@@ -621,8 +621,8 @@ TLDR provides token-efficient code summaries through 5 analysis layers.
 
 #### The 5-Layer Stack
 
-| Layer | Name | What it provides | Token Savings |
-|-------|------|------------------|---------------|
+| Layer | Name | What it provides | Token Cost |
+|-------|------|------------------|------------|
 | **L1** | AST | Functions, classes, signatures | ~500 tokens |
 | **L2** | Call Graph | Who calls what (cross-file) | +440 tokens |
 | **L3** | CFG | Control flow, complexity | +110 tokens |
