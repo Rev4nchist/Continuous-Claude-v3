@@ -2,7 +2,6 @@
 name = "mcp-execution"
 version = "3.0.0"
 description = "Python implementation of Anthropic's 'Code Execution with MCP' enhanced with Skills system (99.6% token reduction), multi-transport support (stdio/SSE/HTTP), and optional container sandboxing"
-readme = "README.md"
 authors = []
 requires-python = ">=3.12"
 dependencies = [
