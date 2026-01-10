@@ -393,7 +393,8 @@ async def run_setup_wizard() -> None:
 
     # Step 2: Database config
     console.print("\n[bold]Step 2/12: Database Configuration[/bold]")
-    if Confirm.ask("Configure PostgreSQL settings?", default=True):
+    console.print("  [dim]Customize host/port for containers (podman, nerdctl) or remote postgres.[/dim]")
+    if Confirm.ask("Configure database connection?", default=True):
         db_config = await prompt_database_config()
         password = Prompt.ask("Database password", password=True, default="claude_dev")
         db_config["password"] = password
