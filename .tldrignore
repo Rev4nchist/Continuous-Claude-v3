@@ -145,3 +145,8 @@ fixtures/
 testdata/
 
 # Keep indexing: opc/packages/, opc/scripts/, .claude/hooks/src/
+
+# External projects
+swe-bench-tldr/
+opc-tldr-code/
+benchmark/

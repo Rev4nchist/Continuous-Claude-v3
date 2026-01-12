@@ -171,7 +171,7 @@ function tryStartDaemon(projectDir) {
         });
         started = result.status === 0;
       }
-      if (!started) {
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync("tldr", ["daemon", "start", "--project", projectDir], {
           timeout: 5e3,
           stdio: "ignore"
@@ -341,8 +341,8 @@ async function impactDaemon(funcName, projectDir) {
   const response = await queryDaemon({ cmd: "impact", func: funcName }, projectDir);
   return response.callers || [];
 }
-async function extractDaemon(filePath, projectDir) {
-  const response = await queryDaemon({ cmd: "extract", file: filePath }, projectDir);
+async function extractDaemon(filePath, projectDir, sessionId) {
+  const response = await queryDaemon({ cmd: "extract", file: filePath, session: sessionId }, projectDir);
   return response.result || null;
 }
 async function statusDaemon(projectDir) {

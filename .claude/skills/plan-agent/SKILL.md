@@ -324,7 +324,7 @@ The orchestrator will spawn you like this:
 ```
 Task(
   subagent_type="general-purpose",
-  model="opus",
+  model="claude-opus-4-5-20251101",
   prompt="""
   # Plan Agent
 

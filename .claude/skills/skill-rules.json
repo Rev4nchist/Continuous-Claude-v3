@@ -892,9 +892,21 @@
             "type": "domain",
             "enforcement": "suggest",
             "priority": "critical",
-            "description": "Token-efficient code context (85% savings) - call graph, CFG, DFG, PDG analysis. USE INSTEAD OF GREP for code understanding.",
+            "description": "Token-efficient code context (95% savings) - AST, call graph, CFG, DFG, PDG analysis. Install: uv tool install llm-tldr",
             "promptTriggers": {
                 "keywords": [
+                    "tldr",
+                    "tldr tree",
+                    "tldr structure",
+                    "tldr search",
+                    "tldr daemon",
+                    "tldr cfg",
+                    "tldr dfg",
+                    "tldr slice",
+                    "tldr impact",
+                    "tldr semantic",
+                    "tldr calls",
+                    "tldr extract",
                     "call graph",
                     "what calls",
                     "who calls",
@@ -912,9 +924,12 @@
                     "how does function",
                     "trace through",
                     "control flow",
-                    "program slice"
+                    "program slice",
+                    "code analysis",
+                    "token efficient"
                 ],
                 "intentPatterns": [
+                    "tldr.*?(tree|structure|search|daemon|cfg|dfg|slice|impact)",
                     "(what|who).*?calls.*?(this|function|method)",
                     "(how|very).*?complex.*?(is|function|code)",
                     "(where|what).*?(does|sets).*?variable",
@@ -922,7 +937,8 @@
                     "(what|which).*?affects.*?(line|code)",
                     "(understand|explain).*?(function|method|code)",
                     "(trace|follow).*?(calls|execution)",
-                    "(cyclomatic|complexity).*?(of|for|is)"
+                    "(cyclomatic|complexity).*?(of|for|is)",
+                    "(run|use).*?tldr"
                 ]
             }
         },

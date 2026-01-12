@@ -28,52 +28,46 @@ python3 $CLAUDE_PROJECT_DIR/.claude/scripts/tldr_stats.py
 
 ```
 ╔══════════════════════════════════════════════════════════════╗
-║  📊 TLDR Stats Dashboard                                     ║
+║  📊 Session Stats                                            ║
 ╚══════════════════════════════════════════════════════════════╝
 
-  Session Cost       $31.90
-  TLDR Saved         +$1.56 (would be $33.46)
+  You've spent  $96.52  this session
 
-  ▸ Token Usage
-    Input            478.1K  tokens sent to Claude
-    Output           150.7K  tokens generated
-    Cache Read        55.3K  reused (cheaper)
+  Tokens Used
+        1.2M sent to Claude
+      416.3K received back
+       97.8K from prompt cache (8% reused)
 
-  ▸ TLDR Savings
-    Raw files        205.3K
-    After TLDR       101.2K
-    Savings        ███████░░░░░░░░ 51%
+  TLDR Savings
 
-  ▸ Cache Efficiency
-    TLDR Cache     ███████░░░░░░░░ 50% hit rate
-                   86 hits / 87 misses
+    You sent:               1.2M
+    Without TLDR:           2.5M
 
-  ▸ Model Usage
-    🎭 Opus      539.9K in    1.3K out  $8.20
+    💰 TLDR saved you ~$18.83
+    (Without TLDR: $115.35 → With TLDR: $96.52)
 
-  ▸ Hook Activity
-    ✓ edit-context       42 calls
-    ✓ read-enforcer      57 calls
-    ✓ search-router      12 calls
+    File reads: 1.3M → 20.9K █████████░ 98% smaller
 
-  ▸ Historical Trend
-    Last 10 sessions  ▄▇▂▆▆▁▁ ▇█  avg 69% saved
+  TLDR Cache
+    Re-reading the same file? TLDR remembers it.
+    █████░░░░░░░░░░ 37% cache hits
+    (35 reused / 60 parsed fresh)
 
-  Daemon: 34m uptime │ 6 active sessions │ Opus @ $15.0/1M
+  Hooks: 553 calls (✓ all ok)
+  History: █▃▄ ▇▃▇▆ avg 84% compression
+  Daemon: 24m up │ 3 sessions
 ```
 
 ## Understanding the Numbers
 
 | Metric | What it means |
 |--------|---------------|
-| **Session Cost** | Actual $ spent on Claude API this session |
-| **TLDR Saved** | Money saved by not sending raw file content |
-| **Input tokens** | Actual tokens sent to Claude API |
-| **Output tokens** | Tokens Claude generated |
-| **Cache Read** | Reused from previous turns (cheaper) |
-| **Savings %** | How much TLDR compressed your file reads |
-| **Cache hit rate** | How often TLDR reuses parsed results |
-| **Historical Trend** | Sparkline of savings % over recent sessions |
+| **You've spent** | Actual $ spent on Claude API this session |
+| **You sent / Without TLDR** | Actual tokens vs what it would have been |
+| **TLDR saved you** | Money saved by compressing file reads |
+| **File reads X → Y** | Raw file tokens compressed to TLDR summary |
+| **Cache hits** | How often TLDR reuses parsed file results |
+| **History sparkline** | Compression % over recent sessions (█ = high) |
 
 ## Visual Elements
 

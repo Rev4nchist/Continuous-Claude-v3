@@ -806,9 +806,9 @@ async def run_setup_wizard() -> None:
         import subprocess
 
         try:
-            # Install from PyPI
+            # Install from PyPI using uv tool (puts tldr CLI in PATH)
             result = subprocess.run(
-                ["uv", "pip", "install", "llm-tldr"],
+                ["uv", "tool", "install", "llm-tldr"],
                 capture_output=True,
                 text=True,
                 timeout=120,
@@ -817,7 +817,7 @@ async def run_setup_wizard() -> None:
             if result.returncode == 0:
                 console.print("  [green]OK[/green] TLDR installed")
 
-                # Verify it works
+                # Verify it works AND is the right tldr (not tldr-pages)
                 console.print("  Verifying installation...")
                 verify_result = subprocess.run(
                     ["tldr", "--help"],
@@ -825,8 +825,17 @@ async def run_setup_wizard() -> None:
                     text=True,
                     timeout=10,
                 )
-                if verify_result.returncode == 0:
+                # Check if this is llm-tldr (has 'tree', 'structure', 'daemon') not tldr-pages
+                is_llm_tldr = any(cmd in verify_result.stdout for cmd in ["tree", "structure", "daemon"])
+                if verify_result.returncode == 0 and is_llm_tldr:
                     console.print("  [green]OK[/green] TLDR CLI available")
+                elif verify_result.returncode == 0 and not is_llm_tldr:
+                    console.print("  [yellow]WARN[/yellow] Wrong tldr detected (tldr-pages, not llm-tldr)")
+                    console.print("  [yellow]    [/yellow] The 'tldr' command is shadowed by tldr-pages.")
+                    console.print("  [yellow]    [/yellow] Uninstall tldr-pages: pip uninstall tldr")
+                    console.print("  [yellow]    [/yellow] Or use full path: ~/.local/bin/tldr")
+
+                if is_llm_tldr:
                     console.print("")
                     console.print("  [dim]Quick start:[/dim]")
                     console.print("    tldr tree .              # See project structure")
@@ -921,16 +930,16 @@ async def run_setup_wizard() -> None:
             else:
                 console.print("  [red]ERROR[/red] Installation failed")
                 console.print(f"       {result.stderr[:200]}")
-                console.print("  You can install manually with: pip install llm-tldr")
+                console.print("  You can install manually with: uv tool install llm-tldr")
         except subprocess.TimeoutExpired:
             console.print("  [yellow]WARN[/yellow] Installation timed out")
-            console.print("  You can install manually with: pip install llm-tldr")
+            console.print("  You can install manually with: uv tool install llm-tldr")
         except Exception as e:
             console.print(f"  [red]ERROR[/red] {e}")
-            console.print("  You can install manually with: pip install llm-tldr")
+            console.print("  You can install manually with: uv tool install llm-tldr")
     else:
         console.print("  Skipped TLDR installation")
-        console.print("  [dim]Install later with: pip install llm-tldr[/dim]")
+        console.print("  [dim]Install later with: uv tool install llm-tldr[/dim]")
 
     # Step 10: Diagnostics Tools (Shift-Left Feedback)
     console.print("\n[bold]Step 10/12: Diagnostics Tools (Shift-Left Feedback)[/bold]")

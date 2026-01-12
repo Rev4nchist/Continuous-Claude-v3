@@ -87,22 +87,19 @@ Combines control and data dependencies:
 
 ## Installation
 
-TLDR-Code is part of the `opc` monorepo:
+TLDR-Code is available on PyPI as `llm-tldr`:
 
 ```bash
-cd opc/packages/tldr-code
+# Recommended: Install as a tool (adds to PATH automatically)
+uv tool install llm-tldr
 
-# Create virtual environment
-python -m venv .venv
-source .venv/bin/activate  # On Windows: .venv\Scripts\activate
-
-# Install dependencies
-uv pip install tree-sitter tree-sitter-languages \
-  tree-sitter-typescript tree-sitter-javascript \
-  tree-sitter-go tree-sitter-rust
+# Alternative: pip install
+pip install llm-tldr
 ```
 
-The `tldr` CLI is installed to `~/.local/bin/tldr` and should be on your PATH.
+The `tldr` CLI will be available on your PATH after installation.
+
+**Source:** [github.com/parcadei/tldr-code](https://github.com/parcadei/tldr-code)
 
 ## CLI Reference
 
@@ -691,7 +688,7 @@ tldr arch src/
 
 TLDR-Code caches analysis results. The cache is stored in:
 ```
-opc/packages/tldr-code/.tldr-cache/
+.tldr/cache/   # In your project directory
 ```
 
 To warm the cache:
@@ -715,12 +712,13 @@ For projects with 1000+ files:
 
 ## Testing
 
-Run the test suite:
+Run the test suite (for contributors):
 
 ```bash
-cd opc/packages/tldr-code
-source .venv/bin/activate
-python -m pytest tests/ -v
+git clone https://github.com/parcadei/tldr-code
+cd tldr-code
+uv sync
+uv run pytest tests/ -v
 ```
 
 Current test status: **265 tests passing**
@@ -816,7 +814,7 @@ tldr extract src/module.py | jq '.functions[].name'
 
 Clear the cache:
 ```bash
-rm -rf opc/packages/tldr-code/.tldr-cache/
+rm -rf .tldr/cache/
 tldr warm src/
 ```
 
@@ -829,12 +827,12 @@ tldr structure src/ --max 50  # Limit files analyzed
 
 ## Contributing
 
-TLDR-Code is part of the Continuous Claude project. To contribute:
+TLDR-Code is a separate package. To contribute:
 
-1. Location: `opc/packages/tldr-code/`
-2. Tests: Run `pytest tests/` before submitting
+1. Source: [github.com/parcadei/tldr-code](https://github.com/parcadei/tldr-code)
+2. Tests: Run `uv run pytest tests/` before submitting
 3. Documentation: Update this file for API changes
-4. Issues: File in the main repository
+4. Issues: File in the tldr-code repository
 
 ## Architecture Notes
 
@@ -856,10 +854,10 @@ This design allows adding new languages without changing the analysis algorithms
 
 ## References
 
-- Source: `opc/packages/tldr-code/`
-- Skills: `.claude/skills/tldr-explorer/SKILL.md`
-- Hooks: `.claude/hooks/tldr-read-enforcer.sh`, `.claude/hooks/tldr-context-inject.sh`
-- Ledger: `thoughts/ledgers/CONTINUITY_CLAUDE-open-source-release.md`
+- PyPI: [pypi.org/project/llm-tldr](https://pypi.org/project/llm-tldr/)
+- Source: [github.com/parcadei/tldr-code](https://github.com/parcadei/tldr-code)
+- Skills: `.claude/skills/tldr-code/SKILL.md`
+- Hooks: `.claude/hooks/dist/tldr-*.mjs`
 
 ## License
 

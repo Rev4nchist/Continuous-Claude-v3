@@ -97,8 +97,19 @@ async function main() {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   const cache = getCacheStatus(projectDir);
 
-  // Warm the cache if stale (> 24h) or missing
-  const shouldWarm = !cache.exists || (cache.age_hours !== undefined && cache.age_hours > 24);
+  // Check daemon's actual index state (not just file cache)
+  let daemonFiles = 0;
+  try {
+    const statusResp = queryDaemonSync({ cmd: 'status' }, projectDir);
+    if (statusResp.status === 'ready') {
+      daemonFiles = statusResp.files || 0;
+    }
+  } catch { /* ignore */ }
+
+  // Warm if: file cache missing, cache stale (>24h), OR daemon has 0 files indexed
+  const shouldWarm = !cache.exists ||
+    (cache.age_hours !== undefined && cache.age_hours > 24) ||
+    daemonFiles === 0;
   let warmStatus = '';
 
   if (shouldWarm) {

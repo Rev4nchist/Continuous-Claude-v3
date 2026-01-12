@@ -11,6 +11,7 @@
 
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { execSync } from 'child_process';
+import { join } from 'path';
 import { queryDaemonSync, DaemonResponse, trackHookActivitySync } from './daemon-client.js';
 
 interface GrepInput {
@@ -124,21 +125,40 @@ interface SemanticResult {
   snippet?: string;
 }
 
-function tldrSemantic(query: string, projectDir: string = '.'): SemanticResult[] {
+interface SemanticSearchResult {
+  results: SemanticResult[];
+  status: 'ok' | 'no_index' | 'daemon_unavailable' | 'indexing' | 'error';
+}
+
+function checkSemanticIndexExists(projectDir: string): boolean {
+  const indexPath = join(projectDir, '.tldr', 'cache', 'semantic', 'index.faiss');
+  return existsSync(indexPath);
+}
+
+function tldrSemantic(query: string, projectDir: string = '.'): SemanticSearchResult {
+  // First check if index exists
+  if (!checkSemanticIndexExists(projectDir)) {
+    return { results: [], status: 'no_index' };
+  }
+
   try {
     const response = queryDaemonSync({ cmd: 'semantic', query, k: 5 }, projectDir);
 
-    if (response.indexing || response.status === 'unavailable') {
-      return [];
+    if (response.indexing) {
+      return { results: [], status: 'indexing' };
+    }
+
+    if (response.status === 'unavailable') {
+      return { results: [], status: 'daemon_unavailable' };
     }
 
     if (response.status === 'ok' && response.results) {
-      return response.results as SemanticResult[];
+      return { results: response.results as SemanticResult[], status: 'ok' };
     }
 
-    return [];
+    return { results: [], status: 'ok' };  // Empty results but working
   } catch {
-    return [];
+    return { results: [], status: 'error' };
   }
 }
 
@@ -402,10 +422,23 @@ function getAstGrepSuggestion(pattern: string, lang: string = 'python'): string 
 }
 
 async function main() {
-  const input: PreToolUseInput = JSON.parse(await readStdin());
+  let input: PreToolUseInput;
+  try {
+    input = JSON.parse(await readStdin());
+  } catch {
+    // Malformed JSON - exit silently
+    console.log('{}');
+    return;
+  }
 
   // Only intercept Grep tool
   if (input.tool_name !== 'Grep') {
+    console.log('{}');
+    return;
+  }
+
+  // Validate tool_input exists and has required fields
+  if (!input.tool_input || typeof input.tool_input.pattern !== 'string') {
     console.log('{}');
     return;
   }
@@ -502,12 +535,12 @@ TLDR: finds + call graph + docstrings + complexity`;
     queries_routed: 1, semantic_queries: 1,
   });
 
-  const semanticResults = tldrSemantic(pattern, projectDir);
+  const semanticSearch = tldrSemantic(pattern, projectDir);
 
   let reason: string;
-  if (semanticResults.length > 0) {
+  if (semanticSearch.status === 'ok' && semanticSearch.results.length > 0) {
     // We have results - provide them directly
-    const resultsStr = semanticResults.map(r => {
+    const resultsStr = semanticSearch.results.map(r => {
       const loc = `${r.file}:${r.function || 'module'}`;
       const score = r.score ? ` (${(r.score * 100).toFixed(0)}%)` : '';
       return `  - ${loc}${score}`;
@@ -518,22 +551,57 @@ TLDR: finds + call graph + docstrings + complexity`;
 ${resultsStr}
 
 **Next steps:**
-1. Read the most relevant file: \`Read ${semanticResults[0].file}\`
+1. Read the most relevant file: \`Read ${semanticSearch.results[0].file}\`
 2. For deeper analysis: \`/tldr-search ${target || pattern} --layer all\`
 
 The results above are semantically similar to "${pattern}".`;
+  } else if (semanticSearch.status === 'no_index') {
+    // Semantic index doesn't exist - offer to set it up
+    reason = `🧠 **Semantic Search Not Set Up**
+
+No semantic index found. To enable AI-powered code search:
+
+\`\`\`bash
+tldr semantic index . --lang all
+\`\`\`
+
+This creates embeddings for your codebase (one-time, ~30s).
+After indexing, natural language queries like "${pattern}" will find relevant code.
+
+**For now, use:**
+- \`/tldr-search ${target || pattern}\` - structured search
+- \`Task(subagent_type="Explore", prompt="${pattern}")\` - agent exploration`;
+  } else if (semanticSearch.status === 'daemon_unavailable') {
+    // Daemon not running
+    reason = `🧠 **TLDR Daemon Not Running**
+
+Start the daemon for semantic search:
+\`\`\`bash
+tldr daemon start
+\`\`\`
+
+Then retry your query. The daemon provides fast, in-memory semantic search.
+
+**For now, use:**
+- \`/tldr-search ${target || pattern}\` - structured search (no daemon needed)`;
+  } else if (semanticSearch.status === 'indexing') {
+    // Daemon is indexing
+    reason = `🧠 **Semantic Index Building...**
+
+The daemon is currently building the semantic index. This takes ~30s.
+Retry in a moment, or use structured search for now:
+
+\`/tldr-search ${target || pattern}\``;
   } else {
-    // No results or daemon unavailable - suggest alternatives
-    reason = `🧠 Semantic query - Use TLDR or Explore agent:
+    // No results but system is working - genuinely no matches
+    reason = `🧠 **No Semantic Matches**
 
-**Option 1 - TLDR with context:**
-/tldr-search ${target || pattern} --layer all
+No code semantically similar to "${pattern}" found in the index.
 
-**Option 2 - Explore agent (for complex questions):**
-Task(subagent_type="Explore", prompt="${pattern}")
-
-TLDR provides: L1 AST + L2 Call Graph + L3 CFG + L4 DFG + L5 PDG
-Explore agent uses TLDR internally for deep analysis.`;
+**Try:**
+1. Rephrase the query with different keywords
+2. Use structured search: \`/tldr-search ${target || pattern}\`
+3. Explore with agent: \`Task(subagent_type="Explore", prompt="${pattern}")\``;
   }
 
   const output: HookOutput = {

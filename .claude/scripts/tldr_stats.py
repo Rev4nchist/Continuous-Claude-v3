@@ -206,41 +206,64 @@ def get_model_breakdown(session_id: str) -> dict:
 
 
 def get_tldr_stats(project_dir: str, session_id: str) -> dict:
-    """Get TLDR daemon stats via Unix socket."""
+    """Get TLDR daemon stats via socket (Unix socket or TCP on Windows)."""
     hash_val = hashlib.md5(project_dir.encode()).hexdigest()[:8]
-    sock_path = f'/tmp/tldr-{hash_val}.sock'
 
     try:
-        sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
-        sock.settimeout(2)
-        sock.connect(sock_path)
+        if sys.platform == 'win32':
+            # Windows: use TCP socket on localhost
+            # Port derived from hash to match daemon behavior
+            port = 17000 + (int(hash_val, 16) % 1000)
+            sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            sock.connect(('127.0.0.1', port))
+        else:
+            # Unix: use Unix domain socket
+            sock_path = f'/tmp/tldr-{hash_val}.sock'
+            sock = socket.socket(socket.AF_UNIX, socket.SOCK_STREAM)
+            sock.settimeout(2)
+            sock.connect(sock_path)
+
         sock.sendall(json.dumps({'cmd': 'status', 'session': session_id}).encode() + b'\n')
         data = sock.recv(65536)
         sock.close()
         return json.loads(data)
-    except (OSError, json.JSONDecodeError, socket.timeout):
+    except (OSError, json.JSONDecodeError, socket.timeout, ConnectionRefusedError):
         return {}
 
 
-def get_historical_stats() -> list[dict]:
-    """Get historical session stats."""
+def get_historical_stats() -> tuple[list[dict], dict]:
+    """Get historical session stats and global totals."""
     stats_file = Path.home() / '.cache' / 'tldr' / 'session_stats.jsonl'
 
     if not stats_file.exists():
-        return []
+        return [], {}
 
     stats = []
+    global_totals = {
+        'total_sessions': 0,
+        'total_raw_tokens': 0,
+        'total_tldr_tokens': 0,
+        'total_savings_tokens': 0,
+    }
+
     try:
         with open(stats_file) as f:
             for line in f:
                 try:
-                    stats.append(json.loads(line.strip()))
+                    entry = json.loads(line.strip())
+                    stats.append(entry)
+                    # Accumulate global totals
+                    global_totals['total_sessions'] += 1
+                    global_totals['total_raw_tokens'] += entry.get('raw_tokens', 0)
+                    global_totals['total_tldr_tokens'] += entry.get('tldr_tokens', 0)
+                    global_totals['total_savings_tokens'] += entry.get('savings_tokens', 0)
                 except json.JSONDecodeError:
                     pass
     except OSError:
         pass
 
-    return stats[-10:]  # Last 10 sessions
+    return stats[-10:], global_totals  # Last 10 for sparkline, plus global totals
 
 
 # ============================================================================
@@ -248,41 +271,27 @@ def get_historical_stats() -> list[dict]:
 # ============================================================================
 
 def main():
-    project_dir = os.environ.get('CLAUDE_PROJECT_DIR', os.getcwd())
     session_id = os.environ.get('CLAUDE_SESSION_ID', 'unknown')[:8]
 
-    # Collect all data
+    # Collect data
     claude_stats = get_claude_stats(session_id)
-    model_breakdown = get_model_breakdown(session_id)
-    tldr_stats = get_tldr_stats(project_dir, session_id)
-    historical = get_historical_stats()
+    historical, global_totals = get_historical_stats()
 
     # Extract metrics
     input_tokens = claude_stats.get('total_input_tokens', 0)
     output_tokens = claude_stats.get('total_output_tokens', 0)
-    cache_read = claude_stats.get('cache_read_tokens', 0)
     actual_cost = claude_stats.get('total_cost_usd', 0)
     model_id = claude_stats.get('model_id', 'unknown')
 
-    all_stats = tldr_stats.get('all_sessions', {})
-    raw_tokens = all_stats.get('total_raw_tokens', 0)
-    tldr_tokens = all_stats.get('total_tldr_tokens', 0)
-    tldr_saved = raw_tokens - tldr_tokens
-    tldr_pct = (tldr_saved / raw_tokens * 100) if raw_tokens > 0 else 0
-
-    salsa = tldr_stats.get('salsa_stats', {})
-    cache_hits = salsa.get('cache_hits', 0)
-    cache_misses = salsa.get('cache_misses', 0)
-    hit_rate = (cache_hits / (cache_hits + cache_misses) * 100) if (cache_hits + cache_misses) > 0 else 0
-
-    uptime_sec = tldr_stats.get('uptime', 0)
-    uptime_min = int(uptime_sec // 60)
-
-    # Price calculation
+    # Price for savings estimate ($/M tokens as of Jan 2026)
+    # Claude 4.5 pricing from anthropic.com/pricing:
+    #   Haiku:  $1 input,  $5 output
+    #   Sonnet: $3 input, $15 output
+    #   Opus:   $5 input, $25 output
+    # TLDR savings = reduced input tokens, so we use input prices
     model_key = 'opus' if 'opus' in model_id.lower() else 'sonnet' if 'sonnet' in model_id.lower() else 'haiku'
-    prices = {'opus': 15.0, 'sonnet': 3.0, 'haiku': 0.25}
-    price = prices.get(model_key, 3.0)
-    estimated_savings = (tldr_saved / 1_000_000) * price
+    input_prices = {'opus': 5.0, 'sonnet': 3.0, 'haiku': 1.0}
+    price = input_prices.get(model_key, 3.0)
 
     # ========================================================================
     # Render Output - Don Norman style: clear, coherent narrative
@@ -292,85 +301,38 @@ def main():
 
     print()
     print(f"{C.BOLD}{C.BRIGHT_CYAN}╔{'═' * w}╗{C.RESET}")
-    print(f"{C.BOLD}{C.BRIGHT_CYAN}║{C.RESET}{C.BOLD}  📊 Session Stats{' ' * (w - 18)}{C.BRIGHT_CYAN}║{C.RESET}")
+    print(f"{C.BOLD}{C.BRIGHT_CYAN}║{C.RESET}{C.BOLD}  📊 Stats{' ' * (w - 10)}{C.BRIGHT_CYAN}║{C.RESET}")
     print(f"{C.BOLD}{C.BRIGHT_CYAN}╚{'═' * w}╝{C.RESET}")
     print()
 
-    # Hero: One clear cost number
-    print(f"  {C.BOLD}You've spent{C.RESET}  {format_cost(actual_cost)}  {C.DIM}this session{C.RESET}")
+    # Current run cost (this terminal process)
+    print(f"  {C.BOLD}Current run:{C.RESET}  {format_cost(actual_cost)}")
+    print(f"  {C.DIM}{format_tokens(input_tokens)} sent, {format_tokens(output_tokens)} received{C.RESET}")
     print()
 
-    # Token breakdown - simple
-    total_tokens = input_tokens + output_tokens
-    print(f"  {C.BOLD}{C.CYAN}Tokens Used{C.RESET}")
-    print(f"    {format_tokens(input_tokens):>8} sent to Claude")
-    print(f"    {format_tokens(output_tokens):>8} received back")
-    if cache_read > 0:
-        cache_pct = (cache_read / input_tokens * 100) if input_tokens > 0 else 0
-        print(f"    {C.GREEN}{format_tokens(cache_read):>8} from prompt cache{C.RESET} {C.DIM}({cache_pct:.0f}% reused){C.RESET}")
-    print()
+    # TLDR savings - cumulative across all runs in this repo
+    if global_totals.get('total_raw_tokens', 0) > 0:
+        global_raw = global_totals['total_raw_tokens']
+        global_tldr = global_totals['total_tldr_tokens']
+        global_saved = global_totals['total_savings_tokens']
+        total_sessions = global_totals['total_sessions']
 
-    # TLDR Section - explain the story clearly
-    if raw_tokens > 0:
-        print(f"  {C.BOLD}{C.MAGENTA}TLDR File Compression{C.RESET}")
-        print(f"    When you read files, TLDR summarizes them instead of")
-        print(f"    sending raw code. This session:")
-        print()
-        print(f"    {C.DIM}Raw file content:{C.RESET}  {format_tokens(raw_tokens):>8}")
-        print(f"    {C.GREEN}After TLDR:{C.RESET}        {format_tokens(tldr_tokens):>8}  {progress_bar(tldr_pct, width=10)} {C.BOLD}{tldr_pct:.0f}%{C.RESET} smaller")
-        print()
-        # Explain cost breakdown clearly
-        total_if_no_tldr = input_tokens + tldr_saved
-        real_savings_pct = (tldr_saved / total_if_no_tldr * 100) if total_if_no_tldr > 0 else 0
-        other_tokens = input_tokens - tldr_tokens
-        other_pct = (other_tokens / input_tokens * 100) if input_tokens > 0 else 0
-        print(f"    {C.DIM}Your input breakdown:{C.RESET}")
-        print(f"    {C.DIM}  {format_tokens(tldr_tokens)} file content ({100-other_pct:.0f}%){C.RESET}")
-        print(f"    {C.DIM}  {format_tokens(other_tokens)} prompts/history ({other_pct:.0f}%){C.RESET}")
-        print(f"    {C.DIM}TLDR saved {format_tokens(tldr_saved)} = ~${estimated_savings:.2f}{C.RESET}")
-        print()
+        cost_without = (global_raw / 1_000_000) * price
+        cost_with = (global_tldr / 1_000_000) * price
+        cost_saved = cost_without - cost_with
 
-    # Cache efficiency - only if meaningful
-    if cache_hits + cache_misses > 10:
-        print(f"  {C.BOLD}{C.YELLOW}TLDR Cache{C.RESET}")
-        print(f"    Re-reading the same file? TLDR remembers it.")
-        print(f"    {progress_bar(hit_rate, width=15)} {hit_rate:.0f}% cache hits")
-        print(f"    {C.DIM}({cache_hits} reused / {cache_misses} parsed fresh){C.RESET}")
-        print()
+        print(f"  {C.BOLD}TLDR Savings{C.RESET} {C.DIM}(all-time, {total_sessions} runs){C.RESET}")
+        print(f"    Without TLDR:  {format_tokens(global_raw):>8}  →  ${cost_without:.2f}")
+        print(f"    With TLDR:     {format_tokens(global_tldr):>8}  →  ${cost_with:.2f}")
+        print(f"    {C.GREEN}{C.BOLD}Saved:         {format_tokens(global_saved):>8}  →  ${cost_saved:.2f}{C.RESET}")
 
-    # Model breakdown - only show if multiple models
-    if model_breakdown and len(model_breakdown) > 1:
-        print(f"  {C.BOLD}{C.BLUE}Models Used{C.RESET}")
-        for model, usage in sorted(model_breakdown.items()):
-            if 'opus' in model.lower():
-                emoji, name = '🎭', 'Opus'
-            elif 'haiku' in model.lower():
-                emoji, name = '🍃', 'Haiku'
-            else:
-                emoji, name = '🎵', 'Sonnet'
-            total_in = usage['input'] + usage['cache_read'] + usage['cache_create']
-            print(f"    {emoji} {name:8} {format_tokens(total_in):>7} tokens")
-        print()
-
-    # Hooks - simplified, just show count
-    hook_stats = tldr_stats.get('hook_stats', {})
-    if hook_stats:
-        total_hooks = sum(s.get('invocations', 0) for s in hook_stats.values())
-        all_ok = all(s.get('success_rate', 100) == 100 for s in hook_stats.values())
-        status = f"{C.GREEN}✓ all ok{C.RESET}" if all_ok else f"{C.YELLOW}some issues{C.RESET}"
-        print(f"  {C.DIM}Hooks: {total_hooks} calls ({status}){C.RESET}")
-
-    # Historical - simple one-liner
-    if historical:
-        savings_values = [h.get('savings_percent', 0) for h in historical]
-        if any(v > 0 for v in savings_values):
-            trend = sparkline(savings_values, width=8)
-            avg_savings = sum(savings_values) / len(savings_values)
-            print(f"  {C.DIM}History: {trend} avg {avg_savings:.0f}% compression{C.RESET}")
-
-    # Footer
-    active_sessions = all_stats.get('active_sessions', 0)
-    print(f"  {C.DIM}Daemon: {uptime_min}m up │ {active_sessions} sessions{C.RESET}")
+        # Sparkline of recent compression rates
+        if historical:
+            savings_values = [h.get('savings_percent', 0) for h in historical]
+            if any(v > 0 for v in savings_values):
+                trend = sparkline(savings_values, width=10)
+                avg_savings = sum(savings_values) / len(savings_values)
+                print(f"    {C.DIM}Recent: {trend} avg {avg_savings:.0f}%{C.RESET}")
     print()
 
 

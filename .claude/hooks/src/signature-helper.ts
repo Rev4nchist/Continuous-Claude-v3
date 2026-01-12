@@ -90,11 +90,11 @@ function findFunctionFile(funcName: string, projectDir: string): string | null {
 /**
  * Get function signature from TLDR daemon extract.
  */
-function getSignatureFromTLDR(funcName: string, filePath: string): string | null {
+function getSignatureFromTLDR(funcName: string, filePath: string, sessionId?: string): string | null {
   try {
     const projectDir = getProjectDir();
     const response = queryDaemonSync(
-      { cmd: 'extract', file: filePath },
+      { cmd: 'extract', file: filePath, session: sessionId },
       projectDir
     );
 
@@ -149,7 +149,7 @@ async function main() {
   for (const call of calls.slice(0, 5)) {
     const filePath = findFunctionFile(call, projectDir);
     if (filePath) {
-      const sig = getSignatureFromTLDR(call, filePath);
+      const sig = getSignatureFromTLDR(call, filePath, input.session_id);
       if (sig) {
         signatures.push(sig);
       }

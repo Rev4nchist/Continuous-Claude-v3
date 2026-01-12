@@ -170,7 +170,7 @@ function tryStartDaemon(projectDir) {
         });
         started = result.status === 0;
       }
-      if (!started) {
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync("tldr", ["daemon", "start", "--project", projectDir], {
           timeout: 5e3,
           stdio: "ignore"
@@ -272,66 +272,6 @@ function getSearchContext(sessionId) {
     return null;
   }
 }
-function analyzeTranscript(transcriptPath) {
-  try {
-    if (!existsSync2(transcriptPath)) return null;
-    const content = readFileSync2(transcriptPath, "utf-8");
-    const lines = content.trim().split("\n").slice(-20);
-    let recentText = "";
-    for (const line of lines) {
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === "human" || msg.type === "assistant") {
-          const text = typeof msg.message === "string" ? msg.message : JSON.stringify(msg.message);
-          recentText += " " + text;
-        }
-      } catch {
-      }
-    }
-    recentText = recentText.toLowerCase();
-    const intentPatterns = [
-      {
-        patterns: [/debug/, /bug/, /fix\s+(the|this|a)?\s*(error|issue|problem)/, /investigate/, /broken/],
-        layers: ["ast", "call_graph", "cfg"],
-        name: "debugging"
-      },
-      {
-        patterns: [/where\s+does/, /data\s*flow/, /variable/, /track\s+\w+/, /what\s+sets/],
-        layers: ["ast", "dfg"],
-        name: "data-flow"
-      },
-      {
-        patterns: [/complexity/, /how\s+complex/, /refactor/, /simplify/, /control\s+flow/],
-        layers: ["ast", "call_graph", "cfg"],
-        name: "complexity"
-      },
-      {
-        patterns: [/what\s+depends/, /impact/, /affects/, /slice/],
-        layers: ["ast", "call_graph", "pdg"],
-        name: "dependencies"
-      },
-      {
-        patterns: [/understand/, /how\s+does.*work/, /explain/],
-        layers: ["ast", "call_graph", "cfg"],
-        name: "understanding"
-      }
-    ];
-    for (const intent of intentPatterns) {
-      if (intent.patterns.some((p) => p.test(recentText))) {
-        const funcMatch = recentText.match(/(?:function|method|def|class)\s+(\w+)/);
-        const target = funcMatch ? funcMatch[1] : null;
-        return {
-          layers: intent.layers,
-          target,
-          source: `transcript:${intent.name}`
-        };
-      }
-    }
-    return null;
-  } catch {
-    return null;
-  }
-}
 var CODE_EXTENSIONS = /* @__PURE__ */ new Set([
   ".py",
   ".ts",
@@ -393,15 +333,78 @@ function detectLanguage(filePath) {
   };
   return langMap[ext] || "python";
 }
-function getTldrContext(filePath, language, layers = ["ast", "call_graph"], target = null, sessionId = null) {
+function chooseTldrMode(target, layers, contextSource) {
+  const fromSearchRouter = contextSource.startsWith("function:") || contextSource.startsWith("class:");
+  if (target && fromSearchRouter) {
+    return { mode: "context", reason: `search: ${target}` };
+  }
+  if (layers.some((l) => ["cfg", "dfg", "pdg"].includes(l))) {
+    return { mode: "extract", reason: "flow analysis" };
+  }
+  return { mode: "structure", reason: "navigation" };
+}
+function getTldrContext(filePath, language, layers = ["ast", "call_graph"], target = null, sessionId = null, contextSource = "default") {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const fileName = basename(filePath);
   const results = [];
+  const { mode, reason } = chooseTldrMode(target, layers, contextSource);
   try {
     results.push(`# ${fileName}`);
     results.push(`Language: ${language}`);
+    results.push(`Mode: ${mode} (${reason})`);
     results.push("");
-    if (layers.includes("ast") || layers.includes("call_graph")) {
+    if (mode === "context" && target) {
+      const contextResp = queryDaemonSync(
+        { cmd: "context", entry: target, language, depth: 2 },
+        projectDir
+      );
+      if (contextResp.status === "ok" && contextResp.result) {
+        results.push("## Focused Context");
+        results.push(typeof contextResp.result === "string" ? contextResp.result : JSON.stringify(contextResp.result, null, 2));
+        results.push("");
+        results.push("---");
+        results.push("To see more: Read with offset/limit, or ask about specific functions");
+        return results.join("\n");
+      }
+    }
+    if (mode === "structure") {
+      const extractResp = queryDaemonSync(
+        { cmd: "extract", file: filePath, session: sessionId || void 0 },
+        projectDir
+      );
+      if (extractResp.status === "ok" && extractResp.result) {
+        results.push("## Structure (names only)");
+        const info = extractResp.result;
+        if (info.functions?.length > 0) {
+          results.push("### Functions");
+          for (const fn of info.functions.slice(0, 30)) {
+            const params = fn.params ? `(${fn.params.slice(0, 3).join(", ")}${fn.params.length > 3 ? "..." : ""})` : "()";
+            results.push(`  ${fn.name}${params}  [line ${fn.line_number || fn.line || "?"}]`);
+            if (fn.docstring) {
+              const firstLine = fn.docstring.split("\n")[0].trim().slice(0, 80);
+              results.push(`    # ${firstLine}`);
+            }
+          }
+        }
+        if (info.classes?.length > 0) {
+          results.push("### Classes");
+          for (const cls of info.classes.slice(0, 20)) {
+            const methods = cls.methods?.slice(0, 5).map((m) => m.name).join(", ") || "";
+            results.push(`  ${cls.name}  [line ${cls.line_number || cls.line || "?"}]`);
+            if (cls.docstring) {
+              const firstLine = cls.docstring.split("\n")[0].trim().slice(0, 80);
+              results.push(`    # ${firstLine}`);
+            }
+            if (methods) results.push(`    methods: ${methods}${cls.methods?.length > 5 ? "..." : ""}`);
+          }
+        }
+        results.push("");
+        results.push("---");
+        results.push("To see full code: Read with limit=100 (or offset=N limit=M for specific lines)");
+        return results.join("\n");
+      }
+    }
+    if (layers.includes("ast") || layers.includes("call_graph") || mode === "extract") {
       const extractResp = queryDaemonSync(
         { cmd: "extract", file: filePath, session: sessionId || void 0 },
         projectDir
@@ -548,15 +551,8 @@ async function main() {
     layers = searchContext.suggestedLayers;
     target = searchContext.target;
     contextSource = `${searchContext.targetType}: ${searchContext.target}`;
-  } else if (input.transcript_path) {
-    const transcriptIntent = analyzeTranscript(input.transcript_path);
-    if (transcriptIntent) {
-      layers = transcriptIntent.layers;
-      target = transcriptIntent.target;
-      contextSource = transcriptIntent.source;
-    }
   }
-  const tldrContext = getTldrContext(filePath, language, layers, target, input.session_id);
+  const tldrContext = getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
   if (!tldrContext) {
     console.log("{}");
     return;

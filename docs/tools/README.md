@@ -465,9 +465,9 @@ MCP_TOOL_TIMEOUT=30000            # Tool execution timeout (ms)
 
 ### TLDR not found
 ```bash
-# Install/update tldr-code package
-cd opc/packages/tldr-code
-uv sync
+# Install from PyPI
+uv tool install llm-tldr
+# or: pip install llm-tldr
 ```
 
 ### Recall returns no results

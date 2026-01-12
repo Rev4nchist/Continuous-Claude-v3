@@ -395,7 +395,8 @@ export function tryStartDaemon(projectDir: string): boolean {
       }
 
       // Fallback to global tldr if local didn't work
-      if (!started) {
+      // Skip fallback in dev mode (TLDR_DEV=1) to prevent duplicate daemons
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync('tldr', ['daemon', 'start', '--project', projectDir], {
           timeout: 5000,
           stdio: 'ignore',
@@ -645,10 +646,11 @@ export async function impactDaemon(funcName: string, projectDir: string): Promis
  *
  * @param filePath - Path to file to extract
  * @param projectDir - Project directory path
+ * @param sessionId - Optional session ID for token tracking
  * @returns Extraction result or null
  */
-export async function extractDaemon(filePath: string, projectDir: string): Promise<any | null> {
-  const response = await queryDaemon({ cmd: 'extract', file: filePath }, projectDir);
+export async function extractDaemon(filePath: string, projectDir: string, sessionId?: string): Promise<any | null> {
+  const response = await queryDaemon({ cmd: 'extract', file: filePath, session: sessionId }, projectDir);
   return response.result || null;
 }
 

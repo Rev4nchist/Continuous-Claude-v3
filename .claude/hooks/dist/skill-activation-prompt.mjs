@@ -229,10 +229,43 @@ Alternative approaches available: ${inference.alternatives.join(", ")}
   output += "=".repeat(50) + "\n";
   return output;
 }
+function detectSemanticQuery(prompt) {
+  const semanticPatterns = [
+    /^(how|what|where|why|when|which)\s/i,
+    /\?$/,
+    /^(find|show|list|get|explain)\s+(all|the|every|any)/i,
+    /^.*\s+(implementation|architecture|flow|pattern|logic|system)$/i
+  ];
+  const isSemanticQuery = semanticPatterns.some((p) => p.test(prompt.trim()));
+  if (!isSemanticQuery) {
+    return { isSemanticQuery: false };
+  }
+  const shortPrompt = prompt.length > 50 ? prompt.slice(0, 50) + "..." : prompt;
+  const suggestion = `\u{1F4A1} **Semantic Query Detected**
+
+Your question "${shortPrompt}" may benefit from semantic code search.
+
+**Try:**
+\`\`\`bash
+tldr semantic search "${prompt.slice(0, 100)}" .
+\`\`\`
+
+Or use the /explore skill for guided exploration.
+`;
+  return { isSemanticQuery: true, suggestion };
+}
 async function main() {
   try {
     const input = readFileSync2(0, "utf-8");
-    const data = JSON.parse(input);
+    let data;
+    try {
+      data = JSON.parse(input);
+    } catch {
+      process.exit(0);
+    }
+    if (!data.prompt || typeof data.prompt !== "string") {
+      process.exit(0);
+    }
     const prompt = data.prompt.toLowerCase();
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
@@ -248,6 +281,7 @@ async function main() {
     }
     const rules = JSON.parse(readFileSync2(rulesPath, "utf-8"));
     const patternInference = runPatternInference(data.prompt, projectDir);
+    const semanticQuery = detectSemanticQuery(data.prompt);
     const matchedSkills = [];
     for (const [skillName, config] of Object.entries(rules.skills)) {
       const triggers = config.promptTriggers;
@@ -351,7 +385,7 @@ async function main() {
         }
       }
     }
-    if (matchedSkills.length > 0 || matchedAgents.length > 0 || patternInference) {
+    if (matchedSkills.length > 0 || matchedAgents.length > 0 || patternInference || semanticQuery.isSemanticQuery) {
       const skillsNeedingValidation = matchedSkills.filter((s) => s.needsValidation);
       const agentsNeedingValidation = matchedAgents.filter((a) => a.needsValidation);
       const allNeedingValidation = [...skillsNeedingValidation, ...agentsNeedingValidation];
@@ -360,6 +394,10 @@ async function main() {
       let output = "";
       if (patternInference) {
         output += generateAgenticaOutput(patternInference, data.prompt);
+        output += "\n";
+      }
+      if (semanticQuery.isSemanticQuery && semanticQuery.suggestion) {
+        output += semanticQuery.suggestion;
         output += "\n";
       }
       if (matchedSkills.length > 0 || matchedAgents.length > 0) {

@@ -174,11 +174,58 @@ function generateAgenticaOutput(inference: PatternInference, prompt: string): st
     return output;
 }
 
+/**
+ * Detect semantic/natural language queries that would benefit from TLDR semantic search.
+ * Pattern: Questions starting with how/what/where/why/when/which
+ */
+function detectSemanticQuery(prompt: string): { isSemanticQuery: boolean; suggestion?: string } {
+    // Question word patterns that indicate semantic queries
+    const semanticPatterns = [
+        /^(how|what|where|why|when|which)\s/i,
+        /\?$/,
+        /^(find|show|list|get|explain)\s+(all|the|every|any)/i,
+        /^.*\s+(implementation|architecture|flow|pattern|logic|system)$/i,
+    ];
+
+    const isSemanticQuery = semanticPatterns.some(p => p.test(prompt.trim()));
+
+    if (!isSemanticQuery) {
+        return { isSemanticQuery: false };
+    }
+
+    // Generate suggestion for semantic search
+    const shortPrompt = prompt.length > 50 ? prompt.slice(0, 50) + '...' : prompt;
+    const suggestion = `💡 **Semantic Query Detected**
+
+Your question "${shortPrompt}" may benefit from semantic code search.
+
+**Try:**
+\`\`\`bash
+tldr semantic search "${prompt.slice(0, 100)}" .
+\`\`\`
+
+Or use the /explore skill for guided exploration.
+`;
+
+    return { isSemanticQuery: true, suggestion };
+}
+
 async function main() {
     try {
         // Read input from stdin
         const input = readFileSync(0, 'utf-8');
-        const data: HookInput = JSON.parse(input);
+        let data: HookInput;
+        try {
+            data = JSON.parse(input);
+        } catch {
+            // Malformed JSON - exit silently
+            process.exit(0);
+        }
+
+        // Early validation - prompt is required
+        if (!data.prompt || typeof data.prompt !== 'string') {
+            process.exit(0);
+        }
         const prompt = data.prompt.toLowerCase();
 
         // Load skill rules (try project first, then global)
@@ -200,6 +247,9 @@ async function main() {
 
         // CHANGE 1: Run pattern inference EARLY on all prompts
         const patternInference = runPatternInference(data.prompt, projectDir);
+
+        // CHANGE 3: Detect semantic queries and suggest TLDR semantic search
+        const semanticQuery = detectSemanticQuery(data.prompt);
 
         const matchedSkills: MatchedSkill[] = [];
 
@@ -322,8 +372,8 @@ async function main() {
             }
         }
 
-        // Generate output if matches found OR pattern inference succeeded
-        if (matchedSkills.length > 0 || matchedAgents.length > 0 || patternInference) {
+        // Generate output if matches found OR pattern inference succeeded OR semantic query detected
+        if (matchedSkills.length > 0 || matchedAgents.length > 0 || patternInference || semanticQuery.isSemanticQuery) {
             // Check which skills need LLM validation (potential false positives)
             const skillsNeedingValidation = matchedSkills.filter(s => s.needsValidation);
             const agentsNeedingValidation = matchedAgents.filter(a => a.needsValidation);
@@ -339,6 +389,12 @@ async function main() {
             // CHANGE 2: Show pattern inference output FIRST if available
             if (patternInference) {
                 output += generateAgenticaOutput(patternInference, data.prompt);
+                output += '\n';
+            }
+
+            // CHANGE 3: Show semantic query suggestion if detected
+            if (semanticQuery.isSemanticQuery && semanticQuery.suggestion) {
+                output += semanticQuery.suggestion;
                 output += '\n';
             }
 

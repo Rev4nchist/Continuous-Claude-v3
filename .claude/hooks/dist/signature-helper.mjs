@@ -169,7 +169,7 @@ function tryStartDaemon(projectDir) {
         });
         started = result.status === 0;
       }
-      if (!started) {
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync("tldr", ["daemon", "start", "--project", projectDir], {
           timeout: 5e3,
           stdio: "ignore"
@@ -336,11 +336,11 @@ function findFunctionFile(funcName, projectDir) {
   }
   return null;
 }
-function getSignatureFromTLDR(funcName, filePath) {
+function getSignatureFromTLDR(funcName, filePath, sessionId) {
   try {
     const projectDir = getProjectDir();
     const response = queryDaemonSync(
-      { cmd: "extract", file: filePath },
+      { cmd: "extract", file: filePath, session: sessionId },
       projectDir
     );
     if (response.indexing || response.status === "unavailable" || response.status === "error") {
@@ -383,7 +383,7 @@ async function main() {
   for (const call of calls.slice(0, 5)) {
     const filePath = findFunctionFile(call, projectDir);
     if (filePath) {
-      const sig = getSignatureFromTLDR(call, filePath);
+      const sig = getSignatureFromTLDR(call, filePath, input.session_id);
       if (sig) {
         signatures.push(sig);
       }

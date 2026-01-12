@@ -8,7 +8,9 @@ __pycache__/
 .claude.json.backup
 *.egg-info/
 dist/
+!.claude/hooks/dist/
 build/
+!.claude/skills/build/
 .pytest_cache/
 .mypy_cache/
 node_modules/
@@ -124,6 +126,27 @@ opc/mcp_config.json
 opc/init-db.sql.bak
 opc/ISOLATED_SETUP.md
 opc/docker-compose.memory.yml
+
+# Personal/local development (not for release)
+.claude/agents/brenner.md
+.claude/skills/rigg-eval.md
+.claude/skills/don-norman-ux/
+.claude/hooks/src/tldr-read-enforcer.backup.ts
+.claude/hooks/dist/tldr-read-enforcer.backup.mjs
+.claude/hooks/.tldrignore
+.claude/hooks/src/.tldrignore
+opc/scripts/.tldrignore
+.tldrignore
+.envrc
+
+# OPC testing scripts (local experiments)
+opc/scripts/analyze_session_cache_potential.py
+opc/scripts/context_cache_calculator.py
+opc/scripts/context_engine_chaos_model.py
+opc/scripts/context_engine_economics.py
+opc/scripts/test_anthropic_cache_empirical.py
+opc/scripts/test_native_vs_api_caching.py
+opc/scripts/tldr_fluid_cache_model.py
 
 # OPC dev-only (not needed for wizard install)
 opc/.github/

@@ -448,7 +448,8 @@ fi
 # Check if installed
 which tldr
 # Install if missing
-pip install tldr-code
+uv tool install llm-tldr
+# or: pip install llm-tldr
 ```
 
 **No Python files found:**

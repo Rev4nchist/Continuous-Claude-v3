@@ -169,7 +169,7 @@ function tryStartDaemon(projectDir) {
         });
         started = result.status === 0;
       }
-      if (!started) {
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync("tldr", ["daemon", "start", "--project", projectDir], {
           timeout: 5e3,
           stdio: "ignore"

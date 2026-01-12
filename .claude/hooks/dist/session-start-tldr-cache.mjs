@@ -170,7 +170,7 @@ function tryStartDaemon(projectDir) {
         });
         started = result.status === 0;
       }
-      if (!started) {
+      if (!started && !process.env.TLDR_DEV) {
         spawnSync("tldr", ["daemon", "start", "--project", projectDir], {
           timeout: 5e3,
           stdio: "ignore"
@@ -304,7 +304,15 @@ async function main() {
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
   const cache = getCacheStatus(projectDir);
-  const shouldWarm = !cache.exists || cache.age_hours !== void 0 && cache.age_hours > 24;
+  let daemonFiles = 0;
+  try {
+    const statusResp = queryDaemonSync({ cmd: "status" }, projectDir);
+    if (statusResp.status === "ready") {
+      daemonFiles = statusResp.files || 0;
+    }
+  } catch {
+  }
+  const shouldWarm = !cache.exists || cache.age_hours !== void 0 && cache.age_hours > 24 || daemonFiles === 0;
   let warmStatus = "";
   if (shouldWarm) {
     try {

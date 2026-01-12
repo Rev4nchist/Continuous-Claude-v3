@@ -62,86 +62,8 @@ interface HookInput {
   transcript_path?: string;  // Path to conversation JSONL
 }
 
-interface TranscriptIntent {
-  layers: string[];
-  target: string | null;
-  source: string;
-}
-
-/**
- * Analyze recent transcript messages to infer intent
- */
-function analyzeTranscript(transcriptPath: string): TranscriptIntent | null {
-  try {
-    if (!existsSync(transcriptPath)) return null;
-
-    const content = readFileSync(transcriptPath, 'utf-8');
-    const lines = content.trim().split('\n').slice(-20);  // Last 20 messages
-
-    // Combine recent text for analysis
-    let recentText = '';
-    for (const line of lines) {
-      try {
-        const msg = JSON.parse(line);
-        if (msg.type === 'human' || msg.type === 'assistant') {
-          const text = typeof msg.message === 'string'
-            ? msg.message
-            : JSON.stringify(msg.message);
-          recentText += ' ' + text;
-        }
-      } catch { /* ignore parse errors */ }
-    }
-
-    recentText = recentText.toLowerCase();
-
-    // Intent detection patterns
-    const intentPatterns: Array<{ patterns: RegExp[]; layers: string[]; name: string }> = [
-      {
-        patterns: [/debug/, /bug/, /fix\s+(the|this|a)?\s*(error|issue|problem)/, /investigate/, /broken/],
-        layers: ['ast', 'call_graph', 'cfg'],
-        name: 'debugging'
-      },
-      {
-        patterns: [/where\s+does/, /data\s*flow/, /variable/, /track\s+\w+/, /what\s+sets/],
-        layers: ['ast', 'dfg'],
-        name: 'data-flow'
-      },
-      {
-        patterns: [/complexity/, /how\s+complex/, /refactor/, /simplify/, /control\s+flow/],
-        layers: ['ast', 'call_graph', 'cfg'],
-        name: 'complexity'
-      },
-      {
-        patterns: [/what\s+depends/, /impact/, /affects/, /slice/],
-        layers: ['ast', 'call_graph', 'pdg'],
-        name: 'dependencies'
-      },
-      {
-        patterns: [/understand/, /how\s+does.*work/, /explain/],
-        layers: ['ast', 'call_graph', 'cfg'],
-        name: 'understanding'
-      }
-    ];
-
-    for (const intent of intentPatterns) {
-      if (intent.patterns.some(p => p.test(recentText))) {
-        // Try to extract a function/class name from recent text
-        const funcMatch = recentText.match(/(?:function|method|def|class)\s+(\w+)/);
-        const target = funcMatch ? funcMatch[1] : null;
-
-        return {
-          layers: intent.layers,
-          target,
-          source: `transcript:${intent.name}`
-        };
-      }
-    }
-
-    return null;
-  } catch {
-    return null;
-  }
-}
+// Transcript analysis removed - use Bayesian inference (search-router) instead of retrospective prediction
+// See: 2026-01-11 discussion - P(intent | current action) >> P(intent | past words)
 
 interface HookOutput {
   hookSpecificOutput?: {
@@ -195,26 +117,125 @@ function detectLanguage(filePath: string): string {
   return langMap[ext] || 'python';
 }
 
+/**
+ * Choose TLDR mode based on context signals.
+ *
+ * Simple logic: trust search-router, otherwise use structure.
+ * - 'structure': Just function/class names (99% savings) - default
+ * - 'context': Entry point focused (87% savings) - when search found target
+ * - 'extract': Full AST dump (26% savings) - when advanced analysis needed
+ */
+type TldrMode = 'structure' | 'context' | 'extract';
+
+function chooseTldrMode(
+  target: string | null,
+  layers: string[],
+  contextSource: string
+): { mode: TldrMode; reason: string } {
+  // Only trust targets from search-router (it actually searched for them)
+  // contextSource format: "function: func_name" or "class: ClassName"
+  const fromSearchRouter = contextSource.startsWith('function:') || contextSource.startsWith('class:');
+  if (target && fromSearchRouter) {
+    return { mode: 'context', reason: `search: ${target}` };
+  }
+
+  // If advanced layers explicitly requested (cfg, dfg, pdg), use extract
+  if (layers.some(l => ['cfg', 'dfg', 'pdg'].includes(l))) {
+    return { mode: 'extract', reason: 'flow analysis' };
+  }
+
+  // Default: structure for navigation (99% savings)
+  return { mode: 'structure', reason: 'navigation' };
+}
+
 function getTldrContext(
   filePath: string,
   language: string,
   layers: string[] = ['ast', 'call_graph'],
   target: string | null = null,
-  sessionId: string | null = null
+  sessionId: string | null = null,
+  contextSource: string = 'default'
 ): string | null {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const fileName = basename(filePath);
   const results: string[] = [];
 
+  // Choose optimal TLDR mode
+  const { mode, reason } = chooseTldrMode(target, layers, contextSource);
+
   try {
-    // Header
+    // Header with mode indicator
     results.push(`# ${fileName}`);
     results.push(`Language: ${language}`);
+    results.push(`Mode: ${mode} (${reason})`);
     results.push('');
 
+    // MODE: context - focused on target function (87% savings)
+    if (mode === 'context' && target) {
+      const contextResp = queryDaemonSync(
+        { cmd: 'context', entry: target, language, depth: 2 },
+        projectDir
+      );
+      if (contextResp.status === 'ok' && contextResp.result) {
+        results.push('## Focused Context');
+        results.push(typeof contextResp.result === 'string'
+          ? contextResp.result
+          : JSON.stringify(contextResp.result, null, 2));
+        results.push('');
+        results.push('---');
+        results.push('To see more: Read with offset/limit, or ask about specific functions');
+        return results.join('\n');
+      }
+      // Fall through to extract if context fails
+    }
+
+    // MODE: structure - just names (99% savings)
+    // Note: use 'extract' for single files (structure is for directories)
+    if (mode === 'structure') {
+      const extractResp = queryDaemonSync(
+        { cmd: 'extract', file: filePath, session: sessionId || undefined },
+        projectDir
+      );
+      if (extractResp.status === 'ok' && extractResp.result) {
+        results.push('## Structure (names only)');
+        const info = extractResp.result;
+        if (info.functions?.length > 0) {
+          results.push('### Functions');
+          for (const fn of info.functions.slice(0, 30)) {
+            const params = fn.params ? `(${fn.params.slice(0, 3).join(', ')}${fn.params.length > 3 ? '...' : ''})` : '()';
+            results.push(`  ${fn.name}${params}  [line ${fn.line_number || fn.line || '?'}]`);
+            // Add first line of docstring for context (addresses premortem tiger)
+            if (fn.docstring) {
+              const firstLine = fn.docstring.split('\n')[0].trim().slice(0, 80);
+              results.push(`    # ${firstLine}`);
+            }
+          }
+        }
+        if (info.classes?.length > 0) {
+          results.push('### Classes');
+          for (const cls of info.classes.slice(0, 20)) {
+            const methods = cls.methods?.slice(0, 5).map((m: { name: string }) => m.name).join(', ') || '';
+            results.push(`  ${cls.name}  [line ${cls.line_number || cls.line || '?'}]`);
+            // Add first line of class docstring
+            if (cls.docstring) {
+              const firstLine = cls.docstring.split('\n')[0].trim().slice(0, 80);
+              results.push(`    # ${firstLine}`);
+            }
+            if (methods) results.push(`    methods: ${methods}${cls.methods?.length > 5 ? '...' : ''}`);
+          }
+        }
+        results.push('');
+        results.push('---');
+        results.push('To see full code: Read with limit=100 (or offset=N limit=M for specific lines)');
+        return results.join('\n');
+      }
+      // Fall through to extract if failed
+    }
+
+    // MODE: extract - full AST (26% savings) - fallback and for editing
     // L1/L2: Extract file info (AST + Call Graph) using daemon
     // Pass session ID for token tracking (P7)
-    if (layers.includes('ast') || layers.includes('call_graph')) {
+    if (layers.includes('ast') || layers.includes('call_graph') || mode === 'extract') {
       const extractResp = queryDaemonSync(
         { cmd: 'extract', file: filePath, session: sessionId || undefined },
         projectDir
@@ -391,24 +412,17 @@ async function main() {
   let target: string | null = null;
   let contextSource = 'default';
 
-  // 1. Check for search context from smart-search-router (highest priority)
+  // Check for search context from smart-search-router (Bayesian: P(intent | current action))
   const searchContext = getSearchContext(input.session_id);
   if (searchContext) {
     layers = searchContext.suggestedLayers;
     target = searchContext.target;
     contextSource = `${searchContext.targetType}: ${searchContext.target}`;
   }
-  // 2. Analyze transcript for intent (fallback when no search context)
-  else if (input.transcript_path) {
-    const transcriptIntent = analyzeTranscript(input.transcript_path);
-    if (transcriptIntent) {
-      layers = transcriptIntent.layers;
-      target = transcriptIntent.target;
-      contextSource = transcriptIntent.source;
-    }
-  }
+  // No transcript analysis - retrospective prediction is epistemically weak
+  // Default layers (ast, call_graph) used when no search context
 
-  const tldrContext = getTldrContext(filePath, language, layers, target, input.session_id);
+  const tldrContext = getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
 
   if (!tldrContext) {
     // TLDR failed, allow normal read
