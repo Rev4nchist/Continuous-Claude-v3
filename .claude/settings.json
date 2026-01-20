@@ -48,6 +48,11 @@
         "hooks": [
           {
             "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/maestro-enforcer.mjs",
+            "timeout": 5
+          },
+          {
+            "type": "command",
             "command": "node $HOME/.claude/hooks/dist/tldr-context-inject.mjs",
             "timeout": 30
           },
@@ -135,6 +140,16 @@
     "UserPromptSubmit": [
       {
         "hooks": [
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/maestro-state-manager.mjs",
+            "timeout": 5
+          },
+          {
+            "type": "command",
+            "command": "node $HOME/.claude/hooks/dist/maestro-detector.mjs",
+            "timeout": 5
+          },
           {
             "type": "command",
             "command": "node $HOME/.claude/hooks/dist/skill-activation-prompt.mjs"
