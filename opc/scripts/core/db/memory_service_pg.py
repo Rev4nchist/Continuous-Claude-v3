@@ -309,6 +309,8 @@ class MemoryServicePG:
         metadata: dict[str, Any] | None = None,
         embedding: list[float] | None = None,
         tags: list[str] | None = None,
+        scope: str | None = None,
+        project_id: str | None = None,
     ) -> str:
         """Store a fact in archival memory.
 
@@ -317,6 +319,8 @@ class MemoryServicePG:
             metadata: Optional metadata dict
             embedding: Optional pre-computed embedding (normalized to 1024 dims)
             tags: Optional list of tags for categorization
+            scope: PROJECT (default) or GLOBAL for cross-project learnings
+            project_id: Hash of project root path for project-scoped queries
 
         Returns:
             Memory ID
@@ -337,8 +341,8 @@ class MemoryServicePG:
                 await conn.execute(
                     """
                     INSERT INTO archival_memory
-                        (id, session_id, agent_id, content, metadata, embedding)
-                    VALUES ($1, $2, $3, $4, $5, $6)
+                        (id, session_id, agent_id, content, metadata, embedding, scope, project_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
                     memory_id,
                     self.session_id,
@@ -346,19 +350,23 @@ class MemoryServicePG:
                     content,
                     json.dumps(metadata or {}),
                     padded_embedding,
+                    scope or "PROJECT",
+                    project_id,
                 )
             else:
                 await conn.execute(
                     """
                     INSERT INTO archival_memory
-                        (id, session_id, agent_id, content, metadata)
-                    VALUES ($1, $2, $3, $4, $5)
+                        (id, session_id, agent_id, content, metadata, scope, project_id)
+                    VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
                     memory_id,
                     self.session_id,
                     self.agent_id,
                     content,
                     json.dumps(metadata or {}),
+                    scope or "PROJECT",
+                    project_id,
                 )
 
             # Store tags if provided (deduplicated via set)

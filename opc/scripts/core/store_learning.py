@@ -53,9 +53,8 @@ if global_env.exists():
     load_dotenv(global_env)
 load_dotenv()
 
-# Add project to path
-project_dir = os.environ.get("CLAUDE_PROJECT_DIR", str(Path(__file__).parent.parent.parent))
-sys.path.insert(0, project_dir)
+# Add parent directory to path (for imports like 'from db.memory_factory')
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
 # Valid learning types for --type parameter
 LEARNING_TYPES = [
@@ -74,6 +73,60 @@ CONFIDENCE_LEVELS = ["high", "medium", "low"]
 # Deduplication threshold (0.85 = 85% similar)
 DEDUP_THRESHOLD = 0.85
 
+# Keywords that indicate GLOBAL scope (cross-project learnings)
+GLOBAL_KEYWORDS = {
+    "windows", "linux", "macos", "darwin", "posix", "platform",
+    "wsl", "mingw", "cygwin", "powershell", "cmd.exe",
+    "hooks", "hook", "skill", "skills", "mcp", "claude code",
+    "subagent", "agent", "spawn", "memory", "embedding",
+    "python", "typescript", "javascript", "rust", "go",
+    "async", "await", "promise", "generator", "decorator",
+    "git", "npm", "pip", "docker", "kubernetes", "postgres", "redis",
+    "segfault", "stack overflow", "memory leak", "race condition",
+}
+
+# Keywords that indicate PROJECT scope (project-specific)
+PROJECT_KEYWORDS = {
+    "src/", "lib/", "app/", "components/", "pages/", "routes/",
+    "test/", "tests/", "spec/", "__tests__/",
+    "package.json", "tsconfig", "pyproject.toml", "cargo.toml",
+}
+
+
+def get_project_id(project_dir: str | None) -> str | None:
+    """Generate stable project ID from absolute path."""
+    if not project_dir or not project_dir.strip():
+        return None
+    import hashlib
+    abs_path = str(Path(project_dir).resolve())
+    if not abs_path or abs_path == ".":
+        return None
+    return hashlib.sha256(abs_path.encode()).hexdigest()[:16]
+
+
+def classify_scope(
+    content: str,
+    tags: list[str] | None = None,
+    context: str | None = None,
+) -> str:
+    """Classify learning as PROJECT or GLOBAL scope.
+
+    GLOBAL: Cross-project patterns (Windows issues, hooks, language patterns)
+    PROJECT: Project-specific code, paths, architecture
+    """
+    combined = content.lower()
+    if context:
+        combined += " " + context.lower()
+    if tags:
+        combined += " " + " ".join(tags).lower()
+
+    global_score = sum(1 for kw in GLOBAL_KEYWORDS if kw in combined)
+    project_score = sum(1 for kw in PROJECT_KEYWORDS if kw in combined)
+
+    if global_score > project_score and global_score >= 2:
+        return "GLOBAL"
+    return "PROJECT"
+
 
 async def store_learning_v2(
     session_id: str,
@@ -82,8 +135,10 @@ async def store_learning_v2(
     context: str | None = None,
     tags: list[str] | None = None,
     confidence: str | None = None,
+    project_dir: str | None = None,
+    scope: str | None = None,
 ) -> dict:
-    """Store learning with v2 metadata schema and deduplication.
+    """Store learning with v2 metadata schema, deduplication, and scope classification.
 
     Args:
         session_id: Session identifier
@@ -92,24 +147,26 @@ async def store_learning_v2(
         context: What this learning relates to (e.g., "hook development")
         tags: List of tags for categorization
         confidence: Confidence level (high/medium/low)
+        project_dir: Project directory for PROJECT scope learnings
+        scope: Override scope classification (PROJECT or GLOBAL)
 
     Returns:
         dict with success status, memory_id, or skipped info for duplicates
     """
     try:
-        from scripts.core.db.memory_factory import (
+        from db.memory_factory import (
             create_memory_service,
             get_default_backend,
         )
-        from scripts.core.db.embedding_service import EmbeddingService
+        from db.embedding_service import EmbeddingService
     except ImportError as e:
         return {"success": False, "error": f"Memory service not available: {e}"}
 
     if not content or not content.strip():
         return {"success": False, "error": "No content provided"}
 
-    # Get backend - prefer postgres if connection string is set
-    if os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL"):
+    # Get backend - prefer postgres if DATABASE_URL is set
+    if os.environ.get("DATABASE_URL"):
         backend = "postgres"
     else:
         backend = get_default_backend()
@@ -121,7 +178,7 @@ async def store_learning_v2(
         )
 
         # Generate embedding
-        embedder = EmbeddingService(provider=os.getenv("EMBEDDING_PROVIDER", "local"))
+        embedder = EmbeddingService(provider="local")
         embedding = await embedder.embed(content)
 
         # Deduplication check: search for similar existing memories
@@ -142,6 +199,10 @@ async def store_learning_v2(
             # If search fails, proceed with storing (don't block on dedup errors)
             pass
 
+        # Classify scope if not explicitly provided
+        final_scope = scope or classify_scope(content, tags, context)
+        project_id = get_project_id(project_dir) if project_dir else None
+
         # Build metadata
         metadata = {
             "type": "session_learning",
@@ -158,11 +219,13 @@ async def store_learning_v2(
         if confidence:
             metadata["confidence"] = confidence
 
-        # Store with embedding
+        # Store with embedding, scope, and project_id
         memory_id = await memory.store(
             content,
             metadata=metadata,
             embedding=embedding,
+            scope=final_scope,
+            project_id=project_id,
         )
 
         await memory.close()
@@ -173,6 +236,8 @@ async def store_learning_v2(
             "backend": backend,
             "content_length": len(content),
             "embedding_dim": len(embedding),
+            "scope": final_scope,
+            "project_id": project_id,
         }
 
     except Exception as e:
@@ -199,11 +264,11 @@ async def store_learning(
         dict with success status and memory_id
     """
     try:
-        from scripts.core.db.memory_factory import (
+        from db.memory_factory import (
             create_memory_service,
             get_default_backend,
         )
-        from scripts.core.db.embedding_service import EmbeddingService
+        from db.embedding_service import EmbeddingService
     except ImportError as e:
         return {"success": False, "error": f"Memory service not available: {e}"}
 
@@ -236,8 +301,8 @@ async def store_learning(
         }
     }
 
-    # Get backend - prefer postgres if connection string is set
-    if os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL"):
+    # Get backend - prefer postgres if DATABASE_URL is set
+    if os.environ.get("DATABASE_URL"):
         backend = "postgres"
     else:
         backend = get_default_backend()
@@ -249,7 +314,7 @@ async def store_learning(
         )
 
         # Generate embedding using local provider (no API key needed)
-        embedder = EmbeddingService(provider=os.getenv("EMBEDDING_PROVIDER", "local"))
+        embedder = EmbeddingService(provider="local")
         embedding = await embedder.embed(learning_content)
 
         # Store with embedding for semantic search
@@ -298,6 +363,14 @@ async def main():
         help="Confidence level (v2)",
     )
 
+    # Scope parameters (v3)
+    parser.add_argument("--project-dir", help="Project directory for PROJECT scope")
+    parser.add_argument(
+        "--scope",
+        choices=["PROJECT", "GLOBAL"],
+        help="Override scope classification",
+    )
+
     # Output options
     parser.add_argument("--json", action="store_true", help="Output as JSON")
 
@@ -317,6 +390,8 @@ async def main():
             context=args.context,
             tags=tags,
             confidence=args.confidence,
+            project_dir=args.project_dir,
+            scope=args.scope,
         )
     else:
         # Legacy mode
@@ -337,6 +412,8 @@ async def main():
             print(f"Learning stored (id: {result.get('memory_id', 'unknown')})")
             print(f"  Backend: {result.get('backend', 'unknown')}")
             print(f"  Content: {result.get('content_length', 0)} chars")
+            if result.get("scope"):
+                print(f"  Scope: {result.get('scope')}")
         else:
             print(f"Failed to store learning: {result.get('error', 'unknown')}")
             sys.exit(1)
