@@ -34,6 +34,32 @@ ITERATION=1
 MAX_ITERATIONS=30
 TASK_ID=""
 CONTEXT_DIR=""
+DOCKER_IMAGE="ralph-ralph"
+
+# ═══════════════════════════════════════════════════════════════════════════════
+# Auto-build Docker image if not present
+# ═══════════════════════════════════════════════════════════════════════════════
+ensure_docker_image() {
+    if ! docker image inspect "$DOCKER_IMAGE" &>/dev/null; then
+        echo -e "${YELLOW}Docker image '$DOCKER_IMAGE' not found. Building (first time only)...${NC}"
+        echo -e "${BLUE}This may take 5-10 minutes due to CUDA/PyTorch dependencies.${NC}"
+
+        local dockerfile_dir="$CLAUDE_HOME/docker/ralph"
+        if [[ ! -f "$dockerfile_dir/Dockerfile" ]]; then
+            echo -e "${RED}Error: Dockerfile not found at $dockerfile_dir/Dockerfile${NC}"
+            exit 1
+        fi
+
+        docker build -t "$DOCKER_IMAGE" "$dockerfile_dir"
+
+        if [[ $? -eq 0 ]]; then
+            echo -e "${GREEN}✓ Docker image '$DOCKER_IMAGE' built successfully${NC}"
+        else
+            echo -e "${RED}✗ Docker image build failed${NC}"
+            exit 1
+        fi
+    fi
+}
 
 # Parse arguments
 while [[ $# -gt 0 ]]; do
@@ -180,6 +206,9 @@ echo -e "${GREEN}  ✓ Agent prompt generated${NC}"
 
 echo -e "${GREEN}[3/4] Spawning Docker agent...${NC}"
 
+# Ensure Docker image exists (builds if needed - first time only)
+ensure_docker_image
+
 # Ensure .ralph directory exists in project
 mkdir -p "$PROJECT_DIR/.ralph"
 
@@ -188,9 +217,14 @@ COMPOSE_FILE="$CLAUDE_HOME/docker/ralph/docker-compose.yml"
 if [[ ! -f "$COMPOSE_FILE" ]]; then
     echo -e "${YELLOW}  ! docker-compose.yml not found, using direct docker run${NC}"
 
-    # Direct docker run fallback
+    # Direct docker run fallback with resource limits
+    # Memory: 8GB, CPU: 4 cores, PIDs: 512
     docker run --rm \
         --network host \
+        --memory="${RALPH_MEMORY_LIMIT:-8g}" \
+        --cpus="${RALPH_CPU_LIMIT:-4}" \
+        --pids-limit=512 \
+        --security-opt=no-new-privileges:true \
         -e ANTHROPIC_API_KEY="${ANTHROPIC_API_KEY:-}" \
         -e DATABASE_URL="${DATABASE_URL:-}" \
         -e STORY_ID="$STORY_ID" \
@@ -202,7 +236,7 @@ if [[ ! -f "$COMPOSE_FILE" ]]; then
         -v "$CLAUDE_HOME/scripts/core:/home/node/.claude/scripts/core:ro" \
         -w /workspace \
         --name "ralph-$TASK_ID" \
-        ralph-ralph \
+        "$DOCKER_IMAGE" \
         claude -p "$(cat "$CONTEXT_DIR/agent-prompt.md")"
 
     DOCKER_EXIT=$?
