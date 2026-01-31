@@ -1,5 +1,7 @@
 ﻿# Continuous-Claude Windows Cheat Sheet
 
+> **See also:** [Architecture Docs](docs/architecture/INDEX.md) for system overview and navigation
+
 ## Memory Daemon
 
 ```powershell

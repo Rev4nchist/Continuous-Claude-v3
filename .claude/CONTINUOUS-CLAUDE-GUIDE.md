@@ -2,6 +2,8 @@
 
 > Cross-session memory, coordination, and continuity for Claude Code
 
+**See also:** [Architecture Docs](docs/architecture/INDEX.md) for system diagrams, agent selection, and deep dives
+
 ## What Continuous Claude Does For You
 
 ### Automatic (No Action Required)
