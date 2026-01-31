@@ -152,23 +152,25 @@ def extract_description(filepath: Path) -> str:
 
 def parse_roadmap(filepath: Path) -> dict[str, Any]:
     if not filepath.exists():
-        return {"source": None, "current": None, "completed": [], "planned": []}
+        return {"source": None, "current": None, "completed": [], "planned": [], "planning_sessions": []}
 
     try:
         content = filepath.read_text(encoding="utf-8", errors="ignore")
     except Exception:
-        return {"source": str(filepath), "current": None, "completed": [], "planned": []}
+        return {"source": str(filepath), "current": None, "completed": [], "planned": [], "planning_sessions": []}
 
-    result = {
+    result: dict[str, Any] = {
         "source": str(filepath.name),
         "current": None,
         "completed": [],
-        "planned": []
+        "planned": [],
+        "planning_sessions": []
     }
 
     lines = content.split("\n")
     section = None
     current_title = None
+    current_session: dict[str, Any] | None = None
 
     for line in lines:
         stripped = line.strip()
@@ -181,6 +183,9 @@ def parse_roadmap(filepath: Path) -> dict[str, Any]:
             continue
         elif stripped.lower().startswith("## planned"):
             section = "planned"
+            continue
+        elif stripped.lower().startswith("## recent planning"):
+            section = "sessions"
             continue
         elif stripped.startswith("## "):
             section = None
@@ -214,6 +219,19 @@ def parse_roadmap(filepath: Path) -> dict[str, Any]:
                     elif "low" in prio_match.lower():
                         priority = "low"
                 result["planned"].append({"title": title, "priority": priority})
+
+        # Parse planning sessions
+        if section == "sessions":
+            session_match = re.match(r"^###\s*(\d{4}-\d{2}-\d{2}):\s*(.+)$", stripped)
+            if session_match:
+                current_session = {
+                    "date": session_match.group(1),
+                    "title": session_match.group(2).strip(),
+                    "decisions": []
+                }
+                result["planning_sessions"].append(current_session)
+            elif current_session and stripped.startswith("- "):
+                current_session["decisions"].append(stripped[2:])
 
     return result
 

@@ -81,7 +81,7 @@ async def search_learnings_text_only_postgres(query: str, k: int = 5) -> list[di
     Uses tsvector/tsquery with GIN index. Automatic stopword handling.
     Falls back to ILIKE if tsquery fails (e.g., all stopwords).
     """
-    from scripts.core.core.db.postgres_pool import get_pool
+    from core.core.db.postgres_pool import get_pool
 
     pool = await get_pool()
 
@@ -259,8 +259,8 @@ async def search_learnings_hybrid_rrf(
     Returns:
         List of learnings with RRF scores
     """
-    from scripts.core.core.db.embedding_service import EmbeddingService
-    from scripts.core.core.db.postgres_pool import get_pool, init_pgvector
+    from core.core.db.embedding_service import EmbeddingService
+    from core.core.db.postgres_pool import get_pool, init_pgvector
 
     pool = await get_pool()
 
@@ -377,8 +377,8 @@ async def search_learnings_postgres(
     Returns:
         List of matching learnings with similarity scores
     """
-    from scripts.core.core.db.embedding_service import EmbeddingService
-    from scripts.core.core.db.postgres_pool import get_pool
+    from core.core.db.embedding_service import EmbeddingService
+    from core.core.db.postgres_pool import get_pool
 
     pool = await get_pool()
 
@@ -402,7 +402,7 @@ async def search_learnings_postgres(
             await embedder.aclose()
 
         async with pool.acquire() as conn:
-            from scripts.core.core.db.postgres_pool import init_pgvector
+            from core.core.db.postgres_pool import init_pgvector
             await init_pgvector(conn)
 
             if recency_weight > 0:

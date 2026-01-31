@@ -3,6 +3,7 @@
 // src/post-plan-roadmap.ts
 import * as fs from "fs";
 import * as path from "path";
+import { execSync } from "child_process";
 function parseRoadmap(content) {
   const result = {
     current: null,
@@ -328,6 +329,61 @@ function extractPlanInfo(planContent, filePath) {
     affectedFiles: affectedFiles.slice(0, 10)
   };
 }
+function storePlanningLearnings(planInfo, projectDir) {
+  const decisions = planInfo.decisions.slice(0, 5);
+  if (decisions.length === 0) {
+    console.error("No decisions to store in memory");
+    return;
+  }
+  const contentLines = [
+    `Planning: ${planInfo.title}`,
+    "",
+    "Decisions:",
+    ...decisions.map((d) => `- ${d}`)
+  ];
+  if (planInfo.steps.length > 0) {
+    contentLines.push("", "Key Steps:", ...planInfo.steps.slice(0, 3).map((s) => `- ${s}`));
+  }
+  const content = contentLines.join("\n");
+  const opcDir = process.env.CLAUDE_OPC_DIR || path.join(process.env.USERPROFILE || process.env.HOME || "", ".claude");
+  const sessionId = `plan-${Date.now()}`;
+  const escapedContent = content.replace(/"/g, '\\"').replace(/\n/g, "\\n");
+  const escapedContext = `planning: ${planInfo.title}`.replace(/"/g, '\\"');
+  const isWindows = process.platform === "win32";
+  const cmd = isWindows ? [
+    `cd /d "${opcDir}"`,
+    `set PYTHONPATH=.`,
+    `uv run python scripts/core/store_learning.py`,
+    `--session-id "${sessionId}"`,
+    `--type ARCHITECTURAL_DECISION`,
+    `--content "${escapedContent}"`,
+    `--context "${escapedContext}"`,
+    `--tags "planning,decisions,architecture"`,
+    `--confidence high`,
+    `--scope GLOBAL`
+  ].join(" && ") : [
+    `cd "${opcDir}"`,
+    `PYTHONPATH=. uv run python scripts/core/store_learning.py`,
+    `--session-id "${sessionId}"`,
+    `--type ARCHITECTURAL_DECISION`,
+    `--content "${escapedContent}"`,
+    `--context "${escapedContext}"`,
+    `--tags "planning,decisions,architecture"`,
+    `--confidence high`,
+    `--scope GLOBAL`
+  ].join(" ");
+  try {
+    execSync(cmd, {
+      stdio: "pipe",
+      timeout: 1e4,
+      shell: isWindows ? "cmd.exe" : true
+    });
+    console.error(`\u2713 Stored ${decisions.length} planning decisions to memory`);
+  } catch (e) {
+    const err = e;
+    console.error(`Warning: Could not store planning learnings: ${err.message}`);
+  }
+}
 async function main() {
   const input = await readStdin();
   if (!input.trim()) {
@@ -423,6 +479,7 @@ async function main() {
   fs.mkdirSync(path.dirname(roadmapPath), { recursive: true });
   fs.writeFileSync(roadmapPath, newContent, "utf-8");
   console.error(`\u2713 ROADMAP.md updated: ${planInfo.title}`);
+  storePlanningLearnings(planInfo, projectDir);
   const stats = [
     `Goal: ${planInfo.title}`,
     `Decisions: ${planInfo.decisions.length}`,

@@ -2,6 +2,8 @@
 import * as fs from "fs";
 import * as path from "path";
 import { execSync } from "child_process";
+var STALE_THRESHOLD_DAYS = 7;
+var STALE_THRESHOLD_MS = STALE_THRESHOLD_DAYS * 24 * 60 * 60 * 1e3;
 function buildHandoffDirName(sessionName, sessionId) {
   const uuidShort = sessionId.replace(/-/g, "").slice(0, 8);
   return `${sessionName}-${uuidShort}`;
@@ -137,6 +139,72 @@ function getLatestHandoff(handoffDir) {
     isAutoHandoff
   };
 }
+async function buildUnifiedContext(projectDir) {
+  const sections = [];
+  const roadmapPath = path.join(projectDir, "ROADMAP.md");
+  if (fs.existsSync(roadmapPath)) {
+    try {
+      const roadmap = fs.readFileSync(roadmapPath, "utf-8");
+      const currentMatch = roadmap.match(/## Current Focus\n([\s\S]*?)(?=\n## |$)/);
+      if (currentMatch) {
+        sections.push(`## ROADMAP - Current Focus
+${currentMatch[1].trim().substring(0, 500)}`);
+      }
+      const sessionMatch = roadmap.match(/### (\d{4}-\d{2}-\d{2}): ([^\n]+)\n([\s\S]*?)(?=\n### |\n## |$)/);
+      if (sessionMatch) {
+        const sessionContent = sessionMatch[3].substring(0, 400);
+        sections.push(`## Recent Planning: ${sessionMatch[2]}
+${sessionContent}`);
+      }
+    } catch (error) {
+      console.error(`Warning: Error reading ROADMAP.md for unified context: ${error}`);
+    }
+  }
+  const treePath = path.join(projectDir, ".claude", "knowledge-tree.json");
+  if (fs.existsSync(treePath)) {
+    try {
+      const treeContent = fs.readFileSync(treePath, "utf-8");
+      const tree = JSON.parse(treeContent);
+      if (tree.navigation?.common_tasks) {
+        const taskNav = Object.entries(tree.navigation.common_tasks).slice(0, 5).map(([task, paths]) => `- ${task}: ${paths.slice(0, 2).join(", ")}`).join("\n");
+        if (taskNav) {
+          sections.push(`## Quick Navigation
+${taskNav}`);
+        }
+      }
+      if (tree.navigation?.entry_points) {
+        const entries = Object.entries(tree.navigation.entry_points).slice(0, 3).map(([name, p]) => `- ${name}: ${p}`).join("\n");
+        if (entries) {
+          sections.push(`## Entry Points
+${entries}`);
+        }
+      }
+    } catch (error) {
+    }
+  }
+  const currentGoalMatch = sections[0]?.match(/\*\*([^*]+)\*\*/);
+  const currentGoal = currentGoalMatch ? currentGoalMatch[1] : "";
+  if (currentGoal) {
+    const opcDir = process.env.CLAUDE_OPC_DIR || path.join(process.env.USERPROFILE || "", ".claude");
+    try {
+      const escapedGoal = currentGoal.replace(/"/g, "").substring(0, 100);
+      const isWindows = process.platform === "win32";
+      const cmd = isWindows ? `cd /d "${opcDir}" && set PYTHONPATH=. && uv run python scripts/core/recall_learnings.py --query "${escapedGoal}" --k 3 --text-only` : `cd "${opcDir}" && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "${escapedGoal}" --k 3 --text-only`;
+      const result = execSync(cmd, {
+        encoding: "utf-8",
+        timeout: 5e3,
+        stdio: ["pipe", "pipe", "pipe"],
+        shell: isWindows ? "cmd.exe" : true
+      });
+      if (result && !result.includes("No results") && result.trim().length > 20) {
+        sections.push(`## Relevant Memories
+${result.substring(0, 600)}`);
+      }
+    } catch (error) {
+    }
+  }
+  return sections.join("\n\n---\n\n");
+}
 function getUnmarkedHandoffs() {
   try {
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -207,6 +275,16 @@ async function main() {
           }
           if (ledgerContent || isYaml && (goalSummary !== "No goal found" || currentFocus !== "Unknown")) {
             const mtime = fs.statSync(handoffPath).mtime.getTime();
+            const fileAge = Date.now() - mtime;
+            if (sessionType === "startup" && fileAge > STALE_THRESHOLD_MS) {
+              console.error(`Skipping stale handoff: ${sessionName} (${Math.floor(fileAge / (24 * 60 * 60 * 1e3))} days old)`);
+              continue;
+            }
+            const statusMatch = content.match(/^status:\s*(\w+)/m);
+            if (statusMatch && statusMatch[1] === "completed") {
+              console.error(`Skipping completed handoff: ${sessionName}`);
+              continue;
+            }
             if (!mostRecentLedger || mtime > mostRecentLedger.mtime) {
               mostRecentLedger = {
                 content: ledgerContent || content,
@@ -220,17 +298,46 @@ async function main() {
           }
         }
       }
+      const roadmapPath = path.join(projectDir, "ROADMAP.md");
+      let roadmapCurrentFocus = "";
+      let roadmapContext = "";
+      if (fs.existsSync(roadmapPath)) {
+        try {
+          const roadmapContent = fs.readFileSync(roadmapPath, "utf-8");
+          const currentMatch = roadmapContent.match(/## Current Focus\n([\s\S]*?)(?=\n## |$)/);
+          if (currentMatch) {
+            const currentSection = currentMatch[1].trim();
+            const firstLine = currentSection.split("\n")[0];
+            roadmapCurrentFocus = firstLine.replace(/\*\*/g, "").trim();
+            roadmapContext = `## ROADMAP - Current Focus
+${currentSection}`;
+          }
+        } catch (error) {
+          console.error(`Warning: Error reading ROADMAP.md: ${error}`);
+        }
+      }
       if (mostRecentLedger) {
         usedHandoffLedger = true;
         const { sessionName, goalSummary, currentFocus, content: ledgerSection, handoffPath } = mostRecentLedger;
         const handoffFilename = path.basename(handoffPath);
         if (sessionType === "startup") {
-          message = `\u{1F4CB} Handoff Ledger: ${sessionName} \u2192 ${currentFocus} (run /resume_handoff to continue)`;
+          if (roadmapCurrentFocus) {
+            message = `\u{1F4CD} Current: ${roadmapCurrentFocus} | \u{1F4CB} Handoff: ${sessionName} (run /resume_handoff)`;
+          } else {
+            message = `\u{1F4CB} Handoff Ledger: ${sessionName} \u2192 ${currentFocus} (run /resume_handoff to continue)`;
+          }
         } else {
           console.error(`\u2713 Handoff Ledger loaded: ${sessionName} \u2192 ${currentFocus}`);
           message = `[${sessionType}] Loaded from handoff: ${handoffFilename} | Goal: ${goalSummary} | Focus: ${currentFocus}`;
           if (sessionType === "clear" || sessionType === "compact") {
-            additionalContext = `Handoff Ledger loaded from ${handoffFilename}:
+            if (roadmapContext) {
+              additionalContext = `${roadmapContext}
+
+---
+
+`;
+            }
+            additionalContext += `Handoff Ledger loaded from ${handoffFilename}:
 
 ${ledgerSection}`;
             const unmarkedHandoffs = getUnmarkedHandoffs();
@@ -265,6 +372,31 @@ cd ~/.claude && uv run python scripts/core/artifact_mark.py --handoff <ID> --out
 Full handoff available at: ${handoffPath}
 `;
           }
+        }
+      }
+      if (!mostRecentLedger && roadmapCurrentFocus) {
+        usedHandoffLedger = true;
+        if (sessionType === "startup") {
+          message = `\u{1F4CD} Current: ${roadmapCurrentFocus}`;
+        } else {
+          message = `[${sessionType}] ROADMAP Focus: ${roadmapCurrentFocus}`;
+          if (sessionType === "clear" || sessionType === "compact") {
+            additionalContext = roadmapContext;
+          }
+        }
+      }
+      if (sessionType === "startup" || sessionType === "clear" || sessionType === "compact") {
+        try {
+          const unifiedContext = await buildUnifiedContext(projectDir);
+          if (unifiedContext && unifiedContext.trim().length > 50) {
+            if (additionalContext) {
+              additionalContext = unifiedContext + "\n\n---\n\n" + additionalContext;
+            } else {
+              additionalContext = unifiedContext;
+            }
+          }
+        } catch (error) {
+          console.error(`Warning: Could not build unified context: ${error}`);
         }
       }
     } catch (error) {

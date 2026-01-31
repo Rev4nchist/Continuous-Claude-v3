@@ -9,6 +9,21 @@ var COMPLETION_PATTERNS = [
   /\bmark\s+(as\s+)?(done|complete|finished)\b/i,
   /\bclose\s+(this\s+)?(task|issue|item)\b/i
 ];
+var TEST_SUCCESS_PATTERNS = [
+  /Tests:\s+\d+\s+passed,\s+0\s+failed/i,
+  /✓\s+\d+\s+tests?\s+passed/i,
+  /All specs passed/i,
+  /\d+\s+passed,\s+0\s+failed/i,
+  /PASSED\s+\d+\s+tests?/i,
+  /OK\s+\(\d+\s+tests?\)/i
+];
+var GIT_PUSH_PATTERNS = [
+  /\[main\s+[a-f0-9]+\]/i,
+  /\[master\s+[a-f0-9]+\]/i,
+  /-> main$/im,
+  /-> master$/im,
+  /Branch .+ set up to track/i
+];
 var COMPLETION_EXCLUSIONS = [
   /\bnot\s+(done|complete|finished)\b/i,
   /\bisn'?t\s+(done|complete|finished)\b/i,
@@ -29,6 +44,19 @@ function readStdin() {
     process.stdin.on("end", () => resolve(data));
     setTimeout(() => resolve(data), 1e3);
   });
+}
+function detectCompletionSignal(text) {
+  for (const pattern of TEST_SUCCESS_PATTERNS) {
+    if (pattern.test(text)) {
+      return { type: "test_success", matched: true };
+    }
+  }
+  for (const pattern of GIT_PUSH_PATTERNS) {
+    if (pattern.test(text)) {
+      return { type: "git_push", matched: true };
+    }
+  }
+  return { type: "none", matched: false };
 }
 function isCompletionSignal(text) {
   for (const exclusion of COMPLETION_EXCLUSIONS) {
@@ -237,6 +265,28 @@ async function handleTaskUpdate(data) {
     message: `ROADMAP updated: "${roadmapData.current.title}" marked complete`
   };
 }
+async function handleBashOutput(data) {
+  const toolResult = data.tool_result || "";
+  const signal = detectCompletionSignal(toolResult);
+  if (!signal.matched) {
+    return { result: "continue" };
+  }
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const roadmapPath = findRoadmapPath(projectDir);
+  if (!roadmapPath) {
+    return { result: "continue" };
+  }
+  const content = fs.readFileSync(roadmapPath, "utf-8");
+  const roadmapData = parseRoadmap(content);
+  if (!roadmapData.current) {
+    return { result: "continue" };
+  }
+  const signalDescription = signal.type === "test_success" ? "All tests passed" : "Code pushed to main branch";
+  return {
+    result: "continue",
+    message: `\u{1F3AF} Completion signal: ${signalDescription}. Goal "${roadmapData.current.title}" may be complete.`
+  };
+}
 async function handleUserPrompt(data) {
   if (!isCompletionSignal(data.prompt)) {
     return { result: "continue" };
@@ -272,6 +322,8 @@ async function main() {
   let result;
   if ("tool_name" in data && data.tool_name === "TaskUpdate") {
     result = await handleTaskUpdate(data);
+  } else if ("tool_name" in data && data.tool_name === "Bash") {
+    result = await handleBashOutput(data);
   } else if ("prompt" in data) {
     result = await handleUserPrompt(data);
   } else {

@@ -195,6 +195,32 @@ Create `/tasks/tasks-<feature>.md`
 
 **THIS IS THE CRITICAL CHANGE: Ralph delegates, never implements.**
 
+### Iteration Control [C:10]
+
+```yaml
+Iteration Limits:
+  max_iterations: 30        # Default for feature work
+  small_task_max: 10        # For quick fixes
+  large_task_max: 50        # For complex multi-file features
+  current_iteration: 0      # Tracked per story
+
+On Max Reached:
+  action: BLOCKED
+  output: |
+    <BLOCKED/>
+    Story: {{STORY_ID}}
+    Reason: Max iterations ({{max}}) reached without completion
+    Completed: {{completed_tasks}} / {{total_tasks}}
+    Need: User intervention to review progress and decide next steps
+
+Iteration Tracking:
+  - Increment counter at start of each delegation cycle
+  - Log iteration number in agent prompts
+  - Store iteration count in .ralph/orchestration.json
+```
+
+**Safety Rule:** Never run indefinitely. Stochastic systems require bounded execution.
+
 ### 3.1 Query Skill Router
 Before each task, query for recommended agents:
 
@@ -221,16 +247,62 @@ Task tool:
 ### 3.3 Wait for Completion
 Agent executes and returns result.
 
-### 3.4 Verify Output
-- Check agent's commit message
-- Run tests to verify
-- Review changes match requirements
+### 3.4 External Verification [C:9]
+
+**CRITICAL: Don't trust agent's "I'm done" signal. Verify independently.**
+
+After each agent completes, run verification checklist:
+
+```yaml
+Verification Checklist (ALL must pass to mark [x]):
+  Tests:
+    - [ ] Run test suite: `npm test` / `pytest` / `go test ./...`
+    - [ ] All tests pass (0 failures)
+    - [ ] No test regressions
+
+  Type Check:
+    - [ ] Run type check: `npm run typecheck` / `mypy` / `tsc --noEmit`
+    - [ ] No type errors
+
+  Lint:
+    - [ ] Run linter: `npm run lint` / `ruff check` / `golangci-lint`
+    - [ ] No new lint errors
+
+  Files:
+    - [ ] Expected files exist (from PRD requirements)
+    - [ ] No unexpected deletions
+
+  PRD Acceptance Criteria:
+    - [ ] Changes satisfy PRD requirements
+    - [ ] Functionality matches specification
+```
+
+**Verification Commands:**
+```bash
+# JavaScript/TypeScript
+npm test && npm run typecheck && npm run lint
+
+# Python
+pytest && mypy . && ruff check .
+
+# Go
+go test ./... && go vet ./...
+
+# Rust
+cargo test && cargo check && cargo clippy
+```
+
+**If ANY check fails:**
+1. Do NOT mark task as [x]
+2. Pass failure details to recovery agent
+3. Increment retry counter
+4. See Error Recovery section
 
 ### 3.5 Handle Errors
 See Error Recovery section below.
 
-### 3.6 Mark Task Complete
-Update `.ralph/IMPLEMENTATION_PLAN.md` with [x].
+### 3.6 Mark Task Complete (Only After Verification)
+**ONLY** update `.ralph/IMPLEMENTATION_PLAN.md` with [x] after ALL verification checks pass.
 
 ### 3.7 Continue or Finish
 - More tasks? → Loop to 3.1
@@ -286,6 +358,77 @@ If significant new patterns were added, regenerate knowledge tree:
 
 ```bash
 cd ~/.claude/scripts/core/core && uv run python knowledge_tree.py --project ${PROJECT}
+```
+
+---
+
+## Fresh Context Architecture [C:9]
+
+**Key insight from original Ralph: "Progress doesn't persist in the LLM's context window — it lives in your files and git history."**
+
+### Why Fresh Context Matters
+
+```yaml
+Problem: Context Rot
+  - Accumulated errors compound
+  - Hallucination drift increases
+  - Earlier mistakes pollute later decisions
+  - Token efficiency degrades
+
+Solution: Fresh Context Per Agent
+  - Each agent spawned via Task tool gets clean context
+  - No accumulated errors from previous iterations
+  - State persists externally (git, files, memory)
+  - Optimal token efficiency per task
+```
+
+### How Ralph Achieves Fresh Context
+
+```yaml
+Orchestration Model:
+  Ralph (parent):
+    - Maintains minimal coordination context
+    - Reads plan, selects task, spawns agent
+    - Receives agent result summary
+    - Does NOT inherit agent's full working context
+
+  Agent (child):
+    - Fresh context via Task tool isolation
+    - Receives only: task description + file list + requirements
+    - Works independently
+    - Returns: commit hash + summary + status
+
+State Persistence:
+  - Git: Code changes committed per task
+  - Memory: Learnings stored in PostgreSQL
+  - Files: .ralph/IMPLEMENTATION_PLAN.md tracks progress
+  - orchestration.json: Iteration counts, timing
+```
+
+### Context Isolation Rules
+
+| Context Type | Where | Persists Across Agents? |
+|--------------|-------|------------------------|
+| Code changes | Git commits | Yes (via git) |
+| Task status | IMPLEMENTATION_PLAN.md | Yes (via file) |
+| Learnings | archival_memory table | Yes (via DB) |
+| Working context | Agent's context window | No (fresh each time) |
+| Error history | orchestration.json | Yes (for escalation) |
+
+### AFK vs HITL Modes
+
+```yaml
+HITL (Human-in-the-loop):
+  max_iterations: 10  # Tighter loop
+  mode: Interactive pair programming
+  verify: After each task
+  escalate: Immediately on uncertainty
+
+AFK (Away-from-keyboard):
+  max_iterations: 30  # Longer runway
+  mode: Autonomous batch processing
+  verify: At end or on failure
+  escalate: After max retries exhausted
 ```
 
 ---
@@ -419,14 +562,21 @@ Ralph MUST NOT:
 | Path | Purpose |
 |------|---------|
 | `~/.claude/templates/ralph/PROMPT_BUILD.md` | Build loop prompt |
+| `~/.claude/templates/ralph/AGENT_PROMPT.md` | Docker agent prompt template |
 | `~/.claude/scripts/ralph/ralph-skill-query.py` | Skill router query |
+| `~/.claude/scripts/ralph/prepare-agent-context.py` | Pre-spawn context builder |
+| `~/.claude/scripts/ralph/extract-agent-learnings.py` | Post-completion learning extractor |
+| `~/.claude/scripts/ralph/spawn-ralph-docker.sh` | Memory-aware Docker spawn |
 | `~/.claude/scripts/core/recall_learnings.py` | Memory recall (Phase 0, 2) |
 | `~/.claude/scripts/core/store_learning.py` | Learning storage (Phase 4) |
+| `~/.claude/docker/ralph/docker-compose.yml` | Docker configuration |
 | `${PROJECT}/.claude/knowledge-tree.json` | Project navigation (Phase 0) |
 | `${PROJECT}/ROADMAP.md` | Goal tracking (auto-updated by hooks) |
 | `/tasks/prd-*.md` | Human-readable PRD |
 | `/tasks/tasks-*.md` | Task breakdown |
 | `.ralph/IMPLEMENTATION_PLAN.md` | Implementation checklist |
+| `.ralph/agent-output.json` | Agent task results |
+| `.ralph/orchestration.json` | Iteration and status tracking |
 
 ## Memory & Knowledge Integration
 
@@ -439,6 +589,126 @@ Ralph MUST NOT:
 | Phase 3 | Knowledge Tree | Injected via `pre-tool-knowledge` hook |
 | Phase 4 | Memory | Store learnings from feature |
 | Phase 4 | ROADMAP | Auto-updated via `prd-roadmap-sync` hook |
+
+---
+
+## Docker-Isolated Agents with Memory [H:8]
+
+Ralph can spawn agents in Docker containers with full memory integration. This provides:
+- True process isolation (clean filesystem state)
+- Pre-loaded relevant learnings from past sessions
+- Automatic learning extraction after completion
+
+### Architecture
+
+```
+┌─────────────────────────────────────────────────────────────────┐
+│                    RALPH ORCHESTRATOR                            │
+│  1. Select task from IMPLEMENTATION_PLAN.md                      │
+│  2. Call prepare-agent-context.py (query memory)                 │
+│  3. Spawn Docker container with /context mounted                 │
+│  4. Wait for completion                                          │
+│  5. Call extract-agent-learnings.py (store learnings)            │
+└─────────────────────────────────────────────────────────────────┘
+         │                                          ▲
+         │ docker run                               │ exit + output
+         ▼                                          │
+┌─────────────────────────────────────────────────────────────────┐
+│                    DOCKER CONTAINER                              │
+│  Volumes:                                                        │
+│  ├── /context/learnings.md (pre-fetched memories, ro)            │
+│  ├── /context/knowledge-tree.json (project structure, ro)        │
+│  ├── /workspace (project files, rw)                              │
+│  └── /workspace/.ralph/agent-output.json (results, rw)           │
+└─────────────────────────────────────────────────────────────────┘
+```
+
+### Context Directory Structure
+
+The `/context` directory (mounted read-only) contains:
+
+| File | Purpose |
+|------|---------|
+| `learnings.md` | Human-readable past learnings (solutions + failures) |
+| `knowledge-tree.json` | Project structure and navigation |
+| `task.md` | Full task instructions with context |
+| `meta.json` | Task metadata for learning extraction |
+
+### Memory Query Strategy
+
+Before spawning, `prepare-agent-context.py` queries memory:
+
+```python
+# Query 1: Similar task patterns
+results1 = recall_learnings(f"{task_type} {keywords}", k=5)
+
+# Query 2: Error patterns to avoid
+results2 = recall_learnings(f"{task_type} errors failures", k=3)
+
+# Query 3: Project-specific patterns
+results3 = recall_learnings(f"{project_name} patterns", k=3)
+```
+
+### Agent Output Format
+
+Agents write results to `/workspace/.ralph/agent-output.json`:
+
+```json
+{
+  "status": "success" | "failure" | "blocked",
+  "task_description": "...",
+  "task_type": "implement" | "test" | "refactor" | "fix",
+  "files_modified": ["path1", "path2"],
+  "commit_hash": "abc123",
+  "approach_summary": "What approach was taken",
+  "key_insight": "Key learning from this task",
+  "error_message": null | "...",
+  "verification": {
+    "tests_passed": true,
+    "typecheck_passed": true,
+    "lint_passed": true
+  }
+}
+```
+
+### Learning Extraction
+
+After task completion, `extract-agent-learnings.py` stores ONE learning:
+
+| Task Status | Learning Type | Content |
+|-------------|---------------|---------|
+| `success` | `WORKING_SOLUTION` | What worked, files, approach, key insight |
+| `failure` | `FAILED_APPROACH` | What failed, error, what to avoid |
+| `blocked` | (skipped) | Not enough signal |
+
+### Spawn Command
+
+```bash
+~/.claude/scripts/ralph/spawn-ralph-docker.sh \
+  --task "Implement authentication middleware" \
+  --story-id "STORY-001" \
+  --project-dir "/path/to/project" \
+  --iteration 1 \
+  --max-iterations 30
+```
+
+### Learning Feedback Loop
+
+```
+Session 1: Agent implements auth middleware
+  → Fails: forgot token refresh
+  → Stored: [FAILED_APPROACH] "Auth without refresh handling"
+
+Session 2: Agent implements similar auth
+  → Recalls: "Auth without refresh" (similarity: 0.85)
+  → Sees: "Error: tokens expired mid-session"
+  → Applies: Adds refresh logic proactively
+  → Succeeds
+  → Stored: [WORKING_SOLUTION] "Auth with token refresh"
+
+Session 3+: Future agents see both patterns
+  → Avoid the failure, apply the solution
+```
 
 ---
 
@@ -464,5 +734,48 @@ Note: Ralph NEVER called Edit/Write for implementation - all went through Task t
 
 ---
 
-*Ralph Skill v3.0 - Memory & Knowledge Tree Integration*
+## Cost Tracking (Future) [H:7]
+
+```yaml
+Future Enhancement:
+  Track per-agent:
+    - Tokens used (from Task result metadata)
+    - Estimated cost ($input_tokens * rate + $output_tokens * rate)
+    - Running total per story
+
+  Alert thresholds:
+    - Warning: 80% of budget
+    - Block: 100% of budget
+
+  Implementation:
+    - Parse Task tool response for token counts
+    - Aggregate in orchestration.json
+    - Add cost_limit parameter to SKILL.md
+```
+
+---
+
+## Summary: Original Ralph vs Our Implementation
+
+| Feature | Original Ralph | Our Implementation | Status |
+|---------|---------------|-------------------|--------|
+| Fresh context per iteration | New AI instance | Task tool / Docker isolation | ✅ Implemented |
+| External verification | `verifyCompletion()` | Verification checklist | ✅ Added |
+| Iteration limits | 5-50 based on size | 10/30/50 tiers | ✅ Added |
+| State via files | `prd.json`, `progress.txt` | `.ralph/`, memory DB | ✅ Better |
+| Cost tracking | Basic | Planned | ⏳ Future |
+| Multi-agent | Single per iteration | Parallel orchestration | ✅ Better |
+| Memory system | Flat file | Semantic search DB + pgvector | ✅ Better |
+| Pre-spawn context | None | `prepare-agent-context.py` | ✅ NEW |
+| Post-completion learning | None | `extract-agent-learnings.py` | ✅ NEW |
+| Docker isolation | None | Full container isolation | ✅ NEW |
+| Enforcement | None | Hook-based | ✅ Better |
+
+**Key insight preserved:** "Ralph is a deterministically mallocing orchestrator that avoids context rot."
+
+**New capability:** Agents get smarter over time by accessing success/failures from previous work.
+
+---
+
+*Ralph Skill v3.2 - Docker Isolation with Memory Integration*
 *Maestro's Autonomous Development Agent with Cross-Session Learning*
