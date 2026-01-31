@@ -36,6 +36,7 @@ from uuid import uuid4
 import asyncpg
 import numpy as np
 
+from .embedding_config import get_embedding_dimension
 from .postgres_pool import get_connection, get_pool, get_transaction, init_pgvector
 
 
@@ -317,7 +318,7 @@ class MemoryServicePG:
         Args:
             content: Fact content
             metadata: Optional metadata dict
-            embedding: Optional pre-computed embedding (normalized to 1024 dims)
+            embedding: Optional pre-computed embedding (normalized to configured dimension)
             tags: Optional list of tags for categorization
             scope: PROJECT (default) or GLOBAL for cross-project learnings
             project_id: Hash of project root path for project-scoped queries
@@ -327,7 +328,7 @@ class MemoryServicePG:
         """
         memory_id = generate_memory_id()
 
-        # Normalize embedding to 1024 dims if provided
+        # Normalize embedding to configured dimension if provided
         # Treat empty list as no embedding
         padded_embedding = None
         if embedding is not None and len(embedding) > 0:
@@ -386,16 +387,18 @@ class MemoryServicePG:
 
         return memory_id
 
-    def _pad_embedding(self, embedding: list[float], target_dim: int = 1024) -> list[float]:
+    def _pad_embedding(self, embedding: list[float], target_dim: int | None = None) -> list[float]:
         """Pad or truncate embedding to target dimension.
 
         Args:
             embedding: Original embedding
-            target_dim: Target dimension (default 1024 to match bge-large-en-v1.5)
+            target_dim: Target dimension (default from EMBEDDING_DIMENSION env var)
 
         Returns:
             Padded/truncated embedding as list
         """
+        if target_dim is None:
+            target_dim = get_embedding_dimension()
         vec = np.array(embedding)
         if len(vec) >= target_dim:
             return vec[:target_dim].tolist()
@@ -481,7 +484,7 @@ class MemoryServicePG:
         """Search archival memory with vector similarity.
 
         Args:
-            query_embedding: Query embedding (normalized to 1024 dims)
+            query_embedding: Query embedding (normalized to configured dimension)
             limit: Max results to return
             start_date: Optional start of date range (inclusive)
             end_date: Optional end of date range (inclusive)

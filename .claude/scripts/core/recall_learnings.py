@@ -35,11 +35,11 @@ from typing import Any
 
 from dotenv import load_dotenv
 
-# Load .env files
+# Load .env files (override=True ensures .env takes precedence over shell env)
 global_env = Path.home() / ".claude" / ".env"
 if global_env.exists():
-    load_dotenv(global_env)
-load_dotenv()
+    load_dotenv(global_env, override=True)
+load_dotenv(override=True)
 
 # Add scripts to path for imports
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
@@ -73,6 +73,116 @@ def get_backend() -> str:
 
     # Default to sqlite for simplicity
     return "sqlite"
+
+
+def check_postgres_available() -> bool:
+    """Quick health check for PostgreSQL connection.
+
+    Returns True if PostgreSQL is reachable, False otherwise.
+    """
+    import socket
+
+    # Parse connection URL to get host/port
+    db_url = os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL") or ""
+    if not db_url:
+        return False
+
+    try:
+        # postgresql://user:pass@host:port/db
+        if "@" in db_url and "/" in db_url:
+            host_port = db_url.split("@")[1].split("/")[0]
+            if ":" in host_port:
+                host, port = host_port.rsplit(":", 1)
+                port = int(port)
+            else:
+                host = host_port
+                port = 5432
+        else:
+            return False
+
+        # Quick socket test (500ms timeout - 100ms was too aggressive)
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.5)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
+async def health_check() -> dict[str, Any]:
+    """Comprehensive health check for memory recall system.
+
+    Validates:
+    - Backend selection
+    - Database connectivity
+    - Table existence
+    - Embedding service
+    - Learning count
+
+    Returns dict with health status and details.
+    """
+    result = {
+        "healthy": True,
+        "backend": get_backend(),
+        "checks": {},
+        "errors": [],
+    }
+
+    backend = result["backend"]
+
+    # Check 1: Database connectivity
+    if backend == "postgres":
+        socket_ok = check_postgres_available()
+        result["checks"]["postgres_socket"] = "OK" if socket_ok else "WARN (socket test failed)"
+
+        # Check 2: Actual database query (this is the authoritative check)
+        try:
+            from core.core.db.postgres_pool import get_pool
+            pool = await get_pool()
+            async with pool.acquire() as conn:
+                row = await conn.fetchrow("SELECT COUNT(*) as cnt FROM archival_memory WHERE metadata->>'type' = 'session_learning'")
+                count = row["cnt"] if row else 0
+                result["checks"]["postgres_query"] = "OK"
+                result["learning_count"] = count
+                # Query success = healthy, even if socket test failed
+        except Exception as e:
+            result["checks"]["postgres_query"] = f"FAIL: {e}"
+            result["errors"].append(f"PostgreSQL query failed: {e}")
+            result["healthy"] = False
+
+    elif backend == "sqlite":
+        db_path = Path.home() / ".claude" / "cache" / "memory.db"
+        if db_path.exists():
+            result["checks"]["sqlite_file"] = "OK"
+            try:
+                import sqlite3
+                conn = sqlite3.connect(str(db_path))
+                cursor = conn.execute("SELECT COUNT(*) FROM archival_memory")
+                count = cursor.fetchone()[0]
+                conn.close()
+                result["checks"]["sqlite_query"] = "OK"
+                result["learning_count"] = count
+            except Exception as e:
+                result["checks"]["sqlite_query"] = f"FAIL: {e}"
+                result["errors"].append(f"SQLite query failed: {e}")
+                result["healthy"] = False
+        else:
+            result["checks"]["sqlite_file"] = "MISSING"
+            result["learning_count"] = 0
+
+    # Check 3: Embedding service (optional - don't fail health on this)
+    try:
+        from core.core.db.embedding_service import EmbeddingService
+        embedder = EmbeddingService(provider="local")
+        # Don't actually embed - just check import works
+        result["checks"]["embedding_service"] = "OK (import)"
+        await embedder.aclose()
+    except Exception as e:
+        result["checks"]["embedding_service"] = f"WARN: {e}"
+        # Don't set healthy=False - text search still works
+
+    return result
 
 
 async def search_learnings_text_only_postgres(query: str, k: int = 5) -> list[dict[str, Any]]:
@@ -558,8 +668,12 @@ async def main() -> int:
     parser.add_argument(
         "--query",
         "-q",
-        required=True,
         help="Search query for semantic matching",
+    )
+    parser.add_argument(
+        "--health",
+        action="store_true",
+        help="Run health check and exit (validates database, embedding service)",
     )
     parser.add_argument(
         "--k",
@@ -605,6 +719,32 @@ async def main() -> int:
 
     args = parser.parse_args()
 
+    # Health check mode
+    if args.health:
+        health = await health_check()
+        if args.json:
+            print(json.dumps(health, indent=2, default=str))
+        else:
+            status = "[OK] HEALTHY" if health["healthy"] else "[FAIL] UNHEALTHY"
+            print(f"Memory Recall Health Check: {status}")
+            print(f"  Backend: {health['backend']}")
+            print(f"  Learnings: {health.get('learning_count', 'unknown')}")
+            print()
+            print("Checks:")
+            for check, result in health["checks"].items():
+                symbol = "[OK]" if "OK" in str(result) else ("[WARN]" if "WARN" in str(result) else "[FAIL]")
+                print(f"  {symbol} {check}: {result}")
+            if health["errors"]:
+                print()
+                print("Errors:")
+                for err in health["errors"]:
+                    print(f"  - {err}")
+        return 0 if health["healthy"] else 1
+
+    # Validate required arguments for search mode
+    if not args.query:
+        parser.error("--query is required for search (use --health for health check)")
+
     # JSON mode: suppress human-readable output
     if not args.json:
         print(f'Recalling learnings for: "{args.query}"')
@@ -613,10 +753,18 @@ async def main() -> int:
 
     try:
         backend = get_backend()
+        used_fallback = False
+
+        # Check PostgreSQL health before attempting connection
+        if backend == "postgres" and not check_postgres_available():
+            if not args.json:
+                print("  [WARN] PostgreSQL unreachable, falling back to SQLite", file=sys.stderr)
+            backend = "sqlite"
+            used_fallback = True
 
         if backend == "sqlite":
             # SQLite only supports text search (no pgvector)
-            if not args.text_only and not args.json:
+            if not args.text_only and not args.json and not used_fallback:
                 print("  (SQLite backend - using text search)")
             results = await search_learnings_sqlite(args.query, args.k)
         elif args.text_only:
@@ -640,11 +788,24 @@ async def main() -> int:
                 similarity_threshold=args.threshold * 0.01,  # RRF scores are ~0.01-0.03 range
             )
     except Exception as e:
-        if args.json:
-            print(json.dumps({"error": str(e), "results": []}))
+        # Try SQLite fallback on any PostgreSQL error
+        if backend == "postgres":
+            try:
+                if not args.json:
+                    print(f"  [WARN] PostgreSQL error ({e}), trying SQLite fallback", file=sys.stderr)
+                results = await search_learnings_sqlite(args.query, args.k)
+            except Exception as fallback_err:
+                if args.json:
+                    print(json.dumps({"error": f"Both backends failed: pg={e}, sqlite={fallback_err}", "results": []}))
+                else:
+                    print(f"Error: Both backends failed. PostgreSQL: {e}, SQLite: {fallback_err}", file=sys.stderr)
+                return 1
         else:
-            print(f"Error: {e}", file=sys.stderr)
-        return 1
+            if args.json:
+                print(json.dumps({"error": str(e), "results": []}))
+            else:
+                print(f"Error: {e}", file=sys.stderr)
+            return 1
 
     # JSON output mode
     if args.json:

@@ -61,7 +61,8 @@ The memory contains session learnings from `archival_memory` table:
 - **Decisions**: Architectural choices and rationale
 - **Patterns**: Reusable approaches
 
-All entries have 1024-dim BGE embeddings (bge-large-en-v1.5) for semantic search.
+All entries have BGE embeddings (default: bge-large-en-v1.5, 1024-dim) for semantic search.
+Dimension is configurable via `EMBEDDING_DIMENSION` env var.
 
 ## Example Queries
 

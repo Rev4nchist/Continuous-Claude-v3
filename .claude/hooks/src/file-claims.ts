@@ -1,22 +1,25 @@
 /**
- * PreToolUse:Edit Hook - Check and claim files for conflict prevention.
+ * PreToolUse:Edit|Write Hook - Enforce file locking for conflict prevention.
  *
  * This hook:
- * 1. Checks if another session has claimed the file
- * 2. Warns if file is being edited by another session
- * 3. Claims the file for the current session
+ * 1. Checks if another ACTIVE session has claimed the file
+ * 2. BLOCKS edits if there's an active conflict (session heartbeat < 5 min old)
+ * 3. Allows and claims if no conflict or other session is stale
  *
- * Part of the coordination layer architecture (Phase 1).
+ * Part of the coordination layer architecture (Phase 3).
  */
 
 import { readFileSync } from 'fs';
-import { checkFileClaim, claimFile } from './shared/db-utils-pg.js';
+import { checkFileClaim, claimFile, isSessionActive } from './shared/db-utils-pg.js';
 import { getSessionId, getProject } from './shared/session-id.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 
+// Stale session threshold (5 minutes)
+const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
 /**
- * Main entry point for the PreToolUse:Edit hook.
- * Checks for file conflicts and claims files for the current session.
+ * Main entry point for the PreToolUse:Edit|Write hook.
+ * Enforces file locking - blocks edits when another active session has the file.
  */
 export function main(): void {
   // Read hook input from stdin
@@ -30,8 +33,8 @@ export function main(): void {
     return;
   }
 
-  // Only process Edit tool
-  if (input.tool_name !== 'Edit') {
+  // Only process Edit and Write tools
+  if (input.tool_name !== 'Edit' && input.tool_name !== 'Write') {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
@@ -51,17 +54,32 @@ export function main(): void {
 
   let output: HookOutput;
 
-  if (claimCheck.claimed) {
-    // File is being edited by another session - warn but allow
-    const fileName = filePath.split('/').pop() || filePath;
-    output = {
-      result: 'continue',  // Allow edit, just warn
-      message: `\u26A0\uFE0F **File Conflict Warning**
-\`${fileName}\` is being edited by Session ${claimCheck.claimedBy}
-Consider coordinating with the other session to avoid conflicts.`,
-    };
+  if (claimCheck.claimed && claimCheck.claimedBy) {
+    // Check if the claiming session is still active
+    const otherSessionActive = isSessionActive(claimCheck.claimedBy, STALE_THRESHOLD_MS);
+
+    if (otherSessionActive) {
+      // Active session has the file - BLOCK the edit
+      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+      output = {
+        result: 'deny',
+        reason: `File locked by active session ${claimCheck.claimedBy}`,
+        message: `[BLOCKED] File Conflict
+"${fileName}" is locked by Session ${claimCheck.claimedBy}
+Wait for the other session to finish or coordinate directly.
+The lock will auto-release when that session's heartbeat goes stale (5 min).`,
+      };
+    } else {
+      // Other session is stale - take over the claim
+      claimFile(filePath, project, sessionId);
+      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+      output = {
+        result: 'continue',
+        message: `[INFO] Took over stale file lock for "${fileName}" from inactive session`,
+      };
+    }
   } else {
-    // Claim the file for this session
+    // No conflict - claim the file for this session
     claimFile(filePath, project, sessionId);
     output = { result: 'continue' };
   }

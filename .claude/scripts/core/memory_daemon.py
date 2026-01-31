@@ -51,10 +51,16 @@ if opc_env.exists():
 
 # Global config
 POLL_INTERVAL = 60  # seconds
-STALE_THRESHOLD = 300  # 5 minutes in seconds
+STALE_THRESHOLD = 180  # 3 minutes (reduced from 5 min for faster extraction)
 MAX_CONCURRENT_EXTRACTIONS = 2  # Limit concurrent headless claude processes
 PID_FILE = Path.home() / ".claude" / "memory-daemon.pid"
 LOG_FILE = Path.home() / ".claude" / "memory-daemon.log"
+
+
+def get_hostname() -> str:
+    """Get current hostname for multi-host conflict detection."""
+    import socket
+    return socket.gethostname()
 
 # Worker queue state (module-level for daemon process)
 active_extractions: dict[int, str] = {}  # pid -> session_id
@@ -124,7 +130,10 @@ def pg_ensure_column():
 
 
 def pg_get_stale_sessions() -> list:
-    """Get sessions with stale heartbeat that haven't been extracted."""
+    """Get sessions with stale heartbeat that haven't been extracted.
+
+    DEPRECATED: Use pg_claim_stale_session() for race-safe claiming.
+    """
     import psycopg2
     conn = psycopg2.connect(get_postgres_url())
     cur = conn.cursor()
@@ -139,14 +148,80 @@ def pg_get_stale_sessions() -> list:
     return rows
 
 
-def pg_mark_extracted(session_id: str):
-    """Mark session as extracted in PostgreSQL."""
+def pg_claim_stale_session() -> tuple[str, str] | None:
+    """Atomically claim ONE stale session for extraction.
+
+    Uses SELECT FOR UPDATE SKIP LOCKED to prevent race conditions
+    when multiple daemons run concurrently.
+
+    Returns:
+        (session_id, project) tuple if a session was claimed, None otherwise.
+        The session is marked as 'extracting' to prevent double-processing.
+    """
+    import psycopg2
+    conn = psycopg2.connect(get_postgres_url())
+    conn.autocommit = False
+    cur = conn.cursor()
+
+    try:
+        threshold = datetime.now() - timedelta(seconds=STALE_THRESHOLD)
+
+        # Atomic claim: SELECT ... FOR UPDATE SKIP LOCKED
+        # This locks exactly ONE row, skipping any already locked by other daemons
+        cur.execute("""
+            SELECT id, project FROM sessions
+            WHERE last_heartbeat < %s
+            AND memory_extracted_at IS NULL
+            ORDER BY last_heartbeat ASC
+            LIMIT 1
+            FOR UPDATE SKIP LOCKED
+        """, (threshold,))
+
+        row = cur.fetchone()
+        if not row:
+            conn.rollback()
+            return None
+
+        session_id, project = row
+
+        # Mark as "in progress" (set to far-future timestamp, real timestamp set on completion)
+        # This prevents re-claiming even if the daemon crashes
+        cur.execute("""
+            UPDATE sessions
+            SET memory_extracted_at = '1970-01-02'
+            WHERE id = %s
+        """, (session_id,))
+
+        conn.commit()
+        return (session_id, project)
+
+    except Exception as e:
+        conn.rollback()
+        log(f"Error claiming session: {e}")
+        return None
+    finally:
+        conn.close()
+
+
+def pg_mark_extracted(session_id: str, success: bool = True):
+    """Mark session extraction as complete in PostgreSQL.
+
+    Args:
+        session_id: Session to mark
+        success: If True, set real timestamp. If False, reset to allow retry.
+    """
     import psycopg2
     conn = psycopg2.connect(get_postgres_url())
     cur = conn.cursor()
-    cur.execute("""
-        UPDATE sessions SET memory_extracted_at = NOW() WHERE id = %s
-    """, (session_id,))
+    if success:
+        cur.execute("""
+            UPDATE sessions SET memory_extracted_at = NOW() WHERE id = %s
+        """, (session_id,))
+    else:
+        # Reset to allow retry (extraction failed)
+        cur.execute("""
+            UPDATE sessions SET memory_extracted_at = NULL WHERE id = %s
+        """, (session_id,))
     conn.commit()
     conn.close()
 
@@ -311,11 +386,14 @@ def reap_completed_extractions():
     completed = []
     for pid, session_id in active_extractions.items():
         if not _process_exists(pid):
-            completed.append(pid)
+            completed.append((pid, session_id))
             log(f"Extraction completed for {session_id} (pid={pid})")
 
-    for pid in completed:
+    for pid, session_id in completed:
         del active_extractions[pid]
+        # Mark as fully extracted (set real timestamp) for PostgreSQL
+        if use_postgres():
+            pg_mark_extracted(session_id, success=True)
 
     return len(completed)
 
@@ -352,41 +430,72 @@ def daemon_loop():
             reap_completed_extractions()
             process_pending_queue()
 
-            # Find new stale sessions
-            stale = get_stale_sessions()
-            if stale:
-                log(f"Found {len(stale)} stale sessions")
-                for session_id, project in stale:
-                    queue_or_extract(session_id, project or "")
-                    mark_extracted(session_id)
+            # Claim sessions atomically (race-safe for PostgreSQL)
+            if use_postgres():
+                # Use atomic claim to prevent double-extraction
+                while len(active_extractions) < MAX_CONCURRENT_EXTRACTIONS:
+                    claimed = pg_claim_stale_session()
+                    if not claimed:
+                        break  # No more stale sessions
+                    session_id, project = claimed
+                    log(f"Claimed session {session_id} for extraction")
+                    extract_memories(session_id, project or "")
+            else:
+                # SQLite: non-atomic (single-daemon assumption)
+                stale = sqlite_get_stale_sessions()
+                if stale:
+                    log(f"Found {len(stale)} stale sessions")
+                    for session_id, project in stale:
+                        queue_or_extract(session_id, project or "")
+                        sqlite_mark_extracted(session_id)
+
         except Exception as e:
             log(f"Error in daemon loop: {e}")
 
         time.sleep(POLL_INTERVAL)
 
 
-def is_running() -> tuple[bool, int | None]:
-    """Check if daemon is already running."""
+def is_running() -> tuple[bool, int | None, str | None]:
+    """Check if daemon is already running.
+
+    Returns:
+        (is_running, pid, hostname) - hostname indicates where daemon runs
+    """
     if not PID_FILE.exists():
-        return False, None
+        return False, None, None
 
     try:
-        pid = int(PID_FILE.read_text().strip())
+        content = PID_FILE.read_text().strip()
+        # Format: "PID:HOSTNAME" or legacy "PID"
+        if ":" in content:
+            pid_str, hostname = content.split(":", 1)
+            pid = int(pid_str)
+        else:
+            # Legacy format - assume local
+            pid = int(content)
+            hostname = get_hostname()
+
+        current_host = get_hostname()
+        if hostname != current_host:
+            # Daemon running on different host - don't interfere
+            log(f"Daemon on different host ({hostname}), this host is {current_host}")
+            return True, pid, hostname
+
         if _process_exists(pid):
-            return True, pid
+            return True, pid, hostname
         else:
             PID_FILE.unlink(missing_ok=True)
-            return False, None
+            return False, None, None
     except (ValueError, OSError):
         PID_FILE.unlink(missing_ok=True)
-        return False, None
+        return False, None, None
 
 
 def _run_as_daemon():
     """Run the daemon loop (called by subprocess on Windows, directly after fork on Unix)."""
-    # Write PID file
+    # Write PID file with hostname for multi-host conflict detection
     PID_FILE.parent.mkdir(parents=True, exist_ok=True)
-    PID_FILE.write_text(str(os.getpid()))
+    PID_FILE.write_text(f"{os.getpid()}:{get_hostname()}")
 
     # Close standard file descriptors
     sys.stdin.close()
@@ -406,9 +515,10 @@ def start_daemon():
     Cross-platform: Uses subprocess.DETACHED_PROCESS on Windows,
     double-fork on Unix (macOS/Linux).
     """
-    running, pid = is_running()
+    running, pid, hostname = is_running()
     if running:
-        print(f"Memory daemon already running (PID {pid})")
+        host_info = f" on {hostname}" if hostname and hostname != get_hostname() else ""
+        print(f"Memory daemon already running (PID {pid}{host_info})")
         return 0
 
     if sys.platform == "win32":
@@ -448,10 +558,16 @@ def start_daemon():
 
 def stop_daemon():
     """Stop the daemon."""
-    running, pid = is_running()
+    running, pid, hostname = is_running()
     if not running:
         print("Memory daemon not running")
         return 0
+
+    current_host = get_hostname()
+    if hostname and hostname != current_host:
+        print(f"Cannot stop daemon - running on different host ({hostname})")
+        print(f"Stop it from that host, or manually delete {PID_FILE}")
+        return 1
 
     try:
         os.kill(pid, signal.SIGTERM)
@@ -465,13 +581,18 @@ def stop_daemon():
 
 def status_daemon():
     """Show daemon status."""
-    running, pid = is_running()
+    running, pid, hostname = is_running()
     db_type = "PostgreSQL" if use_postgres() else "SQLite"
+    current_host = get_hostname()
 
     print(f"Memory Daemon Status")
     print(f"  Running: {'Yes' if running else 'No'}")
     if running:
         print(f"  PID: {pid}")
+        if hostname:
+            remote = " (REMOTE)" if hostname != current_host else ""
+            print(f"  Host: {hostname}{remote}")
+    print(f"  Current host: {current_host}")
     print(f"  Database: {db_type}")
     print(f"  PID file: {PID_FILE}")
     print(f"  Log file: {LOG_FILE}")

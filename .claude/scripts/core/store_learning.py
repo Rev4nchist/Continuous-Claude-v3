@@ -47,14 +47,139 @@ from pathlib import Path
 
 from dotenv import load_dotenv
 
-# Load global ~/.claude/.env first, then local .env
+# Load global ~/.claude/.env with override=True to ensure config file takes precedence
+# This fixes issues where shell has stale DATABASE_URL with wrong port
 global_env = Path.home() / ".claude" / ".env"
 if global_env.exists():
-    load_dotenv(global_env)
+    load_dotenv(global_env, override=True)
 load_dotenv()
 
 # Add parent directory to path (for imports like 'from db.memory_factory')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+# Retry queue path for failed learnings (SQLite-based local queue)
+RETRY_QUEUE_PATH = Path.home() / ".claude" / "cache" / "failed_learnings.db"
+
+
+def queue_failed_learning(
+    session_id: str,
+    content: str,
+    error: str,
+    metadata: dict | None = None,
+) -> bool:
+    """Queue a failed learning for later retry.
+
+    Uses SQLite local file for reliability when PostgreSQL is down.
+
+    Returns True if queued successfully.
+    """
+    import sqlite3
+
+    try:
+        RETRY_QUEUE_PATH.parent.mkdir(parents=True, exist_ok=True)
+        conn = sqlite3.connect(str(RETRY_QUEUE_PATH))
+        conn.execute("""
+            CREATE TABLE IF NOT EXISTS failed_learnings (
+                id INTEGER PRIMARY KEY AUTOINCREMENT,
+                session_id TEXT NOT NULL,
+                content TEXT NOT NULL,
+                error TEXT,
+                metadata_json TEXT,
+                created_at TEXT NOT NULL,
+                retry_count INTEGER DEFAULT 0,
+                last_retry TEXT
+            )
+        """)
+        conn.execute(
+            """
+            INSERT INTO failed_learnings (session_id, content, error, metadata_json, created_at)
+            VALUES (?, ?, ?, ?, ?)
+            """,
+            (
+                session_id,
+                content,
+                error,
+                json.dumps(metadata) if metadata else None,
+                datetime.now(timezone.utc).isoformat(),
+            ),
+        )
+        conn.commit()
+        conn.close()
+        return True
+    except Exception:
+        return False
+
+
+async def retry_failed_learnings(max_retries: int = 3) -> dict:
+    """Retry queued failed learnings.
+
+    Called periodically or on startup to process the retry queue.
+
+    Returns dict with counts of retried/succeeded/failed/remaining.
+    """
+    import sqlite3
+
+    if not RETRY_QUEUE_PATH.exists():
+        return {"retried": 0, "succeeded": 0, "failed": 0, "remaining": 0}
+
+    conn = sqlite3.connect(str(RETRY_QUEUE_PATH))
+    conn.row_factory = sqlite3.Row
+
+    # Get learnings to retry (max 10 at a time, retry_count < max_retries)
+    rows = conn.execute(
+        """
+        SELECT id, session_id, content, metadata_json, retry_count
+        FROM failed_learnings
+        WHERE retry_count < ?
+        ORDER BY created_at ASC
+        LIMIT 10
+        """,
+        (max_retries,),
+    ).fetchall()
+
+    stats = {"retried": 0, "succeeded": 0, "failed": 0, "remaining": 0}
+
+    for row in rows:
+        stats["retried"] += 1
+        metadata = json.loads(row["metadata_json"]) if row["metadata_json"] else {}
+
+        result = await store_learning_v2(
+            session_id=row["session_id"],
+            content=row["content"],
+            learning_type=metadata.get("learning_type"),
+            context=metadata.get("context"),
+            tags=metadata.get("tags"),
+            confidence=metadata.get("confidence"),
+        )
+
+        if result.get("success") and not result.get("used_fallback"):
+            # Succeeded - remove from queue
+            conn.execute("DELETE FROM failed_learnings WHERE id = ?", (row["id"],))
+            stats["succeeded"] += 1
+        else:
+            # Still failing - increment retry count
+            conn.execute(
+                """
+                UPDATE failed_learnings
+                SET retry_count = retry_count + 1, last_retry = ?
+                WHERE id = ?
+                """,
+                (datetime.now(timezone.utc).isoformat(), row["id"]),
+            )
+            stats["failed"] += 1
+
+    conn.commit()
+
+    # Count remaining
+    remaining = conn.execute(
+        "SELECT COUNT(*) FROM failed_learnings WHERE retry_count < ?",
+        (max_retries,),
+    ).fetchone()[0]
+    stats["remaining"] = remaining
+
+    conn.close()
+    return stats
+
 
 # Valid learning types for --type parameter
 LEARNING_TYPES = [
@@ -70,8 +195,8 @@ LEARNING_TYPES = [
 # Valid confidence levels
 CONFIDENCE_LEVELS = ["high", "medium", "low"]
 
-# Deduplication threshold (0.85 = 85% similar)
-DEDUP_THRESHOLD = 0.85
+# Deduplication threshold (0.92 = 92% similar - raised from 0.85 to reduce false dedup)
+DEDUP_THRESHOLD = 0.92
 
 # Keywords that indicate GLOBAL scope (cross-project learnings)
 GLOBAL_KEYWORDS = {
@@ -93,13 +218,49 @@ PROJECT_KEYWORDS = {
 }
 
 
+def check_postgres_available() -> bool:
+    """Quick health check for PostgreSQL connection.
+
+    Returns True if PostgreSQL is reachable, False otherwise.
+    """
+    import socket
+
+    db_url = os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL") or ""
+    if not db_url:
+        return False
+
+    try:
+        if "@" in db_url and "/" in db_url:
+            host_port = db_url.split("@")[1].split("/")[0]
+            if ":" in host_port:
+                host, port = host_port.rsplit(":", 1)
+                port = int(port)
+            else:
+                host = host_port
+                port = 5432
+        else:
+            return False
+
+        sock = socket.socket(socket.AF_INET, socket.SOCK_STREAM)
+        sock.settimeout(0.1)
+        result = sock.connect_ex((host, port))
+        sock.close()
+        return result == 0
+    except Exception:
+        return False
+
+
 def get_project_id(project_dir: str | None) -> str | None:
-    """Generate stable project ID from absolute path."""
+    """Generate stable project ID from absolute path.
+
+    Uses 24-char hash (96 bits) to reduce collision risk at scale.
+    At 100K projects: ~1 in 10^23 collision probability.
+    """
     if not project_dir:
         return None
     import hashlib
     abs_path = str(Path(project_dir).resolve())
-    return hashlib.sha256(abs_path.encode()).hexdigest()[:16]
+    return hashlib.sha256(abs_path.encode()).hexdigest()[:24]
 
 
 def classify_scope(
@@ -163,9 +324,15 @@ async def store_learning_v2(
     if not content or not content.strip():
         return {"success": False, "error": "No content provided"}
 
-    # Get backend - prefer postgres if DATABASE_URL is set
-    if os.environ.get("DATABASE_URL"):
-        backend = "postgres"
+    # Get backend - prefer postgres if DATABASE_URL is set AND available
+    used_fallback = False
+    if os.environ.get("DATABASE_URL") or os.environ.get("CONTINUOUS_CLAUDE_DB_URL"):
+        if check_postgres_available():
+            backend = "postgres"
+        else:
+            # PostgreSQL unavailable - fall back to SQLite
+            backend = "sqlite"
+            used_fallback = True
     else:
         backend = get_default_backend()
 
@@ -175,27 +342,34 @@ async def store_learning_v2(
             session_id=session_id,
         )
 
-        # Generate embedding
-        embedder = EmbeddingService(provider="local")
-        embedding = await embedder.embed(content)
-
-        # Deduplication check: search for similar existing memories
+        # Generate embedding (isolated - don't block store on embedding failure)
+        embedding = None
+        embedding_error = None
         try:
-            existing = await memory.search_vector(embedding, limit=1)
-            if existing and len(existing) > 0:
-                top_match = existing[0]
-                similarity = top_match.get("similarity", 0)
-                if similarity >= DEDUP_THRESHOLD:
-                    await memory.close()
-                    return {
-                        "success": True,
-                        "skipped": True,
-                        "reason": f"duplicate (similarity: {similarity:.2f})",
-                        "existing_id": top_match.get("id"),
-                    }
-        except Exception:
-            # If search fails, proceed with storing (don't block on dedup errors)
-            pass
+            embedder = EmbeddingService(provider="local")
+            embedding = await embedder.embed(content)
+        except Exception as embed_err:
+            embedding_error = str(embed_err)
+            # Continue without embedding - will be stored with status="pending"
+
+        # Deduplication check: only if we have an embedding
+        if embedding is not None:
+            try:
+                existing = await memory.search_vector(embedding, limit=1)
+                if existing and len(existing) > 0:
+                    top_match = existing[0]
+                    similarity = top_match.get("similarity", 0)
+                    if similarity >= DEDUP_THRESHOLD:
+                        await memory.close()
+                        return {
+                            "success": True,
+                            "skipped": True,
+                            "reason": f"duplicate (similarity: {similarity:.2f})",
+                            "existing_id": top_match.get("id"),
+                        }
+            except Exception:
+                # If search fails, proceed with storing (don't block on dedup errors)
+                pass
 
         # Classify scope if not explicitly provided
         final_scope = scope or classify_scope(content, tags, context)
@@ -217,28 +391,79 @@ async def store_learning_v2(
         if confidence:
             metadata["confidence"] = confidence
 
-        # Store with embedding, scope, and project_id
+        # Mark as pending if embedding failed (for later retry)
+        if embedding is None:
+            metadata["embedding_status"] = "pending"
+            metadata["embedding_error"] = embedding_error
+
+        # Store with or without embedding, scope, and project_id
         memory_id = await memory.store(
             content,
             metadata=metadata,
-            embedding=embedding,
+            embedding=embedding,  # May be None - store handles this
             scope=final_scope,
             project_id=project_id,
         )
 
         await memory.close()
 
-        return {
+        result = {
             "success": True,
             "memory_id": memory_id,
             "backend": backend,
             "content_length": len(content),
-            "embedding_dim": len(embedding),
             "scope": final_scope,
             "project_id": project_id,
         }
+        if used_fallback:
+            result["used_fallback"] = True
+            result["fallback_reason"] = "PostgreSQL unreachable"
+        if embedding is not None:
+            result["embedding_dim"] = len(embedding)
+        else:
+            result["embedding_pending"] = True
+            result["embedding_error"] = embedding_error
+        return result
 
     except Exception as e:
+        # If PostgreSQL failed, try SQLite fallback
+        if backend == "postgres":
+            try:
+                memory = await create_memory_service(
+                    backend="sqlite",
+                    session_id=session_id,
+                )
+                metadata = {
+                    "type": "session_learning",
+                    "session_id": session_id,
+                    "timestamp": datetime.now(timezone.utc).isoformat(),
+                    "postgres_error": str(e),
+                }
+                if learning_type:
+                    metadata["learning_type"] = learning_type
+                if context:
+                    metadata["context"] = context
+                if tags:
+                    metadata["tags"] = tags
+
+                memory_id = await memory.store(
+                    content,
+                    metadata=metadata,
+                    embedding=None,  # SQLite doesn't support vector
+                    scope=scope or classify_scope(content, tags, context),
+                    project_id=get_project_id(project_dir) if project_dir else None,
+                )
+                await memory.close()
+                return {
+                    "success": True,
+                    "memory_id": memory_id,
+                    "backend": "sqlite",
+                    "used_fallback": True,
+                    "fallback_reason": f"PostgreSQL error: {e}",
+                    "content_length": len(content),
+                }
+            except Exception as fallback_err:
+                return {"success": False, "error": f"Both backends failed: pg={e}, sqlite={fallback_err}"}
         return {"success": False, "error": str(e)}
 
 
@@ -338,7 +563,14 @@ async def store_learning(
 
 async def main():
     parser = argparse.ArgumentParser(description="Store session learnings in memory")
-    parser.add_argument("--session-id", required=True, help="Session identifier")
+    parser.add_argument("--session-id", help="Session identifier (required unless --retry-queue)")
+
+    # Retry queue mode
+    parser.add_argument(
+        "--retry-queue",
+        action="store_true",
+        help="Process retry queue of failed learnings",
+    )
 
     # Legacy parameters (v1)
     parser.add_argument("--worked", default="None", help="What worked well (legacy)")
@@ -377,6 +609,23 @@ async def main():
     parser.add_argument("--json", action="store_true", help="Output as JSON")
 
     args = parser.parse_args()
+
+    # Retry queue mode
+    if args.retry_queue:
+        result = await retry_failed_learnings()
+        if args.json:
+            print(json.dumps(result))
+        else:
+            print(f"Retry queue processed:")
+            print(f"  Retried: {result['retried']}")
+            print(f"  Succeeded: {result['succeeded']}")
+            print(f"  Failed: {result['failed']}")
+            print(f"  Remaining: {result['remaining']}")
+        return
+
+    # Require session-id for normal operations
+    if not args.session_id:
+        parser.error("--session-id is required unless using --retry-queue")
 
     # Determine which mode to use: v2 if --content is provided, else legacy
     if args.content:

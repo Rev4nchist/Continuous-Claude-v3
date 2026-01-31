@@ -453,42 +453,20 @@ function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
   const escapedContext = `planning: ${planInfo.title}`.replace(/"/g, '\\"');
 
   const isWindows = process.platform === 'win32';
-  const cmd = isWindows
-    ? [
-        `cd /d "${opcDir}"`,
-        `set PYTHONPATH=.`,
-        `uv run python scripts/core/store_learning.py`,
-        `--session-id "${sessionId}"`,
-        `--type ARCHITECTURAL_DECISION`,
-        `--content "${escapedContent}"`,
-        `--context "${escapedContext}"`,
-        `--tags "planning,decisions,architecture"`,
-        `--confidence high`,
-        `--scope GLOBAL`
-      ].join(' && ')
-    : [
-        `cd "${opcDir}"`,
-        `PYTHONPATH=. uv run python scripts/core/store_learning.py`,
-        `--session-id "${sessionId}"`,
-        `--type ARCHITECTURAL_DECISION`,
-        `--content "${escapedContent}"`,
-        `--context "${escapedContext}"`,
-        `--tags "planning,decisions,architecture"`,
-        `--confidence high`,
-        `--scope GLOBAL`
-      ].join(' ');
+  // Build the Python command with arguments as a single string
+  const pyArgs = [
+    `--session-id "${sessionId}"`,
+    `--type ARCHITECTURAL_DECISION`,
+    `--content "${escapedContent}"`,
+    `--context "${escapedContext}"`,
+    `--tags "planning,decisions,architecture"`,
+    `--confidence high`,
+    `--scope GLOBAL`
+  ].join(' ');
 
-  try {
-    execSync(cmd, {
-      stdio: 'pipe',
-      timeout: 10000,
-      shell: isWindows ? 'cmd.exe' : true
-    });
-    console.error(`✓ Stored ${decisions.length} planning decisions to memory`);
-  } catch (e) {
-    const err = e as Error;
-    console.error(`Warning: Could not store planning learnings: ${err.message}`);
-  }
+  // Memory storage is slow (~60s for embeddings) - skip it from the hook
+  // The ROADMAP update is the primary value; learnings can be extracted via memory daemon
+  console.error(`ℹ Skipping memory storage (slow) - ${decisions.length} decisions recorded in ROADMAP`);
 }
 
 async function main() {

@@ -68,7 +68,7 @@ ${pythonCode}
     const result = spawnSync('uv', ['run', 'python', '-c', wrappedCode, ...args], {
       encoding: 'utf-8',
       maxBuffer: 1024 * 1024,
-      timeout: 5000,  // 5 second timeout - fail gracefully if DB unreachable
+      timeout: 15000,  // 15 second timeout (raised from 5s for slow machines)
       cwd: opcDir,
       env: {
         ...process.env,
@@ -517,6 +517,68 @@ asyncio.run(main())
   }
 }
 
+/**
+ * Check if a session is still active (heartbeat within threshold).
+ *
+ * @param sessionId - Session ID to check
+ * @param thresholdMs - Maximum age of heartbeat in milliseconds (default 5 min)
+ * @returns true if session is active, false if stale or not found
+ */
+export function isSessionActive(
+  sessionId: string,
+  thresholdMs: number = 5 * 60 * 1000
+): boolean {
+  const thresholdSeconds = Math.floor(thresholdMs / 1000);
+
+  const pythonCode = `
+import asyncpg
+import os
+from datetime import datetime, timezone
+
+session_id = sys.argv[1]
+threshold_seconds = int(sys.argv[2])
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        row = await conn.fetchrow('''
+            SELECT last_heartbeat FROM sessions
+            WHERE id = $1
+        ''', session_id)
+
+        if not row or not row['last_heartbeat']:
+            print('false')
+            return
+
+        # Check if heartbeat is within threshold
+        heartbeat = row['last_heartbeat']
+        if heartbeat.tzinfo is None:
+            heartbeat = heartbeat.replace(tzinfo=timezone.utc)
+
+        now = datetime.now(timezone.utc)
+        age_seconds = (now - heartbeat).total_seconds()
+
+        if age_seconds <= threshold_seconds:
+            print('true')
+        else:
+            print('false')
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [sessionId, String(thresholdSeconds)]);
+
+  if (!result.success) {
+    // On error, assume not active (allow edit)
+    return false;
+  }
+
+  return result.stdout.trim() === 'true';
+}
+
 // =============================================================================
 // COORDINATION LAYER: File Claims
 // =============================================================================
@@ -782,4 +844,491 @@ export interface FindingInfo {
   finding: string;
   relevant_to: string[];
   created_at: string | null;
+}
+
+// =============================================================================
+// COORDINATION LAYER: Agent Messaging (LISTEN/NOTIFY)
+// =============================================================================
+
+// Type definitions for agent messages
+export interface AgentMessage {
+  id: number;
+  channel: string;
+  sender_id: string;
+  recipient_id: string | null;
+  message_type: string;
+  payload: Record<string, unknown>;
+  created_at: string | null;
+  read_at: string | null;
+}
+
+/**
+ * Send a message to an agent or broadcast to a channel.
+ *
+ * Uses PostgreSQL LISTEN/NOTIFY for real-time delivery.
+ *
+ * @param channel - Channel name (e.g., 'swarm_123', 'project_abc')
+ * @param senderId - Sender agent/session ID
+ * @param messageType - Type of message (e.g., 'task_complete', 'error', 'status')
+ * @param payload - Message payload object
+ * @param recipientId - Optional specific recipient (null = broadcast)
+ * @returns Object with success boolean and message ID
+ */
+export function sendAgentMessage(
+  channel: string,
+  senderId: string,
+  messageType: string,
+  payload: Record<string, unknown> = {},
+  recipientId: string | null = null
+): { success: boolean; messageId?: number; error?: string } {
+  const pythonCode = `
+import asyncpg
+import os
+import json
+
+channel = sys.argv[1]
+sender_id = sys.argv[2]
+message_type = sys.argv[3]
+payload = json.loads(sys.argv[4])
+recipient_id = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != 'null' else None
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        # Insert message (trigger will send NOTIFY)
+        row = await conn.fetchrow('''
+            INSERT INTO agent_messages (channel, sender_id, recipient_id, message_type, payload)
+            VALUES ($1, $2, $3, $4, $5::jsonb)
+            RETURNING id
+        ''', channel, sender_id, recipient_id, message_type, json.dumps(payload))
+
+        print(json.dumps({'success': True, 'id': row['id']}))
+    except Exception as e:
+        print(json.dumps({'success': False, 'error': str(e)}))
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [
+    channel,
+    senderId,
+    messageType,
+    JSON.stringify(payload),
+    recipientId || 'null'
+  ]);
+
+  if (!result.success) {
+    return { success: false, error: result.stderr || 'Query failed' };
+  }
+
+  try {
+    const parsed = JSON.parse(result.stdout || '{}');
+    if (parsed.success) {
+      return { success: true, messageId: parsed.id };
+    }
+    return { success: false, error: parsed.error || 'Unknown error' };
+  } catch {
+    return { success: false, error: 'Failed to parse response' };
+  }
+}
+
+/**
+ * Get unread messages for an agent/session.
+ *
+ * @param recipientId - Recipient agent/session ID
+ * @param channel - Optional channel filter
+ * @param markAsRead - Whether to mark messages as read (default: true)
+ * @returns Array of unread messages
+ */
+export function getAgentMessages(
+  recipientId: string,
+  channel: string | null = null,
+  markAsRead: boolean = true
+): { success: boolean; messages: AgentMessage[] } {
+  const pythonCode = `
+import asyncpg
+import os
+import json
+
+recipient_id = sys.argv[1]
+channel = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != 'null' else None
+mark_as_read = sys.argv[3] == 'true' if len(sys.argv) > 3 else True
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        # Build query based on filters
+        if channel:
+            rows = await conn.fetch('''
+                SELECT id, channel, sender_id, recipient_id, message_type, payload, created_at, read_at
+                FROM agent_messages
+                WHERE (recipient_id = $1 OR recipient_id IS NULL)
+                  AND channel = $2
+                  AND read_at IS NULL
+                ORDER BY created_at ASC
+            ''', recipient_id, channel)
+        else:
+            rows = await conn.fetch('''
+                SELECT id, channel, sender_id, recipient_id, message_type, payload, created_at, read_at
+                FROM agent_messages
+                WHERE (recipient_id = $1 OR recipient_id IS NULL)
+                  AND read_at IS NULL
+                ORDER BY created_at ASC
+            ''', recipient_id)
+
+        messages = []
+        ids = []
+        for row in rows:
+            ids.append(row['id'])
+            messages.append({
+                'id': row['id'],
+                'channel': row['channel'],
+                'sender_id': row['sender_id'],
+                'recipient_id': row['recipient_id'],
+                'message_type': row['message_type'],
+                'payload': dict(row['payload']) if row['payload'] else {},
+                'created_at': row['created_at'].isoformat() if row['created_at'] else None,
+                'read_at': None
+            })
+
+        # Mark as read if requested
+        if mark_as_read and ids:
+            await conn.execute('''
+                UPDATE agent_messages SET read_at = NOW()
+                WHERE id = ANY($1)
+            ''', ids)
+
+        print(json.dumps(messages))
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [
+    recipientId,
+    channel || 'null',
+    markAsRead ? 'true' : 'false'
+  ]);
+
+  if (!result.success) {
+    return { success: false, messages: [] };
+  }
+
+  try {
+    const messages = JSON.parse(result.stdout || '[]') as AgentMessage[];
+    return { success: true, messages };
+  } catch {
+    return { success: false, messages: [] };
+  }
+}
+
+/**
+ * Subscribe to a channel and get the LISTEN command.
+ *
+ * Note: For real-time listening, agents need to maintain a persistent connection.
+ * This function returns the SQL command to execute for LISTEN.
+ *
+ * @param channel - Channel name to subscribe to
+ * @returns LISTEN command string
+ */
+export function getListenCommand(channel: string): string {
+  return `LISTEN agent_${channel};`;
+}
+
+// =============================================================================
+// COORDINATION LAYER: Agent Tracking (Ralph Error Escalation)
+// =============================================================================
+
+// Type definitions for agents
+export interface AgentInfo {
+  id: string;
+  session_id: string;
+  parent_agent_id: string | null;
+  agent_type: string;
+  status: 'running' | 'completed' | 'failed' | 'stalled';
+  task_description: string | null;
+  started_at: string | null;
+  completed_at: string | null;
+  error_message: string | null;
+  result_summary: string | null;
+}
+
+/**
+ * Register a new agent for tracking.
+ *
+ * @param agentId - Unique agent identifier
+ * @param sessionId - Parent session ID
+ * @param agentType - Type of agent (kraken, spark, arbiter, etc.)
+ * @param taskDescription - Description of the task
+ * @param parentAgentId - Optional parent agent ID for hierarchical tracking
+ */
+export function trackAgent(
+  agentId: string,
+  sessionId: string,
+  agentType: string,
+  taskDescription: string | null = null,
+  parentAgentId: string | null = null
+): { success: boolean; error?: string } {
+  const pythonCode = `
+import asyncpg
+import os
+
+agent_id = sys.argv[1]
+session_id = sys.argv[2]
+agent_type = sys.argv[3]
+task_description = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != 'null' else None
+parent_agent_id = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != 'null' else None
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        await conn.execute('''
+            INSERT INTO agents (id, session_id, agent_type, task_description, parent_agent_id, status)
+            VALUES ($1, $2, $3, $4, $5, 'running')
+            ON CONFLICT (id) DO UPDATE SET
+                status = 'running',
+                task_description = EXCLUDED.task_description,
+                started_at = NOW(),
+                completed_at = NULL,
+                error_message = NULL
+        ''', agent_id, session_id, agent_type, task_description, parent_agent_id)
+        print('ok')
+    except Exception as e:
+        print(f'error: {e}')
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [
+    agentId,
+    sessionId,
+    agentType,
+    taskDescription || 'null',
+    parentAgentId || 'null'
+  ]);
+
+  if (!result.success || result.stdout !== 'ok') {
+    return { success: false, error: result.stderr || result.stdout };
+  }
+  return { success: true };
+}
+
+/**
+ * Update agent status (completed or failed).
+ *
+ * @param agentId - Agent identifier
+ * @param status - New status
+ * @param errorMessage - Error message if failed
+ * @param resultSummary - Summary of results if completed
+ */
+export function updateAgentStatus(
+  agentId: string,
+  status: 'completed' | 'failed' | 'stalled',
+  errorMessage: string | null = null,
+  resultSummary: string | null = null
+): { success: boolean; error?: string } {
+  const pythonCode = `
+import asyncpg
+import os
+
+agent_id = sys.argv[1]
+status = sys.argv[2]
+error_message = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'null' else None
+result_summary = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != 'null' else None
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        await conn.execute('''
+            UPDATE agents SET
+                status = $2,
+                completed_at = NOW(),
+                error_message = $3,
+                result_summary = $4
+            WHERE id = $1
+        ''', agent_id, status, error_message, result_summary)
+        print('ok')
+    except Exception as e:
+        print(f'error: {e}')
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [
+    agentId,
+    status,
+    errorMessage || 'null',
+    resultSummary || 'null'
+  ]);
+
+  if (!result.success || result.stdout !== 'ok') {
+    return { success: false, error: result.stderr || result.stdout };
+  }
+  return { success: true };
+}
+
+/**
+ * Get agents for a session, optionally filtered by status.
+ *
+ * @param sessionId - Session ID to query
+ * @param status - Optional status filter
+ * @returns List of agents
+ */
+export function getSessionAgents(
+  sessionId: string,
+  status: string | null = null
+): { success: boolean; agents: AgentInfo[] } {
+  const pythonCode = `
+import asyncpg
+import os
+import json
+
+session_id = sys.argv[1]
+status_filter = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != 'null' else None
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        if status_filter:
+            rows = await conn.fetch('''
+                SELECT id, session_id, parent_agent_id, agent_type, status,
+                       task_description, started_at, completed_at, error_message, result_summary
+                FROM agents
+                WHERE session_id = $1 AND status = $2
+                ORDER BY started_at DESC
+            ''', session_id, status_filter)
+        else:
+            rows = await conn.fetch('''
+                SELECT id, session_id, parent_agent_id, agent_type, status,
+                       task_description, started_at, completed_at, error_message, result_summary
+                FROM agents
+                WHERE session_id = $1
+                ORDER BY started_at DESC
+            ''', session_id)
+
+        agents = []
+        for row in rows:
+            agents.append({
+                'id': row['id'],
+                'session_id': row['session_id'],
+                'parent_agent_id': row['parent_agent_id'],
+                'agent_type': row['agent_type'],
+                'status': row['status'],
+                'task_description': row['task_description'],
+                'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                'error_message': row['error_message'],
+                'result_summary': row['result_summary']
+            })
+        print(json.dumps(agents))
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [sessionId, status || 'null']);
+
+  if (!result.success) {
+    return { success: false, agents: [] };
+  }
+
+  try {
+    const agents = JSON.parse(result.stdout || '[]') as AgentInfo[];
+    return { success: true, agents };
+  } catch {
+    return { success: false, agents: [] };
+  }
+}
+
+/**
+ * Get failed or stalled agents that can be resumed.
+ *
+ * @param sessionId - Optional session filter
+ * @returns List of resumable agents
+ */
+export function getResumableAgents(
+  sessionId: string | null = null
+): { success: boolean; agents: AgentInfo[] } {
+  const pythonCode = `
+import asyncpg
+import os
+import json
+from datetime import datetime, timezone, timedelta
+
+session_id = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != 'null' else None
+pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
+
+async def main():
+    conn = await asyncpg.connect(pg_url)
+    try:
+        # Get failed agents and stalled running agents (no update in 10 min)
+        stale_threshold = datetime.now(timezone.utc) - timedelta(minutes=10)
+
+        if session_id:
+            rows = await conn.fetch('''
+                SELECT id, session_id, parent_agent_id, agent_type, status,
+                       task_description, started_at, completed_at, error_message, result_summary
+                FROM agents
+                WHERE session_id = $1
+                  AND (status IN ('failed', 'stalled')
+                       OR (status = 'running' AND started_at < $2))
+                ORDER BY started_at DESC
+            ''', session_id, stale_threshold)
+        else:
+            rows = await conn.fetch('''
+                SELECT id, session_id, parent_agent_id, agent_type, status,
+                       task_description, started_at, completed_at, error_message, result_summary
+                FROM agents
+                WHERE status IN ('failed', 'stalled')
+                   OR (status = 'running' AND started_at < $1)
+                ORDER BY started_at DESC
+                LIMIT 20
+            ''', stale_threshold)
+
+        agents = []
+        for row in rows:
+            agents.append({
+                'id': row['id'],
+                'session_id': row['session_id'],
+                'parent_agent_id': row['parent_agent_id'],
+                'agent_type': row['agent_type'],
+                'status': row['status'] if row['status'] != 'running' else 'stalled',
+                'task_description': row['task_description'],
+                'started_at': row['started_at'].isoformat() if row['started_at'] else None,
+                'completed_at': row['completed_at'].isoformat() if row['completed_at'] else None,
+                'error_message': row['error_message'],
+                'result_summary': row['result_summary']
+            })
+        print(json.dumps(agents))
+    finally:
+        await conn.close()
+
+asyncio.run(main())
+`;
+
+  const result = runPgQuery(pythonCode, [sessionId || 'null']);
+
+  if (!result.success) {
+    return { success: false, agents: [] };
+  }
+
+  try {
+    const agents = JSON.parse(result.stdout || '[]') as AgentInfo[];
+    return { success: true, agents };
+  } catch {
+    return { success: false, agents: [] };
+  }
 }
