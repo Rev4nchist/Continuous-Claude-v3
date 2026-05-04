@@ -7,7 +7,7 @@ description: Microsoft Kusto.Cli for KQL queries against Azure Data Explorer and
 
 `Kusto.Cli.exe` is Microsoft's reference command-line tool for sending KQL queries and control commands to a Kusto service (Azure Data Explorer or Microsoft Fabric Eventhouse). It is REPL-first but supports fully headless execution via `-execute` / `-script`.
 
-On this machine: `C:\tools\kusto-cli\Kusto.Cli.exe`, version `14.1.2`, .NET Framework 4.7.2 build (no .NET runtime install required — built into Windows 10/11). Source NuGet: [Microsoft.Azure.Kusto.Tools](https://www.nuget.org/packages/Microsoft.Azure.Kusto.Tools/).
+On this machine: `C:\tools\kusto-cli\Kusto.Cli.exe`, version `14.1.2`, .NET Framework 4.7.2 build. Modern Windows 10/11 ships a preinstalled 4.x .NET Framework runtime that is forward-compatible with net472 targets (Win 10 1803/1809 preinstall 4.7.2; Win 11 22H2+ preinstalls 4.8.1) — verify with `Get-ItemPropertyValue 'HKLM:\SOFTWARE\Microsoft\NET Framework Setup\NDP\v4\Full' Release` if startup fails. Source NuGet: [Microsoft.Azure.Kusto.Tools](https://www.nuget.org/packages/Microsoft.Azure.Kusto.Tools/).
 
 Run `Kusto.Cli.exe -help` for basics, `-verboseHelp` for advanced switches. `-helpmd` and `-verboseHelpMd` emit MarkDown.
 
