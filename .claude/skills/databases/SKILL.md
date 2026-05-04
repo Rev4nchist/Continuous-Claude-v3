@@ -11,6 +11,12 @@ For Neon Postgres branch management, connection strings, and project operations,
 - CLI: `neonctl branches list`, `neonctl connection-string`, `neonctl set-context`
 - MCP: `mcp__Neon__run_sql`, `mcp__Neon__create_branch`
 
+## Azure Data Explorer / Microsoft Fabric Eventhouse (KQL)
+
+For KQL queries against Azure Data Explorer or Microsoft Fabric Eventhouse, see the `kusto-cli` skill — connection strings, headless execution, CSV export, and the companion `kusto-cli-safety` rule that gates destructive control commands (`.drop`, `.purge`, `.delete`, `.execute database script`, etc.).
+- CLI: `Kusto.Cli.exe "<conn>" -execute:"<KQL>" -keepRunning:false`
+- KQL is a separate query dialect from SQL — the optimization patterns below (indexes, EXPLAIN, N+1 avoidance) translate conceptually but the syntax does not.
+
 ## Iron Law
 NO database changes without query optimization check.
 

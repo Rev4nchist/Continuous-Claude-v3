@@ -17,11 +17,13 @@ The connection string is the first positional argument. Always wrap in double qu
 
 | Target | Pattern |
 |--------|---------|
-| Microsoft Fabric Eventhouse / KQL DB | `"https://<workspace-id>.kusto.fabric.microsoft.com/<database>;Fed=true"` |
+| Microsoft Fabric Eventhouse / KQL DB | `"https://<eventhouse-guid>.z<N>.kusto.fabric.microsoft.com/<database>;Fed=true"` |
 | Azure Data Explorer cluster | `"https://<cluster>.<region>.kusto.windows.net/<database>;Fed=true"` |
 | Public help cluster (Microsoft samples) | `"https://help.kusto.windows.net/Samples;Fed=true"` or shorthand `"@help/Samples"` |
 
-`Fed=true` enables AAD federated auth — opens a browser on first use, caches tokens afterward. Other auth modes (managed identity, application key, federated certificate) are encoded as additional fragments. Full reference: [Kusto connection strings](https://learn.microsoft.com/kusto/api/connection-strings/kusto).
+> **Fabric Eventhouse URIs are not constructible.** The leading segment is the eventhouse GUID (not the workspace ID) and there is a `.z<N>.` zone segment whose value Microsoft assigns. Always copy the URI from the eventhouse's *Database details → Copy URI* button rather than building one by hand.
+
+`Fed=true` enables AAD federated auth — opens a browser on first use, caches tokens afterward. Other auth modes (application key, federated certificate, managed identity) are encoded as additional fragments — managed identity uses the SDK auth builders (`WithAadSystemManagedIdentity()` / `WithAadUserManagedIdentity(<clientId>)`) or the `EmbeddedManagedIdentity=...` fragment, *not* `dSTS Federated Security` (that is a separate first-party mechanism). Full reference: [Kusto connection strings](https://learn.microsoft.com/kusto/api/connection-strings/kusto).
 
 ## Headless Execution
 
@@ -48,7 +50,7 @@ Script file (one command per line; use `&` at end of line to continue, `&&` to f
 Kusto.Cli.exe "<conn>" -script:"queries\daily.kql" -scriptQuitOnError:true -keepRunning:false
 ```
 
-`-scriptml:` treats the entire file as a single command — use it when KQL spans multiple lines without `&` continuation. For very long queries, use a response file: `Kusto.Cli.exe @args.rsp`.
+`-scriptml:` treats the entire file as a single command — use it when KQL spans multiple lines without `&` continuation. For very long queries, prefer `-script:<file>` over piling up `-execute:` chains; response-file (`@<file>`) syntax exists in `.NET` arg parsing but is *not* in the published Kusto.Cli reference, so don't rely on it.
 
 ## Output
 
@@ -78,8 +80,15 @@ Other output toggles (directives, runtime-only): `#csvheaderson|off`, `#tableon|
 ## Common Recipes
 
 ```powershell
-# Connect, set DB context, run query
-Kusto.Cli.exe "@help/Samples" -execute:"#dbcontext Samples" -execute:".show tables" -keepRunning:false
+# List tables in the database encoded in the conn string
+Kusto.Cli.exe "@help/Samples" -execute:".show tables" -keepRunning:false
+
+# Connect to a cluster URI without a database, then switch context per query
+# (use #dbcontext only when the conn string DOESN'T already pin a database)
+Kusto.Cli.exe "https://help.kusto.windows.net;Fed=true" `
+  -execute:"#dbcontext Samples" `
+  -execute:".show tables" `
+  -keepRunning:false
 
 # Show cluster diagnostics
 Kusto.Cli.exe "<conn>" -execute:".show cluster" -keepRunning:false
@@ -102,11 +111,17 @@ Kusto.Cli.exe "<conn>" -transcript:"run-$(Get-Date -Format yyyyMMdd-HHmmss).log"
 - **No JSON output** — use `#save` to CSV, then `Import-Csv | ConvertTo-Json` if needed.
 - **AAD interactive on first use** — first headless run opens a browser. CI needs managed identity or app-key auth encoded in the conn string.
 - **Positional conn string** — must be the first non-switch arg, before any `-execute`/`-script`.
-- **`Kusto.Cli.exe -ekr:`** (alias for `-executeAndKeepRunning`) runs commands then drops into REPL — useful when interactively iterating after a setup query, but never use it in scripts.
+- **`-executeAndKeepRunning:`** runs commands then drops into REPL — useful when interactively iterating after a setup query, but never use it in scripts. Local `-help` output exposes `-ekr:` as a short alias, but that alias is *not* in Microsoft's published Kusto.Cli reference; use the long form in any script you commit.
+- **`-webProxy:` and response-file `@args.rsp`** appear in some `-help` builds but are *not* in the published reference — don't rely on either in committed scripts.
 
 ## Safety
 
-See [.claude/rules/kusto-cli-safety.md](../../rules/kusto-cli-safety.md) for the dangerous-command list (`.drop`, `.delete`, `.purge`, `.clear`, `.alter ... policy`, `.ingest into`, `.set-or-append`, `.set-or-replace`). Pure read queries, `.show` commands, and `#save` are safe.
+See [.claude/rules/kusto-cli-safety.md](../../rules/kusto-cli-safety.md) for the dangerous-command list (`.drop`, `.drop extents`, `.delete`, `.purge`, `.clear`, `.execute database script`, `.alter ... policy`, `.ingest into`, `.set-or-append`, `.set-or-replace`, function/principal mutations, `.cancel`). Pure read queries, `.show` commands, and `#save` are safe.
+
+## Related Skills
+
+- **`databases`** — general PostgreSQL / SQL query optimization patterns. KQL is its own dialect, but the migration-safety / index-thinking discipline transfers.
+- **`neonctl`** — sibling cloud-DB CLI integration; same skill+rule shape if you ever add another KQL-style tool here.
 
 ## When to Use
 
