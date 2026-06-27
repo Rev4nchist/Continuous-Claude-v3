@@ -1,11 +1,18 @@
 # Project Roadmap
 
 ## Current Focus
-**CCv3 Fable-5 Deep Review — "Hone to Elegance" (2026-06-10)**
-- User decisions (locked): (1) **merge PRs #8/#9/#10 first* — review one unified main; (2) **whole-system scope, recent-weighted* (extra depth on the 145 commits since the 2026-05-16 memory-upgrade era); (3) deliver **report + ratified backlog + quick-wins executed* this arc (structural refactors are a later ratified arc).; Push **`fork`* (Rev4nchist), never `origin`. Never change BGE model/dim (`BAAI/bge-large-en-v1.5`, 1024).
-- Started: 2026-06-10
+**Reporting System — Document It + Make It Flow Better (2026-06-27)**
+- **End goal — "one spine, two cuts":** every reportable unit of work → exactly one Weekly Work Tracker row (`Source`-tagged); the team dashboard + sponsor site are two filtered views of that single spine. Reporting quality is a *capture* problem, not a rendering problem.
+- **Orient here:** read `docs/reporting-system/` (README → CURRENT-STATE → PLAN → RESOURCE-MAP) + the handoff `docs/HANDOFF-2026-06-27-reporting-system.md`.
+- **Open gate:** `ai-reporting` MCP is registered (`~/.mcp.json`) but pending a `NOTION_TOKEN` (Dave) → the team dashboard is down until it's set + Claude Code restarted. **Next build:** make the FourthOS scheduled run log to the Tracker (PLAN Step 3).
+- Branch **`snapshot/reporting-system`** off `main`; push **`fork`** (Rev4nchist), never `origin`. Windows-safe (git via PowerShell).
+- Started: 2026-06-27
 
 ## Completed
+- [x] docs(reporting): orientation library (`docs/reporting-system/`) + handoff + ROADMAP — reporting-system snapshot packaging (2026-06-27) *(this packaging commit)*
+- [x] feat(reporting): Code reporting skill + reporting-system docs + fourthos-weekly pipeline (2026-06-27) `6592d46` → cherry-picked `e886f93` onto `snapshot/reporting-system`
+- [x] chore(reporting): registered `ai-reporting` MCP in `~/.mcp.json` (stdio, `${NOTION_TOKEN}`) + import smoke test — pending Notion token (2026-06-27)
+- [x] feat(decks): reporting-system doc deck + FourthOS sponsor site v2/v3 published to `ai-enablement-decks` (GitHub Pages) — `7aff251`, `3a1c501`, `52e5a52` (2026-06-24→27)
 - [x] P1 — Bus-bias hybrid-recall lift: **KEEP ENABLED** — verified warm gate +7.3%/flat-hit (n=13, corpus 584); +33.6%/63->88% retired as a stale snapshot; tune focus-weighting deferred (2026-06-06)
 - [x] fix(memory): stop test suite from spawning real embedding daemons (herd source #2) (2026-06-05) `c1b110d`
 - [x] fix(memory): herd-proof embedding-daemon spawn — atomic lock + no-shell Windows spawn (2026-06-05) `ea1b03c`
