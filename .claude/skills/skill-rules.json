@@ -2,6 +2,63 @@
   "version": "1.0",
   "description": "Skill activation triggers for Claude Code. Controls when skills automatically suggest or block actions.",
   "skills": {
+    "launch-your-agent": {
+      "type": "workflow",
+      "enforcement": "suggest",
+      "priority": "high",
+      "description": "Interview-to-deployment wizard for Claude Managed Agents (CMA): plan a build-sheet keyless, stage payloads, late credential handover, launch in the user's own Anthropic account, grade vs an outcome rubric, and schedule as a cron deployment. Vendored from anthropics/launch-your-agent.",
+      "promptTriggers": {
+        "keywords": [
+          "/launch-your-agent",
+          "launch your agent",
+          "launch my agent",
+          "launch an agent",
+          "managed agent",
+          "claude managed agent",
+          "cma",
+          "build me a managed agent",
+          "deploy an agent",
+          "scheduled deployment",
+          "outcome rubric",
+          "build sheet"
+        ],
+        "intentPatterns": [
+          "(launch|deploy|build|stand up|spin up).*?(managed )?agent",
+          "(managed agents?|cma).*?(api|session|environment|deployment|vault)",
+          "agent.*?(build sheet|outcome rubric|golden eval|scheduled deployment)",
+          "run.*?agent.*?(on a schedule|on a clock|cron)"
+        ]
+      },
+      "evalScore": 90,
+      "evalTier": "trusted",
+      "evalDate": "2026-06-27",
+      "source": { "registry": "github", "repo": "anthropics/launch-your-agent", "sha": "05e9627", "trustTier": "trusted" }
+    },
+    "wrap-up": {
+      "type": "workflow",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "description": "Close out (or revisit) a Claude Managed Agent build: regenerate the overview HTML, recap every CMA primitive the user now owns, show the run log and live status, and suggest 1-2 tailored next upgrades. Companion to launch-your-agent. Vendored from anthropics/launch-your-agent.",
+      "promptTriggers": {
+        "keywords": [
+          "/wrap-up",
+          "wrap up agent",
+          "wrap up my agent",
+          "close out agent",
+          "agent overview",
+          "agent recap"
+        ],
+        "intentPatterns": [
+          "wrap.?up.*?(managed )?agent",
+          "(close out|recap|summari[sz]e|status of).*?(managed )?agent",
+          "regenerate.*?(agent )?overview"
+        ]
+      },
+      "evalScore": 90,
+      "evalTier": "trusted",
+      "evalDate": "2026-06-27",
+      "source": { "registry": "github", "repo": "anthropics/launch-your-agent", "sha": "05e9627", "trustTier": "trusted" }
+    },
     "ralph": {
       "type": "workflow",
       "enforcement": "suggest",

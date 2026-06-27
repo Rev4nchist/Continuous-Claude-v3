@@ -1,0 +1,8 @@
+{
+  "name": "wrap-up",
+  "version": "0.0.0",
+  "description": "Vendored Anthropic CMA skill",
+  "repository": "github.com/anthropics/launch-your-agent",
+  "author": "anthropics",
+  "license": "Apache-2.0"
+}
