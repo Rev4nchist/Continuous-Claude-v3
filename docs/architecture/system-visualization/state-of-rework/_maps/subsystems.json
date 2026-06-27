@@ -1,0 +1,256 @@
+{
+  "_meta": {
+    "map": "subsystems",
+    "scope": "6 pillars + WS-2 substrate",
+    "frozen_sha": "86b8f60",
+    "review_source": "docs/reviews/2026-06-10/findings.json + wf3/synthesis.json",
+    "generated": "2026-06-27",
+    "verified_against": "live repo files at C:/Users/david.hayes/continuous-claude",
+    "total_confirmed_findings": 190,
+    "by_severity": { "S0": 3, "S1": 41, "S2": 108, "S3": 38 },
+    "elegance_verdict": "mixed",
+    "elegance_rationale_excerpt": "A clean spine wrapped in a thick layer of dead hooks, never-recalled agents, ghost skills, triplicated scripts, and 7 competing session-id schemes. The load-bearing core (memory store/recall math aside) is clean; the duplication is consolidatable, not fundamental."
+  },
+  "pillars": [
+    {
+      "key": "memory",
+      "name": "Memory",
+      "purpose": "Persistent semantic memory across sessions — store learnings, recall relevant context via BGE embeddings + Postgres pgvector hybrid RRF search.",
+      "health": "honing",
+      "entry_point": "opc/scripts/core/recall_learnings.py",
+      "components": [
+        "opc/scripts/core/recall_learnings.py",
+        "opc/scripts/core/store_learning.py",
+        "opc/scripts/core/embedding_daemon.py",
+        "opc/scripts/core/backfill_embeddings.py",
+        ".claude/hooks/src/memory-awareness.ts (UserPromptSubmit writer + score emitter)",
+        ".claude/hooks/src/smarter-everyday.ts (PostToolUse/Edit|Write|Bash|TaskUpdate)",
+        ".claude/hooks/src/periodic-extract.ts (PostToolUse wildcard)",
+        ".claude/hooks/src/pre-compact-extract.ts (PreCompact)",
+        ".claude/hooks/src/session-end-extract.ts (SessionEnd)",
+        "Postgres table: archival_memory (1024-dim pgvector)"
+      ],
+      "verified_counts": {
+        "core_scripts_in_opc": 40,
+        "embedding_model": "BAAI/bge-large-en-v1.5",
+        "embedding_dim": 1024,
+        "recall_hit_rate_pct": 27.4,
+        "intent_pollution_pct": 24.6,
+        "sub_agent_recall_rows": 0,
+        "total_recall_rows_sampled": 281
+      },
+      "notes": "Core store/recall math is sound; three S1 defects actively suppress recall quality. D3b-01: HYBRID_FLOOR=0.01 applied AFTER a decay multiplier mathematically excludes most corpus — one-constant fix. D3b-02: FTS arm uses plainto_tsquery (AND semantics) over full prompt so arm is nearly always empty, degrading hybrid to vector-only. D9-01 / D2c-01: 24.6% of recall queries are <task-notification> XML blobs (no machine-content guard); agents are fully memory-blind (0/281 sub-agent rows — main thread only). No mutation from D3a-01 / D5a-01: store_learning.py shell-injection via execSync is fixed (spawnSync commit f143e5b).",
+      "key_findings": ["D3b-01", "D3b-02", "D3b-05", "D3c-04", "D9-01", "D2c-01"]
+    },
+    {
+      "key": "hooks",
+      "name": "Hooks",
+      "purpose": "Intercept Claude Code lifecycle events (SessionStart, UserPromptSubmit, PreToolUse, PostToolUse, SessionEnd, PreCompact) to inject context, enforce patterns, and block unsafe operations.",
+      "health": "gap",
+      "entry_point": ".claude/settings.json",
+      "components": [
+        ".claude/hooks/src/*.ts — 111 source files (esbuild → dist/*.mjs)",
+        ".claude/hooks/dist/*.mjs — 111 compiled files",
+        ".claude/hooks/braintrust_hooks.py — Python hooks (5 invocations registered)",
+        "Build: cd .claude/hooks && npm run build (esbuild, ESM output)",
+        "Test: npx vitest run (99 test files in src/__tests__/)"
+      ],
+      "verified_counts": {
+        "src_ts_files": 111,
+        "dist_mjs_files": 111,
+        "unique_mjs_registered_in_repo_settings": 58,
+        "python_braintrust_registrations": 5,
+        "review_registered_count": 76,
+        "review_never_registered_count": 35,
+        "dead_agent_safety_hooks": 9,
+        "note_on_count_discrepancy": "Repo settings.json has 58 unique .mjs. Review (frozen SHA, active ~/.claude/settings.json) found 76 registered / 35 never-registered. Divergence is a known 3-way split (repo / active / template) per D2b-01."
+      },
+      "notes": "CRITICAL: D2b-01 + D10c-02 matcher split-brain. The Claude Code Task tool fires as event name 'Task'; all hooks registered under matcher 'Agent' are dead. This silences: agent-model-guard, explore-to-scout, no-haiku-enforcer, navigator-validate, task-router, maestro-enforcer (all PreToolUse/Agent) AND agent-error-capture, agent-verification, ralph-task-monitor (PostToolUse/Agent). EVERY subagent spawn runs with zero pre-spawn guard and zero post-spawn verification. D10c-03: maestro-enforcer is documented as C:10 blocking in RULES.md but has never fired. navigator-safety deregistered 2026-06-10 (commit eae979e) — was auto-approving rm -rf / git push --force / DROP TABLE. D2d-03: epistemic-reminder reads input.tool (not canonical tool_name) — dead; claim-verification.md says it runs after every Grep but it does not.",
+      "key_findings": ["D2b-01", "D10c-01", "D10c-02", "D10c-03", "D2a-01", "D2d-03"],
+      "registered_event_breakdown": {
+        "PreToolUse": ["EnterPlanMode", "Agent(dead_split_brain)", "Grep", "Read", "Edit|Write|Bash", "Edit|Write", "TaskUpdate", "Grep|Agent"],
+        "UserPromptSubmit": ["(wildcard — 12 hooks, 13 total spawns serialized, ~22-32s latency per D6a-01)"],
+        "SessionStart": ["(8 hooks)"],
+        "PreCompact": ["(2 hooks)"],
+        "SessionEnd": ["(5 hooks)"],
+        "PostToolUse": ["(wildcard)", "Agent(dead_split_brain)", "Grep|Read", "ExitPlanMode", "TaskUpdate|Bash", "Bash", "Edit|Write|Bash|TaskUpdate", "Write|Edit", "Edit|Write", "(wildcard 2)", "Read|Grep"]
+      }
+    },
+    {
+      "key": "agents",
+      "name": "Agents",
+      "purpose": "Specialized Claude sub-instances invoked via the Task tool (not Agent tool) for focused delegation — keeps main context clean.",
+      "health": "honing",
+      "entry_point": ".claude/agents/ directory",
+      "components": [
+        ".claude/agents/*.md — 36 agent definition files (Claude Code reads these)",
+        ".claude/agents/*.json — 16 companion JSON files (never executed; Claude Code reads .md only)",
+        ".claude/agents/_archived/ — archived agents",
+        "Key agents: scout, oracle, kraken, spark, architect, phoenix, debug-agent, sleuth, arbiter, atlas, critic, principal-reviewer, maestro, ralph, scribe, deployer"
+      ],
+      "verified_counts": {
+        "md_agent_files": 36,
+        "json_companion_files": 16,
+        "agents_never_in_recall_rows": 30,
+        "agents_active_in_recall_rows": 6,
+        "top_recall_agents": ["codex-adversary", "critic", "plan-reviewer"],
+        "json_layer_executes": false
+      },
+      "notes": "D7c-01: the .json layer (16 files) is never executed — Claude Code reads .md + YAML only. 30/36 agents have never appeared in recall rows including oracle, debug-agent, sleuth, architect, phoenix, arbiter. Activity is dominated by the review pipeline (codex-adversary + critic + plan-reviewer = ~50% of rows). Utilization data suggests the roster could shrink to ~15 actively routed agents. Pre-spawn guard chain (agent-model-guard, no-haiku-enforcer, maestro-enforcer) is dead per hooks matcher split-brain (D2b-01).",
+      "key_findings": ["D7c-01", "D2b-01", "D10c-02"]
+    },
+    {
+      "key": "pageindex",
+      "name": "PageIndex",
+      "purpose": "Tree-based document search — index long docs (PDFs, research, architecture refs) into Postgres pageindex_* tables; LLM-reasoned section retrieval.",
+      "health": "honing",
+      "entry_point": "opc/scripts/pageindex/",
+      "components": [
+        "opc/scripts/pageindex/ — homegrown system (~4.8K LOC)",
+        "opc/scripts/pageindex/pageindex/ — core package",
+        "opc/scripts/pageindex/cli/ — CLI entry point",
+        "opc/scripts/pageindex/tree_search.py — tree-based section search",
+        "Postgres tables: pageindex_* (indexed doc content + embeddings)",
+        ".claude/hooks/src/pageindex-watch.ts — PostToolUse/Write|Edit (tree invalidation trigger, still registered)",
+        ".claude/hooks/src/pageindex-navigator.ts — NOT in settings.json (disabled 2026-06-01)"
+      ],
+      "verified_counts": {
+        "pageindex_dir_items": 19,
+        "per_prompt_hook_active": false,
+        "per_prompt_hook_disabled_date": "2026-06-01",
+        "per_prompt_hook_disable_reason": "0/16 query-hits in telemetry, 1.8-15.8s per-prompt latency tax",
+        "pageindex_watch_still_registered": true
+      },
+      "notes": "The per-prompt pageindex-navigator hook was disabled 2026-06-01 after telemetry showed zero query hits at 1.8-15.8s per prompt. The homegrown system and Postgres tables remain intact; invoke via pageindex CLI deliberately for long-doc section search. pageindex-watch still fires on Write|Edit to trigger invalidation. The system is on-demand only — not zero-hit-rate broken, just not auto-firing.",
+      "key_findings": []
+    },
+    {
+      "key": "workflows",
+      "name": "Workflows",
+      "purpose": "Multi-step orchestration: Ralph (autonomous dev mode, GSD lifecycle Phase 0→4.1.5, bounded agent loops) and Maestro (interview-gated multi-step orchestration with explicit phase gates).",
+      "health": "honing",
+      "entry_point": "/ralph slash command + .claude/skills/ralph/SKILL.md",
+      "components": [
+        ".claude/scripts/ralph/ — 20 Python scripts (state, scheduler, checkpoint, spawn, etc.)",
+        "opc/scripts/ralph/ — 3 test-only files",
+        ".ralph/state.json — unified Ralph state (v2 schema, tasks as array with id field)",
+        ".claude/hooks/src/ralph-delegation-enforcer.ts (PreToolUse Edit|Write|Bash — soft enforcement)",
+        ".claude/hooks/src/ralph-watchdog.ts (UserPromptSubmit — active)",
+        ".claude/hooks/src/ralph-monitor.ts (PostToolUse/Bash — active)",
+        ".claude/hooks/src/ralph-progress-inject.ts (UserPromptSubmit — active)",
+        ".claude/hooks/src/ralph-retry-reminder.ts (UserPromptSubmit — active)",
+        ".claude/hooks/src/ralph-task-monitor.ts (PostToolUse/Agent — DEAD: matcher split-brain)",
+        ".claude/hooks/src/plan-exit-tracker.ts (PostToolUse/ExitPlanMode — active)",
+        ".claude/hooks/src/plan-to-ralph-enforcer.ts (PreToolUse Edit|Write — active)",
+        ".claude/hooks/src/maestro-enforcer.ts (PreToolUse/Agent — DEAD: matcher split-brain)",
+        ".claude/hooks/src/maestro-state-manager.ts (UserPromptSubmit — active)",
+        ".claude/hooks/src/maestro-detector.ts (UserPromptSubmit — active)",
+        ".claude/maestro-state.json — Maestro phase state"
+      ],
+      "verified_counts": {
+        "ralph_scripts": 20,
+        "ralph_hooks_active": 5,
+        "ralph_hooks_dead": 1,
+        "maestro_enforcer_fires": false,
+        "maestro_gating_is_prose_only": true
+      },
+      "notes": "Ralph: core delegation loop works (Task tool not guarded by dead Agent-matcher hooks). ralph-task-monitor is dead (PostToolUse/Agent). Bounded iteration limits (10/30/50) are soft — enforced by prompt instructions, not hardware. Maestro: D10c-03 is a documentation accuracy critical issue — RULES.md asserts maestro-enforcer is C:10 blocking but it has never fired (Agent matcher dead). Maestro phase gating is prose-only. plan-to-ralph-enforcer and plan-exit-tracker are both active and functional.",
+      "key_findings": ["D10c-03", "D2b-01", "D10c-02"]
+    },
+    {
+      "key": "braintrust",
+      "name": "Braintrust",
+      "purpose": "Observability — emit deterministic scores and run LLM judges against sampled sessions to measure system health over time.",
+      "health": "honing",
+      "entry_point": "opc/scripts/core/judge_session.py",
+      "components": [
+        ".claude/hooks/src/hook-health-monitor.ts — emits hook_health_ratio (SessionStart)",
+        ".claude/hooks/src/memory-awareness.ts — emits memory_recall_relevance + memory_recall_hit (UserPromptSubmit)",
+        ".claude/hooks/src/ralph-task-monitor.ts — emits agent_task_success (PostToolUse/Agent — DEAD)",
+        ".claude/hooks/src/telemetry-tracker.ts — emits skill_trigger_accuracy",
+        ".claude/hooks/braintrust_hooks.py — emits tool_call_success (PostToolUse Python)",
+        ".claude/hooks/src/shared/braintrust-score.ts — TS emit helper",
+        "opc/scripts/core/judge_session.py — 3 LLM judges (factuality, closedqa, plan_rubric)"
+      ],
+      "verified_counts": {
+        "emit_invariant_await_calls": 4,
+        "emit_invariant_files": [
+          "hook-health-monitor.ts:322",
+          "memory-awareness.ts:659",
+          "ralph-task-monitor.ts:209",
+          "telemetry-tracker.ts:185"
+        ],
+        "deterministic_score_dimensions": [
+          "hook_health_ratio",
+          "memory_recall_relevance",
+          "memory_recall_hit",
+          "agent_task_success (DEAD — dead PostToolUse/Agent matcher)",
+          "skill_trigger_accuracy",
+          "tool_call_success (Python)"
+        ],
+        "llm_judges": ["factuality", "closedqa", "plan_rubric"],
+        "session_id_schemes_competing": 7,
+        "correlation_null_rate_pct": 60.7
+      },
+      "notes": "Emit-invariant is exactly 4 `await emitBraintrustScore(` calls across 4 .ts files (verified). agent_task_success is dead because ralph-task-monitor is registered under PostToolUse/Agent which matches nothing (Task tool, not Agent). D7d-01: 7 competing getSessionId implementations give different strings for the same session, making Braintrust cross-trace joins fail 60.7% of the time — the core telemetry joinability problem.",
+      "key_findings": ["D7d-01", "D2b-01"]
+    }
+  ],
+  "substrate": [
+    {
+      "key": "ws2_context_bus",
+      "name": "WS-2 Context Bus (L2)",
+      "status": "substrate-only — reads and intent/turn writes work; symbol/finding write path is severed",
+      "purpose": "Session-scoped shared state (focus_symbols, files_in_play, recent_findings, current_intent) written exclusively by hooks; read by L3 specialists to bias queries. One JSON file per session at <projectDir>/.claude/cache/session/<bus_id>/context.json.",
+      "components": [
+        ".claude/hooks/src/shared/context-bus.ts — single-writer module (mutateBus, readBus, addFileInPlay, bumpTurn, setIntent)",
+        ".claude/hooks/src/shared/session-bus-id.ts — getBusId() = <sessionId>-<sha256(realpath(cwd))[:12]>",
+        ".claude/hooks/src/shared/session-id.ts — coordination session-id (separate chain, COORDINATION_SESSION_ID-first)",
+        ".claude/hooks/src/bus-tool-populator.ts — PostToolUse/Read|Grep writer (files_in_play)",
+        ".claude/hooks/src/bus-session-populator.ts — UserPromptSubmit writer (intent + turn bump)",
+        ".claude/hooks/src/shared/intel-bus.ts — L0 observability log (intel-bus.jsonl, distinct from L2)",
+        ".claude/hooks/src/shared/atomic-write.ts — O_EXCL lock + temp+rename for write safety"
+      ],
+      "notes": "Bus READ path works correctly. Intent and turn writes (bus-session-populator, bus-tool-populator) are registered and active. CRITICAL GAP (D1A-001 + D1b-03 S1): codegraph proposed_bus_updates returned by the facade have ZERO consumers — no SubagentStop hook exists in the repo, active, or template settings (0 registrations). The boundary rule and the facade comment both describe a 'downstream SubagentStop writer' in present tense that does not exist. The bus symbol layer (focus_symbols, recent_findings from codegraph) is write-dead. Kill switch: CCV3_BUS_OFF=1. Session-id duality is correctly separated: coordination callers use session-id.ts; bus callers use session-bus-id.ts (finding #15 resolution).",
+      "key_findings": ["D1A-001", "D1b-03", "D10c-01"]
+    },
+    {
+      "key": "ws2_code_intel_facade",
+      "name": "WS-2 /code-intel Facade (L4)",
+      "status": "live — all subcommands routable; codegraph binary present and wired",
+      "purpose": "Stateless Node CLI that routes code-intelligence queries to the correct L3 specialist. Entry for: who-calls, find-symbol, code-context, recall, tldr, bus (read-only). Returns { success, backend, routing_reason, result, ... } JSON.",
+      "components": [
+        "scripts/code-intel.mjs — 1130 lines, the facade implementation",
+        "Kill-switch order: CCV3_KILLSWITCH → CCV3_CODEGRAPH_OFF → binary-absent → TLDR fallback (checked lazily per call)",
+        "Backends: codegraph (LIVE), TLDR (CLI, fallback), archival recall (uv run python opc/scripts/core/recall_learnings.py), bus (read-only), ast-grep (MCP-only, guidance only), Serena (MCP-only, guidance only)"
+      ],
+      "notes": "Header comment at line 17 ('codegraph -> ABSENT (Phase C). who-calls/find-symbol/code-context fall back to TLDR') is stale documentation of the fallback path, NOT the current state. The implementation at lines 291-402 fully wires codegraph: resolveCodegraphBin() finds .claude/hooks/node_modules/@colbymchenry/codegraph/npm-shim.js (confirmed present), runCodegraph() uses process.execPath + array args (CVE-2024-27980 safe, windowsHide:true). Facade PROPOSES bus updates (proposed_bus_updates) but never writes L2 (single-writer rule §4). Telemetry appended to .claude/logs/intel-bus.jsonl.",
+      "key_findings": ["D1b-03"]
+    },
+    {
+      "key": "ws2_codegraph",
+      "name": "WS-2 codegraph L3 Specialist",
+      "status": "LIVE — Phase C (C.2). Binary present, DB exists, kill-switch order honored.",
+      "purpose": "Broad, fast FTS-first symbol discovery and reverse call graph. Owns: who-calls → codegraph callers; find-symbol → codegraph query (FTS); code-context → codegraph query + impact fused with tldr structure + archival recall.",
+      "components": [
+        "@colbymchenry/codegraph@0.9.9 — installed at .claude/hooks/node_modules/@colbymchenry/codegraph/",
+        ".codegraph/codegraph.db — SQLite WAL database (confirmed present in repo root)",
+        "Invoked via: node <npm-shim.js> [args...] (never .cmd shim per CVE-2024-27980)",
+        "Kill-switch order: CCV3_KILLSWITCH → CCV3_CODEGRAPH_OFF → binary-absent → unchanged TLDR path",
+        "C.1 platform contract gate: GREEN (12/12 assertions pass on Windows 11 / Node 24.4.1)"
+      ],
+      "verified_counts": {
+        "package_version": "0.9.9",
+        "db_path": ".codegraph/codegraph.db",
+        "db_exists": true,
+        "binary_path": ".claude/hooks/node_modules/@colbymchenry/codegraph/npm-shim.js",
+        "cold_index_time_s": 9.0,
+        "warm_query_time_s": 2.85,
+        "wall_time_dominated_by": "Node+WASM startup (~3-4s per invocation), not query work"
+      },
+      "notes": "codegraph is LIVE and correctly wired in code-intel.mjs. Known limitation (C.1 finding #4): incremental sync orphans cross-file caller edges — after a callee-file edit, unchanged caller files are not re-parsed, so who-calls may under-report. Remediation: `index --force` OR facade emits Serena-escalation hint when callers is empty. WAL journal confirmed active on local NTFS (journalMode:wal). The write-dead bus is a SEPARATE issue — codegraph itself is not blocked, only the proposed_bus_updates consumer chain is missing.",
+      "key_findings": ["D1A-001", "D1b-03"]
+    }
+  ],
+  "cross_cutting_notes": "Elegance verdict: 'mixed'. The dominant failure pattern is REGISTRATION / WIRING DRIFT, not architectural over-design. Three highest-leverage single fixes by blast radius: (1) D2b-01/D10c-02 — change matcher 'Agent' to 'Task' in settings.json for the entire agent safety+verification chain (one-line each, revives 9 dead hooks at once); (2) D7d-01 — single canonical getSessionId implementation unblocks telemetry joinability (corr-null 60.7%); (3) D5a-01 / D3a-01 — store_learning.py shared-helper extraction (closes junk-file creation + shell-injection together). The S0 findings already patched: D5a-01 shell-injection via spawnSync (commit f143e5b, 2026-06-10 earlz), D2b-05 /tmp path (commit 89c9e5e), D2d-01 ROADMAP contamination guard (commit f7f3eba). The clean spine: PostgreSQL schema, secret handling, path-traversal defenses all cleared by D5b coverage manifest."
+}

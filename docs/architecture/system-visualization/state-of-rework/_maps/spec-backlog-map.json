@@ -1,0 +1,280 @@
+{
+  "filename": "backlog-map",
+  "title": "CCv3 Backlog Execution Roadmap",
+  "subtitle": "wave0 shipped → wave1 quick-wins → tier2 structural → tier3 strategic → deletions",
+  "lanes": [
+    {
+      "id": "w0",
+      "label": "WAVE 0 (shipped)",
+      "accent": "#34d399"
+    },
+    {
+      "id": "w1",
+      "label": "WAVE 1 (S1 quick-wins)",
+      "accent": "#fb923c"
+    },
+    {
+      "id": "t2",
+      "label": "TIER 2 structural",
+      "accent": "#a78bfa"
+    },
+    {
+      "id": "t3",
+      "label": "TIER 3 strategic",
+      "accent": "#06b6d4"
+    },
+    {
+      "id": "del",
+      "label": "DELETIONS",
+      "accent": "#6b7280"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "b_qw01",
+      "lane": "w0",
+      "label": "store_learning Fix",
+      "sublabel": "D5a-01 · spawnSync argv, no shell",
+      "intent": "done"
+    },
+    {
+      "id": "b_qw02",
+      "lane": "w0",
+      "label": "/tmp → os.tmpdir",
+      "sublabel": "D2b-05 · portable temp path",
+      "intent": "done"
+    },
+    {
+      "id": "b_qw03",
+      "lane": "w0",
+      "label": "ROADMAP Guard",
+      "sublabel": "D2d-01 · positive project allowlist",
+      "intent": "done"
+    },
+    {
+      "id": "b_qw04",
+      "lane": "w1",
+      "label": "Agent→Task Matcher",
+      "sublabel": "D2b-01 · revives 12 dead hooks",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw05",
+      "lane": "w1",
+      "label": "Epistemic Field Fix",
+      "sublabel": "D2d-03 · input.tool_name one-word",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw06",
+      "lane": "w1",
+      "label": "Recall Floor + FTS",
+      "sublabel": "D3b-01/02 · floor math + OR semantics",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw07",
+      "lane": "w1",
+      "label": "Pollution Filter",
+      "sublabel": "D2c-01 · strip task-notification XML",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw08",
+      "lane": "w1",
+      "label": "Ghost Skill Cleanup",
+      "sublabel": "D7b-01 · remove 28 dead registrations",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw11",
+      "lane": "w1",
+      "label": "tsc .cmd Shim Fix",
+      "sublabel": "D2e-02 · Windows diagnostics dead",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_qw09_12",
+      "lane": "w1",
+      "label": "Guard + Hygiene",
+      "sublabel": "QW-09/10/12 · rule + artifact cleanup",
+      "intent": "wave1"
+    },
+    {
+      "id": "b_st01",
+      "lane": "t2",
+      "label": "Wire SubagentStop",
+      "sublabel": "D10c-01 · bus symbol writes live",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st02",
+      "lane": "t2",
+      "label": "Session-id Collapse",
+      "sublabel": "D7d-01 · one canonical getSessionId",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st03",
+      "lane": "t2",
+      "label": "Hot-path Latency",
+      "sublabel": "D6a-01 · 13 spawns → parallel",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st04",
+      "lane": "t2",
+      "label": "codegraph Latency",
+      "sublabel": "D4b-01 · 62s median → budget",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st05",
+      "lane": "t2",
+      "label": "Resident Recall Daemon",
+      "sublabel": "D6b-01 · amortize 2.2s boot cost",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st06",
+      "lane": "t2",
+      "label": "Permission Redesign",
+      "sublabel": "D2g-02 · no blanket auto-allow",
+      "intent": "structural"
+    },
+    {
+      "id": "b_st07_10",
+      "lane": "t2",
+      "label": "Sanitizer + Security",
+      "sublabel": "ST-07/08/09/10 · inject+bus hardening",
+      "intent": "structural"
+    },
+    {
+      "id": "b_sg01",
+      "lane": "t3",
+      "label": "Memory Health Program",
+      "sublabel": "D9-01 · hit-rate SLO + corpus curation",
+      "intent": "strategic"
+    },
+    {
+      "id": "b_sg02",
+      "lane": "t3",
+      "label": "Settings Drift Fix",
+      "sublabel": "GAP3-03 · three-way reconciliation",
+      "intent": "strategic"
+    },
+    {
+      "id": "b_sg03",
+      "lane": "t3",
+      "label": "Elegance Pruning",
+      "sublabel": "D7d-03 · collapse duplication clusters",
+      "intent": "strategic"
+    },
+    {
+      "id": "b_sg04",
+      "lane": "t3",
+      "label": "Telemetry Joinability",
+      "sublabel": "D1A-005 · intel-bus consumer + WRRF weights",
+      "intent": "strategic"
+    },
+    {
+      "id": "b_del01",
+      "lane": "del",
+      "label": "11 tmpclaude Files",
+      "sublabel": "D1A-007 · git rm + .gitignore guard",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del03_04",
+      "lane": "del",
+      "label": "Scaffold + Zip Dead",
+      "sublabel": "D7a-01 · test-build.ts + ebr zip",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del05",
+      "lane": "del",
+      "label": "26 Dead Hook Protos",
+      "sublabel": "D2g-08 · archive then git rm two-step",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del06_07",
+      "lane": "del",
+      "label": "Dead Lib + Client",
+      "sublabel": "D2g-06 · lib/ dupes + memory-client triple-dead",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del08",
+      "lane": "del",
+      "label": "handoff-index Hook",
+      "sublabel": "D2g-09 · drops better-sqlite3 dep",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del09",
+      "lane": "del",
+      "label": ".claude/scripts/core",
+      "sublabel": "D7d-04 · 4-month stale mirror remove SYNC_DIRS",
+      "intent": "deletion"
+    },
+    {
+      "id": "b_del10_12",
+      "lane": "del",
+      "label": "Ralph v1 + Dead Roster",
+      "sublabel": "D7d-05/D7c-02/D7b-04 · v1 + agents + skills",
+      "intent": "deletion"
+    }
+  ],
+  "edges": [
+    {
+      "from": "b_qw01",
+      "to": "b_qw04",
+      "kind": "dep",
+      "label": "must land first — re-enables agent-error-capture"
+    },
+    {
+      "from": "b_qw04",
+      "to": "b_st01",
+      "kind": "dep",
+      "label": "matcher fix enables SubagentStop wiring"
+    },
+    {
+      "from": "b_st02",
+      "to": "b_sg04",
+      "kind": "dep",
+      "label": "session-id prerequisite"
+    },
+    {
+      "from": "b_st01",
+      "to": "b_sg04",
+      "kind": "dep",
+      "label": "SubagentStop prerequisite"
+    },
+    {
+      "from": "b_qw06",
+      "to": "b_sg01",
+      "kind": "dep",
+      "label": "recall math baseline before SLO"
+    },
+    {
+      "from": "b_st03",
+      "to": "b_sg01",
+      "kind": "dep",
+      "label": "hot-path improvement before SLO"
+    },
+    {
+      "from": "b_sg03",
+      "to": "b_del05",
+      "kind": "dep",
+      "label": "elegance program drives safe deletes"
+    }
+  ],
+  "notes": [
+    "Sequencing is mandatory: QW-01 before QW-04 — re-enabling agent-error-capture via the matcher fix exposes D2d-07/D2d-06 shell-injection bugs that QW-01 must first close. Within QW-04: flip guard/verify hooks before inject hooks.",
+    "ST-01 (SubagentStop) and ST-02 (session-id) are both prerequisites for SG-04 (telemetry joinability) — SG-04 cannot meaningfully start until both structural arcs land. Corr-null 60.7% is the measurable target.",
+    "Deletion quarantine protocol: archive/disable FIRST, run static_ref_check per-file BEFORE any git rm, never batch safe_to_delete:false items (DEL-02/05/09/10/11/12) with trivial deletes.",
+    "All Wave 0 commits verified: 1788211 (QW-01), 89c9e5e (QW-02), f7f3eba (QW-03). S0-remaining-open: 0. S1 open: 41 (all in Wave 1 + Tier 2)."
+  ]
+}

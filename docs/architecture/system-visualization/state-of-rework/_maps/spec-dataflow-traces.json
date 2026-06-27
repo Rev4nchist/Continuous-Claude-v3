@@ -1,0 +1,367 @@
+{
+  "filename": "dataflow-traces",
+  "title": "CCv3 End-to-End Data-Flow Traces",
+  "subtitle": "four grounded traces · health nodes indicate gap/honing steps",
+  "lanes": [
+    {
+      "id": "tr1",
+      "label": "Prompt → Recall",
+      "accent": "#22c55e"
+    },
+    {
+      "id": "tr2",
+      "label": "Store Learning",
+      "accent": "#22c55e"
+    },
+    {
+      "id": "tr3",
+      "label": "Hook Edit Flow",
+      "accent": "#facc15"
+    },
+    {
+      "id": "tr4",
+      "label": "/code-intel Query",
+      "accent": "#06b6d4"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "t1_hb",
+      "lane": "tr1",
+      "label": "Heartbeat",
+      "sublabel": "heartbeat.ts · Postgres session update",
+      "intent": "sound"
+    },
+    {
+      "id": "t1_skill",
+      "lane": "tr1",
+      "label": "Skill Activation",
+      "sublabel": "skill-activation-prompt.ts · keyword inject",
+      "intent": "sound"
+    },
+    {
+      "id": "t1_bus",
+      "lane": "tr1",
+      "label": "Bus Turn Write",
+      "sublabel": "bus-session-populator.ts · setIntent+bumpTurn",
+      "intent": "honing"
+    },
+    {
+      "id": "t1_mem",
+      "lane": "tr1",
+      "label": "Memory Recall",
+      "sublabel": "memory-awareness.ts · 22-32s serial spawns",
+      "intent": "honing"
+    },
+    {
+      "id": "t1_maestro",
+      "lane": "tr1",
+      "label": "Maestro Detect",
+      "sublabel": "maestro-detector.ts · writes state.json",
+      "intent": "sound"
+    },
+    {
+      "id": "t1_confirm",
+      "lane": "tr1",
+      "label": "Confirm Detect",
+      "sublabel": "user-confirmation-detector.ts · resolution check",
+      "intent": "sound"
+    },
+    {
+      "id": "t1_bt",
+      "lane": "tr1",
+      "label": "Braintrust Span",
+      "sublabel": "braintrust_hooks.py · root span open",
+      "intent": "honing"
+    },
+    {
+      "id": "t2_err",
+      "lane": "tr2",
+      "label": "Agent Error Capture",
+      "sublabel": "agent-error-capture.ts · DEAD Agent matcher",
+      "intent": "gap"
+    },
+    {
+      "id": "t2_confirm",
+      "lane": "tr2",
+      "label": "User Confirms",
+      "sublabel": "user-confirmation-detector.ts · active path",
+      "intent": "sound"
+    },
+    {
+      "id": "t2_smarter",
+      "lane": "tr2",
+      "label": "Smarter Everyday",
+      "sublabel": "smarter-everyday.ts · 5-state machine",
+      "intent": "sound"
+    },
+    {
+      "id": "t2_gate",
+      "lane": "tr2",
+      "label": "TS Quality Gate",
+      "sublabel": "memory-quality-scorer.ts · score 0-10",
+      "intent": "sound"
+    },
+    {
+      "id": "t2_store",
+      "lane": "tr2",
+      "label": "store_learning.py",
+      "sublabel": "argv spawnSync · QW-01 shell-injection closed",
+      "intent": "sound"
+    },
+    {
+      "id": "t2_bge",
+      "lane": "tr2",
+      "label": "BGE Daemon",
+      "sublabel": "embedding_daemon.py · 1024-dim vector",
+      "intent": "honing"
+    },
+    {
+      "id": "t2_pg",
+      "lane": "tr2",
+      "label": "Postgres Insert",
+      "sublabel": "archival_memory · 0.85 sim dedup check",
+      "intent": "sound"
+    },
+    {
+      "id": "t3_bt",
+      "lane": "tr3",
+      "label": "Braintrust Record",
+      "sublabel": "braintrust_hooks.py · all PostToolUse",
+      "intent": "sound"
+    },
+    {
+      "id": "t3_smarter",
+      "lane": "tr3",
+      "label": "Smarter Everyday",
+      "sublabel": "smarter-everyday.ts · tracks edited file",
+      "intent": "sound"
+    },
+    {
+      "id": "t3_import",
+      "lane": "tr3",
+      "label": "Import Validator",
+      "sublabel": "import-validator.ts · path verify",
+      "intent": "sound"
+    },
+    {
+      "id": "t3_diag",
+      "lane": "tr3",
+      "label": "TS Diagnostics",
+      "sublabel": "post-edit-diagnostics.ts · NOT WIRED",
+      "intent": "gap"
+    },
+    {
+      "id": "t3_audit",
+      "lane": "tr3",
+      "label": "Emit Audit",
+      "sublabel": "audit-braintrust-emits.sh · manual only",
+      "intent": "gap"
+    },
+    {
+      "id": "t3_build",
+      "lane": "tr3",
+      "label": "npm Build",
+      "sublabel": "hooks/package.json · manual compile step",
+      "intent": "gap"
+    },
+    {
+      "id": "t3_sync",
+      "lane": "tr3",
+      "label": "Forward Sync",
+      "sublabel": "sync-to-active.sh · post-commit async",
+      "intent": "honing"
+    },
+    {
+      "id": "t4_enf",
+      "lane": "tr4",
+      "label": "Enforcer (OFF)",
+      "sublabel": "code-intel-enforcer.ts · default inert",
+      "intent": "honing"
+    },
+    {
+      "id": "t4_parse",
+      "lane": "tr4",
+      "label": "Facade Parse",
+      "sublabel": "code-intel.mjs · cmd + correlation_id",
+      "intent": "sound"
+    },
+    {
+      "id": "t4_bus",
+      "lane": "tr4",
+      "label": "Bus Discovery",
+      "sublabel": "discoverBus · fail-open best-effort",
+      "intent": "honing"
+    },
+    {
+      "id": "t4_ks",
+      "lane": "tr4",
+      "label": "Kill-Switch + Fresh",
+      "sublabel": "codegraphAbsent · ensureFresh cache",
+      "intent": "sound"
+    },
+    {
+      "id": "t4_cg",
+      "lane": "tr4",
+      "label": "Run codegraph",
+      "sublabel": "runCodegraph · 3-4s Node+WASM cold start",
+      "intent": "honing"
+    },
+    {
+      "id": "t4_shape",
+      "lane": "tr4",
+      "label": "Shape + Serena Hint",
+      "sublabel": "validateCgShape · hint on empty/alias-prone",
+      "intent": "sound"
+    },
+    {
+      "id": "t4_absent",
+      "lane": "tr4",
+      "label": "SubagentStop ABSENT",
+      "sublabel": "proposed_bus_updates never committed",
+      "intent": "gap"
+    }
+  ],
+  "edges": [
+    {
+      "from": "t1_hb",
+      "to": "t1_skill",
+      "kind": "flow"
+    },
+    {
+      "from": "t1_skill",
+      "to": "t1_bus",
+      "kind": "flow"
+    },
+    {
+      "from": "t1_bus",
+      "to": "t1_mem",
+      "kind": "flow",
+      "label": "load-bearing order: write before read"
+    },
+    {
+      "from": "t1_mem",
+      "to": "t1_maestro",
+      "kind": "flow"
+    },
+    {
+      "from": "t1_maestro",
+      "to": "t1_confirm",
+      "kind": "flow"
+    },
+    {
+      "from": "t1_confirm",
+      "to": "t1_bt",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_err",
+      "to": "t2_gate",
+      "kind": "dashed",
+      "label": "DEAD — never fires (D10c-02)"
+    },
+    {
+      "from": "t2_confirm",
+      "to": "t2_smarter",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_smarter",
+      "to": "t2_gate",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_gate",
+      "to": "t2_store",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_store",
+      "to": "t2_bge",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_bge",
+      "to": "t2_pg",
+      "kind": "flow"
+    },
+    {
+      "from": "t2_store",
+      "to": "t2_pg",
+      "kind": "fallback",
+      "label": "FTS-only if BGE daemon down"
+    },
+    {
+      "from": "t3_bt",
+      "to": "t3_smarter",
+      "kind": "flow"
+    },
+    {
+      "from": "t3_smarter",
+      "to": "t3_import",
+      "kind": "flow"
+    },
+    {
+      "from": "t3_import",
+      "to": "t3_diag",
+      "kind": "flow"
+    },
+    {
+      "from": "t3_diag",
+      "to": "t3_audit",
+      "kind": "flow"
+    },
+    {
+      "from": "t3_audit",
+      "to": "t3_build",
+      "kind": "flow"
+    },
+    {
+      "from": "t3_build",
+      "to": "t3_sync",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_enf",
+      "to": "t4_parse",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_parse",
+      "to": "t4_bus",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_bus",
+      "to": "t4_ks",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_ks",
+      "to": "t4_cg",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_cg",
+      "to": "t4_shape",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_shape",
+      "to": "t4_absent",
+      "kind": "flow"
+    },
+    {
+      "from": "t4_ks",
+      "to": "t4_shape",
+      "kind": "fallback",
+      "label": "TLDR bypass when codegraph absent/off"
+    }
+  ],
+  "notes": [
+    "Trace 1: bus-session-populator MUST precede memory-awareness — ordering is load-bearing for WS-2 B.3b/B.4a intent-bias. 13 serialized spawns cause 22-32s worst-case wall latency (D6a-01). 24.6% of recall rows are synthetic <task-notification> XML blobs (D2c-01).",
+    "Trace 2: t2_err dashed edge shows the FAILED_APPROACH auto-capture pipeline is a ghost — every subagent error goes unrecorded in archival_memory because agent-error-capture registered under 'Agent' matcher while tool emits 'Task' (D10c-02).",
+    "Trace 3: nodes t3_diag / t3_audit / t3_build are all gap — they represent a manual cliff after the automated PostToolUse chain. CLAUDE.md asserts post-edit-diagnostics fires automatically on .ts edits; it was built but never registered in settings.json.",
+    "Trace 4: t4_absent (SubagentStop ABSENT, gap) is the final step because proposed_bus_updates from codegraph are computed and dropped on every call — the 'downstream SubagentStop writer' the boundary rule asserts in present tense does not exist anywhere in hooks/src (D1A-001, D10c-01)."
+  ]
+}

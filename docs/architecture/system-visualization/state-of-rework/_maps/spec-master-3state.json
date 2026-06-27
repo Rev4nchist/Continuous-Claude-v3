@@ -1,0 +1,192 @@
+{
+  "filename": "master-3state",
+  "title": "CCv3 State of Rework — Three Horizons",
+  "subtitle": "current health → adjusting backlog → elegant end-state",
+  "lanes": [
+    {
+      "id": "current",
+      "label": "CURRENT STATE",
+      "accent": "#6b7280"
+    },
+    {
+      "id": "adjusting",
+      "label": "ADJUSTING & BUILDING",
+      "accent": "#fbbf24"
+    },
+    {
+      "id": "target",
+      "label": "TARGET (Elegant)",
+      "accent": "#34d399"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "c_memory",
+      "lane": "current",
+      "label": "Memory",
+      "sublabel": "recall_learnings.py · 27.4% hit rate",
+      "intent": "honing"
+    },
+    {
+      "id": "c_hooks",
+      "lane": "current",
+      "label": "Hooks",
+      "sublabel": "settings.json · 35/111 srcs dead",
+      "intent": "gap"
+    },
+    {
+      "id": "c_agents",
+      "lane": "current",
+      "label": "Agents",
+      "sublabel": ".claude/agents/ · 30/36 unrecalled",
+      "intent": "honing"
+    },
+    {
+      "id": "c_pageindex",
+      "lane": "current",
+      "label": "PageIndex",
+      "sublabel": "opc/scripts/pageindex/ · on-demand only",
+      "intent": "honing"
+    },
+    {
+      "id": "c_workflows",
+      "lane": "current",
+      "label": "Workflows",
+      "sublabel": "skills/ralph/ · maestro gate dead",
+      "intent": "honing"
+    },
+    {
+      "id": "c_braintrust",
+      "lane": "current",
+      "label": "Braintrust",
+      "sublabel": "judge_session.py · 60.7% corr-null",
+      "intent": "honing"
+    },
+    {
+      "id": "c_substrate",
+      "lane": "current",
+      "label": "WS-2 Substrate",
+      "sublabel": "context.json · symbol layer write-dead",
+      "intent": "gap"
+    },
+    {
+      "id": "a_wave0",
+      "lane": "adjusting",
+      "label": "Wave 0 Done",
+      "sublabel": "QW-01/02/03 · S0 patches shipped",
+      "intent": "done"
+    },
+    {
+      "id": "a_wave1",
+      "lane": "adjusting",
+      "label": "Wave 1 Quick-Wins",
+      "sublabel": "QW-04..12 · matcher, recall, pollution",
+      "intent": "wave1"
+    },
+    {
+      "id": "a_tier2",
+      "lane": "adjusting",
+      "label": "Tier 2 Structural",
+      "sublabel": "ST-01..10 · bus, session-id, hot-path",
+      "intent": "structural"
+    },
+    {
+      "id": "a_tier3",
+      "lane": "adjusting",
+      "label": "Tier 3 Strategic",
+      "sublabel": "SG-01..04 · memory, elegance, telemetry",
+      "intent": "strategic"
+    },
+    {
+      "id": "a_del",
+      "lane": "adjusting",
+      "label": "12 Deletions",
+      "sublabel": "DEL-01..12 · dead hooks, stale scripts",
+      "intent": "deletion"
+    },
+    {
+      "id": "t_bus",
+      "lane": "target",
+      "label": "Single-Writer Substrate",
+      "sublabel": "Bus reflects live session truth always",
+      "intent": "target"
+    },
+    {
+      "id": "t_hotpath",
+      "lane": "target",
+      "label": "Lean Hot Path",
+      "sublabel": "Resident daemon, parallel hook spawns",
+      "intent": "target"
+    },
+    {
+      "id": "t_dedup",
+      "lane": "target",
+      "label": "No Duplication",
+      "sublabel": "One getSessionId, one storeLearning helper",
+      "intent": "target"
+    },
+    {
+      "id": "t_degrade",
+      "lane": "target",
+      "label": "Honest Degradation",
+      "sublabel": "Kill-switches match documented behavior",
+      "intent": "target"
+    },
+    {
+      "id": "t_evidence",
+      "lane": "target",
+      "label": "Evidence-Locked",
+      "sublabel": "§9 gates from real telemetry, not guesses",
+      "intent": "target"
+    }
+  ],
+  "edges": [
+    {
+      "from": "c_hooks",
+      "to": "a_wave1",
+      "kind": "evolves",
+      "label": "QW-04 Agent→Task matcher"
+    },
+    {
+      "from": "c_memory",
+      "to": "a_wave1",
+      "kind": "evolves",
+      "label": "QW-06/07 recall math fix"
+    },
+    {
+      "from": "a_wave1",
+      "to": "t_degrade",
+      "kind": "evolves",
+      "label": "docs match behavior"
+    },
+    {
+      "from": "c_substrate",
+      "to": "a_tier2",
+      "kind": "evolves",
+      "label": "ST-01 SubagentStop wire"
+    },
+    {
+      "from": "a_tier2",
+      "to": "t_bus",
+      "kind": "evolves",
+      "label": "bus symbol layer live"
+    },
+    {
+      "from": "a_tier3",
+      "to": "t_evidence",
+      "kind": "evolves",
+      "label": "SG-04 telemetry consumer"
+    },
+    {
+      "from": "a_del",
+      "to": "t_dedup",
+      "kind": "evolves",
+      "label": "prune dead periphery"
+    }
+  ],
+  "notes": [
+    "Elegance verdict: 'mixed' — clean spine (SQL layer, secret handling, L3 bus design) wrapped in dead/mis-wired periphery (registration drift + consolidatable duplication). Dominant pattern: prune-and-rewire on a sound core.",
+    "Three highest-leverage single fixes: (1) Agent→Task matcher flip revives 12 dead hooks at once (D2b-01); (2) canonical getSessionId unblocks 60.7% corr-null telemetry (D7d-01); (3) shared storeLearning() helper closes S0 junk-creator + poison-inject seam (D5a-01+D5b-01).",
+    "WS-2 Substrate node represents three components at different health levels — see 'subsystems' diagram for per-component breakdown."
+  ]
+}

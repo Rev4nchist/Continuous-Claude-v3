@@ -1,0 +1,121 @@
+{
+  "slice": "target",
+  "description": "L0-L5 layered model current_status, §9 cohesion metrics, §17 open issues, and elegant end-state narrative",
+  "source_artifacts": [
+    "C:/Users/david.hayes/.claude/plans/we-have-recently-done-refactored-storm.md",
+    "docs/reviews/2026-06-10/findings.json",
+    "docs/reviews/2026-06-10/wf3/synthesis.json",
+    ".claude/settings.json (SubagentStop: 0 matches)",
+    ".claude/hooks/src (proposed_bus_updates: 0 matches)"
+  ],
+  "generated": "2026-06-27",
+  "model_layers": [
+    {
+      "layer": "L0",
+      "name": "Observability (intel-bus.jsonl)",
+      "intent": "Append-only telemetry log at .claude/logs/intel-bus.jsonl capturing every L3 specialist call — facade, specialist, query_type, subject_id, duration_ms, correlation_id, bus_updates, corpus_signature — forming the evidence base for §9 cohesion-metric adoption gates and WRRF weight calibration.",
+      "current_status": "partial",
+      "evidence": "File exists; 125 facade rows and 37 codegraph rows observed (synthesis D1b-05, D4b-05). Critical gaps: bus_id 'unknown' on 100/125 rows (D1b-05), corr-null on 60.7% of all rows because correlation_id is a fresh randomUUID per call with no propagation (D4a-01), intel-bus-stats.mjs (Phase E.1) never built so §9 metrics are uncomputable (D1A-005)."
+    },
+    {
+      "layer": "L1",
+      "name": "Substrates (Postgres / codegraph SQLite / .serena / knowledge-tree.json)",
+      "intent": "Each specialist owns ONE ontology: Postgres archival_memory for semantic learnings (100+ entries, BGE embeddings, RRF hybrid recall), codegraph.db per project for symbol index (FTS + caller/callee graph), .serena per project for LSP truth, knowledge-tree.json for directory orientation.",
+      "current_status": "done",
+      "evidence": "All substrates live. codegraph Phase C platform contract: 12/12 assertions green on Windows 11 / Node 24.4.1 (.claude/rules/windows-platform.md). Postgres archival_memory stores 100+ learnings. knowledge-tree.json per-project via session-start-init-check hook. .serena available via MCP."
+    },
+    {
+      "layer": "L2",
+      "name": "Context Bus (shared/context-bus.ts)",
+      "intent": "Single-writer session-scoped JSON at .claude/cache/session/<bus_id>/context.json holding focus_symbols (SCIP-style IDs, ranks_by_source RRF), files_in_play (8-role load_bearing/ambient taxonomy, ambient capped at 30%), recent_findings, current_intent. Hooks and ONLY hooks write via the owner module. All L3 specialists read to bias queries. Re-read from disk every call (no cache) for compact-survival and hook-ordering safety.",
+      "current_status": "partial",
+      "evidence": "shared/context-bus.ts exists (Phase A shipped). bus-tool-populator and post-edit-diagnostics write files_in_play. CRITICAL GAP: proposed_bus_updates from codegraph have NO committer anywhere in hooks/src (0 grep matches confirmed live). SubagentStop is unregistered at the event level across repo, active, and template settings (0 matches in .claude/settings.json — D10c-01). focus_symbols and recent_findings have no writers (D4a-03). Bus lock cap leaky: 200ms design vs 2293ms observed, 158 slow/14 dropped writes (D4a-02). Only 3 of 8 files_in_play roles have writers. grep_hit slice written but has no consumer (D4a-05). Master CCV3_KILLSWITCH does not short-circuit the bus layer (D1A-002)."
+    },
+    {
+      "layer": "L3",
+      "name": "Specialists (codegraph / Serena / TLDR / ast-grep / archival_memory / PageIndex / knowledge-tree / Notion Bridge)",
+      "intent": "Eight boundary-defined specialists each owning ONE query type per the §3 L3 boundary contract: broad symbol survey (codegraph, FTS-first), LSP truth and alias resolution (Serena), control/data flow and dead code (TLDR), AST pattern find-replace (ast-grep), past session learnings (archival_memory), long-doc section search (PageIndex), directory orientation (knowledge-tree), Eve queue and strategic context (Notion Bridge). Each escalates to a defined peer; none write L2 directly.",
+      "current_status": "partial",
+      "evidence": "codegraph LIVE (Phase C.2). archival_memory live. GAPS: codegraph queries run 35-88s median ~62s in facade, 10x the documented 3-4s budget because ensureFresh spawns one full process per dirty file (D4b-01, D1b-06). Memory recall 27.4% hit rate (D9-01); 24.6% intent pollution from synthetic <task-notification> XML (D2c-01); agent-recall-injector 0-for-78 lifetime yield (D2b-03); 30/36 agents are memory-blind (D9-04). PageIndex near-dead since per-prompt hook disabled 2026-06-01 (0/16 query-hits at up to 15.8s/prompt before disable). .claude/rules/code-intel-boundaries.md (Phase A.3) shipped as the canonical boundary contract."
+    },
+    {
+      "layer": "L4",
+      "name": "Facades (scripts/code-intel.mjs / /memory / /docs / /browser)",
+      "intent": "One deterministic Node CLI entry-point per intent: code-intel routes symbol queries through the L3 boundary contract (JSON output, L0 emit, CCV3_FACADE_INTERNAL env bypass for primitive calls), memory routes explicit ops through recall/store CLIs while the automatic path stays direct, docs through PageIndex/Nia, browser through tiered Playwright rule. code-intel-enforcer ships in warn mode accumulating bypass counts; flips to deny only after ≥80% facade-adoption telemetry.",
+      "current_status": "partial",
+      "evidence": "scripts/code-intel.mjs exists (Phase B.1). .claude/skills/code-intel/SKILL.md exists as usage docs. GAPS: in-facade codegraph routing 45.7% vs ≥80% C.5 gate (D9-03); code-intel-enforcer has wrong matcher, is default OFF, and logs nothing to intel-bus (D1A-004); Phase B.5 instruction surface patching never executed so tldr-cli.md (always in context) still routes symbol search to TLDR directly, contradicting the boundary contract (D1A-003); bus_id 'unknown' on 35/37 codegraph facade rows (D4b-05); code-intel SKILL.md documents 'codegraph absent' mode while codegraph is LIVE (D8c-01)."
+    },
+    {
+      "layer": "L5",
+      "name": "Orchestrators (ralph / maestro / workflow-router / Claude itself)",
+      "intent": "Coordinate multi-step work via delegation to L4 facades and L3 specialists — Ralph for GSD lifecycle (Phase 0→4.1.5), Maestro for interview-gated multi-step tasks with hard phase gates, workflow-router for intent routing. Enforce human checkpoints at plan approval. SubagentStop hook commits sub-agent proposed bus updates to main context.",
+      "current_status": "partial",
+      "evidence": "Ralph functional. GAPS: Maestro enforcer never fires — entire spawn pre-hook chain (explore-to-scout, task-router, ralph-template-inject) and agent safety+verification chain (agent-model-guard, no-haiku-enforcer, maestro-enforcer) all registered under matcher 'Agent' while the live tool emits 'Task' (D2b-01, D10c-02); SubagentStop not registered at event level so sub-agent bus proposals are never committed back to main context (D10c-01); three always-loaded doc surfaces (RULES.md, hook catalog, 2026-05-30 lean audit) assert C:10 maestro blocking enforcement that has never fired (D8a-01, D10c-03)."
+    }
+  ],
+  "cohesion_metrics": [
+    {
+      "metric": "Bus utilization rate",
+      "target": "≥2 distinct L3 specialists read focus_symbols or files_in_play.load_bearing per agent turn",
+      "current": "~0% — focus_symbols has no writers at all (SubagentStop unregistered; proposed_bus_updates computed and dropped without a committer); 0/125 intel-bus rows show cross-specialist reads of shared bus state"
+    },
+    {
+      "metric": "Cross-specialist chain rate",
+      "target": "% of /code-intel calls whose correlation_id chain includes ≥2 specialists; trending up toward Phase C.5 deny-flip gate",
+      "current": "0/125 correlation IDs appear on more than one event (D1b-04); corr-null on 60.7% of all rows (D4a-01); correlation_id is a fresh randomUUID generated per call with zero propagation to child events"
+    },
+    {
+      "metric": "Handoff loss",
+      "target": "≥80% — when SubagentStop writes focus_symbols, next main-context tool call dereferences ≥1 symbol",
+      "current": "0% — SubagentStop is not registered at the event level in repo, active, or template settings (D10c-01); no SubagentStop handler exists in hooks/src; no bus symbol writes ever occur"
+    },
+    {
+      "metric": "Uncorrelated tool-overlap drop",
+      "target": "Trending to 0 — fires only when same subject ID queried by two specialists under separate, non-correlated correlation_ids",
+      "current": "Unmeasurable — correlation_id is not propagated, so correlated escalations (the legitimate codegraph→Serena RRF chain) cannot be distinguished from duplicate uncorrelated calls; the corrective exclusion in the metric definition cannot be applied"
+    },
+    {
+      "metric": "Time-to-correct-tool",
+      "target": "1 call via /code-intel facade",
+      "current": "45.7% in-facade routing (37/81 eligible queries routed through facade; remaining 44 fell back to TLDR direct — D9-03); tldr-cli.md (always-in-context per CLAUDE.md Operational Rules) still routes symbol search to TLDR with ~7 direct-call examples, directly contradicting the Phase B.5 patching that was never executed (D1A-003)"
+    },
+    {
+      "metric": "Facade-bypass rate",
+      "target": "Trending to 0 by Phase C.5; enforcer accumulates warn-mode hits as denominator for deny-flip gate",
+      "current": "Unmeasurable — code-intel-enforcer has wrong tool matcher ('Bash|mcp__serena' vs actual tool names), is default OFF, and logs zero warn-mode events to intel-bus.jsonl (D1A-004); the §9 denominator has no data; the C.5 deny gate is therefore never evaluable"
+    }
+  ],
+  "open_issues_17": [
+    {
+      "id": "OI-1",
+      "title": "WRRF source weights are educated guesses — {user_mentioned:2.0, serena_lsp:1.5, codegraph_fts:1.0, tldr_ast:1.0, grep_hit:0.3} have no labeled data basis; recommendation was to log 30 days of bus-wrrf.jsonl post-Phase C then revisit empirically",
+      "disposition": "open",
+      "review_cross_check": "Phase E (intel-bus-stats.mjs, bus-wrrf.jsonl, weekly digest owner) confirmed absent (D1A-005 S2/strategic). No WRRF computation logs exist. Weights remain unvalidated."
+    },
+    {
+      "id": "OI-2",
+      "title": "SCIP IDs cannot survive simultaneous rename+move — when primary key misses but signature_hash matches, the design calls for a user-visible 'probably same symbol, file moved' flag rather than silent merge; full move-survival not promised",
+      "disposition": "open",
+      "review_cross_check": "No fix implemented. The SCIP ID schema is in the bus design but the bus symbol layer is write-dead (D1A-001), so the move-survival question is moot until focus_symbols has writers."
+    },
+    {
+      "id": "OI-3",
+      "title": "Role classification has edge cases — Read with offset=200 / limit=300 is ambiguous between read_for_context (load_bearing) and read_for_browse (ambient); ~10% misclassification rate accepted given ambient slot is capped at 30%",
+      "disposition": "open",
+      "review_cross_check": "D4a-05 (bus-tool-populator writes grep_hit ambient on every Read/Grep but that slice has no consumer) confirms the taxonomy is partially wired; misclassification cannot be measured since focus_symbols never populates."
+    },
+    {
+      "id": "OI-4",
+      "title": "Log rotation policy — intel-bus.jsonl / memory-recall.jsonl / codex-lift.jsonl / bus-wrrf.jsonl all accumulate without bound; CCv3 has no general log-rotation pattern; provisional threshold 100 MB sweeping to .claude/logs/archive/",
+      "disposition": "open",
+      "review_cross_check": "D2b-05 (S0 — search-context handshake files at C:\\tmp growing unbounded since January) confirms the broader unmanaged log/temp-file accumulation problem. No rotation mechanism added for intel-bus or any other JSONL log."
+    },
+    {
+      "id": "OI-5",
+      "title": "Should pageindex and Notion Bridge calls emit events to intel-bus.jsonl? — Probably yes for cross-tool routing learning but deferred until Phase E validates the schema format",
+      "disposition": "deferred",
+      "review_cross_check": "Phase E not built (D1A-005). PageIndex is near-dead since per-prompt hook disabled 2026-06-01 with 0/16 query hits (synthesis dead_weight section). Deferral remains correct: the format is still unvalidated and the pillar utilization is near-zero."
+    }
+  ],
+  "elegant_endstate_narrative": "The elegant end-state for CCv3 is a system where the design contract IS the running behavior: a single-writer bus (shared/context-bus.ts) accumulates session-scoped focus_symbols and files_in_play that every L3 specialist reads to bias its queries, with SubagentStop wired to commit sub-agent proposals back to the main bus so cross-agent context is never silently dropped. Every layer degrades honestly — CCV3_KILLSWITCH through per-layer env vars short-circuit all consumers, bus reads fail-open in ≤50ms, codegraph falls through to TLDR when absent — so the system's capabilities match its documentation exactly and no always-loaded doc surface asserts enforcement that has never fired. The hot path (UserPromptSubmit) is lean: a resident recall daemon amortizes the Python interpreter boot cost, a synthetic-prompt filter strips <task-notification> XML before it poisons the recall intent, and genuinely parallel hook execution replaces the current 13-spawn 22-32s serialized wall. Duplication is collapsed at every seam — one canonical getSessionId, one storeLearning(argv) spawnSync helper across all callers, one injectRecall() sanitizer applied before any archival content enters a model context — so a security fix in one place is a security fix everywhere. Behavior is evidence-locked, not assertion-locked: §9 facade-bypass counts accumulate in intel-bus.jsonl, the C.5 deny-flip gate triggers only after ≥80% adoption is measured in actual telemetry, and the WRRF source weights are recalibrated from 30 days of bus-wrrf.jsonl rather than held as educated guesses."
+}

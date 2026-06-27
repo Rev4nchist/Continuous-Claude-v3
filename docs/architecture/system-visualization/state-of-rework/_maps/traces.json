@@ -1,0 +1,390 @@
+{
+  "meta": {
+    "slice": "D10 — End-to-End Data-Flow Traces",
+    "generated": "2026-06-27",
+    "source_sha": "f7f3eba (HEAD at trace-time)",
+    "grounded_in": [
+      ".claude/settings.json (registration order verified)",
+      ".claude/hooks/src/*.ts (source logic verified)",
+      "scripts/code-intel.mjs (facade logic verified)",
+      "docs/reviews/2026-06-10/findings.json (health verdicts)",
+      "docs/reviews/2026-06-10/wf3/synthesis.json (priority scores)"
+    ],
+    "health_legend": {
+      "sound": "Logic correct, registered, wired — functions as documented",
+      "honing": "Registered and functional but has open findings (latency, edge-case gap, or mild inaccuracy)",
+      "gap": "Either unregistered, dead matcher, unwired seam, or missing committer — does not function as documented"
+    },
+    "qw01_applied": "commit 1788211 — execSync->spawnSync argv on store_learning.py callers (D5a-01/D2c-04/D2d-06/D3a-01)",
+    "qw02_applied": "commit 89c9e5e — /tmp search-context handshake relocated to os.tmpdir() (D2b-05)",
+    "qw03_applied": "commit f7f3eba — ROADMAP contamination guard stopword+positive flip (D2d-01)"
+  },
+  "traces": [
+    {
+      "name": "UserPromptSubmit: prompt arrival → memory recall → bus read → context injection",
+      "trigger": "User submits a non-trivial, non-slash-command prompt (length >= 15 chars) to the main model (not a subagent)",
+      "steps": [
+        {
+          "order": 1,
+          "component": "heartbeat",
+          "file": ".claude/hooks/src/heartbeat.ts",
+          "action": "Updates sessions.last_heartbeat in postgres (continuous_claude DB) for cross-terminal awareness. Writes session cwd + working_on field.",
+          "health": "sound"
+        },
+        {
+          "order": 2,
+          "component": "maestro-state-manager",
+          "file": ".claude/hooks/src/maestro-state-manager.ts",
+          "action": "Reads .claude/maestro-state.json; if Maestro is active, injects current phase context. No-op when Maestro not running.",
+          "health": "sound"
+        },
+        {
+          "order": 3,
+          "component": "guardrail-enforcer",
+          "file": ".claude/hooks/src/guardrail-enforcer.ts",
+          "action": "Checks CLAUDE_GUARDRAILS env; may deny prompt or inject guardrail context.",
+          "health": "sound"
+        },
+        {
+          "order": 4,
+          "component": "skill-activation-prompt",
+          "file": ".claude/hooks/src/skill-activation-prompt.ts",
+          "action": "Scans prompt for skill trigger keywords; injects skill SKILL.md content as additionalContext if matched. 10s timeout.",
+          "health": "sound"
+        },
+        {
+          "order": 5,
+          "component": "bus-session-populator",
+          "file": ".claude/hooks/src/bus-session-populator.ts",
+          "action": "WRITE side of L2 bus (WS-2 B.4a). Calls mutateBus(bumpTurn + setIntent) with sanitized+truncated prompt (120 char cap). Guards match memory-awareness exactly (CLAUDE_AGENT_ID skip, length<15 skip, slash-command skip). Emits bare continue — NO context injection. MUST run before memory-awareness (step 6) so the bus has a fresh turn+intent for recall bias.",
+          "health": "honing"
+        },
+        {
+          "order": 6,
+          "component": "memory-awareness",
+          "file": ".claude/hooks/src/memory-awareness.ts",
+          "action": "1. readBus() for focus terms (WS-2 B.3b bias). 2. isDaemonReady() TCP probe via ~/.claude/run/ccv3-embedding.json (1500ms budget). 3. Selects mode: hybrid (RRF vector+FTS, HYBRID_FLOOR=0.01) or text-only (FTS ts_rank, TEXT_ONLY_FLOOR=0.05). 4. Parallel: checkLocalMemory (project_memory.py, uv run, 2s timeout) + checkDbMemory (recall_learnings.py, uv run, 12s hybrid/5s text-only). 5. mergeResults + applyFloor → top-3. 6. Appends to .claude/logs/memory-recall.jsonl (observability). 7. Emits memory_recall_relevance + memory_recall_hit scores to Braintrust (spans root_span). 8. Injects MEMORY MATCH block + SESSION FOCUS block as additionalContext. Fail-open throughout.",
+          "health": "honing"
+        },
+        {
+          "order": 7,
+          "component": "maestro-detector",
+          "file": ".claude/hooks/src/maestro-detector.ts",
+          "action": "Detects /maestro trigger in prompt; writes .claude/maestro-state.json to initialize Maestro workflow.",
+          "health": "sound"
+        },
+        {
+          "order": 8,
+          "component": "user-confirmation-detector",
+          "file": ".claude/hooks/src/user-confirmation-detector.ts",
+          "action": "L1 defense layer. Pattern-matches RESOLUTION_SIGNALS (regex: 'it is working', 'fixed', etc.) and MEMORY_SIGNALS ('remember this', etc.). On resolution hit: reads smarter-everyday-state.json; if CANDIDATE state calls storeVictoryFromConfirmation → store_learning.py via spawnSync argv (QW-01 fix applied, no shell). On explicit memory request: notes for next assistant response.",
+          "health": "sound"
+        },
+        {
+          "order": 9,
+          "component": "ralph-watchdog",
+          "file": ".claude/hooks/src/ralph-watchdog.ts",
+          "action": "Reads .ralph/state.json; injects warning if Ralph session appears stalled (no heartbeat).",
+          "health": "sound"
+        },
+        {
+          "order": 10,
+          "component": "ralph-progress-inject",
+          "file": ".claude/hooks/src/ralph-progress-inject.ts",
+          "action": "Reads .ralph/state.json; injects active Ralph task progress and phase into context. 3s timeout.",
+          "health": "sound"
+        },
+        {
+          "order": 11,
+          "component": "ralph-retry-reminder",
+          "file": ".claude/hooks/src/ralph-retry-reminder.ts",
+          "action": "Scans .ralph/state.json for stalled/retry tasks; injects retry nudge.",
+          "health": "sound"
+        },
+        {
+          "order": 12,
+          "component": "braintrust_hooks.py user_prompt_submit",
+          "file": ".claude/hooks/braintrust_hooks.py",
+          "action": "Python handler. Opens Braintrust session span (root) or continues existing. Writes current_turn_span_id to ~/.claude/state/braintrust_sessions/<session_id>.json. Note: runs AFTER memory-awareness (step 6) which needs the span; memory-awareness falls back to root_span_id.",
+          "health": "honing"
+        }
+      ],
+      "seams": [
+        "step5→step6 (bus-session-populator→memory-awareness): bus WRITE must precede bus READ — ordering is load-bearing for WS-2 B.3b/B.4a. If hook order is reversed, recall bias sees stale intent.",
+        "step6 (memory-awareness) calls isDaemonReady() which reads ~/.claude/run/ccv3-embedding.json — daemon lifecycle is cross-session shared state (L5 daemon dimension meets L2 bus dimension here)",
+        "step8 (user-confirmation-detector) reads smarter-everyday-state.json which PostToolUse smarter-everyday.mjs also writes — CANDIDATE detection depends on timing of the PostToolUse write vs this UserPromptSubmit read",
+        "step6 emits Braintrust score before step12 writes the turn span — score attaches to root_span not turn_span (workaround: memory-awareness reads root_span_id from persisted state file)"
+      ],
+      "races": [
+        "D6a-01 (S1, open): 13 serial spawns before prompt answers — worst-case 22-32s wall-clock latency; recall subprocess alone 13-17s. No parallelism in UserPromptSubmit chain.",
+        "D2c-01 (S1, open): No filter for synthetic Claude Code prompts (<task-notification>, internal scaffolding). expandGitQuery swallows the full XML blob as a recall intent query — 24.6% of 281 recall rows were polluted intents at telemetry time.",
+        "D3b-01 (S1, open): HYBRID_FLOOR 0.01 applied to decay-multiplied RRF scores — mathematical exclusion of most corpus even in hybrid mode. 27.4% hit rate across all recall fires.",
+        "D3b-02 (S1, open): FTS arm uses plainto_tsquery (AND semantics) over full prompt — degrades hybrid to effectively vector-only because multi-word prompts produce empty FTS arm."
+      ]
+    },
+    {
+      "name": "A learning is stored: agent error / user confirmation → L0 quality gate → store_learning.py (spawnSync argv) → BGE embed → Postgres dedup",
+      "trigger": "PostToolUse:Agent error response (agent-error-capture) OR UserPromptSubmit resolution signal (user-confirmation-detector) OR smarter-everyday victory detection (PostToolUse:Edit|Write)",
+      "steps": [
+        {
+          "order": 1,
+          "component": "agent-error-capture (DEAD — matcher gap)",
+          "file": ".claude/hooks/src/agent-error-capture.ts",
+          "action": "REGISTERED under PostToolUse matcher 'Agent' (settings.json line 307). Scans tool_response for ERROR_PATTERNS (TypeError, ENOENT, Traceback, etc.). Routes to TypeScript L0 quality gate then store_learning.py. CRITICAL: PostToolUse matcher 'Agent' is dead — the live subagent tool name is 'Task', not 'Agent'. This hook has NEVER fired since registration. Finding D10c-02 (S1).",
+          "health": "gap"
+        },
+        {
+          "order": 2,
+          "component": "user-confirmation-detector (active entry path)",
+          "file": ".claude/hooks/src/user-confirmation-detector.ts",
+          "action": "UserPromptSubmit step 8 (always runs). Pattern-matches RESOLUTION_SIGNALS (8 regexes) against user prompt. Checks ANTI_PATTERNS to skip questions/requests. Reads smarter-everyday-state.json to determine if CANDIDATE is ready to promote to WORKING_SOLUTION.",
+          "health": "sound"
+        },
+        {
+          "order": 3,
+          "component": "smarter-everyday (victory state machine)",
+          "file": ".claude/hooks/src/smarter-everyday.ts",
+          "action": "PostToolUse:Edit|Write|Bash|TaskUpdate. 5-state machine (IDLE→ATTEMPTING→TESTING→CANDIDATE→VICTORY). Detects test-command success after file edit. On VICTORY: calls store_learning.py via spawn() (async/fire-and-forget, 60s budget). On CANDIDATE: signals user-confirmation-detector to await user signal.",
+          "health": "sound"
+        },
+        {
+          "order": 4,
+          "component": "TypeScript L0 quality gate",
+          "file": ".claude/hooks/src/shared/memory-quality-scorer.ts",
+          "action": "scoreExtraction(content, context) → score 0-10. SIGNAL>=5 / BORDERLINE=3-4 / NOISE<3. agent-error-capture gates on this (NOISE dropped with stderr log). user-confirmation-detector does NOT gate — all confirmations pass through to Python. smarter-everyday does NOT use this gate.",
+          "health": "sound"
+        },
+        {
+          "order": 5,
+          "component": "store_learning.py invocation (QW-01 applied)",
+          "file": "opc/scripts/core/store_learning.py",
+          "action": "Invoked via spawnSync('uv', ['run','python','scripts/core/store_learning.py','--session-id',sid,'--type',type,'--content',content,'--context',ctx,'--tags',tags,'--confidence',conf], {shell:false, cwd:opcDir}). QW-01 fix: was execSync({shell:true}) with bash-style quote escaping — broken on Windows cmd.exe and exploitable via shell metachar injection. Now array argv, no shell, content passed verbatim. agent-error-capture: 10s timeout. user-confirmation-detector: 60s timeout.",
+          "health": "sound"
+        },
+        {
+          "order": 6,
+          "component": "Python L0 quality gate + dedup probe",
+          "file": "opc/scripts/core/store_learning.py",
+          "action": "Python-side scoring (second gate, independent of TypeScript gate). Checks archival_memory for near-duplicates: if similar vector exists with cosine similarity >= 0.85, skips INSERT and returns existing ID. This dedup requires the BGE daemon to produce an embedding for comparison.",
+          "health": "sound"
+        },
+        {
+          "order": 7,
+          "component": "BGE embedding daemon",
+          "file": "opc/scripts/core/embedding_daemon.py",
+          "action": "Long-lived TCP daemon on 127.0.0.1:<port> (rendezvous: ~/.claude/run/ccv3-embedding.json, homedir() — QW-02 fix applied for cross-process discovery). Frames: 4-byte big-endian length prefix + JSON. embed command: text → BAAI/bge-large-en-v1.5 vector (dim=1024). If daemon not running at store_learning.py invocation time: falls back to FTS-only dedup (no vector similarity) — silent behavior change.",
+          "health": "honing"
+        },
+        {
+          "order": 8,
+          "component": "Postgres archival_memory INSERT",
+          "file": "opc/scripts/core/store_learning.py",
+          "action": "INSERT INTO archival_memory (session_id, learning_type, content, context, tags, confidence, embedding) VALUES (...). pgvector column holds 1024-dim float array. Dedup check runs before INSERT via vector cosine search. On success returns inserted id. DB: postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude.",
+          "health": "sound"
+        }
+      ],
+      "seams": [
+        "Two-gate pattern: TypeScript L0 (memory-quality-scorer.ts, in-process) runs BEFORE Python L0 (store_learning.py) — different thresholds, different scorers, independent. A NOISE entry that somehow passes TypeScript gate still hits Python dedup.",
+        "smarter-everyday writes smarter-everyday-state.json (PostToolUse) and user-confirmation-detector reads it (UserPromptSubmit next turn) — shared file, atomic write via writeStateWithLock, but read in user-confirmation-detector is not locked",
+        "agent-error-capture (dead) and hook-error-pipeline (not analyzed here) share the same invocation pattern and were both in the SEED-01 shell-injection family. QW-01 fixed both; dead matcher (D10c-02) means the fix is academic until matcher is corrected."
+      ],
+      "races": [
+        "DEAD PATH: agent-error-capture PostToolUse:Agent never fires (D10c-02). Every agent (subagent) error goes unrecorded in archival_memory automatically. The FAILED_APPROACH auto-capture pipeline is a ghost.",
+        "BGE daemon startup race: if store_learning.py runs before memory-awareness spawned the daemon (ensureDaemonRunning fire-and-forget from step 6 of Trace 1), dedup falls back to FTS-only — the embedding and vector-similarity dedup path is skipped silently."
+      ]
+    },
+    {
+      "name": "Agent edits a hook file: PostToolUse chain → diagnostics gap → bus update → forward-sync gap",
+      "trigger": "Agent or main model calls Edit or Write on any file (specifically: .claude/hooks/src/*.ts in the continuous-claude repo)",
+      "steps": [
+        {
+          "order": 1,
+          "component": "braintrust_hooks.py post_tool_use",
+          "file": ".claude/hooks/braintrust_hooks.py",
+          "action": "All PostToolUse (no matcher). Records tool call to Braintrust span under current session. Always fires regardless of file path.",
+          "health": "sound"
+        },
+        {
+          "order": 2,
+          "component": "smarter-everyday",
+          "file": ".claude/hooks/src/smarter-everyday.ts",
+          "action": "PostToolUse:Edit|Write|Bash|TaskUpdate. Records the hook .ts file as tracked_file; increments attempts; transitions state machine toward CANDIDATE. Uses spawn() async — non-blocking, fire-and-forget.",
+          "health": "sound"
+        },
+        {
+          "order": 3,
+          "component": "prd-roadmap-sync",
+          "file": ".claude/hooks/src/prd-roadmap-sync.ts",
+          "action": "PostToolUse:Write|Edit. Checks if edited file is a PRD doc. For hook .ts files, no-op.",
+          "health": "sound"
+        },
+        {
+          "order": 4,
+          "component": "git-auto-commit",
+          "file": ".claude/hooks/src/git-auto-commit.ts",
+          "action": "PostToolUse:Write|Edit. Checks if edited file is under CLAUDE_DIR (homedir()/.claude). For edits to continuous-claude/.claude/hooks/src/*.ts, the path is NOT under ~/.claude — hook exits silently. git-auto-commit only fires for edits made directly to the ACTIVE ~/.claude install, not to the repo source. 10-min debounce.",
+          "health": "honing"
+        },
+        {
+          "order": 5,
+          "component": "tree-invalidate",
+          "file": ".claude/hooks/src/tree-invalidate.ts",
+          "action": "PostToolUse:Write|Edit. Marks .claude/knowledge-tree.json stale for CLAUDE_PROJECT_DIR. Correct and functional — hook tree refresh fires lazily on next knowledge-tree read.",
+          "health": "sound"
+        },
+        {
+          "order": 6,
+          "component": "pageindex-watch",
+          "file": ".claude/hooks/src/pageindex-watch.ts",
+          "action": "PostToolUse:Write|Edit. Queues edited file for pageindex update. .ts hook source files are not indexed docs — effective no-op here.",
+          "health": "sound"
+        },
+        {
+          "order": 7,
+          "component": "import-validator",
+          "file": ".claude/hooks/src/import-validator.ts",
+          "action": "PostToolUse:Edit|Write. Parses import statements from the edited .ts file; verifies import paths resolve on disk. Catches path-typo import errors before the next build. Works correctly for hook .ts files.",
+          "health": "sound"
+        },
+        {
+          "order": 8,
+          "component": "periodic-extract",
+          "file": ".claude/hooks/src/periodic-extract.ts",
+          "action": "All PostToolUse (no matcher). Stochastic learning extraction — fires occasionally based on timing heuristic. Not specific to hook edits.",
+          "health": "sound"
+        },
+        {
+          "order": 9,
+          "component": "post-edit-diagnostics (UNREGISTERED — gap)",
+          "file": ".claude/hooks/src/post-edit-diagnostics.ts",
+          "action": "SOURCE EXISTS, DIST EXISTS (.claude/hooks/dist/post-edit-diagnostics.mjs verified), but NOT registered in settings.json PostToolUse section. CLAUDE.md states 'ts/tsx edits trigger automatic tsc --noEmit diagnostics via post-edit-diagnostics hook'. This is false — the hook was built but never wired. TypeScript type errors after hook edits are NEVER surfaced automatically. The hook also records the edited file to the L2 bus (recordBusFilesInPlay with role 'edited') — that bus write also never fires.",
+          "health": "gap"
+        },
+        {
+          "order": 10,
+          "component": "emit-invariant audit (MANUAL — no hook)",
+          "file": "scripts/audit-braintrust-emits.sh",
+          "action": "NO PostToolUse hook runs audit-braintrust-emits.sh after hook source edits. The audit is manual-only per CLAUDE.md proactive-delegation rules. MEMORY.md documents 3+ instances where spark agents silently dropped await emitBraintrustScore() calls in hook files during multi-file edits. Without an auto-audit step, regressions only surface if the orchestrator manually runs the script.",
+          "health": "gap"
+        },
+        {
+          "order": 11,
+          "component": "npm run build (MANUAL — no hook)",
+          "file": ".claude/hooks/ (package.json build script)",
+          "action": "NO hook triggers compilation after source edits. The .ts → .mjs compilation (esbuild) must be run manually: 'cd .claude/hooks && npm run build'. Until build runs, the dist file is stale and Claude Code runs outdated logic.",
+          "health": "gap"
+        },
+        {
+          "order": 12,
+          "component": "forward-sync to ~/.claude (async, post-git-commit)",
+          "file": "scripts/sync-to-active.sh",
+          "action": "NOT a hook — triggered by git post-commit hook in the continuous-claude repo (runs in background, &). Copies .claude/hooks/src, rules, agents, skills, docs to ~/.claude. Enhanced sync also copies hooks/dist (*.mjs). Does NOT trigger npm build — only copies pre-built dist. If build was not run before commit, stale dist is synced.",
+          "health": "honing"
+        }
+      ],
+      "seams": [
+        "source edit (.ts) → manual build → dist (.mjs) → git commit → async sync → ~/.claude/hooks/dist — four manual steps with no auto-trigger; each can silently fail or be skipped",
+        "post-edit-diagnostics.ts recordBusFilesInPlay (role 'edited') never fires — the L2 bus never sees hook source edits as load-bearing context, so recall bias cannot surface 'files currently being edited' from the code-intel side",
+        "git-auto-commit fires on ~/.claude edits, forward-sync fires on continuous-claude commits — these are ORTHOGONAL flows. A developer who edits .claude/hooks/src/*.ts directly in the REPO (not the active install) does not trigger git-auto-commit"
+      ],
+      "races": [
+        "Spark agents editing .ts hook files concurrently: each triggers import-validator (safe, reads own file); but if spark A edits a shared module (e.g., shared/context-bus.ts) and spark B's import-validator fires first, spark B sees the pre-edit version of the shared module",
+        "Manual build race: if two sessions run npm run build concurrently on the same .claude/hooks/ directory, esbuild output may be partially written. No file-lock on dist output."
+      ]
+    },
+    {
+      "name": "/code-intel query: facade → bus discovery → kill-switch → freshness probe → codegraph → shape validation → Serena hint → TLDR fallback → intel-bus telemetry",
+      "trigger": "Claude or agent invokes `node scripts/code-intel.mjs <cmd> [args]` for who-calls, find-symbol, or code-context queries",
+      "steps": [
+        {
+          "order": 1,
+          "component": "code-intel-enforcer (DEFAULT OFF)",
+          "file": ".claude/hooks/src/code-intel-enforcer.ts",
+          "action": "PreToolUse:Grep|Agent (registered settings.json line 130). Activation gate: CCV3_FACADE_MODE env must equal 'warn' — NOT SET by default. When off (default), returns {} immediately. When 'warn': only nudges on exact structural Grep patterns (regex /\\b(?:function|def|class)\\s+([A-Za-z_]\\w*)/ on grep pattern). Never denies. Ships INERT by design (finding E1: adoption != quality).",
+          "health": "honing"
+        },
+        {
+          "order": 2,
+          "component": "code-intel.mjs facade entry + argv parse",
+          "file": "scripts/code-intel.mjs",
+          "action": "Stateless Node CLI. Parses: cmd (who-calls/find-symbol/code-context/recall/flow/bus/help), positional args, --bus/--k/--text-only flags. Generates correlation_id (randomUUID). Routes via exact-match switch. Unknown cmd → clarify response with supported list.",
+          "health": "sound"
+        },
+        {
+          "order": 3,
+          "component": "Bus discovery + read (fail-open)",
+          "file": "scripts/code-intel.mjs:discoverBus",
+          "action": "Discovery order: (1) --bus arg (sanitizeBusPart strips path separators to prevent path-traversal, cross-model M2). (2) COORDINATION_SESSION_ID env + hashProjectPath → candidate bus path. (3) Most-recent context.json by mtime under .claude/cache/session/. Returns {busId, focus:{symbols,files}, raw}. CCV3_BUS_OFF=1 returns empty focus. Note: env path is a best-effort approximation of getBusId() (which uses session-id.ts chain) — may miss.",
+          "health": "honing"
+        },
+        {
+          "order": 4,
+          "component": "Kill-switch check (codegraphAbsent)",
+          "file": "scripts/code-intel.mjs:codegraphAbsent",
+          "action": "Lazy per-call check: (1) CCV3_KILLSWITCH=1 → absent. (2) CCV3_CODEGRAPH_OFF=1 → absent. (3) resolveCodegraphBin() fails (looks for .claude/hooks/node_modules/@colbymchenry/codegraph/npm-shim.js; also checks CCV3_CODEGRAPH_BIN env) → absent. Any absent → fall through to TLDR fallback everywhere. Kill-switch order matches .claude/rules/code-intel-boundaries.md.",
+          "health": "sound"
+        },
+        {
+          "order": 5,
+          "component": "Freshness probe (ensureFresh, cached per process)",
+          "file": "scripts/code-intel.mjs:ensureFresh",
+          "action": "O(1) amortized: (1) git rev-parse HEAD vs .codegraph/.indexed-head stamp file. (2) git status --porcelain --untracked-files=all for dirty files + structural changes (D/R status codes). Logic: HEAD moved OR hasStructural → syncWholeProject({force: !stamp || (headMoved && hasStructural)}). dirty files only → incremental sync per file (sync -q <file>). Clean + HEAD matches stamp → trust DB, no sync. Result cached in _freshnessDone per process.",
+          "health": "honing"
+        },
+        {
+          "order": 6,
+          "component": "runCodegraph (npm-shim.js via process.execPath)",
+          "file": "scripts/code-intel.mjs:runCodegraph",
+          "action": "Invokes: spawnSync(process.execPath, [npm-shim.js, verb, ...flags, '--', userPositional], {cwd:repoRoot, windowsHide:true, shell:false}). Option injection protected by '--' end-of-options separator (cgArgs pattern, codex finding #2). JSON-parse fail-open. 3-4s cold-start per call (Node+WASM tree-sitter tax — amortized by freshness cache, never eliminated). who-calls: cgArgs('callers', ['-p', root, '-j', '-l', '50'], fn). find-symbol: cgArgs('query', ['-p', root, '-j', '-l', '50'], name). code-context: cgArgs('query', ...) + cgArgs('impact', ...) on top symbol.",
+          "health": "honing"
+        },
+        {
+          "order": 7,
+          "component": "Shape validation (validateCgShape)",
+          "file": "scripts/code-intel.mjs:validateCgShape",
+          "action": "Guards status-0 but wrong-shaped codegraph response (codex finding #3). 'array' kind (find-symbol query): response MUST be top-level array — object/null is schema drift → fall to TLDR. 'callers'/'callees' kind (who-calls): response MUST be object with array at named key. Wrong shape → fall to TLDR instead of reporting fake empty result. Distinguishes: VALID_EMPTY (key present, array, len 0), VALID_DATA (non-empty array), WRONG_SHAPE (not as expected) → { ok:false }.",
+          "health": "sound"
+        },
+        {
+          "order": 8,
+          "component": "Serena escalation hint emission",
+          "file": "scripts/code-intel.mjs (who-calls / find-symbol / code-context)",
+          "action": "who-calls: serena_hint emitted when callers==[] OR name is alias-prone (contains [._#] or len<=2). Hint text references C.1 finding #4 (incremental sync can orphan cross-file caller edges after callee-file edit). escalatedTo='serena' set on response. find-symbol: serena_hint ALWAYS emitted (codegraph FTS ≠ alias resolution; Serena is terminal authority on symbol identity). Hint advises escalate to Serena find_symbol.",
+          "health": "sound"
+        },
+        {
+          "order": 9,
+          "component": "TLDR fallback (when codegraph absent/off/error/wrong-shape)",
+          "file": "scripts/code-intel.mjs:runTldr",
+          "action": "spawnSync('tldr', args, {timeout:60000, windowsHide:true}). who-calls fallback: tldr impact fn [path]. find-symbol fallback: tldr search name [path]. response includes escalated_from:'codegraph' to surface the degradation. JSON-parse fail-open (tldr context emits text, others JSON).",
+          "health": "sound"
+        },
+        {
+          "order": 10,
+          "component": "Intel-bus telemetry append",
+          "file": "scripts/code-intel.mjs:appendIntelRow",
+          "action": "Appends one JSONL row per call to .claude/logs/intel-bus.jsonl. Fields: ts, schema_version:1, facade:'/code-intel', specialist, query_type, bus_id, correlation_id, subject_ids (SCIP signature_hashes — NOT free-text symbols), corpus_signature {git_head:12, file_count, ignored_glob_hash:4}. CR/LF stripped deep. Size-based single-generation rotation at 2MB. Honors CCV3_BUS_OFF. Fail-open.",
+          "health": "sound"
+        },
+        {
+          "order": 11,
+          "component": "Proposed bus updates → SubagentStop writer (ABSENT — gap)",
+          "file": "scripts/code-intel.mjs (response envelope)",
+          "action": "Facade response JSON includes codegraphSubjectIds (SCIP signature_hashes of matched symbols) usable as proposed_bus_updates (focus_symbols + recent_findings). CRITICAL GAP: No SubagentStop hook exists anywhere to commit these proposals to L2 context.json. Finding D10c-01: SubagentStop has 0 registrations in repo, active settings, and template. Finding D1A-001 / D1b-03: 'Bus symbol layer write-dead: codegraph proposed_bus_updates have NO committer.' The bus focus grows only from bus-session-populator (intent) and bus-tool-populator (Read/Grep files) — never from code-intel results. The boundary rule in .claude/rules/code-intel-boundaries.md claims this writer exists in present tense.",
+          "health": "gap"
+        }
+      ],
+      "seams": [
+        "code-intel-enforcer (PreToolUse:Grep) and code-intel.mjs (invoked via Bash) are on DIFFERENT execution paths — enforcer fires on Grep tool calls, not on 'node scripts/code-intel.mjs' Bash invocations. A direct CLI invocation bypasses the enforcer entirely.",
+        "freshness probe (step 5) and bus read (step 3) are independent — codegraph may sync new content AFTER the bus was read; bus focus terms may reference pre-sync symbol states. No cross-check.",
+        "intel-bus telemetry (step 10) logs to .claude/logs/intel-bus.jsonl while bus-tool-populator also appends to the same file — two independent writers, same file, no coordination beyond append atomicity. Both honor CCV3_BUS_OFF consistently.",
+        "code-context response fuses: tldr structure + archival recall (via recall_learnings.py) + codegraph FTS + codegraph impact — three L3 specialists in one call with no partial-failure rollback; if any one subprocess is slow, the whole response is delayed"
+      ],
+      "races": [
+        "Freshness probe caches _freshnessDone per process — in a one-shot CLI call this is fine; if code-intel were ever invoked multiple times in one process, the second call skips sync even if files changed between calls.",
+        "Most-recent context.json bus discovery: if multiple Claude Code sessions exist simultaneously, the wrong session bus can be selected (warning emitted, not blocking). Correct fix is explicit --bus <id> or COORDINATION_SESSION_ID env.",
+        "C.1 finding #4 (open): after a callee-file edit, incremental `sync` does NOT re-parse unchanged caller files — caller edges to the rewritten callee are ORPHANED in the DB. who-calls may return empty when callers exist. Mitigation: Serena hint on empty/alias-prone; periodic `index --force`."
+      ]
+    }
+  ]
+}

@@ -1,0 +1,198 @@
+{
+  "_meta": {
+    "generated": "2026-06-27",
+    "purpose": "Style audit for state-of-rework briefing HTML — ensures new pages match CCv3 house style",
+    "sources": [
+      "docs/architecture/system-visualization/hub.html",
+      "docs/architecture/system-visualization/index.html",
+      "docs/architecture/system-visualization/hooks-visualization.html",
+      "docs/architecture/system-visualization/architecture.json (categories block)"
+    ]
+  },
+
+  "palette": {
+    "backgrounds": {
+      "page":         "#0b1020",
+      "page_alt":     "#0a0e1a",
+      "panel":        "#111827",
+      "panel_2":      "#0e1525",
+      "panel_elev":   "#1c2236",
+      "code_block":   "#0e1322",
+      "sidebar":      "linear-gradient(180deg, #0c1124 0%, #0a0e1a 100%)"
+    },
+    "borders": {
+      "default":      "#1f2937",
+      "light":        "#2a3447",
+      "strong":       "#3a4360"
+    },
+    "text": {
+      "primary":      "#e5e7eb",
+      "dim":          "#9ca3af",
+      "dim_alt":      "#94a3b8",
+      "muted":        "#6b7280",
+      "muted_alt":    "#64748b"
+    },
+    "accent": {
+      "primary":      "#fbbf24",
+      "primary_soft": "rgba(251, 191, 36, 0.18)",
+      "primary_22":   "#fbbf2422",
+      "note": "amber/yellow — the universal interactive accent; used for hover states, active nav borders, step numbers, stat callouts, and all clickable highlights"
+    },
+    "semantic_colors": {
+      "green":        "#34d399",
+      "green_alt":    "#22c55e",
+      "green_10":     "#10b981",
+      "blue":         "#60a5fa",
+      "purple":       "#a855f7",
+      "purple_alt":   "#a78bfa",
+      "red":          "#f87171",
+      "red_alt":      "#ef4444",
+      "orange":       "#fb923c",
+      "orange_alt":   "#f97316",
+      "yellow":       "#facc15",
+      "yellow_warm":  "#eab308",
+      "teal":         "#2dd4bf",
+      "teal_alt":     "#14b8a6",
+      "cyan":         "#06b6d4",
+      "indigo":       "#6366f1",
+      "pink":         "#ec4899",
+      "pink_light":   "#f472b6",
+      "gray":         "#6b7280"
+    },
+    "background_gradient": "radial-gradient(circle at 25% 12%, rgba(99, 102, 241, 0.06), transparent 55%), radial-gradient(circle at 78% 85%, rgba(251, 191, 36, 0.05), transparent 50%), var(--bg)",
+    "shadow": {
+      "card":    "0 8px 24px rgba(0, 0, 0, 0.5)",
+      "card_alt":"0 8px 28px rgba(0,0,0,0.5), 0 2px 6px rgba(0,0,0,0.4)"
+    }
+  },
+
+  "fonts": {
+    "body": "-apple-system, BlinkMacSystemFont, \"Segoe UI\", Roboto, Helvetica, Arial, sans-serif",
+    "body_alt": "-apple-system, 'Segoe UI', system-ui, sans-serif",
+    "mono": "'JetBrains Mono', 'Fira Code', 'Cascadia Code', Consolas, monospace",
+    "base_size": "14px",
+    "line_height": "1.5",
+    "line_height_alt": "1.55"
+  },
+
+  "subsystem_colors": {
+    "note": "Sourced from architecture.json categories block — use these for subsystem-specific stripes, dots, or badges",
+    "actor":         "#f97316",
+    "hook":          "#facc15",
+    "skill-routing": "#06b6d4",
+    "skills":        "#3b82f6",
+    "agents":        "#a855f7",
+    "memory":        "#22c55e",
+    "knowledge-tree":"#14b8a6",
+    "continuity":    "#ec4899",
+    "roadmap":       "#f472b6",
+    "tldr":          "#ef4444",
+    "rlm":           "#6366f1",
+    "orchestration": "#eab308",
+    "external":      "#6b7280",
+    "telemetry":     "#10b981"
+  },
+
+  "severity_color_conventions": {
+    "note": "No explicit severity system exists in current viz pages (they are architecture docs). These conventions are PROPOSED for state-of-rework to match house palette tone — use consistently across all new pages.",
+    "S0_critical":   { "hex": "#f87171", "label": "S0 — Critical / blocking", "var": "--red",    "usage": "3 findings; use red background badge or left-border stripe" },
+    "S1_high":       { "hex": "#fb923c", "label": "S1 — High",                "var": "--orange", "usage": "41 findings; orange badge" },
+    "S2_medium":     { "hex": "#fbbf24", "label": "S2 — Medium",              "var": "--y",      "usage": "108 findings; amber/yellow badge — house accent color, most numerous tier" },
+    "S3_low":        { "hex": "#60a5fa", "label": "S3 — Low",                 "var": "--blue",   "usage": "38 findings; blue badge" },
+    "quick_win":     { "hex": "#34d399", "label": "Quick Win",                "var": "--green",  "usage": "12 items; green — already used for 'verdict badge' in hooks viz" },
+    "structural":    { "hex": "#a78bfa", "label": "Structural Arc",           "var": "--purple", "usage": "10 items; purple — matches agents subsystem color" },
+    "strategic":     { "hex": "#06b6d4", "label": "Strategic / Long",         "var": "--cyan",   "usage": "4 items; cyan — matches skill-routing color" },
+    "deletion":      { "hex": "#6b7280", "label": "Deletion / Dead weight",   "var": "--gray",   "usage": "12 items; gray — matches external/neutral" },
+    "leaking_seam":  { "hex": "#ec4899", "label": "Leaking Seam",             "var": "--pink",   "usage": "6 seams; pink — matches continuity, signals cross-subsystem break" }
+  },
+
+  "layout_pattern": "hub + standalone deep-dive pages",
+
+  "hub_structure": {
+    "pattern": "header + intro paragraph + responsive card grid + footer",
+    "header": {
+      "tag": "header.app",
+      "background": "#0e1525 (--bg-panel-2)",
+      "border_bottom": "1px solid #1f2937",
+      "h1_size": "18px, weight 700",
+      "elements": ["h1 title", ".sub subtitle", ".spacer", "GitHub link button (border:1px solid #2a3447, radius:6px)", "last-verified meta text"]
+    },
+    "card_grid": {
+      "css": "display:grid; grid-template-columns: repeat(auto-fill, minmax(280px, 1fr)); gap:18px",
+      "breakpoint": "max-width:640px => 1fr single column"
+    },
+    "card_anatomy": {
+      "container": "background:#111827; border:1px solid #2a3447; border-radius:12px; overflow:hidden",
+      "top_stripe": "height:4px; width:100%; color = subsystem color (--stripe CSS var)",
+      "body_padding": "16px 18px 18px",
+      "elements": ["24px emoji icon", "h2 title (16px 700)", "p desc (13px text-dim)", "stats bar (12px muted, accent numbers, border-top)"],
+      "hover": "border-color → #fbbf24; translateY(-2px); box-shadow",
+      "arrow": "absolute top-right; color muted; → accent on hover + translateX(2px)"
+    },
+    "footer": {
+      "padding": "20px 28px 26px",
+      "border_top": "1px solid #1f2937",
+      "color": "#6b7280 (text-faint)",
+      "font_size": "12px"
+    }
+  },
+
+  "deep_dive_pattern": {
+    "note": "Used by hooks, agents, braintrust, codex viz pages",
+    "layout": "sticky sidebar (300px) + scrollable main content",
+    "sidebar": {
+      "width": "300px",
+      "background": "linear-gradient(180deg, #0c1124 0%, #0a0e1a 100%)",
+      "border_right": "1px solid #2a3147",
+      "nav_item_active": "background: #fbbf2422; border-left: 2px solid #fbbf24; color: #fbbf24",
+      "section_labels": "10px uppercase, letter-spacing 0.18em, color #64748b"
+    },
+    "main_content": {
+      "padding": "36px 56px 80px",
+      "max_width": "1200px"
+    },
+    "section_header": {
+      "eyebrow": "11px uppercase #fbbf24, letter-spacing 0.18em",
+      "title": "36px weight 600, letter-spacing -0.02em",
+      "lede": "16px color #94a3b8, max-width 800px"
+    },
+    "cards": {
+      "background": "#131829 (--bg-card)",
+      "border": "1px solid #2a3147",
+      "radius": "12px",
+      "padding": "24px"
+    },
+    "stat_tiles": {
+      "background": "#1c2236 (--bg-elev)",
+      "border": "1px solid #2a3147",
+      "radius": "10px",
+      "label": "11px uppercase muted",
+      "value": "26px weight 600",
+      "value_colors": { "y": "#fbbf24", "b": "#60a5fa", "g": "#34d399", "p": "#a78bfa", "r": "#f87171" }
+    },
+    "verdict_badge": {
+      "green_variant": "background:#34d39922; color:#34d399; border-radius:4px; pulsing dot",
+      "note": "Used to show overall system health verdict; adapt color for mixed/warn/fail states"
+    }
+  },
+
+  "navigation_pattern": {
+    "back_link": "<a href='./hub.html'>← Hub</a> in header, color var(--accent)",
+    "footer_links": "Docs root + architecture.json raw + source diagrams",
+    "inter_page": "Each card in hub.html links directly to its standalone page"
+  },
+
+  "existing_viz_files": [
+    { "file": "hub.html",                            "role": "Navigation hub — card grid landing page" },
+    { "file": "index.html",                          "role": "System overview — interactive SVG flow diagram + flow steps sidebar" },
+    { "file": "memory-system-visualization.html",   "role": "Memory subsystem deep dive" },
+    { "file": "hooks-visualization.html",            "role": "Hook layer deep dive — sidebar nav + section viewer" },
+    { "file": "agents-visualization.html",           "role": "Agent roster deep dive" },
+    { "file": "braintrust-scoring-visualization.html","role": "Braintrust scoring + invariant guard" },
+    { "file": "codex-adversarial-visualization.html","role": "Codex cross-model review integration" },
+    { "file": "architecture.json",                   "role": "Machine-readable source of truth (nodes + flows + categories)" },
+    { "file": "state-of-rework/",                   "role": "New directory — state-of-rework briefing pages (this slice)" }
+  ],
+
+  "reuse_notes": "For a new state-of-rework.html briefing:\n\n1. ROOT VARS: Copy the full :root block from hub.html verbatim (--bg:#0b1020 through --shadow). Add semantic color vars from hooks-visualization.html (--green, --red, --blue, --purple, --orange, --teal) — they are not in hub.html but are needed for severity badges.\n\n2. HEADER: Use the header.app pattern from hub.html (h1 18px 700, .sub 13px dim, .spacer flex:1, last-verified meta). Add '← Hub' anchor using hub.html style, pointing to ../hub.html.\n\n3. BODY BACKGROUND: Use the two-radial-gradient formula from hub.html (indigo 6% at 25%/12%, amber 5% at 78%/85%). Do NOT use the ellipse variant from hooks-visualization.html — it is a different aesthetic.\n\n4. CARD GRID: Use hub.html card grid for summary/navigation sections (minmax(280px,1fr), gap:18px). Use hooks-visualization.html stat-tile grid (grid-3 or grid-2) for findings counts and metrics.\n\n5. CARD STYLE: Hub card style (top stripe + icon + title + desc + stats) for linking to sub-pages. Hooks-viz card style (bg-card + 12px radius + card-title uppercase) for content sections.\n\n6. SEVERITY BADGES: Use severity_color_conventions above. S0=red, S1=orange, S2=amber (reuses --accent), S3=blue. The amber S2 badge deliberately reuses the house accent — it is the most numerous tier (108/190) and the accent color already communicates 'pay attention here'.\n\n7. SUBSYSTEM DOT/STRIPE: When referencing a specific subsystem (hooks, agents, memory, etc.) use the subsystem_colors table for a left-border stripe or small swatch dot. This visually cross-references the existing architecture viz pages.\n\n8. VERDICT BADGE: Adapt the hooks-viz .verdict-badge pattern. For 'mixed' verdict: use --orange (#fb923c) with orange pulsing dot. For clean subsystem: use --green. For critical: use --red.\n\n9. FONTS: System font stack (no Google Fonts needed). Mono only for file paths and code spans — use hooks-viz .mono class pattern.\n\n10. FOOTER: hub.html footer pattern. Links: '← Hub', 'architecture.json', 'findings.json (raw)', 'synthesis.json (raw)'. Last-verified date."
+}

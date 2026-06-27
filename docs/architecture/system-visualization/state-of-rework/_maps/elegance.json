@@ -1,0 +1,205 @@
+{
+  "meta": {
+    "slice": "elegance-gap / dead-weight / duplication",
+    "source_sha": "86b8f60",
+    "generated": "2026-06-27",
+    "primary_sources": [
+      "docs/reviews/2026-06-10/wf3/synthesis.json (elegance object: lines 1568-1854)",
+      "docs/reviews/2026-06-10/ccv3-fable5-deep-review-2026-06-10.md (§4 Elegance-Gap Analysis, lines 59-68)",
+      "docs/reviews/2026-06-10/findings.json (190 confirmed findings, by_severity S0:3 S1:41 S2:108 S3:38)"
+    ]
+  },
+
+  "verdict": "mixed",
+
+  "rationale": "CCv3's core substrate is genuinely sound — the D5b verification manifest cleared the SQL layer, secret handling, path-traversal defenses, and the L3 boundary/bus design — but the enforcement and intelligence periphery is largely dead or mis-wired, the signature of accreted baroque growth rather than elegance. Hard numbers: of 111 hook srcs only 76 register (35 never fire); 30 of 36 agents have never hit the recall surface; memory recall misses 72.6% of prompts (27.4% hit) with 24.6% intent-pollution; 28 ghost skill registrations route to skills that do not exist; the ENTIRE agent safety+verification chain (D2b-01/D10c-02) plus Maestro gating (D8a-01) are registered under matcher 'Agent' while the live tool emits 'Task', so they never run despite RULES.md asserting C:10 blocking guarantees. The system is neither 'elegantly working' nor purely baroque — it is mixed: a clean spine wrapped in a thick layer of dead hooks, never-recalled agents, ghost skills, triplicated scripts, and 7 competing session-id schemes. The dominant pattern is registration/wiring drift plus consolidatable duplication — both are prune-and-rewire problems on a sound core, not a fundamentally over-designed architecture.",
+
+  "duplication_clusters": [
+    {
+      "name": "Session-identity schemes (7 implementations, 4 distinct fallback semantics)",
+      "instances": [
+        "shared/session-id.ts:getSessionId — COORDINATION_SESSION_ID env > coordination-session-id file > BRAINTRUST_SPAN_ID > s-<ts36>",
+        "shared/session-isolation.ts:getSessionId — CLAUDE_SESSION_ID > hostname-PID",
+        "shared/session-bus-id.ts:getBusId — composes session-id + project hash",
+        "shared/resource-reader.ts:getSessionId — ppid/pid clone, re-exported from shared/index.ts barrel as the canonical name",
+        "shared/logger.ts:getSessionId — CLAUDE_SESSION_ID > undefined",
+        "lib/hook-trace.ts:getSessionId — CLAUDE_SESSION_ID > pid",
+        "guardrail-enforcer.ts:getSessionId — CLAUDE_SESSION_ID > ppid/pid"
+      ],
+      "resolution": "Collapse to ONE canonical getSessionId in shared/session-id.ts; make getBusId its only composer; delete the 4 private clones; fix shared/index.ts barrel to re-export the canonical (not ppid) implementation. Migrate the 7 session-isolation callers to the canonical id. This is the single highest-leverage structural fix for telemetry joinability — root contributor to corr-null 60.7% of intel-bus rows. Finding: D7d-01.",
+      "finding_ids": ["D7d-01", "D1b-05", "D4a-01"]
+    },
+    {
+      "name": "Repo<->active sync code paths (6 in-repo paths for one relationship; already drifted on a safety fix)",
+      "instances": [
+        "scripts/sync-to-active.sh — canonical forward sync, 271 lines",
+        ".claude/scripts/sync-to-active.sh — 272-line near-duplicate; degrades to self-copy no-op when installed to ~/.claude",
+        "scripts/sync-claude.sh — bidirectional, GUARDED with 2026-06-01 dirty-repo abort, 140 lines",
+        ".claude/scripts/sync-claude.sh — 120-line STALE fork: missing the clobber-guard, mis-rooted REPO_CLAUDE=~/.claude/.claude, reverse-sync is default no-arg behavior",
+        "scripts/post-commit-hook.sh — auto-invokes forward sync",
+        ".claude/hooks/src/sync-to-repo.ts — deregistered after 2026-06-01 clobber incident; source retained; header still claims 'Registered for'"
+      ],
+      "resolution": "Delete the two .claude/scripts/ copies (the scripts/ pair is what docs and post-commit reference); delete or correct sync-to-repo.ts stale header. One forward script + one guarded bidirectional script is the entire need. The proof of failure is already in the codebase: the 2026-06-01 clobber guard landed in scripts/sync-claude.sh but NEVER in the .claude/scripts/ fork — one no-arg invocation from re-creating the clobber incident. Findings: D7d-02, D7d-03, D8a-03.",
+      "finding_ids": ["D7d-02", "D7d-03", "D8a-03"]
+    },
+    {
+      "name": "Python script tree triplication (.claude/scripts/core mirror + recall_learnings.py in 3 divergent versions)",
+      "instances": [
+        ".claude/scripts/core/ — 30-entry frozen mirror of opc/scripts, stale since 2026-01/05, forward-syncs to ~/.claude on every commit",
+        "opc/scripts/core/recall_learnings.py — canonical, 79,759 bytes, last touched 2026-06-04",
+        ".claude/scripts/core/recall_learnings.py — 29,198 bytes, stale 2026-01-30 (4 months / ~50KB behind canonical)",
+        ".claude/scripts/recall_learnings.py — 6,968 bytes 'Bundled Version' with SQLite memory.db fallback (different storage semantics)",
+        "scripts/cdp.mjs + .claude/scripts/cdp.mjs — byte-identical 512-line pair"
+      ],
+      "resolution": "Delete .claude/scripts/core/ and the duplicate cdp.mjs. If a bundled recall is wanted in ~/.claude, keep ONLY the deliberately-bundled file and document its divergent SQLite semantics. opc/scripts is the single source of truth. The 4-month stale fork plausibly interacts with the 27.4% memory-hit findings. Findings: D7d-04, D7d-05.",
+      "finding_ids": ["D7d-04", "D7d-05"]
+    },
+    {
+      "name": "Fourth presentation skill family (~46MB across 3 overlapping skills with bit-identical assets)",
+      "instances": [
+        ".claude/skills/fourth-presentation-builder — 22.8MB, PPTX-only, last commit 2026-03-07",
+        ".claude/skills/fourth-presentation-suite — 12.0MB, two-phase HTML->PPTX, the ONLY one registered in skill-rules.json",
+        ".claude/skills/fourth-brand-guidelines — 11.6MB, all-formats-except-PPTX; md5-confirmed 6.2MB PDF is bit-identical to the copy in fourth-presentation-suite; also ships a 5.6MB zip of itself"
+      ],
+      "resolution": "Single shared assets/references dir (or keep PDF in one skill and cross-reference); delete the self-zip; fold/retire the builder into the suite. Saves ~12-18MB per sync. All ~46MB rides every repo->~/.claude sync and git history. Finding: D7b-03.",
+      "finding_ids": ["D7b-03"]
+    },
+    {
+      "name": "Skill-lifecycle meta-skill cluster (6 overlapping skill-creation skills; prior consolidation started but not finished)",
+      "instances": [
+        ".claude/skills/skill-developer — 'creating and managing skills'",
+        ".claude/skills/skill-development — 'Skill Development Rules'",
+        ".claude/skills/skill-forge — 377KB; 'full lifecycle authoring->validation->testing->optimization->packaging' (functional superset of the above)",
+        ".claude/skills/skill-upgrader — 'Upgrade any skill to v5 Hybrid format'",
+        ".claude/skills/vet-skill — external-install vetting (distinct job)",
+        ".claude/skills/find-skills — discovery (distinct job)",
+        "_archived/ — holds archived copies of skill-developer and skill-development while live copies persist (incomplete prior consolidation)"
+      ],
+      "resolution": "skill-forge absorbs skill-developer + skill-upgrader; keep vet-skill and find-skills for their distinct jobs. Collapses 4 routers to 1. Every retained skill costs description slot in the always-loaded available-skills system-prompt block. Finding: D7b-05.",
+      "finding_ids": ["D7b-05"]
+    },
+    {
+      "name": "Testing/verification skill cluster (6 overlapping skills; name/dir frontmatter mismatch)",
+      "instances": [
+        ".claude/skills/test",
+        ".claude/skills/full-test-suite — frontmatter name 'full-test' MISMATCHES its directory name (latent routing dangle: whichever a router keys on, the other dangles)",
+        ".claude/skills/qa-test",
+        ".claude/skills/qa-suite",
+        ".claude/skills/tdd",
+        ".claude/skills/tdd-migrate — zero refs, fully overlapped by tdd + migrate"
+      ],
+      "resolution": "Collapse to test + qa-suite (structured) + tdd (philosophy). Delete tdd-migrate; rename full-test-suite consistently or fold into qa-suite. Findings: D7b-05, D7b-04.",
+      "finding_ids": ["D7b-05", "D7b-04"]
+    },
+    {
+      "name": "store_learning.py shell-out call sites (4+ hooks each re-implement the same unsafe shell-string interpolation)",
+      "instances": [
+        ".claude/hooks/src/agent-error-capture.ts — NAMED S0 junk-creator; builds store command via execSync string concat",
+        ".claude/hooks/src/user-confirmation-detector.ts — explicit shell:true interpolation",
+        ".claude/hooks/src/hook-error-pipeline.ts — same execSync quoting pattern",
+        ".claude/hooks/src/session-end-extract.ts — same class"
+      ],
+      "resolution": "Extract ONE storeLearning(content, opts) helper using spawnSync('python', [script, '--content', content, ...], {shell:false}) — array args remove the entire injection class at every site at once. The same fix the codegraph platform contract already mandates for runCodegraph(). This is the root cause of SEED-01 (opc/400` junk files, daily ~07:24 scheduled artifacts). Findings: D5a-01, D2c-04, D2d-06, D3a-01, D2g-05.",
+      "finding_ids": ["D5a-01", "D2c-04", "D2d-06", "D3a-01", "D2g-05"]
+    },
+    {
+      "name": "Memory-recall context injectors (5 archival_memory->context sites; WS-0.2 sanitizer applied to only 2 of them)",
+      "instances": [
+        ".claude/hooks/src/memory-awareness.ts — HARDENED (sanitize + wrap)",
+        ".claude/hooks/src/agent-recall-injector.ts — HARDENED (sanitize + wrap)",
+        ".claude/hooks/src/session-start-continuity.ts — RAW 600-char dump, registered on SessionStart (decision-driving surface)",
+        ".claude/hooks/src/pre-plan-memory.ts — RAW 1500-char dump, registered on EnterPlanMode (decision-driving surface)",
+        ".claude/hooks/src/git-memory-check.ts — RAW 200-char, unregistered/latent (one of the 35 never-registered srcs)"
+      ],
+      "resolution": "Route all 5 through one injectRecall() helper that always applies sanitizeMemoryContent+wrapMemoryContext; prefer recall_learnings.py --json so per-row content is sanitized individually. Fix or delete git-memory-check.ts. The WS-0.2 sanitizer rollout stopped at 2 of 5 sites — this is duplication that became a security seam (see leaking_seams: poison-then-inject chain). Finding: D5b-01.",
+      "finding_ids": ["D5b-01"]
+    }
+  ],
+
+  "dead_weight": [
+    {
+      "item": "35 hook srcs that never register on any event (of 111 total hook source files)",
+      "evidence": "WF-0 harvest: 111 hook srcs / 76 unique registered / 35 src-never-registered (ACTIVE runtime truth). Subcategories: 26 SAFE-dead unregistered prototypes deletable as a batch (D2g-08); 4 stale duplicate libs in hooks/src/lib/ that belong in shared/ (daemon-client, skill-router, skill-validation-prompt, transcript-parser — MUST be moved not deleted per D7a-03/D2g-07); specifically dead: epistemic-reminder (reads input.tool not tool_name — never fires, yet claim-verification.md asserts it is live every session, D2d-03); sentry-error-context (reads input.user_message wrong field AND is unregistered — double-dead, D2c-03); test-build.ts (one-line console.log stub, D7a-01); two orphaned library modules hook-error-pipeline + diagnostics CLI with zero importers (D7a-04)."
+    },
+    {
+      "item": "30 of 36 agents that have never appeared on the recall surface; 2 hard-orphan agents; 17-file dead .json agent layer",
+      "evidence": "table-agent-recall.json: 78 recall rows total; 30/36 agents in agents_never_appearing (including oracle, debug-agent, sleuth, architect, phoenix, arbiter — the agents the rules actually route to). Activity is dominated by the review pipeline (codex-adversary + critic + plan-reviewer = 50% of rows). The 17-file .json agent layer is an obsolete Agentica/REPL schema (maestro.json.bak etc.) that no Claude Code loader reads — committed contamination of the agent dir (D7c-01). Hard-orphan agents memory-extractor.md and braintrust-analyst.md are reachable only as prose in agent-skill-map.md. Findings: D7c-01, D7c-02, D7c-05, D9-04."
+    },
+    {
+      "item": "28 ghost skill registrations in skill-rules.json (26 arscontexta-* from removed plugin + 2 archived skills) carrying ~85 live keywords",
+      "evidence": "Object.keys(rules.skills) diffed against ls .claude/skills/: 28 entries have NO skill directory anywhere. The hook fires and injects 'SKILL ACTIVATION CHECK' telling the model to activate a nonexistent skill on every keyword match. arscontexta-remember's /remember keyword even shadows the real remember skill. 14 additional zero-reference skills found (6 confirmed-stale: task-master-workflow, meeting-brief-generator, tdd-migrate, extract-v2, implement_plan_micro, date-logic-management); 2 dead top-level CLI keys (railway-cli, neonctl) with false status:verified outside the skills{} block; stray ebr-data-prep.skill 16KB zip. 5 test files actively pin the dead entries. Findings: D7b-01, D7b-02, D7b-04, D7b-06, D7b-07."
+    },
+    {
+      "item": "4 memory rule-stubs loaded verbatim into every global session's system prompt (zero behavior beyond what the skill router provides)",
+      "evidence": "Rules agent-memory-recall.md, dynamic-recall.md, memory-usage-guidelines.md, proactive-learning.md are each pure 'This content has been consolidated into the memory skill — see X' redirects with no substantive content. Additionally northstar-local-dev.md and NorthStar/Fourth/ECG port rules from SEPARATE repos are globally loaded. All appear verbatim in this review agent's system-prompt (empirical proof of per-session context cost for zero added behavior). Same waste class as the 24.6% intent-pollution. Findings: D7c-03, D7c-06."
+    },
+    {
+      "item": "11 git-tracked tmpclaude-*-cwd junk artifacts; dead handoff-index hook; ralph-state.py v1; orphaned byte-identical test copies",
+      "evidence": "git ls-files | grep tmpclaude = 11 tracked ~37-byte cwd-capture files inside .claude/scripts/ (9) and .claude/hooks/src/ (2); grep tmpclaude .gitignore = no match (no guard against recurrence). handoff-index.ts has zero importers/registration yet pulls in the build's ONLY --external flag for better-sqlite3. rg 'ralph-state\\.py' returns only the file itself (zero external refs). opc/scripts/ralph/ contains 3 orphaned byte-identical test copies. Findings: D7d-06, D1A-007, D2g-10, D2g-09, D7d-05."
+    },
+    {
+      "item": "PageIndex pillar — near-dead since per-prompt pageindex-navigator hook was disabled 2026-06-01",
+      "evidence": "Harvest telemetry: pageindex-nav 16 rows total; 0/16 query-hits at 1.8-15.8s/prompt before the hook was disabled 2026-06-01 (0% hit, 100% latency tax). The ~4.8K LOC homegrown subsystem (opc/scripts/pageindex/) + Postgres pageindex_* tables remain resident. It is listed as one of the Six Pillars in the architecture overview but is now on-demand-only and effectively unconsumed. Disposition: investigate (not safe-delete — the on-demand path has legitimate use). Finding: D2e-07."
+    },
+    {
+      "item": "Intel-bus symbol layer (proposed_bus_updates / focus_symbols / recent_findings / correlation_id / 8-role files_in_play taxonomy) — substantial machinery computed on every codegraph call and dropped",
+      "evidence": "37 codegraph intel-bus rows; 100/125 facade rows carry bus_id:'unknown' (D1b-05); corr-null on 60.7% of rows (D4a-01); correlation_id is a fresh per-call randomUUID appearing on exactly ONE row (zero propagation, D1b-04); only 3 of the 8 files_in_play roles ever get a writer (D1A-009). The 'downstream SubagentStop writer' the boundary rule asserts in present tense does not exist anywhere in hooks/src (D1A-001, D1b-03, D4a-03, D4b-03). Focus_symbols / recent_findings have zero production writers. SubagentStop itself has zero event registrations across repo + active + template (D10c-01). Disposition: investigate (the L2 bus substrate is sound; the gap is wiring, not design). Findings: D1A-001, D1b-03, D4a-01, D4a-03, D4b-03, D1A-009, D1b-04."
+    }
+  ],
+
+  "leaking_seams": [
+    {
+      "seam": "Store-side memory poisoning -> read-side raw injection (poison-then-inject chain: D5a write half -> D5b read half)",
+      "detail": "agent-error-capture.ts and user-confirmation-detector.ts build store_learning.py commands from un-sanitized agent/prompt text via execSync string interpolation (D5a-01 / D2c-04), planting attacker-shaped rows into archival_memory. The WS-0.2 sanitizer that exists specifically to neutralize 'a poisoned row that breaks out of the wrapper and acts as instructions' was wired into only 2 of 5 injectors — session-start-continuity.ts (RAW 600-char, registered SessionStart) and pre-plan-memory.ts (RAW 1500-char, registered EnterPlanMode) render the poisoned row VERBATIM into model context on decision-driving surfaces. A defect in the store subsystem becomes a prompt-injection in the recall subsystem; neither side logs recall telemetry, so the poisoned injection is invisible. Codex cross-model confirmation: the execSync always-shells behavior means the escaping approach is fundamentally wrong regardless of escaping quality. Finding cluster: D5a-01, D5b-01, D2c-04, D2d-06.",
+      "finding_ids": ["D5a-01", "D5b-01", "D2c-04", "D2d-06"]
+    },
+    {
+      "seam": "Matcher split-brain ('Agent' registration vs live 'Task' tool) — kills the WHOLE agent safety + verification chain in one stroke",
+      "detail": "5 Task-router hooks (explore-to-scout, task-router, ralph-template-inject, pre-tool-knowledge, tldr-context-inject) PLUS the entire agent safety chain (agent-model-guard, no-haiku-enforcer, navigator-validate, maestro-enforcer [PreToolUse]) AND the post-spawn verification chain (agent-error-capture, agent-verification, ralph-task-monitor [PostToolUse]) are all registered under matcher 'Agent' while the live subagent tool emits 'Task'. Every subagent spawn runs with zero pre-spawn guard and zero post-spawn verification. SubagentStop is additionally unwired at the event level (zero registrations). Codex cross-model finding: agent-error-capture.ts has an internal 'Task' name check in its source, creating a false-correctness signal — the code LOOKS correct but the hook never fires. Three doc surfaces (RULES.md C:10, hook catalog, 2026-05-30 lean audit) assert hard blocking that has never executed. Findings: D2b-01, D10c-02, D10c-01, D8a-01, D10c-03.",
+      "finding_ids": ["D2b-01", "D10c-02", "D10c-01", "D8a-01", "D10c-03"]
+    },
+    {
+      "seam": "Write-dead context bus -> permanently-starved L3 readers (codegraph proposals computed, never committed, never read)",
+      "detail": "The facade computes proposed_bus_updates (focus_symbols + recent_findings) on every codegraph call and returns them for a 'downstream SubagentStop writer' that does not exist — so the bus symbol layer is write-dead. Downstream, recall-bias readers (memory-awareness biasByFocus) and the §9 telemetry watch have nothing to read: focus_symbols/recent_findings have zero production writers, correlation_id never propagates (corr-null 60.7%), and 100/125 facade rows are bus_id:'unknown'. Codex cross-model finding: bus-focus.ts reads always-empty focus_symbols TODAY — this is an EXISTING degradation silently contributing nothing to recall, not just a future gap. The codegraph subsystem produces intelligence that the bus subsystem can never deliver to its consumers — the L2 substrate is built on one side (mutateBus) but wired to no producer on the symbol side and starves its readers. Findings: D1A-001, D1b-03, D4a-03, D4b-03, D1b-04.",
+      "finding_ids": ["D1A-001", "D1b-03", "D4a-03", "D4b-03", "D1b-04"]
+    },
+    {
+      "seam": "Session-id scheme fragmentation -> cross-subsystem telemetry non-joinability",
+      "detail": "7 getSessionId implementations with 4 distinct fallback semantics mean state files, hook traces, guardrail acks, and Postgres coordination rows for the SAME session carry non-joinable ids. The mechanistic contributor to corr-null 60.7% headline: a defect in the identity primitive leaks into every telemetry subsystem (intel-bus, agent-recall, file-claims coordination) that tries to join by session. Critical exacerbation: shared/index.ts barrel re-exports resource-reader's ppid-scheme under the canonical name 'getSessionId' — any future `import { getSessionId } from './shared/index.js'` silently gets a per-process id, not the coordination id, propagating the fragmentation to new code. Findings: D7d-01, D1b-05, D4a-01.",
+      "finding_ids": ["D7d-01", "D1b-05", "D4a-01"]
+    },
+    {
+      "seam": "ROADMAP contamination guard (negative allowlist of registered projects) -> cross-project ROADMAP clobber",
+      "detail": "The post-plan contamination guard is a negative allowlist of registered sibling projects, so unregistered foreign work (Salesforce/FastMCP) is invisible to it. Additionally the 'claude' identity keyword makes the guard structurally unable to protect a project literally named continuous-claude (D2d-01). Plan selection reads newest-mtime from the machine-global ~/.claude/plans pool ignoring the firing event's own tool_input.plan (D2d-02). buildUnifiedContext re-extracts Current Focus WITHOUT the guard (D2F-03), providing a second contamination path. prd-roadmap-sync marks the current goal complete on ANY fully-checked tasks-*.md with no relatedness check (D2d-09). git-commit-roadmap records foreign-repo commits into this project's Completed without verifying cwd (D2d-10). The net result: a gap in one project's identity model corrupts another project's goal-tracking subsystem — the Session-9 incident (foreign Salesforce goal written to ROADMAP 2026-06-06) is the empirical proof. Findings: D2d-01, D2d-02, D2F-03, D2d-09, D2d-10.",
+      "finding_ids": ["D2d-01", "D2d-02", "D2F-03", "D2d-09", "D2d-10"]
+    },
+    {
+      "seam": "permission-auto-allow defeats the OS permission layer -> every downstream safety hook's deny becomes advisory",
+      "detail": "permission-auto-allow (active-only, no repo/template representation — 3-way drift GAP3-03) auto-approves EVERY PermissionRequest except AskUserQuestion/ExitPlanMode: all Bash/Edit/Write/WebFetch calls are auto-approved, nullifying the OS-level permission dialog system-wide in normal mode (D2g-02 / GAP3-01). Codex cross-model finding: auto-allow removal is a PRECONDITION for the injection fixes (D5a/D2b-10/GAP4), not a parallel track — fixing shell injections while the permission layer approves everything without pause provides no meaningful additional safety. Composition: package-install-guard compound-command bypass (cd X && npm install evil, D2a-02) + the always-loaded hook-auto-execute.md that instructs Claude to run unprompted any bash found in a deny reason (D8a-02) — the permission subsystem's blanket auto-allow undercuts every other guard's intended human checkpoint. Findings: D2g-02, GAP3-01, GAP3-03, D2a-02, D8a-02.",
+      "finding_ids": ["D2g-02", "GAP3-01", "GAP3-03", "D2a-02", "D8a-02"]
+    }
+  ],
+
+  "summary_metrics": {
+    "hook_srcs_total": 111,
+    "hook_srcs_registered": 76,
+    "hook_srcs_never_fire": 35,
+    "agents_total": 36,
+    "agents_never_recalled": 30,
+    "memory_hit_rate_pct": 27.4,
+    "intent_pollution_pct": 24.6,
+    "ghost_skill_registrations": 28,
+    "session_id_implementations": 7,
+    "sync_script_copies": 6,
+    "corr_null_bus_rows_pct": 60.7,
+    "facade_bus_id_unknown_pct": 80.0,
+    "codegraph_facade_latency_median_s": 62,
+    "confirmed_findings_total": 190,
+    "findings_by_severity": {"S0": 3, "S1": 41, "S2": 108, "S3": 38},
+    "highest_leverage_single_fixes": [
+      "D2b-01/D10c-02: Agent->Task matcher (revives entire dead agent safety+verification chain at once)",
+      "D7d-01: single canonical getSessionId (unblocks telemetry joinability / corr-null 60.7%)",
+      "D5a-01+QW-01: store_learning.py shared argv helper (closes S0 junk-creator + D5b poison-inject seam)"
+    ]
+  }
+}

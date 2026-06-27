@@ -1,0 +1,114 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 1028 1062" width="1028" height="1062" role="img" aria-label="CCv3 State of Rework — Three Horizons">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M 0 1 L 9 5 L 0 9 z" fill="context-stroke"/></marker></defs>
+<rect x="0" y="0" width="1028" height="1062" rx="16" fill="#ffffff"/>
+<text x="80" y="52" font-family="system-ui,Segoe UI,sans-serif" font-size="28" font-weight="800" fill="#0b1324">CCv3 State of Rework — Three Horizons</text>
+<text x="80" y="78" font-family="system-ui,Segoe UI,sans-serif" font-size="15" fill="#64748b">current health → adjusting backlog → elegant end-state</text>
+<rect x="62" y="126" width="284" height="830" rx="12" fill="none" stroke="#6b7280" stroke-width="1.5" stroke-dasharray="2 6" opacity="0.7"/>
+<text x="80" y="112" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="800" letter-spacing="0.04em" fill="#6b7280">CURRENT STATE</text>
+<rect x="394" y="126" width="284" height="598" rx="12" fill="none" stroke="#fbbf24" stroke-width="1.5" stroke-dasharray="2 6" opacity="0.7"/>
+<text x="412" y="112" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="800" letter-spacing="0.04em" fill="#fbbf24">ADJUSTING &amp; BUILDING</text>
+<rect x="726" y="126" width="284" height="598" rx="12" fill="none" stroke="#34d399" stroke-width="1.5" stroke-dasharray="2 6" opacity="0.7"/>
+<text x="744" y="112" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="800" letter-spacing="0.04em" fill="#34d399">TARGET (Elegant)</text>
+<path d="M 328.0 299.0 Q 370.0 299.0 412.0 299.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="297.8" y="290.0" width="144.4" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="370.0" y="302.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">QW-04 Agent→Task matcher</text>
+<path d="M 327.1 226.0 Q 370.0 241.0 412.9 256.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="297.8" y="232.0" width="144.4" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="370.0" y="244.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">QW-06/07 recall math fix</text>
+<path d="M 597.5 342.0 Q 702.0 415.0 806.5 488.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="643.8" y="406.0" width="116.4" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="702.0" y="418.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">docs match behavior</text>
+<path d="M 234.8 836.0 Q 370.0 647.0 505.2 458.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="300.6" y="638.0" width="138.8" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="370.0" y="650.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">ST-01 SubagentStop wire</text>
+<path d="M 597.5 372.0 Q 702.0 299.0 806.5 226.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="638.2" y="290.0" width="127.6" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="702.0" y="302.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">bus symbol layer live</text>
+<path d="M 659.1 574.0 Q 702.0 589.0 744.9 604.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="629.8" y="580.0" width="144.4" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="702.0" y="592.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">SG-04 telemetry consumer</text>
+<path d="M 597.5 604.0 Q 702.0 531.0 806.5 458.0" fill="none" stroke="#7048e8" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="641.0" y="522.0" width="122.0" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="702.0" y="534.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#7048e8">prune dead periphery</text>
+<rect x="80" y="140" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="140" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="176" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Memory</text>
+<text x="204" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">recall_learnings.py · 27.4% hit</text>
+<text x="204" y="211" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">rate</text>
+<rect x="80" y="256" width="248" height="86" rx="10" fill="#fff0f0" stroke="#e03131" stroke-width="2"/>
+<rect x="80" y="256" width="5" height="86" rx="2" fill="#e03131"/>
+<text x="204" y="292" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Hooks</text>
+<text x="204" y="312" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">settings.json · 35/111 srcs dead</text>
+<rect x="80" y="372" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="372" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="408" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Agents</text>
+<text x="204" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">.claude/agents/ · 30/36 unrecalled</text>
+<rect x="80" y="488" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="488" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="524" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">PageIndex</text>
+<text x="204" y="544" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">opc/scripts/pageindex/ · on-demand</text>
+<text x="204" y="559" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">only</text>
+<rect x="80" y="604" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="604" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="640" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Workflows</text>
+<text x="204" y="660" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">skills/ralph/ · maestro gate dead</text>
+<rect x="80" y="720" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="720" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="756" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Braintrust</text>
+<text x="204" y="776" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">judge_session.py · 60.7% corr-null</text>
+<rect x="80" y="836" width="248" height="86" rx="10" fill="#fff0f0" stroke="#e03131" stroke-width="2"/>
+<rect x="80" y="836" width="5" height="86" rx="2" fill="#e03131"/>
+<text x="204" y="872" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">WS-2 Substrate</text>
+<text x="204" y="892" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">context.json · symbol layer</text>
+<text x="204" y="907" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">write-dead</text>
+<rect x="412" y="140" width="248" height="86" rx="10" fill="#e6fcf5" stroke="#0ca678" stroke-width="2"/>
+<rect x="412" y="140" width="5" height="86" rx="2" fill="#0ca678"/>
+<text x="536" y="176" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Wave 0 Done</text>
+<text x="536" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">QW-01/02/03 · S0 patches shipped</text>
+<rect x="412" y="256" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="412" y="256" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="536" y="292" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Wave 1 Quick-Wins</text>
+<text x="536" y="312" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">QW-04..12 · matcher, recall,</text>
+<text x="536" y="327" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">pollution</text>
+<rect x="412" y="372" width="248" height="86" rx="10" fill="#e7f5ff" stroke="#1971c2" stroke-width="2"/>
+<rect x="412" y="372" width="5" height="86" rx="2" fill="#1971c2"/>
+<text x="536" y="408" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Tier 2 Structural</text>
+<text x="536" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">ST-01..10 · bus, session-id,</text>
+<text x="536" y="443" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">hot-path</text>
+<rect x="412" y="488" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="412" y="488" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="536" y="524" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Tier 3 Strategic</text>
+<text x="536" y="544" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">SG-01..04 · memory, elegance,</text>
+<text x="536" y="559" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">telemetry</text>
+<rect x="412" y="604" width="248" height="86" rx="10" fill="#fff4e6" stroke="#e8590c" stroke-width="2"/>
+<rect x="412" y="604" width="5" height="86" rx="2" fill="#e8590c"/>
+<text x="536" y="640" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">12 Deletions</text>
+<text x="536" y="660" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">DEL-01..12 · dead hooks, stale</text>
+<text x="536" y="675" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">scripts</text>
+<rect x="744" y="140" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="744" y="140" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="868" y="176" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Single-Writer Substrate</text>
+<text x="868" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">Bus reflects live session truth</text>
+<text x="868" y="211" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">always</text>
+<rect x="744" y="256" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="744" y="256" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="868" y="292" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Lean Hot Path</text>
+<text x="868" y="312" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">Resident daemon, parallel hook</text>
+<text x="868" y="327" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">spawns</text>
+<rect x="744" y="372" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="744" y="372" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="868" y="408" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">No Duplication</text>
+<text x="868" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">One getSessionId, one</text>
+<text x="868" y="443" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">storeLearning helper</text>
+<rect x="744" y="488" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="744" y="488" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="868" y="524" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Honest Degradation</text>
+<text x="868" y="544" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">Kill-switches match documented</text>
+<text x="868" y="559" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">behavior</text>
+<rect x="744" y="604" width="248" height="86" rx="10" fill="#f3f0ff" stroke="#7048e8" stroke-width="2"/>
+<rect x="744" y="604" width="5" height="86" rx="2" fill="#7048e8"/>
+<text x="868" y="640" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Evidence-Locked</text>
+<text x="868" y="660" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">§9 gates from real telemetry, not</text>
+<text x="868" y="675" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">guesses</text>
+<text x="80" y="990" font-family="system-ui,sans-serif" font-size="13" font-weight="800" fill="#94a3b8">NOTES</text>
+</svg>

@@ -1,0 +1,83 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 696 946" width="696" height="946" role="img" aria-label="CCv3 Subsystems — Pillars and WS-2 Substrate">
+<defs><marker id="ah" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto-start-reverse" markerUnits="userSpaceOnUse"><path d="M 0 1 L 9 5 L 0 9 z" fill="context-stroke"/></marker></defs>
+<rect x="0" y="0" width="696" height="946" rx="16" fill="#ffffff"/>
+<text x="80" y="52" font-family="system-ui,Segoe UI,sans-serif" font-size="28" font-weight="800" fill="#0b1324">CCv3 Subsystems — Pillars and WS-2 Substrate</text>
+<text x="80" y="78" font-family="system-ui,Segoe UI,sans-serif" font-size="15" fill="#64748b">per-pillar health · real dependency graph from traces</text>
+<rect x="62" y="126" width="284" height="714" rx="12" fill="none" stroke="#a855f7" stroke-width="1.5" stroke-dasharray="2 6" opacity="0.7"/>
+<text x="80" y="112" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="800" letter-spacing="0.04em" fill="#a855f7">PILLARS</text>
+<rect x="394" y="126" width="284" height="598" rx="12" fill="none" stroke="#06b6d4" stroke-width="1.5" stroke-dasharray="2 6" opacity="0.7"/>
+<text x="412" y="112" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="800" letter-spacing="0.04em" fill="#06b6d4">WS-2 SUBSTRATE</text>
+<path d="M 328.0 183.0 Q 370.0 183.0 412.0 183.0" fill="none" stroke="#1971c2" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="286.6" y="174.0" width="166.8" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="370.0" y="186.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#1971c2">memory-awareness biasByFocus</text>
+<path d="M 327.1 256.0 Q 370.0 241.0 412.9 226.0" fill="none" stroke="#0ca678" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="292.2" y="232.0" width="155.6" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="370.0" y="244.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#0ca678">bus-session/tool-populator</text>
+<path d="M 536.0 342.0 Q 536.0 357.0 536.0 372.0" fill="none" stroke="#868e96" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="424.6" y="348.0" width="222.8" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="536.0" y="360.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#868e96">who-calls / find-symbol / code-context</text>
+<path d="M 536.0 372.0 Q 536.0 299.0 536.0 226.0" fill="none" stroke="#868e96" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="416.2" y="290.0" width="239.6" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="536.0" y="302.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#868e96">proposed_bus_updates write-dead (D10c-01)</text>
+<path d="M 536.0 342.0 Q 536.0 415.0 536.0 488.0" fill="none" stroke="#e8590c" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="452.6" y="406.0" width="166.8" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="536.0" y="418.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#e8590c">when codegraph absent or off</text>
+<path d="M 536.0 342.0 Q 536.0 473.0 536.0 604.0" fill="none" stroke="#868e96" stroke-width="2" stroke-dasharray="6 5" marker-end="url(#ah)"/>
+<rect x="447.0" y="464.0" width="178.0" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="536.0" y="476.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#868e96">Serena escalation hint emitted</text>
+<path d="M 204.0 342.0 Q 204.0 357.0 204.0 372.0" fill="none" stroke="#868e96" stroke-width="2" marker-end="url(#ah)"/>
+<rect x="84.2" y="348.0" width="239.6" height="16" rx="4" fill="#ffffff" opacity="0.92"/>
+<text x="204.0" y="360.0" text-anchor="middle" font-family="system-ui,sans-serif" font-size="10.5" fill="#868e96">Task tool spawn (guard chain dead D2b-01)</text>
+<rect x="80" y="140" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="140" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="176" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Memory</text>
+<text x="204" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">recall_learnings.py · 27.4% hit</text>
+<text x="204" y="211" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">rate</text>
+<rect x="80" y="256" width="248" height="86" rx="10" fill="#fff0f0" stroke="#e03131" stroke-width="2"/>
+<rect x="80" y="256" width="5" height="86" rx="2" fill="#e03131"/>
+<text x="204" y="292" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Hooks</text>
+<text x="204" y="312" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">settings.json · 35/111 hooks dead</text>
+<rect x="80" y="372" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="372" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="408" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Agents</text>
+<text x="204" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">.claude/agents/ · 30/36 never</text>
+<text x="204" y="443" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">recalled</text>
+<rect x="80" y="488" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="488" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="524" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">PageIndex</text>
+<text x="204" y="544" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">opc/scripts/pageindex/ · on-demand</text>
+<text x="204" y="559" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">only</text>
+<rect x="80" y="604" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="604" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="640" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Workflows</text>
+<text x="204" y="660" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">skills/ralph/ · maestro gate</text>
+<text x="204" y="675" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">prose-only</text>
+<rect x="80" y="720" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="80" y="720" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="204" y="756" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Braintrust</text>
+<text x="204" y="776" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">judge_session.py · 4 emit</text>
+<text x="204" y="791" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">invariants</text>
+<rect x="412" y="140" width="248" height="86" rx="10" fill="#fff0f0" stroke="#e03131" stroke-width="2"/>
+<rect x="412" y="140" width="5" height="86" rx="2" fill="#e03131"/>
+<text x="536" y="176" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Context Bus L2</text>
+<text x="536" y="196" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">context.json · symbol layer</text>
+<text x="536" y="211" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">write-dead</text>
+<rect x="412" y="256" width="248" height="86" rx="10" fill="#fff9db" stroke="#f08c00" stroke-width="2"/>
+<rect x="412" y="256" width="5" height="86" rx="2" fill="#f08c00"/>
+<text x="536" y="292" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">/code-intel Facade</text>
+<text x="536" y="312" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">code-intel.mjs · 45.7% in-facade</text>
+<rect x="412" y="372" width="248" height="86" rx="10" fill="#ebfbee" stroke="#2f9e44" stroke-width="2"/>
+<rect x="412" y="372" width="5" height="86" rx="2" fill="#2f9e44"/>
+<text x="536" y="408" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">codegraph L3</text>
+<text x="536" y="428" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">codegraph.db · Phase C live 12/12</text>
+<rect x="412" y="488" width="248" height="86" rx="10" fill="#f1f3f5" stroke="#868e96" stroke-width="2"/>
+<rect x="412" y="488" width="5" height="86" rx="2" fill="#868e96"/>
+<text x="536" y="524" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">TLDR Fallback</text>
+<text x="536" y="544" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">tldr CLI · permanent fallback path</text>
+<rect x="412" y="604" width="248" height="86" rx="10" fill="#f1f3f5" stroke="#868e96" stroke-width="2"/>
+<rect x="412" y="604" width="5" height="86" rx="2" fill="#868e96"/>
+<text x="536" y="640" text-anchor="middle" font-family="system-ui,Segoe UI,sans-serif" font-size="15" font-weight="700" fill="#0b1324">Serena L3</text>
+<text x="536" y="660" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">LSP MCP · alias resolution</text>
+<text x="536" y="675" text-anchor="middle" font-family="ui-monospace,Consolas,monospace" font-size="11" fill="#475569">terminal</text>
+<text x="80" y="874" font-family="system-ui,sans-serif" font-size="13" font-weight="800" fill="#94a3b8">NOTES</text>
+</svg>

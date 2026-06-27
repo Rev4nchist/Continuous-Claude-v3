@@ -1,0 +1,310 @@
+{
+  "_meta": {
+    "generated": "2026-06-27",
+    "source_review": "ccv3-fable5-deep-review",
+    "review_sha": "86b8f60",
+    "confirmed_count": 190,
+    "pipeline": "WF-0 harvest -> WF-1 discovery(248) -> WF-2 verify(190 confirm) -> WF-3 synthesis + codex",
+    "slice": "ADJUSTING / BUILDING backlog map — wave0 shipped + wave1/structural/strategic/deletions ratified"
+  },
+  "wave0_done": [
+    {
+      "id": "QW-01",
+      "title": "Sanitize/argv-ify all store_learning.py shell-outs (junk-creator root)",
+      "sev": "S0",
+      "commit": "1788211",
+      "finding_ids": ["D5a-01", "D2c-04", "D2d-06", "D3a-01"]
+    },
+    {
+      "id": "QW-02",
+      "title": "smart-search-router: relocate hardcoded /tmp handshake to OS temp",
+      "sev": "S0",
+      "commit": "89c9e5e",
+      "finding_ids": ["D2b-05"]
+    },
+    {
+      "id": "QW-03",
+      "title": "ROADMAP contamination guard: positive project-identity allowlist + own-plan selection",
+      "sev": "S0",
+      "commit": "f7f3eba",
+      "finding_ids": ["D2d-01", "D2d-02", "D2F-03"]
+    }
+  ],
+  "wave1": [
+    {
+      "id": "QW-04",
+      "title": "Matcher split-brain: change Agent->Task on all spawn hooks (3 surfaces)",
+      "sev": "S1",
+      "leverage": "structural — revives entire dead agent safety+verification chain (12 hooks) at once",
+      "action": "Rename matcher 'Agent' to 'Task' in repo .claude/settings.json, active ~/.claude/settings.json, AND settings.json.template for 5 router hooks (explore-to-scout, task-router, ralph-template-inject, pre-tool-knowledge, tldr-context-inject) and the full agent safety+verification chain (agent-model-guard, no-haiku-enforcer, navigator-validate, maestro-enforcer, agent-error-capture, agent-verification, ralph-task-monitor). Gate: QW-01 must land first (re-enabling agent-error-capture exposes its own D2d-07/D2d-06 bugs); flip guard/verify hooks before inject hooks.",
+      "finding_ids": ["D2b-01", "D10c-02", "D8a-01", "D10c-04"]
+    },
+    {
+      "id": "QW-05",
+      "title": "epistemic-reminder: input.tool -> input.tool_name (one-word field fix)",
+      "sev": "S1",
+      "leverage": "quick-win — revives claim-verification guard every session is told is live",
+      "action": "Change `const tool = input.tool` (epistemic-reminder.ts:44) to `input.tool_name`. Revives the claim-verification.md-cited Grep guard that currently never fires.",
+      "finding_ids": ["D2d-03"]
+    },
+    {
+      "id": "QW-06",
+      "title": "Memory recall floor + FTS arm: raise floor, switch plainto->websearch_to_tsquery",
+      "sev": "S1",
+      "leverage": "quick-win — co-dominant levers named in D9-01; one-constant + one-function change",
+      "action": "Two math fixes: (a) recompute/raise HYBRID_FLOOR so genuine RRF scores (~0.01-0.03) survive the decay-multiplied floor in recall_learnings.py:1702,1761 (also resolves D3b-08 dead 0.002 effective threshold); (b) replace plainto_tsquery (AND-semantics, ~always empty) with websearch_to_tsquery / OR-joined lexemes in memory_service_pg.py + recall_learnings.py. Stops hybrid degrading to vector-only at half ceiling.",
+      "finding_ids": ["D3b-01", "D3b-02", "D3b-08"]
+    },
+    {
+      "id": "QW-07",
+      "title": "Intent-pollution filter: drop synthetic prompts + machine-content/length guard",
+      "sev": "S1",
+      "leverage": "quick-win — single upstream chokepoint kills 24.6% pollution feeding every recall+bus consumer",
+      "action": "Add synthetic-prompt detection before <task-notification> XML/markdown blobs become recall/bus intent. Apply across: extractIntent (machine-content guard + length cap beyond leading-meta-phrase strip), memory-awareness skip list, expandGitQuery (`lower.includes('pr')` substring fix + XML swallow fix), bus-session-populator intent stamp. Covers D2c-01/D3b-05/D3c-04/D3c-03/D2c-02/D4a-09/D10a-04/D10a-06.",
+      "finding_ids": ["D2c-01", "D3b-05", "D3c-04", "D3c-03", "D2c-02", "D4a-09", "D10a-04", "D10a-06"]
+    },
+    {
+      "id": "QW-08",
+      "title": "Ghost skill-registration cleanup (28 dead entries in skill-rules.json)",
+      "sev": "S1",
+      "leverage": "quick-win — stops activation hook injecting for nonexistent skills on every matching prompt",
+      "action": "Remove 26 arscontexta-* (removed plugin) + 2 archived-skill registrations from skill-rules.json. Also fix railway-cli/neonctl top-level non-schema registrations (D7b-02) and dead iq360-events/tldr-search pointer (D7b-07/D8c-06). Verify every remaining key resolves to a real .claude/skills/<name>/ dir.",
+      "finding_ids": ["D7b-01", "D7b-02", "D7b-07", "D8c-06"]
+    },
+    {
+      "id": "QW-09",
+      "title": "Defuse hook-auto-execute.md auto-run guardrail",
+      "sev": "S1",
+      "leverage": "quick-win — removes rule that instructs Claude to run unprompted any bash in a deny reason",
+      "action": "Rewrite hook-auto-execute.md to remove 'execute that command via Bash without asking' / 'do NOT ask user permission' language tied to PreToolUse deny-reason commands. The named 'Routing to' redirects are dead (Agent split-brain) and the only LIVE denier is smart-search-router whose messages suggest the banned Explore spawn and a Windows-broken rg fallback.",
+      "finding_ids": ["D8a-02"]
+    },
+    {
+      "id": "QW-10",
+      "title": "Stray-artifact quarantine: untracked .ssr_slice.txt + tracked tmpclaude junk",
+      "sev": "S2",
+      "leverage": "quick-win — repo hygiene; stops junk forward-syncing into active",
+      "action": "Two parts: (a) Confirm .ssr_slice.txt is review scratch then move to docs/reviews/2026-06-10/scratch/ or delete; add .gitignore pattern. (b) Initiate quarantine protocol on 11 git-tracked tmpclaude-*-cwd files (2 in hooks/src, 9 in scripts) + test-build.ts + ebr-data-prep.skill zip — git rm + .gitignore in follow-up after static_ref_check. Safe-to-delete items only: tmpclaude files, test-build.ts, dead lib duplicates.",
+      "finding_ids": ["D1A-007", "D2g-10", "D7d-06", "D7a-01", "D7b-06"]
+    },
+    {
+      "id": "QW-11",
+      "title": "post-edit-diagnostics: resolve tsc .cmd shim on Windows + restore bus 'edited' write",
+      "sev": "S1",
+      "leverage": "quick-win — whole TS/JS diagnostics path silently dead on primary platform",
+      "action": "Fix spawnSync('tsc') to invoke node tsc.js directly or cmd.exe /c with array args (per codegraph platform finding — .cmd shims need CVE-2024-27980 workaround). Move bus 'edited' write BEFORE early-return so every TS/JS edit records to bus even when diagnostics no-op. Defer whole-project-tsc cost concern (D2e-03) to structural.",
+      "finding_ids": ["D2e-02", "D2e-08"]
+    },
+    {
+      "id": "QW-12",
+      "title": "ROADMAP write-guard correctness: own-project containment on commit/PRD sync",
+      "sev": "S1",
+      "leverage": "quick-win — stops false goal-complete and foreign-repo commit pollution",
+      "action": "Two hooks: (a) prd-roadmap-sync must not mark roadmap.current.title complete on any fully-checked tasks-*.md — require relatedness to current goal; replace first-word substring section-match and startsWith path-containment (D2d-13) with path.relative. (b) git-commit-roadmap must verify commit ran in THIS project before recording it (reject 'cd <other-repo> && git commit' pattern).",
+      "finding_ids": ["D2d-09", "D2d-10", "D2d-13"]
+    }
+  ],
+  "tier2_structural": [
+    {
+      "id": "ST-01",
+      "title": "Wire SubagentStop + commit codegraph proposed_bus_updates (write-dead bus symbol layer)",
+      "sev": "S1",
+      "finding_ids": ["D10c-01", "D1A-001", "D1b-03", "D4a-03", "D4b-03", "D1b-04"],
+      "why": "SubagentStop has ZERO registrations at SHA in repo/active/template; every codegraph proposed_bus_updates (focus_symbols/recent_findings) is computed and dropped because the 'downstream SubagentStop writer' the boundary rule and facade comment assert in present tense does not exist. New hook + new event registration + revalidation/TTL logic touching the single-writer bus contract; needs design pass on stale-proposal handling and premortem before shipping."
+    },
+    {
+      "id": "ST-02",
+      "title": "Session-identity consolidation: collapse 7 schemes to one canonical getSessionId",
+      "sev": "S2",
+      "finding_ids": ["D7d-01", "D4a-01", "D1b-05", "D4b-05", "D1A-006", "D2F-06"],
+      "why": "7 getSessionId implementations with 4 distinct fallback semantics make state files, hook traces, guardrail acks, and coordination rows non-joinable by session — the mechanistic contributor to corr-null 60.7%. shared/index.ts barrel re-exports the ppid-scheme under the canonical name (silent per-process id). Cross-cutting refactor across coordination, Maestro/Ralph/plan hooks, logger, and barrel export; needs migration plan to avoid breaking file-claims/heartbeat."
+    },
+    {
+      "id": "ST-03",
+      "title": "UserPromptSubmit hot-path latency: collapse 13 serial spawns + parallelize/cache recall",
+      "sev": "S1",
+      "finding_ids": ["D6a-01", "D6a-02", "D6a-07", "D6a-08", "D3b-04", "D2b-11", "D6a-05", "D3b-09", "D10a-03"],
+      "why": "Hot path serializes 13 process spawns (~22-32s worst-case before any prompt answers). memory-awareness docstring claims parallel but main() runs 4 sequential subprocesses; 2x uv cold starts (~2.2s each) per prompt; no result cache; ordering constraint (bus-session-populator must bump turn before memory-awareness reads). Requires resident-recall-daemon decision (ST-05) and careful ordering preservation."
+    },
+    {
+      "id": "ST-04",
+      "title": "codegraph facade latency: 35-50s -> budget; per-dirty-file process fan-out",
+      "sev": "S1",
+      "finding_ids": ["D4b-01", "D1b-06", "D4b-07", "D9-03"],
+      "why": "ensureFresh spawns one full codegraph process per dirty/untracked file on every call with no source filter (telemetry: 16-88s/call, median ~62s, 10x the documented 3-4s). D4b-07: if forced full-reindex on 2804-file corpus exceeds 60s timeout the .indexed-head stamp never writes and every subsequent call re-attempts forever. Without this the >=80% C.5 adoption gate (currently 45.7%) is unreachable. Requires freshness-probe redesign and reindex-budget guarding."
+    },
+    {
+      "id": "ST-05",
+      "title": "Resident recall daemon + recall result cache (memory hot-path boot tax)",
+      "sev": "S2",
+      "finding_ids": ["D6b-01", "D6b-02", "D6b-04", "D3b-07", "D3b-03"],
+      "why": "No resident recall daemon; ~2.2s Python interpreter boot paid twice per prompt. BGE daemon amortizes only the embedding model, not the interpreter. In-process embedding fallback (~30-45s cold load) cannot complete in the 12s SIGKILL budget — currently burns 12s and returns nothing. New long-lived process + lifecycle/health management + cache-invalidation design; BGE daemon precedent helps but recall has different state."
+    },
+    {
+      "id": "ST-06",
+      "title": "Permission layer redesign: replace blanket permission-auto-allow",
+      "sev": "S1",
+      "finding_ids": ["D2g-02", "GAP3-01", "D2a-01", "D2a-05", "D2a-06", "D2a-02"],
+      "why": "permission-auto-allow auto-approves EVERY PermissionRequest except AskUserQuestion/ExitPlanMode (all Bash/Edit/Write/WebFetch), nullifying the OS permission dialog system-wide in normal mode — lives active-only with no repo/template representation. navigator-safety (already deregistered, source needs allow->ask rewrite); plan-mode gate downgrades deny->ask under --dangerously-skip-permissions on transcript failure; isRalphActive() has no TTL. Deliberate security-posture decision needing operator policy choice + blast-radius premortem."
+    },
+    {
+      "id": "ST-07",
+      "title": "Complete the memory sanitizer coverage (poison-then-inject chain)",
+      "sev": "S1",
+      "finding_ids": ["D5b-01"],
+      "why": "WS-0.2 sanitizer covers only 2 of 5 live archival_memory->context injectors. session-start-continuity.ts (RAW 600-char) and pre-plan-memory.ts (RAW 1500-char) inject unsanitized recall output into SessionStart/EnterPlanMode context — the exact prompt-injection the sanitizer exists to stop. Security-sensitive change to what reaches model context at session boundaries; needs injector coverage audit and wrapper-contract design."
+    },
+    {
+      "id": "ST-08",
+      "title": "Grep-path shell-injection: argv-ify smart-search-router + daemon-client fallbacks",
+      "sev": "S1",
+      "finding_ids": ["D2b-10", "GAP4-01", "GAP4-02", "D2b-06"],
+      "why": "Three live injection surfaces fire on every Grep when TLDR daemon is down: smart-search-router ripgrepFallback string-interpolates model-controlled pattern into execSync cmd.exe string (escaping only \" and $); daemon-client double-shells through PowerShell->cmd.exe (inner PS escapes ' only, outer cmd escapes \" only — % & ^ < > | reach cmd.exe live). Spans search-router + daemon-client shell boundary on Windows; deny-message policy (3+-word hard-deny) needs behavioral decision beyond escaping."
+    },
+    {
+      "id": "ST-09",
+      "title": "Bus lock + write-amplification hardening",
+      "sev": "S1",
+      "finding_ids": ["D4a-02", "D4a-05", "D4a-06", "D2e-08", "D1A-002", "D2a-10"],
+      "why": "acquireLockSync 200ms cap is leaky (observed waits to 2293ms/11x; deadline checked on one branch only, 100% CPU spin). bus-tool-populator rewrites full JSON on every Read/Grep for a display-only grep_hit slice with zero behavioral consumer. CCV3_KILLSWITCH does not short-circuit the bus layer (design Q16 says master short-circuits all; bus checks only CCV3_BUS_OFF). Concurrency-correctness work on shared single-writer bus with measured contention (158 slow / 14 dropped writes)."
+    },
+    {
+      "id": "ST-10",
+      "title": "agent-recall-injector: fix the 0-for-78 agent memory surface (DELICATE file)",
+      "sev": "S1",
+      "finding_ids": ["D2b-03", "D9-01", "D3c-06", "D9-04"],
+      "why": "agent-recall-injector has 0-for-78 lifetime memory yield since 2026-05-16: extractIntent passes entire multi-KB Task prompt as recall query AND the 3.5s budget is consumed by uv-run startup alone. 100% of recall benefit accrues to 'main' (zero sub-agent rows in 281 recall events) — agent layer is fully memory-blind. DELICATE: documented regression history (Hook Source Regression MEMORY.md); any edit requires emit-invariant guard + post-spark verification. Fix depends on ST-05 daemon to hit within budget."
+    }
+  ],
+  "tier3_strategic": [
+    {
+      "id": "SG-01",
+      "title": "Memory recall floor redesign + corpus health program",
+      "finding_ids": ["D9-01", "D3b-01", "D3a-04", "D3a-02", "D3a-05", "D3a-03"],
+      "why": "After QW-06/QW-07 land, instrument and re-baseline the 27.4% hit rate. D9-01 decomposed it: pollution fix caps best-case at ~36%, so floor-math + corpus quality are co-dominant levers. Owns: scope classification correctness (D3a-04 short-keyword GLOBAL false-triggers mis-scoping PROJECT learnings), silent store failures (D3a-02 swallowed errors/ignore stdio), dead noise-prefix pipeline (D3a-05 agent-error-capture content gate-rejected before embedding while logging success), corpus-curation pass. Define a hit-rate SLO and recurring health-check."
+    },
+    {
+      "id": "SG-02",
+      "title": "Three-way settings/template drift reconciliation + source-of-truth enforcement",
+      "finding_ids": ["GAP3-03", "D10c-04", "D2a-08", "D2e-11", "D10b-05", "D8b-01", "D8b-05", "D8b-06", "D8b-07", "GAP1-01"],
+      "why": "18 hook registrations live in active but absent from tracked repo — including supply-chain guard (package-install-guard) and permission-system defeat (permission-auto-allow); bootstrap template still registers navigator-safety (mitigated safety-inversion hook); repo ships 100%-dead agent spawn pipeline (zero Task-matched hooks). Architecture.json self-contradicts agent/hook/skill counts; ARCHITECTURE.md/README/INDEX give three wrong inventories. Establish one source-of-truth, reconcile all three settings surfaces, add drift-detection gate (extend /sync-drift)."
+    },
+    {
+      "id": "SG-03",
+      "title": "Elegance/pruning program: collapse duplication clusters, prune dead periphery",
+      "finding_ids": ["D7d-03", "D7d-04", "D7b-03", "D7b-05", "D8c-01", "D8c-04", "D8c-05", "D7c-04", "D2F-04", "D2F-07"],
+      "why": "Elegance verdict: clean spine wrapped in dead/mis-wired periphery. Execute consolidation of named duplication clusters: sync paths (6->2), Python script-tree triplication (delete .claude/scripts/core mirror), Fourth presentation skills (~46MB->one shared asset dir), skill-lifecycle meta-skills (6->skill-forge+vet+find), testing-skill cluster (6, fix name/dir mismatch). Prune dead periphery via deletions backlog. Reconcile stale doc surfaces (code-intel/search-router/tldr-code SKILLs pre-Phase-C; workflow chains naming nonexistent skills; agent-skill-map drift). Goal: expose the elegant core by removing inert machinery."
+    },
+    {
+      "id": "SG-04",
+      "title": "Telemetry joinability + intel-bus consumer (Phases C.3/D/E)",
+      "finding_ids": ["D1A-005", "D1b-05", "D4a-01", "D1A-004", "D9-05", "D4b-05"],
+      "why": "After ST-02 (session-id) and ST-01 (correlation propagation) land: build missing telemetry consumer layer — intel-bus-stats.mjs, weekly digest owner, metadata.bus_snapshot memory bridge (all absent; intel-bus accumulates with no consumer). Fix bus_id 'unknown' on 100/125 facade rows and structurally-inert correlation_id so the §9 facade-bypass metric and >=80% codegraph adoption gate become measurable. Re-examine codex-lift ROI (D9-05: codex_only 77 > claude_only 49 inverts the assumed hierarchy; log has no accepted/rejected disposition so ROI is undecidable as built)."
+    }
+  ],
+  "deletions": [
+    {
+      "id": "DEL-01",
+      "target": "11 git-tracked tmpclaude-*-cwd files (.claude/hooks/src/ x2, .claude/scripts/ x9)",
+      "why": "39-byte cwd-capture temp artifacts committed by accident (since commit ef00c22); no source imports any tmpclaude-* path; forward-sync ships them to ~/.claude where directory scanners enumerate them; no .gitignore guard stops recurrence.",
+      "quarantine": "git rm the 11 files + add 'tmpclaude-*-cwd' to .gitignore in the SAME change. NOTE: also fix D4b-06 (facade PROJECT_DIR falls back to process.cwd()) or the quarantine recurs. No archive needed — zero-value temp files.",
+      "finding_ids": ["D1A-007", "D2g-10", "D7d-06"]
+    },
+    {
+      "id": "DEL-02",
+      "target": ".ssr_slice.txt (untracked, repo root, 7740B)",
+      "why": "Never committed; appears only as '?? .ssr_slice.txt' in git status; not referenced anywhere in the repo; appears to be review/tldr-slice scratch output from the WF-3 session.",
+      "quarantine": "CONFIRM with operator it is review scratch, then move to docs/reviews/2026-06-10/scratch/ OR delete; add a .gitignore pattern. Operator confirmation required — it is in current session's git status and is not tied to a confirmed finding ID.",
+      "finding_ids": []
+    },
+    {
+      "id": "DEL-03",
+      "target": "test-build.ts (one-line console.log scaffold stub in .claude/hooks/src/)",
+      "why": "Never-registered 'hook' with body `console.log('test')`; no importers; scaffold leftover committed by accident; not referenced in any rule/skill/catalog.",
+      "quarantine": "git rm in the deletions follow-up batch, bundled with the three _register/_test-auto-build .cjs one-offs (also named in D2g-10).",
+      "finding_ids": ["D7a-01", "D2g-10"]
+    },
+    {
+      "id": "DEL-04",
+      "target": "ebr-data-prep.skill (16KB zip committed as flat file in .claude/skills/)",
+      "why": "ZIP archive never unpacked, not loadable as a skill (no SKILL.md dir); no skill-rules.json registration; stray committed archive.",
+      "quarantine": "Confirm contents are recoverable elsewhere (unzip + inspect) OR archive to .claude/skills/_archived/ before git rm. One-cycle quarantine.",
+      "finding_ids": ["D7b-06"]
+    },
+    {
+      "id": "DEL-05",
+      "target": "26 SAFE-dead unregistered hook prototypes in .claude/hooks/src/",
+      "why": "35/111 hook srcs are never-registered; of these, ~26 are truly dead prototypes with no registration in active/repo/template and no non-test importers. The remaining ~9 include 6 LIVE shared libs misfiled as top-level entrypoints that must NOT be deleted (D7a-03/D2g-07).",
+      "quarantine": "TWO-STEP: (1) FIRST exclude the 6 live-misfiled libs and relocate them to lib/; (2) move true-dead prototypes to hooks/src/_archived/ for one cycle, then git rm. Do NOT batch-delete on telemetry-dead signal alone — re-run per-file `git grep <basename>` before each delete. Verify none are cited by hook-catalog.md.",
+      "finding_ids": ["D2g-08"]
+    },
+    {
+      "id": "DEL-06",
+      "target": "4 dead lib duplicates in .claude/hooks/src/lib/ (daemon-client, skill-router, skill-validation-prompt, transcript-parser)",
+      "why": "Zero importers from hooks/src/*.ts (excluding lib/ and tests) — confirmed at SHA 86b8f60. Stale forks diverged from the LIVE top-level copies in hooks/src/.",
+      "quarantine": "Confirm top-level copies are the imported ones (D2g-07), then git rm the lib/ duplicates. One-cycle archive optional given the live siblings exist.",
+      "finding_ids": ["D2g-06"]
+    },
+    {
+      "id": "DEL-07",
+      "target": "memory-client.ts + skill-usage.ts (triple-dead client + its only consumer)",
+      "why": "memory-client referenced only by shared/index.ts barrel and skill-usage.ts; skill-usage.ts has zero hook consumers; memory-client spawns python3 (nonexistent on Windows) and imports scripts.agentica.memory_factory (absent from repo).",
+      "quarantine": "Remove barrel re-export in shared/index.ts FIRST, then git rm memory-client.ts + skill-usage.ts together. Verify esbuild build still passes — these emit as never-executed dist entrypoints.",
+      "finding_ids": ["D3b-06"]
+    },
+    {
+      "id": "DEL-08",
+      "target": "handoff-index hook (sole consumer of better-sqlite3 + the build's only --external flag)",
+      "why": "Dead hook; sole consumer of better-sqlite3; live sibling session-end-handoff-indexer.ts falsely presents it as a running complement in its docstring. Removing it drops a runtime dep and the build's only --external flag.",
+      "quarantine": "git rm handoff-index source + dist + .sh; remove better-sqlite3 from package.json and --external build flag; correct live sibling docstring. Run build to confirm no other better-sqlite3 consumer.",
+      "finding_ids": ["D2g-09"]
+    },
+    {
+      "id": "DEL-09",
+      "target": ".claude/scripts/core/ (30-entry frozen mirror of opc/scripts; 4-month stale) + duplicate cdp.mjs",
+      "why": "Mirror is in SYNC_DIRS so it forward-syncs to ~/.claude/scripts/; recall_learnings.py in mirror is 29198B vs 79759B canonical (4-month stale since 2026-01-30). cdp.mjs has byte-identical .claude/scripts/ pair. Double-maintenance already real (commit faa99da touched mirror separately).",
+      "quarantine": "HIGHER RISK — forward-syncs into active. Step 1: remove .claude/scripts/core from SYNC_DIRS so it stops shipping FIRST. Step 2: confirm no agent path resolves to it post-sync. Step 3: git rm mirror + duplicate cdp.mjs. Do NOT batch with trivial deletes — needs sync-config change first.",
+      "finding_ids": ["D7d-04", "D7d-05"]
+    },
+    {
+      "id": "DEL-10",
+      "target": "ralph-state.py v1 + 3 byte-identical orphaned test copies in opc/scripts/ralph/",
+      "why": "Ralph state machinery is LIVE via ralph-state-v2.py (8 registered hooks + templates); v1 is dead code. 3 byte-identical orphan test copies are redundant duplicates.",
+      "quarantine": "git grep 'ralph-state.py' (excluding v2) to confirm zero live callers; archive v1 to opc/scripts/ralph/_archived/ one cycle, then delete the 3 orphaned copies + v1.",
+      "finding_ids": ["D7d-05"]
+    },
+    {
+      "id": "DEL-11",
+      "target": "Hard-orphan agents memory-extractor.md + braintrust-analyst.md",
+      "why": "Referenced only as prose in docs (agent-skill-map.md, README.md, docs/agents/README.md, architecture.json, agents-visualization.html, composition-design.md); never dispatched as subagent_type in any skill/rule/hook/script; never-recalled per telemetry (30/36 agents never-recalled).",
+      "quarantine": "LOWER PRIORITY — doc-coupled. If removed: archive to .claude/agents/_archived/ AND scrub all 6+ doc references in same change. Telemetry-dead is NOT sufficient alone — defer to SG-03 pruning program with operator confirm. Agents are a deliberate library; confirm with operator before action.",
+      "finding_ids": ["D7c-02"]
+    },
+    {
+      "id": "DEL-12",
+      "target": "14 zero-reference skills + Fourth presentation-builder redundancy (~46MB) + 4 memory rule-stubs loaded every session",
+      "why": "14 skills with zero refs anywhere and no skill-rules.json registration (6 confirmed-stale: task-master-workflow, meeting-brief-generator, tdd-migrate, extract-v2, implement_plan_micro, date-logic-management). Fourth presentation-builder's ~22.8MB is functionally covered by the registered fourth-presentation-suite; bit-identical 6.2MB PDF across 2 skills; 5.6MB self-zip. 4 memory rule-stubs (agent-memory-recall, dynamic-recall, memory-usage-guidelines, proactive-learning) are pure 'consolidated into memory skill' pointers yet load verbatim into every session's system prompt — confirmed empirically in review agent's loaded prompt.",
+      "quarantine": "Per-skill: re-run reference grep, then archive to _archived/ one cycle before git rm. For 4 rule-stubs: delete after confirming memory SKILL covers content (stubs' own text confirms this) — pure context-weight wins. For Fourth: dedupe shared 6.2MB PDF + drop 5.6MB self-zip rather than deleting whole skills (SG-03 consolidation). Batch ONLY after per-item static_ref_check passes.",
+      "finding_ids": ["D7b-04", "D7b-03", "D7c-03"]
+    }
+  ],
+  "severity_totals": {
+    "S0": 3,
+    "S1": 41,
+    "S2": 108,
+    "S3": 38,
+    "total_confirmed": 190,
+    "wave0_closed_s0": 3,
+    "s0_remaining_open": 0,
+    "source": "findings.json by_severity at review_sha 86b8f60",
+    "note_codex_adjusted": "2 findings downgraded S1->S2 by Codex cross-model review (D3c-03 precision-leak, D2e-02 advisory-only); GATE-B-LEDGER therefore shows S1=43/S2=106 pre-adjustment vs findings.json S1=41/S2=108 post-adjustment"
+  },
+  "codex_lift": {
+    "claude_only": 190,
+    "codex_only": 6,
+    "both": 184,
+    "note": "190 = all confirmed findings from Claude pipeline; 184 independently corroborated by Codex gpt-5.5@xhigh; 6 additional findings unique to Codex beyond the confirmed 190 set. Codex also applied 2 severity downgrades (D3c-03, D2e-02). D9-05 notes codex_only 77 vs claude_only 49 vs overlap 14 in a DIFFERENT prior metric slice (WF-1 discovery set, not the WF-2 confirmed set reported here) — that finding flags codex-lift ROI as undecidable without accepted/rejected disposition tracking."
+  },
+  "sequencing_note": "Wave 0 (S0, shipped): QW-01/QW-02/QW-03 stop active on-disk corruption/contamination. Wave 1 (S1 quick-wins, mostly independent): QW-05/QW-06/QW-07/QW-08/QW-09/QW-11/QW-12 first (independent one-field/one-constant fixes), then QW-04 last in Wave 1 (matcher flip — must follow QW-01 because re-enabling agent-error-capture exposes D2d-07/D2d-06 bugs; flip guard/verify hooks first, inject hooks last, each verified). Wave 1 cleanup: QW-10 + safe_to_delete:true deletions (DEL-01/DEL-03/DEL-06/DEL-07/DEL-08). Structural arcs (ST-01..ST-10) each need own plan+premortem. ST-02 (session-id) and ST-01 (SubagentStop) are prerequisites for SG-04 telemetry joinability. safe_to_delete:false items (DEL-02 operator-confirm, DEL-05 two-step, DEL-09 sync-config-first, DEL-10 grep-verify, DEL-11 doc-scrub, DEL-12 per-item-grep) defer to SG-03 pruning program.",
+  "notes": "All wave0 commits verified against git log (1788211, 89c9e5e, f7f3eba on branch main). All finding_ids verified against findings.json confirmed set. Severity totals from findings.json by_severity (primary source; 2 Codex-adjusted S1->S2 downgrades account for GATE-B-LEDGER vs findings.json discrepancy). Deletion quarantine protocol: archive/disable FIRST, static_ref_check BEFORE every delete, never batch safe_to_delete:false items with trivial deletes. The elegance verdict is 'mixed' — clean spine (SQL layer, secret handling, path-traversal, L3 boundary/bus design all cleared) wrapped in thick dead/mis-wired periphery (registration drift + consolidatable duplication); the dominant pattern is prune-and-rewire on a sound core, not fundamental over-design."
+}

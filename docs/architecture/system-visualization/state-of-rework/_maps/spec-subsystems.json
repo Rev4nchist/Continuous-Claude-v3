@@ -1,0 +1,146 @@
+{
+  "filename": "subsystems",
+  "title": "CCv3 Subsystems — Pillars and WS-2 Substrate",
+  "subtitle": "per-pillar health · real dependency graph from traces",
+  "lanes": [
+    {
+      "id": "pillars",
+      "label": "PILLARS",
+      "accent": "#a855f7"
+    },
+    {
+      "id": "ws2",
+      "label": "WS-2 SUBSTRATE",
+      "accent": "#06b6d4"
+    }
+  ],
+  "nodes": [
+    {
+      "id": "p_memory",
+      "lane": "pillars",
+      "label": "Memory",
+      "sublabel": "recall_learnings.py · 27.4% hit rate",
+      "intent": "honing"
+    },
+    {
+      "id": "p_hooks",
+      "lane": "pillars",
+      "label": "Hooks",
+      "sublabel": "settings.json · 35/111 hooks dead",
+      "intent": "gap"
+    },
+    {
+      "id": "p_agents",
+      "lane": "pillars",
+      "label": "Agents",
+      "sublabel": ".claude/agents/ · 30/36 never recalled",
+      "intent": "honing"
+    },
+    {
+      "id": "p_pageindex",
+      "lane": "pillars",
+      "label": "PageIndex",
+      "sublabel": "opc/scripts/pageindex/ · on-demand only",
+      "intent": "honing"
+    },
+    {
+      "id": "p_workflows",
+      "lane": "pillars",
+      "label": "Workflows",
+      "sublabel": "skills/ralph/ · maestro gate prose-only",
+      "intent": "honing"
+    },
+    {
+      "id": "p_braintrust",
+      "lane": "pillars",
+      "label": "Braintrust",
+      "sublabel": "judge_session.py · 4 emit invariants",
+      "intent": "honing"
+    },
+    {
+      "id": "s_bus",
+      "lane": "ws2",
+      "label": "Context Bus L2",
+      "sublabel": "context.json · symbol layer write-dead",
+      "intent": "gap"
+    },
+    {
+      "id": "s_facade",
+      "lane": "ws2",
+      "label": "/code-intel Facade",
+      "sublabel": "code-intel.mjs · 45.7% in-facade",
+      "intent": "honing"
+    },
+    {
+      "id": "s_codegraph",
+      "lane": "ws2",
+      "label": "codegraph L3",
+      "sublabel": "codegraph.db · Phase C live 12/12",
+      "intent": "sound"
+    },
+    {
+      "id": "s_tldr",
+      "lane": "ws2",
+      "label": "TLDR Fallback",
+      "sublabel": "tldr CLI · permanent fallback path",
+      "intent": "external"
+    },
+    {
+      "id": "s_serena",
+      "lane": "ws2",
+      "label": "Serena L3",
+      "sublabel": "LSP MCP · alias resolution terminal",
+      "intent": "external"
+    }
+  ],
+  "edges": [
+    {
+      "from": "p_memory",
+      "to": "s_bus",
+      "kind": "reads",
+      "label": "memory-awareness biasByFocus"
+    },
+    {
+      "from": "p_hooks",
+      "to": "s_bus",
+      "kind": "writes",
+      "label": "bus-session/tool-populator"
+    },
+    {
+      "from": "s_facade",
+      "to": "s_codegraph",
+      "kind": "dep",
+      "label": "who-calls / find-symbol / code-context"
+    },
+    {
+      "from": "s_codegraph",
+      "to": "s_bus",
+      "kind": "dashed",
+      "label": "proposed_bus_updates write-dead (D10c-01)"
+    },
+    {
+      "from": "s_facade",
+      "to": "s_tldr",
+      "kind": "fallback",
+      "label": "when codegraph absent or off"
+    },
+    {
+      "from": "s_facade",
+      "to": "s_serena",
+      "kind": "dashed",
+      "label": "Serena escalation hint emitted"
+    },
+    {
+      "from": "p_hooks",
+      "to": "p_agents",
+      "kind": "dep",
+      "label": "Task tool spawn (guard chain dead D2b-01)"
+    }
+  ],
+  "notes": [
+    "Critical gap: entire pre-spawn agent guard chain (agent-model-guard, no-haiku-enforcer, maestro-enforcer) is registered under matcher 'Agent' while the live subagent tool emits 'Task' — zero pre-spawn enforcement on every subagent call (D2b-01, D10c-02).",
+    "Dashed edge codegraph→Context Bus: proposed_bus_updates computed on every codegraph call but SubagentStop has 0 registrations across repo/active/template — the bus symbol layer (focus_symbols, recent_findings) has no writers (D1A-001, D10c-01).",
+    "Memory reads bus for recall bias (biasByFocus) but focus_symbols is always empty — the bias is a no-op until ST-01 (SubagentStop wire) lands.",
+    "PageIndex pillar: per-prompt hook disabled 2026-06-01 after 0/16 query-hits at up to 15.8s/prompt — listed as a Six Pillar but effectively on-demand only."
+  ]
+}
