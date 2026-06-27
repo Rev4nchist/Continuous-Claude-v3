@@ -29,15 +29,17 @@ Pattern: single file, JSON output to stdout, subcommand interface.
 Use **browser automation** (Playwright MCP) as last resort.
 Highest friction, lowest reliability — only for truly GUI-only workflows.
 
-## Current CLI Inventory (23 tools)
+## Current CLI Inventory (24 tools)
 
 | Pattern | Tools |
 |---------|-------|
-| Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, codex |
+| Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, codex, cma (SDK/curl)† |
 | Python harness via uv run | ast-grep, morph, braintrust, github-search |
 | MCP server | Serena, Playwright MCP, Notion, Paper, Exa, Neon, Vercel Cloud, Linear, Sentry |
 | Claude Code plugin | codex-plugin-cc (slash commands `/codex:*`) |
-| Agent delegation | deployer (Vercel + Railway + Sentry + Linear), arbiter/atlas (tests), codex-adversary (cross-model review via Codex CLI) |
+| Agent delegation | deployer (Vercel + Railway + Sentry + Linear), arbiter/atlas (tests), codex-adversary (cross-model review via Codex CLI), cma-operator (headless Claude Managed Agents cloud runs) |
+
+† `cma` (Claude Managed Agents) has no public `ant` Windows release binary as of 2026-06-27 — the surfaces are the `anthropic` Python SDK (preferred, headless) and `curl`. One agent-friendliness gap: events stream must be opened before sending (SSE open-before-send) — the SDK handles it; prefer SDK over raw curl for the headless `cma-operator` path. Has the standard `--beta=true` / beta-header split (deployments use the query param; agents/sessions use the header).
 
 \* `kusto-cli` is Pattern 1 with notable agent-friendliness gaps — REPL-first (needs `-keepRunning:false`), positional connection string, no native JSON output (CSV via `#save` only). Score it low on the Agent Compatibility Checklist when comparing to gold-standard tools like `gh` or `vercel`.
 
@@ -51,6 +53,7 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 | Sentry | INTEGRATED — MCP (remote) + sentry-cli + skill + rule + deployer + 3 hooks (2026-03-25) | DONE |
 | Kusto.Cli (ADX / Fabric Eventhouse) | INTEGRATED — Microsoft.Azure.Kusto.Tools v14.1.2 net472 staged at `C:\tools\kusto-cli\`; skill + safety rule + databases cross-ref (2026-05-04) | DONE |
 | Codex (OpenAI) | INTEGRATED — `codex-cli 0.131.0` + `codex-plugin-cc` plugin + `codex-adversary` agent + `codex-adversarial` rule + `/review` and `/premortem` skill wiring + `plan-exit-premortem-prompt` hook (2026-05-18; CLI 0.104.0 -> 0.131.0, end-to-end verified 2026-06-01). ChatGPT subscription auth via `codex login` — verified `codex exec` runs on the subscription with no `OPENAI_API_KEY`. Used for cross-model adversarial review. | DONE |
+| Claude Managed Agents (CMA) | INTEGRATED (infra) — `cma` operator skill + `cma-safety` rule + `cma-operator` agent + vendored `launch-your-agent`/`wrap-up` wizard skills (`anthropics/launch-your-agent@05e9627`, G8-audited); `anthropic` SDK 0.75.0 (headless) + curl fallback; no public `ant` Windows binary (SDK-first). Beta header `managed-agents-2026-04-01`, toolset `agent_toolset_20260401` (2026-06-27). Consumption-billed on `ANTHROPIC_API_KEY`, SEPARATE from the Claude Code subscription; NOT ZDR/HIPAA. **Live path BLOCKED pending a valid Console API key** — the env key returns `401 invalid x-api-key`. | DONE (infra) / BLOCKED (live) |
 | CLI-Anything | Not installed — for future desktop software control | LOW |
 
 ## Agent Compatibility Checklist
