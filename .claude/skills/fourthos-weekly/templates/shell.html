@@ -1,0 +1,220 @@
+<!DOCTYPE html>
+<!--
+  FourthOS Sponsor Site — SHARED SHELL (canonical chrome for every tier).
+  The weekly generator builds each page = this shell + tier content. Keep pages self-contained
+  (no external requests beyond the Google Fonts link). Replace these placeholders at render time:
+
+    {{TITLE}}            browser tab title
+    {{META_DESC}}        meta description
+    {{SITE_ROOT}}        "/ai-enablement-decks"            (Pages base, no trailing slash)
+    {{DECK_BASE}}        "/ai-enablement-decks/fourthos/2026-06-24"   (this week's deck root, no slash)
+    {{DATE_ISO}}         "2026-06-24"
+    {{DATE_HUMAN}}       "24 June 2026"
+    {{TIER}}             one of: hub | briefing | deep-dive   (drives active tab via body[data-tier])
+    {{BREADCRUMB_CURRENT}}  "Hub" | "The Briefing" | "Deep Dive"
+    {{HEAD_EXTRA}}       tier-specific <style> (optional)
+    {{CONTENT}}          tier body markup
+
+  ALL deck-internal links MUST be root-absolute ({{DECK_BASE}}/briefing.html, etc.) — never bare
+  "briefing.html" (trailing-slash fragile on GitHub Pages → 404).
+-->
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{{TITLE}}</title>
+  <meta name="description" content="{{META_DESC}}">
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Poppins:wght@300;400;500;600;700&family=JetBrains+Mono:wght@400;500&display=swap" rel="stylesheet">
+  <style>
+    :root {
+      --bg-primary:#0A1929; --bg-secondary:#0F2A3F; --bg-tertiary:#153650;
+      --bg-midnight:#051526; --bg-card:rgba(15,42,63,0.55);
+      --text-primary:#FFFFFF; --text-secondary:#CFD1D1; --text-muted:#8DA8C4;
+      --accent:#6FB4E3; --teal:#00B69F; --sunrise:#FAA51A; --danger:#D81632; --purple:#9678B6;
+      --fourth-deep-blue:#0C4A7D;
+      --vignette:linear-gradient(25deg,#00B69F 0%,#6FB4E3 40%,#0C4A7D 100%);
+      --border:rgba(111,180,227,0.10); --border-accent:rgba(111,180,227,0.22);
+      --teal-glow:rgba(0,182,159,0.15); --accent-glow:rgba(111,180,227,0.15); --sunrise-glow:rgba(250,165,26,0.12);
+      --font-display:'Poppins',sans-serif; --font-body:'Poppins',sans-serif; --font-mono:'JetBrains Mono',monospace;
+      --ease:cubic-bezier(0.16,1,0.3,1);
+    }
+    *,*::before,*::after { margin:0; padding:0; box-sizing:border-box; }
+    html { scroll-behavior:smooth; font-size:18px; }
+    body {
+      font-family:var(--font-body); background:var(--bg-primary); color:var(--text-primary);
+      line-height:1.6; -webkit-font-smoothing:antialiased; overflow-x:hidden;
+    }
+    a { color:inherit; text-decoration:none; }
+    .wrap { max-width:1140px; margin:0 auto; padding:0 clamp(1.25rem,4vw,2.5rem); width:100%; }
+    :focus-visible { outline:2px solid var(--teal); outline-offset:3px; border-radius:4px; }
+
+    /* ===================== TOP BAR (shared on every tier) ===================== */
+    .topbar {
+      position:sticky; top:0; z-index:50;
+      background:rgba(5,21,38,0.82); backdrop-filter:blur(14px);
+      border-bottom:1px solid var(--border);
+    }
+    .topbar-inner {
+      display:flex; align-items:center; gap:1rem 1.5rem; flex-wrap:wrap;
+      padding:0.7rem 0;
+    }
+    /* brand mark */
+    .brand { display:inline-flex; align-items:center; gap:0.55rem; font-weight:600; letter-spacing:0.01em; }
+    .brand svg { width:26px; height:26px; flex-shrink:0; display:block; }
+    .brand .wordmark { font-size:1.02rem; }
+    .brand .wordmark b { font-weight:700; }
+    .brand .wordmark .os { color:var(--teal); font-weight:700; }
+    /* breadcrumb */
+    .crumbs { display:flex; align-items:center; gap:0.45rem; font-size:0.82rem; color:var(--text-muted); flex-wrap:wrap; }
+    .crumbs a { color:var(--text-secondary); transition:color .2s; }
+    .crumbs a:hover { color:var(--accent); }
+    .crumbs .sep { color:var(--text-muted); opacity:0.6; }
+    .crumbs .current { color:var(--text-primary); font-weight:500; }
+    /* right cluster */
+    .topbar-right { margin-left:auto; display:flex; align-items:center; gap:0.75rem 1.25rem; flex-wrap:wrap; }
+    /* tier tabs */
+    .tabs { display:flex; align-items:center; gap:0.25rem; }
+    .tabs a {
+      font-size:0.82rem; font-weight:500; color:var(--text-secondary);
+      padding:0.35rem 0.7rem; border-radius:8px; transition:color .2s, background .2s;
+    }
+    .tabs a:hover { color:var(--text-primary); background:rgba(111,180,227,0.08); }
+    body[data-tier="hub"]        .tab-hub,
+    body[data-tier="briefing"]   .tab-briefing,
+    body[data-tier="deep-dive"]  .tab-deepdive {
+      color:var(--teal); background:rgba(0,182,159,0.12);
+    }
+    /* week switcher */
+    .wkswitch { position:relative; display:inline-flex; align-items:center; }
+    .wkswitch select {
+      appearance:none; -webkit-appearance:none;
+      font-family:var(--font-body); font-size:0.8rem; font-weight:500; color:var(--text-secondary);
+      background:var(--bg-secondary); border:1px solid var(--border-accent); border-radius:999px;
+      padding:0.4rem 2rem 0.4rem 0.95rem; cursor:pointer; transition:border-color .2s, color .2s;
+    }
+    .wkswitch select:hover { color:var(--text-primary); border-color:rgba(0,182,159,0.4); }
+    .wkswitch::after {
+      content:'▾'; position:absolute; right:0.85rem; top:50%; transform:translateY(-50%);
+      pointer-events:none; color:var(--accent); font-size:0.7rem;
+    }
+
+    /* ===================== FOOTER (shared) ===================== */
+    footer {
+      border-top:1px solid var(--border); padding:2.25rem 0 2.75rem; background:var(--bg-midnight); margin-top:3rem;
+    }
+    .foot-grid { display:flex; flex-wrap:wrap; justify-content:space-between; align-items:center; gap:1rem; }
+    .foot-grid .pwr { display:inline-flex; align-items:center; gap:0.5rem; font-weight:600; color:var(--text-secondary); }
+    .foot-grid .pwr .iq { color:var(--teal); }
+    .foot-grid .mid, .foot-grid .gen { font-size:0.82rem; color:var(--text-muted); }
+
+    /* ===================== TIER PAGER (briefing / deep-dive) ===================== */
+    .pager { display:flex; justify-content:space-between; gap:1rem; flex-wrap:wrap; margin-top:1rem; }
+    .pager a {
+      display:inline-flex; align-items:center; gap:0.5rem; font-size:0.9rem; font-weight:500;
+      color:var(--text-secondary); border:1px solid var(--border-accent); border-radius:10px;
+      padding:0.7rem 1.1rem; transition:color .2s, border-color .2s, background .2s;
+    }
+    .pager a:hover { color:var(--text-primary); border-color:rgba(0,182,159,0.4); background:rgba(0,182,159,0.06); }
+
+    @media (max-width:720px) {
+      html { font-size:16px; }
+      .topbar-inner { gap:0.6rem 1rem; }
+      .crumbs { width:100%; order:3; }
+      .topbar-right { width:100%; justify-content:space-between; }
+      .foot-grid { flex-direction:column; align-items:flex-start; }
+    }
+    {{HEAD_EXTRA}}
+  </style>
+</head>
+<body data-tier="{{TIER}}">
+  <!-- ===================== SHARED TOP BAR ===================== -->
+  <div class="topbar">
+    <div class="wrap topbar-inner">
+      <a class="brand" href="{{DECK_BASE}}/" aria-label="FourthOS Sponsor Update home">
+        <!-- Custom FourthOS mark: orbiting nodes (connector ecosystem / OS motif) -->
+        <svg viewBox="0 0 32 32" fill="none" role="img" aria-hidden="true" xmlns="http://www.w3.org/2000/svg">
+          <defs>
+            <linearGradient id="fos-g" x1="2" y1="30" x2="30" y2="2" gradientUnits="userSpaceOnUse">
+              <stop stop-color="#00B69F"/><stop offset="0.5" stop-color="#6FB4E3"/><stop offset="1" stop-color="#0C4A7D"/>
+            </linearGradient>
+          </defs>
+          <ellipse cx="16" cy="16" rx="13.5" ry="7" transform="rotate(-28 16 16)" stroke="url(#fos-g)" stroke-width="1.6" opacity="0.85"/>
+          <circle cx="16" cy="16" r="3.4" fill="url(#fos-g)"/>
+          <circle cx="26.5" cy="9.5" r="2.1" fill="#00B69F"/>
+          <circle cx="5.5" cy="22.5" r="2.1" fill="#6FB4E3"/>
+          <circle cx="7" cy="8" r="1.6" fill="#FAA51A"/>
+        </svg>
+        <span class="wordmark"><b>Fourth</b><span class="os">OS</span></span>
+      </a>
+
+      <nav class="crumbs" aria-label="Breadcrumb">
+        <a href="{{SITE_ROOT}}/#sponsor-updates">Sponsor Updates</a>
+        <span class="sep" aria-hidden="true">&rsaquo;</span>
+        <a href="{{DECK_BASE}}/">{{DATE_HUMAN}}</a>
+        <span class="sep" aria-hidden="true">&rsaquo;</span>
+        <span class="current">{{BREADCRUMB_CURRENT}}</span>
+      </nav>
+
+      <div class="topbar-right">
+        <nav class="tabs" aria-label="Sections">
+          <a class="tab-hub" href="{{DECK_BASE}}/">Hub</a>
+          <a class="tab-briefing" href="{{DECK_BASE}}/briefing.html">The Briefing</a>
+          <a class="tab-deepdive" href="{{DECK_BASE}}/deep-dive.html">Deep Dive</a>
+        </nav>
+        <label class="wkswitch">
+          <span class="sr-only" style="position:absolute;width:1px;height:1px;overflow:hidden;clip:rect(0 0 0 0);">Switch week</span>
+          <select id="weekSwitch" aria-label="Switch to another week's update">
+            <option value="{{DATE_ISO}}" selected>{{DATE_HUMAN}}</option>
+          </select>
+        </label>
+      </div>
+    </div>
+  </div>
+
+  <main>
+{{CONTENT}}
+  </main>
+
+  <footer>
+    <div class="wrap foot-grid">
+      <span class="pwr">Powered by <span class="iq">iQ</span></span>
+      <span class="mid">FourthOS &middot; Principal AI Mandate</span>
+      <span class="gen">Generated {{DATE_ISO}}</span>
+    </div>
+  </footer>
+
+  <script>
+    /* Data-driven week switcher: read the hub manifest, list every sponsor-update week.
+       Derives the Pages base from the current path so it is not hardcoded to the repo name. */
+    (function () {
+      var sel = document.getElementById('weekSwitch');
+      if (!sel) return;
+      var path = location.pathname;
+      var root = path.split('/fourthos/')[0];               // e.g. "/ai-enablement-decks"
+      var current = "{{DATE_ISO}}";
+      fetch(root + '/decks.json', { cache: 'no-cache' })
+        .then(function (r) { return r.json(); })
+        .then(function (data) {
+          var weeks = (data.decks || [])
+            .filter(function (d) { return d.section === 'sponsor-updates' && d.date; })
+            .sort(function (a, b) { return String(b.date).localeCompare(String(a.date)); });
+          if (!weeks.length) return;
+          sel.innerHTML = '';
+          weeks.forEach(function (w) {
+            var o = document.createElement('option');
+            o.value = w.date;
+            o.textContent = (w.meta || w.date) + (w.date === current ? ' (current)' : '');
+            if (w.date === current) o.selected = true;
+            sel.appendChild(o);
+          });
+        })
+        .catch(function () { /* offline / manifest missing — keep the single current option */ });
+      sel.addEventListener('change', function () {
+        if (sel.value && sel.value !== current) location.href = root + '/fourthos/' + sel.value + '/';
+      });
+    })();
+  </script>
+</body>
+</html>
