@@ -1,0 +1,12 @@
+Produce this week's engineering digest.
+
+Cover these repositories for the last 7 days as of today (compute the window relative to this run — never a fixed date):
+REPOS:
+<FILL: one owner/repo per line, e.g.
+Rev4nchist/Continuous-Claude-v3
+>
+
+Publish the result to this Notion page (the dedicated Weekly Git Digest child page under Claude Bridge HQ — NOT the HQ root):
+NOTION_PARENT_PAGE_ID: <FILL: 32-char Notion page id>
+
+Steps: group the commits and merged PRs by project, write a clean dated report to /mnt/session/outputs/digest.md citing real commits/PRs, then idempotently publish it to the Notion page per your instructions (upsert by run-key, read back to verify). Mark anything you can't verify. Use only api.github.com and api.notion.com.

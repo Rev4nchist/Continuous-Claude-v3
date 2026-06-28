@@ -1,0 +1,83 @@
+{
+  "_comment": "SINGLE SOURCE OF TRUTH for the weekly-git-digest Claude Managed Agent. The other files in this folder (system.md, agent.json, environment.json, outcome.md, first_prompt.txt, deployment.json) are projections of this sheet. Authored keyless 2026-06-27 from locked decisions; NOT launched. Validate payloads against live docs before launch (live docs win).",
+  "meta": {
+    "name": "weekly-git-digest",
+    "owner": "Dave Hayes",
+    "problem": "Each Thursday evening, summarize the week's git activity by project and publish it into the Claude Bridge HQ Notion area, off-box, without the laptop needing to be on.",
+    "status": "PLANNED (keyless build kit staged; live launch gated on Part-C checklist)"
+  },
+  "agent": {
+    "name": "weekly-git-digest",
+    "model": "claude-opus-4-8",
+    "model_rationale": "Quality-first; a weekly run costs cents. Switch to a Sonnet-class model if cost matters more later.",
+    "version": null,
+    "system_source": "system.md (injected into agent.json at launch)",
+    "never_dos": [
+      "Never echo GITHUB_TOKEN / NOTION_TOKEN or any secret in output, logs, or the digest",
+      "Never post anywhere except the configured Notion parent page",
+      "Never fabricate commits or PRs; mark anything unverified",
+      "Never use web_search (disabled); only api.github.com and api.notion.com are reachable"
+    ]
+  },
+  "outcome": {
+    "description": "Produce and idempotently publish this week's git digest",
+    "rubric_source": "outcome.md",
+    "max_iterations": 3
+  },
+  "tools": {
+    "toolset": "agent_toolset_20260401",
+    "enabled": ["bash", "read", "write", "edit", "glob", "grep", "web_fetch"],
+    "disabled": ["web_search"],
+    "rationale": "Direct GitHub + Notion REST via bash/curl using vault-injected tokens; web_search OFF to remove a broad exfil channel (premortem #6). web_fetch stays but is contained by environment networking allowlist."
+  },
+  "connections": {
+    "vault_credentials": [
+      {"secret_name": "GITHUB_TOKEN", "type": "environment_variable", "scope": "GitHub fine-grained PAT, contents:read + pull_requests:read, on the target repos, with an expiry", "source": "<FILL: Dave creates at github.com/settings/tokens?type=beta>"},
+      {"secret_name": "NOTION_TOKEN", "type": "environment_variable", "scope": "Notion internal-integration token, shared with the dedicated child page ONLY", "source": "<FILL: Dave creates at notion.so/my-integrations>"}
+    ],
+    "config_non_secret": {
+      "NOTION_PARENT_PAGE_ID": "<FILL: the dedicated child page under Claude Bridge HQ 30e76fd7ac8281e99fe1c0b257088b34 — NOT the HQ root>",
+      "REPOS": "<FILL: newline list of owner/repo, e.g. Rev4nchist/Continuous-Claude-v3 — start small, expand in v2>"
+    }
+  },
+  "environment": {
+    "name": "weekly-git-digest-env",
+    "type": "cloud",
+    "networking": "limited -> api.github.com, github.com, *.githubusercontent.com, api.notion.com",
+    "packages": "git (jq/curl/python expected present; confirm at launch)"
+  },
+  "schedule": {
+    "type": "cron",
+    "expression": "0 19 * * 4",
+    "expression_meaning": "Thursday 19:00 (mid your 6-9pm window; cron fires at one minute, not a range)",
+    "timezone": "<FILL: confirm Dave IANA tz; default America/New_York>",
+    "initial_events_source": "deployment.json (the same outcome kickoff as first_prompt.txt + outcome.md)"
+  },
+  "idempotency": {
+    "run_key": "weekly-git-digest:<ISO-week>:<sha1(sorted REPOS)[:8]>",
+    "policy": "Search the Notion parent page for an existing block tagged with the run-key; if found, replace that section's children (upsert); if not, append a new dated section. NEVER blind-append. Read back to verify. Optional memory store persists returned block IDs across runs.",
+    "rationale": "Premortem #2 (duplicate posts on retry/re-fire) + #4 (Notion block-id stability)"
+  },
+  "evals": {
+    "case_01": "<FILL: a known past week's commits -> expected grouping; save the first verified run as the golden baseline>"
+  },
+  "next_directions": [
+    {"v1": "Wire a real Notion connector via MCP instead of direct API, if richer formatting is wanted"},
+    {"v2": "Expand REPOS coverage; add a per-project PR-review-time summary"},
+    {"v3": "Post-cron health monitor as its own tiny scheduled check (G10) -> alert on missing/failed run"}
+  ],
+  "defaults_applied": ["model claude-opus-4-8", "max_iterations 3", "cloud env", "drafts-to-Notion only (no other side effects)"],
+  "gate_status_part_c": {
+    "G1_api_probe": "BLOCKED — env ANTHROPIC_API_KEY returns 401 invalid x-api-key; need a valid Console key",
+    "G2_notion_child_page": "PENDING Dave — create child page + integration, share page with integration, capture page id",
+    "G3_github_token": "PENDING Dave — fine-grained contents:read+pull_requests:read + expiry; pre-run permission check",
+    "G4_idempotent_runkey": "DESIGNED — encoded in system.md + outcome.md (verify in first live run)",
+    "G5_secret_hygiene": "DESIGNED — vault env-var injection only; secret-scan before Notion write; never inline",
+    "G6_web_search_off": "DONE in agent.json (web_search disabled) + environment networking allowlist",
+    "G7_cost_guard": "DESIGNED — max_iterations 3; set workspace spend cap; pause/delete documented in LAUNCH.md; cma-spend.jsonl ledger",
+    "G8_supply_chain": "DONE — upstream skills vendored @05e9627, G8-audited",
+    "G9_timezone_window": "PENDING Dave tz; ISO window bounds in system.md run-key",
+    "G10_post_cron_monitor": "TODO — add after first successful run (next_directions v3)",
+    "G11_e2_acceptance": "PENDING Dave — confirm repo set acceptable to process in non-ZDR cloud"
+  }
+}

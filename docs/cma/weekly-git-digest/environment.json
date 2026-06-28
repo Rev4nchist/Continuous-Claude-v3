@@ -1,0 +1,18 @@
+{
+  "name": "weekly-git-digest-env",
+  "config": {
+    "type": "cloud",
+    "networking": {
+      "type": "limited",
+      "allowed_hosts": ["api.github.com", "github.com", "*.githubusercontent.com", "api.notion.com"],
+      "allow_mcp_servers": false,
+      "allow_package_managers": true
+    },
+    "packages": { "apt": ["git"] }
+  },
+  "_notes": [
+    "networking.limited is a containment control (premortem #6/E2): the sandbox can ONLY reach GitHub + Notion. Booleans default false; allow_package_managers:true is needed to apt-install git.",
+    "curl/python3/jq are usually preinstalled in the sandbox — if a launch run can't find one, add it under packages.apt and recreate the env.",
+    "Hostnames only, no scheme. github.com is needed for git clone over HTTPS if you clone instead of using the REST API."
+  ]
+}

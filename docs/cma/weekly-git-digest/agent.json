@@ -1,0 +1,20 @@
+{
+  "name": "weekly-git-digest",
+  "model": "claude-opus-4-8",
+  "system": "<INJECT system.md AT LAUNCH — see LAUNCH.md step 3; the API rejects this placeholder>",
+  "tools": [
+    {
+      "type": "agent_toolset_20260401",
+      "configs": [
+        { "name": "web_search", "enabled": false }
+      ]
+    }
+  ],
+  "description": "Weekly Thursday git-history to Notion digest (off-box, scheduled). web_search disabled; reaches only GitHub + Notion APIs via vault-injected tokens.",
+  "_notes": [
+    "model may be a string ('claude-opus-4-8') or an object ({id: claude-opus-4-8}, +speed:fast) — confirm against live docs.",
+    "tools MUST be the toolset wrapper; never list built-ins individually (API 400). web_search is the only built-in disabled.",
+    "NO mcp_servers in v0 — the agent calls GitHub + Notion REST directly via bash/curl using vault env-var tokens.",
+    "system is injected from system.md at launch (jq --rawfile) so it stays readable/editable here."
+  ]
+}

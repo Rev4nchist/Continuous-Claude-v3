@@ -1,0 +1,25 @@
+{
+  "name": "weekly-git-digest",
+  "agent": "<FILL: AGENT_ID from launch step 4>",
+  "environment_id": "<FILL: ENV_ID from launch step 2>",
+  "vault_ids": ["<FILL: VAULT_ID holding GITHUB_TOKEN + NOTION_TOKEN>"],
+  "initial_events": [
+    {
+      "type": "user.define_outcome",
+      "description": "<INJECT first_prompt.txt AT LAUNCH — relative dates only>",
+      "rubric": { "type": "text", "content": "<INJECT outcome.md AT LAUNCH>" },
+      "max_iterations": 3
+    }
+  ],
+  "schedule": {
+    "type": "cron",
+    "expression": "0 19 * * 4",
+    "timezone": "<FILL: confirm Dave IANA tz; default America/New_York>"
+  },
+  "_notes": [
+    "POST to /v1/deployments?beta=true (query param, not the header). initial_events REPLAY VERBATIM every run — keep dates relative.",
+    "cron '0 19 * * 4' = Thursday 19:00 wall-clock in the timezone (DST-aware). Read back schedule.upcoming_runs_at to confirm.",
+    "After create, do ONE manual fire to test before trusting the cron: POST /v1/deployments/{id}/run?beta=true with body {}.",
+    "OFF SWITCH: POST /v1/deployments/{id}/pause?beta=true (stop firing) / unpause / archive. Set a workspace spend cap too."
+  ]
+}
