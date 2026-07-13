@@ -49,16 +49,15 @@ export function buildOutcomeMessage(sessionName: string, handoffName: string, ou
 Session ended: ${sessionName}
 Latest handoff: ${handoffName}
 
-To mark outcome and improve future sessions:
+Record the outcome in the handoff's YAML frontmatter (outcome: SUCCEEDED |
+PARTIAL_PLUS | PARTIAL_MINUS | FAILED), then index it so recall surfaces it:
 
-  cd ~/.claude && uv run python scripts/core/artifact_mark.py \\
-    --handoff <handoff-id> \\
-    --outcome SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED
+  cd opc && uv run python scripts/core/index_handoffs.py --apply \\
+    --only-path thoughts/shared/handoffs/${sessionName}/<this-handoff>.yaml
 
-To find handoff ID, query the database:
-
-  sqlite3 .claude/cache/artifact-index/context.db \\
-    "SELECT id, file_path FROM handoffs WHERE session_name='${sessionName}' ORDER BY indexed_at DESC LIMIT 1"
+index_handoffs.py is idempotent (re-runs insert nothing new) and writes to
+archival_memory — the canonical recall path. Do NOT use artifact_mark.py:
+the SQL handoffs table it targets is deprecated/unpopulated.
 
 Outcome meanings:
   SUCCEEDED      - Task completed successfully

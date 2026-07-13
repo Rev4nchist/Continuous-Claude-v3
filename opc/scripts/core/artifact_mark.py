@@ -4,6 +4,21 @@ USAGE: artifact_mark.py --handoff ID --outcome OUTCOME [--notes NOTES]
        artifact_mark.py --latest --outcome OUTCOME [--notes NOTES]
        artifact_mark.py --get-latest-id
 
+DEPRECATED (2026-07-13): This writes to the `handoffs` SQL table, which is no
+longer populated by any current tooling — its newest row dates to January.
+`--latest` therefore silently marks a STALE row rather than the handoff you
+just created (the mis-mark this deprecation was written to stop).
+
+The live handoff-outcome path is the YAML frontmatter (`outcome:`) plus
+`index_handoffs.py --apply --only-path <handoff>`, which lands per-field
+entries (with outcome) in `archival_memory` — the canonical recall path.
+create_handoff/SKILL.md and the session-outcome hook now point there.
+
+Do not add new callers of this script. Left in place (no table drop) because
+it is harmless and removal is not worth the risk. If you need to backfill the
+`handoffs` table for some other reason, mark by explicit `--handoff <id>`,
+never `--latest`.
+
 Mark a handoff with user outcome in the database (PostgreSQL or SQLite).
 
 Supports PostgreSQL (via DATABASE_URL or CONTINUOUS_CLAUDE_DB_URL) with

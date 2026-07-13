@@ -89,9 +89,9 @@ files:
 **The statusline parser looks for EXACTLY `goal:` and `now:` - nothing else works.**
 ---
 
-### 3. Mark Session Outcome (REQUIRED)
+### 3. Confirm Outcome & Index into Recall (REQUIRED)
 
-**IMPORTANT:** Before responding to the user, you MUST ask about the session outcome.
+**IMPORTANT:** Before responding to the user, you MUST confirm the session outcome.
 
 Use the AskUserQuestion tool with these exact options:
 
@@ -104,15 +104,24 @@ Options:
   - FAILED: Task abandoned or blocked
 ```
 
-After the user responds, mark the outcome:
+**The outcome lives in the YAML frontmatter** (`outcome:` field, written in step 2 — it is REQUIRED there). After the user responds, make sure that frontmatter value matches their choice (edit the handoff file if it differs).
+
+Then index the handoff you just created into `archival_memory` so recall can surface it — with its outcome — in future sessions:
+
 ```bash
-# Mark the most recent handoff (works with PostgreSQL or SQLite)
-# Use git root to find project, then opc/scripts/core/
+# Index THE handoff you created in step 1 (not "whatever is newest in a stale table").
+# index_handoffs.py is idempotent — re-runs on the same path insert nothing new.
 PROJECT_ROOT=$(git rev-parse --show-toplevel 2>/dev/null || echo "${CLAUDE_PROJECT_DIR:-.}")
-cd "$PROJECT_ROOT/opc" && uv run python scripts/core/artifact_mark.py --latest --outcome <USER_CHOICE>
+HANDOFF_PATH="thoughts/shared/handoffs/{session-name}/YYYY-MM-DD_HH-MM_description.yaml"  # the file from step 1
+cd "$PROJECT_ROOT/opc" && uv run python scripts/core/index_handoffs.py --apply --only-path "$HANDOFF_PATH"
 ```
 
-This command auto-detects the database (PostgreSQL if configured, SQLite fallback).
+This parses the handoff's fields (goal, done, decisions, findings, next, blockers) into per-field
+recall entries tagged with `source=handoff` and `outcome=<your outcome>`, so a future session's
+`/recall` surfaces this work with the correct outcome.
+
+> Do NOT use `artifact_mark.py --latest` — the `handoffs` SQL table it writes is deprecated/unpopulated,
+> and `--latest` silently marks a stale January row. See that script's docstring.
 
 ### 4. Confirm completion
 
