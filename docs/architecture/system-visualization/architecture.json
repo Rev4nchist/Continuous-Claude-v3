@@ -3,7 +3,7 @@
     "name": "Continuous Claude v3",
     "tagline": "Memory + agents + hooks + skills scaffolding over Claude Code.",
     "description": "Continuous Claude v3 (CCv3) is a scaffolding layer on top of Anthropic's Claude Code CLI. It adds persistent semantic memory, 31 specialized agents, ~90 lifecycle hooks, 145+ skills, a project knowledge tree, session continuity (handoffs + ledgers), a 5-layer AST analysis pipeline (TLDR), and a Docker-sandboxed Recursive Language Models (RLM) subsystem for analyzing very large corpora. The result is an AI coding workshop that remembers across sessions, dispatches specialist sub-agents, enforces house rules automatically, and resumes work cleanly across hours, days, and weeks.",
-    "lastVerified": "2026-07-17",
+    "lastVerified": "2026-07-18",
     "platform": "Windows + WSL + Docker",
     "sources": [
       "docs/continuous-claude-explained.md",
@@ -16,7 +16,7 @@
       "docs/architecture/rlm/rlm-architecture.md",
       "docs/memory-architecture.md"
     ],
-    "lastCommit": "2026-07-17T16:33:39-05:00",
+    "lastCommit": "2026-07-18T16:17:27-05:00",
     "stats": {
       "totalHooks": 112,
       "totalAgents": 43,

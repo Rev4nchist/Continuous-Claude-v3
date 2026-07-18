@@ -21,6 +21,8 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] feat(self-improvement): triage cockpit — deterministic HTML proposal-review + prioritize + JSON/MD export (2026-07-18) `6e91693`
+- [x] docs(roadmap): absorb hook-appended completed entry (2026-07-18) `a37a9b7`
 - [x] docs(self-improvement): backfill INDEX to 16/16, commit 07-18 observability proposal; unify ROADMAP (2026-07-18) `ee7d026`
 - [x] docs(roadmap): close out reporting optimization track + commit sweep/viz state churn (2026-07-18) `3b6450a`
 - [x] feat(reporting): proposal 07 — /reporting ops verbs (status/run/heal) folded into the reporting skill (2026-07-17) `c38926b`
