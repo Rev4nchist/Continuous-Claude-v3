@@ -1,0 +1,2 @@
+# Build artifact — regenerate with `node build.mjs`
+out/
