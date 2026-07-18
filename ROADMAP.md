@@ -1,12 +1,13 @@
 # Project Roadmap
 
 ## Current Focus
-**Steady-state maintenance** — reporting optimization track COMPLETE for local work (2026-07-17: 01–03 + 05 + 07 + 08 + 09 shipped; 04 first slice shipped, remainder = efficiency Phase 2 dedicated session; 06 awaiting Dave's IT ticket submission). Next up: verify first unattended fourthos-weekly run Thu 2026-07-23 07:00.
-**Fable — close-out (CLOSED)**
-- Fable build work is DONE and CLOSED (harvest + corpus + standing trap harness; PRs #20/#21/#22). **Verified 2026-07-16:** nothing Fable-derived is installed on ANY active behavioral surface — no rule, agent prompt, skill judgment text, hook, template, or `settings.json` registration (two independent greps: zero). The always-on `reasoning-discipline` rule was cancelled by the `no_lift` trap gate (Opus 4.8 scored 16/16 with and without it — it already saturates that judgment ceiling). Every Fable artifact is inert docs under `docs/fable-manual/`. **No hindrance to Opus agents; nothing to revert.**
-- The only change that actually touched Opus was the separate model-tier retier (PR #17: explicit 12 Opus / 25 Sonnet, `kraken` → Sonnet) + one global `effortLevel: high` — a deliberate, reversible cost/judgment-density call, not a degradation.
-- Two Fable follow-ups intentionally PARKED as backlog (below) — each gated behind the standing trap harness before any prompt-layer change ships, so a future Opus-hindrance can't land unmeasured.
-- claude-for-sales SKO package parked until end of July (built + merged PR #25; remainder is human-gated).
+**Self-Improvement visibility + Reporting convergence** — unified 2026-07-18; supersedes the two split session plans. Single source of truth: `~/.claude/plans/we-had-been-working-quirky-planet.md`.
+
+Priority order (one queue across both former workstreams):
+1. **Self-Improvement Triage Cockpit** (Part B, this session) — the daily loop writes proposals to disk that Dave can't see (Reports Hub row = "—"). Build a deterministic HTML triage cockpit (`scripts/self-improvement/triage/`: expandable 7-section cards, prioritize→queue with Now/Next/Later/Someday buckets, JSON+MD export) so proposals become reviewable, plus a round-trip contract CC turns into ROADMAP entries + project plans. Its hosted URL later becomes the `artifactUrl` that fixes the "—".
+2. **Reporting efficiency Phase 2** — batched STDIN bind + meaning-based hash-gates + ROADMAP-guard H1/H2 fix. Plan `~/.claude/plans/mellow-enchanting-zebra.md`; handoff `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`. Phase 1 shipped: `bc19ef2 9090e0f 9ff3414 7fcee47`.
+3. **Self-Improvement pipeline wiring** (Part C) — omit-`--artifactUrl` quick fix so the registry row writes again; host cockpit on GitHub Pages; wire regen into `run-research.ps1`; recreate broken hub linked-view; silent-failure detection (07-06/07-13 advanced the cursor but wrote no proposal).
+- Started: 2026-07-18
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.
@@ -234,12 +235,13 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] Eliminate Excessive Permission Prompts for Autonomous Agent Tasks (2026-04-02)
 
 ## Planned
-*(curated 2026-07-17 — stale entries removed with evidence: Agent+Skill Fleet Review shipped as PR #17 `c2a9db2`; CCv3-Hardening through Phase C shipped — codegraph LIVE 2026-06-07 per `code-intel-boundaries.md`; WS-0/WS-1 + hardening waves shipped 2026-06-28/29 per `docs/system-update/BACKLOG.md` (Wave 0 + Wave 1 DONE); `snapshot/ccv3-system-update` close-out executed via the 2026-07-01 plan; early hygiene gate + scope decision long-since resolved.)*
+- [ ] **Self-Improvement loop — visibility & pipeline** (unified 2026-07-18, plan `~/.claude/plans/we-had-been-working-quirky-planet.md`): Part B triage cockpit `scripts/self-improvement/triage/` (this session) → Part C wiring: omit-`--artifactUrl` quick fix (registry row writes again), host cockpit on GitHub Pages `ai-enablement-decks`, wire regen into `run-research.ps1`, recreate broken hub linked-view (`reportRunsViews` re-pin in `report-runs.ids.json`), silent-failure detection for cursor-advanced-but-no-file runs (07-06 doc-rag, 07-13 hooks). INDEX backfilled to 16/16 this session. (high priority)
+- [ ] Fable — close-out (CLOSED) (high priority)
 - [ ] **Reporting optimization — remainder** (05/07/08/09 SHIPPED 2026-07-17: `62ff375` conventions, `b534dd5` health strip + trust metrics, `c38926b` /reporting ops verbs; statuses live in artifact `a45fad78`): **04 remainder** = reporting-efficiency Phase 2 (batched STDIN bind + meaning-based hash-gates — spec'd with premortem mitigations in `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`; dedicated session; dashboard-sync deterministic repoint stays BLOCKED on GAP-1..4) · **06** unattended VP Weekly — IT ticket DRAFTED (`thoughts/shared/handoffs/reporting-optimization/it-ticket-batch-logon-draft.md`), Dave submits · manual follow-ups: live 7/02 hub-callout cleanup + reviewed-date stamps on human sections; ROADMAP-guard hook fix (H1/H2 file:line spec in the efficiency handoff) (high priority)
-- [ ] Verify first unattended fourthos-weekly run — Thu 2026-07-23 07:00; check `~/.claude/logs/fourthos-weekly/` + verify-run.mjs classification (high priority, time-gated)
+- [ ] Verify first unattended fourthos-weekly run — Thu 2026-07-23 07:00; check `~/.claude/logs/fourthos-weekly/` + verify-run.mjs classification (high priority)
 - [ ] fourthos v4 report enhancements — design-approved, staged on main via PR #12; dedicated session, resolve the 4 open choices first (memory: `fourthos-v4-build-queued`) (medium priority)
 - [ ] HELM — Notion-first command center (pivoted 2026-07-03: engine unchanged, presentation = Notion Projects DB + HTML daily brief via `ntn`; local SPA deferred behind daily-use gate) (medium priority)
-- [ ] Grok check-back — externally blocked (corp egress). When probe.ps1 shows READY: `/harness-update grok` (0.2.99 unverified) → grok-adversary pass on the parked plan. IT allowlist ticket for `*.x.ai` (medium priority, externally gated)
+- [ ] Grok check-back — externally blocked (corp egress). When probe.ps1 shows READY: `/harness-update grok` (0.2.99 unverified) → grok-adversary pass on the parked plan. IT allowlist ticket for `*.x.ai` (medium priority)
 - [ ] Fleet-review residuals (post-PR #17): DEL-11 curation, Pocock 7-point deep-review pass, downgrade canary, `updatedInput` spike (low priority)
 - [ ] CCv3 system-update backlog remainder — Tier 2 structural arcs, Tier 2b multi-session coordination, Tier 3 strategic programs, 12 deletions: tracked in `docs/system-update/BACKLOG.md` (medium priority)
 - [ ] WS-2 remainder: Phase B enforcement teeth (facade shipped inert; C codegraph is LIVE) → D memory bridge (needs GIN index) → E observability (medium priority)
@@ -255,6 +257,18 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-07-18: Unified Session Plan — Merge the two workstreams, make the Self-Improvement loop visible & actionable
+**Key Decisions:**
+- Reporting efficiency/optimization: — Phase 1 shipped & pushed (`bc19ef2`, `9090e0f`, `9ff3414`, `7fcee47`); Phase 2 (batched STDIN bind + meaning-based hash-gates) + a spec'd ROADMAP-guard hook fix remain. Plan `~/.claude/plans/mellow-enchanting-zebra.md`; handoff `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`.
+- Self-improvement loop: — a daily 7:30am Task-Scheduler job (`CCv3-Self-Improvement-Research`) researches one component and writes a proposal `.md`. **The problem Dave hit: the loop's output is invisible.* The Reports Hub "Self-Improvement Research" row shows Artifact = "—" (no report linked), and an anchor on the hub is broken.
+- The two workstreams actually converge. The self-improvement "no report" symptom is a *reporting-registry bug, and its fix (give proposals a real hosted URL) is the same artifact Dave wants for triage. One build closes both.
+- "No report in Notion" / Artifact = "—":: `run-research.ps1:100-107` passes a **local repo path* (`docs/self-improvement/proposals/<date>-<component>.md`) as `--artifactUrl`. Since proposal 08 (`62ff375`, 2026-07-17) `make-run.mjs` `buildRun()` **hard-rejects any non-`http(s)` URL* → throws exit 1 → `upsert.mjs` never runs → **no registry row is written at all**. The visible row is stale (pre-08). Confirmed in `.claude/logs/self-improvement/2026-07-18.log:19`: `make-run emitted no path (exit=1) -- skipping upsert`.
+- Broken anchor: `…#39576fd7ac8281d6be38000ce9bbd794` = the shared **"All Report Runs — by Type (hub)"* linked-view block (`reportRunsViews` in `report-runs.ids.json`), NOT Self-Improvement-specific. It was appended headless with no owning heading and was plausibly swept up by one of the 3 racing hub writers doing a heading→end-of-page splice. Repo can't confirm live Notion state — needs a live read to recreate.
+
+**Files:** ~/.claude/plans/mellow-enchanting-zebra.md, thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md, docs/self-improvement/proposals/<date>-<component>.md, make-run.mjs, upsert.mjs, report-runs.ids.json, INDEX.md, PENDING-DIGEST.md
+
+**Verification:** Part A:: `git -C C:/Users/david.hayes/continuous-claude log --oneline -3` shows the churn commit; `INDEX.md` has 16 rows (one per `proposals/*.md`); `ROADMAP.md` shows both tracks + priority order.
+
 ### 2026-07-15: /init-project Review + Hardening Plan
 **Key Decisions:**
 - Interview → CLAUDE.md: — auto-scan (package.json/README/configs/git), confirm with user, fill 8-section template from `references/claude-md-template.md`
@@ -262,17 +276,11 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Sentry: (conditional, deploy targets) → **7. E2E scaffold* → **8. dev-server scripts* (conditional web) → **9. summary**
 - Hook table at bottom: all names verified real in dist except "memory-extraction" (actual family: `pre-compact-extract`, `session-end-extract`, `periodic-extract`)
 - P1 — would cause a wrong outcome on the next run: *
-
-**Implementation:**
 - Normalize schema: in BOTH `continuous-claude/.claude/project-registry.json` and `~/.claude/project-registry.json` to the project-registry skill's schema: `name, path, stack[] (array), description, port, url, devCommand, status` (+ keep optional extras `github`, `deploy`, `kind`, `notes`, `sentryProject`, `linearTeam`). Convert the 7 string-stack entries to arrays; add missing `description` fields; make the two files byte-identical (repo ordering wins).
 - Add `project-registry.json` to forward sync: edit `scripts/sync-to-active.sh` to copy `.claude/project-registry.json` → `~/.claude/`, and add a row to `rules/sync-known-gaps.md`.
 - Rewrite init-project Phase 5: write the REPO copy (`~/continuous-claude/.claude/project-registry.json`) using the array schema, then run `bash ~/continuous-claude/scripts/sync-to-active.sh` (or copy both). Keep the port-conflict check, sourcing ports from the registry itself.
 - `references/dev-server-pattern.md`: delete the static port list; replace with "derive used ports from `~/.claude/project-registry.json` at run time; assign next free 3xxx."
 - `rules/dev-server-cleanup.md` + `rules/project-registry.md`: replace/trim their static tables the same way (keep 2–3 rows as *examples*, marked as examples, or point at the JSON). Prevents this class of rot permanently.
-
-**Files:** references/claude-md-template.md, knowledge_tree.py, .serena/project.yml, .mcp.json, ~/.claude/project-registry.json, .claude/project-registry.json, references/dev-server-pattern.md, rules/dev-server-cleanup.md
-
-**Verification:** `node -e` parse both registry copies → identical, all `stack` arrays, all have `description`.
 
 ### 2026-07-03: Notion Platform Integration + Helm Notion-First Pivot
 **Key Decisions:**
@@ -297,9 +305,3 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - The review is READ-ONLY: — no fixes during discovery/verification/synthesis. Fixes happen only in Phase 4 (quick wins) after ratification.
 - Windows-safe commands (array-arg spawns, `Remove-Item -LiteralPath`, no brace expansion). **Never run the full parallel vitest suite** (known hang on a Windows daemon/socket suite) — no test execution during the review at all.
 - Gates G4 (no parallel edits to memory files), G5 (WS-0.1 blocked), G6 (P3 archive cross-check) remain binding for the fix arc.
-
-### 2026-06-06: CCv3-Hardening — Session 9 (reconciliation + P1 bus-bias)
-**Key Decisions:**
-- Step 0 repo reconciliation DONE: herd-fix PR #8 opened; 7 logical reconciliation commits on `chore/session9-reconciliation` (PR #9); 4 junk stderr-artifact files deleted; `.codex/` mirror + `tools/PerfView.exe` gitignored; leading-# memory-eval doc renamed + inbound ref fixed.
-- P1 bus-bias hybrid-recall lift: **KEEP ENABLED** (user-ratified). Verified warm gate +7.3% top-score / flat 69% hit-rate (n=13, corpus 584); read-only PASS. The documented +33.6%/63->88% does NOT reproduce (stale snapshot; repr-only ~+14.5% matches the original +15.3%, diluted to +7.3% by the 5 STRONG cases). Deferred: tune focus-term weighting. Memory id 79da5d25.
-- Two live-hazard findings flagged for follow-up (out of this push's scope): (a) a `store_learning.py` invocation with unquoted shell metacharacters creates junk files under `opc/` (one regenerated mid-session); (b) the `post-plan-roadmap` hook clobbered this Current Focus with a foreign project's goal (Salesforce/FastMCP plan `abstract-coral`) — the cross-project contamination guard did not catch it; this entry restores the correct session-9 record.
