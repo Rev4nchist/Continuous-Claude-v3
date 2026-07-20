@@ -134,6 +134,24 @@ export function scheduleFormatMismatches(schedule = SCHEDULE) {
     .map((e) => ({ type: e.type, scheduled: e.periodFormat, expected: PERIOD_FORMAT_BY_TYPE[e.type] }));
 }
 
+// --- per-cadence staleness threshold (period-aware drift) -----------------------
+// Weekly reports legitimately run ~7 days apart, so a flat 48h daily threshold
+// cries wolf on a healthy weekly BETWEEN runs (the false "stale"/"in drift" this
+// plan fixes). One PINNED number per cadence, resolved from the SAME SCHEDULE the
+// silent-miss watchdog uses — so the hub, the CLI drift check, and the watchdog's
+// own report-only freshness signal can never independently drift on the number:
+//   daily  = DEFAULT_MAX_AGE_HOURS (48h, unchanged)
+//   weekly = 192h (7d cadence + a 24h grace)
+// GUARDED: an unknown/missing cadence (a type absent from SCHEDULE, or a future
+// cadence value) falls back to the daily DEFAULT — never `undefined` (the crash
+// guard). `DEFAULT_MAX_AGE_HOURS` is read at CALL time only (never at module-eval),
+// which keeps the existing watchdog<->check-drift import cycle safe.
+export const MAX_AGE_HOURS_WEEKLY = 192;
+export function maxAgeForType(type, schedule = SCHEDULE) {
+  const cadence = schedule.find((e) => e.type === type)?.cadence;
+  return cadence === 'weekly' ? MAX_AGE_HOURS_WEEKLY : DEFAULT_MAX_AGE_HOURS;
+}
+
 // --- local-time date helpers (pure) ---------------------------------------------
 // Exported (proposals 05/09): the hub health strip and trust-metrics rollup reuse
 // these instead of re-deriving local-time day math independently.
@@ -316,8 +334,11 @@ export function buildMissRun(entry, period, now) {
 // absence-only), so existing callers/behavior are unchanged.
 export function evaluateEntry(entry, now, {
   dsId = REPORT_RUNS_DS_ID, query = queryDataSource, upsert = upsertReportRun, dryRun = false,
-  maxAgeHours = DEFAULT_MAX_AGE_HOURS,
+  maxAgeHours = null,
 } = {}) {
+  // Per-cadence by default (weekly widens to 192h so a healthy weekly between runs
+  // is not reported stale); an explicit maxAgeHours still overrides (CLI --max-age-hours).
+  const effMaxAge = maxAgeHours ?? maxAgeForType(entry.type);
   const c = computeCandidate(entry, now);
   if (!c.due) return { type: entry.type, checked: false };
 
@@ -334,7 +355,7 @@ export function evaluateEntry(entry, now, {
   if (rows.length > 0) {
     return {
       type: entry.type, checked: true, period: c.period, status: 'ok',
-      freshness: assessFreshness(rows, { now, maxAgeHours, type: entry.type }),
+      freshness: assessFreshness(rows, { now, maxAgeHours: effMaxAge, type: entry.type }),
     };
   }
 
@@ -361,7 +382,7 @@ export function evaluateEntry(entry, now, {
 export function runWatchdog({
   now = new Date(), dryRun = false, schedule = SCHEDULE,
   dsId = REPORT_RUNS_DS_ID, query = queryDataSource, upsert = upsertReportRun,
-  maxAgeHours = DEFAULT_MAX_AGE_HOURS,
+  maxAgeHours = null,
 } = {}) {
   // Registry convention parity (proposal 08): warn loudly — but stay non-fatal,
   // this is an observability sweep that must always exit 0 — on any REPORT_TYPES
@@ -392,7 +413,10 @@ function parseNow(argv) {
 function main() {
   const argv = process.argv.slice(2);
   const dryRun = argv.includes('--dry-run');
-  const maxAgeHours = parseMaxAgeHours(argv);
+  // Only a flat override when --max-age-hours is EXPLICITLY passed; otherwise null
+  // -> per-cadence resolution (maxAgeForType) inside evaluateEntry.
+  const hasMaxAgeFlag = argv.includes('--max-age-hours') || argv.some((a) => a.startsWith('--max-age-hours='));
+  const maxAgeHours = hasMaxAgeFlag ? parseMaxAgeHours(argv) : null;
   const now = parseNow(argv);
   if (Number.isNaN(now.getTime())) {
     throw new Error(`--now value did not parse to a valid date/time`);
@@ -411,7 +435,8 @@ function main() {
       // additive freshness verdict is REPORT-ONLY — a stale/malformed present row
       // is surfaced loudly but never written and never affects the exit code.
       if (r.freshness?.stale) {
-        console.log(`  ${r.type}: OK-but-STALE — a row exists for period ${r.period}, but its newest Run Date is ${r.freshness.reason} (age=${r.freshness.ageHours ?? 'n/a'}h > ${maxAgeHours}h) [report-only, not written]`);
+        const effThreshold = maxAgeHours ?? maxAgeForType(r.type);
+        console.log(`  ${r.type}: OK-but-STALE — a row exists for period ${r.period}, but its newest Run Date is ${r.freshness.reason} (age=${r.freshness.ageHours ?? 'n/a'}h > ${effThreshold}h) [report-only, not written]`);
       } else {
         console.log(`  ${r.type}: OK — a row exists for period ${r.period} (age=${r.freshness?.ageHours ?? 'n/a'}h)`);
       }

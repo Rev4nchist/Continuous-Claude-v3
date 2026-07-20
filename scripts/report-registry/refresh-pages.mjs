@@ -53,8 +53,8 @@ import {
 } from './config.mjs';
 import {
   SCHEDULE, nextExpectedDeadline, isWatchdogMissRow, ymd,
+  candidateForDay, startOfDay, addDays,
 } from './watchdog.mjs';
-import { computeDrift, DEFAULT_MAX_AGE_HOURS } from './check-drift.mjs';
 import { computeTrustMetrics, renderTrustRollupBlocks } from './trust-metrics.mjs';
 
 // The two section headings this refresh owns/writes.
@@ -127,14 +127,25 @@ export function extractRun(row) {
 // ancient history as the "Current run". Rows whose Summary starts with
 // "backfill"/"remap" (the corrective-row convention) are excluded from the pick
 // unless a type has ONLY corrective rows.
-function isCorrectiveRow(r) {
+function summaryText(r) {
   const rt = r?.properties?.Summary?.rich_text;
-  const s = (Array.isArray(rt) ? rt.map((t) => t?.plain_text || '').join('') : '').trim().toLowerCase();
+  return (Array.isArray(rt) ? rt.map((t) => t?.plain_text || '').join('') : '').trim();
+}
+function isCorrectiveRow(r) {
+  const s = summaryText(r).toLowerCase();
   return s.startsWith('backfill') || s.startsWith('remap');
+}
+// A synthetic row is a corrective (backfill/remap) OR a watchdog miss-row. Both carry
+// TODAY'S Run Date but do NOT represent a genuine pipeline success, so they must never
+// win "Current run"/Status/Watchdog over a real row for the same period (WS1b): once a
+// genuine Self-Improvement row lands again, a same-period `watchdog:` Failed miss-row
+// could otherwise win by date and show "missing" for a day that actually succeeded.
+function isSyntheticRow(r) {
+  return isCorrectiveRow(r) || isWatchdogMissRow(summaryText(r));
 }
 export function pickNewest(rows) {
   const all = rows || [];
-  const genuine = all.filter((r) => !isCorrectiveRow(r));
+  const genuine = all.filter((r) => !isSyntheticRow(r));
   const pool = genuine.length > 0 ? genuine : all;
   let best = null;
   let bestMs = -Infinity;
@@ -190,24 +201,63 @@ export function nextExpectedLabel(type, { schedule = SCHEDULE, now = new Date() 
   }
 }
 
-// "Watchdog" verdict — reuses check-drift's computeDrift (the SAME staleness
-// definition check-drift.mjs and watchdog.mjs's report-only freshness signal
-// already share) plus watchdog.mjs's isWatchdogMissRow marker:
+// The run's LOCAL calendar day as 'YYYY-MM-DD'. A bare date is ALREADY a local
+// calendar day (returned as-is — Date.parse would misread a bare 'YYYY-MM-DD' as UTC
+// midnight and shift it to the prior evening in a negative-offset zone); an ISO
+// instant is converted to its local day via ymd(). null when unparseable.
+function runLocalDay(runDate) {
+  const s = String(runDate ?? '');
+  if (/^\d{4}-\d{2}-\d{2}$/.test(s)) return s;
+  const ms = Date.parse(s);
+  return Number.isNaN(ms) ? null : ymd(new Date(ms));
+}
+
+// The most-recent expected period whose deadline+grace has ALREADY passed as of
+// `now`, or null if none has (e.g. a brand-new schedule with nothing due yet).
+// Reuses candidateForDay so the candidate-day/deadline mapping is IDENTICAL to the
+// real silent-miss watchdog's — no magic thresholds. Bounded walk-back: a weekly
+// cadence repeats within 7 days, a daily within 2, so ≤8 days always finds it.
+function mostRecentPassedPeriod(entry, now) {
+  let day = startOfDay(now);
+  const maxBack = entry.cadence === 'weekly' ? 8 : 2;
+  for (let i = 0; i <= maxBack; i += 1) {
+    if (entry.cadence === 'weekly' && day.getDay() !== entry.weekday) {
+      day = addDays(day, -1);
+      continue;
+    }
+    const { candidateDay, deadline, period } = candidateForDay(entry, day);
+    if (deadline.getTime() <= now.getTime()) return { candidateDay, deadline, period };
+    day = addDays(day, -1);
+  }
+  return null;
+}
+
+// "Watchdog" verdict — PERIOD-PRECISE (reuses watchdog.mjs's own SCHEDULE +
+// candidateForDay cadence logic; no maxAge threshold, so a healthy WEEKLY report
+// between runs never reads "stale"):
 //   'missing'     — the newest known row for this type IS a watchdog miss-row
 //                    (a genuine silent miss the watchdog already caught).
-//   'stale'       — a real row exists but its Run Date is older than maxAgeHours.
-//   'present'     — a real, fresh row exists.
+//   'stale'       — a real row exists but its Run Date predates the most-recent
+//                    expected period whose deadline+grace has passed (a genuinely
+//                    missed run — flagged right after its own weekday+grace, so a
+//                    dead weekly cannot masquerade as healthy for a week).
+//   'present'     — a real row covering the most-recent expected period (or newer),
+//                    or nothing is due yet.
 //   'no runs'     — the type has zero registry rows at all.
 //   'unscheduled' — the type has no watchdog SCHEDULE entry (parity violation).
-export function watchdogVerdict(type, run, {
-  schedule = SCHEDULE, now = new Date(), maxAgeHours = DEFAULT_MAX_AGE_HOURS,
-} = {}) {
+export function watchdogVerdict(type, run, { schedule = SCHEDULE, now = new Date() } = {}) {
   const entry = schedule.find((e) => e.type === type);
   if (!entry) return 'unscheduled';
   if (!run) return 'no runs';
   if (isWatchdogMissRow(run.summary)) return 'missing';
-  const [drift] = computeDrift({ [type]: run.runDate }, { maxAgeHours, now: now.getTime(), types: [type] });
-  return drift.drift ? 'stale' : 'present';
+  const expected = mostRecentPassedPeriod(entry, now);
+  if (!expected) return 'present'; // nothing due yet — an existing run is fine
+  const runDay = runLocalDay(run.runDate);
+  if (runDay == null) return 'stale'; // unparseable Run Date — cannot prove freshness
+  // Compare LOCAL calendar days as strings (both 'YYYY-MM-DD' -> lexical == chrono).
+  // NEVER string-compare periods across types (VP Weekly's period is ISO-week); this
+  // compares the run's day to the expected candidate DAY, which is date-shaped for all.
+  return runDay >= ymd(expected.candidateDay) ? 'present' : 'stale';
 }
 
 // --- Hub launcher builder (pure) -----------------------------------------------
@@ -226,7 +276,6 @@ export function buildHubLauncherBlocks({
   types = REPORT_TYPES,
   schedule = SCHEDULE,
   now = new Date(),
-  maxAgeHours = DEFAULT_MAX_AGE_HOURS,
   trustSummary = null,
 } = {}) {
   const header = {
@@ -248,12 +297,20 @@ export function buildHubLauncherBlocks({
     const nameCell = cell(seg(type, { link: notionPageUrl(childPages[type]) }));
     const statusCell = cell(seg(run?.status || '—'));
     const dateCell = cell(seg(run?.runDate || '—'));
-    const artCell = isHttpUrl(run?.artifactUrl)
-      ? cell(seg('link', { link: run.artifactUrl }))
-      : cell(seg('—'));
+    // Never blank (WS2): a live http artifact -> "link"; otherwise deep-link the
+    // report's Notion child page ("page") so the Artifact cell is always a working
+    // quick-link. Degrades to a dash only if the type has no child page at all.
+    let artCell;
+    if (isHttpUrl(run?.artifactUrl)) {
+      artCell = cell(seg('link', { link: run.artifactUrl }));
+    } else if (childPages[type]) {
+      artCell = cell(seg('page', { link: notionPageUrl(childPages[type]) }));
+    } else {
+      artCell = cell(seg('—'));
+    }
     const nextCell = cell(seg(nextExpectedLabel(type, { schedule, now })));
     const logCell = cell(seg(LOG_HINT_BY_TYPE[type] || '—'));
-    const watchdogCell = cell(seg(watchdogVerdict(type, run, { schedule, now, maxAgeHours })));
+    const watchdogCell = cell(seg(watchdogVerdict(type, run, { schedule, now })));
     return {
       type: 'table_row',
       table_row: { cells: [nameCell, statusCell, dateCell, artCell, nextCell, logCell, watchdogCell] },

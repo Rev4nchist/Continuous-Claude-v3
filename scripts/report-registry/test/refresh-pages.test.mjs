@@ -10,7 +10,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
-  notionPageUrl, notionViewUrl, extractRun, pickNewest,
+  notionPageUrl, notionViewUrl, extractRun, pickNewest, watchdogVerdict,
   buildCurrentRunBlocks, buildHubLauncherBlocks,
   refreshChildPage, refreshHub, refreshAll, parseTypeArg,
   CURRENT_RUN_HEADING, HUB_LAUNCHER_HEADING,
@@ -70,6 +70,26 @@ test('pickNewest picks the chronologically newest row across mixed tz (not lexic
   assert.equal(pickNewest([]), null);
 });
 function dateOf(r) { return r?.properties?.['Run Date']?.date?.start; }
+
+test('pickNewest: a genuine row wins over a same-period watchdog: miss-row even when the miss-row is newer (WS1b)', () => {
+  // Once genuine Self-Improvement rows land again, a same-period `watchdog:` Failed
+  // miss-row (written earlier, TODAY's date) must NOT win over the genuine success.
+  const rows = [
+    row({ runDate: '2026-07-20T02:00:00Z', status: 'Failed', summary: 'watchdog: no "Self-Improvement" row found for period 2026-07-20 by its deadline+grace' }),
+    row({ runDate: '2026-07-20T00:30:00Z', status: 'OK', summary: 'daily-sweep: proposal recorded (docs/self-improvement/proposals/2026-07-20-x.md)' }),
+  ];
+  const picked = pickNewest(rows);
+  assert.equal(picked.properties.Status.select.name, 'OK'); // the genuine row, not the newer miss
+});
+
+test('pickNewest: a period with ONLY a watchdog: miss-row still surfaces the miss (falls back to all)', () => {
+  const rows = [
+    row({ runDate: '2026-07-20T02:00:00Z', status: 'Failed', summary: 'watchdog: no "Self-Improvement" row found for period 2026-07-20 by its deadline+grace' }),
+  ];
+  const picked = pickNewest(rows);
+  assert.ok(picked, 'a period with only a miss-row still returns it (verdict -> missing), not null');
+  assert.match(picked.properties.Summary.rich_text[0].plain_text, /^watchdog:/);
+});
 
 // --- Current run callout builder -----------------------------------------------
 
@@ -149,12 +169,14 @@ test('buildHubLauncherBlocks -> a table (header + one row per type) + trailing o
   assert.notEqual(flat(vp[5]), '—'); // log hint present for a scheduled type
   assert.equal(flat(vp[6]), 'stale'); // present row from 2026-06-29 is > 48h old at HUB_NOW
 
-  // Team Dashboard row (no runs): status + date + artifact + watchdog all show "no data"
+  // Team Dashboard row (no runs): status + date show "no data", but the Artifact cell
+  // is NEVER blank (WS2) — it deep-links the child page ("page") even with no run.
   const td = table.table.children[2].table_row.cells;
   assert.equal(flat(td[0]), 'Team Dashboard');
   assert.equal(flat(td[1]), '—');
   assert.equal(flat(td[2]), '—');
-  assert.equal(flat(td[3]), '—');
+  assert.equal(flat(td[3]), 'page');
+  assert.equal(td[3][0].text.link.url, notionPageUrl(CHILD['Team Dashboard']));
   assert.equal(flat(td[6]), 'no runs');
 
   // trailing overview link paragraph
@@ -164,11 +186,25 @@ test('buildHubLauncherBlocks -> a table (header + one row per type) + trailing o
   assert.match(link.text.link.url, /#39576fd7ac8281d6be38000ce9bbd794$/);
 });
 
-test('buildHubLauncherBlocks: a non-http artifact yields a dash, not a broken link', () => {
+test('buildHubLauncherBlocks: a non-http artifact falls back to the child-page link (never a bare path, never blank)', () => {
+  const SI_PAGE = '39576fd7-ac82-8139-8438-ed06fdedebb7';
   const blocks = buildHubLauncherBlocks({
     latestByType: { 'Self-Improvement': { runDate: '2026-07-05', status: 'OK', artifactUrl: 'docs/x.md' } },
-    childPages: { 'Self-Improvement': '39576fd7-ac82-8139-8438-ed06fdedebb7' },
+    childPages: { 'Self-Improvement': SI_PAGE },
     types: ['Self-Improvement'],
+    now: HUB_NOW,
+  });
+  const cells = findTable(blocks).table.children[1].table_row.cells;
+  // NOT the broken local path, NOT blank — a working http link to the Notion child page.
+  assert.equal(flat(cells[3]), 'page');
+  assert.equal(cells[3][0].text.link.url, notionPageUrl(SI_PAGE));
+});
+
+test('buildHubLauncherBlocks: artCell degrades to a dash only when the type has NO child page', () => {
+  const blocks = buildHubLauncherBlocks({
+    latestByType: { 'Orphan': { runDate: '2026-07-05', status: 'OK', artifactUrl: 'docs/x.md' } },
+    childPages: {}, // no child page for this type
+    types: ['Orphan'],
     now: HUB_NOW,
   });
   const cells = findTable(blocks).table.children[1].table_row.cells;
@@ -200,6 +236,31 @@ test('buildHubLauncherBlocks: a fresh recent row yields verdict "present"', () =
   });
   const cells = findTable(blocks).table.children[1].table_row.cells;
   assert.equal(flat(cells[6]), 'present');
+});
+
+// --- period-precise watchdogVerdict (WS1: no flat-48h stale on healthy weeklies) ---
+
+test('watchdogVerdict: a WEEKLY type between runs reads "present" (period-precise, not flat-48h stale)', () => {
+  // Tuesday 2026-07-21, 5 days after the last scheduled Thursday (2026-07-16) run.
+  // A flat 48h threshold would call this stale; period-precise says the last expected
+  // Thursday period IS covered -> present.
+  const now = new Date(2026, 6, 21, 10, 0, 0);
+  const run = { runDate: '2026-07-16', status: 'OK', summary: 'sponsor update 2026-07-16' };
+  assert.equal(watchdogVerdict('FourthOS Sponsor', run, { now }), 'present');
+});
+
+test('watchdogVerdict: a genuinely-missed WEEKLY (no row for the last expected period) reads "stale"', () => {
+  // Same Tuesday; the last expected period is Thursday 2026-07-16, but the newest row
+  // is from the PRIOR Thursday (2026-07-09) -> the expected period was missed -> stale.
+  const now = new Date(2026, 6, 21, 10, 0, 0);
+  const run = { runDate: '2026-07-09', status: 'OK', summary: 'sponsor update 2026-07-09' };
+  assert.equal(watchdogVerdict('FourthOS Sponsor', run, { now }), 'stale');
+});
+
+test('watchdogVerdict: a watchdog: miss-row (even with today\'s date) reads "missing"', () => {
+  const now = new Date(2026, 6, 21, 10, 0, 0);
+  const run = { runDate: now.toISOString(), status: 'Failed', summary: 'watchdog: no "FourthOS Sponsor" row found for period 2026-07-16 by its deadline+grace' };
+  assert.equal(watchdogVerdict('FourthOS Sponsor', run, { now }), 'missing');
 });
 
 test('buildHubLauncherBlocks: an unscheduled type degrades to dashes/unscheduled instead of throwing', () => {

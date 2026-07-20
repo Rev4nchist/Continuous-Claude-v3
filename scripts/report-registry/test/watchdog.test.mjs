@@ -5,8 +5,9 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   isoWeekNumber, isoWeekLabel, formatPeriod, computeCandidate, hasRowForPeriod,
-  buildMissRun, evaluateEntry, runWatchdog, SCHEDULE,
+  buildMissRun, evaluateEntry, runWatchdog, SCHEDULE, maxAgeForType, MAX_AGE_HOURS_WEEKLY,
 } from '../watchdog.mjs';
+import { DEFAULT_MAX_AGE_HOURS } from '../check-drift.mjs';
 
 const DS = 'c7d2d9e3-d388-4640-a66e-88f7dd50f854';
 
@@ -208,6 +209,23 @@ test('evaluateEntry: query error is caught and reported, not thrown', () => {
   });
   assert.equal(r.status, 'error');
   assert.match(r.error, /boom/);
+});
+
+// --- maxAgeForType: per-cadence staleness threshold + guard ----------------------
+
+test('maxAgeForType: weekly -> MAX_AGE_HOURS_WEEKLY (192), daily -> DEFAULT (48)', () => {
+  assert.equal(maxAgeForType('VP Weekly'), MAX_AGE_HOURS_WEEKLY);
+  assert.equal(MAX_AGE_HOURS_WEEKLY, 192);
+  assert.equal(maxAgeForType('System Health'), 192);
+  assert.equal(maxAgeForType('Project Portfolio'), DEFAULT_MAX_AGE_HOURS);
+  assert.equal(DEFAULT_MAX_AGE_HOURS, 48);
+});
+
+test('maxAgeForType: an unknown/unscheduled type falls back to DEFAULT, never undefined (?? guard)', () => {
+  assert.equal(maxAgeForType('Not A Real Type'), DEFAULT_MAX_AGE_HOURS);
+  // a schedule with no cadence field on the matched entry also degrades safely
+  assert.equal(maxAgeForType('X', [{ type: 'X' }]), DEFAULT_MAX_AGE_HOURS);
+  assert.notEqual(maxAgeForType('anything'), undefined);
 });
 
 // --- runWatchdog: sweep shape -----------------------------------------------------
