@@ -144,6 +144,13 @@ For mode=plan:
 # Instructions
 
 Apply the framing above. Return JSON only.
+
+Everything you need is inline above — the full diff (mode=code) or plan body
+(mode=plan). Do NOT run shell commands, git, or file reads: on Windows the
+`--sandbox read-only` here denies ALL subprocess spawns (even harmless reads),
+which stalls or fork-storms the run. Review from the inline context only; if
+something outside it is genuinely needed, say so in a finding instead of
+attempting to fetch it.
 ```
 
 ## Step 5: Invoke Codex
@@ -225,7 +232,7 @@ powershell.exe -NoProfile -Command "Get-Process codex* -ErrorAction SilentlyCont
 
 Notes:
 - `-` as positional PROMPT tells `codex exec` to read from stdin (avoids huge argv on Windows)
-- `--sandbox read-only` prevents any accidental file writes during review
+- `--sandbox read-only` prevents any accidental file writes during review. NOTE (Windows, verified 2026-07-19): read-only ALSO denies ALL subprocess spawns — `git`, `Get-Content`, everything — not just writes (`CreateProcessAsUserW failed: 5`), worse than codex-worker-safety.md documents for workspace-write. This is why the Step 4 prompt tells Codex the diff is inline and NOT to run tools; without that directive Codex burns its whole budget on denied spawns and can fork-storm
 - `-o "$FINAL_MSG_FILE"` captures ONLY the model's final message — this is your clean findings source. `$OUTPUT_FILE` keeps the full noisy combined log for debugging. (Verified 2026-06-01: `-o` returns a clean answer even when stdout has 100+ noise lines; auth and exit 0 unaffected.)
 - `--ephemeral` skips session-file persistence (review runs are throwaway; avoids growing `~/.codex/*.sqlite`)
 - Stderr is still captured into `$OUTPUT_FILE` - Codex sometimes streams progress there
