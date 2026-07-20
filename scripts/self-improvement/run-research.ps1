@@ -106,6 +106,15 @@ try {
   # proposal path in the human-readable summary as a breadcrumb.
   $ids   = Get-Content (Join-Path $repo 'scripts\report-registry\report-runs.ids.json') -Raw | ConvertFrom-Json
   $siId  = ($ids.childPages.'Self-Improvement') -replace '-', ''
+  # Guard (CodeRabbit): a missing/empty/malformed id would yield a bare
+  # "https://www.notion.so/" — still http(s), so make-run's URL guard would NOT reject
+  # it, silently landing a meaningless artifact link (the same "no useful row" class
+  # WS3 set out to kill, minus make-run's safety net). Require a 32-hex Notion id; on
+  # failure throw a specific error (caught + logged by the outer try/catch below) so NO
+  # row is emitted with a broken link — the watchdog then flags the genuine absence.
+  if ($siId -notmatch '^[0-9a-f]{32}$') {
+    throw "Self-Improvement child-page id missing/invalid in report-runs.ids.json (got '$siId') -- refusing to emit a meaningless artifact URL"
+  }
   $artifact = "https://www.notion.so/$siId"
   if (Test-Path $proposal) {
     $siStatus = 'OK'; $verdict = "proposal recorded ($proposal)"
