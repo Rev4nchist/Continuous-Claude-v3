@@ -97,21 +97,40 @@ try {
   # (parity with the .bat wrappers under Task Scheduler's minimal PATH). Harmless
   # when bare node already resolves.
   $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
+  # Artifact URL MUST be a durable http(s) URL — make-run's buildRun hard-rejects a
+  # local filesystem path (it stops resolving once the run's temp workspace is cleaned,
+  # and Notion's url property rejects non-URLs). Passing $proposal here (the old bug)
+  # made make-run THROW inside this non-fatal try/catch, so the run exited 0 while
+  # silently landing NO registry row. Emit the Self-Improvement child-page Notion URL
+  # instead (single source of truth = report-runs.ids.json childPages); keep the local
+  # proposal path in the human-readable summary as a breadcrumb.
+  $ids   = Get-Content (Join-Path $repo 'scripts\report-registry\report-runs.ids.json') -Raw | ConvertFrom-Json
+  $siId  = ($ids.childPages.'Self-Improvement') -replace '-', ''
+  $artifact = "https://www.notion.so/$siId"
   if (Test-Path $proposal) {
-    $siStatus = 'OK'; $artifact = $proposal; $verdict = 'proposal recorded'
+    $siStatus = 'OK'; $verdict = "proposal recorded ($proposal)"
   } else {
-    $siStatus = 'Warn'; $artifact = 'docs/self-improvement/INDEX.md'; $verdict = "no proposal (record-index exit=$recordExit)"
+    $siStatus = 'Warn'; $verdict = "no proposal (record-index exit=$recordExit); see docs/self-improvement/INDEX.md"
   }
   $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
     --type 'Self-Improvement' --source 'Self-Improvement' --period $date --status $siStatus `
-    --artifactUrl $artifact --summary "$($c.id): $verdict"
-  $emit = ($emit | Select-Object -Last 1)
-  if ($LASTEXITCODE -eq 0 -and $emit) {
-    & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $emit 2>&1 |
+    --artifactUrl $artifact --summary "$($c.id): $verdict" 2>&1
+  # make-run prints the emitted run-JSON PATH on stdout and a preamble on stderr; 2>&1
+  # merges both so a THROW (e.g. a future URL-guard regression) is captured in the log
+  # instead of being swallowed silently — this silent-swallow is exactly what hid the bug.
+  $makeRunExit = $LASTEXITCODE
+  # The stdout PATH line is a bare path (no whitespace); the stderr preamble
+  # ("[report-registry] emitted run ... -> <path>.json") also ends in .json, so match
+  # only a whitespace-free .json line to avoid picking the preamble.
+  $runPath = ($emit | ForEach-Object { "$_".Trim() } |
+    Where-Object { $_ -match '\.json$' -and $_ -notmatch '\s' } | Select-Object -Last 1)
+  if ($makeRunExit -eq 0 -and $runPath) {
+    Log "make-run SUCCEEDED (exit=0) -> $runPath"
+    & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $runPath 2>&1 |
       ForEach-Object { "$_" } | Tee-Log
     Log "report-run upsert exit=$LASTEXITCODE (non-fatal)"
   } else {
-    Log "make-run emitted no path (exit=$LASTEXITCODE) -- skipping upsert"
+    Log "make-run FAILED or emitted no path (exit=$makeRunExit) -- skipping upsert. Output: $($emit -join ' | ')"
   }
 } catch {
   Log "report-run registry step threw (non-fatal): $_"

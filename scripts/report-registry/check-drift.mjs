@@ -31,6 +31,11 @@
 import { pathToFileURL } from 'node:url';
 import { queryDataSource, selectName, dateStart } from '../project-cards/lib/notion.mjs';
 import { REPORT_RUNS_DS_ID, REPORT_TYPES } from './config.mjs';
+// maxAgeForType lives in watchdog.mjs (it owns the SCHEDULE cadence map). This is a
+// static import into the module that watchdog itself imports from — an ESM cycle that
+// is SAFE because it is only ever CALLED at runtime (inside checkDrift/main), never at
+// module-eval time, and watchdog likewise never reads a check-drift binding at eval.
+import { maxAgeForType } from './watchdog.mjs';
 
 export const DEFAULT_MAX_AGE_HOURS = 48;
 
@@ -89,21 +94,31 @@ export function parseMaxAgeHours(argv) {
   return DEFAULT_MAX_AGE_HOURS;
 }
 
-export function checkDrift({ maxAgeHours = DEFAULT_MAX_AGE_HOURS, query = queryDataSource, dsId = REPORT_RUNS_DS_ID, now = Date.now() } = {}) {
+// maxAgeHours: null (default) => per-cadence threshold per type via maxAgeForType
+// (weekly widens to 192h so a healthy weekly is not false-flagged as drift); a number
+// => a flat override applied to ALL types (the documented `--max-age-hours` behavior).
+export function checkDrift({ maxAgeHours = null, query = queryDataSource, dsId = REPORT_RUNS_DS_ID, now = Date.now() } = {}) {
   const rows = query(dsId, {});
   const byType = groupByType(rows);
-  const newestByType = {};
-  for (const type of REPORT_TYPES) newestByType[type] = newestRunDate(byType[type] || []);
-  const report = computeDrift(newestByType, { maxAgeHours, now });
-  return report;
+  return REPORT_TYPES.map((type) => {
+    const newest = newestRunDate(byType[type] || []);
+    const threshold = maxAgeHours ?? maxAgeForType(type);
+    return computeDrift({ [type]: newest }, { maxAgeHours: threshold, now, types: [type] })[0];
+  });
 }
 
 function main() {
-  const maxAgeHours = parseMaxAgeHours(process.argv.slice(2));
+  const argv = process.argv.slice(2);
+  // Only a flat override when --max-age-hours is EXPLICITLY passed; otherwise null
+  // -> per-cadence thresholds (daily 48h / weekly 192h) so a healthy weekly report
+  // between runs is not counted as drift.
+  const hasMaxAgeFlag = argv.includes('--max-age-hours') || argv.some((a) => a.startsWith('--max-age-hours='));
+  const maxAgeHours = hasMaxAgeFlag ? parseMaxAgeHours(argv) : null;
   const report = checkDrift({ maxAgeHours });
   const drifting = report.filter((r) => r.drift);
   console.log(JSON.stringify(report, null, 2));
-  console.error(`[check-drift] threshold=${maxAgeHours}h — ${drifting.length}/${report.length} type(s) in drift${drifting.length ? ': ' + drifting.map((d) => d.type).join(', ') : ''}`);
+  const thresholdLabel = maxAgeHours == null ? 'per-cadence (daily 48h / weekly 192h)' : `${maxAgeHours}h`;
+  console.error(`[check-drift] threshold=${thresholdLabel} — ${drifting.length}/${report.length} type(s) in drift${drifting.length ? ': ' + drifting.map((d) => d.type).join(', ') : ''}`);
   process.exit(drifting.length > 0 ? 1 : 0);
 }
 

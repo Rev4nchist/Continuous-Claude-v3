@@ -32,8 +32,10 @@
 // Run: node --test scripts/report-registry/test/detector-coverage-matrix.test.mjs
 import assert from 'node:assert/strict';
 import test from 'node:test';
-import { evaluateEntry, assessFreshness, runWatchdog, SCHEDULE } from '../watchdog.mjs';
-import { computeDrift } from '../check-drift.mjs';
+import {
+  evaluateEntry, assessFreshness, runWatchdog, SCHEDULE, maxAgeForType,
+} from '../watchdog.mjs';
+import { computeDrift, DEFAULT_MAX_AGE_HOURS } from '../check-drift.mjs';
 
 const TYPE = 'VP Weekly';
 const vpEntry = () => SCHEDULE.find((e) => e.type === TYPE);
@@ -58,8 +60,11 @@ function row({ status, runDate } = {}) {
 
 // watchdog verdict for a class: evaluateEntry at NOW (dry-run so a MISS never writes)
 // against a mock transport that returns `rows` for the period-filtered query.
+// The freshness CLASSES below are characterized at the DAILY 48h threshold (passed
+// explicitly), independent of the per-cadence default; the per-cadence behavior
+// (weekly widens to 192h) is characterized separately in its own section at the end.
 function watchdog(rows) {
-  return evaluateEntry(vpEntry(), NOW, { query: () => rows, dryRun: true });
+  return evaluateEntry(vpEntry(), NOW, { query: () => rows, dryRun: true, maxAgeHours: 48 });
 }
 // drift verdict for a class: computeDrift over the type's newest Run Date at NOW.
 function drift(newestRunDate) {
@@ -182,6 +187,7 @@ test('CHARACTERIZATION: the superset extension is REPORT-ONLY — a present-but-
     query: () => [row({ status: 'OK', runDate: STALE })],
     upsert: () => { upserts += 1; return { action: 'created', pageId: 'x' }; },
     dryRun: false, // REAL run — not dry
+    maxAgeHours: 48, // characterize the stale class at the daily threshold
   });
   assert.equal(r.status, 'ok');        // still ok (present)
   assert.equal(r.freshness.stale, true);
@@ -232,4 +238,38 @@ test('runWatchdog attaches a freshness verdict to every present (ok) entry in th
     assert.ok(r.freshness, `expected freshness on ok result for ${r.type}`);
     assert.equal(r.freshness.stale, false);
   }
+});
+
+// --- per-cadence staleness threshold (maxAgeForType) -----------------------------
+// The freshness classes above are pinned at the DAILY 48h threshold. The default
+// (no explicit maxAgeHours) is PER-CADENCE: weekly widens to 192h so a healthy weekly
+// report ~5-6 days between runs is NOT reported stale, while a daily stays at 48h.
+
+test('maxAgeForType: weekly types = 192h, daily types = 48h (DEFAULT), unknown = DEFAULT (guard)', () => {
+  assert.equal(maxAgeForType('VP Weekly'), 192);
+  assert.equal(maxAgeForType('FourthOS Sponsor'), 192);
+  assert.equal(maxAgeForType('System Health'), 192);
+  assert.equal(maxAgeForType('Team Dashboard'), DEFAULT_MAX_AGE_HOURS);
+  assert.equal(maxAgeForType('Self-Improvement'), DEFAULT_MAX_AGE_HOURS);
+  assert.equal(maxAgeForType('Not A Real Type'), DEFAULT_MAX_AGE_HOURS); // ?? DEFAULT, never undefined
+});
+
+test('per-cadence default: a 120h-old WEEKLY row is FRESH in the sweep (not stale under 192h)', () => {
+  // Same 120h STALE row that reads stale at the daily 48h threshold reads FRESH for a
+  // weekly type once the per-cadence default (192h) applies — the false-"stale" fix.
+  const r = evaluateEntry(vpEntry(), NOW, { query: () => [row({ status: 'OK', runDate: STALE })], dryRun: true });
+  assert.equal(r.status, 'ok');
+  assert.equal(r.freshness.stale, false);
+  assert.equal(r.freshness.reason, 'fresh');
+});
+
+test('per-cadence default: a 120h-old DAILY row is STALE (daily threshold unchanged at 48h)', () => {
+  const daily = SCHEDULE.find((e) => e.type === 'Self-Improvement'); // daily, grace 12:00
+  // A daily-due instant: 2026-07-16 20:00 local (grace 12:00 elapsed).
+  const dailyNow = new Date(2026, 6, 16, 20, 0, 0);
+  const staleForDaily = new Date(dailyNow.getTime() - 120 * 3_600_000).toISOString();
+  const r = evaluateEntry(daily, dailyNow, { query: () => [row({ status: 'OK', runDate: staleForDaily })], dryRun: true });
+  assert.equal(r.status, 'ok');
+  assert.equal(r.freshness.stale, true);
+  assert.equal(r.freshness.reason, 'stale');
 });
