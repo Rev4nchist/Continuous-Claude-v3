@@ -644,6 +644,74 @@ def check_tldr_daemon_running() -> CheckResult:
     )
 
 
+def check_gitbash_fork() -> CheckResult:
+    """Probe Git-Bash fork() reliability on Windows.
+
+    Claude Code runs the Bash tool (and historically string-form hook
+    commands) through Git-Bash. MSYS2 fork() can fail intermittently under
+    BLODA -- a third-party DLL (e.g. iolo System Mechanic) injected into
+    bash.exe collides with cygwin's heap/shared-memory region, producing
+    `*** fatal error - add_item (... "/", ...) failed, errno 1`. A single
+    Bash call spawning ~14 hooks then had a high chance of >=1 crash line;
+    exec-form hooks removed that amplifier, but the underlying fork can still
+    flake. This probe spawns `bash -c echo` repeatedly and reports the
+    failure rate so the degradation is caught proactively, not via crash spam.
+    """
+    import shutil
+
+    name = "gitbash-fork-reliability"
+    cat = "infrastructure"
+    if os.name != "nt":
+        return _pass(name, cat, "not applicable (non-Windows)", severity="INFO")
+
+    bash = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH") or shutil.which("bash")
+    if not bash or not Path(bash).exists():
+        return _skip(name, cat,
+                     "git-bash not found (CLAUDE_CODE_GIT_BASH_PATH unset, "
+                     "no bash on PATH)")
+
+    start = time.perf_counter()
+    runs = 12
+    ok = 0
+    failures: list[str] = []
+    for _ in range(runs):
+        try:
+            p = _run([bash, "-c", "echo ok"], timeout=8)
+            blob = (p.stdout or "") + (p.stderr or "")
+            if (p.returncode == 0 and "ok" in (p.stdout or "")
+                    and "add_item" not in blob and "fatal error" not in blob):
+                ok += 1
+            else:
+                failures.append((blob or f"exit={p.returncode}").strip()[:80])
+        except subprocess.TimeoutExpired:
+            failures.append("timeout (fork hung)")
+        except Exception as exc:  # noqa: BLE001 -- probe must not crash the check
+            failures.append(f"{type(exc).__name__}: {exc}"[:80])
+
+    dur = int((time.perf_counter() - start) * 1000)
+    fail = runs - ok
+    sample = failures[0] if failures else ""
+    remediation = (
+        "Git-Bash fork() failing (MSYS2 add_item / BLODA). Prime suspect: "
+        "iolo System Mechanic. Disable its autostart in an elevated shell: "
+        "Get-ScheduledTask -TaskPath '\\iolo\\' | Disable-ScheduledTask . "
+        "Fallbacks: rebaseall via dash, or reinstall Git for Windows."
+    )
+    meta = {"runs": runs, "ok": ok, "failed": fail, "sample": sample}
+    if fail == 0:
+        return _pass(name, cat, f"{ok}/{runs} bash forks OK", dur, metadata=meta)
+    if fail / runs < 0.25:
+        return _warn(name, cat,
+                     f"intermittent bash fork failure: {ok}/{runs} OK; "
+                     f"sample: {sample}",
+                     severity="MEDIUM", remediation=remediation,
+                     duration_ms=dur, metadata=meta)
+    return _fail(name, cat,
+                 f"bash fork failing: only {ok}/{runs} OK; sample: {sample}",
+                 severity="HIGH", remediation=remediation,
+                 duration_ms=dur, metadata=meta)
+
+
 # ---- 2. Hooks --------------------------------------------------------------
 
 
@@ -2651,6 +2719,8 @@ def build_runner(output_dir: Path | None = None,
                check_opc_env_file)
     r.register("tldr-daemon-running", "infrastructure",
                check_tldr_daemon_running)
+    r.register("gitbash-fork-reliability", "infrastructure",
+               check_gitbash_fork)
 
     # 2. Hooks
     r.register("hook-dist-freshness", "hooks",

@@ -25,7 +25,7 @@ def main():
         # Trigger warm via daemon (non-blocking)
         try:
             subprocess.Popen(
-                ['tldr', 'daemon', 'warm', str(project_dir)],
+                ['tldr', 'daemon', 'start', '--project', str(project_dir)],
                 stdout=subprocess.DEVNULL,
                 stderr=subprocess.DEVNULL,
                 start_new_session=True  # Detach from parent (cross-platform nohup)

@@ -1,0 +1,68 @@
+// hooks-to-execform.mjs — convert Claude Code settings.json hooks from SHELL form
+// ("command":"node x.mjs") to EXEC form ("command":"node","args":["x.mjs"]) so hooks
+// spawn the executable DIRECTLY instead of via git-bash — killing the msys2 fork storm.
+//
+// Usage (node):
+//   node hooks-to-execform.mjs                 # dry-run, ALL events
+//   node hooks-to-execform.mjs --event SessionStart   # dry-run, one event
+//   node hooks-to-execform.mjs --event SessionStart --apply   # write (backs up first)
+//   node hooks-to-execform.mjs --restore <backup-path>        # revert
+//
+// Safe by construction: backs up before writing; only touches type:command hooks that
+// are still shell-form (no existing args); preserves type/timeout/other fields; expands
+// a leading ~/ to the home dir (exec form has no shell to expand it). Whitespace
+// tokenization — verified safe here (0 hooks have quoted/spaced paths).
+import fs from 'node:fs';
+import os from 'node:os';
+
+const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const argv = process.argv.slice(2);
+const apply = argv.includes('--apply');
+const eventIdx = argv.indexOf('--event');
+const onlyEvent = eventIdx !== -1 ? argv[eventIdx + 1] : null;
+const restoreIdx = argv.indexOf('--restore');
+const home = os.homedir().replace(/\\/g, '/');
+
+if (restoreIdx !== -1) {
+  const bak = argv[restoreIdx + 1];
+  fs.copyFileSync(bak, SETTINGS);
+  console.log(`restored ${SETTINGS} from ${bak}`);
+  process.exit(0);
+}
+
+function expandTilde(tok) {
+  if (tok === '~') return home;
+  if (tok.startsWith('~/')) return home + tok.slice(1);
+  return tok;
+}
+
+const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
+let converted = 0;
+const changes = [];
+for (const ev of Object.keys(s.hooks || {})) {
+  if (onlyEvent && ev !== onlyEvent) continue;
+  for (const m of (s.hooks[ev] || [])) {
+    for (const h of (m.hooks || [])) {
+      if (h.type !== 'command' || Array.isArray(h.args) || typeof h.command !== 'string') continue;
+      const toks = h.command.split(/\s+/).filter(Boolean).map(expandTilde);
+      const before = h.command;
+      h.command = toks[0];
+      h.args = toks.slice(1);
+      converted += 1;
+      if (changes.length < 40) changes.push({ ev, before, after: `${h.command} + ${JSON.stringify(h.args)}` });
+    }
+  }
+}
+
+console.log(`${apply ? 'APPLY' : 'DRY-RUN'} — event=${onlyEvent || 'ALL'} — ${converted} hook(s) converted`);
+changes.forEach((c) => console.log(`  [${c.ev}] ${c.after}`));
+
+if (apply && converted > 0) {
+  const stamp = new Date().toISOString().replace(/[:.]/g, '-');
+  const bak = `${SETTINGS}.bak.execform-${stamp}`;
+  fs.copyFileSync(SETTINGS, bak);
+  fs.writeFileSync(SETTINGS, `${JSON.stringify(s, null, 2)}\n`, 'utf8');
+  console.log(`\nBACKUP: ${bak}`);
+  console.log(`WROTE:  ${SETTINGS}`);
+  console.log(`REVERT: node hooks-to-execform.mjs --restore "${bak}"`);
+}
