@@ -3,20 +3,23 @@
 // spawn the executable DIRECTLY instead of via git-bash — killing the msys2 fork storm.
 //
 // Usage (node):
-//   node hooks-to-execform.mjs                 # dry-run, ALL events
+//   node hooks-to-execform.mjs                 # dry-run, ALL events, USER settings
+//   node hooks-to-execform.mjs --settings <path>      # target a specific settings.json
 //   node hooks-to-execform.mjs --event SessionStart   # dry-run, one event
 //   node hooks-to-execform.mjs --event SessionStart --apply   # write (backs up first)
 //   node hooks-to-execform.mjs --restore <backup-path>        # revert
 //
 // Safe by construction: backs up before writing; only touches type:command hooks that
 // are still shell-form (no existing args); preserves type/timeout/other fields; expands
-// a leading ~/ to the home dir (exec form has no shell to expand it). Whitespace
-// tokenization — verified safe here (0 hooks have quoted/spaced paths).
+// a leading ~/ to the home dir (exec form has no shell to expand it). Quote-aware
+// tokenization — respects double-quoted segments (e.g. a "${CLAUDE_PROJECT_DIR}/..."
+// path) and strips the surrounding quotes so the exec-form arg is a clean path.
 import fs from 'node:fs';
 import os from 'node:os';
 
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
 const argv = process.argv.slice(2);
+const settingsIdx = argv.indexOf('--settings');
+const SETTINGS = settingsIdx !== -1 ? argv[settingsIdx + 1] : 'C:/Users/david.hayes/.claude/settings.json';
 const apply = argv.includes('--apply');
 const eventIdx = argv.indexOf('--event');
 const onlyEvent = eventIdx !== -1 ? argv[eventIdx + 1] : null;
@@ -36,6 +39,17 @@ function expandTilde(tok) {
   return tok;
 }
 
+// Quote-aware tokenizer: splits on unquoted whitespace, keeps double-quoted
+// segments intact, then strips the surrounding quotes. Handles both bare paths
+// (node C:/x.mjs arg) and quoted paths (node "${CLAUDE_PROJECT_DIR}/x.mjs").
+function tokenize(cmd) {
+  const toks = [];
+  const re = /"([^"]*)"|(\S+)/g;
+  let m;
+  while ((m = re.exec(cmd)) !== null) toks.push(m[1] !== undefined ? m[1] : m[2]);
+  return toks;
+}
+
 const s = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
 let converted = 0;
 const changes = [];
@@ -44,7 +58,7 @@ for (const ev of Object.keys(s.hooks || {})) {
   for (const m of (s.hooks[ev] || [])) {
     for (const h of (m.hooks || [])) {
       if (h.type !== 'command' || Array.isArray(h.args) || typeof h.command !== 'string') continue;
-      const toks = h.command.split(/\s+/).filter(Boolean).map(expandTilde);
+      const toks = tokenize(h.command).map(expandTilde);
       const before = h.command;
       h.command = toks[0];
       h.args = toks.slice(1);
