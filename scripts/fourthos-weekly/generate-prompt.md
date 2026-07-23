@@ -69,12 +69,25 @@ week-switcher) and footer. Brand = `.claude/skills/fourth-brand-guidelines/` (Fo
   and project-card decision flags link to the specific card.
 - Hub body: sponsor-lens glance FIRST, nav cards second. Chip row label is "This week".
 
-**Language rules (MANDATORY — see the skill's "Language rules" table for full replacements):**
+**Clarity Contract (MANDATORY — the #1 rule; read the skill's "Clarity Contract" section in full).**
+Carly and Christian are NOT inside the projects — write every unit so a smart non-technical leader
+understands it cold, in one pass. Clarity beats completeness.
+- **Change → Benefit (every progress item, each portfolio card's focus / latest update / next milestone,
+  every outcome, risk, and sponsor action):** state (1) *what concretely changed* this week — never
+  "worked on" / "progressed" / "continued" — and (2) *the benefit and the named beneficiary* (the
+  company, a specific team like CS or RevOps, end users, a customer, or the sponsors' own decision),
+  linked with "so that" / "which means". If you cannot name a benefit AND a beneficiary, it is activity,
+  not progress — dig for the real outcome or cut it.
+- **Outcome first, mechanism second. One idea per sentence. Halve any sentence you can.**
+- Climb the **So-What Ladder**: Raw (version/test/bug — never shown) → Capability (plain verb) → Value
+  (Trust / Usefulness / Risk retired / Readiness / Speed) → Sponsor sentence (≤25 words, one evidence
+  anchor, honesty badge, names the beneficiary). Match the before→after calibration table in the skill.
+
+**Language mechanics (MANDATORY — see the skill's "Language rules" table for full replacements):**
 BANNED: "topology". Technical terms are defined on first use or replaced with plain phrasing
 (SWA → "access-gated report site"; Entra groups → "per-audience security groups"; OBO → "each person
 signs in as themselves"; ADR → "architecture decision record"; drop rev numbers from Tier 1). Claim
 calibration: adversarial test results are "demonstrated"/"held 16/16", never "proven"/"secure".
-Writing is intelligent and clear — one idea per sentence, every item states its "so what".
 
 **Honesty / 3-state badge system (MANDATORY — never overstate to a VP/CTO).** Tag every capability:
 **LIVE** (running in prod now — teal filled) · **BUILT IN-REPO** (code-complete/proven, not yet

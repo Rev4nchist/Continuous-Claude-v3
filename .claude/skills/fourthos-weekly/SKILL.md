@@ -185,7 +185,59 @@ inheritance diagram ("build the mold once; every connector inherits the governan
 inside the toggle must be internally consistent across all three views and carry an explicit
 provenance label (e.g. "validation-window snapshot").
 
-## Language rules (MANDATORY — Dave, 2026-07-02)
+## Clarity Contract [MANDATORY — the #1 language rule, strengthened 2026-07-23]
+
+**This is the top writing rule; the Language rules below serve it.** The whole job of this report is
+to compress a week of dense, technical work into bite-sized units two busy leaders understand in ONE
+pass. Clarity beats completeness: cut a true-but-opaque detail rather than ship a sentence they cannot
+decode.
+
+**Know the readers.** Carly (VP) and Christian (CTO) are the audience, and they are **NOT inside the
+projects.** A term that is obvious to the builder means nothing to them. Every sentence is read cold by
+a smart non-technical leader. If a sentence needs project context to parse, it fails — rewrite it.
+
+**The Change → Benefit rule (applies to EVERY unit: progress items, "what changed", each portfolio card's
+current focus / latest update / next milestone, every outcome, every risk, every sponsor action).**
+Every unit answers two questions in plain words:
+1. **What concretely changed** this week — the observable move. Banned openers: "worked on", "progressed",
+   "continued", "made progress on", "focused on". Those describe activity, not change.
+2. **The benefit, and to whom** — what that change now makes possible, for a *named beneficiary*: the
+   company, a specific team (CS, RevOps, GTM), end users, a customer, or **the sponsors' own decision**.
+   Force the link with "so that" / "which means" / "so".
+
+> If you cannot name a benefit and a beneficiary, it is activity, not progress. Dig for the real outcome,
+> or cut the item. "Benefits the business" is too weak — name who, and what they can now do.
+
+**Write it in this shape:**
+- **Outcome first, mechanism second** (and only if the mechanism earns its place).
+  ✅ "Answers are now trustworthy across teams, because the connector checks each business term against a
+  verified dictionary before using it." ❌ the reverse order.
+- **One idea per sentence.** Short sentences win. If a sentence can be halved, halve it.
+- **Define a technical term on first use or replace it** (jargon table below) — prefer the plain phrase.
+- **No internal shorthand, repo names, ticket/rev numbers, or tool names** in Tiers 1–2.
+
+**Method — the So-What Ladder (now MANDATORY here; it is no longer a "v4-planned" idea).** Climb every
+technical item four rungs: **Raw** (version / test count / bug — never shown) → **Capability** (plain verb:
+what it can now do) → **Value** (pick ONE axis: Trust · Usefulness · Risk retired · Readiness · Speed) →
+**Sponsor sentence** (≤25 words, one evidence anchor, the honesty badge, names the beneficiary). Carly
+reads the Sponsor sentence; Christian reads Capability + one soundness number.
+
+**Calibration — before → after. This IS the bar; match it every week.**
+
+| ❌ Opaque / activity-only (builder voice) | ✅ Change → Benefit, plain (sponsor voice) |
+|---|---|
+| "Semantic layer Phase A code-complete; 1,144 tests green; picklist visibility + governed dictionary shipped." | "The connector now checks each business term against a verified dictionary before it answers, so a question like 'top EMEA deals by value' returns the same correct number for any team instead of a confident guess." |
+| "Reframed model-routing into a governed agent-delivery platform with reusable Agent Packs." | "We now have a plan to assemble automations from reusable, pre-governed building blocks, which means future AI tools ship faster and are all controlled the same way, instead of being hand-built one at a time." |
+| "NetSuite Spike A0 unblocked, no admin dependency." | "We can decide NetSuite's technical approach this week without waiting on admin access — removing a dependency that would otherwise stall the third connector." |
+| "Architecture review still unscheduled (3rd week)." | "The architecture review with Christian still is not booked (third week). Until it happens, three connectors keep building on a design he has not signed off, so a late correction gets more expensive each week. This is the one thing we need from you." |
+
+**Pre-publish clarity check (run alongside the banned-word grep, before staging):**
+1. Read each Tier-1 sentence as Carly. Any term she would have to ask about? Define it, replace it, or cut it.
+2. Does every progress / outcome / focus item name a benefit AND a beneficiary? If not, fix or cut.
+3. Is the outcome first and the mechanism second?
+4. Could any sentence be halved? Halve it.
+
+## Language rules (MANDATORY — Dave, 2026-07-02) — the mechanics that serve the Clarity Contract above
 
 The writing must be **intelligent and clear** — no dumbing down, and no insider shorthand. A smart
 non-engineer (Carly) reads every sentence cold; a CTO (Christian) reads for soundness.
@@ -202,8 +254,8 @@ non-engineer (Carly) reads every sentence cold; a CTO (Christian) reads for soun
   | chassis / clone the chassis | "reuse the Salesforce build as the mold" (mold/stamp is the house metaphor) |
   | Phase-0 / spike | keep, but define once per page: "(the hands-on discovery check)" |
   | Cosmos | "the system of record" |
-- Sentences carry one idea each; every technical item states its "so what" (the v4 So-What Ladder is
-  the fuller version of this rule).
+- Sentences carry one idea each; every technical item states its "so what" via the **Change → Benefit
+  rule** and the So-What Ladder in the Clarity Contract above (both now mandatory, not v4-planned).
 
 ## Render constraints (reuse, do not rebuild)
 
@@ -322,7 +374,9 @@ Everything else reads existing cockpit data.
    forcing function ("if I don't hear by Fri, I proceed with X"). Honest empty state: "Nothing
    needed — FYI read." Every sensor (stalls, spinning tells, health drops) auto-promotes into it,
    so the report becomes a decision instrument, not a status broadcast.
-4. **So-What Ladder (the narrative method — solves "too technical → why it matters").** Climb
+4. **So-What Ladder (the narrative method — solves "too technical → why it matters").** **NOTE:
+   PROMOTED (2026-07-23) — the So-What Ladder + Change → Benefit rule are now MANDATORY and live in the
+   "Clarity Contract" section above; they apply every week regardless of the rest of v4.** Climb
    every technical item 4 rungs: **Raw** (version/test/bug — never shown) → **Capability** (plain
    verb) → **Value** (pick ONE axis: Trust/Usefulness/Risk-retired/Readiness) → **Sponsor
    sentence** (≤25 words, one evidence anchor, honesty badge). **Carly reads rung 4; CB reads rung

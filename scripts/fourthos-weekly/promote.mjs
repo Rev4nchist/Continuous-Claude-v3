@@ -94,6 +94,22 @@ if (!DRY) {
   for (const name of previewFiles) {
     fs.cpSync(path.join(previewDir, name), path.join(datedDir, name), { recursive: true });
   }
+  // Rewrite staged preview links to the dated path. The preview stages with working
+  // /fourthos/preview/ nav for review; once promoted, preview/ is cleared (below), so
+  // verbatim /fourthos/preview/ links in the dated deck would 404. Swap them to the
+  // dated path so promoted cross-tier navigation resolves.
+  const rewriteLinks = (dir) => {
+    for (const ent of fs.readdirSync(dir, { withFileTypes: true })) {
+      const p = path.join(dir, ent.name);
+      if (ent.isDirectory()) { rewriteLinks(p); continue; }
+      if (!ent.name.endsWith(".html")) continue;
+      const before = fs.readFileSync(p, "utf8");
+      const after = before.split("/fourthos/preview/").join(`/fourthos/${date}/`);
+      if (after !== before) fs.writeFileSync(p, after);
+    }
+  };
+  rewriteLinks(datedDir);
+  log(`rewrote /fourthos/preview/ -> /fourthos/${date}/ in staged HTML`);
   fs.rmSync(previewDir, { recursive: true, force: true }); // clear staging
 }
 
