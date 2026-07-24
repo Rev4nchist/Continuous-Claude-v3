@@ -130,13 +130,31 @@ const DEFAULT_PING_TIMEOUT_MS = 1500;
 const DEFAULT_EMBED_TIMEOUT_MS = 1500;
 
 /**
- * Default recall timeout: 3000ms (ST-05). Deliberately ABOVE the daemon's own
- * internal recall cap (RECALL_TIMEOUT_S = 2.5s) so a daemon-side slow query
- * returns a structured {ok:false} (clean uv fallback) rather than tripping a raw
- * socket timeout here. Warm recall is ~tens of ms; this is only the ceiling. The
- * rare slow path (daemon up AND DB stalled) falls back to uv and never hangs.
+ * Default recall timeout: 7000ms (2026-07-24, proposal 07-12 R1). Was 3000ms —
+ * live telemetry showed 47% of recall_ready fires still fell back to the ~12s uv
+ * subprocess, and whole-hook elapsed for daemon-served fires ran p50 2.4s / p99
+ * 6.2s, so the 3s ceiling sat inside the observed service tail. New value =
+ * observed p99 + margin (degrading to a SLOWER fallback path is never worth
+ * saving <4s here). Still deliberately ABOVE the daemon's own internal recall
+ * cap (RECALL_TIMEOUT_S = 2.5s) so a daemon-side slow query returns a structured
+ * {ok:false} (clean fallback) rather than tripping a raw socket timeout. The
+ * companion `reasonRef` telemetry distinguishes client timeout from daemon-side
+ * ok:false so the next re-baseline can attribute residual fallbacks.
  */
-const DEFAULT_RECALL_TIMEOUT_MS = 3000;
+const DEFAULT_RECALL_TIMEOUT_MS = 7000;
+
+/**
+ * Why a recallViaDaemon call returned null (proposal 07-12 R1 reason codes).
+ * 'timeout' = client-side overall timer fired; 'transport' = socket error /
+ * frame send/recv failure; 'ok_false' = daemon replied but not ok/malformed;
+ * 'model_mismatch' = H6 wrong model/dim; 'empty_query' = caller passed blank.
+ */
+export type RecallFailReason =
+  | 'timeout'
+  | 'transport'
+  | 'ok_false'
+  | 'model_mismatch'
+  | 'empty_query';
 
 /** Expected model + dim for sanity-check. */
 const EXPECTED_MODEL = 'BAAI/bge-large-en-v1.5';
@@ -584,11 +602,17 @@ export async function recallViaDaemon(
   info: DaemonInfo,
   query: string,
   k: number,
-  opts: { timeoutMs?: number; mode?: string } = {},
+  opts: { timeoutMs?: number; mode?: string; reasonRef?: { reason?: RecallFailReason } } = {},
 ): Promise<any[] | null> {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_RECALL_TIMEOUT_MS;
   const mode = opts.mode ?? 'hybrid';
-  if (!query || !query.trim()) return null;
+  const fail = (reason: RecallFailReason) => {
+    if (opts.reasonRef) opts.reasonRef.reason = reason;
+  };
+  if (!query || !query.trim()) {
+    fail('empty_query');
+    return null;
+  }
 
   return new Promise<any[] | null>((res) => {
     const sock = new net.Socket();
@@ -607,10 +631,14 @@ export async function recallViaDaemon(
     };
 
     // Single overall timer covering connect + send + recv (mirrors embedText).
-    const overallTimer = setTimeout(() => cleanup(null), timeoutMs);
+    const overallTimer = setTimeout(() => {
+      fail('timeout');
+      cleanup(null);
+    }, timeoutMs);
 
     sock.once('error', () => {
       clearTimeout(overallTimer);
+      fail('transport');
       cleanup(null);
     });
 
@@ -624,6 +652,7 @@ export async function recallViaDaemon(
         sendFrame(sock, { cmd: 'recall', query, k, mode });
       } catch {
         clearTimeout(overallTimer);
+        fail('transport');
         cleanup(null);
         return;
       }
@@ -644,17 +673,20 @@ export async function recallViaDaemon(
               ((meta.model && meta.model !== EXPECTED_MODEL) ||
                 (meta.dim && meta.dim !== EXPECTED_DIM))
             ) {
+              fail('model_mismatch');
               cleanup(null);
               return;
             }
             cleanup(reply.results as any[]);
           } else {
             // ok:false / malformed -> fall back to uv (never treat as "no match").
+            fail('ok_false');
             cleanup(null);
           }
         })
         .catch(() => {
           clearTimeout(overallTimer);
+          fail('transport');
           cleanup(null);
         });
     });

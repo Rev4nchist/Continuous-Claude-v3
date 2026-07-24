@@ -335,7 +335,7 @@ function _spawnLockPath() {
 var SPAWN_LOCK_TTL_MS = 6e4;
 var FRAME_SIZE_CAP_BYTES = 100 * 1024 * 1024;
 var DEFAULT_PING_TIMEOUT_MS = 1500;
-var DEFAULT_RECALL_TIMEOUT_MS = 3e3;
+var DEFAULT_RECALL_TIMEOUT_MS = 7e3;
 var EXPECTED_MODEL = "BAAI/bge-large-en-v1.5";
 var EXPECTED_DIM = 1024;
 function sendFrame(sock, obj) {
@@ -488,7 +488,13 @@ async function probeDaemon() {
 async function recallViaDaemon(info, query, k, opts = {}) {
   const timeoutMs = opts.timeoutMs ?? DEFAULT_RECALL_TIMEOUT_MS;
   const mode = opts.mode ?? "hybrid";
-  if (!query || !query.trim()) return null;
+  const fail = (reason) => {
+    if (opts.reasonRef) opts.reasonRef.reason = reason;
+  };
+  if (!query || !query.trim()) {
+    fail("empty_query");
+    return null;
+  }
   return new Promise((res) => {
     const sock = new net.Socket();
     let settled = false;
@@ -502,9 +508,13 @@ async function recallViaDaemon(info, query, k, opts = {}) {
       }
       res(val);
     };
-    const overallTimer = setTimeout(() => cleanup(null), timeoutMs);
+    const overallTimer = setTimeout(() => {
+      fail("timeout");
+      cleanup(null);
+    }, timeoutMs);
     sock.once("error", () => {
       clearTimeout(overallTimer);
+      fail("transport");
       cleanup(null);
     });
     sock.connect(info.port, "127.0.0.1", () => {
@@ -516,6 +526,7 @@ async function recallViaDaemon(info, query, k, opts = {}) {
         sendFrame(sock, { cmd: "recall", query, k, mode });
       } catch {
         clearTimeout(overallTimer);
+        fail("transport");
         cleanup(null);
         return;
       }
@@ -524,15 +535,18 @@ async function recallViaDaemon(info, query, k, opts = {}) {
         if (reply && typeof reply === "object" && reply.ok === true && Array.isArray(reply.results)) {
           const meta = reply._meta;
           if (meta && typeof meta === "object" && (meta.model && meta.model !== EXPECTED_MODEL || meta.dim && meta.dim !== EXPECTED_DIM)) {
+            fail("model_mismatch");
             cleanup(null);
             return;
           }
           cleanup(reply.results);
         } else {
+          fail("ok_false");
           cleanup(null);
         }
       }).catch(() => {
         clearTimeout(overallTimer);
+        fail("transport");
         cleanup(null);
       });
     });
@@ -1404,11 +1418,21 @@ function mapDbResults(rawResults, useHybrid) {
   return (rawResults || []).map((r) => {
     const content = r.content || "";
     const preview = content.split("\n").filter((l) => l.trim().length > 0).map((l) => l.trim()).join(" ").slice(0, 120);
+    let storedDate;
+    const rawCreated = r.created_at;
+    if (rawCreated != null) {
+      try {
+        const d = typeof rawCreated === "number" ? new Date(rawCreated * 1e3) : new Date(String(rawCreated));
+        if (!Number.isNaN(d.getTime())) storedDate = d.toISOString().slice(0, 10);
+      } catch {
+      }
+    }
     return {
       id: (r.id || "unknown").slice(0, 8),
       type: r.learning_type || r.type || "UNKNOWN",
       content: preview + (content.length > 120 ? "..." : ""),
-      score: (useHybrid ? r.base_score ?? r.score : r.score) || 0
+      score: (useHybrid ? r.base_score ?? r.score : r.score) || 0,
+      storedDate
     };
   });
 }
@@ -1624,22 +1648,30 @@ async function main() {
   let dbTimedOut;
   let recallVia = "uv";
   let daemonRows = null;
-  if (probe?.recallReady) {
+  const daemonFail = {};
+  const daemonAttempted = !!probe?.recallReady;
+  if (daemonAttempted) {
     try {
-      daemonRows = await recallViaDaemon(probe.info, cleanSearchTerm(recallQuery), 3);
+      daemonRows = await recallViaDaemon(probe.info, cleanSearchTerm(recallQuery), 3, {
+        reasonRef: daemonFail
+      });
     } catch {
       daemonRows = null;
+      if (!daemonFail.reason) daemonFail.reason = "transport";
     }
   }
+  let uvUsedHybrid = false;
   if (daemonRows !== null) {
     db = mapDbResults(daemonRows, true);
     dbTimedOut = false;
     recallVia = "daemon";
   } else {
-    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, daemonReady);
+    uvUsedHybrid = daemonAttempted ? false : daemonReady;
+    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
-  const floorApplied = daemonReady ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
+  const usedHybridScores = recallVia === "daemon" || uvUsedHybrid;
+  const floorApplied = usedHybridScores ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
   const match = applyFloor(mergedRaw, floorApplied);
   const topScoreRaw = mergedRaw && mergedRaw.results.length > 0 ? mergedRaw.results.reduce((m, r) => Math.max(m, r.score ?? 0), 0) : 0;
   const logEntry = {
@@ -1661,6 +1693,8 @@ async function main() {
     db_subprocess_timed_out: dbTimedOut,
     // ST-05: 'daemon' when the resident recall op served this fire, else 'uv'.
     recall_via: recallVia,
+    daemon_fail_reason: recallVia === "uv" && daemonAttempted ? daemonFail.reason ?? null : null,
+    uv_mode: recallVia === "uv" ? uvUsedHybrid ? "hybrid" : "text-only" : null,
     // BLOCKER-2: host-memory-pressure telemetry. host_memory_pressure=true means
     // we forced text-only + skipped the daemon to avoid thrashing the model.
     host_memory_pressure: hostMemoryPressured,
@@ -1723,7 +1757,7 @@ async function main() {
     }
     const safeIntent = sanitizeMemoryContent(intent, 200);
     const resultLines = match.results.map(
-      (r, i) => `${i + 1}. [${sanitizeMemoryContent(String(r.type ?? "UNKNOWN"), 40)}] ${sanitizeMemoryContent(r.content)} (id: ${sanitizeMemoryContent(String(r.id ?? ""), 16)})`
+      (r, i) => `${i + 1}. [${sanitizeMemoryContent(String(r.type ?? "UNKNOWN"), 40)}] ${sanitizeMemoryContent(r.content)}${r.storedDate ? ` (stored ${r.storedDate}; may be stale)` : ""} (id: ${sanitizeMemoryContent(String(r.id ?? ""), 16)})`
     ).join("\n");
     const body = `MEMORY MATCH (${match.count} results) for "${safeIntent}":
 ${resultLines}`;

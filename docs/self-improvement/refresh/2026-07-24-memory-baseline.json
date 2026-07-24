@@ -1,0 +1,20 @@
+{
+  "captured": "2026-07-24",
+  "purpose": "SG-01 re-baseline BEFORE snapshot (proposal 07-12 R2). Recompute the same stats from .claude/logs/memory-recall.jsonl after ~1 week of live traffic on the R1 fix (timeout 3000->7000ms, reason codes, failed-daemon fallback -> --text-only) and compare. Fields daemon_fail_reason + uv_mode only exist in post-fix rows.",
+  "note": "total_elapsed_ms is WHOLE-HOOK elapsed (probe + recall + merge), not daemon-call latency alone. Post-fix attribution should pivot on daemon_fail_reason.",
+  "baseline": {
+    "total": 797,
+    "ready": 270,
+    "viaDaemon": 146,
+    "viaUv": 135,
+    "readyButUv": 126,
+    "readyFallbackPct": 47,
+    "daemon_total_elapsed_ms": { "n": 146, "p50": 2369, "p95": 3985, "p99": 6203 },
+    "uv_total_elapsed_ms": { "n": 135, "p50": 12295, "p95": 22911 }
+  },
+  "success_criteria": {
+    "readyFallbackPct": "<< 47 (target < 15)",
+    "uv_fallback_p50_ms": "~5000 or less when it does fall back (text-only cap) instead of ~12300",
+    "no_hit_rate_regression": "kept_after_floor / results_count distribution comparable to baseline"
+  }
+}

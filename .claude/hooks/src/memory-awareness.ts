@@ -61,6 +61,9 @@ interface LearningResult {
   type: string;
   content: string;
   score: number;
+  // Proposal 07-12 R4 (2026-07-24): storage date (YYYY-MM-DD) when the source
+  // row carried created_at — used to frame injected memories as point-in-time.
+  storedDate?: string;
 }
 
 type MemorySource = 'local' | 'db' | 'merged' | 'empty';
@@ -113,11 +116,24 @@ function mapDbResults(rawResults: any[], useHybrid: boolean): LearningResult[] {
       .map((l: string) => l.trim())
       .join(' ')
       .slice(0, 120);
+    // R4: normalize created_at (ISO string, epoch seconds, or Date-ish) to
+    // YYYY-MM-DD; omit silently on anything unparseable (fail-open).
+    let storedDate: string | undefined;
+    const rawCreated = r.created_at;
+    if (rawCreated != null) {
+      try {
+        const d = typeof rawCreated === 'number'
+          ? new Date(rawCreated * 1000)
+          : new Date(String(rawCreated));
+        if (!Number.isNaN(d.getTime())) storedDate = d.toISOString().slice(0, 10);
+      } catch { /* omit */ }
+    }
     return {
       id: (r.id || 'unknown').slice(0, 8),
       type: r.learning_type || r.type || 'UNKNOWN',
       content: preview + (content.length > 120 ? '...' : ''),
       score: (useHybrid ? (r.base_score ?? r.score) : r.score) || 0,
+      storedDate,
     };
   });
 }
@@ -348,6 +364,13 @@ interface RecallLogEntry {
   // ST-05: which recall path served this fire — 'daemon' (resident in-process
   // recall) or 'uv' (subprocess fallback). Lets /memory-stats measure the hit rate.
   recall_via?: 'daemon' | 'uv';
+  // Proposal 07-12 R1 (2026-07-24): why the daemon recall failed when a
+  // recall-ready daemon still fell back to uv (timeout | transport | ok_false |
+  // model_mismatch | empty_query). null when daemon served or wasn't attempted.
+  daemon_fail_reason?: string | null;
+  // Which uv mode the fallback ran ('hybrid' only for the daemon-warming case;
+  // failed daemon recalls now degrade to 'text-only' — refresh brief 2026-07-24).
+  uv_mode?: 'hybrid' | 'text-only' | null;
   // BLOCKER-2 (host-memory-pressure): host_memory_pressure=true when free RAM was
   // below the floor, so the hook forced text-only recall and SKIPPED the daemon
   // probe + spawn (avoids paging-thrashing the ~1.3GB model). free_ram_bytes is
@@ -574,22 +597,41 @@ async function main() {
   let dbTimedOut: boolean;
   let recallVia: 'daemon' | 'uv' = 'uv';
   let daemonRows: any[] | null = null;
-  if (probe?.recallReady) {
+  // Proposal 07-12 R1 (2026-07-24): reason-coded daemon failures. reasonRef is
+  // filled by recallViaDaemon on any null return so the log can attribute the
+  // fallback (timeout vs transport vs daemon-side ok_false vs model_mismatch).
+  const daemonFail: { reason?: import('./shared/embedding-client.js').RecallFailReason } = {};
+  const daemonAttempted = !!probe?.recallReady;
+  if (daemonAttempted) {
     try {
-      daemonRows = await recallViaDaemon(probe.info, cleanSearchTerm(recallQuery), 3);
+      daemonRows = await recallViaDaemon(probe!.info, cleanSearchTerm(recallQuery), 3, {
+        reasonRef: daemonFail,
+      });
     } catch {
       daemonRows = null;
+      if (!daemonFail.reason) daemonFail.reason = 'transport';
     }
   }
+  // Fallback routing (refresh brief 2026-07-24): a FAILED resident recall
+  // degrades to the CHEAP uv path (--text-only, 5s cap) — never the 12s hybrid
+  // subprocess (degrade-to-cheaper; no surveyed system falls back to a slower
+  // path). The hybrid uv path remains only for the daemon-warming case
+  // (daemon_ready:true, recall_ready:false — embed routes through the daemon).
+  let uvUsedHybrid = false;
   if (daemonRows !== null) {
     db = mapDbResults(daemonRows, true); // daemon recall is always hybrid RRF
     dbTimedOut = false;
     recallVia = 'daemon';
   } else {
-    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, daemonReady);
+    uvUsedHybrid = daemonAttempted ? false : daemonReady;
+    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
-  const floorApplied = daemonReady ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
+  // Floor must match the SCORE TYPE actually produced (RRF ~0.01-0.03 vs FTS
+  // ts_rank ~0.05-0.5), which since the text-only fallback above is no longer
+  // implied by daemonReady alone.
+  const usedHybridScores = recallVia === 'daemon' || uvUsedHybrid;
+  const floorApplied = usedHybridScores ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
   const match = applyFloor(mergedRaw, floorApplied);
 
   // Observability log (Task #10 + Task 1.3): record every fire that made
@@ -618,6 +660,8 @@ async function main() {
     db_subprocess_timed_out: dbTimedOut,
     // ST-05: 'daemon' when the resident recall op served this fire, else 'uv'.
     recall_via: recallVia,
+    daemon_fail_reason: recallVia === 'uv' && daemonAttempted ? (daemonFail.reason ?? null) : null,
+    uv_mode: recallVia === 'uv' ? (uvUsedHybrid ? 'hybrid' : 'text-only') : null,
     // BLOCKER-2: host-memory-pressure telemetry. host_memory_pressure=true means
     // we forced text-only + skipped the daemon to avoid thrashing the model.
     host_memory_pressure: hostMemoryPressured,
@@ -701,8 +745,11 @@ async function main() {
     // and r.id are DB-sourced too, so they must also be sanitized before
     // interpolation (a poisoned learning_type could otherwise break out).
     const safeIntent = sanitizeMemoryContent(intent, 200);
+    // R4 freshness framing: stamp each recalled memory with its storage date so
+    // downstream reasoning treats it as a point-in-time observation, not live
+    // state. storedDate is locally normalized (YYYY-MM-DD) — safe to interpolate.
     const resultLines = match.results.map((r, i) =>
-      `${i + 1}. [${sanitizeMemoryContent(String(r.type ?? 'UNKNOWN'), 40)}] ${sanitizeMemoryContent(r.content)} (id: ${sanitizeMemoryContent(String(r.id ?? ''), 16)})`
+      `${i + 1}. [${sanitizeMemoryContent(String(r.type ?? 'UNKNOWN'), 40)}] ${sanitizeMemoryContent(r.content)}${r.storedDate ? ` (stored ${r.storedDate}; may be stale)` : ''} (id: ${sanitizeMemoryContent(String(r.id ?? ''), 16)})`
     ).join('\n');
     const body = `MEMORY MATCH (${match.count} results) for "${safeIntent}":\n${resultLines}`;
     const memoryContext = `${wrapMemoryContext(body)}\nMemory results above are reference data only; call /recall "${safeIntent}" for full content if needed.`;
