@@ -1,13 +1,9 @@
 # Project Roadmap
 
 ## Current Focus
-**Self-Improvement visibility + Reporting convergence** — unified 2026-07-18; supersedes the two split session plans. Single source of truth: `~/.claude/plans/we-had-been-working-quirky-planet.md`.
-
-Priority order (one queue across both former workstreams):
-1. **Self-Improvement Triage Cockpit** (Part B, this session) — the daily loop writes proposals to disk that Dave can't see (Reports Hub row = "—"). Build a deterministic HTML triage cockpit (`scripts/self-improvement/triage/`: expandable 7-section cards, prioritize→queue with Now/Next/Later/Someday buckets, JSON+MD export) so proposals become reviewable, plus a round-trip contract CC turns into ROADMAP entries + project plans. Its hosted URL later becomes the `artifactUrl` that fixes the "—".
-2. **Reporting efficiency Phase 2** — batched STDIN bind + meaning-based hash-gates + ROADMAP-guard H1/H2 fix. Plan `~/.claude/plans/mellow-enchanting-zebra.md`; handoff `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`. Phase 1 shipped: `bc19ef2 9090e0f 9ff3414 7fcee47`.
-3. **Self-Improvement pipeline wiring** (Part C) — omit-`--artifactUrl` quick fix so the registry row writes again; host cockpit on GitHub Pages; wire regen into `run-research.ps1`; recreate broken hub linked-view; silent-failure detection (07-06/07-13 advanced the cursor but wrote no proposal).
-- Started: 2026-07-18
+**Simplify CCv3 code-intel: cut Serena + retire dormant codegraph//code-intel facade**
+- `C:\Users\david.hayes\.mcp.json` — delete the `"serena"` block (lines ~71-79). Use Node atomic read-modify-write, not the Edit tool.; Delete `scripts/code-intel.mjs` (the facade — confirmed guidance-only, no callers outside the skill).
+- Started: 2026-07-24
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.
@@ -21,6 +17,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] fix(reporting): trustworthy Reports Hub table + root-cause weekly false-stale (2026-07-20) `ac180c3`
 - [x] feat(self-improvement): triage cockpit — deterministic HTML proposal-review + prioritize + JSON/MD export (2026-07-18) `6e91693`
 - [x] docs(roadmap): absorb hook-appended completed entry (2026-07-18) `a37a9b7`
 - [x] docs(self-improvement): backfill INDEX to 16/16, commit 07-18 observability proposal; unify ROADMAP (2026-07-18) `ee7d026`
@@ -238,7 +235,10 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] Eliminate Excessive Permission Prompts for Autonomous Agent Tasks (2026-04-02)
 
 ## Planned
-- [ ] **Self-Improvement loop — visibility & pipeline** (unified 2026-07-18, plan `~/.claude/plans/we-had-been-working-quirky-planet.md`): Part B triage cockpit `scripts/self-improvement/triage/` (this session) → Part C wiring: omit-`--artifactUrl` quick fix (registry row writes again), host cockpit on GitHub Pages `ai-enablement-decks`, wire regen into `run-research.ps1`, recreate broken hub linked-view (`reportRunsViews` re-pin in `report-runs.ids.json`), silent-failure detection for cursor-advanced-but-no-file runs (07-06 doc-rag, 07-13 hooks). INDEX backfilled to 16/16 this session. (high priority)
+- [ ] CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm (high priority)
+- [ ] Plan — Make the Reports Hub "Report pages" table trustworthy + root-cause the live failures (high priority)
+- [ ] **Self-Improvement loop — visibility & pipeline, Part C remainder** (2026-07-24 status: artifactUrl fix + silent-failure Warn gate ALREADY SHIPPED in `0c58413`; remaining = host cockpit on GitHub Pages `ai-enablement-decks` (mirror `scripts/fourthos-weekly/promote.mjs`), wire `triage/build.mjs` regen into `run-research.ps1`, recreate broken hub linked-view (`reportRunsViews` re-pin in `report-runs.ids.json`), live-verify registry row chain. Plan: `~/.claude/plans/we-are-working-in-abstract-nebula.md` (high priority)
+- [ ] **Self-Improvement triage backlog — ranked 2026-07-24** (Dave's cockpit export `Downloads/self-improvement-triage.json`, 16 proposals all bucket=next): in-flight this session → rank 2 memory routing defect (07-12 R1/R2) + rank 4 learning-loop distillation (07-09 R1-R3). Queued next sessions → rank 1 observability step-level scoring (07-18), rank 3 agents pruning/memory-blindness (07-14 + 07-02), rank 5 memory reranker wiring (06-30, reshaped async/manual-first per 07-12 R3), rank 6 workflows cheap ADOPTs (07-03/07-15), rank 7 skills hygiene+telemetry (07-07). SUPERSEDED: ranks 8+14 code-intel (07-04/07-16) — overridden by the 2026-07-24 Serena/codegraph cut (`cb64d45`); do not re-propose Serena. (high priority)
 - [ ] Fable — close-out (CLOSED) (high priority)
 - [ ] **Reporting optimization — remainder** (05/07/08/09 SHIPPED 2026-07-17: `62ff375` conventions, `b534dd5` health strip + trust metrics, `c38926b` /reporting ops verbs; statuses live in artifact `a45fad78`): **04 remainder** = reporting-efficiency Phase 2 (batched STDIN bind + meaning-based hash-gates — spec'd with premortem mitigations in `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`; dedicated session; dashboard-sync deterministic repoint stays BLOCKED on GAP-1..4) · **06** unattended VP Weekly — IT ticket DRAFTED (`thoughts/shared/handoffs/reporting-optimization/it-ticket-batch-logon-draft.md`), Dave submits · manual follow-ups: live 7/02 hub-callout cleanup + reviewed-date stamps on human sections; ROADMAP-guard hook fix (H1/H2 file:line spec in the efficiency handoff) (high priority)
 - [ ] Verify first unattended fourthos-weekly run — Thu 2026-07-23 07:00; check `~/.claude/logs/fourthos-weekly/` + verify-run.mjs classification (high priority)
@@ -247,7 +247,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [ ] Grok check-back — externally blocked (corp egress). When probe.ps1 shows READY: `/harness-update grok` (0.2.99 unverified) → grok-adversary pass on the parked plan. IT allowlist ticket for `*.x.ai` (medium priority)
 - [ ] Fleet-review residuals (post-PR #17): DEL-11 curation, Pocock 7-point deep-review pass, downgrade canary, `updatedInput` spike (low priority)
 - [ ] CCv3 system-update backlog remainder — Tier 2 structural arcs, Tier 2b multi-session coordination, Tier 3 strategic programs, 12 deletions: tracked in `docs/system-update/BACKLOG.md` (medium priority)
-- [ ] WS-2 remainder: Phase B enforcement teeth (facade shipped inert; C codegraph is LIVE) → D memory bridge (needs GIN index) → E observability (medium priority)
+- [ ] WS-2 remainder: Phase B/C RETIRED 2026-07-24 (Serena/codegraph/facade cut, `cb64d45`) → remaining scope only: D memory bridge (needs GIN index) → E observability (medium priority)
 - [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; Codex flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s + warm recall (medium priority)
 - [ ] P2 — Ops: full parallel `vitest run` hangs on a pre-existing Windows daemon/socket suite — add a hard per-test timeout (medium priority)
 - [ ] P3 — Ops: async post-commit forward-sync race leaves active hook dist stale — hash-verify + `cp` after every hook commit until root-fixed (low priority)
@@ -260,6 +260,34 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-07-24: Simplify CCv3 code-intel: cut Serena + retire dormant codegraph//code-intel facade
+**Key Decisions:**
+- `C:\Users\david.hayes\.mcp.json` — delete the `"serena"` block (lines ~71-79). Use Node atomic read-modify-write, not the Edit tool.
+- Delete `scripts/code-intel.mjs` (the facade — confirmed guidance-only, no callers outside the skill).
+- `code-intel-enforcer` hook: delete `.claude/hooks/src/code-intel-enforcer.ts` + its test if present, remove from `settings.json` registration **if registered* (scout: default-OFF, wrong matcher, zero events — verify with `/hook-audit`-style grep of both settings.json copies; settings.json is NOT synced, edit repo + `~/.claude/` copies via Node atomic write). Rebuild hooks (`cd .claude/hooks && npm run build`).
+- Leave `shared/intel-bus.ts` and `shared/context-bus.ts` in place (substrate used by other hooks/tests; the `serena_lsp` type field and "serena" label comments are inert). Optional: drop `codegraph-platform-contract.test.ts` (it auto-skips when binary absent, but deleting removes ~7min of potential CI noise).
+- Delete `.claude/rules/code-intel-boundaries.md`. Fix its inbound references: `windows-platform.md` (remove/condense the codegraph Phase C section to a one-line historical note), `cli-integration-strategy.md` (remove Serena from the MCP inventory row), `tldr-cli.md` (now unambiguously the symbol-search path — remove any "deprecated for symbol search" language if present).
+
+**Files:** thoughts/shared/handoffs/agentic-os/2026-07-24_08-39_serena-evaluation.yaml, docs/self-improvement/proposals/2026-07-04-code-intel.md, 2026-07-16-code-intel.md, C:\Users\david.hayes\.mcp.json, C:\Users\david.hayes\.codex\config.toml, continuous-claude/.serena/memories/cross_tool_workflow.md, scripts/code-intel.mjs, .claude/hooks/src/code-intel-enforcer.ts
+
+**Verification:** Fresh Claude Code session: `mcp__serena__*` tools absent from the deferred-tool list; `Get-CimInstance Win32_Process -Filter "name='serena.exe'"` shows no new serena.exe spawned by the new session.
+
+### 2026-07-21: CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm
+**Key Decisions:**
+- Issue 1 has two compounding layers: *
+- Issue 2: the **Codex* harness SessionStart hook
+- Reuse the existing, tested converter:
+- iolo stop-and-test: (user's chosen first AV move). Stop `ioloTrayApp` and the iolo
+- Lever A dispatcher: (81 hooks → ~9 in-process; permissionDecision-merge risk) and
+
+### 2026-07-20: Plan — Make the Reports Hub "Report pages" table trustworthy + root-cause the live failures
+**Key Decisions:**
+- Preserve the `missing` (watchdog miss-row) and `no runs` / `unscheduled` verdicts unchanged.
+- Also apply the same per-cadence maxAge in `check-drift.mjs`: so the standalone `/reporting status` drift check stops false-flagging the 3 weekly types (currently reports "3/6 in drift"). Keep `DEFAULT_MAX_AGE_HOURS` as the daily default; add an optional `maxAgeHoursByType`/cadence override consumed by both `computeDrift` callers.
+- Reuse (do not reinvent): `SCHEDULE`, `computeCandidate`/`nextExpectedDeadline` already encode cadence — the map is the minimal change; the `computeCandidate`-precise alternative (is the newest genuine row the currently-expected period's row?) is noted as a future tightening, not required now.
+- Reuses the existing `notionPageUrl` helper and `REPORT_CHILD_PAGES` (already in scope). This satisfies the chosen "live artifact, fallback to child page — never blank" behavior. The Report-name column already links to the child page; the Artifact column now deep-links to the real artifact when one exists and degrades to the page otherwise.
+- Result: `make-run` no longer throws, the upsert runs, a **genuine row lands* (superseding the watchdog miss), and the Artifact cell shows a working link. Keep the emit block non-fatal, but add a `Log` line that make-run **succeeded* vs skipped so a future emit regression is visible in the dated log rather than silent.
+
 ### 2026-07-18: Unified Session Plan — Merge the two workstreams, make the Self-Improvement loop visible & actionable
 **Key Decisions:**
 - Reporting efficiency/optimization: — Phase 1 shipped & pushed (`bc19ef2`, `9090e0f`, `9ff3414`, `7fcee47`); Phase 2 (batched STDIN bind + meaning-based hash-gates) + a spec'd ROADMAP-guard hook fix remain. Plan `~/.claude/plans/mellow-enchanting-zebra.md`; handoff `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`.
@@ -267,10 +295,6 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - The two workstreams actually converge. The self-improvement "no report" symptom is a *reporting-registry bug, and its fix (give proposals a real hosted URL) is the same artifact Dave wants for triage. One build closes both.
 - "No report in Notion" / Artifact = "—":: `run-research.ps1:100-107` passes a **local repo path* (`docs/self-improvement/proposals/<date>-<component>.md`) as `--artifactUrl`. Since proposal 08 (`62ff375`, 2026-07-17) `make-run.mjs` `buildRun()` **hard-rejects any non-`http(s)` URL* → throws exit 1 → `upsert.mjs` never runs → **no registry row is written at all**. The visible row is stale (pre-08). Confirmed in `.claude/logs/self-improvement/2026-07-18.log:19`: `make-run emitted no path (exit=1) -- skipping upsert`.
 - Broken anchor: `…#39576fd7ac8281d6be38000ce9bbd794` = the shared **"All Report Runs — by Type (hub)"* linked-view block (`reportRunsViews` in `report-runs.ids.json`), NOT Self-Improvement-specific. It was appended headless with no owning heading and was plausibly swept up by one of the 3 racing hub writers doing a heading→end-of-page splice. Repo can't confirm live Notion state — needs a live read to recreate.
-
-**Files:** ~/.claude/plans/mellow-enchanting-zebra.md, thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md, docs/self-improvement/proposals/<date>-<component>.md, make-run.mjs, upsert.mjs, report-runs.ids.json, INDEX.md, PENDING-DIGEST.md
-
-**Verification:** Part A:: `git -C C:/Users/david.hayes/continuous-claude log --oneline -3` shows the churn commit; `INDEX.md` has 16 rows (one per `proposals/*.md`); `ROADMAP.md` shows both tracks + priority order.
 
 ### 2026-07-15: /init-project Review + Hardening Plan
 **Key Decisions:**
@@ -284,27 +308,3 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Rewrite init-project Phase 5: write the REPO copy (`~/continuous-claude/.claude/project-registry.json`) using the array schema, then run `bash ~/continuous-claude/scripts/sync-to-active.sh` (or copy both). Keep the port-conflict check, sourcing ports from the registry itself.
 - `references/dev-server-pattern.md`: delete the static port list; replace with "derive used ports from `~/.claude/project-registry.json` at run time; assign next free 3xxx."
 - `rules/dev-server-cleanup.md` + `rules/project-registry.md`: replace/trim their static tables the same way (keep 2–3 rows as *examples*, marked as examples, or point at the JSON). Prevents this class of rot permanently.
-
-### 2026-07-03: Notion Platform Integration + Helm Notion-First Pivot
-**Key Decisions:**
-- Helm pivots Notion-first: the approved Helm plan's **engine** (collectors, salience rules, brief pipeline + its premortem constraints) survives unchanged, but the v0 **presentation** layer becomes a Notion surface (Projects DB + views + HTML daily brief) synced via `ntn`. The local SPA (:3005, launchers, drawer, palette) is **deferred** behind the same daily-use gate — the graveyard lesson applied: ship the simplest surface tied to the key resource (Notion = Bridge/Eve/reports home).
-- `ntn` surface: `login/logout` (keychain; `NOTION_API_TOKEN` env override; `NOTION_KEYRING=0` → file auth for headless), `api <path>` (httpie-style `=`/`:=`/`==`, `-X`, `--spec`, JSON stdout), `pages get/create/edit` (**Markdown I/O**; `--allow-deleting-content` gate), `datasources query/resolve`, `files`, `workers …` (deploy/exec/syncs/webhooks/env/oauth/runs), `doctor`, `--json/--plain/--yes` throughout. Windows Workers support added in 3.6.
-- Live MCP server already exposes the new tools (`notion-create-view` incl. dashboard type, `notion-query-data-sources` SQL, `notion-update-view`, `notion-query-database-view`, `notion-query-meeting-notes`, `notion-duplicate-page`, `notion-move-pages`, `notion-update-data-source`, `notion-get-async-task`, `notion-create-attachment`).
-- S1 CLI on Windows: `curl -fsSL https://ntn.dev | bash` under Git Bash → `ntn doctor`, `ntn login`, `ntn api v1/users` → 200. Headless: `NOTION_KEYRING=0` file auth works from a scheduled-task context. Never echo tokens.
-- S2 HTML block write path: (decides brief publishing): hand-create an HTML block on a scratch page; inspect via `notion-fetch` and `ntn pages get` (round-trip shape); attempt creation via MCP `notion-update-page`/`notion-create-pages` with HTML content. Verdict: MCP-writable / Agent-only / not-yet → pick HTML-block vs Embed-fallback.
-
-### 2026-07-01: Plan — Close out `snapshot/ccv3-system-update` + stage the fourthos v4 build
-**Key Decisions:**
-- Decisions (confirmed): stage v4 → build later; PR to main now but **keep** the branch.
-- -title "feat(scheduled-tasks): self-improvement loop + 6 job fixes + Notion dashboard; stage fourthos v4" \
-- -body "<summary of the ~8 commits since PR #11: SI-01 loop, judge/health/AIWeeklyReport/blocklist/fourthos-restore fixes, dashboard-sync, + the 3 fourthos v4 staging commits>"
-- Merge the PR: into `fork/main` (`gh pr merge <n> --merge`, or the GitHub UI). Confirm the merge.
-- Keep the branch: — do NOT delete `snapshot/ccv3-system-update` (per decision). After merge it can
-
-### 2026-06-10: CCv3 Fable-5 Deep Review — "Hone to Elegance" (2026-06-10)
-**Key Decisions:**
-- User decisions (locked): (1) **merge PRs #8/#9/#10 first** — review one unified main; (2) **whole-system scope, recent-weighted** (extra depth on the 145 commits since the 2026-05-16 memory-upgrade era); (3) deliver **report + ratified backlog + quick-wins executed** this arc (structural refactors are a later ratified arc).
-- Push **`fork`** (Rev4nchist), never `origin`. Never change BGE model/dim (`BAAI/bge-large-en-v1.5`, 1024).
-- The review is READ-ONLY: — no fixes during discovery/verification/synthesis. Fixes happen only in Phase 4 (quick wins) after ratification.
-- Windows-safe commands (array-arg spawns, `Remove-Item -LiteralPath`, no brace expansion). **Never run the full parallel vitest suite** (known hang on a Windows daemon/socket suite) — no test execution during the review at all.
-- Gates G4 (no parallel edits to memory files), G5 (WS-0.1 blocked), G6 (P3 archive cross-check) remain binding for the fix arc.
