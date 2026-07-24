@@ -44,7 +44,6 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 | `fetch` | `~/.claude/settings.json` | stdio (uvx) | Generic URL fetch fallback |
 | `pageindex` | `~/.claude/settings.json` + `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Document search (long PDFs) |
 | `nia` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (uv) | External-source semantic indexing |
-| `serena` | `~/.mcp.json` | stdio | Semantic code symbol navigation |
 | `context7` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Real-time library/SDK docs |
 | `github` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | GitHub API (issues, PRs, search) |
 | `playwright` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Browser automation (Tier 1) |

@@ -37,8 +37,8 @@ RESEARCH
     ├── Multiple sources needed?
     │   └── YES → Parallel: scout + oracle
     │
-    ├── Symbol navigation (go-to-def, find-refs)?
-    │   └── YES → Serena MCP (resolves through barrel files, re-exports)
+    ├── Symbol navigation (who-calls, find-refs)?
+    │   └── YES → tldr impact / tldr importers (call graph + import tracking)
     │   Text pattern search → scout / Grep
     │
     └── Structured platform data (Twitter, Reddit, HN, YouTube)?
@@ -52,7 +52,7 @@ RESEARCH
 | Find code patterns | scout | Uses Grep, Glob, Read |
 | Library docs | oracle | Uses WebSearch, WebFetch |
 | External repo | pathfinder | Clones and analyzes |
-| Symbol navigation | Serena MCP | Go-to-def, find-refs, resolves barrel files |
+| Symbol navigation | TLDR CLI | `tldr impact` (callers), `tldr importers` (imports) |
 | Platform data | opencli | Twitter, Reddit, HN, YouTube (44 adapters) |
 
 ---

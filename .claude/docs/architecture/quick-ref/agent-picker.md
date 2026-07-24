@@ -10,7 +10,7 @@
 | Explore codebase | scout | sonnet | Internal code only |
 | External docs/APIs/Exa/OpenCLI | oracle | opus | 7-tool research stack (Context7, Nia, Exa, OpenCLI, GitHub, WebSearch, WebFetch) |
 | GitHub repos | pathfinder | opus | Clone and analyze |
-| Symbol navigation | Serena | MCP | go-to-definition, find-references (resolves re-exports) |
+| Symbol navigation | TLDR CLI | CLI | `tldr impact` (callers), `tldr importers` (reverse imports) |
 | **Planning** |
 | Feature design | architect | opus | Before implementing |
 | Refactor plan | phoenix | opus | Migration planning |

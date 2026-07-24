@@ -47,11 +47,6 @@
         "NIA_API_URL": "https://apigcp.trynia.ai/"
       },
       "type": "stdio"
-    },
-    "serena": {
-      "type": "stdio",
-      "command": "serena",
-      "args": ["start-mcp-server", "--context", "claude-code"]
     }
   }
 }
