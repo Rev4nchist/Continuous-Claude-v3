@@ -67,7 +67,7 @@ npx tsc --noEmit path/to/file.ts
 
 CRITICAL — Read this before editing any TypeScript hook in `.claude/hooks/src/`.
 
-1. **Use minimal-diff Edit, never whole-file regeneration.** The `void emitBraintrustScore(...)` block in `memory-awareness.ts` has been silently dropped 5 times by sparks that used Write or Serena `replace_symbol_body` instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
+1. **Use minimal-diff Edit, never whole-file regeneration.** The `void emitBraintrustScore(...)` block in `memory-awareness.ts` has been silently dropped 5 times by sparks that used Write (whole-file regeneration) instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
 
 2. **Verify every TS hook edit at write time.** After every Edit on a file under `.claude/hooks/src/`, run:
    ```bash
