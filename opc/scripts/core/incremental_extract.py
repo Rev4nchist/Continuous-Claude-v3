@@ -372,8 +372,10 @@ async def store_thinking_learning(
     content: str,
     session_id: str,
     project_dir: str | None,
+    context: str | None = None,
+    extra_tags: list[str] | None = None,
 ) -> dict:
-    """Store a thinking block as a learning."""
+    """Store a thinking block (or its distilled lesson) as a learning."""
     try:
         from store_learning import store_learning_v2
     except ImportError:
@@ -388,6 +390,8 @@ async def store_thinking_learning(
     # Extract tags from content (simple keyword extraction)
     content_lower = content.lower()
     tags = ["auto_extracted", "thinking_block"]
+    if extra_tags:
+        tags.extend(extra_tags)
     keywords = ["hook", "test", "build", "api", "database", "ui", "config"]
     for kw in keywords:
         if kw in content_lower:
@@ -404,7 +408,7 @@ async def store_thinking_learning(
         session_id=session_id,
         content=content[:2000],  # Limit size
         learning_type=learning_type,
-        context="extracted from thinking block",
+        context=context or "extracted from thinking block",
         tags=tags,
         confidence="medium",
         project_dir=project_dir,
@@ -576,13 +580,72 @@ async def extract_incremental(
     tool_errors_to_store = quality_filtered_errors
     result["learnings_skipped"] += quality_skipped
 
-    # Store thinking learnings
-    for thinking in learnings_to_store:
+    # --- LLM distillation before store (proposal 07-09 R2, 2026-07-24) ---
+    # One batched headless `claude -p` call turns raw thinking blocks into
+    # crisp lessons. Secret-bearing candidates never reach the model (egress
+    # guard) and take the legacy verbatim path. Any distiller failure falls
+    # back to verbatim for ALL candidates — extraction is never lost to a
+    # broken distiller. Kill switch: CCV3_DISTILL=0. The distiller child
+    # carries CCV3_DISTILL_CHILD=1 so extraction hooks can never cascade.
+    # store_items: (content, context, extra_tags) triples.
+    store_items: list[tuple[str, str | None, list[str] | None]] = []
+    distill_enabled = os.environ.get("CCV3_DISTILL", "1") != "0"
+    if distill_enabled and learnings_to_store:
+        try:
+            from distill_learning import distill, is_secret_bearing, looks_injected
+        except ImportError:
+            sys.path.insert(0, os.path.dirname(__file__))
+            from distill_learning import distill, is_secret_bearing, looks_injected
+
+        secretful = [t for t in learnings_to_store if is_secret_bearing(t)]
+        clean = [t for t in learnings_to_store if not is_secret_bearing(t)]
+        for t in secretful:  # non-LLM path only (egress guard)
+            store_items.append((t, None, None))
+
+        distilled = distill(clean) if clean else []
+        if distilled is None:
+            # Distiller failure -> verbatim fallback, nothing lost.
+            for t in clean:
+                store_items.append((t, None, None))
+        else:
+            by_index = {d["index"]: d for d in distilled}
+            for i, raw in enumerate(clean):
+                d = by_index.get(i)
+                if d is None:
+                    # Model omitted this candidate -> verbatim fallback.
+                    store_items.append((raw, None, None))
+                    continue
+                if d["action"] == "skip":
+                    result["learnings_skipped"] += 1
+                    continue
+                lesson = f"{d['lesson']}"
+                if d["why"]:
+                    lesson += f"\nWhy: {d['why']}"
+                if d["how_to_apply"]:
+                    lesson += f"\nApply: {d['how_to_apply']}"
+                # Post-distillation gates: NOISE re-score + injection shape
+                # (memory-injection defense — distilled text becomes trusted
+                # context in future sessions).
+                if looks_injected(lesson) or score_extraction(lesson)["classification"] == "NOISE":
+                    result["learnings_skipped"] += 1
+                    continue
+                # Verbatim companion (ablations favor keeping the source):
+                # carried in context, truncated, for traceability.
+                ctx = f"distilled from thinking block; verbatim excerpt: {raw[:400]}"
+                store_items.append((lesson, ctx, ["distilled"]))
+    else:
+        for t in learnings_to_store:
+            store_items.append((t, None, None))
+
+    # Store thinking learnings (distilled or verbatim)
+    for content_item, ctx_item, tags_item in store_items:
         try:
             store_result = await store_thinking_learning(
-                content=thinking,
+                content=content_item,
                 session_id=session_id,
                 project_dir=project_dir,
+                context=ctx_item,
+                extra_tags=tags_item,
             )
 
             if store_result.get("success"):

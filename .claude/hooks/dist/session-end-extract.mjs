@@ -104,6 +104,10 @@ function extractLearningsLegacy(sessionId, projectDir) {
   console.error(`\u2713 Memory extraction started for session ${sessionId.slice(0, 8)}...`);
 }
 async function main() {
+  if (process.env.CCV3_DISTILL_CHILD) {
+    console.log(JSON.stringify({ result: "continue" }));
+    return;
+  }
   const input = await readStdin();
   if (!input.trim()) {
     console.log(JSON.stringify({ result: "continue" }));

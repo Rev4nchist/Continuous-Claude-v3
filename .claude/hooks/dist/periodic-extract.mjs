@@ -2,7 +2,6 @@
 import { readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
 import { join } from "path";
-import { spawn } from "child_process";
 var INTERVAL = 50;
 function loadState(stateFile) {
   const defaults = { count: 0, lastExtract: 0, tools: [] };
@@ -77,39 +76,6 @@ async function main() {
     saveState(stateFile, state);
     console.log(JSON.stringify({}));
     return;
-  }
-  const opcDir = process.env.CLAUDE_OPC_DIR;
-  if (!opcDir) {
-    saveState(stateFile, state);
-    console.log(JSON.stringify({}));
-    return;
-  }
-  const content = buildLearningContent(state, sessionId);
-  try {
-    const child = spawn("uv", [
-      "run",
-      "python",
-      "scripts/core/store_learning.py",
-      "--session-id",
-      sessionId,
-      "--type",
-      "OPEN_THREAD",
-      "--content",
-      content,
-      "--context",
-      "periodic mid-session extraction",
-      "--tags",
-      "periodic,extraction,scope:project",
-      "--confidence",
-      "low"
-    ], {
-      cwd: opcDir,
-      detached: true,
-      stdio: "ignore",
-      env: { ...process.env, PYTHONPATH: "." }
-    });
-    child.unref();
-  } catch {
   }
   state.lastExtract = Date.now();
   saveState(stateFile, state);

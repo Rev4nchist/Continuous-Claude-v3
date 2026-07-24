@@ -227,6 +227,10 @@ function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile
   }
 }
 async function main() {
+  if (process.env.CCV3_DISTILL_CHILD) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
   const input = await readStdin();
   if (!input.trim()) {
     console.log(JSON.stringify({ continue: true }));

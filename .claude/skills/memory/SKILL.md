@@ -468,6 +468,21 @@ All extraction hooks (`agent-error-capture`, `browser-learning-extractor`, etc.)
 | Observability | `.claude/logs/memory-recall.jsonl` + `/memory-stats` skill |
 | `EMBEDDING_DIMENSION` | Env var to configure vector dimension |
 
+## Three-Tier Reconciliation with Native Auto Memory (07-09 R3, 2026-07-24)
+
+CCv3's Postgres pipeline and Claude Code's native Auto memory (`~/.claude/projects/<project>/memory/`) coexist by ROLE, not by sync:
+
+| Tier | Owner | What lives there |
+|------|-------|------------------|
+| Rules / standing behavior | `CLAUDE.md` + `.claude/rules/` | How to work — never stored as "memories" |
+| Curated always-loaded index | Native `MEMORY.md` + topic files (200-line / 25KB cap on MEMORY.md) | One-line pointers to durable project facts; model-curated, may be rewritten by native memory at any time |
+| Full searchable archive | PostgreSQL `archival_memory` (this skill) | Every distilled learning, semantically recallable at scale |
+
+Rules:
+- **No bidirectional sync.** Native memory is model-owned and rewritable ("auto-dream" risk) — never treat it as an authoritative mirror of Postgres, and never script writes into it from the extraction pipeline.
+- **Auto-extraction writes go to Postgres only** (now LLM-distilled before store — see `opc/scripts/core/distill_learning.py`; verbatim source kept as a context excerpt, `distilled` tag). Native MEMORY.md entries are written by the model in-session, by judgment.
+- **Watch the MEMORY.md byte cap**: the cap is 200 lines OR 25KB, whichever hits first (2026-07-24 audit: 114 lines but 19.3KB — bytes, not lines, are the binding constraint here; heavy lines silently truncate).
+
 ---
 
 ## Proactive Memory Usage
