@@ -147,6 +147,23 @@ try {
   $ErrorActionPreference = $prevEAP
 }
 
+# --- Triage cockpit refresh (Part C, 2026-07-24): rebuild + publish the cockpit so the
+# hosted copy reflects today's proposal set. Non-fatal; runs in THIS parent process.
+# publish.mjs lands a DATED immutable folder + latest/ alias on the decks Pages site
+# (unlisted, no card) and deliberately never touches the registry artifactUrl (which
+# stays on the Notion child page above — Codex premortem findings #1/#2).
+$prevEAP = $ErrorActionPreference
+$ErrorActionPreference = 'Continue'
+try {
+  $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
+  & $node (Join-Path $si 'triage\publish.mjs') 2>&1 | ForEach-Object { "$_" } | Tee-Log
+  Log "triage cockpit publish exit=$LASTEXITCODE (non-fatal)"
+} catch {
+  Log "triage cockpit publish threw (non-fatal): $_"
+} finally {
+  $ErrorActionPreference = $prevEAP
+}
+
 if ($recordExit -eq 0) {
   Log "Done. Proposal: $proposal"
   exit 0

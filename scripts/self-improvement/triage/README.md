@@ -74,8 +74,15 @@ proposal id, so it persists across rebuilds).
 project plan from the referenced proposal; `deferred` become lower-priority ROADMAP items;
 `dropped` proposals get marked dropped. Read `proposalPath` for full why/how/benefit detail.
 
-## Roadmap (Part C — not yet wired)
+## Part C — WIRED (2026-07-24)
 
-Host `out/triage.html` on GitHub Pages (`ai-enablement-decks`), feed that URL into
-`run-research.ps1`'s `--artifactUrl` (fixes the Reports Hub "—"), and regenerate on each
-loop run. See `~/.claude/plans/we-had-been-working-quirky-planet.md`.
+- **Hosting:** `publish.mjs` builds and publishes the cockpit to the `ai-enablement-decks`
+  Pages site, unlisted (no decks.json card): a dated immutable folder
+  `self-improvement/<YYYY-MM-DD>/` plus a mutable `self-improvement/latest/` alias.
+  Live: `https://rev4nchist.github.io/ai-enablement-decks/self-improvement/latest/`
+- **Loop regen:** `run-research.ps1` calls `triage/publish.mjs` non-fatally after each
+  research run, so the hosted copy always reflects the current proposal set.
+- **Registry `artifactUrl` deliberately does NOT point here** — it stays on the per-run
+  Notion Self-Improvement child page (immutable per-run contract; Codex premortem
+  findings #1/#2, 2026-07-24). The old "feed the cockpit URL into --artifactUrl" idea
+  from `we-had-been-working-quirky-planet.md` is superseded.
