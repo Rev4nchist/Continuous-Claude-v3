@@ -65,15 +65,26 @@ Remove-Item $emitFile -ErrorAction SilentlyContinue
 $runStamp = (Get-Date).ToUniversalTime().ToString('o')
 $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
 $isFullSweep = -not ($args | Where-Object { $_ -eq '--dry-run' -or $_ -eq '--target' })
+# Distinct from $emitFile ON PURPOSE -- see the --out note in the pre-emit below.
+# Cleared up front so a previous run's pre-emit can never be mistaken for this one's.
+$preEmitFile = Join-Path $env:TEMP 'report-run-Project-Cards-preemit.json'
+Remove-Item $preEmitFile -ErrorAction SilentlyContinue
 
 if ($isFullSweep) {
   try {
     # Keep this summary pure ASCII: this file has no BOM, so powershell.exe 5.1
     # decodes it as CP1252 and a UTF-8 em-dash inside a DOUBLE-QUOTED string becomes
     # a smart quote that terminates the string early (comments are unaffected).
+    # --out is MANDATORY here: make-run's DEFAULT path is tempRunPath('Project-Cards'),
+    # which is byte-for-byte $emitFile -- the file the post-sweep step uses to decide
+    # "did the sweep emit?". Without --out the pre-emit masquerades as a sweep emit,
+    # making the "full sweep emitted nothing" branch below unreachable and causing a
+    # killed sweep to log + page-refresh as though it had succeeded. (Found on the
+    # first live run, 2026-07-25 17:45.)
     $preEmit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
       --type 'Project Portfolio' --source 'Project-Cards' --period $date --runDate $runStamp `
       --status 'Failed' --artifactUrl 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a' `
+      --out $preEmitFile `
       --summary "in-progress - sweep started at $runStamp. Updated in place on completion; if it still reads Failed the sweep was killed or aborted before finishing (see .claude/logs/project-cards/$date.log)."
     $preEmit = ($preEmit | Select-Object -Last 1)
     if ($LASTEXITCODE -eq 0 -and $preEmit) {
