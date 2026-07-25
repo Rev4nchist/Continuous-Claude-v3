@@ -1,9 +1,7 @@
 # Project Roadmap
 
 ## Current Focus
-**Simplify CCv3 code-intel: cut Serena + retire dormant codegraph//code-intel facade**
-- `C:\Users\david.hayes\.mcp.json` — delete the `"serena"` block (lines ~71-79). Use Node atomic read-modify-write, not the Edit tool.; Delete `scripts/code-intel.mjs` (the facade — confirmed guidance-only, no callers outside the skill).
-- Started: 2026-07-24
+_(none — set with /roadmap focus)_
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.
@@ -17,6 +15,8 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] Rank-3 agent portfolio prune (07-02+07-14): 6 zero-usage agents archived (evidence-based; "delete .json twins" REJECTED — sidecars are live), recall-injector repo registration gap closed, structured return contracts on 6 core agents, README tier drift fixed (2026-07-25) `a02911e`
+- [x] Simplify CCv3 code-intel: cut Serena + codegraph + /code-intel facade (near-zero adoption; usage-data-driven) + smart-search-router false-deny fix (2026-07-25) `cb64d45`..`cdbae08`
 - [x] fix(reporting): trustworthy Reports Hub table + root-cause weekly false-stale (2026-07-20) `ac180c3`
 - [x] feat(self-improvement): triage cockpit — deterministic HTML proposal-review + prioritize + JSON/MD export (2026-07-18) `6e91693`
 - [x] docs(roadmap): absorb hook-appended completed entry (2026-07-18) `a37a9b7`
