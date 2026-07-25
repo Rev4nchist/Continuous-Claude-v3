@@ -31,14 +31,76 @@ function Tee-Log {
   param([Parameter(ValueFromPipeline=$true)]$Line)
   process { $Line | Out-File -FilePath $log -Append -Encoding utf8; $Line }
 }
+# --- ALWAYS-EMIT registry contract (root-caused 2026-07-25) ----------------------
+# THE BUG THIS FIXES: the registry emit sat AFTER claude -p, so a run killed during
+# it left the period with ZERO rows and the watchdog reported a silent miss --
+# indistinguishable from a run that never launched. That is exactly the 2026-07-23
+# miss: this wrapper logged "dashboard-sync starting" and nothing else, because
+# claude -p hung and the task's PT1H ExecutionTimeLimit killed the whole process.
+# Emit a PESSIMISTIC row FIRST, then update it in place. Both emits pass the SAME
+# --runDate ($runStamp) and make-run derives runId = "<type>|<period>|<runDate>",
+# so upsert (which queries by Run ID) updates ONE row instead of duplicating.
+$runStamp = (Get-Date).ToUniversalTime().ToString('o')
+$node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
+
+function Write-RunRow($status, $summary) {
+  try {
+    $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
+      --type 'Team Dashboard' --source 'Dashboard-Sync' --period $date --runDate $runStamp `
+      --status $status --artifactUrl 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a' `
+      --summary $summary
+    $emit = ($emit | Select-Object -Last 1)
+    if ($LASTEXITCODE -eq 0 -and $emit) {
+      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $emit 2>&1 |
+        ForEach-Object { "$_" } | Tee-Log
+      "[$(Get-Date -Format o)] report-run upsert exit=$LASTEXITCODE status=$status (non-fatal)" | Tee-Log
+    } else {
+      "[$(Get-Date -Format o)] make-run emitted no path (exit=$LASTEXITCODE) -- skipping upsert" | Tee-Log
+    }
+  } catch {
+    "[$(Get-Date -Format o)] report-run registry step threw (non-fatal): $_" | Tee-Log
+  }
+}
+
 "[$(Get-Date -Format o)] dashboard-sync starting" | Tee-Log
-Get-Content -Raw $prompt |
-  & claude -p --allowedTools "Bash,ReadMcpResourceTool,mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-update-page" 2>&1 |
-  Tee-Log
-# Capture the claude -p exit code FIRST -- before any cmdlet/native call below can
-# perturb $LASTEXITCODE (premortem X3: the registry Status needs a reliable signal).
-$code = $LASTEXITCODE
-"[$(Get-Date -Format o)] dashboard-sync finished (exit=$code)" | Tee-Log
+
+# PESSIMISTIC PRE-EMIT -- survives a hard kill during the long call below.
+# Keep this string pure ASCII: this file has no BOM, so powershell.exe 5.1 decodes
+# it as CP1252 and a UTF-8 em-dash inside a DOUBLE-QUOTED string becomes a smart
+# quote that terminates the string early (comments are unaffected).
+Write-RunRow 'Failed' "in-progress - claude -p invoked at $runStamp. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see .claude/logs/dashboard-sync/$date.log)."
+
+# BOUNDED claude -p. The old unbounded pipe could ride the task's PT1H limit to a
+# silent death (2026-07-23). Start-Process gives a ceiling we control; the prompt is
+# fed from $prompt via stdin redirection and output is captured to files, then logged.
+# Healthy runs take ~3 min, so 30 min is generous while staying inside PT1H.
+$syncTimeoutSec = if ($env:CCV3_DASH_TIMEOUT_SEC) { [int]$env:CCV3_DASH_TIMEOUT_SEC } else { 1800 }
+$outFile = Join-Path $env:TEMP "ccv3-dash-out-$date.txt"
+$errFile = Join-Path $env:TEMP "ccv3-dash-err-$date.txt"
+$code = -1
+$syncTimedOut = $false
+try {
+  $proc = Start-Process -FilePath 'C:\Users\david.hayes\.local\bin\claude.exe' `
+    -ArgumentList '-p', '--allowedTools', 'Bash,ReadMcpResourceTool,mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-update-page' `
+    -RedirectStandardInput $prompt -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
+    -NoNewWindow -PassThru
+  # Touch .Handle so .ExitCode remains readable after exit (PS -PassThru quirk).
+  $null = $proc.Handle
+  if (-not $proc.WaitForExit($syncTimeoutSec * 1000)) {
+    $syncTimedOut = $true
+    "[$(Get-Date -Format o)] TIMEOUT: claude -p exceeded ${syncTimeoutSec}s -- killing it so the registry emit below still runs" | Tee-Log
+    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+    try { $proc.WaitForExit(15000) | Out-Null } catch { }
+  } else {
+    $code = $proc.ExitCode
+  }
+  foreach ($f in @($outFile, $errFile)) {
+    if (Test-Path $f) { Get-Content $f -ErrorAction SilentlyContinue | Tee-Log | Out-Null }
+  }
+} catch {
+  "[$(Get-Date -Format o)] claude -p launch threw (captured): $_" | Tee-Log
+}
+"[$(Get-Date -Format o)] dashboard-sync finished (exit=$code, timedOut=$syncTimedOut)" | Tee-Log
 
 # --- Post-write verification (non-fatal, read-only): confirm the write actually
 # landed server-side before the registry records OK. A `claude -p` exit=0 proves
@@ -107,28 +169,17 @@ if ($code -eq 0) {
 # post-write verification above (0 exit alone is NOT sufficient for OK -- a
 # verify failure records Warn with the verify reason so a silent no-op doesn't
 # read as a healthy sync).
-try {
-  # T6.1 #8: resolve an absolute node path for the registry make-run/upsert calls
-  # (parity with the .bat wrappers, which must hardcode it under Task Scheduler's
-  # minimal PATH). Harmless when bare node already resolves.
-  $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
-  $status = if ($code -eq 0 -and $verifyOk) { 'OK' } else { 'Warn' }
-  $summary = "scheduled-tasks section refreshed (exit=$code); verify: $verifyReason"
-  $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
-    --type 'Team Dashboard' --source 'Dashboard-Sync' --period $date --status $status `
-    --artifactUrl 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a' `
-    --summary $summary
-  $emit = ($emit | Select-Object -Last 1)
-  if ($LASTEXITCODE -eq 0 -and $emit) {
-    & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $emit 2>&1 |
-      ForEach-Object { "$_" } | Tee-Log
-    "[$(Get-Date -Format o)] report-run upsert exit=$LASTEXITCODE (non-fatal)" | Tee-Log
-  } else {
-    "[$(Get-Date -Format o)] make-run emitted no path (exit=$LASTEXITCODE) -- skipping upsert" | Tee-Log
-  }
-} catch {
-  "[$(Get-Date -Format o)] report-run registry step threw (non-fatal): $_" | Tee-Log
+# This UPDATES the pessimistic pre-emit row in place (same $runStamp => same runId),
+# so a healthy day still ends with exactly one row. A timeout is Failed, not Warn:
+# it produced no verified write at all, and defaulting to the worse state matches the
+# health-check wrapper's exit-code mapping convention (T6.1 #3).
+$status = if ($syncTimedOut) { 'Failed' } elseif ($code -eq 0 -and $verifyOk) { 'OK' } else { 'Warn' }
+$summary = if ($syncTimedOut) {
+  "claude -p exceeded the ${syncTimeoutSec}s timeout and was killed; no verified write"
+} else {
+  "scheduled-tasks section refreshed (exit=$code); verify: $verifyReason"
 }
+Write-RunRow $status $summary
 
 # --- Silent-miss watchdog (T5): non-fatal final step, NEVER touches $code. -------
 # Sweeps ALL 6 report types (not just Team Dashboard's own row above) -- checks
@@ -149,4 +200,7 @@ try {
 # X3 fix: the script previously logged $LASTEXITCODE but never `exit`ed with it, so
 # Task Scheduler always recorded success. Exit with the captured claude -p code so
 # the scheduler's Last Run Result and the registry Status agree on the outcome.
+# A timeout normalizes to 1 rather than the -1 sentinel, so the scheduler shows a
+# plain failure instead of 0xFFFFFFFF.
+if ($syncTimedOut) { exit 1 }
 exit $code
