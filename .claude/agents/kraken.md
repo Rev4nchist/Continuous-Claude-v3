@@ -110,6 +110,23 @@ uv run python -m runtime.harness scripts/morph_search.py --query "function_name"
 $CLAUDE_PROJECT_DIR/.claude/cache/agents/kraken/output-{timestamp}.md
 ```
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching (extends the existing ralph_status convention — keep ralph_status when running under Ralph):
+
+```json
+{
+  "agent": "kraken",
+  "status": "complete | partial | blocked",
+  "files_changed": ["<path>"],
+  "verification": {"suite": "<command run>", "passed": 0, "failed": 0, "evidence": "<the actual summary line from the runner>"},
+  "followups": ["<anything left undone>"]
+}
+```
+
+`verification.evidence` must be the runner's real output line — never a paraphrase. status `complete` with `failed > 0` is a contradiction; use `partial`.
+
 ## Output Format
 
 ```markdown

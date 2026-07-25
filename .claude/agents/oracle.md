@@ -176,6 +176,24 @@ If a tool fails, log the error and continue with alternatives. Partial results a
 $CLAUDE_PROJECT_DIR/.claude/cache/agents/oracle/output-{timestamp}.md
 ```
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "oracle",
+  "status": "complete | partial | blocked",
+  "facts": [
+    {"claim": "<one statement>", "evidence": "<URL or doc name>", "confidence": "verified | inferred", "recency": "<date of the source if known>"}
+  ],
+  "unanswered": ["<what could not be sourced>"]
+}
+```
+
+Unsourced claims are speculation — every fact carries a URL/doc evidence anchor or is marked `inferred`.
+
 ## Output Format
 
 ```markdown

@@ -94,6 +94,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/tldr-context-inject.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/agent-recall-injector.mjs"
+            ],
+            "timeout": 3000
           }
         ]
       },

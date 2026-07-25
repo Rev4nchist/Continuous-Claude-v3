@@ -5,7 +5,7 @@ Every predefined agent (`.claude/agents/*.md` **and** its `.json` mirror) carrie
 ## The two tiers
 
 - **`model: opus`** = Opus 4.8 (high effort is its shipped default; effort is a **global** `~/.claude/settings.json` `effortLevel`, not a per-agent field). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
-- **`model: sonnet`** = Sonnet 5. The **default** for execution: implementation (kraken, spark, agentica-agent), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
+- **`model: sonnet`** = Sonnet 5. The **default** for execution: implementation (kraken, spark), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
 
 Tier by **judgment density**, not task size. Canonical map (37 agents, 12 Opus / 25 Sonnet): `~/.claude/plans/agent-skill-two-tier-model-policy` and the review artifact.
 

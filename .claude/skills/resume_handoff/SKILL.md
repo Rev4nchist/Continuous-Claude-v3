@@ -160,7 +160,6 @@ Then wait for the user's input.
    | `pathfinder` | research | Repository structure analysis |
    | `plan-reviewer` | review | Feature plan review, design validation |
    | `plan-reviewer` | review | Migration review, refactoring validation |
-   | `chronicler` | session | Session analysis, history summaries |
 
 2. **Spawn the specialist via Task tool**:
    ```

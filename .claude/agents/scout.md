@@ -105,6 +105,24 @@ grep -rc "pattern" src/ | sort -t: -k2 -n -r | head -10
 $CLAUDE_PROJECT_DIR/.claude/cache/agents/scout/output-{timestamp}.md
 ```
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "scout",
+  "status": "complete | partial | blocked",
+  "facts": [
+    {"claim": "<one verifiable statement>", "evidence": "<file:line>", "confidence": "verified | inferred"}
+  ],
+  "unanswered": ["<question you could not resolve>"]
+}
+```
+
+Every fact needs a `file:line` (or path) evidence anchor — a fact without evidence is `inferred`, never `verified`. Empty `facts` with status `complete` means "confirmed absent" and MUST carry the search locations in `unanswered`-style notes.
+
 ## Output Format
 
 ```markdown

@@ -100,6 +100,23 @@ Interpret the output by exit code AND first line:
 - Exit 1 + `FAIL: Regression detected` → STOP. You have silently dropped an `emitBraintrustScore(...)` call. Report the failure to the orchestrator with the file and line number of your edits. Do NOT modify the audit script. Do NOT pass `--accept-new-invariant` or any other flag. Do NOT re-run the script after editing more code in an attempt to "fix" the count. Recovery is the orchestrator's job, not yours.
 - Any other exit code → include `Audit: ERROR (script crashed unexpectedly)` and report the full stdout+stderr to the orchestrator.
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "spark",
+  "status": "complete | partial | blocked",
+  "files_changed": ["<path>"],
+  "verification": {"check": "<what was run: syntax/test/audit>", "result": "PASS | FAIL", "evidence": "<the actual output line>"},
+  "followups": []
+}
+```
+
+`verification.evidence` is the runner's real output — never a paraphrase. If the emit-audit failed, status is `blocked`, never `complete`.
+
 ## Output Format
 
 ```markdown
