@@ -30,7 +30,9 @@
 // test/detector-coverage-matrix.test.mjs.
 import { pathToFileURL } from 'node:url';
 import { queryDataSource, selectName, dateStart } from '../project-cards/lib/notion.mjs';
-import { REPORT_RUNS_DS_ID, REPORT_TYPES } from './config.mjs';
+// ACTIVE_REPORT_TYPES (not the full REPORT_TYPES validation domain): a retired type
+// has no future runs, so it would sit in permanent drift forever and drown the signal.
+import { REPORT_RUNS_DS_ID, ACTIVE_REPORT_TYPES } from './config.mjs';
 // maxAgeForType lives in watchdog.mjs (it owns the SCHEDULE cadence map). This is a
 // static import into the module that watchdog itself imports from — an ESM cycle that
 // is SAFE because it is only ever CALLED at runtime (inside checkDrift/main), never at
@@ -72,7 +74,7 @@ export function groupByType(rows) {
 // --- pure drift core -----------------------------------------------------------
 // newestByType: { [type]: newestRunDateString | '' }. Every type in `types` gets a
 // row in the result; a type with no/unparseable date is drift=true, ageHours=null.
-export function computeDrift(newestByType, { maxAgeHours = DEFAULT_MAX_AGE_HOURS, now = Date.now(), types = REPORT_TYPES } = {}) {
+export function computeDrift(newestByType, { maxAgeHours = DEFAULT_MAX_AGE_HOURS, now = Date.now(), types = ACTIVE_REPORT_TYPES } = {}) {
   const nowMs = typeof now === 'number' ? now : Date.parse(now);
   return types.map((type) => {
     const raw = newestByType[type] || '';
@@ -100,7 +102,7 @@ export function parseMaxAgeHours(argv) {
 export function checkDrift({ maxAgeHours = null, query = queryDataSource, dsId = REPORT_RUNS_DS_ID, now = Date.now() } = {}) {
   const rows = query(dsId, {});
   const byType = groupByType(rows);
-  return REPORT_TYPES.map((type) => {
+  return ACTIVE_REPORT_TYPES.map((type) => {
     const newest = newestRunDate(byType[type] || []);
     const threshold = maxAgeHours ?? maxAgeForType(type);
     return computeDrift({ [type]: newest }, { maxAgeHours: threshold, now, types: [type] })[0];

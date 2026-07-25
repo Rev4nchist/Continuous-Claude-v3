@@ -11,7 +11,19 @@ import { DEFAULT_MAX_AGE_HOURS } from '../check-drift.mjs';
 
 const DS = 'c7d2d9e3-d388-4640-a66e-88f7dd50f854';
 
-function vpEntry() { return SCHEDULE.find((e) => e.type === 'VP Weekly'); }
+// VP Weekly was RETIRED 2026-07-25, so it no longer has a SCHEDULE entry. This
+// fixture is now pinned LITERALLY (it used to be looked up from SCHEDULE) rather
+// than deleted, because it is the only isoWeek-period weekly shape and that code
+// path is deliberately retained — both for the retired type's historical ISO-week
+// rows and for any future weekly report that adopts the format. The type/source
+// still validate: retirement removes a type from the EXPECTATION domain
+// (ACTIVE_REPORT_TYPES), not from the VALIDATION domain (REPORT_TYPES).
+function vpEntry() {
+  return {
+    type: 'VP Weekly', source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
+    grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
+  };
+}
 function sponsorEntry() { return SCHEDULE.find((e) => e.type === 'FourthOS Sponsor'); }
 function healthEntry() { return SCHEDULE.find((e) => e.type === 'System Health'); }
 function dashboardEntry() { return SCHEDULE.find((e) => e.type === 'Team Dashboard'); }
@@ -214,9 +226,13 @@ test('evaluateEntry: query error is caught and reported, not thrown', () => {
 // --- maxAgeForType: per-cadence staleness threshold + guard ----------------------
 
 test('maxAgeForType: weekly -> MAX_AGE_HOURS_WEEKLY (192), daily -> DEFAULT (48)', () => {
-  assert.equal(maxAgeForType('VP Weekly'), MAX_AGE_HOURS_WEEKLY);
+  assert.equal(maxAgeForType('FourthOS Sponsor'), MAX_AGE_HOURS_WEEKLY);
   assert.equal(MAX_AGE_HOURS_WEEKLY, 192);
   assert.equal(maxAgeForType('System Health'), 192);
+  // RETIRED types have no SCHEDULE entry, so they hit the documented unknown-type
+  // guard and get the DAILY default rather than undefined. Asserted explicitly so
+  // the retirement's knock-on effect is pinned, not discovered later.
+  assert.equal(maxAgeForType('VP Weekly'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(maxAgeForType('Project Portfolio'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(DEFAULT_MAX_AGE_HOURS, 48);
 });

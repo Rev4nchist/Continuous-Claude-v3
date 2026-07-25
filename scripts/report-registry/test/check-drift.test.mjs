@@ -5,6 +5,7 @@ import test from 'node:test';
 import {
   computeDrift, newestRunDate, groupByType, parseMaxAgeHours, DEFAULT_MAX_AGE_HOURS, checkDrift,
 } from '../check-drift.mjs';
+import { ACTIVE_REPORT_TYPES } from '../config.mjs';
 
 const NOW = Date.parse('2026-07-05T12:00:00Z');
 
@@ -111,22 +112,25 @@ test('parseMaxAgeHours reads flag forms and defaults', () => {
 test('checkDrift default is PER-CADENCE: a ~100h-old WEEKLY row is fresh; a ~100h-old DAILY row is drift', () => {
   const now = Date.parse('2026-07-21T12:00:00Z');
   // 2026-07-17T08:00Z -> ~100h before now (4d4h).
-  const rows = [dsRow('VP Weekly', '2026-07-17T08:00:00Z'), dsRow('Team Dashboard', '2026-07-17T08:00:00Z')];
+  const rows = [dsRow('FourthOS Sponsor', '2026-07-17T08:00:00Z'), dsRow('Team Dashboard', '2026-07-17T08:00:00Z')];
   const report = checkDrift({ query: () => rows, now }); // no explicit maxAgeHours -> per-cadence
-  assert.equal(report.find((r) => r.type === 'VP Weekly').drift, false); // weekly 192h -> fresh
+  assert.equal(report.find((r) => r.type === 'FourthOS Sponsor').drift, false); // weekly 192h -> fresh
   assert.equal(report.find((r) => r.type === 'Team Dashboard').drift, true); // daily 48h -> drift
 });
 
 test('checkDrift with an explicit flat maxAgeHours overrides ALL types (documented --max-age-hours behavior)', () => {
   const now = Date.parse('2026-07-21T12:00:00Z');
-  const rows = [dsRow('VP Weekly', '2026-07-17T08:00:00Z')]; // ~100h
+  const rows = [dsRow('FourthOS Sponsor', '2026-07-17T08:00:00Z')]; // ~100h
   const flat = checkDrift({ maxAgeHours: 48, query: () => rows, now });
-  assert.equal(flat.find((r) => r.type === 'VP Weekly').drift, true); // flat 48 ignores cadence
+  assert.equal(flat.find((r) => r.type === 'FourthOS Sponsor').drift, true); // flat 48 ignores cadence
 });
 
-test('checkDrift returns one row per REPORT_TYPES type, in order, unchanged shape', () => {
+test('checkDrift returns one row per ACTIVE_REPORT_TYPES type, in order, unchanged shape', () => {
   const report = checkDrift({ query: () => [], now: NOW });
-  assert.ok(report.length >= 6);
+  // Derived, not a hardcoded count: checkDrift covers the ACTIVE types only, so
+  // retiring one must shrink this in lockstep rather than fail an arbitrary >= 6.
+  assert.equal(report.length, ACTIVE_REPORT_TYPES.length);
+  assert.deepEqual(report.map((r) => r.type), ACTIVE_REPORT_TYPES);
   for (const r of report) {
     assert.ok('type' in r && 'newestRunDate' in r && 'ageHours' in r && 'drift' in r);
     assert.equal(r.drift, true); // no rows for any type -> all drift

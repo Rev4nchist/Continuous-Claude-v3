@@ -28,10 +28,13 @@
 //
 // SCHEDULING MODEL (matches the REAL period formats each pipeline emits —
 // verified against the wrapper scripts, not the README's illustrative
-// examples): VP Weekly emits an ISO-week period (`Get-Date -UFormat '%Y-W%V'`,
-// e.g. "2026-W29"); every other type (including the other two weekly-cadence
-// types, FourthOS Sponsor and System Health) emits a plain `YYYY-MM-DD` date
-// period. Weekly types are gated to their scheduled weekday ONLY — the check
+// examples): every ACTIVE type emits a plain `YYYY-MM-DD` date period. The
+// isoWeek period format (`Get-Date -UFormat '%Y-W%V'`, e.g. "2026-W29") has no
+// active consumer since VP Weekly was retired 2026-07-25 — the machinery
+// (isoWeekNumber/isoWeekLabel/formatPeriod, ISO_WEEK_PERIOD_RE) is retained and
+// still unit-tested so a future weekly-cadence report can adopt it, and so the
+// retired type's historical ISO-week rows stay interpretable.
+// Weekly types are gated to their scheduled weekday ONLY — the check
 // is a no-op on every other day of the week. Daily types are checked every
 // day; two of them (Team Dashboard, Project Portfolio) have a
 // `crossesMidnight` grace window because their expected period isn't
@@ -74,7 +77,9 @@
 // core). ESM, no external deps.
 import { pathToFileURL } from 'node:url';
 import { queryDataSource } from '../project-cards/lib/notion.mjs';
-import { REPORT_RUNS_DS_ID, REPORT_TYPES, PERIOD_FORMAT_BY_TYPE } from './config.mjs';
+import {
+  REPORT_RUNS_DS_ID, ACTIVE_REPORT_TYPES, PERIOD_FORMAT_BY_TYPE,
+} from './config.mjs';
 import { upsertReportRun } from './upsert.mjs';
 import {
   newestRunDate, computeDrift, DEFAULT_MAX_AGE_HOURS, parseMaxAgeHours,
@@ -87,11 +92,11 @@ import {
 // periodFormat: 'isoWeek' (VP Weekly only, real-pipeline format) | 'date'.
 // crossesMidnight: the expected period isn't complete until end of day, so the
 //   watchdog run on day D checks day D-1's period (see module doc above).
+// VP Weekly was RETIRED 2026-07-25 (see report-runs.ids.json "decommissioned").
+// Its schedule entry is removed deliberately: leaving it here while the type is gone
+// from REPORT_TYPES would keep minting a Failed miss-row every Thursday forever for a
+// report nobody runs. Historical rows + its Notion child page are kept as an archive.
 export const SCHEDULE = [
-  {
-    type: 'VP Weekly', source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
-    grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
-  },
   {
     type: 'FourthOS Sponsor', source: 'FourthOS-Weekly', cadence: 'weekly', weekday: 4,
     grace: { h: 12, m: 0 }, periodFormat: 'date', crossesMidnight: false,
@@ -118,9 +123,12 @@ export const SCHEDULE = [
 // Registry convention: every new pipeline ships with a watchdog schedule entry on
 // day one — a report type that exists in REPORT_TYPES but has no SCHEDULE entry
 // is invisible to the silent-miss detector. Pure, exported for tests.
+// Checked against ACTIVE_REPORT_TYPES, not REPORT_TYPES: a RETIRED type has no
+// schedule entry BY DESIGN (that is what stops it minting a Failed miss-row every
+// week forever), so warning about it would be permanent false noise.
 export function scheduleMissingTypes(schedule = SCHEDULE) {
   const covered = new Set(schedule.map((e) => e.type));
-  return REPORT_TYPES.filter((t) => !covered.has(t));
+  return ACTIVE_REPORT_TYPES.filter((t) => !covered.has(t));
 }
 
 // Registry convention: one period format per cadence, single source of truth =

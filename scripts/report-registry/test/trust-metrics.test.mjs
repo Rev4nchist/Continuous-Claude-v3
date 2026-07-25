@@ -13,7 +13,15 @@ import {
 } from '../trust-metrics.mjs';
 import { SCHEDULE } from '../watchdog.mjs';
 
-function vpEntry() { return SCHEDULE.find((e) => e.type === 'VP Weekly'); }
+// Pinned literally rather than looked up from SCHEDULE: VP Weekly was RETIRED
+// 2026-07-25 and has no schedule entry, but it remains the only isoWeek weekly
+// shape and these tests exist to cover the weekly-cadence expectation math.
+function vpEntry() {
+  return {
+    type: 'VP Weekly', source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
+    grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
+  };
+}
 function portfolioEntry() { return SCHEDULE.find((e) => e.type === 'Project Portfolio'); }
 function selfImpEntry() { return SCHEDULE.find((e) => e.type === 'Self-Improvement'); }
 

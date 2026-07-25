@@ -31,7 +31,23 @@ export const REPORT_CHILD_PAGES = ids.childPages;
 export const REPORT_RUNS_VIEWS = ids.reportRunsViews;
 
 // --- enumerations (validated by the upsert) ---
+// REPORT_TYPES is the VALIDATION domain: every type the registry knows, INCLUDING
+// retired ones. Retired types keep their historical rows in Notion, and those rows
+// must stay valid/upsertable (a remap or re-read of history would otherwise fail),
+// so they are deliberately NOT removed from this list.
 export const REPORT_TYPES = ids.reportTypes;
+
+// --- active vs retired (2026-07-25) ---------------------------------------------
+// ACTIVE_REPORT_TYPES is the EXPECTATION domain: types a scheduled run is still
+// expected to produce. Everything schedule-driven keys off this — the watchdog's
+// schedule-parity check, the drift check, the hub launcher table, and the page
+// refresh loop. Separating the two domains is what lets a report be retired without
+// either (a) invalidating its history or (b) minting a Failed miss-row every week
+// forever for a pipeline nobody runs.
+export const RETIRED_REPORT_TYPES = ids.retiredTypes || [];
+export const ACTIVE_REPORT_TYPES = REPORT_TYPES.filter(
+  (t) => !RETIRED_REPORT_TYPES.includes(t),
+);
 export const STATUSES = ids.statuses;
 // type -> originating scheduled job (Source select value). Callers that omit an
 // explicit `source` in report-run.json can derive it from the report type.
@@ -54,8 +70,9 @@ export const REPORT_RUN_KEYS = ids.reportRunContract.keys;
 
 // One period format per report-type cadence. VP Weekly's ISO-week period
 // (`Get-Date -UFormat '%Y-W%V'`, e.g. "2026-W29") is the documented LONE
-// exception (see watchdog.mjs's module doc, verified against the real wrapper
-// scripts) — every other type emits a plain `YYYY-MM-DD` date period.
+// exception — every other type emits a plain `YYYY-MM-DD` date period. This map is
+// keyed off REPORT_TYPES (the validation domain), so it still covers VP Weekly after
+// its 2026-07-25 retirement: its historical ISO-week rows must keep validating.
 export const PERIOD_FORMAT_BY_TYPE = Object.fromEntries(
   REPORT_TYPES.map((t) => [t, t === 'VP Weekly' ? 'isoWeek' : 'date']),
 );
@@ -81,6 +98,7 @@ export const HTTP_URL_RE = /^https?:\/\//i;
 // themselves, 2026-07-17). Cheap-by-design: no filesystem walk, no per-run file
 // discovery. Update this map if a wrapper's log location ever moves.
 export const LOG_HINT_BY_TYPE = {
+  // Retired 2026-07-25; kept so a lookup for a historical VP Weekly row still resolves.
   'VP Weekly': 'ai-report-card/logs/scheduled-run.log (out-of-repo)',
   'FourthOS Sponsor': '~/.claude/logs/fourthos-weekly/',
   'System Health': '~/.claude/logs/health-check/',

@@ -107,7 +107,7 @@ Then, as needed:
   `Get-ScheduledTaskInfo <task>`.
 - **Dated logs:** `~/.claude/logs/<pipeline>/<YYYY-MM-DD>.log` — pipelines: `health-check/`,
   `fourthos-weekly/`, `dashboard-sync/`, `self-improvement/` (project-cards logs to
-  `scripts/project-cards/sweep.jsonl`; VP Weekly to `ai-report-card/` run output).
+  `scripts/project-cards/sweep.jsonl`).
 - **Hub surfaces:** the Reports hub launcher + Reporting Health strip are machine-owned and
   refreshed by `refresh-pages.mjs` — if they lag the registry, that IS the finding (see heal).
 
@@ -117,7 +117,6 @@ Then, as needed:
 |---|---|---|
 | System Health | `CCv3-Health-Check` (Fri 08:00) | `scripts\scheduled-health-check.bat` (Notion mirror = `node scripts/report-registry/health-mirror.mjs`, ntn-only) |
 | FourthOS Sponsor | `CCv3-FourthOS-Weekly` (Thu 07:00) | `scripts\fourthos-weekly\scheduled-fourthos-weekly.bat` |
-| VP Weekly | `AIWeeklyReport` (Thu 06:00 — needs logged-in session until the IT batch-logon ticket clears) | `scripts\run-ai-weekly-report.bat` |
 | Team Dashboard | `CCv3-Dashboard-Sync` (daily) | `scripts\sync-tasks-dashboard.ps1` (LLM path; deterministic replacement is BLOCKED — see the 2026-07-17 efficiency handoff GAP-1..4) |
 | Project Portfolio (cards) | `CCv3-Project-Cards` (daily) | `node scripts/project-cards/sweep.mjs` (`--dry-run` is safe: no publishes, no claude spawn) |
 | Self-Improvement | `CCv3-Self-Improvement-Research` (daily 07:30) | headless research loop; digests queue in `docs/self-improvement/PENDING-DIGEST.md` for interactive Bridge sweep |
@@ -138,7 +137,9 @@ auto-refreshes that type's child page + hub launcher (proposal 02).
 
 Conventions that keep this trustworthy (enforced in `make-run.mjs`, proposal 08): corrective rows
 carry `backfill:`/`remap:` prefixes; artifact URLs must be durable http(s); one period format per
-cadence (VP Weekly ISO-week is the lone exception); every type has a watchdog schedule entry.
+cadence; every ACTIVE type has a watchdog schedule entry. Retired types (see `retiredTypes` in
+`report-runs.ids.json` — VP Weekly, retired 2026-07-25) keep their history and Notion child page
+but are excluded from the schedule, drift check and hub table, so they never mint miss-rows.
 
 ## Related
 - `/log-work` — the row-creation primitive (field parsing, Source detection, dedup).

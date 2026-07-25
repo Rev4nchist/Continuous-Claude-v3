@@ -22,6 +22,16 @@
     "All Report Runs — by Type (hub)": "39576fd7-ac82-81d6-be38-000ce9bbd794"
   },
   "reportRunsViewsNote": "notion-create-view appends the linked view at page-bottom (no heading placement); per-type views sit below the ## History text, not nested under it. Cosmetic only — filter/sort correct.",
+  "_retiredTypesComment": "retiredTypes are types the registry still KNOWS (their historical rows exist and must stay valid/upsertable, so they remain in reportTypes + sourceByType) but which are no longer EXPECTED TO RUN. Everything schedule-driven derives from ACTIVE_REPORT_TYPES (= reportTypes minus retiredTypes): no watchdog schedule entry (so no perpetual Failed miss-rows), no drift check, no hub table row, no page refresh. Their Notion child pages survive as a read-only archive. To revive one: drop it from retiredTypes and restore its watchdog SCHEDULE entry.",
+  "retiredTypes": ["VP Weekly"],
+  "retiredTypeDetail": {
+    "VP Weekly": {
+      "retiredOn": "2026-07-25",
+      "reason": "no longer needed; the AIWeeklyReport scheduled task never once fired unattended (blocked on an unfiled batch-logon IT ticket) and the report is not wanted going forward",
+      "archiveChildPage": "39576fd7-ac82-817d-9658-d2c8b7f84ad2",
+      "historicalRowsKept": true
+    }
+  },
   "reportTypes": ["VP Weekly", "FourthOS Sponsor", "Team Dashboard", "System Health", "Project Portfolio", "Self-Improvement"],
   "statuses": ["OK", "Warn", "Failed", "Skipped"],
   "sourceByType": {
