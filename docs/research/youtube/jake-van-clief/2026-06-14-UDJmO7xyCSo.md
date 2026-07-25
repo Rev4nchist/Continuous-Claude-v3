@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 1026
 ingested_at: 2026-07-25T15:24:26.174Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # What we give away free beats all the other "AI Gurus"

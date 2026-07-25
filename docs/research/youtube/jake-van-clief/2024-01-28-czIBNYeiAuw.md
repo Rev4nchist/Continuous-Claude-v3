@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 7677
 ingested_at: 2026-07-25T15:24:26.516Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # AI in Academics: How NOT to Use It (Learning How Not to Use AI is The Most Important Skill)

@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 8568
 ingested_at: 2026-07-25T15:24:26.282Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # Claude Design Full Breakdown: GitHub Imports, Skills, and Local Model Handoff

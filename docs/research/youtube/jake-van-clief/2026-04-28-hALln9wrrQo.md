@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 2561
 ingested_at: 2026-07-25T15:24:26.265Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # How I Run Creative, Software, and Business Work as One System (Ai memory vs Human memory?)

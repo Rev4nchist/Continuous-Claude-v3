@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 12151
 ingested_at: 2026-07-25T14:05:15.267Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # [1hr Talk] Intro to Large Language Models

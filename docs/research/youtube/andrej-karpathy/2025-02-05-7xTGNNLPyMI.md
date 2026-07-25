@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 41116
 ingested_at: 2026-07-25T13:55:39.282Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # Deep Dive into LLMs like ChatGPT

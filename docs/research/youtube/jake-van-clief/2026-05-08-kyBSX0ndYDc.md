@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 2210
 ingested_at: 2026-07-25T15:24:26.242Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # He Started an AI Company in 2011. I asked him my burning questions on the next decade.

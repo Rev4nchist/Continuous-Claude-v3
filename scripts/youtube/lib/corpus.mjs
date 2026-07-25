@@ -164,6 +164,51 @@ export function readVideoDoc(path) {
   return { path, meta, body };
 }
 
+// Set project_id on already-ingested videos, in place.
+//
+// Tagging an existing corpus into a project must NOT mean re-downloading it —
+// that would make "drop this channel into project X" cost a full re-ingest to
+// change one frontmatter field. Rewrites frontmatter only; the transcript body
+// is preserved byte-for-byte, which matters because digests cite into it by
+// timestamp. Returns the number of files actually changed (already-correct
+// files are left untouched so mtimes stay meaningful).
+export function retagVideos(videoIds, projectId) {
+  const ids = new Set(videoIds);
+  if (ids.size === 0) return 0;
+  let changed = 0;
+
+  for (const ch of listChannels()) {
+    for (const file of listVideoFiles(ch)) {
+      const raw = readFileSync(file, 'utf8');
+      const { meta, body } = parseFrontmatter(raw);
+      if (!ids.has(meta.video_id)) continue;
+      if (meta.project_id === projectId) continue;
+      meta.project_id = projectId;
+      writeFileSync(file, renderFrontmatter(meta) + body, 'utf8');
+      changed += 1;
+    }
+  }
+  return changed;
+}
+
+// Distinct project ids present in the corpus, for status/discovery.
+export function listProjects() {
+  const projects = new Map();
+  for (const ch of listChannels()) {
+    for (const file of listVideoFiles(ch)) {
+      const { meta } = readVideoDoc(file);
+      if (!meta.project_id) continue;
+      const p = projects.get(meta.project_id) ?? { project: meta.project_id, videos: 0, channels: new Set() };
+      p.videos += 1;
+      p.channels.add(ch);
+      projects.set(meta.project_id, p);
+    }
+  }
+  return [...projects.values()]
+    .map((p) => ({ ...p, channels: [...p.channels].sort() }))
+    .sort((a, b) => b.videos - a.videos);
+}
+
 // --- channel state -----------------------------------------------------------
 export function channelStatePath(channelSlug) {
   return join(channelDir(channelSlug), '_channel.json');
@@ -181,38 +226,114 @@ export function writeChannelState(channelSlug, state) {
 }
 
 // --- search ------------------------------------------------------------------
-// The point of this function: a hit is not just "this file matched" but a
-// CITATION — video id + second offset + clickable deep link. Synthesis reads
-// these directly, so a digest's claims are verifiable by construction.
-export function searchCorpus(pattern, { channel = null, flags = 'i', limit = 200 } = {}) {
+// Parse a video doc's transcript into addressable chunks: [{ t, timestamp, text }].
+// This is the retrieval unit — ~240 chars / ~60 tokens on the current corpus.
+export function transcriptChunks(body) {
+  const tIdx = body.indexOf('## Transcript');
+  if (tIdx === -1) return [];
+  const chunks = [];
+  for (const line of body.slice(tIdx).split('\n')) {
+    const lm = line.match(/^\[(\d+:\d{2}(?::\d{2})?)\]\s+(.*)$/);
+    if (!lm) continue;
+    chunks.push({
+      timestamp: lm[1],
+      t: lm[1].split(':').reduce((acc, v) => acc * 60 + Number(v), 0),
+      text: lm[2],
+    });
+  }
+  return chunks;
+}
+
+// Core windowing, as a pure function over parsed chunks so it is testable
+// without a corpus on disk.
+//
+// Returns [{ anchor, from, to, matchCount }] — index positions into `chunks`.
+// Adjacent matches whose windows would overlap are MERGED into one group: two
+// hits three chunks apart would otherwise return overlapping text twice,
+// re-introducing the read amplification this exists to remove.
+//
+// Each group is anchored at its FIRST match so a citation deep-link lands at or
+// before the claim, never after it.
+export function searchChunks(chunks, re, window = 2) {
+  const win = Math.max(0, Number(window) || 0);
+
+  const matched = [];
+  for (let i = 0; i < chunks.length; i += 1) {
+    re.lastIndex = 0;
+    if (re.test(chunks[i].text)) matched.push(i);
+  }
+  if (matched.length === 0) return [];
+
+  const groups = [];
+  for (const i of matched) {
+    const last = groups[groups.length - 1];
+    if (last && i - last[last.length - 1] <= win * 2 + 1) last.push(i);
+    else groups.push([i]);
+  }
+
+  return groups.map((g) => ({
+    anchor: g[0],
+    from: Math.max(0, g[0] - win),
+    to: Math.min(chunks.length - 1, g[g.length - 1] + win),
+    matchCount: g.length,
+  }));
+}
+
+// A hit is not "this file matched" — it is a CITATION (video id + second offset +
+// deep link) carrying ENOUGH SURROUNDING TEXT TO USE WITHOUT OPENING THE FILE.
+//
+// That last clause is the whole point of SI-02. Returning a filename and letting
+// the caller read the file cost a measured 14x at the median transcript and 83x at
+// the largest (~4,300 / ~25,000 tokens versus ~300 for a ±2 window). The cited
+// claim lives in the window either way, so the rest of the read was waste.
+//
+// Adjacent matches MERGE into one window rather than emitting separately: two hits
+// three chunks apart would otherwise return overlapping text twice, re-introducing
+// the amplification this exists to remove.
+export function searchCorpus(pattern, {
+  channel = null,
+  project = null,
+  flags = 'i',
+  limit = 200,
+  window = 2,
+} = {}) {
   const re = new RegExp(pattern, flags.includes('g') ? flags : `${flags}g`);
   const channels = channel ? [channel] : listChannels();
+  const win = Math.max(0, Number(window) || 0);
   const hits = [];
 
   for (const ch of channels) {
     for (const file of listVideoFiles(ch)) {
       const { meta, body } = readVideoDoc(file);
-      const tIdx = body.indexOf('## Transcript');
-      if (tIdx === -1) continue;
+      if (project && meta.project_id !== project) continue;
 
-      for (const line of body.slice(tIdx).split('\n')) {
-        const lm = line.match(/^\[(\d+:\d{2}(?::\d{2})?)\]\s+(.*)$/);
-        if (!lm) continue;
-        re.lastIndex = 0;
-        if (!re.test(lm[2])) continue;
+      const chunks = transcriptChunks(body);
+      if (chunks.length === 0) continue;
 
-        const seconds = lm[1].split(':').reduce((acc, v) => acc * 60 + Number(v), 0);
+      for (const g of searchChunks(chunks, re, win)) {
+        const anchor = chunks[g.anchor];
+        const { from, to } = g;
+        const slice = chunks.slice(from, to + 1);
+
         hits.push({
           channel: ch,
           channelName: meta.channel,
+          projectId: meta.project_id ?? null,
           videoId: meta.video_id,
           title: meta.title,
           uploadDate: meta.upload_date,
-          timestamp: lm[1],
-          seconds,
-          text: lm[2],
-          url: citationUrl(meta.video_id, seconds),
-          citation: `[vid:${meta.video_id} @${lm[1]}]`,
+          transcriptSource: meta.transcript_source ?? null,
+          timestamp: anchor.timestamp,
+          seconds: anchor.t,
+          text: anchor.text,
+          matchCount: g.matchCount,
+          window: slice,
+          windowText: slice.map((c) => c.text).join(' '),
+          windowFrom: chunks[from].timestamp,
+          windowTo: chunks[to].timestamp,
+          url: citationUrl(meta.video_id, anchor.t),
+          citation: `[vid:${meta.video_id} @${anchor.timestamp}]`,
+          file,
         });
         if (hits.length >= limit) return hits;
       }

@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 2370
 ingested_at: 2026-07-25T15:24:26.382Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # From Nazi Psychology to AI Auditing: Inside the System I Built

@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 3897
 ingested_at: 2026-07-25T15:24:26.442Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # AI is the New Compiler (Why 'Learning AI' is the Wrong Goal)

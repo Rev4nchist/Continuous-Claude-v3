@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 1862
 ingested_at: 2026-07-25T15:24:26.428Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # AI Agency and Consulting Models are DEAD (Here is what to do Instead)

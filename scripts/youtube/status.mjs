@@ -5,7 +5,7 @@
 //
 // The one-screen answer to "what do I actually have to research over?".
 import { existsSync, readFileSync } from 'node:fs';
-import { corpusStats, dirSizeBytes, channelDir } from './lib/corpus.mjs';
+import { corpusStats, dirSizeBytes, channelDir, listProjects } from './lib/corpus.mjs';
 import { WATCHLIST_PATH, DIGEST_INDEX, CORPUS_ROOT } from './lib/config.mjs';
 
 function readWatchlist() {
@@ -39,12 +39,16 @@ function main() {
     bytes: dirSizeBytes(channelDir(c.channel)),
   }));
 
+  const projects = listProjects();
+
   const payload = {
     corpusRoot: CORPUS_ROOT,
     totalChannels: channels.length,
     totalVideos: stats.totalVideos,
     totalWords: stats.totalWords,
     digests: countDigests(),
+    projects,
+    untaggedVideos: stats.totalVideos - projects.reduce((n, p) => n + p.videos, 0),
     watchlist: watch.channels || [],
     channels,
   };
@@ -66,6 +70,20 @@ function main() {
         `${human(c.bytes).padStart(7)}  ${c.watched ? 'yes' : '—'}`,
       );
     }
+  }
+
+  if (projects.length) {
+    console.log('\n  PROJECTS');
+    const pw = Math.max(8, ...projects.map((p) => p.project.length));
+    for (const p of projects) {
+      console.log(`  ${p.project.padEnd(pw)}  ${String(p.videos).padStart(4)} video(s)  ${p.channels.join(', ')}`);
+    }
+    if (payload.untaggedVideos > 0) {
+      console.log(`  ${'(untagged)'.padEnd(pw)}  ${String(payload.untaggedVideos).padStart(4)} video(s)`);
+    }
+  } else {
+    console.log('\n  No videos tagged to a project yet.');
+    console.log('  Tag an existing channel:  ingest.mjs "@handle" --project <id>   (retags in place, no re-download)');
   }
 
   const pending = (watch.channels || []).filter((c) => c.pendingDigest);

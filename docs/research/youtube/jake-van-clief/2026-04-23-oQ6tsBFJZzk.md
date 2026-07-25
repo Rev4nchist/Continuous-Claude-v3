@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 2044
 ingested_at: 2026-07-25T15:24:26.271Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # You Think, Therefore I Am: The 400-Year History of Thinking Machines

@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 18462
 ingested_at: 2026-07-25T15:24:26.200Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # I'll never post one of these videos on YouTube again.

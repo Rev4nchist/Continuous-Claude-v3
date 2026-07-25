@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 10012
 ingested_at: 2026-07-25T15:24:26.081Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # A Pagani, a Toyota, and Why "Best" Is a Trap in AI

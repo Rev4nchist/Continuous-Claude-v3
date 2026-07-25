@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 1986
 ingested_at: 2026-07-25T15:24:26.474Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # I Went from Warzones to Algorithms — And I’m Still Asking Who’s in Charge

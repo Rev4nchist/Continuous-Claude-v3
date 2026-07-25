@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 4892
 ingested_at: 2026-07-25T15:24:26.533Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # AI isn't going to replace people, People using AI will replace people

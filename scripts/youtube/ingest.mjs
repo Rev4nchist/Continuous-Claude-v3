@@ -27,18 +27,19 @@ import {
 import { vttToChunks, countWords } from './lib/vtt.mjs';
 import {
   allIngestedIds, renderVideoDoc, writeVideoDoc, readChannelState,
-  writeChannelState, ensureDir, channelDir,
+  writeChannelState, ensureDir, channelDir, retagVideos,
 } from './lib/corpus.mjs';
 
 function parseArgs(argv) {
   const opts = {
-    target: null, limit: null, since: null,
+    target: null, limit: null, since: null, project: null,
     force: false, transcript: true, json: false, quiet: false,
   };
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
     if (a === '--limit') { opts.limit = Number(argv[++i]); continue; }
     if (a === '--since') { opts.since = argv[++i]; continue; }
+    if (a === '--project') { opts.project = argv[++i]; continue; }
     if (a === '--force') { opts.force = true; continue; }
     if (a === '--no-transcript') { opts.transcript = false; continue; }
     if (a === '--json') { opts.json = true; continue; }
@@ -47,9 +48,15 @@ function parseArgs(argv) {
     if (!opts.target) opts.target = a;
     else throw new Error(`Unexpected extra argument: ${a}`);
   }
-  if (!opts.target) throw new Error('Usage: ingest.mjs <@handle|url|video-id> [--limit N] [--since YYYY-MM-DD] [--force]');
+  if (!opts.target) throw new Error('Usage: ingest.mjs <@handle|url|video-id> [--limit N] [--since YYYY-MM-DD] [--project ID] [--force]');
   if (opts.since && !/^\d{4}-\d{2}-\d{2}$/.test(opts.since)) {
     throw new Error(`--since must be YYYY-MM-DD, got "${opts.since}"`);
+  }
+  // Project ids end up in filenames-adjacent metadata and in queries; keep them
+  // to a conservative, greppable character set rather than discovering the hard
+  // way that a space or quote broke a downstream filter.
+  if (opts.project !== null && !/^[A-Za-z0-9][A-Za-z0-9._-]{0,63}$/.test(opts.project)) {
+    throw new Error(`--project must be 1-64 chars of [A-Za-z0-9._-] starting alphanumeric, got "${opts.project}"`);
   }
   return opts;
 }
@@ -82,14 +89,24 @@ async function main() {
   const todo = listing.entries.filter((e) => !known.has(e.id));
   const skipped = listing.entries.length - todo.length;
 
+  // Tagging an ALREADY-INGESTED corpus into a project is the common Agentic OS
+  // case ("drop this channel into project X"). Re-downloading to change one
+  // frontmatter field would be absurd, so retag in place — no network, no yt-dlp.
+  let retagged = 0;
+  if (opts.project) {
+    const alreadyHere = listing.entries.filter((e) => known.has(e.id)).map((e) => e.id);
+    retagged = retagVideos(alreadyHere, opts.project);
+    if (retagged) log(`  tagged ${retagged} existing video(s) with project "${opts.project}"`);
+  }
+
   if (skipped) log(`  ${skipped} already in corpus, skipping`);
   if (todo.length === 0) {
     const summary = {
       target: opts.target, listed: listing.entries.length,
-      ingested: 0, skipped, failed: 0, noCaptions: 0, files: [],
+      ingested: 0, skipped, retagged, failed: 0, noCaptions: 0, files: [],
     };
     if (opts.json) console.log(JSON.stringify(summary, null, 2));
-    else log('Nothing new to ingest.');
+    else log(retagged ? `Nothing new to ingest (${retagged} retagged).` : 'Nothing new to ingest.');
     return;
   }
 
@@ -98,8 +115,8 @@ async function main() {
   // Staging dir under the OS temp root — created by us, removed by us.
   const stage = mkdtempSync(join(tmpdir(), 'yt-ingest-'));
   const result = {
-    target: opts.target, listed: listing.entries.length,
-    ingested: 0, skipped, failed: 0, noCaptions: 0, files: [],
+    target: opts.target, listed: listing.entries.length, project: opts.project ?? null,
+    ingested: 0, skipped, retagged, failed: 0, noCaptions: 0, files: [],
   };
 
   try {
@@ -152,6 +169,7 @@ async function main() {
         channel: channelName,
         channel_id: info.channel_id || null,
         channel_slug: channelSlug,
+        project_id: opts.project ?? null,
         url: info.webpage_url || `https://www.youtube.com/watch?v=${info.id}`,
         upload_date: upload,
         duration_s: info.duration ?? null,
@@ -187,11 +205,16 @@ async function main() {
     for (const [slug, name] of touchedChannels) {
       ensureDir(channelDir(slug));
       const prev = readChannelState(slug) || {};
+      // Projects accumulate: a channel can feed more than one project, and a
+      // later single-project ingest must not silently drop an earlier binding.
+      const projects = new Set(prev.projects ?? []);
+      if (opts.project) projects.add(opts.project);
       writeChannelState(slug, {
         ...prev,
         channelSlug: slug,
         channelName: name,
         channelId: listing.channelId || prev.channelId || null,
+        projects: [...projects].sort(),
         lastIngestAt: new Date().toISOString(),
         lastTarget: opts.target,
       });
@@ -205,7 +228,11 @@ async function main() {
     console.log(JSON.stringify(result, null, 2));
   } else {
     log('');
-    log(`Ingested ${result.ingested} · skipped ${result.skipped} · failed ${result.failed} · no captions ${result.noCaptions}`);
+    log(
+      `Ingested ${result.ingested} · skipped ${result.skipped} · retagged ${result.retagged} · `
+      + `failed ${result.failed} · no captions ${result.noCaptions}`
+      + (result.project ? ` · project ${result.project}` : ''),
+    );
   }
 }
 

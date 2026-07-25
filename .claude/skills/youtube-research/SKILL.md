@@ -41,8 +41,9 @@ YouTube ──ingest──> corpus on disk ──search──> citations ──d
 | Intent | Command |
 |---|---|
 | Pull a channel / video / playlist | `node scripts/youtube/ingest.mjs "<target>" --limit N` |
-| Search the corpus (returns citations) | `node scripts/youtube/search.mjs "<regex>" [--channel SLUG]` |
+| Search — returns citations **with surrounding text** | `node scripts/youtube/search.mjs "<regex>" [--window N] [--channel SLUG] [--project ID]` |
 | What do I have? | `node scripts/youtube/status.mjs` |
+| Tag content into a project | `node scripts/youtube/ingest.mjs "<target>" --project <id>` |
 | Watch a channel | `node scripts/youtube/watchlist.mjs add "@handle" --topic "..."` |
 | Check for new uploads | `node scripts/youtube/poll.mjs [--ingest]` |
 | Publish a digest | `node scripts/youtube/publish.mjs <digest.md>` |
@@ -52,6 +53,12 @@ YouTube ──ingest──> corpus on disk ──search──> citations ──d
 
 **Ingest is incremental.** Ids already in the corpus are skipped before any network call, so
 re-running against a channel is cheap and only fetches genuinely new uploads.
+
+**Projects.** `--project <id>` binds content to a project. Running it against an
+**already-ingested** channel retags in place — no re-download, transcript bodies untouched —
+so "drop this channel into project X" is one cheap command. `search.mjs --project <id>` then
+scopes retrieval to that project's material, and `status.mjs` lists projects with their video
+counts and any untagged remainder.
 
 ---
 
@@ -67,15 +74,30 @@ spans videos you have not ingested, **ingest first** — say so, do not silently
 
 ### Step 2 — Retrieve, don't recall
 Run `search.mjs` with several *distinct* phrasings of the topic (the creator's vocabulary is
-rarely yours). Use `--context 2` to read around a hit before quoting it. Prefer 3–6 targeted
-searches over one broad one.
+rarely yours). Prefer 3–6 targeted searches over one broad one.
 
 Never quote a transcript from memory. If it is not in a search result you just ran, it does
 not go in the digest.
 
-### Step 3 — Read the strongest hits in full
-Open the corpus files for the videos that matter (`docs/research/youtube/<slug>/<date>-<id>.md`).
-Search finds candidates; it does not tell you what the creator actually argues.
+### Step 3 — Widen the window; do NOT read whole files
+
+**Search returns the surrounding text, not a filename.** Each hit ships with a `±2`-chunk
+window (the hit is marked `>`), which is usually enough to quote and judge on the spot.
+
+When a window is not enough, **widen it** — `--window 6`, `--window 10`. That is nearly always
+cheaper than opening the transcript:
+
+| Action | Measured cost |
+|---|---|
+| `--window 2` (default) | **~300 tokens** |
+| `--window 10` | ~1,300 tokens |
+| Reading a median transcript | ~4,300 tokens |
+| Reading the largest transcript | **~25,000 tokens** |
+
+Reading files in full is what made this pipeline's first real run cost 2.5M tokens to produce
+65k of findings (SI-02). Open a transcript only when you genuinely need the whole argument —
+following a thread across an entire talk, say — and state why. `search.mjs --files` lists the
+paths when you have decided that is warranted.
 
 ### Step 4 — Synthesize with verdicts
 Group findings into ideas. Give each idea a verdict, exactly as the self-improvement loop does:
@@ -252,18 +274,18 @@ The single smallest change that starts the experiment.
 ## 7. Worked example
 
 ```
-# 1. gather
-node scripts/youtube/ingest.mjs "@AndrejKarpathy" --limit 5
+# 1. gather (optionally bind straight to a project)
+node scripts/youtube/ingest.mjs "@AndrejKarpathy" --limit 5 --project agentic-os
 
-# 2. see what landed
+# 2. see what landed, and which projects exist
 node scripts/youtube/status.mjs
 
-# 3. retrieve with citations (several phrasings)
-node scripts/youtube/search.mjs "context window" --context 1
+# 3. retrieve — each hit ships with its surrounding text, several phrasings
+node scripts/youtube/search.mjs "context window" --project agentic-os
 node scripts/youtube/search.mjs "tokeniz(er|ation)"
-node scripts/youtube/search.mjs "hallucinat"
+node scripts/youtube/search.mjs "hallucinat" --window 4      # widen when a window is thin
 
-# 4. read the strongest videos in full, then write the digest
+# 4. write the digest from the windows
 #    -> docs/research/youtube/_digests/2026-07-25-karpathy-llm-workflows.md
 
 # 5. publish

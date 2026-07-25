@@ -11,9 +11,9 @@ calls an LLM, so the nightly job is cheap, offline-safe, and cannot hallucinate.
 
 | File | Role |
 |---|---|
-| `ingest.mjs` | Pull channel/playlist/video → corpus markdown. Incremental. |
-| `search.mjs` | Regex sweep → **citations** (video id + timestamp + deep link). |
-| `status.mjs` | What is in the corpus, what is watched, what is pending. |
+| `ingest.mjs` | Pull channel/playlist/video → corpus markdown. Incremental. `--project` retags in place. |
+| `search.mjs` | Regex sweep → **citations with their surrounding text** (`--window N`, `--project ID`). |
+| `status.mjs` | What is in the corpus, which projects exist, what is watched, what is pending. |
 | `watchlist.mjs` | Subscribe/unsubscribe channels (`add` resolves before storing). |
 | `poll.mjs` | Check watched channels for new uploads; `--ingest` to pull. Gathers only. |
 | `publish.mjs` | Upsert a digest into the Notion `YouTube Research` DB. |
@@ -34,7 +34,7 @@ research output.
 ```bash
 node scripts/youtube/ingest.mjs "@AndrejKarpathy" --limit 5
 node scripts/youtube/status.mjs
-node scripts/youtube/search.mjs "context window" --context 1
+node scripts/youtube/search.mjs "context window" --window 2
 node scripts/youtube/watchlist.mjs add "@AndrejKarpathy" --topic "LLM engineering"
 node scripts/youtube/poll.mjs --ingest
 ```
@@ -68,8 +68,21 @@ call for metadata + subtitles. yt-dlp accepts many URLs per invocation.
 **Incremental by id, before any network call.** Re-running against a channel costs one list
 request and fetches only new uploads.
 
-**Search returns citations, not filenames.** This is the design hinge: a synthesis step quotes
-the corpus and every claim is verifiable in one click, by construction rather than by trust.
+**Search returns citations WITH their surrounding text, not filenames.** This is the design
+hinge: a synthesis step quotes the corpus and every claim is verifiable in one click, by
+construction rather than by trust — and it never has to open a transcript to do it.
+
+**Windows, not whole files (SI-02).** v1 returned a filename and let the caller read the file.
+Measured on this corpus: median transcript ~4,300 tokens, largest ~25,000, versus **~300 for
+the ±2 window that actually contains the cited claim** — 14x / 83x amplification. The first
+real dig spent 2,506,699 tokens to emit ~65k of findings. Adjacent matches merge into one
+window, because two nearby hits returning overlapping text hands the amplification straight
+back. `--window N` widens; `--files` lists paths for the rare genuine full read.
+
+**Projects.** `--project <id>` binds content to a project and, against an already-ingested
+channel, retags **in place** — frontmatter only, transcript bodies byte-identical (verified:
+5 files changed, 5 insertions). Mirrors the `project_id` column `archival_memory` already
+carries, so the same id can scope both memory and video context.
 
 **Polling never synthesizes.** The nightly job raises `pendingDigest` and stops. An unattended
 job that both gathers *and* concludes is how a corpus fills with confident noise.

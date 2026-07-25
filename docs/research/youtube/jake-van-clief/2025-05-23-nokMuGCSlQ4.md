@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 324
 ingested_at: 2026-07-25T15:24:26.466Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # Googles VEO 3 just made branding videos INSANELY easily.

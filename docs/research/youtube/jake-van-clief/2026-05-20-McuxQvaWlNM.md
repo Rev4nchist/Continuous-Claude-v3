@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 1345
 ingested_at: 2026-07-25T15:24:26.220Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # We Ran Claude Code By Voice In A Group Call (The Future of Work?)

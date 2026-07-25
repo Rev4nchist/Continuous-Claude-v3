@@ -15,6 +15,7 @@ transcript_source: auto
 transcript_words: 25287
 ingested_at: 2026-07-25T13:55:39.168Z
 ingest_version: 1
+project_id: agentic-os
 ---
 
 # How I use LLMs
