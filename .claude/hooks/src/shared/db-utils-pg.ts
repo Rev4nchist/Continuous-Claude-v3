@@ -61,6 +61,15 @@ import json
 sys.path.insert(0, '${opcDir.replace(/\\/g, '/')}')
 os.chdir('${opcDir.replace(/\\/g, '/')}')
 
+# Single source of truth for the connection string, available to every snippet below.
+# The literal is unreachable by construction: the spawn env below always sets
+# CONTINUOUS_CLAUDE_DB_URL from getPgConnectionString(). It is kept only so this line
+# reads correctly in isolation. Snippets previously each carried their own copy and
+# they had drifted apart on the port (7 said :5432, 7 said :5434), which looked like a
+# live split-brain bug during the 2026-07-26 coordination audit. It was not one - the
+# copies were dead code - but the ambiguity cost real time, so there is now exactly one.
+pg_url = os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL") or "postgresql://claude:claude_dev@localhost:5432/continuous_claude"
+
 ${pythonCode}
 `;
 
@@ -171,7 +180,6 @@ import os
 
 pipeline_id = sys.argv[1]
 current_stage = int(sys.argv[2])
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -400,7 +408,6 @@ from datetime import datetime
 session_id = sys.argv[1]
 project = sys.argv[2]
 working_on = sys.argv[3] if len(sys.argv) > 3 else ''
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -461,7 +468,6 @@ import json
 from datetime import datetime, timedelta
 
 project_filter = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -537,7 +543,6 @@ from datetime import datetime, timezone
 
 session_id = sys.argv[1]
 threshold_seconds = int(sys.argv[2])
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -604,7 +609,6 @@ import json
 file_path = sys.argv[1]
 project = sys.argv[2]
 my_session_id = sys.argv[3]
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -671,7 +675,6 @@ import os
 file_path = sys.argv[1]
 project = sys.argv[2]
 session_id = sys.argv[3]
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -721,7 +724,6 @@ session_id = sys.argv[1]
 topic = sys.argv[2]
 finding = sys.argv[3]
 relevant_to = json.loads(sys.argv[4]) if len(sys.argv) > 4 else []
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -778,7 +780,6 @@ import json
 query = sys.argv[1]
 exclude_session = sys.argv[2]
 limit = int(sys.argv[3])
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5432/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -891,7 +892,6 @@ sender_id = sys.argv[2]
 message_type = sys.argv[3]
 payload = json.loads(sys.argv[4])
 recipient_id = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -956,7 +956,6 @@ import json
 recipient_id = sys.argv[1]
 channel = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != 'null' else None
 mark_as_read = sys.argv[3] == 'true' if len(sys.argv) > 3 else True
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -1083,7 +1082,6 @@ session_id = sys.argv[2]
 agent_type = sys.argv[3]
 task_description = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != 'null' else None
 parent_agent_id = sys.argv[5] if len(sys.argv) > 5 and sys.argv[5] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -1143,7 +1141,6 @@ agent_id = sys.argv[1]
 status = sys.argv[2]
 error_message = sys.argv[3] if len(sys.argv) > 3 and sys.argv[3] != 'null' else None
 result_summary = sys.argv[4] if len(sys.argv) > 4 and sys.argv[4] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -1196,7 +1193,6 @@ import json
 
 session_id = sys.argv[1]
 status_filter = sys.argv[2] if len(sys.argv) > 2 and sys.argv[2] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)
@@ -1269,7 +1265,6 @@ import json
 from datetime import datetime, timezone, timedelta
 
 session_id = sys.argv[1] if len(sys.argv) > 1 and sys.argv[1] != 'null' else None
-pg_url = os.environ.get('CONTINUOUS_CLAUDE_DB_URL') or os.environ.get('DATABASE_URL', 'postgresql://claude:claude_dev@localhost:5434/continuous_claude')
 
 async def main():
     conn = await asyncpg.connect(pg_url)

@@ -1,4 +1,4 @@
-<title>Agentic OS — Lane Board (current state, 2026-07-26)</title>
+<title>Agentic OS — Lane Board</title>
 
 <style>
   :root {
@@ -292,7 +292,7 @@
       <span class="mark">AOS</span>
       <span>
         <b>Lane Board</b>
-        <span>current state &middot; 2026-07-26 &middot; read-only prototype</span>
+        <span>current state &middot; as of 2026-07-26 15:01 &middot; read-only prototype</span>
       </span>
     </div>
     <div class="counters">
@@ -316,7 +316,7 @@
     </div>
     <aside class="callout">
       <span class="lbl">The board is built on a substrate that lies</span>
-      <p>Of 8,170 file claims in the coordination database, <b>zero</b> are owned by a session that is currently alive. The lock never fires against another session, and sometimes fires against you. Fixing that comes before anything reads it as truth.</p>
+      <p>Of 8,179 file claims in the coordination database, <b>zero</b> are owned by a session that is currently alive. The lock never fires against another session, and sometimes fires against you. Fixing that comes before anything reads it as truth.</p>
     </aside>
   </div>
 
@@ -379,17 +379,17 @@
       <div class="sec-head"><h2>Coordination integrity</h2><p>Is the lock telling the truth?</p></div>
       <div class="card">
         <div class="bigstat">
-          <span class="n">0</span><span class="of">/ 8,170 claims owned by a live session</span>
+          <span class="n">0</span><span class="of">/ 8,179 claims owned by a live session</span>
           <p class="cap">Every conflict check falls through to &ldquo;took over stale lock.&rdquo; The file lock has not blocked a real cross-session edit in a long time.</p>
         </div>
-        <div class="bar" role="img" aria-label="3,168 orphaned, 5,002 stale, 0 live">
-          <i style="width:38.8%;background:var(--crit)"></i>
-          <i style="width:61.2%;background:var(--warn)"></i>
+        <div class="bar" role="img" aria-label="3,167 orphaned, 5,012 stale, 0 live">
+          <i style="width:38.7%;background:var(--crit)"></i>
+          <i style="width:61.3%;background:var(--warn)"></i>
           <i style="width:0.4%;background:var(--ok);min-width:3px"></i>
         </div>
         <div class="bar-key">
-          <span><i class="sw" style="background:var(--crit)"></i> 3,168 orphaned</span>
-          <span><i class="sw" style="background:var(--warn)"></i> 5,002 stale owner</span>
+          <span><i class="sw" style="background:var(--crit)"></i> 3,167 orphaned</span>
+          <span><i class="sw" style="background:var(--warn)"></i> 5,012 stale owner</span>
           <span><i class="sw" style="background:var(--ok)"></i> 0 live</span>
         </div>
         <div class="tw">
@@ -397,11 +397,12 @@
             <thead><tr><th>Signal</th><th class="mono">Value</th><th>Reading</th></tr></thead>
             <tbody>
               <tr><td>Session rows per real session</td><td class="mono">2</td><td><span class="pill p-crit">split identity</span></td></tr>
-              <tr><td><span class="mono">s-*</span> rows (register)</td><td class="mono">1,476</td><td><span class="pill p-crit">frozen hb</span></td></tr>
-              <tr><td>uuid rows (heartbeat)</td><td class="mono">894</td><td><span class="pill p-ok">correct</span></td></tr>
+              <tr><td><span class="mono">s-*</span> rows (register)</td><td class="mono">1,479</td><td><span class="pill p-crit">frozen hb</span></td></tr>
+              <tr><td>uuid rows (heartbeat)</td><td class="mono">896</td><td><span class="pill p-ok">correct</span></td></tr>
               <tr><td>Claims owned by uuid</td><td class="mono">0</td><td><span class="pill p-crit">none</span></td></tr>
               <tr><td>Conflict events logged</td><td class="mono">—</td><td><span class="pill p-idle">not measured</span></td></tr>
               <tr><td>Sessions with <span class="mono">ended_at</span></td><td class="mono">—</td><td><span class="pill p-idle">no column</span></td></tr>
+              <tr><td>Port split as a contributing cause</td><td class="mono">n/a</td><td><span class="pill p-ok">ruled out</span></td></tr>
             </tbody>
           </table>
         </div>
@@ -409,7 +410,14 @@
                 count(*) FILTER (WHERE s.last_heartbeat &lt;  now() - interval '5 min') AS stale,
                 count(*) FILTER (WHERE s.last_heartbeat &gt;= now() - interval '5 min') AS live
          FROM file_claims fc LEFT JOIN sessions s ON s.id = fc.session_id;
-<b>target</b>     live &gt; 0 after the identity fix. Today it is 0.</span>
+<b>target</b>     live &gt; 0 after the identity fix. Today it is 0.
+<b>drift</b>      re-queried 15:01 the same day: total 8,170 -> 8,179, live 0 -> 0. Nine claims
+           accrued in seven hours and not one of them was ever owned by a live session.
+<b>refuted</b>    07-26: a second cause was suspected — isSessionActive defaulting to :5434 while
+           claimFile defaulted to :5432. Not real. db-utils-pg.ts:68-77 holds the file's ONLY
+           spawnSync and always injects CONTINUOUS_CLAUDE_DB_URL, so every inline port literal
+           is unreachable. Same in the running bundle (dist/file-claims.mjs:64-67).
+           Cause is the identity split alone — which makes the fix smaller, not larger.</span>
       </div>
     </div>
   </section>
@@ -514,7 +522,7 @@
       <article class="card">
         <span class="lbl" style="color:var(--warn)">Detect</span>
         <h3>Overlap before it happens</h3>
-        <p>Two lanes with intersecting scope is one query over about six rows — not a scan of 8,170 file claims after the damage.</p>
+        <p>Two lanes with intersecting scope is one query over about six rows — not a scan of 8,179 file claims after the damage.</p>
         <p>Same terminal is a <b>warn</b>; a stranger on infra scope is a <b>block</b>; docs are advisory. Posture is a column on the lane, not a hardcoded path list.</p>
       </article>
 
@@ -544,7 +552,7 @@
 
   <footer>
     <span>Agentic OS &middot; lane board prototype &middot; read-only, no writes, no agents invoked</span>
-    <span>rendered from verified state, 2026-07-26</span>
+    <span>rendered from verified state &middot; last refreshed 2026-07-26 15:01</span>
   </footer>
 </div>
 
