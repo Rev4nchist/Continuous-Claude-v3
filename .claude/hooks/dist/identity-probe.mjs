@@ -64,10 +64,16 @@ function main() {
     project_legacy: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
     project_canonical: canonicalProjectKey(cwd),
     cwd,
-    // Process tree — lets us tell a subagent's hook from the main session's.
+    // Process tree. NOTE (verified 2026-07-26): ppid is IDENTICAL for a
+    // subagent's hook and the main session's -- both are spawned by the same
+    // Claude Code process -- so ppid does NOT discriminate. Kept for the record.
     pid: process.pid,
     ppid: process.ppid,
-    tool: payload.tool_name ?? null
+    tool: payload.tool_name ?? null,
+    // The last untested discriminator. session_id is shared with the parent and
+    // CLAUDE_AGENT_ID is unset, so if anything distinguishes a subagent's tool
+    // call from its parent's, transcript_path is the remaining candidate.
+    transcript_path: payload.transcript_path ?? null
   };
   try {
     const logRoot = gitCommonRoot(cwd) || process.env.CLAUDE_PROJECT_DIR || process.cwd();

@@ -5,20 +5,31 @@
  * amount of code reading can answer, because they are all about what the RUNTIME
  * actually hands a hook process:
  *
- *   Q1  Is `payload.session_id` distinct per subagent and stable per process
- *       tree? The plan assumes yes, and that assumption is what lets us delete
- *       generateSessionId() instead of building a new agent_id scheme.
+ *   Q1  ANSWERED 2026-07-26, and the answer inverts the plan's assumption.
+ *       `payload.session_id` is stable per process tree but NOT distinct per
+ *       subagent: a scout subagent's PostToolUse hook reported the SAME
+ *       session_id as the main session (509d86fd-...), with CLAUDE_AGENT_ID
+ *       unset and an identical ppid. So the platform does NOT hand us a
+ *       ready-made agent_id, and payload-first identity will NOT cause subagent
+ *       fan-out to block against its parent -- they share one identity.
  *
- *   Q2  Does an env var exported by the launching terminal (CC_TERMINAL_ID)
- *       actually reach a SUBAGENT's hook process? The sibling rule -- "same
- *       terminal is a warn, a stranger is a block" -- is unimplementable if it
- *       does not. ENV_INHERITED_MARKERS below double as a proxy: if vars the
- *       parent shell exported are visible here, CC_TERMINAL_ID will be too.
+ *   Q2  Partially answered. CLAUDE_OPC_DIR and DATABASE_URL -- exported by the
+ *       user profile, not by Claude Code -- ARE visible in hook processes, so
+ *       parent-shell env inheritance reaches hooks. CC_TERMINAL_ID itself is
+ *       still unset on this machine, so the sibling rule remains untested end
+ *       to end; set it in a launcher and this probe will capture it.
  *
- *   Q3  Do the main tree and a worktree agree on a canonical project key?
- *       Verified 2026-07-26 for --git-common-dir; this records it per-event so
- *       the answer is captured under real hook conditions rather than in a
- *       one-off shell.
+ *   Q3  ANSWERED 2026-07-26, yes. --git-common-dir is byte-identical from the
+ *       main tree and from a linked worktree (ordinal compare), and git
+ *       normalizes 8.3 short paths. Recorded per-event as project_canonical
+ *       alongside the broken project_legacy for contrast.
+ *
+ *   Also established: SessionStart does NOT fire for subagents. session-register
+ *   is registered on SessionStart with no matcher and has no early-exit guard,
+ *   yet a subagent run produced no sessions row and did not rewrite
+ *   ~/.claude/.coordination-session-id. Mid-session hook registration WAS live
+ *   at the time (proven separately), so this is a real negative, not a
+ *   not-yet-loaded artifact.
  *
  * Writes one JSONL line per hook event to .claude/logs/identity-probe.jsonl.
  * Never blocks, never denies, never mutates coordination state. Fail-open on
@@ -110,10 +121,16 @@ function main(): void {
     project_legacy: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
     project_canonical: canonicalProjectKey(cwd),
     cwd,
-    // Process tree — lets us tell a subagent's hook from the main session's.
+    // Process tree. NOTE (verified 2026-07-26): ppid is IDENTICAL for a
+    // subagent's hook and the main session's -- both are spawned by the same
+    // Claude Code process -- so ppid does NOT discriminate. Kept for the record.
     pid: process.pid,
     ppid: process.ppid,
     tool: payload.tool_name ?? null,
+    // The last untested discriminator. session_id is shared with the parent and
+    // CLAUDE_AGENT_ID is unset, so if anything distinguishes a subagent's tool
+    // call from its parent's, transcript_path is the remaining candidate.
+    transcript_path: payload.transcript_path ?? null,
   };
 
   try {
