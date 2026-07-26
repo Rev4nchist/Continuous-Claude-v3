@@ -88,8 +88,13 @@ try {
   $null = $proc.Handle
   if (-not $proc.WaitForExit($syncTimeoutSec * 1000)) {
     $syncTimedOut = $true
-    "[$(Get-Date -Format o)] TIMEOUT: claude -p exceeded ${syncTimeoutSec}s -- killing it so the registry emit below still runs" | Tee-Log
-    try { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } catch { }
+    "[$(Get-Date -Format o)] TIMEOUT: claude -p exceeded ${syncTimeoutSec}s -- killing the process TREE so the registry emit below still runs" | Tee-Log
+    # taskkill /T (tree), NOT Stop-Process: Stop-Process kills ONLY the named process,
+    # so claude's ~9 hook `node` children would orphan permanently -- the exact leak
+    # that stranded 29 processes via sweep.mjs's spawnSync timeout (found 2026-07-25).
+    try { & taskkill.exe /T /F /PID $proc.Id 2>&1 | Out-Null } catch { }
+    # Fallback: if taskkill is unavailable, at least kill the direct child.
+    try { if (-not $proc.HasExited) { Stop-Process -Id $proc.Id -Force -ErrorAction SilentlyContinue } } catch { }
     try { $proc.WaitForExit(15000) | Out-Null } catch { }
   } else {
     $code = $proc.ExitCode

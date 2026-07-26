@@ -407,12 +407,28 @@ const NOTION_PUBLISH_TOOLS = [
   'mcp__claude_ai_Notion__notion-update-page',
 ].join(',');
 
+// Kill a process AND its descendants. spawnSync's `timeout` signals only the DIRECT
+// child, and Windows has no process-group kill — so a timed-out `claude` stranded
+// itself plus its ~9 hook `node` children, permanently, on every timeout. Three such
+// clusters (33h / 9.7h / 3.1h old, 29 processes) had accumulated by 2026-07-25 and
+// were degrading spawn latency enough to cause MORE ETIMEDOUTs — a self-reinforcing
+// leak. `taskkill /T` walks the tree; /F forces. Best-effort by design: this runs
+// during spawn exhaustion, so it must never throw or block the sweep.
+function killTree(pid) {
+  if (!pid) return;
+  try {
+    spawnSync('taskkill', ['/T', '/F', '/PID', String(pid)], {
+      windowsHide: true, timeout: 15000, encoding: 'utf8',
+    });
+  } catch { /* best effort — never let cleanup break the run */ }
+}
+
 // Spawn headless claude with the connector enabled (ANTHROPIC_API_KEY deleted) and
 // a scoped tool allowlist (no --dangerously-skip-permissions — see #9 above).
 function spawnClaude(prompt) {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
-  return spawnSync('claude', ['-p', prompt, '--allowedTools', NOTION_PUBLISH_TOOLS], {
+  const res = spawnSync('claude', ['-p', prompt, '--allowedTools', NOTION_PUBLISH_TOOLS], {
     input: '',
     env,
     timeout: CLAUDE_TIMEOUT_MS,
@@ -420,6 +436,10 @@ function spawnClaude(prompt) {
     encoding: 'utf8',
     maxBuffer: 64 * 1024 * 1024,
   });
+  // res.error covers the ETIMEDOUT case (and any spawn failure). Reap the tree so a
+  // timed-out publish costs one failed card, not ten permanently leaked processes.
+  if (res.error && res.pid) killTree(res.pid);
+  return res;
 }
 
 // Run refresh.mjs --all and parse its stdout manifest (stderr carries the banner).
