@@ -1,0 +1,45 @@
+{
+  "$schema_notes": [
+    "Registry of published claude.ai Artifacts whose source lives in THIS repo.",
+    "Purpose: a published artifact keeps its URL only if a later session passes that URL back to",
+    "the Artifact tool. Without a durable record, a new session mints a NEW url and the old link",
+    "goes stale. Prose in a handoff is not enough - this file is the machine-readable anchor.",
+    "",
+    "TO REFRESH AN ARTIFACT (any session, no prior context needed):",
+    "  1. WebFetch the `url` FIRST. The Artifact tool refuses to redeploy from a session that has",
+    "     not viewed the live version ('This session hasn't viewed the latest version'). It is also",
+    "     how you detect that another session republished without committing its source.",
+    "  2. Edit the `source` file in this repo.",
+    "  3. Call the Artifact tool with BOTH `file_path` (the source) and `url` (from this file).",
+    "     Passing `url` is what redeploys in place. Omitting it mints a new URL - do not omit it.",
+    "  4. Reuse the recorded `favicon` verbatim. A changed favicon reads as a different page.",
+    "  5. Update `last_published` here in the same commit.",
+    "",
+    "The `title` lives in the source file's <title> tag, not here - here it is a mirror for humans.",
+    "Titles must NOT carry a hard date: these are living pages, the as-of stamp belongs in the body."
+  ],
+  "artifacts": [
+    {
+      "id": "agentic-os-lane-board",
+      "url": "https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a",
+      "source": "docs/architecture/agentic-os/mockups/current-state.html",
+      "title": "Agentic OS — Lane Board",
+      "favicon": "🛤️",
+      "description": "Current-state lane board across all active work: 13 lanes, 4 projects, the coordination-layer failure, and the reconciliation queries behind each number.",
+      "session": "agentic-os",
+      "refresh": "at-handoff",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-07-26",
+      "notes": [
+        "DECISION 2026-07-26: stays a hand-authored narrative snapshot, NOT a live data-driven board.",
+        "Rationale: the live version is Mission Control v0 by another name, and the standing decision",
+        "is 'psql for two weeks before any UI' - sprawl is intake/closure discipline, not a dashboard.",
+        "Numbers in the page are point-in-time and carry an as-of stamp. Do not wire it to Postgres",
+        "without revisiting that decision.",
+        "",
+        "Originally published with a hard date in the <title>. Removed 2026-07-26 so the gallery entry",
+        "stays stable across redeploys."
+      ]
+    }
+  ]
+}

@@ -89,7 +89,49 @@ files:
 **The statusline parser looks for EXACTLY `goal:` and `now:` - nothing else works.**
 ---
 
-### 3. Confirm Outcome & Index into Recall (REQUIRED)
+### 3. Refresh registered artifacts (REQUIRED if any match)
+
+Some sessions maintain a **living published artifact** — a page on claude.ai that is meant to stay
+current as work progresses, not a one-shot deliverable. Those are registered in
+`.claude/artifacts.json` at the repo root.
+
+Read that file. For every entry whose `session` matches this handoff's `{session-name}`:
+
+1. **Decide whether the page is now stale.** It is stale if this session changed anything the page
+   asserts — a finding it states, a lane's status, a count, a "next" item, a decision it records.
+   A session that only read code does not make it stale. Say so and skip rather than churning.
+2. **WebFetch the artifact's `url` first.** This is REQUIRED, not optional. The Artifact tool
+   refuses to redeploy from a session that has not seen the currently-published version — it
+   errors with *"This session hasn't viewed the latest version"* — because another session may
+   have republished since. Fetching is also how you find out: compare what is live against the
+   repo `source`. If they differ, another session edited the artifact without committing its
+   source; reconcile before publishing rather than silently reverting their work.
+3. **Edit the `source` file** so it reflects reality. Corrections matter more than additions: if
+   this session *refuted* something the page claims, fix the claim — do not leave it standing next
+   to its correction.
+4. **Republish to the same URL:**
+
+```
+Artifact tool:
+  file_path:  <the entry's `source`, absolute path>
+  url:        <the entry's `url`>          <- REQUIRED. Omitting it mints a NEW url and orphans the old link.
+  favicon:    <the entry's `favicon`>      <- reuse verbatim; a changed favicon reads as a different page
+  description: <one sentence, may update>
+```
+
+5. **Update `last_published`** in `.claude/artifacts.json` and include it in the same commit as the
+   source edit.
+
+Never pass `force: true` to skip the read-first check unless the user explicitly asks to discard
+another session's version — it overwrites their work.
+
+**Do not** create a new artifact here. This step only refreshes ones already registered. If a
+session produced a genuinely new page worth keeping alive, publish it, then add an entry to
+`.claude/artifacts.json` recording `url`, `source`, `favicon`, and `session`.
+
+---
+
+### 4. Confirm Outcome & Index into Recall (REQUIRED)
 
 **IMPORTANT:** Before responding to the user, you MUST confirm the session outcome.
 
@@ -123,7 +165,7 @@ recall entries tagged with `source=handoff` and `outcome=<your outcome>`, so a f
 > Do NOT use `artifact_mark.py --latest` — the `handoffs` SQL table it writes is deprecated/unpopulated,
 > and `--latest` silently marks a stale January row. See that script's docstring.
 
-### 4. Confirm completion
+### 5. Confirm completion
 
 After marking the outcome, respond to the user:
 
@@ -133,6 +175,9 @@ Handoff created! Outcome marked as [OUTCOME].
 Resume in a new session with:
 /resume_handoff path/to/handoff.yaml
 ```
+
+If step 3 refreshed an artifact, name it and give the URL — the user's bookmark is unchanged, so
+say what moved on the page rather than re-pasting the link as if it were new.
 
 ---
 ##.  Additional Notes & Instructions
