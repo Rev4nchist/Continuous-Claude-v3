@@ -1,0 +1,635 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="description" content="A self-contained architectural overview of the Continuous Claude Agentic OS control plane.">
+  <title>Agentic OS | Architecture and Delivery Brief</title>
+  <style>
+    :root {
+      color-scheme: light;
+      --ink: #15233b;
+      --muted: #5d6a7f;
+      --paper: #f6f3ec;
+      --panel: #fffdf8;
+      --panel-strong: #ffffff;
+      --line: #d9d5ca;
+      --navy: #102a43;
+      --blue: #176b87;
+      --teal: #0c7b72;
+      --gold: #ad6b08;
+      --red: #a83a3a;
+      --violet: #6941a5;
+      --green: #25724b;
+      --shadow: 0 14px 40px rgba(16, 42, 67, .08);
+      --radius: 18px;
+      --max: 1180px;
+    }
+
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body {
+      margin: 0;
+      color: var(--ink);
+      background:
+        radial-gradient(circle at 12% 0%, rgba(23, 107, 135, .12), transparent 30rem),
+        linear-gradient(180deg, #f8f6f0 0, var(--paper) 32rem);
+      font: 16px/1.62 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif;
+    }
+    a { color: var(--blue); text-decoration-thickness: .08em; text-underline-offset: .18em; }
+    a:hover { color: var(--navy); }
+    a:focus-visible, button:focus-visible, summary:focus-visible { outline: 3px solid #e0a93e; outline-offset: 3px; }
+    code, pre { font-family: "Cascadia Code", "SFMono-Regular", Consolas, monospace; }
+    code { font-size: .9em; }
+    img, svg { max-width: 100%; }
+    h1, h2, h3, h4 { color: var(--navy); line-height: 1.15; letter-spacing: -.025em; }
+    h1 { margin: .35rem 0 1rem; font-size: clamp(2.6rem, 8vw, 5.7rem); max-width: 12ch; }
+    h2 { margin: 0 0 1.25rem; font-size: clamp(1.8rem, 4vw, 3rem); }
+    h3 { margin: 0 0 .7rem; font-size: 1.22rem; }
+    h4 { margin: 0 0 .35rem; font-size: 1rem; }
+    p { margin: 0 0 1rem; }
+    ul, ol { margin-top: .4rem; padding-left: 1.25rem; }
+    li + li { margin-top: .35rem; }
+    .skip-link { position: fixed; left: 1rem; top: -5rem; z-index: 100; padding: .7rem 1rem; color: white; background: var(--navy); border-radius: .5rem; }
+    .skip-link:focus { top: 1rem; }
+    .reading-progress { position: fixed; z-index: 90; inset: 0 auto auto 0; width: 0; height: 4px; background: linear-gradient(90deg, var(--teal), #e0a93e); }
+    .shell { width: min(calc(100% - 2rem), var(--max)); margin-inline: auto; }
+
+    .masthead { padding: 1rem 0; border-bottom: 1px solid rgba(16, 42, 67, .12); }
+    .masthead .shell { display: flex; align-items: center; justify-content: space-between; gap: 1rem; }
+    .brand { display: flex; gap: .65rem; align-items: center; font-weight: 800; color: var(--navy); text-decoration: none; }
+    .brand-mark { display: grid; place-items: center; width: 2rem; height: 2rem; color: white; background: var(--navy); border-radius: 8px; font-size: .78rem; letter-spacing: .08em; }
+    .masthead-meta { color: var(--muted); font-size: .86rem; text-align: right; }
+
+    .hero { padding: clamp(4rem, 10vw, 8rem) 0 4rem; }
+    .eyebrow { display: inline-flex; align-items: center; gap: .5rem; color: var(--teal); font-size: .78rem; font-weight: 800; letter-spacing: .15em; text-transform: uppercase; }
+    .eyebrow::before { content: ""; width: 2rem; height: 2px; background: currentColor; }
+    .lede { max-width: 780px; color: #34435a; font-size: clamp(1.1rem, 2.2vw, 1.38rem); }
+    .hero-grid { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(270px, .72fr); gap: 2rem; align-items: end; }
+    .decision-card { padding: 1.5rem; color: white; background: var(--navy); border-radius: var(--radius); box-shadow: var(--shadow); }
+    .decision-card h2 { color: white; font-size: 1.1rem; }
+    .decision-card p { color: #dbe7f0; }
+    .decision-card strong { color: #78ded3; }
+    .meta-row { display: flex; flex-wrap: wrap; gap: .65rem; margin-top: 1.5rem; }
+
+    .tag { display: inline-flex; align-items: center; min-height: 1.65rem; padding: .18rem .55rem; border: 1px solid currentColor; border-radius: 999px; font-size: .7rem; font-weight: 800; letter-spacing: .08em; text-transform: uppercase; }
+    .tag.evidence { color: var(--blue); background: #eaf6f9; }
+    .tag.decision { color: var(--green); background: #e9f5ed; }
+    .tag.assumption { color: var(--gold); background: #fff4d9; }
+    .tag.open { color: var(--violet); background: #f2ebfb; }
+    .tag.gate { color: var(--red); background: #faece9; }
+    .decision-card .tag { color: #c7f2ec; background: rgba(255,255,255,.08); }
+
+    .section-nav { position: sticky; top: 0; z-index: 70; background: rgba(246, 243, 236, .94); border-block: 1px solid var(--line); backdrop-filter: blur(12px); }
+    .section-nav .shell { display: flex; gap: .3rem; overflow-x: auto; scrollbar-width: thin; padding-block: .55rem; }
+    .section-nav a { flex: 0 0 auto; padding: .45rem .7rem; color: var(--muted); border-radius: 999px; font-size: .76rem; font-weight: 700; text-decoration: none; }
+    .section-nav a:hover, .section-nav a[aria-current="true"] { color: white; background: var(--navy); }
+
+    main section { padding: clamp(3.5rem, 8vw, 7rem) 0; scroll-margin-top: 4rem; }
+    main section + section { border-top: 1px solid var(--line); }
+    .section-head { display: grid; grid-template-columns: .65fr 1.35fr; gap: 2rem; margin-bottom: 2rem; }
+    .section-kicker { color: var(--teal); font-size: .75rem; font-weight: 800; letter-spacing: .13em; text-transform: uppercase; }
+    .section-intro { max-width: 760px; color: var(--muted); font-size: 1.06rem; }
+
+    .grid { display: grid; gap: 1rem; }
+    .grid.two { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+    .grid.three { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+    .grid.four { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+    .card { padding: 1.25rem; background: rgba(255, 253, 248, .88); border: 1px solid var(--line); border-radius: var(--radius); box-shadow: 0 6px 18px rgba(16,42,67,.035); }
+    .card > :last-child { margin-bottom: 0; }
+    .card-top { display: flex; justify-content: space-between; align-items: start; gap: .8rem; margin-bottom: .65rem; }
+    .number { display: grid; place-items: center; flex: 0 0 auto; width: 2rem; height: 2rem; color: white; background: var(--teal); border-radius: 50%; font-weight: 850; }
+    .muted { color: var(--muted); }
+    .small { font-size: .86rem; }
+    .callout { margin: 1.5rem 0; padding: 1.25rem 1.35rem; background: #eaf4f3; border-left: 4px solid var(--teal); border-radius: 0 var(--radius) var(--radius) 0; }
+    .callout.warning { background: #fff3df; border-color: var(--gold); }
+    .callout strong { color: var(--navy); }
+
+    .maturity { counter-reset: maturity; }
+    .maturity .card { position: relative; overflow: hidden; min-height: 235px; }
+    .maturity .card::after { content: attr(data-level); position: absolute; right: -.05em; bottom: -.35em; color: rgba(16, 42, 67, .055); font-size: 8rem; font-weight: 900; line-height: 1; }
+    .maturity .card:nth-child(2) { border-top: 4px solid #2b7a9a; }
+    .maturity .card:nth-child(3) { border-top: 4px solid #8065aa; }
+    .maturity .card:nth-child(4) { border-top: 4px solid #b06b32; }
+    .maturity .card:first-child { border-top: 4px solid var(--teal); }
+
+    .diagram { padding: 1.25rem; background: #0f253b; border-radius: var(--radius); box-shadow: var(--shadow); overflow: auto; }
+    .diagram svg { display: block; width: 100%; min-width: 760px; height: auto; }
+    .diagram-caption { margin-top: .75rem; color: #c2d1dd; font-size: .82rem; }
+    .flow { display: flex; align-items: stretch; gap: .45rem; overflow-x: auto; padding: .35rem 0 1rem; }
+    .flow-step { position: relative; flex: 1 0 145px; padding: .85rem; background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+    .flow-step:not(:last-child)::after { content: "→"; position: absolute; right: -.55rem; top: 50%; z-index: 2; width: 1.1rem; color: var(--teal); background: var(--paper); text-align: center; font-weight: 900; transform: translateY(-50%); }
+    .flow-step b { display: block; color: var(--navy); font-size: .86rem; }
+    .flow-step span { color: var(--muted); font-size: .76rem; }
+
+    .table-wrap { overflow-x: auto; border: 1px solid var(--line); border-radius: var(--radius); background: var(--panel); }
+    table { width: 100%; border-collapse: collapse; font-size: .88rem; }
+    caption { padding: 1rem; color: var(--muted); text-align: left; font-weight: 700; }
+    th, td { padding: .85rem .9rem; border-bottom: 1px solid var(--line); text-align: left; vertical-align: top; }
+    th { color: var(--navy); background: #edf1f0; font-size: .74rem; letter-spacing: .05em; text-transform: uppercase; }
+    tr:last-child td { border-bottom: 0; }
+    tbody tr:hover { background: #faf8f2; }
+    .score { white-space: nowrap; color: var(--green); font-weight: 800; }
+    .score.alt { color: var(--gold); }
+    .score.no { color: var(--red); }
+
+    .authority { display: grid; grid-template-columns: repeat(3, 1fr); gap: 1rem; }
+    .authority .card { border-top: 5px solid var(--teal); }
+    .authority .card:nth-child(2) { border-top-color: var(--blue); }
+    .authority .card:nth-child(3) { border-top-color: var(--violet); }
+    .authority .owns { padding-top: .65rem; border-top: 1px solid var(--line); }
+
+    .contract { padding: 1rem; background: #102a43; border-radius: 12px; color: #dce9f1; overflow: auto; font-size: .78rem; }
+    .contract strong { color: #7de0d3; }
+    .contract code { color: inherit; white-space: pre; }
+    details { background: var(--panel); border: 1px solid var(--line); border-radius: 12px; }
+    details + details { margin-top: .7rem; }
+    summary { cursor: pointer; padding: 1rem 1.1rem; color: var(--navy); font-weight: 800; }
+    details[open] summary { border-bottom: 1px solid var(--line); }
+    .details-body { padding: 1rem 1.1rem; }
+
+    .roadmap { position: relative; display: grid; grid-template-columns: repeat(6, minmax(180px, 1fr)); gap: .75rem; overflow-x: auto; padding: .2rem .1rem 1rem; }
+    .phase { padding: 1rem; background: var(--panel); border: 1px solid var(--line); border-radius: 14px; }
+    .phase .phase-id { color: var(--teal); font-size: .72rem; font-weight: 850; letter-spacing: .09em; text-transform: uppercase; }
+    .phase h3 { margin-top: .25rem; font-size: 1rem; }
+    .phase p { color: var(--muted); font-size: .8rem; }
+    .phase .gate-line { display: block; padding-top: .6rem; border-top: 1px solid var(--line); color: var(--red); font-size: .76rem; font-weight: 750; }
+
+    .risk-grid .card { padding-left: 1.15rem; border-left: 4px solid var(--red); }
+    .metric { padding: 1rem; background: #eef6f4; border-radius: 12px; }
+    .metric strong { display: block; color: var(--teal); font-size: 1.45rem; line-height: 1.2; }
+    .metric span { color: var(--muted); font-size: .78rem; }
+    .gate-list { list-style: none; padding: 0; columns: 2; column-gap: 2rem; }
+    .gate-list li { break-inside: avoid; position: relative; padding: .45rem 0 .45rem 1.6rem; border-bottom: 1px dotted var(--line); }
+    .gate-list li::before { content: "□"; position: absolute; left: 0; color: var(--red); font-size: 1.1rem; }
+
+    .source-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: .7rem 1.5rem; list-style: none; padding: 0; }
+    .source-list li { padding: .65rem 0; border-bottom: 1px solid var(--line); }
+    .source-list a { font-weight: 700; }
+    footer { padding: 2rem 0 4rem; border-top: 1px solid var(--line); color: var(--muted); }
+    .footer-grid { display: flex; justify-content: space-between; gap: 2rem; }
+    .print-button { padding: .55rem .8rem; color: var(--navy); background: transparent; border: 1px solid var(--navy); border-radius: 8px; cursor: pointer; font: inherit; font-weight: 750; }
+
+    @media (max-width: 900px) {
+      .hero-grid, .section-head { grid-template-columns: 1fr; }
+      .grid.four { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+      .grid.three { grid-template-columns: 1fr; }
+      .authority { grid-template-columns: 1fr; }
+    }
+    @media (max-width: 640px) {
+      .grid.two, .grid.four, .source-list { grid-template-columns: 1fr; }
+      .masthead-meta { display: none; }
+      .gate-list { columns: 1; }
+      .footer-grid { display: block; }
+      h1 { font-size: 3rem; }
+      .hero { padding-top: 3.25rem; }
+    }
+    @media (prefers-reduced-motion: reduce) { html { scroll-behavior: auto; } }
+    @media print {
+      body { background: white; font-size: 10pt; }
+      .section-nav, .reading-progress, .print-button, .skip-link { display: none; }
+      .hero, main section { padding: 1.5rem 0; }
+      .card, .table-wrap, details, .diagram { break-inside: avoid; box-shadow: none; }
+      .diagram { background: white; border: 1px solid #999; }
+      .diagram svg text { fill: #111 !important; }
+      .diagram svg rect { fill: white !important; stroke: #555 !important; }
+      a { color: #111; text-decoration: none; }
+      a[href^="http"]::after { content: " (" attr(href) ")"; font-size: .7em; word-break: break-all; }
+    }
+  </style>
+</head>
+<body>
+  <a class="skip-link" href="#main">Skip to content</a>
+  <div class="reading-progress" id="reading-progress" aria-hidden="true"></div>
+
+  <header class="masthead">
+    <div class="shell">
+      <a class="brand" href="#top" aria-label="Agentic OS overview home">
+        <span class="brand-mark" aria-hidden="true">AOS</span>
+        <span>Agentic OS</span>
+      </a>
+      <div class="masthead-meta">Phase-0-ready architecture handoff • branch <code>agentic-os</code><br>Prepared 18 July 2026</div>
+    </div>
+  </header>
+
+  <div class="hero" id="top">
+    <div class="shell hero-grid">
+      <div>
+        <span class="eyebrow">Governed automation, built on what exists</span>
+        <h1>The control plane for Continuous Claude.</h1>
+        <p class="lede">Agentic OS turns proven skills, agents, hooks, memory, and workflows into a safe shared product: versioned actions, durable runs, scoped authority, human approvals, observable outcomes, and deliberate improvement.</p>
+        <div class="meta-row" aria-label="Document classification legend">
+          <span class="tag evidence">Evidence</span>
+          <span class="tag decision">Decision</span>
+          <span class="tag assumption">Assumption</span>
+          <span class="tag open">Open question</span>
+          <span class="tag gate">Release gate</span>
+        </div>
+      </div>
+      <aside class="decision-card" aria-labelledby="exec-decision">
+        <span class="tag">Executive decision</span>
+        <h2 id="exec-decision">Build the missing control plane. Do not replace the kernel.</h2>
+        <p><strong>Reuse</strong> Continuous Claude's differentiated agent, skill, hook, Ralph/Maestro, memory, Notion, and evaluation assets.</p>
+        <p><strong>Adopt</strong> Claude Agent SDK as the production runner boundary and borrow durable-workflow patterns where fixtures prove a gap.</p>
+        <p><strong>Build</strong> the domain layer that owns runs, policy, approvals, idempotency, evidence, projection, promotion, and rollback.</p>
+      </aside>
+    </div>
+  </div>
+
+  <nav class="section-nav" aria-label="Overview sections">
+    <div class="shell">
+      <a href="#summary">Summary</a><a href="#maturity">Maturity</a><a href="#landscape">Landscape</a><a href="#authority">Authority</a><a href="#architecture">Architecture</a><a href="#contracts">Contracts</a><a href="#workflows">Workflows</a><a href="#roadmap">Roadmap</a><a href="#security">Security</a><a href="#operations">Operations</a><a href="#gates">Gates</a><a href="#decisions">Decisions</a><a href="#sources">Sources</a>
+    </div>
+  </nav>
+
+  <main id="main">
+    <section id="summary">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">01 / Executive summary</div><h2>A shared operating surface, not another agent framework.</h2></div>
+          <p class="section-intro">The design extends the current repository into a durable, authenticated run service with a useful operator interface. Its primary promise is controlled execution: a user can launch valuable automation without terminal access and still explain what ran, why, under whose authority, at what cost, and with what result.</p>
+        </div>
+        <div class="grid three">
+          <article class="card"><div class="card-top"><h3>Product outcome</h3><span class="tag decision">Decision</span></div><p>A governed workspace to discover repeated work, codify it as versioned capabilities, execute it safely, inspect live progress and evidence, and improve it through evaluation plus approval.</p></article>
+          <article class="card"><div class="card-top"><h3>Missing layer</h3><span class="tag evidence">Evidence</span></div><p>The repository already has the kernel. What it lacks is shared identity and policy, durable run/task state, leases, idempotent side effects, approvals, artifact lineage, a registry, and an operator client.</p></article>
+          <article class="card"><div class="card-top"><h3>v1 boundary</h3><span class="tag decision">Decision</span></div><p>Deliver three reference workflows through one API and dashboard. No arbitrary code execution, visual workflow builder, auto-merge, multi-region active-active, or autonomous definition promotion.</p></article>
+        </div>
+        <div class="callout">
+          <strong>Definition of success:</strong> at least 80% of reference runs finish without terminal intervention; duplicate launches create one run and one side-effect set; worker restart resumes at the last checkpoint; all external writes are attributable; projection failures remain visible and retryable; no skill promotes itself.
+        </div>
+        <div class="grid two">
+          <article class="card"><h3>Who it serves</h3><ul><li><strong>Operator:</strong> launch, supervise, approve, recover.</li><li><strong>Builder:</strong> define in Git, test fixtures, evaluate, ship.</li><li><strong>Contributor:</strong> use curated actions through typed forms.</li><li><strong>Auditor/Admin:</strong> reconstruct authority, versions, and effects.</li></ul></article>
+          <article class="card"><h3>Architectural invariants</h3><ul><li>UI, voice, CLI, and Notion are clients of the same authenticated API.</li><li>A browser request never shells directly into <code>claude -p</code>.</li><li>Each entity has exactly one authoritative writer.</li><li>Every run pins exact definition, policy, and model configuration versions.</li><li>Self-improvement proposes candidates; independent gates promote them.</li></ul></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="maturity">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">02 / Source model</div><h2>Four levels, translated from inspiration into production controls.</h2></div>
+          <p class="section-intro"><span class="tag evidence">Video-derived evidence</span> Chase AI's four-level model supplies the product arc. The design retains its progression while adding identity, durable execution, policy, recovery, and audit needed for a shared system. The <a href="https://www.youtube.com/watch?v=HRw-vP0j8OM&t=1396s">23:16 boundary</a> is pivotal: durable run records become the substrate for insight before the visual layer arrives.</p>
+        </div>
+        <div class="grid four maturity">
+          <article class="card" data-level="1"><div class="card-top"><span class="number">1</span><a class="small" href="https://www.youtube.com/watch?v=HRw-vP0j8OM&t=266s">04:26 ↗</a></div><h3>Skills &amp; loops</h3><p class="muted">Audit recurring work, validate it manually, codify it, automate it, learn from results.</p><p><strong>Production translation:</strong> versioned registry, deterministic definitions, scheduler, fixtures, evaluation, promotion gates.</p></article>
+          <article class="card" data-level="2"><div class="card-top"><span class="number">2</span><a class="small" href="https://www.youtube.com/watch?v=HRw-vP0j8OM&t=809s">13:29 ↗</a></div><h3>Memory &amp; state</h3><p class="muted">Organize raw inputs, structured knowledge, outputs, indexes, and run history as a navigable second brain.</p><p><strong>Production translation:</strong> Git navigation, Notion knowledge, PostgreSQL events, pgvector memory, artifacts, provenance, retention.</p></article>
+          <article class="card" data-level="3"><div class="card-top"><span class="number">3</span><a class="small" href="https://www.youtube.com/watch?v=HRw-vP0j8OM&t=1404s">23:24 ↗</a></div><h3>Experience</h3><p class="muted">Place a command center over metrics, artifacts, directives, and one-click skills.</p><p><strong>Production translation:</strong> authenticated dashboard and optional voice client over the run API, with approvals and evidence.</p></article>
+          <article class="card" data-level="4"><div class="card-top"><span class="number">4</span><a class="small" href="https://www.youtube.com/watch?v=HRw-vP0j8OM&t=1703s">28:23 ↗</a></div><h3>Distribution</h3><p class="muted">Package the interface so teammates and clients can operate capabilities without learning the terminal.</p><p><strong>Production translation:</strong> tenancy, RBAC, scoped connector grants, deployment, audit, support, and rollback.</p></article>
+        </div>
+        <div class="callout warning"><span class="tag assumption">Production interpretation</span> The video's concepts are high confidence; exact automatic-caption wording is medium confidence. The architecture additions are design decisions, not claims made by the video.</div>
+      </div>
+    </section>
+
+    <section id="landscape">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">03 / Build versus adopt</div><h2>Borrow primitives. Own the domain control plane.</h2></div>
+          <p class="section-intro">The market offers useful execution, memory, graph, durable-workflow, and UX patterns. None owns this project's specific chain of <strong>Goal → Project → Task → Run → Step → Evidence/Artifact → Approval</strong> together with its Notion and Continuous Claude contracts.</p>
+        </div>
+        <div class="table-wrap">
+          <table>
+            <caption>Decision matrix. “Preferred” is a design choice; every alternative still requires the shared fixture scorecard.</caption>
+            <thead><tr><th>Option</th><th>What it gives us</th><th>Main cost or risk</th><th>Posture</th></tr></thead>
+            <tbody>
+              <tr><td><strong>Thin control plane + Claude Agent SDK</strong></td><td>Preserves current skills, hooks, Ralph/Maestro, memory, and TypeScript stack.</td><td>We must implement durable state, leases, policy, idempotency, and projections.</td><td class="score">Preferred baseline</td></tr>
+              <tr><td><a href="https://mastra.ai/">Mastra</a></td><td>TypeScript agents, workflows, memory, evals, observability, resumable snapshots.</td><td>Framework duplication, rapid churn, suspend/resume uncertainty.</td><td class="score alt">Best TS spike</td></tr>
+              <tr><td><a href="https://github.com/conductor-oss/conductor">Conductor</a></td><td>Mature durable state machines, workers, retries, HITL, immutable versions.</td><td>JVM and operational weight; workers still need idempotency.</td><td class="score alt">Durability spike</td></tr>
+              <tr><td><a href="https://github.com/agno-agi/agno">Agno AgentOS</a></td><td>Integrated API, browser control plane, sessions, RBAC, memory, traces.</td><td>Python surface, API churn, RBAC hardening.</td><td class="score alt">Prototype option</td></tr>
+              <tr><td><a href="https://docs.langchain.com/oss/python/langgraph/overview">LangGraph</a></td><td>Strong checkpoint, interrupt, replay, and thread/store model.</td><td>A second orchestration model beside Ralph/Maestro.</td><td>Borrow; spike on gap</td></tr>
+              <tr><td><a href="https://github.com/mem0ai/mem0">Mem0</a> / <a href="https://github.com/letta-ai/letta">Letta</a></td><td>Well-defined memory service and persistent-agent patterns.</td><td>Do not solve governed business workflows, promotion, or runtime authority.</td><td>Evaluate after retrieval tests</td></tr>
+              <tr><td><a href="https://github.com/n8n-io/n8n">n8n</a></td><td>Triggers, waits, visual integrations, strong Notion edge.</td><td>License and agent-state model make it a poor kernel.</td><td class="score no">Optional edge only</td></tr>
+              <tr><td><a href="https://github.com/langgenius/dify">Dify</a></td><td>Workflow publishing, knowledge, plugin and UX references.</td><td>Visual-first abstraction, footprint, licensing restrictions.</td><td class="score no">UX inspiration</td></tr>
+            </tbody>
+          </table>
+        </div>
+        <div class="grid three" style="margin-top:1rem">
+          <article class="card"><h3>Personal OS patterns</h3><p><a href="https://github.com/openclaw/openclaw">OpenClaw</a> shows gateway, channels, isolated sessions, skills, cron, and Markdown memory at scale. <a href="https://github.com/CoWork-OS/CoWork-OS">CoWork OS</a> is a strong timeline, approval, evidence, and artifact UX reference.</p></article>
+          <article class="card"><h3>Agent runtime patterns</h3><p><a href="https://github.com/microsoft/autogen">AutoGen</a>, <a href="https://github.com/crewAIInc/crewAI">CrewAI</a>, <a href="https://github.com/elizaOS/eliza">ElizaOS</a>, and <a href="https://adk.dev/">Google ADK</a> inform typed messages, roles, plugin contracts, sessions, evaluation, and collaborative graphs.</p></article>
+          <article class="card"><h3>Sandbox and portability</h3><p><a href="https://agentic-os.sh/">ANOLISA</a> informs isolation and kernel observability. The <a href="https://openai.github.io/openai-agents-python/">OpenAI Agents SDK</a> supplies a compact handoff, guardrail, and trace reference independent of the primary model runtime.</p></article>
+        </div>
+        <details style="margin-top:1rem"><summary>Framework adoption scorecard</summary><div class="details-body"><p>Every candidate must run identical fixtures for worker-death recovery, duplicate delivery, multi-day human approval, version pinning and rollback, workspace isolation, least-privilege tools, PostgreSQL/Notion authority compatibility, trace redaction/export, Windows development, Railway/container deployment, licensing, operations, dependencies, and migration cost.</p></div></details>
+      </div>
+    </section>
+
+    <section id="authority">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">04 / Source of truth</div><h2>One entity, one authoritative writer.</h2></div>
+          <p class="section-intro">The most important boundary in the design is not a framework choice. It is authority. Notion holds human intent; Git holds executable truth; PostgreSQL holds transactional runtime truth. Everything else is a projection or a specialized byte/telemetry store.</p>
+        </div>
+        <div class="authority">
+          <article class="card"><div class="card-top"><h3>Notion</h3><span class="tag decision">Human authority</span></div><p>Portfolio, project and task intent, durable human decisions, curated knowledge, human-readable results and artifact links. It can submit approval commands and display approval projections.</p><p class="owns small"><strong>Does not own:</strong> operational approval state, leases, event streams, prompts, secrets, high-volume logs, or queue semantics.</p></article>
+          <article class="card"><div class="card-top"><h3>Git</h3><span class="tag decision">Executable authority</span></div><p>Versioned agents, skills, workflows, schemas, evaluations, policy configuration, releases, deployment definitions, and immutable content hashes.</p><p class="owns small"><strong>Does not own:</strong> mutable run state, human task status, or live approvals.</p></article>
+          <article class="card"><div class="card-top"><h3>PostgreSQL + pgvector</h3><span class="tag decision">Runtime authority</span></div><p>Runs, attempts, tasks, immutable events, leases, runner session/checkpoint state, operational approvals, idempotency, grants, receipts, outbox, evaluation records, artifact metadata, and semantic memory.</p><p class="owns small"><strong>Does not own:</strong> canonical project intent or executable source definitions.</p></article>
+        </div>
+        <div class="table-wrap" style="margin-top:1rem">
+          <table><caption>Authority and projection map</caption><thead><tr><th>Entity</th><th>Authority</th><th>Read models / projections</th></tr></thead><tbody>
+            <tr><td>Agent, skill, workflow</td><td>Git SHA + content hash</td><td>Registry table, dashboard, Notion catalog</td></tr>
+            <tr><td>Project, task, durable human decision</td><td>Notion</td><td>PostgreSQL reference/cache, dashboard</td></tr>
+            <tr><td>Operational approval state</td><td>PostgreSQL</td><td>Notion and dashboard submit idempotent commands and receive projections</td></tr>
+            <tr><td>Run, step, event, lease, idempotency</td><td>PostgreSQL</td><td>Dashboard, selected Notion status fields</td></tr>
+            <tr><td>Artifact bytes</td><td>Private object store or repository</td><td>PostgreSQL metadata, signed Notion link/embed</td></tr>
+            <tr><td>Learning / memory</td><td>PostgreSQL + pgvector</td><td>Curated Notion page only after promotion</td></tr>
+            <tr><td>Trace / evaluation</td><td>PostgreSQL durable record</td><td>Braintrust/OTel and dashboard</td></tr>
+          </tbody></table>
+        </div>
+        <div class="callout"><strong>Notion operating rule:</strong> runtime transitions and an outbox row commit together. A sync worker projects concise state with a stable operation id, honors <code>Retry-After</code> for <code>429</code>/<code>529</code>, stores the receipt and content hash, and reconciles drift without overwriting human-owned fields.</div>
+        <div class="card">
+          <div class="card-top"><h3>Live v1 workspace</h3><span class="tag evidence">Live evidence</span></div>
+          <p><a href="https://app.notion.com/p/3a276fd7ac828122a0d5f57eb93cb5b1"><strong>Agentic OS project in Notion</strong></a> is marked <strong>In progress</strong> and connected to the Claude Bridge bucket. Its phase tasks are live: <a href="https://app.notion.com/p/3a276fd7ac82815d8d2cc3b500aadb34">Phase 0</a>, <a href="https://app.notion.com/p/3a276fd7ac828136be25fd044161fb28">Phase 1</a>, <a href="https://app.notion.com/p/3a276fd7ac828106b37dc4cee52913da">Phase 2</a>, <a href="https://app.notion.com/p/3a276fd7ac8281fe8e28db37cc13032c">Phase 3</a>, <a href="https://app.notion.com/p/3a276fd7ac82817b88e0cf3121215e2b">Phase 4</a>, and <a href="https://app.notion.com/p/3a276fd7ac8281d6b411c3d21be24fb4">Phase 5</a>. The <a href="https://www.notion.so/30e76fd7ac8281e99fe1c0b257088b34">Claude Bridge HQ</a> remains the collaboration surface.</p>
+        </div>
+      </div>
+    </section>
+
+    <section id="architecture">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">05 / Target architecture</div><h2>Clients command. The control plane decides. Sandboxed workers act.</h2></div>
+          <p class="section-intro">A narrow API separates operator intent from execution authority. The orchestrator resolves pinned definitions and policy, workers claim renewable leases, and the tool broker exposes only approved capabilities. PostgreSQL anchors state while asynchronous projections feed human and telemetry surfaces.</p>
+        </div>
+        <figure class="diagram" aria-labelledby="architecture-caption">
+          <svg viewBox="0 0 1120 560" role="img" aria-labelledby="arch-title arch-desc">
+            <title id="arch-title">Agentic OS logical architecture</title>
+            <desc id="arch-desc">Clients enter through identity and policy into the run orchestrator, which coordinates registries, a durable task queue, sandboxed workers and a tool broker. PostgreSQL is the transactional center and projection workers publish to Notion, telemetry and artifact storage.</desc>
+            <defs><marker id="arrow" markerWidth="8" markerHeight="8" refX="7" refY="4" orient="auto"><path d="M0 0 L8 4 L0 8Z" fill="#73d8cb"/></marker></defs>
+            <g fill="none" stroke="#73d8cb" stroke-width="2" marker-end="url(#arrow)">
+              <path d="M190 95 H255"/><path d="M450 95 H515"/><path d="M710 95 H775"/><path d="M870 140 V200"/><path d="M775 255 H710"/><path d="M515 255 H450"/>
+              <path d="M355 140 V200"/><path d="M610 140 V395"/><path d="M515 440 H430"/><path d="M705 440 H790"/><path d="M920 395 V340"/><path d="M920 485 V525 H330 V485"/>
+            </g>
+            <g font-family="system-ui, sans-serif" font-size="14" text-anchor="middle">
+              <g><rect x="30" y="50" width="160" height="90" rx="14" fill="#173957" stroke="#376888"/><text x="110" y="86" fill="#fff" font-weight="700">Experience clients</text><text x="110" y="112" fill="#bcd1df" font-size="12">Dashboard · CLI · Voice</text><text x="110" y="129" fill="#bcd1df" font-size="12">Notion · Scheduler</text></g>
+              <g><rect x="255" y="50" width="195" height="90" rx="14" fill="#173957" stroke="#376888"/><text x="352" y="86" fill="#fff" font-weight="700">Identity &amp; policy gateway</text><text x="352" y="112" fill="#bcd1df" font-size="12">OIDC · RBAC · grants</text><text x="352" y="129" fill="#bcd1df" font-size="12">allow · deny · approval</text></g>
+              <g><rect x="515" y="50" width="195" height="90" rx="14" fill="#0d756e" stroke="#73d8cb"/><text x="612" y="86" fill="#fff" font-weight="800">Run orchestrator</text><text x="612" y="112" fill="#d4f3ef" font-size="12">state · pinning · approvals</text><text x="612" y="129" fill="#d4f3ef" font-size="12">idempotency · cancellation</text></g>
+              <g><rect x="775" y="50" width="190" height="90" rx="14" fill="#173957" stroke="#376888"/><text x="870" y="86" fill="#fff" font-weight="700">Definition registries</text><text x="870" y="112" fill="#bcd1df" font-size="12">agents · skills · workflows</text><text x="870" y="129" fill="#bcd1df" font-size="12">tools · policy · hashes</text></g>
+              <g><rect x="775" y="200" width="190" height="110" rx="14" fill="#173957" stroke="#376888"/><text x="870" y="239" fill="#fff" font-weight="700">Queue &amp; checkpoints</text><text x="870" y="265" fill="#bcd1df" font-size="12">leases · runner session store</text><text x="870" y="283" fill="#bcd1df" font-size="12">retry · timeout · dead letter</text></g>
+              <g><rect x="515" y="200" width="195" height="110" rx="14" fill="#69509a" stroke="#bfa8e8"/><text x="612" y="239" fill="#fff" font-weight="700">Sandboxed workers</text><text x="612" y="265" fill="#e5dbf7" font-size="12">Agent SDK / local adapter</text><text x="612" y="283" fill="#e5dbf7" font-size="12">per-run worktree · events</text></g>
+              <g><rect x="255" y="200" width="195" height="110" rx="14" fill="#a25f27" stroke="#f0b77e"/><text x="352" y="239" fill="#fff" font-weight="700">Tool broker</text><text x="352" y="265" fill="#f9e3ce" font-size="12">scoped capabilities · secrets</text><text x="352" y="283" fill="#f9e3ce" font-size="12">operation id · receipt</text></g>
+              <g><rect x="30" y="200" width="160" height="110" rx="14" fill="#173957" stroke="#376888"/><text x="110" y="239" fill="#fff" font-weight="700">Adapters</text><text x="110" y="265" fill="#bcd1df" font-size="12">MCP · CLI · Browser</text><text x="110" y="283" fill="#bcd1df" font-size="12">Deploy · Notion</text></g>
+              <g><rect x="515" y="395" width="190" height="90" rx="45" fill="#163f5f" stroke="#73d8cb" stroke-width="3"/><text x="610" y="432" fill="#fff" font-weight="800">PostgreSQL + pgvector</text><text x="610" y="457" fill="#cce4e2" font-size="12">events · state · outbox · memory</text></g>
+              <g><rect x="230" y="395" width="200" height="90" rx="14" fill="#173957" stroke="#376888"/><text x="330" y="432" fill="#fff" font-weight="700">Projection workers</text><text x="330" y="457" fill="#bcd1df" font-size="12">lease · retry · reconcile drift</text></g>
+              <g><rect x="790" y="395" width="260" height="90" rx="14" fill="#173957" stroke="#376888"/><text x="920" y="425" fill="#fff" font-weight="700">External projections</text><text x="920" y="450" fill="#bcd1df" font-size="12">Notion · Braintrust / OTel</text><text x="920" y="468" fill="#bcd1df" font-size="12">private artifact storage</text></g>
+            </g>
+          </svg>
+          <figcaption id="architecture-caption" class="diagram-caption">Transactional core in teal; authority-sensitive execution boundaries in violet and amber. Arrows show command or projection flow, not shared ownership.</figcaption>
+        </figure>
+        <div class="grid three" style="margin-top:1rem">
+          <article class="card"><h3>Experience + control</h3><p>React/TypeScript catalog, launch forms, timeline, approval inbox and artifacts. Node/TypeScript API owns authentication, registry lookup, run creation, policy and SSE.</p></article>
+          <article class="card"><h3>Execution + data</h3><p>Workers claim tasks, create a sandbox/worktree, invoke the resolved Claude adapter and tools, checkpoint, and emit normalized events. PostgreSQL 16 + pgvector uses one migration chain.</p></article>
+          <article class="card"><h3>Knowledge + observability</h3><p>Notion holds human work and curated outputs. A durable telemetry outbox exports traces, costs, policy outcomes and evaluations to Braintrust and an OTel-compatible sink.</p></article>
+        </div>
+        <div class="callout"><strong>Reliability invariant:</strong> a database transaction writes the state transition, immutable event, and outbox message together. Durable resume requires both a committed workflow checkpoint and a runner-session reference. Every external side effect has a stable <code>operation_id</code>; retries first inspect the adapter receipt. Projection failure cannot roll back a completed run.</div>
+      </div>
+    </section>
+
+    <section id="contracts">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">06 / Runtime contracts</div><h2>Durability is a product behavior, not an implementation detail.</h2></div>
+          <p class="section-intro">Typed records and explicit state machines make restart, retry, approval, cancellation, audit, and version promotion predictable. Terminal attempt states are immutable. Retrying appends a linked attempt under the same run aggregate and never erases history.</p>
+        </div>
+        <div class="grid two">
+          <article class="card"><div class="card-top"><h3>Run state machine</h3><span class="tag decision">Contract</span></div><pre class="contract"><code><strong>requested</strong> → queued → running
+running → awaiting_approval → running
+requested|queued|running|awaiting_approval
+  → cancelling → cancelled
+running → succeeded|failed|timed_out
+retry request → append queued run_attempt
+              (same run aggregate; prior attempt remains terminal)</code></pre></article>
+          <article class="card"><div class="card-top"><h3>Step / task state machine</h3><span class="tag decision">Contract</span></div><pre class="contract"><code>pending → ready → leased → running
+running → checkpointed → <strong>succeeded</strong>
+leased|running → retry_wait → ready
+leased|running → awaiting_approval → ready
+leased|running → failed|cancelled|timed_out</code></pre></article>
+        </div>
+        <div class="flow" aria-label="Run lifecycle summary" style="margin-top:1.4rem">
+          <div class="flow-step"><b>1. Request</b><span>authenticate, authorize, idempotency key</span></div>
+          <div class="flow-step"><b>2. Resolve</b><span>pin manifest, hashes, policy and model</span></div>
+          <div class="flow-step"><b>3. Queue</b><span>create tasks and dependencies atomically</span></div>
+          <div class="flow-step"><b>4. Lease</b><span>worker heartbeat and sandbox setup</span></div>
+          <div class="flow-step"><b>5. Execute</b><span>checkpoints, brokered tools, approvals</span></div>
+          <div class="flow-step"><b>6. Evaluate</b><span>rubric, evidence, independent decision</span></div>
+          <div class="flow-step"><b>7. Project</b><span>artifacts, Notion, traces via outbox</span></div>
+        </div>
+        <div class="table-wrap">
+          <table><caption>Core durable records</caption><thead><tr><th>Concern</th><th>Records and required purpose</th></tr></thead><tbody>
+            <tr><td>Identity &amp; authority</td><td><code>workspace</code>, <code>principal</code>, <code>role_binding</code>, <code>tool_grant</code></td></tr>
+            <tr><td>Versioning</td><td><code>definition_version</code> pins kind, name, Git SHA, path, content hash, manifest and status.</td></tr>
+            <tr><td>Execution</td><td><code>run</code>, <code>run_attempt</code>, <code>task</code> carry state, dependencies, lease, retry, model and cost.</td></tr>
+            <tr><td>Evidence</td><td><code>event</code>, <code>artifact</code>, <code>evaluation</code> preserve provenance, checksums, rubric and hash chain.</td></tr>
+            <tr><td>Human control</td><td><code>approval</code> captures action summary, risk, requester, decider, decision and expiry.</td></tr>
+            <tr><td>Side effects</td><td><code>tool_operation</code> stores stable operation id, request hash, state and receipt; <code>outbox</code> carries retryable projections.</td></tr>
+          </tbody></table>
+        </div>
+        <div class="grid two" style="margin-top:1rem">
+          <details open><summary>Minimum API surface</summary><div class="details-body small"><p><code>GET /v1/catalog/actions</code><br><code>POST /v1/runs</code><br><code>GET /v1/runs/:id</code><br><code>GET /v1/runs/:id/events</code> (page or SSE)<br><code>POST /v1/runs/:id/cancel</code><br><code>POST /v1/runs/:id/retry</code><br><code>GET /v1/approvals</code><br><code>POST /v1/approvals/:id/decision</code><br><code>GET /v1/artifacts/:id</code><br><code>POST /v1/notion/webhook</code><br><code>GET /health/live</code> and <code>/health/ready</code></p></div></details>
+          <details open><summary>Manifest and runner boundary</summary><div class="details-body small"><p>Every executable definition declares owner, entrypoint, typed input/output schemas, agents, tools, side effects, approval rules, timeout, retry, and evaluation. The runner implements <code>start</code>, <code>resume</code>, <code>cancel</code>, and an async event stream. It receives resolved capabilities only and cannot discover unrestricted host credentials.</p></div></details>
+        </div>
+        <div class="grid two" style="margin-top:1rem">
+          <article class="card"><h3>Workspace isolation contract</h3><p>Every runtime, identity, approval, grant, event, memory, artifact, evaluation, receipt, and outbox record carries <code>workspace_id</code>. Repository queries require an explicit workspace predicate, reinforced by PostgreSQL row-level security and cross-workspace negative tests.</p></article>
+          <article class="card"><h3>Side-effect recovery classes</h3><p>Each adapter action declares one class: <strong>idempotent</strong> (stable key + receipt), <strong>reconcilable</strong> (read-after-write confirms outcome), <strong>compensatable</strong> (explicit audited undo), or <strong>non-repeatable</strong> (no automatic retry; quarantine for human resolution).</p></article>
+        </div>
+        <div class="callout"><strong>Policy rule:</strong> evaluate principal, role, pinned workflow, tool action, resource, environment, data class, risk, and prior approvals outside the model. Return <code>allow</code>, <code>deny</code>, or <code>require_approval</code> with a reason. The most restrictive applicable decision wins.</div>
+      </div>
+    </section>
+
+    <section id="workflows">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">07 / Vertical slice</div><h2>Three workflows prove the whole operating model.</h2></div>
+          <p class="section-intro">The first release should not prove breadth. It should prove the same durable, policy-aware lifecycle across research, code change, and scheduled publishing, including failure and recovery at every side-effect boundary.</p>
+        </div>
+        <div class="grid three">
+          <article class="card"><div class="card-top"><span class="number">1</span><span class="tag decision">Reference</span></div><h3>Research brief</h3><p class="muted">Notion task → research → cited artifact → evaluation → approval → one Notion result/update.</p><ul class="small"><li>Tests citations and untrusted web content.</li><li>Proves artifact lineage and human publication gate.</li><li>Outbox makes Notion failure independent of run success.</li></ul></article>
+          <article class="card"><div class="card-top"><span class="number">2</span><span class="tag decision">Reference</span></div><h3>Repository change</h3><p class="muted">Approved task → isolated worktree → Ralph → tests/review → PR-ready artifact.</p><ul class="small"><li>Proves sandbox, scoped filesystem/tools and restart.</li><li>Pins definitions and captures review evidence.</li><li><strong>No automatic merge in v1.</strong></li></ul></article>
+          <article class="card"><div class="card-top"><span class="number">3</span><span class="tag decision">Reference</span></div><h3>Operational digest</h3><p class="muted">Scheduled trigger → approved sources → summarize/evaluate → Notion child page + tracker row.</p><ul class="small"><li>Proves scheduling, jitter and admission control.</li><li>Proves Bridge protocol and writeback URL dedup.</li><li>Reconciliation detects projection drift.</li></ul></article>
+        </div>
+        <div class="grid two" style="margin-top:1rem">
+          <article class="card"><h3>Approval preview must explain</h3><p>Intended side effect, target resource, data scope, risk, diff or content preview, grant used, policy reason, expiry, and whether the operation is reversible.</p></article>
+          <article class="card"><h3>Self-improvement lifecycle</h3><p>Evidence proposes a candidate in Git → fixed fixtures and safe shadow traffic → deterministic checks + independent evaluator → Builder/Admin promotion → only new runs select it → rollback moves the default pointer without rewriting history.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="roadmap">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">08 / Delivery plan</div><h2>Six vertical phases, each with a rollback point.</h2></div>
+          <p class="section-intro">Every phase leaves a working, testable system. Production runtime behavior, migrations, policy, and adapters use TDD. Architectural deviation requires an ADR. A failed gate stops progression.</p>
+        </div>
+        <div class="roadmap" aria-label="Six phase delivery roadmap">
+          <article class="phase"><span class="phase-id">Phase 0</span><h3>Validate &amp; inventory</h3><p>Select fixtures, inventory tools and drift, confirm auth/billing, write ADRs for runner/session store, sandbox substrate, storage, identity, queue, recovery and deploy.</p><span class="gate-line">Gate: approved scope, threat model, data classes, fixtures and ADRs.</span></article>
+          <article class="phase"><span class="phase-id">Phase 1</span><h3>Contracts &amp; persistence</h3><p>Schemas, canonical migrations, registry hashing, state machines, idempotent API, event + outbox, identity interface.</p><span class="gate-line">Gate: contracts, migration, concurrency and API snapshots pass.</span></article>
+          <article class="phase"><span class="phase-id">Phase 2</span><h3>Runner &amp; worker</h3><p>Leases, heartbeat, durable session/checkpoint store, retry, timeout, cancel, dead letter, SDK/local adapters, approved sandbox substrate and broker.</p><span class="gate-line">Gate: kill/restart proves resume and no completed effect repeats.</span></article>
+          <article class="phase"><span class="phase-id">Phase 3</span><h3>Notion &amp; workflows</h3><p>Verified webhooks, project/task read model, outbox, drift reconciliation, approvals and three reference definitions.</p><span class="gate-line">Gate: exactly-once projections recover from Notion outage.</span></article>
+          <article class="phase"><span class="phase-id">Phase 4</span><h3>Operator experience</h3><p>Catalog, typed forms, run list, live SSE timeline, approval inbox, artifacts, links, admin views and accessibility.</p><span class="gate-line">Gate: contributor completes all references without terminal.</span></article>
+          <article class="phase"><span class="phase-id">Phase 5</span><h3>Harden &amp; deploy</h3><p>Security review, load/soak/chaos, quotas, retention, redaction, OIDC/RBAC, production deploy and rollback rehearsal.</p><span class="gate-line">Gate: every P0/P1 acceptance check has fresh evidence.</span></article>
+        </div>
+        <div class="callout warning"><strong>Stop and re-plan if:</strong> the first slice requires rewriting Ralph/Maestro; Notion ownership conflicts with an existing automation; shared runner auth/billing is unsuitable; the sandbox cannot enforce declared scopes; event/idempotency contracts cannot represent a reference side effect; or a framework is proposed without a measured comparison.</div>
+      </div>
+    </section>
+
+    <section id="security">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">09 / Security &amp; trust</div><h2>The model never decides its own authority.</h2></div>
+          <p class="section-intro">Capability resolution, secrets, policy, approval validity, tenancy, and side-effect idempotency sit outside prompts. Shared environments capture sanitized model content only by explicit policy. Self-improvement cannot bypass review or rollback.</p>
+        </div>
+        <div class="grid three risk-grid">
+          <article class="card"><h3>Prompt injection</h3><p>Label untrusted content, separate data from instruction, enforce tool policy outside the model, require approval for sensitive writes.</p></article>
+          <article class="card"><h3>Excess authority</h3><p>Deny by default; scope capability grants to action, resource, workspace, environment and expiry; resolve short-lived credentials in adapters.</p></article>
+          <article class="card"><h3>Sandbox escape</h3><p>Non-root execution, read-only base, explicit mounts, per-run worktree, egress allowlist, and CPU/memory/time limits.</p></article>
+          <article class="card"><h3>Duplicate effect</h3><p>Stable operation id, request hash, adapter receipt, transactional event/outbox, and quarantine when external outcome is ambiguous.</p></article>
+          <article class="card"><h3>Cross-workspace leak</h3><p>Mandatory workspace predicate, row-policy tests, namespaced vector retrieval, cache keys and private artifact paths.</p></article>
+          <article class="card"><h3>Secret disclosure</h3><p>References rather than values, sensitive-field schema annotations, redaction before export, canary scanning, and retention controls.</p></article>
+          <article class="card"><h3>Malicious definition</h3><p>Git review, approved/signed release, pinned hashes, independent evaluation, immutable run history and rollback pointer.</p></article>
+          <article class="card"><h3>Feedback poisoning</h3><p>Provenance, confidence, quarantine, minimum evidence, fixture evaluation, and human promotion.</p></article>
+          <article class="card"><h3>Supply chain / webhook</h3><p>Lockfiles, SBOM, pinned images/actions, scans; verify Notion signature, replay window and event-id dedup.</p></article>
+        </div>
+        <div class="table-wrap" style="margin-top:1rem"><table><caption>Baseline action policy</caption><thead><tr><th>Action</th><th>Default</th></tr></thead><tbody>
+          <tr><td>Read approved project files / Notion pages; web research with controls; draft artifact</td><td class="score">Allow within scope</td></tr>
+          <tr><td>Notion content write</td><td class="score alt">Approval, except approved idempotent projections</td></tr>
+          <tr><td>Email/message/publish; deploy/merge/infrastructure/schema</td><td class="score alt">Require approval</td></tr>
+          <tr><td>Delete, move, bulk overwrite</td><td class="score no">Deny unless one-time Admin approval</td></tr>
+          <tr><td>Read raw secrets or broaden permissions</td><td class="score no">Deny; adapter resolves values</td></tr>
+        </tbody></table></div>
+        <div class="callout"><strong>Audit chain:</strong> append-only events capture actor, pinned versions, policy rule, grant, request hash, result receipt, and previous/current event hash. An authorized export can reconstruct the run without exposing raw secrets.</div>
+      </div>
+    </section>
+
+    <section id="operations">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">10 / Observe, evaluate, recover</div><h2>Fresh evidence is the release currency.</h2></div>
+          <p class="section-intro">The durable event model feeds traces rather than the reverse. Braintrust and OpenTelemetry are destinations, not authorities. Deployment proceeds from compatible migrations through staged services and smoke checks; rollback protects history and quarantines uncertain external effects.</p>
+        </div>
+        <div class="grid four">
+          <div class="metric"><strong>99.5%</strong><span>monthly pilot API availability</span></div>
+          <div class="metric"><strong>&lt; 500 ms</strong><span>run creation p95, excluding identity</span></div>
+          <div class="metric"><strong>&lt; 30 s</strong><span>queue-to-start p95 at pilot capacity</span></div>
+          <div class="metric"><strong>&lt; 2 s</strong><span>event-to-dashboard p95</span></div>
+          <div class="metric"><strong>&lt; 5 s</strong><span>approval propagation p95</span></div>
+          <div class="metric"><strong>&lt; 60 s</strong><span>Notion projection lag p95 when healthy</span></div>
+          <div class="metric"><strong>0</strong><span>duplicate external side effects</span></div>
+          <div class="metric"><strong>0</strong><span>unattributed side effects</span></div>
+        </div>
+        <div class="grid two" style="margin-top:1rem">
+          <article class="card"><h3>Trace hierarchy</h3><pre class="contract"><code>run → attempt → workflow.step
+  → agent.turn
+    → model.call | memory.query | tool.operation
+    → artifact.write
+  → policy.decision | approval.wait
+  → evaluation
+→ notion.projection</code></pre><p class="small muted">All spans carry workspace, run, attempt, task, definition version, trace id, and data classification.</p></article>
+          <article class="card"><h3>Evaluation and alerts</h3><p>Track queue/lease/retry/dead-letter health, workflow-version success, approval wait, tool/model latency and cost, memory usefulness, artifacts, Notion throttling, drift, regressions, and redaction failure.</p><ul class="small"><li><strong>P0:</strong> cross-tenant, secret, policy, audit-chain failure.</li><li><strong>P1:</strong> repeated effect, migration/restore failure, stalled queue.</li><li><strong>P2:</strong> SLO, projection, telemetry, cost anomaly.</li><li><strong>P3:</strong> workflow regression or stale catalog.</li></ul></article>
+        </div>
+        <div class="table-wrap" style="margin-top:1rem"><table><caption>Deployment and recovery model</caption><thead><tr><th>Stage</th><th>Required action</th></tr></thead><tbody>
+          <tr><td>Build</td><td>Lint, typecheck, unit, contract, migration, policy and security tests; pinned images, SBOM and scan.</td></tr>
+          <tr><td>Preview</td><td>Ephemeral data only, no production connector scopes; API/browser smoke checks.</td></tr>
+          <tr><td>Release</td><td>Backup, migration preflight, expand-compatible migrations; deploy API/sync, workers, then web; ramp concurrency.</td></tr>
+          <tr><td>Smoke</td><td>Readiness, duplicate no-effect launch, ordered SSE, denied approval, private artifact, exactly-once Notion projection, redaction, worker restart.</td></tr>
+          <tr><td>Rollback</td><td>Stop admissions, scale affected workers to zero, restore images/default pointers, prefer schema forward-fix, reconcile leases, quarantine ambiguous effects, re-run smoke.</td></tr>
+          <tr><td>Recovery</td><td>PostgreSQL PITR + daily backup; quarterly restore rehearsal; Git-backed definitions; artifact retention. Runtime pilot target: RPO 15 min, RTO 4 hr. Notion pilot target: daily normalized snapshot + weekly export, RPO 24 hr, RTO 8 hr; quarterly staging restoration must reconcile human-owned project/task state.</td></tr>
+        </tbody></table></div>
+        <div class="callout warning"><strong>Version safety:</strong> rollback changes the default pointer for new runs. Active runs continue using their pinned content hashes, model and policy configuration. Definition activation is independent of database migration.</div>
+      </div>
+    </section>
+
+    <section id="gates">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">11 / Acceptance</div><h2>No checkbox closes from inspection alone.</h2></div>
+          <p class="section-intro"><span class="tag gate">Evidence rule</span> Each acceptance claim needs a fresh command, API response, test report, trace, screenshot, or recovery demonstration linked from the release record. P0 is release-blocking; P1 proves useful operation.</p>
+        </div>
+        <div class="grid two">
+          <article class="card"><h3>P0 release blockers</h3><ul class="gate-list small"><li>Authentication, roles, revocation and workspace isolation fail closed.</li><li>Idempotent run creation and exclusive worker leases.</li><li>Checkpoint recovery without repeating completed tool operations.</li><li>Deterministic cancel, timeout, retry and terminal states.</li><li>Every external write has grant, policy, operation id, hash and receipt.</li><li>Expired/denied approvals cannot act; injection cannot alter grants.</li><li>Canary secrets absent from every surface.</li><li>Audit hash chain and administrative attribution pass.</li><li>Restore meets RPO/RTO; migration failure is recoverable.</li><li>Ambiguous external operations are quarantined.</li></ul></article>
+          <article class="card"><h3>P1 functional proof</h3><ul class="gate-list small"><li>All three reference workflows finish end to end.</li><li>Verified Notion webhook and reconciliation paths.</li><li>Human-owned fields never overwritten.</li><li>Notion throttle retry and drift visible to operators.</li><li>Contributor launches approved actions without terminal.</li><li>Accessible live timeline and approval preview.</li><li>Empty, stale, offline, denied and error states tested.</li><li>One correlated trace spans run through projection.</li><li>Queue, lease, cost and projection metrics present.</li><li>P0/P1 synthetic alerts reach the operator route.</li></ul></article>
+        </div>
+        <div class="grid three" style="margin-top:1rem">
+          <article class="card"><h3>Performance &amp; soak</h3><p class="small">SLOs at 2× expected concurrency; 24-hour soak without orphaned leases, memory growth, duplicate effects, or drift; backpressure under worker/Notion outage; paginated event history.</p></article>
+          <article class="card"><h3>Definition safety</h3><p class="small">Every run pins hashes/config; a candidate needs test/evaluation evidence and approval; rollback changes only the default; active runs continue pinned.</p></article>
+          <article class="card"><h3>Sign-off packet</h3><p class="small">Release SHA/images, migration + restore evidence, test and accessibility reports, threat closure, load/soak/chaos, workflow traces + Notion pages, rollback rehearsal, limitations and owners.</p></article>
+        </div>
+      </div>
+    </section>
+
+    <section id="decisions">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">12 / Decision register</div><h2>What is settled, what is provisional, what must be resolved.</h2></div>
+          <p class="section-intro">These labels prevent research findings, selected architecture, operating assumptions, and unresolved ADRs from blending together.</p>
+        </div>
+        <div class="grid three">
+          <article class="card"><div class="card-top"><h3>Settled decisions</h3><span class="tag decision">Decision</span></div><ul class="small"><li>Brownfield extension, not rewrite.</li><li>Claude Agent SDK preferred production boundary; <code>claude -p</code> local adapter only.</li><li>Git / Notion / PostgreSQL authority split.</li><li>Typed durable state and idempotent side effects.</li><li>One authenticated API for every client.</li><li>Human-gated definition promotion.</li><li>Railway API/workers/database; Vercel or Railway web, portable topology.</li></ul></article>
+          <article class="card"><div class="card-top"><h3>Phase 0 assumptions</h3><span class="tag assumption">Assumption</span></div><ul class="small"><li>Dave plus a small trusted team are initial users.</li><li>Existing Ralph, Maestro and reporting jobs can supply fixtures.</li><li>Railway, PostgreSQL/pgvector, Notion and Braintrust remain approved.</li><li>Shared automation gets explicit service billing/auth.</li><li>Current source-tree and schema drift can be resolved incrementally.</li></ul></article>
+          <article class="card"><div class="card-top"><h3>Open Phase 0 gates</h3><span class="tag open">Open question</span></div><ul class="small"><li>Exact production identity provider and role mapping.</li><li>Queue and durable runner session/checkpoint store.</li><li>Sandbox substrate and enforceable filesystem/network/resource boundaries.</li><li>Artifact object store and retention tiers.</li><li>Railway web vs Vercel static/edge split.</li><li>Runner service billing, credential isolation and concurrency contract.</li><li>Whether fixtures justify Mastra, Conductor, Agno or LangGraph.</li><li>Final data-classification, approval, and adapter recovery-class matrices.</li><li>Validate the Notion 24-hour RPO / 8-hour RTO through a staging rehearsal.</li></ul></article>
+        </div>
+        <div class="callout"><strong>Decision method:</strong> choose the simplest option that passes identical durability, isolation, authority, trace, development and deployment fixtures. Record any deviation from this package as an ADR before implementation.</div>
+      </div>
+    </section>
+
+    <section id="sources">
+      <div class="shell">
+        <div class="section-head">
+          <div><div class="section-kicker">13 / Evidence trail</div><h2>Detailed design and primary sources.</h2></div>
+          <p class="section-intro">This overview is a synthesis. The linked Markdown files carry the complete implementation detail. External claims link to the originating video, official product documentation, or primary repositories.</p>
+        </div>
+        <h3>Design package</h3>
+        <ul class="source-list">
+          <li><a href="README.md">Package README</a><br><span class="small muted">Outcome, decisions, non-goals, readiness.</span></li>
+          <li><a href="source-and-landscape.md">Source &amp; landscape research</a><br><span class="small muted">Video model, systems comparison, claims.</span></li>
+          <li><a href="github-landscape.md">GitHub landscape</a><br><span class="small muted">Repositories, shortlist, scorecard.</span></li>
+          <li><a href="product-brief.md">Product brief</a><br><span class="small muted">Users, jobs, capabilities, success measures.</span></li>
+          <li><a href="target-architecture.md">Target architecture</a><br><span class="small muted">Planes, reuse, deployment units, reliability.</span></li>
+          <li><a href="contracts.md">Runtime contracts</a><br><span class="small muted">States, records, events, manifest, API, policy.</span></li>
+          <li><a href="notion-operating-model.md">Notion operating model</a><br><span class="small muted">Live resources, ownership, outbox, Bridge.</span></li>
+          <li><a href="build-plan.md">Build plan</a><br><span class="small muted">Phases, gates, ownership, re-plan rules.</span></li>
+          <li><a href="security-observability.md">Security &amp; observability</a><br><span class="small muted">Threats, policy, audit, traces, SLOs.</span></li>
+          <li><a href="deployment-runbook.md">Deployment runbook</a><br><span class="small muted">Environments, CI/CD, smoke, rollback, recovery.</span></li>
+          <li><a href="acceptance-plan.md">Acceptance plan</a><br><span class="small muted">P0/P1, soak, version safety, sign-off.</span></li>
+        </ul>
+        <h3 style="margin-top:2rem">Primary external sources</h3>
+        <ul class="source-list">
+          <li><a href="https://www.youtube.com/watch?v=HRw-vP0j8OM">Chase AI: The Agentic OS Setup That Will 10x Claude Code</a></li>
+          <li><a href="https://www.chaseai.io/blog/claude-code-agentic-os-framework">Chase AI framework article</a></li>
+          <li><a href="https://code.claude.com/docs/en/agent-sdk/overview">Claude Agent SDK documentation</a></li>
+          <li><a href="https://code.claude.com/docs/en/hooks-guide">Claude Code hooks guide</a></li>
+          <li><a href="https://support.claude.com/en/articles/15036540-use-the-claude-agent-sdk-with-your-claude-plan">Anthropic plan billing clarification</a></li>
+          <li><a href="https://support.claude.com/en/articles/12304248-manage-api-key-environment-variables-in-claude-code">Anthropic authentication guidance</a></li>
+          <li><a href="https://developers.notion.com/reference/request-limits">Notion API request limits</a></li>
+          <li><a href="https://developers.notion.com/reference/webhooks">Notion webhooks</a></li>
+          <li><a href="https://developers.notion.com/guides/get-started/authorization">Notion authorization</a></li>
+          <li><a href="https://developers.notion.com/guides/mcp/mcp-security-best-practices">Notion MCP security practices</a></li>
+          <li><a href="https://learn.microsoft.com/en-us/agent-framework/integrations/durable-extension">Microsoft Agent Framework Durable Extension</a></li>
+          <li><a href="https://openai.github.io/openai-agents-python/tracing/">OpenAI Agents SDK tracing reference</a></li>
+        </ul>
+      </div>
+    </section>
+  </main>
+
+  <footer>
+    <div class="shell footer-grid">
+      <p><strong>Agentic OS architecture handoff</strong><br><span class="small">Self-contained and offline-readable. External links require connectivity.</span></p>
+      <p><button class="print-button" type="button" onclick="window.print()">Print / save as PDF</button></p>
+    </div>
+  </footer>
+
+  <script>
+    (() => {
+      const progress = document.getElementById('reading-progress');
+      const links = [...document.querySelectorAll('.section-nav a')];
+      const sections = links.map(link => document.querySelector(link.hash)).filter(Boolean);
+      const update = () => {
+        const max = document.documentElement.scrollHeight - innerHeight;
+        progress.style.width = `${max > 0 ? Math.min(100, scrollY / max * 100) : 0}%`;
+        const marker = scrollY + 120;
+        let current = sections[0];
+        for (const section of sections) if (section.offsetTop <= marker) current = section;
+        links.forEach(link => link.setAttribute('aria-current', link.hash === `#${current?.id}` ? 'true' : 'false'));
+      };
+      addEventListener('scroll', update, { passive: true });
+      addEventListener('resize', update);
+      update();
+    })();
+  </script>
+</body>
+</html>

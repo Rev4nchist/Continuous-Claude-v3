@@ -1,0 +1,299 @@
+<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <meta name="color-scheme" content="light">
+  <title>Agentic OS — Interface Directions</title>
+  <style>
+    :root {
+      --ink: #14201e;
+      --muted: #5b6965;
+      --paper: #f4f1e9;
+      --panel: #fffdf8;
+      --line: #d9d4c7;
+      --teal: #0d756b;
+      --blue: #255e9a;
+      --violet: #6750a4;
+      --amber: #a95e12;
+      --shadow: 0 18px 50px rgba(25, 37, 34, .10);
+      --radius: 18px;
+    }
+    * { box-sizing: border-box; }
+    html { scroll-behavior: smooth; }
+    body { margin: 0; background: var(--paper); color: var(--ink); font: 15px/1.5 Inter, ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", sans-serif; }
+    button, input, textarea { font: inherit; }
+    a { color: inherit; }
+    :focus-visible { outline: 3px solid #f0a43a; outline-offset: 3px; }
+    .shell { width: min(1440px, 100%); margin: auto; padding: 0 30px 70px; }
+    .topbar { display: flex; align-items: center; justify-content: space-between; gap: 20px; padding: 18px 0; border-bottom: 1px solid var(--line); }
+    .brand { display: flex; align-items: center; gap: 11px; text-decoration: none; font-weight: 800; letter-spacing: -.02em; }
+    .mark { width: 31px; height: 31px; border-radius: 10px; display: grid; place-items: center; color: white; background: var(--ink); font: 700 12px/1 ui-monospace, monospace; }
+    .toplinks { display: flex; align-items: center; flex-wrap: wrap; gap: 16px; color: var(--muted); font-size: 13px; }
+    .toplinks a { text-decoration: none; }
+    .hero { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(310px, .75fr); gap: 40px; padding: 70px 0 54px; align-items: end; }
+    .eyebrow { color: var(--teal); font: 800 12px/1.2 ui-monospace, monospace; letter-spacing: .12em; text-transform: uppercase; }
+    h1 { max-width: 900px; margin: 15px 0 20px; font: 750 clamp(45px, 7vw, 92px)/.94 Georgia, serif; letter-spacing: -.055em; }
+    h2 { font: 720 clamp(30px, 4vw, 49px)/1 Georgia, serif; letter-spacing: -.035em; margin: 0; }
+    h3 { margin: 0; font-size: 19px; letter-spacing: -.02em; }
+    .lede { max-width: 760px; color: var(--muted); font-size: 18px; }
+    .hero-note { padding: 22px; background: var(--ink); color: #f4f1e9; border-radius: var(--radius); box-shadow: var(--shadow); }
+    .hero-note strong { display: block; font-size: 17px; margin-bottom: 8px; }
+    .hero-note p { margin: 0; color: #c8d1ce; }
+    .authority { display: grid; grid-template-columns: repeat(3, 1fr); border: 1px solid var(--line); border-radius: 15px; overflow: hidden; background: var(--panel); }
+    .authority div { padding: 15px 18px; border-right: 1px solid var(--line); }
+    .authority div:last-child { border-right: 0; }
+    .authority b { display: block; margin-bottom: 2px; }
+    .authority span { color: var(--muted); font-size: 13px; }
+    .section { padding-top: 76px; }
+    .section-head { display: flex; justify-content: space-between; gap: 24px; align-items: end; margin-bottom: 25px; }
+    .section-head p { max-width: 580px; margin: 0; color: var(--muted); }
+    .concept-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 25px; }
+    .concept { position: relative; overflow: hidden; display: flex; flex-direction: column; min-height: 590px; background: var(--panel); border: 1px solid var(--line); border-radius: 24px; box-shadow: var(--shadow); }
+    .concept-visual { height: 225px; padding: 22px; overflow: hidden; }
+    .concept-body { display: flex; flex-direction: column; flex: 1; padding: 25px; }
+    .concept-label { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 12px; }
+    .number { color: var(--muted); font: 700 12px/1 ui-monospace, monospace; }
+    .fit { border: 1px solid currentColor; border-radius: 99px; padding: 5px 9px; font-size: 11px; font-weight: 800; text-transform: uppercase; letter-spacing: .05em; }
+    .concept h3 { font: 720 31px/1.05 Georgia, serif; }
+    .thesis { color: var(--muted); min-height: 48px; }
+    .features { display: grid; grid-template-columns: 1fr 1fr; gap: 8px 16px; padding: 0; list-style: none; font-size: 13px; }
+    .features li::before { content: "✓"; color: var(--teal); margin-right: 7px; font-weight: 800; }
+    .trade { margin: auto 0 20px; padding: 12px 14px; border-radius: 10px; background: #f3efe6; color: var(--muted); font-size: 13px; }
+    .actions { display: flex; flex-wrap: wrap; gap: 9px; }
+    .btn { border: 1px solid var(--ink); border-radius: 10px; background: transparent; color: var(--ink); padding: 10px 14px; cursor: pointer; text-decoration: none; font-weight: 750; font-size: 13px; }
+    .btn.primary { color: white; background: var(--ink); }
+    .btn:hover { transform: translateY(-1px); }
+    .mission .concept-visual { background: #0d1825; color: #d7f3ef; }
+    .project .concept-visual { background: #f3ead6; color: #4d4435; }
+    .forge .concept-visual { background-color: #171526; color: #e7dfff; background-image: linear-gradient(#2c2944 1px, transparent 1px), linear-gradient(90deg, #2c2944 1px, transparent 1px); background-size: 22px 22px; }
+    .executive .concept-visual { background: #efece3; color: #14201e; }
+    .mini-window { height: 100%; border: 1px solid currentColor; border-radius: 12px; padding: 13px; opacity: .95; box-shadow: 8px 10px 0 color-mix(in srgb, currentColor 12%, transparent); }
+    .mini-head { display: flex; justify-content: space-between; font: 700 9px/1 ui-monospace, monospace; text-transform: uppercase; letter-spacing: .08em; }
+    .mini-grid { display: grid; grid-template-columns: 1.6fr .8fr; gap: 9px; margin-top: 15px; }
+    .mini-stack { display: grid; gap: 7px; }
+    .block { min-height: 29px; padding: 7px; border: 1px solid currentColor; border-radius: 6px; font-size: 8px; opacity: .8; }
+    .block.tall { min-height: 96px; }
+    .nodes { position: relative; height: 145px; }
+    .node { position: absolute; width: 88px; padding: 9px; background: #26223a; border: 1px solid #a78bfa; border-radius: 7px; font-size: 8px; }
+    .node:nth-child(1) { left: 2%; top: 54px; }
+    .node:nth-child(2) { left: 35%; top: 20px; }
+    .node:nth-child(3) { right: 4%; top: 68px; border-color: #f0a43a; }
+    .chat { width: 82%; margin: 22px auto 0; }
+    .bubble { max-width: 79%; margin-bottom: 11px; padding: 10px 12px; border: 1px solid currentColor; border-radius: 12px 12px 12px 3px; font: 10px/1.4 Georgia, serif; }
+    .bubble.me { margin-left: auto; border-radius: 12px 12px 3px 12px; background: var(--ink); color: white; border-color: var(--ink); }
+    .tabs { display: flex; gap: 5px; margin-top: 17px; }
+    .tab { padding: 5px 9px; border-radius: 5px; border: 1px solid currentColor; font-size: 8px; }
+    .tab.active { background: #4d4435; color: #fff; }
+    .compare-wrap { overflow-x: auto; background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); }
+    table { width: 100%; min-width: 850px; border-collapse: collapse; }
+    th, td { padding: 13px 15px; text-align: left; border-bottom: 1px solid var(--line); vertical-align: top; }
+    th { background: #eee9de; font-size: 12px; text-transform: uppercase; letter-spacing: .05em; }
+    td:first-child { font-weight: 750; }
+    tr:last-child td { border-bottom: 0; }
+    .yes { color: var(--teal); font-weight: 800; }
+    .later { color: var(--amber); }
+    .scoreboard { display: grid; grid-template-columns: 1.1fr 1.9fr; gap: 25px; align-items: start; }
+    .rubric, .results { background: var(--panel); border: 1px solid var(--line); border-radius: var(--radius); padding: 23px; }
+    .criterion { display: grid; grid-template-columns: 1fr auto; gap: 5px 12px; padding: 12px 0; border-bottom: 1px solid var(--line); }
+    .criterion:last-child { border-bottom: 0; }
+    .criterion label { font-weight: 700; }
+    .criterion small { color: var(--muted); grid-column: 1; }
+    .criterion output { grid-column: 2; grid-row: 1 / span 2; align-self: center; color: var(--teal); font: 800 20px/1 ui-monospace, monospace; }
+    .score-select { margin-top: 14px; display: flex; flex-wrap: wrap; gap: 8px; }
+    .score-select button { border: 1px solid var(--line); background: white; border-radius: 99px; padding: 8px 11px; cursor: pointer; }
+    .score-select button.active { background: var(--ink); color: white; border-color: var(--ink); }
+    .slider-row { display: grid; grid-template-columns: 1fr 135px 30px; gap: 10px; align-items: center; margin: 15px 0; }
+    input[type="range"] { accent-color: var(--teal); width: 100%; }
+    .total { display: flex; align-items: baseline; gap: 8px; margin: 20px 0; }
+    .total output { font: 750 58px/.9 Georgia, serif; }
+    .bars { display: grid; gap: 12px; }
+    .bar-label { display: flex; justify-content: space-between; font-size: 13px; margin-bottom: 4px; }
+    .bar-track { height: 9px; overflow: hidden; border-radius: 99px; background: #e5e0d5; }
+    .bar-fill { height: 100%; background: var(--teal); border-radius: inherit; transition: width .2s ease; }
+    textarea { width: 100%; min-height: 115px; resize: vertical; border: 1px solid var(--line); border-radius: 10px; background: #fff; padding: 12px; color: var(--ink); }
+    .footer { display: flex; justify-content: space-between; gap: 30px; margin-top: 75px; padding-top: 25px; border-top: 1px solid var(--line); color: var(--muted); font-size: 13px; }
+    .toast { position: fixed; z-index: 20; right: 22px; bottom: 22px; max-width: 340px; padding: 13px 16px; border-radius: 10px; background: var(--ink); color: white; box-shadow: var(--shadow); transform: translateY(120px); opacity: 0; transition: .2s ease; }
+    .toast.show { transform: translateY(0); opacity: 1; }
+    @media (max-width: 900px) {
+      .hero, .scoreboard { grid-template-columns: 1fr; }
+      .concept-grid { grid-template-columns: 1fr; }
+      .authority { grid-template-columns: 1fr; }
+      .authority div { border-right: 0; border-bottom: 1px solid var(--line); }
+      .authority div:last-child { border-bottom: 0; }
+    }
+    @media (max-width: 600px) {
+      .shell { padding: 0 16px 45px; }
+      .topbar { align-items: flex-start; }
+      .toplinks a:not(:last-child) { display: none; }
+      .hero { padding-top: 45px; }
+      h1 { font-size: 49px; }
+      .section-head, .footer { align-items: flex-start; flex-direction: column; }
+      .concept-visual { height: 190px; }
+      .features { grid-template-columns: 1fr; }
+      .slider-row { grid-template-columns: 1fr 105px 25px; }
+    }
+    @media (prefers-reduced-motion: reduce) {
+      *, *::before, *::after { scroll-behavior: auto !important; transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    }
+  </style>
+</head>
+<body>
+  <div class="shell">
+    <header class="topbar">
+      <a class="brand" href="../overview.html"><span class="mark">AOS</span> Agentic OS</a>
+      <nav class="toplinks" aria-label="Page navigation">
+        <a href="#directions">Directions</a><a href="#compare">Compare</a><a href="#evaluate">Evaluate</a><a href="../README.md">Design package ↗</a>
+      </nav>
+    </header>
+
+    <main>
+      <section class="hero" aria-labelledby="page-title">
+        <div>
+          <div class="eyebrow">Interface exploration / four product bets</div>
+          <h1 id="page-title">Choose the work surface, not just the skin.</h1>
+          <p class="lede">These prototypes test four different answers to one question: where should people meet the Agentic OS? Explore each, then score the product assumptions that matter to you.</p>
+        </div>
+        <aside class="hero-note"><strong>Prototype boundary</strong><p>All data and actions are simulated. Controls demonstrate governed commands, evidence, approvals, and recovery. They do not invoke agents or modify Notion.</p></aside>
+      </section>
+
+      <section class="authority" aria-label="Shared authority model">
+        <div><b>Notion = human intent</b><span>Projects, tasks, curated knowledge and approval inbox.</span></div>
+        <div><b>Git = executable definitions</b><span>Versioned workflows, skills, policies, schemas and evals.</span></div>
+        <div><b>PostgreSQL = live runtime</b><span>Runs, attempts, events, leases, operational approvals and audit.</span></div>
+      </section>
+
+      <section class="section" id="directions" aria-labelledby="directions-title">
+        <div class="section-head"><div><div class="eyebrow">Explore</div><h2 id="directions-title">Four interface directions</h2></div><p>Each direction is intentionally opinionated. The strongest final system may combine two, but evaluating clear extremes reveals the right hierarchy.</p></div>
+        <div class="concept-grid">
+          <article class="concept mission">
+            <div class="concept-visual" aria-hidden="true"><div class="mini-window"><div class="mini-head"><span>Mission Control</span><span>7 live / 2 blocked</span></div><div class="mini-grid"><div class="block tall">RUNS<br><br>Research brief · awaiting approval<br>Repo change · resumed<br>Digest · projection delayed</div><div class="mini-stack"><div class="block">APPROVALS 02</div><div class="block">QUEUE 07</div><div class="block">DRIFT 01</div></div></div></div></div>
+            <div class="concept-body"><div class="concept-label"><span class="number">01 / OPERATOR-FIRST</span><span class="fit" style="color:var(--teal)">Strongest v1 fit</span></div><h3>Mission Control</h3><p class="thesis">See everything running, blocked, risky, costly, or drifting in one operational command center.</p><ul class="features"><li>Fleet-wide run table</li><li>Approval inbox</li><li>Checkpoint timeline</li><li>Queue and lease health</li><li>Notion outbox status</li><li>Cost and concurrency</li></ul><p class="trade"><strong>Watch-out:</strong> highest operational clarity, but information density may intimidate occasional contributors.</p><div class="actions"><a class="btn primary" href="mission-control.html">Open prototype</a><button class="btn score-jump" data-concept="mission">Score this direction</button></div></div>
+          </article>
+
+          <article class="concept project">
+            <div class="concept-visual" aria-hidden="true"><div class="mini-window"><div class="mini-head"><span>Agentic OS / Phase 2</span><span>Notion intent</span></div><div class="tabs"><span class="tab active">Plan</span><span class="tab">Automation</span><span class="tab">Runs</span><span class="tab">Decisions</span></div><div class="mini-grid"><div class="block tall">TASK PAGE<br><br>Durable runner and sandboxed worker<br>Status · In progress<br>Priority · High</div><div class="mini-stack"><div class="block">REQUEST ACTION</div><div class="block">RUN PROJECTION</div></div></div></div></div>
+            <div class="concept-body"><div class="concept-label"><span class="number">02 / PROJECT-FIRST</span><span class="fit" style="color:var(--blue)">Fastest adoption</span></div><h3>Project Canvas</h3><p class="thesis">Keep human intent and delivery in a familiar project page, with governed automation attached to eligible tasks.</p><ul class="features"><li>Project phase hierarchy</li><li>Task action cards</li><li>Authority badges</li><li>Run projections</li><li>Decision history</li><li>Bridge metadata</li></ul><p class="trade"><strong>Watch-out:</strong> natural for Notion users, but weaker fleet-wide visibility and a higher risk of blurring authority.</p><div class="actions"><a class="btn primary" href="project-canvas.html">Open prototype</a><button class="btn score-jump" data-concept="project">Score this direction</button></div></div>
+          </article>
+
+          <article class="concept forge">
+            <div class="concept-visual" aria-hidden="true"><div class="mini-window"><div class="mini-head"><span>Workflow Forge</span><span>Draft v0.4</span></div><div class="nodes"><div class="node">Typed input</div><div class="node">Research agent</div><div class="node">Approval → Notion</div></div></div></div>
+            <div class="concept-body"><div class="concept-label"><span class="number">03 / BUILDER-FIRST</span><span class="fit" style="color:var(--violet)">Post-v1 option</span></div><h3>Workflow Forge</h3><p class="thesis">Make contracts, grants, approvals, recovery behavior, fixtures, and release evidence visible on a workflow canvas.</p><ul class="features"><li>Typed node graph</li><li>Grant validation</li><li>Recovery classes</li><li>Fixture runner</li><li>Manifest preview</li><li>Promotion evidence</li></ul><p class="trade"><strong>Watch-out:</strong> the clearest builder model and the largest product surface; explicitly outside the documented v1 scope.</p><div class="actions"><a class="btn primary" href="workflow-forge.html">Open prototype</a><button class="btn score-jump" data-concept="forge">Score this direction</button></div></div>
+          </article>
+
+          <article class="concept executive">
+            <div class="concept-visual" aria-hidden="true"><div class="mini-window"><div class="mini-head"><span>Executive Briefing</span><span>Evidence linked</span></div><div class="chat"><div class="bubble me">What needs me today?</div><div class="bubble">Two approvals, one quarantined write, and a project decision. I can show the evidence.</div></div></div></div>
+            <div class="concept-body"><div class="concept-label"><span class="number">04 / CONVERSATION-FIRST</span><span class="fit" style="color:var(--amber)">Most approachable</span></div><h3>Executive Cockpit</h3><p class="thesis">Turn portfolio evidence into a concise briefing, then compile natural-language intent into reviewable commands.</p><ul class="features"><li>Portfolio briefing</li><li>Evidence ledger</li><li>Command previews</li><li>Safe refusals</li><li>Approval tray</li><li>Optional voice client</li></ul><p class="trade"><strong>Watch-out:</strong> excellent narrative value, but ambiguity demands unusually strong evidence and confirmation boundaries.</p><div class="actions"><a class="btn primary" href="executive-cockpit.html">Open prototype</a><button class="btn score-jump" data-concept="executive">Score this direction</button></div></div>
+          </article>
+        </div>
+      </section>
+
+      <section class="section" id="compare" aria-labelledby="compare-title">
+        <div class="section-head"><div><div class="eyebrow">Compare</div><h2 id="compare-title">Different center of gravity</h2></div><p>Every direction can use the same API and contracts. The choice changes the default mental model, not the system of record.</p></div>
+        <div class="compare-wrap"><table>
+          <thead><tr><th>Capability</th><th>Mission Control</th><th>Project Canvas</th><th>Workflow Forge</th><th>Executive Cockpit</th></tr></thead>
+          <tbody>
+            <tr><td>Primary user</td><td>Operator / owner</td><td>Contributor / lead</td><td>Workflow builder</td><td>Executive / owner</td></tr>
+            <tr><td>Default object</td><td>Run and incident</td><td>Project and task</td><td>Definition and fixture</td><td>Briefing and proposed command</td></tr>
+            <tr><td>Operational depth</td><td class="yes">Highest</td><td>Contextual</td><td>Test-oriented</td><td>Progressive disclosure</td></tr>
+            <tr><td>Notion affinity</td><td>Projection health</td><td class="yes">Highest</td><td>Connector node</td><td>Portfolio evidence</td></tr>
+            <tr><td>Definition authoring</td><td>Registry viewer</td><td>Curated actions</td><td class="yes">Visual studio</td><td>Not exposed</td></tr>
+            <tr><td>Approval experience</td><td>Risk-ranked inbox</td><td>Task-context decision</td><td>Gate design + fixture</td><td>Conversational preview</td></tr>
+            <tr><td>Best release horizon</td><td class="yes">v1 core</td><td class="yes">v1 companion</td><td class="later">Post-v1 exploration</td><td>v1 thin client / later voice</td></tr>
+            <tr><td>Primary risk</td><td>Complexity density</td><td>Authority ambiguity</td><td>Scope expansion</td><td>Intent ambiguity</td></tr>
+          </tbody>
+        </table></div>
+      </section>
+
+      <section class="section" id="evaluate" aria-labelledby="evaluate-title">
+        <div class="section-head"><div><div class="eyebrow">Evaluate</div><h2 id="evaluate-title">Score the product bet</h2></div><p>Choose a direction, move the eight ratings, and add notes. Scores and notes stay in this browser; export produces a local JSON decision packet.</p></div>
+        <div class="scoreboard">
+          <div class="rubric">
+            <h3>Evaluation rubric</h3>
+            <div class="criterion"><label>Persona / job clarity</label><small>Primary job is obvious in five seconds.</small><output>15%</output></div>
+            <div class="criterion"><label>Authority fidelity</label><small>Git, Notion and PostgreSQL ownership is unmistakable.</small><output>20%</output></div>
+            <div class="criterion"><label>Safety legibility</label><small>Effects, grants, risk, expiry and recovery appear before action.</small><output>20%</output></div>
+            <div class="criterion"><label>Workflow coverage</label><small>Supports the three reference workflows.</small><output>15%</output></div>
+            <div class="criterion"><label>Operational clarity</label><small>Attempts, failures, checkpoints, drift and quarantine make sense.</small><output>10%</output></div>
+            <div class="criterion"><label>Interaction coherence</label><small>Key moments tell one credible end-to-end story.</small><output>10%</output></div>
+            <div class="criterion"><label>Accessibility</label><small>Keyboard and responsive behavior feel intentional.</small><output>5%</output></div>
+            <div class="criterion"><label>v1 feasibility</label><small>Maps directly to the Phase 4 product scope.</small><output>5%</output></div>
+          </div>
+          <div class="results">
+            <h3>My evaluation</h3>
+            <div class="score-select" role="group" aria-label="Concept to score">
+              <button class="active" data-score-concept="mission">Mission Control</button><button data-score-concept="project">Project Canvas</button><button data-score-concept="forge">Workflow Forge</button><button data-score-concept="executive">Executive Cockpit</button>
+            </div>
+            <div class="total"><output id="totalScore">3.9</output><span>/ 5 weighted score</span></div>
+            <div id="sliders"></div>
+            <label for="notes"><strong>Evaluation notes</strong></label>
+            <textarea id="notes" placeholder="What should survive into the final design? What should be rejected?"></textarea>
+            <div class="actions" style="margin-top:12px"><button class="btn primary" id="saveEvaluation">Save locally</button><button class="btn" id="exportEvaluation">Export JSON</button><button class="btn" id="resetEvaluation">Reset</button></div>
+            <div class="bars" id="allScores" aria-label="Weighted score comparison" style="margin-top:24px"></div>
+          </div>
+        </div>
+      </section>
+    </main>
+
+    <footer class="footer"><span>Agentic OS interface exploration · simulated local prototype</span><span><a href="../overview.html">Architecture overview</a> · <a href="../acceptance-plan.md">Acceptance gates</a></span></footer>
+  </div>
+  <div class="toast" id="toast" role="status" aria-live="polite"></div>
+  <script>
+    const criteria = [
+      ["Persona clarity", .15], ["Authority fidelity", .20], ["Safety legibility", .20], ["Workflow coverage", .15],
+      ["Operational clarity", .10], ["Interaction coherence", .10], ["Accessibility", .05], ["v1 feasibility", .05]
+    ];
+    const names = { mission: "Mission Control", project: "Project Canvas", forge: "Workflow Forge", executive: "Executive Cockpit" };
+    const seed = {
+      mission: [5,5,5,4,5,4,4,5], project: [5,4,4,5,3,5,4,5], forge: [5,5,5,4,4,5,4,2], executive: [5,4,4,4,3,5,4,4]
+    };
+    let data;
+    try { data = JSON.parse(localStorage.getItem("agentic-os-design-eval")) || {}; } catch { data = {}; }
+    Object.keys(seed).forEach(k => { if (!data[k]) data[k] = { scores: seed[k].slice(), notes: "" }; });
+    let current = "mission";
+    const sliders = document.getElementById("sliders");
+    const total = document.getElementById("totalScore");
+    const notes = document.getElementById("notes");
+    const toast = document.getElementById("toast");
+
+    function weighted(key) { return criteria.reduce((sum, c, i) => sum + data[key].scores[i] * c[1], 0); }
+    function notify(message) { toast.textContent = message; toast.classList.add("show"); window.setTimeout(() => toast.classList.remove("show"), 2200); }
+    function renderSliders() {
+      sliders.innerHTML = "";
+      criteria.forEach((criterion, i) => {
+        const row = document.createElement("div"); row.className = "slider-row";
+        const label = document.createElement("label"); const id = "score-" + i; label.htmlFor = id; label.textContent = criterion[0] + " · " + Math.round(criterion[1] * 100) + "%";
+        const input = document.createElement("input"); input.type = "range"; input.min = 1; input.max = 5; input.step = 1; input.id = id; input.value = data[current].scores[i];
+        const out = document.createElement("output"); out.value = input.value; out.textContent = input.value;
+        input.addEventListener("input", () => { data[current].scores[i] = Number(input.value); out.textContent = input.value; renderTotals(); });
+        row.append(label, input, out); sliders.append(row);
+      });
+      notes.value = data[current].notes || ""; total.textContent = weighted(current).toFixed(1);
+    }
+    function renderTotals() {
+      total.textContent = weighted(current).toFixed(1);
+      const box = document.getElementById("allScores"); box.innerHTML = "";
+      Object.keys(names).sort((a,b) => weighted(b) - weighted(a)).forEach(key => {
+        const score = weighted(key); const wrap = document.createElement("div");
+        wrap.innerHTML = '<div class="bar-label"><span>' + names[key] + '</span><strong>' + score.toFixed(1) + '</strong></div><div class="bar-track"><div class="bar-fill" style="width:' + (score / 5 * 100) + '%"></div></div>';
+        box.append(wrap);
+      });
+    }
+    function choose(key) {
+      data[current].notes = notes.value; current = key;
+      document.querySelectorAll("[data-score-concept]").forEach(b => b.classList.toggle("active", b.dataset.scoreConcept === key));
+      renderSliders(); renderTotals();
+    }
+    document.querySelectorAll("[data-score-concept]").forEach(button => button.addEventListener("click", () => choose(button.dataset.scoreConcept)));
+    document.querySelectorAll(".score-jump").forEach(button => button.addEventListener("click", () => { choose(button.dataset.concept); document.getElementById("evaluate").scrollIntoView(); }));
+    document.getElementById("saveEvaluation").addEventListener("click", () => { data[current].notes = notes.value; localStorage.setItem("agentic-os-design-eval", JSON.stringify(data)); notify("Evaluation saved in this browser."); });
+    document.getElementById("resetEvaluation").addEventListener("click", () => { if (!confirm("Reset all design scores and notes to the seeded comparison?")) return; Object.keys(seed).forEach(k => data[k] = { scores: seed[k].slice(), notes: "" }); localStorage.removeItem("agentic-os-design-eval"); renderSliders(); renderTotals(); notify("Evaluation reset."); });
+    document.getElementById("exportEvaluation").addEventListener("click", () => {
+      data[current].notes = notes.value;
+      const packet = { artifact: "Agentic OS interface directions", exported_at: new Date().toISOString(), rubric: criteria.map(c => ({ criterion: c[0], weight: c[1] })), evaluations: Object.fromEntries(Object.keys(names).map(k => [k, { name: names[k], weighted_score: Number(weighted(k).toFixed(2)), scores: data[k].scores, notes: data[k].notes }])) };
+      const blob = new Blob([JSON.stringify(packet, null, 2)], { type: "application/json" }); const url = URL.createObjectURL(blob); const a = document.createElement("a"); a.href = url; a.download = "agentic-os-design-evaluation.json"; a.click(); URL.revokeObjectURL(url); notify("Evaluation JSON exported.");
+    });
+    renderSliders(); renderTotals();
+  </script>
+</body>
+</html>
