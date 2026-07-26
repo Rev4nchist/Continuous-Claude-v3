@@ -197,13 +197,30 @@ session_id = sys.argv[3]
 async def main():
     conn = await asyncpg.connect(pg_url)
     try:
-        await conn.execute('''
-            INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-            VALUES ($1, $2, $3, NOW())
-            ON CONFLICT (file_path, project) DO UPDATE SET
-                session_id = EXCLUDED.session_id,
-                claimed_at = NOW()
-        ''', file_path, project, session_id)
+        async with conn.transaction():
+            await conn.execute('''
+                INSERT INTO file_claims (file_path, project, session_id, claimed_at)
+                VALUES ($1, $2, $3, NOW())
+                ON CONFLICT (file_path, project) DO UPDATE SET
+                    session_id = EXCLUDED.session_id,
+                    claimed_at = NOW()
+            ''', file_path, project, session_id)
+
+            # Claiming a file IS activity, so it renews the owner's heartbeat.
+            # Without this the lock is only real for ~5 minutes after each user
+            # message: heartbeat fires on UserPromptSubmit alone, so during a
+            # long agent turn the session goes stale and its claims become
+            # reclaimable WHILE it is actively editing. Measured 2026-07-26 --
+            # 652s since the last prompt, mid-work, claims already reclaimable.
+            # Same transaction as the claim, so there is no extra round trip and
+            # no window where a claim exists whose owner looks dead.
+            # Upsert rather than UPDATE: a session whose SessionStart never ran
+            # would otherwise hold claims with no sessions row at all.
+            await conn.execute('''
+                INSERT INTO sessions (id, project, last_heartbeat)
+                VALUES ($1, $2, NOW())
+                ON CONFLICT (id) DO UPDATE SET last_heartbeat = NOW()
+            ''', session_id, project)
         print('ok')
     finally:
         await conn.close()
