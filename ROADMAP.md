@@ -1,7 +1,10 @@
 # Project Roadmap
 
 ## Current Focus
-_(none — set with /roadmap focus)_
+**Repair the coordination layer, then stand up the lane board.** Multi-session work is blocked by a broken session identity: `sessions` holds two rows per real session, and 0 of 8,170 `file_claims` are owned by a live session — so the lock never blocks another session and sometimes blocks you against yourself.
+- Plan: `~/.claude/plans/we-have-been-working-jolly-token.md` (premortem-mitigated, Codex pass folded in)
+- First block: 0a commit corpus -> 0b DEFAULT_PG_URL -> 1 terminal-id probe + repo_root canonicalization -> 1b node pg -> 1c reconcile 16 orphan hooks -> 2 identity fix -> 3 sibling rule (same commit as 2) -> 4 conflict/blocked telemetry -> 5 file_claims hardening + G5 migration
+- Started: 2026-07-26
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.
@@ -15,6 +18,12 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] fix(spawn): reap the process TREE on timeout, not just the direct child (2026-07-26) `449e80e`
+- [x] fix(project-cards): give the pre-emit its own --out path (it was clobbering $emitFile) (2026-07-25) `d89c53a`
+- [x] feat(reporting): retire VP Weekly via an active-vs-retired type split (2026-07-25) `3adda93`
+- [x] fix(reporting): extend always-emit contract to dashboard-sync + project-cards (2026-07-25) `4f5f38b`
+- [x] fix(self-improvement): always-emit registry contract + bounded claude -p (2026-07-25) `f43755e`
+- [x] fix(reporting): drop angle brackets from skill description (2026-07-25) `0fd86e6`
 - [x] Rank-3 agent portfolio prune (07-02+07-14): 6 zero-usage agents archived (evidence-based; "delete .json twins" REJECTED — sidecars are live), recall-injector repo registration gap closed, structured return contracts on 6 core agents, README tier drift fixed (2026-07-25) `a02911e`
 - [x] Simplify CCv3 code-intel: cut Serena + codegraph + /code-intel facade (near-zero adoption; usage-data-driven) + smart-search-router false-deny fix (2026-07-25) `cb64d45`..`cdbae08`
 - [x] fix(reporting): trustworthy Reports Hub table + root-cause weekly false-stale (2026-07-20) `ac180c3`
@@ -235,6 +244,10 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] Eliminate Excessive Permission Prompts for Autonomous Agent Tasks (2026-04-02)
 
 ## Planned
+- [ ] **Coordination repair — ST-02 identity + claim hardening (THE GATE for multi-session work)** (high priority). Verified 2026-07-26: `sessions` = 1,476 `s-*` + 894 uuid rows (two per real session); `file_claims` = 8,170 rows, **0 owned by a live session**, 3,168 orphaned, 5,002 stale-owner. Cause: `SessionStart` has no matcher so it fires for subagents; `session-register.ts:34` discards the payload `session_id` and stomps the machine-global `~/.claude/.coordination-session-id`, while `heartbeat.ts:62` uses the payload id. Fix = payload-first identity + per-terminal cache + `CC_TERMINAL_ID` sibling rule **in one commit** (splitting them makes subagent fan-out hard-block itself). Then `file_claims` lease/TTL/fence + the G5 migration (`DELETE … WHERE session_id LIKE 's-%'` wipes all 8,170 — `pg_dump` first). Plan: `~/.claude/plans/we-have-been-working-jolly-token.md`
+- [ ] **Agentic OS — lane board in `agentic_os` (Slice 1, re-scoped)** (high priority). Primary object is a **lane** (durable, human-named, scope-declaring, worktree-bound, session-attachable), not a session. Board = `work_item`/`work_claim`/`resource_lease`/`announcement` in the `agentic_os` schema, seeded from `.claude/project-registry.json`. **Interface is psql for two weeks before any UI** — the sprawl problem is intake/closure discipline, not visibility. Port 3010. Never `drizzle-kit push` (shared DB, 40 `public` tables belonging to 3 other apps).
+- [ ] **Harness supply-chain integrity (R1/R2)** (high priority). Verified live: `scripts/sync-to-active.sh:283,443` run `jq '.mcpServers = $mcp'` — a wholesale **replace** of the global `~/.claude/settings.json` MCP server set from a repo-tracked file, unvalidated, on post-commit. With `origin` = third-party upstream and `git pull` in the documented workflow this is the CVE-2025-59536 primitive. **The allowlist/hash manifest must be anchored OUTSIDE the synced repo** (Codex premortem: a manifest inside the repo is shipped by the same malicious commit and passes itself). Also: 75 active hook registrations vs 59 in repo — 16 execute undescribed by VCS; `dist/*.mjs` verified by file *count*, never hash. Source: `docs/self-improvement/proposals/2026-07-26-hooks.md`
+- [ ] **Root-cause the headless `claude -p` hang** (high priority). 3 of 13 scheduled pipelines (Dashboard-Sync, Project-Cards, Self-Improvement-Research) exit `0xC000013A`. Identical signature: the always-emit registry row lands, then the process dies at the `claude -p` step, leaving every row `Failed`. The always-emit contract works; what it records is genuinely broken. Handoff: `thoughts/shared/handoffs/reporting-watchdog/2026-07-25-always-emit-shipped-verification-pending.md`
 - [ ] CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm (high priority)
 - [ ] Plan — Make the Reports Hub "Report pages" table trustworthy + root-cause the live failures (high priority)
 - [ ] **Self-Improvement loop — visibility & pipeline, Part C remainder** (2026-07-24 status: artifactUrl fix + silent-failure Warn gate ALREADY SHIPPED in `0c58413`; remaining = host cockpit on GitHub Pages `ai-enablement-decks` (mirror `scripts/fourthos-weekly/promote.mjs`), wire `triage/build.mjs` regen into `run-research.ps1`, recreate broken hub linked-view (`reportRunsViews` re-pin in `report-runs.ids.json`), live-verify registry row chain. Plan: `~/.claude/plans/we-are-working-in-abstract-nebula.md` (high priority)
@@ -260,6 +273,19 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
+**Key Decisions:**
+- Correction: ROADMAP.md *does have a `## Planned` section — 17 items — at **line 243, beneath a 226-line `## Completed` changelog**. `Current Focus` is empty. Several Planned entries stale. `## Notes` preserves six hard gates; **G4 (never parallel-edit the same memory files)* and **G5 (session-id consolidation needs a `file_claims` migration)* both directly constrain this plan.
+- Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**, so it fires for every subagent too. `session-register.ts:34` ignores `input.session_id`, calls `generateSessionId()`, and stomps the single machine-global file `~/.claude/.coordination-session-id`. Meanwhile `heartbeat.ts:62` correctly uses `input.session_id`. So a terminal **claims files under one identity while heartbeating as another**, and the claiming identity's heartbeat is frozen at session start.
+- False negative:: past minute five every `s-*` identity is permanently stale, so every conflict resolves as "took over stale lock." **Zero of 8,170 claims are live-owned. The lock has not blocked a real cross-session edit in a long time.**
+- Correction to the hooks proposal: its "6 `getSessionId` implementations" framing overstates the coordination impact. Five clones (`guardrail-enforcer.ts:98`, `lib/hook-trace.ts:34`, `shared/logger.ts:72`, `shared/resource-reader.ts:70`, `shared/session-isolation.ts:23`) only pick tmp-state filenames and are **not on the coordination path**. The break is entirely in the `session-id.ts` ↔ `session-register.ts` ↔ `heartbeat.ts` triangle. That makes the fix much smaller than the BACKLOG framing suggests.
+- The good news: Claude Code already hands every hook a `session_id` that is distinct per subagent and stable per process tree — exactly the `agent_id` MS-01 planned to build. We don't need a new identity scheme; we need to stop discarding the one we're given.
+
+**Files:** docs/self-improvement/proposals/2026-07-26-hooks.md, scripts/sync-to-active.sh, ~/.claude/settings.json, .claude/settings.json, dist/*.mjs, session-id.ts, session-register.ts, heartbeat.ts
+
+**Verification:** Step 0:: artifact opens standalone, renders in light and dark, no external requests, every figure carries its reconciliation query.
+
+### 2026-07-25: Planning Session
 ### 2026-07-24: Simplify CCv3 code-intel: cut Serena + retire dormant codegraph//code-intel facade
 **Key Decisions:**
 - `C:\Users\david.hayes\.mcp.json` — delete the `"serena"` block (lines ~71-79). Use Node atomic read-modify-write, not the Edit tool.
@@ -267,10 +293,6 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - `code-intel-enforcer` hook: delete `.claude/hooks/src/code-intel-enforcer.ts` + its test if present, remove from `settings.json` registration **if registered* (scout: default-OFF, wrong matcher, zero events — verify with `/hook-audit`-style grep of both settings.json copies; settings.json is NOT synced, edit repo + `~/.claude/` copies via Node atomic write). Rebuild hooks (`cd .claude/hooks && npm run build`).
 - Leave `shared/intel-bus.ts` and `shared/context-bus.ts` in place (substrate used by other hooks/tests; the `serena_lsp` type field and "serena" label comments are inert). Optional: drop `codegraph-platform-contract.test.ts` (it auto-skips when binary absent, but deleting removes ~7min of potential CI noise).
 - Delete `.claude/rules/code-intel-boundaries.md`. Fix its inbound references: `windows-platform.md` (remove/condense the codegraph Phase C section to a one-line historical note), `cli-integration-strategy.md` (remove Serena from the MCP inventory row), `tldr-cli.md` (now unambiguously the symbol-search path — remove any "deprecated for symbol search" language if present).
-
-**Files:** thoughts/shared/handoffs/agentic-os/2026-07-24_08-39_serena-evaluation.yaml, docs/self-improvement/proposals/2026-07-04-code-intel.md, 2026-07-16-code-intel.md, C:\Users\david.hayes\.mcp.json, C:\Users\david.hayes\.codex\config.toml, continuous-claude/.serena/memories/cross_tool_workflow.md, scripts/code-intel.mjs, .claude/hooks/src/code-intel-enforcer.ts
-
-**Verification:** Fresh Claude Code session: `mcp__serena__*` tools absent from the deferred-tool list; `Get-CimInstance Win32_Process -Filter "name='serena.exe'"` shows no new serena.exe spawned by the new session.
 
 ### 2026-07-21: CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm
 **Key Decisions:**
@@ -287,24 +309,3 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Reuse (do not reinvent): `SCHEDULE`, `computeCandidate`/`nextExpectedDeadline` already encode cadence — the map is the minimal change; the `computeCandidate`-precise alternative (is the newest genuine row the currently-expected period's row?) is noted as a future tightening, not required now.
 - Reuses the existing `notionPageUrl` helper and `REPORT_CHILD_PAGES` (already in scope). This satisfies the chosen "live artifact, fallback to child page — never blank" behavior. The Report-name column already links to the child page; the Artifact column now deep-links to the real artifact when one exists and degrades to the page otherwise.
 - Result: `make-run` no longer throws, the upsert runs, a **genuine row lands* (superseding the watchdog miss), and the Artifact cell shows a working link. Keep the emit block non-fatal, but add a `Log` line that make-run **succeeded* vs skipped so a future emit regression is visible in the dated log rather than silent.
-
-### 2026-07-18: Unified Session Plan — Merge the two workstreams, make the Self-Improvement loop visible & actionable
-**Key Decisions:**
-- Reporting efficiency/optimization: — Phase 1 shipped & pushed (`bc19ef2`, `9090e0f`, `9ff3414`, `7fcee47`); Phase 2 (batched STDIN bind + meaning-based hash-gates) + a spec'd ROADMAP-guard hook fix remain. Plan `~/.claude/plans/mellow-enchanting-zebra.md`; handoff `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`.
-- Self-improvement loop: — a daily 7:30am Task-Scheduler job (`CCv3-Self-Improvement-Research`) researches one component and writes a proposal `.md`. **The problem Dave hit: the loop's output is invisible.* The Reports Hub "Self-Improvement Research" row shows Artifact = "—" (no report linked), and an anchor on the hub is broken.
-- The two workstreams actually converge. The self-improvement "no report" symptom is a *reporting-registry bug, and its fix (give proposals a real hosted URL) is the same artifact Dave wants for triage. One build closes both.
-- "No report in Notion" / Artifact = "—":: `run-research.ps1:100-107` passes a **local repo path* (`docs/self-improvement/proposals/<date>-<component>.md`) as `--artifactUrl`. Since proposal 08 (`62ff375`, 2026-07-17) `make-run.mjs` `buildRun()` **hard-rejects any non-`http(s)` URL* → throws exit 1 → `upsert.mjs` never runs → **no registry row is written at all**. The visible row is stale (pre-08). Confirmed in `.claude/logs/self-improvement/2026-07-18.log:19`: `make-run emitted no path (exit=1) -- skipping upsert`.
-- Broken anchor: `…#39576fd7ac8281d6be38000ce9bbd794` = the shared **"All Report Runs — by Type (hub)"* linked-view block (`reportRunsViews` in `report-runs.ids.json`), NOT Self-Improvement-specific. It was appended headless with no owning heading and was plausibly swept up by one of the 3 racing hub writers doing a heading→end-of-page splice. Repo can't confirm live Notion state — needs a live read to recreate.
-
-### 2026-07-15: /init-project Review + Hardening Plan
-**Key Decisions:**
-- Interview → CLAUDE.md: — auto-scan (package.json/README/configs/git), confirm with user, fill 8-section template from `references/claude-md-template.md`
-- ROADMAP.md: — created with user's current focus
-- Sentry: (conditional, deploy targets) → **7. E2E scaffold* → **8. dev-server scripts* (conditional web) → **9. summary**
-- Hook table at bottom: all names verified real in dist except "memory-extraction" (actual family: `pre-compact-extract`, `session-end-extract`, `periodic-extract`)
-- P1 — would cause a wrong outcome on the next run: *
-- Normalize schema: in BOTH `continuous-claude/.claude/project-registry.json` and `~/.claude/project-registry.json` to the project-registry skill's schema: `name, path, stack[] (array), description, port, url, devCommand, status` (+ keep optional extras `github`, `deploy`, `kind`, `notes`, `sentryProject`, `linearTeam`). Convert the 7 string-stack entries to arrays; add missing `description` fields; make the two files byte-identical (repo ordering wins).
-- Add `project-registry.json` to forward sync: edit `scripts/sync-to-active.sh` to copy `.claude/project-registry.json` → `~/.claude/`, and add a row to `rules/sync-known-gaps.md`.
-- Rewrite init-project Phase 5: write the REPO copy (`~/continuous-claude/.claude/project-registry.json`) using the array schema, then run `bash ~/continuous-claude/scripts/sync-to-active.sh` (or copy both). Keep the port-conflict check, sourcing ports from the registry itself.
-- `references/dev-server-pattern.md`: delete the static port list; replace with "derive used ports from `~/.claude/project-registry.json` at run time; assign next free 3xxx."
-- `rules/dev-server-cleanup.md` + `rules/project-registry.md`: replace/trim their static tables the same way (keep 2–3 rows as *examples*, marked as examples, or point at the JSON). Prevents this class of rot permanently.

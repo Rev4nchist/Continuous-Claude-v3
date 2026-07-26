@@ -21,7 +21,7 @@
     },
     {
       "name": "NorthStar Transformation",
-      "path": "C:/Users/david.hayes/Projects/northstar-transformation",
+      "path": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -30,10 +30,11 @@
         "Neon"
       ],
       "description": "AI transformation platform for enterprise",
-      "port": 3002,
-      "url": "https://northstar.localhost/",
-      "devCommand": "npm run dev",
-      "status": "active",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (5 months untouched, 49 uncommitted files preserved as-is on move). Port 3002 / northstar.localhost freed for reuse.",
       "sentryProject": "",
       "linearTeam": "the-lab"
     },
@@ -255,6 +256,32 @@
       "notes": "SQL -> JSON ETL feeding the EBR presentation builder. Not a web app."
     },
     {
+      "name": "Fourth Presentation Hosting Platform",
+      "path": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
+      "stack": [],
+      "description": "Presentation hosting platform",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (4 months untouched, 293 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
+      "sentryProject": "",
+      "linearTeam": ""
+    },
+    {
+      "name": "fourth-workbook",
+      "path": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
+      "stack": [],
+      "description": "Fourth workbook project",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (6 months untouched, 35 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
+      "sentryProject": "",
+      "linearTeam": ""
+    },
+    {
       "name": "fourth-netsuite-mcp",
       "path": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
       "stack": [
@@ -274,6 +301,24 @@
       "notes": "Governance proxy in front of NetSuite AI Connector Service MCP. Connector #3 of the FourthOS ecosystem; cloned from the fourth-salesforce-mcp mold (~95% reuse). Entra-rooted edge auth + per-user NetSuite OAuth (AuthCode+PKCE, no OBO exists), distributed rotate-on-use token lock, distributed account-concurrency governor, read-audit, SuiteQL safety. Phase 0 (spike gate) as of 2026-07-15; build not started.",
       "sentryProject": "",
       "linearTeam": ""
+    },
+    {
+      "name": "Agentic OS",
+      "path": "C:/Users/david.hayes/continuous-claude/apps/agentic-os",
+      "stack": [
+        "Next.js",
+        "TypeScript",
+        "Drizzle",
+        "PostgreSQL"
+      ],
+      "description": "Local-first mission control / lane board over the CCv3 coordination plane. Reads the agentic_os schema plus read-only views of public.sessions, file_claims, archival_memory.",
+      "port": 3010,
+      "url": "http://localhost:3010",
+      "devCommand": "npm run dev",
+      "status": "in-development",
+      "sentryProject": "",
+      "linearTeam": "the-lab",
+      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os]."
     }
   ]
 }
