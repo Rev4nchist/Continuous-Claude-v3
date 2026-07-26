@@ -9,7 +9,7 @@
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
 import { join } from 'path';
 import { registerSession } from './shared/db-utils-pg.js';
-import { getSessionId } from './shared/session-id.js';
+import { resolveSessionId, canonicalProject, normalizeProjectKey } from './shared/session-id.js';
 
 // Cache heartbeat to avoid DB update on every prompt
 const CACHE_TTL_MS = 30000;  // 30 seconds
@@ -59,14 +59,21 @@ function main(): void {
     // Ignore parse errors
   }
 
-  const sessionId = input.session_id || getSessionId();
-  const project = input.cwd || process.cwd();
+  // heartbeat was already payload-first and therefore already correct; it is the
+  // other two hooks that were moved onto its identity. The project key, though,
+  // was raw cwd -- the forward-slash half of the two-spelling split.
+  const sessionId = resolveSessionId(input.session_id);
+  const project = canonicalProject(input.cwd);
 
   // Guard: Skip in ~/.claude (infrastructure directory)
   const homeDir = process.env.HOME || process.env.USERPROFILE || '';
   if (homeDir) {
-    const claudeDir = homeDir.replace(/\\/g, '/') + '/.claude';
-    const normalizedProject = project.replace(/\\/g, '/');
+    // Both sides go through normalizeProjectKey: `project` is now lowercased by
+    // canonicalProject(), so comparing it against a raw `C:/Users/...` path
+    // would never match on Windows. The endsWith check alone would still have
+    // caught it, but a silently-dead equality test is how the next bug hides.
+    const claudeDir = normalizeProjectKey(homeDir + '/.claude');
+    const normalizedProject = normalizeProjectKey(project);
     if (normalizedProject === claudeDir || normalizedProject.endsWith('/.claude')) {
       console.log(JSON.stringify({ result: 'continue' }));
       return;

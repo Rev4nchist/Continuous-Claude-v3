@@ -11,7 +11,7 @@
 
 import { readFileSync } from 'fs';
 import { checkFileClaim, claimFile, isSessionActive } from './shared/db-utils-pg.js';
-import { getSessionId, getProject } from './shared/session-id.js';
+import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 
 // Stale session threshold (5 minutes)
@@ -46,8 +46,12 @@ export function main(): void {
     return;
   }
 
-  const sessionId = getSessionId();
-  const project = getProject();
+  // Claim under the SAME identity heartbeat registers, so isSessionActive() can
+  // actually find the owner alive. Previously this read the machine-global id
+  // file and filed claims under an `s-*` row that never heartbeats -- which is
+  // why every conflict check fell through to "took over stale lock".
+  const sessionId = resolveSessionId(input.session_id);
+  const project = canonicalProject(input.cwd);
 
   // Check if file is claimed by another session
   const claimCheck = checkFileClaim(filePath, project, sessionId);

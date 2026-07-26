@@ -11,7 +11,7 @@
 
 import { readFileSync } from 'fs';
 import { registerSession, getActiveSessions } from './shared/db-utils-pg.js';
-import { generateSessionId, writeSessionId, getProject } from './shared/session-id.js';
+import { resolveSessionId, writeSessionId, canonicalProject } from './shared/session-id.js';
 import { initActivity } from './shared/session-activity.js';
 import type { SessionStartInput, HookOutput } from './shared/types.js';
 
@@ -31,8 +31,14 @@ export function main(): void {
     return;
   }
 
-  const sessionId = generateSessionId();
-  const project = getProject();
+  // Coordinate under the id Claude Code gave us, NOT a freshly generated one.
+  // This line is the bug. It called generateSessionId() and produced an `s-*`
+  // identity that only this hook ever used, while heartbeat registered the
+  // payload id -- two rows per session, and every file claim filed under the
+  // `s-*` row whose heartbeat froze here at session start. Measured before the
+  // fix: 0 of 8,179 claims owned by a session that looked alive.
+  const sessionId = resolveSessionId(input.session_id);
+  const project = canonicalProject(input.cwd);
   const projectName = project.split('/').pop() || 'unknown';
 
   // Store session ID in environment and file for other hooks

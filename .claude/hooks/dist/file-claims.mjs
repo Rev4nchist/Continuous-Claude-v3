@@ -215,6 +215,7 @@ asyncio.run(main())
 }
 
 // src/shared/session-id.ts
+import { execFileSync } from "child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join as join2 } from "path";
@@ -245,21 +246,31 @@ function readSessionId() {
     return null;
   }
 }
-function getSessionId(options = {}) {
-  if (process.env.COORDINATION_SESSION_ID) {
-    return process.env.COORDINATION_SESSION_ID;
-  }
+function resolveSessionId(payloadSessionId) {
+  if (payloadSessionId) return payloadSessionId;
+  if (process.env.COORDINATION_SESSION_ID) return process.env.COORDINATION_SESSION_ID;
   const fileId = readSessionId();
-  if (fileId) {
-    return fileId;
-  }
-  if (options.debug) {
-    console.error("[session-id] WARNING: No persisted session ID found, generating new one");
-  }
+  if (fileId) return fileId;
   return generateSessionId();
 }
-function getProject() {
-  return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+function canonicalProject(cwd) {
+  const base = cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  try {
+    const out = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: base,
+      encoding: "utf-8",
+      timeout: 2e3,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (out) {
+      return normalizeProjectKey(out.replace(/\/?\.git\/?$/, ""));
+    }
+  } catch {
+  }
+  return normalizeProjectKey(base);
+}
+function normalizeProjectKey(p) {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 // src/file-claims.ts
@@ -282,8 +293,8 @@ function main() {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
-  const sessionId = getSessionId();
-  const project = getProject();
+  const sessionId = resolveSessionId(input.session_id);
+  const project = canonicalProject(input.cwd);
   const claimCheck = checkFileClaim(filePath, project, sessionId);
   let output;
   if (claimCheck.claimed && claimCheck.claimedBy) {

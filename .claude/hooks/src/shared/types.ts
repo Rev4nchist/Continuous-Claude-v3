@@ -28,10 +28,32 @@ export interface SubagentStopInput {
   agent_type?: string;
 }
 
+/**
+ * SessionStart payload.
+ *
+ * NOTE: session-register.ts has imported this type since it was written, but it
+ * was never actually declared here -- esbuild strips type imports without
+ * checking them, so the build stayed green while `input` silently had no type.
+ * Declared 2026-07-26 while fixing the identity split that lives in that file.
+ *
+ * `source` distinguishes startup / resume / clear / compact. Not used yet, but
+ * it is the field to reach for if duplicate SessionStart rows ever reappear.
+ */
+export interface SessionStartInput {
+  session_id: string;
+  source?: string;
+  cwd?: string;
+  transcript_path?: string;
+}
+
 export interface PreToolUseInput {
   session_id: string;
   tool_name: string;
   tool_input: Record<string, unknown>;
+  /** Present in the real payload (verified by identity-probe 2026-07-26); it is
+   *  the project dir the session was launched in, and the input to
+   *  canonicalProject(). Optional so existing test fixtures stay valid. */
+  cwd?: string;
 }
 
 export interface PostToolUseInput {
