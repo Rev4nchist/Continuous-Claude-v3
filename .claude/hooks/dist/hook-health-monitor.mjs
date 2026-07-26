@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/hook-health-monitor.ts
 import * as fs from "fs";
 import * as path from "path";

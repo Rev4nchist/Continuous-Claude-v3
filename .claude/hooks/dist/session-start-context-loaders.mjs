@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-start-context-loaders.ts
 import { readFileSync } from "fs";
 import { homedir } from "node:os";

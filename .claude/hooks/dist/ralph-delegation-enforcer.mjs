@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/ralph-delegation-enforcer.ts
 import { readFileSync as readFileSync3, existsSync as existsSync5, statSync as statSync3 } from "fs";

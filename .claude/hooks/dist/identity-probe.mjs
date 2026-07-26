@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/identity-probe.ts
 import { appendFileSync, mkdirSync, readFileSync } from "fs";
 import { dirname, join } from "path";

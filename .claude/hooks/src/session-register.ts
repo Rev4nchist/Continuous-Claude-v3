@@ -19,7 +19,7 @@ import type { SessionStartInput, HookOutput } from './shared/types.js';
  * Main entry point for the SessionStart hook.
  * Registers the session, persists the ID to file, and injects awareness message.
  */
-export function main(): void {
+export async function main(): Promise<void> {
   // Read hook input from stdin
   let input: SessionStartInput;
   try {
@@ -56,10 +56,13 @@ export function main(): void {
   }
 
   // Register session in PostgreSQL
-  const registerResult = registerSession(sessionId, project, '');
+  const registerResult = await registerSession(sessionId, project, '');
+  if (!registerResult.success) {
+    console.error(`[session-register] registration failed: ${registerResult.error}`);
+  }
 
   // Get other active sessions
-  const sessionsResult = getActiveSessions(project);
+  const sessionsResult = await getActiveSessions(project);
   const otherSessions = sessionsResult.sessions.filter(s => s.id !== sessionId);
 
   // Build awareness message
@@ -100,4 +103,7 @@ You are the only session currently working here.
 }
 
 // Run if executed directly
-main();
+main().catch((err) => {
+  console.error('[session-register] unexpected error:', err);
+  console.log(JSON.stringify({ result: 'continue' }));
+});

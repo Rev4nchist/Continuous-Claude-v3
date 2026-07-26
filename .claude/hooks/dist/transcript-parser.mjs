@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/transcript-parser.ts
 import * as fs from "fs";
 function parseTranscript(transcriptPath) {

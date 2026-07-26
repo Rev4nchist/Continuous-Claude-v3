@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/pre-plan-memory.ts
 import { execSync } from "child_process";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/plan-to-ralph-enforcer.ts
 import { readFileSync as readFileSync4 } from "fs";

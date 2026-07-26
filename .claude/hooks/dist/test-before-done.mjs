@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/test-before-done.ts
 import { readFileSync, existsSync as existsSync2 } from "fs";

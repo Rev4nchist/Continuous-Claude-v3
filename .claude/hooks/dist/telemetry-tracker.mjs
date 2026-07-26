@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/telemetry-tracker.ts
 import { readFileSync as readFileSync2, appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "fs";

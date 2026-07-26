@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/maestro-state-manager.ts
 import { readFileSync as readFileSync2, existsSync as existsSync4, unlinkSync as unlinkSync3 } from "fs";

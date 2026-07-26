@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/guardrail-enforcer.ts
 import { readFileSync, writeFileSync, existsSync } from "fs";

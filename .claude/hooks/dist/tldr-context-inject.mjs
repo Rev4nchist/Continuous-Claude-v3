@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/tldr-context-inject.ts
 import { readFileSync as readFileSync2, existsSync as existsSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2, readdirSync, statSync, unlinkSync as unlinkSync2 } from "fs";
 import { join as join2, dirname } from "path";

@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/sentry-error-context.ts
 import { readFileSync } from "fs";
 var ERROR_KEYWORDS = /\b(production error|prod bug|crash|exception|500 error|failing in prod|sentry issue|sentry error)\b/i;

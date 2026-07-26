@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-start-dead-code.ts
 import { readFileSync as readFileSync2, existsSync as existsSync2 } from "fs";
 

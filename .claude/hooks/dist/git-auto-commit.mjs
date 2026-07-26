@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/git-auto-commit.ts
 import { readFileSync, writeFileSync, existsSync, statSync } from "fs";

@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-start-docker.ts
 import { execSync } from "child_process";
 import { readFileSync } from "fs";

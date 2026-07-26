@@ -21,7 +21,7 @@ const STALE_THRESHOLD_MS = 5 * 60 * 1000;
  * Main entry point for the PreToolUse:Edit|Write hook.
  * Enforces file locking - blocks edits when another active session has the file.
  */
-export function main(): void {
+export async function main(): Promise<void> {
   // Read hook input from stdin
   let input: PreToolUseInput;
   try {
@@ -54,13 +54,26 @@ export function main(): void {
   const project = canonicalProject(input.cwd);
 
   // Check if file is claimed by another session
-  const claimCheck = checkFileClaim(filePath, project, sessionId);
+  const claimCheck = await checkFileClaim(filePath, project, sessionId);
 
   let output: any;
 
+  if (claimCheck.degraded) {
+    // We did not learn that the file is free -- we failed to ask. The edit is
+    // still permitted (a stopped container must not brick editing) but this
+    // path used to be indistinguishable from "no conflict", which is how a
+    // broken lock looked healthy for the whole life of this arc.
+    console.error('[file-claims] coordination degraded, permitting edit unchecked');
+    console.log(JSON.stringify({
+      result: 'continue',
+      message: '[WARN] Coordination DB unreachable - file conflict NOT checked for this edit',
+    }));
+    return;
+  }
+
   if (claimCheck.claimed && claimCheck.claimedBy) {
     // Check if the claiming session is still active
-    const otherSessionActive = isSessionActive(claimCheck.claimedBy, STALE_THRESHOLD_MS);
+    const otherSessionActive = await isSessionActive(claimCheck.claimedBy, STALE_THRESHOLD_MS);
 
     if (otherSessionActive) {
       // Active session has the file - BLOCK the edit with proper PreToolUse format
@@ -83,7 +96,7 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
       };
     } else {
       // Other session is stale - take over the claim
-      claimFile(filePath, project, sessionId);
+      await claimFile(filePath, project, sessionId);
       const fileName = filePath.split(/[/\\]/).pop() || filePath;
       output = {
         result: 'continue',
@@ -92,12 +105,18 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
     }
   } else {
     // No conflict - claim the file for this session
-    claimFile(filePath, project, sessionId);
+    await claimFile(filePath, project, sessionId);
     output = { result: 'continue' };
   }
 
   console.log(JSON.stringify(output));
 }
 
-// Run if executed directly
-main();
+// Run if executed directly. A PreToolUse hook MUST emit exactly one decision on
+// stdout, so an unexpected rejection has to be converted into an explicit
+// continue rather than being allowed to reach the default unhandled-rejection
+// handler, which would exit non-zero having printed nothing.
+main().catch((err) => {
+  console.error('[file-claims] unexpected error:', err);
+  console.log(JSON.stringify({ result: 'continue' }));
+});

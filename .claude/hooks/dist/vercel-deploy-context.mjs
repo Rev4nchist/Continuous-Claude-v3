@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/vercel-deploy-context.ts
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";

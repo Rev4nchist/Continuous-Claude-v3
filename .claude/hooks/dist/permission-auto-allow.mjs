@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/permission-auto-allow.ts
 import { readFileSync } from "node:fs";
 function emitAllow() {

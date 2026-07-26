@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/session-start-recovery.ts
 import { readFileSync as readFileSync2, readdirSync, existsSync as existsSync3, unlinkSync, statSync as statSync2 } from "fs";

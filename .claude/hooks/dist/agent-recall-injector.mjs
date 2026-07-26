@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/agent-recall-injector.ts
 import { readFileSync as readFileSync3, mkdirSync as mkdirSync4, appendFileSync as appendFileSync3 } from "fs";

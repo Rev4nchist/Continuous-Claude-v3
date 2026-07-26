@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/dashboard-reporter.ts
 var DASHBOARD_URL = "http://127.0.0.1:3434/api/hook-events";
 var TIMEOUT_MS = 2e3;

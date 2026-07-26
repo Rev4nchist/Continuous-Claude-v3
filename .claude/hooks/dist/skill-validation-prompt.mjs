@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/skill-validation-prompt.ts
 var AMBIGUOUS_KEYWORDS = /* @__PURE__ */ new Set([
   "commit",

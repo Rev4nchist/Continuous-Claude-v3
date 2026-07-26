@@ -47,7 +47,7 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
-function main(): void {
+async function main(): Promise<void> {
   let input: HookInput = {};
 
   try {
@@ -92,7 +92,7 @@ function main(): void {
   }
 
   // Update session heartbeat via registerSession (upserts)
-  const result = registerSession(sessionId, project, workingOn);
+  const result = await registerSession(sessionId, project, workingOn);
 
   if (!result.success) {
     console.error(`Heartbeat update failed: ${result.error}`);
@@ -103,9 +103,7 @@ function main(): void {
   console.log(JSON.stringify({ result: 'continue' }));
 }
 
-try {
-  main();
-} catch (err) {
+main().catch((err) => {
   console.error('Heartbeat error:', err);
   console.log(JSON.stringify({ result: 'continue' }));
-}
+});

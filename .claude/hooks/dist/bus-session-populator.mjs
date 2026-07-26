@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/bus-session-populator.ts
 import { readFileSync as readFileSync4 } from "fs";
 

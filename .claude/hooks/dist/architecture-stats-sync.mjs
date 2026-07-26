@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/architecture-stats-sync.ts
 import { spawn, spawnSync } from "node:child_process";

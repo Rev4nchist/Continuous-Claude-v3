@@ -106,10 +106,10 @@ async function registerSessionTask(): Promise<TaskResult> {
     writeSessionId(sessionId);
 
     // Register in DB
-    registerSession(sessionId, project, '');
+    await registerSession(sessionId, project, '');
 
     // Get peer sessions
-    const sessionsResult = getActiveSessions(project);
+    const sessionsResult = await getActiveSessions(project);
     const otherSessions = sessionsResult.sessions.filter(s => s.id !== sessionId);
 
     // Build awareness message

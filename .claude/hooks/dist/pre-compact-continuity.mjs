@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/pre-compact-continuity.ts
 import * as fs2 from "fs";
 import * as path from "path";

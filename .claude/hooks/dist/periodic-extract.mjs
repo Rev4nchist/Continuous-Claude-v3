@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/periodic-extract.ts
 import { readFileSync, writeFileSync } from "fs";
 import { tmpdir } from "os";

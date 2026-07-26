@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/memory-awareness.ts
 import { readFileSync as readFileSync5, existsSync as existsSync6, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
 import * as path from "path";

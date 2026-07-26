@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/signature-helper.ts
 import { readFileSync as readFileSync2 } from "fs";
 

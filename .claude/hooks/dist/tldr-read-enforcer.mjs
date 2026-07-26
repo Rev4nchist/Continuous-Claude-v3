@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/tldr-read-enforcer.ts
 import { readFileSync as readFileSync2, existsSync as existsSync2, statSync } from "fs";
 import { basename, extname } from "path";

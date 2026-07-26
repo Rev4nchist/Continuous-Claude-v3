@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/post-learning-prompt.ts
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/bus-tool-populator.ts
 import { readFileSync as readFileSync4, statSync as statSync4, realpathSync as realpathSync2 } from "fs";
