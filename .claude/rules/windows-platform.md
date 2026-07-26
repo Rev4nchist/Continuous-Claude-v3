@@ -117,10 +117,36 @@ they are all node/python). The username contains a period, which some upstream
 reports blame, but that cannot be the cause here: bash succeeds the overwhelming
 majority of the time and a fundamental incompatibility would not be intermittent.
 
-**Not reproducible on demand.** Synthetic bursts fail all-or-nothing and
-sporadically — 48/48 failed, then 64/64 passed minutes later, then 16 consecutive
-48-bursts all passed. Treat the JSONL as the evidence base; the `bash_alive` field
-at crash time is what tests the cold-start theory against real occurrences.
+**CORRECTION (2026-07-26): it IS reproducible — the earlier burst shape was wrong.**
+A burst of N identical bash processes is not the failing shape and stayed stubbornly
+bimodal (48/48 failed, then 64/64 passed, then 16 clean bursts). The shape that
+reproduces is the one real hooks actually create: **a long-lived MSYS process holding
+a cohort open while short-lived NESTED bash cold-starts arrive into it.** Reproduced
+twice on the first attempt, from a plain `bash -c "bash scripts/sync-to-active.sh --changed"`
+launched alongside a sampler. Harness: `scripts/msys/repro.ps1`.
+
+**The crash is not the worst outcome — the hang is.** The documented `add_item` fatal
+error is loud, exits immediately, and `git-safe.ps1` already retries it. What the repro
+surfaced is different and unlogged: affected bash processes **block instead of dying**,
+at ~0 CPU, and never exit. One trial that should have created ~9 processes left **51
+live**, 46 of them descendants nothing had a handle on, still present ten minutes later.
+`Stop-Process` on the tracked pids sails straight past the descendants — the same
+spawn-tree leak already recorded for `spawnSync`; only `taskkill /T /F` clears them.
+
+**Recovery:** `pwsh -File scripts/msys/reap.ps1` (dry-run) then `-Force`. It kills only
+processes that are BOTH older than 120s AND under 2s CPU, so a bash doing real work is
+never touched. Verified: cleared 3 stuck leftovers, bash healthy immediately after.
+
+**Not yet established, do not assume:** that this hang is what broke the Bash *tool* in
+the 2026-07-26 session. The Bash tool was probed three times during the storm, including
+with 48 stuck processes alive, and worked every time. The stuck-process pile-up and the
+Bash-tool failure are so far two separate observations, not one causal chain. The
+warm-keeper mitigation is still untested — but now there is a repro to test it against,
+which is what the earlier zero-failures-in-both-arms A/B lacked.
+
+⚠️ `repro.ps1` deliberately storms the machine. It has a circuit breaker (`-MaxBashAlive`,
+default 25) that aborts and reaps; the first two versions did not, and both left the
+machine with dozens of blocked processes.
 
 ## Bash tool hangs on git/network ops → use PowerShell [H:8]
 
