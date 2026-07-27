@@ -213,6 +213,35 @@ unchanged.
 - **A probe that passes first try is not trusted** — break the thing it guards. One that
   fails once is not trusted either — re-run before concluding.
 
+## "Serialize commits" is a convention, not a lock — and it failed today
+
+This happened while writing this file, so it is not hypothetical.
+
+I announced a commit run on the bus, staged two files, and hit the MSYS fork storm. While
+I retried, 0e1e2e2b staged and committed their own work. **Their commit swallowed my two
+staged files.** `45aa14f`, titled *"feat(report-registry): recover the runs that happened
+where nobody was looking"*, actually contains this handoff and `scripts/gpu/crash-watch.ps1`
+alongside the reconciler. The content is durable and tracked; the history misdescribes it.
+
+Three things generalize, and all three matter to you immediately:
+
+1. **The lane bus coordinates *scope*. It does not lock the *index*.** `.git/index` is
+   shared mutable state with no mutual exclusion between sessions. Announcing is
+   cooperative and therefore only as reliable as the other session's timing.
+2. **Use `git commit --only <paths>`** (`-o`). It commits exactly the named paths from the
+   working tree and ignores whatever else sits in the index, so a concurrent session's
+   staged files cannot ride along and yours cannot be swept into their commit. This is the
+   actual fix and it needs no coordination at all. Prefer it over `git add` + `git commit`
+   for as long as more than one session is live.
+3. **The failure is silent, and my own success-check made it worse.** My commit printed
+   `no changes added to commit` — because my files were already gone into theirs — and my
+   retry loop concluded "LANDED" because it tested *whether HEAD had changed* rather than
+   *whether HEAD was mine*. HEAD had changed; it just wasn't me. A proxy for success is not
+   success, which is the same class of error as the midnight cutoff below.
+
+Do not rewrite this history to fix the attribution. Three sessions are live on this branch;
+a shared-history rewrite mid-flight is far worse than one commit with a wrong title.
+
 ## Verification
 
 ```
