@@ -362,13 +362,28 @@ const commands = {
     if (!id || !LANE_STATES.includes(to)) {
       throw new Error(`usage: lane.mjs state <lane-id> <${LANE_STATES.join('|')}>`);
     }
+    // NOTE: `myId` is deliberately NOT a bind parameter here. It used to be passed as
+    // $3, but the SQL below never referenced $3 -- Postgres cannot infer the type of an
+    // unreferenced parameter, so it rejected the whole statement with "could not
+    // determine data type of parameter $3". That broke `state`, and with it `release`
+    // and `done`, which delegate here. The result: nothing was EVER markable done
+    // through this CLI, so the board silently degraded into an intake register that
+    // could record work starting but never work finishing.
+    //
+    // `myId` is still read below for logEvent attribution -- it just has no business in
+    // the SQL. It could not be recovered from `rows[0]` either, because this same
+    // UPDATE nulls owner_session_id on the done/ready transitions.
+    //
+    // Known gap, deliberately left alone: WHERE is `id=$1` with no ownership check, so
+    // any session can transition any lane. That is a behaviour change affecting other
+    // live sessions and does not belong in a parameter-binding bug fix.
     const { rows } = await c.query(
       `UPDATE agentic_os.lane SET state=$2, updated_at=now(),
-         note = COALESCE($4, note),
+         note = COALESCE($3, note),
          owner_session_id = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE owner_session_id END,
          lease_expires_at = CASE WHEN $2 IN ('done','ready') THEN NULL ELSE lease_expires_at END
        WHERE id=$1 RETURNING *`,
-      [id, to, myId, typeof flags.note === 'string' ? flags.note : null],
+      [id, to, typeof flags.note === 'string' ? flags.note : null],
     );
     if (!rows.length) throw new Error(`no lane "${id}"`);
     await logEvent(c, {

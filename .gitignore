@@ -265,3 +265,24 @@ scripts/project-cards/.hub.lock
 
 # MCP tool-schema catalog dumps (local reference; regenerated per MCP server)
 mcps/
+
+# Local DB backups (pre-migration safety dumps) - never commit
+#
+# `.backups/` alone matched NOTHING: the real directory is `.claude/backups/`, so the
+# dumps and the settings snapshots below were still fully committable. Verified with
+# `git check-ignore -v` -- all four paths came back EXPOSED. Keeping the original
+# pattern as well, since a top-level `.backups/` may exist on another machine.
+.backups/
+.claude/backups/
+
+# settings.json snapshots taken around risky edits. These are NOT harmless copies --
+# they embed a literal DATABASE_URL with credentials, so an accidental `git add -A`
+# would commit a secret. That is not hypothetical on this branch: one session's commit
+# has already swept up another session's staged files.
+.claude/settings.json.bak-*
+
+# SpecStory local conversation-history mirror (500+ personal session transcripts)
+.specstory/
+
+# Machine-local editor config
+.vscode/

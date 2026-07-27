@@ -40,15 +40,29 @@ export const project = agenticOs.table(
 );
 
 /**
- * Maps the 111 distinct raw `public.sessions.project` values onto ~20 real
- * projects. Backslash and forward-slash variants of the same path, trailing
- * slashes, subdirectories, git worktrees and synthetic stress-test rows all
- * collapse here.
+ * Maps the distinct raw `public.sessions.project` values onto ~19 real projects.
+ * Backslash and forward-slash variants of the same path, trailing slashes,
+ * subdirectories, git worktrees and synthetic stress-test rows all collapse here.
+ * (`continuous-claude` alone arrives in four spellings differing only by slash
+ * direction, case and a trailing slash.)
+ *
+ * The count is deliberately NOT stated here. It was written as "111", and by the
+ * time anyone acted on it the live figure was 115 — a number in a comment is a
+ * snapshot that nothing ages out, and this file is read by people deciding
+ * whether the seed data is complete. The authoritative count is
+ * `SELECT count(DISTINCT project) FROM sessions`, and the seeder asserts that the
+ * seed file's raw set matches it EXACTLY in both directions, so drift fails loudly
+ * instead of being silently absorbed.
  *
  * This is DATA, not code, deliberately: a wrong mapping is an UPDATE, not a
- * redeploy. Rows are seeded by hand rather than trusted to a normalizer,
- * because a confidently-wrong fleet grid is worse than an obviously-incomplete
- * one. Anything unmatched stays unmatched and is surfaced in the UI.
+ * redeploy. Rows are seeded by hand rather than trusted to a normalizer, because a
+ * confidently-wrong fleet grid is worse than an obviously-incomplete one. Anything
+ * unmatched stays unmatched and is surfaced in the UI.
+ *
+ * `confidence` carries the REVIEW DECISION, not just a score — 1.0 mapped,
+ * 0.5 reviewed and a real project but not yet in the registry, 0.0 reviewed and
+ * rejected (temp dirs, installer paths, the user's home). A bare NULL
+ * `project_key` would conflate the last two, and they need opposite follow-up.
  */
 export const projectAlias = agenticOs.table(
   'project_alias',
