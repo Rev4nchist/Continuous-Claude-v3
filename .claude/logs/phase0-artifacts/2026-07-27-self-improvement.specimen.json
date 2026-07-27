@@ -1,0 +1,10 @@
+{
+  "runId": "Self-Improvement|2026-07-27|2026-07-27T12:32:50.7699793Z",
+  "type": "Self-Improvement",
+  "period": "2026-07-27",
+  "runDate": "2026-07-27T12:32:50.7699793Z",
+  "status": "Failed",
+  "source": "Self-Improvement",
+  "artifactUrl": "https://www.notion.so/39576fd7ac8281398438ed06fdedebb7",
+  "summary": "agents: in-progress - claude -p invoked at 2026-07-27T12:32:50.7699793Z. This row is updated in place on completion; if it still reads Failed, the run was killed or aborted before finishing (see .claude/logs/self-improvement/2026-07-27.log)."
+}
