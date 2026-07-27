@@ -5243,7 +5243,16 @@ async function withPgClientOrFallback(fn, fallback, context) {
     return { value: await withPgClient(fn), degraded: false };
   } catch (err) {
     const message = describeError(err);
-    console.error(`[coordination] ${context} degraded: ${message}`);
+    const code = err?.code;
+    const schemaFault = code === "42703" || code === "42P01" || code === "42883";
+    if (schemaFault) {
+      console.error(
+        `[coordination] ${context} SCHEMA OUT OF DATE (${code}): ${message}
+[coordination] the database is reachable -- it is missing objects this code needs. Apply scripts/coordination/migrations/001-file-claims-leases.sql`
+      );
+    } else {
+      console.error(`[coordination] ${context} degraded: ${message}`);
+    }
     return { value: fallback, degraded: true, error: message };
   }
 }

@@ -78,12 +78,36 @@ function extractClaimSql() {
   if (i >= src.length) throw new Error('claim-sql-probe: unterminated RESOLVE_CLAIM_SQL literal');
 
   // The extracted statement must still be the thing this probe thinks it is.
-  // Without this, a future edit could silently reduce it to something trivial
-  // and every case below would keep passing.
-  for (const required of ['ON CONFLICT', 'expires_at < NOW()', 'last_heartbeat', '$7']) {
-    if (!out.includes(required)) {
-      throw new Error(`claim-sql-probe: extracted SQL is missing ${required} -- refusing to run`);
+  //
+  // These tokens are chosen to span the WHOLE statement, head to tail, because
+  // the realistic failure is TRUNCATION, not replacement. It happened: an
+  // unescaped backtick in a SQL comment ended the TS template early, extraction
+  // stopped mid-sentence, and the fragment still contained $7 and ON CONFLICT
+  // from the head -- so an earlier version of this guard passed it straight
+  // through to Postgres, which answered with a bare syntax error.
+  //
+  // RETURNING and the final projection are last in the text, so requiring them
+  // proves the tail arrived. The trailing-newline check catches a truncation
+  // that happens to land after them.
+  const required = [
+    'ON CONFLICT',        // head
+    'expires_at < NOW()', // the reclamation rule
+    'last_heartbeat',     // the other half
+    '$7',                 // break-glass param
+    'RETURNING',          // tail of the upsert CTE
+    'prior_holder_stale', // the very last projection
+  ];
+  for (const token of required) {
+    if (!out.includes(token)) {
+      throw new Error(
+        `claim-sql-probe: extracted SQL is missing ${token} -- refusing to run. ` +
+        `This usually means the literal was TRUNCATED (an unescaped backtick in a ` +
+        `SQL comment will do it), not that the statement changed.`);
     }
+  }
+  // A statement that ends mid-comment has no business reaching the database.
+  if (/--[^\n]*$/.test(out.trimEnd())) {
+    throw new Error('claim-sql-probe: extracted SQL ends inside a comment -- truncated');
   }
   return out;
 }
@@ -235,10 +259,16 @@ async function main() {
   // Postgres version or rewrite ever makes `prior` see the winner, this check
   // fails loudly and tells the next person the workaround may be removable --
   // rather than leaving a mysterious extra query nobody dares touch.
+  // How MANY losers are blind is timing-dependent, and measuring it taught me
+  // my own first guess was wrong: I asserted all 23 and observed 4. A racer is
+  // blind only if its snapshot was taken before the winner COMMITTED; racers
+  // that arrive later see the row and report it correctly. So the honest
+  // assertion is that the blind spot is demonstrable, not that it is universal.
   const losers = raced.filter((r) => r.outcome === 'blocked');
   const blindLosers = losers.filter((r) => r.row.prior_owner === null).length;
-  check('5b the raw statement CANNOT name the winner (why the 2nd read exists)',
-    blindLosers, N - 1);
+  console.log(`      of ${losers.length} blocked racers, ${blindLosers} could not name the winner`);
+  check('5b at least one racer proves the raw statement CANNOT name the winner',
+    blindLosers >= 1, true);
 
   // --- teardown ---------------------------------------------------------
   if (!process.argv.includes('--keep')) {

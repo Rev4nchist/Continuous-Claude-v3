@@ -5243,7 +5243,16 @@ async function withPgClientOrFallback(fn, fallback, context) {
     return { value: await withPgClient(fn), degraded: false };
   } catch (err) {
     const message = describeError(err);
-    console.error(`[coordination] ${context} degraded: ${message}`);
+    const code = err?.code;
+    const schemaFault = code === "42703" || code === "42P01" || code === "42883";
+    if (schemaFault) {
+      console.error(
+        `[coordination] ${context} SCHEMA OUT OF DATE (${code}): ${message}
+[coordination] the database is reachable -- it is missing objects this code needs. Apply scripts/coordination/migrations/001-file-claims-leases.sql`
+      );
+    } else {
+      console.error(`[coordination] ${context} degraded: ${message}`);
+    }
     return { value: fallback, degraded: true, error: message };
   }
 }
@@ -5343,10 +5352,23 @@ upsert AS (
                 AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
             )
           )
-  RETURNING session_id, fence
+  -- xmax <> 0 is the standard idiom for "this row came from the ON CONFLICT
+  -- branch, not the INSERT branch". It is load-bearing: under contention the
+  -- prior CTE can be EMPTY for a row that nonetheless already existed by the
+  -- time the upsert ran (see the snapshot note above), and without this the
+  -- classifier reads prior_owner = NULL and calls a genuine change of custody a
+  -- first-time grant.
+  --
+  -- (No backticks in this comment. It lives inside a TS template literal, so an
+  -- unescaped one silently truncates the statement -- which is exactly what
+  -- happened here: tsc reported TS1005, esbuild swallowed it and emitted
+  -- something that worked by luck, and claim-sql-probe's extractor stopped
+  -- mid-sentence and handed Postgres a fragment.)
+  RETURNING session_id, fence, (xmax <> 0) AS was_update
 )
 SELECT (SELECT session_id FROM upsert) AS new_owner,
        (SELECT fence      FROM upsert) AS new_fence,
+       (SELECT was_update FROM upsert) AS was_update,
        (SELECT session_id FROM prior)  AS prior_owner,
        (SELECT fence      FROM prior)  AS prior_fence,
 
@@ -5391,16 +5413,54 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
           breakGlass
         ]);
         const row = res.rows[0];
-        const holder = row.prior_owner ?? void 0;
-        const holderClaimedAt = row.prior_claimed_at ? row.prior_claimed_at.toISOString() : void 0;
-        const holderExpiresAt = row.prior_expires_at ? row.prior_expires_at.toISOString() : void 0;
+        const contendedUnseen = row.prior_owner === null && (row.new_owner === null || row.was_update === true);
+        let facts = {
+          owner: row.prior_owner,
+          claimedAt: row.prior_claimed_at,
+          expiresAt: row.prior_expires_at,
+          fence: row.prior_fence,
+          leaseExpired: row.prior_lease_expired,
+          holderStale: row.prior_holder_stale
+        };
+        if (contendedUnseen && row.new_owner === null) {
+          const again = await client.query(
+            `SELECT session_id,
+                    claimed_at AT TIME ZONE 'UTC' AS claimed_at,
+                    expires_at AT TIME ZONE 'UTC' AS expires_at,
+                    fence,
+                    (expires_at IS NULL OR expires_at < NOW()) AS lease_expired,
+                    NOT EXISTS (
+                      SELECT 1 FROM sessions s
+                      WHERE s.id = file_claims.session_id
+                        AND s.last_heartbeat >= NOW() - make_interval(secs => $3)
+                    ) AS holder_stale
+               FROM file_claims
+              WHERE file_path = $1 AND project = $2`,
+            [filePath, project, staleSeconds]
+          );
+          if (again.rows.length > 0) {
+            const r = again.rows[0];
+            facts = {
+              owner: r.session_id,
+              claimedAt: r.claimed_at,
+              expiresAt: r.expires_at,
+              fence: r.fence,
+              leaseExpired: r.lease_expired,
+              holderStale: r.holder_stale
+            };
+          }
+        }
+        const holder = facts.owner ?? void 0;
+        const holderClaimedAt = facts.claimedAt ? facts.claimedAt.toISOString() : void 0;
+        const holderExpiresAt = facts.expiresAt ? facts.expiresAt.toISOString() : void 0;
         const num = (v) => v === null || v === void 0 ? void 0 : Number(v);
         let outcome;
         if (row.new_owner === null) outcome = "blocked";
-        else if (row.prior_owner === null) outcome = "granted";
-        else if (row.prior_owner === sessionId) outcome = "renewed";
+        else if (row.was_update !== true) outcome = "granted";
+        else if (facts.owner === sessionId) outcome = "renewed";
         else outcome = "takeover";
-        const wouldHaveReclaimed = row.prior_lease_expired === true && row.prior_holder_stale === true;
+        const priorHolderUnobservable = outcome === "takeover" && facts.owner === null;
+        const wouldHaveReclaimed = facts.leaseExpired === true && facts.holderStale === true;
         const forced = outcome === "takeover" && breakGlass && !wouldHaveReclaimed;
         await client.query(
           `INSERT INTO sessions (id, project, last_heartbeat)
@@ -5423,13 +5483,21 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
               // Which half of the rule held. A block with leaseExpired=true and
               // holderStale=false is the NEW behaviour doing its job (an idle
               // but alive holder); the old code would have preempted them here.
-              leaseExpired: row.prior_lease_expired,
-              holderStale: row.prior_holder_stale,
+              leaseExpired: facts.leaseExpired,
+              holderStale: facts.holderStale,
               leaseClass,
               leaseTtlSeconds: ttlSeconds,
-              fenceFrom: num(row.prior_fence) ?? null,
+              fenceFrom: num(facts.fence) ?? null,
               fenceTo: num(row.new_fence) ?? null,
-              staleThresholdSeconds: staleSeconds
+              staleThresholdSeconds: staleSeconds,
+              // True when custody changed away from a holder this statement
+              // could not observe. Says "we could not name them" rather than
+              // letting a null holder read as "nobody was there".
+              priorHolderUnobservable: priorHolderUnobservable || void 0,
+              // True when the holder facts came from the follow-up read rather
+              // than the statement's own snapshot -- a post-image, not the true
+              // pre-image at decision time.
+              holderReadAfterContention: contendedUnseen || void 0
             }
           });
         }
@@ -5440,10 +5508,10 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
           holderClaimedAt,
           holderExpiresAt,
           fence: num(row.new_fence),
-          priorFence: num(row.prior_fence),
+          priorFence: num(facts.fence),
           leaseClass,
-          leaseExpired: row.prior_lease_expired ?? void 0,
-          holderStale: row.prior_holder_stale ?? void 0,
+          leaseExpired: facts.leaseExpired ?? void 0,
+          holderStale: facts.holderStale ?? void 0,
           breakGlass: forced ? true : void 0,
           eventRecorded
         };

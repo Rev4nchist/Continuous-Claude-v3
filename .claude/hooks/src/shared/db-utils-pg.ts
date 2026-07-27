@@ -722,10 +722,16 @@ upsert AS (
           )
   -- xmax <> 0 is the standard idiom for "this row came from the ON CONFLICT
   -- branch, not the INSERT branch". It is load-bearing: under contention the
-  -- `prior` CTE can be EMPTY for a row that nonetheless already existed by the
+  -- prior CTE can be EMPTY for a row that nonetheless already existed by the
   -- time the upsert ran (see the snapshot note above), and without this the
   -- classifier reads prior_owner = NULL and calls a genuine change of custody a
   -- first-time grant.
+  --
+  -- (No backticks in this comment. It lives inside a TS template literal, so an
+  -- unescaped one silently truncates the statement -- which is exactly what
+  -- happened here: tsc reported TS1005, esbuild swallowed it and emitted
+  -- something that worked by luck, and claim-sql-probe's extractor stopped
+  -- mid-sentence and handed Postgres a fragment.)
   RETURNING session_id, fence, (xmax <> 0) AS was_update
 )
 SELECT (SELECT session_id FROM upsert) AS new_owner,
