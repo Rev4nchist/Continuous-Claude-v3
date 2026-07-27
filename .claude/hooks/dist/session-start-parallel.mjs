@@ -5319,6 +5319,7 @@ async function getActiveSessions(project) {
 }
 
 // src/shared/session-id.ts
+import { execFileSync } from "child_process";
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
 import { homedir } from "os";
 import { join } from "path";
@@ -5349,8 +5350,43 @@ function writeSessionId(sessionId) {
     return false;
   }
 }
+function readSessionId() {
+  try {
+    const sessionFile = getSessionIdFile();
+    const id = readFileSync(sessionFile, "utf-8").trim();
+    return id || null;
+  } catch {
+    return null;
+  }
+}
 function getProject() {
   return process.env.CLAUDE_PROJECT_DIR || process.cwd();
+}
+function resolveSessionId(payloadSessionId) {
+  if (payloadSessionId) return payloadSessionId;
+  if (process.env.COORDINATION_SESSION_ID) return process.env.COORDINATION_SESSION_ID;
+  const fileId = readSessionId();
+  if (fileId) return fileId;
+  return generateSessionId();
+}
+function canonicalProject(cwd) {
+  const base = cwd || process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  try {
+    const out = execFileSync("git", ["rev-parse", "--path-format=absolute", "--git-common-dir"], {
+      cwd: base,
+      encoding: "utf-8",
+      timeout: 2e3,
+      stdio: ["ignore", "pipe", "ignore"]
+    }).trim();
+    if (out) {
+      return normalizeProjectKey(out.replace(/\/?\.git\/?$/, ""));
+    }
+  } catch {
+  }
+  return normalizeProjectKey(base);
+}
+function normalizeProjectKey(p) {
+  return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
 // src/session-start-parallel.ts
@@ -5398,12 +5434,12 @@ function runCommand(name, command, args, stdinData, timeoutMs = 1e4) {
     proc.stdin?.end();
   });
 }
-async function registerSessionTask() {
+async function registerSessionTask(input) {
   const start = Date.now();
   try {
-    const sessionId = generateSessionId();
-    const project = getProject();
-    const projectName = project.split(/[/\\]/).pop() || "unknown";
+    const sessionId = resolveSessionId(input.session_id);
+    const project = canonicalProject(input.cwd);
+    const projectName = project.split("/").pop() || "unknown";
     process.env.COORDINATION_SESSION_ID = sessionId;
     writeSessionId(sessionId);
     await registerSession(sessionId, project, "");
@@ -5455,8 +5491,9 @@ async function main() {
   const hooksDir = join2(homedir2(), ".claude", "hooks").replace(/\\/g, "/");
   const distDir = `${hooksDir}/dist`;
   const results = await Promise.all([
-    // Inline task (no subprocess)
-    registerSessionTask(),
+    // Inline task (no subprocess). Payload passed so coordination identity comes
+    // from the id every hook agrees on, not a locally generated one.
+    registerSessionTask(input),
     // Node.js hooks
     runCommand(
       "continuity",

@@ -20,7 +20,12 @@ import { spawn } from 'child_process';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { registerSession, getActiveSessions } from './shared/db-utils-pg.js';
-import { generateSessionId, writeSessionId, getProject } from './shared/session-id.js';
+import {
+  writeSessionId,
+  getProject,
+  resolveSessionId,
+  canonicalProject,
+} from './shared/session-id.js';
 import type { SessionStartInput, HookOutput } from './shared/types.js';
 
 interface TaskResult {
@@ -93,13 +98,25 @@ function runCommand(
 
 /**
  * Session registration task (inline - no subprocess needed)
+ *
+ * Takes the hook payload because coordination identity MUST come from it. This
+ * hook is not registered in either settings.json today, so it is dead code -- but
+ * it registers sessions and therefore seeds the identity that file_claims rows are
+ * filed under. It previously called generateSessionId() + getProject(), which are
+ * both halves of the bug ca1a16e fixed in session-register.ts: an `s-*` identity no
+ * other hook agreed on (heartbeat used the payload id, so every session wrote TWO
+ * rows and claims were filed under the one whose heartbeat froze at session start),
+ * and an unnormalized project key that split one repo across a backslash and a
+ * forward-slash namespace. Together those produced 8,179 claims of which 0 were
+ * owned by a session that looked alive. Registering this hook unfixed would have
+ * silently reinstated all of it, so it is corrected here rather than left armed.
  */
-async function registerSessionTask(): Promise<TaskResult> {
+async function registerSessionTask(input: SessionStartInput): Promise<TaskResult> {
   const start = Date.now();
   try {
-    const sessionId = generateSessionId();
-    const project = getProject();
-    const projectName = project.split(/[/\\]/).pop() || 'unknown';
+    const sessionId = resolveSessionId(input.session_id);
+    const project = canonicalProject(input.cwd);
+    const projectName = project.split('/').pop() || 'unknown';
 
     // Store session ID
     process.env.COORDINATION_SESSION_ID = sessionId;
@@ -170,8 +187,9 @@ export async function main(): Promise<void> {
 
   // Run all tasks in parallel
   const results = await Promise.all([
-    // Inline task (no subprocess)
-    registerSessionTask(),
+    // Inline task (no subprocess). Payload passed so coordination identity comes
+    // from the id every hook agrees on, not a locally generated one.
+    registerSessionTask(input),
 
     // Node.js hooks
     runCommand(
