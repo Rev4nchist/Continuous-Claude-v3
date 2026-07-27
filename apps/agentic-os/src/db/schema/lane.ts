@@ -1,5 +1,5 @@
 import { bigint, bigserial, index, integer, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
-import { agenticOs } from './project.js';
+import { agenticOs } from './project';
 
 /**
  * Lanes — durable work threads that outlive the sessions working them.

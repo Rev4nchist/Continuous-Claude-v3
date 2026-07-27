@@ -1,5 +1,5 @@
 import { bigserial, index, jsonb, text, timestamp } from 'drizzle-orm/pg-core';
-import { agenticOs } from './project.js';
+import { agenticOs } from './project';
 
 /**
  * Coordination events — the instrument that had to exist before any UI.
