@@ -42,6 +42,15 @@ export type CoordinationEventKind =
   | 'claim_takeover'
   /** The DB could not be reached, so the edit was permitted UNCHECKED. */
   | 'claim_degraded'
+  /**
+   * A takeover the two-condition rule would have REFUSED, forced by the
+   * break-glass env var. Distinct from claim_takeover on purpose: a legitimate
+   * reclamation and a deliberate override must never be the same row, or the
+   * override becomes invisible in exactly the aggregate you would use to spot it.
+   */
+  | 'claim_break_glass'
+  /** The holder ended its session and gave the claims back. */
+  | 'claim_released'
   /** The session is waiting on a human and may be sitting unwatched. */
   | 'blocked_on';
 

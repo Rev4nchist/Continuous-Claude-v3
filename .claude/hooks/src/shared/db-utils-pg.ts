@@ -17,6 +17,7 @@ import type { QueryResult } from './types.js';
 import { requireOpcDir } from './opc-path.js';
 import { getPgConnectionString, withPgClient, withPgClientOrFallback } from './pg-client.js';
 import { recordEventInTransaction } from './coordination-events.js';
+import { leaseFor, type LeaseClass } from './leases.js';
 
 // Re-export SAFE_ID_PATTERN and isValidId from pattern-router for convenience
 export { SAFE_ID_PATTERN, isValidId } from './pattern-router.js';
@@ -434,8 +435,17 @@ export async function getActiveSessions(project?: string): Promise<{
   // inside the query removes the assumption entirely.
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
+      // Same AT TIME ZONE 'UTC' cast as RESOLVE_CLAIM_SQL, for the same reason:
+      // these are `timestamp without time zone` holding UTC, and node-postgres
+      // parses that type as LOCAL, so an uncast value came back five hours in
+      // the future and .toISOString() then stamped a Z on the wrong instant.
+      // No live caller renders these two fields today, but SessionInfo is an
+      // exported shape and the next board that consumes it would inherit the
+      // future-dated display that has already shipped twice.
       const sql = `
-        SELECT id, project, working_on, started_at, last_heartbeat
+        SELECT id, project, working_on,
+               started_at     AT TIME ZONE 'UTC' AS started_at,
+               last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
         FROM sessions
         WHERE last_heartbeat > NOW() - INTERVAL '5 minutes'
         ${project ? 'AND project = $1' : ''}
@@ -511,18 +521,35 @@ export async function checkFileClaim(
   // and the caller says so out loud instead of permitting silently.
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
+      // This is the only place that creates file_claims, so it has to create
+      // the CURRENT shape. It used to declare the four pre-lease columns, which
+      // meant that on any database where migration 001 had not been applied by
+      // hand -- a fresh machine following BOOTSTRAP.md, a rebuilt container, a
+      // restored dump -- the table came into existence WITHOUT expires_at,
+      // fence or lease_class. Every RESOLVE_CLAIM_SQL then failed on a missing
+      // column, degraded, and permitted every edit while reporting the DB as
+      // unreachable. A guard that silently does not fire, diagnosed as the
+      // wrong thing: the exact shape this codebase has shipped three times.
+      await client.query(`CREATE SEQUENCE IF NOT EXISTS coordination_fence_seq AS BIGINT`);
       await client.query(`
         CREATE TABLE IF NOT EXISTS file_claims (
           file_path TEXT,
           project TEXT,
           session_id TEXT,
           claimed_at TIMESTAMP DEFAULT NOW(),
+          expires_at TIMESTAMP DEFAULT NOW() + INTERVAL '10 minutes',
+          fence BIGINT DEFAULT nextval('coordination_fence_seq'),
+          lease_class TEXT DEFAULT 'file',
           PRIMARY KEY (file_path, project)
         )
       `);
 
       const res = await client.query(
-        `SELECT session_id, claimed_at FROM file_claims
+        // AT TIME ZONE 'UTC' for the same reason as everywhere else in this
+        // file: without it claimedAt is reported five hours in the future,
+        // which reads as a corrupt row rather than as a timezone bug.
+        `SELECT session_id, claimed_at AT TIME ZONE 'UTC' AS claimed_at
+           FROM file_claims
          WHERE file_path = $1 AND project = $2 AND session_id <> $3`,
         [filePath, project, mySessionId]
       );
@@ -580,34 +607,154 @@ export interface ClaimDecision {
   outcome: ClaimOutcome;
   /** Who held the claim before this attempt. Set for blocked and takeover. */
   holder?: string;
-  /** When they took it, ISO. */
+  /** When they last touched it, ISO. */
   holderClaimedAt?: string;
+  /** When the holder's lease runs out, ISO. Set for blocked — it is the answer
+   *  to "how long do I have to wait?", which the old message could not give. */
+  holderExpiresAt?: string;
+  /** The lease generation now in force. See the fence note below. */
+  fence?: number;
+  /** The generation this replaced, when custody changed hands. */
+  priorFence?: number;
+  /** The lease class applied to this path. */
+  leaseClass?: LeaseClass;
+  /** Was the holder's lease already expired? One half of the reclamation rule. */
+  leaseExpired?: boolean;
+  /** Had the holder stopped heartbeating? The other half. */
+  holderStale?: boolean;
+  /** True when the takeover happened only because break-glass was set. */
+  breakGlass?: boolean;
   /** False when the conflict happened but could not be written down. */
   eventRecorded?: boolean;
 }
 
+/**
+ * RECLAMATION REQUIRES BOTH CONDITIONS.
+ *
+ * `file_claims.expires_at < NOW()` **AND** the holder's session heartbeat stale.
+ * Either one alone is what produced the original false positives:
+ *
+ *   - Heartbeat alone (what this used to do): heartbeat only refreshed on
+ *     UserPromptSubmit, so a session went "stale" during any long agent turn and
+ *     its own claims became reclaimable WHILE it was actively editing. Measured
+ *     at 652s mid-work on 2026-07-26.
+ *   - Expiry alone: a file lease is 10 minutes but the interval it protects is a
+ *     human reading and thinking, so the lease can lapse while somebody is
+ *     simply looking at the file.
+ *
+ * Requiring both means a preemption needs the holder to be BOTH out of lease AND
+ * showing no sign of life. This is strictly more conservative than the previous
+ * behaviour — a file whose holder is stale but whose lease is still live now
+ * BLOCKS where it used to be taken over.
+ *
+ * THE FENCE
+ * ---------
+ * A lease generation, minted on every change of custody and preserved across
+ * renewals. Be precise about what it is not: it is NOT a Kleppmann fencing
+ * token, because there is no mediated resource that could reject a stale one —
+ * nothing can stop a process writing to the filesystem with an out-of-date
+ * number. It buys detection and evidence: a monotonic, globally unique id for
+ * "this particular grant", so an event row is unambiguous on its own.
+ *
+ * It is monotonic but NOT contiguous. Postgres evaluates the VALUES list —
+ * including nextval() — before it detects the conflict, so every renewal and
+ * every blocked attempt burns a sequence value it does not use. Gaps are
+ * expected; ordering is the only property relied on.
+ *
+ * THE SNAPSHOT TRAP (found by adversarial review, then reproduced)
+ * ---------------------------------------------------------------
+ * `prior` and `upsert` are CTEs of ONE statement, so they share the statement
+ * snapshot — but the ON CONFLICT WHERE does NOT. It re-reads the latest
+ * committed row, which is exactly what makes the serialization work. The two
+ * therefore disagree under precisely the contention this design exists for.
+ *
+ * Measured: 24 sessions racing for one UNCLAIMED file. All 24 snapshot an empty
+ * table, so `prior` is empty for every one of them. One wins; the other 23 wait
+ * on its speculative tuple, then correctly block against its committed row — and
+ * report prior_owner = NULL. The deny message rendered "held by session
+ * undefined" and the event stored NULL for holder, leaseExpired and holderStale:
+ * the three fields it exists to record, absent in the only case that matters.
+ *
+ * So `prior` is used ONLY as a fast path. When it is empty but the statement
+ * demonstrably contended, the facts are re-read below in a SECOND statement,
+ * which under READ COMMITTED takes a fresh snapshot and sees the winner.
+ */
 const RESOLVE_CLAIM_SQL = `
 WITH prior AS (
-  SELECT session_id, claimed_at
+  SELECT session_id, claimed_at, expires_at, fence
   FROM file_claims
   WHERE file_path = $1 AND project = $2
 ),
 upsert AS (
-  INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-  VALUES ($1, $2, $3, NOW())
+  INSERT INTO file_claims
+    (file_path, project, session_id, claimed_at, expires_at, fence, lease_class)
+  VALUES
+    ($1, $2, $3, NOW(), NOW() + make_interval(secs => $5),
+     nextval('coordination_fence_seq'), $6)
   ON CONFLICT (file_path, project) DO UPDATE
-    SET session_id = EXCLUDED.session_id, claimed_at = NOW()
+    SET session_id  = EXCLUDED.session_id,
+        claimed_at  = NOW(),
+        expires_at  = NOW() + make_interval(secs => $5),
+        lease_class = EXCLUDED.lease_class,
+        -- A renewal is the SAME lease, so it keeps its generation. Only a
+        -- change of custody advances it.
+        fence = CASE WHEN file_claims.session_id = EXCLUDED.session_id
+                     THEN file_claims.fence
+                     ELSE EXCLUDED.fence
+                END
     WHERE file_claims.session_id = EXCLUDED.session_id
-       OR NOT EXISTS (
-            SELECT 1 FROM sessions s
-            WHERE s.id = file_claims.session_id
-              AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+       OR $7::boolean
+       OR (
+            -- A row with no lease at all is treated as EXPIRED, not as
+            -- infinite. NULL < NOW() is NULL, which would make the whole OR
+            -- branch unknown and leave that file blocked FOREVER -- no
+            -- heartbeat, no expiry and no release could ever free it. Every
+            -- writer sets the column today (it has a DEFAULT), so this is
+            -- unreachable in principle; it is here because "unreachable" and
+            -- "permanently wedged if reached" is a bad pair. Degrading to the
+            -- heartbeat-only rule is the safe direction.
+            (file_claims.expires_at IS NULL OR file_claims.expires_at < NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM sessions s
+              WHERE s.id = file_claims.session_id
+                AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+            )
           )
-  RETURNING session_id
+  -- xmax <> 0 is the standard idiom for "this row came from the ON CONFLICT
+  -- branch, not the INSERT branch". It is load-bearing: under contention the
+  -- `prior` CTE can be EMPTY for a row that nonetheless already existed by the
+  -- time the upsert ran (see the snapshot note above), and without this the
+  -- classifier reads prior_owner = NULL and calls a genuine change of custody a
+  -- first-time grant.
+  RETURNING session_id, fence, (xmax <> 0) AS was_update
 )
 SELECT (SELECT session_id FROM upsert) AS new_owner,
+       (SELECT fence      FROM upsert) AS new_fence,
+       (SELECT was_update FROM upsert) AS was_update,
        (SELECT session_id FROM prior)  AS prior_owner,
-       (SELECT claimed_at  FROM prior) AS prior_claimed_at
+       (SELECT fence      FROM prior)  AS prior_fence,
+
+       -- AT TIME ZONE 'UTC' is not cosmetic. These columns are
+       -- \`timestamp without time zone\` holding UTC values, and node-postgres
+       -- parses that type by interpreting it as LOCAL time -- so on this machine
+       -- (UTC-5) a raw Date came back five hours wrong, and .toISOString() then
+       -- printed that wrong instant with a Z on it. The cast produces a real
+       -- timestamptz, which the driver reads correctly. The same confusion put a
+       -- future date on the lane board on 2026-07-26.
+       (SELECT claimed_at AT TIME ZONE 'UTC' FROM prior) AS prior_claimed_at,
+       (SELECT expires_at AT TIME ZONE 'UTC' FROM prior) AS prior_expires_at,
+
+       -- The two halves of the reclamation rule, evaluated by the DATABASE
+       -- against its own clock. Returned separately so the caller can say WHICH
+       -- condition held without re-deriving it client-side against a different
+       -- clock -- and so a break-glass override can be identified as an override
+       -- rather than inferred.
+       (SELECT expires_at IS NULL OR expires_at < NOW() FROM prior) AS prior_lease_expired,
+       (SELECT NOT EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.id = prior.session_id
+            AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+        ) FROM prior) AS prior_holder_stale
 `;
 
 export async function resolveFileClaim(
@@ -616,32 +763,120 @@ export async function resolveFileClaim(
   sessionId: string,
   staleThresholdMs: number,
   toolName: string,
+  options: { breakGlass?: boolean } = {},
 ): Promise<ClaimDecision> {
   const staleSeconds = Math.floor(staleThresholdMs / 1000);
+  const { leaseClass, ttlMs } = leaseFor(filePath);
+  const ttlSeconds = Math.floor(ttlMs / 1000);
+  const breakGlass = options.breakGlass === true;
 
   const { value, degraded } = await withPgClientOrFallback<ClaimDecision | null>(
     async (client) => {
       await client.query('BEGIN');
       try {
         const res = await client.query(RESOLVE_CLAIM_SQL, [
-          filePath, project, sessionId, staleSeconds,
+          filePath, project, sessionId, staleSeconds, ttlSeconds, leaseClass, breakGlass,
         ]);
         const row = res.rows[0] as {
           new_owner: string | null;
+          new_fence: string | number | null;
+          was_update: boolean | null;
           prior_owner: string | null;
           prior_claimed_at: Date | null;
+          prior_expires_at: Date | null;
+          prior_fence: string | number | null;
+          prior_lease_expired: boolean | null;
+          prior_holder_stale: boolean | null;
         };
 
-        const holder = row.prior_owner ?? undefined;
-        const holderClaimedAt = row.prior_claimed_at
-          ? row.prior_claimed_at.toISOString()
-          : undefined;
+        // Did this statement contend with a row our snapshot could not see?
+        // Either we were blocked (somebody holds it, but `prior` is empty), or
+        // we won via the UPDATE branch against a row that was not in our
+        // snapshot. Both mean prior_* is missing rather than genuinely absent.
+        const contendedUnseen =
+          row.prior_owner === null &&
+          (row.new_owner === null || row.was_update === true);
 
+        let facts = {
+          owner: row.prior_owner,
+          claimedAt: row.prior_claimed_at,
+          expiresAt: row.prior_expires_at,
+          fence: row.prior_fence,
+          leaseExpired: row.prior_lease_expired,
+          holderStale: row.prior_holder_stale,
+        };
+
+        // A SEPARATE statement, so under READ COMMITTED it takes a fresh
+        // snapshot and sees whatever committed while we were waiting. Only runs
+        // on the contended path, which is rare -- the ordinary claim still costs
+        // exactly one round trip.
+        //
+        // Honest about what this is: for a BLOCKED caller it is the true current
+        // holder. For a caller that WON against an unseen row, the row now holds
+        // us, so the displaced holder is genuinely unrecoverable -- we record
+        // that we cannot name them rather than reporting nobody was there.
+        if (contendedUnseen && row.new_owner === null) {
+          const again = await client.query(
+            `SELECT session_id,
+                    claimed_at AT TIME ZONE 'UTC' AS claimed_at,
+                    expires_at AT TIME ZONE 'UTC' AS expires_at,
+                    fence,
+                    (expires_at IS NULL OR expires_at < NOW()) AS lease_expired,
+                    NOT EXISTS (
+                      SELECT 1 FROM sessions s
+                      WHERE s.id = file_claims.session_id
+                        AND s.last_heartbeat >= NOW() - make_interval(secs => $3)
+                    ) AS holder_stale
+               FROM file_claims
+              WHERE file_path = $1 AND project = $2`,
+            [filePath, project, staleSeconds],
+          );
+          if (again.rows.length > 0) {
+            const r = again.rows[0];
+            facts = {
+              owner: r.session_id,
+              claimedAt: r.claimed_at,
+              expiresAt: r.expires_at,
+              fence: r.fence,
+              leaseExpired: r.lease_expired,
+              holderStale: r.holder_stale,
+            };
+          }
+        }
+
+        const holder = facts.owner ?? undefined;
+        const holderClaimedAt = facts.claimedAt ? facts.claimedAt.toISOString() : undefined;
+        const holderExpiresAt = facts.expiresAt ? facts.expiresAt.toISOString() : undefined;
+
+        // node-postgres returns BIGINT as a string to avoid silently losing
+        // precision past 2^53. These counters will never come close, but the
+        // conversion is explicit so the value is a number everywhere above.
+        const num = (v: string | number | null) =>
+          v === null || v === undefined ? undefined : Number(v);
+
+        // Classification keys off was_update, NOT off prior_owner alone. A row
+        // that already existed but was invisible to our snapshot used to be
+        // classified `granted` -- which writes no event and prints no warning,
+        // so a break-glass override that displaced a live holder left no mark at
+        // all. Reproduced 2 times in 12 randomized trials before this fix.
         let outcome: ClaimOutcome;
         if (row.new_owner === null) outcome = 'blocked';
-        else if (row.prior_owner === null) outcome = 'granted';
-        else if (row.prior_owner === sessionId) outcome = 'renewed';
+        else if (row.was_update !== true) outcome = 'granted';
+        else if (facts.owner === sessionId) outcome = 'renewed';
         else outcome = 'takeover';
+
+        // We changed custody away from somebody we could not name.
+        const priorHolderUnobservable =
+          outcome === 'takeover' && facts.owner === null;
+
+        // A takeover the two-condition rule would NOT have permitted, which
+        // happened only because break-glass was set. Both halves come from the
+        // database's own clock -- never re-derived here, where the timezone
+        // would be wrong. Recorded so an override is never silent: the whole
+        // point of a break-glass is that pulling it leaves a mark.
+        const wouldHaveReclaimed =
+          facts.leaseExpired === true && facts.holderStale === true;
+        const forced = outcome === 'takeover' && breakGlass && !wouldHaveReclaimed;
 
         // Running this hook at all proves the session is alive, so renew its
         // heartbeat even when it was blocked. Without this the lock is only
@@ -661,7 +896,11 @@ export async function resolveFileClaim(
         let eventRecorded: boolean | undefined;
         if (outcome === 'blocked' || outcome === 'takeover') {
           eventRecorded = await recordEventInTransaction(client, {
-            kind: outcome === 'blocked' ? 'claim_blocked' : 'claim_takeover',
+            kind: forced
+              ? 'claim_break_glass'
+              : outcome === 'blocked'
+                ? 'claim_blocked'
+                : 'claim_takeover',
             sessionId,
             project,
             filePath,
@@ -669,13 +908,43 @@ export async function resolveFileClaim(
             toolName,
             detail: {
               holderClaimedAt: holderClaimedAt ?? null,
+              holderExpiresAt: holderExpiresAt ?? null,
+              // Which half of the rule held. A block with leaseExpired=true and
+              // holderStale=false is the NEW behaviour doing its job (an idle
+              // but alive holder); the old code would have preempted them here.
+              leaseExpired: facts.leaseExpired,
+              holderStale: facts.holderStale,
+              leaseClass,
+              leaseTtlSeconds: ttlSeconds,
+              fenceFrom: num(facts.fence) ?? null,
+              fenceTo: num(row.new_fence) ?? null,
               staleThresholdSeconds: staleSeconds,
+              // True when custody changed away from a holder this statement
+              // could not observe. Says "we could not name them" rather than
+              // letting a null holder read as "nobody was there".
+              priorHolderUnobservable: priorHolderUnobservable || undefined,
+              // True when the holder facts came from the follow-up read rather
+              // than the statement's own snapshot -- a post-image, not the true
+              // pre-image at decision time.
+              holderReadAfterContention: contendedUnseen || undefined,
             },
           });
         }
 
         await client.query('COMMIT');
-        return { outcome, holder, holderClaimedAt, eventRecorded };
+        return {
+          outcome,
+          holder,
+          holderClaimedAt,
+          holderExpiresAt,
+          fence: num(row.new_fence),
+          priorFence: num(facts.fence),
+          leaseClass,
+          leaseExpired: facts.leaseExpired ?? undefined,
+          holderStale: facts.holderStale ?? undefined,
+          breakGlass: forced ? true : undefined,
+          eventRecorded,
+        };
       } catch (err) {
         await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
         throw err;
@@ -687,6 +956,76 @@ export async function resolveFileClaim(
 
   if (degraded || value === null) return { outcome: 'degraded' };
   return value;
+}
+
+/**
+ * Give back every claim this session holds.
+ *
+ * WHY THIS HAD TO EXIST BEFORE LEASES COULD
+ * -----------------------------------------
+ * Nothing has ever released a file claim on this machine. Claims were only ever
+ * written, and the only thing that removed one was a manual run of
+ * cleanup_sessions.py with a 24-hour cutoff — which is how file_claims reached
+ * 8,170 rows of which zero were live-owned.
+ *
+ * That was survivable while reclamation needed only a stale heartbeat: an
+ * abandoned claim became reclaimable five minutes later. It is NOT survivable
+ * now. Reclamation requires the lease to expire too, so an abandoned claim on a
+ * harness file is genuinely held for a full hour. Making leases longer without
+ * making them releasable would have converted a rare annoyance into a routine
+ * one, so this ships in the same change.
+ *
+ * Deleted by session_id ALONE, not (session_id, project): a session's claims are
+ * its own wherever it filed them, and scoping by the cwd at exit would silently
+ * strand claims made from a different directory earlier in the session.
+ */
+export async function releaseSessionClaims(
+  sessionId: string,
+  reason: string,
+): Promise<{ released: number; files: string[]; degraded: boolean }> {
+  const { value, degraded } = await withPgClientOrFallback(
+    async (client) => {
+      await client.query('BEGIN');
+      try {
+        const res = await client.query(
+          `DELETE FROM file_claims WHERE session_id = $1
+           RETURNING file_path, lease_class`,
+          [sessionId],
+        );
+
+        const files = res.rows.map((r: Record<string, unknown>) => r.file_path as string);
+
+        // Silence when there was nothing to release. A row per session exit
+        // regardless of whether anything happened is the same unbounded-growth
+        // mistake as a row per Edit, one level up.
+        if (files.length > 0) {
+          await recordEventInTransaction(client, {
+            kind: 'claim_released',
+            sessionId,
+            detail: {
+              reason,
+              count: files.length,
+              // Capped so one session that touched a thousand files cannot put
+              // a megabyte of jsonb in an event row. The count above is exact
+              // either way.
+              files: files.slice(0, 50),
+              truncated: files.length > 50,
+            },
+          });
+        }
+
+        await client.query('COMMIT');
+        return files;
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
+        throw err;
+      }
+    },
+    [] as string[],
+    `releaseSessionClaims(${sessionId})`,
+  );
+
+  return { released: value.length, files: value, degraded };
 }
 
 /**
@@ -710,13 +1049,30 @@ export async function claimFile(
     async (client) => {
       await client.query('BEGIN');
       try {
+        // The lease columns are set on BOTH branches, and the update branch is
+        // the one that matters. Column DEFAULTs apply only to an INSERT, never
+        // to ON CONFLICT DO UPDATE -- so a version of this that named them
+        // nowhere left a change of custody carrying the PREVIOUS holder's
+        // lease: an already-lapsed expiry (a claim expired at birth), or an
+        // inherited 60-minute harness lease on an ordinary file. leaseFor() was
+        // never consulted on this path at all, so even the insert misclassified
+        // harness paths as 10-minute file leases.
+        const { leaseClass, ttlMs } = leaseFor(filePath);
         await client.query(
-          `INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-           VALUES ($1, $2, $3, NOW())
+          `INSERT INTO file_claims
+             (file_path, project, session_id, claimed_at, expires_at, fence, lease_class)
+           VALUES ($1, $2, $3, NOW(), NOW() + make_interval(secs => $4),
+                   nextval('coordination_fence_seq'), $5)
            ON CONFLICT (file_path, project) DO UPDATE SET
-               session_id = EXCLUDED.session_id,
-               claimed_at = NOW()`,
-          [filePath, project, sessionId]
+               session_id  = EXCLUDED.session_id,
+               claimed_at  = NOW(),
+               expires_at  = EXCLUDED.expires_at,
+               lease_class = EXCLUDED.lease_class,
+               fence = CASE WHEN file_claims.session_id = EXCLUDED.session_id
+                            THEN file_claims.fence
+                            ELSE EXCLUDED.fence
+                       END`,
+          [filePath, project, sessionId, Math.floor(ttlMs / 1000), leaseClass]
         );
 
         // Claiming a file IS activity, so it renews the owner's heartbeat.

@@ -14,8 +14,42 @@ import { resolveFileClaim } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 
-// Stale session threshold (5 minutes)
+// Stale session threshold (5 minutes). This is only ONE HALF of the reclamation
+// rule -- the lease must ALSO have expired. See resolveFileClaim.
 const STALE_THRESHOLD_MS = 5 * 60 * 1000;
+
+/**
+ * Break-glass: take the claim even when the two-condition rule refuses.
+ *
+ * This exists because reclamation is now strictly more conservative, and the
+ * harness lease is an hour. If a session dies without releasing (crash, killed
+ * terminal, the MSYS fork storm) its claim on a hook file is genuinely held for
+ * up to 60 minutes, and there has to be a way through that is not "wait it out"
+ * or "hand-edit the database".
+ *
+ * It is NOT silent: a forced takeover writes a `claim_break_glass` event, which
+ * is a distinct kind precisely so it cannot hide inside the ordinary takeover
+ * count. Pulling the handle leaves a mark.
+ */
+const BREAK_GLASS = process.env.COORDINATION_BREAK_GLASS === '1';
+
+/**
+ * "4 minutes" / "38 seconds" — how long until an instant, or null if it has
+ * already passed.
+ *
+ * Returning null rather than "now" for an elapsed deadline is deliberate. An
+ * earlier version returned the string "now", which is truthy, so a caller
+ * testing the result for truthiness rendered "runs for another now" — wrong
+ * grammar and, worse, wrong information: in the expired-lease case the wait is
+ * not over, it is governed by something else entirely.
+ */
+function humanizeUntil(iso: string | undefined): string | null {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const mins = Math.round(ms / 60000);
+  return mins >= 1 ? `${mins} minute${mins === 1 ? '' : 's'}` : `${Math.round(ms / 1000)} seconds`;
+}
 
 /**
  * Main entry point for the PreToolUse:Edit|Write hook.
@@ -59,6 +93,7 @@ export async function main(): Promise<void> {
   // an UNCLAIMED file were BOTH told to go ahead. See resolveFileClaim.
   const decision = await resolveFileClaim(
     filePath, project, sessionId, STALE_THRESHOLD_MS, input.tool_name,
+    { breakGlass: BREAK_GLASS },
   );
 
   const fileName = filePath.split(/[/\\]/).pop() || filePath;
@@ -66,14 +101,48 @@ export async function main(): Promise<void> {
 
   switch (decision.outcome) {
     case 'blocked': {
+      // Say how long, and say WHY. The old message promised the lock releases
+      // "when that session's heartbeat goes stale (5 min)", which is no longer
+      // true and was never the whole rule -- reclamation needs the lease to have
+      // expired as well. Telling someone to wait 5 minutes for something that
+      // will not happen for an hour is worse than saying nothing.
+      // WHICH half of the rule is holding the file determines what the person
+      // is actually waiting for, and they are completely different waits:
+      //
+      //   lease still live  -> a deadline, and renewing pushes it out
+      //   lease expired but holder alive -> NOT a deadline at all. It clears
+      //     when the holder goes quiet, which no clock can predict.
+      //
+      // Collapsing these was a real bug: the elapsed-deadline case rendered
+      // "runs for another now", which is both broken English and a promise that
+      // the wait is over when it has not started.
+      const waitFor = humanizeUntil(decision.holderExpiresAt);
+      let leaseLine: string;
+      if (decision.leaseExpired) {
+        leaseLine =
+          `Their ${decision.leaseClass} lease has already lapsed, but that session is still\n` +
+          `alive, so the file is not free. It comes back when they stop heartbeating\n` +
+          `for ${Math.round(STALE_THRESHOLD_MS / 60000)} minutes — there is no fixed deadline for that.`;
+      } else if (waitFor) {
+        leaseLine =
+          `Their ${decision.leaseClass} lease runs for another ${waitFor}, and it renews\n` +
+          `every time they touch the file.`;
+      } else {
+        leaseLine =
+          `Their ${decision.leaseClass} lease is still live, and it renews every time they\n` +
+          `touch the file.`;
+      }
+
       const blockMessage = `⚠️ FILE CONFLICT BLOCKED
 
-"${fileName}" is locked by Session ${decision.holder}
+"${fileName}" is held by session ${decision.holder}
 
-This file is being edited by another active Claude session.
-Wait for the other session to finish or coordinate directly.
+${leaseLine}
+Reclaiming needs BOTH an expired lease AND a holder that has stopped
+heartbeating, so an idle-but-alive session is never preempted.
 
-The lock auto-releases when that session's heartbeat goes stale (5 min).`;
+Coordinate with that session, or work on something else.
+To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
 
       output = {
         hookSpecificOutput: {
@@ -86,9 +155,14 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
     }
 
     case 'takeover':
+      // Custody changed hands, so somebody else may have edited this file since
+      // anyone last looked at it. The fence transition is the evidence, and it
+      // is worth putting in front of the model rather than only in the DB.
       output = {
         result: 'continue',
-        message: `[INFO] Took over stale file lock for "${fileName}" from inactive session`,
+        message: decision.breakGlass
+          ? `[WARN] BREAK-GLASS: forced the lock for "${fileName}" away from session ${decision.holder}, whose lease was still valid. This was logged. Re-read the file before writing.`
+          : `[INFO] Took over the expired lock for "${fileName}" from inactive session ${decision.holder} (lease ${decision.priorFence} -> ${decision.fence}). They may have changed it -- re-read before writing.`,
       };
       break;
 

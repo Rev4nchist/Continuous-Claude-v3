@@ -132,8 +132,27 @@ export async function withPgClientOrFallback<T>(
     // a diagnostic that tells you the thing failed but never why. Fall through
     // to the nested causes, then to the error's own name.
     const message = describeError(err);
-    // stderr only: stdout is the hook's protocol channel and must stay pure JSON.
-    console.error(`[coordination] ${context} degraded: ${message}`);
+
+    // A schema fault is not a connectivity fault, and conflating them sends the
+    // reader to the wrong place. 42703 = undefined_column, 42P01 = undefined
+    // table, 42883 = undefined function/sequence. Those mean the database is
+    // answering perfectly well and simply does not have the shape this code
+    // needs -- typically because the lease migration has not been applied. The
+    // caller still degrades (a hook must never throw), but the operator gets
+    // told what is actually wrong instead of going to look at a container that
+    // is running fine.
+    const code = (err as { code?: string } | undefined)?.code;
+    const schemaFault = code === '42703' || code === '42P01' || code === '42883';
+    if (schemaFault) {
+      console.error(
+        `[coordination] ${context} SCHEMA OUT OF DATE (${code}): ${message}\n` +
+        `[coordination] the database is reachable -- it is missing objects this ` +
+        `code needs. Apply scripts/coordination/migrations/001-file-claims-leases.sql`
+      );
+    } else {
+      // stderr only: stdout is the hook's protocol channel and must stay pure JSON.
+      console.error(`[coordination] ${context} degraded: ${message}`);
+    }
     return { value: fallback, degraded: true, error: message };
   }
 }

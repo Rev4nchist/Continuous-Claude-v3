@@ -96,12 +96,18 @@ async function main() {
                  WHERE session_id='${INTRUDER}' AND kind<>'claim_blocked'`)), 0);
 
   // === 3. A stale holder is taken over, and that IS recorded ==============
+  // expires_at is set EXPLICITLY, and that is not incidental. Since step 5,
+  // reclamation requires an expired lease as well as a stale heartbeat, and the
+  // column defaults to NOW() + 10 minutes -- so an INSERT that omits it creates
+  // a holder with a live lease, which correctly BLOCKS. Omitting it here made
+  // this case fail in exactly the way the new rule is supposed to.
   psql(`
     DELETE FROM file_claims WHERE file_path = '${TARGET}';
     INSERT INTO sessions (id, project, last_heartbeat)
       VALUES ('${STALE}', '${CANON}', NOW() - INTERVAL '10 minutes');
-    INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-      VALUES ('${TARGET}', '${CANON}', '${STALE}', NOW() - INTERVAL '10 minutes');
+    INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+      VALUES ('${TARGET}', '${CANON}', '${STALE}',
+              NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '5 minutes');
   `);
   const took = await runHook('.claude/hooks/dist/file-claims.mjs', {
     session_id: INTRUDER, cwd: REPO, tool_name: 'Write', tool_input: { file_path: TARGET },

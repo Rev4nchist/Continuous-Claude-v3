@@ -88,8 +88,8 @@ function setup() {
     ${PURGE_EVENTS}
     INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
     VALUES ('${OWNER}', '${CANONICAL_PROJECT}', 'load probe owner', NOW(), NOW());
-    INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-    VALUES ('${TARGET_FILE}', '${CANONICAL_PROJECT}', '${OWNER}', NOW());
+    INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+    VALUES ('${TARGET_FILE}', '${CANONICAL_PROJECT}', '${OWNER}', NOW(), NOW() + INTERVAL '30 minutes');
   `);
 }
 

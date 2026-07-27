@@ -5251,6 +5251,10 @@ async function withPgClientOrFallback(fn, fallback, context) {
   }
 }
 
+// src/shared/leases.ts
+var FILE_LEASE_MS = 10 * 60 * 1e3;
+var HARNESS_LEASE_MS = 60 * 60 * 1e3;
+
 // src/shared/db-utils-pg.ts
 async function registerSession(sessionId, project, workingOn = "") {
   try {
@@ -5282,7 +5286,9 @@ async function getActiveSessions(project) {
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
       const sql = `
-        SELECT id, project, working_on, started_at, last_heartbeat
+        SELECT id, project, working_on,
+               started_at     AT TIME ZONE 'UTC' AS started_at,
+               last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
         FROM sessions
         WHERE last_heartbeat > NOW() - INTERVAL '5 minutes'
         ${project ? "AND project = $1" : ""}

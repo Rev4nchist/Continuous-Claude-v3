@@ -5284,32 +5284,99 @@ async function recordEventInTransaction(client, event) {
   }
 }
 
+// src/shared/leases.ts
+var FILE_LEASE_MS = 10 * 60 * 1e3;
+var HARNESS_LEASE_MS = 60 * 60 * 1e3;
+var HARNESS_DIRS = ["hooks", "rules", "skills"];
+function isHarnessPath(filePath) {
+  const p = filePath.replace(/\\/g, "/").toLowerCase();
+  for (const dir of HARNESS_DIRS) {
+    if (p.includes(`/.claude/${dir}/`)) return true;
+  }
+  const base = p.split("/").pop() ?? "";
+  if (/^settings[^/]*\.json$/.test(base)) return true;
+  return false;
+}
+function leaseFor(filePath) {
+  return isHarnessPath(filePath) ? { leaseClass: "harness:src", ttlMs: HARNESS_LEASE_MS } : { leaseClass: "file", ttlMs: FILE_LEASE_MS };
+}
+
 // src/shared/db-utils-pg.ts
 var RESOLVE_CLAIM_SQL = `
 WITH prior AS (
-  SELECT session_id, claimed_at
+  SELECT session_id, claimed_at, expires_at, fence
   FROM file_claims
   WHERE file_path = $1 AND project = $2
 ),
 upsert AS (
-  INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-  VALUES ($1, $2, $3, NOW())
+  INSERT INTO file_claims
+    (file_path, project, session_id, claimed_at, expires_at, fence, lease_class)
+  VALUES
+    ($1, $2, $3, NOW(), NOW() + make_interval(secs => $5),
+     nextval('coordination_fence_seq'), $6)
   ON CONFLICT (file_path, project) DO UPDATE
-    SET session_id = EXCLUDED.session_id, claimed_at = NOW()
+    SET session_id  = EXCLUDED.session_id,
+        claimed_at  = NOW(),
+        expires_at  = NOW() + make_interval(secs => $5),
+        lease_class = EXCLUDED.lease_class,
+        -- A renewal is the SAME lease, so it keeps its generation. Only a
+        -- change of custody advances it.
+        fence = CASE WHEN file_claims.session_id = EXCLUDED.session_id
+                     THEN file_claims.fence
+                     ELSE EXCLUDED.fence
+                END
     WHERE file_claims.session_id = EXCLUDED.session_id
-       OR NOT EXISTS (
-            SELECT 1 FROM sessions s
-            WHERE s.id = file_claims.session_id
-              AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+       OR $7::boolean
+       OR (
+            -- A row with no lease at all is treated as EXPIRED, not as
+            -- infinite. NULL < NOW() is NULL, which would make the whole OR
+            -- branch unknown and leave that file blocked FOREVER -- no
+            -- heartbeat, no expiry and no release could ever free it. Every
+            -- writer sets the column today (it has a DEFAULT), so this is
+            -- unreachable in principle; it is here because "unreachable" and
+            -- "permanently wedged if reached" is a bad pair. Degrading to the
+            -- heartbeat-only rule is the safe direction.
+            (file_claims.expires_at IS NULL OR file_claims.expires_at < NOW())
+            AND NOT EXISTS (
+              SELECT 1 FROM sessions s
+              WHERE s.id = file_claims.session_id
+                AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+            )
           )
-  RETURNING session_id
+  RETURNING session_id, fence
 )
 SELECT (SELECT session_id FROM upsert) AS new_owner,
+       (SELECT fence      FROM upsert) AS new_fence,
        (SELECT session_id FROM prior)  AS prior_owner,
-       (SELECT claimed_at  FROM prior) AS prior_claimed_at
+       (SELECT fence      FROM prior)  AS prior_fence,
+
+       -- AT TIME ZONE 'UTC' is not cosmetic. These columns are
+       -- \`timestamp without time zone\` holding UTC values, and node-postgres
+       -- parses that type by interpreting it as LOCAL time -- so on this machine
+       -- (UTC-5) a raw Date came back five hours wrong, and .toISOString() then
+       -- printed that wrong instant with a Z on it. The cast produces a real
+       -- timestamptz, which the driver reads correctly. The same confusion put a
+       -- future date on the lane board on 2026-07-26.
+       (SELECT claimed_at AT TIME ZONE 'UTC' FROM prior) AS prior_claimed_at,
+       (SELECT expires_at AT TIME ZONE 'UTC' FROM prior) AS prior_expires_at,
+
+       -- The two halves of the reclamation rule, evaluated by the DATABASE
+       -- against its own clock. Returned separately so the caller can say WHICH
+       -- condition held without re-deriving it client-side against a different
+       -- clock -- and so a break-glass override can be identified as an override
+       -- rather than inferred.
+       (SELECT expires_at IS NULL OR expires_at < NOW() FROM prior) AS prior_lease_expired,
+       (SELECT NOT EXISTS (
+          SELECT 1 FROM sessions s
+          WHERE s.id = prior.session_id
+            AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+        ) FROM prior) AS prior_holder_stale
 `;
-async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, toolName) {
+async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, toolName, options = {}) {
   const staleSeconds = Math.floor(staleThresholdMs / 1e3);
+  const { leaseClass, ttlMs } = leaseFor(filePath);
+  const ttlSeconds = Math.floor(ttlMs / 1e3);
+  const breakGlass = options.breakGlass === true;
   const { value, degraded } = await withPgClientOrFallback(
     async (client) => {
       await client.query("BEGIN");
@@ -5318,16 +5385,23 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
           filePath,
           project,
           sessionId,
-          staleSeconds
+          staleSeconds,
+          ttlSeconds,
+          leaseClass,
+          breakGlass
         ]);
         const row = res.rows[0];
         const holder = row.prior_owner ?? void 0;
         const holderClaimedAt = row.prior_claimed_at ? row.prior_claimed_at.toISOString() : void 0;
+        const holderExpiresAt = row.prior_expires_at ? row.prior_expires_at.toISOString() : void 0;
+        const num = (v) => v === null || v === void 0 ? void 0 : Number(v);
         let outcome;
         if (row.new_owner === null) outcome = "blocked";
         else if (row.prior_owner === null) outcome = "granted";
         else if (row.prior_owner === sessionId) outcome = "renewed";
         else outcome = "takeover";
+        const wouldHaveReclaimed = row.prior_lease_expired === true && row.prior_holder_stale === true;
+        const forced = outcome === "takeover" && breakGlass && !wouldHaveReclaimed;
         await client.query(
           `INSERT INTO sessions (id, project, last_heartbeat)
            VALUES ($1, $2, NOW())
@@ -5337,7 +5411,7 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
         let eventRecorded;
         if (outcome === "blocked" || outcome === "takeover") {
           eventRecorded = await recordEventInTransaction(client, {
-            kind: outcome === "blocked" ? "claim_blocked" : "claim_takeover",
+            kind: forced ? "claim_break_glass" : outcome === "blocked" ? "claim_blocked" : "claim_takeover",
             sessionId,
             project,
             filePath,
@@ -5345,12 +5419,34 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
             toolName,
             detail: {
               holderClaimedAt: holderClaimedAt ?? null,
+              holderExpiresAt: holderExpiresAt ?? null,
+              // Which half of the rule held. A block with leaseExpired=true and
+              // holderStale=false is the NEW behaviour doing its job (an idle
+              // but alive holder); the old code would have preempted them here.
+              leaseExpired: row.prior_lease_expired,
+              holderStale: row.prior_holder_stale,
+              leaseClass,
+              leaseTtlSeconds: ttlSeconds,
+              fenceFrom: num(row.prior_fence) ?? null,
+              fenceTo: num(row.new_fence) ?? null,
               staleThresholdSeconds: staleSeconds
             }
           });
         }
         await client.query("COMMIT");
-        return { outcome, holder, holderClaimedAt, eventRecorded };
+        return {
+          outcome,
+          holder,
+          holderClaimedAt,
+          holderExpiresAt,
+          fence: num(row.new_fence),
+          priorFence: num(row.prior_fence),
+          leaseClass,
+          leaseExpired: row.prior_lease_expired ?? void 0,
+          holderStale: row.prior_holder_stale ?? void 0,
+          breakGlass: forced ? true : void 0,
+          eventRecorded
+        };
       } catch (err) {
         await client.query("ROLLBACK").catch(() => {
         });
@@ -5425,6 +5521,14 @@ function normalizeProjectKey(p) {
 
 // src/file-claims.ts
 var STALE_THRESHOLD_MS = 5 * 60 * 1e3;
+var BREAK_GLASS = process.env.COORDINATION_BREAK_GLASS === "1";
+function humanizeUntil(iso) {
+  if (!iso) return null;
+  const ms = new Date(iso).getTime() - Date.now();
+  if (!Number.isFinite(ms) || ms <= 0) return null;
+  const mins = Math.round(ms / 6e4);
+  return mins >= 1 ? `${mins} minute${mins === 1 ? "" : "s"}` : `${Math.round(ms / 1e3)} seconds`;
+}
 async function main() {
   let input;
   try {
@@ -5450,20 +5554,36 @@ async function main() {
     project,
     sessionId,
     STALE_THRESHOLD_MS,
-    input.tool_name
+    input.tool_name,
+    { breakGlass: BREAK_GLASS }
   );
   const fileName = filePath.split(/[/\\]/).pop() || filePath;
   let output;
   switch (decision.outcome) {
     case "blocked": {
+      const waitFor = humanizeUntil(decision.holderExpiresAt);
+      let leaseLine;
+      if (decision.leaseExpired) {
+        leaseLine = `Their ${decision.leaseClass} lease has already lapsed, but that session is still
+alive, so the file is not free. It comes back when they stop heartbeating
+for ${Math.round(STALE_THRESHOLD_MS / 6e4)} minutes \u2014 there is no fixed deadline for that.`;
+      } else if (waitFor) {
+        leaseLine = `Their ${decision.leaseClass} lease runs for another ${waitFor}, and it renews
+every time they touch the file.`;
+      } else {
+        leaseLine = `Their ${decision.leaseClass} lease is still live, and it renews every time they
+touch the file.`;
+      }
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is locked by Session ${decision.holder}
+"${fileName}" is held by session ${decision.holder}
 
-This file is being edited by another active Claude session.
-Wait for the other session to finish or coordinate directly.
+${leaseLine}
+Reclaiming needs BOTH an expired lease AND a holder that has stopped
+heartbeating, so an idle-but-alive session is never preempted.
 
-The lock auto-releases when that session's heartbeat goes stale (5 min).`;
+Coordinate with that session, or work on something else.
+To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
       output = {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -5476,7 +5596,7 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
     case "takeover":
       output = {
         result: "continue",
-        message: `[INFO] Took over stale file lock for "${fileName}" from inactive session`
+        message: decision.breakGlass ? `[WARN] BREAK-GLASS: forced the lock for "${fileName}" away from session ${decision.holder}, whose lease was still valid. This was logged. Re-read the file before writing.` : `[INFO] Took over the expired lock for "${fileName}" from inactive session ${decision.holder} (lease ${decision.priorFence} -> ${decision.fence}). They may have changed it -- re-read before writing.`
       };
       break;
     case "degraded":

@@ -440,6 +440,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/session-outcome.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/coordination-release.mjs"
+            ],
+            "timeout": 10000
           }
         ]
       }

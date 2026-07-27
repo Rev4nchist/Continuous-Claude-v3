@@ -5227,6 +5227,10 @@ async function withPgClient(fn) {
   }
 }
 
+// src/shared/leases.ts
+var FILE_LEASE_MS = 10 * 60 * 1e3;
+var HARNESS_LEASE_MS = 60 * 60 * 1e3;
+
 // src/shared/db-utils-pg.ts
 async function registerSession(sessionId, project, workingOn = "") {
   try {

@@ -22,6 +22,7 @@
  * Exits non-zero on any failed case. Removes its own fixtures unless --keep.
  */
 import { createRequire } from 'node:module';
+import { readFileSync } from 'node:fs';
 
 // `pg` is a dependency of the hooks package, not of the repo root, and ESM
 // resolves from the importing FILE rather than the cwd — so this script cannot
@@ -36,31 +37,58 @@ const DB_URL = process.env.CONTINUOUS_CLAUDE_DB_URL
 
 const PROJECT = '__step4_claim_probe__';
 const STALE_SECS = 300;
+const TTL_SECS = 600;
 
-/** The statement under test. Kept here verbatim so the probe and the hook cannot drift apart silently. */
-export const CLAIM_SQL = `
-WITH prior AS (
-  SELECT session_id, claimed_at
-  FROM file_claims
-  WHERE file_path = $1 AND project = $2
-),
-upsert AS (
-  INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-  VALUES ($1, $2, $3, NOW())
-  ON CONFLICT (file_path, project) DO UPDATE
-    SET session_id = EXCLUDED.session_id, claimed_at = NOW()
-    WHERE file_claims.session_id = EXCLUDED.session_id
-       OR NOT EXISTS (
-            SELECT 1 FROM sessions s
-            WHERE s.id = file_claims.session_id
-              AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
-          )
-  RETURNING session_id
-)
-SELECT (SELECT session_id FROM upsert) AS new_owner,
-       (SELECT session_id FROM prior)  AS prior_owner,
-       (SELECT claimed_at  FROM prior) AS prior_claimed_at
-`;
+/**
+ * The statement under test, READ OUT OF THE SOURCE THE HOOK ACTUALLY USES.
+ *
+ * This used to be a verbatim copy, under a comment asserting that keeping it
+ * here meant "the probe and the hook cannot drift apart silently." That was
+ * exactly backwards, and it failed the first time it was tested: step 5 changed
+ * the real statement to require an expired lease as well as a stale heartbeat,
+ * and this probe went on passing 11/11 against the superseded copy. A guard
+ * against drift that is itself a copy IS the drift.
+ *
+ * So the text is extracted from db-utils-pg.ts at run time. If the marker moves
+ * or the extraction fails, the probe ABORTS rather than falling back to a
+ * literal — a probe with no statement to test must not report success.
+ */
+function extractClaimSql() {
+  const src = readFileSync(
+    new URL('../../.claude/hooks/src/shared/db-utils-pg.ts', import.meta.url), 'utf-8');
+
+  const marker = 'const RESOLVE_CLAIM_SQL = `';
+  const start = src.indexOf(marker);
+  if (start === -1) {
+    throw new Error(
+      'claim-sql-probe: could not find RESOLVE_CLAIM_SQL in db-utils-pg.ts. ' +
+      'If it was renamed or moved, update this extractor -- do NOT paste a copy back in.');
+  }
+
+  // Walk to the closing backtick, honouring escapes: the SQL comments contain
+  // \` sequences because the whole thing lives inside a template literal.
+  let i = start + marker.length;
+  let out = '';
+  for (; i < src.length; i++) {
+    const c = src[i];
+    if (c === '\\' && src[i + 1] === '`') { out += '`'; i++; continue; }
+    if (c === '`') break;
+    out += c;
+  }
+  if (i >= src.length) throw new Error('claim-sql-probe: unterminated RESOLVE_CLAIM_SQL literal');
+
+  // The extracted statement must still be the thing this probe thinks it is.
+  // Without this, a future edit could silently reduce it to something trivial
+  // and every case below would keep passing.
+  for (const required of ['ON CONFLICT', 'expires_at < NOW()', 'last_heartbeat', '$7']) {
+    if (!out.includes(required)) {
+      throw new Error(`claim-sql-probe: extracted SQL is missing ${required} -- refusing to run`);
+    }
+  }
+  return out;
+}
+
+export const CLAIM_SQL = extractClaimSql();
 
 function outcomeOf(row, me) {
   if (row.new_owner === null) return 'blocked';
@@ -76,8 +104,13 @@ async function connect() {
   return c;
 }
 
-async function resolve(client, filePath, me) {
-  const res = await client.query(CLAIM_SQL, [filePath, PROJECT, me, STALE_SECS]);
+async function resolve(client, filePath, me, { breakGlass = false } = {}) {
+  // $5 lease TTL, $6 lease class, $7 break-glass -- added in step 5. The probe
+  // passes the ordinary file-class TTL because these cases are about the
+  // reclamation RULE, not about classification; lease-probe.mjs covers the
+  // class-to-TTL mapping against the real hook.
+  const res = await client.query(CLAIM_SQL,
+    [filePath, PROJECT, me, STALE_SECS, TTL_SECS, 'file', breakGlass]);
   return { outcome: outcomeOf(res.rows[0], me), row: res.rows[0] };
 }
 
@@ -108,22 +141,41 @@ async function main() {
   // --- case 2: I already hold it (must NOT self-block) ------------------
   check('2 my own claim renews', (await resolve(admin, '/fx/a.ts', 'fxprobe-me')).outcome, 'renewed');
 
-  // --- case 3: a stale session holds it ---------------------------------
+  // --- case 3: a stale session holds it, AND its lease has run out -------
+  // Both halves are set explicitly. Since step 5 a stale heartbeat alone is not
+  // enough, and expires_at DEFAULTS to a live lease -- so a fixture that omits
+  // it silently describes a different situation than its name claims.
   await admin.query(
-    `INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-     VALUES ('/fx/b.ts', $1, 'fxprobe-stale', NOW())
-     ON CONFLICT (file_path, project) DO UPDATE SET session_id = EXCLUDED.session_id`,
+    `INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+     VALUES ('/fx/b.ts', $1, 'fxprobe-stale', NOW(), NOW() - INTERVAL '1 minute')
+     ON CONFLICT (file_path, project) DO UPDATE
+       SET session_id = EXCLUDED.session_id, expires_at = EXCLUDED.expires_at`,
     [PROJECT],
   );
   const c3 = await resolve(admin, '/fx/b.ts', 'fxprobe-me');
-  check('3 stale holder is taken over', c3.outcome, 'takeover');
+  check('3 stale holder with an expired lease is taken over', c3.outcome, 'takeover');
   check('3 prior holder is reported', c3.row.prior_owner, 'fxprobe-stale');
+
+  // --- case 3b: stale holder whose lease is STILL LIVE -------------------
+  // The mixed quadrant, at the SQL level. Reclamation needs both conditions.
+  await admin.query(
+    `INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+     VALUES ('/fx/b2.ts', $1, 'fxprobe-stale', NOW(), NOW() + INTERVAL '5 minutes')
+     ON CONFLICT (file_path, project) DO UPDATE
+       SET session_id = EXCLUDED.session_id, expires_at = EXCLUDED.expires_at`,
+    [PROJECT],
+  );
+  check('3b stale holder with a LIVE lease is NOT taken over',
+    (await resolve(admin, '/fx/b2.ts', 'fxprobe-me')).outcome, 'blocked');
+  check('3b break-glass gets through anyway',
+    (await resolve(admin, '/fx/b2.ts', 'fxprobe-me', { breakGlass: true })).outcome, 'takeover');
 
   // --- case 4: an ACTIVE session holds it -------------------------------
   await admin.query(
-    `INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-     VALUES ('/fx/c.ts', $1, 'fxprobe-active', NOW())
-     ON CONFLICT (file_path, project) DO UPDATE SET session_id = EXCLUDED.session_id`,
+    `INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+     VALUES ('/fx/c.ts', $1, 'fxprobe-active', NOW(), NOW() + INTERVAL '5 minutes')
+     ON CONFLICT (file_path, project) DO UPDATE
+       SET session_id = EXCLUDED.session_id, expires_at = EXCLUDED.expires_at`,
     [PROJECT],
   );
   const c4 = await resolve(admin, '/fx/c.ts', 'fxprobe-me');
@@ -149,18 +201,44 @@ async function main() {
 
   const raced = await Promise.all(
     racers.map((c, i) => resolve(c, '/fx/race.ts', `fxprobe-race-${i + 1}`)
-      .then((r) => r.outcome)
-      .catch((e) => `error:${e.message}`)),
+      .then((r) => ({ outcome: r.outcome, row: r.row }))
+      .catch((e) => ({ outcome: `error:${e.message}`, row: {} }))),
   );
   await Promise.all(racers.map((c) => c.end().catch(() => {})));
 
-  const granted = raced.filter((o) => o === 'granted').length;
-  const blocked = raced.filter((o) => o === 'blocked').length;
-  const errored = raced.filter((o) => String(o).startsWith('error')).length;
+  const outcomes = raced.map((r) => r.outcome);
+  const granted = outcomes.filter((o) => o === 'granted').length;
+  const blocked = outcomes.filter((o) => o === 'blocked').length;
+  const errored = outcomes.filter((o) => String(o).startsWith('error')).length;
   console.log(`      race n=${N}: granted=${granted} blocked=${blocked} errored=${errored}`);
   check('5 exactly one winner on an unclaimed file', granted, 1);
   check('5 everyone else is blocked', blocked, N - 1);
   check('5 nobody errored', errored, 0);
+
+  // --- case 5b: PIN the statement's known blind spot ----------------------
+  // This is an assertion that the SQL alone is INSUFFICIENT, which is a strange
+  // thing to test until you know why it is here.
+  //
+  // Case 5 above counted outcomes and passed green while all 23 blocked racers
+  // carried prior_owner = NULL. The `prior` CTE reads the statement snapshot,
+  // taken before any of them had a row to see; the ON CONFLICT WHERE re-reads
+  // the latest committed row. They disagree under exactly this contention. Left
+  // there, every blocked session told a human the file was "held by session
+  // undefined" and wrote an event whose holder and rule-halves were null.
+  //
+  // The repair could not go in this statement -- recovering the winner needs a
+  // SECOND statement, so that READ COMMITTED gives it a fresh snapshot. It
+  // therefore lives in resolveFileClaim, and lease-probe.mjs asserts the
+  // recovered behaviour end-to-end against the real hook.
+  //
+  // What is pinned here is the reason that second read exists. If a future
+  // Postgres version or rewrite ever makes `prior` see the winner, this check
+  // fails loudly and tells the next person the workaround may be removable --
+  // rather than leaving a mysterious extra query nobody dares touch.
+  const losers = raced.filter((r) => r.outcome === 'blocked');
+  const blindLosers = losers.filter((r) => r.row.prior_owner === null).length;
+  check('5b the raw statement CANNOT name the winner (why the 2nd read exists)',
+    blindLosers, N - 1);
 
   // --- teardown ---------------------------------------------------------
   if (!process.argv.includes('--keep')) {
