@@ -211,26 +211,33 @@ async function main() {
 
   const { queryDataSource } = await import('../project-cards/lib/notion.mjs');
   const rows = queryDataSource(TRACKER_DS, {});
-  const watermark = sinceArg || newestRowDate(rows);
-  if (!watermark) throw new Error('could not determine a watermark date (no --since, and no dated rows)');
+  // Two different things that were once conflated, at the cost of a refused apply:
+  //   `watermark` — the DERIVED newest row Date. This is state, and --apply's freshness
+  //                 check compares it against a freshly derived one to detect drift.
+  //   `since`     — the window this run actually scanned, which --since overrides.
+  // Storing the override AS the watermark made every --since proposal un-appliable: the
+  // check compared a hand-picked window against a derived value and always saw drift.
+  const watermark = newestRowDate(rows);
+  const since = sinceArg || watermark;
+  if (!since) throw new Error('could not determine a scan window (no --since, and no dated rows)');
 
   const logged = loggedShas(rows);
-  const commits = readCommits(watermark);
+  const commits = readCommits(since);
   const groups = groupCommits(commits);
   const proposals = groups.map((g) => splitPartial(g, logged)).filter(Boolean).map(toProposedRow);
 
   // Look back past the watermark for work it stepped over. Skipped when --since was
   // given explicitly: the caller has already chosen the window.
-  const lookback = lookbackDate(watermark);
-  const buried = sinceArg ? [] : buriedCommits(readCommits(lookback), logged, watermark);
+  const lookback = lookbackDate(since);
+  const buried = sinceArg ? [] : buriedCommits(readCommits(lookback), logged, since);
 
-  const id = `${watermark}-${commits.length}c`;
+  const id = `${since}-${commits.length}c`;
   const outPath = join(process.env.TEMP || tmpdir(), `work-rows-proposal-${id}.json`);
   const proposal = {
     proposalId: id,
     generatedAt: new Date().toISOString(),
     // `--apply` MUST re-read both and refuse if either moved (stale-proposal race).
-    basis: { watermark, headSha: headSha(), trackerRowCount: rows.length },
+    basis: { watermark, since, headSha: headSha(), trackerRowCount: rows.length },
     rows: proposals,
     buried: buried.map((c) => ({ sha: c.sha, date: c.date, subject: c.subject })),
   };
