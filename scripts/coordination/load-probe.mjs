@@ -71,10 +71,21 @@ function psql(sql) {
 // standard_conforming_strings is on by default, so a backslash inside a
 // single-quoted literal is already a literal backslash. Escaping it here would
 // store C:\\Users\\... and silently never match the row the hook writes.
+/**
+ * Since step 4 the hook WRITES a coordination_event per blocked decision, so a
+ * single n=20/rounds=3 run leaves 60 synthetic rows behind. Left alone the gate
+ * would slowly poison the exact table it exists to make trustworthy, and a real
+ * conflict would be indistinguishable from probe exhaust. Scoped by session id
+ * prefix so it can never touch a genuine event.
+ */
+const PURGE_EVENTS =
+  `DELETE FROM agentic_os.coordination_event WHERE session_id LIKE 'loadprobe-%';`;
+
 function setup() {
   psql(`
     DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
+    ${PURGE_EVENTS}
     INSERT INTO sessions (id, project, working_on, started_at, last_heartbeat)
     VALUES ('${OWNER}', '${CANONICAL_PROJECT}', 'load probe owner', NOW(), NOW());
     INSERT INTO file_claims (file_path, project, session_id, claimed_at)
@@ -86,6 +97,7 @@ function teardown() {
   psql(`
     DELETE FROM file_claims WHERE file_path = '${TARGET_FILE}';
     DELETE FROM sessions WHERE id LIKE 'loadprobe-%';
+    ${PURGE_EVENTS}
   `);
 }
 

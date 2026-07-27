@@ -16,6 +16,7 @@ import { spawnSync } from 'child_process';
 import type { QueryResult } from './types.js';
 import { requireOpcDir } from './opc-path.js';
 import { getPgConnectionString, withPgClient, withPgClientOrFallback } from './pg-client.js';
+import { recordEventInTransaction } from './coordination-events.js';
 
 // Re-export SAFE_ID_PATTERN and isValidId from pattern-router for convenience
 export { SAFE_ID_PATTERN, isValidId } from './pattern-router.js';
@@ -543,7 +544,158 @@ export async function checkFileClaim(
 }
 
 /**
+ * The claim decision, in one statement, with its conflict event.
+ *
+ * WHAT THIS REPLACES
+ * ------------------
+ * checkFileClaim -> isSessionActive -> claimFile: three round trips with two
+ * races in the gaps.
+ *
+ *   1. Two sessions both see an UNCLAIMED file and both write. ON CONFLICT DO
+ *      UPDATE made the last writer win silently, and BOTH were told to go
+ *      ahead. The load probe never caught this because it always starts from a
+ *      file that is already held.
+ *   2. The holder's liveness was read after the claim row, so the answer could
+ *      already be stale when it was used.
+ *
+ * One `INSERT ... ON CONFLICT DO UPDATE ... WHERE` closes both. It takes a row
+ * lock and re-evaluates its WHERE against the LATEST committed row rather than
+ * the statement snapshot, so concurrent callers serialize on the conflicting
+ * row. **Zero rows returned means somebody else holds it.**
+ *
+ * Verified by scripts/coordination/claim-sql-probe.mjs, whose case 5 races 24
+ * live sessions for one unclaimed file: exactly 1 granted, 23 blocked.
+ *
+ * WHY THE EVENT IS WRITTEN HERE
+ * -----------------------------
+ * This is the only place that knows a conflict occurred, and it already owns a
+ * transaction. Writing the event anywhere else would mean it could disagree
+ * with the decision. Only conflicts and degradations are recorded — never the
+ * ordinary grant, which would be one row per Edit and would recreate exactly
+ * the unbounded accumulation that left file_claims with 8,170 dead rows.
+ */
+export type ClaimOutcome = 'granted' | 'renewed' | 'takeover' | 'blocked' | 'degraded';
+
+export interface ClaimDecision {
+  outcome: ClaimOutcome;
+  /** Who held the claim before this attempt. Set for blocked and takeover. */
+  holder?: string;
+  /** When they took it, ISO. */
+  holderClaimedAt?: string;
+  /** False when the conflict happened but could not be written down. */
+  eventRecorded?: boolean;
+}
+
+const RESOLVE_CLAIM_SQL = `
+WITH prior AS (
+  SELECT session_id, claimed_at
+  FROM file_claims
+  WHERE file_path = $1 AND project = $2
+),
+upsert AS (
+  INSERT INTO file_claims (file_path, project, session_id, claimed_at)
+  VALUES ($1, $2, $3, NOW())
+  ON CONFLICT (file_path, project) DO UPDATE
+    SET session_id = EXCLUDED.session_id, claimed_at = NOW()
+    WHERE file_claims.session_id = EXCLUDED.session_id
+       OR NOT EXISTS (
+            SELECT 1 FROM sessions s
+            WHERE s.id = file_claims.session_id
+              AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+          )
+  RETURNING session_id
+)
+SELECT (SELECT session_id FROM upsert) AS new_owner,
+       (SELECT session_id FROM prior)  AS prior_owner,
+       (SELECT claimed_at  FROM prior) AS prior_claimed_at
+`;
+
+export async function resolveFileClaim(
+  filePath: string,
+  project: string,
+  sessionId: string,
+  staleThresholdMs: number,
+  toolName: string,
+): Promise<ClaimDecision> {
+  const staleSeconds = Math.floor(staleThresholdMs / 1000);
+
+  const { value, degraded } = await withPgClientOrFallback<ClaimDecision | null>(
+    async (client) => {
+      await client.query('BEGIN');
+      try {
+        const res = await client.query(RESOLVE_CLAIM_SQL, [
+          filePath, project, sessionId, staleSeconds,
+        ]);
+        const row = res.rows[0] as {
+          new_owner: string | null;
+          prior_owner: string | null;
+          prior_claimed_at: Date | null;
+        };
+
+        const holder = row.prior_owner ?? undefined;
+        const holderClaimedAt = row.prior_claimed_at
+          ? row.prior_claimed_at.toISOString()
+          : undefined;
+
+        let outcome: ClaimOutcome;
+        if (row.new_owner === null) outcome = 'blocked';
+        else if (row.prior_owner === null) outcome = 'granted';
+        else if (row.prior_owner === sessionId) outcome = 'renewed';
+        else outcome = 'takeover';
+
+        // Running this hook at all proves the session is alive, so renew its
+        // heartbeat even when it was blocked. Without this the lock is only
+        // real for ~5 minutes after each user message -- heartbeat otherwise
+        // fires on UserPromptSubmit alone, so during a long agent turn a
+        // session goes stale and its own claims become reclaimable WHILE it is
+        // actively editing (measured 652s mid-work, 2026-07-26). Upsert rather
+        // than UPDATE: a session whose SessionStart never ran would otherwise
+        // hold claims with no sessions row at all.
+        await client.query(
+          `INSERT INTO sessions (id, project, last_heartbeat)
+           VALUES ($1, $2, NOW())
+           ON CONFLICT (id) DO UPDATE SET last_heartbeat = NOW()`,
+          [sessionId, project],
+        );
+
+        let eventRecorded: boolean | undefined;
+        if (outcome === 'blocked' || outcome === 'takeover') {
+          eventRecorded = await recordEventInTransaction(client, {
+            kind: outcome === 'blocked' ? 'claim_blocked' : 'claim_takeover',
+            sessionId,
+            project,
+            filePath,
+            holderSessionId: holder ?? null,
+            toolName,
+            detail: {
+              holderClaimedAt: holderClaimedAt ?? null,
+              staleThresholdSeconds: staleSeconds,
+            },
+          });
+        }
+
+        await client.query('COMMIT');
+        return { outcome, holder, holderClaimedAt, eventRecorded };
+      } catch (err) {
+        await client.query('ROLLBACK').catch(() => { /* connection already gone */ });
+        throw err;
+      }
+    },
+    null,
+    `resolveFileClaim(${filePath})`,
+  );
+
+  if (degraded || value === null) return { outcome: 'degraded' };
+  return value;
+}
+
+/**
  * Claim a file for the current session.
+ *
+ * Superseded on the hook path by resolveFileClaim, which decides and claims in
+ * one statement. Retained because it is a stable exported surface with tests
+ * against it, and because a plain unconditional claim is still the right
+ * primitive for callers that have already made their decision.
  *
  * @param filePath - Path to the file
  * @param project - Project directory

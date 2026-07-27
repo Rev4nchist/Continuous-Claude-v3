@@ -10,7 +10,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { checkFileClaim, claimFile, isSessionActive } from './shared/db-utils-pg.js';
+import { resolveFileClaim } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
 
@@ -53,34 +53,22 @@ export async function main(): Promise<void> {
   const sessionId = resolveSessionId(input.session_id);
   const project = canonicalProject(input.cwd);
 
-  // Check if file is claimed by another session
-  const claimCheck = await checkFileClaim(filePath, project, sessionId);
+  // One statement decides and claims, and logs the conflict in the same
+  // transaction. This used to be three round trips (check -> is-holder-alive ->
+  // claim) with a race in each gap; the worst was that two sessions racing for
+  // an UNCLAIMED file were BOTH told to go ahead. See resolveFileClaim.
+  const decision = await resolveFileClaim(
+    filePath, project, sessionId, STALE_THRESHOLD_MS, input.tool_name,
+  );
 
+  const fileName = filePath.split(/[/\\]/).pop() || filePath;
   let output: any;
 
-  if (claimCheck.degraded) {
-    // We did not learn that the file is free -- we failed to ask. The edit is
-    // still permitted (a stopped container must not brick editing) but this
-    // path used to be indistinguishable from "no conflict", which is how a
-    // broken lock looked healthy for the whole life of this arc.
-    console.error('[file-claims] coordination degraded, permitting edit unchecked');
-    console.log(JSON.stringify({
-      result: 'continue',
-      message: '[WARN] Coordination DB unreachable - file conflict NOT checked for this edit',
-    }));
-    return;
-  }
-
-  if (claimCheck.claimed && claimCheck.claimedBy) {
-    // Check if the claiming session is still active
-    const otherSessionActive = await isSessionActive(claimCheck.claimedBy, STALE_THRESHOLD_MS);
-
-    if (otherSessionActive) {
-      // Active session has the file - BLOCK the edit with proper PreToolUse format
-      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  switch (decision.outcome) {
+    case 'blocked': {
       const blockMessage = `⚠️ FILE CONFLICT BLOCKED
 
-"${fileName}" is locked by Session ${claimCheck.claimedBy}
+"${fileName}" is locked by Session ${decision.holder}
 
 This file is being edited by another active Claude session.
 Wait for the other session to finish or coordinate directly.
@@ -91,22 +79,42 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
           permissionDecision: 'deny',
-          permissionDecisionReason: blockMessage
-        }
+          permissionDecisionReason: blockMessage,
+        },
       };
-    } else {
-      // Other session is stale - take over the claim
-      await claimFile(filePath, project, sessionId);
-      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+      break;
+    }
+
+    case 'takeover':
       output = {
         result: 'continue',
         message: `[INFO] Took over stale file lock for "${fileName}" from inactive session`,
       };
-    }
-  } else {
-    // No conflict - claim the file for this session
-    await claimFile(filePath, project, sessionId);
-    output = { result: 'continue' };
+      break;
+
+    case 'degraded':
+      // We did not learn that the file is free -- we failed to ask. The edit is
+      // still permitted (a stopped container must not brick editing) but this
+      // path used to be indistinguishable from "no conflict", which is how a
+      // broken lock looked healthy for the whole life of this arc.
+      console.error('[file-claims] coordination degraded, permitting edit unchecked');
+      output = {
+        result: 'continue',
+        message: '[WARN] Coordination DB unreachable - file conflict NOT checked for this edit',
+      };
+      break;
+
+    default:
+      // granted | renewed -- the ordinary path, deliberately silent and
+      // deliberately unlogged. One event row per successful Edit is how
+      // file_claims accumulated 8,170 dead rows.
+      output = { result: 'continue' };
+  }
+
+  // A conflict that could not be written down is worth saying out loud: the
+  // decision still stands, but the evidence for it is gone.
+  if (decision.eventRecorded === false) {
+    console.error('[file-claims] conflict occurred but the event was not recorded');
   }
 
   console.log(JSON.stringify(output));

@@ -1225,8 +1225,8 @@ var require_utils2 = __commonJS({
     }
     async function deriveKey(password, salt, iterations) {
       const key = await subtleCrypto.importKey("raw", textEncoder.encode(password), "PBKDF2", false, ["deriveBits"]);
-      const params = { name: "PBKDF2", hash: "SHA-256", salt, iterations };
-      return await subtleCrypto.deriveBits(params, key, 32 * 8, ["deriveBits"]);
+      const params2 = { name: "PBKDF2", hash: "SHA-256", salt, iterations };
+      return await subtleCrypto.deriveBits(params2, key, 32 * 8, ["deriveBits"]);
     }
   }
 });
@@ -1788,10 +1788,10 @@ var require_connection_parameters = __commonJS({
     var quoteParamValue = function(value) {
       return "'" + ("" + value).replace(/\\/g, "\\\\").replace(/'/g, "\\'") + "'";
     };
-    var add = function(params, config, paramName) {
+    var add = function(params2, config, paramName) {
       const value = config[paramName];
       if (value !== void 0 && value !== null) {
-        params.push(paramName + "=" + quoteParamValue(value));
+        params2.push(paramName + "=" + quoteParamValue(value));
       }
     };
     var ConnectionParameters = class {
@@ -1862,40 +1862,40 @@ var require_connection_parameters = __commonJS({
         }
       }
       getLibpqConnectionString(cb) {
-        const params = [];
-        add(params, this, "user");
-        add(params, this, "password");
-        add(params, this, "port");
-        add(params, this, "application_name");
-        add(params, this, "fallback_application_name");
-        add(params, this, "connect_timeout");
-        add(params, this, "options");
+        const params2 = [];
+        add(params2, this, "user");
+        add(params2, this, "password");
+        add(params2, this, "port");
+        add(params2, this, "application_name");
+        add(params2, this, "fallback_application_name");
+        add(params2, this, "connect_timeout");
+        add(params2, this, "options");
         const ssl = typeof this.ssl === "object" ? this.ssl : this.ssl ? { sslmode: this.ssl } : {};
-        add(params, ssl, "sslmode");
-        add(params, ssl, "sslca");
-        add(params, ssl, "sslkey");
-        add(params, ssl, "sslcert");
-        add(params, ssl, "sslrootcert");
-        add(params, this, "sslnegotiation");
+        add(params2, ssl, "sslmode");
+        add(params2, ssl, "sslca");
+        add(params2, ssl, "sslkey");
+        add(params2, ssl, "sslcert");
+        add(params2, ssl, "sslrootcert");
+        add(params2, this, "sslnegotiation");
         if (this.database) {
-          params.push("dbname=" + quoteParamValue(this.database));
+          params2.push("dbname=" + quoteParamValue(this.database));
         }
         if (this.replication) {
-          params.push("replication=" + quoteParamValue(this.replication));
+          params2.push("replication=" + quoteParamValue(this.replication));
         }
         if (this.host) {
-          params.push("host=" + quoteParamValue(this.host));
+          params2.push("host=" + quoteParamValue(this.host));
         }
         if (this.isDomainSocket) {
-          return cb(null, params.join(" "));
+          return cb(null, params2.join(" "));
         }
         if (this.client_encoding) {
-          params.push("client_encoding=" + quoteParamValue(this.client_encoding));
+          params2.push("client_encoding=" + quoteParamValue(this.client_encoding));
         }
         dns.lookup(this.host, function(err, address) {
           if (err) return cb(err, null);
-          params.push("hostaddr=" + quoteParamValue(address));
-          return cb(null, params.join(" "));
+          params2.push("hostaddr=" + quoteParamValue(address));
+          return cb(null, params2.join(" "));
         });
       }
     };
@@ -4086,29 +4086,29 @@ var require_client = __commonJS({
         this.emit("notice", msg);
       }
       getStartupConf() {
-        const params = this.connectionParameters;
+        const params2 = this.connectionParameters;
         const data = {
-          user: params.user,
-          database: params.database
+          user: params2.user,
+          database: params2.database
         };
-        const appName = params.application_name || params.fallback_application_name;
+        const appName = params2.application_name || params2.fallback_application_name;
         if (appName) {
           data.application_name = appName;
         }
-        if (params.replication) {
-          data.replication = "" + params.replication;
+        if (params2.replication) {
+          data.replication = "" + params2.replication;
         }
-        if (params.statement_timeout) {
-          data.statement_timeout = String(parseInt(params.statement_timeout, 10));
+        if (params2.statement_timeout) {
+          data.statement_timeout = String(parseInt(params2.statement_timeout, 10));
         }
-        if (params.lock_timeout) {
-          data.lock_timeout = String(parseInt(params.lock_timeout, 10));
+        if (params2.lock_timeout) {
+          data.lock_timeout = String(parseInt(params2.lock_timeout, 10));
         }
-        if (params.idle_in_transaction_session_timeout) {
-          data.idle_in_transaction_session_timeout = String(parseInt(params.idle_in_transaction_session_timeout, 10));
+        if (params2.idle_in_transaction_session_timeout) {
+          data.idle_in_transaction_session_timeout = String(parseInt(params2.idle_in_transaction_session_timeout, 10));
         }
-        if (params.options) {
-          data.options = params.options;
+        if (params2.options) {
+          data.options = params2.options;
         }
         return data;
       }
@@ -5248,84 +5248,120 @@ async function withPgClientOrFallback(fn, fallback, context) {
   }
 }
 
+// src/shared/coordination-events.ts
+var INSERT_EVENT = `
+  INSERT INTO agentic_os.coordination_event
+    (kind, session_id, project, file_path, holder_session_id, tool_name, detail)
+  VALUES ($1, $2, $3, $4, $5, $6, $7::jsonb)
+`;
+function params(e) {
+  return [
+    e.kind,
+    e.sessionId,
+    e.project ?? null,
+    e.filePath ?? null,
+    e.holderSessionId ?? null,
+    e.toolName ?? null,
+    JSON.stringify(e.detail ?? {})
+  ];
+}
+async function recordEventInTransaction(client, event) {
+  try {
+    await client.query("SAVEPOINT coordination_event");
+  } catch {
+    return false;
+  }
+  try {
+    await client.query(INSERT_EVENT, params(event));
+    await client.query("RELEASE SAVEPOINT coordination_event");
+    return true;
+  } catch (err) {
+    await client.query("ROLLBACK TO SAVEPOINT coordination_event").catch(() => {
+    });
+    const msg = err instanceof Error ? err.message : String(err);
+    console.error(`[coordination] event ${event.kind} dropped: ${msg}`);
+    return false;
+  }
+}
+
 // src/shared/db-utils-pg.ts
-async function isSessionActive(sessionId, thresholdMs = 5 * 60 * 1e3) {
-  const thresholdSeconds = Math.floor(thresholdMs / 1e3);
-  const { value } = await withPgClientOrFallback(
-    async (client) => {
-      const res = await client.query(
-        `SELECT last_heartbeat >= NOW() - make_interval(secs => $2) AS active
-         FROM sessions WHERE id = $1`,
-        [sessionId, thresholdSeconds]
-      );
-      return res.rows.length > 0 && res.rows[0].active === true;
-    },
-    false,
-    `isSessionActive(${sessionId})`
-  );
-  return value;
-}
-async function checkFileClaim(filePath, project, mySessionId) {
+var RESOLVE_CLAIM_SQL = `
+WITH prior AS (
+  SELECT session_id, claimed_at
+  FROM file_claims
+  WHERE file_path = $1 AND project = $2
+),
+upsert AS (
+  INSERT INTO file_claims (file_path, project, session_id, claimed_at)
+  VALUES ($1, $2, $3, NOW())
+  ON CONFLICT (file_path, project) DO UPDATE
+    SET session_id = EXCLUDED.session_id, claimed_at = NOW()
+    WHERE file_claims.session_id = EXCLUDED.session_id
+       OR NOT EXISTS (
+            SELECT 1 FROM sessions s
+            WHERE s.id = file_claims.session_id
+              AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+          )
+  RETURNING session_id
+)
+SELECT (SELECT session_id FROM upsert) AS new_owner,
+       (SELECT session_id FROM prior)  AS prior_owner,
+       (SELECT claimed_at  FROM prior) AS prior_claimed_at
+`;
+async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, toolName) {
+  const staleSeconds = Math.floor(staleThresholdMs / 1e3);
   const { value, degraded } = await withPgClientOrFallback(
-    async (client) => {
-      await client.query(`
-        CREATE TABLE IF NOT EXISTS file_claims (
-          file_path TEXT,
-          project TEXT,
-          session_id TEXT,
-          claimed_at TIMESTAMP DEFAULT NOW(),
-          PRIMARY KEY (file_path, project)
-        )
-      `);
-      const res = await client.query(
-        `SELECT session_id, claimed_at FROM file_claims
-         WHERE file_path = $1 AND project = $2 AND session_id <> $3`,
-        [filePath, project, mySessionId]
-      );
-      if (res.rows.length === 0) return { claimed: false };
-      const row = res.rows[0];
-      return {
-        claimed: true,
-        claimedBy: row.session_id,
-        claimedAt: row.claimed_at ? row.claimed_at.toISOString() : void 0
-      };
-    },
-    { claimed: false },
-    `checkFileClaim(${filePath})`
-  );
-  return degraded ? { ...value, degraded: true } : value;
-}
-async function claimFile(filePath, project, sessionId) {
-  const { value } = await withPgClientOrFallback(
     async (client) => {
       await client.query("BEGIN");
       try {
-        await client.query(
-          `INSERT INTO file_claims (file_path, project, session_id, claimed_at)
-           VALUES ($1, $2, $3, NOW())
-           ON CONFLICT (file_path, project) DO UPDATE SET
-               session_id = EXCLUDED.session_id,
-               claimed_at = NOW()`,
-          [filePath, project, sessionId]
-        );
+        const res = await client.query(RESOLVE_CLAIM_SQL, [
+          filePath,
+          project,
+          sessionId,
+          staleSeconds
+        ]);
+        const row = res.rows[0];
+        const holder = row.prior_owner ?? void 0;
+        const holderClaimedAt = row.prior_claimed_at ? row.prior_claimed_at.toISOString() : void 0;
+        let outcome;
+        if (row.new_owner === null) outcome = "blocked";
+        else if (row.prior_owner === null) outcome = "granted";
+        else if (row.prior_owner === sessionId) outcome = "renewed";
+        else outcome = "takeover";
         await client.query(
           `INSERT INTO sessions (id, project, last_heartbeat)
            VALUES ($1, $2, NOW())
            ON CONFLICT (id) DO UPDATE SET last_heartbeat = NOW()`,
           [sessionId, project]
         );
+        let eventRecorded;
+        if (outcome === "blocked" || outcome === "takeover") {
+          eventRecorded = await recordEventInTransaction(client, {
+            kind: outcome === "blocked" ? "claim_blocked" : "claim_takeover",
+            sessionId,
+            project,
+            filePath,
+            holderSessionId: holder ?? null,
+            toolName,
+            detail: {
+              holderClaimedAt: holderClaimedAt ?? null,
+              staleThresholdSeconds: staleSeconds
+            }
+          });
+        }
         await client.query("COMMIT");
-        return true;
+        return { outcome, holder, holderClaimedAt, eventRecorded };
       } catch (err) {
         await client.query("ROLLBACK").catch(() => {
         });
         throw err;
       }
     },
-    false,
-    `claimFile(${filePath})`
+    null,
+    `resolveFileClaim(${filePath})`
   );
-  return { success: value };
+  if (degraded || value === null) return { outcome: "degraded" };
+  return value;
 }
 
 // src/shared/session-id.ts
@@ -5409,23 +5445,20 @@ async function main() {
   }
   const sessionId = resolveSessionId(input.session_id);
   const project = canonicalProject(input.cwd);
-  const claimCheck = await checkFileClaim(filePath, project, sessionId);
+  const decision = await resolveFileClaim(
+    filePath,
+    project,
+    sessionId,
+    STALE_THRESHOLD_MS,
+    input.tool_name
+  );
+  const fileName = filePath.split(/[/\\]/).pop() || filePath;
   let output;
-  if (claimCheck.degraded) {
-    console.error("[file-claims] coordination degraded, permitting edit unchecked");
-    console.log(JSON.stringify({
-      result: "continue",
-      message: "[WARN] Coordination DB unreachable - file conflict NOT checked for this edit"
-    }));
-    return;
-  }
-  if (claimCheck.claimed && claimCheck.claimedBy) {
-    const otherSessionActive = await isSessionActive(claimCheck.claimedBy, STALE_THRESHOLD_MS);
-    if (otherSessionActive) {
-      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+  switch (decision.outcome) {
+    case "blocked": {
       const blockMessage = `\u26A0\uFE0F FILE CONFLICT BLOCKED
 
-"${fileName}" is locked by Session ${claimCheck.claimedBy}
+"${fileName}" is locked by Session ${decision.holder}
 
 This file is being edited by another active Claude session.
 Wait for the other session to finish or coordinate directly.
@@ -5438,17 +5471,26 @@ The lock auto-releases when that session's heartbeat goes stale (5 min).`;
           permissionDecisionReason: blockMessage
         }
       };
-    } else {
-      await claimFile(filePath, project, sessionId);
-      const fileName = filePath.split(/[/\\]/).pop() || filePath;
+      break;
+    }
+    case "takeover":
       output = {
         result: "continue",
         message: `[INFO] Took over stale file lock for "${fileName}" from inactive session`
       };
-    }
-  } else {
-    await claimFile(filePath, project, sessionId);
-    output = { result: "continue" };
+      break;
+    case "degraded":
+      console.error("[file-claims] coordination degraded, permitting edit unchecked");
+      output = {
+        result: "continue",
+        message: "[WARN] Coordination DB unreachable - file conflict NOT checked for this edit"
+      };
+      break;
+    default:
+      output = { result: "continue" };
+  }
+  if (decision.eventRecorded === false) {
+    console.error("[file-claims] conflict occurred but the event was not recorded");
   }
   console.log(JSON.stringify(output));
 }
