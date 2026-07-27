@@ -362,7 +362,7 @@
       <span class="mark">AOS</span>
       <span>
         <b>Lane Board</b>
-        <span>current state &middot; as of 2026-07-27 00:28 &middot; read-only prototype</span>
+        <span>current state &middot; as of 2026-07-26 20:00 &middot; read-only prototype</span>
       </span>
     </div>
     <div class="counters">
@@ -381,7 +381,7 @@
   <div class="intro">
     <div>
       <h1>Everything in flight, on one screen.</h1>
-      <p>Sixteen lanes across four projects, rendered from the real state of this machine on 2026&#8209;07&#8209;27 — git, Postgres, Task Scheduler, and the handoff corpus. Every number carries the query that produced it, so any figure on this page can be falsified in about ten seconds.</p>
+      <p>Sixteen lanes across four projects, rendered from the real state of this machine on 2026&#8209;07&#8209;26 — git, Postgres, Task Scheduler, and the handoff corpus. Every number carries the query that produced it, so any figure on this page can be falsified in about ten seconds.</p>
       <p>This is also the v0 interface spec. The design package scored four interface directions and shipped prototypes for none of them; this is the first one with data behind it.</p>
       <p class="glowkey" style="margin-top:14px"><i></i> a white glow marks everything completed or worked on in the last two sessions — 07&#8209;26 13:40 onward, commits <span class="mono">94d36a9..b6e7842</span> plus tonight's open work.</p>
     </div>
@@ -491,14 +491,18 @@
                 count(*) FILTER (WHERE s.last_heartbeat &lt;  now() - interval '5 min') AS stale,
                 count(*) FILTER (WHERE s.last_heartbeat &gt;= now() - interval '5 min') AS live
          FROM file_claims fc LEFT JOIN sessions s ON s.id = fc.session_id;
-<b>reads</b>      0 orphaned | 29 stale | 0 live, at 00:28 with nobody mid-edit.
+<b>reads</b>      0 orphaned | 29 stale | 0 live, at 19:28 local with nobody mid-edit.
+<b>clocks</b>     the DB runs Etc/UTC and this machine runs UTC-5, so a psql timestamp is
+           five hours ahead of every git timestamp on this page. Times here are
+           LOCAL. An earlier version of this refresh stamped the masthead with
+           the UTC clock and dated the board a day into the future; corrected.
 <b>careful</b>    "0 live" here is NOT the old bug returning. It is the correct resting state:
            the last writer stopped two hours ago, so its claims aged out exactly as
            designed. This gauge is point-in-time and only means something while a
            session is actively editing. The DURABLE invariants are the ones above it —
            0 orphaned, 0 `s-*`-owned claims, 1 namespace per repo — and they hold.
            An earlier version of this panel printed "3/3 live" as a victory metric.
-           That was a snapshot dressed up as an invariant; corrected 07-27.
+           That was a snapshot dressed up as an invariant; corrected 07-26.
 <b>cause 1</b>    session-register minted an `s-*` id and froze; heartbeat used the payload uuid
            and lived; file-claims filed under the frozen one. Two rows per session, every
            claim owned by the corpse. All three now coordinate on the payload id.
@@ -663,7 +667,7 @@
 
   <footer>
     <span>Agentic OS &middot; lane board prototype &middot; read-only, no writes, no agents invoked</span>
-    <span>rendered from verified state &middot; last refreshed 2026-07-27 00:28 &middot; glow = last 2 sessions</span>
+    <span>rendered from verified state &middot; last refreshed 2026-07-26 20:00 local &middot; glow = last 2 sessions</span>
   </footer>
 </div>
 
