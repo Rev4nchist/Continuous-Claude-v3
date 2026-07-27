@@ -23,7 +23,13 @@ export type ProjectSummary = {
    *  `continuous-claude` is currently 16: slash direction, case, trailing slash,
    *  subdirectories and worktrees. Surfacing it makes the normalization auditable. */
   rawSpellings: number;
+  /** ISO-8601 with an explicit `Z`. See the derivation note on the query below —
+   *  this is NOT `sessions.last_activity_at`, which is NULL in every row. */
   lastActivityAt: string | null;
+  /** Age in seconds, computed server-side against the database clock.
+   *  Sent alongside the timestamp so the UI never has to reconcile a browser
+   *  clock, a timezone, or a hydration boundary to render "4m ago". */
+  lastActivitySecondsAgo: number | null;
 };
 
 /**
@@ -99,7 +105,20 @@ export async function getFleetOverview(): Promise<FleetOverview> {
       SELECT
         s.id,
         s.project,
-        s.last_activity_at,
+        -- WHY THIS IS NOT JUST s.last_activity_at: that column is NULL in ALL 2,418
+        -- rows (verified 2026-07-27 -- count(last_activity_at) returns 0). Nothing
+        -- writes it. Reading it alone made every project's "last active" render as an
+        -- em-dash, which looks like an empty fleet rather than a dead column.
+        --
+        -- GREATEST rather than COALESCE precedence, so that if last_activity_at ever
+        -- DOES start being written, an older value cannot mask a newer heartbeat.
+        -- '-infinity' is the identity element here; NULLIF puts the NULL back for a
+        -- project that genuinely has no sessions at all.
+        GREATEST(
+          COALESCE(s.last_activity_at, '-infinity'::timestamp),
+          COALESCE(s.last_heartbeat,   '-infinity'::timestamp),
+          COALESCE(s.started_at,       '-infinity'::timestamp)
+        ) AS activity_at,
         a.project_key,
         a.confidence,
         a.raw AS alias_raw,
@@ -118,7 +137,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
         b.project_key,
         count(*)                     AS session_count,
         count(DISTINCT b.project)    AS raw_spellings,
-        max(b.last_activity_at)      AS last_activity_at
+        NULLIF(max(b.activity_at), '-infinity'::timestamp) AS last_activity_at
       FROM bucketed b
       WHERE b.bucket = 'mapped'
       GROUP BY b.project_key
@@ -134,7 +153,14 @@ export async function getFleetOverview(): Promise<FleetOverview> {
           p.url,
           COALESCE(pp.session_count, 0)::int   AS "sessionCount",
           COALESCE(pp.raw_spellings, 0)::int   AS "rawSpellings",
-          to_char(pp.last_activity_at, 'YYYY-MM-DD"T"HH24:MI:SS') AS "lastActivityAt",
+          -- The trailing "Z" is load-bearing. These are timestamp WITHOUT time zone
+          -- columns that hold UTC (server TimeZone is Etc/UTC, verified). Emitting them
+          -- unmarked meant new Date(str) in the browser read them as LOCAL time and
+          -- every age was wrong by the UTC offset -- 5 hours here, and 0 hours in
+          -- January, which is exactly the kind of bug that hides until it doesn't.
+          to_char(pp.last_activity_at, 'YYYY-MM-DD"T"HH24:MI:SS"Z"') AS "lastActivityAt",
+          EXTRACT(EPOCH FROM ((now() AT TIME ZONE 'UTC') - pp.last_activity_at))::int
+                                               AS "lastActivitySecondsAgo",
           COALESCE(pp.session_count, 0)        AS session_count
         FROM agentic_os.project p
         LEFT JOIN per_project pp ON pp.project_key = p.key

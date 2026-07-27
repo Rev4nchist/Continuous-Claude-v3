@@ -1,0 +1,61 @@
+/**
+ * Display helpers for the fleet view. No data access, no fetching — these turn
+ * numbers the server already computed into strings.
+ *
+ * Ages arrive as SECONDS COMPUTED SERVER-SIDE against the database clock, never
+ * as a timestamp the browser has to parse. That is deliberate: `sessions`
+ * timestamps are `timestamp WITHOUT time zone` holding UTC, and every attempt to
+ * render them client-side is one missed `Z` away from being wrong by the local
+ * UTC offset — which is zero in winter in some locales and therefore invisible
+ * until it isn't.
+ */
+
+/** Compact age: "just now", "4m", "2h", "3d". Null renders as an em-dash. */
+export function formatAge(seconds: number | null | undefined): string {
+  if (seconds === null || seconds === undefined) return '—';
+  // Clock skew or a heartbeat written a moment in the future should read as
+  // "just now", not "-3s ago".
+  if (seconds < 45) return 'just now';
+  if (seconds < 3_600) return `${Math.round(seconds / 60)}m`;
+  if (seconds < 86_400) return `${Math.round(seconds / 3_600)}h`;
+  return `${Math.round(seconds / 86_400)}d`;
+}
+
+/** Same scale, past tense, for "last active" labels. */
+export function formatAgo(seconds: number | null | undefined): string {
+  const age = formatAge(seconds);
+  if (age === '—' || age === 'just now') return age;
+  return `${age} ago`;
+}
+
+export function formatCount(n: number): string {
+  return n.toLocaleString('en-US');
+}
+
+/** Pluralise without the "1 sessions" tell. */
+export function plural(n: number, one: string, many = `${one}s`): string {
+  return n === 1 ? one : many;
+}
+
+export type ProjectStatus = 'active' | 'in-development' | 'inactive' | 'archived';
+
+/**
+ * Status pill styling. Archived and inactive are muted rather than hidden —
+ * a project with 43 sessions that is now archived is still part of the history
+ * this screen is accounting for, and dropping it would break the arithmetic the
+ * accounting bar makes verifiable.
+ */
+export function statusClasses(status: string): string {
+  switch (status) {
+    case 'active':
+      return 'border-emerald-500/30 bg-emerald-500/10 text-emerald-700 dark:text-emerald-400';
+    case 'in-development':
+      return 'border-sky-500/30 bg-sky-500/10 text-sky-700 dark:text-sky-400';
+    case 'inactive':
+      return 'border-amber-500/30 bg-amber-500/10 text-amber-700 dark:text-amber-500';
+    case 'archived':
+      return 'border-border bg-muted text-muted-foreground';
+    default:
+      return 'border-border bg-muted text-muted-foreground';
+  }
+}
