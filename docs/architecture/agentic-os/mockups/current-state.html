@@ -75,6 +75,70 @@
     --shadow: 0 1px 2px rgba(15,26,29,.05), 0 8px 24px rgba(15,26,29,.05);
   }
 
+  /* ---- recency glow -------------------------------------------------------
+     Marks everything touched in the last two working sessions (07-26 13:40
+     through now). White reads as "lit" on the dark ground directly; on paper
+     a white halo alone would vanish, so a 1px ink edge carries the boundary
+     and the white does the lifting. */
+  :root {
+    --glow-ring: rgba(255,255,255,.95);
+    --glow-halo: rgba(255,255,255,.90);
+    --glow-edge: rgba(15,26,29,.22);
+    --glow-tint: #FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glow-ring: rgba(255,255,255,.58);
+      --glow-halo: rgba(226,242,246,.30);
+      --glow-edge: rgba(255,255,255,.34);
+      --glow-tint: rgba(255,255,255,.06);
+    }
+  }
+  :root[data-theme="dark"] {
+    --glow-ring: rgba(255,255,255,.58);
+    --glow-halo: rgba(226,242,246,.30);
+    --glow-edge: rgba(255,255,255,.34);
+    --glow-tint: rgba(255,255,255,.06);
+  }
+  :root[data-theme="light"] {
+    --glow-ring: rgba(255,255,255,.95);
+    --glow-halo: rgba(255,255,255,.90);
+    --glow-edge: rgba(15,26,29,.22);
+    --glow-tint: #FFFFFF;
+  }
+
+  .is-recent { position: relative; }
+  .is-recent::after {
+    content: ''; position: absolute; inset: -3px; pointer-events: none;
+    border-radius: calc(var(--r) + 3px);
+    box-shadow:
+      0 0 0 1px var(--glow-edge),
+      0 0 0 3px var(--glow-ring),
+      0 0 22px 3px var(--glow-halo);
+    animation: breathe 3.8s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
+
+  /* table rows can't carry an outer halo reliably — they get a lit band */
+  tr.is-recent td { background: var(--glow-tint); }
+  tr.is-recent td:first-child { box-shadow: inset 3px 0 0 var(--glow-ring), inset 4px 0 0 var(--glow-edge); }
+
+  .p-new {
+    color: var(--ink); background: var(--glow-tint);
+    border-color: var(--glow-ring);
+    box-shadow: 0 0 10px var(--glow-halo);
+  }
+
+  .glowkey {
+    display: inline-flex; align-items: center; gap: 8px;
+    font: 500 11px/1 var(--mono); color: var(--muted);
+  }
+  .glowkey i {
+    width: 11px; height: 11px; border-radius: 3px; display: inline-block;
+    background: var(--panel); border: 1px solid var(--glow-edge);
+    box-shadow: 0 0 0 2px var(--glow-ring), 0 0 12px var(--glow-halo);
+  }
+
   * { box-sizing: border-box; }
   body {
     margin: 0; background: var(--ground); color: var(--ink);
@@ -287,6 +351,8 @@
   }
   @media (prefers-reduced-motion: reduce) {
     *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    /* an infinite animation squeezed to .01ms strobes — hold the glow steady instead */
+    .is-recent::after { animation: none !important; opacity: .88; }
   }
 </style>
 
@@ -296,15 +362,15 @@
       <span class="mark">AOS</span>
       <span>
         <b>Lane Board</b>
-        <span>current state &middot; as of 2026-07-26 15:49 &middot; read-only prototype</span>
+        <span>current state &middot; as of 2026-07-27 00:28 &middot; read-only prototype</span>
       </span>
     </div>
     <div class="counters">
-      <span class="ctr"><b>13</b><span>lanes</span></span>
+      <span class="ctr"><b>16</b><span>lanes</span></span>
       <span class="ctr is-warn"><b>5</b><span>unmerged</span></span>
       <span class="ctr is-warn"><b>2</b><span>overlap</span></span>
-      <span class="ctr is-crit"><b>3</b><span>pipelines down</span></span>
-      <span class="ctr is-ok"><b>100%</b><span>live claims</span></span>
+      <span class="ctr is-crit"><b>2</b><span>pipelines down</span></span>
+      <span class="ctr is-ok is-recent"><b>0</b><span>fail-open / 240</span></span>
     </div>
     <button class="themebtn" id="tt" type="button">theme</button>
   </div>
@@ -315,12 +381,13 @@
   <div class="intro">
     <div>
       <h1>Everything in flight, on one screen.</h1>
-      <p>Thirteen lanes across four projects, rendered from the real state of this machine on 2026&#8209;07&#8209;26 — git, Postgres, Task Scheduler, and the handoff corpus. Every number carries the query that produced it, so any figure on this page can be falsified in about ten seconds.</p>
+      <p>Sixteen lanes across four projects, rendered from the real state of this machine on 2026&#8209;07&#8209;27 — git, Postgres, Task Scheduler, and the handoff corpus. Every number carries the query that produced it, so any figure on this page can be falsified in about ten seconds.</p>
       <p>This is also the v0 interface spec. The design package scored four interface directions and shipped prototypes for none of them; this is the first one with data behind it.</p>
+      <p class="glowkey" style="margin-top:14px"><i></i> a white glow marks everything completed or worked on in the last two sessions — 07&#8209;26 13:40 onward, commits <span class="mono">94d36a9..b6e7842</span> plus tonight's open work.</p>
     </div>
-    <aside class="callout is-fixed">
-      <span class="lbl">Fixed — the substrate tells the truth now</span>
-      <p>This panel read <b>0 of 8,179</b> claims owned by a live session for the whole life of this board. Two hooks disagreed about who you are and a third about where you are. Both are fixed and verified: a second session editing the same file is now <b>denied</b>, and the 8,189 dead rows have been migrated out. The table is small and entirely live-owned.</p>
+    <aside class="callout is-fixed is-recent">
+      <span class="lbl">Fixed — and now proven under load</span>
+      <p>The lock was repaired at 15:38, but the repair was verified single-shot. Under 20 concurrent writers the old Python-subprocess transport still let <b>6 of 60</b> intruders through. Replacing it with node <span class="mono">pg</span> took that to <b>0 of 240</b> at triple the load. A green quiet test was never evidence; the load probe is the gate now.</p>
     </aside>
   </div>
 
@@ -332,10 +399,11 @@
     </div>
 
     <div class="filters" role="group" aria-label="Filter lanes">
-      <button class="chip" data-f="all" aria-pressed="true">all 13</button>
+      <button class="chip" data-f="all" aria-pressed="true">all 16</button>
+      <button class="chip" data-f="recent" aria-pressed="false">last 2 sessions 4</button>
       <button class="chip" data-f="attention" aria-pressed="false">needs attention 5</button>
       <button class="chip" data-f="unmerged" aria-pressed="false">unmerged 5</button>
-      <button class="chip" data-f="ccv3" aria-pressed="false">continuous-claude 8</button>
+      <button class="chip" data-f="ccv3" aria-pressed="false">continuous-claude 11</button>
       <button class="chip" data-f="other" aria-pressed="false">other projects 5</button>
     </div>
 
@@ -358,76 +426,94 @@
             <thead><tr><th>Task</th><th class="mono">Last run</th><th>Result</th></tr></thead>
             <tbody>
               <tr><td class="mono">Self-Improvement-Research</td><td class="mono">07-26 07:30</td><td><span class="pill p-crit">killed</span></td></tr>
-              <tr><td class="mono">Project-Cards</td><td class="mono">07-26 07:45</td><td><span class="pill p-crit">killed</span></td></tr>
               <tr><td class="mono">Dashboard-Sync</td><td class="mono">07-25 20:00</td><td><span class="pill p-crit">killed</span></td></tr>
+              <tr class="is-recent"><td class="mono">Project-Cards</td><td class="mono">07-26 17:45</td><td><span class="pill p-ok">ok</span> <span class="pill p-new">was killed</span></td></tr>
               <tr><td class="mono">Health-Check</td><td class="mono">07-24 08:03</td><td><span class="pill p-warn">exit 3</span></td></tr>
+              <tr><td class="mono">Outcome-Tagger</td><td class="mono">07-26 16:30</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">Blocklist-Update</td><td class="mono">07-26 11:46</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">UW-Daily-Snapshot</td><td class="mono">07-26 11:46</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">Judge-Batch</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">YouTube-Poll</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">Embedding-Daemon-Daily</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">Finance-Eval-Weekly</td><td class="mono">07-26 03:17</td><td><span class="pill p-ok">ok</span></td></tr>
-              <tr><td class="mono">Outcome-Tagger</td><td class="mono">07-25 16:30</td><td><span class="pill p-ok">ok</span></td></tr>
-              <tr><td class="mono">FourthOS-Weekly</td><td class="mono">07-23 07:00</td><td><span class="pill p-ok">ok</span></td></tr>
               <tr><td class="mono">Embedding-Daemon</td><td class="mono">07-25 20:52</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">FourthOS-Weekly</td><td class="mono">07-23 07:00</td><td><span class="pill p-ok">ok</span></td></tr>
             </tbody>
           </table>
         </div>
         <span class="recon"><b>reconcile</b>  Get-ScheduledTaskInfo -TaskName CCv3-* | select TaskName,LastRunTime,LastTaskResult
-<b>note</b>  3 tasks return 0xC000013A — all three die at the headless `claude -p` step,
-       after the registry row has already landed. Cause still unexplained.</span>
+<b>changed</b>   Project-Cards returned 0x0 at 17:45, its first green run since 07-25. Down
+          from 3 killed to 2. ONE green run is not three — nothing was fixed on
+          purpose, so treat this as unexplained-good, not resolved.
+<b>note</b>      the other 2 still return 0xC000013A, dying at the headless `claude -p`
+          step after the registry row has already landed. Cause still unexplained.</span>
       </div>
     </div>
 
     <div>
       <div class="sec-head"><h2>Coordination integrity</h2><p>Is the lock telling the truth?</p></div>
-      <div class="card">
+      <div class="card is-recent">
         <div class="bigstat">
-          <span class="n" style="color:var(--ok)">3</span><span class="of">/ 3 claims owned by a live session</span>
-          <p class="cap">Was 0 of 8,179. A cross-session edit now returns a real <b>deny</b> instead of falling through to &ldquo;took over stale lock&rdquo;, and the 8,189 dead rows were dumped and migrated out.</p>
+          <span class="n" style="color:var(--ok)">0</span><span class="of">/ 240 concurrent intruders admitted</span>
+          <p class="cap">The load probe is the only test that has ever caught this lock failing. The old transport admitted <b>6 of 60</b> at n=20; node <span class="mono">pg</span> admits <b>0 of 240</b> at n=120 — past <span class="mono">max_connections</span> and still holding.</p>
         </div>
-        <div class="bar" role="img" aria-label="0 orphaned, 0 stale, 3 live">
-          <i style="width:100%;background:var(--ok)"></i>
+        <div class="bar" role="img" aria-label="0 orphaned, 29 stale-owner, 0 live">
+          <i style="width:100%;background:var(--warn)"></i>
         </div>
         <div class="bar-key">
           <span><i class="sw" style="background:var(--crit)"></i> 0 orphaned</span>
-          <span><i class="sw" style="background:var(--warn)"></i> 0 stale owner</span>
-          <span><i class="sw" style="background:var(--ok)"></i> 3 live</span>
+          <span><i class="sw" style="background:var(--warn)"></i> 29 stale owner</span>
+          <span><i class="sw" style="background:var(--ok)"></i> 0 live</span>
         </div>
         <div class="tw">
           <table>
             <thead><tr><th>Signal</th><th class="mono">Value</th><th>Reading</th></tr></thead>
             <tbody>
+              <tr class="is-recent"><td>Fail-open under load (n=120)</td><td class="mono">0 / 240</td><td><span class="pill p-ok">holds</span> <span class="pill p-new">was 6/60</span></td></tr>
+              <tr class="is-recent"><td>Claim path latency</td><td class="mono">~250ms</td><td><span class="pill p-ok">was ~1530ms</span></td></tr>
+              <tr class="is-recent"><td>DB unreachable</td><td class="mono">degraded</td><td><span class="pill p-ok">announced, was silent</span></td></tr>
+              <tr><td>Claims owned by <span class="mono">s-*</span></td><td class="mono">0</td><td><span class="pill p-ok">was 8,170</span></td></tr>
               <tr><td>Session rows per real session</td><td class="mono">1</td><td><span class="pill p-ok">was 2</span></td></tr>
               <tr><td>Project spellings per repo</td><td class="mono">1</td><td><span class="pill p-ok">was 2</span></td></tr>
               <tr><td>Cross-session edit</td><td class="mono">deny</td><td><span class="pill p-ok">blocks</span></td></tr>
-              <tr><td>Same-session edit</td><td class="mono">allow</td><td><span class="pill p-ok">no self-block</span></td></tr>
               <tr><td>Heartbeat renews on</td><td class="mono">edit</td><td><span class="pill p-ok">was prompt only</span></td></tr>
-              <tr><td>Conflict events logged</td><td class="mono">—</td><td><span class="pill p-idle">not measured</span></td></tr>
+              <tr class="is-recent"><td>Conflict events logged</td><td class="mono">—</td><td><span class="pill p-warn">step 4 · in progress</span></td></tr>
+              <tr><td>TOCTOU on an unclaimed file</td><td class="mono">—</td><td><span class="pill p-warn">open · step 4</span></td></tr>
               <tr><td>Sessions with <span class="mono">ended_at</span></td><td class="mono">—</td><td><span class="pill p-idle">no column</span></td></tr>
               <tr><td>Lease TTL + fencing</td><td class="mono">—</td><td><span class="pill p-warn">step 5</span></td></tr>
+              <tr><td>Stale <span class="mono">s-*</span> rows in <span class="mono">sessions</span></td><td class="mono">1,479</td><td><span class="pill p-idle">cosmetic · unclaimed</span></td></tr>
             </tbody>
           </table>
         </div>
-        <span class="recon"><b>reconcile</b>  SELECT count(*) FILTER (WHERE s.id IS NULL)                                  AS orphaned,
+        <span class="recon"><b>gate</b>       node scripts/coordination/load-probe.mjs --hook .claude/hooks/dist/file-claims.mjs \
+                --n 20 --rounds 3          # must print "verdict":"HOLDS", fail_open_count 0
+<b>reconcile</b>  SELECT count(*) FILTER (WHERE s.id IS NULL)                                  AS orphaned,
                 count(*) FILTER (WHERE s.last_heartbeat &lt;  now() - interval '5 min') AS stale,
                 count(*) FILTER (WHERE s.last_heartbeat &gt;= now() - interval '5 min') AS live
          FROM file_claims fc LEFT JOIN sessions s ON s.id = fc.session_id;
-<b>PASSING</b>   returns 3. It returned 0 for the entire prior life of this board.
+<b>reads</b>      0 orphaned | 29 stale | 0 live, at 00:28 with nobody mid-edit.
+<b>careful</b>    "0 live" here is NOT the old bug returning. It is the correct resting state:
+           the last writer stopped two hours ago, so its claims aged out exactly as
+           designed. This gauge is point-in-time and only means something while a
+           session is actively editing. The DURABLE invariants are the ones above it —
+           0 orphaned, 0 `s-*`-owned claims, 1 namespace per repo — and they hold.
+           An earlier version of this panel printed "3/3 live" as a victory metric.
+           That was a snapshot dressed up as an invariant; corrected 07-27.
 <b>cause 1</b>    session-register minted an `s-*` id and froze; heartbeat used the payload uuid
            and lived; file-claims filed under the frozen one. Two rows per session, every
            claim owned by the corpse. All three now coordinate on the payload id.
 <b>cause 2</b>    CLAUDE_PROJECT_DIR is injected into hooks in BACKSLASH form while cwd gives
            forward slashes, so one repo held two blind claim namespaces (5,737 of 8,179
            rows, 7 repos). Fixing identity ALONE would not have restored blocking.
-<b>lease</b>      heartbeat fired only on UserPromptSubmit, so a session went stale mid-work
-           (measured 652s idle while actively committing). Claiming now renews it.
-<b>migrated</b>   8,189 dead rows pg_dump'd, then deleted. 8,192 -> 3, all live-owned.
-<b>refuted</b>    07-26: a second cause was suspected — isSessionActive defaulting to :5434 while
-           claimFile defaulted to :5432. Not real. db-utils-pg.ts:68-77 holds the file's ONLY
-           spawnSync and always injects CONTINUOUS_CLAUDE_DB_URL, so every inline port literal
-           is unreachable. Same in the running bundle (dist/file-claims.mjs:64-67).
-           Cause is the identity split alone — which makes the fix smaller, not larger.</span>
+<b>cause 3</b>    the repaired lock was still verified SINGLE-SHOT. Two `uv run python` spawns
+           per Edit at ~700ms each have no headroom in a 3s budget, so under 20 concurrent
+           writers 6 of 60 intruders were still admitted — a passing test over a broken
+           lock. node `pg` replaced the transport; 0 of 240 at n=120. (d4ecead)
+<b>migrated</b>   8,189 dead rows pg_dump'd, then deleted. 1,479 `s-*` rows remain in `sessions`
+           but own zero claims and are unrenewable by construction — cosmetic.
+<b>refuted</b>    a second cause was suspected — isSessionActive defaulting to :5434 while
+           claimFile defaulted to :5432. Not real: the only spawnSync always injected
+           CONTINUOUS_CLAUDE_DB_URL, so every inline port literal was unreachable.</span>
       </div>
     </div>
   </section>
@@ -445,10 +531,25 @@
             <tr><th>Thread</th><th>State</th><th>Blocking / note</th></tr>
           </thead>
           <tbody>
-            <tr>
+            <tr class="is-recent">
               <td>Session identity + claim repair<span class="src">ca1a16e · 3185fb1 · .claude/hooks/src/shared/session-id.ts</span></td>
               <td><span class="pill p-ok">shipped</span></td>
               <td>Designed twice, built zero times — built 07-26. Blocking verified live.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>Coordination transport → node <span class="mono">pg</span><span class="src">d4ecead · .claude/hooks/src/shared/pg-client.ts · scripts/coordination/load-probe.mjs</span></td>
+              <td><span class="pill p-ok">shipped</span></td>
+              <td>Step 1b. 6/60 fail-open → 0/240. The load probe is now the gate for any claim-path edit.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>Conflict + blocked-on event logging<span class="src">plan step 4 · agentic_os.coordination_event</span></td>
+              <td><span class="pill p-warn">in progress</span></td>
+              <td>The retrofit-hostile one — the event is computed in file-claims.ts and discarded today.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>MSYS fork storm<span class="src">b6e7842 · scripts/msys/repro.ps1 · scripts/msys/reap.ps1</span></td>
+              <td><span class="pill p-warn">partial</span></td>
+              <td>Reproduced on demand (the rule said it wasn't). Reaper ships. Bash-tool root cause still NOT established.</td>
             </tr>
             <tr>
               <td>Sync-layer integrity (mcpServers + dist hashes)<span class="src">docs/self-improvement/proposals/2026-07-26-hooks.md · scripts/sync-to-active.sh:283,443</span></td>
@@ -461,9 +562,9 @@
               <td>Root cause unexplained. 3 pipelines failing daily.</td>
             </tr>
             <tr>
-              <td>Agentic OS Slice 1 (board + fleet grid)<span class="src">~/.claude/plans/i-am-ready-to-noble-wilkinson.md</span></td>
+              <td>Agentic OS Slice 1 (board + fleet grid)<span class="src">~/.claude/plans/i-am-ready-to-noble-wilkinson.md · 94d36a9</span></td>
               <td><span class="pill p-warn">backlog</span></td>
-              <td>Approved. Blocked on identity repair. 13 design docs still untracked.</td>
+              <td>Approved. Identity repair no longer blocking. Corpus committed 07-26 — 14 docs + 9 app files now tracked.</td>
             </tr>
             <tr>
               <td>Reporting efficiency Phase 2<span class="src">thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md</span></td>
@@ -536,11 +637,11 @@
         <p>Same terminal is a <b>warn</b>; a stranger on infra scope is a <b>block</b>; docs are advisory. Posture is a column on the lane, not a hardcoded path list.</p>
       </article>
 
-      <article class="card">
+      <article class="card is-recent">
         <span class="lbl" style="color:var(--crit)">Answer</span>
         <h3>The one thing worth a browser</h3>
         <p>A session hits a permission prompt in a terminal you aren't watching and waits — silently, indefinitely, holding a worktree.</p>
-        <p>Nothing records that today. Capturing it is the cheapest high-value instrument missing, and <em>&ldquo;2 lanes waiting on you, oldest 47 min&rdquo;</em> is the line that justifies the app.</p>
+        <p>Nothing records that today: the <code>Notification</code> event Claude Code already fires is not registered by a single hook. Capturing it is step 4, in progress now, and <em>&ldquo;2 lanes waiting on you, oldest 47 min&rdquo;</em> is the line that justifies the app.</p>
       </article>
 
       <article class="card">
@@ -562,7 +663,7 @@
 
   <footer>
     <span>Agentic OS &middot; lane board prototype &middot; read-only, no writes, no agents invoked</span>
-    <span>rendered from verified state &middot; last refreshed 2026-07-26 15:49</span>
+    <span>rendered from verified state &middot; last refreshed 2026-07-27 00:28 &middot; glow = last 2 sessions</span>
   </footer>
 </div>
 
@@ -570,9 +671,27 @@
   const LANES = [
     { id:'coordination-repair', proj:'continuous-claude', grp:'ccv3', sev:'ok', state:'shipped', statec:'p-ok',
       scope:'.claude/hooks/src/{session-id,session-register,heartbeat,file-claims}.ts',
-      branch:'agentic-os', age:'today', flags:['infra'], sess:null,
+      branch:'agentic-os', age:'today', flags:['infra'], sess:null, recent:true,
       why:'Shipped 07-26 in ca1a16e + 3185fb1. session-register minted an s-* id that froze while heartbeat used the payload uuid, so claims were filed under an owner that never beats. A second break — CLAUDE_PROJECT_DIR arriving in backslash form while cwd gives forward slashes — split one repo into two claim namespaces and had to be fixed too. The predicted sequencing trap turned out not to exist: a probe showed subagents already share the parent session_id, so the CC_TERMINAL_ID sibling rule was dropped rather than built.',
-      done:'DONE — a cross-session edit is denied, same-session is not, 8,192 rows migrated to 3 live-owned.' },
+      done:'DONE — a cross-session edit is denied, same-session is not, 8,189 dead rows migrated out.' },
+
+    { id:'coordination-transport', proj:'continuous-claude', grp:'ccv3', sev:'ok', state:'shipped', statec:'p-ok',
+      scope:'.claude/hooks/src/shared/{pg-client,db-utils-pg}.ts · scripts/coordination/load-probe.mjs',
+      branch:'agentic-os', age:'today', flags:['infra'], sess:null, recent:true,
+      why:'Step 1b, shipped 07-26 in d4ecead. The identity repair was verified single-shot, which is exactly how this layer has passed tests while broken before. Baselining under concurrency first showed the repaired lock STILL admitted 6 of 60 intruders onto a file an active session held: two `uv run python` spawns per Edit at ~700ms each leave no headroom in a 3s budget, spawnSync returns non-zero, and every caller read that failure as "no claim exists". Replacing the transport with node pg gives 0 of 240 at n=120 — past max_connections and still holding. Failure is also loud now: checkFileClaim returns `degraded` instead of silently permitting.',
+      done:'DONE — load probe prints HOLDS with fail_open_count 0. It is now the gate for any claim-path change; the unit tests deliberately do not cover this property.' },
+
+    { id:'conflict-events', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'in progress', statec:'p-warn',
+      scope:'agentic_os.coordination_event · file-claims.ts · a new Notification hook',
+      branch:'agentic-os', age:'now', flags:['infra','open'], sess:'live', recent:true,
+      why:'Step 4, and the most retrofit-hostile item in the plan: a block or stale-takeover is computed in file-claims.ts and thrown away — no row, no log. Every day without it is evidence that can never be recovered. Events go to Postgres in the same transaction as the claim decision, not JSONL, because concurrent hook processes interleave appends on Windows. The Notification hook is not registered at all today, so a session waiting on a permission prompt in an unwatched terminal is invisible — the cheapest high-value instrument missing.',
+      done:'A blocked edit and a permission prompt each land exactly one row, and the load probe still prints HOLDS afterwards.' },
+
+    { id:'msys-fork-storm', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'partial', statec:'p-warn',
+      scope:'scripts/msys/{repro,reap}.ps1 · scripts/git-safe.ps1 · .claude/rules/windows-platform.md',
+      branch:'agentic-os', age:'today', flags:['ops','open'], sess:null, recent:true,
+      why:'Shipped 07-26 in 2541b4f + b6e7842. The rule said this was not reproducible; it is — the earlier harness used the wrong shape. Bursts of N identical bash processes stay stubbornly bimodal. What reproduces is what real git hooks create: a long-lived MSYS process holding a cohort open while short-lived nested cold-starts arrive into it. Fired on the first attempt, twice. The crash is not the worst outcome — affected processes BLOCK rather than die, at ~0 CPU, and never exit; one trial left 51 alive, 46 of them untracked descendants that per-pid Stop-Process sails straight past.',
+      done:'PARTIAL — repro + reaper ship. What actually broke the Bash tool is still NOT established: it was probed three times mid-storm, including with 48 stuck processes alive, and worked every time. Do not write these up as one bug. The warm-keeper A/B is still untested, but now has something to measure against.' },
 
     { id:'harness-security', proj:'continuous-claude', grp:'ccv3', sev:'crit', state:'ready', statec:'p-crit',
       scope:'scripts/sync-to-active.sh · .claude/settings.json',
@@ -583,13 +702,13 @@
     { id:'claude-p-hang', proj:'continuous-claude', grp:'ccv3', sev:'crit', state:'blocked', statec:'p-crit',
       scope:'scripts/self-improvement · scripts/project-cards · report-registry',
       branch:'—', age:'2d', flags:['ops'], sess:null,
-      why:'Three scheduled pipelines die at the headless claude -p step after their registry row lands. The always-emit contract works; what it records is genuinely broken. Root cause unexplained.',
-      done:'Three consecutive green runs, each landing exactly one non-Failed registry row.' },
+      why:'Scheduled pipelines die at the headless claude -p step after their registry row lands. The always-emit contract works; what it records is genuinely broken. Root cause still unexplained. Project-Cards returned 0x0 at 17:45 on 07-26, its first green run since 07-25, taking this from 3 down to 2 — but nothing was changed on purpose, so that is unexplained-good, not fixed.',
+      done:'Three consecutive green runs each, landing exactly one non-Failed registry row.' },
 
     { id:'agentic-os-board', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'backlog', statec:'p-warn',
       scope:'apps/agentic-os/** · docs/architecture/agentic-os/**',
-      branch:'agentic-os', age:'8d', flags:['untracked'], sess:null,
-      why:'Thirteen design docs and the DB safety proof are still untracked in git, eight days after a plan whose day-one guard was to commit them. Schema exists with zero rows.',
+      branch:'agentic-os', age:'8d', flags:[], sess:null,
+      why:'The untracked-corpus flag this lane carried is now false: 94d36a9 committed it on 07-26 and git tracks 14 docs plus 9 app files. What remains is that the schema still holds only project + project_alias and zero lanes — the board has no rows to render, and step 4 is about to add the first table that writes itself.',
       done:'Lanes seeded from the 18-project registry; board usable from psql.' },
 
     { id:'reporting-phase-2', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'backlog', statec:'p-warn',
@@ -648,7 +767,7 @@
   ];
 
   const GROUPS = [
-    { key:'ccv3', name:'continuous-claude', note:'8 lanes · 4 branches unmerged' },
+    { key:'ccv3', name:'continuous-claude', note:'11 lanes · 4 branches unmerged' },
     { key:'other', name:'other projects', note:'5 lanes · portfolio visibility only' }
   ];
 
@@ -665,6 +784,7 @@
       'ext-blocked':['p-idle','ext blocked'],
       'spike-gated':['p-idle','spike gated'],
       untriaged:['p-idle','untriaged'],
+      open:     ['p-warn','open'],
       '188 behind':['p-idle','188 behind']
     };
     const [cls, txt] = m[f] || ['p-idle', f];
@@ -681,6 +801,7 @@
         if (filter === 'other') return l.grp === 'other';
         if (filter === 'unmerged') return l.flags.indexOf('unmerged') > -1;
         if (filter === 'attention') return l.sev === 'crit' || l.sev === 'warn';
+        if (filter === 'recent') return l.recent === true;
         return true;
       });
       if (!rows.length) return;
@@ -693,8 +814,9 @@
       rows.forEach(function (l) {
         const btn = document.createElement('button');
         btn.type = 'button';
-        btn.className = 'lane';
+        btn.className = 'lane' + (l.recent ? ' is-recent' : '');
         btn.setAttribute('aria-expanded', 'false');
+        if (l.recent) btn.setAttribute('title', 'touched in the last 2 sessions');
         btn.innerHTML =
           '<span class="stripe s-' + l.sev + '"></span>' +
           '<span class="nm">' + l.id + '<small>' + l.proj + '</small></span>' +
