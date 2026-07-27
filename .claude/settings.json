@@ -291,6 +291,14 @@
               "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
               "user_prompt_submit"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
           }
         ]
       }
@@ -370,6 +378,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/identity-probe.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
           }
         ]
       }

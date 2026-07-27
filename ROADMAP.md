@@ -1,5 +1,11 @@
 # Project Roadmap
 
+> **⚠ Multiple sessions run on branch `agentic-os` (2026-07-27).** Coordination is in the
+> database, not in a file: run `node scripts/coordination/lane.mjs board` to see every lane
+> and who holds it, and `claim <id>` before starting work. See
+> [`COORDINATION.md`](COORDINATION.md) for the command list and the rules code does not
+> enforce. This roadmap stays a record of work; the lane board is the live channel.
+
 ## Current Focus
 **Repair the coordination layer, then stand up the lane board.** Multi-session work is blocked by a broken session identity: `sessions` holds two rows per real session, and 0 of 8,170 `file_claims` are owned by a live session — so the lock never blocks another session and sometimes blocks you against yourself.
 - Plan: `~/.claude/plans/we-have-been-working-jolly-token.md` (premortem-mitigated, Codex pass folded in)
