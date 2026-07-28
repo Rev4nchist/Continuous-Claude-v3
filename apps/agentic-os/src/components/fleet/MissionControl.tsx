@@ -49,6 +49,7 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
           status={status}
           error={error}
           ageMs={ageMs}
+          generatedAt={data.generatedAt}
           consecutiveFailures={consecutiveFailures}
           onRefresh={refresh}
         />
@@ -106,15 +107,35 @@ function LiveIndicator({
   status,
   error,
   ageMs,
+  generatedAt,
   consecutiveFailures,
   onRefresh,
 }: {
   status: 'live' | 'refreshing' | 'error' | 'paused';
   error: string | null;
   ageMs: number | null;
+  /** `MissionControlSnapshot.generatedAt` — when the SERVER built the data on
+   *  screen, ISO-8601 UTC. It has been computed on every snapshot since the
+   *  endpoint was written and rendered nowhere until 2026-07-28.
+   *
+   *  It is the anchor the relative ages cannot be. `ageMs` is measured from the
+   *  last successful FETCH on the client, so during an outage it keeps counting
+   *  while every number underneath it stays frozen — and a paused tab shows a
+   *  plausible small age for data that is hours old. An absolute server stamp
+   *  cannot drift, cannot freeze, and answers "as of when?" outright. */
+  generatedAt: string;
   consecutiveFailures: number;
   onRefresh: () => void;
 }) {
+  // Sliced out of the ISO string, never parsed into a Date. new Date(...) here
+  // would render in the viewer's local zone on the client and UTC during SSR —
+  // a hydration mismatch — and this file's own timestamps are UTC-bearing
+  // `timestamp without time zone`, the exact class of bug that has already cost
+  // this project two rounds. A substring cannot be five hours wrong.
+  const serverClock = /^\d{4}-\d{2}-\d{2}T\d{2}:\d{2}:\d{2}/.test(generatedAt)
+    ? `${generatedAt.slice(11, 19)}Z`
+    : null;
+
   const dot =
     status === 'error'
       ? 'bg-destructive'
@@ -122,14 +143,22 @@ function LiveIndicator({
         ? 'bg-muted-foreground'
         : 'bg-emerald-500';
 
+  const ageSeconds = ageMs === null ? null : Math.max(0, Math.round(ageMs / 1000));
+
   const label =
     status === 'error'
-      ? `stale — ${consecutiveFailures} failed ${consecutiveFailures === 1 ? 'refresh' : 'refreshes'}`
+      ? // The AGE is the point of this state and it used to be dropped here:
+        // "stale — 3 failed refreshes" tells you something is wrong but not
+        // whether you are looking at 10-second-old or 40-minute-old numbers,
+        // which is the only part that decides whether you can act on them.
+        `stale ${ageSeconds === null ? '' : `${ageSeconds}s `}— ${consecutiveFailures} failed ${
+          consecutiveFailures === 1 ? 'refresh' : 'refreshes'
+        }`
       : status === 'paused'
-        ? 'paused (tab hidden)'
-        : ageMs === null
+        ? `paused (tab hidden)${ageSeconds === null ? '' : ` — ${ageSeconds}s old`}`
+        : ageSeconds === null
           ? 'live'
-          : `updated ${Math.max(0, Math.round(ageMs / 1000))}s ago`;
+          : `updated ${ageSeconds}s ago`;
 
   return (
     <div className="flex flex-col items-end gap-1">
@@ -149,6 +178,14 @@ function LiveIndicator({
         />
         <span className="tabular-nums">{label}</span>
       </button>
+      {serverClock && (
+        <span
+          className="font-mono text-[0.6875rem] tabular-nums text-muted-foreground"
+          title="When the SERVER built the data on screen (UTC). Unlike the relative age above, this cannot keep counting while the data underneath it is frozen."
+        >
+          data as of {serverClock}
+        </span>
+      )}
       {status === 'error' && error && (
         <span className="max-w-xs truncate text-right font-mono text-[0.6875rem] text-destructive">
           {error}

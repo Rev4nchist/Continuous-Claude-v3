@@ -23,9 +23,24 @@ import { useCallback, useEffect, useRef, useState, useSyncExternalStore } from '
  *      This app reads a database shared with three other applications; a
  *      forgotten background tab issuing a query every 5 seconds forever is a bad
  *      neighbour, and the first thing you want on refocus is fresh numbers.
- *   3. Only one request is ever in flight. The previous one is aborted rather
- *      than raced, so a slow query cannot land after a newer, faster one and
- *      roll the screen backwards.
+ *   3. Only one request is ever in flight, so a slow query cannot land after a
+ *      newer, faster one and roll the screen backwards. This is enforced by
+ *      SKIPPING a new request while one is running — NOT, as it was until
+ *      2026-07-28, by aborting the running one.
+ *
+ *      That distinction was a permanent silent outage. The interval fires every
+ *      5s unconditionally, so any response slower than 5s was aborted by the
+ *      next tick, which started a request that was aborted by the tick after
+ *      it, forever — no fetch could ever complete again. And because an abort
+ *      returns early WITHOUT setting an error or counting a failure, the header
+ *      never left "refreshing", `consecutiveFailures` stayed 0, and the screen
+ *      presented frozen data with no indication anything was wrong. A dashboard
+ *      that stops updating must say so; this one could not.
+ *
+ *      A request is now also given a hard REQUEST_TIMEOUT_MS deadline. Skipping
+ *      alone would trade starvation for a different permanent stall: one hung
+ *      request with no timeout would block every future poll. A timeout counts
+ *      as a REAL failure — error state, failure count, visible.
  */
 
 export type LiveStatus =
@@ -49,7 +64,9 @@ export type LiveData<T> = {
    *  client-measured age for it would be a small lie. */
   ageMs: number | null;
   consecutiveFailures: number;
-  /** Force an immediate refresh, cancelling any in-flight request. */
+  /** Ask for an immediate refresh. A no-op while a request is already in flight —
+   *  that request will deliver, and cancelling it to start another is what caused
+   *  the starvation described in the header. */
   refresh: () => void;
 };
 
@@ -64,6 +81,11 @@ export type UseLiveDataOptions<T> = {
 };
 
 const DEFAULT_INTERVAL_MS = 5_000;
+
+/** Hard deadline for a single request. Three poll intervals: long enough that a
+ *  merely slow query recovers on its own, short enough that a hung one surfaces
+ *  as an error rather than quietly holding the poller shut. */
+const REQUEST_TIMEOUT_MS = 15_000;
 
 /** Re-render cadence for the age display. Independent of the poll interval so
  *  "12s ago" keeps counting up while a request is failing. */
@@ -108,9 +130,23 @@ export function useLiveData<T>({
   const inFlight = useRef<AbortController | null>(null);
 
   const fetchOnce = useCallback(async () => {
-    inFlight.current?.abort();
+    // SKIP while busy — see behaviour 3 in the header. Aborting the in-flight
+    // request here instead is what made a >5s response a permanent, invisible
+    // outage. The running request will deliver; a second one cannot help.
+    if (inFlight.current) return;
+
     const controller = new AbortController();
     inFlight.current = controller;
+
+    // Tracked separately from signal.aborted because the two aborts mean
+    // opposite things: a timeout is a FAILURE the user must see, while a
+    // cancellation (unmount, tab hidden, endpoint change) is this hook tidying
+    // up and must stay silent.
+    let timedOut = false;
+    const deadline = setTimeout(() => {
+      timedOut = true;
+      controller.abort();
+    }, REQUEST_TIMEOUT_MS);
 
     setFetchStatus((s) => (s === 'error' ? 'error' : 'refreshing'));
 
@@ -147,13 +183,22 @@ export function useLiveData<T>({
       setNow(at);
       setFetchStatus('live');
     } catch (caught) {
-      // An abort is this hook cancelling itself, not a failure. Counting it
-      // would put the header in an error state every time the tab regains focus.
-      if (controller.signal.aborted) return;
-      setError(caught instanceof Error ? caught.message : String(caught));
+      // A cancellation is this hook tidying up, not a failure — counting it
+      // would put the header in an error state every time the tab regains
+      // focus. A TIMEOUT also arrives as an abort but is the opposite: it is
+      // the failure this dashboard most needs to admit to.
+      if (controller.signal.aborted && !timedOut) return;
+      setError(
+        timedOut
+          ? `no response in ${Math.round(REQUEST_TIMEOUT_MS / 1000)}s`
+          : caught instanceof Error
+            ? caught.message
+            : String(caught),
+      );
       setFailures((n) => n + 1);
       setFetchStatus('error');
     } finally {
+      clearTimeout(deadline);
       if (inFlight.current === controller) inFlight.current = null;
     }
   }, [endpoint]);
@@ -175,6 +220,12 @@ export function useLiveData<T>({
       clearTimeout(immediate);
       clearInterval(timer);
       inFlight.current?.abort();
+      // Cleared SYNCHRONOUSLY, not left to the aborted request's finally block.
+      // That block runs a microtask later, so on tab-refocus the new effect's
+      // immediate fetch would see a stale non-null ref and skip itself — turning
+      // "fires immediately on return" (behaviour 2) into a full interval of
+      // stale data at exactly the moment the user is looking.
+      inFlight.current = null;
     };
   }, [enabled, hidden, fetchOnce, intervalMs]);
 
