@@ -16,7 +16,7 @@ import { formatAge, formatAgo, plural } from './format';
  * about whether you are working.
  */
 export function ActiveSessionsStrip({ active }: { active: ActiveSessions }) {
-  const { sessions, windowMinutes, truncated } = active;
+  const { sessions, recentlyEnded, windowMinutes, truncated } = active;
 
   return (
     <section className="space-y-3">
@@ -106,16 +106,70 @@ export function ActiveSessionsStrip({ active }: { active: ActiveSessions }) {
         </ul>
       )}
 
+      {recentlyEnded.length > 0 && (
+        <div className="space-y-2">
+          <h3 className="text-xs font-medium tracking-tight text-muted-foreground">
+            Closed in the last {windowMinutes}m
+          </h3>
+          <ul className="grid grid-cols-1 gap-2 lg:grid-cols-2">
+            {recentlyEnded.map((session) => (
+              <li
+                key={session.id}
+                className="flex items-start gap-3 rounded-lg border border-dashed p-3 opacity-70"
+              >
+                <span aria-hidden className="mt-1.5 size-2 shrink-0 rounded-full bg-muted-foreground/40" />
+                <div className="min-w-0 flex-1">
+                  <div className="flex items-baseline justify-between gap-3">
+                    <span className="truncate text-sm">
+                      {session.projectDisplayName ?? (
+                        <span className="text-amber-600 dark:text-amber-500">unmapped</span>
+                      )}
+                    </span>
+                    <span
+                      className="shrink-0 font-mono text-[0.6875rem] text-muted-foreground"
+                      title={session.id}
+                    >
+                      {session.shortId}
+                    </span>
+                  </div>
+                  <p className="mt-1 text-[0.6875rem] tabular-nums text-muted-foreground">
+                    {/* Membership in this list comes from the SQL predicate, not
+                        from this number, so it can in principle be absent. Say so
+                        rather than rendering `?? 0` as "closed just now". */}
+                    {session.endedSecondsAgo === null
+                      ? 'closed, time unknown'
+                      : `closed ${formatAgo(session.endedSecondsAgo)}`}
+                    {session.endReason && (
+                      <> · <span className="font-mono">{session.endReason}</span></>
+                    )}
+                    {session.startedSecondsAgo !== null && (
+                      <> · ran {formatAge(session.startedSecondsAgo)}</>
+                    )}
+                  </p>
+                </div>
+              </li>
+            ))}
+          </ul>
+        </div>
+      )}
+
       <p className="text-xs leading-relaxed text-muted-foreground">
         {sessions.length > 0 && (
           <>
             {sessions.length} live {plural(sessions.length, 'session')}.{' '}
           </>
         )}
-        Sessions are never deleted from <code className="text-[0.7rem]">public.sessions</code>,
-        and nothing writes an end-of-session marker, so &ldquo;active&rdquo; is defined
-        entirely by this {windowMinutes}-minute window — not by anything the row itself
-        records as open or closed. A terminal you closed twelve minutes ago is still here.
+        {/* CORRECTED 2026-07-28. This paragraph used to end "nothing writes an
+            end-of-session marker ... a terminal you closed twelve minutes ago is
+            still here". Something writes one now, so that had to go — a stale
+            explanation of a fixed bug is worse than none. What replaces it is the
+            limit that is STILL true, stated as narrowly as it actually holds. */}
+        A session leaves this list the moment its SessionEnd hook records an end,
+        and reappears under &ldquo;closed&rdquo; above. That hook cannot run if the
+        process is killed outright, so a session with no recorded end is{' '}
+        <em>unknown</em>, not necessarily alive — for those, and for every row
+        written before 2026-07-28, this {windowMinutes}-minute window of silence is
+        still the only thing separating live from long gone.
       </p>
     </section>
   );

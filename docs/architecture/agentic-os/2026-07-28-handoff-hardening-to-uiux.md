@@ -199,19 +199,38 @@ Select-String -Path "$env:USERPROFILE\.codex\hooks.json" -Pattern 'session-regis
 Get-Item "$env:USERPROFILE\.codex\hooks\dist\session-register.mjs" | Select-Object LastWriteTime
 ```
 
-**2. No session-END writer exists.** `coordination-release.ts` runs on SessionEnd
-but touches `file_claims` only; `public.sessions` has no `ended_at`, no status,
-no exit reason. A terminal you closed reads "active" for up to 15 minutes, and
-"crashed" is indistinguishable from "exited cleanly". **This one matters
-disproportionately for where the product is going** — you cannot manage or spin
-up sessions from a screen that cannot tell you which are alive. `coordination-release.ts`
-already receives Claude Code's `reason` string and discards it.
+**2. ~~No session-END writer exists.~~ DONE 2026-07-28.** `sessions.ended_at` /
+`end_reason` now exist and `coordination-release.ts` writes them, concurrently
+with the claim release so a dead database costs one timeout at exit rather than
+two. "Ended" is defined RELATIVELY at read time — `ended_at >= GREATEST(
+last_heartbeat, last_activity_at)` — so a resumed session un-ends itself with no
+clearing write anywhere, and no hook ordering requirement.
 
-**3. `public.sessions` has no index for the liveness query.** `EXPLAIN ANALYZE`
-shows a Seq Scan removing 2,433 rows to return 3, every 5 seconds, forever, on a
-database shared with three other applications. 0.45 ms today — this is the
-silently-degrading shape, not a current outage. Any index is DDL on a shared
-table: generate → read the SQL → `db:check` → `migrate`. **Never `drizzle-kit push`.**
+A missing `ended_at` still means **UNKNOWN, never "crashed"**: SessionEnd cannot
+fire for a process that was killed, and every row written before this date
+predates the writer. Lease expiry remains the backstop, which is why it still
+exists. Gate: `node scripts/coordination/session-lifecycle-probe.mjs` (7/7,
+exercises the real hook bundle against the real database and cleans up after
+itself).
+
+**3. ~~`public.sessions` has no index for the liveness query.~~ DONE 2026-07-28**
+— along with item 2 above; both were DDL on the same table, so they were one
+migration or none. Seq Scan → Index Scan, 48 buffers → 5, 0.412 ms → 0.054 ms,
+and 2,450 rows discarded per poll → 0.
+
+**CORRECTION to what this section originally said.** It prescribed "generate →
+read the SQL → `db:check` → `migrate`". That is wrong for this table and would
+have wasted the next session's time. `public.*` declarations live in
+`src/db/readonly/` and are **deliberately excluded** from `drizzle.config.ts`'s
+`schema` glob — the file says so, because drizzle table declarations are not
+inert to drizzle-kit even under `schemaFilter`. Verified by running it:
+`db:generate` reports `6 tables` (all `agentic_os`) and `No schema changes,
+nothing to migrate`. It cannot see `public.sessions` and never will.
+
+DDL on the shared `public` schema is **hand-written SQL**, following the
+established `scripts/coordination/migrations/` pattern that
+`docker/init-schema.sql` already points at for `file_claims`. The standing rule
+is unchanged and load-bearing: **never `drizzle-kit push`.**
 
 **4. 88% of `claim_takeover` rows carry an old detail schema** with
 `holderClaimedAt` values up to 5 hours in the **future**.

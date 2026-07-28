@@ -5337,6 +5337,21 @@ async function releaseSessionClaims(sessionId, reason) {
   );
   return { released: value.length, files: value, degraded };
 }
+async function markSessionEnded(sessionId, reason) {
+  if (!sessionId || sessionId === "unknown") return { recorded: false, degraded: false };
+  const { value, degraded } = await withPgClientOrFallback(
+    async (client) => {
+      const res = await client.query(
+        `UPDATE sessions SET ended_at = NOW(), end_reason = $2 WHERE id = $1`,
+        [sessionId, reason]
+      );
+      return res.rowCount ?? 0;
+    },
+    0,
+    `markSessionEnded(${sessionId})`
+  );
+  return { recorded: value > 0, degraded };
+}
 
 // src/shared/session-id.ts
 import { mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -5387,12 +5402,15 @@ async function main() {
     return;
   }
   const sessionId = resolveSessionId(input.session_id);
-  const { released, degraded } = await releaseSessionClaims(
-    sessionId,
-    input.reason || "session_end"
-  );
-  if (degraded) {
-    console.error("[coordination-release] DB unreachable; claims will expire with their leases");
+  const reason = input.reason || "session_end";
+  const [{ released, degraded }, ended] = await Promise.all([
+    releaseSessionClaims(sessionId, reason),
+    markSessionEnded(sessionId, reason)
+  ]);
+  if (degraded || ended.degraded) {
+    console.error(
+      "[coordination-release] DB unreachable; claims will expire with their leases and this session will have no recorded end"
+    );
   } else if (released > 0) {
     console.error(`[coordination-release] released ${released} claim(s) for ${sessionId}`);
   }

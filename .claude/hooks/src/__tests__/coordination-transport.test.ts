@@ -29,6 +29,7 @@ import {
   isSessionActive,
   registerSession,
   getActiveSessions,
+  markSessionEnded,
 } from '../shared/db-utils-pg.js';
 import { withPgClientOrFallback, getPgConnectionString } from '../shared/pg-client.js';
 
@@ -65,6 +66,7 @@ describe('coordination calls are async', () => {
     ['isSessionActive', () => isSessionActive('s')],
     ['registerSession', () => registerSession('s', 'p')],
     ['getActiveSessions', () => getActiveSessions('p')],
+    ['markSessionEnded', () => markSessionEnded('s', 'clear')],
   ];
 
   for (const [name, call] of cases) {
@@ -116,6 +118,26 @@ describe('unreachable database degrades loudly, not silently', () => {
   it('claimFile reports failure when it could not write', async () => {
     const result = await claimFile('f.ts', 'p', 's');
     expect(result.success).toBe(false);
+  });
+
+  it('markSessionEnded reports degraded rather than a recorded end', async () => {
+    // The distinction this protects: `recorded: false` must never be readable as
+    // "the session was not ended". Downstream, a missing ended_at already means
+    // UNKNOWN, and a silent false here would be a second, invisible source of the
+    // same ambiguity -- one the operator could not even see in the exit log.
+    const result = await markSessionEnded('s', 'clear');
+    expect(result.recorded).toBe(false);
+    expect(result.degraded).toBe(true);
+  });
+
+  it('markSessionEnded does not even try for an unusable session id', async () => {
+    // Guard clause, so it must NOT degrade: there was nothing to attempt. This
+    // also keeps a session whose id could not be resolved from paying a 2s
+    // connect timeout on the way out.
+    for (const id of ['', 'unknown']) {
+      const result = await markSessionEnded(id, 'clear');
+      expect(result).toEqual({ recorded: false, degraded: false });
+    }
   });
 
   it('isSessionActive treats an unreachable DB as "not provably alive"', async () => {

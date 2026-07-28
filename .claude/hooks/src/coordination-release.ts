@@ -15,16 +15,34 @@
  * crashed session is an hour of blocked edits on a hook file. Release is what
  * pays for the longer leases.
  *
- * WHAT IT DOES NOT DO
- * -------------------
- * It does not mark the session ended. `sessions` still has no `ended_at`, so
- * "finished" and "abandoned" and "crashed" remain indistinguishable downstream;
- * that column arrives with agentic_os.session at step 8. This hook deliberately
- * does not invent it in the legacy table.
+ * IT NOW ALSO MARKS THE SESSION ENDED (changed 2026-07-28)
+ * --------------------------------------------------------
+ * The previous version of this comment said `sessions` had no `ended_at` and
+ * that the column would "arrive with agentic_os.session at step 8", so this hook
+ * deliberately did not invent it in the legacy table. That deferral has been
+ * reversed, on purpose:
  *
- * It also cannot run when the process is killed outright — a SessionEnd hook
- * needs the session to end, not to be destroyed. The lease expiry remains the
- * backstop for that case, which is exactly why the backstop still exists.
+ *   - step 8 has not happened and is not next;
+ *   - meanwhile the dashboard reads liveness ENTIRELY from a 15-minute window,
+ *     so a terminal you closed reads "active" for a quarter of an hour and a
+ *     crash is indistinguishable from a clean exit forever;
+ *   - and this hook was already handed the one fact that fixes it — Claude
+ *     Code's `reason` string — and dropped it into a `claim_released` event,
+ *     which is not queryable as session state and is not even written when the
+ *     session held no claims.
+ *
+ * `sessions.ended_at` / `end_reason` were added by
+ * scripts/coordination/migrations/003-sessions-lifecycle.sql. Writing them here
+ * costs nothing extra: the hook already runs, and the UPDATE goes out CONCURRENT
+ * with the claim release rather than after it, so a degraded database stalls exit
+ * by one timeout rather than two. They touch different tables and cannot contend.
+ *
+ * WHAT IT STILL DOES NOT DO
+ * -------------------------
+ * It cannot run when the process is killed outright — a SessionEnd hook needs the
+ * session to end, not to be destroyed. So a missing `ended_at` means UNKNOWN, not
+ * "crashed", and the lease expiry remains the backstop for that case, which is
+ * exactly why the backstop still exists.
  *
  * POSTURE
  * -------
@@ -34,7 +52,7 @@
  */
 
 import { readFileSync } from 'fs';
-import { releaseSessionClaims } from './shared/db-utils-pg.js';
+import { markSessionEnded, releaseSessionClaims } from './shared/db-utils-pg.js';
 import { resolveSessionId } from './shared/session-id.js';
 
 interface SessionEndInput {
@@ -55,16 +73,27 @@ export async function main(): Promise<void> {
   }
 
   const sessionId = resolveSessionId(input.session_id);
-  const { released, degraded } = await releaseSessionClaims(
-    sessionId,
-    input.reason || 'session_end',
-  );
+  const reason = input.reason || 'session_end';
+
+  // CONCURRENT, not sequential. Both calls open their own short-lived client with
+  // a 2s connect / 3s query bound, and a session exit should pay that ceiling
+  // once rather than twice when the container is down. They write different
+  // tables (file_claims + coordination_event vs sessions) so they cannot contend.
+  // Both fail open by construction, so neither can reject and take the other with
+  // it — Promise.all is safe here without an allSettled wrapper.
+  const [{ released, degraded }, ended] = await Promise.all([
+    releaseSessionClaims(sessionId, reason),
+    markSessionEnded(sessionId, reason),
+  ]);
 
   // stderr only, and only when something actually happened. stdout is the hook
   // protocol channel; a SessionEnd hook that chatters on every exit is noise in
   // the one place a user is not looking.
-  if (degraded) {
-    console.error('[coordination-release] DB unreachable; claims will expire with their leases');
+  if (degraded || ended.degraded) {
+    console.error(
+      '[coordination-release] DB unreachable; claims will expire with their leases ' +
+      'and this session will have no recorded end',
+    );
   } else if (released > 0) {
     console.error(`[coordination-release] released ${released} claim(s) for ${sessionId}`);
   }

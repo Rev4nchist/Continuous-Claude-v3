@@ -1035,6 +1035,75 @@ export async function releaseSessionClaims(
 }
 
 /**
+ * Record that a session ENDED, and Claude Code's own word for why.
+ *
+ * WHY THIS EXISTS
+ * ---------------
+ * `sessions` recorded four kinds of beginning-or-middle (started_at,
+ * last_heartbeat, last_activity_at, memory_extracted_at) and no kind of end.
+ * Liveness was therefore inferred ENTIRELY from a read-side window: a terminal
+ * you closed deliberately read "active" for up to fifteen minutes, and a session
+ * that crashed was indistinguishable from one that exited cleanly — permanently,
+ * not just for those fifteen minutes.
+ *
+ * coordination-release.ts has received Claude Code's `reason` string on every
+ * SessionEnd since leases landed and passed it only into a `claim_released`
+ * event, which is not queryable as session state and does not exist at all when
+ * the session happened to hold no claims.
+ *
+ * WHAT NULL MEANS (the part that must not be got wrong downstream)
+ * ---------------------------------------------------------------
+ * A written `ended_at` is a POSITIVE signal and is trustworthy. Its ABSENCE is
+ * UNKNOWN, never "crashed": the session may still be running, or the process may
+ * have been killed outright so no SessionEnd ever fired — the lease expiry
+ * remains the backstop for that case, which is why the backstop still exists —
+ * or the row may simply predate this writer, which was true of all 2,453 rows
+ * the day it shipped.
+ *
+ * WHY UPDATE-ONLY (never INSERT)
+ * ------------------------------
+ * Same rule as shared/session-touch.ts: row creation belongs to
+ * session-register.ts / heartbeat.ts, which own `project` and its canonical-path
+ * normalization. A second module with its own opinion about project spelling is
+ * how the 115-alias mess was made. An UPDATE against an id that never registered
+ * is a harmless zero-row no-op, which is the right outcome for a session the
+ * coordination layer never knew about.
+ *
+ * WHY NOTHING HAS TO CLEAR IT ON RESUME
+ * -------------------------------------
+ * `claude --resume` re-registers the same id, and hooks can race. Readers
+ * therefore define "ended" RELATIVELY —
+ *   `ended_at IS NOT NULL AND ended_at >= GREATEST(last_heartbeat, last_activity_at)`
+ * — so any later sign of life un-ends the session on its own. No clearing write,
+ * no ordering requirement between hooks, and session-register/heartbeat stay
+ * untouched. Do not "fix" this by adding a clearing UPDATE somewhere.
+ *
+ * NOW() is evaluated by the DATABASE. `ended_at` is `timestamp without time
+ * zone` holding UTC; computing it in this process would reintroduce the exact
+ * client-side timezone assumption the rest of this file was corrected to remove.
+ */
+export async function markSessionEnded(
+  sessionId: string,
+  reason: string,
+): Promise<{ recorded: boolean; degraded: boolean }> {
+  if (!sessionId || sessionId === 'unknown') return { recorded: false, degraded: false };
+
+  const { value, degraded } = await withPgClientOrFallback(
+    async (client) => {
+      const res = await client.query(
+        `UPDATE sessions SET ended_at = NOW(), end_reason = $2 WHERE id = $1`,
+        [sessionId, reason],
+      );
+      return res.rowCount ?? 0;
+    },
+    0,
+    `markSessionEnded(${sessionId})`,
+  );
+
+  return { recorded: value > 0, degraded };
+}
+
+/**
  * Claim a file for the current session.
  *
  * Superseded on the hook path by resolveFileClaim, which decides and claims in

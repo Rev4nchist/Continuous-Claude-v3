@@ -10,6 +10,18 @@ CREATE EXTENSION IF NOT EXISTS pg_trgm;
 -- =============================================================================
 
 -- Sessions: Cross-terminal awareness
+--
+-- The lifecycle columns are the table's only record of an END. `ended_at` NOT
+-- NULL means a SessionEnd hook observed the session finishing and is
+-- trustworthy; NULL means UNKNOWN -- still running, killed outright before the
+-- hook could fire, or simply older than the writer -- and must never be rendered
+-- as "crashed". There is deliberately no `status` column: status is derivable
+-- from these facts plus the clock, and a stored one rots the first time a writer
+-- misses an update.
+--
+-- Already-provisioned databases get the same shape from
+-- scripts/coordination/migrations/003-sessions-lifecycle.sql, which also carries
+-- the full rationale.
 CREATE TABLE IF NOT EXISTS sessions (
     id TEXT PRIMARY KEY,
     project TEXT NOT NULL,
@@ -17,8 +29,26 @@ CREATE TABLE IF NOT EXISTS sessions (
     started_at TIMESTAMP DEFAULT NOW(),
     last_heartbeat TIMESTAMP DEFAULT NOW(),
     last_activity_at TIMESTAMP,
-    memory_extracted_at TIMESTAMP
+    memory_extracted_at TIMESTAMP,
+    ended_at TIMESTAMP,
+    end_reason TEXT
 );
+
+-- The dashboard's liveness query runs every 5 seconds, forever. Without this it
+-- is a Seq Scan that discarded 2,450 rows to return 3 (measured 2026-07-28);
+-- with it, an Index Scan touching 5 buffers instead of 48.
+--
+-- GREATEST of all three timestamps is "the most recent thing known about this
+-- session". Including ended_at is what lets a session that idled for an hour and
+-- was then closed still appear as recently-ended. For a live session ended_at is
+-- NULL and this reduces exactly to GREATEST of the other two, so the live path is
+-- unchanged -- Postgres GREATEST ignores NULLs.
+--
+-- Partial because every caller carries the `s-%` exclusion and those rows are the
+-- majority of the table.
+CREATE INDEX IF NOT EXISTS sessions_last_signal_idx
+    ON sessions (GREATEST(last_heartbeat, last_activity_at, ended_at) DESC)
+    WHERE id NOT LIKE 's-%';
 
 -- File Claims: Cross-terminal file locking
 --

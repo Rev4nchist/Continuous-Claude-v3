@@ -41,9 +41,35 @@ export const sessions = pgTable('sessions', {
   memoryExtractedAt: timestamp('memory_extracted_at'),
   lastActivityAt: timestamp('last_activity_at'),
   lastPeriodicExtraction: timestamp('last_periodic_extraction'),
+
+  /**
+   * The session's END, written by .claude/hooks/src/coordination-release.ts on
+   * SessionEnd (added 2026-07-28, migration 003-sessions-lifecycle.sql).
+   *
+   * NOT NULL is a trustworthy positive signal. NULL is UNKNOWN and must NEVER be
+   * rendered as "crashed" — the session may be running, may have been killed
+   * before the hook could fire, or may simply predate the writer, which was true
+   * of all 2,453 rows on the day it shipped. Same contract as lastActivityAt.
+   *
+   * A session can resume, so readers must treat it as ended only when the end is
+   * the LAST thing that happened: ended_at >= GREATEST(lastHeartbeat,
+   * lastActivityAt). Nothing clears the column.
+   */
+  endedAt: timestamp('ended_at'),
+  /** Claude Code's own reason string, verbatim. Unconstrained TEXT on purpose. */
+  endReason: text('end_reason'),
 });
 
-/** Cross-session file locks. 8,138+ rows. Composite PK (file_path, project). */
+/**
+ * Cross-session file locks. Composite PK (file_path, project).
+ *
+ * COUNT CORRECTED 2026-07-28: this said "8,138+ rows", which was true when it was
+ * written and had been false since coordination-release.ts started releasing
+ * claims on SessionEnd. Measured today: 92. It is now a live WORKING SET that
+ * rises and falls, not an append-only pile — so treat any number written here as
+ * a dated observation rather than a property of the table, and re-measure rather
+ * than quoting this line back.
+ */
 export const fileClaims = pgTable('file_claims', {
   filePath: text('file_path').notNull(),
   project: text('project').notNull(),
