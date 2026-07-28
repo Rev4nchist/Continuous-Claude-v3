@@ -766,6 +766,45 @@ def _load_settings() -> dict | None:
     return None
 
 
+def _hook_entry_mjs_path(h: dict) -> str | None:
+    """Extract the .mjs path from ONE hook entry, in either registration shape.
+
+    Two shapes exist in the wild and only one was ever handled:
+
+        inline  {"command": "node C:/.../foo.mjs"}
+        split   {"command": "node", "args": ["C:/.../foo.mjs"]}
+
+    Reading `command` alone was correct for the inline form and blind to the
+    split one. FOUND 2026-07-28: the live ~/.claude/settings.json uses the SPLIT
+    form for 84 of its 85 hooks (the repo copy: 78 args arrays, 1 inline), so
+    both callers below were finding ZERO paths.
+
+    That did not fail loudly. check_hook_registrations reported
+    "0 hook registrations all resolve" and PASSED -- vacuously true, and
+    structurally incapable of catching the registered-but-missing hook it exists
+    to catch. check_hook_orphans counted every dist file as an orphan (114).
+    get_registered_hooks returned an empty set, so the whole hook-runtime
+    category was comparing traces against nothing.
+
+    Quotes are stripped because a quoted inline command
+    ("node 'C:/.../foo.mjs'") would otherwise resolve to a path with a leading
+    apostrophe and be reported as MISSING -- a false alarm in the opposite
+    direction. That form is live in ~/.codex/hooks.json today.
+    """
+    candidates: list[str] = []
+    cmd = h.get("command")
+    if isinstance(cmd, str):
+        candidates.append(cmd)
+    args = h.get("args")
+    if isinstance(args, list):
+        candidates.extend(a for a in args if isinstance(a, str))
+    for text in candidates:
+        m = re.search(r"(\S+\.mjs)", text)
+        if m:
+            return m.group(1).strip("'\"")
+    return None
+
+
 def _extract_hook_paths(settings: dict) -> list[tuple[str, str]]:
     """Return list of (event, path) from hooks config."""
     hooks_cfg = settings.get("hooks") or {}
@@ -778,14 +817,10 @@ def _extract_hook_paths(settings: dict) -> list[tuple[str, str]]:
             for h in inner:
                 if not isinstance(h, dict):
                     continue
-                cmd = h.get("command", "")
-                # extract last .mjs path from the command
-                m = re.search(r"(\S+\.mjs)", cmd)
-                if m:
-                    raw = m.group(1)
+                raw = _hook_entry_mjs_path(h)
+                if raw:
                     # resolve ~
-                    resolved = os.path.expanduser(raw)
-                    paths.append((event, resolved))
+                    paths.append((event, os.path.expanduser(raw)))
     return paths
 
 
@@ -1198,13 +1233,14 @@ def get_registered_hooks(
             for h in inner:
                 if not isinstance(h, dict):
                     continue
-                cmd = h.get("command", "")
-                if not isinstance(cmd, str):
+                # Handles BOTH the inline and the split command/args shapes --
+                # see _hook_entry_mjs_path. Reading `command` alone returned an
+                # empty set against the live settings.json, which silently made
+                # every hook-runtime comparison below a comparison against
+                # nothing.
+                raw = _hook_entry_mjs_path(h)
+                if not raw:
                     continue
-                m = re.search(r"(\S+\.mjs)", cmd)
-                if not m:
-                    continue
-                raw = m.group(1)
                 # Normalize separators and strip dirname + extension
                 raw_norm = raw.replace("\\", "/")
                 bare = raw_norm.rsplit("/", 1)[-1]
