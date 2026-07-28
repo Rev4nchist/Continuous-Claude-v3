@@ -28,6 +28,8 @@ import { readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
+import { touchSessionActivity } from './shared/session-touch.js';
+
 // ---------------------------------------------------------------------------
 // Constants
 // ---------------------------------------------------------------------------
@@ -168,6 +170,20 @@ async function main() {
   const rawSessionId = data.session_id || 'unknown';
   const sessionId = rawSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const toolName = data.tool_name || '';
+
+  // Liveness stamp. This hook is registered on PostToolUse with an EMPTY matcher,
+  // making it the only node hook that already spawns on every single tool call —
+  // so it is the one place a per-tool-call DB touch costs zero additional process
+  // spawns, which matters on this machine. It is deliberately BEFORE the
+  // shouldExtract early-return below: that return fires on 49 of every 50 calls,
+  // and liveness that only updates every 50th tool call would reproduce the
+  // sparse-signal bug this is fixing.
+  //
+  // Awaited, not fire-and-forget: this process exits immediately after the
+  // console.log below, so a detached promise would be abandoned unresolved.
+  // touchSessionActivity throttles itself to one write per 30s and never
+  // rejects, so the cost here is bounded and cannot break the extraction path.
+  await touchSessionActivity(rawSessionId);
 
   // State file for this session
   const stateFile = join(tmpdir(), `claude-periodic-extract-${sessionId}.json`);

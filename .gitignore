@@ -286,3 +286,10 @@ mcps/
 
 # Machine-local editor config
 .vscode/
+
+# Machine-local Claude Code config. Untracked 2026-07-28: it had been committed to a
+# pushed repo carrying 21 permission grants (including Bash(powershell:*) and
+# Bash(node:*)), zero deny entries, and enableAllProjectMcpServers - while
+# .claude/rules/sync-known-gaps.md declares this file "NEVER sync". No secrets in it,
+# so no rotation was needed; the file itself is untouched on disk.
+.claude/settings.local.json

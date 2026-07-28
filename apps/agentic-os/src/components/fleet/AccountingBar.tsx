@@ -12,7 +12,7 @@ import { formatCount } from './format';
  * Every row in `public.sessions` lands in exactly one of four buckets, and they
  * sum to the table's row count:
  *
- *   mapped + unmatched + heartbeats + nullProject = totalSessionRows
+ *   mapped + unmatched + duplicates + nullProject = totalSessionRows
  *
  * `reconciles` is that check, run in the query against a single snapshot rather
  * than asserted in a test. If it is ever false the projection is lying, and this
@@ -40,9 +40,12 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
       tone: fleet.unmatched.sessionCount > 0 ? 'text-amber-600 dark:text-amber-500' : 'text-foreground',
     },
     {
-      label: 'Coordination rows',
-      value: fleet.heartbeats,
-      hint: 's-* ids from generateSessionId() — hook coordination, not Claude Code sessions.',
+      label: 'Duplicates',
+      value: fleet.duplicates,
+      hint:
+        'Pre-2026-07-26 s-* registrations collapsed into the uuid row for the SAME session, ' +
+        'so they are not counted twice. Matched on identical raw path within 90 seconds — ' +
+        'a strict heuristic, so this is a floor and some twins go undetected.',
       tone: 'text-muted-foreground',
     },
     {
@@ -64,7 +67,7 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
             These numbers do not add up — treat the grid as unreliable.
           </p>
           <p className="mt-1 text-muted-foreground">
-            The four buckets below sum to {formatCount(mapped + fleet.unmatched.sessionCount + fleet.heartbeats + fleet.nullProject)}
+            The four buckets below sum to {formatCount(mapped + fleet.unmatched.sessionCount + fleet.duplicates + fleet.nullProject)}
             , but <code className="text-xs">public.sessions</code> holds{' '}
             {formatCount(fleet.totalSessionRows)} rows. A session has been dropped or
             double-counted by the partition, which means every per-project count above may
@@ -80,6 +83,47 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
               {formatCount(bucket.value)}
             </div>
             <div className="mt-0.5 text-xs text-muted-foreground">{bucket.label}</div>
+          </div>
+        ))}
+      </div>
+
+      {/* WHICH HARNESS. Orthogonal to the arithmetic above, not another slice of it:
+          these three sum to Attributed, and they answer a different question — not
+          "can we account for this row" but "what wrote it". Codex is broken out
+          because it was previously counted as Claude Code, silently: agent-arch was
+          41% Codex under a card that said "sessions". */}
+      <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border bg-border">
+        {(
+          [
+            {
+              key: 'claude',
+              label: 'Claude Code',
+              value: fleet.byHarness.claude,
+              hint: 'UUIDv4 session ids — written by this repo’s own hooks.',
+            },
+            {
+              key: 'codex',
+              label: 'Codex',
+              value: fleet.byHarness.codex,
+              hint:
+                'UUIDv7 thread ids, written into this shared table by a SEPARATE copy of ' +
+                'these hooks at ~/.codex/hooks/dist built 2026-05-04. Still registered, ' +
+                'still writing, three months behind this repo.',
+            },
+            {
+              key: 'legacy',
+              label: 'Legacy',
+              value: fleet.byHarness.legacy,
+              hint:
+                'Pre-2026-07-26 s-* registrations, after removing provable duplicates. ' +
+                'An UPPER bound: undetected twins may still be inside it. Production of ' +
+                'this id shape has stopped, so the number is frozen, not growing.',
+            },
+          ] as const
+        ).map((h) => (
+          <div key={h.key} className="bg-card p-4" title={h.hint}>
+            <div className="text-xl font-semibold tabular-nums">{formatCount(h.value)}</div>
+            <div className="mt-0.5 text-xs text-muted-foreground">{h.label}</div>
           </div>
         ))}
       </div>

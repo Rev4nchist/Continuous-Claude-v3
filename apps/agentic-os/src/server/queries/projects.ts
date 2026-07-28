@@ -11,14 +11,54 @@ import { db } from '@/db';
  * this directory is the API boundary; no component imports `db`).
  */
 
+/**
+ * Which harness wrote a session row. Derived from the id SHAPE, because no column
+ * records it — and the shapes are unambiguous:
+ *
+ *   claude — UUIDv4. Claude Code's own session id.
+ *   codex  — UUIDv7. OpenAI Codex thread ids, written into this shared table by a
+ *            SEPARATE, STALE copy of these hooks at ~/.codex/hooks/dist (built
+ *            2026-05-04, three months behind, still registered in ~/.codex/hooks.json
+ *            and still writing today). All 168 carry raw backslash paths the current
+ *            canonicalProject() cannot produce, and the first appeared 2026-05-10 —
+ *            six days after that mirror was built.
+ *   legacy — `s-*` from generateSessionId(). SessionStart registrations written before
+ *            the 2026-07-26 identity fix, when session-register and heartbeat disagreed
+ *            about the session id and every session produced TWO rows. Production has
+ *            essentially stopped (37/day on 07-24, 0 on 07-28) so this is a frozen
+ *            historical population, not a growing one.
+ *   other  — anything else. Currently 4 hand-typed diagnostic rows.
+ *
+ * This is a CLASSIFIER OVER EXISTING DATA, not a schema change. If sessions ever gains
+ * a real `harness` column, this becomes a fallback for old rows and nothing else moves.
+ */
+export type Harness = 'claude' | 'codex' | 'legacy' | 'other';
+
+export type HarnessCounts = {
+  claude: number;
+  codex: number;
+  legacy: number;
+  other: number;
+};
+
 export type ProjectSummary = {
   key: string;
   displayName: string;
   status: string;
   port: number | null;
   url: string | null;
-  /** Real Claude Code sessions only — `s-*` coordination heartbeats are excluded. */
+  /** EVERY session attributed to this project, across every harness — Claude Code,
+   *  Codex, and pre-2026-07-26 legacy registrations alike, minus provable duplicates.
+   *
+   *  CHANGED 2026-07-28. This used to mean "real Claude Code sessions only", which was
+   *  wrong twice: it silently EXCLUDED 1,483 `s-*` rows described as "coordination
+   *  heartbeats" that are actually session registrations, and it silently INCLUDED 168
+   *  Codex sessions counted as Claude ones (agent-arch was 41% Codex under the old
+   *  number). The fleet is multi-harness; the count now says so, and `byHarness` breaks
+   *  it down rather than making the reader guess which kind they are looking at. */
   sessionCount: number;
+  /** The same total, split by which harness wrote the row. Sums to `sessionCount`. */
+  byHarness: HarnessCounts;
   /** How many distinct raw `sessions.project` spellings collapse into this project.
    *  `continuous-claude` is currently 16: slash direction, case, trailing slash,
    *  subdirectories and worktrees. Surfacing it makes the normalization auditable. */
@@ -50,10 +90,21 @@ export type UnmatchedBucket = {
 export type FleetOverview = {
   projects: ProjectSummary[];
   unmatched: UnmatchedBucket;
-  /** `s-*` rows from generateSessionId() — coordination heartbeats, not real sessions.
-   *  Currently the MAJORITY of the table, which is why they are reported rather than
-   *  silently filtered: a total that shrank with no explanation invites mistrust. */
-  heartbeats: number;
+  /** Every ATTRIBUTED session split by harness. Sums to the sum of project counts. */
+  byHarness: HarnessCounts;
+  /**
+   * Legacy `s-*` rows collapsed into a uuid row that represents the SAME session, and
+   * therefore excluded from every session count so they are not counted twice.
+   *
+   * Matched on identical raw `project` string plus a start within ±90 seconds. That is
+   * a HEURISTIC and deliberately the strict one: matching on the alias-resolved project
+   * key instead would collapse 564 rather than 238, but it treats two unmapped paths as
+   * equal (NULL key = NULL key) and would merge genuinely distinct sessions. So this
+   * number is a FLOOR — some twins wrote different spellings of the same directory and
+   * are not detected, which means the `legacy` harness count is an UPPER bound on
+   * distinct legacy sessions. The UI must not present it as exact.
+   */
+  duplicates: number;
   /** Rows with a NULL/empty `project`. Every WHERE-based bucket would drop these. */
   nullProject: number;
   totalSessionRows: number;
@@ -75,7 +126,11 @@ export type FleetOverview = {
 
 type OverviewRow = {
   projects: ProjectSummary[] | null;
-  heartbeats: string;
+  duplicates: string;
+  h_claude: string;
+  h_codex: string;
+  h_legacy: string;
+  h_other: string;
   null_project: string;
   unseen_sessions: string;
   unseen_raws: string;
@@ -101,10 +156,38 @@ type OverviewRow = {
  */
 export async function getFleetOverview(): Promise<FleetOverview> {
   const { rows } = await db.execute<OverviewRow>(sql`
-    WITH bucketed AS (
+    WITH harnessed AS (
+      SELECT
+        s.*,
+        -- Id SHAPE is the only available evidence of provenance; see the Harness type.
+        -- The version nibble of a UUID is character 15 (8 hex, dash, 4 hex, dash, V).
+        CASE
+          WHEN s.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4' THEN 'claude'
+          WHEN s.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7' THEN 'codex'
+          WHEN s.id LIKE 's-%'                     THEN 'legacy'
+          ELSE                                          'other'
+        END AS harness
+      FROM public.sessions s
+    ),
+    -- A legacy row whose uuid twin exists is the SECOND registration of ONE session.
+    -- Counting both would inflate every project. See the duplicates note above: this is
+    -- the STRICT raw-path match on purpose, so it under-collapses rather than merging
+    -- two genuinely different sessions.
+    dup AS (
+      SELECT DISTINCT l.id
+      FROM harnessed l
+      JOIN harnessed u
+        ON u.harness IN ('claude', 'codex')
+       AND u.project = l.project
+       AND u.started_at BETWEEN l.started_at - interval '90 seconds'
+                            AND l.started_at + interval '90 seconds'
+      WHERE l.harness = 'legacy'
+    ),
+    bucketed AS (
       SELECT
         s.id,
         s.project,
+        s.harness,
         -- WHY THIS IS NOT JUST s.last_activity_at: that column is NULL in ALL 2,418
         -- rows (verified 2026-07-27 -- count(last_activity_at) returns 0). Nothing
         -- writes it. Reading it alone made every project's "last active" render as an
@@ -122,21 +205,35 @@ export async function getFleetOverview(): Promise<FleetOverview> {
         a.project_key,
         a.confidence,
         a.raw AS alias_raw,
+        -- Precedence: duplicate > null/empty > mapped > reviewed-unmapped > unseen.
+        -- The s-star shape NO LONGER short-circuits here (no backticks in this comment:
+        -- one inside a sql template literal terminates it, and tsc then points ~40 lines
+        -- away from the real cause -- the trap this file's own handoff documents).
+        -- It used to be first in this CASE, which meant 1,483
+        -- rows were dropped from project attribution before the alias join ever ran --
+        -- discarding real evidence, since every one of them carries a project value.
+        -- Harness is now an ORTHOGONAL dimension, not a bucket, so a legacy row is
+        -- attributed to its project like any other and merely labelled as legacy.
         CASE
-          WHEN s.id LIKE 's-%'                      THEN 'heartbeat'
+          WHEN d.id IS NOT NULL                     THEN 'duplicate'
           WHEN s.project IS NULL OR s.project = ''  THEN 'null_project'
           WHEN a.project_key IS NOT NULL            THEN 'mapped'
           WHEN a.raw IS NOT NULL                    THEN 'reviewed_unmapped'
           ELSE                                           'unseen'
         END AS bucket
-      FROM public.sessions s
+      FROM harnessed s
       LEFT JOIN agentic_os.project_alias a ON a.raw = s.project
+      LEFT JOIN dup d ON d.id = s.id
     ),
     per_project AS (
       SELECT
         b.project_key,
         count(*)                     AS session_count,
         count(DISTINCT b.project)    AS raw_spellings,
+        count(*) FILTER (WHERE b.harness = 'claude') AS h_claude,
+        count(*) FILTER (WHERE b.harness = 'codex')  AS h_codex,
+        count(*) FILTER (WHERE b.harness = 'legacy') AS h_legacy,
+        count(*) FILTER (WHERE b.harness = 'other')  AS h_other,
         NULLIF(max(b.activity_at), '-infinity'::timestamp) AS last_activity_at
       FROM bucketed b
       WHERE b.bucket = 'mapped'
@@ -152,6 +249,12 @@ export async function getFleetOverview(): Promise<FleetOverview> {
           p.port,
           p.url,
           COALESCE(pp.session_count, 0)::int   AS "sessionCount",
+          jsonb_build_object(
+            'claude', COALESCE(pp.h_claude, 0)::int,
+            'codex',  COALESCE(pp.h_codex,  0)::int,
+            'legacy', COALESCE(pp.h_legacy, 0)::int,
+            'other',  COALESCE(pp.h_other,  0)::int
+          )                                    AS "byHarness",
           COALESCE(pp.raw_spellings, 0)::int   AS "rawSpellings",
           -- The trailing "Z" is load-bearing. These are timestamp WITHOUT time zone
           -- columns that hold UTC (server TimeZone is Etc/UTC, verified). Emitting them
@@ -170,7 +273,11 @@ export async function getFleetOverview(): Promise<FleetOverview> {
     )
     SELECT
       (SELECT payload FROM projects) AS projects,
-      count(*) FILTER (WHERE bucket = 'heartbeat')::text            AS heartbeats,
+      count(*) FILTER (WHERE bucket = 'duplicate')::text            AS duplicates,
+      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'claude')::text AS h_claude,
+      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'codex')::text  AS h_codex,
+      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'legacy')::text AS h_legacy,
+      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'other')::text  AS h_other,
       count(*) FILTER (WHERE bucket = 'null_project')::text         AS null_project,
       count(*) FILTER (WHERE bucket = 'unseen')::text               AS unseen_sessions,
       count(DISTINCT project) FILTER (WHERE bucket = 'unseen')::text AS unseen_raws,
@@ -205,18 +312,31 @@ export async function getFleetOverview(): Promise<FleetOverview> {
     unseen,
   };
 
-  const heartbeats = n(r.heartbeats);
+  const duplicates = n(r.duplicates);
   const nullProject = n(r.null_project);
   const totalSessionRows = n(r.total);
   const mapped = projects.reduce((sum, p) => sum + p.sessionCount, 0);
 
+  const byHarness: HarnessCounts = {
+    claude: n(r.h_claude),
+    codex: n(r.h_codex),
+    legacy: n(r.h_legacy),
+    other: n(r.h_other),
+  };
+
   return {
     projects,
     unmatched,
-    heartbeats,
+    byHarness,
+    duplicates,
     nullProject,
     totalSessionRows,
+    // Same contract as before, with `duplicates` taking the slot `heartbeats` held.
+    // Legacy rows are no longer a bucket — they are inside `mapped`/`unmatched` now and
+    // labelled by harness — so removing them from this sum without adding the collapsed
+    // duplicates back would make it fail. It is checked at runtime for exactly that
+    // reason: a partition that stops adding up should say so, not round.
     reconciles:
-      mapped + unmatched.sessionCount + heartbeats + nullProject === totalSessionRows,
+      mapped + unmatched.sessionCount + duplicates + nullProject === totalSessionRows,
   };
 }

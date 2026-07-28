@@ -7,15 +7,22 @@ import { formatAgo, formatCount, plural, statusClasses } from './format';
 /**
  * One project in the fleet grid.
  *
- * Two numbers, and the second is the one that keeps the first honest:
- *   sessionCount — real Claude Code sessions attributed to this project
+ * Three numbers, and the two smaller ones keep the big one honest:
+ *   sessionCount — EVERY session attributed here, across every harness
+ *   byHarness    — which harness wrote them (Claude Code / Codex / legacy)
  *   rawSpellings — how many distinct `sessions.project` strings collapsed to get there
  *
- * `continuous-claude` shows 639 sessions from 16 spellings. Without the second
- * number that 639 looks like double-counting; with it, it reads as what it is —
- * subdirectories, worktrees, slash-direction and case variants of one path. The
- * mapping behind it is hand-authored, so the count proves nothing was DROPPED
- * and nothing here can prove a row went to the RIGHT project.
+ * `continuous-claude` shows 1,456 sessions from 23 spellings. Without the spelling
+ * count that number looks like double-counting; with it, it reads as what it is —
+ * subdirectories, worktrees, slash-direction and case variants of one path.
+ *
+ * The harness split is not decoration. Until 2026-07-28 this card said "sessions"
+ * and meant "Claude Code sessions", while 41% of agent-arch's were actually Codex
+ * and 1,483 legacy registrations were excluded entirely. A single number could not
+ * be both totals at once, so it silently was neither.
+ *
+ * The mapping behind all of it is hand-authored, so the count proves nothing was
+ * DROPPED and nothing here can prove a row went to the RIGHT project.
  */
 export function ProjectCard({ project }: { project: ProjectSummary }) {
   const idle = project.sessionCount === 0;
@@ -55,6 +62,24 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
           {plural(project.sessionCount, 'session')}
         </span>
       </div>
+
+      {project.sessionCount > 0 && (
+        <p className="-mt-1 font-mono text-[0.6875rem] text-muted-foreground">
+          {/* Only non-zero harnesses, so a Claude-only project does not carry a
+              permanent "codex 0" implying Codex is expected there. */}
+          {(
+            [
+              ['claude', project.byHarness.claude],
+              ['codex', project.byHarness.codex],
+              ['legacy', project.byHarness.legacy],
+              ['other', project.byHarness.other],
+            ] as const
+          )
+            .filter(([, n]) => n > 0)
+            .map(([name, n]) => `${name} ${formatCount(n)}`)
+            .join('  ·  ')}
+        </p>
+      )}
 
       <dl className="mt-auto grid gap-1 border-t pt-3 text-xs text-muted-foreground">
         <div className="flex items-baseline justify-between gap-3">

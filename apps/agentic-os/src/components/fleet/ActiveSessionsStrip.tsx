@@ -36,14 +36,19 @@ export function ActiveSessionsStrip({ active }: { active: ActiveSessions }) {
 
       {sessions.length === 0 ? (
         <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
-          No session has sent a heartbeat in {windowMinutes} minutes. Heartbeats are written
-          by the coordination hooks on tool use, so an open-but-idle terminal will drop off
-          this strip before it is actually closed.
+          No session has shown any sign of life in {windowMinutes} minutes. Liveness is the
+          more recent of a user prompt and an agent tool call, so an open-but-idle terminal
+          will drop off this strip before it is actually closed.
         </p>
       ) : (
         <ul className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           {sessions.map((session) => {
-            const fresh = session.heartbeatSecondsAgo < 120;
+            // Keyed on liveSecondsAgo, NOT heartbeatSecondsAgo. Measured on this
+            // machine 2026-07-28: session 9370e196 had made a tool call 5 seconds
+            // earlier and had a 442-second-old heartbeat, so the old test painted
+            // an actively-working agent amber. The dot answers "is anything
+            // happening", and a tool call is something happening.
+            const fresh = session.liveSecondsAgo < 120;
             return (
               <li
                 key={session.id}
@@ -84,7 +89,12 @@ export function ActiveSessionsStrip({ active }: { active: ActiveSessions }) {
                   </p>
 
                   <p className="mt-1.5 text-[0.6875rem] tabular-nums text-muted-foreground">
-                    heartbeat {formatAgo(session.heartbeatSecondsAgo)}
+                    active {formatAgo(session.liveSecondsAgo)}
+                    {session.activitySecondsAgo !== null && (
+                      <> · tool {formatAgo(session.activitySecondsAgo)}</>
+                    )}
+                    {' · prompt '}
+                    {formatAgo(session.heartbeatSecondsAgo)}
                     {session.startedSecondsAgo !== null && (
                       <> · open {formatAge(session.startedSecondsAgo)}</>
                     )}
@@ -103,8 +113,9 @@ export function ActiveSessionsStrip({ active }: { active: ActiveSessions }) {
           </>
         )}
         Sessions are never deleted from <code className="text-[0.7rem]">public.sessions</code>,
-        so &ldquo;active&rdquo; is defined entirely by this {windowMinutes}-minute heartbeat
-        window — not by anything the row itself records as open or closed.
+        and nothing writes an end-of-session marker, so &ldquo;active&rdquo; is defined
+        entirely by this {windowMinutes}-minute window — not by anything the row itself
+        records as open or closed. A terminal you closed twelve minutes ago is still here.
       </p>
     </section>
   );
