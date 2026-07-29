@@ -34,6 +34,26 @@ const REBUILD = args.includes('--rebuild');
 // GitHub Advisory API queries
 // ---------------------------------------------------------------------------
 
+/**
+ * Synchronous backoff that exists on Windows.
+ *
+ * This was `execSync('sleep N')`. There is no `sleep` on Windows, so the retry
+ * path threw `'sleep' is not recognized as an internal or external command` --
+ * FROM INSIDE THE CATCH BLOCK, so it escaped ghApiPaginated entirely and killed
+ * the whole run. The retry logic did not merely fail to wait; it converted every
+ * transient GitHub hiccup into a total failure of the daily security update.
+ * 28 scheduled runs, 24 [ERROR]s, 0 completions.
+ *
+ * Atomics.wait blocks the thread with no subprocess at all, which is the point:
+ * the previous implementation shelled out to sleep for three seconds of waiting.
+ */
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+/** Set when any page exhausted its retries -- see the note in main(). */
+let fetchWasIncomplete = false;
+
 function ghApiPaginated(endpoint, { retries = 3, timeoutMs = 60000 } = {}) {
   // Fetch page-by-page to avoid ENOBUFS on large datasets (npm malware = 100+ pages)
   const allResults = [];
@@ -62,12 +82,18 @@ function ghApiPaginated(endpoint, { retries = 3, timeoutMs = 60000 } = {}) {
         const reason = isBuffer ? 'BUFFER_OVERFLOW' : isTimeout ? 'TIMEOUT' : err.message?.slice(0, 80);
         console.error(`  Page ${page} attempt ${attempt}/${retries}: ${reason}`);
         if (attempt < retries) {
-          execSync(`sleep ${attempt * 3}`, { encoding: 'utf-8' });
+          sleepSync(attempt * 3000);
         }
       }
     }
 
     if (pageData === null) {
+      // Partial data is NOT a success. The merge below is additive, so a short
+      // fetch cannot delete an existing blocklist entry -- but it can silently
+      // fail to ADD one, and this is the feed for a supply-chain guard. A run
+      // that fetched 4 of 100 pages must not exit 0 looking identical to a run
+      // that fetched all of them.
+      fetchWasIncomplete = true;
       console.error(`  Giving up on page ${page} after ${retries} attempts. Returning ${allResults.length} results so far.`);
       break;
     }
@@ -284,7 +310,23 @@ async function main() {
   }
 }
 
-main().catch(err => {
-  console.error('Fatal error:', err);
-  process.exit(1);
-});
+main()
+  .then(() => {
+    // Checked HERE, not inside main(), because main() has several early returns
+    // ("already up to date", dry run) and each one would otherwise need its own
+    // copy of this check -- which is how the liveness predicate ended up wrong
+    // at eight sites. One exit path, one assertion.
+    if (fetchWasIncomplete) {
+      console.error(
+        '\n[ERROR] Advisory fetch was INCOMPLETE -- at least one page exhausted its retries.\n' +
+        '        Any changes fetched were merged and written (the merge is additive, so\n' +
+        '        nothing was removed), but this run did NOT see the full advisory set and\n' +
+        '        must not be recorded as a successful daily update. Re-run when GitHub is\n' +
+        '        reachable: node scripts/update-blocklist.mjs --apply');
+      process.exit(1);
+    }
+  })
+  .catch(err => {
+    console.error('Fatal error:', err);
+    process.exit(1);
+  });
