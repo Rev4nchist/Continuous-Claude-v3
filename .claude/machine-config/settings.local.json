@@ -1,0 +1,20 @@
+{
+  "enableAllProjectMcpServers": false,
+  "enabledMcpjsonServers": [],
+  "permissions": {
+    "allow": [
+      "Read",
+      "Glob",
+      "Grep",
+      "Write",
+      "Edit",
+      "Bash"
+    ],
+    "deny": [
+      "Bash(rm *)",
+      "Bash(rm)",
+      "Bash(rmdir *)",
+      "Bash(neonctl *delete*)"
+    ]
+  }
+}

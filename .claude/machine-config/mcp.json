@@ -1,0 +1,89 @@
+{
+  "mcpServers": {
+    "context7": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@upstash/context7-mcp@latest"
+      ],
+      "type": "stdio"
+    },
+    "github": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@modelcontextprotocol/server-github"
+      ],
+      "env": {
+        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
+      },
+      "type": "stdio"
+    },
+    "shadcn": {
+      "command": "shadcn",
+      "args": [
+        "mcp"
+      ],
+      "env": {
+        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
+      },
+      "type": "stdio"
+    },
+    "playwright": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "@playwright/mcp@latest"
+      ],
+      "type": "stdio"
+    },
+    "shadcnspace-mcp": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "npx",
+        "-y",
+        "shadcnspace-mcp@latest"
+      ],
+      "type": "stdio"
+    },
+    "nia": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "uv",
+        "tool",
+        "run",
+        "nia-mcp-server"
+      ],
+      "env": {
+        "NIA_API_KEY": "${NIA_API_KEY}",
+        "NIA_API_URL": "https://apigcp.trynia.ai/"
+      },
+      "type": "stdio"
+    },
+    "ai-reporting": {
+      "command": "cmd",
+      "args": [
+        "/c",
+        "uv",
+        "run",
+        "--directory",
+        "C:/Users/david.hayes/ai-reporting-mcp",
+        "python",
+        "server.py"
+      ],
+      "env": {
+        "NOTION_TOKEN": "${NOTION_TOKEN}",
+        "MCP_TRANSPORT": "stdio"
+      },
+      "type": "stdio"
+    }
+  }
+}
