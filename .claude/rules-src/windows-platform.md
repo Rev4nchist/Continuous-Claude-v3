@@ -110,12 +110,32 @@ bash/node process counts. Read-only git (`status`, `log`, `rev-parse`) does not
 need it — those rarely fire hooks.
 
 **Ruled out as causes, so don't re-chase them:** forced ASLR (all mitigations
-`NOTSET`), competing MSYS runtimes (one `msys-2.0.dll` 3.5.7, one git install),
-running AV filter drivers (none; iolo is registered in SecurityCenter2 but has no
-service or driver running), and Claude Code's own hooks (**0 of 146 invoke bash** —
-they are all node/python). The username contains a period, which some upstream
-reports blame, but that cannot be the cause here: bash succeeds the overwhelming
-majority of the time and a fundamental incompatibility would not be intermittent.
+`NOTSET`), competing MSYS runtimes (one `msys-2.0.dll` 3.5.7, one git install), and
+Claude Code's own hooks (**0 of 146 invoke bash** — they are all node/python). The
+username contains a period, which some upstream reports blame, but that cannot be
+the cause here: bash succeeds the overwhelming majority of the time and a
+fundamental incompatibility would not be intermittent.
+
+**CORRECTION (2026-07-29): "running AV filter drivers (none)" was WRONG — put it
+back on the list.** Two Microsoft security minifilters are running and intercepting
+file I/O on every volume: `MsSecFlt` (Defender for Endpoint sensor, altitude 385600)
+and `WdFilter`. Verified unelevated via `Get-CimInstance Win32_SystemDriver` — both
+`State=Running`. What *is* true is the narrower claim: the third-party filters
+(`rtp1`/`rtp2`/`BdSentry`, iolo) are gone from the registry, driver list and disk
+after the uninstall. Those are different statements, and the file asserted the
+stronger one. `fltmc filters` needs elevation, so from an ordinary shell **record
+this as unchecked rather than empty** — an access-denied read is not a zero.
+
+**Claude Code's hooks don't invoke bash, but this repo's GIT hooks do — nested.**
+Read the ruled-out line above carefully: it is about `.claude/hooks/`, and it
+invites the wrong conclusion that "hooks aren't involved". A single `git commit`
+here spawns `pre-commit` (bash) → a **nested** `bash scripts/precommit-build-guard.sh`
+→ a `grep`×3 / `sed` MSYS pipeline, then `post-commit` (bash) → a **detached,
+long-lived** `nohup bash sync-to-active.sh --changed &`. Measured: 3 concurrent
+bash from the pre-commit chain alone. That is precisely the shape recorded below as
+reproducing the crash — a long-lived MSYS process holding a cohort open while
+short-lived nested cold-starts arrive into it — and this repo manufactures it on
+every commit, for free, without anyone running `repro.ps1`.
 
 **CORRECTION (2026-07-26): it IS reproducible — the earlier burst shape was wrong.**
 A burst of N identical bash processes is not the failing shape and stayed stubbornly
@@ -143,6 +163,37 @@ with 48 stuck processes alive, and worked every time. The stuck-process pile-up 
 Bash-tool failure are so far two separate observations, not one causal chain. The
 warm-keeper mitigation is still untested — but now there is a repro to test it against,
 which is what the earlier zero-failures-in-both-arms A/B lacked.
+
+**Crashes come in WINDOWS, and the load hypothesis is still open (2026-07-29).** Across
+18 commits in one day: every `git-safe` commit crashed between 08:28 and 11:29, then
+**five consecutive commits 11:33–12:21 crashed zero times**, then crashing resumed from
+14:30. Concurrency was not visibly different across those windows, so "two processes
+happened to collide" does not explain the clustering on its own. The live candidate is
+that the 15-second `shared.cc` spinlock is only *reachable* when the machine is slow
+inside the critical section, i.e. **degraded process-spawn latency manufactures the
+race** — consistent with the separately-measured spawn pathology on this box (p50 814ms
+and later 2,167ms against a healthy 30–80ms).
+
+Measure it, don't assume it: `pwsh -File scripts/msys/spawn-latency.ps1`. Strictly
+serial, no bursts, **safe to run at any time including inside a crash window** — unlike
+`repro.ps1`, which deliberately storms the machine. It samples `node`, `bash` and
+`git rev-parse` cold starts and prints a HEALTHY/ELEVATED/DEGRADED verdict against the
+30–80ms reference.
+
+Two measurement traps this lane already fell into, both worth avoiding:
+
+- **`msys-crash.jsonl` only sees `git-safe`-wrapped git.** Every Bash-*tool* crash is
+  invisible to it — on 2026-07-29 that included two `claude -p` launches fired in
+  parallel which both died instantly, the single most concurrency-shaped evidence of
+  the day, recorded nowhere. A concurrency hypothesis tested only against a log that
+  cannot see the concurrent cases is unfalsifiable. Weigh the log accordingly.
+- **`bash_alive` in that log is sampled AFTER the failing command returns**, so a
+  crashed cohort has already died and it reads 0. It is not a count at crash time, and
+  the many `bash_alive=0` failure rows are not evidence against a concurrency cause.
+
+`git-safe.ps1` now also records `node_spawn_ms` (one sample, crash path only) and
+`hooks_expected` per crash, so the next occurrence can settle both questions from its
+own row instead of from a probe run after the window has closed.
 
 ⚠️ `repro.ps1` deliberately storms the machine. It has a circuit breaker (`-MaxBashAlive`,
 default 25) that aborts and reaps; the first two versions did not, and both left the

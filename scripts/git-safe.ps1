@@ -80,6 +80,48 @@ function Write-CrashLog {
     try {
         $dir = Split-Path -Parent $LogPath
         if (-not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+
+        # Spawn latency AT CRASH TIME. Added 2026-07-29 because the load
+        # hypothesis was untestable from this log: the MSYS spinlock in
+        # shared.cc gives up after 15s, which is only reachable if the first
+        # process is slow INSIDE the critical section -- so degraded spawn
+        # latency would MANUFACTURE the race rather than merely coincide with
+        # it. Measuring it afterwards cannot settle that, because the crash
+        # windows close: on 2026-07-29 every commit crashed 08:28-11:29, none
+        # 11:33-12:21, then crashing again from 14:30, and a latency probe run
+        # after the last crash read a perfectly healthy 42.7ms p50.
+        # One sample only, on the crash path only, where a 6s backoff already
+        # follows -- never on the success path. Healthy is 30-80ms; the
+        # degraded observations on this box were p50 814ms and 2,167ms.
+        $spawnMs = $null
+        try {
+            $sw = [System.Diagnostics.Stopwatch]::StartNew()
+            & node -e "0" *> $null
+            $sw.Stop()
+            $spawnMs = [Math]::Round($sw.Elapsed.TotalMilliseconds, 1)
+        } catch { }
+
+        # Does THIS git command run hooks? pre-commit spawns a nested bash for
+        # the build guard plus a grep/sed MSYS pipeline; post-commit detaches a
+        # long-lived bash for the sync. That is exactly the shape reported to
+        # reproduce the crash -- a long-lived MSYS process holding a cohort
+        # open while short-lived nested cold-starts arrive into it. If crashes
+        # only ever land on hook-running verbs, the hooks are implicated; if
+        # they land on `git log` too, they are not.
+        # Finding the verb is not "first non-flag token": git's own pre-command
+        # options TAKE VALUES, so for `-C <repo> commit -F <msg>` the first
+        # non-flag token is the REPO PATH. Skip the value after any of them.
+        $valueTaking = @('-C', '-c', '--git-dir', '--work-tree', '--namespace', '--exec-path')
+        $verb = $null
+        $skipNext = $false
+        foreach ($a in $GitArgs) {
+            if ($skipNext) { $skipNext = $false; continue }
+            if ($valueTaking -contains $a) { $skipNext = $true; continue }
+            if ($a -like '-*') { continue }
+            $verb = $a; break
+        }
+        $hooksExpected = $verb -in @('commit', 'push', 'merge', 'rebase', 'am', 'applypatch')
+
         $row = [ordered]@{
             ts        = (Get-Date).ToString('o')
             attempt   = $Attempt
@@ -89,8 +131,12 @@ function Write-CrashLog {
             snippet   = $Snippet
             # Concurrency context, so we can test the cold-start-race theory
             # against real occurrences instead of synthetic bursts.
+            # CAVEAT: sampled AFTER the failing command returns, so a crashed
+            # cohort has already died and reads 0. Not a count at crash time.
             bash_alive = (Get-Process bash -ErrorAction SilentlyContinue | Measure-Object).Count
             node_alive = (Get-Process node -ErrorAction SilentlyContinue | Measure-Object).Count
+            node_spawn_ms  = $spawnMs
+            hooks_expected = $hooksExpected
         }
         Add-Content -Path $LogPath -Value ($row | ConvertTo-Json -Compress) -Encoding utf8
     } catch {
