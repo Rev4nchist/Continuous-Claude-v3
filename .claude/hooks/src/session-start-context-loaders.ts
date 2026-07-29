@@ -51,7 +51,7 @@ export async function main(): Promise<void> {
   );
 
   const message = result.output ?? '';
-  const output: HookOutput = { result: 'continue', message };
+  const output: HookOutput = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: message } };
   console.log(JSON.stringify(output));
 }
 

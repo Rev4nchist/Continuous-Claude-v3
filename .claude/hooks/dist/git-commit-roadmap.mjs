@@ -49,7 +49,7 @@ function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3);
+    setTimeout(() => resolve2(data), 1e3).unref();
   });
 }
 function isGitCommitCommand(command) {
@@ -243,8 +243,7 @@ async function main() {
   const scopeDesc = commit.scope ? `(${commit.scope}) ` : "";
   console.error(`\u2713 ROADMAP.md: ${typeDesc}${scopeDesc}${commit.description}`);
   const output = {
-    result: "continue",
-    message: `\u{1F4CB} ROADMAP updated: ${commit.description}`
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `\u{1F4CB} ROADMAP updated: ${commit.description}` }
   };
   console.log(JSON.stringify(output));
 }

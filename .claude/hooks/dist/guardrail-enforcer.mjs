@@ -10,6 +10,15 @@ import { join } from "path";
 function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
 }
+function outputWithMessage(message, hookEventName) {
+  if (!message || !message.trim()) {
+    outputContinue();
+    return;
+  }
+  console.log(JSON.stringify({
+    hookSpecificOutput: { hookEventName, additionalContext: message }
+  }));
+}
 
 // src/guardrail-enforcer.ts
 var GUARDRAILS = [
@@ -123,9 +132,9 @@ function checkGuardrails(prompt) {
   }
   return null;
 }
-function makeBlockOutput(guardrail) {
+function emitGuardrail(guardrail) {
   acknowledgeGuardrail(guardrail.name);
-  return JSON.stringify({ result: "block", reason: guardrail.message });
+  outputWithMessage(guardrail.message, "UserPromptSubmit");
 }
 async function main() {
   try {
@@ -147,7 +156,7 @@ async function main() {
     }
     const triggeredGuardrail = checkGuardrails(input.prompt);
     if (triggeredGuardrail) {
-      console.log(makeBlockOutput(triggeredGuardrail));
+      emitGuardrail(triggeredGuardrail);
       return;
     }
     outputContinue();

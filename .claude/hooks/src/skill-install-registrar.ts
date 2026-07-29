@@ -84,7 +84,7 @@ async function readStdin(): Promise<string> {
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', (chunk) => (data += chunk));
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 14000);
+    setTimeout(() => resolve(data), 14000).unref();
   });
 }
 

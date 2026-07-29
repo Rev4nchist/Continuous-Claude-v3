@@ -549,8 +549,10 @@ async function main() {
   console.error(message);
 
   const output = {
-    result: 'continue',
-    message: message
+    hookSpecificOutput: {
+      hookEventName: 'SessionStart',
+      additionalContext: message,
+    },
   };
 
   console.log(JSON.stringify(output));

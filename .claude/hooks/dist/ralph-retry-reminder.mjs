@@ -166,7 +166,7 @@ async function main() {
   lines.push("  - Skip/discard: manually remove from state");
   lines.push("\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501\u2501");
   const message = lines.join("\n");
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: message } }));
 }
 main().catch(() => {
   console.log(JSON.stringify({ result: "continue" }));

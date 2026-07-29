@@ -107,7 +107,7 @@ function makeSuggestionOutput(score, signals, phases) {
     "Continue with your request normally.",
     "--------------------------------------"
   ].join("\n");
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: message } }));
 }
 async function main() {
   try {

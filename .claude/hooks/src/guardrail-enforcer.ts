@@ -18,7 +18,7 @@
 import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { outputContinue } from './shared/output.js';
+import { outputContinue, outputWithMessage } from './shared/output.js';
 
 interface Guardrail {
   name: string;
@@ -167,11 +167,24 @@ function checkGuardrails(prompt: string): Guardrail | null {
   return null;
 }
 
-function makeBlockOutput(guardrail: Guardrail): string {
+/**
+ * Emit the guardrail so the model actually receives it.
+ *
+ * The comment here used to say "Return valid JSON so Claude sees message as
+ * additionalContext" -- directly above a line that emitted no additionalContext
+ * at all. It was valid JSON in a shape the harness ignores, so this hook fired,
+ * marked itself acknowledged, and said nothing, for months.
+ *
+ * Proven on 2026-07-28: it fired at 19:18:35 on a prompt containing "bugs"/"fix"
+ * (state file written that second) and its text appeared nowhere in the
+ * transcript, while memory-awareness injected fine on the same prompt.
+ *
+ * Acknowledgement still happens exactly once, on emit, so a guardrail continues
+ * to fire once per session rather than on every prompt.
+ */
+function emitGuardrail(guardrail: Guardrail): void {
   acknowledgeGuardrail(guardrail.name);
-  // UserPromptSubmit hooks can't truly block - they inject context
-  // Return valid JSON so Claude sees message as additionalContext
-  return JSON.stringify({ result: 'block', reason: guardrail.message });
+  outputWithMessage(guardrail.message, 'UserPromptSubmit');
 }
 
 async function main() {
@@ -198,8 +211,7 @@ async function main() {
     const triggeredGuardrail = checkGuardrails(input.prompt);
 
     if (triggeredGuardrail) {
-      // Output message directly - Claude sees this as injected context
-      console.log(makeBlockOutput(triggeredGuardrail));
+      emitGuardrail(triggeredGuardrail);
       return;
     }
 

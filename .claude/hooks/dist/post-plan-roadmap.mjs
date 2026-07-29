@@ -769,7 +769,7 @@ async function readStdin() {
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3);
+    setTimeout(() => resolve2(data), 1e3).unref();
   });
 }
 main().catch((err) => {

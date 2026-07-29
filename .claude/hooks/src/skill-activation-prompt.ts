@@ -658,10 +658,13 @@ Do NOT skip this step. The skill provides:
                     const blockMessage = output + '\n⛔ BLOCKING: You MUST invoke ' +
                         blockingSkills.map(s => s.name).join(', ') +
                         ' skill(s) before generating ANY response.';
-                    console.log(JSON.stringify({
-                        result: 'block',
-                        reason: blockMessage
-                    }));
+                    // A UserPromptSubmit hook cannot actually refuse the turn --
+                    // only PreToolUse can gate anything. The strongest available
+                    // move is injecting the demand into context, which is what
+                    // {result:'block'} was silently FAILING to do: the harness
+                    // reads hookSpecificOutput and ignores result/reason, so this
+                    // enforcement branch has never once reached the model.
+                    outputWithMessage(blockMessage, 'UserPromptSubmit');
                     process.exit(0);
                 }
             }
@@ -740,7 +743,7 @@ Do NOT skip this step. The skill provides:
 
         // Single JSON output with all accumulated messages
         if (messages.length > 0) {
-            outputWithMessage(messages.join('\n\n'));
+            outputWithMessage(messages.join('\n\n'), 'UserPromptSubmit');
         } else {
             outputContinue();
         }

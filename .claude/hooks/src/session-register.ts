@@ -95,8 +95,7 @@ You are the only session currently working here.
 
   // Output hook result with awareness injection
   const output: HookOutput = {
-    result: 'continue',
-    message: awarenessMessage,
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: awarenessMessage },
   };
 
   console.log(JSON.stringify(output));

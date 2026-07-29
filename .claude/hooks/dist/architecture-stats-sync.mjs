@@ -66,7 +66,7 @@ function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3);
+    setTimeout(() => resolve2(data), 1e3).unref();
   });
 }
 function passthrough() {

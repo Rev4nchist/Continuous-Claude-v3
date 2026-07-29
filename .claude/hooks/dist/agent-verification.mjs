@@ -45,7 +45,12 @@ function readStdin() {
 }
 function outputWithMessage(message) {
   if (message) {
-    console.log(JSON.stringify({ message }));
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext: message
+      }
+    }));
   } else {
     console.log(JSON.stringify({}));
   }

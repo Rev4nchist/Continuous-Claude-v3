@@ -55,7 +55,7 @@ function readStdin(): Promise<string> {
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 
@@ -301,8 +301,7 @@ async function main() {
   console.error(`✓ ROADMAP.md: ${typeDesc}${scopeDesc}${commit.description}`);
 
   const output: HookOutput = {
-    result: 'continue',
-    message: `📋 ROADMAP updated: ${commit.description}`,
+    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `📋 ROADMAP updated: ${commit.description}` },
   };
 
   console.log(JSON.stringify(output));

@@ -90,8 +90,35 @@ export interface PreToolUseHookOutput {
 }
 
 /**
- * Legacy hook output format (deprecated but still used by some hooks).
- * Prefer PreToolUseHookOutput for new hooks.
+ * Inject text into the model's context. Valid for UserPromptSubmit,
+ * PostToolUse and SessionStart.
+ *
+ * This is the shape the harness actually reads. Verified in production, not
+ * from docs: `memory-awareness` emits it and was observed injecting on
+ * 2026-07-28, in the same event and the same prompt where a hook emitting
+ * `LegacyHookOutput` below was observed reaching the model with nothing.
+ */
+export interface ContextInjectionHookOutput {
+  hookSpecificOutput: {
+    hookEventName: 'UserPromptSubmit' | 'PostToolUse' | 'SessionStart';
+    additionalContext: string;
+  };
+}
+
+/**
+ * DISCARDED BY THE HARNESS. Not "legacy" in the sense of older-but-working --
+ * `result`/`message`/`reason` are read by nothing, so a hook returning this
+ * exits 0, looks healthy, and says nothing at all.
+ *
+ * The previous doc comment here called it "deprecated but still used by some
+ * hooks", which reads as a style preference and is very likely why this
+ * survived ~186 days across 19 registered hooks: nobody deprecating something
+ * expects it to be inert.
+ *
+ * `{ result: 'continue' }` with NO message is the one honest use -- it carries
+ * nothing, so it loses nothing. It is the correct "I have nothing to say"
+ * signal. Anything with a `message` or `reason` belongs in
+ * ContextInjectionHookOutput instead.
  */
 export interface LegacyHookOutput {
   result: 'continue' | 'block';
@@ -99,7 +126,10 @@ export interface LegacyHookOutput {
   reason?: string;
 }
 
-export type HookOutput = PreToolUseHookOutput | LegacyHookOutput;
+export type HookOutput =
+  | PreToolUseHookOutput
+  | ContextInjectionHookOutput
+  | LegacyHookOutput;
 
 // =============================================================================
 // Database Query Result Types

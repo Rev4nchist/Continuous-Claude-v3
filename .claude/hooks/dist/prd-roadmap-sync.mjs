@@ -195,7 +195,7 @@ function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve3(data));
-    setTimeout(() => resolve3(data), 100);
+    setTimeout(() => resolve3(data), 100).unref();
   });
 }
 function isPRDFile(filePath) {
@@ -558,7 +558,7 @@ async function handleTasksChange(filePath, content) {
   if (updated !== roadmapContent) {
     fs.writeFileSync(roadmapPath, updated);
   }
-  return { result: "continue", message };
+  return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: message } };
 }
 async function main() {
   const input = await readStdin();

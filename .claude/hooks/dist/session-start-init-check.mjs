@@ -413,8 +413,10 @@ Install relevant skills to enhance your work on this project.`
   }
   console.error(message);
   const output = {
-    result: "continue",
-    message
+    hookSpecificOutput: {
+      hookEventName: "SessionStart",
+      additionalContext: message
+    }
   };
   console.log(JSON.stringify(output));
 }

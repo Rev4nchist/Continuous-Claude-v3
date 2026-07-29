@@ -32,7 +32,7 @@ async function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve(data));
-    setTimeout(() => resolve(data), 1e3);
+    setTimeout(() => resolve(data), 1e3).unref();
   });
 }
 function output(obj) {

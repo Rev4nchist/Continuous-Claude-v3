@@ -82,7 +82,7 @@ async function main() {
     15e3
   );
   const message = result.output ?? "";
-  const output = { result: "continue", message };
+  const output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } };
   console.log(JSON.stringify(output));
 }
 main().catch((err) => {

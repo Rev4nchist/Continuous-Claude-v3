@@ -21,6 +21,15 @@ import { createLogger } from './shared/logger.js';
 import { writeStateWithLock, readStateWithLock } from './shared/atomic-write.js';
 import { validateMaestroState } from './shared/state-schema.js';
 
+/**
+ * This hook is registered on UserPromptSubmit, so every message it emits must
+ * carry that event name. Bound once here rather than threaded through seven
+ * call sites -- and named `say` so a reader can see at a glance that these are
+ * messages TO THE MODEL, which until 2026-07-28 they silently were not
+ * (see shared/output.ts).
+ */
+const say = (message: string): void => outputWithMessage(message, 'UserPromptSubmit');
+
 const log = createLogger('maestro-state-manager');
 
 interface HookInput {
@@ -251,7 +260,7 @@ async function main() {
     if (matchesPattern(prompt, CANCEL_PATTERNS)) {
       log.info('Maestro deactivated by user', { sessionId });
       clearState(sessionId);
-      outputWithMessage('MAESTRO DEACTIVATED\nMaestro orchestration mode disabled.\nReturning to normal operation.');
+      say('MAESTRO DEACTIVATED\nMaestro orchestration mode disabled.\nReturning to normal operation.');
       return;
     }
 
@@ -271,7 +280,7 @@ async function main() {
       }, sessionId);
 
       if (isResearch) {
-        outputWithMessage(
+        say(
           'MAESTRO ACTIVATED (Research Mode)\n\n' +
           'Task Type: **RESEARCH** (external docs, best practices)\n\n' +
           '**WORKFLOW:**\n1. Discovery Interview (CURRENT)\n2. Propose Plan\n3. Await Approval\n4. Execute\n\n' +
@@ -279,7 +288,7 @@ async function main() {
           'Task tool BLOCKED until interview complete.'
         );
       } else {
-        outputWithMessage(
+        say(
           'MAESTRO ACTIVATED (Implementation Mode)\n\n' +
           'Task Type: **IMPLEMENTATION** (coding, building, fixing)\n\n' +
           '**WORKFLOW:**\n1. Codebase Recon (CURRENT) - scout allowed\n2. Discovery Interview\n3. Propose Plan\n4. Await Approval\n5. Execute\n\n' +
@@ -297,7 +306,7 @@ async function main() {
         state.reconComplete = true;
         log.info('State transition: recon complete', { sessionId });
         writeState(state, sessionId);
-        outputWithMessage(
+        say(
           'MAESTRO: Recon Complete\n\n' +
           '**WORKFLOW PROGRESS:**\n1. [done] Codebase Recon\n2. Discovery Interview (CURRENT)\n3. Propose Plan\n4. Await Approval\n5. Execute\n\n' +
           '**YOUR NEXT ACTION:**\nUse AskUserQuestion with INFORMED questions based on recon:\n- "I found X pattern, should we follow it?"\n- "Existing code uses Y approach, continue or change?"\n- "This will affect N files, confirm scope?"\n\n' +
@@ -315,7 +324,7 @@ async function main() {
         const progress = state.taskType === 'implementation'
           ? '1. [done] Codebase Recon\n2. [done] Discovery Interview\n3. Propose Plan (CURRENT)\n4. Await Approval\n5. Execute'
           : '1. [done] Discovery Interview\n2. Propose Plan (CURRENT)\n3. Await Approval\n4. Execute';
-        outputWithMessage(
+        say(
           'MAESTRO: Interview Complete\n\n' +
           '**WORKFLOW PROGRESS:**\n' + progress + '\n\n' +
           '**YOUR NEXT ACTION:**\nPresent orchestration plan to user.\nTask tool still BLOCKED until plan approved.'
@@ -328,7 +337,7 @@ async function main() {
         state.planApproved = true;
         log.info('State transition: plan approved', { sessionId });
         writeState(state, sessionId);
-        outputWithMessage(
+        say(
           'MAESTRO: Plan Approved\n\n' +
           '**WORKFLOW PROGRESS:**\n1. [done] Discovery Interview\n2. [done] Propose Plan\n3. [done] Await Approval\n4. Execute (CURRENT)\n\n' +
           '**Task tool is now UNBLOCKED.**\nYou may spawn agents to execute the plan.'
@@ -346,7 +355,7 @@ async function main() {
           // User is answering questions - mark interview potentially complete
           state.interviewComplete = true;
           writeState(state);
-          outputWithMessage(
+          say(
             'MAESTRO: Answers Received\n\n' +
             'Discovery answers received.\n\n' +
             '**YOUR NEXT ACTION:**\n1. Classify task type based on answers\n2. Present orchestration plan\n3. Wait for approval\n\n' +

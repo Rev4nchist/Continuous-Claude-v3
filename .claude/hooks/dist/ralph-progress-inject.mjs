@@ -222,7 +222,7 @@ async function main() {
   if (elapsed > 100) {
     log2.warn("Progress injection slow", { elapsed });
   }
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: message } }));
 }
 main().catch(() => {
   console.log(JSON.stringify({ result: "continue" }));

@@ -60,7 +60,7 @@ function readStdin(): Promise<string> {
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 100);
+    setTimeout(() => resolve(data), 100).unref();
   });
 }
 
@@ -534,7 +534,9 @@ async function handleTasksChange(filePath: string, content: string): Promise<Hoo
     fs.writeFileSync(roadmapPath, updated);
   }
 
-  return { result: 'continue', message };
+  // PostToolUse:Write|Edit. {result,message} is discarded by the harness, so
+  // this advisory never reached the model -- see scripts/hooks/hook-contract-guard.mjs.
+  return { hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: message } };
 }
 
 async function main() {

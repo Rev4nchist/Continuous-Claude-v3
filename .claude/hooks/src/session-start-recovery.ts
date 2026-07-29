@@ -169,7 +169,7 @@ async function main() {
       message = message.replace('**Options:**', unifiedRecoveryInfo + '\n**Options:**');
     }
   }
-  console.log(JSON.stringify({ result: 'continue', message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: message } }));
 }
 
 main().catch(() => {
