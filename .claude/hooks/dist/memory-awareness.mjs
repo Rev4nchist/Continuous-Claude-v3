@@ -1,7 +1,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/memory-awareness.ts
-import { readFileSync as readFileSync5, existsSync as existsSync6, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
+import { readFileSync as readFileSync6, existsSync as existsSync6, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
 import * as path from "path";
 import * as os from "os";
 import { spawnSync } from "child_process";
@@ -796,19 +796,48 @@ function isHostMemoryPressured(freeRamBytes = getFreeRamBytes(), floor = getHost
 }
 
 // src/shared/braintrust-score.ts
+import { readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join4 } from "path";
 var BRAINTRUST_FEEDBACK_TIMEOUT_MS = 2e3;
 var DEFAULT_API_URL = "https://api.braintrust.dev";
 var DEFAULT_PROJECT_NAME = "claude-code";
 var projectIdCache = {};
+var dotenvLoaded = false;
+function loadClaudeDotEnv() {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  try {
+    const envPath = join4(homedir2(), ".claude", ".env");
+    for (const line of readFileSync3(envPath, "utf-8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const idx = trimmed.indexOf("=");
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) process.env[key] = value;
+    }
+  } catch {
+  }
+}
 function getApiUrl() {
+  loadClaudeDotEnv();
   return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
 }
 function getApiKey() {
+  loadClaudeDotEnv();
   const key = process.env.BRAINTRUST_API_KEY;
   return key && key.length > 0 ? key : null;
 }
 function isTraceEnabled() {
+  loadClaudeDotEnv();
   return (process.env.TRACE_TO_BRAINTRUST || "").toLowerCase() === "true";
+}
+async function consumeBody(resp) {
+  try {
+    await resp.arrayBuffer();
+  } catch {
+  }
 }
 function logErr(msg) {
   try {
@@ -818,6 +847,7 @@ function logErr(msg) {
   }
 }
 async function resolveProjectId(apiKey) {
+  loadClaudeDotEnv();
   const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
   if (directId && directId.length > 0) {
     return directId;
@@ -837,6 +867,7 @@ async function resolveProjectId(apiKey) {
     });
     if (!resp.ok) {
       logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
+      await consumeBody(resp);
       return null;
     }
     const data = await resp.json();
@@ -890,6 +921,7 @@ async function emitBraintrustScore(opts) {
       if (!resp.ok) {
         logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
       }
+      await consumeBody(resp);
     } catch (e) {
       logErr(`feedback POST ${opts.spanId} failed: ${e.message}`);
     }
@@ -917,27 +949,27 @@ ${body}
 }
 
 // src/shared/context-bus.ts
-import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname2, join as join7, resolve as resolve2, sep } from "node:path";
+import { readFileSync as readFileSync5 } from "node:fs";
+import { dirname as dirname2, join as join8, resolve as resolve2, sep } from "node:path";
 
 // src/shared/session-bus-id.ts
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 
 // src/shared/session-id.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join4 } from "path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join5 } from "path";
 var SESSION_ID_FILENAME = ".coordination-session-id";
 function getSessionIdFile(options = {}) {
-  const claudeDir = join4(process.env.HOME || process.env.USERPROFILE || homedir2(), ".claude");
+  const claudeDir = join5(process.env.HOME || process.env.USERPROFILE || homedir3(), ".claude");
   if (options.createDir) {
     try {
       mkdirSync3(claudeDir, { recursive: true, mode: 448 });
     } catch {
     }
   }
-  return join4(claudeDir, SESSION_ID_FILENAME);
+  return join5(claudeDir, SESSION_ID_FILENAME);
 }
 function generateSessionId() {
   const spanId = process.env.BRAINTRUST_SPAN_ID;
@@ -949,7 +981,7 @@ function generateSessionId() {
 function readSessionId() {
   try {
     const sessionFile = getSessionIdFile();
-    const id = readFileSync3(sessionFile, "utf-8").trim();
+    const id = readFileSync4(sessionFile, "utf-8").trim();
     return id || null;
   } catch {
     return null;
@@ -1000,10 +1032,10 @@ function getBusId(opts = {}) {
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, statSync as statSync2, renameSync } from "fs";
-import { join as join5 } from "path";
-import { homedir as homedir3 } from "os";
-var LOG_DIR = join5(homedir3(), ".claude", "logs");
-var LOG_FILE = join5(LOG_DIR, "hooks.log");
+import { join as join6 } from "path";
+import { homedir as homedir4 } from "os";
+var LOG_DIR = join6(homedir4(), ".claude", "logs");
+var LOG_FILE = join6(LOG_DIR, "hooks.log");
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -1074,13 +1106,13 @@ var log = createLogger("atomic-write");
 
 // src/shared/intel-bus.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname, join as join6 } from "node:path";
+import { dirname, join as join7 } from "node:path";
 var MAX_LINE_BYTES = 4096;
 var MAX_INTEL_BUS_BYTES = 2e6;
 var DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 function intelBusPath(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join6(root, ".claude", "logs", "intel-bus.jsonl");
+  return join7(root, ".claude", "logs", "intel-bus.jsonl");
 }
 function stripNewlinesDeep(value) {
   if (typeof value === "string") {
@@ -1239,12 +1271,12 @@ function assertSafeBusId(busId) {
 }
 function sessionCacheRoot(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join7(root, ".claude", "cache", "session");
+  return join8(root, ".claude", "cache", "session");
 }
 function busPath(busId, projectDir) {
   assertSafeBusId(busId);
   const sessionRoot = sessionCacheRoot(projectDir);
-  const full = join7(sessionRoot, busId, "context.json");
+  const full = join8(sessionRoot, busId, "context.json");
   const resolvedRoot = resolve2(sessionRoot);
   const resolvedFull = resolve2(full);
   const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
@@ -1301,7 +1333,7 @@ function coerceFilesInPlay(value) {
 }
 function defaultRead(path2) {
   try {
-    return readFileSync4(path2, "utf-8");
+    return readFileSync5(path2, "utf-8");
   } catch {
     return null;
   }
@@ -1411,7 +1443,7 @@ function buildFocusBlock(terms) {
 var TEXT_ONLY_FLOOR = 0.05;
 var HYBRID_FLOOR = 0.01;
 function readStdin() {
-  return readFileSync5(0, "utf-8");
+  return readFileSync6(0, "utf-8");
 }
 function cleanSearchTerm(intent) {
   return intent.replace(/[_\/]/g, " ").replace(/\b\w{1,2}\b/g, "").replace(/\s+/g, " ").trim();
@@ -1563,7 +1595,7 @@ function readBraintrustSessionState(sessionId) {
       `${sessionId}.json`
     );
     if (!existsSync6(statePath)) return null;
-    const raw = readFileSync5(statePath, "utf-8");
+    const raw = readFileSync6(statePath, "utf-8");
     return JSON.parse(raw);
   } catch {
     return null;

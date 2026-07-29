@@ -18,6 +18,7 @@ import { spawnSync } from 'child_process';
 import { createLogger } from './shared/logger.js';
 import { readRalphUnifiedState } from './shared/state-schema.js';
 import { emitBraintrustScore } from './shared/braintrust-score.js';
+import { resolveBraintrustSpanId } from './shared/braintrust-span.js';
 
 const log = createLogger('ralph-task-monitor');
 
@@ -98,9 +99,15 @@ function readStdin(): string {
 //   * complete + retries > 0       -> 0.5 (partial credit, recovered)
 //   * failed                       -> 0.0
 //
-// spanId resolution: prefer BRAINTRUST_SESSION_ID env (set by the Python hook
-// chain when running inside a Claude Code session). The helper is fail-open,
-// so a missing span just skips emission silently.
+// spanId resolution: from the Python-written span state file, via
+// shared/braintrust-span.ts, keyed on the session id in the hook payload.
+//
+// It previously read BRAINTRUST_SESSION_ID and the comment here claimed that
+// var was "set by the Python hook chain". It is not, and never was -- verified
+// 2026-07-28 against the process env, ~/.claude/.env and the settings.json env
+// block. So this returned null every time and agent_task_success has never
+// reached Braintrust. The helper is fail-open, so a missing span still skips
+// silently.
 //
 // Metadata: { task_id, task_name, agent, retries, duration_s }.
 // ---------------------------------------------------------------------------
@@ -114,6 +121,12 @@ export interface RalphTaskScoreInput {
   retries?: number;
   durationS?: number;
   transition: RalphTaskTransition;
+  /**
+   * Claude Code session id, used to look up the Braintrust span this score
+   * attaches to. Threaded in from the hook payload rather than read from the
+   * environment -- see the note on the spanId resolution below.
+   */
+  sessionId?: string;
 }
 
 /**
@@ -138,7 +151,12 @@ export function computeAgentTaskScore(input: RalphTaskScoreInput): number {
 export function buildAgentTaskScorePayload(
   input: RalphTaskScoreInput,
 ): { spanId: string; scores: Record<string, number>; metadata: Record<string, unknown> } | null {
-  const spanId = (process.env.BRAINTRUST_SESSION_ID || '').trim();
+  // Was `process.env.BRAINTRUST_SESSION_ID`, which is set NOWHERE -- checked on
+  // 2026-07-28 against the process env, ~/.claude/.env and the settings.json
+  // env block. So this returned null on every single call and
+  // `agent_task_success` has never once reached Braintrust. The span state is
+  // written by braintrust_hooks.py; read that instead.
+  const spanId = resolveBraintrustSpanId(input.sessionId || '');
   if (!spanId) return null;
   const score = computeAgentTaskScore(input);
   return {
@@ -189,6 +207,17 @@ function readRalphTaskById(
  * state reads and helper calls in try/catch so a score-emit failure can
  * never break the primary task-monitor flow.
  */
+/**
+ * Session id for THIS hook invocation, captured once in main().
+ *
+ * Module-level rather than threaded through the four `emitRalphTaskScore` call
+ * sites: a hook is a single-shot process handling exactly one payload, so there
+ * is no second session to confuse it with, and four extra parameters is four
+ * more places to forget one. Empty string simply means no span, and the emit
+ * skips -- the same fail-open behaviour as everywhere else here.
+ */
+let currentSessionId = '';
+
 async function emitRalphTaskScore(
   projectDir: string,
   taskId: string,
@@ -204,6 +233,7 @@ async function emitRalphTaskScore(
       retries: task?.retries,
       durationS: task?.duration_s,
       transition,
+      sessionId: currentSessionId,
     });
     if (payload) {
       await emitBraintrustScore(payload); // eslint-disable-line @typescript-eslint/no-floating-promises
@@ -305,6 +335,9 @@ async function main() {
   } catch {
     return;
   }
+
+  // Captured before any scoring path runs. See the note on currentSessionId.
+  currentSessionId = input.session_id || '';
 
   // Only process Agent/Task tool results
   if (input.tool_name !== 'Agent' && input.tool_name !== 'Task') return;

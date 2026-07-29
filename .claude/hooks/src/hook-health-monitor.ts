@@ -10,6 +10,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 import { emitBraintrustScore } from './shared/braintrust-score.js';
+import { resolveBraintrustSpanId } from './shared/braintrust-span.js';
 
 // ============================================
 // Types
@@ -32,6 +33,13 @@ export interface HookHealthResult {
 interface HookEntry {
   type?: string;
   command?: string;
+  /**
+   * Live settings.json registers most hooks as
+   * {"command":"node","args":["C:/.../dist/foo.mjs"]}. Without this field the
+   * parser saw only "node", matched no .mjs, and reported ZERO hooks -- see
+   * parseHookCommands.
+   */
+  args?: string[];
   timeout?: number;
 }
 
@@ -78,8 +86,18 @@ export function parseHookCommands(settings: SettingsJson): HookFileInfo[] {
       for (const hook of group.hooks) {
         if (hook.type !== 'command' || !hook.command) continue;
 
-        // Extract file path from "node <path>" commands
-        const distPath = extractDistPath(hook.command);
+        // Join command + args BEFORE matching.
+        //
+        // This is the fault fixed in ee29181, found here again on 2026-07-28 --
+        // third occurrence in this codebase. Live settings.json uses
+        // {"command":"node","args":[path]} for 80 of 86 entries, so reading
+        // `command` alone yields the literal string "node", matches no .mjs,
+        // and produces an EMPTY hook list. This function returned [] on every
+        // real session, so main() took its `hookFiles.length === 0` early
+        // return: the hook health monitor has been checking ZERO hooks and
+        // reporting a clean continue, and `hook_health_ratio` never emitted.
+        const commandLine = [hook.command, ...(hook.args || [])].join(' ');
+        const distPath = extractDistPath(commandLine);
         if (!distPath) continue;
 
         // Deduplicate
@@ -315,8 +333,14 @@ async function main() {
     // helper is fail-open; we additionally wrap in try/catch so any unexpected
     // failure can't block the health-report context injection below.
     try {
-      const spanId = (process.env.BRAINTRUST_SESSION_ID || '').trim()
-        || (input.session_id || '');
+      // BRAINTRUST_SESSION_ID is set NOWHERE -- process env, ~/.claude/.env and
+      // the settings.json env block were all checked on 2026-07-28. So that
+      // branch was always empty, and the fallback was worse than useless: a
+      // Claude Code session id is NOT a Braintrust span id, so this posted
+      // feedback against an id that does not exist as a span. Harmless only
+      // while the emit was disabled by the .env gate; the moment that gate was
+      // fixed it would have become a stream of bogus writes.
+      const spanId = resolveBraintrustSpanId(input.session_id || '');
       const payload = buildHookHealthRatioPayload({ results, spanId });
       if (payload) {
         await emitBraintrustScore(payload); // eslint-disable-line @typescript-eslint/no-floating-promises
