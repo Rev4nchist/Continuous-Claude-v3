@@ -247,10 +247,61 @@ the live count drops below its recorded baseline.
 **Step 3 — RATCHET B: output-contract shape assertion.** Every registered hook's
 source must contain ≥1 field the harness actually reads (`hookSpecificOutput`,
 `systemMessage`, `permissionDecision`, `decision`, `updatedInput`).
-→ **Accept:** ≥ **42** hooks pass (current: 38 + 4); the broken-envelope set is
-pinned at exactly **15** and the script fails if it grows.
-→ **Do Step 3a first (30 seconds):** trigger a guardrail and check whether its text
-reaches context. If the envelope is *not* dropped, this entire step is void.
+→ **Accept:** ≥ **44** hooks pass; the dropped-envelope set is pinned at exactly
+**19** and the script fails if it grows.
+
+> #### Step 3a — RUN, and CONFIRMED. The envelope IS dropped.
+>
+> This step is **not** void; it is the highest-priority repair in the document.
+> Verified 2026-07-28 by a controlled natural experiment in session `b9978324`,
+> with a positive control on the same prompt:
+>
+> - `guardrail-enforcer` is registered on `UserPromptSubmit` — VERIFIED in live
+>   `settings.json`.
+> - This session's **first prompt** contained "bugs" and "fix", matching its
+>   `systematic-debugging` trigger. It **fired at 19:18:35** — VERIFIED by the
+>   state file `$TEMP/claude-guardrails-45972.json`, written at that exact second
+>   with `{"acknowledgedGuardrails":["systematic-debugging"]}`.
+> - Its output is `{result:'block', reason: <🛑 text>}` with no
+>   `hookSpecificOutput` — VERIFIED by reading `guardrail-enforcer.ts:170-175`,
+>   whose comment three lines above says "Return valid JSON so Claude sees message
+>   as additionalContext".
+> - **That text reached context nowhere.** The only occurrence of "Debugging
+>   methodology required" in the transcript is my own later `Read` of the source
+>   file; every other hit is a grep command echoing itself.
+> - **Positive control, same event, same prompt:** `memory-awareness`, which uses
+>   `hookSpecificOutput.additionalContext`, **did** inject (8 occurrences).
+>
+> Two hooks, one event, one prompt, different output shape — one reaches the model
+> and one does not. That is a clean controlled result, not an inference.
+>
+> **The systemic root is `shared/output.ts`.** Two of its three helpers —
+> `outputWithMessage()` and `outputBlock()` — emit `{result, message}`, a shape the
+> harness ignores. (`outputContinue()` is fine; it is only a no-op signal.) So this
+> is one shared bug with four direct callers, not fifteen independent mistakes.
+>
+> **Measured blast radius: 19 of 80 registered hooks with a repo source emit ONLY
+> the dropped envelope** (44 emit a field the harness reads). Named:
+> `agent-verification`, `git-commit-roadmap`, `guardrail-enforcer`,
+> `maestro-cleanup`, `maestro-detector`, `maestro-state-manager`,
+> `prd-roadmap-sync`, `ralph-progress-inject`, `ralph-retry-reminder`,
+> `ralph-watchdog`, `session-end-handoff-indexer`, `session-outcome`,
+> `session-register`, `session-start-context-loaders`, `session-start-docker`,
+> `session-start-init-check`, `session-start-memory-loaders`,
+> `session-start-recovery`, `skill-activation-prompt`.
+>
+> **Do not fix all 19 blindly.** A meaningful subset (`session-register`,
+> `git-commit-roadmap`, `prd-roadmap-sync`) are side-effect hooks whose real job is
+> writing to the DB or git; for those a dropped envelope costs nothing. The ones
+> that matter are the ones whose entire purpose is to tell the model something —
+> `skill-activation-prompt` (760 lines, the flagship skill router), the five
+> `session-start-*` loaders, the three `ralph-*` hooks, and `guardrail-enforcer`.
+>
+> **The tension to decide before fixing:** repairing these makes 19 hooks start
+> injecting text that has never been in context. That is *more* context load, in a
+> plan whose other half is cutting context. Triage by whether the hook needs to
+> speak at all — and note that six test files assert the broken shape, so a green
+> suite has never been able to detect this and will resist the fix.
 
 **Step 4 — RATCHET C: timer census**, extending the pattern of
 `audit-braintrust-emits.sh` — the only guard here with a catch record (6
@@ -305,8 +356,10 @@ Step 2's ratchet still reports ≥ **86** live registrations.
 - **`/context` was never run.** Every Q2 token number is `count_tokens` against a
   *reconstruction* of the serializer, replicated by neither agent. Step 8 is the
   first real measurement.
-- **Whether Claude Code actually drops `{result, message|reason}`** — the entire
-  15-hook finding, including `skill-activation-prompt`, rests on this inference.
+- ~~Whether Claude Code actually drops `{result, message|reason}`~~ — **RESOLVED
+  2026-07-28, see Step 3a. It does.** Confirmed by controlled experiment with a
+  positive control, not inference. 19 registered hooks affected; root cause is two
+  helpers in `shared/output.ts`.
 - **`claudeMdExcludes` was never executed** — read from the binary, never observed
   excluding a file.
 - **`paths:` frontmatter end-to-end** — parser and both loader branches read; no
