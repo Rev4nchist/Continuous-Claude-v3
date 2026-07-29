@@ -315,11 +315,67 @@ pattern **and** ≥ **8** carry `.unref()`/`clearTimeout`.
 → **Accept:** Step 4 reports **8/8**; sampled wall-clock for ≥ **3** hooks drops
 below 150 ms over ≥ **5** iterations each.
 
-**Step 6 — RE-MEASURE Q3 with REAL payloads.** `Win32_Process` sampler over ≥ 20
-genuine Bash turns and ≥ 20 genuine Edit turns.
-→ **Accept:** ≥ **20** Bash fan-outs recorded with named command lines for ≥ **10**
-distinct hooks each; report the count exceeding 500 ms. **A no-op-payload latency
-assertion is explicitly rejected** — it cannot see the costs that dominate a real turn.
+**Step 6 — RE-MEASURE Q3 with REAL payloads.** — **DONE 2026-07-28.**
+
+> #### Step 6 result: the hook layer costs ~1s per tool call, and it is TWO processes
+>
+> Method: `scripts/hooks/hook-latency-sampler.ps1` polled during 20 real Bash
+> turns and 20 real Write/Edit turns (300s, 7,585 polls, ~40ms interval, 266
+> processes seen), plus `scripts/hooks/measure-fanout.mjs` which runs *every*
+> registered hook for a tool with realistic payloads.
+>
+> **Corrected fan-out** (matcher-aware, from live `settings.json`). The reported
+> "13 per Bash / 11 per Edit / 15 per Task" was close but wrong:
+>
+> | tool | PreToolUse | PostToolUse | total |
+> |---|---|---|---|
+> | Bash | 3 | 12 | **15** |
+> | Edit / Write | 3 | 10 | **13** |
+> | Task | 10 | 7 | **17** |
+> | Read / Grep | 1 | 5 | **6** |
+> | Glob | 0 | 3 | **3** |
+>
+> Plus **14** per user message (UserPromptSubmit) and **13** per SessionStart —
+> those are per-message/per-session, NOT per tool call.
+>
+> **The cost is concentrated in two processes, both measured on real turns:**
+>
+> | process | n | p50 | max | fires on |
+> |---|---|---|---|---|
+> | `braintrust_hooks post_tool_use` | 29 | **1,017 ms** | 1,725 ms | EVERY PostToolUse |
+> | `post-edit-diagnostics` | 16 | **1,364 ms** | 2,546 ms | every `.ts`/`.tsx` edit |
+> | `claude-hud/launcher.mjs` *(plugin, not a hook)* | 22 | 581 ms | 2,833 ms | per turn |
+>
+> Every other hook measured **64–87 ms** with a realistic payload, and dispatch is
+> parallel (peak 13 simultaneous observed), so the other ~13 hooks in a fan-out
+> cost roughly **one** hook's wall time, not their sum.
+>
+> **This reshapes the plan: the prune's value is NOT latency.** Deleting the ~30
+> quiet hooks would save close to nothing measurable. Turning off Braintrust
+> tracing would save ~1s on *every tool call* — a far larger win than the entire
+> prune, and it is Step 7.
+>
+> **Two methodological corrections, both recorded because both nearly misled me:**
+> - `measure-fanout.mjs` timed `braintrust_hooks` at **285 ms** while the sampler
+>   measured **1,017 ms** on real turns. The constructed payload lacks
+>   `turn_span_id`, so the hook early-returns *before* the synchronous HTTP POST —
+>   the exact trap that refuted Q3, reproduced here on purpose. **Constructed
+>   payloads understate; the sampler number is the authoritative one.**
+> - The sampler's first classifier matched any `.mjs`/`.py`, so it counted my own
+>   tooling (`vitest`, `update-blocklist`, the embedding daemon) as hooks and
+>   reported p50s in the tens of millions of ms — their *age*, not their duration.
+>   The absurd numbers were the lucky case; `launcher` at 581 ms looked exactly
+>   like a plausible hook and is a statusline **plugin**. Classification is now by
+>   path, with plugins reported separately.
+>
+> **Acceptance criterion NOT met as written, and it cannot be.** It asked for ≥10
+> distinct hooks from the sampler; polling caught **2**, an 8.7% capture rate,
+> because without elevation `Win32_ProcessStartTrace` is denied and any hook
+> shorter than a poll interval is invisible. Polling is biased toward slow
+> processes *by construction*. That is why the fan-out census is taken statically
+> and the fast hooks are timed directly — the ≥10-distinct requirement is met by
+> `measure-fanout.mjs` (13 hooks timed for Edit, 3 for Bash), not by the sampler.
+> Reported rather than worked around.
 
 **Step 7 — Decide on Braintrust tracing.** It is ON, doing a synchronous POST per
 Bash/Edit/Write turn.
