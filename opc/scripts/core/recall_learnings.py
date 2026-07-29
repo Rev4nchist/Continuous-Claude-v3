@@ -130,27 +130,56 @@ def _resolve_registry_path() -> Path:
     return install_root / ".claude" / "project-registry.json"
 
 
-def _is_registered_project(abs_path: str) -> bool:
-    """Check if abs_path matches an entry in .claude/project-registry.json.
+def _resolve_registered_root(abs_path: str) -> str | None:
+    """Return the registered PROJECT ROOT containing abs_path, or None.
 
-    Used to decide whether to derive a project_id from CWD or fall back to
-    GLOBAL-only filtering. We treat unregistered CWDs as ambient/unsafe and
-    fail-safe rather than leaking PROJECT-scoped rows.
+    Returns the root, not a bool, because the caller must hash the ROOT rather
+    than the path it was given. abs_path may legitimately be a SUBDIRECTORY of
+    a registered project -- and the canonical documented invocation is exactly
+    that: `cd $CLAUDE_OPC_DIR && ... recall_learnings.py`, i.e. from `opc/`.
+
+    Getting this wrong is silent and total. The old code answered a bool here
+    and then hashed the CWD, so from `<repo>/opc` it derived
+    b963d587e5d0a6b0 while every stored row carries the repo root's
+    addc92d926988bb9. Mode still reported 'project', the SQL still ran, and it
+    matched nothing -- so PROJECT-scoped recall returned GLOBAL rows only and
+    looked exactly like "no relevant memories". Two handoffs recorded that as a
+    possible break in the read path; the read path was fine, the scope key was
+    wrong.
+
+    Longest match wins, so a project nested inside another resolves to the
+    innermost one rather than whichever the registry happens to list first.
     """
     try:
         registry_path = _resolve_registry_path()
         if not registry_path.exists():
-            return False
+            return None
         with open(registry_path, encoding="utf-8") as f:
             registry = json.load(f)
         norm = str(Path(abs_path).resolve()).replace("\\", "/").lower()
+        best: str | None = None
+        best_len = -1
         for proj in registry.get("projects", []):
-            proj_path = str(Path(proj.get("path", "")).resolve()).replace("\\", "/").lower()
-            if proj_path and (norm == proj_path or norm.startswith(proj_path + "/")):
-                return True
+            raw = proj.get("path", "")
+            if not raw:
+                continue
+            resolved = str(Path(raw).resolve())
+            proj_path = resolved.replace("\\", "/").lower()
+            if norm == proj_path or norm.startswith(proj_path + "/"):
+                if len(proj_path) > best_len:
+                    best, best_len = resolved, len(proj_path)
+        return best
     except Exception:
-        return False
-    return False
+        return None
+
+
+def _is_registered_project(abs_path: str) -> bool:
+    """Back-compat wrapper: does abs_path sit inside a registered project?
+
+    Kept because it names a real question, but callers deciding SCOPE must use
+    _resolve_registered_root -- a bool cannot tell you what to hash.
+    """
+    return _resolve_registered_root(abs_path) is not None
 
 
 def resolve_recall_scope(
@@ -163,7 +192,9 @@ def resolve_recall_scope(
       1. all_projects=True            -> ('all', 'all')           debug opt-out
       2. CLAUDE_PROJECT_ID env set    -> (env_value, 'project')   explicit override
       3. project_dir provided         -> (sha256(...), 'project') explicit
-      4. CWD inside registered project-> (sha256(cwd), 'project') implicit
+      4. CWD inside registered project-> (sha256(ROOT), 'project') implicit
+                                         NB: the project ROOT, not the CWD --
+                                         a subdir hashes to an id no row has.
       5. else                          -> (None, 'global_only')   fail-safe default
 
     Returns:
@@ -185,11 +216,13 @@ def resolve_recall_scope(
         from project_memory import get_project_id  # type: ignore
         return get_project_id(project_dir), "project"
 
-    # Implicit: CWD inside a registered project
+    # Implicit: CWD inside a registered project.
+    # Hash the matched project ROOT, never the CWD -- see _resolve_registered_root.
     cwd = os.getcwd()
-    if _is_registered_project(cwd):
+    root = _resolve_registered_root(cwd)
+    if root:
         from project_memory import get_project_id  # type: ignore
-        return get_project_id(cwd), "project"
+        return get_project_id(root), "project"
 
     # Fail-safe: GLOBAL-only when context is unclear
     return None, "global_only"
