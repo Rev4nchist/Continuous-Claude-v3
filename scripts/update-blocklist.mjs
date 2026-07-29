@@ -53,16 +53,43 @@ function sleepSync(ms) {
 
 /** Set when any page exhausted its retries -- see the note in main(). */
 let fetchWasIncomplete = false;
+/** Set when a fetch stopped at MAX_PAGES rather than at the end of the feed. */
+let fetchWasCapped = false;
+
+/**
+ * Hard ceiling on pagination.
+ *
+ * Found by actually running it: with the Windows `sleep` bug fixed, the npm
+ * malware query no longer died on the first retry -- it paginated to page
+ * 11,180 (1,118,000 advisories), ran for ~2.5 HOURS, and then died with
+ * "FATAL ERROR: Reached heap limit - JavaScript heap out of memory", exit 134.
+ * `allResults.push(...pageData)` accumulates the entire feed in memory and the
+ * feed is now far larger than this script was written for.
+ *
+ * Fixing the sleep therefore turned a fast wrong answer into a slow wrong
+ * answer. That is worse operationally, and it is the honest result of the first
+ * end-to-end run rather than something the component tests could have shown.
+ *
+ * 200 pages = 20,000 advisories per query. Paired with `sort=published&
+ * direction=desc` below so the cap keeps the NEWEST advisories -- the ones a
+ * supply-chain guard actually needs -- instead of an arbitrary slice. Hitting
+ * the cap is reported and is NOT treated as a clean run.
+ */
+const MAX_PAGES = Number(process.env.BLOCKLIST_MAX_PAGES || 200);
 
 function ghApiPaginated(endpoint, { retries = 3, timeoutMs = 60000 } = {}) {
   // Fetch page-by-page to avoid ENOBUFS on large datasets (npm malware = 100+ pages)
   const allResults = [];
   let page = 1;
   const perPage = endpoint.includes('per_page=') ? '' : '&per_page=100';
+  // Newest first, so MAX_PAGES truncates the OLD tail rather than an arbitrary
+  // slice. A blocklist that is missing 2019 advisories is fine; one missing last
+  // week's is not.
+  const order = endpoint.includes('sort=') ? '' : '&sort=published&direction=desc';
   const separator = endpoint.includes('?') ? '&' : '?';
 
   while (true) {
-    const url = `${endpoint}${perPage}${separator}page=${page}`;
+    const url = `${endpoint}${perPage}${order}${separator}page=${page}`;
     let pageData = null;
 
     for (let attempt = 1; attempt <= retries; attempt++) {
@@ -101,6 +128,15 @@ function ghApiPaginated(endpoint, { retries = 3, timeoutMs = 60000 } = {}) {
     if (!Array.isArray(pageData) || pageData.length === 0) break;
 
     allResults.push(...pageData);
+
+    if (page >= MAX_PAGES) {
+      fetchWasCapped = true;
+      console.error(`\n  Reached MAX_PAGES=${MAX_PAGES} (${allResults.length} advisories). Stopping.`);
+      console.error(`  Results are sorted newest-first, so this is the most recent ${allResults.length}.`);
+      console.error(`  Raise with BLOCKLIST_MAX_PAGES if genuinely needed -- but note an`);
+      console.error(`  unbounded run OOMed at page 11,180 after 2.5 hours (exit 134).`);
+      break;
+    }
     process.stdout.write(`  Page ${page}: +${pageData.length} (total: ${allResults.length})\r`);
 
     if (pageData.length < 100) break; // last page
@@ -324,6 +360,14 @@ main()
         '        must not be recorded as a successful daily update. Re-run when GitHub is\n' +
         '        reachable: node scripts/update-blocklist.mjs --apply');
       process.exit(1);
+    }
+    if (fetchWasCapped) {
+      console.error(
+        `\n[WARN] Advisory fetch hit MAX_PAGES=${MAX_PAGES}. The newest advisories WERE\n` +
+        '       fetched and merged (results are sorted newest-first), so the blocklist is\n' +
+        '       current; the older tail of the feed was not read. This is a bounded,\n' +
+        '       deliberate truncation and is logged rather than hidden -- a silent cap is\n' +
+        '       the defect this whole exercise is about. Exiting 0.');
     }
   })
   .catch(err => {

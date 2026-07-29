@@ -377,10 +377,41 @@ below 150 ms over ≥ **5** iterations each.
 > `measure-fanout.mjs` (13 hooks timed for Edit, 3 for Bash), not by the sampler.
 > Reported rather than worked around.
 
-**Step 7 — Decide on Braintrust tracing.** It is ON, doing a synchronous POST per
-Bash/Edit/Write turn.
-→ **Accept:** ≥ **10** real PostToolUse invocations timed with tracing on and off;
-report the delta as a number, not a verdict.
+**Step 7 — Decide on Braintrust tracing.** — **MEASURED 2026-07-28.**
+
+> #### Step 7 result: tracing costs ~690 ms on every PostToolUse
+>
+> A/B on real turns, 12 per arm, toggling `TRACE_TO_BRAINTRUST` in
+> `~/.claude/.env` (backed up, restored, hash-verified identical afterward). The
+> env var alone cannot be used — the loader at `braintrust_hooks.py:885-889`
+> **unconditionally overwrites `os.environ`**, so the file always wins.
+>
+> | arm | n | p50 | mean | max |
+> |---|---|---|---|---|
+> | tracing **ON** | 12 of 12 turns | **955 ms** | 1,000 ms | 1,260 ms |
+> | tracing **OFF** | 2 of 12 turns | **317 ms** | 311 ms | 317 ms |
+> | no-POST path, direct, deterministic | 10 | **264 ms** | — | 300 ms |
+>
+> **Delta ≈ 640–690 ms per PostToolUse**, i.e. per tool call.
+>
+> The OFF arm captured only 2 of 12 turns, and that is *itself* evidence rather
+> than a hole: an OFF process lives ~3× shorter, so polling misses it far more
+> often — the same bias documented in Step 6. It is corroborated by two
+> independent deterministic measurements of the same no-POST path (264 ms direct
+> here; 285 ms from `measure-fanout.mjs` earlier), which agree with the sampled
+> 317 ms.
+>
+> **The floor matters as much as the delta.** With tracing OFF the hook still
+> costs **~264 ms** on every PostToolUse — python startup is only 33 ms of that,
+> so ~230 ms is the hook's own imports, `.env` parse and dispatch. So:
+>
+> - **Disabling tracing** saves ~640–690 ms/tool call and leaves ~264 ms.
+> - **Deregistering the hook** saves the full ~955 ms/tool call.
+>
+> Against that: tracing is the only telemetry the harness currently has that
+> isn't dead (`hook-trace.jsonl` has been dead since 2026-05-18). This is a real
+> trade, which is why the step asks for a number and not a verdict. **The number
+> is 690 ms per tool call. The decision is Dave's.**
 
 **Step 8 — Context lever, with a non-vacuous guard.** `claudeMdExcludes` in
 `~/.claude/settings.local.json` (never synced), one key, revertible, no file moves.
