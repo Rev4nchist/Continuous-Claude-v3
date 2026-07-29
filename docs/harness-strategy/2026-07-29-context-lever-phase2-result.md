@@ -1,18 +1,30 @@
 # Context lever, phase 2 — result
 
-Executed 2026-07-29, session `9b863a11`, against the plan in
-`2026-07-29-context-lever-phase2-plan.md`. Commits: `b800899` (sync fix), `d272454` (the split).
+Executed 2026-07-29 against the plan in `2026-07-29-context-lever-phase2-plan.md`, over two
+sessions the same day.
+
+- **Phase 2a**, session `9b863a11` — `b800899` (sync fix), `d272454` (6 rules split).
+- **Phase 2b**, session `131683fe` — `bea25d2` (tree cleanup), `014d2c6` (recover the stranded
+  skills), `6e6fdee` (the last 3 rules + the verbatim checker), `bdec8f7` (pin the snapshots).
+
+Phase 2 is **complete**: 9 of 13 tool rules split, 13.7k/session recovered, all nine archived
+snapshots machine-verified byte-identical to the text they replace.
 
 ## Measured (the only acceptance measure)
 
-| | before phase 1 | after phase 1 | after phase 2 |
-|---|---|---|---|
-| continuous-claude memory files | 145.6k (96 files) | 81.1k (50) | **72.2k** |
-| agent-arch (control) | 82.1k (51) | 82.1k | **73.2k** |
+| | before phase 1 | after phase 1 | phase 2a (6 rules) | **phase 2b (9 rules)** |
+|---|---|---|---|---|
+| continuous-claude memory files | 145.6k (96 files) | 81.1k (50) | 72.2k | **67.4k** |
+| agent-arch (control) | 82.1k (51) | 82.1k | 73.2k | **68.4k** |
 
-Phase 2 recovered **8.9k/session**. Both projects dropped **exactly 8.9k**, which is the
-control the plan asked for: a project using none of these tools sees the same drop, so the
-cost was global, not project-specific. Cumulative across both phases: **145.6k → 72.2k**.
+Phase 2 recovered **8.9k** on the first six rules and a further **4.8k** on the last three,
+**13.7k/session** in total. At every step both projects dropped *exactly* the same amount,
+which is the control the plan asked for: a project using none of these tools sees the same
+drop, so the cost was global, not project-specific. Cumulative: **145.6k → 67.4k**.
+
+Skills went 13.8k → 14.0k across phase 2b. That +0.2k is the `cli-integration` skill's
+*description* entering the listing; its 6.5k body stays unloaded until triggered. That is the
+whole trade, priced.
 
 Skills stayed at **13.8k** before and after. Skill *bodies* do not load until invoked, so
 moving detail into a SKILL.md is genuinely free in the always-on budget — the premise the
@@ -37,6 +49,33 @@ Detail is appended to each paired SKILL.md as a **verbatim pre-split snapshot**,
 summary, so "nothing was lost" is mechanically checkable. Caveat worth carrying: that check
 is guaranteed by construction and proves only no knowledge *loss*. It says nothing about
 whether a split is well *judged* — the adversarial pass is what speaks to that.
+
+### "Mechanically checkable" was itself unchecked, and was wrong in 3 of 6
+
+Phase 2b built the checker that phase 2a assumed — `scripts/verify-rule-archive.mjs` extracts
+the fenced block after each `<!-- archived-rule:NAME ref:SHA -->` marker and byte-compares it
+to that rule's text at the pinned pre-split commit. Running it found three of the six snapshots
+(`browser-automation`, `tldr-cli`, `grok-worker-safety`) were **not** byte-identical: the
+appender had rewritten inner ` ``` ` fences as `` ` ` ` `` so they would not close the outer
+3-backtick fence, mutating exactly the code blocks a reader most wants to copy. The other three
+passed only because they happened to contain no code fences. All repaired by re-emitting inside
+a 4-backtick fence, which carries 3-backtick content intact.
+
+```
+node scripts/verify-rule-archive.mjs      ->  pass=9 fail=0 skip=0
+```
+
+Two design notes worth reusing. Each marker **pins its own commit**, because one global `--ref`
+cannot be right for snapshots taken in different commits — run bare, the first version reported
+`pass=3 fail=6` on a set that was entirely correct, comparing six snapshots against their own
+*post*-split rules. A gate whose default invocation indicts healthy work is one people learn to
+ignore. And the script **exits 1 when it compared nothing**, because a green verdict over an
+empty set is the failure mode that let a `PASS | 0 registrations` health check stand for months.
+
+The general lesson: *a construction-guaranteed property is still worth testing, because the
+guarantee lives in the generator and generators have bugs.* "Verbatim by construction" was true
+of the intent and false of the output for half the cases, and nobody would have noticed by
+reading — the mangling is invisible unless you diff.
 
 ## The plan's ~26k estimate was optimistic, not pessimistic
 
@@ -69,13 +108,26 @@ Generalisation for future splits: **a prohibition is load-bearing exactly when t
 still contains the friction that motivates violating it.** Trimming the prohibition while
 keeping the friction converts a closed question back into an open one.
 
+## The three "homeless" rules — resolved (phase 2b, same day)
+
+They were skipped because shrinking them would have *deleted* rather than relocated. Each got
+a home that matches where the thing actually lives, rather than defaulting to "a skill":
+
+| rule | bytes | home | why that home |
+|---|---|---|---|
+| `cma-safety` | 6888 → 3066 | `skills/cma` | **was never really homeless** — the skill existed only in `~/.claude`, stranded by the reverse-sync bug below. One `--to-repo` run recovered it (`014d2c6`) |
+| `cli-integration-strategy` | 6552 → 2065 | `skills/cli-integration` (new) | trigger-shaped — "give Claude access to platform X" — so a skill loads it exactly when wanted |
+| `package-install-safety` | 4234 → 1736 | `docs/hooks/package-install-guard.md` | its enforcement is a **hook**, and its detail is read deliberately (interpreting a block, updating the blocklist). Inventing a skill nothing would trigger would be a home built to justify the move |
+
+Both surviving prohibitions were kept under the phase-2a generalisation — the kept text still
+carries the friction that motivates the violation. `cma` keeps "every non-`GET` is
+confirm-first" plus the pause command, because a standing deployment fires where the confirm
+gates cannot reach. `package-install` keeps "a block is a finding, not an obstacle" and names
+all three ways round it (`SKIP_PACKAGE_GUARD`, another package manager, a shell wrapper),
+because "your install just failed" is precisely the friction that produces the bypass.
+
 ## Deliberately not applied — and why
 
-- `cma-safety`, `cli-integration-strategy`, `package-install-safety` — **no paired skill
-  exists in the repo**, so shrinking them deletes rather than relocates. The plan's premise
-  that "all 13 already have a paired skill" is false for these three. `skills/cma/` exists
-  only in `~/.claude` (stranded by the reverse-sync bug, below); the other two have no skill
-  counterpart at all — `package-install-safety`'s counterpart is a *hook*.
 - `harness-update` — the proposed rewrite was **larger** than the original (2704 → 3134).
 - `notion-cli` (87% retained), `sentry` (93%), `railway` (96%) — churn on safety rules for
   ~0.3k combined.
@@ -121,9 +173,29 @@ already blessed this script twice.
 
 ## Open
 
-1. `b800899` and `d272454` are **unpushed**; the `~/.claude` rules snapshot is local-only.
-2. The 4 active-only skills need one `--to-repo` run to be captured — now that reverse-sync
-   actually works. Requires a clean repo tree first.
-3. The 3 homeless rules need a decision on where their detail should live before phase 2's
-   remaining ~4k is safe to take.
-4. The fossil sync scripts still await the June review's recommended deletion.
+Items 1–3 of the original open list are **closed** (pushed through `bdec8f7`; `--to-repo` ran
+and captured the stranded skills in `014d2c6`; the homeless rules are resolved above). What
+remains:
+
+1. The fossil `.claude/scripts/sync-claude.sh` and its `~/.claude` mirror still await the June
+   review's recommended deletion (D7d-02, D8a-03). Destructive, so Dave's call.
+2. `~/.claude` drift **recurs by design** after every forward sync. If it ever matters, the fix
+   is a scheduled snapshot commit, not a hook — `PostToolUse` cannot see shell-copy writes.
+3. `/recall` does not surface indexed handoffs. The write half works (rows verified in
+   `archival_memory` with embeddings and correct metadata); the read half returned only
+   GLOBAL-scoped rows across three attempts, including a query containing a literal string SQL
+   confirms is stored. Untouched this session. Open handoffs by path, not by `/recall`.
+4. The reverse-sync surfaced 10 files that are drift rather than content — 2 exact duplicates
+   of top-level `scripts/msys/`, a **stale** `load-probe.mjs` 139 lines behind the top-level
+   copy, and 7 unregistered leftovers in `.claude/hooks/` (two byte-identical to files already
+   in `hooks/archive/`). All reverted in `014d2c6`. They will reappear on the next `--to-repo`.
+   Worth cleaning at the source in `~/.claude` if that becomes annoying.
+
+## Remaining headroom
+
+Roughly zero on this lever without changing its shape. What is left in the always-on budget is
+either genuinely load-bearing (the two worker-safety rules need ~3.4–3.7k each of real
+invariants), already at target (`linear`, `neonctl`), cosmetic (`notion-cli` 87% retained,
+`sentry` 93%, `railway` 96% — ~0.3k combined, on safety rules, not worth the churn), or
+counterproductive (`harness-update`, whose rewrite was larger). The next meaningful reduction
+would have to come from a different category than tool rules.
