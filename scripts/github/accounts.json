@@ -1,0 +1,36 @@
+{
+  "_comment": [
+    "Dual GitHub account routing. Read by scripts/github/gh-for.ps1 and",
+    "scripts/github/verify-github-accounts.ps1.",
+    "",
+    "WHY PATH-DETERMINED AND NOT `gh auth switch`:",
+    "  gh auth switch changes a GLOBAL active account. Its failure mode is silent",
+    "  -- you push to the company repo as your personal account, or commit company",
+    "  work with a personal email, and nothing errors. Routing on the directory you",
+    "  are standing in has no mode to be in and nothing to remember to switch.",
+    "",
+    "ROUTES are matched LONGEST PREFIX FIRST, so a company folder nested inside the",
+    "home directory wins over the catch-all. Paths are compared case-insensitively",
+    "with forward slashes, because Windows will hand you both spellings."
+  ],
+
+  "accounts": {
+    "personal": {
+      "user": "Rev4nchist",
+      "email": "dkhayes44@gmail.com",
+      "ghConfigDir": "~/.config/gh-personal",
+      "ssoOrg": null
+    },
+    "work": {
+      "user": "TBD-COMPANY-USERNAME",
+      "email": "TBD-COMPANY-EMAIL",
+      "ghConfigDir": "~/.config/gh-work",
+      "ssoOrg": "TBD-COMPANY-ORG"
+    }
+  },
+
+  "routes": [
+    { "prefix": "C:/Users/david.hayes/work", "account": "work" },
+    { "prefix": "C:/Users/david.hayes", "account": "personal" }
+  ]
+}
