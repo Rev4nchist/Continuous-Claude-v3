@@ -37,7 +37,7 @@ else
     DST="$USER_CLAUDE"
 fi
 
-$VERBOSE && echo "Syncing: $SRC -> $DST"
+$VERBOSE && echo "Syncing: $SRC -> $DST" || true
 
 # Pre-flight: refuse reverse-sync if repo audit invariant violated.
 # Reverse-sync used to propagate fossilized ~/.claude/hooks/src/ back to repo,
@@ -125,7 +125,13 @@ copy_dir() {
         else
             mkdir -p "$(dirname "$dst_file")"
             cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $dir/$rel"
+            # `|| true` is load-bearing (see note at end of file): this is the
+            # LAST command in the while body, so without it a non-verbose run
+            # makes the loop -> pipeline -> copy_dir all return 1, and `set -e`
+            # kills the script at the call site. Effect: --to-repo copied
+            # agents/ and silently stopped, never reaching skills, scripts,
+            # docs, rules or hooks. Verified by scripts/sync-claude-mapping.test.sh.
+            $VERBOSE && echo "Copied: $dir/$rel" || true
         fi
     done
 }
@@ -150,9 +156,13 @@ for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/pack
         else
             mkdir -p "$(dirname "$dst_file")"
             cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $rel"
+            $VERBOSE && echo "Copied: $rel" || true
         fi
     done
 done
 
-$VERBOSE && echo "Sync complete"
+# `|| true` is load-bearing: without it this `&&` list is the script's last
+# command, so a non-verbose run exits 1 on SUCCESS. The abort paths above also
+# exit 1, which made "sync completed" and "guard refused, nothing copied"
+# indistinguishable to any caller checking $?. sync-to-active.sh already had it.
+$VERBOSE && echo "Sync complete" || true
