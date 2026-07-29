@@ -39,7 +39,22 @@ done
 $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 
 # hooks/src excluded: dist/*.mjs is what runs; copying src stomps mtimes and breaks hook-dist-freshness.
-SYNC_DIRS="rules agents skills scripts docs"
+#
+# NOTE: `rules` is NOT in this list. The repo keeps them at .claude/rules-src/ and
+# they land at ~/.claude/rules/ -- source name deliberately differs from dest name.
+# Why: Claude Code auto-loads .claude/rules/*.md from BOTH user scope and project
+# scope. With the repo copy at .claude/rules/, every session in this repo loaded all
+# 46 rules TWICE, byte-identical. Measured with /context on 2026-07-29:
+# 145.6k memory-file tokens here vs 82.1k in a project with no .claude/rules --
+# a ~61k/session duplicate, 13% of the 1M window, carrying zero information.
+# Renaming the SOURCE keeps the rules version-controlled and still fed to
+# ~/.claude/rules/ (which 18 of 19 projects rely on as their ONLY copy) while
+# removing the second load. See docs/harness-strategy/.
+SYNC_DIRS="agents skills scripts docs"
+
+# Explicit source->dest mapping for the rules tree (names differ, see above).
+RULES_SRC_DIR="rules-src"
+RULES_DST_DIR="rules"
 
 NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.jsonl knowledge-tree.json"
 
@@ -64,8 +79,11 @@ copy_registry() {
 
 copy_dir() {
     local dir="$1"
+    # Optional 2nd arg: dest dir name when it differs from the source name
+    # (used by the rules-src -> rules mapping). Defaults to same-name.
+    local dst_dir="${2:-$1}"
     local src_path="$REPO_CLAUDE/$dir"
-    local dst_path="$ACTIVE_CLAUDE/$dir"
+    local dst_path="$ACTIVE_CLAUDE/$dst_dir"
 
     [[ ! -d "$src_path" ]] && return 0
 
@@ -161,7 +179,18 @@ if $CHANGED; then
     changed_map_target() {
         local p="$1" rest skip
         case "$p" in
-            .claude/rules/*|.claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*)
+            # rules-src -> rules. Must be matched BEFORE the same-name subtrees.
+            # Deliberately NO `.claude/rules/*` case: that path is no longer a sync
+            # source, so the 46 D-entries produced by the rules -> rules-src rename
+            # map to nothing and cannot delete ~/.claude/rules/. That matters because
+            # renames are not detected here (no -M): a move appears as D(old)+A(new),
+            # and `.claude/rules-src/x` sorts BEFORE `.claude/rules/x` ('-' < '/'),
+            # so the add would be copied and the delete would then remove it.
+            .claude/rules-src/*)
+                changed_is_excluded "$p" && return 0
+                printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
+                ;;
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
@@ -313,6 +342,9 @@ fi
 for dir in $SYNC_DIRS; do
     copy_dir "$dir"
 done
+
+# rules: repo .claude/rules-src/ -> active ~/.claude/rules/ (see SYNC_DIRS note).
+copy_dir "$RULES_SRC_DIR" "$RULES_DST_DIR"
 
 # Sync the project registry (repo canonical -> active mirror, JSON-validated)
 copy_registry
