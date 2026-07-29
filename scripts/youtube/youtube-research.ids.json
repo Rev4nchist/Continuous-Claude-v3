@@ -1,0 +1,21 @@
+{
+  "_comment": "Canonical Notion IDs for the YouTube Research registry. Idempotency key = \"Digest ID\". Machine-owned (job-owned per notion-cli-safety.md): pipelines upsert rows; humans read views.",
+  "reportsHubPageId": "38f76fd7-ac82-8047-8e50-dd2956ba6e8a",
+  "databaseId": "61a859db-4f60-4e3a-9e9d-4a246939a60a",
+  "dataSourceId": "1b728566-a5b3-4eec-82f9-c53ea7671aff",
+  "url": "https://app.notion.com/p/61a859db4f604e3a9e9d4a246939a60a",
+  "createdAt": "2026-07-25T14:15:33.406Z",
+  "properties": [
+    "Title",
+    "Type",
+    "Topic",
+    "Channels",
+    "Verdict",
+    "Status",
+    "Videos",
+    "Citations",
+    "Date",
+    "Digest ID",
+    "Corpus Path"
+  ]
+}
