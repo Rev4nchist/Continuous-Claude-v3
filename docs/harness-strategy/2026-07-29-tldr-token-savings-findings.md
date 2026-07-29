@@ -8,6 +8,40 @@ the machinery costs?"*
 
 ---
 
+> ## ⚠️ CORRECTION (same day, later) — read this before the rest
+>
+> **The headline count below is wrong and the verdict is too harsh.** My
+> transcript scan used a non-recursive `readdirSync`: it read the 512
+> top-level transcripts and **silently missed 548 subagent transcripts**.
+>
+> | | this doc says | actually |
+> |---|---|---|
+> | real denials | 27 | **138** (32 main + 106 subagent) |
+> | where it fires | main sessions | **77% in subagents** |
+> | net token effect | "mostly illusory" | **positive, ~+174k tok est** |
+>
+> The tell was external and was sitting in plain sight:
+> `.tldr/stats/hook_activity.jsonl` — a 471-record, 3-month telemetry file
+> nobody had read — independently recorded **173 intercepts**. Two sources
+> disagreeing 6× is the signal. A single count that looks plausible is not
+> evidence, and I published one.
+>
+> **Revised verdict: TLDR is net-positive even in its broken state and worth
+> fixing, not cutting.** The saving is monotonic in file size — files under
+> 5KB *lose* ~10k tokens, files over 50KB win 5-for-5 — so the fix is to
+> retarget it, not remove it. Everything below about the *cost* side (zombie
+> daemon, 31.6s denials, 63s Task calls, no timeout protection) stands
+> unchanged and verified; it was the *benefit* side I undercounted.
+>
+> Full revised analysis and the remediation plan:
+> `~/.claude/plans/i-want-a-deeper-joyful-blossom.md`.
+>
+> This is the fifth instance in this lineage of the same defect — a query
+> narrower than the question, returning a number that looked like an answer —
+> and the second one of mine.
+
+---
+
 ## Verdict
 
 **The compression is real. The saving is not. Right now the machinery is a
