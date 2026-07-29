@@ -12,10 +12,18 @@ docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c "S
 
 ## Quick Queries
 
+**Liveness is `GREATEST(last_heartbeat, last_activity_at)` — never bare `last_heartbeat`.**
+`heartbeat.ts` fires on `UserPromptSubmit` only, so that column measures the HUMAN
+typing, not the agent working (measured peak staleness during a 12-agent workflow:
+505s while the session edited continuously). Any query that keys on it alone reports
+a working session as dead. `GREATEST` returns NULL only when every argument is NULL,
+so rows predating the `last_activity_at` writer degrade to the old behaviour.
+Enforced by `node scripts/coordination/liveness-predicate-guard.mjs`.
+
 ```bash
 # Active sessions (last 5 min)
 docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c \
-  "SELECT id, project, working_on, last_heartbeat FROM sessions WHERE last_heartbeat > NOW() - INTERVAL '5 minutes';"
+  "SELECT id, project, working_on, GREATEST(last_heartbeat, last_activity_at) AS last_alive FROM sessions WHERE GREATEST(last_heartbeat, last_activity_at) > NOW() - INTERVAL '5 minutes';"
 
 # All sessions
 docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c \

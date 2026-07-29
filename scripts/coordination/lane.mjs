@@ -152,6 +152,28 @@ async function logEvent(c, { laneId = null, kind, sessionId, to = null, body = n
 }
 
 /**
+ * WHEN A SESSION WAS LAST ALIVE -- one expression, so no reader invents its own.
+ *
+ * NOT bare `last_heartbeat`. `heartbeat.ts` fires on UserPromptSubmit ONLY, so
+ * that column measures the HUMAN typing, not the agent working. Measured peak
+ * staleness during a 12-agent workflow: 505s, while the session was editing
+ * continuously. Keying liveness on it alone means a session that is mid-edit
+ * reads as dead and its lane or file claim becomes reclaimable out from under it
+ * -- demonstrated live on session 079ae1e7 (heartbeat age 1521s, activity age
+ * 25s, lock said dead, truth said alive).
+ *
+ * GREATEST ignores NULLs and returns NULL only when EVERY argument is NULL, so
+ * rows written before `last_activity_at` had a writer degrade exactly to the old
+ * behaviour rather than to "never alive".
+ *
+ * Takes the table alias so the SAME text is used in every query. The reason this
+ * bug existed at all is that the predicate was spelled out at eight separate
+ * sites and only some were updated; `scripts/coordination/liveness-predicate-guard.mjs`
+ * now asserts a nonzero count of this form and zero of the bare form.
+ */
+const ALIVE_AT = (alias = '') => `GREATEST(${alias}last_heartbeat, ${alias}last_activity_at)`;
+
+/**
  * The reclaimability predicate, in one place so every query agrees.
  *
  * BOTH conditions, never either: an expired lease on a live session means the
@@ -167,7 +189,7 @@ const RECLAIMABLE = `(
     AND NOT EXISTS (
       SELECT 1 FROM sessions s
       WHERE s.id = l.owner_session_id
-        AND s.last_heartbeat > now() - interval '${STALE_MINUTES} minutes'
+        AND ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
     )
   )
 )`;
@@ -207,7 +229,8 @@ const commands = {
     );
     const peers = (await c.query(
       `SELECT id, working_on FROM sessions
-       WHERE last_heartbeat > now() - interval '${STALE_MINUTES} minutes' ORDER BY last_heartbeat DESC`,
+       WHERE ${ALIVE_AT()} > now() - interval '${STALE_MINUTES} minutes'
+       ORDER BY ${ALIVE_AT()} DESC`,
     )).rows;
 
     if (JSON_OUT) return { lanes: rows, peers, me: myId };
@@ -232,12 +255,12 @@ const commands = {
   async peers(c) {
     const myId = me();
     const { rows } = await c.query(
-      `SELECT s.id, s.working_on, s.last_heartbeat,
+      `SELECT s.id, s.working_on, ${ALIVE_AT('s.')} AS last_alive,
               (SELECT string_agg(l.id, ', ' ORDER BY l.id) FROM agentic_os.lane l
                 WHERE l.owner_session_id = s.id AND l.state <> 'done') AS lanes
        FROM sessions s
-       WHERE s.last_heartbeat > now() - interval '${STALE_MINUTES} minutes'
-       ORDER BY s.last_heartbeat DESC`,
+       WHERE ${ALIVE_AT('s.')} > now() - interval '${STALE_MINUTES} minutes'
+       ORDER BY ${ALIVE_AT('s.')} DESC`,
     );
     if (JSON_OUT) return rows;
     return rows.map((r) =>
@@ -311,8 +334,16 @@ const commands = {
     if (cur.owner_session_id === myId) {
       return JSON_OUT ? cur : `you already hold ${id} -- use "renew" to extend, "note" to update it`;
     }
+    // Displayed, not decided -- but it must answer the SAME question the deny
+    // message goes on to state the rule for. Rendering bare last_heartbeat here
+    // next to "a holder quiet Nm" told the reader a working holder had been
+    // silent for 25 minutes while RECLAIMABLE, correctly, refused to release the
+    // lane. AT TIME ZONE 'UTC' because these are `timestamp without time zone`
+    // holding UTC and node-postgres parses that as LOCAL -- the same confusion
+    // put a future date on this board on 2026-07-26.
     const holder = (await c.query(
-      `SELECT last_heartbeat, working_on FROM sessions WHERE id=$1`, [cur.owner_session_id],
+      `SELECT ${ALIVE_AT()} AT TIME ZONE 'UTC' AS last_alive, working_on
+         FROM sessions WHERE id=$1`, [cur.owner_session_id],
     )).rows[0];
     await logEvent(c, {
       laneId: id, kind: 'note', sessionId: myId, to: cur.owner_session_id,
@@ -323,7 +354,7 @@ const commands = {
       `DENIED ${id} -- held by session ${short(cur.owner_session_id)}`,
       `  their note: ${cur.note || '(none)'}`,
       `  lease: ${cur.lease_expires_at ? new Date(cur.lease_expires_at).toISOString() : 'none'}`,
-      `  they were last alive: ${holder ? new Date(holder.last_heartbeat).toISOString() : 'never seen'}`,
+      `  they were last alive: ${holder?.last_alive ? new Date(holder.last_alive).toISOString() : 'never seen'}`,
       `  Reclaim needs BOTH an expired lease AND a holder quiet ${STALE_MINUTES}m.`,
       `  They have been told you wanted it. Pick another: lane.mjs next`,
     ].join('\n');
@@ -413,7 +444,8 @@ const commands = {
     if (typeof flags.to === 'string') {
       const m = await c.query(
         `SELECT id FROM sessions WHERE id LIKE $1 || '%'
-         AND last_heartbeat > now() - interval '2 hours' ORDER BY last_heartbeat DESC LIMIT 2`, [flags.to],
+         AND ${ALIVE_AT()} > now() - interval '2 hours'
+         ORDER BY ${ALIVE_AT()} DESC LIMIT 2`, [flags.to],
       );
       if (m.rows.length === 0) throw new Error(`no recent session matching "${flags.to}"`);
       if (m.rows.length > 1) throw new Error(`"${flags.to}" is ambiguous -- give more characters`);

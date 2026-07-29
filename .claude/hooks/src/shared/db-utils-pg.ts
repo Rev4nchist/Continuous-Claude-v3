@@ -447,7 +447,7 @@ export async function getActiveSessions(project?: string): Promise<{
                started_at     AT TIME ZONE 'UTC' AS started_at,
                last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
         FROM sessions
-        WHERE last_heartbeat > NOW() - INTERVAL '5 minutes'
+        WHERE GREATEST(last_heartbeat, last_activity_at) > NOW() - INTERVAL '5 minutes'
         ${project ? 'AND project = $1' : ''}
         ORDER BY started_at DESC
       `;
@@ -481,11 +481,19 @@ export async function isSessionActive(
   const thresholdSeconds = Math.floor(thresholdMs / 1000);
 
   // Liveness is decided entirely inside the query, against the same clock that
-  // wrote last_heartbeat -- no client-side subtraction, no timezone assumption.
+  // wrote the columns -- no client-side subtraction, no timezone assumption.
+  //
+  // GREATEST(last_heartbeat, last_activity_at), not bare last_heartbeat: the
+  // heartbeat is written on UserPromptSubmit ONLY, so it measures the HUMAN
+  // typing, not the agent working. Measured peak staleness during a 12-agent
+  // workflow: 505s, while the session was continuously editing. Keying liveness
+  // on the heartbeat alone classifies a working session as dead. GREATEST
+  // ignores NULLs and returns NULL only when EVERY argument is NULL, so rows
+  // predating the last_activity_at writer reduce exactly to the old behaviour.
   const { value } = await withPgClientOrFallback(
     async (client) => {
       const res = await client.query(
-        `SELECT last_heartbeat >= NOW() - make_interval(secs => $2) AS active
+        `SELECT GREATEST(last_heartbeat, last_activity_at) >= NOW() - make_interval(secs => $2) AS active
          FROM sessions WHERE id = $1`,
         [sessionId, thresholdSeconds]
       );
@@ -717,7 +725,7 @@ upsert AS (
             AND NOT EXISTS (
               SELECT 1 FROM sessions s
               WHERE s.id = file_claims.session_id
-                AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $4)
             )
           )
   -- xmax <> 0 is the standard idiom for "this row came from the ON CONFLICT
@@ -759,7 +767,7 @@ SELECT (SELECT session_id FROM upsert) AS new_owner,
        (SELECT NOT EXISTS (
           SELECT 1 FROM sessions s
           WHERE s.id = prior.session_id
-            AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+            AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $4)
         ) FROM prior) AS prior_holder_stale
 `;
 
@@ -831,7 +839,7 @@ export async function resolveFileClaim(
                     NOT EXISTS (
                       SELECT 1 FROM sessions s
                       WHERE s.id = file_claims.session_id
-                        AND s.last_heartbeat >= NOW() - make_interval(secs => $3)
+                        AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $3)
                     ) AS holder_stale
                FROM file_claims
               WHERE file_path = $1 AND project = $2`,

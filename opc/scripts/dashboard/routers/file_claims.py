@@ -44,7 +44,7 @@ async def get_active_claims() -> dict[str, Any]:
                 FROM file_claims fc
                 JOIN sessions s ON fc.session_id = s.id
                 WHERE fc.released_at IS NULL
-                  AND s.last_heartbeat > NOW() - INTERVAL '5 minutes'
+                  AND GREATEST(s.last_heartbeat, s.last_activity_at) > NOW() - INTERVAL '5 minutes'
                 ORDER BY fc.claimed_at DESC
                 """
             )

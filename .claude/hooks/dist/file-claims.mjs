@@ -5349,7 +5349,7 @@ upsert AS (
             AND NOT EXISTS (
               SELECT 1 FROM sessions s
               WHERE s.id = file_claims.session_id
-                AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+                AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $4)
             )
           )
   -- xmax <> 0 is the standard idiom for "this row came from the ON CONFLICT
@@ -5391,7 +5391,7 @@ SELECT (SELECT session_id FROM upsert) AS new_owner,
        (SELECT NOT EXISTS (
           SELECT 1 FROM sessions s
           WHERE s.id = prior.session_id
-            AND s.last_heartbeat >= NOW() - make_interval(secs => $4)
+            AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $4)
         ) FROM prior) AS prior_holder_stale
 `;
 async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, toolName, options = {}) {
@@ -5432,7 +5432,7 @@ async function resolveFileClaim(filePath, project, sessionId, staleThresholdMs, 
                     NOT EXISTS (
                       SELECT 1 FROM sessions s
                       WHERE s.id = file_claims.session_id
-                        AND s.last_heartbeat >= NOW() - make_interval(secs => $3)
+                        AND GREATEST(s.last_heartbeat, s.last_activity_at) >= NOW() - make_interval(secs => $3)
                     ) AS holder_stale
                FROM file_claims
               WHERE file_path = $1 AND project = $2`,

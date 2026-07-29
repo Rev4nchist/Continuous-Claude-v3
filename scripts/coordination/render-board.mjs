@@ -65,14 +65,15 @@ await c.connect();
 const lanes = (await c.query(`SELECT * FROM agentic_os.lane ORDER BY track, priority, id`)).rows;
 
 const sessions = (await c.query(
-  `SELECT s.id, s.working_on, s.last_heartbeat,
+  `SELECT s.id, s.working_on,
+          GREATEST(s.last_heartbeat, s.last_activity_at) AS last_heartbeat,
           COALESCE(json_agg(json_build_object('id',l.id,'title',l.title,'scope',l.scope,'note',l.note)
             ORDER BY l.priority) FILTER (WHERE l.id IS NOT NULL), '[]') AS lanes
    FROM sessions s
    LEFT JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done'
-   WHERE s.last_heartbeat > now() - interval '${STALE_MINUTES} minutes'
-   GROUP BY s.id, s.working_on, s.last_heartbeat
-   ORDER BY s.last_heartbeat DESC`,
+   WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+   GROUP BY s.id, s.working_on, s.last_heartbeat, s.last_activity_at
+   ORDER BY GREATEST(s.last_heartbeat, s.last_activity_at) DESC`,
 )).rows;
 
 const events = (await c.query(
@@ -80,9 +81,9 @@ const events = (await c.query(
 )).rows;
 
 const claimHealth = (await c.query(
-  `SELECT count(*) FILTER (WHERE s.id IS NULL)::int                                   AS orphaned,
-          count(*) FILTER (WHERE s.last_heartbeat <  now() - interval '5 min')::int   AS stale,
-          count(*) FILTER (WHERE s.last_heartbeat >= now() - interval '5 min')::int   AS live
+  `SELECT count(*) FILTER (WHERE s.id IS NULL)::int AS orphaned,
+          count(*) FILTER (WHERE GREATEST(s.last_heartbeat, s.last_activity_at) <  now() - interval '5 min')::int AS stale,
+          count(*) FILTER (WHERE GREATEST(s.last_heartbeat, s.last_activity_at) >= now() - interval '5 min')::int AS live
    FROM file_claims fc LEFT JOIN sessions s ON s.id = fc.session_id`,
 )).rows[0];
 

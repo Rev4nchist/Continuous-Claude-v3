@@ -93,6 +93,14 @@ function extractClaimSql() {
     'ON CONFLICT',        // head
     'expires_at < NOW()', // the reclamation rule
     'last_heartbeat',     // the other half
+    // ...and it must be the CORRECT other half. Bare last_heartbeat measures the
+    // human typing, not the agent working, so the lock classified a session that
+    // had been editing for 25 minutes as dead and offered its claims to anyone
+    // (verified on session 079ae1e7, 2026-07-28). Requiring the token here means
+    // a revert to the bare column cannot reach Postgres through this probe.
+    // Structural enforcement across all call sites:
+    // scripts/coordination/liveness-predicate-guard.mjs
+    'last_activity_at',
     '$7',                 // break-glass param
     'RETURNING',          // tail of the upsert CTE
     'prior_holder_stale', // the very last projection
@@ -152,10 +160,16 @@ async function main() {
   await admin.query(`DELETE FROM file_claims WHERE project = $1`, [PROJECT]);
   await admin.query(`DELETE FROM sessions WHERE id LIKE 'fxprobe-%'`);
   await admin.query(
-    `INSERT INTO sessions (id, project, last_heartbeat) VALUES
-       ('fxprobe-active', $1, NOW()),
-       ('fxprobe-stale',  $1, NOW() - INTERVAL '10 minutes'),
-       ('fxprobe-me',     $1, NOW())`,
+    `INSERT INTO sessions (id, project, last_heartbeat, last_activity_at) VALUES
+       ('fxprobe-active',  $1, NOW(),                        NOW()),
+       ('fxprobe-stale',   $1, NOW() - INTERVAL '10 minutes', NOW() - INTERVAL '10 minutes'),
+       ('fxprobe-me',      $1, NOW(),                        NOW()),
+       -- The session the lock used to get WRONG: its human stopped typing 25
+       -- minutes ago, so last_heartbeat is long stale, but the agent has been
+       -- editing continuously and last_activity_at is current. Under the old
+       -- bare-heartbeat rule this session reads as DEAD and its claims were
+       -- offered to anyone. Case 3c is the assertion that it no longer is.
+       ('fxprobe-working', $1, NOW() - INTERVAL '25 minutes', NOW())`,
     [PROJECT],
   );
 
@@ -193,6 +207,36 @@ async function main() {
     (await resolve(admin, '/fx/b2.ts', 'fxprobe-me')).outcome, 'blocked');
   check('3b break-glass gets through anyway',
     (await resolve(admin, '/fx/b2.ts', 'fxprobe-me', { breakGlass: true })).outcome, 'takeover');
+
+  // --- case 3c: the holder is WORKING but its human is not typing ---------
+  // Lease EXPIRED and heartbeat STALE -- i.e. every condition the old rule
+  // required for takeover -- but last_activity_at is current, so the holder is
+  // alive and must keep its claim. This is the regression the whole fix is
+  // about, and it is deliberately the mirror image of case 3: identical setup,
+  // opposite expected outcome, and the ONLY difference is last_activity_at.
+  //
+  // NEGATIVE CONTROL, actually run on 2026-07-28 rather than asserted: reverting
+  // ONLY the ON CONFLICT predicate to bare last_heartbeat makes this case return
+  // 'takeover' -- FAILED 1/16. So the fix is load-bearing and this case can fail.
+  //
+  // Worth knowing what that run also showed: `prior_holder_stale` stayed FALSE
+  // while the statement handed the claim away, because the classifier at the
+  // tail of the statement had already been fixed and the ON CONFLICT branch had
+  // not. The recorded facts contradicted the action taken. That is why the
+  // second assertion below checks the classifier SEPARATELY from the outcome --
+  // either one alone can agree with you while the other is wrong.
+  await admin.query(
+    `INSERT INTO file_claims (file_path, project, session_id, claimed_at, expires_at)
+     VALUES ('/fx/b3.ts', $1, 'fxprobe-working', NOW(), NOW() - INTERVAL '1 minute')
+     ON CONFLICT (file_path, project) DO UPDATE
+       SET session_id = EXCLUDED.session_id, expires_at = EXCLUDED.expires_at`,
+    [PROJECT],
+  );
+  const c3c = await resolve(admin, '/fx/b3.ts', 'fxprobe-me');
+  check('3c working holder (stale heartbeat, live activity) is NOT taken over',
+    c3c.outcome, 'blocked');
+  check('3c and it is classified as alive, not merely lease-protected',
+    c3c.row.prior_holder_stale, false);
 
   // --- case 4: an ACTIVE session holds it -------------------------------
   await admin.query(

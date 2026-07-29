@@ -151,13 +151,21 @@ async function main(): Promise<void> {
 
     // Only peers that are BOTH alive and holding something. A live session with
     // no lane is not a collision risk and does not need a line.
+    //
+    // "Alive" is GREATEST(last_heartbeat, last_activity_at), never the heartbeat
+    // alone: heartbeat.ts fires on UserPromptSubmit only, so a peer that has been
+    // editing continuously for 25 minutes without its human typing reads as dead
+    // and is silently DROPPED from this warning -- the one place the collision
+    // was supposed to surface. GREATEST returns NULL only when both are NULL, so
+    // pre-writer rows degrade to the old behaviour rather than to "never alive".
     const peers = (await client.query<{ sid: string; lanes: string; scopes: string }>(
       `SELECT s.id AS sid,
               string_agg(l.id, ', ' ORDER BY l.id)              AS lanes,
               string_agg(COALESCE(l.scope,''), ' | ')           AS scopes
        FROM sessions s
        JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done'
-       WHERE s.last_heartbeat > now() - interval '${STALE_MINUTES} minutes' AND s.id <> $1
+       WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+         AND s.id <> $1
        GROUP BY s.id`,
       [me],
     )).rows;

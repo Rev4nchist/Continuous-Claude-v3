@@ -5296,7 +5296,7 @@ async function getActiveSessions(project) {
                started_at     AT TIME ZONE 'UTC' AS started_at,
                last_heartbeat AT TIME ZONE 'UTC' AS last_heartbeat
         FROM sessions
-        WHERE last_heartbeat > NOW() - INTERVAL '5 minutes'
+        WHERE GREATEST(last_heartbeat, last_activity_at) > NOW() - INTERVAL '5 minutes'
         ${project ? "AND project = $1" : ""}
         ORDER BY started_at DESC
       `;

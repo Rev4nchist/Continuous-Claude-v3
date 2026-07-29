@@ -5268,7 +5268,8 @@ async function main() {
               string_agg(COALESCE(l.scope,''), ' | ')           AS scopes
        FROM sessions s
        JOIN agentic_os.lane l ON l.owner_session_id = s.id AND l.state <> 'done'
-       WHERE s.last_heartbeat > now() - interval '${STALE_MINUTES} minutes' AND s.id <> $1
+       WHERE GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+         AND s.id <> $1
        GROUP BY s.id`,
       [me]
     )).rows;
