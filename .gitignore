@@ -293,3 +293,10 @@ mcps/
 # .claude/rules/sync-known-gaps.md declares this file "NEVER sync". No secrets in it,
 # so no rotation was needed; the file itself is untouched on disk.
 .claude/settings.local.json
+
+# Stray nested .claude/ trees. Something writes .claude/logs/intel-bus.jsonl
+# RELATIVE TO ITS CWD, so running from .claude/hooks/ or .claude/hooks/src/
+# creates .claude/hooks/.claude/logs/ and .claude/hooks/src/.claude/logs/.
+# Runtime logs, never content. Ignored rather than deleted so the writer's
+# cwd bug stays visible on disk; the real fix is an absolute path in the writer.
+.claude/**/.claude/
