@@ -509,16 +509,33 @@ async function main() {
     const hookDistDir = path.join(projectDir, '.claude', 'hooks', 'dist');
     if (fs.existsSync(hookSrcDir) && fs.existsSync(hookDistDir)) {
       try {
-        const distMtime = fs.statSync(hookDistDir).mtimeMs;
-        const staleFiles = fs.readdirSync(hookSrcDir)
-          .filter(f => f.endsWith('.ts'))
-          .filter(f => {
-            try {
-              return fs.statSync(path.join(hookSrcDir, f)).mtimeMs > distMtime;
-            } catch { return false; }
-          });
+        // Compare against the newest dist BUNDLE, not the dist DIRECTORY. A
+        // directory's mtime only moves when entries are added/removed/renamed, so
+        // a rebuild that overwrites every .mjs in place leaves it untouched — the
+        // old predicate reported "stale" on a freshly built tree, every session.
+        const bundles = fs.readdirSync(hookDistDir).filter(f => f.endsWith('.mjs'));
+        const newestBundleMtime = bundles.reduce((max, f) => {
+          try { return Math.max(max, fs.statSync(path.join(hookDistDir, f)).mtimeMs); } catch { return max; }
+        }, 0);
+        // Walk src recursively: shared/*.ts are bundled into dist too, so a
+        // non-recursive readdir cannot see the edits most likely to need a build.
+        const srcFiles: string[] = [];
+        const walk = (dir: string) => {
+          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
+            if (e.name === '__tests__' || e.name === 'node_modules') continue;
+            const full = path.join(dir, e.name);
+            if (e.isDirectory()) walk(full);
+            else if (e.name.endsWith('.ts')) srcFiles.push(full);
+          }
+        };
+        walk(hookSrcDir);
+        const staleFiles = newestBundleMtime === 0 ? srcFiles : srcFiles.filter(f => {
+          try { return fs.statSync(f).mtimeMs > newestBundleMtime; } catch { return false; }
+        });
         if (staleFiles.length > 0) {
-          maintenanceWarnings.push(`[!] Hook dist/ is stale -- ${staleFiles.length} source files newer than dist. Run: cd ~/.claude/hooks && npm run build`);
+          const names = staleFiles.slice(0, 3).map(f => path.relative(hookSrcDir, f)).join(', ');
+          const more = staleFiles.length > 3 ? `, +${staleFiles.length - 3} more` : '';
+          maintenanceWarnings.push(`[!] Hook dist/ is stale -- ${staleFiles.length} of ${srcFiles.length} sources newer than the newest bundle (${names}${more}). Run: cd ~/.claude/hooks && npm run build`);
         }
       } catch { /* fail silently */ }
     }
