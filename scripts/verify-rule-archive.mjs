@@ -87,6 +87,11 @@ for (const file of [...walk(join(ROOT, '.claude', 'skills')), ...walk(join(ROOT,
   let m;
   while ((m = MARKER.exec(text)) !== null) {
     const name = m[1];
+    // Prose that DOCUMENTS the marker syntax is not a marker. Without this, the result doc
+    // explaining `<!-- archived-rule:NAME ref:SHA -->` registered as a snapshot of a rule
+    // called "NAME" and reported a permanent SKIP -- noise that teaches people to ignore
+    // non-zero counts, which is how a real skip gets missed.
+    if (!name.endsWith('.md')) continue;
     const ref = m[2] || REF;
     const pinned = m[2] ? '' : ' [unpinned]';
     const where = relative(ROOT, file).replace(/\\/g, '/');
