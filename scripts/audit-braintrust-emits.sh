@@ -3,6 +3,27 @@
 # Purpose: Guard against agent-rewrite collisions silently dropping or reverting emitBraintrustScore() calls.
 # Usage:   bash scripts/audit-braintrust-emits.sh
 # Run after any TypeScript hook edit. Exits 1 on regression (count < invariant).
+#
+# WHAT THIS GUARD DOES NOT DO -- read before trusting a green run
+# ---------------------------------------------------------------
+# It counts CALL SITES IN SOURCE. It says nothing about whether those call sites
+# can emit, or ever did.
+#
+# It reported OK 4/4 continuously through the entire period in which ZERO of the
+# four could emit anything (root-caused 2026-07-28: node hooks never received
+# TRACE_TO_BRAINTRUST / BRAINTRUST_API_KEY, and three emitters resolved their
+# span from an env var set in no location). The count was correct the whole time
+# and told us nothing.
+#
+# That is not a reason to delete this script -- it has caught six real
+# agent-rewrite regressions, which is more than any other guard here. It is a
+# reason to know its scope.
+#
+# The complement, which asserts reachability and (with --live) real emissions:
+#     node scripts/hooks/braintrust-emit-guard.mjs
+#     node scripts/hooks/braintrust-emit-guard.mjs --live
+# Run both. This one is fast and offline; that one can tell you the layer is
+# actually alive.
 
 # ==============================================================
 # INVARIANT GUARD — DO NOT MODIFY THE INVARIANT_4 LINE
