@@ -124,7 +124,7 @@ The rule now carries only the invariants an agent must hold *before* deciding to
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
 load only once this skill does. Verbatim snapshot, so nothing that was trimmed is lost:
 
-```markdown
+````markdown
 # Grok Worker Safety Rules
 
 Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules/codex-worker-safety.md` (same discipline, different verified surface) — the `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
@@ -171,9 +171,9 @@ The Game Plan roster gives Grok a `research` role (live web/X research feeding
 appear in Grok's tool list), but the **ask guard deliberately excludes them** — research
 therefore uses a SEPARATE widened allowlist, never a silent reuse of ask's:
 
-` ` `
+```
 --tools "read_file,list_dir,grep,web_search,web_fetch,open_page"
-` ` `
+```
 
 Rules:
 - **Write-free is non-negotiable** — no write/edit/`run_terminal_command` tool ever joins
@@ -241,5 +241,4 @@ Subscription-gated (X Premium+); no per-token invoice observed in this pass. No 
 | `git branch -D grok/<ts>` cleanup (interactive) | Yes (destructive-commands rule) |
 | Passing `-w/--worktree` expecting isolation | **Never** — silently ignored headless; use the hand-rolled worktree only |
 | Trusting `--sandbox <anything>` as a safety boundary | **Never** — decorative on this build, verified to block nothing |
-
-```
+````

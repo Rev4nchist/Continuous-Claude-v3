@@ -1,92 +1,28 @@
 # Package Install Safety
 
-## Overview
+Every package install command — `pip`/`uv`/`poetry`, `npm`/`yarn`/`pnpm`/`bun`, `cargo`, `go`,
+`gem`/`bundle`, `composer` — is intercepted by the `package-install-guard` PreToolUse:Bash hook
+and checked against four layers before it runs: typosquat detection, a known-malicious
+blocklist, a live OSV.dev advisory query, and package age. Read/list/uninstall commands
+(`pip list`, `npm info`, `pip uninstall`, …) pass straight through.
 
-A PreToolUse:Bash hook (`package-install-guard`) intercepts all package install commands and runs a 4-layer security check before allowing execution. This protects against supply-chain attacks like the LiteLLM/TeamPCP incident (March 2026).
+## If an install is blocked, it is a finding, not an obstacle [C:10]
 
-## What's Guarded
+A block means the guard matched something real. **Do not route around it** — not with
+`SKIP_PACKAGE_GUARD=1`, not by switching package manager, not by wrapping the install in a
+script or a `bash -c`. The override exists for the case where *you have manually verified the
+package*, and it skips all four checks; reaching for it because an install failed is exactly
+the failure mode the guard is there to prevent.
 
-All package manager install/add commands are intercepted:
-- **Python:** `pip install`, `pip3 install`, `uv pip install`, `uv add`, `poetry add`
-- **Node.js:** `npm install`, `npm i`, `yarn add`, `pnpm add`, `pnpm install`, `bun add`, `bun install`
-- **Rust:** `cargo add`, `cargo install`
-- **Go:** `go get`, `go install`
-- **Ruby:** `gem install`, `bundle install`
-- **PHP:** `composer require`
+Read the block reason first. A typosquat block names the package you probably meant. A `MAL-`
+advisory means confirmed malware — that package is not installable, at any version. An age
+block (<24h) is usually satisfied by waiting rather than overriding: malicious releases are
+typically yanked within hours, which is precisely why the check exists.
 
-## What's NOT Guarded (passthrough)
+## Detail
 
-These commands are never intercepted:
-- `pip list`, `pip show`, `pip freeze`
-- `npm ls`, `npm list`, `npm info`
-- `pip uninstall`, `npm uninstall`
-- All non-package-manager commands
-
-## Security Checks (in order)
-
-| Layer | Check | Source | Speed | Action on Fail |
-|-------|-------|--------|-------|---------------|
-| 1 | **Typosquat detection** — misspelling of a popular package? | Local curated list + Levenshtein | <1ms | BLOCK |
-| 2 | **Known-malicious blocklist** — confirmed compromised package/version? | Local `malicious-packages.json` | <1ms | BLOCK |
-| 3 | **OSV.dev real-time query** — malware advisory (MAL-) or CRITICAL CVE? | Google OSV API (no auth) | ~300ms | BLOCK (MAL-/CRITICAL), WARN (HIGH) |
-| 4 | **Package age** — published <24h ago? <7d ago? | PyPI/npm registry API | ~500ms | BLOCK (<24h), WARN (<7d) |
-
-## Override
-
-If you need to bypass the guard for a known-good install:
-
-```bash
-SKIP_PACKAGE_GUARD=1 pip install <package>
-```
-
-This skips all checks. Use only when you've verified the package manually.
-
-## What to Do If Blocked
-
-1. **Typosquat block:** Check the package name spelling. The guard will suggest the correct name.
-2. **Malicious version block:** Use a different version. Check the advisory link for details.
-3. **OSV.dev block (MAL-):** This package has a confirmed malware advisory. Do NOT install. Check the advisory ID at `https://osv.dev/vulnerability/<ID>`.
-4. **OSV.dev block (CRITICAL):** Critical vulnerability detected. Check the CVE details before proceeding.
-5. **Age block (<24h):** Wait 24 hours, or use the override if you've verified the package.
-
-## Updating the Blocklist
-
-### Automatic (recommended)
-
-```bash
-node scripts/update-blocklist.mjs                    # Dry run — show what would change
-node scripts/update-blocklist.mjs --apply            # Write changes
-node scripts/update-blocklist.mjs --apply --rebuild   # Write + rebuild hooks + sync
-```
-
-This fetches from:
-- GitHub Advisory API — npm malware advisories (`type=malware`)
-- GitHub Advisory API — PyPI critical CVEs (`type=reviewed, severity=critical`)
-
-Requires `gh` CLI authenticated (`gh auth status`).
-
-### Scheduled (daily at 9am)
-
-A Windows Task Scheduler job runs `scripts/scheduled-blocklist-update.bat` daily at 9am. It:
-1. Fetches latest advisories from GitHub
-2. Updates `malicious-packages.json`
-3. Rebuilds hooks
-4. Commits and pushes to fork if changes found
-5. Syncs to `~/.claude/`
-
-Task name: `CCv3-Blocklist-Update`. Check status: `schtasks /query /tn "CCv3-Blocklist-Update"`
-
-If the machine is off at 9am, it runs when the machine next wakes up (`-StartWhenAvailable`).
-
-### Manual
-
-When a new supply-chain attack is disclosed:
-1. Add the package to `.claude/hooks/src/shared/malicious-packages.json`
-2. Rebuild: `cd .claude/hooks && npm run build`
-3. Sync: `bash scripts/sync-to-active.sh`
-
-## Background
-
-On March 24, 2026, LiteLLM versions 1.82.7-1.82.8 were published to PyPI with a credential-stealing payload. The attack used a `.pth` file that auto-executed on every Python process startup, harvesting SSH keys, cloud credentials, K8s configs, and API keys. LiteLLM gets 3.4M downloads/day — anyone who installed during the window was compromised.
-
-This hook would have caught it at Layer 2 (blocklist), Layer 3 (OSV.dev — the OSSF malicious-packages repo flagged it as MAL-), and Layer 4 (age check — the malicious versions were yanked within hours).
+Per-block-class remediation, the four-layer table, the full guarded/passthrough command lists,
+how to update the blocklist (automatic via `scripts/update-blocklist.mjs`, the daily
+`CCv3-Blocklist-Update` scheduled task, or by hand), and the LiteLLM incident this was built
+after: `docs/hooks/package-install-guard.md`. Read it when interpreting a block or updating the
+blocklist — verbatim pre-split snapshot included.

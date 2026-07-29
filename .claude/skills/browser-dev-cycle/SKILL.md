@@ -292,7 +292,7 @@ The rule now carries only the invariants an agent must hold *before* deciding to
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
 load only once this skill does. Verbatim snapshot, so nothing that was trimmed is lost:
 
-```markdown
+````markdown
 # Browser Automation Rules
 
 ## Tool Tiers
@@ -311,7 +311,7 @@ Load the `browser-dev-cycle` skill for full decision tree and tool reference.
 
 Requires Chrome running with `--remote-debugging-port=9222`.
 
-` ` `bash
+```bash
 node scripts/cdp.mjs navigate <url>     # navigate + wait
 node scripts/cdp.mjs perf               # TTFB, DOM, LCP, resources
 node scripts/cdp.mjs network            # resource timing entries
@@ -322,7 +322,7 @@ node scripts/cdp.mjs snapshot [-i]      # accessibility tree
 node scripts/cdp.mjs screenshot [path]  # screenshot
 node scripts/cdp.mjs eval <expr>        # evaluate JS
 node scripts/cdp.mjs tabs              # list open tabs
-` ` `
+```
 
 All output is JSON. Replaces chrome-devtools-mcp (32x fewer tokens, 100% vs 72% reliability).
 
@@ -358,5 +358,4 @@ All output is JSON. Replaces chrome-devtools-mcp (32x fewer tokens, 100% vs 72% 
 - NEVER use deprecated claude-in-chrome tools for new work
 - NEVER take screenshots when `browser_snapshot` (accessibility tree) would suffice
 - NEVER skip waits for dynamic content
-
-```
+````
