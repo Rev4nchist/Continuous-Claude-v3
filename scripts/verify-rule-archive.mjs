@@ -15,17 +15,26 @@
  *   node scripts/verify-rule-archive.mjs [--ref <git-ref>] [--rules-dir <path>]
  *
  * Discovers every archived-rule marker under .claude/skills and docs, then compares each
- * fenced snapshot against that rule's text AT <git-ref> -- i.e. before the split. Default
- * ref is HEAD~1, which is right immediately after committing a split.
+ * fenced snapshot against that rule's text BEFORE the split.
+ *
+ * Each marker PINS its own pre-split commit, because snapshots are taken in different
+ * commits and one global --ref cannot be right for all of them:
+ *
+ *   <!-- archived-rule:tldr-cli.md ref:b800899 -->
+ *
+ * That makes a bare `node scripts/verify-rule-archive.mjs` the whole gate. --ref only
+ * supplies a fallback for a marker with no pin (default HEAD~1, correct immediately after
+ * committing a split). Without pins this script quietly turned into archaeology -- you had
+ * to already know which commit each snapshot predated to interpret its own output.
  *
  * EXIT CODES
  *   0  every discovered snapshot matched
  *   1  at least one snapshot differs from the rule it claims to archive
  *   2  bad invocation
  *
- * A rule that does not exist at the given ref is reported SKIP, not FAIL: snapshots taken
- * in different commits need their own ref, and silently passing them would be the vacuous
- * -gate failure mode (a green verdict over an empty set).
+ * A rule that does not exist at its ref is reported SKIP, not FAIL. But a run that compared
+ * NOTHING exits 1: a green verdict over an empty set is the failure mode that let a
+ * "PASS | 0 registrations" health check stand for months.
  */
 import { readFileSync, readdirSync, statSync } from 'node:fs';
 import { execFileSync } from 'node:child_process';
@@ -40,7 +49,8 @@ const REF = argOf('--ref', 'HEAD~1');
 const RULES_DIR = argOf('--rules-dir', '.claude/rules-src');
 const ROOT = process.cwd();
 
-const MARKER = /<!--\s*archived-rule:([^\s>]+?)\s*-->/g;
+// <!-- archived-rule:NAME --> or <!-- archived-rule:NAME ref:SHA -->
+const MARKER = /<!--\s*archived-rule:(\S+?)(?:\s+ref:(\S+?))?\s*-->/g;
 
 function walk(dir, out = []) {
   let entries;
@@ -56,9 +66,9 @@ function walk(dir, out = []) {
   return out;
 }
 
-function ruleAtRef(name) {
+function ruleAtRef(name, ref) {
   try {
-    return execFileSync('git', ['show', `${REF}:${RULES_DIR}/${name}`], {
+    return execFileSync('git', ['show', `${ref}:${RULES_DIR}/${name}`], {
       encoding: 'utf8',
       maxBuffer: 1024 * 1024 * 8,
     });
@@ -77,10 +87,12 @@ for (const file of [...walk(join(ROOT, '.claude', 'skills')), ...walk(join(ROOT,
   let m;
   while ((m = MARKER.exec(text)) !== null) {
     const name = m[1];
+    const ref = m[2] || REF;
+    const pinned = m[2] ? '' : ' [unpinned]';
     const where = relative(ROOT, file).replace(/\\/g, '/');
-    const original = ruleAtRef(name);
+    const original = ruleAtRef(name, ref);
     if (original === null) {
-      console.log(`SKIP  ${name} <- ${where} (not present at ${REF})`);
+      console.log(`SKIP  ${name} <- ${where} (not present at ${ref})${pinned}`);
       skip++;
       continue;
     }
@@ -96,7 +108,7 @@ for (const file of [...walk(join(ROOT, '.claude', 'skills')), ...walk(join(ROOT,
     const archived = norm(fence[2]);
     const expected = norm(original);
     if (archived === expected) {
-      console.log(`PASS  ${name} <- ${where} (${Buffer.byteLength(expected)} bytes)`);
+      console.log(`PASS  ${name} <- ${where} @${ref} (${Buffer.byteLength(expected)} bytes)${pinned}`);
       pass++;
       continue;
     }
@@ -104,7 +116,7 @@ for (const file of [...walk(join(ROOT, '.claude', 'skills')), ...walk(join(ROOT,
     let i = 0;
     while (i < Math.min(a.length, b.length) && a[i] === b[i]) i++;
     console.error(`FAIL  ${name} <- ${where}: differs at line ${i + 1} of ${b.length}`);
-    console.error(`        rule@${REF}: ${JSON.stringify(b[i] ?? '<eof>')}`);
+    console.error(`        rule@${ref}: ${JSON.stringify(b[i] ?? '<eof>')}`);
     console.error(`        archived:    ${JSON.stringify(a[i] ?? '<eof>')}`);
     fail++;
   }

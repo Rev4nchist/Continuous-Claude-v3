@@ -39,7 +39,7 @@ interactive, or where the operation genuinely has no CLI equivalent.
 
 ---
 
-<!-- archived-rule:cli-integration-strategy.md -->
+<!-- archived-rule:cli-integration-strategy.md ref:014d2c6 -->
 ## Reference: pre-split text of `rules/cli-integration-strategy.md` (archived 2026-07-29)
 
 Verbatim snapshot of the rule as it stood before the split, so nothing that was trimmed out of

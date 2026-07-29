@@ -89,7 +89,7 @@ is the **`cma-operator`** agent (`.claude/agents/cma-operator.md`).
 
 ---
 
-<!-- archived-rule:cma-safety.md -->
+<!-- archived-rule:cma-safety.md ref:014d2c6 -->
 ## Reference: pre-split text of `rules/cma-safety.md` (archived 2026-07-29)
 
 The rule now carries only what must be true *before* an agent decides to touch CMA at all —

@@ -285,7 +285,7 @@ The legacy `agent-browser` skill at `.claude/skills/agent-browser/SKILL.md` is p
 
 ---
 
-<!-- archived-rule:browser-automation.md -->
+<!-- archived-rule:browser-automation.md ref:b800899 -->
 ## Reference: pre-split text of `rules/browser-automation.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this

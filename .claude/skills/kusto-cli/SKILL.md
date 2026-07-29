@@ -129,7 +129,7 @@ Trigger keywords: `kusto`, `Kusto.Cli`, `KQL`, `kql query`, `Azure Data Explorer
 
 ---
 
-<!-- archived-rule:kusto-cli-safety.md -->
+<!-- archived-rule:kusto-cli-safety.md ref:b800899 -->
 ## Reference: pre-split text of `rules/kusto-cli-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this

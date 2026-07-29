@@ -117,7 +117,7 @@ One row per run → `.claude/logs/grok-worker.jsonl` (schema: `.claude/logs/grok
 
 ---
 
-<!-- archived-rule:grok-worker-safety.md -->
+<!-- archived-rule:grok-worker-safety.md ref:b800899 -->
 ## Reference: pre-split text of `rules/grok-worker-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this

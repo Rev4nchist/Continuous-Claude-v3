@@ -128,7 +128,7 @@ One row per run → `.claude/logs/codex-worker.jsonl` (schema: `.claude/logs/cod
 
 ---
 
-<!-- archived-rule:codex-worker-safety.md -->
+<!-- archived-rule:codex-worker-safety.md ref:b800899 -->
 ## Reference: pre-split text of `rules/codex-worker-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
@@ -231,7 +231,7 @@ There is no per-call dollar price — the cost is ChatGPT-subscription quota (tw
 
 ---
 
-<!-- archived-rule:codex-adversarial.md -->
+<!-- archived-rule:codex-adversarial.md ref:b800899 -->
 ## Reference: pre-split text of `rules/codex-adversarial.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this

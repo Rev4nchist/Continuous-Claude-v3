@@ -15,7 +15,7 @@ malicious-packages.json` (the blocklist), `scripts/update-blocklist.mjs` (the up
 
 ---
 
-<!-- archived-rule:package-install-safety.md -->
+<!-- archived-rule:package-install-safety.md ref:014d2c6 -->
 ## Reference: pre-split text of `rules/package-install-safety.md` (archived 2026-07-29)
 
 Verbatim snapshot of `rules/package-install-safety.md` as it stood before the split, so nothing

@@ -169,7 +169,7 @@ Need to validate changes?
 
 ---
 
-<!-- archived-rule:tldr-cli.md -->
+<!-- archived-rule:tldr-cli.md ref:b800899 -->
 ## Reference: pre-split text of `rules/tldr-cli.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
