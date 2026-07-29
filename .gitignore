@@ -294,6 +294,15 @@ mcps/
 # so no rotation was needed; the file itself is untouched on disk.
 .claude/settings.local.json
 
+# Independent projects parked inside this repo. sites/fastmcp-v3 is its OWN git
+# repo (main @ e6c2ae9, clean, no remote), so committing it here would create an
+# embedded-repo gitlink rather than tracking the files. It is not CCv3 content.
+# NOTE: it has no remote, so its only copy is this working tree -- give it one.
+sites/
+
+# One-off design captures from the sites/fastmcp-v3 build (artifacts, not content)
+fastmcp-*.png
+
 # Stray nested .claude/ trees. Something writes .claude/logs/intel-bus.jsonl
 # RELATIVE TO ITS CWD, so running from .claude/hooks/ or .claude/hooks/src/
 # creates .claude/hooks/.claude/logs/ and .claude/hooks/src/.claude/logs/.
