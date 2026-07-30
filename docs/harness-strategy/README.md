@@ -308,7 +308,76 @@ file for it.
    Only `tsc --noEmit` remains excluded — still exactly **234** errors, unchanged,
    none in any file touched this session.
 
-### 5.6 `agent-error-capture` has stored nothing for 161 days — YOUR CALL
+### 5.6 `agent-error-capture` stored nothing for 161 days — B1 CHOSEN, ONE CAUSE LEFT
+
+> **UPDATE 2026-07-29, `84454e4`. Dave chose B1 (unblock, then measure).** The
+> prefix half is fixed and guarded. **A SECOND, INDEPENDENT CAUSE was then found by
+> the end-to-end check, and the pipeline is still dead.**
+>
+> **Fire-and-forget never finishes.** Isolated with one variable, identical spawn in
+> both arms:
+>
+> | arm | parent | row lands |
+> |---|---|---|
+> | P | exits immediately — **the hook's actual behaviour** | **no** |
+> | W | waits 40 s | **yes** |
+>
+> And the discriminator proving it is not the gate: the **same** invocation, same
+> content, same cwd, run synchronously with stdio inherited prints
+> `Learning stored (id: …)` and lands a row. Only the detached-with-parent-exit form
+> fails — silently, exit 0.
+>
+> So `09ba655` (2026-06-29, QW-04) made the store `detached` + `unref()` +
+> `stdio:'ignore'` to stop a 10 s `spawnSync` blocking Task completion. It fixed the
+> latency and broke the delivery. **Two stacked causes, either alone sufficient:**
+>
+> | date | commit | cause | status |
+> |---|---|---|---|
+> | 2026-02-18 | `05abf54` | content blacklisted at ingestion | **fixed** `84454e4` |
+> | 2026-06-29 | `09ba655` | detached store never completes | **OPEN** |
+>
+> Mechanism not established — candidates are Windows job-object teardown, the `uv`
+> launcher's own python child, or node exiting before `CreateProcess` settles. **Not
+> guessing at a fix on the Task hot path**: a durable JSONL queue plus a drainer, a
+> bounded synchronous store, and holding the parent briefly trade latency against
+> reliability differently, and that is a deliberate call.
+>
+> Two consequences for the "then measure" half of B1:
+> - the row count stays **zero** until delivery is fixed. Do **not** read a flat
+>   count as "B1 shows low volume".
+> - an end-to-end check is mandatory on this pipeline. The in-process gate probe
+>   passed on all five content shapes while production stored nothing. **A green
+>   unit test here has never meant a row exists.**
+
+### 5.7 `hook-error-pipeline` is DEAD CODE — its zero has a different cause
+
+Investigated 2026-07-29 (the other half of the 0-for-2 question in §5.6). **The gate
+is not the cause: `"Hook '"` is not blacklisted and a realistic failure PASSES
+validation.** The cause is that `captureHookError` is **never invoked in
+production** — zero importers outside its own test, and not registered in any
+`settings.json`.
+
+Verified: 13 different DB query shapes all return 0 (content, tags, context, type),
+so the zero is robust and not a wrong `LIKE` pattern; the content template is
+unchanged since `7793392` (2026-02-01), so the pattern was never wrong; the only
+invocations that ever happened were in the test suite **with `spawnSync` mocked** —
+which is the clean discriminator between "rejected" and "never called".
+
+Three independent audits already reached this: the health check lists it under
+`orphans` in **35** `health_*.json` files, `hook-audit-2026-04.md:134` files it as
+"probably archive", and the 2026-06-10 WF2 review called it `UNREACHABLE / dead
+code`. **Recommendation: archive it** — 242 lines of source, a dist artifact, a
+test, and a permanent orphan entry, for zero behavioural change.
+
+If the capability is ever wanted it needs **two** fixes, and the second is the
+non-obvious one: it cannot be registered as a standalone hook (no stdin handler —
+only `wrapWithErrorCapture` at each hook's entry makes it live), **and** its
+`--type FAILED_APPROACH` carries a 100-char floor that would silently swallow the
+short-message class (`ECONNREFUSED`, a thrown string). `ERROR_FIX` (floor 50) is
+both semantically closer and safer. Also latent: a deep repetitive stack trips the
+uniqueness-ratio gate at 0.17 vs a 0.25 threshold.
+
+### 5.6b The original decision, for the record
 
 Not a test problem, and the reason the `store-learning-injection` fix above was
 deliberately kept narrow: greening that test is precisely what would have buried
