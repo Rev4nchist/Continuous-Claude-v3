@@ -308,7 +308,64 @@ file for it.
    Only `tsc --noEmit` remains excluded — still exactly **234** errors, unchanged,
    none in any file touched this session.
 
-### 5.6 `agent-error-capture` stored nothing for 161 days — B1 CHOSEN, ONE CAUSE LEFT
+### 5.6 `agent-error-capture` — FIXED 2026-07-29. Three stacked causes, all closed
+
+> **RESOLVED, `24e47a2`.** The store lands rows again, verified end to end through
+> the REAL built hook: two **unrelated** failures both stored, hook wall time
+> ~300 ms (node startup, not the store). First successful delivery since
+> 2026-02-18.
+>
+> **There were three causes, not two. Each alone sufficient, each silent.**
+>
+> | # | date | cause | how it was found |
+> |---|---|---|---|
+> | 1 | 2026-02-18 `05abf54` | content blacklisted by `NOISE_PREFIXES` | SQL + in-process gate probe |
+> | 2 | 2026-06-29 `09ba655` | detached store never completed | 4-arm isolation |
+> | 3 | 2026-07-29 *(my own fix)* | boilerplate → 0.88 dedup collapse | end-to-end check |
+>
+> **Cause 2, root-caused rather than guessed.** `unref()` followed by the parent
+> exiting in the **same synchronous tick** kills the child. One variable, four arms,
+> identical spawn:
+>
+> | arm | parent exit | row |
+> |---|---|---|
+> | same tick as spawn (**what the hook did**) | — | **no** |
+> | one tick later, on the `spawn` event | — | yes |
+> | after a 500 ms grace | — | yes |
+> | OS-level breakaway (`cmd start /b`) | — | yes |
+>
+> That **rules out Windows job-object teardown**, the obvious rival: if job closure
+> at parent exit were the killer, the two arms that also exit — just a tick later —
+> would have failed too, and only the breakaway would have survived. It is a startup
+> race, so one event-loop turn fixes it. `releaseWhenRunning(child)` now releases on
+> `spawn`/`error`; Node guarantees exactly one fires, so the loop cannot hang. Cost:
+> one turn (~1–5 ms), not the 10 s `spawnSync` that `09ba655` removed.
+>
+> **Cause 3 was mine, and only the end-to-end check caught it.** The first B1
+> wording used a ~95-char fixed lead-in to guarantee the 100-char `FAILED_APPROACH`
+> floor. Measured **0.88** embedding similarity between two *unrelated* failures,
+> against a 0.85 dedup threshold — so the first failure would land and every later
+> one would be skipped as a duplicate, silently. **A boilerplate-dominated record is
+> a duplicate of every other record.** Fixed by leading with the distinctive
+> material and cutting the boilerplate, which deliberately trades the guaranteed
+> floor away: an ultra-terse error can now be dropped as `too_short`, losing **one**
+> thin learning, where dedup collision loses **all but the first**. A test bounds
+> fixed boilerplate at <80 chars by diffing two captures that differ only in error
+> text.
+>
+> **Verification standard, because this pipeline lies.** A green unit test has never
+> meant a row exists here: the in-process gate probe passed all five content shapes
+> while production stored zero. The child's real argv had to be captured from the
+> process table. And **two of my own harnesses produced false results first** — one
+> measured its own call order (stateful hooks), one measured its own teardown (a
+> node wrapper exiting and tearing down the tree). Only a row in `archival_memory`
+> counts.
+>
+> **Open follow-up, cosmetic, pre-existing:** `extractErrorContext` returns the
+> whole stringified `tool_response`, so stored content begins with a JSON wrapper
+> (`{\n  "content": "ENOENT: …"`). Functional but poor for recall readability.
+
+### 5.6-history The original decision and its evidence
 
 > **UPDATE 2026-07-29, `84454e4`. Dave chose B1 (unblock, then measure).** The
 > prefix half is fixed and guarded. **A SECOND, INDEPENDENT CAUSE was then found by
@@ -349,7 +406,17 @@ file for it.
 >   passed on all five content shapes while production stored nothing. **A green
 >   unit test here has never meant a row exists.**
 
-### 5.7 `hook-error-pipeline` is DEAD CODE — its zero has a different cause
+### 5.7 `hook-error-pipeline` — ARCHIVED 2026-07-29 (`24e47a2`)
+
+> **DONE.** Moved to `.claude/hooks/archive/hook-error-pipeline.ts`, its `dist`
+> bundle deleted (in the repo **and** the `~/.claude` mirror — the forward sync
+> copies but never deletes, so a stale bundle there would keep reading as a live
+> hook). Its QW-01 test was removed with it: keeping a security test for a module
+> nothing loads is precisely what let the arscontexta fossils sit red for a month.
+> The two producers that actually run keep their QW-01 coverage. Suite green after,
+> and nothing referenced it — verified before and after.
+
+The investigation that justified it:
 
 Investigated 2026-07-29 (the other half of the 0-for-2 question in §5.6). **The gate
 is not the cause: `"Hook '"` is not blacklisted and a realistic failure PASSES
