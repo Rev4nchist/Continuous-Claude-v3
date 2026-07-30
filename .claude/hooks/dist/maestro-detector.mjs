@@ -156,7 +156,9 @@ async function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("maestro-detector")) {
+  main();
+}
 export {
   analyzeComplexity,
   countProcessPhases,

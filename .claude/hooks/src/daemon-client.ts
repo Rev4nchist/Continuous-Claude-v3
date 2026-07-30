@@ -369,6 +369,21 @@ export function tryStartDaemon(projectDir: string): boolean {
       return true;  // Already running, no need to spawn
     }
 
+    // Escape hatch for callers that must not block on a real daemon spawn.
+    // Deliberately placed AFTER the two fast checks above, so a daemon that is
+    // genuinely running is still reported as available; this only suppresses the
+    // attempt to START one.
+    //
+    // Why it exists: the spawn path below costs ~10.4s when there is nothing to
+    // connect to (`tldr daemon start` at 5s, then up to 10s waiting for
+    // reachability). daemon-client.test.ts hits that path 6 times, so the file
+    // took ~62s and blew the suite's per-file budget -- and because the cost is
+    // inside a SYNCHRONOUS spawnSync, vitest's testTimeout cannot interrupt it,
+    // so the tests "passed" slowly rather than failing visibly.
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === '1') {
+      return false;
+    }
+
     // Try to acquire lock - if another process is starting daemon, wait for it
     if (!tryAcquireLock(projectDir)) {
       // Another process is starting the daemon - wait and check if it succeeds

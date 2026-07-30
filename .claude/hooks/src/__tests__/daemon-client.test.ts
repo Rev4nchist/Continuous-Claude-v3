@@ -26,6 +26,18 @@ import {
   DaemonResponse,
 } from '../daemon-client.js';
 
+// Do NOT let the socket-missing tests try to start a REAL daemon. Six of them
+// reach tryStartDaemon's spawn path, which costs ~10.4s each against a temp
+// project dir (`tldr daemon start` at 5s, then up to 10s waiting for
+// reachability) -- ~62s for this file, which is why it blew the suite's per-file
+// budget. The cost sits inside a synchronous spawnSync, so vitest's testTimeout
+// cannot interrupt it: the tests passed slowly instead of failing loudly.
+//
+// These tests assert the "daemon unavailable" contract, so suppressing the spawn
+// is what they meant all along. The 4 tests that exercise a live connection
+// stand up their own net server and are unaffected.
+process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
+
 describe('buildDaemonInvocation — GAP4-02 injection-safety (payload via stdin, not shell)', () => {
   const payload = JSON.stringify({ cmd: 'search', pattern: `x"; calc & rm -rf / ; $(id) \`whoami\` '` });
 
