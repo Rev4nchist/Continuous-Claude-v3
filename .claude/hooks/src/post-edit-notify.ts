@@ -72,4 +72,6 @@ async function main() {
   console.log('{}');
 }
 
-main().catch(() => console.log('{}'));
+if ((process.argv[1] || '').includes('post-edit-notify')) {
+  main().catch(() => console.log('{}'));
+}

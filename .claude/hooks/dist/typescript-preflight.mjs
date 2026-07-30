@@ -109,4 +109,6 @@ Fix before proceeding.`
     console.log(JSON.stringify({}));
   }
 }
-main();
+if ((process.argv[1] || "").includes("typescript-preflight")) {
+  main();
+}

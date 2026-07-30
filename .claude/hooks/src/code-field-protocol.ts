@@ -90,4 +90,6 @@ async function main() {
     }
 }
 
-main();
+if ((process.argv[1] || '').includes('code-field-protocol')) {
+  main();
+}

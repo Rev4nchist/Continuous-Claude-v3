@@ -5334,4 +5334,6 @@ async function main() {
     });
   }
 }
-main().catch(() => process.stdout.write("{}"));
+if ((process.argv[1] || "").includes("lane-context")) {
+  main().catch(() => process.stdout.write("{}"));
+}

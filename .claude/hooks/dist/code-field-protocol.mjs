@@ -74,4 +74,6 @@ async function main() {
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("code-field-protocol")) {
+  main();
+}

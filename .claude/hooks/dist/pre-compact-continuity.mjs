@@ -511,4 +511,6 @@ async function readStdin() {
     process.stdin.on("end", () => resolve(data));
   });
 }
-main().catch(console.error);
+if ((process.argv[1] || "").includes("pre-compact-continuity")) {
+  main().catch(console.error);
+}

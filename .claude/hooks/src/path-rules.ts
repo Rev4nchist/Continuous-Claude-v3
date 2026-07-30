@@ -121,4 +121,6 @@ async function main() {
   }));
 }
 
-main().catch(() => process.exit(1));
+if ((process.argv[1] || '').includes('path-rules')) {
+  main().catch(() => process.exit(1));
+}

@@ -90,4 +90,6 @@ function main(): void {
   outputContinue();
 }
 
-main();
+if ((process.argv[1] || '').includes('bus-session-populator')) {
+  main();
+}

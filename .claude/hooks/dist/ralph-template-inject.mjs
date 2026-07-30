@@ -107,4 +107,6 @@ function main() {
     console.log(JSON.stringify({ result: "allow" }));
   }
 }
-main();
+if ((process.argv[1] || "").includes("ralph-template-inject")) {
+  main();
+}

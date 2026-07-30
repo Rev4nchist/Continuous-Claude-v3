@@ -374,4 +374,6 @@ async function main() {
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('maestro-state-manager')) {
+  main();
+}

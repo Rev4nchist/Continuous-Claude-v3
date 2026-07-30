@@ -431,4 +431,6 @@ Interview complete. Plan presented.
     makeAllowOutput();
   }
 }
-main();
+if ((process.argv[1] || "").includes("maestro-enforcer")) {
+  main();
+}

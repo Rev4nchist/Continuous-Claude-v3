@@ -88,4 +88,6 @@ async function main() {
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("mcp-activity-tracker")) {
+  main();
+}

@@ -8,6 +8,10 @@
  * Design contract:
  *   - Fail-open: NEVER throws. All errors swallowed to stderr only.
  *   - Skips silently when TRACE_TO_BRAINTRUST != "true" or BRAINTRUST_API_KEY unset.
+ *   - PRECEDENCE: an explicit TRACE_TO_BRAINTRUST in the process environment wins
+ *     over ~/.claude/.env -- it is the off switch. Every OTHER variable still comes
+ *     from the file. braintrust_hooks.py applies the same rule so spans and scores
+ *     cannot disagree about whether tracing is on.
  *   - 2-second AbortController timeout (matches dashboard-reporter pattern).
  *   - Endpoint: POST {API_URL}/v1/project_logs/{project_id}/feedback
  *   - Payload shape: { feedback: [{ id, scores, metadata?, comment? }] }
@@ -106,6 +110,19 @@ export function resetProjectIdCacheForTests(): void {
   projectIdCache = {};
 }
 
+/**
+ * Test-only: clear the once-per-process .env latch so the next call re-reads the
+ * environment (including BRAINTRUST_DOTENV_PATH). NOT for production use.
+ *
+ * The latch is why only ONE test in braintrust-score.test.ts ever failed: after
+ * the first read, tests 2-19 kept their own env values and passed. Order
+ * dependence made a systemic defect look like a single flaky assertion.
+ */
+export function resetDotEnvStateForTests(): void {
+  dotenvLoaded = false;
+  envTraceOverride = undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
@@ -122,11 +139,40 @@ export function resetProjectIdCacheForTests(): void {
  * simply stays disabled. This module must never be the reason a hook dies.
  */
 let dotenvLoaded = false;
+
+/**
+ * `TRACE_TO_BRAINTRUST` exactly as it appeared in the REAL process environment,
+ * captured BEFORE ~/.claude/.env is merged in. `undefined` means the environment
+ * said nothing about tracing.
+ *
+ * This is the kill switch, and it did not work. The file override below is what
+ * makes tracing work at all (see the header), but because it rewrote
+ * process.env unconditionally, `TRACE_TO_BRAINTRUST=false` in the environment --
+ * or in the settings.json `env` block -- was silently replaced with the file's
+ * `true` before the guard read it. Proven by execution 2026-07-29: the module
+ * POSTed using the FILE's project id and the FILE's API key while
+ * process.env.TRACE_TO_BRAINTRUST was 'false'. The only way to disable tracing
+ * was to edit a credentials file, which nothing documented.
+ *
+ * So for this ONE variable an explicit environment value now wins. Every other
+ * variable still comes from the file. braintrust_hooks.py carries the identical
+ * rule, deliberately: if only one layer honoured the switch, an env `false`
+ * would silence scores while the other kept minting spans, which is the
+ * spans-without-scores desync this module's header exists to prevent.
+ */
+let envTraceOverride: string | undefined;
+
 function loadClaudeDotEnv(): void {
   if (dotenvLoaded) return;
   dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
   try {
-    const envPath = join(homedir(), '.claude', '.env');
+    // BRAINTRUST_DOTENV_PATH lets tests point at a nonexistent file (or a
+    // fixture) and stay hermetic. Production never sets it. Before this, the
+    // suite read the developer's real ~/.claude/.env -- and the failing test
+    // printed the live `Bearer sk-...` key into its output.
+    const envPath =
+      process.env.BRAINTRUST_DOTENV_PATH || join(homedir(), '.claude', '.env');
     for (const line of readFileSync(envPath, 'utf-8').split('\n')) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
@@ -153,7 +199,11 @@ function getApiKey(): string | null {
 
 function isTraceEnabled(): boolean {
   loadClaudeDotEnv();
-  return (process.env.TRACE_TO_BRAINTRUST || '').toLowerCase() === 'true';
+  // An explicit value in the real environment is authoritative -- that is the off
+  // switch. Only when the environment is silent does ~/.claude/.env decide.
+  const effective =
+    envTraceOverride !== undefined ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || '';
+  return effective.toLowerCase() === 'true';
 }
 
 /**

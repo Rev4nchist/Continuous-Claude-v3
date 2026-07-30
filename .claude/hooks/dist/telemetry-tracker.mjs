@@ -84,11 +84,13 @@ var DEFAULT_API_URL = "https://api.braintrust.dev";
 var DEFAULT_PROJECT_NAME = "claude-code";
 var projectIdCache = {};
 var dotenvLoaded = false;
+var envTraceOverride;
 function loadClaudeDotEnv() {
   if (dotenvLoaded) return;
   dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
   try {
-    const envPath = join2(homedir(), ".claude", ".env");
+    const envPath = process.env.BRAINTRUST_DOTENV_PATH || join2(homedir(), ".claude", ".env");
     for (const line of readFileSync2(envPath, "utf-8").split("\n")) {
       const trimmed = line.trim();
       if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
@@ -111,7 +113,8 @@ function getApiKey() {
 }
 function isTraceEnabled() {
   loadClaudeDotEnv();
-  return (process.env.TRACE_TO_BRAINTRUST || "").toLowerCase() === "true";
+  const effective = envTraceOverride !== void 0 ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || "";
+  return effective.toLowerCase() === "true";
 }
 async function consumeBody(resp) {
   try {

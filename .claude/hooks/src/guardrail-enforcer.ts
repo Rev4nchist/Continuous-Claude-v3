@@ -223,4 +223,6 @@ async function main() {
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('guardrail-enforcer')) {
+  main();
+}

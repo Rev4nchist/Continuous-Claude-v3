@@ -84,4 +84,6 @@ async function main() {
   }));
 }
 
-main().catch(() => process.exit(1));
+if ((process.argv[1] || '').includes('react-perf-context')) {
+  main().catch(() => process.exit(1));
+}

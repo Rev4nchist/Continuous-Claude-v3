@@ -4,11 +4,12 @@
  * The plan-exit-tracker hook fires on ExitPlanMode. When triggered, it writes a
  * state file marking that a plan has been approved:
  *
- *   State file: $TEMP/claude-plan-approved-<sessionId>.json
+ *   State file: $TEMP/claude-plan-approved-<projectId>-<sessionId>.json
  *   Content:    { "approved": true, "timestamp": <epoch ms>, "sessionId": "<id>" }
  *
  * It uses:
- *   - getStatePathWithMigration('plan-approved', sessionId) for the state path
+ *   - getProjectScopedStatePath('plan-approved', getActiveProjectId(), sessionId)
+ *     for the state path (Phase 4 cross-project isolation, commit 331ce8b)
  *   - writeStateWithLock(path, jsonString) for atomic writes
  *   - readStateWithLock(path) for atomic reads
  *   - Always outputs {} to stdout (PostToolUse hooks don't block)
@@ -21,7 +22,8 @@ import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
 
-import { getStatePathWithMigration } from '../shared/session-isolation.js';
+import { getProjectScopedStatePath, getSessionId } from '../shared/session-isolation.js';
+import { getActiveProjectId } from '../shared/project-id.js';
 import { writeStateWithLock, readStateWithLock } from '../shared/atomic-write.js';
 
 // ---------------------------------------------------------------------------
@@ -40,6 +42,22 @@ import {
 
 const TEST_SESSION = 'plan-exit-test-session';
 const TEST_SESSION_B = 'plan-exit-test-session-b';
+
+/**
+ * The state path EXACTLY as the hook writes it (plan-exit-tracker.ts:88-94) and as
+ * the production reader resolves it (plan-to-ralph-enforcer.ts:155-159):
+ * project-scoped by sha256(CLAUDE_PROJECT_DIR || cwd), then sessionId.
+ *
+ * These tests used to read getStatePathWithMigration('plan-approved', sessionId),
+ * which has no projectId segment and has not been written since commit 331ce8b
+ * ("Phase 4 - scope file_claims and hook state by project"). The hook was
+ * project-scoped; the test never was. One assertion against a path nothing writes
+ * produced 1 real failure and 6 downstream nulls. The GATE was always fine --
+ * writer and production reader agreed with each other the whole time.
+ */
+function statePathFor(sessionId: string): string {
+  return getProjectScopedStatePath('plan-approved', getActiveProjectId(), sessionId);
+}
 
 // ---------------------------------------------------------------------------
 // Test helpers
@@ -62,19 +80,24 @@ afterEach(() => {
     // Ignore cleanup errors
   }
 
-  // Clean up any state files in the real tmpdir that our tests might create
-  const patterns = [
-    `claude-plan-approved-${TEST_SESSION}.json`,
-    `claude-plan-approved-${TEST_SESSION}.json.lock`,
-    `claude-plan-approved-${TEST_SESSION_B}.json`,
-    `claude-plan-approved-${TEST_SESSION_B}.json.lock`,
+  // Clean up the state files these tests create. The hook writes PROJECT-SCOPED
+  // paths, so removing the legacy session-only names is not enough -- leaving the
+  // scoped file behind is what made the "does not write state file" tests pass
+  // while asserting nothing.
+  const targets = [
+    statePathFor(TEST_SESSION),
+    statePathFor(TEST_SESSION_B),
+    // "does not crash on input missing session_id" writes under the getSessionId()
+    // fallback (hostname-pid); reclaim that too.
+    statePathFor(getSessionId()),
   ];
-  for (const pattern of patterns) {
-    const fullPath = path.join(os.tmpdir(), pattern);
-    try {
-      if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
-    } catch {
-      // Ignore
+  for (const target of targets) {
+    for (const fullPath of [target, `${target}.lock`]) {
+      try {
+        if (fs.existsSync(fullPath)) fs.unlinkSync(fullPath);
+      } catch {
+        // Ignore
+      }
     }
   }
 });
@@ -178,7 +201,7 @@ describe('handlePlanExit -- state file creation', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(true);
   });
 
@@ -191,7 +214,7 @@ describe('handlePlanExit -- state file creation', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const raw = readStateWithLock(statePath);
     expect(raw).not.toBeNull();
 
@@ -208,7 +231,7 @@ describe('handlePlanExit -- state file creation', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const raw = readStateWithLock(statePath);
     const state = JSON.parse(raw!);
     expect(state.sessionId).toBe(TEST_SESSION);
@@ -225,7 +248,7 @@ describe('handlePlanExit -- state file creation', () => {
     handlePlanExit(input);
     const after = Date.now();
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const raw = readStateWithLock(statePath);
     const state = JSON.parse(raw!);
 
@@ -241,8 +264,8 @@ describe('handlePlanExit -- state file creation', () => {
 
 describe('session isolation', () => {
   it('different sessions produce different state file paths', () => {
-    const pathA = getStatePathWithMigration('plan-approved', TEST_SESSION);
-    const pathB = getStatePathWithMigration('plan-approved', TEST_SESSION_B);
+    const pathA = statePathFor(TEST_SESSION);
+    const pathB = statePathFor(TEST_SESSION_B);
     expect(pathA).not.toBe(pathB);
   });
 
@@ -260,14 +283,14 @@ describe('session isolation', () => {
 
     handlePlanExit(inputA);
 
-    const pathB = getStatePathWithMigration('plan-approved', TEST_SESSION_B);
+    const pathB = statePathFor(TEST_SESSION_B);
     // Session B state file should NOT exist after only session A wrote
     expect(fs.existsSync(pathB)).toBe(false);
 
     handlePlanExit(inputB);
 
     // Now both should exist with their own session IDs
-    const pathA = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const pathA = statePathFor(TEST_SESSION);
     const stateA = JSON.parse(readStateWithLock(pathA)!);
     const stateB = JSON.parse(readStateWithLock(pathB)!);
 
@@ -275,10 +298,14 @@ describe('session isolation', () => {
     expect(stateB.sessionId).toBe(TEST_SESSION_B);
   });
 
-  it('state file path follows naming convention: claude-plan-approved-<sessionId>.json', () => {
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+  it('state file path follows naming convention: claude-plan-approved-<projectId>-<sessionId>.json', () => {
+    const statePath = statePathFor(TEST_SESSION);
     const fileName = path.basename(statePath);
-    expect(fileName).toMatch(/^claude-plan-approved-.*\.json$/);
+    // Asserting the projectId segment specifically: the old regex was
+    // /^claude-plan-approved-.*\.json$/, which matches both the scoped and the
+    // legacy unscoped layout, so it could not have caught this drift.
+    expect(fileName).toMatch(/^claude-plan-approved-[0-9a-f]{16}-.*\.json$/);
+    expect(fileName).toContain(getActiveProjectId());
   });
 });
 
@@ -296,7 +323,7 @@ describe('non-ExitPlanMode tools ignored', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     // State file should not be created by this call
     // (it may exist from a prior ExitPlanMode, but should not be created fresh)
     // We check by verifying no file was written in this test
@@ -312,7 +339,7 @@ describe('non-ExitPlanMode tools ignored', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(false);
   });
 
@@ -325,7 +352,7 @@ describe('non-ExitPlanMode tools ignored', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(false);
   });
 });
@@ -350,7 +377,7 @@ describe('empty and invalid input handling', () => {
   it('does not write state for empty input', () => {
     handlePlanExit({} as any);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(false);
   });
 
@@ -387,7 +414,7 @@ describe('state round-trip', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const raw = readStateWithLock(statePath);
     expect(raw).not.toBeNull();
 
@@ -410,7 +437,7 @@ describe('state round-trip', () => {
 
     handlePlanExit(input);
 
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const raw = readStateWithLock(statePath);
     expect(() => JSON.parse(raw!)).not.toThrow();
   });
@@ -423,7 +450,7 @@ describe('state round-trip', () => {
     };
 
     handlePlanExit(input);
-    const statePath = getStatePathWithMigration('plan-approved', TEST_SESSION);
+    const statePath = statePathFor(TEST_SESSION);
     const firstState = JSON.parse(readStateWithLock(statePath)!);
 
     // Small delay

@@ -79,4 +79,6 @@ async function main() {
     systemMessage: contents.join("\n\n---\n\n")
   }));
 }
-main().catch(() => process.exit(1));
+if ((process.argv[1] || "").includes("path-rules")) {
+  main().catch(() => process.exit(1));
+}

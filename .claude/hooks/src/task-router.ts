@@ -215,4 +215,6 @@ async function main() {
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('task-router')) {
+  main();
+}

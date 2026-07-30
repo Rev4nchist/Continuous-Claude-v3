@@ -281,4 +281,6 @@ async function readStdin(): Promise<string> {
   });
 }
 
-main().catch(console.error);
+if ((process.argv[1] || '').includes('pre-compact-continuity')) {
+  main().catch(console.error);
+}

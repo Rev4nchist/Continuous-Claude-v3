@@ -263,4 +263,6 @@ async function main() {
     makeAllowOutput();
   }
 }
-main();
+if ((process.argv[1] || "").includes("ralph-delegation-enforcer")) {
+  main();
+}

@@ -159,4 +159,6 @@ ${"\u2501".repeat(50)}
     console.log(JSON.stringify(output));
   }
 }
-main();
+if ((process.argv[1] || "").includes("prd-task-template-enforcer")) {
+  main();
+}

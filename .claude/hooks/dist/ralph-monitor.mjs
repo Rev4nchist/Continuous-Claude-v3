@@ -214,4 +214,6 @@ ${stderr}`;
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("ralph-monitor")) {
+  main();
+}

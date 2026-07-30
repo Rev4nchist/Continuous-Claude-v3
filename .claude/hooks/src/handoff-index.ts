@@ -268,4 +268,6 @@ async function readStdin(): Promise<string> {
   });
 }
 
-main().catch(console.error);
+if ((process.argv[1] || '').includes('handoff-index')) {
+  main().catch(console.error);
+}

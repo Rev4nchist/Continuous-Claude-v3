@@ -101,4 +101,6 @@ async function main() {
   output({ decision: 'allow' });
 }
 
-main().catch(() => output({ decision: 'allow' }));
+if ((process.argv[1] || '').includes('pre-plan-memory')) {
+  main().catch(() => output({ decision: 'allow' }));
+}

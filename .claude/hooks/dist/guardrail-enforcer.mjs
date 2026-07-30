@@ -165,4 +165,6 @@ async function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("guardrail-enforcer")) {
+  main();
+}

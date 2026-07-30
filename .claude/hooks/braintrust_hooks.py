@@ -861,8 +861,13 @@ def main():
     # The full path (which mutates os.environ and re-parses every config var)
     # still runs whenever tracing is on or for any other subcommand.
     if hook_name == "user_prompt_submit":
-        trace_effective = os.environ.get("TRACE_TO_BRAINTRUST", "").lower() == "true"
-        if not trace_effective:
+        env_trace_raw = os.environ.get("TRACE_TO_BRAINTRUST")
+        trace_effective = (env_trace_raw or "").lower() == "true"
+        # An EXPLICIT value in the environment is the off switch and beats
+        # ~/.claude/.env; only fall through to the file when the environment is
+        # silent. Without the `is None` check, TRACE_TO_BRAINTRUST=false was
+        # overruled by the file and tracing could not be turned off at all.
+        if not trace_effective and env_trace_raw is None:
             try:
                 env_file_probe = Path.home() / ".claude" / ".env"
                 if env_file_probe.exists():
@@ -880,6 +885,12 @@ def main():
             print(json.dumps({"result": "continue"}))
             sys.exit(0)
 
+    # Captured BEFORE the .env merge below: an explicit TRACE_TO_BRAINTRUST in the
+    # real environment is the off switch and beats the file. Mirrors
+    # hooks/src/shared/braintrust-score.ts so spans and scores cannot disagree
+    # about whether tracing is on.
+    pre_env_trace = os.environ.get("TRACE_TO_BRAINTRUST")
+
     # Load .env if exists
     env_file = Path.home() / ".claude" / ".env"
     if env_file.exists():
@@ -894,7 +905,11 @@ def main():
     PROJECT = os.environ.get("BRAINTRUST_CC_PROJECT", "claude-code")
     API_URL = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     DEBUG = os.environ.get("BRAINTRUST_CC_DEBUG", "false").lower() == "true"
-    TRACE_ENABLED = os.environ.get("TRACE_TO_BRAINTRUST", "false").lower() == "true"
+    TRACE_ENABLED = (
+        pre_env_trace
+        if pre_env_trace is not None
+        else os.environ.get("TRACE_TO_BRAINTRUST", "false")
+    ).lower() == "true"
     SAMPLE_RATE = float(os.environ.get("BRAINTRUST_SAMPLE_RATE", "1.0"))
 
     try:

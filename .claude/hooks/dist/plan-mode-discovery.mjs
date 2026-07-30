@@ -188,4 +188,6 @@ async function main() {
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("plan-mode-discovery")) {
+  main();
+}

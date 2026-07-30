@@ -257,4 +257,6 @@ Consider verifying the agent's claims before proceeding.
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('agent-verification')) {
+  main();
+}

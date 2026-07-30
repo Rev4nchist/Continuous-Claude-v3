@@ -181,4 +181,6 @@ async function main() {
   console.log('{}');
 }
 
-main().catch(() => console.log('{}'));
+if ((process.argv[1] || '').includes('post-learning-prompt')) {
+  main().catch(() => console.log('{}'));
+}

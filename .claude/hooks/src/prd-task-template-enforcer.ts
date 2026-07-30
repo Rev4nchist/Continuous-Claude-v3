@@ -236,4 +236,6 @@ function main() {
     }
 }
 
-main();
+if ((process.argv[1] || '').includes('prd-task-template-enforcer')) {
+  main();
+}
