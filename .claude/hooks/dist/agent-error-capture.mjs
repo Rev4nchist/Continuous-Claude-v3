@@ -235,6 +235,20 @@ function buildStoreInvocation(opcDir, sessionId, content, contextStr, tagsStr) {
     options: { cwd: opcDir, shell: false, detached: true, stdio: "ignore", windowsHide: true }
   };
 }
+function releaseWhenRunning(child) {
+  const release = () => {
+    try {
+      child.unref?.();
+    } catch {
+    }
+  };
+  if (typeof child.once !== "function") {
+    release();
+    return;
+  }
+  child.once("spawn", release);
+  child.once("error", release);
+}
 function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
   const spawnFn = deps.spawnFn ?? spawn;
   const scoreFn = deps.scoreFn ?? scoreExtraction;
@@ -245,7 +259,7 @@ function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
     console.error("[AgentErrorCapture] store_learning.py not found");
     return;
   }
-  const content = `Task failure in the ${agentType} agent. The agent was invoked and did not complete; the error it surfaced was: ${errorContext}`;
+  const content = `${errorContext} -- task failure in the ${agentType} agent, which did not complete.`;
   const score = scoreFn(content, `Failed agent invocation: ${agentType}`);
   if (score.classification === "NOISE") {
     console.error(
@@ -270,7 +284,7 @@ function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
       tags.join(",")
     );
     const child = spawnFn(cmd, args, options);
-    child.unref();
+    releaseWhenRunning(child);
     console.error(`[AgentErrorCapture] Dispatched (detached) failure learning for agent '${agentType}'`);
   } catch (err) {
     console.error(`[AgentErrorCapture] Failed to dispatch learning: ${err}`);
@@ -319,5 +333,6 @@ if (process.argv[1] && process.argv[1].includes("agent-error-capture")) {
 export {
   buildStoreInvocation,
   hasStructuredError,
+  releaseWhenRunning,
   storeLearning
 };

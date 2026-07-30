@@ -103,6 +103,10 @@ function storeCall(): any[] | undefined {
 }
 
 /**
+ * VESTIGIAL as of 2026-07-29: hook-error-pipeline is archived, so nothing in this
+ * file writes the marker any more. The cleanup is kept because it is free and the
+ * failure mode it documents is worth not relearning.
+ *
  * hook-error-pipeline dedups identical errors for 5 minutes via a REAL file in the
  * developer's temp dir ($TEMP/claude-hook-errors/recent-errors.json, keyed on
  * hookName + errorMessage). Because this test always reports the same hook name
@@ -158,28 +162,13 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
     expect(opts.shell).not.toBe(true);
   });
 
-  it('hook-error-pipeline.ts: stores via spawnSync with raw content argv', async () => {
-    const mod: any = await import('../hook-error-pipeline.js');
-    const fn = mod.captureHookError;
-    expect(typeof fn, 'captureHookError must be exported').toBe('function');
-
-    const err = new Error(INJECTION);
-    fn('some-hook', err, 'sess-2', true);
-
-    expect(execSyncMock).not.toHaveBeenCalled();
-    const call = storeCall();
-    expect(call, 'spawnSync should have been called with store_learning.py').toBeDefined();
-
-    const argv = call![1];
-    expect(Array.isArray(argv)).toBe(true);
-
-    const content = argAfter(argv, '--content');
-    expect(content).toContain(INJECTION);
-    expect(content).not.toContain('\\"');
-
-    const opts: any = call![2] || {};
-    expect(opts.shell).not.toBe(true);
-  });
+  // hook-error-pipeline.ts was ARCHIVED 2026-07-29 -> .claude/hooks/archive/.
+  // It was dead code: zero importers outside this test, registered in no
+  // settings.json, and flagged for archive by three independent audits (35
+  // health_*.json orphan entries, hook-audit-2026-04.md:134, the 2026-06-10 WF2
+  // review). Its own QW-01 test is removed with it -- keeping a security test for
+  // a module nothing loads is what made the sibling arscontexta fossils survive a
+  // month of red. The two live producers below still carry their QW-01 coverage.
 
   it('user-confirmation-detector.ts: USER_PREFERENCE store via spawnSync with raw content', async () => {
     const mod: any = await import('../user-confirmation-detector.js');
@@ -245,9 +234,10 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
 });
 
 describe('QW-01: static-source regression guard', () => {
+  // hook-error-pipeline.ts removed 2026-07-29 -- archived as dead code. These are
+  // the two producers that are actually registered and actually run.
   const FILES = [
     'agent-error-capture.ts',
-    'hook-error-pipeline.ts',
     'user-confirmation-detector.ts',
   ];
 

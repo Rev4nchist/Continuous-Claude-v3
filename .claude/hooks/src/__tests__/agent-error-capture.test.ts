@@ -15,6 +15,7 @@ import {
   buildStoreInvocation,
   storeLearning,
   hasStructuredError,
+  releaseWhenRunning,
 } from '../agent-error-capture.js';
 
 describe('buildStoreInvocation — argv shape + fire-and-forget options', () => {
@@ -131,16 +132,109 @@ describe('storeLearning — non-blocking detached spawn (QW-04 hot-path fix)', (
       ).toBeUndefined();
     });
 
-    it('clears the FAILED_APPROACH length floor even for a terse error', () => {
-      // The floor is why the lead-in sentence exists: a bare "EPERM" would
-      // otherwise be dropped as too_short, silently, exactly like before.
-      const content = producedContent('spark', 'EPERM');
+    it('clears the FAILED_APPROACH length floor for a realistic error', () => {
+      const content = producedContent(
+        'kraken',
+        "TypeError: Cannot read properties of undefined (reading 'sessionId') at storeLearning (agent-error-capture.ts:237)",
+      );
       expect(content.trim().length).toBeGreaterThanOrEqual(failedApproachMinLength());
+    });
+
+    it('keeps fixed boilerplate SHORT, so the 0.85 dedup gate cannot collapse all failures into one', () => {
+      // Measured 2026-07-29: a ~95-char fixed lead-in produced 0.88 embedding
+      // similarity between two UNRELATED agent failures, so the store skipped them
+      // as duplicates -- the first failure would land and every later one would
+      // vanish silently. Boilerplate is the share of the record that is identical
+      // across every capture, so it is the thing to bound.
+      const a = producedContent('kraken', 'AAAAAAAAAA');
+      const b = producedContent('kraken', 'BBBBBBBBBB');
+      // Whatever is common to both, with the error text differing, IS the boilerplate.
+      let common = 0;
+      while (common < a.length && common < b.length && a[common] === b[common]) common++;
+      const tailCommon = (() => {
+        let n = 0;
+        while (n < a.length && n < b.length && a[a.length - 1 - n] === b[b.length - 1 - n]) n++;
+        return n;
+      })();
+      expect(
+        common + tailCommon,
+        'fixed boilerplate is long enough to dominate the embedding -- unrelated failures will dedup against each other',
+      ).toBeLessThan(80);
     });
 
     it('POSITIVE CONTROL: the pre-2026-07-29 wording would FAIL this check', () => {
       const old = "Agent 'kraken' error: TypeError: boom";
       expect(noisePrefixes().some((p) => old.startsWith(p))).toBe(true);
+    });
+  });
+
+  // ── the OTHER half of the 161 silent days ────────────────────────────────
+  //
+  // 09ba655 (QW-04) made the store detached + unref'd to stop a ~10s spawnSync
+  // blocking Task completion. But unref() followed by the parent exiting in the
+  // SAME tick kills the child: measured 2026-07-29, exit-same-tick stored NO row
+  // while exit-one-tick-later stored one, identical spawn. So the store was
+  // dispatched, logged, exited 0 -- and never completed.
+  //
+  // The fix is to release the child only once the OS reports it running. These
+  // tests pin the ORDER, which is the whole content of the bug.
+  describe('detached child is released only once running (regression: fire-and-forget never finished)', () => {
+    /** A child stub that records unref timing and lets the test fire events. */
+    function eventChild() {
+      const handlers: Record<string, Array<() => void>> = {};
+      return {
+        unref: vi.fn(),
+        once(event: string, fn: () => void) {
+          (handlers[event] ||= []).push(fn);
+          return this;
+        },
+        emit(event: string) {
+          for (const fn of handlers[event] || []) fn();
+        },
+      };
+    }
+
+    it('does NOT unref in the same tick as the spawn', () => {
+      const child = eventChild();
+      storeLearning('s', 'kraken', 'p', 'TypeError: boom', {
+        spawnFn: (() => child) as never,
+        scoreFn: okScore,
+        existsFn: () => true,
+      });
+      // This is the assertion that would have caught the bug: at this point the
+      // hook has returned and, before the fix, the child was already released.
+      expect(
+        child.unref,
+        'unref() in the spawn tick kills the store -- release on the spawn event instead',
+      ).not.toHaveBeenCalled();
+    });
+
+    it('unrefs once the child reports spawned', () => {
+      const child = eventChild();
+      storeLearning('s', 'kraken', 'p', 'TypeError: boom', {
+        spawnFn: (() => child) as never,
+        scoreFn: okScore,
+        existsFn: () => true,
+      });
+      child.emit('spawn');
+      expect(child.unref).toHaveBeenCalledTimes(1);
+    });
+
+    it('unrefs on spawn error too, so a failed spawn cannot hold the hook open', () => {
+      const child = eventChild();
+      storeLearning('s', 'kraken', 'p', 'TypeError: boom', {
+        spawnFn: (() => child) as never,
+        scoreFn: okScore,
+        existsFn: () => true,
+      });
+      child.emit('error');
+      expect(child.unref).toHaveBeenCalledTimes(1);
+    });
+
+    it('a stub child without .once is released immediately (back-compat)', () => {
+      const plain = { unref: vi.fn() };
+      releaseWhenRunning(plain);
+      expect(plain.unref).toHaveBeenCalledTimes(1);
     });
   });
 
