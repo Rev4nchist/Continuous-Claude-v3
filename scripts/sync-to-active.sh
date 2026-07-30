@@ -50,7 +50,13 @@ $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 # Renaming the SOURCE keeps the rules version-controlled and still fed to
 # ~/.claude/rules/ (which 18 of 19 projects rely on as their ONLY copy) while
 # removing the second load. See docs/harness-strategy/.
-SYNC_DIRS="agents skills scripts docs"
+# `commands` added 2026-07-29. The 59 slash commands had existed ONLY in
+# ~/.claude/commands -- one untracked copy on one machine. They are now committed,
+# but a committed copy that nothing propagates is a second source of truth waiting
+# to drift, which is the exact failure the rules-src rename above was fixing.
+# Safe to add: repo and active were verified hash-identical (58/58) when the backup
+# landed, so the first forward sync copies nothing.
+SYNC_DIRS="agents skills scripts docs commands"
 
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
@@ -66,6 +72,19 @@ copy_registry() {
     [[ -f "$src" ]] || return 0
     if $DRY_RUN; then
         echo "[DRY RUN] Would copy: $src -> $dst"
+        return 0
+    fi
+    # Distinguish "cannot validate" from "invalid". Conflating them cost a real
+    # diagnosis on 2026-07-29: this printed "invalid JSON" for a file that node
+    # and PowerShell both parse fine. The actual cause is which bash is running.
+    # On this machine `bash` on PATH is WSL (C:\WINDOWS\system32\bash.exe), which
+    # has NO node and uses /mnt/c paths; git's hooks use Git Bash, which has node
+    # at /c/Program Files/nodejs. So a manual `bash scripts/sync-to-active.sh`
+    # silently skipped the registry while blaming the file, and the post-commit
+    # path synced it correctly -- which is why nobody noticed.
+    if ! command -v node >/dev/null 2>&1; then
+        echo "  WARNING: node not on PATH in this shell -- cannot validate project-registry.json, NOT synced"
+        echo "           (if this is WSL bash, re-run under Git Bash: it has node)"
         return 0
     fi
     if ! node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$src" 2>/dev/null; then

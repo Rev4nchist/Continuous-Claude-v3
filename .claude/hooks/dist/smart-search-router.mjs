@@ -154,6 +154,9 @@ function tryStartDaemon(projectDir) {
     if (isDaemonReachable(projectDir)) {
       return true;
     }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
+    }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();
       while (Date.now() - start < 5e3) {

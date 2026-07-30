@@ -23,30 +23,57 @@ Yes, on every gate that exists. Verified 2026-07-29, all counts non-vacuous
 | Hook build actually current | `cd .claude/hooks && npm run build` then `git status --porcelain .claude/hooks/dist` | clean — rebuild changes zero bytes |
 | Repo ↔ `~/.claude` drift | see §6 | rules 46/46, agents 66/66, dist 261/261 |
 
-### The test suite is NOT green — and it cannot complete
+### The test suite returns a verdict again — and it is not green
 
-This is the one place "stable" needs qualifying. Every mechanised guard above
-passes, but `npx vitest run` in `.claude/hooks` **never finishes**. Inventoried
-2026-07-29 by running all 113 files in isolation with a 45 s cap, via
-`pwsh -File scripts/hooks/test-bisect.ps1`:
+`npx vitest run` in `.claude/hooks` used to have no exit at all. As of
+2026-07-29 it **completes in ~12 s**:
 
-**99 pass · 12 fail · 2 hang.**
+**113 files · 2163 tests pass · 94 fail · 7 skipped.**
 
-| Class | Files | Note |
+Neither blocker was a slow test:
+
+- **`maestro-detector.ts` ended with a bare `main();`** at module scope, and
+  `main()` awaits stdin. Importing it to unit-test its pure helpers ran the hook
+  and blocked on a stdin that never closes under vitest — one file's import cost
+  the whole suite its verdict. Fixed with the `argv[1]` guard 16 other hooks
+  already use.
+- **`daemon-client.test.ts` was not hanging, it was paying ~10.4 s six times.**
+  Six tests hit `tryStartDaemon`'s real spawn path (`tldr daemon start` at 5 s,
+  then up to 10 s waiting for reachability). Because that sits inside a
+  **synchronous** `spawnSync`, vitest's `testTimeout` cannot interrupt it: with
+  `--testTimeout=4000` those tests still *passed* at 10463 ms each. Now gated by
+  an opt-in `CCV3_DAEMON_NO_AUTOSTART=1`.
+
+⚠️ **Latent hang class — 16 hooks still call `main()` unguarded at module scope:**
+`agent-verification`, `bus-session-populator`, `code-field-protocol`,
+`guardrail-enforcer`, `maestro-enforcer`, `maestro-state-manager`,
+`mcp-activity-tracker`, `permission-auto-allow`, `plan-mode-discovery`,
+`prd-task-template-enforcer`, `ralph-delegation-enforcer`, `ralph-monitor`,
+`ralph-template-inject`, `task-router`, `typescript-preflight`.
+`maestro-detector` was simply the only one with a test importing it. **The next
+unit test written against any of the other 15 hangs the suite the same way** —
+add the `argv[1]` guard first.
+
+Remaining 94 failures, 8 files:
+
+| Files | Failing | Note |
 |---|---|---|
-| **Hangs** — why the full suite never returns | `daemon-client.test.ts`, `maestro-detector.test.ts` | Both exceed 45 s in isolation. Cause not investigated |
-| **Never collected by vitest** | `extractLedgerSection`, `findSessionHandoff`, `mainHandoffFirst` | Import `describe/it` from **`node:test`**, not `vitest`. Vitest loads them, registers no suite, reports "No test suite found" — **39 test cases** that run under no runner at all. They also fail under `node --test`. Zero coverage while appearing to exist |
-| **Real assertion failures** | 5 × `arscontexta-*` | e.g. keyword-matching: repeated "expected false to be true" |
-| **Narrow real failures** | `braintrust-score` (1 of 19 — a mock asserted not-called was called once), `telemetry-tracker-braintrust`, `plan-exit-tracker`, `store-learning-injection` | |
+| 5 × `arscontexta-*` | **83** | Dominates everything else. `data-integrity` alone is 40 of 45. A subsystem investigation, not a test-hygiene pass |
+| `plan-exit-tracker` | 7 | |
+| `store-learning-injection` | 3 | |
+| `braintrust-score` | 1 of 19 | A mock asserted not-called was called once. Also makes **real network calls** during the suite (`project lookup claude-code failed: DNS failure`) |
 
-Fixed this session and no longer in that list: `ralph-task-monitor-braintrust`
-was 4 failed / 6 passed because the tests still asserted the
-`BRAINTRUST_SESSION_ID` env var that `2542561` retired a day earlier — and its
-two "returns null" tests were passing **vacuously**. Now 12/12 (`e26141c`).
+Fixed this session, no longer in that list: 39 tests that ran under **no runner**
+(see §5.4), and two files whose tests asserted the `BRAINTRUST_SESSION_ID` env
+var that `2542561` retired — `ralph-task-monitor-braintrust` (4 failed → 12/12,
+`e26141c`) and `telemetry-tracker-braintrust` (14 failed → 25/25). In both, some
+"returns null" tests had been passing **vacuously**.
 
-**Do not read a passing `npx vitest run <file>` as suite health**, and do not
-wait on a full run — it will sit at ~0 CPU indefinitely. Until the two hangs are
-fixed, the per-file harness is the only way to get a complete signal.
+`pwsh -File scripts/hooks/test-bisect.ps1` still runs each file in isolation with
+a timeout — use it when you need per-file attribution or suspect a new hang.
+
+Also red, and separate: **`npm run check` reports 234 pre-existing `tsc` errors.**
+None are in the files touched this session.
 
 Branch was `0 0` against `fork/agentic-os` at session start and is pushed.
 `agentic-os` is **103 commits ahead of `fork/main`** — that is the standing
@@ -108,16 +135,28 @@ floor; deregistering the hook saves the full ~955 ms.
 Against that: tracing is the only telemetry the harness has that isn't dead
 (`hook-trace.jsonl` has been dead since 2026-05-18). Detail in the plan, Step 7.
 
-### 4.2 Two destructive items deliberately left undone
+### 4.2 Resolved 2026-07-29 (was: decisions pending)
 
-- The fossil `.claude/scripts/sync-claude.sh` and its `~/.claude` mirror still
-  await the June review's recommended deletion (D7d-02, D8a-03).
-- `.claude/settings.local.json` **is still tracked** (`git ls-files` returns it)
-  even though `.gitignore` carries a dated 2026-07-28 note saying it was
-  untracked because it held 21 permission grants and zero deny entries. The
-  documented intent is not in effect. Secret-scanned clean today — no rotation
-  needed. Fix is `git rm --cached .claude/settings.local.json`, which is a
-  tracked-state change on a config file, so: your call.
+All four are closed. Recorded because each was a standing item, not because the
+work was interesting:
+
+- **Braintrust tracing: STAYS ON.** ~690 ms/tool call is accepted for now — it is
+  the only live telemetry, and killing it mid-refinement removes the instrument
+  you'd judge Steps 9–10 with. Revisit after the suite is green and the prune is
+  done. The measurement is in the plan, Step 7; nothing to re-derive.
+- **`.claude/settings.local.json`: untracked.** `git rm --cached`, file untouched
+  on disk, ignore rule already present at `.gitignore:295`. Was tracked despite a
+  dated note saying otherwise; secret-scanned clean, so no rotation.
+- **Fossil `.claude/scripts/sync-claude.sh`: deleted**, repo copy and `~/.claude`
+  mirror (D7d-02, D8a-03). Verified beforehand that it is a *different file* from
+  the live reverse-sync at `scripts/sync-claude.sh` (3698 vs 6586 bytes, distinct
+  hashes) and that only docs referenced the fossil path, while 4 rules reference
+  the live one. The live script still parses (`bash -n`, exit 0).
+- **`sites/fastmcp-v3` has a remote:** `Rev4nchist/fastmcp-v3`, **private**,
+  pushed `0 0` at `e6c2ae9`. It is no longer a single-copy repository. The push
+  needed an ephemeral inline credential helper reading `$GITHUB_TOKEN` — the
+  configured helper fails with "could not read Username" though `gh` is
+  authenticated (see §6).
 
 ---
 
@@ -149,35 +188,48 @@ Headline from the findings, because it inverts the obvious conclusion: the
 saving is **monotonic in file size** — under 5 KB it *loses* ~10k tokens, over
 50 KB it wins. So retarget the threshold (3 KB → 8 KB), don't cut the tool.
 
-### 5.3 The `commands` copy does not sync
+### 5.3 The `commands` copy now syncs — DONE
 
-Landed this session as a backup. No sync script handles it (0 mentions across
-all nine `scripts/sync*` files; `SYNC_DIRS="agents skills scripts docs"`), so
-the repo copy can go stale. Wiring is one word:
+`SYNC_DIRS="agents skills scripts docs commands"`. Verified a no-op on the first
+run (`commands: OK (59 files)`, 0 files changed), because the repo and active
+copies were hash-identical when the backup landed.
 
-```
-SYNC_DIRS="agents skills scripts docs commands"
-```
+That change surfaced a separate live bug, which is now §6's first entry: the
+forward sync was **silently not syncing `project-registry.json`** and blaming the
+file for it.
 
-Left undone deliberately — `sync-to-active.sh` is shared, load-bearing, and in
-the declared scope of the `harness-security` lane. Bounded failure mode: a stale
-snapshot can mislead a human, never the harness, which reads `~/.claude/commands`.
+### 5.4 Test backlog — items 1 and 2 are DONE
 
-### 5.4 The two suite hangs, and 39 tests running under no runner
+1. ~~The two suite hangs~~ — **done**, see §1. The suite returns a verdict.
+2. ~~39 tests collected by no runner~~ — **done**. `extractLedgerSection`,
+   `findSessionHandoff` and `mainHandoffFirst` imported `describe/it` from
+   `node:test`; all three carried the header `Run with: npx tsx --test`, but
+   **`tsx` is not installed** (absent from devDependencies *and* node_modules), so
+   the documented command never worked here. Converted to vitest: 78 assert calls
+   across 4 APIs, via a paren- and quote-aware transform rather than a regex,
+   because 12 were multi-line with nested calls and commas.
 
-Highest-leverage test work, in order:
+   `mainHandoffFirst` then failed 9/9 on one shared Windows bug: its helper ran
+   ``execSync(`echo '${json}' | CLAUDE_PROJECT_DIR="${dir}" node "${hook}"`)`` —
+   POSIX-only twice over, since Windows `execSync` uses cmd.exe where
+   `echo '{...}'` emits literal quotes and a `VAR="x" cmd` prefix is not valid
+   syntax. Replaced with `spawnSync` piping stdin. All 39 now pass.
 
-1. **`daemon-client.test.ts` and `maestro-detector.test.ts` hang.** Fixing these
-   two restores a whole-suite verdict, which nothing else can substitute for.
-2. **Point the 3 `node:test` files at vitest** (`extractLedgerSection`,
-   `findSessionHandoff`, `mainHandoffFirst`) — 39 test cases currently collected
-   by nothing. Mechanical: swap the import, translate `node:assert` to `expect`.
-   Expect some to then fail for real; that is the point.
-3. The 5 `arscontexta-*` failures, then the 4 narrow ones.
+**Remaining, in order:**
 
-A guard belongs here once (1) and (2) are done — assert the pass count never
-drops and that no test file imports from `node:test`. Adding it before then would
-just pin the current red state.
+3. **The `arscontexta-*` block: 83 failures across 5 files.** This is the whole
+   remaining ballgame — everything else is 11 failures. Treat it as a subsystem
+   investigation (is the code wrong, or did a contract move and the tests not?),
+   not a hygiene pass. Start with `data-integrity` (40 of 45 failing).
+4. `plan-exit-tracker` (7), `store-learning-injection` (3), `braintrust-score` (1).
+5. The 234 `tsc --noEmit` errors — separate axis, unmeasured.
+
+**Two guards worth adding once (3) and (4) land**, not before — added now they'd
+just pin the red state:
+
+- pass-count ratchet: fails if the passing total drops below its recorded baseline
+- shape guards: no test file may import from `node:test`, and no hook may call
+  `main()` unguarded at module scope (16 currently do — see §1)
 
 ### 5.5 The YouTube pipeline is unaudited
 
@@ -191,6 +243,21 @@ never read.
 ## 6. Things that will bite you
 
 Every one of these cost real time already.
+
+- **`bash` on this machine is WSL, not Git Bash — and WSL has no node.**
+  `bash` resolves to `C:\WINDOWS\system32\bash.exe`: `/mnt/c/…` paths, **no node
+  on PATH**. Git's hooks use `…\Git\bin\bash.exe`: `/c/…` paths, node at
+  `/c/Program Files/nodejs`. So the same shell script behaves differently
+  depending on who runs it, and a node-dependent step silently degrades when you
+  run it by hand.
+
+  This was live: `sync-to-active.sh` printed *"repo project-registry.json is
+  invalid JSON -- NOT synced"* for a file that node and PowerShell both parse
+  fine. The real cause was `command -v node` failing under WSL, and the message
+  blamed the file. The post-commit path (Git Bash) synced it correctly, which is
+  why it went unnoticed. The check now distinguishes *cannot validate* from
+  *invalid* and names the shell. **When a shell script misbehaves, check which
+  bash ran it before debugging the script.**
 
 - **The MSYS fork storm is live and frequent.** Two Bash-tool deaths in this
   session alone (`add_item ... errno 1`). Fall back to the **PowerShell tool**
@@ -222,6 +289,14 @@ Every one of these cost real time already.
   cannot see shell-copy writes.
 - **Do not run `scripts/msys/repro.ps1` unattended.** It deliberately storms the
   machine and has twice left dozens of blocked processes behind.
+- **`git push` fails with "could not read Username" though `gh` is authenticated.**
+  The configured credential helper cannot prompt in these shells. Route around it
+  per-command without touching config (a peer session owns the dual-account lane):
+  `git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f' push …`
+  — token comes from env, never appears in argv, nothing persisted.
+- **A synchronous `spawnSync`/`execSync` cannot be interrupted by a test timeout.**
+  `--testTimeout=4000` let tests *pass* at 10463 ms each. If a suite is slow but
+  green, look for blocking sync calls before believing the timings.
 
 ---
 
