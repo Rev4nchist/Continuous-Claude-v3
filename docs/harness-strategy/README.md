@@ -23,14 +23,36 @@ Yes, on every gate that exists. Verified 2026-07-29, all counts non-vacuous
 | Hook build actually current | `cd .claude/hooks && npm run build` then `git status --porcelain .claude/hooks/dist` | clean — rebuild changes zero bytes |
 | Repo ↔ `~/.claude` drift | see §6 | rules 46/46, agents 66/66, dist 261/261 |
 
-### The test suite returns a verdict again — and it is not green
+### The test suite is GREEN — and now ratcheted
 
 `npx vitest run` in `.claude/hooks` used to have no exit at all. As of
-2026-07-29 it **completes in ~12 s**:
+2026-07-29 it completes in ~10 s and **passes**:
 
-**113 files · 2163 tests pass · 94 fail · 7 skipped.**
+**109 files · 2158 pass · 0 fail · 7 skipped.**
 
-Neither blocker was a slow test:
+Verified twice back to back, which matters: one of the fixes was a test that only
+passed on the first run in any 5-minute window.
+
+Two ratchets now hold this, each **demonstrated failing on purpose** (a guard
+never seen to fail is not yet a guard):
+
+```
+node scripts/hooks/suite-count-ratchet.mjs     # 0 failures, and neither passed
+                                               # nor COLLECTED may drop below
+                                               # 2158 / 2165
+node scripts/hooks/suite-shape-guard.mjs       # 0 module-scope main() calls,
+                                               # 0 node:test imports
+```
+
+The *collected*-count assertion is the one a plain `vitest run` cannot give you:
+a file that stops being collected removes its tests from the total while the
+suite still reports green. That is how 39 tests ran under no runner at all.
+
+The journey was **93 → 0**: 83 fossils deleted (13 assertions salvaged first),
+7 + 2 stale tests retargeted, and **2 live defects the tests were right about** —
+see §4.1 and §5.6.
+
+Neither original blocker was a slow test:
 
 - **`maestro-detector.ts` ended with a bare `main();`** at module scope, and
   `main()` awaits stdin. Importing it to unit-test its pure helpers ran the hook
@@ -44,24 +66,50 @@ Neither blocker was a slow test:
   `--testTimeout=4000` those tests still *passed* at 10463 ms each. Now gated by
   an opt-in `CCV3_DAEMON_NO_AUTOSTART=1`.
 
-⚠️ **Latent hang class — 16 hooks still call `main()` unguarded at module scope:**
-`agent-verification`, `bus-session-populator`, `code-field-protocol`,
-`guardrail-enforcer`, `maestro-enforcer`, `maestro-state-manager`,
-`mcp-activity-tracker`, `permission-auto-allow`, `plan-mode-discovery`,
-`prd-task-template-enforcer`, `ralph-delegation-enforcer`, `ralph-monitor`,
-`ralph-template-inject`, `task-router`, `typescript-preflight`.
-`maestro-detector` was simply the only one with a test importing it. **The next
-unit test written against any of the other 15 hangs the suite the same way** —
-add the `argv[1]` guard first.
+✅ **Latent hang class — CLOSED. All hooks now carry the `argv[1]` guard**, and
+`suite-shape-guard.mjs` keeps it at zero.
 
-Remaining 94 failures, 8 files:
+> **CORRECTION — the count was 15, then 18, then 27.** This section listed 15
+> hooks. The real number was **27**. The list was built from a grep for a bare
+> `main();` and missed `main().catch(...)`; a first recount said 18 because
+> `/\.catch\([^)]*\)/` cannot match `catch(() => console.log(''))` — nested
+> parens. Third time in this workstream that a "verified" list turned out to be
+> exactly as wide as the grep behind it, and the second and third narrowings were
+> mine. The guard now matches any zero-arg call at column 0, no hardcoded names
+> or spellings.
 
-| Files | Failing | Note |
+Because the guard's failure mode is **inverted** — a guard string absent from
+`argv[1]` silently disables a *live* hook, worse than a hanging test — this was
+verified three ways rather than asserted:
+
+- Registration computed from the **live** `settings.json` for all 27: **15
+  registered**, every one as `<name>.mjs`; **12 not registered at all** (the old
+  table named 4 of those). Zero where the guard would not fire.
+- **Differential test**: pre-guard bundle from `git HEAD` vs post-guard bundle on
+  byte-identical stdin → 13 IDENTICAL and non-empty. Its first version reported
+  `guardrail-enforcer` and `lane-context` as broken; they were not — both are
+  stateful, so whichever bundle ran *second* emitted less and the test was
+  measuring its own call order. Fixed with a fresh TEMP, project dir and session
+  id per invocation.
+- **Predicate probe** for the two hooks that emit nothing either way
+  (`mcp-activity-tracker`, `ralph-monitor`): guard fires **27/27** under the
+  production basename, negative control false 27/27. Both write through a
+  `try/catch`'d side channel, so no behavioural test can settle them — and
+  "inconclusive" on a live hook is not a pass.
+
+Side finding: `mcp-activity-tracker` and `permission-auto-allow` are registered in
+the **active** `settings.json` but absent from the repo's — live-only hooks a
+fresh bootstrap would not get.
+
+The 93 failures, as they were resolved:
+
+| Files | Was | Outcome |
 |---|---|---|
-| 5 × `arscontexta-*` | **83** | **FOSSILS — delete the files.** The subsystem does not exist: zero skills, agents or hook sources; the only `arscontexta*` files in the repo are these 5 tests. `f9cdbef` (2026-06-28) purged 61 arscontexta lines from `skill-rules.json` as "28 ghost skill registrations", and these tests assert those registrations are present. Not an investigation |
-| `plan-exit-tracker` | 7 | **One root cause, 7 symptoms** — the state file is never written (`writes state file when ExitPlanMode fires` fails first; the other 6 are downstream nulls) |
-| `store-learning-injection` | 3 | Asserts the SOURCE SHAPE of `agent-error-capture.ts` (must call `store_learning.py` via `spawnSync`). Either the hook was refactored or the test is a fossil — determine which |
-| `braintrust-score` | 1 of 19 | **Possibly a real bug in the OFF switch:** `returns silently when TRACE_TO_BRAINTRUST is "false"` — the fetch mock was called once when it should not have been. Also makes **real network calls** during the suite (`DNS failure`), so it may be flaky: it moved between 93 and 94 total failures across two runs |
+| 5 × `arscontexta-*` | **83** | **DELETED** (`0773a9f`) — fossils, confirmed: 0 skills, 0 agents, 0 hook sources, 0 matches in `skill-rules.json`. But the plan also pre-authorised dropping their **32 passing** tests, and **13 of those were real coverage existing nowhere else**: regex-validity over all 254 `intentPattern`s (the production matcher `try/catch`es a bad pattern, so it silently stops a skill triggering — nothing else checks it), and the suite's **only** E2E spawn of `dist/skill-activation-prompt.mjs`. Salvaged into `skill-rules-integrity.test.ts` (14 tests, each with a positive control), *then* deleted |
+| `plan-exit-tracker` | 7 | **FIXED — stale test, one cause.** `331ce8b` made the hook write a project-scoped path; the test still read the session-only name. The **gate was never broken** — `plan-to-ralph-enforcer.ts:155` resolves byte-identically to what the hook writes. Also fixed `afterEach`, which only unlinked the legacy names, and the naming regex, which matched both layouts and so could not have caught the drift |
+| `store-learning-injection` | 2 | **FIXED — stale test, over a REAL regression.** It asserted the function *name* `spawnSync`; `09ba655` moved to a detached `spawn` with the security invariant intact. Retargeted to the invariant (`shell:false`, raw argv) — `/spawn\s*\(/` would not work either, since the call goes through an injected seam. **The regression underneath is unfixed and is a decision — see §5.6** |
+| `braintrust-score` | 1 of 19 | **FIXED — the OFF switch really was broken. See §4.1.** Not flaky: 4/4 red, deterministic. And the `DNS failure` in the log was a **mocked** rejection, not a real network call — that suspicion was wrong |
+| `hook-error-pipeline` | (appeared) | **FIXED — this was the 93↔94 flapper.** Not caused by the above: it dedups identical errors for 5 min via a real file in `$TEMP`, keyed on hook+message, so it passed once and failed on every rerun inside the window. Proven: delete marker → 7 pass; rerun immediately → 1 fail. The live marker held 20 entries, some days old |
 
 Because the suite could not complete, **none of this was visible.** The arscontexta
 files have been red since 2026-06-28 — the hang was hiding a month of failure, not
@@ -117,7 +165,7 @@ Two answers inside it that close off whole branches of investigation:
 | 4 | RATCHET C: timer census | **DONE** — guard reports 9/9 |
 | 5 | Fix 7 dangling-timer hooks | **DONE** — covered by the 9/9 above |
 | 6 | Re-measure hook latency with real payloads | **DONE** — ~1s per tool call, concentrated in 2 processes |
-| 7 | Decide on Braintrust tracing | **MEASURED, DECISION OPEN** — see §4.1 |
+| 7 | Decide on Braintrust tracing | **MEASURED, DECISION OPEN** — see §4.1. ⚠️ the off switch it assumed did not work until `688228f` |
 | 8 | Context lever | **DONE** — 145.6k → 67.4k memory-file tokens/session |
 | 9 | Fleet-wide `paths:` frontmatter | **OPEN, unstarted** — verified **0 of 46** rules carry `paths:` |
 | 10 | Re-derive prune list, then prune | **OPEN — do LAST** |
@@ -138,6 +186,32 @@ floor; deregistering the hook saves the full ~955 ms.
 
 Against that: tracing is the only telemetry the harness has that isn't dead
 (`hook-trace.jsonl` has been dead since 2026-05-18). Detail in the plan, Step 7.
+
+> ⚠️ **The premise this decision rested on was FALSE until `688228f`.** "Keep it
+> on, we can turn it off later" assumed `TRACE_TO_BRAINTRUST=false` works. It did
+> not. `loadClaudeDotEnv()` merged `~/.claude/.env` (which says `true`) into
+> `process.env` **inside** `isTraceEnabled()`, before the comparison — so an
+> environment `false`, or one in the `settings.json` `env` block, was silently
+> overwritten. Proven by execution: the module POSTed to
+> `/v1/project_logs/<file's id>/feedback` using the **file's** API key while
+> `process.env.TRACE_TO_BRAINTRUST` was `'false'`. Editing `~/.claude/.env` did
+> work — and nothing documented that.
+>
+> Both layers are fixed (`braintrust-score.ts` **and** `braintrust_hooks.py` —
+> patching one would let an env `false` silence scores while the other kept
+> minting spans). An explicit environment value now wins for this one variable;
+> every other variable still comes from the file, so the default is unchanged.
+> Confirmed safe first: `TRACE_TO_BRAINTRUST` appears **0 times** in
+> `settings.json` and `settings.local.json`, so the environment is genuinely
+> silent in normal launches. Covered by the off-switch test **and** a negative
+> control, because "no requests" is also what a dead emitter looks like.
+>
+> 🔑 **Rotate the Braintrust API key.** The suite read the developer's real
+> `~/.claude/.env`, so the failing assertion printed
+> `Authorization: Bearer sk-...` into test output. Anywhere that red test was
+> pasted — CI log, screenshot, handoff — the live key went with it. Tests are now
+> hermetic via `BRAINTRUST_DOTENV_PATH`, but that does not un-leak what already
+> escaped.
 
 ### 4.2 Resolved 2026-07-29 (was: decisions pending)
 
@@ -219,11 +293,67 @@ file for it.
    `echo '{...}'` emits literal quotes and a `VAR="x" cmd` prefix is not valid
    syntax. Replaced with `spawnSync` piping stdin. All 39 now pass.
 
-**Remaining work is planned in full — see
-[`2026-07-29-suite-green-plan.md`](2026-07-29-suite-green-plan.md).** It is one
-session's worth, with the arscontexta block correctly sized (a deletion, not an
-investigation), the 4 real root causes identified, the 15-hook guard mapping
-pre-computed, and the tsc errors deliberately excluded.
+3. ~~The remaining 93 failures~~ — **done**, `0773a9f` + `688228f` + `ea5187e`.
+   The plan is
+   [`2026-07-29-suite-green-plan.md`](2026-07-29-suite-green-plan.md); all 6 steps
+   landed, plus both ratchets. Suite is **0 fail** (§1).
+
+   Two places the plan was wrong, recorded because in both cases the plan was
+   confident and the number was checkable in about a minute:
+   - it authorised deleting the 5 arscontexta files outright, **including their 32
+     passing tests**. 13 of those were live coverage existing nowhere else.
+     Salvage first, then delete.
+   - the guard mapping said **15** hooks. It was **27**.
+
+   Only `tsc --noEmit` remains excluded — still exactly **234** errors, unchanged,
+   none in any file touched this session.
+
+### 5.6 `agent-error-capture` has stored nothing for 161 days — YOUR CALL
+
+Not a test problem, and the reason the `store-learning-injection` fix above was
+deliberately kept narrow: greening that test is precisely what would have buried
+this.
+
+The hook builds `` `Agent '${agentType}' error: ${errorContext}` `` and
+`store_learning.py`'s `NOISE_PREFIXES` blacklists `"Agent '"`, checked **first**,
+before any length or type gate. Commit **`05abf54` (2026-02-18)** added that
+blacklist *and* rewrote the producer to emit the prefix it had just blacklisted,
+in the same diff — while deleting 138 rows of this output as garbage.
+
+Verified, not inferred:
+
+- `validate_learning_quality()` on the hook's exact content shape returns
+  `{"passes": False, "reason": "noise_prefix: Agent '"}` (run in-process)
+- SQL: **0 of 622** `archival_memory` rows come from this producer
+- the store returns `{"success": True, "skipped": True}` and exits 0; the hook
+  spawns with `stdio: 'ignore'`, so **the drop is unobservable from either side**
+- the live artifact `~/.claude/hooks/dist/agent-error-capture.mjs:248` carries the
+  same blocked string — this is the running hook, not just repo source
+- the retrieval-side safety net (`recall_learnings.py`, 7 sites) filters
+  `content NOT LIKE 'Agent ''%'' failed when given task:%'` — the **pre-`05abf54`**
+  shape, so it now protects nothing and is itself a fossil
+
+Two later commits (`09ba655` fire-and-forget, `a2b211f` crash-regex tuning)
+invested in the fidelity of a producer whose output is discarded unconditionally.
+
+**The decision is yours because it is not obvious.** Unblocking restores a
+firehose a prior session deliberately closed. Since February the producer gained
+two filters (STRUCTURED-only trigger, plus the TS quality scorer), so volume
+should be far lower — but that is **unmeasured**.
+
+- **B1 — unblock:** reword the content so it clears the prefix gate, keep the
+  quality scorer as the filter. Then watch
+  `SELECT count(*) FROM archival_memory WHERE metadata::text LIKE '%agent_failure%'`
+  for a week; if it climbs past a few dozen or reads as dumps, revert to B2.
+- **B2 — retire:** delete the store path and the fossil retrieval filters, and
+  say in the hook that agent failures are deliberately not stored.
+
+Either way the fossil `recall_learnings.py` filters should go.
+
+⚠️ **Open, uninvestigated:** `hook-error-pipeline` also has **0** rows
+(`content LIKE 'Hook ''%'' failed with error%'`), yet `Hook '` is **not** in
+`NOISE_PREFIXES` — so its zero has a *different* cause. The auto-capture producers
+may be 0-for-2.
 
 > **CORRECTION.** An earlier revision of this section called arscontexta "the whole
 > remaining ballgame — treat it as a subsystem investigation". That was wrong, and

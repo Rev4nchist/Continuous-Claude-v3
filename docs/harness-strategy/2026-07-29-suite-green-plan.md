@@ -1,5 +1,33 @@
 # Plan: get the hook suite green and ratcheted — one session
 
+> ## ✅ EXECUTED 2026-07-29 — all 6 steps + both ratchets
+> `0773a9f` (Step 1) · `688228f` (Steps 2–5) · `ea5187e` (Step 6).
+> **109 files · 2158 pass · 0 fail · 7 skipped**, verified twice back to back.
+>
+> **Where this plan was wrong, both checkable in about a minute:**
+>
+> 1. **Step 1 pre-authorised dropping the 5 files' 32 PASSING tests.** 13 of those
+>    were live coverage existing nowhere else in the suite — regex-validity across
+>    all 254 `intentPattern`s, and the *only* E2E spawn of
+>    `dist/skill-activation-prompt.mjs`. Salvaged into
+>    `skill-rules-integrity.test.ts` first, then deleted. The predicted numbers
+>    were otherwise exact (10 failures, and 2132 + 14 salvaged = 2146).
+> 2. **Step 5's table said 15 hooks. It was 27.** The table's grep admitted a bare
+>    `main();` and missed `main().catch(...)`; a first recount said 18 for a second
+>    pattern-narrowness reason. Also 12 hooks are unregistered, not 4.
+>
+> **Two of the four groups were live defects, not stale tests:** the Braintrust
+> **off switch genuinely did not work** (README §4.1 — and the failing test leaked
+> the live API key into its output), and `agent-error-capture` **has stored nothing
+> for 161 days** (README §5.6 — left as an explicit decision, not silently fixed).
+>
+> Also fixed: the 93↔94 flapper (`hook-error-pipeline`'s 5-minute dedup marker in
+> the real `$TEMP`), and a test leaking **2 embedding daemons per suite run** —
+> 9 runs had left 18 orphaned trees, 45 python + 22 uv processes, spawning console
+> windows on the user's desktop.
+>
+> Everything below is the plan as written beforehand, kept for the record.
+
 Written 2026-07-29 at the end of the session that made the suite complete at all.
 Entry point: [`README.md`](README.md). Everything below was verified today; where
 a fact is unverified it says so.
