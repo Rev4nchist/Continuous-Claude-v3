@@ -626,7 +626,6 @@ async def search_learnings_text_only_postgres(
                 'USER_PREFERENCE', 'OPEN_THREAD'))
                 AND to_tsvector('english', content) @@ to_tsquery('english', $1)
                 AND LENGTH(content) >= 50
-                AND content NOT LIKE 'Agent ''%'' failed when given task:%'
                 {scope_sql}
                 {temporal_sql}
             ORDER BY ({rank_expr} * {decay_select}) DESC, created_at DESC
@@ -661,7 +660,6 @@ async def search_learnings_text_only_postgres(
                     'USER_PREFERENCE', 'OPEN_THREAD'))
                     AND content ILIKE '%' || $1 || '%'
                     AND LENGTH(content) >= 50
-                    AND content NOT LIKE 'Agent ''%'' failed when given task:%'
                     {scope_sql}
                     {temporal_sql}
                 ORDER BY (0.1 * {decay_select}) DESC, created_at DESC
@@ -874,7 +872,6 @@ async def search_learnings_hybrid_rrf(
         "'ARCHITECTURAL_DECISION', 'CODEBASE_PATTERN', 'FAILED_APPROACH', "
         "'USER_PREFERENCE', 'OPEN_THREAD'))"
         " AND LENGTH(content) >= 50"
-        " AND content NOT LIKE 'Agent ''%'' failed when given task:%'"
     )
 
     # Phase 1 (cross-project isolation): append project_id constraint to the
@@ -1106,7 +1103,6 @@ async def search_learnings_postgres(
                             'USER_PREFERENCE', 'OPEN_THREAD'))
                             AND embedding IS NOT NULL
                             AND LENGTH(content) >= 50
-                            AND content NOT LIKE 'Agent ''%'' failed when given task:%'
                             {scope_sql}
                             {temporal_sql}
                     )
@@ -1152,7 +1148,6 @@ async def search_learnings_postgres(
                         'USER_PREFERENCE', 'OPEN_THREAD'))
                         AND embedding IS NOT NULL
                         AND LENGTH(content) >= 50
-                        AND content NOT LIKE 'Agent ''%'' failed when given task:%'
                         {scope_sql}
                         {temporal_sql}
                     ORDER BY ((1 - (embedding <=> $1::vector)) * {decay_expr}) DESC
@@ -1192,7 +1187,6 @@ async def search_learnings_postgres(
                     'USER_PREFERENCE', 'OPEN_THREAD'))
                     AND content ILIKE '%' || $1 || '%'
                     AND LENGTH(content) >= 50
-                    AND content NOT LIKE 'Agent ''%'' failed when given task:%'
                     {scope_sql}
                     {temporal_sql}
                 ORDER BY (0.5 * {decay_expr}) DESC, created_at DESC

@@ -197,7 +197,28 @@ export function storeLearning(
   }
 
   // Build content for the learning.
-  const content = `Agent '${agentType}' error: ${errorContext}`;
+  //
+  // The wording is load-bearing, not cosmetic. From 2026-02-18 to 2026-07-29 this
+  // read `Agent '${agentType}' error: ...` and EVERY learning was silently
+  // discarded at ingestion: store_learning.py's NOISE_PREFIXES blacklists
+  // "Agent '" and checks it FIRST, before any other gate. Commit 05abf54 added
+  // that blacklist AND rewrote this line to emit the prefix it had just
+  // blacklisted, in the same diff -- while deleting 138 rows of this output as
+  // garbage. Verified 2026-07-29: 0 of 622 archival_memory rows came from here.
+  // The store returns {"success": true, "skipped": true} and exits 0, and the
+  // spawn below uses stdio:'ignore', so the drop was invisible from both ends.
+  //
+  // Two constraints on any future rewording (store_learning.py:167, :152):
+  //   1. must NOT start with any NOISE_PREFIXES entry -- currently "Agent '",
+  //      "Now I have", "Let me ", "The user wants", "I need to", "Looking at",
+  //      "I notice the", "The user sent".
+  //   2. FAILED_APPROACH has a 100-char minimum. The lead-in sentence below is
+  //      ~95 chars on its own, so a terse errorContext (a bare "EPERM") still
+  //      clears the floor instead of being dropped as too_short. It is honest
+  //      prose about what the record is, not padding to game the gate.
+  const content =
+    `Task failure in the ${agentType} agent. The agent was invoked and did not ` +
+    `complete; the error it surfaced was: ${errorContext}`;
 
   // G3 / Task #6: gate the store with the TypeScript memory-quality-scorer BEFORE
   // spawning. NOISE (<3) is dropped with a stderr log; SIGNAL (>=5) / BORDERLINE

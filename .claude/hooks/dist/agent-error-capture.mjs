@@ -245,7 +245,7 @@ function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
     console.error("[AgentErrorCapture] store_learning.py not found");
     return;
   }
-  const content = `Agent '${agentType}' error: ${errorContext}`;
+  const content = `Task failure in the ${agentType} agent. The agent was invoked and did not complete; the error it surfaced was: ${errorContext}`;
   const score = scoreFn(content, `Failed agent invocation: ${agentType}`);
   if (score.classification === "NOISE") {
     console.error(
