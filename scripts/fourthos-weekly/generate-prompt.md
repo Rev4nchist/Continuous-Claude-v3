@@ -33,6 +33,32 @@ that is Dave's separate approval step (`promote.mjs`).
 
 ## Steps
 
+0. **Stand-down check — do this FIRST, before any Notion call or any write.** If a preview for
+   today already exists, this run must NOT rebuild over it. An interactive generate (Dave building
+   the week's package by hand, often the night before) stages exactly the same artifact this task
+   would, and regenerating over it would silently replace a reviewed, hand-tuned package with a
+   default one. From the decks repo, `C:/Users/david.hayes/Projects/ai-enablement-decks`:
+
+   ```
+   git -C <decks-repo> fetch origin --quiet
+   git -C <decks-repo> log -1 --format=%cs -- fourthos/preview
+   ```
+
+   Treat the preview as ALREADY GENERATED when **all** of these hold:
+   - that commit date equals today (`YYYY-MM-DD`, local), **and**
+   - `fourthos/preview/index.html`, `briefing.html` and `deep-dive.html` all exist, **and**
+   - `fourthos/preview/_ERROR.md` does **not** exist.
+
+   If already generated: make **no** Notion writes, **no** git writes and **no** Slack message.
+   Print exactly `fourthos-weekly: SKIP reason=already-generated-today` and exit 0. This is a
+   deliberate no-publish condition, which is what the SKIP sentinel is for — the wrapper still
+   records a registry row, so the always-emit spine is preserved and the week reads as
+   "deliberately skipped" rather than "never ran". Do not disguise it as a failure, and do not
+   delete or overwrite the existing preview.
+
+   If `_ERROR.md` IS present, that is a prior failed run, **not** an already-generated preview —
+   continue with a normal generate (step 6 deletes the stale `_ERROR.md`).
+
 1. **Pre-flight.** Confirm the Notion MCP is reachable (`notion-fetch` the cockpit). If it fails or
    returns an auth error, follow Guardrail G1 and stop.
 2. **Refresh the Tier 3 package.** Following the saved-prompt structure (page `82c202b8…`) exactly,
