@@ -17,7 +17,9 @@ Yes, on every gate that exists. Verified 2026-07-29, all counts non-vacuous
 | Gate | Command | Result |
 |---|---|---|
 | Hook registration + output contract + timers | `node scripts/hooks/hook-contract-guard.mjs` | PASS — 86 live entries / 80 names, 80 sources scanned, 55 speak the contract, **0** discarded-output, **9/9** timers safe |
-| Braintrust scoring layer can emit | `node scripts/hooks/braintrust-emit-guard.mjs` | PASS — 115 sources, 4 emit sites / 4 hooks, config reachable, 0 dead span sources |
+| Braintrust scoring layer can emit | `node scripts/hooks/braintrust-emit-guard.mjs` | PASS — 114 sources, 4 emit sites / 4 hooks, config reachable, 0 dead span sources |
+| Suite cannot silently shrink | `node scripts/hooks/suite-count-ratchet.mjs` | PASS — baseline 2164 passed / 2171 collected |
+| No module-scope `main()`, no `node:test` | `node scripts/hooks/suite-shape-guard.mjs` | PASS — 114 sources, 109 test files, 0 and 0 |
 | Emit-count invariant | `bash scripts/audit-braintrust-emits.sh` | PASS — Found 4, invariant 4 |
 | Coordination liveness predicate | `node scripts/coordination/liveness-predicate-guard.mjs` | PASS — 6/6 files, 23 correct predicates, 0 bare-heartbeat tests |
 | Hook build actually current | `cd .claude/hooks && npm run build` then `git status --porcelain .claude/hooks/dist` | clean — rebuild changes zero bytes |
@@ -107,9 +109,9 @@ The 93 failures, as they were resolved:
 |---|---|---|
 | 5 × `arscontexta-*` | **83** | **DELETED** (`0773a9f`) — fossils, confirmed: 0 skills, 0 agents, 0 hook sources, 0 matches in `skill-rules.json`. But the plan also pre-authorised dropping their **32 passing** tests, and **13 of those were real coverage existing nowhere else**: regex-validity over all 254 `intentPattern`s (the production matcher `try/catch`es a bad pattern, so it silently stops a skill triggering — nothing else checks it), and the suite's **only** E2E spawn of `dist/skill-activation-prompt.mjs`. Salvaged into `skill-rules-integrity.test.ts` (14 tests, each with a positive control), *then* deleted |
 | `plan-exit-tracker` | 7 | **FIXED — stale test, one cause.** `331ce8b` made the hook write a project-scoped path; the test still read the session-only name. The **gate was never broken** — `plan-to-ralph-enforcer.ts:155` resolves byte-identically to what the hook writes. Also fixed `afterEach`, which only unlinked the legacy names, and the naming regex, which matched both layouts and so could not have caught the drift |
-| `store-learning-injection` | 2 | **FIXED — stale test, over a REAL regression.** It asserted the function *name* `spawnSync`; `09ba655` moved to a detached `spawn` with the security invariant intact. Retargeted to the invariant (`shell:false`, raw argv) — `/spawn\s*\(/` would not work either, since the call goes through an injected seam. **The regression underneath is unfixed and is a decision — see §5.6** |
+| `store-learning-injection` | 2 | **FIXED — stale test, over a REAL regression.** It asserted the function *name* `spawnSync`; `09ba655` moved to a detached `spawn` with the security invariant intact. Retargeted to the invariant (`shell:false`, raw argv) — `/spawn\s*\(/` would not work either, since the call goes through an injected seam. **The regression underneath is now FIXED too — §5.6** |
 | `braintrust-score` | 1 of 19 | **FIXED — the OFF switch really was broken. See §4.1.** Not flaky: 4/4 red, deterministic. And the `DNS failure` in the log was a **mocked** rejection, not a real network call — that suspicion was wrong |
-| `hook-error-pipeline` | (appeared) | **FIXED — this was the 93↔94 flapper.** Not caused by the above: it dedups identical errors for 5 min via a real file in `$TEMP`, keyed on hook+message, so it passed once and failed on every rerun inside the window. Proven: delete marker → 7 pass; rerun immediately → 1 fail. The live marker held 20 entries, some days old |
+| `hook-error-pipeline` | (appeared) | **FIXED — this was the 93↔94 flapper.** Not caused by the above: it dedups identical errors for 5 min via a real file in `$TEMP`, keyed on hook+message, so it passed once and failed on every rerun inside the window. Proven: delete marker → 7 pass; rerun immediately → 1 fail. The live marker held 20 entries, some days old. The hook itself was later **archived** as dead code — §5.7 |
 
 Because the suite could not complete, **none of this was visible.** The arscontexta
 files have been red since 2026-06-28 — the hang was hiding a month of failure, not
