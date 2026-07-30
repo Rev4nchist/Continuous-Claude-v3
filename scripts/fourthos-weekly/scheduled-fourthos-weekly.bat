@@ -106,14 +106,19 @@ if not defined RUN_DATE (
     goto :final_exit
 )
 
-REM Only advertise the preview URL for a verified-OK run; upsert.mjs omits
-REM non-http artifactUrl values.
-set "ARTIFACT_URL=none"
-if "%RUN_STATUS%"=="OK" set "ARTIFACT_URL=https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/"
+REM Only advertise the preview URL for a verified-OK run. Pass the flag ONLY
+REM in that case: make-run.mjs REJECTS a non-http artifactUrl and exits 1
+REM without emitting, so the old `--artifactUrl "none"` on any non-OK status
+REM killed the emit and the registry upsert was skipped entirely. Effect: a
+REM Warn, Skipped or Failed run recorded NO ROW AT ALL -- the always-emit
+REM spine was blind in exactly the cases it exists to record. Omitting the
+REM flag is the supported way to say "no artifact" (verified by execution).
+set "ARTIFACT_ARG="
+if "%RUN_STATUS%"=="OK" set "ARTIFACT_ARG=--artifactUrl https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/"
 
 set "RUN_EMIT=%TEMP%\report-run-FourthOS-Weekly.json"
 del "%RUN_EMIT%" 2>nul
-"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% --status %RUN_STATUS% --artifactUrl "%ARTIFACT_URL%" --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
+"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
 if not exist "%RUN_EMIT%" (
     echo [%date% %time%] no report-run.json emitted -- skipping registry upsert
     goto :final_exit
