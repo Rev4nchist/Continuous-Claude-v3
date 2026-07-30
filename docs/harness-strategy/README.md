@@ -58,10 +58,14 @@ Remaining 94 failures, 8 files:
 
 | Files | Failing | Note |
 |---|---|---|
-| 5 × `arscontexta-*` | **83** | Dominates everything else. `data-integrity` alone is 40 of 45. A subsystem investigation, not a test-hygiene pass |
-| `plan-exit-tracker` | 7 | |
-| `store-learning-injection` | 3 | |
-| `braintrust-score` | 1 of 19 | A mock asserted not-called was called once. Also makes **real network calls** during the suite (`project lookup claude-code failed: DNS failure`) |
+| 5 × `arscontexta-*` | **83** | **FOSSILS — delete the files.** The subsystem does not exist: zero skills, agents or hook sources; the only `arscontexta*` files in the repo are these 5 tests. `f9cdbef` (2026-06-28) purged 61 arscontexta lines from `skill-rules.json` as "28 ghost skill registrations", and these tests assert those registrations are present. Not an investigation |
+| `plan-exit-tracker` | 7 | **One root cause, 7 symptoms** — the state file is never written (`writes state file when ExitPlanMode fires` fails first; the other 6 are downstream nulls) |
+| `store-learning-injection` | 3 | Asserts the SOURCE SHAPE of `agent-error-capture.ts` (must call `store_learning.py` via `spawnSync`). Either the hook was refactored or the test is a fossil — determine which |
+| `braintrust-score` | 1 of 19 | **Possibly a real bug in the OFF switch:** `returns silently when TRACE_TO_BRAINTRUST is "false"` — the fetch mock was called once when it should not have been. Also makes **real network calls** during the suite (`DNS failure`), so it may be flaky: it moved between 93 and 94 total failures across two runs |
+
+Because the suite could not complete, **none of this was visible.** The arscontexta
+files have been red since 2026-06-28 — the hang was hiding a month of failure, not
+just withholding a verdict.
 
 Fixed this session, no longer in that list: 39 tests that ran under **no runner**
 (see §5.4), and two files whose tests asserted the `BRAINTRUST_SESSION_ID` env
@@ -215,21 +219,18 @@ file for it.
    `echo '{...}'` emits literal quotes and a `VAR="x" cmd` prefix is not valid
    syntax. Replaced with `spawnSync` piping stdin. All 39 now pass.
 
-**Remaining, in order:**
+**Remaining work is planned in full — see
+[`2026-07-29-suite-green-plan.md`](2026-07-29-suite-green-plan.md).** It is one
+session's worth, with the arscontexta block correctly sized (a deletion, not an
+investigation), the 4 real root causes identified, the 15-hook guard mapping
+pre-computed, and the tsc errors deliberately excluded.
 
-3. **The `arscontexta-*` block: 83 failures across 5 files.** This is the whole
-   remaining ballgame — everything else is 11 failures. Treat it as a subsystem
-   investigation (is the code wrong, or did a contract move and the tests not?),
-   not a hygiene pass. Start with `data-integrity` (40 of 45 failing).
-4. `plan-exit-tracker` (7), `store-learning-injection` (3), `braintrust-score` (1).
-5. The 234 `tsc --noEmit` errors — separate axis, unmeasured.
-
-**Two guards worth adding once (3) and (4) land**, not before — added now they'd
-just pin the red state:
-
-- pass-count ratchet: fails if the passing total drops below its recorded baseline
-- shape guards: no test file may import from `node:test`, and no hook may call
-  `main()` unguarded at module scope (16 currently do — see §1)
+> **CORRECTION.** An earlier revision of this section called arscontexta "the whole
+> remaining ballgame — treat it as a subsystem investigation". That was wrong, and
+> wrong in the way this repo keeps being wrong: a confident note written from a
+> count without checking what the count referred to. The subsystem had been deleted
+> a month earlier. Ninety seconds of `Get-ChildItem` would have caught it, and the
+> claim survived a commit because nothing checks a doc's assertions.
 
 ### 5.5 The YouTube pipeline is unaudited
 
