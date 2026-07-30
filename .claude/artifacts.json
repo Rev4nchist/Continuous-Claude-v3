@@ -30,6 +30,23 @@
       "refresh": "at-handoff",
       "content_model": "narrative-snapshot",
       "last_published": "2026-07-26",
+      "PENDING_RECONCILIATION": {
+        "found": "2026-07-29",
+        "by_session": "08e4b3c5",
+        "problem": "This entry and the live page describe two different artifacts. Resolve before any republish.",
+        "registry_says": "source=mockups/current-state.html (51KB, hand-authored, masthead 'as of 2026-07-26 20:00', newest commit 191db52); content_model=narrative-snapshot; last_published=2026-07-26",
+        "live_page_says": "masthead 'generated from agentic_os.lane - 2026-07-28 11:50 local', ~100KB -- i.e. a scripts/coordination/render-board.mjs OUTPUT (a fresh run of that script yields ~97.5KB with the same masthead form)",
+        "inference_not_fact": "On 2026-07-28 a session republished this URL from the GENERATED board and did not update this registry. So the 2026-07-26 'stays hand-authored, do not wire to Postgres' decision below was overridden in practice and never recorded.",
+        "do_not": [
+          "Do NOT regenerate-and-publish on reflex -- that ships the wired-to-Postgres board the 07-26 note forbids without revisiting.",
+          "Do NOT restore mockups/current-state.html on reflex -- that silently reverts the 07-28 session's evident intent, which this file's own protocol forbids."
+        ],
+        "do": "Decide which the board IS, write that decision here WITH a date (explicitly superseding the 07-26 note rather than deleting it), make source + content_model match, then publish via the protocol above and set last_published in the same commit.",
+        "fix_before_publishing_if_generated": "render-board.mjs:101 -- `const held = open.filter((l) => l.owner_session_id).length` ignores lease_expires_at, so the 'held now' headline contradicts both its own per-lane 'lease lapsed' rows (:117-127) and the query the page PRINTS at :345. Reuse lane.mjs's existing reclaimability predicate; do not hand-roll a second definition of abandoned. VERIFIED by reading the code 2026-07-29.",
+        "also_stale_on_the_live_page": "counters (live 18 open/1 held/8 claimable vs a fresh render's 17/2/6); two dead sessions (903600b6, 079ae1e7) still shown with live pulse dots; nothing from 2026-07-29 (hook suite 93 failures -> GREEN, the inert Braintrust off switch, agent-error-capture's 161 silent days); and the aos-data-hardening lane note still says 'dev server on 3010 pid 34904' -- lane notes render VERBATIM, so fix that in the DB via lane.mjs note, not in HTML.",
+        "why_no_handoff_caught_it": "create_handoff refreshes only entries whose `session` matches the handoff's folder. This is session=agentic-os; the 2026-07-29 harness handoffs were filed under suite-green / ccv3-stabilise / context-lever, so the match correctly never fired. If this board is meant to carry cross-track status, `session` is mis-scoped.",
+        "full_handoff": "thoughts/shared/handoffs/agentic-os/2026-07-29_22-05_lane-board-artifact-reconcile.yaml (NOTE: thoughts/ is gitignored, so that file is machine-local -- this block is the durable record)"
+      },
       "notes": [
         "DECISION 2026-07-26: stays a hand-authored narrative snapshot, NOT a live data-driven board.",
         "Rationale: the live version is Mission Control v0 by another name, and the standing decision",
