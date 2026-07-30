@@ -62,7 +62,41 @@ const c = new Client({
 });
 await c.connect();
 
-const lanes = (await c.query(`SELECT * FROM agentic_os.lane ORDER BY track, priority, id`)).rows;
+/**
+ * HELD IS NOT "HAS AN OWNER" -- it is "has an owner who is still there".
+ *
+ * The headline counter used to be `open.filter((l) => l.owner_session_id).length`
+ * in JS, which never read `lease_expires_at`. So the page said "1 held now" while
+ * the row underneath it correctly printed "lease lapsed", and the reconciliation
+ * query printed beneath the counter advertised a predicate the code did not
+ * apply. A board whose headline disagrees with its own detail rows is worse than
+ * no board, because the headline is the part people read.
+ *
+ * `held_now` is the exact complement of lane.mjs's RECLAIMABLE predicate: BOTH an
+ * expired lease AND a holder quiet ${STALE_MINUTES}m make a lane reclaimable, so
+ * a lane is genuinely held unless both hold. Not either: an expired lease on a
+ * live session means the owner is slow, not gone, and a dead session inside its
+ * lease is still dead.
+ *
+ * Spelled in SQL here rather than imported from lane.mjs on purpose -- lane.mjs
+ * executes a command at import time, so it is not importable, and
+ * liveness-predicate-guard.mjs asserts a MINIMUM count of correct predicate
+ * spellings per file (it guards the question by count across sites precisely
+ * because the predicate spans four languages). Moving this out of the file would
+ * drop that count. The guard is the thing that keeps the two spellings agreeing.
+ */
+const lanes = (await c.query(`
+  SELECT l.*,
+         (l.owner_session_id IS NOT NULL AND NOT (
+            (l.lease_expires_at IS NULL OR l.lease_expires_at < now())
+            AND NOT EXISTS (
+              SELECT 1 FROM sessions s
+              WHERE s.id = l.owner_session_id
+                AND GREATEST(s.last_heartbeat, s.last_activity_at) > now() - interval '${STALE_MINUTES} minutes'
+            )
+         )) AS held_now
+    FROM agentic_os.lane l
+   ORDER BY l.track, l.priority, l.id`)).rows;
 
 const sessions = (await c.query(
   `SELECT s.id, s.working_on,
@@ -98,7 +132,7 @@ await c.end();
 
 const open = lanes.filter((l) => l.state !== 'done');
 const byState = (s) => open.filter((l) => l.state === s).length;
-const held = open.filter((l) => l.owner_session_id).length;
+const held = open.filter((l) => l.held_now).length;
 const tracks = [...new Set(lanes.map((l) => l.track))];
 
 const STRIPE = {
@@ -118,7 +152,7 @@ const laneRow = (l, i) => {
     ? Math.round((new Date(l.lease_expires_at) - Date.now()) / 60000) : null;
   const detailId = `d${i}`;
   return `
-  <button class="lane${owner ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${owner ? '1' : '0'}">
+  <button class="lane${l.held_now ? ' is-held' : ''}" aria-expanded="false" aria-controls="${detailId}" data-state="${esc(l.state)}" data-track="${esc(l.track)}" data-held="${l.held_now ? '1' : '0'}">
     <span class="stripe ${STRIPE[l.state] || 's-idle'}"></span>
     <span class="nm">${esc(l.id)}<small>${esc(l.title)}</small></span>
     <span class="state-c"><span class="pill ${PILL[l.state] || 'p-idle'}">${esc(l.state)}</span></span>
@@ -340,10 +374,19 @@ const html = `<title>Agentic OS — Lane Board</title>
         : '<p class="none">holds no lane</p>'}
       </div>`).join('') : '<div class="card sess"><p class="none">no live sessions</p></div>'}
     </div>
-    <div class="card" style="margin-top:10px"><span class="recon"><b>sessions</b>  SELECT id, working_on, last_heartbeat FROM sessions
-            WHERE last_heartbeat &gt; now() - interval '${STALE_MINUTES} minutes';
-<b>held</b>      SELECT id, owner_session_id, lease_expires_at FROM agentic_os.lane
-            WHERE owner_session_id IS NOT NULL AND state &lt;&gt; 'done';</span></div>
+    <div class="card" style="margin-top:10px"><span class="recon"><b>sessions</b>  SELECT id, working_on, GREATEST(last_heartbeat, last_activity_at) AS last_alive
+            FROM sessions
+            WHERE GREATEST(last_heartbeat, last_activity_at) &gt; now() - interval '${STALE_MINUTES} minutes';
+            -- NOT bare last_heartbeat: that column fires on UserPromptSubmit only, so it
+            -- measures the human typing, not the agent working (peak drift 505s mid-edit).
+<b>held</b>      SELECT count(*) FROM agentic_os.lane l
+            WHERE l.state &lt;&gt; 'done' AND l.owner_session_id IS NOT NULL AND NOT (
+              (l.lease_expires_at IS NULL OR l.lease_expires_at &lt; now())
+              AND NOT EXISTS (SELECT 1 FROM sessions s WHERE s.id = l.owner_session_id
+                AND GREATEST(s.last_heartbeat, s.last_activity_at) &gt; now() - interval '${STALE_MINUTES} minutes'));
+            -- held = has an owner who is STILL THERE, the complement of lane.mjs's
+            -- RECLAIMABLE. BOTH an expired lease AND a quiet holder are required to
+            -- unhold a lane, so an owned-but-lapsed lane is reclaimable, not held.</span></div>
   </section>
 
   <section>

@@ -68,8 +68,8 @@ const GUARDED = [
     why: 'the peer-collision warning -- a working peer dropped from here is a silent collision' },
   { file: 'scripts/coordination/lane.mjs', minCorrect: 5,
     why: 'lane reclamation, board peers, peers command, deny-message display, say --to resolution' },
-  { file: 'scripts/coordination/render-board.mjs', minCorrect: 4,
-    why: 'the rendered board and its live-vs-stale claim health counts' },
+  { file: 'scripts/coordination/render-board.mjs', minCorrect: 9,
+    why: 'the rendered board, its live-vs-stale claim health counts, the held_now predicate behind the headline counter, and the two reconciliation queries the page PRINTS. Raised 4 -> 9 on 2026-07-29, set to the MEASURED count rather than a guessed floor: at 6 the negative control did not fire (deleting held_now left 8, still above the floor, and the guard passed on the exact regression it was being ratcheted for). A floor below the real count is slack the next regression spends. If a site legitimately goes away, lower this deliberately and say why.' },
   { file: 'opc/scripts/dashboard/routers/file_claims.py', minCorrect: 1,
     why: 'the dashboard active-claims view' },
   { file: 'opc/scripts/core/cleanup_sessions.py', minCorrect: 2,
@@ -99,6 +99,18 @@ const CORRECT = [
 const BARE_TEST = [
   /last_heartbeat\s*(?:>=|<=|>|<)\s*(?:NOW|now)\s*\(\)/g,
   /(?:NOW|now)\s*\(\)[^;\n]{0,60}?(?:>=|<=|>|<)\s*last_heartbeat/g,
+  /**
+   * The SAME test, HTML-escaped. render-board.mjs PRINTS its reconciliation
+   * queries onto the page, so those comparisons are written `&gt;` / `&lt;` and
+   * the two literal patterns above cannot see them. That is not hypothetical: the
+   * printed `sessions` query advertised `last_heartbeat &gt; now()` while the code
+   * it documented had already been fixed to GREATEST(...), so the page's own
+   * falsify-it-in-ten-seconds affordance was handing the reader the predicate the
+   * guard exists to forbid. Caught 2026-07-29 by a negative control that failed
+   * for the wrong reason (the count check, not this one).
+   */
+  /last_heartbeat\s*(?:&gt;=|&lt;=|&gt;|&lt;)\s*(?:NOW|now)\s*\(\)/g,
+  /(?:NOW|now)\s*\(\)[^;\n]{0,60}?(?:&gt;=|&lt;=|&gt;|&lt;)\s*last_heartbeat/g,
 ];
 
 /**

@@ -309,3 +309,10 @@ fastmcp-*.png
 # Runtime logs, never content. Ignored rather than deleted so the writer's
 # cwd bug stays visible on disk; the real fix is an absolute path in the writer.
 .claude/**/.claude/
+
+# Generated lane board. `render-board.mjs` defaults its output here, and the page
+# is a BUILD ARTIFACT of the generator plus the live database -- committing a 97KB
+# snapshot of it would create exactly the second source of truth the generated
+# board exists to eliminate. The generator is the tracked source; see
+# .claude/artifacts.json -> agentic-os-lane-board.
+/lane-board.html

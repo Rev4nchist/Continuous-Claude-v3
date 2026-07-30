@@ -95,39 +95,67 @@ Some sessions maintain a **living published artifact** — a page on claude.ai t
 current as work progresses, not a one-shot deliverable. Those are registered in
 `.claude/artifacts.json` at the repo root.
 
-Read that file. For every entry whose `session` matches this handoff's `{session-name}`:
+Read that file. An entry is in scope for this handoff when **either**:
+
+- its `session` equals this handoff's `{session-name}`, **or**
+- its `session` is `"*"`, which means *cross-track*: the page reports on work from every track, so
+  any handoff can stale it and every handoff must consider it.
+
+> Why `"*"` exists. Match-on-session-name is right for a page scoped to one workstream, and wrong
+> for a page whose whole job is to show status ACROSS workstreams — that entry would only ever
+> refresh when its own track happened to write a handoff. The lane board sat 3 days stale exactly
+> this way: it is `session: agentic-os`, and the harness work that changed it wrote handoffs under
+> `suite-green` / `ccv3-stabilise` / `context-lever`, so the match correctly never fired and no
+> handoff ever considered the page. Scope the key to what the page REPORTS ON, not to who happens
+> to maintain it.
+
+For every entry in scope:
 
 1. **Decide whether the page is now stale.** It is stale if this session changed anything the page
    asserts — a finding it states, a lane's status, a count, a "next" item, a decision it records.
    A session that only read code does not make it stale. Say so and skip rather than churning.
+   For a `"*"` entry, ask this about *your* work regardless of which track you are on.
 2. **WebFetch the artifact's `url` first.** This is REQUIRED, not optional. The Artifact tool
    refuses to redeploy from a session that has not seen the currently-published version — it
    errors with *"This session hasn't viewed the latest version"* — because another session may
    have republished since. Fetching is also how you find out: compare what is live against the
    repo `source`. If they differ, another session edited the artifact without committing its
    source; reconcile before publishing rather than silently reverting their work.
-3. **Edit the `source` file** so it reflects reality. Corrections matter more than additions: if
-   this session *refuted* something the page claims, fix the claim — do not leave it standing next
-   to its correction.
+3. **Bring the page up to date — how depends on `content_model`.**
+   - `narrative-snapshot` — the `source` file IS the page. Edit it so it reflects reality.
+     Corrections matter more than additions: if this session *refuted* something the page claims,
+     fix the claim, do not leave it standing next to its correction.
+   - `generated` — the `source` is a GENERATOR, not the page, and is usually not even HTML. Do
+     **not** pass it to the Artifact tool. Run the entry's `render` command to produce
+     `publish_from`, and fix wrong output by fixing the generator or the DATA it reads — never by
+     editing the rendered HTML, which the next render silently discards. If the page shows a stale
+     status line that lives in the database, correct it at the source of truth (for the lane board:
+     `node scripts/coordination/lane.mjs note <id> "..."`).
 4. **Republish to the same URL:**
 
 ```
 Artifact tool:
-  file_path:  <the entry's `source`, absolute path>
+  file_path:  narrative-snapshot -> the entry's `source`, absolute path
+              generated          -> the entry's `publish_from`, absolute path (after running `render`)
   url:        <the entry's `url`>          <- REQUIRED. Omitting it mints a NEW url and orphans the old link.
   favicon:    <the entry's `favicon`>      <- reuse verbatim; a changed favicon reads as a different page
   description: <one sentence, may update>
 ```
 
 5. **Update `last_published`** in `.claude/artifacts.json` and include it in the same commit as the
-   source edit.
+   source edit. If you changed what the page fundamentally IS — generated vs hand-authored — record
+   that as a dated decision in `notes` that explicitly supersedes the prior one rather than deleting
+   it, and make `source` / `content_model` match what you actually published. A registry that
+   describes a page which no longer exists is worse than no registry: the next session reads it,
+   believes it, and reverts someone's work on the strength of it.
 
 Never pass `force: true` to skip the read-first check unless the user explicitly asks to discard
 another session's version — it overwrites their work.
 
 **Do not** create a new artifact here. This step only refreshes ones already registered. If a
 session produced a genuinely new page worth keeping alive, publish it, then add an entry to
-`.claude/artifacts.json` recording `url`, `source`, `favicon`, and `session`.
+`.claude/artifacts.json` recording `url`, `source`, `favicon`, `session` (`"*"` if it reports across
+tracks), `content_model`, and — for a `generated` entry — `render` and `publish_from`.
 
 ---
 
