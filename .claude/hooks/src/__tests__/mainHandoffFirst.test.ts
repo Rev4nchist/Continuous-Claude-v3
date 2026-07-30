@@ -6,15 +6,14 @@
  * 2. When handoff lacks Ledger section, fall back to legacy ledger
  * 3. When no handoff exists, use legacy ledger
  *
- * Run with: npx tsx --test src/__tests__/mainHandoffFirst.test.ts
+ * Run with: npx vitest run src/__tests__/mainHandoffFirst.test.ts
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
-import * as assert from 'node:assert';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
-import { execSync } from 'child_process';
+import { spawnSync } from 'child_process';
 import { fileURLToPath } from 'url';
 
 // ESM-compatible __dirname
@@ -50,19 +49,28 @@ describe('main() handoff-first behavior', () => {
    * Helper to run the hook with stdin input and capture output
    */
   function runHook(input: object): { stdout: string; stderr: string } {
-    const inputJson = JSON.stringify(input);
     const hookPath = path.resolve(__dirname, '../../dist/session-start-continuity.mjs');
 
-    try {
-      const stdout = execSync(`echo '${inputJson}' | CLAUDE_PROJECT_DIR="${testDir}" node "${hookPath}"`, {
-        encoding: 'utf-8',
-        timeout: 5000,
-        env: { ...process.env, CLAUDE_PROJECT_DIR: testDir }
-      });
-      return { stdout, stderr: '' };
-    } catch (error: any) {
-      return { stdout: error.stdout || '', stderr: error.stderr || '' };
-    }
+    // No shell. This used to be
+    //   execSync(`echo '${json}' | CLAUDE_PROJECT_DIR="${dir}" node "${hook}"`)
+    // which is POSIX-only twice over: on Windows execSync runs cmd.exe, where
+    // `echo '{...}'` emits the literal single quotes and a `VAR="x" cmd` prefix
+    // is not valid syntax at all. The command failed, stdout came back empty,
+    // and all 9 tests died on JSON.parse('') -- "Unexpected end of JSON input".
+    // spawnSync pipes stdin directly and passes env as a real option, matching
+    // session-start-init-check.test.ts.
+    const result = spawnSync('node', [hookPath], {
+      input: JSON.stringify(input),
+      encoding: 'utf-8',
+      timeout: 5000,
+      env: { ...process.env, CLAUDE_PROJECT_DIR: testDir },
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+
+    return {
+      stdout: (result.stdout || '').toString(),
+      stderr: (result.stderr || '').toString(),
+    };
   }
 
   describe('when handoff has Ledger section', () => {
@@ -117,18 +125,12 @@ Legacy ledger goal (OLD - should not be used)
       const output = JSON.parse(result.stdout);
 
       // Should load from handoff, not legacy ledger
-      assert.strictEqual(output.result, 'continue', 'Hook should continue');
+      expect(output.result, 'Hook should continue').toBe('continue');
 
       // The message or additionalContext should reference handoff content
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('Handoff goal') || fullOutput.includes('Working from handoff'),
-        'Should include content from handoff Ledger, not legacy ledger'
-      );
-      assert.ok(
-        !fullOutput.includes('Legacy ledger goal') && !fullOutput.includes('Legacy focus'),
-        'Should NOT include content from legacy ledger'
-      );
+      expect(fullOutput.includes('Handoff goal') || fullOutput.includes('Working from handoff'), 'Should include content from handoff Ledger, not legacy ledger').toBeTruthy();
+      expect(!fullOutput.includes('Legacy ledger goal') && !fullOutput.includes('Legacy focus'), 'Should NOT include content from legacy ledger').toBeTruthy();
     });
 
     it('should select most recent handoff when multiple sessions have Ledger sections', async () => {
@@ -187,10 +189,7 @@ New context.
 
       // Should use the more recent handoff
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('New session goal') || fullOutput.includes('New session focus'),
-        'Should include content from most recent handoff'
-      );
+      expect(fullOutput.includes('New session goal') || fullOutput.includes('New session focus'), 'Should include content from most recent handoff').toBeTruthy();
     });
   });
 
@@ -236,10 +235,7 @@ Fallback legacy goal
 
       // Should fall back to legacy ledger
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('Fallback legacy goal') || fullOutput.includes('Legacy fallback focus'),
-        'Should fall back to legacy ledger when handoff has no Ledger section'
-      );
+      expect(fullOutput.includes('Fallback legacy goal') || fullOutput.includes('Legacy fallback focus'), 'Should fall back to legacy ledger when handoff has no Ledger section').toBeTruthy();
     });
   });
 
@@ -273,10 +269,7 @@ Pure legacy goal
 
       // Should use legacy ledger
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('Pure legacy goal') || fullOutput.includes('Pure legacy focus'),
-        'Should use legacy ledger when no handoffs exist'
-      );
+      expect(fullOutput.includes('Pure legacy goal') || fullOutput.includes('Pure legacy focus'), 'Should use legacy ledger when no handoffs exist').toBeTruthy();
     });
 
     it('should return continue with no message when no ledger or handoff exists', () => {
@@ -289,7 +282,7 @@ Pure legacy goal
       const result = runHook({ source: 'resume', session_id: 'test-123' });
       const output = JSON.parse(result.stdout);
 
-      assert.strictEqual(output.result, 'continue', 'Should continue even with no state');
+      expect(output.result, 'Should continue even with no state').toBe('continue');
     });
   });
 
@@ -318,12 +311,9 @@ Test goal
       const result = runHook({ source: 'resume', session_id: 'test-123' });
       const output = JSON.parse(result.stdout);
 
-      assert.strictEqual(output.result, 'continue', 'Should continue gracefully');
+      expect(output.result, 'Should continue gracefully').toBe('continue');
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('Test goal') || fullOutput.includes('Test focus'),
-        'Should fall back to legacy ledger'
-      );
+      expect(fullOutput.includes('Test goal') || fullOutput.includes('Test focus'), 'Should fall back to legacy ledger').toBeTruthy();
     });
 
     it('should handle empty handoffs directory', () => {
@@ -354,7 +344,7 @@ Empty handoffs test
       const result = runHook({ source: 'resume', session_id: 'test-123' });
       const output = JSON.parse(result.stdout);
 
-      assert.strictEqual(output.result, 'continue', 'Should continue gracefully');
+      expect(output.result, 'Should continue gracefully').toBe('continue');
     });
   });
 
@@ -391,10 +381,10 @@ Context details.
       const result = runHook({ source: 'startup', session_id: 'test-123' });
       const output = JSON.parse(result.stdout);
 
-      assert.strictEqual(output.result, 'continue', 'Should continue');
+      expect(output.result, 'Should continue').toBe('continue');
       // Startup should have brief message, not full content
       if (output.message) {
-        assert.ok(output.message.length < 500, 'Startup message should be brief');
+        expect(output.message.length < 500, 'Startup message should be brief').toBeTruthy();
       }
     });
 
@@ -441,13 +431,10 @@ Full context that should be available on resume.
       const result = runHook({ source: 'resume', session_id: 'test-123' });
       const output = JSON.parse(result.stdout);
 
-      assert.strictEqual(output.result, 'continue', 'Should continue');
+      expect(output.result, 'Should continue').toBe('continue');
       // Resume should have more detailed content
       const fullOutput = JSON.stringify(output);
-      assert.ok(
-        fullOutput.includes('Resume test goal') || fullOutput.includes('Working on resume'),
-        'Resume should include handoff Ledger content'
-      );
+      expect(fullOutput.includes('Resume test goal') || fullOutput.includes('Working on resume'), 'Resume should include handoff Ledger content').toBeTruthy();
     });
   });
 });
