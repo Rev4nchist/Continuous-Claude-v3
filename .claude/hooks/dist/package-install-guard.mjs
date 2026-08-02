@@ -4195,6 +4195,12 @@ var malicious_packages_default = {
       reason: "Malware in @0xlr/sentry-web (GHSA-pq34-wqrw-jw86)",
       date: "2026-07-31",
       advisory: "https://github.com/advisories/GHSA-pq34-wqrw-jw86"
+    },
+    "pp-react-worldready": {
+      blocked_all: true,
+      reason: "Malicious code in pp-react-worldready (npm) (GHSA-4g95-5h46-4643)",
+      date: "2026-08-01",
+      advisory: "https://github.com/advisories/GHSA-4g95-5h46-4643"
     }
   }
 };
