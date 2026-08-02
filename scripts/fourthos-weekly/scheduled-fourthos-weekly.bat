@@ -41,6 +41,40 @@ if defined RUN_DATE (set "LOG_NAME=%RUN_DATE%.log") else (set "LOG_NAME=last-run
 set "LOG_FILE=%LOG_DIR%\%LOG_NAME%"
 echo [%date% %time%] claude -p output will be captured to %LOG_FILE%
 
+REM --- ALWAYS-EMIT pre-emit (S5a, 2026-08-02) -------------------------------
+REM THE BUG THIS CLOSES: the registry emit lives at the END of this wrapper
+REM (line ~135). Any path that returns before it -- claude -p killed mid-run,
+REM the task's ExecutionTimeLimit firing, a reboot -- records ZERO rows for the
+REM period, indistinguishable from a run that never launched. Verified
+REM 2026-08-02: the FourthOS scheduled run has NEVER produced a registry row
+REM under the current emit code (it landed 2026-07-16, after that day's run);
+REM every historical row came from promote.mjs or a hand backfill.
+REM
+REM FIX: emit a pessimistic Failed row BEFORE the long call, stamped with a
+REM RUN_STAMP the final emit reuses -- make-run derives
+REM runId = "<type>|<period>|<runDate>", and upsert queries by Run ID, so the
+REM final emit UPDATES this row instead of appending a second one per period.
+REM A killed run therefore leaves a visible, self-explaining Failed row.
+REM
+REM --out is MANDATORY: make-run's DEFAULT path is byte-identical to %RUN_EMIT%,
+REM the file the `if not exist` guard below uses to decide "did the final emit
+REM fire?". Without --out the pre-emit masquerades as the final emit and a
+REM killed run would upsert as though it had succeeded. That lesson was already
+REM paid for in run-sweep.ps1:78-83 on 2026-07-25 -- do not re-learn it here.
+REM
+REM Pre-cleared before the for/f (the scheduled-health-check.bat:75 trap: a
+REM failed powershell date call leaves the PREVIOUS value in scope).
+set "RUN_STAMP="
+for /f "usebackq delims=" %%s in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('o')"`) do set "RUN_STAMP=%%s"
+set "RUNDATE_ARG="
+if defined RUN_STAMP set "RUNDATE_ARG=--runDate %RUN_STAMP%"
+set "PRE_EMIT=%TEMP%\report-run-FourthOS-Weekly-preemit.json"
+del "%PRE_EMIT%" 2>nul
+if defined RUN_DATE if defined RUN_STAMP "%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status Failed --out "%PRE_EMIT%" --summary "in-progress - generation started at %RUN_STAMP%. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see %LOG_NAME%)."
+if exist "%PRE_EMIT%" "%NODE_EXE%" scripts\report-registry\upsert.mjs "%PRE_EMIT%" >> "%LOG_FILE%" 2>&1
+if exist "%PRE_EMIT%" echo [%date% %time%] pre-emit registry row upserted ^(non-fatal^)
+if not exist "%PRE_EMIT%" echo [%date% %time%] pre-emit make-run emitted nothing -- continuing ^(non-fatal^)
+
 REM Feed the generate prompt to a non-interactive claude -p session. The prompt instructs
 REM Claude Code to read the FourthOS Notion cockpit, refresh the Tier-3 Update Package page,
 REM render the Tier-1 dashboard + Tier-2 deep-dive, stage them to fourthos/preview/ (unlisted),
@@ -51,7 +85,14 @@ REM Headless claude -p AUTO-DENIES any MCP tool not explicitly granted (root-cau
 REM 2026-07-16: this, not connector unavailability, caused the silent SKIP no-ops).
 REM Grant exactly the Notion + Slack tools the generate prompt needs -- nothing more.
 set "GEN_TOOLS=mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-search,mcp__claude_ai_Notion__notion-query-data-sources,mcp__claude_ai_Notion__notion-create-pages,mcp__claude_ai_Notion__notion-update-page,mcp__claude_ai_Notion__notion-create-comment,mcp__claude_ai_Slack__slack_send_message"
-type %GEN_PROMPT% | call claude -p --output-format text --allowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" > "%LOG_FILE%" 2>&1
+REM --add-dir grants the decks repo as an ADDITIONAL workspace root (S9,
+REM 2026-08-02). The 2026-07-30 log concluded "a real generate would have failed
+REM at the staging step" -- that conclusion is REFUTED: four bounded probes
+REM showed Bash `git -C <decks>`, Read and Write outside the workspace all work
+REM under this exact grant. The real cause was narrower -- a NON-GRANTED tool
+REM (PowerShell, absent from --allowedTools) used outside the workspace, which
+REM headless auto-denies. --add-dir removes the workspace half of that class.
+type %GEN_PROMPT% | call claude -p --output-format text --add-dir "C:\Users\david.hayes\Projects\ai-enablement-decks" --allowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" > "%LOG_FILE%" 2>&1
 set EXIT_CODE=%ERRORLEVEL%
 
 echo [%date% %time%] FourthOS weekly generation finished. exit=%EXIT_CODE% log=%LOG_FILE%
@@ -118,7 +159,12 @@ if "%RUN_STATUS%"=="OK" set "ARTIFACT_ARG=--artifactUrl https://rev4nchist.githu
 
 set "RUN_EMIT=%TEMP%\report-run-FourthOS-Weekly.json"
 del "%RUN_EMIT%" 2>nul
-"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
+REM %RUNDATE_ARG% carries the SAME RUN_STAMP the pre-emit used, so this emit's
+REM runId matches and upsert UPDATES the pessimistic row rather than appending a
+REM second row for the period. If RUN_STAMP failed to resolve the arg is empty
+REM and make-run falls back to its own timestamp (two rows for the day is worse
+REM bookkeeping, never data loss).
+"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
 if not exist "%RUN_EMIT%" (
     echo [%date% %time%] no report-run.json emitted -- skipping registry upsert
     goto :final_exit
