@@ -4201,6 +4201,72 @@ var malicious_packages_default = {
       reason: "Malicious code in pp-react-worldready (npm) (GHSA-4g95-5h46-4643)",
       date: "2026-08-01",
       advisory: "https://github.com/advisories/GHSA-4g95-5h46-4643"
+    },
+    "@types-beta/sdk": {
+      blocked_all: true,
+      reason: "Malicious code in @types-beta/sdk (npm) (GHSA-j9jc-8h3g-qqrx)",
+      date: "2026-08-03",
+      advisory: "https://github.com/advisories/GHSA-j9jc-8h3g-qqrx"
+    },
+    "tailwind-anim": {
+      blocked_all: true,
+      reason: "Malware in tailwind-anim (GHSA-7xhc-fvmj-h5xj)",
+      date: "2026-08-03",
+      advisory: "https://github.com/advisories/GHSA-7xhc-fvmj-h5xj"
+    },
+    "@custombots/custombot": {
+      blocked_all: true,
+      reason: "Malicious code in @custombots/custombot (npm) (GHSA-77jv-xw6r-q246)",
+      date: "2026-08-03",
+      advisory: "https://github.com/advisories/GHSA-77jv-xw6r-q246"
+    },
+    "list-issue-predecessor-dependencies-block": {
+      blocked_all: true,
+      reason: "Malicious code in list-issue-predecessor-dependencies-block (npm) (GHSA-fjgr-3cq9-qxm6)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-fjgr-3cq9-qxm6"
+    },
+    "tailwindcss-anim": {
+      blocked_all: true,
+      reason: "Malware in tailwindcss-anim (GHSA-m326-xg22-g2fx)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-m326-xg22-g2fx"
+    },
+    "simple-date-formatter-util-2": {
+      blocked_all: true,
+      reason: "Malware in simple-date-formatter-util-2 (GHSA-q43f-5xj6-8v63)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-q43f-5xj6-8v63"
+    },
+    "simple-date-formatter-util": {
+      blocked_all: true,
+      reason: "Malware in simple-date-formatter-util (GHSA-q32h-xc3m-rc77)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-q32h-xc3m-rc77"
+    },
+    "simple-date-formatter-util-1": {
+      blocked_all: true,
+      reason: "Malware in simple-date-formatter-util-1 (GHSA-mmc7-8pmj-h3xj)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-mmc7-8pmj-h3xj"
+    },
+    houzidawang808: {
+      blocked_all: true,
+      reason: "Malware in houzidawang808 (GHSA-4qvg-392x-j32q)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-4qvg-392x-j32q"
+    },
+    houzidawang807: {
+      blocked_all: true,
+      reason: "Malware in houzidawang807 (GHSA-f2g2-48mf-957v)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-f2g2-48mf-957v"
+    },
+    houzidawang806: {
+      blocked_all: true,
+      reason: "Malware in houzidawang806 (GHSA-7gf8-h22p-4qr4)",
+      date: "2026-08-02",
+      advisory: "https://github.com/advisories/GHSA-7gf8-h22p-4qr4"
     }
   }
 };
