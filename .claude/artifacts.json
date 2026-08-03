@@ -38,11 +38,11 @@
       "publish_from": "lane-board.html",
       "title": "Agentic OS — Lane Board",
       "favicon": "🛤️",
-      "description": "Live lane board generated from agentic_os.lane: 32 lanes across 8 tracks, who holds what right now, and the reconciliation query behind every number.",
+      "description": "Live lane board generated from agentic_os.lane: 33 lanes across 8 tracks, who holds what right now, and the reconciliation query behind every number.",
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-07-29",
+      "last_published": "2026-08-03",
       "RECONCILED": {
         "resolved": "2026-07-29",
         "by_session": "3831be22",
