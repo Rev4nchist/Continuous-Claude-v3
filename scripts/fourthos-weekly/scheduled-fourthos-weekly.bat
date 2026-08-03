@@ -71,8 +71,34 @@ if defined RUN_STAMP set "RUNDATE_ARG=--runDate %RUN_STAMP%"
 set "PRE_EMIT=%TEMP%\report-run-FourthOS-Weekly-preemit.json"
 del "%PRE_EMIT%" 2>nul
 if defined RUN_DATE if defined RUN_STAMP "%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status Failed --out "%PRE_EMIT%" --summary "in-progress - generation started at %RUN_STAMP%. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see %LOG_NAME%)."
-if exist "%PRE_EMIT%" "%NODE_EXE%" scripts\report-registry\upsert.mjs "%PRE_EMIT%" >> "%LOG_FILE%" 2>&1
-if exist "%PRE_EMIT%" echo [%date% %time%] pre-emit registry row upserted ^(non-fatal^)
+REM Three corrections, 2026-08-03, all found by an independent eval of the change
+REM that introduced this block the day before. Each is the same species of defect
+REM this block exists to fix -- a step that cannot report its own failure.
+REM
+REM (1) --no-refresh. Without it upsert.mjs defaults refresh ON (upsert.mjs:273)
+REM     and spawns refresh-pages.mjs, which rewrites the WHOLE 6-type hub table --
+REM     publishing this pessimistic Status=Failed row to the LIVE Notion hub
+REM     before generation has even started, through a blocking 240s spawn sitting
+REM     inside the pre-emit window. run-sweep.ps1:120 already passed --no-refresh
+REM     for exactly this reason; the two pre-emits shipped in one effort disagreed
+REM     until today. ONLY the final emit below refreshes surfaces.
+REM (2) Its own log. %LOG_FILE% is opened at :95 with a SINGLE `>` (truncate) for
+REM     the claude -p capture, so this upsert's output -- the only evidence it ran
+REM     at all -- was erased moments later by the very next command. A distinct
+REM     file is used rather than switching :95 to `>>`, because the documented
+REM     "a same-day manual rerun overwrites that day's log" behaviour at :35-37 is
+REM     deliberate and worth keeping.
+REM (3) Gate the success echo on the EXIT CODE, not on the emit file existing.
+REM     %PRE_EMIT% is written by make-run ABOVE, so the old form printed
+REM     "upserted" even when the upsert had failed. `if errorlevel 1` is used
+REM     rather than %ERRORLEVEL% deliberately: this must not sit inside a
+REM     parenthesized block, where cmd expands %ERRORLEVEL% at PARSE time (the
+REM     same class as the scheduled-health-check.bat:75 trap).
+set "PRE_LOG=%LOG_FILE%.pre-emit.txt"
+del "%PRE_LOG%" 2>nul
+if exist "%PRE_EMIT%" "%NODE_EXE%" scripts\report-registry\upsert.mjs "%PRE_EMIT%" --no-refresh >> "%PRE_LOG%" 2>&1
+if exist "%PRE_EMIT%" if errorlevel 1 echo [%date% %time%] pre-emit registry upsert FAILED ^(non-fatal -- see %PRE_LOG%^)
+if exist "%PRE_EMIT%" if not errorlevel 1 echo [%date% %time%] pre-emit registry row upserted ^(non-fatal^)
 if not exist "%PRE_EMIT%" echo [%date% %time%] pre-emit make-run emitted nothing -- continuing ^(non-fatal^)
 
 REM Feed the generate prompt to a non-interactive claude -p session. The prompt instructs
