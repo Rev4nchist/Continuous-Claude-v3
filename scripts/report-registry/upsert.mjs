@@ -286,8 +286,22 @@ export function runScopedRefresh(type, { spawn = spawnSync } = {}) {
       timeout: REFRESH_TIMEOUT_MS,
       windowsHide: true,
       encoding: 'utf8',
-      stdio: ['pipe', 'inherit', 'inherit'],
+      // MUST be piped, never 'inherit': emit-run.mjs's contract #2 ("stderr is
+      // silent on the success path") holds only if the child's output flows
+      // through THIS process's console, where captureConsole can intercept it.
+      // 'inherit' hands the child the parent's real fds and leaked refresh
+      // chatter straight past the capture (proven live 2026-08-03).
+      stdio: ['pipe', 'pipe', 'pipe'],
     });
+    // Replay the child's output in-process — before the status branch, so a
+    // failing child's detail is never dropped. Direct CLI use prints it as
+    // before (buffered, not streamed — acceptable under the 240s hard bound).
+    for (const chunk of [res.stdout, res.stderr]) {
+      if (!chunk) continue;
+      for (const line of String(chunk).split(/\r?\n/)) {
+        if (line.trim()) console.error(line);
+      }
+    }
     if (res.error) {
       console.error(`[report-registry] WARN: scoped refresh spawn failed (non-fatal): ${res.error.message}`);
       return { ok: false, status: null };

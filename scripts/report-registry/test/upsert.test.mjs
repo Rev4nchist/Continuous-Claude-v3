@@ -2,13 +2,16 @@
 // transport; no ntn spawn). Verifies the append-all-attempts contract:
 //   distinct runId -> create (append); same runId -> update in place;
 //   >1 match -> dedup-warn + update newest. Plus validation + property mapping.
-// Run: node --test scripts/report-registry/test/
+// Run: node --test "scripts/report-registry/test/*.test.mjs"
+//      (NOT the bare directory form — on this Node/Windows combo it collects 1 file and fails)
 import assert from 'node:assert/strict';
 import test from 'node:test';
+import { spawnSync } from 'node:child_process';
 import {
   validateRun, buildProperties, upsertReportRun, readInput,
   wantsRefresh, runScopedRefresh,
 } from '../upsert.mjs';
+import { captureConsole } from '../emit-run.mjs';
 
 const DS = 'c7d2d9e3-d388-4640-a66e-88f7dd50f854';
 
@@ -273,6 +276,39 @@ test('runScopedRefresh spawns refresh-pages.mjs with --type and reports ok on ex
   assert.match(calls[0].args[0], /refresh-pages\.mjs$/);
   assert.deepEqual(calls[0].args.slice(1), ['--type', 'VP Weekly']);
   assert.ok(calls[0].opts.timeout > 0, 'hard-bounded');
+});
+
+// Contract #2 of emit-run.mjs ("stderr is SILENT on the success path") depends on
+// the child's output being routed through THIS process's console, where
+// captureConsole can intercept it. stdio 'inherit' hands the child the parent's
+// real fds and makes that structurally impossible — proven live 2026-08-03
+// (handoff: emit_run_contract_2_is_false_on_its_own_default_path). This test
+// runs a REAL child process with runScopedRefresh's own spawn options, so it
+// fails if anyone reverts to 'inherit'.
+test('runScopedRefresh routes a REAL child\'s stdout+stderr through console (capturable), not the parent fds', () => {
+  const realChild = (cmd, args, opts) => spawnSync(
+    process.execPath,
+    ['-e', 'console.log("child-stdout-chatter"); console.error("child-stderr-chatter")'],
+    opts, // CRITICAL: the exact options runScopedRefresh built, stdio included
+  );
+  const sink = [];
+  const { value: res } = captureConsole(() => runScopedRefresh('VP Weekly', { spawn: realChild }), sink);
+  assert.equal(res.ok, true);
+  const joined = sink.join('\n');
+  assert.match(joined, /child-stdout-chatter/, 'child stdout must be re-emitted in-process so captureConsole can hold it');
+  assert.match(joined, /child-stderr-chatter/, 'child stderr must be re-emitted in-process so captureConsole can hold it');
+});
+
+test('runScopedRefresh replays a failing child\'s output too (a nonzero exit must not be silent)', () => {
+  const realChild = (cmd, args, opts) => spawnSync(
+    process.execPath,
+    ['-e', 'console.error("child-failure-detail"); process.exit(3)'],
+    opts,
+  );
+  const sink = [];
+  const { value: res } = captureConsole(() => runScopedRefresh('VP Weekly', { spawn: realChild }), sink);
+  assert.deepEqual(res, { ok: false, status: 3 });
+  assert.match(sink.join('\n'), /child-failure-detail/, 'the child\'s failure detail must survive into the capturing caller');
 });
 
 test('runScopedRefresh is NON-FATAL on spawn error, nonzero exit, and throw', () => {

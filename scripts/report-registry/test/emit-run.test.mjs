@@ -11,8 +11,10 @@ import {
 } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
+import { spawnSync } from 'node:child_process';
 import { emitRun, captureConsole } from '../emit-run.mjs';
 import { tempRunPath } from '../make-run.mjs';
+import { runScopedRefresh } from '../upsert.mjs';
 
 const base = {
   type: 'Project Portfolio',
@@ -75,6 +77,40 @@ test('success path: exactly one stdout line (the path); nothing leaks to stderr'
     assert.deepEqual(logs, [res.path], 'stdout must carry exactly one line: the emitted path');
     assert.equal(res.action, 'created');
     assert.ok(existsSync(out));
+  });
+});
+
+// --- contract #2 against the REAL transport -----------------------------------
+// The mock above emits via in-process console.error. Until 2026-08-03 the real
+// runScopedRefresh did the OPPOSITE (stdio 'inherit' — child wrote straight to
+// the parent's fds), so the mock-based test asserted a contract the real
+// transport violated. This test wires emitRun to the REAL runScopedRefresh,
+// driving a REAL child process through its own spawn options, and proves the
+// success path stays silent on the actual fds.
+test('contract #2 holds against the REAL runScopedRefresh: a chattering real child leaks nothing to stderr', () => {
+  withTempDir((dir) => {
+    const out = join(dir, 'run.json');
+    const realChild = (cmd, args, opts) => spawnSync(
+      process.execPath,
+      ['-e', 'console.log("refresh stdout chatter"); console.error("refresh stderr chatter")'],
+      opts, // the exact options runScopedRefresh built — stdio config included
+    );
+    const errs = [];
+    const origErr = console.error;
+    console.error = (...a) => errs.push(a.map(String).join(' '));
+    let res;
+    try {
+      res = emitRun({ ...base, out }, {
+        upsert: () => ({ action: 'created', pageId: 'mock-page' }),
+        refresh: (type) => runScopedRefresh(type, { spawn: realChild }),
+      });
+    } finally {
+      console.error = origErr;
+    }
+    assert.deepEqual(errs, [], 'real child chatter must be captured by emitRun, never leaked to stderr');
+    const joined = res.lines.join('\n');
+    assert.match(joined, /refresh stdout chatter/, 'the chatter must land in the sink (replayable on failure)');
+    assert.match(joined, /refresh stderr chatter/, 'the chatter must land in the sink (replayable on failure)');
   });
 });
 
