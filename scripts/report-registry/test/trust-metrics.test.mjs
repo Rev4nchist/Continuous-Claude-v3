@@ -9,6 +9,7 @@ import {
   computeWeeklyExpectedVsLanded, expectedDeadlineForPeriod, computeTimeToDetection,
   computeCorrectiveRate, computeTrustMetrics, renderTrustRollupBlocks,
   scanHumanSections, assessSectionFreshness, checkHumanSectionFreshness,
+  computeConsecutiveNonOk, computeStandingFailures,
   DEFAULT_LOOKBACK_WEEKS, HUMAN_SECTION_MAX_AGE_DAYS,
 } from '../trust-metrics.mjs';
 import { SCHEDULE } from '../watchdog.mjs';
@@ -192,6 +193,62 @@ test('computeCorrectiveRate: fraction of rows carrying the backfill:/remap: pref
 test('computeCorrectiveRate: empty input -> rate 0, no division by zero', () => {
   const r = computeCorrectiveRate([]);
   assert.deepEqual(r, { rate: 0, correctiveCount: 0, totalCount: 0 });
+});
+
+// --- computeConsecutiveNonOk / computeStandingFailures (U2, T9.2) -----------------
+// Audit finding this closes: two genuine Self-Improvement mid-flight-death rows
+// (2026-07-26, 2026-07-27) stood stranded for days scored as landed successes,
+// because nothing anywhere branched on Status. These are the status-aware metric.
+
+test('computeConsecutiveNonOk: counts consecutive non-OK rows from the most recent backward, stopping at the first genuine OK', () => {
+  const rows = [
+    { type: 'Self-Improvement', runDate: '2026-07-25T12:00:00Z', status: 'OK' },
+    { type: 'Self-Improvement', runDate: '2026-07-26T12:00:00Z', status: 'Failed' },
+    { type: 'Self-Improvement', runDate: '2026-07-27T12:00:00Z', status: 'Failed' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'Self-Improvement'), 2);
+});
+
+test('computeConsecutiveNonOk: zero when the most recent row is OK, even if older non-OK rows exist', () => {
+  const rows = [
+    { type: 'Self-Improvement', runDate: '2026-07-26T12:00:00Z', status: 'Failed' },
+    { type: 'Self-Improvement', runDate: '2026-07-27T12:00:00Z', status: 'OK' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'Self-Improvement'), 0);
+});
+
+test('computeConsecutiveNonOk: zero for a type with no rows', () => {
+  assert.equal(computeConsecutiveNonOk([], 'Self-Improvement'), 0);
+});
+
+test('computeStandingFailures: one entry per schedule type; counts stranded non-OK rows for the audit\'s exact scenario (two consecutive mid-flight-death rows previously scored as landed successes)', () => {
+  const rawRows = [
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-26', runDate: '2026-07-26T12:00:00Z', summary: 'died mid-flight', status: 'Failed',
+    }),
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-27', runDate: '2026-07-27T12:00:00Z', summary: 'died mid-flight', status: 'Failed',
+    }),
+  ];
+  const rows = rawRows.map(extractRunRow);
+  const standing = computeStandingFailures(rows, { schedule: SCHEDULE });
+  assert.equal(standing.length, SCHEDULE.length); // every schedule type gets an entry, even zero-count ones
+  assert.equal(standing.find((s) => s.type === 'Self-Improvement').consecutiveNonOk, 2);
+  for (const s of standing) {
+    if (s.type !== 'Self-Improvement') assert.equal(s.consecutiveNonOk, 0);
+  }
+});
+
+test('computeTrustMetrics exposes standingFailures in its return shape', () => {
+  const now = new Date(2026, 6, 16, 13, 0, 0);
+  const rawRows = [
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-16', runDate: '2026-07-16T13:00:00Z', summary: 'died', status: 'Failed',
+    }),
+  ];
+  const summary = computeTrustMetrics({ rawRows, now });
+  assert.ok(Array.isArray(summary.standingFailures));
+  assert.equal(summary.standingFailures.find((s) => s.type === 'Self-Improvement').consecutiveNonOk, 1);
 });
 
 // --- computeTrustMetrics (integration of the pure pieces) -------------------------

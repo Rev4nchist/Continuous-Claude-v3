@@ -76,7 +76,7 @@
 // project-cards/lib/notion.mjs (queryDataSource) + check-drift.mjs (freshness
 // core). ESM, no external deps.
 import { pathToFileURL } from 'node:url';
-import { queryDataSource } from '../project-cards/lib/notion.mjs';
+import { queryDataSource, richText } from '../project-cards/lib/notion.mjs';
 import {
   REPORT_RUNS_DS_ID, ACTIVE_REPORT_TYPES, PERIOD_FORMAT_BY_TYPE,
 } from './config.mjs';
@@ -257,13 +257,21 @@ export function nextExpectedDeadline(entry, now) {
 }
 
 // --- registry read (transport-injectable) ---------------------------------------
-// All rows of `type` whose Period equals `period`, regardless of Status — a
-// Warn/Failed row still proves the run LAUNCHED (that's a different, already
-// visible failure mode); the write path only cares about total absence. The rows
-// themselves are returned (not just a count) so the additive freshness assessment
-// can inspect their Run Dates — see assessFreshness / the superset note up top.
+// All GENUINE rows of `type` whose Period equals `period`, regardless of Status —
+// a Warn/Failed row still proves the run LAUNCHED (that's a different, already
+// visible failure mode); the write path only cares about total absence. Preserved
+// intent, unchanged.
+//
+// EXCLUDES the watchdog's OWN miss-rows (T9.2, 2026-08-02 audit fix): before this
+// fix, a period whose ONLY row was a miss-row this same watchdog wrote (Summary
+// prefixed "watchdog:") satisfied this presence check — so every silent miss was
+// reportable exactly ONCE, ever (re-running the watchdog immediately after it wrote
+// a miss-row returned `missing=0`, verified by execution). A miss-row is NOT
+// evidence the run launched; excluding it restores "absent" as the honest answer.
+// This does NOT touch the Status-blindness above — only the SYNTHETIC miss-row
+// class is filtered; a genuine Failed/Warn/Skipped row still counts as present.
 export function rowsForPeriod(type, period, { dsId = REPORT_RUNS_DS_ID, query = queryDataSource } = {}) {
-  return query(dsId, {
+  const rows = query(dsId, {
     filter: {
       and: [
         { property: 'Report Type', select: { equals: type } },
@@ -271,6 +279,7 @@ export function rowsForPeriod(type, period, { dsId = REPORT_RUNS_DS_ID, query = 
       ],
     },
   }) || [];
+  return rows.filter((r) => !isWatchdogMissRow(richText(r?.properties?.Summary)));
 }
 
 // Presence-only convenience wrapper (unchanged public contract): true iff ANY row

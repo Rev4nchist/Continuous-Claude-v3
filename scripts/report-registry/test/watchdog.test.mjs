@@ -135,6 +135,52 @@ test('hasRowForPeriod returns false on an empty result set', () => {
   assert.equal(present, false);
 });
 
+// --- T9.2: the watchdog no longer satisfies its own presence check ---------------
+
+test('hasRowForPeriod: false when the ONLY row for the period is the watchdog\'s OWN prior miss-row (a miss-row is not evidence the run launched)', () => {
+  const missRow = {
+    properties: {
+      Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] },
+    },
+  };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [missRow] });
+  assert.equal(present, false);
+});
+
+test('hasRowForPeriod: true when a genuine Failed row exists for the period (Status-blindness preserved — only the SYNTHETIC miss-row class is excluded)', () => {
+  const failedRow = {
+    properties: {
+      Status: { select: { name: 'Failed' } },
+      Summary: { rich_text: [{ plain_text: 'pipeline crashed: ECONNRESET' }] },
+    },
+  };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [failedRow] });
+  assert.equal(present, true);
+});
+
+test('hasRowForPeriod: a real row and its own watchdog miss-row can coexist for the same period (append-all-attempts) — presence is still true because of the REAL row', () => {
+  const realRow = { properties: { Status: { select: { name: 'OK' } }, Summary: { rich_text: [{ plain_text: 'ok' }] } } };
+  const missRow = { properties: { Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] } } };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [missRow, realRow] });
+  assert.equal(present, true);
+});
+
+test('evaluateEntry: re-checking a period whose ONLY row is its own prior miss-row STILL reports MISSING, not ok (T9.2 fix — reproduces the audit\'s "re-running the watchdog at the exact instant it wrote a miss-row returns missing=0" bug and proves it is closed)', () => {
+  const missRow = {
+    properties: {
+      Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] },
+    },
+  };
+  const calls = { upsert: 0 };
+  const r = evaluateEntry(vpEntry(), new Date(2026, 6, 16, 13, 0, 0), {
+    query: () => [missRow],
+    upsert: () => { calls.upsert += 1; return { action: 'updated', pageId: 'page1' }; },
+    dryRun: true,
+  });
+  assert.equal(r.status, 'would-write');
+  assert.equal(calls.upsert, 0);
+});
+
 // --- buildMissRun: deterministic runId (the idempotency mechanism) --------------
 
 test('buildMissRun produces a deterministic runId with NO timestamp component', () => {

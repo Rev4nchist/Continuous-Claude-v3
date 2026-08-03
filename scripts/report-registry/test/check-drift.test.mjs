@@ -4,6 +4,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
   computeDrift, newestRunDate, groupByType, parseMaxAgeHours, DEFAULT_MAX_AGE_HOURS, checkDrift,
+  isGenuineRow,
 } from '../check-drift.mjs';
 import { ACTIVE_REPORT_TYPES } from '../config.mjs';
 
@@ -12,6 +13,17 @@ const NOW = Date.parse('2026-07-05T12:00:00Z');
 // A raw DS row shaped like queryDataSource returns.
 function dsRow(type, runDate) {
   return { properties: { 'Report Type': { select: { name: type } }, 'Run Date': { date: { start: runDate } } } };
+}
+
+// A raw DS row with Summary/Status too (queryDataSource shape — plain_text array).
+function dsRowFull(type, runDate, { summary, status } = {}) {
+  const props = {
+    'Report Type': { select: { name: type } },
+    'Run Date': { date: { start: runDate } },
+  };
+  if (summary !== undefined) props.Summary = { rich_text: [{ plain_text: summary }] };
+  if (status !== undefined) props.Status = { select: { name: status } };
+  return { properties: props };
 }
 
 test('computeDrift flags a type older than the threshold', () => {
@@ -123,6 +135,48 @@ test('checkDrift with an explicit flat maxAgeHours overrides ALL types (document
   const rows = [dsRow('FourthOS Sponsor', '2026-07-17T08:00:00Z')]; // ~100h
   const flat = checkDrift({ maxAgeHours: 48, query: () => rows, now });
   assert.equal(flat.find((r) => r.type === 'FourthOS Sponsor').drift, true); // flat 48 ignores cadence
+});
+
+// --- T9.2: synthetic-row exclusion (the 2026-08-02 audit false-green fix) --------
+
+test('isGenuineRow: true for a normal pipeline row, false for a watchdog miss-row or a corrective row', () => {
+  assert.equal(isGenuineRow(dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', { summary: 'cards refreshed=8' })), true);
+  assert.equal(isGenuineRow(dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', {
+    summary: 'watchdog: no "Team Dashboard" row found for period 2026-07-04 by its deadline+grace',
+  })), false);
+  assert.equal(isGenuineRow(dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', { summary: 'backfill: seeded from archive' })), false);
+  assert.equal(isGenuineRow(dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', { summary: 'remap: corrected period' })), false);
+});
+
+test('checkDrift: a type whose ONLY row is a watchdog miss-row is drift=true — the exact 2026-08-02 audit false-green (Team Dashboard reported drift=false because of its own watchdog miss-row)', () => {
+  const now = Date.parse('2026-07-05T12:00:00Z');
+  const rows = [
+    dsRowFull('Team Dashboard', '2026-07-05T01:04:00Z', {
+      summary: 'watchdog: no "Team Dashboard" row found for period 2026-07-04 by its deadline+grace',
+      status: 'Failed',
+    }),
+  ];
+  const report = checkDrift({ query: () => rows, now });
+  const td = report.find((r) => r.type === 'Team Dashboard');
+  assert.equal(td.newestRunDate, null); // no genuine row -> nothing to be "fresh" against
+  assert.equal(td.ageHours, null);
+  assert.equal(td.drift, true);
+});
+
+test('checkDrift: a type whose ONLY row is a corrective (backfill:/remap:) row is ALSO drift=true, same reasoning', () => {
+  const now = Date.parse('2026-07-05T12:00:00Z');
+  const rows = [dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', { summary: 'backfill: seeded from archive', status: 'OK' })];
+  const report = checkDrift({ query: () => rows, now });
+  assert.equal(report.find((r) => r.type === 'Team Dashboard').drift, true);
+});
+
+test('checkDrift: a type with a genuine FAILED pipeline row still counts toward freshness -> drift=false (must NOT break — a Failed row proves the run launched, a different already-visible failure)', () => {
+  const now = Date.parse('2026-07-05T12:00:00Z');
+  const rows = [dsRowFull('Team Dashboard', '2026-07-05T01:00:00Z', { summary: 'dashboard sync crashed: ECONNRESET', status: 'Failed' })];
+  const report = checkDrift({ query: () => rows, now });
+  const td = report.find((r) => r.type === 'Team Dashboard');
+  assert.equal(td.drift, false);
+  assert.ok(td.newestRunDate);
 });
 
 test('checkDrift returns one row per ACTIVE_REPORT_TYPES type, in order, unchanged shape', () => {

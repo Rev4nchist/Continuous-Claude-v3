@@ -84,6 +84,14 @@ export const ISO_DATE_PERIOD_RE = /^\d{4}-\d{2}-\d{2}$/;
 // pickNewest() relies on exactly this prefix to exclude them from "Current run"
 // (see the 2026-07-16 remap-proof fix). Anchored + case-insensitive.
 export const CORRECTIVE_PREFIX_RE = /^(backfill|remap):/i;
+// Single predicate over CORRECTIVE_PREFIX_RE (T9.2): both trust-metrics.mjs and
+// check-drift.mjs need "is this row a corrective backfill/remap re-emit, not a
+// genuine pipeline run" — extracted here so the two files can never independently
+// drift on the definition (mirrors watchdog.mjs's isWatchdogMissRow being the
+// single source of truth for its own prefix).
+export function isCorrectiveSummary(summary) {
+  return CORRECTIVE_PREFIX_RE.test(String(summary || '').trim());
+}
 
 // A Notion `url`-typed property (Artifact URL / Docx-Deck) rejects a non-URL
 // value outright; a local filesystem path also stops resolving the moment the
