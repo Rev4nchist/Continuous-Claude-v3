@@ -49,8 +49,24 @@
 //      should log this exit code and then ignore it. Do not make the helper lie
 //      to preserve the caller's contract — that is precisely how watchdog.mjs
 //      and trust-metrics.mjs became detectors that can never fail.
-//   4. Redirect to a FILE (`>> "%LOG%" 2>&1` in cmd, `*>> $log` in PowerShell).
-//      Do NOT pipe through ForEach-Object under EAP='Stop'.
+//   4. In PowerShell, LOWER $ErrorActionPreference TO 'Continue' LOCALLY around
+//      the call, and restore it in a finally. Do not rely on redirection style.
+//      CORRECTED 2026-08-03 — the original text here claimed that redirecting to
+//      a file avoided the throw and that piping through ForEach-Object was the
+//      culprit. That was written without probing and is FALSE. Measured on this
+//      machine's real powershell.exe 5.1 (5.1.26100.8875), EAP='Stop', against a
+//      native command that exits 0 while writing ONE stderr line:
+//          *>>   *>   2>>   2>$null   and a bare `$x = ... 2>&1`   ALL THROW
+//          piping through ForEach-Object                            THROWS
+//          bare invocation with NO redirection at all                no throw
+//      So ANY stderr capture throws — the redirection style is not the variable.
+//      run-research.ps1's Write-RunRow has always done the local EAP save/lower/
+//      restore, which is why it was the one copy of this spine that worked;
+//      run-sweep.ps1 adopted it in 1f3180a. cmd.exe callers are unaffected —
+//      `>> "%LOG%" 2>&1` is fine there, since cmd has no EAP concept.
+//      NOTE this does not make contract #2 redundant: silent-stderr-on-success
+//      means the SUCCESS path has nothing to raise, so the EAP guard is what
+//      covers the FAILURE path.
 //   5. --out is MANDATORY for a pre-emit whose pipeline also does a final emit
 //      for the same source. The default path is $TEMP/report-run-<source>.json;
 //      if the pre-emit writes there it masquerades as the final emit and an
