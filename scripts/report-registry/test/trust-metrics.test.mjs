@@ -221,6 +221,38 @@ test('computeConsecutiveNonOk: zero for a type with no rows', () => {
   assert.equal(computeConsecutiveNonOk([], 'Self-Improvement'), 0);
 });
 
+// A corrective row (backfill:/remap:) is a human-authored record about a PAST
+// period, not evidence the pipeline ran. Before 2026-08-03 a single `backfill:`
+// OK row zeroed the streak — masking a standing failure behind bookkeeping.
+// Summaries below are the REAL live shapes (strict-prefix form), not synthetic.
+test('computeConsecutiveNonOk: a corrective OK row must NOT reset the streak (it is bookkeeping, not a run)', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-25T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-28T12:00:00Z', status: 'OK', summary: 'backfill: reconstructed from artifact, run was healthy' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 3, 'the backfill: OK row must not zero the only Status-aware signal');
+});
+
+test('computeConsecutiveNonOk: a corrective non-OK row must not INFLATE the streak either', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-25T12:00:00Z', status: 'OK', summary: 'health check ok (exit=0)' },
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Failed', summary: 'remap: backfill row said OK but artifact overall_status=CRITICAL_FAIL' },
+    { type: 'System Health', runDate: '2026-07-28T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 2, 'corrective rows are skipped entirely: neither break nor count');
+});
+
+test('computeConsecutiveNonOk: a genuine OK under a corrective non-OK row still ends the streak', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'OK', summary: 'health check ok (exit=0)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Failed', summary: 'remap: backfill row said OK but artifact overall_status=CRITICAL_FAIL' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 0);
+});
+
 test('computeStandingFailures: one entry per schedule type; counts stranded non-OK rows for the audit\'s exact scenario (two consecutive mid-flight-death rows previously scored as landed successes)', () => {
   const rawRows = [
     rawRow({

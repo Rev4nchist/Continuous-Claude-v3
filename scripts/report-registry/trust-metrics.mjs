@@ -213,6 +213,12 @@ export function computeConsecutiveNonOk(rows, type) {
     .sort((a, b) => b.ms - a.ms); // newest first
   let count = 0;
   for (const { r } of dated) {
+    // Corrective rows (backfill:/remap:) are human bookkeeping about a PAST
+    // period, not evidence the pipeline ran — skip them entirely: a backfill:
+    // OK must not zero the streak (it masked a real standing failure until
+    // 2026-08-03), and a remap: Failed must not inflate it (13 same-timestamp
+    // remap rows once inflated System Health's count).
+    if (isCorrectiveSummary(r.summary)) continue;
     if (r.status === 'OK') break;
     count += 1;
   }
