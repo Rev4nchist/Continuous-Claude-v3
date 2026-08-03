@@ -12,10 +12,10 @@
 // The artifact is written locally first and is durable; this sweeps whatever the
 // network lost.
 //
-// CLI:
-//   node scripts/report-registry/reconcile.mjs                 # sweep and repair
-//   node scripts/report-registry/reconcile.mjs --dry-run       # report only
-//   node scripts/report-registry/reconcile.mjs --keep          # never delete artifacts
+// CLI (D6, decided 2026-08-02 — default is report-only + delete-nothing):
+//   node scripts/report-registry/reconcile.mjs                 # DRY RUN: report what would change
+//   node scripts/report-registry/reconcile.mjs --apply         # actually repair + clean confirmed artifacts
+//   node scripts/report-registry/reconcile.mjs --apply --keep  # repair but never delete artifacts
 //   node scripts/report-registry/reconcile.mjs --max-age-days 14
 //
 // Exit codes: 0 nothing to do or all repaired · 1 at least one artifact failed.
@@ -75,17 +75,30 @@ export function listArtifacts(dir, { readdir = readdirSync } = {}) {
 }
 
 export function parseArgs(argv) {
-  const out = { dryRun: false, keep: false, maxAgeDays: DEFAULT_MAX_AGE_DAYS, dir: process.env.TEMP || tmpdir() };
+  // D6 (decided 2026-08-02): default is REPORT-ONLY and DELETE-NOTHING. The
+  // operator reaching for a recovery tool is mid-incident; the safe default is
+  // to show what would change. --apply opts into writes + cleanup; an explicit
+  // --keep still suppresses deletion under --apply.
+  const out = { dryRun: true, keep: true, maxAgeDays: DEFAULT_MAX_AGE_DAYS, dir: process.env.TEMP || tmpdir() };
+  let apply = false;
+  let explicitKeep = false;
+  let explicitDryRun = false;
   for (let i = 0; i < argv.length; i += 1) {
     const a = argv[i];
-    if (a === '--dry-run') out.dryRun = true;
-    else if (a === '--keep') out.keep = true;
+    if (a === '--apply') apply = true;
+    else if (a === '--dry-run') explicitDryRun = true;
+    else if (a === '--keep') explicitKeep = true;
     else if (a === '--max-age-days') {
       const n = Number(argv[++i]);
       if (!Number.isFinite(n) || n <= 0) throw new Error('--max-age-days needs a positive number');
       out.maxAgeDays = n;
     } else if (a === '--dir') out.dir = argv[++i];
     else if (a.startsWith('--')) throw new Error(`unknown flag ${a}`);
+  }
+  if (apply && explicitDryRun) throw new Error('--apply and --dry-run contradict each other — pick one');
+  if (apply) {
+    out.dryRun = false;
+    out.keep = explicitKeep;
   }
   return out;
 }
@@ -186,6 +199,7 @@ async function main() {
   if (r.repaired.length) {
     console.log('\nRuns that had happened and the registry did not know about:');
     for (const x of r.repaired) console.log(`  ${x.runId}`);
+    if (args.dryRun) console.log('\nDRY RUN — nothing was written. Re-run with --apply to repair.');
   }
   if (r.failed.length) {
     console.error(`\n${r.failed.length} artifact(s) failed:`);

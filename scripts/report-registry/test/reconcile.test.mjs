@@ -173,11 +173,28 @@ test('both pre-emit and final artifact names are swept, unrelated files are not'
   );
 });
 
-test('parseArgs defaults to a live, non-destructive sweep', () => {
+// D6 (decided 2026-08-02): a recovery tool that mutates the registry and deletes
+// artifacts BY DEFAULT is a foot-gun for the exact operator who reaches for it —
+// someone mid-incident. Default is report-only + keep-everything; --apply opts in.
+test('parseArgs defaults to --dry-run --keep (report-only, delete-nothing)', () => {
   const a = parseArgs([]);
-  assert.equal(a.dryRun, false);
-  assert.equal(a.keep, false);
+  assert.equal(a.dryRun, true);
+  assert.equal(a.keep, true);
   assert.equal(a.maxAgeDays, DEFAULT_MAX_AGE_DAYS);
+});
+
+test('parseArgs: --apply enables writes AND cleanup; --apply --keep writes but never deletes', () => {
+  const a = parseArgs(['--apply']);
+  assert.equal(a.dryRun, false);
+  assert.equal(a.keep, false, '--apply alone un-keeps: cleanup of confirmed-present artifacts is part of the live sweep');
+  const b = parseArgs(['--apply', '--keep']);
+  assert.equal(b.dryRun, false);
+  assert.equal(b.keep, true, 'an explicit --keep survives --apply');
+});
+
+test('parseArgs: --apply with --dry-run is a contradiction and fails loud', () => {
+  assert.throws(() => parseArgs(['--apply', '--dry-run']), /contradict/);
+  assert.throws(() => parseArgs(['--dry-run', '--apply']), /contradict/);
 });
 
 test('parseArgs rejects a nonsense age and unknown flags', () => {
