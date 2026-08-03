@@ -121,16 +121,22 @@ export function buildReportSummary({
 // LOGGED and swallowed so the emit can NEVER change the sweep's outcome or exit
 // code (the run-sweep.ps1 upsert step is likewise wrapped non-fatal). Returns the
 // written path, or null on any failure. NEVER called on --dry-run (per plan).
-async function emitPortfolioReportRun(fields) {
+//
+// `override` (optional {status, summary}) lets a caller that already KNOWS the
+// outcome (e.g. the lock-skip path below, which never attempted a real sweep and
+// so has no publishFailed/hubRefreshed/etc. to derive from) supply the status and
+// summary directly instead of running them through deriveReportStatus/
+// buildReportSummary, which assume a run that actually executed.
+async function emitPortfolioReportRun(fields, override = {}) {
   try {
     const { buildRun, writeRun } = await import('../report-registry/make-run.mjs');
     const run = buildRun({
       type: 'Project Portfolio',
       period: new Date().toISOString().slice(0, 10),
-      status: deriveReportStatus(fields),
+      status: override.status || deriveReportStatus(fields),
       source: 'Project-Cards',
       artifactUrl: REPORTING_HUB_URL,
-      summary: buildReportSummary(fields),
+      summary: override.summary || buildReportSummary(fields),
     });
     // writeRun's signature is (run, { out }); it derives the canonical
     // $TEMP/report-run-<source>.json path from run.source itself, so no option needed.
@@ -141,6 +147,23 @@ async function emitPortfolioReportRun(fields) {
     console.error(`[sweep] WARN: report-run emit failed (non-fatal): ${e.message}`);
     return null;
   }
+}
+
+// PURE + exported (T9.3): the Project Portfolio status/summary for a run that
+// correctly DECLINED to start because another sweep instance already holds
+// .sweep.lock. Kept separate from deriveReportStatus (which needs real outcome
+// fields — publishFailed/hubRefreshed/etc. — this run never produced, since it
+// never attempted a sweep) so a lock-skip is recorded as Skipped rather than
+// misread as the Failed outcome of a run that never happened. Without this, the
+// wrapper's pessimistic pre-emit Failed row stands unchanged forever for a
+// period that was actually skipped correctly (do-not-start-new-instance), which
+// is indistinguishable from a genuinely broken sweep.
+export function buildLockSkipReportRun() {
+  return {
+    status: 'Skipped',
+    summary: 'sweep skipped - another sweep instance already holds .sweep.lock '
+      + '(do-not-start-new-instance); no cards were refreshed this period',
+  };
 }
 
 // The cockpit publishes at the TOP of the Reporting Hub under its OWN section
@@ -1335,6 +1358,16 @@ async function main() {
       // Mitigation #6: a --target triage lock-skip exits 0 but is OBSERVABLE —
       // it logs a structured {step:'triage', skipped:'lock'} row to sweep.jsonl.
       if (triageOnly) appendTriageLogRow({ skipped: 'lock', target: 'triage' });
+      // T9.3: a FULL-sweep lock-skip must ALSO emit a Project Portfolio
+      // report-run.json (status Skipped) so run-sweep.ps1's existing
+      // `if (Test-Path $emitFile)` upsert path updates the wrapper's
+      // pessimistic pre-emit Failed row to Skipped instead of leaving a
+      // correct skip recorded as a failure. Gated the same as the real
+      // end-of-sweep emit (!mobileOnly && !triageOnly) -- mobile/triage
+      // sub-targets never own the Project Portfolio row.
+      if (!mobileOnly && !triageOnly) {
+        await emitPortfolioReportRun({}, buildLockSkipReportRun());
+      }
       process.exit(0);
     }
     if (lock === 'stale-replaced') console.error('[sweep] WARN: replaced a stale (>30min) .sweep.lock');

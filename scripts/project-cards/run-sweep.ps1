@@ -71,31 +71,63 @@ $preEmitFile = Join-Path $env:TEMP 'report-run-Project-Cards-preemit.json'
 Remove-Item $preEmitFile -ErrorAction SilentlyContinue
 
 if ($isFullSweep) {
+  # Saved/restored LOCALLY (not the global flip at :138, below): this block
+  # still runs before that flip, so the script's EAP is 'Stop' on entry here.
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
+    # T9.3: migrated to emit-run.mjs (make-run + upsert in ONE node process --
+    # see its header comment for the full caller contract). The OLD shape here
+    # was TWO chained native commands (make-run, then a SEPARATE
+    # `upsert.mjs ... 2>&1 | ForEach-Object`), run entirely under the script's
+    # global EAP='Stop' (the flip to 'Continue' at :138 is BELOW this block) --
+    # upsert's first stderr line was promoted to a TERMINATING
+    # NativeCommandError, caught by this block's own try/catch and logged
+    # "non-fatal" -- daily, unread, on 16 of 16 runs since this shipped
+    # 2026-07-25. With make-run+upsert in one process there is at most ONE
+    # native command left to guard here instead of two.
+    #
+    # IMPORTANT -- empirically corrects emit-run.mjs's own header comment
+    # (contract #4, "redirect to a FILE"): on THIS machine's powershell.exe 5.1
+    # (5.1.26100.8875), file redirection ALONE does NOT avoid the throw. Under
+    # EAP='Stop', a probe harness (see T9.3 verification) showed `*>>`, `*>`,
+    # `2>`, `2>$null`, and even a bare `2>&1` assignment to a variable ALL threw
+    # NativeCommandError for the same benign stderr line -- with NO
+    # ForEach-Object anywhere in the pipeline. The one thing that reliably
+    # avoided it was dropping $ErrorActionPreference to 'Continue' LOCALLY
+    # around the call -- exactly what run-research.ps1's Write-RunRow already
+    # does (the "ONLY copy that got it right", per emit-run.mjs's own header),
+    # and exactly what this file's OWN :134-143 comment already explains for
+    # the FINAL emit below. Restored in the `finally` below so the block's
+    # scope doesn't leak EAP='Continue' past this if-block (the sweep.mjs
+    # invocation further down still does its own explicit global flip).
+    #
+    # --out is MANDATORY (contract #5): the default path is byte-for-byte
+    # $emitFile, the file the post-sweep step below reads to decide "did the
+    # sweep emit?". Without --out the pre-emit would masquerade as a sweep
+    # emit. (Found on the first live run, 2026-07-25 17:45.)
+    # --runDate is the SAME $runStamp as the final emit (contract #6), so the
+    # two share a runId and the final upsert UPDATES this row in place instead
+    # of appending a second one.
+    # --no-refresh: only the FINAL emit (below) refreshes the report child
+    # pages -- same scope as the pre-emit step this replaces.
     # Keep this summary pure ASCII: this file has no BOM, so powershell.exe 5.1
-    # decodes it as CP1252 and a UTF-8 em-dash inside a DOUBLE-QUOTED string becomes
-    # a smart quote that terminates the string early (comments are unaffected).
-    # --out is MANDATORY here: make-run's DEFAULT path is tempRunPath('Project-Cards'),
-    # which is byte-for-byte $emitFile -- the file the post-sweep step uses to decide
-    # "did the sweep emit?". Without --out the pre-emit masquerades as a sweep emit,
-    # making the "full sweep emitted nothing" branch below unreachable and causing a
-    # killed sweep to log + page-refresh as though it had succeeded. (Found on the
-    # first live run, 2026-07-25 17:45.)
-    $preEmit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
+    # decodes it as CP1252 and a UTF-8 em-dash inside a DOUBLE-QUOTED string
+    # becomes a smart quote that terminates the string early (comments unaffected).
+    & $node (Join-Path $repo 'scripts\report-registry\emit-run.mjs') `
       --type 'Project Portfolio' --source 'Project-Cards' --period $date --runDate $runStamp `
       --status 'Failed' --artifactUrl 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a' `
-      --out $preEmitFile `
-      --summary "in-progress - sweep started at $runStamp. Updated in place on completion; if it still reads Failed the sweep was killed or aborted before finishing (see .claude/logs/project-cards/$date.log)."
-    $preEmit = ($preEmit | Select-Object -Last 1)
-    if ($LASTEXITCODE -eq 0 -and $preEmit) {
-      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $preEmit 2>&1 |
-        ForEach-Object { "$_" } | Tee-Log
-      "[$(Get-Date -Format o)] pre-emit report-run upsert exit=$LASTEXITCODE (non-fatal)" | Tee-Log
-    } else {
-      "[$(Get-Date -Format o)] pre-emit make-run emitted no path (exit=$LASTEXITCODE) -- continuing" | Tee-Log
-    }
+      --out $preEmitFile --no-refresh `
+      --summary "in-progress - sweep started at $runStamp. Updated in place on completion; if it still reads Failed the sweep was killed or aborted before finishing (see .claude/logs/project-cards/$date.log)." `
+      2>&1 | ForEach-Object { "$_" } | Tee-Log
+    # emit-run.mjs is HONEST about failure by design (contract #3: exit 0 = the
+    # row landed, exit 1 = it did not) -- this wrapper logs the exit code and
+    # ignores it, same non-fatal contract as every other registry step here.
+    "[$(Get-Date -Format o)] pre-emit registry step (emit-run.mjs) exit=$LASTEXITCODE (non-fatal)" | Tee-Log
   } catch {
     "[$(Get-Date -Format o)] pre-emit registry step threw (non-fatal): $_" | Tee-Log
+  } finally {
+    $ErrorActionPreference = $prevEAP
   }
 }
 

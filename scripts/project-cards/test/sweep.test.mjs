@@ -13,6 +13,7 @@ import {
   cockpitContentHash, cockpitEmbedIdFromUrl,
   deriveReportStatus, buildReportSummary,
   buildOverviewExamplePrompt, OVERVIEW_EXAMPLES,
+  buildLockSkipReportRun,
 } from '../sweep.mjs';
 import { getOverviewExample, recordOverviewExample } from '../lib/state.mjs';
 import { OVERVIEW_PAGE_ID, OVERVIEW_COCKPIT_HEADING, OVERVIEW_CARD_HEADING } from '../lib/config.mjs';
@@ -379,6 +380,23 @@ test('buildReportSummary: mobile failure with no failureCode falls back to "unkn
     mobileFailed: true, mobileFailureCode: null,
   });
   assert.ok(s.endsWith('· mobile=fail(unknown)'));
+});
+
+// --- T9.3: lock-skip must record Skipped, never let the pre-emit Failed row stand ---
+
+test('buildLockSkipReportRun: status is Skipped, not derived from (absent) outcome fields', () => {
+  const r = buildLockSkipReportRun();
+  assert.equal(r.status, 'Skipped');
+  // Must NOT collapse to what deriveReportStatus({}) would produce (Warn, since
+  // hubRefreshed/cockpitPublished are falsy on an empty fields object) -- a
+  // lock-skip never attempted a sweep at all, so it must not be graded as if it did.
+  assert.notEqual(r.status, deriveReportStatus({}));
+});
+
+test('buildLockSkipReportRun: summary self-explains the skip (mentions the lock)', () => {
+  const r = buildLockSkipReportRun();
+  assert.match(r.summary, /\.sweep\.lock/);
+  assert.match(r.summary, /skip/i);
 });
 
 // --- optimization 01: overview-page example embeds -----------------------------
