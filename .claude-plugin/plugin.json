@@ -1,0 +1,15 @@
+{
+  "name": "youtube-research",
+  "version": "0.1.0",
+  "description": "Turn YouTube channels into a citation-backed research corpus on disk, then synthesize cited briefs and lab specs from it. Every claim resolves to a second-accurate deep link.",
+  "author": {
+    "name": "David Hayes"
+  },
+  "keywords": [
+    "youtube",
+    "research",
+    "transcripts",
+    "citations",
+    "synthesis"
+  ]
+}

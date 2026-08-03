@@ -1,0 +1,10 @@
+# Research output and machine state are per-user, never committed with the plugin.
+docs/research/youtube/
+
+# Local plugin settings
+.claude/*.local.md
+
+# OS / editor noise
+.DS_Store
+Thumbs.db
+*.swp
