@@ -125,7 +125,12 @@ if ($code -eq 0) {
     } else {
       $psi = [System.Diagnostics.ProcessStartInfo]::new()
       $psi.FileName = $ntnExe
-      foreach ($a in @('pages', 'get', $pageId)) { $psi.ArgumentList.Add($a) }
+      # PS 5.1 runs .NET FRAMEWORK, where ProcessStartInfo has NO ArgumentList --
+      # the property reads null and .Add() threw "You cannot call a method on a
+      # null-valued expression" on EVERY verify since 2026-07-16 (13 Warn rows;
+      # last OK 2026-07-15). Use the single Arguments string, which both runtimes
+      # support. $pageId is bare hex -- no quoting needed.
+      $psi.Arguments = "pages get $pageId"
       $psi.RedirectStandardInput = $true
       $psi.RedirectStandardOutput = $true
       $psi.RedirectStandardError = $true
@@ -137,7 +142,9 @@ if ($code -eq 0) {
       $outTask = $p.StandardOutput.ReadToEndAsync()
       $errTask = $p.StandardError.ReadToEndAsync()
       if (-not $p.WaitForExit(30000)) {
-        try { $p.Kill($true) } catch {}
+        # Kill() only: .NET Framework has no Kill(bool) tree overload. ntn is a
+        # single self-contained exe, so there is no tree to kill anyway.
+        try { $p.Kill() } catch {}
         $verifyReason = 'ntn pages get timed out after 30000ms'
       } else {
         $pageMd = $outTask.GetAwaiter().GetResult()
