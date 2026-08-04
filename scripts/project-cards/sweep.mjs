@@ -300,26 +300,36 @@ function enrichAndOrderHubRows(rows, seriesBySlug, slugByRowId, now = new Date()
 // fatal error, no publish failures, hub refreshed) and is backward-tolerant of
 // older rows that predate the cockpitPublished field. Returns null when there is
 // no readable prior row, so the cockpit renders "no sweep recorded".
-function readLastSweepSignal() {
+export function readLastSweepSignal(logPath = SWEEP_LOG_PATH) {
   let raw;
   try {
-    raw = readFileSync(SWEEP_LOG_PATH, 'utf8');
+    raw = readFileSync(logPath, 'utf8');
   } catch {
     return null;
   }
   const lines = raw.split(/\r?\n/).filter((l) => l.trim());
-  if (lines.length === 0) return null;
-  let row;
-  try {
-    row = JSON.parse(lines[lines.length - 1]);
-  } catch {
-    return null;
+  // Scan BACKWARD for the newest FULL-sweep row (2026-08-04): sub-target rows land
+  // in the same file — a --target mobile-cockpit row carries hubRefreshed:false BY
+  // CONSTRUCTION (spurious "last sweep failed"), and a {step:'triage'} row lacks
+  // the failure fields entirely (derives ok=true, the opposite hazard). Only a
+  // full sweep's row is a valid health signal. Rows predating the `target` field
+  // (all from full sweeps) still match. Exported shape unchanged: { ts, ok }|null.
+  for (let i = lines.length - 1; i >= 0; i -= 1) {
+    let row;
+    try {
+      row = JSON.parse(lines[i]);
+    } catch {
+      continue;
+    }
+    if (!row || !row.ts) continue;
+    if (row.step) continue; // triage step rows (may also carry target:'full')
+    if (row.target && row.target !== 'full') continue; // scoped sub-target rows
+    const ok = !row.error
+      && (!Array.isArray(row.publishFailed) || row.publishFailed.length === 0)
+      && row.hubRefreshed !== false;
+    return { ts: row.ts, ok };
   }
-  if (!row || !row.ts) return null;
-  const ok = !row.error
-    && (!Array.isArray(row.publishFailed) || row.publishFailed.length === 0)
-    && row.hubRefreshed !== false;
-  return { ts: row.ts, ok };
+  return null;
 }
 
 // Lazy, resilient import of the cockpit builder. cockpit.mjs is a peer module in
@@ -1069,6 +1079,9 @@ async function publishMobileCockpit({ liveRoster, seriesBySlug, lastSweep, asOfH
     // never hang the sweep — worst case is 2x the single-attempt bound, not
     // unbounded. Read-back verification below still gates state advancement, so
     // a retry can never falsely mark an unpublished embed as published.
+    // Identity BEFORE the publish (2026-08-04): same fresh-embed compare as the
+    // cockpit/card paths — presence-only verification let a stale embed pass.
+    const mobileBeforeId = sectionEmbedIdentity(MOBILE_COCKPIT_PAGE_ID, MOBILE_EMBED_HEADING);
     let res = spawnClaude(buildMobilePrompt({ html, asOfHuman }));
     let out = (res && res.stdout) || '';
     let ok = !res.error && out.match(/MOBILEDONE attachment=(\S+)/);
@@ -1085,14 +1098,23 @@ async function publishMobileCockpit({ liveRoster, seriesBySlug, lastSweep, asOfH
         : (fail ? fail[1].trim() : (res.status === null ? 'timeout/no-marker' : 'no MOBILEDONE marker'));
       console.error(`[sweep] mobile-cockpit embed publish FAILED (after retry): ${mob.failureCode}`);
     } else {
-      // Mitigation #6: never trust the stdout marker — read back the page and
-      // require an embed block under the queue heading before advancing state.
+      // Mitigation #6 (hardened 2026-08-04): never trust the stdout marker — read
+      // back the page and require a FRESH embed under the queue heading (identity
+      // changed vs before the publish, or none existed before) before advancing
+      // state. Presence-only passed a stale embed.
       let blocks = [];
       let embedVerified = false;
       try {
         blocks = getPageBlocks(MOBILE_COCKPIT_PAGE_ID);
         const section = findSectionBlocks(blocks, MOBILE_EMBED_HEADING);
-        embedVerified = !!(section && section.blocks.some((b) => b && b.type === 'embed'));
+        const embed = section && section.blocks.find((b) => b && b.type === 'embed');
+        const afterId = embed
+          ? cockpitEmbedIdFromUrl(embed.embed?.url ?? embed.embed?.src ?? '', embed.id)
+          : null;
+        embedVerified = freshEmbedVerified(mobileBeforeId, afterId);
+        if (!embedVerified && afterId) {
+          console.error('[sweep] mobile-cockpit embed identity UNCHANGED after MOBILEDONE (stale embed)');
+        }
       } catch (e) {
         console.error(`[sweep] mobile-cockpit read-back failed: ${e.message}`);
       }
@@ -1167,6 +1189,12 @@ function publishCard(r, state, asOfHuman, publishedOk, publishFailed) {
     publishFailed.push({ slug: r.slug, reason: `read html: ${e.message}` });
     return;
   }
+  // Identity BEFORE the publish (2026-08-04): presence-only verifyCardEmbed let a
+  // failed section-replace that left the OLD embed pass verification — the daily
+  // hash-churn republish silently self-healed it, and this fix ships WITH the
+  // hash quantization that removes that accidental self-heal (review finding
+  // pair). Same before/after freshness compare as the cockpit path.
+  const beforeId = sectionEmbedIdentity(r.pageId, CARD_SECTION_HEADING);
   const res = spawnClaude(buildPublishPrompt({
     projectName: r.projectName, pageId: r.pageId, html, asOfHuman,
   }));
@@ -1179,8 +1207,10 @@ function publishCard(r, state, asOfHuman, publishedOk, publishFailed) {
   const ok = out.match(/PUBLISHED attachment=(\S+)/);
   if (ok) {
     const attachmentId = ok[1];
-    // ARCH read-back verify: trust the page, not the stdout marker.
-    const verified = verifyCardEmbed(r.pageId);
+    // Read-back verify: a FRESH embed must now be under the card heading — an
+    // embed exists AND its identity changed vs before (or there was none before).
+    const afterId = sectionEmbedIdentity(r.pageId, CARD_SECTION_HEADING);
+    const verified = freshEmbedVerified(beforeId, afterId);
     if (verified) {
       recordPublish(state, r.slug, {
         attachmentId,
@@ -1191,8 +1221,8 @@ function publishCard(r, state, asOfHuman, publishedOk, publishFailed) {
       publishedOk.push(r.slug);
       console.error(`[sweep] published+verified ${r.slug} attachment=${attachmentId}`);
     } else {
-      publishFailed.push({ slug: r.slug, reason: 'read-back verify: no embed in card section' });
-      console.error(`[sweep] publish UNVERIFIED ${r.slug}: embed missing after PUBLISHED marker`);
+      publishFailed.push({ slug: r.slug, reason: 'read-back verify: no FRESH embed in card section (missing or identity unchanged)' });
+      console.error(`[sweep] publish UNVERIFIED ${r.slug}: no fresh embed after PUBLISHED marker (stale or missing)`);
     }
     return;
   }
@@ -1239,18 +1269,35 @@ export function cockpitEmbedIdFromUrl(raw, blockId = null) {
   return m ? m[1] : (blockId || 'present');
 }
 
-function cockpitEmbedIdentity() {
+// PURE freshness predicate (2026-08-04), shared by the card/mobile/cockpit verify
+// paths: a publish is verified only when an embed NOW exists AND it is not the
+// same attachment that was there before (or nothing was there before). Exported
+// for unit tests.
+export function freshEmbedVerified(beforeId, afterId) {
+  return !!afterId && (beforeId === null || afterId !== beforeId);
+}
+
+// Embed identity under ANY page section (2026-08-04, generalized from the cockpit
+// path so cards + mobile get the same before/after freshness compare instead of
+// presence-only verification — the check the cockpit's own comment called out as
+// the exact stale-embed failure mode). Returns the stable id, or null when the
+// section/embed is absent or the read fails.
+function sectionEmbedIdentity(pageId, heading) {
   try {
-    const blocks = getPageBlocks(REPORTING_HUB_PAGE_ID);
-    const section = findSectionBlocks(blocks, COCKPIT_SECTION_HEADING);
+    const blocks = getPageBlocks(pageId);
+    const section = findSectionBlocks(blocks, heading);
     if (!section) return null;
     const embed = section.blocks.find((b) => b && b.type === 'embed');
     if (!embed) return null;
     return cockpitEmbedIdFromUrl(embed.embed?.url ?? embed.embed?.src ?? '', embed.id);
   } catch (e) {
-    console.error(`[sweep] cockpit embed read failed: ${e.message}`);
+    console.error(`[sweep] embed identity read failed ("${heading}"): ${e.message}`);
     return null;
   }
+}
+
+function cockpitEmbedIdentity() {
+  return sectionEmbedIdentity(REPORTING_HUB_PAGE_ID, COCKPIT_SECTION_HEADING);
 }
 
 // Publish the portfolio cockpit as an <embed> at the TOP of the hub, under
@@ -1292,7 +1339,7 @@ function publishCockpit(html, asOfHuman) {
   let afterId = null;
   try {
     afterId = cockpitEmbedIdentity();
-    verified = !!afterId && (beforeId === null || afterId !== beforeId);
+    verified = freshEmbedVerified(beforeId, afterId);
   } catch (e) {
     console.error(`[sweep] cockpit read-back failed: ${e.message}`);
   }
