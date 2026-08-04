@@ -33,7 +33,7 @@ Two halves:
 | Requirement | Notes |
 |---|---|
 | **Node.js 18+** | ESM, `node:test`. No npm dependencies at all. |
-| **yt-dlp on PATH** | Does the actual fetching. `winget install yt-dlp` / `brew install yt-dlp` / `pipx install yt-dlp`. Override the binary with `YTDLP_EXE`. |
+| **yt-dlp** | Does the actual fetching (ingest/poll only — search/status work without it). **No manual install required:** `node skills/youtube-research/scripts/bootstrap.mjs` downloads the official release into the corpus `_state/bin/` and every command finds it automatically. Prefer a managed install? `winget install yt-dlp` / `brew install yt-dlp` / `pipx install yt-dlp` works too; override the binary with `YTDLP_EXE`. |
 
 There is no API key, no account, and no external service. Nothing leaves your machine except
 the yt-dlp requests to YouTube.

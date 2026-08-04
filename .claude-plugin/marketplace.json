@@ -6,14 +6,14 @@
   },
   "metadata": {
     "description": "Citation-backed YouTube research: transcripts to a local corpus, then cited briefs and lab specs",
-    "version": "0.1.1"
+    "version": "0.1.2"
   },
   "plugins": [
     {
       "name": "youtube-research",
       "source": "./",
-      "version": "0.1.1",
-      "description": "Turn YouTube channels into a citation-backed research corpus on disk, then synthesize cited briefs and lab specs from it. Every non-obvious claim resolves to a second-accurate deep link. Requires Node 18+ and yt-dlp on PATH; no API keys and no external services.",
+      "version": "0.1.2",
+      "description": "Turn YouTube channels into a citation-backed research corpus on disk, then synthesize cited briefs and lab specs from it. Every non-obvious claim resolves to a second-accurate deep link. Requires Node 18+; yt-dlp self-bootstraps on first ingest if absent. No API keys and no external services.",
       "category": "research",
       "keywords": [
         "youtube",

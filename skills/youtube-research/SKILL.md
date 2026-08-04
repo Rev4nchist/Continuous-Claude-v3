@@ -49,6 +49,7 @@ YTR="<absolute path of the directory containing this SKILL.md>"
 | What do I have? | `node "$YTR/scripts/status.mjs"` |
 | Watch a channel | `node "$YTR/scripts/watchlist.mjs" add "@handle" --topic "..."` |
 | Check for new uploads | `node "$YTR/scripts/poll.mjs" [--ingest]` |
+| yt-dlp missing? Fetch it | `node "$YTR/scripts/bootstrap.mjs"` — downloads the official release into the corpus `_state/bin/`; every other command then finds it automatically |
 
 If `ls "$YTR/scripts"` shows nothing, the machinery is not present in this environment
 (some hosts mount the skill text only). Say so plainly and fall back to §8.
@@ -225,7 +226,7 @@ The single smallest change that starts the experiment.
 
 | Limit | Detail |
 |---|---|
-| Requires yt-dlp | `yt-dlp` must be on PATH (or set `YTDLP_EXE`). Without it, every ingest fails. |
+| Requires yt-dlp | Needed for ingest/poll only. If absent, run `node "$YTR/scripts/bootstrap.mjs"` — it downloads the official single-file release (needs network egress to github.com, ~10-35MB). Manual installs and `YTDLP_EXE` still work. |
 | No captions | Videos without English captions ingest as metadata-only. `whisper` is **not** bundled, so there is no local fallback transcription. `status.mjs` shows the transcript-vs-video gap. |
 | ASR quality | Auto captions mangle technical terms, names, and code. `transcript_source` records which track was used. |
 | yt-dlp drift | YouTube breaks extractors regularly. If ingest starts failing, `yt-dlp -U` first, before debugging anything else. |

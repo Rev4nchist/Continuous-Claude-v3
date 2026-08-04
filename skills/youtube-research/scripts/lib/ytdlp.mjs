@@ -26,7 +26,8 @@ function run(args, { timeout = YTDLP_TIMEOUT_MS, allowFailure = false } = {}) {
   if (res.error) {
     if (res.error.code === 'ENOENT') {
       throw new Error(
-        `yt-dlp not found (tried "${YTDLP_EXE}"). Install it or set YTDLP_EXE.`,
+        `yt-dlp not found (tried "${YTDLP_EXE}"). Run: node scripts/bootstrap.mjs ` +
+        '(downloads the official release) — or install it yourself / set YTDLP_EXE.',
       );
     }
     throw new Error(`yt-dlp spawn failed: ${res.error.message}`);

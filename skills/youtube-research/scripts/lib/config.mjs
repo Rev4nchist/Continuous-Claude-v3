@@ -13,6 +13,7 @@
 //     some installs, not writable).
 import { fileURLToPath } from 'node:url';
 import { dirname, join, resolve, isAbsolute } from 'node:path';
+import { existsSync } from 'node:fs';
 
 // --- code layout (read-only; lives inside the plugin) ------------------------
 // scripts/lib -> scripts
@@ -56,8 +57,20 @@ export const WATCHLIST_PATH = join(STATE_ROOT, 'watchlist.json');
 export const LOG_ROOT = join(STATE_ROOT, 'logs');
 
 // --- yt-dlp ------------------------------------------------------------------
-// Resolved from PATH. Overridable for CI / a pinned build.
-export const YTDLP_EXE = process.env.YTDLP_EXE || 'yt-dlp';
+// Resolution order: YTDLP_EXE override > a copy installed by bootstrap.mjs
+// (<STATE_ROOT>/bin/) > bare `yt-dlp` from PATH. The bootstrapped copy is
+// preferred over PATH deliberately: checking PATH here would cost a process
+// spawn on every import, and bootstrap.mjs only ever installs when PATH had
+// no working yt-dlp. If a PATH install should win later, set YTDLP_EXE=yt-dlp.
+function resolveYtdlpExe() {
+  if (process.env.YTDLP_EXE) return process.env.YTDLP_EXE;
+  const bootstrapped = join(
+    STATE_ROOT, 'bin', process.platform === 'win32' ? 'yt-dlp.exe' : 'yt-dlp',
+  );
+  if (existsSync(bootstrapped)) return bootstrapped;
+  return 'yt-dlp';
+}
+export const YTDLP_EXE = resolveYtdlpExe();
 
 // Hard ceiling per yt-dlp invocation. A channel batch is ONE process, so this
 // covers the whole batch, not a single video. Windows stall bugs mean we never
