@@ -5,6 +5,51 @@ REM Runs every Friday at 08:03am (local time)
 REM Output files land in C:\Users\david.hayes\continuous-claude\.claude\cache\health-checks\
 REM Run manually: schtasks /run /tn "CCv3-Health-Check"
 
+REM --- Shared vars resolved FIRST (2026-08-04): the pessimistic pre-emit below must
+REM fire BEFORE the long python run, so everything it needs is computed up front.
+REM Set lines stay OUTSIDE parenthesized blocks -- batch parse-time-expands every
+REM %VAR% when it parses a whole block, so a `set` inside one would be too late.
+set "NODE=C:\Program Files\nodejs\node.exe"
+if not exist "%NODE%" set "NODE=node"
+set "REGISTRY=C:\Users\david.hayes\continuous-claude\scripts\report-registry"
+
+REM Dated-log capture (since 2026-07-16): keep full stdout+stderr so a no-op is
+REM diagnosable. Resolve the date via powershell (System32, always on the Task
+REM Scheduler minimal PATH); fall back to last-run.log.
+set "NLOG_DIR=C:\Users\david.hayes\.claude\logs\health-check"
+if not exist "%NLOG_DIR%" mkdir "%NLOG_DIR%"
+set "NLOG_DATE="
+for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"`) do set "NLOG_DATE=%%d"
+if defined NLOG_DATE (set "NLOG=%NLOG_DIR%\%NLOG_DATE%.log") else (set "NLOG=%NLOG_DIR%\last-run.log")
+
+REM period + runDate. BOTH emits below pass the SAME --runDate: runId is
+REM `<type>|<period>|<runDate>` and upsert queries by Run ID, so the final emit
+REM UPDATES the pessimistic row in place instead of appending a second one
+REM (emit-run.mjs caller contract #6). Vars are pre-cleared: a failed powershell
+REM date call must not leave a previous value in scope.
+set "TODAY="
+for /f %%D in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set "TODAY=%%D"
+set "RUN_STAMP="
+for /f "usebackq delims=" %%s in (`powershell -NoProfile -Command "(Get-Date).ToUniversalTime().ToString('o')"`) do set "RUN_STAMP=%%s"
+
+REM CLAUDE_OPC_DIR: the Task Scheduler minimal env lacks it, which made the
+REM claude-opc-dir-set check a chronic MEDIUM warn in every scheduled run.
+set "CLAUDE_OPC_DIR=C:\Users\david.hayes\continuous-claude\opc"
+
+REM --- PESSIMISTIC PRE-EMIT (always-emit contract, migrated to emit-run.mjs) ---
+REM Survives a hard kill during the python run: a killed run now leaves an
+REM attributed Failed row instead of a silent watchdog miss. --no-refresh: the
+REM pessimistic row must NOT publish to live surfaces (only the final emit
+REM refreshes). --out is a DISTINCT path so this file cannot masquerade as the
+REM final emit (contract #5). NON-FATAL by caller contract #3: exit code logged,
+REM never propagated.
+set "PRE_EMIT=%TEMP%\report-run-Health-Check-preemit.json"
+del "%PRE_EMIT%" 2>nul
+if defined TODAY if defined RUN_STAMP "%NODE%" "%REGISTRY%\emit-run.mjs" --type "System Health" --source "Health-Check" --period "%TODAY%" --runDate "%RUN_STAMP%" --status Failed --no-refresh --out "%PRE_EMIT%" --summary "in-progress - health check started at %RUN_STAMP%. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see %NLOG%)." >> "%NLOG%" 2>&1
+if defined TODAY if defined RUN_STAMP if errorlevel 1 echo [%date% %time%] pre-emit FAILED ^(non-fatal -- see %NLOG%^)
+if defined TODAY if defined RUN_STAMP if not errorlevel 1 echo [%date% %time%] pre-emit registry row landed ^(non-fatal^)
+if not defined RUN_STAMP echo [%date% %time%] RUN_STAMP empty -- pre-emit skipped ^(non-fatal^)
+
 cd /d C:\Users\david.hayes\continuous-claude\opc
 set PYTHONPATH=.
 
@@ -22,46 +67,26 @@ REM --- Notion dashboard mirror (deterministic; Stream C, approved proposal 04) 
 REM After the Python run, mirror the newest health_*.json onto the CCv3 Weekly Health
 REM Checks Notion page via scripts/report-registry/health-mirror.mjs -- ntn-only, NO MCP,
 REM NO claude -p. This REPLACES the old claude -p + scripts/notion-health-prompt.md step
-REM (that prompt is now DEPRECATED, kept on disk for reference). The mirror is a mechanical
-REM section rewrite, so the LLM round-trip added cost, non-determinism, and the headless-MCP
-REM permission-grant footgun (the missing --allowedTools grant silently froze this pipeline
-REM for 11 weeks -- see .claude/rules/headless-claude-mcp.md). The node path needs no key
-REM clearing and no tool grant. NON-FATAL: a mirror failure NEVER alters %EXIT_CODE% (the
-REM python exit captured above); the mjs exits 0 on success/partial by contract.
+REM (that prompt is now DEPRECATED, kept on disk for reference). NON-FATAL: a mirror
+REM failure NEVER alters %EXIT_CODE% (the python exit captured above); the mjs exits 0
+REM on success/partial by contract. APPEND (>>) since 2026-08-04: a single `>` here
+REM truncated the pre-emit's log lines written above.
 cd /d C:\Users\david.hayes\continuous-claude
-
-REM node is resolved to an ABSOLUTE path because the Task Scheduler minimal PATH does not
-REM include node (the registry steps below reuse these same two vars).
-set "NODE=C:\Program Files\nodejs\node.exe"
-if not exist "%NODE%" set "NODE=node"
-set "REGISTRY=C:\Users\david.hayes\continuous-claude\scripts\report-registry"
-
-REM Dated-log capture (since 2026-07-16): keep full stdout+stderr so a no-op is diagnosable.
-REM Resolve the date via powershell (System32, always on the Task Scheduler minimal PATH);
-REM fall back to last-run.log. Set lines stay ABOVE the parenthesized block below -- batch
-REM parse-time-expands every %VAR% when it parses the whole block, so a `set` INSIDE the
-REM block would be too late (same mechanism as the %ERRORLEVEL% note in the registry step).
-set "NLOG_DIR=C:\Users\david.hayes\.claude\logs\health-check"
-if not exist "%NLOG_DIR%" mkdir "%NLOG_DIR%"
-set "NLOG_DATE="
-for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "(Get-Date).ToString('yyyy-MM-dd')"`) do set "NLOG_DATE=%%d"
-if defined NLOG_DATE (set "NLOG=%NLOG_DIR%\%NLOG_DATE%.log") else (set "NLOG=%NLOG_DIR%\last-run.log")
 set "HEALTH_MIRROR=%REGISTRY%\health-mirror.mjs"
 
 if exist "%HEALTH_MIRROR%" (
     echo [%date% %time%] Mirroring results to Notion dashboard... log=%NLOG%
-    "%NODE%" "%HEALTH_MIRROR%" > "%NLOG%" 2>&1
+    "%NODE%" "%HEALTH_MIRROR%" >> "%NLOG%" 2>&1
     REM The captured log's final line (health-mirror: OK/PARTIAL ...) is the real outcome.
     echo [%date% %time%] Notion mirror step finished ^(non-fatal^). log=%NLOG%
 ) else (
     echo [%date% %time%] WARN: %HEALTH_MIRROR% not found -- skipping Notion mirror.
 )
 
-REM --- Report Runs registry (T3.5) ---
-REM FINAL step, NON-FATAL: map the health check exit code to a registry Status, build a
-REM report-run.json via make-run.mjs, then upsert it. This must NEVER change %EXIT_CODE%
-REM (captured above and untouched below). %NODE% and %REGISTRY% were resolved above (the
-REM Notion mirror step) to absolute paths -- the Task Scheduler minimal PATH lacks node.
+REM --- Report Runs registry FINAL emit (T3.5, migrated to emit-run.mjs 2026-08-04) ---
+REM NON-FATAL: map the health check exit code to a registry Status and update the
+REM pessimistic pre-emit row in place (same --runDate). This must NEVER change
+REM %EXIT_CODE% (captured above and untouched below).
 REM Map exit code -> Status, DEFAULTING TO THE WORSE state (T6.1 #3): an unrecognized or
 REM unexpected nonzero code (2, 3, 9009 command-not-found, or anything else) must NOT be
 REM silently recorded as OK. Order matters: start OK, downgrade ANY nonzero to Failed, then
@@ -70,24 +95,22 @@ set "RUNSTATUS=OK"
 if not "%EXIT_CODE%"=="0" set "RUNSTATUS=Failed"
 if "%EXIT_CODE%"=="1" set "RUNSTATUS=Warn"
 
-REM period = today's date YYYY-MM-DD, built locale-independently via PowerShell (System32,
-REM always on PATH). RUNJSON is cleared first so a make-run failure cannot upsert a stale file.
-for /f %%D in ('powershell -NoProfile -Command "Get-Date -Format yyyy-MM-dd"') do set "TODAY=%%D"
 set "RUNJSON=%TEMP%\report-run-Health-Check.json"
 if exist "%RUNJSON%" del /q "%RUNJSON%"
 
-echo [%date% %time%] Emitting health-check report run (status=%RUNSTATUS%)...
-"%NODE%" "%REGISTRY%\make-run.mjs" --type "System Health" --source "Health-Check" --status "%RUNSTATUS%" --period "%TODAY%" --artifactUrl "https://www.notion.so/innovativemusings/CCv3-Weekly-Health-Checks-34c76fd7ac8280a984afc486a9844290" --summary "health check exit=%EXIT_CODE% status=%RUNSTATUS%" --out "%RUNJSON%"
-if exist "%RUNJSON%" "%NODE%" "%REGISTRY%\upsert.mjs" "%RUNJSON%"
-echo [%date% %time%] Registry emit/upsert finished (non-fatal).
+echo [%date% %time%] Emitting health-check report run (status=%RUNSTATUS%)... log=%NLOG%
+"%NODE%" "%REGISTRY%\emit-run.mjs" --type "System Health" --source "Health-Check" --status "%RUNSTATUS%" --period "%TODAY%" --runDate "%RUN_STAMP%" --artifactUrl "https://www.notion.so/innovativemusings/CCv3-Weekly-Health-Checks-34c76fd7ac8280a984afc486a9844290" --summary "health check exit=%EXIT_CODE% status=%RUNSTATUS%" --out "%RUNJSON%" >> "%NLOG%" 2>&1
+if errorlevel 1 echo [%date% %time%] Registry final emit FAILED ^(non-fatal -- see %NLOG%^)
+if not errorlevel 1 echo [%date% %time%] Registry final emit landed ^(non-fatal^).
 
 REM --- Report Runs drift check (T4.2 wired to schedule, T6.1 #7) ---
 REM FINAL non-fatal step: run the freshness/drift detector so a report type that silently
 REM stopped landing rows gets flagged here (it exits nonzero when any type is stale). This
 REM must NEVER change %EXIT_CODE% -- that is captured above and untouched; the final
-REM exit /b uses it regardless of what check-drift returns.
-echo [%date% %time%] Running report-registry drift check...
-"%NODE%" "%REGISTRY%\check-drift.mjs"
+REM exit /b uses it regardless of what check-drift returns. Output captured to the dated
+REM log since 2026-08-04 (it previously went to the discarded scheduler console).
+echo [%date% %time%] Running report-registry drift check... log=%NLOG%
+"%NODE%" "%REGISTRY%\check-drift.mjs" >> "%NLOG%" 2>&1
 echo [%date% %time%] Drift check finished exit=%ERRORLEVEL% (non-fatal).
 
 REM Exit code contract:
