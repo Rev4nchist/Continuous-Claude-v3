@@ -19,8 +19,10 @@ YouTube ──ingest──> corpus on disk ──search──> citations ──d
 
 Two halves:
 
-- **Machinery** (`scripts/`) — deterministic Node scripts. Zero LLM calls, so polling is cheap,
-  offline-safe, and cannot hallucinate.
+- **Machinery** (`skills/youtube-research/scripts/`) — deterministic Node scripts. Zero LLM
+  calls, so polling is cheap, offline-safe, and cannot hallucinate. They live *inside* the
+  skill directory so that hosts which mount only skill directories (e.g. Claude web) still
+  receive them.
 - **Judgment** (`skills/youtube-research/SKILL.md`) — the `dig` method Claude follows to turn a
   corpus into a digest with verdicts and citations.
 
@@ -62,11 +64,12 @@ Run these from **the project you want the research to live in** — the corpus i
 relative to your current directory.
 
 ```bash
-node scripts/ingest.mjs "@AndrejKarpathy" --limit 5
-node scripts/status.mjs
-node scripts/search.mjs "context window" --context 1
-node scripts/watchlist.mjs add "@AndrejKarpathy" --topic "LLM engineering"
-node scripts/poll.mjs --ingest
+YTR="/path/to/claude-youtube-research/skills/youtube-research"
+node "$YTR/scripts/ingest.mjs" "@AndrejKarpathy" --limit 5
+node "$YTR/scripts/status.mjs"
+node "$YTR/scripts/search.mjs" "context window" --context 1
+node "$YTR/scripts/watchlist.mjs" add "@AndrejKarpathy" --topic "LLM engineering"
+node "$YTR/scripts/poll.mjs" --ingest
 ```
 
 In Claude Code you normally do not type these — you say *"deep dive @channel on <topic>"* and
@@ -110,14 +113,14 @@ synthesis stays with you. Set it up with your OS scheduler, running from your pr
 
 ```
 schtasks /create /tn "YouTube-Poll" ^
-  /tr "cmd /c cd /d C:\path\to\your-project && node C:\path\to\claude-youtube-research\scripts\poll.mjs --ingest" ^
+  /tr "cmd /c cd /d C:\path\to\your-project && node C:\path\to\claude-youtube-research\skills\youtube-research\scripts\poll.mjs --ingest" ^
   /sc daily /st 07:00 /f
 ```
 
 **macOS / Linux (cron)**
 
 ```
-0 7 * * * cd /path/to/your-project && node /path/to/claude-youtube-research/scripts/poll.mjs --ingest
+0 7 * * * cd /path/to/your-project && node /path/to/claude-youtube-research/skills/youtube-research/scripts/poll.mjs --ingest
 ```
 
 `poll.mjs` exits 0 for both "nothing new" and "found N new" — read the `--json` output to tell
@@ -129,10 +132,10 @@ failed, so one dead channel does not mark the whole run red.
 ## Tests
 
 ```bash
-node --test --test-reporter=spec "scripts/test/*.test.mjs"
+node --test --test-reporter=spec "skills/youtube-research/scripts/test/*.test.mjs"
 ```
 
-Quote the glob. A bare directory arg (`scripts/test/`) is resolved as a *module* on some
+Quote the glob. A bare directory arg (`.../scripts/test/`) is resolved as a *module* on some
 Node/Windows builds and fails with `MODULE_NOT_FOUND`, which reports as a failing suite rather
 than a usage error — easy to misread as broken tests.
 

@@ -33,17 +33,25 @@ transcript **is** the index — no embedding store, no daemon, no external servi
 
 ## 2. Verbs
 
-Scripts live inside the plugin; run them with `node`. `$CLAUDE_PLUGIN_ROOT` is set by
-Claude Code when the plugin is active — if it is ever empty, substitute the plugin's
-install path.
+The scripts live in `scripts/` **inside this skill's own directory** — the directory
+containing this SKILL.md. You know that path: it is where this skill was loaded from.
+Set it once and reuse it (do NOT use `$CLAUDE_PLUGIN_ROOT` — that variable is not set
+in shell commands, in any environment):
+
+```bash
+YTR="<absolute path of the directory containing this SKILL.md>"
+```
 
 | Intent | Command |
 |---|---|
-| Pull a channel / video / playlist | `node "$CLAUDE_PLUGIN_ROOT/scripts/ingest.mjs" "<target>" --limit N` |
-| Search the corpus (returns citations) | `node "$CLAUDE_PLUGIN_ROOT/scripts/search.mjs" "<regex>" [--channel SLUG]` |
-| What do I have? | `node "$CLAUDE_PLUGIN_ROOT/scripts/status.mjs"` |
-| Watch a channel | `node "$CLAUDE_PLUGIN_ROOT/scripts/watchlist.mjs" add "@handle" --topic "..."` |
-| Check for new uploads | `node "$CLAUDE_PLUGIN_ROOT/scripts/poll.mjs" [--ingest]` |
+| Pull a channel / video / playlist | `node "$YTR/scripts/ingest.mjs" "<target>" --limit N` |
+| Search the corpus (returns citations) | `node "$YTR/scripts/search.mjs" "<regex>" [--channel SLUG]` |
+| What do I have? | `node "$YTR/scripts/status.mjs"` |
+| Watch a channel | `node "$YTR/scripts/watchlist.mjs" add "@handle" --topic "..."` |
+| Check for new uploads | `node "$YTR/scripts/poll.mjs" [--ingest]` |
+
+If `ls "$YTR/scripts"` shows nothing, the machinery is not present in this environment
+(some hosts mount the skill text only). Say so plainly and fall back to §8.
 
 `<target>` = `@handle` · channel URL · playlist URL · video URL · 11-char video id.
 
@@ -229,21 +237,44 @@ The single smallest change that starts the experiment.
 ## 7. Worked example
 
 ```bash
+# 0. locate the machinery (once per session; this dir contains this SKILL.md)
+YTR="<absolute path of this skill's directory>"
+
 # 1. gather
-node "$CLAUDE_PLUGIN_ROOT/scripts/ingest.mjs" "@AndrejKarpathy" --limit 5
+node "$YTR/scripts/ingest.mjs" "@AndrejKarpathy" --limit 5
 
 # 2. see what landed
-node "$CLAUDE_PLUGIN_ROOT/scripts/status.mjs"
+node "$YTR/scripts/status.mjs"
 
 # 3. retrieve with citations (several phrasings)
-node "$CLAUDE_PLUGIN_ROOT/scripts/search.mjs" "context window" --context 1
-node "$CLAUDE_PLUGIN_ROOT/scripts/search.mjs" "tokeniz(er|ation)"
-node "$CLAUDE_PLUGIN_ROOT/scripts/search.mjs" "hallucinat"
+node "$YTR/scripts/search.mjs" "context window" --context 1
+node "$YTR/scripts/search.mjs" "tokeniz(er|ation)"
+node "$YTR/scripts/search.mjs" "hallucinat"
 
 # 4. read the strongest videos in full, then write the digest
 #    -> docs/research/youtube/_digests/2026-07-25-karpathy-llm-workflows.md
 #    -> append a row to _digests/INDEX.md
 
 # 5. subscribe for future uploads
-node "$CLAUDE_PLUGIN_ROOT/scripts/watchlist.mjs" add "@AndrejKarpathy" --topic "LLM engineering"
+node "$YTR/scripts/watchlist.mjs" add "@AndrejKarpathy" --topic "LLM engineering"
 ```
+
+---
+
+## 8. Degraded mode — no machinery, or no yt-dlp
+
+The dig method (§3), verdict rubric, citation contract, and templates (§4) are pure
+judgment and work anywhere. When the scripts are missing (skill-text-only host) or
+`yt-dlp` is absent (ingest impossible):
+
+1. **Say which capability is missing** — do not silently degrade.
+2. **Accept transcripts the user provides** — pasted text, uploaded files, or an existing
+   corpus directory. Treat each as a corpus file: note the video id and title if known,
+   and whether timestamps are present.
+3. **Apply §3 steps 2–6 unchanged** against that material. Retrieval is your own reading
+   of the provided transcripts, not memory of the video.
+4. **Citation rules bend, never break:** with timestamps, cite `[vid:<id> @<M:SS>]` as
+   normal. Without timestamps, cite by section/quote and mark the digest's frontmatter
+   `citations: approximate`. Never fabricate a timestamp to look precise (§5.1).
+5. Ingestion requests in this mode get a plain answer: not available here, run the
+   ingest on a machine with the plugin's scripts and yt-dlp, or paste the transcript.

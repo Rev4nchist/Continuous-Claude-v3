@@ -6,7 +6,8 @@
 // The one-screen answer to "what do I actually have to research over?".
 import { existsSync, readFileSync } from 'node:fs';
 import { corpusStats, dirSizeBytes, channelDir } from './lib/corpus.mjs';
-import { WATCHLIST_PATH, DIGEST_INDEX, CORPUS_ROOT } from './lib/config.mjs';
+import { WATCHLIST_PATH, DIGEST_INDEX, CORPUS_ROOT, YT_ROOT } from './lib/config.mjs';
+import { join } from 'node:path';
 
 function readWatchlist() {
   if (!existsSync(WATCHLIST_PATH)) return { channels: [] };
@@ -55,7 +56,7 @@ function main() {
   console.log(`  ${payload.totalChannels} channel(s) · ${payload.totalVideos} video(s) · ${payload.totalWords.toLocaleString('en-US')} words · ${payload.digests} digest(s)\n`);
 
   if (channels.length === 0) {
-    console.log('  (empty — run: node scripts/ingest.mjs "@channel" --limit 10)');
+    console.log(`  (empty — run: node "${join(YT_ROOT, 'ingest.mjs')}" "@channel" --limit 10)`);
   } else {
     const w = Math.max(10, ...channels.map((c) => c.name.length));
     console.log(`  ${'CHANNEL'.padEnd(w)}  VIDEOS  TRANSCR  WORDS      NEWEST      SIZE    WATCHED`);
