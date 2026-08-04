@@ -74,11 +74,13 @@ test('weekly type IS due on its weekday after grace elapses, period = this week'
   assert.match(c.period, /^2026-W\d{2}$/);
 });
 
-test('FourthOS Sponsor (weekly, date-format period) due Thursday afternoon', () => {
-  const thuAfternoon = new Date(2026, 6, 16, 13, 0, 0);
-  const c = computeCandidate(sponsorEntry(), thuAfternoon);
+test('FourthOS Sponsor (weekly, date-format period) due Wednesday afternoon (moved Thu->Wed 2026-08-04)', () => {
+  const wedAfternoon = new Date(2026, 6, 15, 13, 0, 0);
+  const c = computeCandidate(sponsorEntry(), wedAfternoon);
   assert.equal(c.due, true);
-  assert.equal(c.period, '2026-07-16');
+  assert.equal(c.period, '2026-07-15');
+  // The old weekday: a Thursday afternoon is no longer a due instant for this type.
+  assert.equal(computeCandidate(sponsorEntry(), new Date(2026, 6, 16, 13, 0, 0)).due, false);
 });
 
 test('System Health (weekly Friday) is due Friday afternoon, not Thursday', () => {

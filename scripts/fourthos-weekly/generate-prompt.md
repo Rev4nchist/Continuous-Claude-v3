@@ -1,8 +1,8 @@
 # FourthOS Weekly Sponsor Update — Generate Prompt
 
 This prompt is fed to `claude -p` by `scripts/fourthos-weekly/scheduled-fourthos-weekly.bat`
-every Thursday at 07:00 (ahead of Dave's 10:00 CST Thursday submit deadline; can be run manually
-the same way). It generates the weekly FourthOS
+every Wednesday at 07:00 (moved from Thursday 2026-08-04 — Dave's Carly/Christian meetings are now
+Thursday morning, so the package must be reviewed Wednesday; can be run manually the same way). It generates the weekly FourthOS
 sponsor update package and stages it UNLISTED for Dave's review.
 
 Read the `fourthos-weekly` skill for the full contract before acting:
@@ -10,7 +10,7 @@ Read the `fourthos-weekly` skill for the full contract before acting:
 
 ---
 
-You are a non-interactive `claude -p` session invoked by the Thursday 07:00 `CCv3-FourthOS-Weekly`
+You are a non-interactive `claude -p` session invoked by the Wednesday 07:00 `CCv3-FourthOS-Weekly`
 scheduled task on Windows. Your job: build this week's FourthOS sponsor update package for **Carly**
 (VP Enterprise Transformation & Technology) and **Christian** (CTO), stage it to an UNLISTED preview
 on the `ai-enablement-decks` GitHub Pages site, and notify Dave to review. **Do not promote it live** —

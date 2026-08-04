@@ -269,9 +269,12 @@ test('per-cadence default: a 120h-old WEEKLY row is FRESH in the sweep (not stal
   // Must use a type that is WEEKLY *in SCHEDULE* — evaluateEntry resolves the
   // threshold via maxAgeForType(entry.type), which is schedule-driven. The pinned
   // vpEntry() fixture no longer qualifies (retired 2026-07-25 -> unknown -> 48h).
-  // FourthOS Sponsor is weekly on the same weekday, so NOW stays a due instant.
+  // FourthOS Sponsor moved Thu->Wed 2026-08-04, so this test pins its OWN Wednesday
+  // due instant (the file-level NOW is a Thursday) with the row aged relative to it.
   const weekly = SCHEDULE.find((e) => e.type === 'FourthOS Sponsor');
-  const r = evaluateEntry(weekly, NOW, { query: () => [row({ status: 'OK', runDate: STALE })], dryRun: true });
+  const wedNow = new Date(2026, 6, 15, 13, 0, 0); // local Wednesday, grace (12:00) elapsed
+  const staleForWeekly = new Date(wedNow.getTime() - 120 * 3_600_000).toISOString();
+  const r = evaluateEntry(weekly, wedNow, { query: () => [row({ status: 'OK', runDate: staleForWeekly })], dryRun: true });
   assert.equal(r.status, 'ok');
   assert.equal(r.freshness.stale, false);
   assert.equal(r.freshness.reason, 'fresh');

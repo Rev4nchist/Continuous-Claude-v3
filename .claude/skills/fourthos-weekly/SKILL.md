@@ -10,9 +10,9 @@ multi-tier, **draft-and-notify** artifact pipeline for sponsors **Carly** (VP En
 Transformation & Technology) and **Christian** (CTO, dotted line).
 
 **Mental model:** Dave stays editor-in-chief. The pipeline auto-builds everything to an
-*unlisted* preview each Thursday morning and pings Dave (Dave's submit deadline is 10:00 CST
-Thursday; sponsors review Friday morning); nothing reaches sponsors until Dave
-promotes it. The "teach what we build/research" mandate is carried by the Tier 2 **Concept
+*unlisted* preview each Wednesday morning and pings Dave (Dave's Carly/Christian meetings
+moved to Thursday MORNING as of 2026-08-04, so review happens Wednesday); nothing reaches
+sponsors until Dave promotes it. The "teach what we build/research" mandate is carried by the Tier 2 **Concept
 Spotlight** module.
 
 ---
@@ -21,10 +21,10 @@ Spotlight** module.
 
 | Intent | What runs | Who triggers |
 |---|---|---|
-| **Generate** (default) | Read Notion → refresh Tier 3 package → render Tier 1+2 → stage to `fourthos/preview/` (unlisted) → notify Dave | `CCv3-FourthOS-Weekly` task (**Thu 07:00** — moved from Fri 2026-07-02 for the 10:00 CST Thursday submit deadline) OR Dave interactively |
+| **Generate** (default) | Read Notion → refresh Tier 3 package → render Tier 1+2 → stage to `fourthos/preview/` (unlisted) → notify Dave | `CCv3-FourthOS-Weekly` task (**Wed 07:00** — moved from Thu 2026-08-04 because the sponsor meetings are now Thursday morning; previously moved from Fri 2026-07-02) OR Dave interactively |
 | **Promote** | `fourthos/preview/` → dated `fourthos/<YYYY-MM-DD>/` + add its card to `decks.json` `sponsor-updates` (newest becomes `featured`, prior weeks demoted) → push | Dave, after reviewing the preview |
 
-- **Generate** headless path (unattended, Thursday 07:00): `scripts/fourthos-weekly/scheduled-fourthos-weekly.bat`
+- **Generate** headless path (unattended, Wednesday 07:00): `scripts/fourthos-weekly/scheduled-fourthos-weekly.bat`
   pipes `scripts/fourthos-weekly/generate-prompt.md` into `claude -p`.
 - **Promote**: `node scripts/fourthos-weekly/promote.mjs` (run from anywhere; it targets the decks repo).
   Options: `--date=YYYY-MM-DD`, `--dry-run`, `--no-push`.

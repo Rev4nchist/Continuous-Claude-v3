@@ -1,7 +1,10 @@
 @echo off
 REM Weekly FourthOS sponsor update package (Carly & Christian)
 REM Registered in Windows Task Scheduler as "CCv3-FourthOS-Weekly"
-REM Runs every Thursday at 07:00am (local time)
+REM Runs every Wednesday at 07:00am (local time) -- moved from Thursday 2026-08-04:
+REM Dave's Carly/Christian meetings are now Thursday morning, so the report must
+REM exist Wednesday. ExecutionTimeLimit pinned PT2H the same day (the claude -p
+REM below is a bare pipe with no bound of its own).
 REM Stages an UNLISTED preview to the ai-enablement-decks GitHub Pages site and pings Dave.
 REM It deliberately does NOT promote to the live sponsor URL -- that is Dave's approval step:
 REM     node scripts\fourthos-weekly\promote.mjs

@@ -98,7 +98,10 @@ import {
 // report nobody runs. Historical rows + its Notion child page are kept as an archive.
 export const SCHEDULE = [
   {
-    type: 'FourthOS Sponsor', source: 'FourthOS-Weekly', cadence: 'weekly', weekday: 4,
+    // Moved Thursday -> Wednesday 2026-08-04: Dave's Carly/Christian meetings are
+    // now Thursday MORNING, so the report must exist Wednesday. Task Scheduler
+    // trigger changed the same day.
+    type: 'FourthOS Sponsor', source: 'FourthOS-Weekly', cadence: 'weekly', weekday: 3,
     grace: { h: 12, m: 0 }, periodFormat: 'date', crossesMidnight: false,
   },
   {
