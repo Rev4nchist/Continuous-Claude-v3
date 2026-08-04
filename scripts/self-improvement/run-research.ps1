@@ -184,9 +184,27 @@ try {
   }
   Log "claude -p exited (code=$claudeExit, timedOut=$claudeTimedOut)"
 
-  # 4) Record the INDEX row deterministically (non-fatal if the proposal is missing)
-  & node (Join-Path $si 'record-index.mjs') $date $c.id 2>&1 | Tee-Log
-  $recordExit = $LASTEXITCODE
+  # 4) Record the INDEX row deterministically (non-fatal if the proposal is missing).
+  # LOCAL EAP drop (2026-08-04): under this script's EAP='Stop', record-index's stderr
+  # (e.g. its designed exit-2 "proposal not found" message) merged via 2>&1 raised a
+  # NativeCommandError, the catch below set bodyError, and the run was mislabeled
+  # Failed -- the designed 'Warn: no proposal' status was unreachable. Same local
+  # save/lower/restore pattern as Write-RunRow (emit-run.mjs caller contract #4).
+  $prevRecEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
+  try {
+    & node (Join-Path $si 'record-index.mjs') $date $c.id 2>&1 | ForEach-Object { "$_" } | Tee-Log
+    $recordExit = $LASTEXITCODE
+    # 5) Deterministic PENDING-DIGEST queue append -- the parent-process push promised
+    # by the scope-guard comment at the top of this file. The headless session's own
+    # fallback append was permission-denied on 5 of its last 7 runs (Edit deliberately
+    # ungranted), so 8 completed runs landed in NO queue. The helper is idempotent
+    # (skips if the session already wrote the block) and non-fatal here.
+    & node (Join-Path $si 'append-digest.mjs') $date $c.id 2>&1 | ForEach-Object { "$_" } | Tee-Log
+    Log "append-digest exit=$LASTEXITCODE (non-fatal)"
+  } finally {
+    $ErrorActionPreference = $prevRecEAP
+  }
 } catch {
   $bodyError = "$_"
   Log "RUN BODY THREW (captured; the registry row below records this as Failed): $_"
