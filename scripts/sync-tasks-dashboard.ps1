@@ -43,7 +43,7 @@ function Tee-Log {
 $runStamp = (Get-Date).ToUniversalTime().ToString('o')
 $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
 
-function Write-RunRow($status, $summary) {
+function Write-RunRow($status, $summary, $noRefresh) {
   try {
     $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
       --type 'Team Dashboard' --source 'Dashboard-Sync' --period $date --runDate $runStamp `
@@ -51,7 +51,11 @@ function Write-RunRow($status, $summary) {
       --summary $summary
     $emit = ($emit | Select-Object -Last 1)
     if ($LASTEXITCODE -eq 0 -and $emit) {
-      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $emit 2>&1 |
+      # --no-refresh on the pre-emit only: the pessimistic Failed row must NOT
+      # publish to the live Team Dashboard page (it did nightly for ~5 min and
+      # doubled refresh volume). The final emit below keeps refresh ON.
+      $upsertArgs = @($emit); if ($noRefresh) { $upsertArgs += '--no-refresh' }
+      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') @upsertArgs 2>&1 |
         ForEach-Object { "$_" } | Tee-Log
       "[$(Get-Date -Format o)] report-run upsert exit=$LASTEXITCODE status=$status (non-fatal)" | Tee-Log
     } else {
@@ -68,7 +72,7 @@ function Write-RunRow($status, $summary) {
 # Keep this string pure ASCII: this file has no BOM, so powershell.exe 5.1 decodes
 # it as CP1252 and a UTF-8 em-dash inside a DOUBLE-QUOTED string becomes a smart
 # quote that terminates the string early (comments are unaffected).
-Write-RunRow 'Failed' "in-progress - claude -p invoked at $runStamp. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see .claude/logs/dashboard-sync/$date.log)."
+Write-RunRow 'Failed' "in-progress - claude -p invoked at $runStamp. Updated in place on completion; if it still reads Failed the run was killed or aborted before finishing (see .claude/logs/dashboard-sync/$date.log)." $true
 
 # BOUNDED claude -p. The old unbounded pipe could ride the task's PT1H limit to a
 # silent death (2026-07-23). Start-Process gives a ceiling we control; the prompt is
