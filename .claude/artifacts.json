@@ -42,7 +42,7 @@
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-08-03",
+      "last_published": "2026-08-04",
       "RECONCILED": {
         "resolved": "2026-07-29",
         "by_session": "3831be22",
