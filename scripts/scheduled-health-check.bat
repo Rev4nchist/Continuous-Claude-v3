@@ -50,6 +50,14 @@ if defined TODAY if defined RUN_STAMP if errorlevel 1 echo [%date% %time%] pre-e
 if defined TODAY if defined RUN_STAMP if not errorlevel 1 echo [%date% %time%] pre-emit registry row landed ^(non-fatal^)
 if not defined RUN_STAMP echo [%date% %time%] RUN_STAMP empty -- pre-emit skipped ^(non-fatal^)
 
+REM Second pessimistic pre-emit for the Weekend Plan row (same runDate, its own
+REM type -> its own runId). weekend-plan.mjs updates it in place at the end of the
+REM chain; if the chain dies first, this row truthfully reads Failed.
+set "WP_PRE_EMIT=%TEMP%\report-run-Weekend-Plan-preemit.json"
+del "%WP_PRE_EMIT%" 2>nul
+if defined TODAY if defined RUN_STAMP "%NODE%" "%REGISTRY%\emit-run.mjs" --type "Weekend Plan" --source "Health-Check" --period "%TODAY%" --runDate "%RUN_STAMP%" --status Failed --no-refresh --out "%WP_PRE_EMIT%" --summary "in-progress - health-check chain started at %RUN_STAMP%. Updated in place when weekend-plan.mjs completes; if it still reads Failed the chain died first (see %NLOG%)." >> "%NLOG%" 2>&1
+if defined TODAY if defined RUN_STAMP if errorlevel 1 echo [%date% %time%] Weekend Plan pre-emit FAILED ^(non-fatal -- see %NLOG%^)
+
 cd /d C:\Users\david.hayes\continuous-claude\opc
 set PYTHONPATH=.
 
@@ -74,34 +82,30 @@ REM truncated the pre-emit's log lines written above.
 cd /d C:\Users\david.hayes\continuous-claude
 set "HEALTH_MIRROR=%REGISTRY%\health-mirror.mjs"
 
-if exist "%HEALTH_MIRROR%" (
-    echo [%date% %time%] Mirroring results to Notion dashboard... log=%NLOG%
-    "%NODE%" "%HEALTH_MIRROR%" >> "%NLOG%" 2>&1
-    REM The captured log's final line (health-mirror: OK/PARTIAL ...) is the real outcome.
-    echo [%date% %time%] Notion mirror step finished ^(non-fatal^). log=%NLOG%
-) else (
-    echo [%date% %time%] WARN: %HEALTH_MIRROR% not found -- skipping Notion mirror.
-)
+REM Linear (no parenthesized block) so %ERRORLEVEL% expands at EXECUTE time --
+REM MIRROR_EXIT feeds weekend-plan.mjs's chain-status synthesis below. -1 = the
+REM mirror never ran (missing file), which correctly reads as a partial chain.
+set "MIRROR_EXIT=-1"
+if not exist "%HEALTH_MIRROR%" echo [%date% %time%] WARN: %HEALTH_MIRROR% not found -- skipping Notion mirror.
+if exist "%HEALTH_MIRROR%" echo [%date% %time%] Mirroring results to Notion dashboard... log=%NLOG%
+if exist "%HEALTH_MIRROR%" "%NODE%" "%HEALTH_MIRROR%" >> "%NLOG%" 2>&1
+if exist "%HEALTH_MIRROR%" set "MIRROR_EXIT=%ERRORLEVEL%"
+REM The captured log's final line (health-mirror: OK/PARTIAL/STALE ...) is the real outcome.
+if exist "%HEALTH_MIRROR%" echo [%date% %time%] Notion mirror step finished exit=%MIRROR_EXIT% ^(non-fatal^). log=%NLOG%
 
-REM --- Report Runs registry FINAL emit (T3.5, migrated to emit-run.mjs 2026-08-04) ---
-REM NON-FATAL: map the health check exit code to a registry Status and update the
-REM pessimistic pre-emit row in place (same --runDate). This must NEVER change
-REM %EXIT_CODE% (captured above and untouched below).
-REM Map exit code -> Status, DEFAULTING TO THE WORSE state (T6.1 #3): an unrecognized or
-REM unexpected nonzero code (2, 3, 9009 command-not-found, or anything else) must NOT be
-REM silently recorded as OK. Order matters: start OK, downgrade ANY nonzero to Failed, then
-REM upgrade ONLY the known warnings-code 1 to Warn. Net: 0->OK, 1->Warn, everything-else->Failed.
-set "RUNSTATUS=OK"
-if not "%EXIT_CODE%"=="0" set "RUNSTATUS=Failed"
-if "%EXIT_CODE%"=="1" set "RUNSTATUS=Warn"
-
-set "RUNJSON=%TEMP%\report-run-Health-Check.json"
-if exist "%RUNJSON%" del /q "%RUNJSON%"
-
-echo [%date% %time%] Emitting health-check report run (status=%RUNSTATUS%)... log=%NLOG%
-"%NODE%" "%REGISTRY%\emit-run.mjs" --type "System Health" --source "Health-Check" --status "%RUNSTATUS%" --period "%TODAY%" --runDate "%RUN_STAMP%" --artifactUrl "https://www.notion.so/innovativemusings/CCv3-Weekly-Health-Checks-34c76fd7ac8280a984afc486a9844290" --summary "health check exit=%EXIT_CODE% status=%RUNSTATUS%" --out "%RUNJSON%" >> "%NLOG%" 2>&1
-if errorlevel 1 echo [%date% %time%] Registry final emit FAILED ^(non-fatal -- see %NLOG%^)
-if not errorlevel 1 echo [%date% %time%] Registry final emit landed ^(non-fatal^).
+REM --- Weekend Fix Plan + FINAL registry emits (2026-08-04, Dave's redesign) ---
+REM weekend-plan.mjs is the chain's closer: it reads the fresh health JSON
+REM (freshness-guarded), merges findings with integration-ready Self-Improvement
+REM research into the Weekend Fix Plan page, then final-emits BOTH registry rows
+REM in place (same --runDate as the pre-emits above) under the NEW OK semantics:
+REM Status measures the PIPELINE (check ran + mirror landed + plan generated);
+REM the WARN/FAIL findings are the payload, carried in the summary string. If
+REM this step crashes, both pessimistic Failed rows stand -- "chain died", which
+REM is exactly what they should say. NON-FATAL: never changes %EXIT_CODE%.
+echo [%date% %time%] Generating Weekend Fix Plan + final registry emits... log=%NLOG%
+"%NODE%" "%REGISTRY%\weekend-plan.mjs" --period "%TODAY%" --runDate "%RUN_STAMP%" --health-exit %EXIT_CODE% --mirror-exit %MIRROR_EXIT% >> "%NLOG%" 2>&1
+if errorlevel 1 echo [%date% %time%] weekend-plan reported PARTIAL/failure ^(non-fatal -- see %NLOG%^)
+if not errorlevel 1 echo [%date% %time%] Weekend Fix Plan generated + registry rows updated ^(non-fatal^).
 
 REM --- Report Runs drift check (T4.2 wired to schedule, T6.1 #7) ---
 REM FINAL non-fatal step: run the freshness/drift detector so a report type that silently

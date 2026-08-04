@@ -113,6 +113,8 @@ export const LOG_HINT_BY_TYPE = {
   'Team Dashboard': '.claude/logs/dashboard-sync/',
   'Project Portfolio': '.claude/logs/project-cards/',
   'Self-Improvement': '.claude/logs/self-improvement/',
+  // Same chain as System Health (weekend-plan.mjs runs inside scheduled-health-check.bat).
+  'Weekend Plan': '~/.claude/logs/health-check/',
 };
 
 // --- ntn CLI (absolute winget exe — solves the ntn-PATH problem) ---

@@ -10,7 +10,8 @@
     "Team Dashboard": "39576fd7-ac82-810b-9fc8-c2d1f4f76fc3",
     "System Health": "39576fd7-ac82-8186-bed5-f2f096dcea47",
     "Project Portfolio": "39576fd7-ac82-81eb-90b1-c022b92660ad",
-    "Self-Improvement": "39576fd7-ac82-8139-8438-ed06fdedebb7"
+    "Self-Improvement": "39576fd7-ac82-8139-8438-ed06fdedebb7",
+    "Weekend Plan": "3b276fd7-ac82-81eb-b199-ce003663c51b"
   },
   "reportRunsViews": {
     "VP Weekly — History": "39576fd7-ac82-81f7-922b-000c2f69bcd3",
@@ -32,7 +33,7 @@
       "historicalRowsKept": true
     }
   },
-  "reportTypes": ["VP Weekly", "FourthOS Sponsor", "Team Dashboard", "System Health", "Project Portfolio", "Self-Improvement"],
+  "reportTypes": ["VP Weekly", "FourthOS Sponsor", "Team Dashboard", "System Health", "Project Portfolio", "Self-Improvement", "Weekend Plan"],
   "statuses": ["OK", "Warn", "Failed", "Skipped"],
   "sourceByType": {
     "VP Weekly": "AIWeeklyReport",
@@ -40,7 +41,8 @@
     "Team Dashboard": "Dashboard-Sync",
     "System Health": "Health-Check",
     "Project Portfolio": "Project-Cards",
-    "Self-Improvement": "Self-Improvement"
+    "Self-Improvement": "Self-Improvement",
+    "Weekend Plan": "Health-Check"
   },
   "reportRunContract": {
     "_comment": "report-run.json schema each pipeline emits (Phase 2a). runId = <type>|<period>|<ISO-timestamp>.",
