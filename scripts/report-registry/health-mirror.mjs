@@ -474,11 +474,31 @@ export function findHealthJsons(dir = HEALTH_CACHE_DIR) {
 // file — a genuinely first-ever run, where every WARN then reads as 'new' (no baseline to
 // compare) and `resolved` is []. In practice the cache always holds prior runs, so ages are
 // computed against the run just before this one.
-export function loadRuns(dir = HEALTH_CACHE_DIR) {
+//
+// FRESHNESS GUARD (2026-08-04): "newest by filename" is NOT "this run's output". If the
+// python run crashed before writing (or never launched: 9009), the newest file is LAST
+// week's — and mirroring it would re-publish old data as fresh, page saying PASS while the
+// registry row disagrees. The Run Log's dedup-by-dateKey then hides the re-splice. So the
+// newest JSON must be recent (default 6h — the scheduled chain runs the mirror minutes
+// after the check). A stale or unparseable timestamp THROWS; main() maps that to the
+// grep-able `health-mirror: STALE` line + exit 2 instead of publishing.
+export const STALE_MAX_AGE_HOURS = 6;
+export function loadRuns(dir = HEALTH_CACHE_DIR, { maxAgeHours = STALE_MAX_AGE_HOURS, now = Date.now() } = {}) {
   const files = findHealthJsons(dir);
   if (files.length === 0) throw new Error(`no health_*.json found in ${dir}`);
   const newestPath = files[files.length - 1];
   const json = JSON.parse(readFileSync(newestPath, 'utf8'));
+  const ts = Date.parse(json.timestamp);
+  if (!Number.isFinite(ts)) {
+    throw new Error(`STALE: newest ${newestPath} has missing/unparseable timestamp `
+      + `${JSON.stringify(json.timestamp ?? null)} — refusing to mirror unverifiable data`);
+  }
+  const ageHours = (now - ts) / 3_600_000;
+  if (ageHours > maxAgeHours) {
+    throw new Error(`STALE: newest ${newestPath} is ${ageHours.toFixed(1)}h old `
+      + `(threshold ${maxAgeHours}h) — this run likely wrote no JSON; refusing to re-publish `
+      + `the previous run's data as fresh`);
+  }
   let previousWarnNames = new Set();
   if (files.length >= 2) {
     try {
@@ -536,7 +556,12 @@ if (invokedDirectly) {
   try {
     main();
   } catch (e) {
-    console.error(`[health-mirror] FATAL: ${e.message}`);
+    // STALE disclosure path: the freshness guard in loadRuns throws with a STALE:
+    // prefix; surface it as its own grep-able outcome line (the dated log's last
+    // line is what an operator reads) instead of a generic FATAL.
+    const stale = /^STALE:/.test(e.message);
+    console.error(`[health-mirror] ${stale ? e.message : `FATAL: ${e.message}`}`);
+    if (stale) console.log('health-mirror: STALE nothing published (see stderr)');
     process.exit(2);
   }
 }
