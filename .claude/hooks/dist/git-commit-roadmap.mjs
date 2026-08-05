@@ -439,6 +439,7 @@ function appendAudit(projectDir, record, appendLogDep) {
 function writeRoadmapGuarded(args) {
   const {
     hook,
+    tool,
     roadmapPath,
     projectDir,
     before,
@@ -456,6 +457,7 @@ function writeRoadmapGuarded(args) {
   const base = {
     ts: (/* @__PURE__ */ new Date()).toISOString(),
     hook,
+    tool: tool ?? "unknown",
     project_dir: projectDir,
     roadmap_path: roadmapPath,
     before_sha256: sha256Prefix16(before),
@@ -836,6 +838,7 @@ async function main() {
   const afterLineCount = updated.split("\n").length;
   const guardResult = writeRoadmapGuarded({
     hook: "git-commit-roadmap",
+    tool: data.tool_name,
     roadmapPath,
     projectDir,
     before: content,

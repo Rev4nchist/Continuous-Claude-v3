@@ -646,6 +646,7 @@ function appendAudit(projectDir, record, appendLogDep) {
 function writeRoadmapGuarded(args) {
   const {
     hook,
+    tool,
     roadmapPath,
     projectDir,
     before,
@@ -663,6 +664,7 @@ function writeRoadmapGuarded(args) {
   const base = {
     ts: (/* @__PURE__ */ new Date()).toISOString(),
     hook,
+    tool: tool ?? "unknown",
     project_dir: projectDir,
     roadmap_path: roadmapPath,
     before_sha256: sha256Prefix16(before),
@@ -1267,6 +1269,7 @@ async function main() {
   const allowedDeletions = focusSeeded ? [CURRENT_FOCUS_PLACEHOLDER] : [];
   const { outcome, record } = writeRoadmapGuarded({
     hook: "post-plan-roadmap",
+    tool: data.tool_name,
     roadmapPath,
     projectDir,
     before: sections.rawContent,

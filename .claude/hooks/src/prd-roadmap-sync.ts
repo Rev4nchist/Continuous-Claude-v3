@@ -424,7 +424,11 @@ function promoteToCurrent(content: string, item: RoadmapItem): RoadmapEdit {
   return { content: result.join('\n'), removed };
 }
 
-async function handlePRDChange(filePath: string, content: string): Promise<HookOutput> {
+async function handlePRDChange(
+  filePath: string,
+  content: string,
+  toolName: string,
+): Promise<HookOutput> {
   const metadata = extractPRDMetadata(content);
   const fileDir = path.dirname(filePath);
 
@@ -475,6 +479,7 @@ async function handlePRDChange(filePath: string, content: string): Promise<HookO
   // addToPlanned is a pure insert, so the deletion guard has nothing to allow.
   const { outcome } = writeRoadmapGuarded({
     hook: 'prd-roadmap-sync',
+    tool: toolName,
     roadmapPath,
     projectDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
     before: roadmapContent,
@@ -495,7 +500,11 @@ async function handlePRDChange(filePath: string, content: string): Promise<HookO
   };
 }
 
-async function handleTasksChange(filePath: string, content: string): Promise<HookOutput> {
+async function handleTasksChange(
+  filePath: string,
+  content: string,
+  toolName: string,
+): Promise<HookOutput> {
   const progress = extractTaskProgress(content, filePath);
   const fileDir = path.dirname(filePath);
 
@@ -586,6 +595,7 @@ async function handleTasksChange(filePath: string, content: string): Promise<Hoo
     // and declares nothing.
     const { outcome, record } = writeRoadmapGuarded({
       hook: 'prd-roadmap-sync',
+      tool: toolName,
       roadmapPath,
       projectDir,
       before: roadmapContent,
@@ -650,10 +660,10 @@ async function main() {
 
   if (isPRDFile(filePath)) {
     const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
-    result = await handlePRDChange(filePath, content);
+    result = await handlePRDChange(filePath, content, data.tool_name);
   } else if (isTasksFile(filePath)) {
     const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, 'utf-8') : '';
-    result = await handleTasksChange(filePath, content);
+    result = await handleTasksChange(filePath, content, data.tool_name);
   } else {
     result = { result: 'continue' };
   }

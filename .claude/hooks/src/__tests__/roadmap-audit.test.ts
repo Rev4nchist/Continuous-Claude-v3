@@ -487,6 +487,7 @@ describe('writeRoadmapGuarded -- record shape', () => {
 
     const { record } = writeRoadmapGuarded({
       hook: 'post-plan-roadmap',
+      tool: 'ExitPlanMode',
       roadmapPath: ROADMAP_PATH,
       projectDir: PROJECT_DIR,
       before,
@@ -498,6 +499,7 @@ describe('writeRoadmapGuarded -- record shape', () => {
     const requiredKeys: Array<keyof RoadmapAuditRecord> = [
       'ts',
       'hook',
+      'tool',
       'project_dir',
       'roadmap_path',
       'outcome',
@@ -536,6 +538,45 @@ describe('writeRoadmapGuarded -- record shape', () => {
     });
     expect(record.session_id).toBeNull();
   });
+
+  // The `tool` field exists so a future reader can tell which harness tool
+  // triggered a write WITHOUT relying on anyone's recollection. It is only
+  // worth anything if it survives serialization into the JSONL, so assert on
+  // the appended LINE, not just the returned record.
+  it('round-trips the triggering tool into the appended log line', () => {
+    const { deps, logCalls } = makeSpyDeps();
+
+    const { record } = writeRoadmapGuarded({
+      hook: 'git-commit-roadmap',
+      tool: 'PowerShell',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before: 'a\n',
+      after: 'a\nb\n',
+      deps,
+    });
+
+    expect(record.tool).toBe('PowerShell');
+    expect(logCalls).toHaveLength(1);
+    const written = JSON.parse(logCalls[0].line.trim());
+    expect(written.tool).toBe('PowerShell');
+  });
+
+  // A caller that forgets to pass `tool` must produce a VISIBLE placeholder,
+  // never an absent key. An absent key is exactly the blind spot this field
+  // was added to close.
+  it('records the tool as "unknown" when a caller omits it', () => {
+    const { deps } = makeSpyDeps();
+    const { record } = writeRoadmapGuarded({
+      hook: 'prd-roadmap-sync',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before: 'a\n',
+      after: 'a\nb\n',
+      deps,
+    });
+    expect(record.tool).toBe('unknown');
+  });
 });
 
 describe('appendRoadmapAuditRecord', () => {
@@ -561,6 +602,7 @@ describe('appendRoadmapAuditRecord', () => {
     const record: RoadmapAuditRecord = {
       ts: new Date().toISOString(),
       hook: 'git-commit-roadmap',
+      tool: 'Bash',
       project_dir: dir,
       roadmap_path: join(dir, 'ROADMAP.md'),
       outcome: 'written',
@@ -591,6 +633,7 @@ describe('appendRoadmapAuditRecord', () => {
     const record: RoadmapAuditRecord = {
       ts: new Date().toISOString(),
       hook: 'git-commit-roadmap',
+      tool: 'PowerShell',
       project_dir: badProjectDir,
       roadmap_path: ROADMAP_PATH,
       outcome: 'written',

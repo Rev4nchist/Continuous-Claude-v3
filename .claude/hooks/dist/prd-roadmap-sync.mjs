@@ -478,6 +478,7 @@ function appendAudit(projectDir, record, appendLogDep) {
 function writeRoadmapGuarded(args) {
   const {
     hook,
+    tool,
     roadmapPath,
     projectDir,
     before,
@@ -495,6 +496,7 @@ function writeRoadmapGuarded(args) {
   const base = {
     ts: (/* @__PURE__ */ new Date()).toISOString(),
     hook,
+    tool: tool ?? "unknown",
     project_dir: projectDir,
     roadmap_path: roadmapPath,
     before_sha256: sha256Prefix16(before),
@@ -851,7 +853,7 @@ function promoteToCurrent(content, item) {
   }
   return { content: result.join("\n"), removed };
 }
-async function handlePRDChange(filePath, content) {
+async function handlePRDChange(filePath, content, toolName) {
   const metadata = extractPRDMetadata(content);
   const fileDir = path2.dirname(filePath);
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -889,6 +891,7 @@ async function handlePRDChange(filePath, content) {
   const updated = addToPlanned(roadmapContent, newItem);
   const { outcome } = writeRoadmapGuarded({
     hook: "prd-roadmap-sync",
+    tool: toolName,
     roadmapPath,
     projectDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
     before: roadmapContent,
@@ -906,7 +909,7 @@ async function handlePRDChange(filePath, content) {
     message: `ROADMAP updated: Added "${metadata.title}" to Planned (from PRD)`
   };
 }
-async function handleTasksChange(filePath, content) {
+async function handleTasksChange(filePath, content, toolName) {
   const progress = extractTaskProgress(content, filePath);
   const fileDir = path2.dirname(filePath);
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -963,6 +966,7 @@ async function handleTasksChange(filePath, content) {
   if (edit.content !== roadmapContent) {
     const { outcome, record } = writeRoadmapGuarded({
       hook: "prd-roadmap-sync",
+      tool: toolName,
       roadmapPath,
       projectDir,
       before: roadmapContent,
@@ -1010,10 +1014,10 @@ async function main() {
   let result;
   if (isPRDFile(filePath)) {
     const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
-    result = await handlePRDChange(filePath, content);
+    result = await handlePRDChange(filePath, content, data.tool_name);
   } else if (isTasksFile(filePath)) {
     const content = fs.existsSync(filePath) ? fs.readFileSync(filePath, "utf-8") : "";
-    result = await handleTasksChange(filePath, content);
+    result = await handleTasksChange(filePath, content, data.tool_name);
   } else {
     result = { result: "continue" };
   }

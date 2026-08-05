@@ -527,6 +527,7 @@ async function main() {
   // pure insert (delegates to insertUnderSection), so no allowedDeletions.
   const guardResult = writeRoadmapGuarded({
     hook: 'git-commit-roadmap',
+    tool: data.tool_name,
     roadmapPath,
     projectDir,
     before: content,

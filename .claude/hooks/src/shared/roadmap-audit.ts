@@ -63,6 +63,19 @@ export type RoadmapWriteOutcome = 'written' | 'noop' | 'skipped' | 'failed';
 export interface RoadmapAuditRecord {
   ts: string;
   hook: string;
+  /**
+   * The harness tool whose PostToolUse event triggered this write, taken from
+   * the hook payload's `tool_name` (`Bash`, `PowerShell`, `ExitPlanMode`, ...).
+   *
+   * REQUIRED, not optional, and that is the point. git-commit-roadmap was
+   * registered on the `Bash` matcher alone while windows-platform.md told
+   * everyone to prefer the PowerShell tool for git. The recommended way to
+   * commit was the one way that went unrecorded. The log built to catch that
+   * could not, because it never recorded which tool ran. An optional field that
+   * silently goes missing rebuilds the same blind spot. A required one degrades
+   * to the literal string `unknown`, which is visible.
+   */
+  tool: string;
   project_dir: string;
   roadmap_path: string;
   outcome: RoadmapWriteOutcome;
@@ -241,6 +254,13 @@ function appendAudit(
 
 export function writeRoadmapGuarded(args: {
   hook: string;
+  /**
+   * The triggering tool name, from the hook payload's `tool_name`. Optional on
+   * the ARGS so an existing caller still compiles, but it lands on the record
+   * as the literal `unknown` when omitted -- a missing wire-up stays visible in
+   * the log instead of vanishing. See `RoadmapAuditRecord.tool`.
+   */
+  tool?: string;
   roadmapPath: string;
   projectDir: string;
   before: string;
@@ -253,6 +273,7 @@ export function writeRoadmapGuarded(args: {
 }): { outcome: RoadmapWriteOutcome; record: RoadmapAuditRecord } {
   const {
     hook,
+    tool,
     roadmapPath,
     projectDir,
     before,
@@ -272,6 +293,7 @@ export function writeRoadmapGuarded(args: {
   const base = {
     ts: new Date().toISOString(),
     hook,
+    tool: tool ?? 'unknown',
     project_dir: projectDir,
     roadmap_path: roadmapPath,
     before_sha256: sha256Prefix16(before),

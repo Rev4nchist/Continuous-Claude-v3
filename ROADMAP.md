@@ -299,6 +299,17 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-08-05: Session plan — prove the roadmap matcher, then close three open threads
+**Key Decisions:**
+- A hook fix does not take effect until the NEXT commit.: `dist/*.mjs` reaches the live hook
+- Claim a lane: `node scripts/coordination/lane.mjs next`, then `claim <id>`.
+- Do not sweep in these 8 pre-existing uncommitted files: (verified unchanged this session;
+- `RoadmapAuditRecord` (lines 63–89): add `tool: string` as a **required** field. Required, not
+- `appendRoadmapAuditRecord` (373–375) needs no change — it takes a full record.
+
+**Files:** windows-platform.md, settings.json, dist/*.mjs, .git/index.lock, docs/research/youtube/jake-van-clief/_channel.json, scripts/project-cards/state.json, scripts/youtube/state/watchlist.json, ~/.claude/plans/we-are-picking-up-lovely-crab-agent-a95421aa735afc91b.md
+
+
 ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
 **Key Decisions:**
 - Fix: drop `myId` from the params array, renumber `$4` → `$3`.

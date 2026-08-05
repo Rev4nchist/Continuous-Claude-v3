@@ -749,6 +749,7 @@ async function main() {
 
   const { outcome, record } = writeRoadmapGuarded({
     hook: 'post-plan-roadmap',
+    tool: data.tool_name,
     roadmapPath,
     projectDir,
     before: sections.rawContent,
