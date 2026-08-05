@@ -19,6 +19,22 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { parseRoadmap, type RoadmapItem as SharedRoadmapItem } from './shared/roadmap-parser.js';
 import { isPathInsideProject, isTasksRelatedToGoal } from './shared/roadmap-sync-guards.js';
+import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
+import { insertUnderSection } from './shared/roadmap-splice.js';
+
+/**
+ * A content edit plus the lines it INTENDS to remove.
+ *
+ * `writeRoadmapGuarded`'s deletion-free invariant needs an allowlist that is
+ * DERIVED FROM THE OPERATION, never from the observed diff -- an allowlist
+ * built by looking at what actually disappeared would permit anything and make
+ * the guard vacuous. So each helper below declares its own removals.
+ */
+interface RoadmapEdit {
+  content: string;
+  /** Exact lines this edit deliberately removes. Empty for pure appends. */
+  removed: string[];
+}
 
 interface PostToolUseInput {
   tool_name: string;
@@ -235,9 +251,17 @@ function addToPlanned(content: string, item: RoadmapItem): string {
   return result.join('\n');
 }
 
-function updateProgress(content: string, title: string, progress: TaskProgress): string {
+/**
+ * Refresh the `- Progress:` line under the current goal.
+ *
+ * Deliberately deletes exactly ONE line (the previous `- Progress:` value) and
+ * declares it via `removed`, so the guarded write's deletion-free invariant can
+ * permit that single line and nothing else. Every other line is passed through.
+ */
+function updateProgress(content: string, title: string, progress: TaskProgress): RoadmapEdit {
   const lines = content.split('\n');
   const result: string[] = [];
+  const removed: string[] = [];
   let inCurrent = false;
   let foundTitle = false;
   let progressUpdated = false;
@@ -264,6 +288,7 @@ function updateProgress(content: string, title: string, progress: TaskProgress):
 
       // Update progress line if found
       if (foundTitle && stripped.toLowerCase().startsWith('- progress:')) {
+        removed.push(lines[i]); // the superseded Progress line -- the only intended deletion
         result.push(`- Progress: ${progress.completed}/${progress.total} tasks (${progress.percentage}%)`);
         progressUpdated = true;
         continue;
@@ -296,65 +321,59 @@ function updateProgress(content: string, title: string, progress: TaskProgress):
       }
     }
 
-    return newResult.join('\n');
+    // Insert-only path: nothing was replaced, so nothing is removed.
+    return { content: newResult.join('\n'), removed: [] };
   }
 
-  return result.join('\n');
+  return { content: result.join('\n'), removed };
 }
 
-function moveToCompleted(content: string, title: string): string {
-  const lines = content.split('\n');
-  const result: string[] = [];
-  let inCurrent = false;
-  let skipUntilNextSection = false;
-  let completedInsertIndex = -1;
+/**
+ * Record a finished goal in `## Completed`. APPEND-ONLY (2026-08-05).
+ *
+ * It used to also wipe `## Current Focus`: on finding a `**Title**` line whose
+ * text contained the first word of `title`, it set `skipUntilNextSection` and
+ * dropped every remaining line of that section, substituting a placeholder.
+ * That destroyed hand-written detail bullets -- the identical clobber removed
+ * from `post-plan-roadmap` in this same change, and from `roadmap-completion`
+ * back in `091f19f`. Two things made it worse than it looks: the match was a
+ * substring test on ONE word, so an unrelated goal sharing a first word was
+ * enough to trigger it; and the bullets it deleted are routinely the only
+ * record of open follow-ups.
+ *
+ * Finishing a goal is now recorded WITHOUT touching Current Focus. The caller
+ * advises the session to clear it deliberately (`/roadmap complete`), which is
+ * a visible, self-correcting state -- unlike silently eaten content. Same
+ * posture as post-plan-roadmap SS3 and roadmap-completion: a hook may record a
+ * fact, but a human owns Current Focus.
+ *
+ * Uses the shared, parity-tested `insertUnderSection`, which also handles the
+ * create-if-missing case the old inline loop silently skipped (no `## Completed`
+ * header meant the entry was dropped on the floor).
+ */
+function moveToCompleted(content: string, title: string): RoadmapEdit {
   const today = new Date().toISOString().split('T')[0];
-
-  for (let i = 0; i < lines.length; i++) {
-    const stripped = lines[i].trim();
-    const lower = stripped.toLowerCase();
-
-    if (lower.startsWith('## current')) {
-      inCurrent = true;
-      result.push(lines[i]);
-      continue;
-    } else if (lower.startsWith('## completed')) {
-      inCurrent = false;
-      skipUntilNextSection = false;
-      completedInsertIndex = result.length + 1;
-      result.push(lines[i]);
-      // Insert completed item
-      result.push(`- [x] ${title} (${today})`);
-      continue;
-    } else if (lower.startsWith('## ') && inCurrent) {
-      inCurrent = false;
-      skipUntilNextSection = false;
-    }
-
-    // Skip current section content if it matches our title
-    if (inCurrent) {
-      if (stripped.startsWith('**') && stripped.toLowerCase().includes(title.toLowerCase().split(' ')[0])) {
-        skipUntilNextSection = true;
-        // Add placeholder
-        result.push('');
-        result.push('_No current goal. Run /init-project or start a new PRD._');
-        result.push('');
-        continue;
-      }
-      if (skipUntilNextSection) {
-        continue;
-      }
-    }
-
-    result.push(lines[i]);
-  }
-
-  return result.join('\n');
+  return {
+    content: insertUnderSection(content, '## completed', `- [x] ${title} (${today})`),
+    removed: [],
+  };
 }
 
-function promoteToCurrent(content: string, item: RoadmapItem): string {
+/**
+ * Seed `## Current Focus` from a Planned item. Only ever called when there is
+ * NO current goal (see the `inPlanned && !roadmap.current` branch), so it
+ * cannot overwrite a real hand-written focus block.
+ *
+ * Two intended deletions, both declared via `removed`: the "no current goal"
+ * placeholder it replaces, and the Planned entry being promoted (an item should
+ * not sit in both sections). Note the Planned match is a substring test on the
+ * title's FIRST WORD -- pre-existing and fragile, but now at least the exact
+ * line it drops is recorded in the audit trail instead of vanishing silently.
+ */
+function promoteToCurrent(content: string, item: RoadmapItem): RoadmapEdit {
   const lines = content.split('\n');
   const result: string[] = [];
+  const removed: string[] = [];
   let inCurrent = false;
   let inPlanned = false;
   let removedFromPlanned = false;
@@ -388,11 +407,13 @@ function promoteToCurrent(content: string, item: RoadmapItem): string {
 
     // Skip "no current goal" placeholder
     if (inCurrent && stripped.includes('No current goal')) {
+      removed.push(lines[i]); // placeholder being replaced by the real goal
       continue;
     }
 
     // Remove item from planned
     if (inPlanned && !removedFromPlanned && stripped.includes(item.title.split(' ')[0])) {
+      removed.push(lines[i]); // promoted out of Planned into Current
       removedFromPlanned = true;
       continue;
     }
@@ -400,7 +421,7 @@ function promoteToCurrent(content: string, item: RoadmapItem): string {
     result.push(lines[i]);
   }
 
-  return result.join('\n');
+  return { content: result.join('\n'), removed };
 }
 
 async function handlePRDChange(filePath: string, content: string): Promise<HookOutput> {
@@ -450,7 +471,23 @@ async function handlePRDChange(filePath: string, content: string): Promise<HookO
   };
 
   const updated = addToPlanned(roadmapContent, newItem);
-  fs.writeFileSync(roadmapPath, updated);
+  // Guarded write (2026-08-05): .bak + deletion-free invariant + audit record.
+  // addToPlanned is a pure insert, so the deletion guard has nothing to allow.
+  const { outcome } = writeRoadmapGuarded({
+    hook: 'prd-roadmap-sync',
+    roadmapPath,
+    projectDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+    before: roadmapContent,
+    after: updated,
+    ops: [{ label: 'prd-add-planned', lines_removed: 0, lines_added: 1 }],
+  });
+
+  if (outcome !== 'written') {
+    return {
+      result: 'continue',
+      message: `ROADMAP NOT updated for PRD "${metadata.title}" (${outcome}) -- see .claude/logs/roadmap-sync.jsonl`,
+    };
+  }
 
   return {
     result: 'continue',
@@ -492,8 +529,13 @@ async function handleTasksChange(filePath: string, content: string): Promise<Hoo
   const isCurrent = roadmap.current &&
     roadmap.current.title.toLowerCase().includes(progress.featureName.toLowerCase().split(' ')[0]);
 
-  let updated = roadmapContent;
+  // `edit.removed` carries each helper's DECLARED deletions straight through to
+  // the guarded write's allowlist. Nothing infers deletions from the diff.
+  let edit: RoadmapEdit = { content: roadmapContent, removed: [] };
   let message = '';
+  // Set when a goal is recorded complete: Current Focus is intentionally left
+  // alone (see moveToCompleted), so the session is told to clear it deliberately.
+  let clearFocusAdvice = '';
 
   if (progress.isComplete) {
     // D2d-09: only mark the CURRENT goal complete when the tasks file actually
@@ -502,27 +544,31 @@ async function handleTasksChange(filePath: string, content: string): Promise<Hoo
     if (roadmap.current) {
       if (isTasksRelatedToGoal(progress.featureName, roadmap.current.title)) {
         const titleToComplete = roadmap.current.title;
-        updated = moveToCompleted(roadmapContent, titleToComplete);
+        edit = moveToCompleted(roadmapContent, titleToComplete);
         message = `ROADMAP updated: "${titleToComplete}" marked complete (100%)`;
+        clearFocusAdvice =
+          ` Current Focus still shows "${titleToComplete}" and its detail bullets --` +
+          ` they are hand-written, so this hook leaves them alone. Run \`/roadmap complete\`` +
+          ` (or \`/roadmap focus <next goal>\`) to clear it once you have salvaged anything still open.`;
       } else {
         message = `Tasks complete (100%) for "${progress.featureName}" but unrelated to current goal "${roadmap.current.title}" -- ROADMAP completion skipped`;
       }
     } else {
       // No current goal: record the actually-completed feature (not a false
       // completion of some other goal).
-      updated = moveToCompleted(roadmapContent, progress.featureName);
+      edit = moveToCompleted(roadmapContent, progress.featureName);
       message = `ROADMAP updated: "${progress.featureName}" marked complete (100%)`;
     }
   } else if (inPlanned && !roadmap.current) {
     // Promote to current if no current goal
-    updated = promoteToCurrent(roadmapContent, {
+    edit = promoteToCurrent(roadmapContent, {
       title: inPlanned.title,
       source: path.basename(filePath),
     });
     message = `ROADMAP updated: Promoted "${inPlanned.title}" to Current`;
   } else if (isCurrent) {
     // Update progress
-    updated = updateProgress(roadmapContent, roadmap.current!.title, progress);
+    edit = updateProgress(roadmapContent, roadmap.current!.title, progress);
     message = `ROADMAP progress: ${progress.completed}/${progress.total} (${progress.percentage}%)`;
   } else if (inPlanned) {
     message = `Tasks started for planned item "${inPlanned.title}" - will promote when current goal completes`;
@@ -530,8 +576,41 @@ async function handleTasksChange(filePath: string, content: string): Promise<Hoo
     message = `Tasks progress: ${progress.completed}/${progress.total} (${progress.percentage}%)`;
   }
 
-  if (updated !== roadmapContent) {
-    fs.writeFileSync(roadmapPath, updated);
+  if (edit.content !== roadmapContent) {
+    // Guarded write (2026-08-05): .bak + deletion-free invariant + audit record.
+    //
+    // `allowedDeletions` comes from the helper's own `removed` list, so the
+    // guard permits exactly the lines the operation meant to drop (a superseded
+    // `- Progress:` value, a "no current goal" placeholder, a promoted Planned
+    // entry) and refuses anything else. `moveToCompleted` is now a pure append
+    // and declares nothing.
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'prd-roadmap-sync',
+      roadmapPath,
+      projectDir,
+      before: roadmapContent,
+      after: edit.content,
+      allowedDeletions: edit.removed,
+      ops: [
+        {
+          label: 'prd-tasks-sync',
+          lines_removed: edit.removed.length,
+          lines_added:
+            edit.content.split('\n').length - roadmapContent.split('\n').length + edit.removed.length,
+        },
+      ],
+    });
+
+    if (outcome !== 'written') {
+      const detail = record.refused_deletions?.length
+        ? ` Would have removed: ${record.refused_deletions.slice(0, 3).join(' | ')}`
+        : '';
+      message =
+        `ROADMAP NOT updated (${outcome}${record.reason ? `: ${record.reason}` : ''}).` +
+        `${detail} See .claude/logs/roadmap-sync.jsonl`;
+    } else {
+      message += clearFocusAdvice;
+    }
   }
 
   // PostToolUse:Write|Edit. {result,message} is discarded by the harness, so

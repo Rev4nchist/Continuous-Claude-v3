@@ -186,6 +186,425 @@ function isPathInsideProject(targetPath, projectDir) {
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
 
+// src/shared/roadmap-audit.ts
+import { createHash } from "node:crypto";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join4 } from "node:path";
+
+// src/shared/atomic-write.ts
+import {
+  writeFileSync,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync2,
+  openSync,
+  closeSync,
+  readFileSync,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname, basename, join as join3 } from "path";
+
+// src/shared/logger.ts
+import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
+import { join as join2 } from "path";
+import { homedir } from "os";
+var LOG_DIR = join2(homedir(), ".claude", "logs");
+var LOG_FILE = join2(LOG_DIR, "hooks.log");
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync(LOG_DIR)) {
+    mkdirSync(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/atomic-write.ts
+var log = createLogger("atomic-write");
+var LOCK_STALE_MS = 1e4;
+var LOCK_RETRY_MS = 50;
+var LOCK_TIMEOUT_MS = 5e3;
+function atomicWriteSync(filePath, content) {
+  const dir = dirname(filePath);
+  const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync2(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+function acquireLockSync(filePath, timeoutMs = LOCK_TIMEOUT_MS) {
+  const lockFile = filePath + ".lock";
+  const startTime = Date.now();
+  while (true) {
+    try {
+      const fd = openSync(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+      writeFileSync(fd, `${process.pid}
+${Date.now()}`, "utf-8");
+      closeSync(fd);
+      return true;
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        try {
+          const stat = statSync2(lockFile);
+          if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+            log.warn("Removing stale lock", { lockFile, ageMs: Date.now() - stat.mtimeMs });
+            unlinkSync(lockFile);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() - startTime > timeoutMs) {
+          log.error("Lock acquisition timed out", { lockFile, timeoutMs });
+          return false;
+        }
+        const waitUntil = Date.now() + LOCK_RETRY_MS;
+        while (Date.now() < waitUntil) {
+        }
+      } else {
+        log.error("Lock acquisition failed", { lockFile, error: String(err) });
+        return false;
+      }
+    }
+  }
+}
+function releaseLockSync(filePath) {
+  const lockFile = filePath + ".lock";
+  try {
+    if (existsSync2(lockFile)) {
+      unlinkSync(lockFile);
+    }
+  } catch (err) {
+    log.warn("Failed to release lock", { lockFile, error: String(err) });
+  }
+}
+function mutateStateWithLock(filePath, transformFn, opts = {}) {
+  const lockTimeoutMs = opts.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+  const lockStart = Date.now();
+  const locked = acquireLockSync(filePath, lockTimeoutMs);
+  const waitMs = Date.now() - lockStart;
+  if (opts.onLockOutcome) {
+    try {
+      opts.onLockOutcome({ acquired: locked, wait_ms: waitMs });
+    } catch {
+    }
+  }
+  if (!locked) {
+    log.warn("mutateStateWithLock: lock not acquired, skipping write", { filePath });
+    return false;
+  }
+  try {
+    let current;
+    if (!existsSync2(filePath)) {
+      current = null;
+    } else {
+      try {
+        current = readFileSync(filePath, "utf-8");
+      } catch (err) {
+        log.warn("mutateStateWithLock: existing file unreadable, aborting write", {
+          filePath,
+          error: String(err)
+        });
+        return false;
+      }
+    }
+    let next;
+    try {
+      next = transformFn(current);
+    } catch (err) {
+      log.error("mutateStateWithLock: transform threw, leaving file untouched", {
+        filePath,
+        error: String(err)
+      });
+      return false;
+    }
+    if (next == null) {
+      return false;
+    }
+    const writeStart = Date.now();
+    atomicWriteSync(filePath, next);
+    if (opts.onWriteTiming) {
+      try {
+        opts.onWriteTiming({ write_ms: Date.now() - writeStart });
+      } catch {
+      }
+    }
+    return true;
+  } catch (err) {
+    log.error("mutateStateWithLock: write failed", { filePath, error: String(err) });
+    return false;
+  } finally {
+    releaseLockSync(filePath);
+  }
+}
+
+// src/shared/roadmap-audit.ts
+var MAX_REFUSED_DELETIONS = 20;
+var CATASTROPHIC_MIN_RATIO = 0.25;
+function sha256Prefix16(content) {
+  return createHash("sha256").update(content, "utf-8").digest("hex").slice(0, 16);
+}
+function multisetCounts(lines) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const line of lines) {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return counts;
+}
+function computeRemovedLines(beforeLines, afterLines) {
+  const beforeCounts = multisetCounts(beforeLines);
+  const afterCounts = multisetCounts(afterLines);
+  const removed = [];
+  for (const [line, count] of beforeCounts) {
+    const remaining = count - (afterCounts.get(line) ?? 0);
+    for (let i = 0; i < remaining; i++) {
+      removed.push(line);
+    }
+  }
+  return removed;
+}
+function defaultWrite(roadmapPath, before, after) {
+  const captured = { transformDeclined: false, lockOutcome: null, writeMs: void 0 };
+  const wrote = mutateStateWithLock(
+    roadmapPath,
+    (current) => {
+      const observed = current ?? "";
+      if (observed === before) return after;
+      captured.transformDeclined = true;
+      return null;
+    },
+    {
+      onLockOutcome: (o) => {
+        captured.lockOutcome = o;
+      },
+      onWriteTiming: (o) => {
+        captured.writeMs = o.write_ms;
+      }
+    }
+  );
+  if (wrote) {
+    return { wrote: true, wait_ms: captured.lockOutcome?.wait_ms, write_ms: captured.writeMs };
+  }
+  if (captured.lockOutcome && !captured.lockOutcome.acquired) {
+    return { wrote: false, reason: "lock_timeout", wait_ms: captured.lockOutcome.wait_ms };
+  }
+  if (captured.transformDeclined) {
+    return {
+      wrote: false,
+      reason: "concurrent_modification",
+      wait_ms: captured.lockOutcome?.wait_ms
+    };
+  }
+  return { wrote: false, reason: "write_failed", wait_ms: captured.lockOutcome?.wait_ms };
+}
+function defaultBackup(bakPath, content) {
+  writeFileSync2(bakPath, content, "utf-8");
+}
+function defaultAppendLog(logPath, line) {
+  mkdirSync2(dirname2(logPath), { recursive: true });
+  appendFileSync2(logPath, line, "utf-8");
+}
+function appendAudit(projectDir, record, appendLogDep) {
+  try {
+    const logPath = join4(projectDir, ".claude", "logs", "roadmap-sync.jsonl");
+    const line = JSON.stringify(record) + "\n";
+    (appendLogDep ?? defaultAppendLog)(logPath, line);
+  } catch {
+  }
+}
+function writeRoadmapGuarded(args) {
+  const {
+    hook,
+    roadmapPath,
+    projectDir,
+    before,
+    after,
+    ops,
+    allowedDeletions,
+    allowFullRewrite,
+    sessionId,
+    deps
+  } = args;
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const beforeBytes = Buffer.byteLength(before, "utf-8");
+  const afterBytes = Buffer.byteLength(after, "utf-8");
+  const base = {
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    hook,
+    project_dir: projectDir,
+    roadmap_path: roadmapPath,
+    before_sha256: sha256Prefix16(before),
+    after_sha256: sha256Prefix16(after),
+    before_lines: beforeLines.length,
+    after_lines: afterLines.length,
+    line_delta: afterLines.length - beforeLines.length,
+    before_bytes: beforeBytes,
+    after_bytes: afterBytes,
+    bytes_delta: afterBytes - beforeBytes,
+    ops,
+    session_id: sessionId ?? null
+  };
+  const finish = (outcome, extra = {}) => {
+    const record = {
+      ...base,
+      outcome,
+      bak_path: null,
+      bak_error: null,
+      ...extra
+    };
+    appendAudit(projectDir, record, deps?.appendLog);
+    return { outcome, record };
+  };
+  if (after === before) {
+    return finish("noop");
+  }
+  if (!allowFullRewrite) {
+    const allowedSet = new Set(allowedDeletions ?? []);
+    const removed = computeRemovedLines(beforeLines, afterLines);
+    const refused = removed.filter((line) => !allowedSet.has(line));
+    if (refused.length > 0) {
+      return finish("skipped", {
+        reason: "deletion_guard",
+        refused_deletions: refused.slice(0, MAX_REFUSED_DELETIONS)
+      });
+    }
+  } else {
+    const beforeTrim = before.trim();
+    const afterTrim = after.trim();
+    const tooSmall = beforeLines.length > 0 && afterLines.length < beforeLines.length * CATASTROPHIC_MIN_RATIO;
+    if (beforeTrim !== "" && (afterTrim === "" || tooSmall)) {
+      return finish("skipped", { reason: "catastrophic_rewrite" });
+    }
+  }
+  const bakPath = `${roadmapPath}.bak`;
+  let bakError = null;
+  try {
+    (deps?.backup ?? defaultBackup)(bakPath, before);
+  } catch (err) {
+    bakError = err instanceof Error ? err.message : String(err);
+  }
+  let writeResult;
+  try {
+    writeResult = (deps?.write ?? defaultWrite)(roadmapPath, before, after);
+  } catch {
+    writeResult = { wrote: false, reason: "write_failed" };
+  }
+  if (!writeResult.wrote) {
+    return finish("skipped", {
+      reason: writeResult.reason ?? "write_failed",
+      bak_path: bakPath,
+      bak_error: bakError,
+      wait_ms: writeResult.wait_ms,
+      write_ms: writeResult.write_ms
+    });
+  }
+  return finish("written", {
+    bak_path: bakPath,
+    bak_error: bakError,
+    wait_ms: writeResult.wait_ms,
+    write_ms: writeResult.write_ms
+  });
+}
+
+// src/shared/roadmap-splice.ts
+function insertUnderSection(content, sectionPrefix, entry) {
+  const prefixLower = sectionPrefix.trim().toLowerCase();
+  const lines = content.split("\n");
+  const result = [];
+  let insertedEntry = false;
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const stripped = line.trim().toLowerCase();
+    if (stripped.startsWith(prefixLower)) {
+      inSection = true;
+      result.push(line);
+      result.push(entry);
+      insertedEntry = true;
+      continue;
+    }
+    if (stripped.startsWith("## ") && inSection) {
+      inSection = false;
+    }
+    result.push(line);
+  }
+  if (!insertedEntry) {
+    const sectionIndex = result.findIndex(
+      (l) => l.trim().toLowerCase().startsWith("## planned") || l.trim().toLowerCase().startsWith("## recent")
+    );
+    if (sectionIndex > 0) {
+      result.splice(sectionIndex, 0, "", "## Completed", entry, "");
+    } else {
+      result.push("", "## Completed", entry);
+    }
+  }
+  return result.join("\n");
+}
+
 // src/prd-roadmap-sync.ts
 function readStdin() {
   return new Promise((resolve3) => {
@@ -199,12 +618,12 @@ function readStdin() {
   });
 }
 function isPRDFile(filePath) {
-  const basename2 = path2.basename(filePath).toLowerCase();
-  return basename2.startsWith("prd-") && basename2.endsWith(".md");
+  const basename3 = path2.basename(filePath).toLowerCase();
+  return basename3.startsWith("prd-") && basename3.endsWith(".md");
 }
 function isTasksFile(filePath) {
-  const basename2 = path2.basename(filePath).toLowerCase();
-  return basename2.startsWith("tasks-") && basename2.endsWith(".md");
+  const basename3 = path2.basename(filePath).toLowerCase();
+  return basename3.startsWith("tasks-") && basename3.endsWith(".md");
 }
 function extractPRDMetadata(content) {
   const result = {
@@ -236,11 +655,11 @@ function extractPRDMetadata(content) {
   return result;
 }
 function extractTaskProgress(content, filePath) {
-  const basename2 = path2.basename(filePath);
-  const featureMatch = basename2.match(/tasks?-(.+)\.md/i);
+  const basename3 = path2.basename(filePath);
+  const featureMatch = basename3.match(/tasks?-(.+)\.md/i);
   const featureName = featureMatch ? featureMatch[1].replace(/-/g, " ") : "Unknown Feature";
   const dir = path2.dirname(filePath);
-  const prdPattern = basename2.replace(/^tasks?-/i, "prd-");
+  const prdPattern = basename3.replace(/^tasks?-/i, "prd-");
   const prdPath = path2.join(dir, prdPattern.replace("tasks-", "PRD-"));
   const prdFile = fs.existsSync(prdPath) ? prdPath : null;
   const taskPattern = /^-\s*\[([ x])\]/gm;
@@ -330,6 +749,7 @@ function addToPlanned(content, item) {
 function updateProgress(content, title, progress) {
   const lines = content.split("\n");
   const result = [];
+  const removed = [];
   let inCurrent = false;
   let foundTitle = false;
   let progressUpdated = false;
@@ -350,6 +770,7 @@ function updateProgress(content, title, progress) {
         continue;
       }
       if (foundTitle && stripped.toLowerCase().startsWith("- progress:")) {
+        removed.push(lines[i]);
         result.push(`- Progress: ${progress.completed}/${progress.total} tasks (${progress.percentage}%)`);
         progressUpdated = true;
         continue;
@@ -374,54 +795,21 @@ function updateProgress(content, title, progress) {
         inserted = true;
       }
     }
-    return newResult.join("\n");
+    return { content: newResult.join("\n"), removed: [] };
   }
-  return result.join("\n");
+  return { content: result.join("\n"), removed };
 }
 function moveToCompleted(content, title) {
-  const lines = content.split("\n");
-  const result = [];
-  let inCurrent = false;
-  let skipUntilNextSection = false;
-  let completedInsertIndex = -1;
   const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-  for (let i = 0; i < lines.length; i++) {
-    const stripped = lines[i].trim();
-    const lower = stripped.toLowerCase();
-    if (lower.startsWith("## current")) {
-      inCurrent = true;
-      result.push(lines[i]);
-      continue;
-    } else if (lower.startsWith("## completed")) {
-      inCurrent = false;
-      skipUntilNextSection = false;
-      completedInsertIndex = result.length + 1;
-      result.push(lines[i]);
-      result.push(`- [x] ${title} (${today})`);
-      continue;
-    } else if (lower.startsWith("## ") && inCurrent) {
-      inCurrent = false;
-      skipUntilNextSection = false;
-    }
-    if (inCurrent) {
-      if (stripped.startsWith("**") && stripped.toLowerCase().includes(title.toLowerCase().split(" ")[0])) {
-        skipUntilNextSection = true;
-        result.push("");
-        result.push("_No current goal. Run /init-project or start a new PRD._");
-        result.push("");
-        continue;
-      }
-      if (skipUntilNextSection) {
-        continue;
-      }
-    }
-    result.push(lines[i]);
-  }
-  return result.join("\n");
+  return {
+    content: insertUnderSection(content, "## completed", `- [x] ${title} (${today})`),
+    removed: []
+  };
 }
 function promoteToCurrent(content, item) {
   const lines = content.split("\n");
   const result = [];
+  const removed = [];
   let inCurrent = false;
   let inPlanned = false;
   let removedFromPlanned = false;
@@ -451,15 +839,17 @@ function promoteToCurrent(content, item) {
       inPlanned = false;
     }
     if (inCurrent && stripped.includes("No current goal")) {
+      removed.push(lines[i]);
       continue;
     }
     if (inPlanned && !removedFromPlanned && stripped.includes(item.title.split(" ")[0])) {
+      removed.push(lines[i]);
       removedFromPlanned = true;
       continue;
     }
     result.push(lines[i]);
   }
-  return result.join("\n");
+  return { content: result.join("\n"), removed };
 }
 async function handlePRDChange(filePath, content) {
   const metadata = extractPRDMetadata(content);
@@ -497,7 +887,20 @@ async function handlePRDChange(filePath, content) {
     source: path2.basename(filePath)
   };
   const updated = addToPlanned(roadmapContent, newItem);
-  fs.writeFileSync(roadmapPath, updated);
+  const { outcome } = writeRoadmapGuarded({
+    hook: "prd-roadmap-sync",
+    roadmapPath,
+    projectDir: process.env.CLAUDE_PROJECT_DIR || process.cwd(),
+    before: roadmapContent,
+    after: updated,
+    ops: [{ label: "prd-add-planned", lines_removed: 0, lines_added: 1 }]
+  });
+  if (outcome !== "written") {
+    return {
+      result: "continue",
+      message: `ROADMAP NOT updated for PRD "${metadata.title}" (${outcome}) -- see .claude/logs/roadmap-sync.jsonl`
+    };
+  }
   return {
     result: "continue",
     message: `ROADMAP updated: Added "${metadata.title}" to Planned (from PRD)`
@@ -526,37 +929,59 @@ async function handleTasksChange(filePath, content) {
     (item) => item.title.toLowerCase().includes(progress.featureName.toLowerCase().split(" ")[0])
   );
   const isCurrent = roadmap.current && roadmap.current.title.toLowerCase().includes(progress.featureName.toLowerCase().split(" ")[0]);
-  let updated = roadmapContent;
+  let edit = { content: roadmapContent, removed: [] };
   let message = "";
+  let clearFocusAdvice = "";
   if (progress.isComplete) {
     if (roadmap.current) {
       if (isTasksRelatedToGoal(progress.featureName, roadmap.current.title)) {
         const titleToComplete = roadmap.current.title;
-        updated = moveToCompleted(roadmapContent, titleToComplete);
+        edit = moveToCompleted(roadmapContent, titleToComplete);
         message = `ROADMAP updated: "${titleToComplete}" marked complete (100%)`;
+        clearFocusAdvice = ` Current Focus still shows "${titleToComplete}" and its detail bullets -- they are hand-written, so this hook leaves them alone. Run \`/roadmap complete\` (or \`/roadmap focus <next goal>\`) to clear it once you have salvaged anything still open.`;
       } else {
         message = `Tasks complete (100%) for "${progress.featureName}" but unrelated to current goal "${roadmap.current.title}" -- ROADMAP completion skipped`;
       }
     } else {
-      updated = moveToCompleted(roadmapContent, progress.featureName);
+      edit = moveToCompleted(roadmapContent, progress.featureName);
       message = `ROADMAP updated: "${progress.featureName}" marked complete (100%)`;
     }
   } else if (inPlanned && !roadmap.current) {
-    updated = promoteToCurrent(roadmapContent, {
+    edit = promoteToCurrent(roadmapContent, {
       title: inPlanned.title,
       source: path2.basename(filePath)
     });
     message = `ROADMAP updated: Promoted "${inPlanned.title}" to Current`;
   } else if (isCurrent) {
-    updated = updateProgress(roadmapContent, roadmap.current.title, progress);
+    edit = updateProgress(roadmapContent, roadmap.current.title, progress);
     message = `ROADMAP progress: ${progress.completed}/${progress.total} (${progress.percentage}%)`;
   } else if (inPlanned) {
     message = `Tasks started for planned item "${inPlanned.title}" - will promote when current goal completes`;
   } else {
     message = `Tasks progress: ${progress.completed}/${progress.total} (${progress.percentage}%)`;
   }
-  if (updated !== roadmapContent) {
-    fs.writeFileSync(roadmapPath, updated);
+  if (edit.content !== roadmapContent) {
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: "prd-roadmap-sync",
+      roadmapPath,
+      projectDir,
+      before: roadmapContent,
+      after: edit.content,
+      allowedDeletions: edit.removed,
+      ops: [
+        {
+          label: "prd-tasks-sync",
+          lines_removed: edit.removed.length,
+          lines_added: edit.content.split("\n").length - roadmapContent.split("\n").length + edit.removed.length
+        }
+      ]
+    });
+    if (outcome !== "written") {
+      const detail = record.refused_deletions?.length ? ` Would have removed: ${record.refused_deletions.slice(0, 3).join(" | ")}` : "";
+      message = `ROADMAP NOT updated (${outcome}${record.reason ? `: ${record.reason}` : ""}).${detail} See .claude/logs/roadmap-sync.jsonl`;
+    } else {
+      message += clearFocusAdvice;
+    }
   }
   return { hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: message } };
 }

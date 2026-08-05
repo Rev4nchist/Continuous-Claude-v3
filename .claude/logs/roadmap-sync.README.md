@@ -1,0 +1,90 @@
+# roadmap-sync.jsonl — ROADMAP.md guarded-write audit trail
+
+One row per `writeRoadmapGuarded` (and follow-up `appendRoadmapAuditRecord`) call from any of the three hooks that touch `ROADMAP.md`: `post-plan-roadmap.ts`, `git-commit-roadmap.ts`, `prd-roadmap-sync.ts`. The `.jsonl` is gitignored (`.claude/logs/*.jsonl`) — machine-local runtime data; this README is committed.
+
+Plan: `i-was-working-in-composed-manatee` (approved, premortemed Claude+Codex, 2026-08-05), section 5. Built to close a real gap: no `.bak`, no audit log for any ROADMAP write existed before this, which is why the recurring clobber only ever surfaced as anecdote rather than evidence.
+
+## Schema (one JSON object per line)
+
+```json
+{
+  "ts": "2026-08-05T18:42:00Z",       // ISO 8601 UTC timestamp
+  "hook": "post-plan-roadmap",         // which hook called writeRoadmapGuarded
+  "project_dir": "/path/to/project",
+  "roadmap_path": "/path/to/project/ROADMAP.md",
+  "outcome": "written" | "noop" | "skipped" | "failed",
+  "reason": "deletion_guard" | "catastrophic_rewrite" | "lock_timeout" | "concurrent_modification" | "write_failed" | undefined,
+  "before_sha256": "0123456789abcdef",  // 16-hex prefix of sha256(before)
+  "after_sha256": "fedcba9876543210",   // 16-hex prefix of sha256(after)
+  "before_lines": 335,
+  "after_lines": 340,
+  "line_delta": 5,
+  "before_bytes": 12345,
+  "after_bytes": 12489,
+  "bytes_delta": 144,
+  "ops": [{ "label": "session-insert", "lines_removed": 0, "lines_added": 5 }],
+  "refused_deletions": ["- bullet that would have been dropped"],
+  "bak_path": "/path/to/project/ROADMAP.md.bak",
+  "bak_error": null,
+  "session_id": "abc123-...",
+  "committed": true,
+  "commit_hash": "deadbeef7",
+  "wait_ms": 12,
+  "write_ms": 3
+}
+```
+
+Every field beyond `ts`/`hook`/`project_dir`/`roadmap_path`/`outcome`/`before_*`/`after_*`/`line_delta`/`bytes_delta` is conditional on the outcome — see below.
+
+## Outcome / reason reference
+
+| outcome | reason | meaning |
+|---|---|---|
+| `noop` | — | `after === before`. No write, no `.bak`. Still logged so a hook firing with nothing to add is visible. |
+| `skipped` | `deletion_guard` | **The real guard.** A line present in `before` and absent from `after` was not in the caller's `allowedDeletions` list. The write was refused outright; `refused_deletions` names the offending lines (capped at 20). This is what makes append-only *enforced* rather than merely intended — it is the guard that would have caught the 24-insertion/19-deletion live clobber this plan fixes (net +5 lines, so a shrink-floor check could never have caught it; a line-vanishing check catches it on gate one). |
+| `skipped` | `catastrophic_rewrite` | Only reachable when the caller passed `allowFullRewrite: true` (the legitimate fresh-file path, which deliberately skips the deletion-guard above). Refused because `before` was non-empty and `after` was empty or under 25% of `before`'s line count. |
+| `skipped` | `lock_timeout` | `mutateStateWithLock`'s `acquireLockSync` did not get the lock inside its timeout. `wait_ms` records how long it waited. No content was lost — the write simply didn't happen this turn. |
+| `skipped` | `concurrent_modification` | The lock WAS acquired, but the file's content had changed since `before` was captured (another writer got there first). This is the one reason that should be **surfaced to the calling session**, not just logged — a silently dropped planning entry is exactly the defect class this plan exists to close. |
+| `skipped` | `write_failed` | Lock acquired, pre-image matched, but the underlying read or atomic write still failed (e.g. the file became unreadable, or the write threw). |
+| `written` | — | The write happened. `bak_path` holds where the pre-image was saved (best-effort — see `bak_error`); `wait_ms`/`write_ms` come from the lock/write timings when the real (non-test) write path was used. |
+| `failed` | (caller-defined) | Reserved for follow-up records appended via `appendRoadmapAuditRecord` — e.g. `git-commit-roadmap` recording that the ROADMAP write succeeded but the follow-on `git commit` failed. `writeRoadmapGuarded` itself never returns this outcome. |
+
+`lock_timeout`, `concurrent_modification`, and `write_failed` are kept as three distinct reasons rather than one generic "skipped" bucket precisely because they call for different next actions: a lock timeout is retry-later noise, a concurrent modification means a human's hand-edit just won a race and needs acknowledging, and a write failure needs investigating.
+
+## `.bak`
+
+Single generation (`ROADMAP.md.bak`, overwritten on every guarded write), holding the **before** content — not the after. A backup failure never blocks the write (`bak_error` records the message instead). Because it's single-generation and hand edits to `ROADMAP.md` are routinely uncommitted, `.bak` + git do **not** guarantee recovery two writes deep — it is the second line of defense, not the first; the deletion guard above is the first.
+
+## No rotation
+
+Deliberate. Three hooks append concurrently, and an unsynchronised rename at a rotation boundary can lose records — worse than a large file. A record is roughly 400 bytes; even 100 writes/day is on the order of 15 MB/year. Past 2 MB the intended behavior is to keep appending and let the caller emit a one-time advisory suggesting a manual sweep — this module does not delete or truncate the log itself.
+
+## Query patterns
+
+### Every refused write (the guard actually firing)
+```bash
+jq -c 'select(.outcome == "skipped" and .reason == "deletion_guard")' .claude/logs/roadmap-sync.jsonl
+```
+
+### Concurrent-modification drops (the case that needs surfacing to a session)
+```bash
+jq -c 'select(.reason == "concurrent_modification")' .claude/logs/roadmap-sync.jsonl
+```
+
+### Outcomes by hook
+```bash
+jq -s 'group_by(.hook) | map({hook: .[0].hook, outcomes: group_by(.outcome) | map({outcome: .[0].outcome, n: length})})' .claude/logs/roadmap-sync.jsonl
+```
+
+### Lock-wait distribution (fork-storm / spawn-latency correlation)
+```bash
+jq -s 'map(select(.wait_ms != null) | .wait_ms) | sort' .claude/logs/roadmap-sync.jsonl
+```
+
+## Related
+
+- Module: `.claude/hooks/src/shared/roadmap-audit.ts` (`writeRoadmapGuarded`, `appendRoadmapAuditRecord`)
+- Underlying primitive: `.claude/hooks/src/shared/atomic-write.ts` (`mutateStateWithLock`, `MutateLockOptions`)
+- Tests: `.claude/hooks/src/__tests__/roadmap-audit.test.ts`
+- Plan: `i-was-working-in-composed-manatee` (§5 "New `shared/roadmap-audit.ts`")
+- Sibling READMEs: `.claude/logs/codex-lift.README.md`, `.claude/logs/grok-worker.README.md`
