@@ -140,6 +140,26 @@ $clash = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "repos/$TargetOrg/$targe
 if ($clash.ok) { Add-Block "$TargetOrg/$targetName ALREADY EXISTS. Pass -NewName to rename on transfer." }
 else           { Write-Host "  [ok] $TargetOrg/$targetName is free" }
 
+# 4b. Source VISIBILITY. Learned the hard way 2026-08-05: transferring the public
+#     repo Rev4nchist/fourth-firecrawl into 'fourth' returned
+#       422 "You don't have the permission to create public repositories on fourth"
+#     Note what is NOT usable as the check here: GET /orgs/fourth reported
+#     members_can_create_public_repositories=true in the SAME session the 422
+#     fired. A plain org MEMBER gets a partial view of org config (
+#     default_repository_permission came back null alongside it), so those fields
+#     are not authoritative -- most likely an enterprise policy overrides them.
+#     There is no dry-run for transfer, so the 422 is the only ground truth and
+#     this has to be a static rule: public source into this org is refused.
+#     Remedy is to flip the repo private first (an internal tool probably should
+#     be), or have an org owner receive the transfer.
+$vis = Invoke-Gh -ConfigDir $personalDir -GhArgs @('api', "repos/$SourceOwner/$Repo", '--jq', '.visibility')
+$visibility = $vis.out.Trim()
+if ($vis.ok -and $visibility -eq 'public') {
+  Add-Block "source is PUBLIC. Transferring a public repo into '$TargetOrg' returns 422 'You don't have the permission to create public repositories on $TargetOrg' (observed 2026-08-05). Do NOT trust GET /orgs/$TargetOrg on this -- as a member you get a partial view that claims public creation is allowed. Flip it private first (gh api repos/$SourceOwner/$Repo -X PATCH -F private=true) or have an org owner receive it. CHECK FIRST if the repo is licensed copyleft (this one is AGPL-3.0) or has external dependents."
+} elseif ($vis.ok) {
+  Write-Host "  [ok] source visibility: $visibility"
+}
+
 # 5. git credential for the WORK user must exist BEFORE the move, or the first
 #    post-transfer push fails. Non-interactive: GCM's default on a miss is a GUI
 #    prompt, which blocks forever in a tool shell (verifier layer 2, 2026-08-05).
