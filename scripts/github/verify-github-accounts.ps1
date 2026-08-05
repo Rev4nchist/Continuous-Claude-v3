@@ -173,8 +173,22 @@ foreach ($r in $cfg.routes) {
   $row = [ordered]@{ route = $r.prefix; account = $routeAcct; expectedEmail = $expected }
   if ($expected -like 'TBD-*') { $row.actualEmail = '(account is a placeholder)'; $routeRows += [pscustomobject]$row; continue }
   if (-not (Test-Path $dir)) {
-    $row.actualEmail = 'PATH DOES NOT EXIST'
-    Add-Finding 'commit-identity' $routeAcct "route prefix '$dir' does not exist -- a route that matches nothing silently never applies"
+    # A route pointing at nothing is normally a real defect: it looks like coverage
+    # and protects nothing. But a DELIBERATELY reserved prefix (a directory that
+    # will exist once something is cloned into it) is not a defect, and reporting
+    # it as one made this verifier permanently FAIL on 2 findings while every real
+    # repo was correct. A gate that can never go green stops being read, which is
+    # worse than the thing it was reporting.
+    #
+    # The distinction comes from the route's own `note`, i.e. from stated INTENT,
+    # not from guessing. An unnoted missing prefix is still a finding -- that is
+    # how the stale Projects/fourth-connect route was caught and removed.
+    if ($r.note -match '(?i)reserved') {
+      $row.actualEmail = '(reserved - not yet created)'
+    } else {
+      $row.actualEmail = 'PATH DOES NOT EXIST'
+      Add-Finding 'commit-identity' $routeAcct "route prefix '$dir' does not exist and is not marked reserved -- a route that matches nothing silently never applies. Either create it, delete the route, or add a note saying it is reserved."
+    }
   } else {
     # Ask git from INSIDE the directory: that is what resolves includeIf.
     $actual = (& git -C $dir config user.email 2>&1) -join ''

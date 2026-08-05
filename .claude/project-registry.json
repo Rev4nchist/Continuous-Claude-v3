@@ -118,7 +118,9 @@
       "devCommand": null,
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/ebr-presentations-plugin",
+      "notes": "Created directly in the fourth org 2026-08-05 (had no remote, so nothing to transfer)."
     },
     {
       "name": "gong-mcp",
@@ -187,38 +189,65 @@
     {
       "name": "fourth-playwright-mcp",
       "path": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
-      "stack": [],
-      "description": "Fourth Playwright MCP server",
-      "port": null,
-      "url": null,
-      "devCommand": null,
+      "stack": [
+        "Python 3.11",
+        "FastMCP v3",
+        "Playwright",
+        "uv"
+      ],
+      "description": "General-purpose web automation MCP server (navigate, extract, forms, a11y, performance)",
+      "port": 8000,
+      "url": "http://127.0.0.1:8000",
+      "devCommand": "uv run python src/server.py",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/fourth-playwright-mcp",
+      "kind": "mcp-server",
+      "deploy": "Railway (DOCKERFILE builder, healthcheck /health)",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. PORT COLLISION UNRESOLVED: .env.example sets PORT=8000, already assigned to gong-mcp. Next free 8xxx is 8003. Recorded as 8000 because that is what the repo actually does - the duplicate is left VISIBLE rather than papered over with an aspirational number. Railway service is not GitHub-bound (source null), deploys by CLI, project lives in the personal Railway workspace."
     },
     {
       "name": "agent-arch",
       "path": "C:/agent-arch",
-      "stack": [],
-      "description": "Agent architecture workspace",
-      "port": null,
-      "url": null,
-      "devCommand": null,
+      "stack": [
+        "Python",
+        "Dockerfile backend",
+        "Next.js 16.2.10",
+        "React 19"
+      ],
+      "description": "MSFT Agent Architecture Guide - Fourth agent architecture platform (Python backend + Next.js frontend)",
+      "port": 3008,
+      "url": "http://localhost:3008",
+      "devCommand": "cd frontend && npm run dev",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/agent-arch",
+      "kind": "web-app",
+      "deploy": "Azure via GitHub Actions (backend-deploy.yml, frontend-deploy.yml, staging-deploy.yml)",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. 3008 is the frontend dev port per .env.example; with Docker the reverse proxy is 8080. security-scan.yml fires on push/PR to main only."
     },
     {
       "name": "fourth-marketing-brain",
       "path": "C:/Users/david.hayes/fourth-marketing-brain",
-      "stack": [],
-      "description": "Fourth marketing brain",
+      "stack": [
+        "Python 3.12",
+        "FastMCP",
+        "Cosmos + SharePoint backends",
+        "uv"
+      ],
+      "description": "AI-powered marketing knowledge MCP server for Fourth - serves the Marketing Brain KB to any AI tool",
       "port": null,
-      "url": null,
-      "devCommand": null,
+      "url": "stdio (MCP_TRANSPORT=stdio default)",
+      "devCommand": "uv run python app.py",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/fourth-marketing-brain",
+      "kind": "mcp-server",
+      "deploy": "GitHub Actions deploy.yml",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. Defaults to stdio so claims NO port. MCP_PORT=8000 applies only when MCP_TRANSPORT=http, and that value collides with gong-mcp - reassign before running in http mode."
     },
     {
       "name": "Fourth Canvas",
@@ -335,6 +364,26 @@
       "url": "ws://localhost:3011",
       "devCommand": "BUZZ_HTTP_PORT=3011 docker compose -f deploy/compose/compose.yml up -d",
       "status": "active"
+    },
+    {
+      "name": "fourth-firecrawl",
+      "path": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
+      "stack": [
+        "Claude Code plugin",
+        "Markdown skills + commands",
+        "Firecrawl MCP"
+      ],
+      "description": "Fourth-tailored Firecrawl Claude plugin v1.2.1 - competitor intel, hospitality market scans, staged KB ingestion",
+      "port": null,
+      "url": "",
+      "devCommand": "",
+      "status": "active",
+      "github": "fourth/fourth-firecrawl",
+      "deploy": "n/a (plugin, distributed as .claude-plugin)",
+      "kind": "claude-plugin",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. AGPL-3.0. Working copy dir is fourth-firecrawl-PLUGIN; the sibling fourth-firecrawl dir was the per-user output workspace and is archived at Projects/archive/fourth-firecrawl-workspace-2026-04. Superseded duplicate david-hayes44/fourth-firecrawl is archived on GitHub.",
+      "sentryProject": "",
+      "linearTeam": ""
     }
   ]
 }
