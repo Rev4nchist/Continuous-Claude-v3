@@ -59,6 +59,15 @@
         "structural_fix": "create_handoff SKILL.md now (a) supports `session: \"*\"` so a cross-track page is considered by EVERY handoff, and (b) handles `content_model: generated` -- run `render`, publish `publish_from`, never hand the generator to the Artifact tool. Without both, the decisions above would have been recorded in a file nothing honors: the wildcard was chosen precisely because the old match-on-session-name rule is why no handoff ever looked at this page.",
         "full_handoff": "thoughts/shared/handoffs/agentic-os/2026-07-29_22-05_lane-board-artifact-reconcile.yaml (thoughts/ is gitignored, so that file is machine-local -- this block is the durable record)"
       },
+      "URL_UNREACHABLE": {
+        "found": "2026-08-05",
+        "by_session": "35c80051",
+        "symptom": "The recorded `url` resolves to nothing. WebFetch returns 'artifact not found -- it may have been deleted, or it has not been shared with you', and the Artifact tool's own listing does not contain it: 13 artifacts across scope=all (6 mine, 7 shared) and this id is absent from both.",
+        "why_it_matters": "`last_published` says 2026-08-05 and commit 8bba4df says 'lane board republished at handoff (2026-08-05)', so the registry asserts a successful publish TODAY to a URL that does not exist. Either that republish minted a new URL and did not record it, or it failed and was recorded as success. This is the exact hazard $schema_notes describes: a registry entry the next session believes on sight.",
+        "deliberately_not_done": "Did NOT publish. Publishing without a live URL to pass back would mint a NEW url (the skill forbids creating artifacts during a handoff refresh), and `force: true` was not used because it exists to overwrite another session's version, not to paper over a missing one. Did not edit `last_published` either -- leaving it visibly contradicted by this block is more informative than quietly resetting it.",
+        "what_this_session_would_have_changed": "Two branch-wide `lane.mjs say` notes about the ROADMAP append-only repair. render-board.mjs:114 renders the last 30 agentic_os.lane_event rows and the page calls that log the message bus between sessions, so those notes DO belong on the page -- the staleness is real, only the destination is missing.",
+        "next_step": "Decide whether the board should be re-published at a fresh URL (then update `url` + `last_published` here in the same commit) or retired from this registry. Until then treat every field of this entry except this block as unverified. `node scripts/coordination/render-board.mjs` still renders lane-board.html locally and is unaffected."
+      },
       "notes": [
         "DECISION 2026-07-29: this is a GENERATED live board, read from agentic_os.lane on every",
         "publish. Rationale: a hand-written board is accurate the day it is written and rots the same",
