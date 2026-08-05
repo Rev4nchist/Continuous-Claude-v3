@@ -14,23 +14,102 @@ function isPathInsideProject(targetPath, projectDir) {
   const rel = path.relative(path.resolve(projectDir), path.resolve(targetPath));
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
+function normalizeShellPath(p) {
+  if (!p || process.platform !== "win32") return p;
+  let m = p.match(/^\/cygdrive\/([A-Za-z])(\/.*)?$/);
+  if (m) return `${m[1].toUpperCase()}:${m[2] || "/"}`;
+  m = p.match(/^\/([A-Za-z])(\/.*)?$/);
+  if (m) return `${m[1].toUpperCase()}:${m[2] || "/"}`;
+  return p;
+}
+var GIT_VALUE_OPTS = /* @__PURE__ */ new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--super-prefix"
+]);
+var SHELL_SEPARATORS = /* @__PURE__ */ new Set(["&&", "||", ";", "|", "&"]);
+function tokenizeCommand(command) {
+  const tokens = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) {
+    tokens.push(m[1] ?? m[2] ?? m[3] ?? "");
+  }
+  return tokens;
+}
+function parseGitCommitInvocations(command) {
+  if (!command) return [];
+  const tokens = tokenizeCommand(command);
+  const found = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].toLowerCase() !== "git" && !/[\\/]git(\.exe)?$/i.test(tokens[i])) continue;
+    let cTarget = null;
+    let j = i + 1;
+    let subcommand = null;
+    while (j < tokens.length) {
+      const tok = tokens[j];
+      if (tok.startsWith("-")) {
+        const eq = tok.indexOf("=");
+        if (eq > 0) {
+          const name = tok.slice(0, eq);
+          if (name === "--work-tree" || name === "--git-dir") cTarget = tok.slice(eq + 1);
+          j += 1;
+          continue;
+        }
+        if (GIT_VALUE_OPTS.has(tok)) {
+          if (tok === "-C") cTarget = tokens[j + 1] ?? null;
+          j += 2;
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      subcommand = tok;
+      break;
+    }
+    if (subcommand?.toLowerCase() !== "commit") continue;
+    let hasAmend = false;
+    for (let k = j + 1; k < tokens.length; k++) {
+      if (SHELL_SEPARATORS.has(tokens[k])) break;
+      if (tokens[k] === "--amend") {
+        hasAmend = true;
+        break;
+      }
+    }
+    found.push({ cTarget, hasAmend });
+    i = j;
+  }
+  return found;
+}
 function extractCdTarget(command) {
   if (!command) return null;
-  const commitIdx = command.search(/git\s+(?:-[^\s]+\s+)*commit/i);
+  const commitIdx = command.search(/git\s+(?:-[^\s]+(?:\s+[^\s-]\S*)?\s+)*commit\b/i);
   const scope = commitIdx >= 0 ? command.slice(0, commitIdx) : command;
   const m = scope.match(/(?:^|[;&|]\s*|&&\s*)cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/);
   if (!m) return null;
   return m[1] || m[2] || m[3] || null;
 }
-function commitRanInProject(command, projectDir) {
-  const target = extractCdTarget(command);
-  if (!target) return true;
-  let resolved = target;
+function resolveShellTarget(target, base) {
+  let resolved = normalizeShellPath(target);
   if (resolved === "~" || resolved.startsWith("~/") || resolved.startsWith("~\\")) {
     resolved = path.join(homedir(), resolved.slice(1));
   }
-  const abs = path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(projectDir, resolved);
-  return isPathInsideProject(abs, projectDir);
+  return path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(base, resolved);
+}
+function commitRanInProject(command, projectDir) {
+  const cdTarget = extractCdTarget(command);
+  const cwd = cdTarget ? resolveShellTarget(cdTarget, projectDir) : path.resolve(projectDir);
+  if (cdTarget && !isPathInsideProject(cwd, projectDir)) return false;
+  for (const invocation of parseGitCommitInvocations(command)) {
+    if (!invocation.cTarget) continue;
+    const effective = resolveShellTarget(invocation.cTarget, cwd);
+    if (!isPathInsideProject(effective, projectDir)) return false;
+  }
+  return true;
 }
 
 // src/shared/roadmap-splice.ts
@@ -476,8 +555,8 @@ function readStdin() {
   });
 }
 function isGitCommitCommand(command) {
-  const normalized = command.toLowerCase().trim();
-  return normalized.includes("git commit") && !normalized.includes("--amend");
+  const invocations = parseGitCommitInvocations(command);
+  return invocations.length > 0 && invocations.some((inv) => !inv.hasAmend);
 }
 function isSuccessfulCommit(response) {
   return COMMIT_PATTERNS.commitOutput.test(response) && !COMMIT_PATTERNS.amendIndicator.test(response);

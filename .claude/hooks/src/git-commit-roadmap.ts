@@ -16,7 +16,11 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execFileSync } from 'node:child_process';
-import { commitRanInProject, isPathInsideProject } from './shared/roadmap-sync-guards.js';
+import {
+  commitRanInProject,
+  isPathInsideProject,
+  parseGitCommitInvocations,
+} from './shared/roadmap-sync-guards.js';
 import { insertUnderSection } from './shared/roadmap-splice.js';
 import { writeRoadmapGuarded, appendRoadmapAuditRecord } from './shared/roadmap-audit.js';
 
@@ -62,9 +66,22 @@ function readStdin(): Promise<string> {
   });
 }
 
+/**
+ * Recognise a `git commit` in any option form.
+ *
+ * Was `normalized.includes('git commit')`, which is FALSE for
+ * `git -C <path> commit` — so every commit made that way was invisible to this
+ * hook and never reached the ROADMAP (found 2026-08-05; `git -C` is the form
+ * .claude/rules/windows-platform.md recommends for the PowerShell tool, because
+ * the Bash tool hangs on git/network ops). Now tokenizes the invocation.
+ *
+ * The `--amend` exclusion is preserved, and is now per-invocation rather than a
+ * whole-string test — so `git commit -m "..."` in a command that ALSO mentions
+ * the word --amend elsewhere is still recorded correctly.
+ */
 function isGitCommitCommand(command: string): boolean {
-  const normalized = command.toLowerCase().trim();
-  return normalized.includes('git commit') && !normalized.includes('--amend');
+  const invocations = parseGitCommitInvocations(command);
+  return invocations.length > 0 && invocations.some((inv) => !inv.hasAmend);
 }
 
 function isSuccessfulCommit(response: string): boolean {
