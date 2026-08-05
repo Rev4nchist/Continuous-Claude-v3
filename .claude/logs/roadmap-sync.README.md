@@ -39,6 +39,27 @@ are still live:
    both). The tool name was confirmed as the literal string `PowerShell` from a
    session transcript before editing — guessing a matcher gives you one that
    silently matches nothing, which is the failure this whole list documents.
+6. **A commit made through `scripts/git-safe.ps1` is invisible to the hook.**
+   OPEN as of 2026-08-05. `isGitCommitCommand` parses the *command string* and
+   `parseGitCommitInvocations` requires a literal `git` token, or a token whose
+   path ends in `git`/`git.exe` (`roadmap-sync-guards.ts:180`). The command
+   `pwsh -File scripts/git-safe.ps1 -C <repo> commit -F <msg>` contains neither:
+   `scripts/git-safe.ps1` ends in `git-safe.ps1`, not `git`. So the hook returns
+   before it ever reaches `writeRoadmapGuarded`, and writes no record at all —
+   not even a `skipped` one.
+
+   This is the same shape as item 5 and just as load-bearing.
+   `.claude/rules/windows-platform.md` mandates `git-safe.ps1` for commits and
+   pushes because of the MSYS fork storm, so once again **the recommended way to
+   commit is a way that goes unrecorded**.
+
+   It also means the evidence for item 5 was **confounded**. The 7-commit
+   negative control cited as proof of the matcher bug
+   (`7fc7edd`, `901a456`, `26b0497`, `b04ea82`, `14292bd`, `27cf37a`, `8341150`)
+   went through `git-safe.ps1` *and* through the PowerShell tool, so both causes
+   were present in every one of them and neither was isolated. Two independent
+   defects producing one identical symptom is exactly why a wrapper that changes
+   the observed command string has to be part of the hypothesis.
 
 ## Schema (one JSON object per line)
 
@@ -46,6 +67,7 @@ are still live:
 {
   "ts": "2026-08-05T18:42:00Z",       // ISO 8601 UTC timestamp
   "hook": "post-plan-roadmap",         // which hook called writeRoadmapGuarded
+  "tool": "PowerShell",                // triggering tool_name; "unknown" if a caller omits it
   "project_dir": "/path/to/project",
   "roadmap_path": "/path/to/project/ROADMAP.md",
   "outcome": "written" | "noop" | "skipped" | "failed",
