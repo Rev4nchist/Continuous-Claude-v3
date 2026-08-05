@@ -20,7 +20,26 @@ are still live:
    only in the sense of being understood — the check is unchanged.
 3. **`chore`, `style` and `ci` are in `SKIP_TYPES`** and never recorded. The
    hook's own follow-on commit uses `chore(roadmap):` deliberately, as one of the
-   three recursion barriers.
+   three recursion barriers. Useful side effect: a `chore:` commit is the only
+   way to land a ROADMAP.md edit without the hook appending another line to it.
+
+### `CCV3_ROADMAP_AUTOCOMMIT=0` (set 2026-08-05, both settings.json copies)
+
+The paired `chore(roadmap): record ...` commit is OFF. The hook still writes
+ROADMAP.md and still appends an audit record — `outcome: written`,
+`committed: false`, `reason: autocommit_disabled`.
+
+**It took effect immediately, not at the next session start.** A commit message
+in `97220ca` claims otherwise; that was wrong. The hook reads `process.env` per
+invocation and the harness passes the settings `env` block through to hook
+processes without a restart.
+
+Consequence, and it is the real cost of the setting: **ROADMAP.md is now left
+uncommitted after every conventional commit**, in a working tree three sessions
+share. It rides along in whoever runs `git add` next. Tolerable only because
+writes are append-only behind a deletion-free guard. To close a session with a
+clean tree, land the pending ROADMAP line under a `chore:` type — `SKIP_TYPES`
+means the hook adds nothing on top of it.
 4. **Two path/parsing gaps, CLOSED 2026-08-05 (`ed9b825`)** — `cd /c/... && git
    commit` was rejected as foreign (`path.resolve` turned `/c/` into a directory
    named `c`), and `git -C <path> commit` was not recognised as a commit at all.
