@@ -72,6 +72,12 @@ function resolveYtdlpExe() {
 }
 export const YTDLP_EXE = resolveYtdlpExe();
 
+// EXPLICIT opt-in for TLS-intercepting egress proxies (self-signed cert in
+// chain -> CERTIFICATE_VERIFY_FAILED). Disables yt-dlp's certificate checks —
+// never the default. Try trust first: SSL_CERT_FILE=<system CA bundle> reaches
+// yt-dlp's Python runtime through the environment without weakening anything.
+export const INSECURE_TLS = process.env.YT_INSECURE_TLS === '1';
+
 // Hard ceiling per yt-dlp invocation. A channel batch is ONE process, so this
 // covers the whole batch, not a single video. Windows stall bugs mean we never
 // rely on the tool self-terminating.

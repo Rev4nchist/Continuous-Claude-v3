@@ -12,9 +12,15 @@ import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join } from 'node:path';
 import {
   YTDLP_EXE, YTDLP_TIMEOUT_MS, SUB_LANGS, SUB_LANG_PREFERENCE, SLEEP_REQUESTS_S,
+  INSECURE_TLS,
 } from './config.mjs';
 
 function run(args, { timeout = YTDLP_TIMEOUT_MS, allowFailure = false } = {}) {
+  // YT_INSECURE_TLS=1 is an EXPLICIT opt-in for sandboxes behind a
+  // TLS-intercepting proxy whose CA yt-dlp's bundled trust store lacks.
+  // Prefer fixing trust instead: SSL_CERT_FILE=<system CA bundle> passes
+  // through to yt-dlp's Python runtime via the environment.
+  if (INSECURE_TLS) args = ['--no-check-certificates', ...args];
   const res = spawnSync(YTDLP_EXE, args, {
     timeout,
     windowsHide: true,
@@ -83,14 +89,36 @@ export function listTarget(target, { limit } = {}) {
   if (limit && Number(limit) > 0) args.push('--playlist-end', String(Number(limit)));
   args.push(url);
 
-  const { stdout } = run(args, { allowFailure: true });
-  if (!stdout.trim()) throw new Error(`yt-dlp returned no data for ${url}`);
+  const { stdout, stderr } = run(args, { allowFailure: true });
+  return parseListOutput(stdout, stderr, url);
+}
+
+// Pure — tested. Turns yt-dlp's -J output into { kind, channel, entries[] }, or
+// throws with yt-dlp's OWN error text. The trap this guards (hit live on Claude
+// web, 2026-08-04): with --ignore-errors a totally-failed extraction exits
+// non-zero AND prints the literal string "null" — JSON.parse succeeds, and an
+// unguarded `data._type` becomes a property-access crash that swallows the real
+// error (there: SSL CERTIFICATE_VERIFY_FAILED from a TLS-intercepting proxy).
+export function parseListOutput(stdout, stderr, url) {
+  const errTail = (stderr || '').trim().slice(-600);
+
+  if (!stdout.trim()) {
+    throw new Error(
+      `yt-dlp returned no data for ${url}${errTail ? ` — yt-dlp said: ${errTail}` : ''}`,
+    );
+  }
 
   let data;
   try {
     data = JSON.parse(stdout);
   } catch {
     throw new Error(`yt-dlp returned non-JSON for ${url}: ${stdout.slice(0, 300)}`);
+  }
+
+  if (!data || typeof data !== 'object') {
+    throw new Error(
+      `yt-dlp could not extract ${url}${errTail ? ` — yt-dlp said: ${errTail}` : ' (no error detail)'}`,
+    );
   }
 
   // A single video URL yields a video object, not a playlist.

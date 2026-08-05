@@ -231,6 +231,7 @@ The single smallest change that starts the experiment.
 | ASR quality | Auto captions mangle technical terms, names, and code. `transcript_source` records which track was used. |
 | yt-dlp drift | YouTube breaks extractors regularly. If ingest starts failing, `yt-dlp -U` first, before debugging anything else. |
 | Rate limits | Subtitle requests are the throttle. `SUB_LANGS` is pinned to two tracks and requests are spaced; widening it re-introduces the HTTP 429 that an `en.*` glob caused. |
+| TLS-intercepting proxies | In sandboxes whose egress proxy re-signs HTTPS (symptom: ingest fails with `CERTIFICATE_VERIFY_FAILED — self-signed certificate in certificate chain`), yt-dlp's bundled trust store lacks the proxy CA even when node's works. Fix trust first: `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt` (or the host's CA bundle). Last resort, explicit opt-in: `YT_INSECURE_TLS=1` disables yt-dlp's cert checks — say so out loud before using it. |
 | Search is regex, not semantic | Excellent for known vocabulary, blind to paraphrase. Run several phrasings. Revisit if the corpus passes ~1,000 videos. |
 
 ---

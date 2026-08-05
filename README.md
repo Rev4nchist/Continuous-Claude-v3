@@ -101,6 +101,8 @@ you are in — not to the plugin's install directory.
 | `YT_SUB_LANGS` | `en,en-orig` | Subtitle tracks to request (see the 429 note below) |
 | `YT_CHUNK_CHARS` | `220` | Transcript chunk size before a new `[MM:SS]` stamp |
 | `YTDLP_TIMEOUT_MS` | `900000` | Hard ceiling per yt-dlp invocation |
+| `SSL_CERT_FILE` | (unset) | Point yt-dlp's Python runtime at a CA bundle — the right fix behind a TLS-intercepting proxy |
+| `YT_INSECURE_TLS` | (unset) | `1` disables yt-dlp certificate checks. Explicit last-resort opt-in for re-signing proxies; prefer `SSL_CERT_FILE` |
 
 ---
 
