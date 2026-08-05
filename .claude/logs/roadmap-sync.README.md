@@ -27,6 +27,18 @@ are still live:
    If you see either symptom again, `normalizeShellPath` /
    `parseGitCommitInvocations` in `shared/roadmap-sync-guards.ts` are the code to
    look at, and `roadmap-sync-guards-invocation.test.ts` is the guard.
+5. **The hook was registered on the `Bash` matcher only, CLOSED 2026-08-05** —
+   so a commit made through the **PowerShell tool** never fired it. That is not a
+   corner case: `.claude/rules/windows-platform.md` tells you to prefer the
+   PowerShell tool for git precisely because the Bash tool hangs on git/network
+   ops, so the recommended way to commit was the one way that went unrecorded.
+   Caught in the wild by this very log — a concurrent session's `fix(github)`
+   commit produced ZERO records while Bash-tool commits produced two each.
+   Matcher is now `Bash|PowerShell` in **both** settings.json copies (repo and
+   `~/.claude`; that file is deliberately NOT synced, so it must be edited in
+   both). The tool name was confirmed as the literal string `PowerShell` from a
+   session transcript before editing — guessing a matcher gives you one that
+   silently matches nothing, which is the failure this whole list documents.
 
 ## Schema (one JSON object per line)
 

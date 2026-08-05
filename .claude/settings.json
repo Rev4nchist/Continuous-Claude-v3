@@ -546,7 +546,7 @@
         ]
       },
       {
-        "matcher": "TaskUpdate|Bash",
+        "matcher": "TaskUpdate|Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
@@ -559,7 +559,7 @@
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
