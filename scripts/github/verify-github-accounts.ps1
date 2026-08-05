@@ -98,9 +98,30 @@ foreach ($prop in $cfg.accounts.PSObject.Properties) {
   # `git credential fill` asks the SAME helper git itself would ask, for the
   # SAME user-scoped key. Anything less (reading cmdkey, assuming wincred) tests
   # a different question than the one that matters at push time.
+  #
+  # MUST be non-interactive. Git Credential Manager's default behaviour on a MISS
+  # is to raise a GUI prompt, and a GUI prompt in a scheduled/tool shell blocks
+  # forever -- nobody is there to answer it. Observed 2026-08-05: this layer hung
+  # the whole verifier with `git credential fill` -> `git credential-manager get`
+  # parked at 0% CPU, and the run had to be killed, producing ZERO output. A
+  # verifier that can hang is a verifier that never gets run, which is how all
+  # four layers stayed unverified while the setup was silently misconfigured.
+  #
+  # Belt and braces, because these are read by different components:
+  #   GIT_TERMINAL_PROMPT=0        -- git's own terminal prompt
+  #   GCM_INTERACTIVE=never        -- GCM env knob
+  #   -c credential.interactive=false -- GCM git-config knob
+  # A miss must FAIL, not ask.
   $checks++
   $probe = "protocol=https`nhost=github.com`nusername=$($a.user)`n`n"
-  $filled = ($probe | & git credential fill 2>&1) -join "`n"
+  $prevTp = $env:GIT_TERMINAL_PROMPT; $prevGcmI = $env:GCM_INTERACTIVE
+  $env:GIT_TERMINAL_PROMPT = '0'; $env:GCM_INTERACTIVE = 'never'
+  try {
+    $filled = ($probe | & git -c credential.interactive=false credential fill 2>&1) -join "`n"
+  } finally {
+    if ($null -ne $prevTp) { $env:GIT_TERMINAL_PROMPT = $prevTp } else { Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue }
+    if ($null -ne $prevGcmI) { $env:GCM_INTERACTIVE = $prevGcmI } else { Remove-Item Env:GCM_INTERACTIVE -ErrorAction SilentlyContinue }
+  }
   if ($filled -match 'password=') {
     $gotUser = if ($filled -match 'username=(\S+)') { $Matches[1] } else { '(none)' }
     $row.gitCredential = $gotUser
@@ -119,20 +140,43 @@ foreach ($prop in $cfg.accounts.PSObject.Properties) {
 $routeRows = @()
 foreach ($r in $cfg.routes) {
   $checks++
-  $acct = $cfg.accounts.($r.account)
+  #
+  # Routes carry the account under `commitAccount`. They used to carry it under
+  # `account`, and this script kept reading the old name after accounts.json was
+  # refactored -- so `$cfg.accounts.($null)` returned $null, `$expected` was
+  # $null, and `$actual -ne $expected` was TRUE for every route on disk. That
+  # does not fail loudly; it fires a spurious commit-identity finding for ALL 15
+  # routes, which is worse than hanging, because it looks like 15 real problems.
+  #
+  # Accept either spelling, but REFUSE to proceed if neither is present rather
+  # than silently treating an unreadable route as "no expectation".
+  $routeAcct = if ($r.PSObject.Properties['commitAccount']) { $r.commitAccount } `
+               elseif ($r.PSObject.Properties['account']) { $r.account } `
+               else { $null }
+  if (-not $routeAcct) {
+    Add-Finding 'commit-identity' '(schema)' "route '$($r.prefix)' has neither 'commitAccount' nor 'account' -- accounts.json schema drifted away from this verifier. Not guessing."
+    $routeRows += [pscustomobject]@{ route = $r.prefix; account = '(UNREADABLE)'; expectedEmail = '(unknown)'; actualEmail = '(skipped)' }
+    continue
+  }
+  $acct = $cfg.accounts.$routeAcct
+  if (-not $acct) {
+    Add-Finding 'commit-identity' $routeAcct "route '$($r.prefix)' points at account '$routeAcct' which is not defined in accounts.json"
+    $routeRows += [pscustomobject]@{ route = $r.prefix; account = $routeAcct; expectedEmail = '(undefined account)'; actualEmail = '(skipped)' }
+    continue
+  }
   $expected = $acct.email
   $dir = $r.prefix
-  $row = [ordered]@{ route = $r.prefix; account = $r.account; expectedEmail = $expected }
+  $row = [ordered]@{ route = $r.prefix; account = $routeAcct; expectedEmail = $expected }
   if ($expected -like 'TBD-*') { $row.actualEmail = '(account is a placeholder)'; $routeRows += [pscustomobject]$row; continue }
   if (-not (Test-Path $dir)) {
     $row.actualEmail = 'PATH DOES NOT EXIST'
-    Add-Finding 'commit-identity' $r.account "route prefix '$dir' does not exist -- a route that matches nothing silently never applies"
+    Add-Finding 'commit-identity' $routeAcct "route prefix '$dir' does not exist -- a route that matches nothing silently never applies"
   } else {
     # Ask git from INSIDE the directory: that is what resolves includeIf.
     $actual = (& git -C $dir config user.email 2>&1) -join ''
     $row.actualEmail = $actual
     if ($actual -ne $expected) {
-      Add-Finding 'commit-identity' $r.account "commits made in '$dir' would be authored as '$actual', expected '$expected'. Add an includeIf gitdir rule -- this one bakes the wrong identity into history permanently."
+      Add-Finding 'commit-identity' $routeAcct "commits made in '$dir' would be authored as '$actual', expected '$expected'. Add an includeIf gitdir rule -- this one bakes the wrong identity into history permanently."
     }
   }
   $routeRows += [pscustomobject]$row
@@ -141,7 +185,15 @@ foreach ($r in $cfg.routes) {
 # --- layer 4: github MCP server -----------------------------------------
 $checks++
 $mcpPath = Join-Path $HOME '.mcp.json'
-$mcpNote = 'not configured'
+# ABSENT ON PURPOSE since 2026-08-05: the `github` MCP server pointed at
+# @modelcontextprotocol/server-github, which upstream DEPRECATED and archived in
+# favour of github/github-mcp-server. It could not connect, and nothing in this
+# repo ever called an mcp__github__* tool -- the gh CLI is the GitHub path here
+# (see .claude/rules/cli-integration-strategy.md: native CLI is tier 1). So
+# "absent" is the PASS state for this layer, not a misconfiguration to repair.
+# If a github MCP server is ever reinstated, it must be the github/ one, and its
+# identity has to be verified here like any other layer.
+$mcpNote = 'absent (deliberate -- gh CLI is the GitHub path; see comment above)'
 if (Test-Path $mcpPath) {
   $mcp = Get-Content $mcpPath -Raw | ConvertFrom-Json
   $srv = $mcp.mcpServers.github

@@ -26,6 +26,13 @@ echo [%date% %time%] Starting blocklist update...
 
 cd /d C:\Users\david.hayes\continuous-claude
 
+REM Pin gh to the personal account's own config dir. update-blocklist.mjs hard-gates on
+REM `gh auth status` and then calls bare `gh api`, so it needs a credential of its own --
+REM it used to borrow the ambient GITHUB_TOKEN, which is being removed. This repo's remote
+REM is Rev4nchist/parcadei, so personal is the correct account (see scripts/github/accounts.json).
+REM Inert while GITHUB_TOKEN still exists: gh precedence is GH_TOKEN > GITHUB_TOKEN > stored.
+set "GH_CONFIG_DIR=%USERPROFILE%\.config\gh-personal"
+
 REM Fetch latest advisories and update the blocklist
 echo Fetching advisories from GitHub...
 call node scripts/update-blocklist.mjs --apply
