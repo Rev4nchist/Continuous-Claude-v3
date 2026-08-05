@@ -140,24 +140,58 @@ $clash = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "repos/$TargetOrg/$targe
 if ($clash.ok) { Add-Block "$TargetOrg/$targetName ALREADY EXISTS. Pass -NewName to rename on transfer." }
 else           { Write-Host "  [ok] $TargetOrg/$targetName is free" }
 
-# 4b. Source VISIBILITY. Learned the hard way 2026-08-05: transferring the public
-#     repo Rev4nchist/fourth-firecrawl into 'fourth' returned
+# 4b. WHO INITIATES. This is the one that cost two failed -Apply runs, and the
+#     first diagnosis of it was WRONG, so the reasoning is recorded in full.
+#
+#     Attempt 1, initiated as the PERSONAL account (it owns the repo, so it was
+#     the obvious choice):
 #       422 "You don't have the permission to create public repositories on fourth"
-#     Note what is NOT usable as the check here: GET /orgs/fourth reported
-#     members_can_create_public_repositories=true in the SAME session the 422
-#     fired. A plain org MEMBER gets a partial view of org config (
-#     default_repository_permission came back null alongside it), so those fields
-#     are not authoritative -- most likely an enterprise policy overrides them.
-#     There is no dry-run for transfer, so the 422 is the only ground truth and
-#     this has to be a static rule: public source into this org is refused.
-#     Remedy is to flip the repo private first (an internal tool probably should
-#     be), or have an org owner receive the transfer.
-$vis = Invoke-Gh -ConfigDir $personalDir -GhArgs @('api', "repos/$SourceOwner/$Repo", '--jq', '.visibility')
-$visibility = $vis.out.Trim()
-if ($vis.ok -and $visibility -eq 'public') {
-  Add-Block "source is PUBLIC. Transferring a public repo into '$TargetOrg' returns 422 'You don't have the permission to create public repositories on $TargetOrg' (observed 2026-08-05). Do NOT trust GET /orgs/$TargetOrg on this -- as a member you get a partial view that claims public creation is allowed. Flip it private first (gh api repos/$SourceOwner/$Repo -X PATCH -F private=true) or have an org owner receive it. CHECK FIRST if the repo is licensed copyleft (this one is AGPL-3.0) or has external dependents."
-} elseif ($vis.ok) {
-  Write-Host "  [ok] source visibility: $visibility"
+#     That names visibility, so the apparent fix was to flip the repo private.
+#     Flipping it changed the message and nothing else:
+#       422 "You don't have the permission to create private repositories on fourth"
+#
+#     Visibility was never the issue. A transfer is a repo CREATION in the target
+#     org, authorized against the INITIATING account -- and the personal account
+#     is not a member of the org at all (GET /orgs/fourth/members/Rev4nchist ->
+#     404). GitHub reported whichever visibility was asked for, which is what
+#     made the first message so convincingly wrong.
+#
+#     So the initiator must hold BOTH: admin on the source repo, AND membership
+#     of the target org. Neither account had both by default. The fix is to make
+#     the WORK account an admin collaborator on the source (the personal account
+#     can grant that), accept the invitation as the work account, and initiate
+#     from there. Proven end to end 2026-08-05.
+#
+#     Also do NOT try to answer this from GET /orgs/<org>: it reported
+#     members_can_create_repositories=true in the same session both 422s fired.
+#     A plain member gets a partial view (default_repository_permission came back
+#     null beside it), so those fields will cheerfully green-light the exact
+#     transfer that fails.
+$srcW = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "repos/$SourceOwner/$Repo", '--jq', '.permissions.admin')
+$workHasAdmin = ($srcW.ok -and $srcW.out.Trim() -eq 'true')
+$mem = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "orgs/$TargetOrg/memberships/$workUser", '--jq', '.state')
+if (-not ($mem.ok -and $mem.out.Trim() -eq 'active')) {
+  Add-Block "$workUser is not an active member of '$TargetOrg' -- it cannot receive a transfer. A transfer is a repo CREATION in the target org, authorized against the INITIATING account."
+} else {
+  Write-Host "  [ok] $workUser is an active member of $TargetOrg"
+}
+if ($workHasAdmin) {
+  Write-Host "  [ok] $workUser has admin on source (can initiate)"
+} elseif ($Apply) {
+  Write-Host "  [..] $workUser lacks admin on source -- granting collaborator + accepting"
+  $inv = Invoke-Gh -ConfigDir $personalDir -GhArgs @('api', "repos/$SourceOwner/$Repo/collaborators/$workUser", '-X', 'PUT', '-f', 'permission=admin')
+  if (-not $inv.ok) { Add-Block "could not grant $workUser admin on $SourceOwner/$Repo : $($inv.out)" }
+  else {
+    $ids = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', 'user/repository_invitations', '--jq', ".[] | select(.repository.full_name==`"$SourceOwner/$Repo`") | .id")
+    foreach ($id in ($ids.out -split "`n" | Where-Object { $_.Trim() })) {
+      Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "user/repository_invitations/$($id.Trim())", '-X', 'PATCH', '--silent') | Out-Null
+    }
+    $re = Invoke-Gh -ConfigDir $workDir -GhArgs @('api', "repos/$SourceOwner/$Repo", '--jq', '.permissions.admin')
+    if ($re.ok -and $re.out.Trim() -eq 'true') { Write-Host "  [ok] $workUser now has admin on source" }
+    else { Add-Block "granted collaborator but $workUser still lacks admin on $SourceOwner/$Repo -- invitation may not have been accepted." }
+  }
+} else {
+  Add-Warn "$workUser does not yet have admin on $SourceOwner/$Repo. -Apply will grant it as an admin collaborator and auto-accept the invitation, which is what makes the transfer authorizable."
 }
 
 # 5. git credential for the WORK user must exist BEFORE the move, or the first
@@ -236,7 +270,10 @@ Write-Host ""
 Write-Host "=== transferring ==="
 $xferArgs = @('api', "repos/$SourceOwner/$Repo/transfer", '-X', 'POST', '-f', "new_owner=$TargetOrg")
 if ($NewName) { $xferArgs += @('-f', "new_name=$NewName") }
-$xfer = Invoke-Gh -ConfigDir $personalDir -GhArgs $xferArgs
+# Initiated as the WORK account, NOT the owner of the source. See 4b: the target
+# org authorizes the creation against the initiator, and the personal account is
+# not a member of the org. Initiating as personal 422s regardless of visibility.
+$xfer = Invoke-Gh -ConfigDir $workDir -GhArgs $xferArgs
 if (-not $xfer.ok) { Write-Host "TRANSFER FAILED: $($xfer.out)"; exit 1 }
 Write-Host "  transfer accepted (202 is async -- polling for arrival)"
 

@@ -29,7 +29,6 @@
     "ROUTES are matched LONGEST PREFIX FIRST, compared case-insensitively with",
     "forward slashes, because Windows hands you both spellings."
   ],
-
   "accounts": {
     "personal": {
       "user": "Rev4nchist",
@@ -44,32 +43,78 @@
       "ssoOrg": "fourth"
     }
   },
-
   "authByOwner": {
     "fourth": "work",
     "_default": "personal"
   },
-
   "routes": [
-    { "prefix": "C:/Users/david.hayes/Projects/fourth", "commitAccount": "work", "note": "reserved for future github.com/fourth clones" },
-
-    { "prefix": "C:/agent-arch", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/fourth-marketing-brain", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/fourth-connect", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/fourth-playwright-mcp", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/Fourth Canvas", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/gong-mcp", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/ebr-presentations", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/ebr-presentations-plugin", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform", "commitAccount": "work" },
-    { "prefix": "C:/Users/david.hayes/Projects/archive/fourth-workbook", "commitAccount": "work" },
-
-    { "prefix": "C:/Users/david.hayes", "commitAccount": "personal" }
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
+      "commitAccount": "work",
+      "note": "transferred to fourth org 2026-08-05"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth",
+      "commitAccount": "work",
+      "note": "reserved for future github.com/fourth clones"
+    },
+    {
+      "prefix": "C:/agent-arch",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/fourth-marketing-brain",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth-connect",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/Fourth Canvas",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/gong-mcp",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/ebr-presentations",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/ebr-presentations-plugin",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
+      "commitAccount": "work"
+    },
+    {
+      "prefix": "C:/Users/david.hayes",
+      "commitAccount": "personal"
+    }
   ],
-
   "_unclassified": {
     "_comment": [
       "NOT routed to work, because I could not tell from the repo alone and",
