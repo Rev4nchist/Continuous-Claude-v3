@@ -35,6 +35,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] feat(github): git-for.ps1 routes git credentials per account, like gh-for.ps1 routes gh (2026-08-05) `271f4a6`
 - [x] fix(artifacts): lane board republished, and the registry now has to verify before it records (2026-08-05) `5c25df0`
 - [x] docs(roadmap): the PowerShell matcher is proven live, and turn the paired commit off (2026-08-05) `97220ca`
 - [x] docs(hooks): record the two-gate failure mode where widening a matcher does nothing (2026-08-05) `5ba820d`
