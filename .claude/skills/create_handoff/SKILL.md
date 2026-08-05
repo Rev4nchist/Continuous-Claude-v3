@@ -142,7 +142,26 @@ Artifact tool:
   description: <one sentence, may update>
 ```
 
-5. **Update `last_published`** in `.claude/artifacts.json` and include it in the same commit as the
+5. **VERIFY BEFORE YOU RECORD. REQUIRED.** Do not treat the publish call returning as proof it
+   published. Read the result back two ways: **WebFetch the returned URL** (it works on artifacts
+   you own, verified 2026-08-05), **and** confirm the id appears in `Artifact action:"list"`. Only
+   after both pass do you write anything to `.claude/artifacts.json`.
+
+   *Why this step exists:* on 2026-08-05 every other step here was followed, and the registry
+   still recorded `last_published: 2026-08-05` against a URL that did not exist — commit `8bba4df`
+   claimed the republish succeeded and the page was never there. Five commits (`42ed422`,
+   `11a6e26`, `821296d`, `eaeb7b1`, `8bba4df`) are the same "republished/stale" churn with no root
+   cause claimed. Nothing in the procedure ever read the result back, so a failed publish entered
+   the registry as a fact and the next session believed it on sight. **The recurring defect was
+   the recording, not the publishing.**
+
+   *If the recorded URL is dead* — absent from `Artifact action:"list"`, not merely unreachable —
+   there is nothing to redeploy in place, so step 4's "url is REQUIRED" does not apply. Publish
+   **without** `url` to mint a fresh one, verify as above, then record the new `url` plus a dated
+   block saying what happened. `force: true` overwrites another session's version; it does not
+   resurrect a deleted one.
+
+6. **Update `last_published`** in `.claude/artifacts.json` and include it in the same commit as the
    source edit. If you changed what the page fundamentally IS — generated vs hand-authored — record
    that as a dated decision in `notes` that explicitly supersedes the prior one rather than deleting
    it, and make `source` / `content_model` match what you actually published. A registry that
