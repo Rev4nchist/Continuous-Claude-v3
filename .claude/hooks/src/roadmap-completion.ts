@@ -31,6 +31,14 @@ interface HookOutput {
   hookSpecificOutput?: { hookEventName: string; additionalContext: string };
 }
 
+/**
+ * Harness tools that run a shell command, so both can carry the git/test output
+ * this hook reads. MUST stay in step with this hook's settings.json `matcher`
+ * (`TaskUpdate|Bash|PowerShell`). A runtime check narrower than the matcher is
+ * an inert registration -- the 2026-08-05 defect.
+ */
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
 const COMPLETION_PATTERNS = [
   /\b(done|complete|completed|finished|shipped|deployed|merged)\b/i,
   /\btask\s+(is\s+)?(done|complete|finished)\b/i,
@@ -243,7 +251,11 @@ async function main() {
   // Determine which hook type based on input shape
   if ('tool_name' in data && (data as PostToolUseInput).tool_name === 'TaskUpdate') {
     result = await handleTaskUpdate(data as PostToolUseInput);
-  } else if ('tool_name' in data && (data as PostToolUseInput).tool_name === 'Bash') {
+    // Registered matcher is `TaskUpdate|Bash|PowerShell`. Both shell tools put
+    // the command in `tool_input.command`, so both reach handleBashOutput. A
+    // runtime check narrower than the matcher is an inert registration -- see
+    // the same defect in git-commit-roadmap.ts (COMMAND_TOOLS).
+  } else if ('tool_name' in data && COMMAND_TOOLS.has((data as PostToolUseInput).tool_name)) {
     result = await handleBashOutput(data as PostToolUseInput);
   } else if ('prompt' in data) {
     result = await handleUserPrompt(data as UserPromptSubmitInput);

@@ -545,6 +545,7 @@ var COMMIT_PATTERNS = {
   revertIndicator: /^Revert\s+"/i
 };
 var SKIP_TYPES = /* @__PURE__ */ new Set(["chore", "style", "ci"]);
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 function readStdin() {
   return new Promise((resolve3) => {
     let data = "";
@@ -769,7 +770,7 @@ async function main() {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
-  if (data.tool_name !== "Bash") {
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }

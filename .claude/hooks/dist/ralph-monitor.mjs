@@ -5,6 +5,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 import { readFileSync, existsSync } from "fs";
 import { spawnSync } from "child_process";
 import { join } from "path";
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var SIGNAL_PATTERNS = [
   { pattern: /<TASK_COMPLETE\s*\/?>/i, type: "TASK_COMPLETE" },
   { pattern: /<COMPLETE\s*\/?>/i, type: "COMPLETE" },
@@ -185,7 +186,7 @@ function main() {
   try {
     const input = readFileSync(0, "utf-8");
     const data = JSON.parse(input);
-    if (data.event !== "PostToolUse" || data.tool_name !== "Bash") {
+    if (data.event !== "PostToolUse" || !COMMAND_TOOLS.has(data.tool_name)) {
       process.exit(0);
       return;
     }

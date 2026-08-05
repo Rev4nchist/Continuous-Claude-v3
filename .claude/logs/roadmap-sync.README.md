@@ -53,13 +53,41 @@ are still live:
    pushes because of the MSYS fork storm, so once again **the recommended way to
    commit is a way that goes unrecorded**.
 
-   It also means the evidence for item 5 was **confounded**. The 7-commit
-   negative control cited as proof of the matcher bug
-   (`7fc7edd`, `901a456`, `26b0497`, `b04ea82`, `14292bd`, `27cf37a`, `8341150`)
-   went through `git-safe.ps1` *and* through the PowerShell tool, so both causes
-   were present in every one of them and neither was isolated. Two independent
-   defects producing one identical symptom is exactly why a wrapper that changes
-   the observed command string has to be part of the hypothesis.
+   **Status: verified by code reading, NOT isolated by a live test.** Every
+   commit available to test it with was also blocked by item 7 below, so no
+   experiment has yet shown this gap failing on its own. It is real — read
+   `roadmap-sync-guards.ts:180` — but do not cite a live commit as proof of it.
+
+7. **The matcher fix was INERT: the hook rejected PowerShell at runtime.
+   CLOSED 2026-08-05.** This is the actual reason item 5's fix changed nothing.
+   `git-commit-roadmap`'s `main()` opened with
+   `if (data.tool_name !== 'Bash') return;`. Widening the settings.json matcher
+   to `Bash|PowerShell` let the event reach the hook; that line then dropped it.
+   Two gates, one widened, one forgotten, symptom unmoved — which read exactly
+   like "the matcher string must be wrong" and cost a whole extra session.
+
+   **Three siblings had the identical defect**, all registered on a matcher
+   naming PowerShell and all rejecting it at runtime: `roadmap-completion`
+   (`=== 'Bash'`), `ralph-monitor`, `test-run-tracker`. Every hook in the repo
+   whose matcher mentions PowerShell was affected. All four now gate on a
+   `COMMAND_TOOLS` set.
+
+   Guard: `__tests__/hook-matcher-runtime-consistency.test.ts` reads
+   settings.json, and for any hook registered on a PowerShell matcher asserts
+   its source both names the tool AND carries no `tool_name === 'Bash'`-style
+   narrow gate. Demonstrated failing on purpose against the pre-fix tree: 7
+   violations across the 4 hooks, 0 after. The second rule exists because the
+   first one alone MISSED the primary offender — `git-commit-roadmap.ts` already
+   mentioned "PowerShell" in a prose comment while still rejecting it.
+
+### The general lesson
+
+Three of these seven items are the same mistake at different layers: a fix
+applied at one gate while another gate, downstream and invisible, kept the old
+behaviour. Item 4 was path parsing, item 5 was registration, item 7 was the
+runtime check. **When a fix does not move the symptom, look for a second gate
+before doubting the first fix.** Widen a registration and its runtime check in
+the same change.
 
 ## Schema (one JSON object per line)
 

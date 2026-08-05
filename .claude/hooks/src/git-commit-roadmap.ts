@@ -56,6 +56,14 @@ const COMMIT_PATTERNS = {
 
 const SKIP_TYPES = new Set(['chore', 'style', 'ci']);
 
+/**
+ * Harness tools that run a shell command and therefore can produce a commit.
+ * MUST stay in step with this hook's `matcher` in settings.json (currently
+ * `Bash|PowerShell`) -- a matcher that admits a tool this set rejects is an
+ * inert registration, which is exactly the 2026-08-05 defect.
+ */
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = '';
@@ -431,7 +439,17 @@ async function main() {
     return;
   }
 
-  if (data.tool_name !== 'Bash') {
+  // Both shell tools carry the command in `tool_input.command`, so both can
+  // produce a commit this hook must record.
+  //
+  // This gate is the SECOND of two layers, and forgetting it is what made the
+  // 2026-08-05 matcher fix inert. Widening the settings.json matcher to
+  // `Bash|PowerShell` let the event reach the hook; this line then dropped it
+  // anyway, so the symptom (PowerShell commits go unrecorded) did not move and
+  // looked exactly like a wrong matcher string. When a registration is widened,
+  // widen the runtime check in the same change -- grep the hook for its own
+  // tool_name comparison before believing a matcher edit did anything.
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }

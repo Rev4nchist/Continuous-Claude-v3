@@ -5,6 +5,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var TEST_PATTERNS = [
   /\bvitest\b/,
   /\bjest\b/,
@@ -42,7 +43,7 @@ async function main() {
     console.log(JSON.stringify({}));
     return;
   }
-  if (data.tool_name !== "Bash") {
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({}));
     return;
   }
