@@ -80,6 +80,13 @@ are still live:
    first one alone MISSED the primary offender — `git-commit-roadmap.ts` already
    mentioned "PowerShell" in a prose comment while still rejecting it.
 
+   **PROVEN LIVE 2026-08-05**, session 47e656a2, after two failed attempts that
+   isolated the cause. Commit `5ba820d`, a bare `git commit` through the
+   PowerShell tool against a freshly synced dist, produced two records both
+   carrying `"tool":"PowerShell"` plus the paired `chore(roadmap)` commit
+   `67f0f3f`. The `tool` field is what makes this self-evidencing: the log names
+   the tool, so the proof does not rest on anyone remembering what they ran.
+
 ### The general lesson
 
 Three of these seven items are the same mistake at different layers: a fix
