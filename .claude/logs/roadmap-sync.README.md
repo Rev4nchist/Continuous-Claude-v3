@@ -4,6 +4,30 @@ One row per `writeRoadmapGuarded` (and follow-up `appendRoadmapAuditRecord`) cal
 
 Plan: `i-was-working-in-composed-manatee` (approved, premortemed Claude+Codex, 2026-08-05), section 5. Built to close a real gap: no `.bak`, no audit log for any ROADMAP write existed before this, which is why the recurring clobber only ever surfaced as anecdote rather than evidence.
 
+## If a commit you expected is missing from `## Completed`
+
+Check these before assuming the writer is broken — all four are real, and three
+are still live:
+
+1. **The active mirror lags the repo.** The hook that actually runs is
+   `~/.claude/hooks/dist/*.mjs`, not the repo copy. Forward sync fires on
+   *post-commit*, so a rebuild only reaches the live hook on the NEXT commit —
+   the commit that ships a hook fix runs the OLD hook. Verify with a file hash
+   before concluding anything about hook logic.
+2. **`isDuplicateEntry` matches on a 30-char description prefix** as a plain
+   substring of any `- [x]` line, so short descriptions collide easily (a commit
+   described as "probe" matches any completed entry containing "probe"). Fixed
+   only in the sense of being understood — the check is unchanged.
+3. **`chore`, `style` and `ci` are in `SKIP_TYPES`** and never recorded. The
+   hook's own follow-on commit uses `chore(roadmap):` deliberately, as one of the
+   three recursion barriers.
+4. **Two path/parsing gaps, CLOSED 2026-08-05 (`ed9b825`)** — `cd /c/... && git
+   commit` was rejected as foreign (`path.resolve` turned `/c/` into a directory
+   named `c`), and `git -C <path> commit` was not recognised as a commit at all.
+   If you see either symptom again, `normalizeShellPath` /
+   `parseGitCommitInvocations` in `shared/roadmap-sync-guards.ts` are the code to
+   look at, and `roadmap-sync-guards-invocation.test.ts` is the guard.
+
 ## Schema (one JSON object per line)
 
 ```json
