@@ -153,7 +153,7 @@ try {
   if ($null -ne $prevGi) { $env:GCM_INTERACTIVE      = $prevGi } else { Remove-Item Env:GCM_INTERACTIVE      -ErrorAction SilentlyContinue }
 }
 if ($filled -match 'password=') { Write-Host "  [ok] git credential resolvable for $workUser" }
-else { Add-Block "no git credential for https://$workUser@github.com. After transfer, pushes route to the work account and would FAIL. Fix first: git-credential-manager github login" }
+else { Add-Block "no git credential for https://$workUser@github.com. After transfer, pushes route to the work account and would FAIL. Fix first: git credential-manager github login  (git SUBCOMMAND form -- the bare git-credential-manager executable is not on PATH here)" }
 
 # 6. local clone sane, and NOTHING is only on this disk
 if ($Path -and (Test-Path $Path)) {

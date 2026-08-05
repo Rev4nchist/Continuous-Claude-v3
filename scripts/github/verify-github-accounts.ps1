@@ -130,7 +130,11 @@ foreach ($prop in $cfg.accounts.PSObject.Properties) {
     }
   } else {
     $row.gitCredential = 'NONE STORED'
-    Add-Finding 'git-credential' $name "no retrievable credential for https://$($a.user)@github.com. Add the account with: git-credential-manager github login  (browser OAuth -- this also satisfies SAML SSO, which a PAT would not without separate authorization). Then confirm with: git-credential-manager github list"
+    # `git credential-manager`, NOT `git-credential-manager`. The bare executable
+    # is NOT on PATH on this machine (it lives in Git's libexec/git-core and
+    # mingw64/bin); the git-subcommand form resolves it. Verified 2026-08-05 --
+    # the old wording sent you to a command that errors with "not recognized".
+    Add-Finding 'git-credential' $name "no retrievable credential for https://$($a.user)@github.com. Add the account with: git credential-manager github login  (browser OAuth -- this also satisfies SAML SSO, which a PAT would not without separate authorization). Then confirm with: git credential-manager github list"
   }
 
   $results += [pscustomobject]$row
