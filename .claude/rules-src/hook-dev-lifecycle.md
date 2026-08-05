@@ -25,6 +25,7 @@
 | Failure | Cause | Fix |
 |---------|-------|-----|
 | Hook silently doesn't run | Missing registration in settings.json | Run `/hook-audit` to find unregistered hooks |
+| Widening a matcher changes nothing | **Two gates.** The hook's own `main()` still rejects the new tool (`if (data.tool_name !== 'Bash') return;`). The matcher lets the event in; the runtime check drops it, so the symptom does not move and the matcher edit looks wrong. Hit 2026-08-05 across all 4 PowerShell-registered hooks. | Widen the runtime check in the SAME change. Gate on a `COMMAND_TOOLS` set. Guard: `hook-matcher-runtime-consistency.test.ts` |
 | dist file missing | Never built or build failed | `cd .claude/hooks && npm run build` |
 | Stale behavior | src changed but dist not rebuilt | `cd .claude/hooks && npm run build` |
 | Hook errors in stderr | Logic error in TS code | Check `~/.claude/hooks/dist/<name>.mjs` output |
