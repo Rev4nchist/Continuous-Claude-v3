@@ -35,6 +35,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] docs(hooks): record the two-gate failure mode where widening a matcher does nothing (2026-08-05) `5ba820d`
 - [x] docs(artifacts): the lane-board URL is dead while the registry claims it was published today (2026-08-05) `df01d2a`
 - [x] docs(roadmap): record the four reasons a commit can go unrecorded in the audit README (2026-08-05) `5a5ccff`
 - [x] docs(harness): both closed — store lands rows, dead hook archived (2026-07-29) `c573384`
