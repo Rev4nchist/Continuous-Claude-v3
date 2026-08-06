@@ -52,7 +52,10 @@ else has been waiting on.
    skills ecosystem to keep the portal's maintained surface small. Your answer brings it back in,
    so I will plan for it rather than around it.
 
-**What your answer does not settle, and I am not assuming**
+**What your answer does not settle — and what I am doing about it**
+
+Four questions remain. They are Engineering questions rather than sponsor questions, so I am
+working them with Toma Busarov and will bring back the answers rather than the questions:
 
 - Where the line falls between Developer Portal, Fourth360 and the landing zone, feature by feature.
 - Whether the portal mirrors the API-key and webhook configuration already prototyped in Fourth360,
@@ -60,8 +63,8 @@ else has been waiting on.
 - How much token provisioning is exposed to the customer versus automated behind the scenes.
 - How delegated consultant administration works — who configures on a customer's behalf.
 
-These are the four I would like to close next, in that order. The first one is the one that gets
-expensive if we leave it.
+The first is the one that gets expensive if we leave it, because Engineering's token-request UI
+starts within weeks. Flag it if you would rather any of these came to you instead.
 
 **What I need from you**
 
