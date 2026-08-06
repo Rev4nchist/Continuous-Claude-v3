@@ -1,0 +1,204 @@
+<title>FourthOS — Sponsor Session Brief · 2026-08-06</title>
+<style>
+  :root{
+    --ground:#F5F8FA; --card:#FFFFFF; --ink:#17242F; --ink-2:#4A5B69; --ink-3:#7A8994;
+    --line:#DCE4EA; --blue:#0C4A7D; --blue-soft:#E3EDF5; --teal:#00B69F; --teal-ink:#00745F;
+    --amber:#B26E13; --amber-soft:#F7ECDB; --green:#2E7D54; --green-soft:#E2F0E8;
+    --red:#A5484A; --red-soft:#F5E4E4; --mono:'Consolas','SF Mono',monospace;
+  }
+  @media (prefers-color-scheme: dark){ :root{
+    --ground:#0C141D; --card:#13202C; --ink:#DCE6EE; --ink-2:#9FB1BF; --ink-3:#6E8090;
+    --line:#243545; --blue:#5D9BD0; --blue-soft:#16283A; --teal:#19C9B1; --teal-ink:#4FD8C4;
+    --amber:#D99A45; --amber-soft:#2E2417; --green:#5CB68A; --green-soft:#15271E;
+    --red:#D08587; --red-soft:#2C1B1B;
+  }}
+  :root[data-theme="light"]{
+    --ground:#F5F8FA; --card:#FFFFFF; --ink:#17242F; --ink-2:#4A5B69; --ink-3:#7A8994;
+    --line:#DCE4EA; --blue:#0C4A7D; --blue-soft:#E3EDF5; --teal:#00B69F; --teal-ink:#00745F;
+    --amber:#B26E13; --amber-soft:#F7ECDB; --green:#2E7D54; --green-soft:#E2F0E8;
+    --red:#A5484A; --red-soft:#F5E4E4;
+  }
+  :root[data-theme="dark"]{
+    --ground:#0C141D; --card:#13202C; --ink:#DCE6EE; --ink-2:#9FB1BF; --ink-3:#6E8090;
+    --line:#243545; --blue:#5D9BD0; --blue-soft:#16283A; --teal:#19C9B1; --teal-ink:#4FD8C4;
+    --amber:#D99A45; --amber-soft:#2E2417; --green:#5CB68A; --green-soft:#15271E;
+    --red:#D08587; --red-soft:#2C1B1B;
+  }
+  *{box-sizing:border-box}
+  body{background:var(--ground); color:var(--ink); font-family:'Poppins','Segoe UI',system-ui,sans-serif;
+    margin:0; line-height:1.55; font-size:15.5px;}
+  .wrap{max-width:880px; margin:0 auto; padding:0 20px 80px;}
+  header.top{padding:34px 0 10px; border-bottom:3px solid var(--blue); margin-bottom:26px;}
+  .eyebrow{font-size:11px; letter-spacing:.14em; text-transform:uppercase; color:var(--teal-ink); font-weight:600;}
+  h1{font-size:clamp(24px,4.5vw,32px); margin:.25em 0 .15em; color:var(--blue); line-height:1.2; text-wrap:balance;}
+  .sub{color:var(--ink-2); font-size:14px; margin:0;}
+  section{margin:36px 0;}
+  h2{font-size:19px; color:var(--blue); margin:0 0 4px; display:flex; align-items:baseline; gap:10px;}
+  h2 .tag{font-size:10.5px; letter-spacing:.12em; text-transform:uppercase; color:var(--ink-3); font-weight:600;}
+  .lede{color:var(--ink-2); margin:4px 0 16px; max-width:65ch;}
+  .card{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:16px 18px; margin:12px 0;}
+  .ask h3{margin:0 0 6px; font-size:15.5px;}
+  .ask h3 .n{color:var(--teal-ink); font-weight:700; font-variant-numeric:tabular-nums;}
+  .ask .meta{font-size:12.5px; color:var(--ink-3); margin-top:8px;}
+  .pill{display:inline-block; font-size:10.5px; font-weight:600; letter-spacing:.06em; text-transform:uppercase;
+    padding:2px 9px; border-radius:999px; vertical-align:middle;}
+  .pill.open{background:var(--amber-soft); color:var(--amber);}
+  .pill.due{background:var(--red-soft); color:var(--red);}
+  .pill.live{background:var(--green-soft); color:var(--green);}
+  .pill.next{background:var(--blue-soft); color:var(--blue);}
+  .pill.pilot{background:var(--blue-soft); color:var(--blue);}
+  table{border-collapse:collapse; width:100%; font-size:13.5px; font-variant-numeric:tabular-nums;}
+  .tbl{overflow-x:auto; margin:10px 0;}
+  th{color:var(--ink-3); text-align:left; font-weight:600; font-size:11.5px; letter-spacing:.05em;
+    text-transform:uppercase; padding:7px 12px 7px 0; border-bottom:2px solid var(--line);}
+  td{padding:8px 12px 8px 0; border-bottom:1px solid var(--line); vertical-align:top;}
+  tr:last-child td{border-bottom:none;}
+  .readbox{background:var(--blue-soft); border:none; border-radius:10px; padding:16px 18px; margin:12px 0;}
+  .readbox p{margin:0 0 8px; max-width:68ch;}
+  .readbox .qual{font-size:12.5px; color:var(--ink-2); font-family:var(--mono); line-height:1.6;}
+  .counter{font-family:var(--mono); font-size:12.5px; color:var(--ink-2); background:var(--card);
+    border:1px solid var(--line); border-radius:8px; padding:10px 14px; margin:10px 0;}
+  ul{padding-left:20px; margin:8px 0;}
+  li{margin:5px 0; max-width:70ch;}
+  .cols{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin:12px 0;}
+  .surf{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:12px 14px;}
+  .surf b{display:block; font-size:13.5px; margin-bottom:3px;}
+  .surf p{margin:0; font-size:12.8px; color:var(--ink-2);}
+  .fork{display:grid; grid-template-columns:repeat(auto-fit,minmax(240px,1fr)); gap:10px; margin:12px 0;}
+  .fork .card{margin:0;}
+  .fork b{color:var(--blue);}
+  .fork p{font-size:13px; color:var(--ink-2); margin:6px 0 0;}
+  .q{background:var(--card); border:1px solid var(--teal); border-radius:10px; padding:16px 18px; margin:14px 0;}
+  .q p{margin:0; font-size:16px; font-weight:500; max-width:64ch;}
+  .q .src{font-size:12px; color:var(--ink-3); margin-top:8px; font-weight:400;}
+  .slot{border:1.5px dashed var(--line); border-radius:10px; padding:16px 18px; color:var(--ink-3);
+    font-size:14px; margin:12px 0;}
+  footer{margin-top:48px; border-top:1px solid var(--line); padding-top:16px; font-size:12.5px; color:var(--ink-3);}
+  footer code{font-family:var(--mono); font-size:11.5px;}
+  .small{font-size:12.5px; color:var(--ink-3);}
+  a{color:var(--teal-ink); text-decoration:none;}
+  a:hover{text-decoration:underline;}
+  :focus-visible{outline:2px solid var(--teal); outline-offset:2px;}
+  @media (prefers-reduced-motion: no-preference){ html{scroll-behavior:smooth;} }
+</style>
+
+<div class="wrap">
+<header class="top">
+  <div class="eyebrow">FourthOS · Principal AI Mandate</div>
+  <h1>Sponsor Session Brief — Thursday morning, Aug 6</h1>
+  <p class="sub">For the Carly + Christian session · prepared Wed evening 2026-08-05 · Pillars 1 &amp; 3 + the weekly-update proposal. Pillar 2 arrives from Dave separately.</p>
+</header>
+
+<section id="asks">
+  <h2>The session in one pass <span class="tag">3 asks</span></h2>
+  <p class="lede">Everything below funnels into three decisions this meeting can close. If only one thing happens Thursday, make it Ask&nbsp;1 — in writing.</p>
+
+  <div class="card ask">
+    <h3><span class="n">1 ·</span> Christian: the portal boundary answer — captured in writing, live <span class="pill open">Open 7 days</span></h3>
+    <p style="margin:6px 0 0; font-size:14px;">Is the Developer Portal primarily a <b>documentation-and-onboarding experience</b>, or the <b>customer-facing operational control centre</b> for MCP integrations, token management, and tool discovery? Put 07-30 with a same-day decide-by; no answer on record. The milestone bar: written and acknowledged — the milestone fails if the call happens and the boundary is still verbal.</p>
+    <div class="meta">Everything portal-shaped sequences behind this. Also resolves in one question: is "PerformanceOS" a real second platform, or a naming artifact? (The transcript only ever says Fourth360.)</div>
+  </div>
+
+  <div class="card ask">
+    <h3><span class="n">2 ·</span> Assign an owner to the catalog security gate (D-2 ESCALATE, carried) <span class="pill open">Unowned since 07-30</span></h3>
+    <p style="margin:6px 0 0; font-size:14px;">If any tool catalog survives scoping, the portal cannot publish installable tools without a security gate (~a sprint). If Christian picks docs-only, this dissolves by its own wrong-if clause.</p>
+  </div>
+
+  <div class="card ask">
+    <h3><span class="n">3 ·</span> Reconcile the six carried-forward research decisions <span class="pill due">All due</span></h3>
+    <p style="margin:6px 0 0; font-size:14px;">The 08-05 weekly was skipped (no cockpit movement), so none of the 07-30 docket's six decisions has a recorded checkpoint outcome. Dave states each status in the meeting; outcomes land in the cockpit the same day.</p>
+    <div class="meta">Follow-ups riding along: the four access items Toma promised (repo link, hosted apps + keys, Confluence access, QAI + demo keys) still undelivered — they block persona testing; and the Michael + Christian user-provisioning session (closes the token-acquisition gap) needs booking.</div>
+  </div>
+</section>
+
+<section id="p1">
+  <h2>Pillar 1 — Research → Decisions <span class="tag">25 talks · 5 pilots · zero escalates</span></h2>
+  <p class="lede">A docket week built from your 22 bookmarked videos (all ingested with transcripts) plus 20 X bookmarks. Every citation re-checked against the local corpus; the honest headline is a zero-adopt, zero-escalate week of pilots.</p>
+
+  <div class="readbox">
+    <p><b>The read.</b> Three lanes converged without coordinating: verification is moving from post-build review to standing structure the builder cannot touch — gates authored before work starts, scheduled rubric-grading over live traffic, and how often a system checks its own work as the readiness measure. The 13-role business test is the Fourth asset implicated: it should run on a schedule against live alpha traffic, not only at build time.</p>
+    <div class="qual">Confidence: medium — broad design consensus, little measurement.<br>
+    Wrong if: one week of D-7's scheduled grading files nothing the 13-role suite did not already catch.<br>
+    Case against: every scheduled-loop row is one solo founder's self-report; the loudest advocates sell it.</div>
+  </div>
+
+  <div class="counter">25 talks ingested, 24 reviewed at depth → 5 decisions: 0 adopt · 5 pilot · 0 escalate · 7 watch · 2 set aside. New build asked: an agent-consumable docs bundle on the portal (D-10). New spend: none. Evidence: 3 D · 8 R · 0 A.</div>
+
+  <div class="tbl"><table>
+    <tr><th>#</th><th>Workstream → artifact</th><th style="min-width:220px">What it makes possible</th><th>Basis</th></tr>
+    <tr><td>D-7</td><td>Salesforce connector → 13-role rubric on live traffic</td><td>Grade every real alpha conversation daily; file an issue for each one below the bar</td><td>R</td></tr>
+    <tr><td>D-8</td><td>Salesforce connector → call-log check</td><td>Catch right answers reached through dozens of redundant calls — cost the current test scores as a pass</td><td>R</td></tr>
+    <tr><td>D-9</td><td>NetSuite connector → planning decision map</td><td>Planning decisions become tracked tickets, so Christian's architecture review can trace why each call was made</td><td>D (2 maps)</td></tr>
+    <tr><td>D-10</td><td>Developer portal → agent-readable docs bundle</td><td>The portal's first reader may be a customer's coding agent; ship one bundle it can integrate from directly</td><td>D (1 case)</td></tr>
+    <tr><td>D-11</td><td>Internal harness → pre-build validation gate</td><td>The reviewer writes the pass/fail gate before the build, so a milestone cannot pass on the builder's own claims</td><td>D (1 case)</td></tr>
+  </table></div>
+  <p class="small">All five are PILOT · NEXT with kill criteria and 1–2 week checkpoints. Also on file: 7 WATCH items with expiry dates, 5 held at the word cap, ~30 segments honestly not counted. Full docket: <code>pillar1-research.md</code>.</p>
+</section>
+
+<section id="p2">
+  <h2>Pillar 2 — Prototyping &amp; POC <span class="tag">Dave's slot</span></h2>
+  <div class="slot"><b>[ Dave fills this section — Pillar 2 organization arrives separately. ]</b><br>
+  Mechanical requirement already fixed: cockpit decision rows + project Latest Updates are the feed; outcomes land the day they happen.</div>
+</section>
+
+<section id="p3">
+  <h2>Pillar 3 — External Developer Portal <span class="tag">Scope is the work</span></h2>
+  <p class="lede">Synthesized from seven sources including the raw 47-minute Toma transcript, the live Management API, both Confluence pages, and Christian's actual prototype repo — not just the meeting notes.</p>
+
+  <div class="readbox">
+    <p><b>The read.</b> The portal is not a blank page and not blocked on building anything. The plumbing — a tool server with 300+ tools and a live token-management API — already exists and Engineering owns it. A working prototype of every portal surface already exists inside Christian's own prototype repo, running on fake data. What is missing is one written answer from Christian. Everything else sequences behind it.</p>
+  </div>
+
+  <div class="cols">
+    <div class="surf"><b>MCP server + registry <span class="pill live">Live · QAI</span></b><p>C#/.NET, database-backed registry routes 300+ tools to newly built backend APIs. Four-state estate legend: real data / mock / erroring / undeployed — reliability is uneven by Toma's own account.</p></div>
+    <div class="surf"><b>Management API <span class="pill live">Live · 25 endpoints</span></b><p>PAT create/revoke, scopes, entitlements, full tool CRUD with JSON schemas. This is the machinery a portal Access-Management pillar would front. No RBAC detail, no audit trail yet.</p></div>
+    <div class="surf"><b>Token model <span class="pill next">Designed + gaps</span></b><p>Customer-wide vs user-scoped PATs; two-level scope filtering. Two disclosed holes: anyone who knows the acquisition APIs can get a token; vendor key grouping is unenforced. Rotation, revocation, IdP: never discussed.</p></div>
+    <div class="surf"><b>Fourth360 front-end <span class="pill next">Engineering's build</span></b><p>Christian's POC migrated in; Vance, Cisco and others building. Raw-prototype key/webhook config section. Engineering starts its own token-request UI <b>within weeks</b> — the boundary is time-sensitive.</p></div>
+    <div class="surf"><b>agent-poc repo <span class="pill next">Prototype · mock data</span></b><p>POC-grade instance of all three portal pillars: Docusaurus docs hub generated from OpenAPI, key lifecycle with approval flow, tool catalog + working FourthIQ chat. Every surface runs on a localhost mock gateway.</p></div>
+    <div class="surf"><b>Docs estate <span class="pill next">Internal-only</span></b><p>Architecture pages, ADRs, API docs — nothing developer-facing. Toma expects portal docs to be <i>skills for LLMs</i>, not human manuals. Doc drift already visible inside the prototype (tool counts disagree 211/282/300+).</p></div>
+  </div>
+
+  <div class="q">
+    <p>"Is the Developer Portal primarily a documentation/onboarding experience, or is it intended to become the customer-facing operational control center for MCP integrations, token management, and tool discovery?"</p>
+    <div class="src">The framing question, verbatim — put to sponsors 07-30, unanswered. The starting proposal to confirm, narrow, or reject:</div>
+  </div>
+
+  <div class="fork">
+    <div class="card"><b>Documentation Hub</b><p>If confirmed: agent-first artifacts (skills, MCP configs, scenario prompts) generated from the live registry — reference docs that cannot rot independently of the product.</p></div>
+    <div class="card"><b>Access Management</b><p>If confirmed: a UI + policy layer over the live 25-endpoint API — and it must be reconciled with Engineering's own token-request UI starting within weeks.</p></div>
+    <div class="card"><b>Tool Catalog</b><p>If confirmed: curate a badged subset, not all 300+; triggers the D-2 security gate. Propose dropping the per-tool playground — low value on the record, MCP Inspector covers it.</p></div>
+  </div>
+
+  <p class="lede" style="margin-top:14px;"><b>Not gated on Christian — starting now:</b> chase the four promised access items and personally walk vendor-to-first-call (the experience audit nobody can currently narrate, and the portal's first metric); build the MCP tool-testing agent Toma wanted (generates the reliability data any catalog needs); spike registry-generated docs. Full brief with citations: <code>pillar3-devportal.md</code>.</p>
+</section>
+
+<section id="proposal">
+  <h2>The weekly sponsor update — proposal <span class="tag">Extends the existing pipeline</span></h2>
+  <p class="lede">The rendering half is solved — the Wed 07:00 pipeline already builds the three-tier package when it is fed. The 08-05 skip proved the bottleneck is feeding, not rendering. This proposal adds a feeding discipline, not new machinery.</p>
+
+  <div class="tbl"><table>
+    <tr><th>When</th><th>What</th><th>Cost</th></tr>
+    <tr><td>Continuous</td><td>Reportable work lands in the cockpit the day it happens; Thursday's decisions land Thursday</td><td>~10 min/day</td></tr>
+    <tr><td>Nightly</td><td>Research watchlist poll ingests new talks <span class="pill live">exists</span></td><td>0</td></tr>
+    <tr><td>Mon/Tue</td><td>Docket dig session — graded Pillar 1 docket per the ratified spec; thin weeks short-circuit to ~20 min</td><td>≤2 h</td></tr>
+    <tr><td>Tue EOD</td><td>Cockpit close — 15-minute backstop before generation; Pillar 3 ledger tick lives here</td><td>15 min</td></tr>
+    <tr><td>Wed 07:00</td><td>Auto-generate Tiers 1–3, stage unlisted preview <span class="pill live">exists</span></td><td>0</td></tr>
+    <tr><td>Wed</td><td>Dave reviews, fixes judgment calls, promotes or holds</td><td>30–45 min</td></tr>
+    <tr><td>Thu AM</td><td>Sponsor meeting off the promoted package</td><td>existing slot</td></tr>
+  </table></div>
+
+  <ul>
+    <li><b>Total cost to Dave:</b> roughly 3–4 hours/week, most of it the dig and the Wednesday review.</li>
+    <li><b>Evidence discipline survives production:</b> graded content is authored upstream and transcluded verbatim — the pipeline does not re-narrate, tallies are derived by counting rows.</li>
+    <li><b>Pillar 3 renders delta-only:</b> a standing ledger with age counters ("asked 07-30, open N days"), not weekly re-narration.</li>
+    <li><b>Skips stay honest:</b> a no-movement week reports a skip; the daily landings + Tuesday close make skips rare. Items not yet built are badged DESIGNED·NEXT in the proposal itself.</li>
+  </ul>
+
+  <p class="lede"><b>What this asks of you two:</b> hold the Thursday slot and read Tier 1 in one phone pass; turn decisions around in-meeting or by Friday (unanswered asks reappear with their age); and Christian — the boundary answer in writing. Full proposal: <code>PROPOSAL-weekly-sponsor-update.md</code>.</p>
+</section>
+
+<footer>
+  <p><b>Provenance.</b> Built 2026-08-05 by 25 verification-gated agents across three workflows (source digesters → synthesis → adversarial citation + completeness + format audits → fix passes). Sources: the mandate page, the raw Toma transcript (docx), 2 Confluence pages, the live Management API spec, Christian's agent-poc repo (3,655 files), the 07-30 sponsor package, 22 bookmarked YouTube transcripts, 20 X bookmarks + 4 Notion-saved posts.</p>
+  <p>Depth lives in <code>continuous-claude/docs/research/session-prep-2026-08-06/</code> — <code>pillar1-research.md</code> · <code>pillar3-devportal.md</code> · <code>PROPOSAL-weekly-sponsor-update.md</code> · <code>sources/</code> (A0–A9 + digests). Private page — not sponsor-facing until Dave says so.</p>
+</footer>
+</div>
