@@ -444,7 +444,7 @@
           {
             "type": "command",
             "command": "python",
-            "timeout": 15000,
+            "timeout": 30000,
             "args": [
               "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
               "stop"
