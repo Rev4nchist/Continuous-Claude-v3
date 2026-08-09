@@ -49,7 +49,7 @@
   "artifacts": [
     {
       "id": "agentic-os-lane-board",
-      "url": "https://claude.ai/code/artifact/b8692cef-68a5-4db5-baf1-100376015216",
+      "url": "https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a",
       "source": "scripts/coordination/render-board.mjs",
       "render": "node scripts/coordination/render-board.mjs",
       "publish_from": "lane-board.html",
@@ -91,6 +91,32 @@
         "next_step": "None. Kept rather than deleted so the next reader can see that a same-day `last_published` was once false, and what closed it. NOTE for anyone whose bookmark is the old 9eb25020 URL: it is gone and cannot be revived -- use the `url` field above.",
         "still_open": "Why the 8bba4df republish recorded success against a URL that never existed is NOT root-caused. The verify step now makes that failure mode loud instead of silent, which is a containment, not a diagnosis. If it recurs with verification in place, suspect the publish path itself."
       },
+      "URL_CONTRADICTION_2026-08-08_RESOLVED_TO_READING_B": {
+        "resolved": "2026-08-09",
+        "by_session": "54491ed2 (agentic-os track - the owner the open block asked for)",
+        "verdict": "Reading (b). The recorded b8692cef id was wrong; 9eb25020 has been the live board all along. `url` above is corrected back to 9eb25020.",
+        "evidence": "A SECOND independent `Artifact action:list scope=mine` (limit 50, 31 artifacts returned, spanning 2026-08-07 back to 2026-07-03) shows 'Agentic OS - Lane Board' at 9eb25020 PRESENT, updated 2026-08-05, and b8692cef ABSENT from all 31. This is a different session on a different day from 75823f04's listing, and the two agree exactly.",
+        "why_reading_a_is_rejected": "Reading (a) required b8692cef to have been genuinely live on 2026-08-05 and deleted afterwards. It has now failed to appear in TWO full listings taken 1 and 2 days later, both of which comfortably span 2026-08-05. A deleted-since artifact is possible; an artifact that was never once observed in any listing is far better explained as never having existed.",
+        "consequence_for_the_2026-08-05_block": "URL_UNREACHABLE_RESOLVED below asserts it verified b8692cef by BOTH WebFetch and listing before recording, and that 9eb25020 was 'absent from the listing' and 'cannot be revived'. Both halves are now contradicted by direct evidence. Kept, not deleted - it is the clearest surviving example of the failure this registry keeps having. The uncomfortable conclusion: verify-before-record was FOLLOWED on 08-05 and the entry still went in wrong, so the read-back step is necessary but not sufficient, exactly as the 08-08 block warned.",
+        "what_is_NOT_verified": "Whether 9eb25020 currently SERVES a correct, current board. It was NOT WebFetched - render-board.mjs output is ~100KB and this session was asked for a handoff, not an artifact audit. The correction rests on listing presence/absence only, which is enough to choose between a URL that exists and one that does not, and is NOT enough to claim the page is up to date.",
+        "still_open": "The board is now stale by one lane_event: this session posted a branch-wide `lane.mjs say` about the braintrust hook change (5abcb64), and render-board.mjs:114 renders the last 30 lane_event rows. Republishing was deliberately not done - see next_step.",
+        "next_step": "Next agentic-os session with context budget: WebFetch 9eb25020 (required before the Artifact tool will redeploy), run `node scripts/coordination/render-board.mjs`, publish `lane-board.html` with url=9eb25020 and favicon unchanged, verify per $schema_notes step 5, then set `last_published`. `last_published` is deliberately left at 2026-08-05 until that happens rather than being advanced on the strength of a URL correction."
+      },
+      "URL_CONTRADICTION_2026-08-08": {
+        "found": "2026-08-08",
+        "by_session": "75823f04 (greymatter-cto track, does NOT own this board)",
+        "status": "OPEN - recorded, deliberately not resolved",
+        "symptom": "The `url` above and the URL_UNREACHABLE_RESOLVED block below are contradicted by the live artifact listing. That block asserts b8692cef-68a5-4db5-baf1-100376015216 is the live board and that 9eb25020-1959-47b9-b51f-6589e0c0515a is 'absent from the Artifact listing' and 'cannot be revived'. On 2026-08-08 a FULL listing (`Artifact action:list scope=mine`, limit 50, 38 artifacts returned, reaching back to 2026-07-06) shows the exact opposite: 'Agentic OS - Lane Board' at 9eb25020 PRESENT, updated 2026-08-05; b8692cef ABSENT from all 38.",
+        "what_is_verified": "Only the listing. 38 rows, sorted most-recent-first, spanning 2026-08-07 back to 2026-07-06 - so a 2026-08-05 artifact is inside the window and b8692cef's absence is not a paging artifact.",
+        "what_is_NOT_verified": "Whether 9eb25020 actually SERVES the board. It was not WebFetched: WebFetch returns RAW HTML for an owned artifact (confirmed this session on a different page), and render-board.mjs output is ~100KB, which would have consumed the session's context for a side-quest. Someone with budget should fetch it and confirm before acting.",
+        "two_readings_could_not_be_separated": [
+          "(a) b8692cef was genuinely live and verified on 2026-08-05 and has been DELETED since. Then the board needs republishing and a fresh id recorded.",
+          "(b) The recorded id was wrong - a transcription or a publish that minted nothing - and 9eb25020 was the live board all along. Then `url` should simply be corrected back and the RESOLVED block below is itself wrong."
+        ],
+        "deliberately_not_done": "Did NOT edit `url` or `last_published`, and did NOT republish. Choosing between (a) and (b) from here is guessing, and this entry has now recorded a non-resolving URL twice. Republishing is also out of scope: this session holds no lane, changed no lane rows, and posted no lane notes, so it has nothing to contribute to the board's CONTENT - a republish would be pure churn that also silently picks one reading.",
+        "why_it_matters": "This is the same class the verify-before-record rule was added for on 2026-08-05, except that rule WAS followed and the entry still ended up wrong. If reading (a) holds, an artifact verified present on 08-05 was gone by 08-08, which means read-back at publish time is necessary but NOT sufficient, and the registry needs a periodic liveness sweep rather than a one-shot check at write time. That is a real gap in the current procedure, not a one-off slip.",
+        "next_step": "Owner of the agentic-os track: WebFetch 9eb25020, decide between (a) and (b), then either correct `url` or republish and record a fresh one. Resolve THIS block rather than deleting it."
+      },
       "notes": [
         "DECISION 2026-07-29: this is a GENERATED live board, read from agentic_os.lane on every",
         "publish. Rationale: a hand-written board is accurate the day it is written and rots the same",
@@ -109,6 +135,43 @@
         "",
         "Originally published with a hard date in the <title>. Removed 2026-07-26 so the gallery entry",
         "stays stable across redeploys."
+      ]
+    },
+    {
+      "id": "greymatter-cto-charter",
+      "url": "https://claude.ai/code/artifact/c47b31cc-9c56-4726-9dbc-275672f567e4",
+      "source": "docs/greymatter/00-CTO-CHARTER.html",
+      "title": "CTO Charter — greymatter.design",
+      "favicon": "🧠",
+      "description": "The founding charter for greymatter.design's AI cofounder-CTO: mandate, earned authority ladder, decision records, and the calibration loop.",
+      "session": "greymatter-cto",
+      "refresh": "at-handoff",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-08-07",
+      "verified": {
+        "on": "2026-08-08",
+        "by_session": "75823f04",
+        "webfetch": "Returns the live page - correct <title>, masthead, and all 14 numbered sections; reported as owned by you.",
+        "listing": "`Artifact action:list scope=mine` (limit 50) returns 38 artifacts; this id is first.",
+        "note": "Both checks run BEFORE this entry was written, per $schema_notes step 5."
+      },
+      "notes": [
+        "A LIVING document, versioned in the body (currently Draft v0.1), not in the <title>.",
+        "Every amendment bumps that version and republishes to THIS url. Do not mint a new one.",
+        "",
+        "The HTML is a hand-authored rendering of docs/greymatter/00-CTO-CHARTER.md, NOT generated",
+        "from it. The two must be edited together or they drift. If a v0.2 changes the markdown and",
+        "not the HTML, the published page silently misstates the charter - and the charter is the",
+        "document that claims to override every later design decision, so a stale render is worse",
+        "here than on an ordinary status page.",
+        "",
+        "Scoped to `greymatter-cto`, not `\"*\"`: this page reports on ONE workstream (a new company's",
+        "CTO design) and nothing in any other track can stale it. Per $schema_notes, scope follows",
+        "what the page REPORTS ON.",
+        "",
+        "Phone-first by request - Dave reads it on his phone. Every table is stacked definition",
+        "blocks rather than a real <table>, which is why it survives a narrow viewport. Keep that",
+        "constraint when editing; a four-column table would break the only device it is read on."
       ]
     }
   ]
