@@ -6372,6 +6372,72 @@
       "reason": "Malicious code in dolyame-ui-inlineedit (npm) (GHSA-f2x5-grg7-j57q)",
       "date": "2026-08-07",
       "advisory": "https://github.com/advisories/GHSA-f2x5-grg7-j57q"
+    },
+    "statist-browser-typed-client-eventea.projects.pwakasko": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.pwakasko (GHSA-4fvg-gp6j-v2qm)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-4fvg-gp6j-v2qm"
+    },
+    "statist-browser-typed-client-eventea.projects.tdevice": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.tdevice (GHSA-rrvf-xjx8-gmjh)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-rrvf-xjx8-gmjh"
+    },
+    "statist-browser-typed-client-eventea.projects.pwahelp": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.pwahelp (GHSA-wvc6-wpjx-jgx8)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-wvc6-wpjx-jgx8"
+    },
+    "statist-browser-typed-client-eventea.projects.tdeal": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.tdeal (GHSA-966c-8786-6cx7)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-966c-8786-6cx7"
+    },
+    "statist-browser-typed-client-eventea.projects.pwainsurance": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.pwainsurance (GHSA-hm23-rg8r-xhmg)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-hm23-rg8r-xhmg"
+    },
+    "statist-browser-typed-client-eventea.projects.pwafamily": {
+      "blocked_all": true,
+      "reason": "Malware in statist-browser-typed-client-eventea.projects.pwafamily (GHSA-qmv3-2w4r-rwwq)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-qmv3-2w4r-rwwq"
+    },
+    "bnpl-blocks-desktop-bnpl-anchor-title": {
+      "blocked_all": true,
+      "reason": "Malware in bnpl-blocks-desktop-bnpl-anchor-title (GHSA-55g4-q5c3-783j)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-55g4-q5c3-783j"
+    },
+    "test-noexist-xyz-99": {
+      "blocked_all": true,
+      "reason": "Malware in test-noexist-xyz-99 (GHSA-682j-6frp-w6rq)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-682j-6frp-w6rq"
+    },
+    "specials-resources-server": {
+      "blocked_all": true,
+      "reason": "Malware in specials-resources-server (GHSA-9wh2-7j4m-r43r)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-9wh2-7j4m-r43r"
+    },
+    "svelte-kit-cache": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-kit-cache (GHSA-9fg7-rqp2-7hpg)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-9fg7-rqp2-7hpg"
+    },
+    "svelte-streak-kit": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-streak-kit (GHSA-2w6v-q693-8jjm)",
+      "date": "2026-08-08",
+      "advisory": "https://github.com/advisories/GHSA-2w6v-q693-8jjm"
     }
   }
 }
