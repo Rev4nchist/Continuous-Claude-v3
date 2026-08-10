@@ -6697,6 +6697,84 @@ var malicious_packages_default = {
       reason: "Malware in svelte-streak-kit (GHSA-2w6v-q693-8jjm)",
       date: "2026-08-08",
       advisory: "https://github.com/advisories/GHSA-2w6v-q693-8jjm"
+    },
+    "simple-date-formatter-new-9": {
+      blocked_all: true,
+      reason: "Malicious code in simple-date-formatter-new-9 (npm) (GHSA-fq7m-frv3-2w4v)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-fq7m-frv3-2w4v"
+    },
+    tokocrytodev: {
+      blocked_all: true,
+      reason: "Malicious code in tokocrytodev (npm) (GHSA-m482-gfg4-jcp7)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-m482-gfg4-jcp7"
+    },
+    "postcss-initial-provider": {
+      blocked_all: true,
+      reason: "Malicious code in postcss-initial-provider (npm) (GHSA-9qww-697m-3rg3)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-9qww-697m-3rg3"
+    },
+    "simple-date-formatter-new-10": {
+      blocked_all: true,
+      reason: "Malicious code in simple-date-formatter-new-10 (npm) (GHSA-wgv9-74pq-hwh9)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-wgv9-74pq-hwh9"
+    },
+    cryptostock: {
+      blocked_all: true,
+      reason: "Malicious code in cryptostock (npm) (GHSA-vxm9-fcc8-7337)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-vxm9-fcc8-7337"
+    },
+    "hex-encode-utils": {
+      blocked_all: true,
+      reason: "Malicious code in hex-encode-utils (npm) (GHSA-2p54-jrq3-p4p9)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-2p54-jrq3-p4p9"
+    },
+    "env-local": {
+      blocked_all: true,
+      reason: "Malicious code in env-local (npm) (GHSA-r3pr-mmg7-gr2j)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-r3pr-mmg7-gr2j"
+    },
+    "chai-jsonss": {
+      blocked_all: true,
+      reason: "Malicious code in chai-jsonss (npm) (GHSA-xp6h-f5rv-v8fp)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-xp6h-f5rv-v8fp"
+    },
+    "@noobaihome/amis-uni-area-widget": {
+      blocked_all: true,
+      reason: "Malicious code in @noobaihome/amis-uni-area-widget (npm) (GHSA-932g-6p3v-rp3w)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-932g-6p3v-rp3w"
+    },
+    "@rblxts/services": {
+      blocked_all: true,
+      reason: "Malicious code in @rblxts/services (npm) (GHSA-x6xv-2jr9-4pc5)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-x6xv-2jr9-4pc5"
+    },
+    "@kuperka/chainguard-sdk": {
+      blocked_all: true,
+      reason: "Malicious code in @kuperka/chainguard-sdk (npm) (GHSA-x3c3-qwj8-qfpc)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-x3c3-qwj8-qfpc"
+    },
+    "@noobaihome/amis-simple-area-widget": {
+      blocked_all: true,
+      reason: "Malicious code in @noobaihome/amis-simple-area-widget (npm) (GHSA-jprv-2653-h4xc)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-jprv-2653-h4xc"
+    },
+    "@ssgw/icon": {
+      blocked_all: true,
+      reason: "Malicious code in @ssgw/icon (npm) (GHSA-v5mx-v28f-r24j)",
+      date: "2026-08-10",
+      advisory: "https://github.com/advisories/GHSA-v5mx-v28f-r24j"
     }
   }
 };
