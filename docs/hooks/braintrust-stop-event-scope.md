@@ -65,24 +65,24 @@ real in the code but unreachable in practice for this pair, which is why the mov
 the serialization as an **undocumented CLI behaviour that could change on upgrade**, not as a
 guarantee: the mitigation in §4 is a deletion, so it costs nothing to keep.
 
-## 3. Two facts to establish first
+## 3. Two facts, both now established
 
-Both are cheap and neither requires touching production behaviour. The original plan **assumed**
-both; that assumption is what moved this change out of the shipped work.
+Both were cheap and neither required touching production behaviour. The original plan **assumed**
+both; that assumption is what moved this change out of the shipped work. Neither assumption turned
+out to be wrong, but that was not knowable in advance — and 3.2 in particular was guarding against a
+change several times this one's size.
 
 **3.1 — Can `Stop` overlap the next `UserPromptSubmit`? — NO, they are serialized.**
-Verified 2026-08-10, interactive session `127aa175`.
-Claude Code's ordering guarantee between these events is not documented in this repo and was not
-verified. Establish it empirically: register a throwaway probe hook on both events that appends
-`{event, pid, ts_start, ts_end}` to a JSONL, run a session with deliberately fast turns, and look
-for overlapping intervals. If they are strictly serialized, most of §4 collapses to a no-op and
-the change becomes small.
+Verified 2026-08-10, interactive session `127aa175`. Claude Code's ordering guarantee between these
+events is documented nowhere in this repo, so it was established empirically rather than assumed.
 
-Harness (2026-08-09): `~/.claude/state/order-probe.mjs`, registered in the **active**
-`~/.claude/settings.json` only — never the repo copy. It creates the first `Stop` entry this
-machine has ever had, so the run also confirms whether `Stop` fires per turn at all. The Stop arm
-holds for 6s **only while `~/.claude/state/order-probe.ARMED` exists**, so leaving it registered
-costs an ordinary session nothing. Rows land in `~/.claude/state/order-probe.jsonl`.
+Harness: `~/.claude/state/order-probe.mjs`, a throwaway hook registered on both events in the
+**active** `~/.claude/settings.json` only — never the repo copy — appending
+`{event, pid, session_id, ts_start, ts_end, hold_ms}` to a JSONL. The `Stop` arm slept for a fixed
+hold, gated on a sentinel file so an unarmed session paid nothing. It created the first `Stop`
+entry this machine has ever had, which incidentally confirmed that **`Stop` does fire once per
+turn**. Torn down after the run: no registration remains and no `Stop` key exists. Raw rows are not
+in the repo; the table below is the record.
 
 Method. Asking a human to "type fast" does not work — reply latency swamped the window twice (29.8s
 and 130s against 6s and 15s holds). The fix was to make the hold longer than any plausible reply and
