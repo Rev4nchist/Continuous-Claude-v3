@@ -1,6 +1,9 @@
 # Scope: move `braintrust_hooks.py stop` to the `Stop` event
 
-Status: **scoped, not started.** Blocked on two facts that must be established first (§3).
+Status: **unblocked, ready to implement.** Both prerequisite facts (§3) are established, and both
+came back favourable: `Stop` and `UserPromptSubmit` are serialized (§3.1), and Braintrust tolerates
+a parent span arriving after its children (§3.2). The change is therefore the small version — a
+deletion plus a registration, no locking and no spool reordering. Remaining work: §6 steps 2-5.
 Companion to the shipped shutdown fix (`5abcb64`).
 
 ## 1. The defect
@@ -50,46 +53,97 @@ Current writer map (generated from source):
 writers. That is what keeps the blast radius small.
 
 Today `stop` runs once, at shutdown, after the last `user_prompt_submit`. No overlap is possible,
-so no race exists. **Registering it on `Stop` creates one.** The window is `stop`'s own duration
+so no race exists. The concern was that registering it on `Stop` creates one: `stop`'s own duration
 (transcript parse plus a network POST — measured at up to 8s) overlapping the next
-`user_prompt_submit` if the user types immediately. A slow `stop` for turn N can rewrite the whole
+`user_prompt_submit` if the user types immediately. A slow `stop` for turn N would rewrite the whole
 state dict from a snapshot taken before turn N+1 began, discarding the `current_turn_span_id` and
 `turn_count` that `user_prompt_submit` had already written.
+
+**§3.1 falsified this.** The CLI serializes the two events — `UserPromptSubmit` does not fire until
+every `Stop` hook has returned, measured against a 90s hold. The read-modify-write hazard above is
+real in the code but unreachable in practice for this pair, which is why the move is small. Treat
+the serialization as an **undocumented CLI behaviour that could change on upgrade**, not as a
+guarantee: the mitigation in §4 is a deletion, so it costs nothing to keep.
 
 ## 3. Two facts to establish first
 
 Both are cheap and neither requires touching production behaviour. The original plan **assumed**
 both; that assumption is what moved this change out of the shipped work.
 
-**3.1 — Can `Stop` overlap the next `UserPromptSubmit`?**
+**3.1 — Can `Stop` overlap the next `UserPromptSubmit`? — NO, they are serialized.**
+Verified 2026-08-10, interactive session `127aa175`.
 Claude Code's ordering guarantee between these events is not documented in this repo and was not
 verified. Establish it empirically: register a throwaway probe hook on both events that appends
 `{event, pid, ts_start, ts_end}` to a JSONL, run a session with deliberately fast turns, and look
 for overlapping intervals. If they are strictly serialized, most of §4 collapses to a no-op and
 the change becomes small.
 
-**3.2 — Does Braintrust tolerate a parent span arriving after its children?**
-The durable spool can now delay a batch, so a turn-N parent can land after turn-N+1 children.
-Establish it against a scratch project: POST a child referencing a parent id, then POST the parent,
-then read the trace back and confirm the hierarchy resolved. If it does not tolerate this, the
-spool needs parent-before-child ordering, which is a materially larger change.
+Harness (2026-08-09): `~/.claude/state/order-probe.mjs`, registered in the **active**
+`~/.claude/settings.json` only — never the repo copy. It creates the first `Stop` entry this
+machine has ever had, so the run also confirms whether `Stop` fires per turn at all. The Stop arm
+holds for 6s **only while `~/.claude/state/order-probe.ARMED` exists**, so leaving it registered
+costs an ordinary session nothing. Rows land in `~/.claude/state/order-probe.jsonl`.
+
+Method. Asking a human to "type fast" does not work — reply latency swamped the window twice (29.8s
+and 130s against 6s and 15s holds). The fix was to make the hold longer than any plausible reply and
+then **vary it**, so the verdict reads off which variable the prompt timestamp tracks: the hook, or
+the human.
+
+| Hold | `stop` actual | Next `user_prompt_submit` fired | Inside window? |
+|---|---|---|---|
+| 6,000ms | 6,004ms | +29,792ms | no — user away, uninformative |
+| 15,000ms | 15,006ms | +130,017ms | no — user away, uninformative |
+| **90,000ms** | 90,011ms | **+90,444ms** (433ms after end) | **no** |
+| 40,000ms | 40,014ms | +1,045,457ms | no — user away, uninformative |
+| **40,000ms** | 40,011ms | **+40,327ms** (316ms after end) | **no** |
+
+The two informative rows are the ones where the user typed within seconds. In both, the prompt hook
+fired a few hundred ms after the hold ended, at two different hold values. The timestamp tracks the
+hook's duration, not the keystroke — the CLI does not fire `UserPromptSubmit` until every `Stop`
+hook has returned. Zero overlaps in five held runs.
+
+Scope of the claim: same session, one machine, one Claude Code build, single hook on `Stop`. It
+measures when the *hook process* starts, which is exactly the quantity the §2 race is about — two
+hook processes writing one state file. **Concurrent sessions still overlap** (11 sessions were
+observed interleaving in the same JSONL), but they write different per-session state files, so
+they do not contend.
+
+**3.2 — Does Braintrust tolerate a parent span arriving after its children? — YES.**
+Verified 2026-08-09 against scratch project `ccv3-scratch-probe`
+(`46578eb1-bfdf-4c09-8f66-6182428c6c1b`), never `claude-code`/`e33fbd8b`. Posted root, then a
+child carrying `span_parents: [parent]` for a span that did not exist yet, then 3s later the
+parent. All three POSTs returned HTTP 200; the child was accepted with a dangling parent
+reference rather than rejected. On read-back all three rows were visible on the first fetch with
+`span_parents` and `root_span_id` stored verbatim, so the hierarchy resolves from the fields
+themselves rather than from arrival order.
+
+Scope of the claim: this proves the ingest and storage layer preserves the linkage. Braintrust
+builds the tree from `span_parents`/`root_span_id` at read time, so the UI follows — but the UI
+rendering itself was not separately inspected.
+
+Consequence: **the spool does not need parent-before-child ordering.** The materially larger
+change §3.2 was guarding against is not required. Repro script kept out of the repo (it needs the
+live API key); it is 90 lines and reconstructible from this paragraph.
 
 ## 4. Design options
 
-**Option A — remove the contention instead of locking it (recommended).**
+**Option A — remove the contention instead of locking it (recommended, and now reduced).**
 Stop having `stop` write `current_turn_span_id`. It only ever sets it to `""`; let
 `user_prompt_submit` own that key exclusively, since it is the one that assigns a real value. This
-deletes the only two-writer key outright. `turn_last_line` then has a single writer (`stop`), so
-the remaining exposure is only the whole-dict clobber, which is fixed by making
-`set_session_value` merge under the same lock helper the spool already uses
-(`_acquire_spool_lock` / `_release_spool_lock`, per-session lock file).
+deletes the only two-writer key outright. `turn_last_line` then has a single writer (`stop`).
 Cost: between turns, a `post_tool_use` span could attach to the previous turn rather than none.
 That is a minor and arguably more correct attribution.
 
-**Option B — lock everything.**
-Put every `set_session_value` behind a per-session lock. Correct, but adds a lock acquisition to
-`post_tool_use`, the hottest hook in the system (5000ms budget, fires on every tool call). Rejected
-unless 3.1 shows genuine overlap that Option A does not cover.
+**The locked merge originally bundled into Option A is no longer required.** It existed to close the
+whole-dict clobber, and §3.1 shows the only two processes that could collide never overlap. Ship the
+deletion without it — the deletion is what makes the design safe rather than the lock. If a future
+CLI upgrade breaks serialization, the lock is the ready-made answer and is written up in Option B.
+
+**Option B — lock everything.** *(deferred, not rejected)*
+Put every `set_session_value` behind a per-session lock reusing the spool's helpers
+(`_acquire_spool_lock` / `_release_spool_lock`). Correct, but adds a lock acquisition to
+`post_tool_use`, the hottest hook in the system (5000ms budget, fires on every tool call) — for a
+race §3.1 shows cannot currently occur. Revisit only if the §3.1 probe stops reproducing.
 
 **Option C — per-key state files.**
 Eliminates whole-dict clobber structurally. Rejected: it multiplies file count in a directory that
@@ -108,13 +162,15 @@ already needed a pruning fix, for a problem Option A solves with a deletion.
 
 ## 6. Work breakdown
 
-1. Probe hook for 3.1; scratch-project probe for 3.2. Record both in this doc.
-2. Option A: drop `current_turn_span_id` from `stop`'s writes; add a locked merge to
-   `set_session_value` reusing the spool lock helpers.
+1. ~~Probe hook for 3.1; scratch-project probe for 3.2.~~ **Both done 2026-08-09/10, recorded in
+   §3.** Both answers came back favourable, so steps 2-5 are the whole remaining change.
+2. Option A: drop `current_turn_span_id` from `stop`'s writes. No lock — see §4.
 3. Register `Stop` in **both** `settings.json` copies (atomic Node read-modify-write, not the Edit
    tool), timeout 15000. Remove nothing from SessionEnd — `session_end` still closes the root span.
-4. Tests in `braintrust-hooks-shutdown.test.ts`: concurrent `stop` + `user_prompt_submit` against
-   one session file loses no key; `turn_last_line` advances monotonically across N turns.
+   Note the active copy currently carries the throwaway §3.1 probe on `Stop`; remove that first.
+4. Tests in `braintrust-hooks-shutdown.test.ts`: `turn_last_line` advances monotonically across N
+   turns; `stop` no longer writes `current_turn_span_id`. The concurrent-writers test is dropped —
+   §3.1 shows that concurrency does not occur, so the test would assert against a fiction.
 5. Verify live: `grep -c "=== STOP HOOK CALLED ==="` increments **more than once per session**, and
    the `Turn finalized` count matches the session's turn count instead of being 1.
 
