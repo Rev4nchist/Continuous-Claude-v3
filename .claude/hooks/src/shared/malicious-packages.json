@@ -6516,6 +6516,204 @@
       "reason": "Malicious code in @ssgw/icon (npm) (GHSA-v5mx-v28f-r24j)",
       "date": "2026-08-10",
       "advisory": "https://github.com/advisories/GHSA-v5mx-v28f-r24j"
+    },
+    "newtun": {
+      "blocked_all": true,
+      "reason": "Malicious code in newtun (npm) (GHSA-3xv7-433h-78x9)",
+      "date": "2026-08-11",
+      "advisory": "https://github.com/advisories/GHSA-3xv7-433h-78x9"
+    },
+    "ghazaly": {
+      "blocked_all": true,
+      "reason": "Malware in ghazaly (GHSA-g62q-mq3x-765x)",
+      "date": "2026-08-11",
+      "advisory": "https://github.com/advisories/GHSA-g62q-mq3x-765x"
+    },
+    "dependencyfsdsfdsfg": {
+      "blocked_all": true,
+      "reason": "Malware in dependencyfsdsfdsfg (GHSA-6xhq-px35-hhv9)",
+      "date": "2026-08-11",
+      "advisory": "https://github.com/advisories/GHSA-6xhq-px35-hhv9"
+    },
+    "fetch-runtime": {
+      "blocked_all": true,
+      "reason": "Malware in fetch-runtime (GHSA-3hqj-592v-g33j)",
+      "date": "2026-08-11",
+      "advisory": "https://github.com/advisories/GHSA-3hqj-592v-g33j"
+    },
+    "lines-columns": {
+      "blocked_all": true,
+      "reason": "Malware in lines-columns (GHSA-572q-x4v9-m474)",
+      "date": "2026-08-11",
+      "advisory": "https://github.com/advisories/GHSA-572q-x4v9-m474"
+    },
+    "@sqlite-labs/nodesql": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-labs/nodesql (GHSA-86f7-qh62-pq7c)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-86f7-qh62-pq7c"
+    },
+    "@sqlite-labs/createsql": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-labs/createsql (GHSA-qwqp-6xhg-jhhv)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-qwqp-6xhg-jhhv"
+    },
+    "spoint": {
+      "blocked_all": true,
+      "reason": "Malware in spoint (GHSA-72h3-pwwh-68cx)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-72h3-pwwh-68cx"
+    },
+    "svelte-kit-streak": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-kit-streak (GHSA-rc4p-g2mc-7w8h)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-rc4p-g2mc-7w8h"
+    },
+    "kit-map-streak": {
+      "blocked_all": true,
+      "reason": "Malware in kit-map-streak (GHSA-7wwj-2mjc-pmxq)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-7wwj-2mjc-pmxq"
+    },
+    "iconova-react": {
+      "blocked_all": true,
+      "reason": "Malware in iconova-react (GHSA-mvp5-cv38-rqfj)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-mvp5-cv38-rqfj"
+    },
+    "post-css-transfer": {
+      "blocked_all": true,
+      "reason": "Malware in post-css-transfer (GHSA-f5h9-q436-8chv)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-f5h9-q436-8chv"
+    },
+    "godot-kit": {
+      "blocked_all": true,
+      "reason": "Malware in godot-kit (GHSA-j7m9-r9h4-rfw8)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-j7m9-r9h4-rfw8"
+    },
+    "runtimekit": {
+      "blocked_all": true,
+      "reason": "Malware in runtimekit (GHSA-v6qq-vq5x-rmxf)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-v6qq-vq5x-rmxf"
+    },
+    "tailwind-elements-ui": {
+      "blocked_all": true,
+      "reason": "Malware in tailwind-elements-ui (GHSA-mmpq-4w6p-rwg2)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-mmpq-4w6p-rwg2"
+    },
+    "fsbrowse": {
+      "blocked_all": true,
+      "reason": "Malware in fsbrowse (GHSA-pvvh-h7rh-2c7g)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-pvvh-h7rh-2c7g"
+    },
+    "@sqlite-table/sql-creator": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-table/sql-creator (GHSA-4hxf-37q3-vfxh)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-4hxf-37q3-vfxh"
+    },
+    "@sqlite-table/schema-generator": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-table/schema-generator (GHSA-f86c-mf53-7934)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-f86c-mf53-7934"
+    },
+    "@sqlite-prime/nodesql": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-prime/nodesql (GHSA-f348-mwv9-7p8h)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-f348-mwv9-7p8h"
+    },
+    "@sqlite-prime/createsql": {
+      "blocked_all": true,
+      "reason": "Malware in @sqlite-prime/createsql (GHSA-v49c-g99c-qvf9)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-v49c-g99c-qvf9"
+    },
+    "eth-library-utils": {
+      "blocked_all": true,
+      "reason": "Malware in eth-library-utils (GHSA-rp49-3975-7q6c)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-rp49-3975-7q6c"
+    },
+    "eth-library-toolkit": {
+      "blocked_all": true,
+      "reason": "Malware in eth-library-toolkit (GHSA-mqxc-259c-25w3)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-mqxc-259c-25w3"
+    },
+    "commonjs-assertion": {
+      "blocked_all": true,
+      "reason": "Malware in commonjs-assertion (GHSA-mfjj-4625-mpvr)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-mfjj-4625-mpvr"
+    },
+    "commonjs-assert": {
+      "blocked_all": true,
+      "reason": "Malware in commonjs-assert (GHSA-hcmm-fvc7-pjv3)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-hcmm-fvc7-pjv3"
+    },
+    "xerohub-discord-voice": {
+      "blocked_all": true,
+      "reason": "Malicious code in xerohub-discord-voice (npm) (GHSA-mppv-3p7f-3fmq)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-mppv-3p7f-3fmq"
+    },
+    "chai-tracker": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-tracker (npm) (GHSA-j2r4-fv2p-jjf8)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-j2r4-fv2p-jjf8"
+    },
+    "neverthrow-js": {
+      "blocked_all": true,
+      "reason": "Malicious code in neverthrow-js (npm) (GHSA-qpxw-hpjq-29wj)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-qpxw-hpjq-29wj"
+    },
+    "polymarket-stake-mathss": {
+      "blocked_all": true,
+      "reason": "Malicious code in polymarket-stake-mathss (npm) (GHSA-2qqg-9fjr-5mw9)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-2qqg-9fjr-5mw9"
+    },
+    "chai-as-promised-plus": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-promised-plus (npm) (GHSA-525m-456x-w57c)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-525m-456x-w57c"
+    },
+    "chai-as-deployer": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-deployer (npm) (GHSA-7qqp-m577-rp2w)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-7qqp-m577-rp2w"
+    },
+    "chai-as-map": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-map (npm) (GHSA-rx7j-9w2g-fvjf)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-rx7j-9w2g-fvjf"
+    },
+    "chai-as-format": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-format (npm) (GHSA-wpwv-ffg9-hmxr)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-wpwv-ffg9-hmxr"
+    },
+    "chai-as-bench": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-bench (npm) (GHSA-m5h5-5r2r-qw58)",
+      "date": "2026-08-10",
+      "advisory": "https://github.com/advisories/GHSA-m5h5-5r2r-qw58"
     }
   }
 }
