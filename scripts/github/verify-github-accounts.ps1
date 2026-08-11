@@ -193,8 +193,16 @@ foreach ($r in $cfg.routes) {
     # Ask git from INSIDE the directory: that is what resolves includeIf.
     $actual = (& git -C $dir config user.email 2>&1) -join ''
     $row.actualEmail = $actual
-    if ($actual -ne $expected) {
-      Add-Finding 'commit-identity' $routeAcct "commits made in '$dir' would be authored as '$actual', expected '$expected'. Add an includeIf gitdir rule -- this one bakes the wrong identity into history permanently."
+    # An alias is accepted, not ignored. GitHub's noreply form attributes commits
+    # to the same account, so flagging it reported a defect where there was none
+    # -- two permanent findings that made the whole verifier read as FAIL. What
+    # still fails is an address belonging to neither identity, which is the case
+    # that actually bakes the wrong PERSON into history.
+    $accepted = @($expected) + @($acct.emailAliases | Where-Object { $_ })
+    if ($accepted -notcontains $actual) {
+      Add-Finding 'commit-identity' $routeAcct "commits made in '$dir' would be authored as '$actual', which is neither '$expected' nor any configured alias. Add an includeIf gitdir rule -- this one bakes the wrong identity into history permanently."
+    } elseif ($actual -ne $expected) {
+      $row.actualEmail = "$actual (alias)"
     }
   }
   $routeRows += [pscustomobject]$row

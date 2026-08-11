@@ -27,18 +27,39 @@
     "  automatically without being added here.",
     "",
     "ROUTES are matched LONGEST PREFIX FIRST, compared case-insensitively with",
-    "forward slashes, because Windows hands you both spellings."
+    "forward slashes, because Windows hands you both spellings.",
+    "",
+    "EMAIL vs EMAILALIASES:",
+    "  `email` is CANONICAL-FOR-WRITING -- apply-commit-identity.ps1 writes it",
+    "  into the includeIf gitconfig, and that is the address new commits get.",
+    "",
+    "  `emailAliases` are ADDITIONALLY ACCEPTABLE when auditing what is already",
+    "  configured. GitHub's noreply form (<id>+<user>@users.noreply.github.com)",
+    "  is a deliberate privacy choice, it still attributes commits to the right",
+    "  GitHub account, and it was already in use in several places. Treating it",
+    "  as a defect produced two permanent verifier findings for a setup that was",
+    "  not actually wrong -- and a gate that can never go green stops being read.",
+    "",
+    "  An alias is NOT a wildcard. An email that is neither the canonical one nor",
+    "  a listed alias is still a finding, because THAT is the failure worth",
+    "  catching: the wrong PERSON baked into history, permanently."
   ],
   "accounts": {
     "personal": {
       "user": "Rev4nchist",
       "email": "dkhayes44@gmail.com",
+      "emailAliases": [
+        "171101129+Rev4nchist@users.noreply.github.com"
+      ],
       "ghConfigDir": "~/.config/gh-personal",
       "ssoOrg": null
     },
     "work": {
       "user": "david-hayes44",
       "email": "david.hayes@fourth.com",
+      "emailAliases": [
+        "199642134+david-hayes44@users.noreply.github.com"
+      ],
       "ghConfigDir": "~/.config/gh-work",
       "ssoOrg": "fourth"
     }
