@@ -11,12 +11,13 @@ Nothing here duplicates those docs; it records **what state each thing is in**,
 
 ## 1. Is the harness stable right now?
 
-Yes, on every gate that exists. Verified 2026-07-29, all counts non-vacuous
-(each asserts a nonzero denominator, so none can pass by finding nothing):
+Yes, on every gate that exists. Verified 2026-07-29 unless noted, all counts
+non-vacuous (each asserts a nonzero denominator, so none can pass by finding
+nothing):
 
 | Gate | Command | Result |
 |---|---|---|
-| Hook registration + output contract + timers | `node scripts/hooks/hook-contract-guard.mjs` | PASS — 86 live entries / 80 names, 80 sources scanned, 55 speak the contract, **0** discarded-output, **9/9** timers safe |
+| Hook registration + output contract + timers | `node scripts/hooks/hook-contract-guard.mjs` | PASS — 86 live entries / 80 names, 80 sources scanned, 55 speak the contract, **0** discarded-output, **9/9** timers safe. ⚠️ these counts predate the `Stop` registration added 2026-08-11 (`ccdd14b`, §4.1) — re-run |
 | Braintrust scoring layer can emit | `node scripts/hooks/braintrust-emit-guard.mjs` | PASS — 114 sources, 4 emit sites / 4 hooks, config reachable, 0 dead span sources |
 | Suite cannot silently shrink | `node scripts/hooks/suite-count-ratchet.mjs` | PASS — baseline 2164 passed / 2171 collected |
 | No module-scope `main()`, no `node:test` | `node scripts/hooks/suite-shape-guard.mjs` | PASS — 114 sources, 109 test files, 0 and 0 |
@@ -30,7 +31,8 @@ Yes, on every gate that exists. Verified 2026-07-29, all counts non-vacuous
 `npx vitest run` in `.claude/hooks` used to have no exit at all. As of
 2026-07-29 it completes in ~10 s and **passes**:
 
-**109 files · 2158 pass · 0 fail · 7 skipped.**
+**117 files · 2284 pass · 0 fail** (verified 2026-08-11 with `ccdd14b`; was
+**109 files · 2158 pass · 0 fail · 7 skipped** on 2026-07-29).
 
 Verified twice back to back, which matters: one of the fixes was a test that only
 passed on the first run in any 5-minute window.
@@ -40,8 +42,9 @@ never seen to fail is not yet a guard):
 
 ```
 node scripts/hooks/suite-count-ratchet.mjs     # 0 failures, and neither passed
-                                               # nor COLLECTED may drop below
-                                               # 2158 / 2165
+                                               # nor COLLECTED may drop below the
+                                               # baseline recorded in
+                                               # scripts/hooks/suite-baseline.json
 node scripts/hooks/suite-shape-guard.mjs       # 0 module-scope main() calls,
                                                # 0 node:test imports
 ```
@@ -215,6 +218,43 @@ Against that: tracing is the only telemetry the harness has that isn't dead
 > hermetic via `BRAINTRUST_DOTENV_PATH`, but that does not un-leak what already
 > escaped.
 
+> **UPDATE 2026-08-11, `ccdd14b` — the traced data itself was wrong, and is now
+> fixed. The ON/OFF latency call above is unchanged and still open.**
+>
+> `braintrust_hooks.py stop` was registered **only** on `SessionEnd`, so it ran
+> once per session — while being written for per-turn incremental work (it tracks
+> `turn_last_line`). Result: **7,610 of 8,726 turn spans (87%) across 1,637
+> sessions were opened and never closed** — open-ended, unbounded duration in the
+> Braintrust UI. So the instrument you would judge Steps 9–10 with was recording
+> 87% of its turns as never-ending.
+>
+> `stop` now also fires on a new **`Stop`** event key in **both** `settings.json`
+> copies (repo and active), `python … braintrust_hooks.py stop`, timeout 15000 —
+> there was no `Stop` key at all before. It **remains** on `SessionEnd`
+> (timeout 30000) deliberately, as a safety net for an abrupt exit mid-turn;
+> nothing was removed. It no longer writes `current_turn_span_id` (the only
+> two-writer key — `user_prompt_submit` owns it exclusively now), and it is
+> **idempotent**: it returns early ("already finalized") when the transcript has
+> no new lines, replacing the old clear-the-span-id re-entry guard.
+>
+> Two beliefs that shaped the design were settled by experiment, not inference,
+> and both removed planned work:
+> - **`Stop` and `UserPromptSubmit` are serialized.** The CLI does not fire
+>   `UserPromptSubmit` until every `Stop` hook returns — proven with 90 s and 40 s
+>   holds (next prompt at +90,444 ms and +40,327 ms). So the locked merge is not
+>   needed (deferred as Option B), and the planned concurrent-writers test was
+>   dropped: it would have asserted against a fiction.
+> - **Braintrust tolerates a parent span arriving after its children.** A child
+>   with a dangling `span_parents` reference is accepted (HTTP 200) and the
+>   hierarchy resolves on read. The spool needs no parent-before-child ordering.
+>
+> Guarded by 3 tests in
+> `.claude/hooks/src/__tests__/braintrust-hooks-shutdown.test.ts` (12 tests in
+> that file); full hook suite 117 files / 2284 passed / 0 failed. Verified live:
+> the STOP HOOK CALLED count incremented, `turn_last_line` appeared, and
+> `current_turn_span_id` held the **new** turn's id rather than `""`. Full detail:
+> [`../hooks/braintrust-stop-event-scope.md`](../hooks/braintrust-stop-event-scope.md) §3.
+
 ### 4.2 Resolved 2026-07-29 (was: decisions pending)
 
 All four are closed. Recorded because each was a standing item, not because the
@@ -236,7 +276,8 @@ work was interesting:
   pushed `0 0` at `e6c2ae9`. It is no longer a single-copy repository. The push
   needed an ephemeral inline credential helper reading `$GITHUB_TOKEN` — the
   configured helper fails with "could not read Username" though `gh` is
-  authenticated (see §6).
+  authenticated. (That helper failure was root-caused and fixed 2026-08-11 — see
+  §6; the inline helper is no longer needed.)
 
 ---
 
@@ -558,11 +599,40 @@ Every one of these cost real time already.
   cannot see shell-copy writes.
 - **Do not run `scripts/msys/repro.ps1` unattended.** It deliberately storms the
   machine and has twice left dozens of blocked processes behind.
-- **`git push` fails with "could not read Username" though `gh` is authenticated.**
-  The configured credential helper cannot prompt in these shells. Route around it
-  per-command without touching config (a peer session owns the dual-account lane):
-  `git -c credential.helper='!f() { echo username=x-access-token; echo "password=$GITHUB_TOKEN"; }; f' push …`
-  — token comes from env, never appears in argv, nothing persisted.
+- **`git push` failing with "could not read Username" / "Repository not found" is
+  FIXED** (2026-08-11, `65d1444`…`351a377`). The old diagnosis here — "the
+  credential helper cannot prompt in these shells" — was wrong, and the inline
+  `$GITHUB_TOKEN` helper it prescribed is obsolete. **Do not re-add it.** Real
+  cause: with no `credential."https://github.com".username`, GCM could not choose
+  between the two accounts, and a **second** helper (global `wincred`) answered
+  from an ambiguous `git:https://github.com` entry mapping to the **work**
+  account — so every personal repo silently authenticated as `david-hayes44` and
+  returned "Repository not found", a 404, not a permissions problem.
+
+  `~/.gitconfig` now pins `credential."https://github.com".username = Rev4nchist`
+  plus a `url."https://david-hayes44@github.com/fourth/".insteadOf` rewrite; the
+  global `wincred` helper is removed and only the system `manager` (GCM) remains.
+  Bare `gh` routes itself by directory via `scripts/github/gh-shim.ps1`,
+  dot-sourced from both PowerShell profiles (explicit `GH_CONFIG_DIR` beats
+  directory; it never throws). Gate:
+  `pwsh -File scripts/github/sweep-remotes.ps1` — **25 failures / 64 remotes → 0
+  failures / 63 remotes**; `verify-github-accounts.ps1` gained layer 5 (21 → 24
+  checks) and passes all 24.
+
+  Three beliefs to unlearn while working near this:
+  - **`git remote -v` does NOT stay clean under `insteadOf`** — it prints the
+    *rewritten* url. The stored config is untouched:
+    `git config --get remote.origin.url`.
+  - **Deleting the ambiguous `git:https://github.com` credential does not stay
+    done** — GCM recreates it on the next successful auth. The username pin is
+    the load-bearing fix; the deletion is hygiene.
+  - **A no-username `git credential fill` still returns a credential, and
+    should** (the default account). The invariant is *which* account answers.
+
+  Also: revoking the "GitHub CLI" OAuth grant breaks `gh` **and** plain
+  `git push` together for that account — both held the same `gho_` token — and
+  there is no reissue button in the GitHub UI. Re-run the client login flow.
+  Detail: `.claude/rules-src/windows-platform.md`.
 - **A synchronous `spawnSync`/`execSync` cannot be interrupted by a test timeout.**
   `--testTimeout=4000` let tests *pass* at 10463 ms each. If a suite is slow but
   green, look for blocking sync calls before believing the timings.
@@ -576,6 +646,7 @@ Every one of these cost real time already.
 | Strategy + measurement docs (this dir) | `docs/harness-strategy/` |
 | Self-improvement proposals + verdict index | `docs/self-improvement/INDEX.md` |
 | Hook concurrency plan | `docs/hook-dispatcher-consolidation-plan.md` |
+| Braintrust turn-span finalization (`Stop` scope) | `docs/hooks/braintrust-stop-event-scope.md` |
 | Session handoffs (YAML, newest last) | `thoughts/shared/handoffs/<lane>/` |
 | Architecture entry point | `docs/architecture/INDEX.md` |
 | Mechanised guards | `scripts/hooks/`, `scripts/coordination/`, `scripts/audit-braintrust-emits.sh` |
@@ -610,6 +681,6 @@ Relevant to CCv3 refinement specifically:
 | `self-improvement-triage` | backlog | |
 | `reporting-phase-2` | backlog | |
 | `aos-project-canvas` | backlog | unblocked; the drill-in half of the dashboard |
-| `github-dual-account` | active (peer) | scope: gitconfig · ssh · gh config · `.mcp.json` github server |
+| `github-dual-account` | board says `active`, **LAPSED** | Its board note is stale — the gitconfig/`gh`-routing half SHIPPED on this branch (`65d1444`…`351a377`): bare `git` and bare `gh` route themselves, shared resolution in `scripts/github/accounts-lib.ps1`, `gh-shim.ps1` dot-sourced from both PS profiles, gates `sweep-remotes.ps1` (0 failures / 63 remotes) + `verify-github-accounts.ps1` (24/24). Remaining scope: ssh, `.mcp.json` github server. See §6 |
 
 Serialize commits — one branch, several sessions, and `.git/index.lock` races.

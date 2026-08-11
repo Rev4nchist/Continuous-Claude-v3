@@ -1,19 +1,22 @@
 # Scope: move `braintrust_hooks.py stop` to the `Stop` event
 
-Status: **unblocked, ready to implement.** Both prerequisite facts (§3) are established, and both
-came back favourable: `Stop` and `UserPromptSubmit` are serialized (§3.1), and Braintrust tolerates
-a parent span arriving after its children (§3.2). The change is therefore the small version — a
-deletion plus a registration, no locking and no spool reordering. Remaining work: §6 steps 2-5.
+Status: **SHIPPED** in `ccdd14b` (2026-08-11). Both prerequisite facts (§3) were established first
+and both came back favourable: `Stop` and `UserPromptSubmit` are serialized (§3.1), and Braintrust
+tolerates a parent span arriving after its children (§3.2) — so what shipped was the small version,
+a deletion plus a registration, with no locking and no spool reordering.
 Companion to the shipped shutdown fix (`5abcb64`).
 
-## 1. The defect
+Read §1 and §2 as the historical problem statement. §3 is the evidence, §4-§7 record what was
+decided and what was deliberately left out.
 
-`braintrust_hooks.py stop` is registered under **SessionEnd**. There is no `Stop` key in
+## 1. The defect (as it stood before `ccdd14b`)
+
+`braintrust_hooks.py stop` was registered under **SessionEnd** only. There was no `Stop` key in
 `settings.json` at all. But the function is written for per-turn incremental work — its docstring
 says "creates LLM spans for model calls within the turn", and it tracks `turn_last_line` so each
 call resumes where the last one stopped.
 
-Running it once per session instead of once per turn means every turn span except the last is
+Running it once per session instead of once per turn meant every turn span except the last was
 opened and never closed.
 
 Measured across the full hook log (1,637 sessions with a recorded end):
@@ -160,22 +163,30 @@ already needed a pruning fix, for a problem Option A solves with a deletion.
 - Trace shape in Braintrust changes going forward: turn spans become real per-turn spans instead of
   one session-long open span. Historical traces are unaffected but will not match new ones.
 
-## 6. Work breakdown
+## 6. Work breakdown — all five steps done in `ccdd14b` (2026-08-11)
 
-1. ~~Probe hook for 3.1; scratch-project probe for 3.2.~~ **Both done 2026-08-09/10, recorded in
-   §3.** Both answers came back favourable, so steps 2-5 are the whole remaining change.
-2. Option A: drop `current_turn_span_id` from `stop`'s writes. No lock — see §4.
-3. Register `Stop` in **both** `settings.json` copies (atomic Node read-modify-write, not the Edit
-   tool), timeout 15000. Remove nothing from SessionEnd — `session_end` still closes the root span.
-   Note the active copy currently carries the throwaway §3.1 probe on `Stop`; remove that first.
-4. Tests in `braintrust-hooks-shutdown.test.ts`: `turn_last_line` advances monotonically across N
-   turns; `stop` no longer writes `current_turn_span_id`. The concurrent-writers test is dropped —
-   §3.1 shows that concurrency does not occur, so the test would assert against a fiction.
-5. Verify live: `grep -c "=== STOP HOOK CALLED ==="` increments **more than once per session**, and
-   the `Turn finalized` count matches the session's turn count instead of being 1.
+1. ~~Probe hook for 3.1; scratch-project probe for 3.2.~~ **Done 2026-08-09/10, recorded in §3.**
+   Both answers came back favourable, which is what reduced steps 2-5 to the small version.
+2. ~~Option A: drop `current_turn_span_id` from `stop`'s writes. No lock — see §4.~~ **Done.**
+   One consequence surfaced only on execution: clearing that key was *also* the re-entry guard, so
+   `stop` gained an explicit early return ("already finalized") when the transcript has no new
+   lines. A deletion can remove a second, undocumented behaviour riding on the same line.
+3. ~~Register `Stop` in **both** `settings.json` copies (atomic Node read-modify-write, not the
+   Edit tool), timeout 15000.~~ **Done.** Nothing was removed from SessionEnd — `stop` stays there
+   too as a safety net for an abrupt exit mid-turn, which the step-2 idempotence makes free. The
+   throwaway §3.1 probe was unregistered first; no probe remains in either copy.
+4. ~~Tests in `braintrust-hooks-shutdown.test.ts`.~~ **Done — 3 guards, 12 tests in that file**,
+   each demonstrated failing against the pre-change hook via `BT_HOOK_PATH`. The concurrent-writers
+   test was dropped as planned: §3.1 shows that concurrency does not occur, so it would assert
+   against a fiction.
+5. ~~Verify live.~~ **Done.** `=== STOP HOOK CALLED ===` incremented on a turn boundary,
+   `turn_last_line` appeared in session state, and `current_turn_span_id` held the NEW turn's id
+   rather than `""`. The first such run finalized with status `split`, because a session's
+   accumulated backlog exceeded the 10 MiB cap in one pass — expected once, and precisely what
+   per-turn finalization prevents from recurring.
 
 ## 7. Rollback
 
-Remove the `Stop` block from both `settings.json` copies. The hook code is backward compatible —
-it already runs correctly when invoked once at SessionEnd, which is the current production
-behaviour.
+Remove the `Stop` block from both `settings.json` copies. The hook code stays backward compatible:
+it runs correctly when invoked once at SessionEnd, which was the production behaviour before
+`ccdd14b` and remains the SessionEnd safety-net path today.

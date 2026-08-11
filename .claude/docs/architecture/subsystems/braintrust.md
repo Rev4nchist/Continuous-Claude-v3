@@ -1,9 +1,10 @@
 # Braintrust Observability Subsystem
 
 Braintrust is the observability pillar: it scores how well the CCv3 system
-performs its own work. It is a two-layer system — fast deterministic scores
-emitted live by hooks, and slower LLM-judge scores run offline on a sampled
-subset of sessions.
+performs its own work. Underneath sits a trace/span pipeline
+(`braintrust_hooks.py`) that produces the spans the scores attach to. Above it
+are two scoring layers — fast deterministic scores emitted live by hooks, and
+slower LLM-judge scores run offline on a sampled subset of sessions.
 
 ## Architecture
 
@@ -11,6 +12,11 @@ subset of sessions.
 ┌─────────────────────────────────────────────────────────────────────────┐
 │                      BRAINTRUST OBSERVABILITY                           │
 ├─────────────────────────────────────────────────────────────────────────┤
+│                                                                         │
+│  LAYER 0 — TRACE/SPAN pipeline (live, in the hook path)                 │
+│    braintrust_hooks.py                                                  │
+│      turn span opened by  user_prompt_submit                            │
+│      turn span closed by  stop  → Stop event (+ SessionEnd safety net)  │
 │                                                                         │
 │  LAYER 1 — DETERMINISTIC scores (live, in the hook path)                │
 │    4 TS hooks → await emitBraintrustScore(...)                          │
@@ -29,6 +35,43 @@ subset of sessions.
             ▼                                          ▼
    /v1/project_logs/{project_id}/feedback   (Braintrust UI: spans + scores)
 ```
+
+## Layer 0 — Trace/Span Pipeline
+
+The scores in Layers 1 and 2 attach to spans produced by `braintrust_hooks.py`.
+Per-turn spans are opened by `user_prompt_submit` — which now owns
+`current_turn_span_id` exclusively — and finalized by `stop`, which is written
+for per-turn incremental work (it tracks `turn_last_line` in the transcript).
+
+**Fixed in `ccdd14b`:** `stop` was registered only on `SessionEnd`, so it ran
+once per session while being written to run once per turn. 7,610 of 8,726 turn
+spans (87%) across 1,637 sessions were opened and never closed — open-ended,
+unbounded duration in the Braintrust UI. `stop` is now also registered on a new
+`Stop` event key in **both** `settings.json` copies (repo `.claude/` and active
+`~/.claude/`; `python … braintrust_hooks.py stop`, timeout 15000). There was no
+`Stop` key at all before. The `SessionEnd` registration stays (timeout 30000),
+deliberately, as a safety net for an abrupt exit mid-turn — nothing was removed.
+
+`stop` is idempotent: it returns early ("already finalized") when the transcript
+has no new lines. That replaces the old re-entry guard, which worked by clearing
+`current_turn_span_id`. `stop` no longer writes that key — it was the only
+two-writer key.
+
+Two properties made the per-turn registration safe, both established
+empirically:
+
+- **`Stop` and `UserPromptSubmit` are serialized.** The CLI does not fire
+  `UserPromptSubmit` until every `Stop` hook returns (proven with 90s and 40s
+  holds; the next prompt fired at +90,444ms and +40,327ms). The locked merge
+  originally planned is therefore not needed (deferred as Option B).
+- **Braintrust tolerates a parent span arriving after its children.** A child
+  with a dangling `span_parents` reference is accepted (HTTP 200) and the
+  hierarchy resolves on read, so the spool needs no parent-before-child
+  ordering.
+
+Guards: 3 in `.claude/hooks/src/__tests__/braintrust-hooks-shutdown.test.ts`
+(12 tests in that file); full hook suite 117 files / 2284 passed / 0 failed.
+Runbook: `docs/hooks/braintrust-stop-event-scope.md` §3.
 
 ## Layer 1 — Deterministic Scores
 
@@ -204,6 +247,7 @@ notes. This subsystem doc summarizes; the recipe doc is the runbook.
 | Situation | Action |
 |-----------|--------|
 | Edited any TS hook under `hooks/src/` | Run `bash scripts/audit-braintrust-emits.sh` — confirm 4/4 |
+| Turn spans look open-ended in the Braintrust UI | Confirm the `Stop` key registers `braintrust_hooks.py stop` in **both** `settings.json` copies |
 | Score-volume looks wrong in Braintrust UI | Check the 7-dim → emitter map above; verify the emit `await` survived |
 | Want a judge score for one session now | `judge_session.py --session-id <id> --force` |
 | Suspect a regression returned | `git diff HEAD -- .claude/hooks/src/*.ts \| grep emitBraintrustScore` |

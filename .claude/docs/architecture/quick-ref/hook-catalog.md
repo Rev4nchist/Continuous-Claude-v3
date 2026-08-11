@@ -93,6 +93,17 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | pre-compact-extract | Extract learnings before context compaction (L1) |
 | pre-compact-continuity | Save continuity state before compaction |
 
+## Stop
+
+| Hook | Description |
+|------|-------------|
+| braintrust_hooks stop | Finalize the current turn's Braintrust span (fires per assistant turn, timeout 15000). Idempotent — returns early when the transcript has no new lines. |
+
+Registered on the `Stop` event key in both `settings.json` copies (repo and
+`~/.claude/`) by commit `ccdd14b`. Before that there was no `Stop` key at all and
+`stop` ran once per session, so 7,610 of 8,726 turn spans (87%) across 1,637
+sessions opened and never closed. Detail: `docs/hooks/braintrust-stop-event-scope.md`.
+
 ## SessionEnd
 
 | Hook | Description |
@@ -100,7 +111,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | maestro-cleanup | Clean up Maestro workflow state files |
 | session-end-extract | Extract session learnings on close (L2) |
 | braintrust_hooks session_end | Finalize Braintrust session trace |
-| braintrust_hooks stop | Flush Braintrust trace data |
+| braintrust_hooks stop | Safety net — finalizes a turn span left open by an abrupt exit mid-turn (timeout 30000). Same handler as the Stop registration, deliberately kept. |
 | session-outcome | Prompt for session outcome marking |
 
 ## Blocking Hooks
@@ -123,7 +134,7 @@ Key blockers:
   src/              # TypeScript source
   dist/             # Compiled JS (esbuild output, .mjs)
   package.json      # Dependencies and build script
-  braintrust_hooks.py  # Legacy session-level Braintrust tracing (session_start/end, stop, tool-use trace) — NOT the score emitters
+  braintrust_hooks.py  # Braintrust trace/span pipeline — session_start/session_end (session span), stop (per-TURN span finalize, on Stop + SessionEnd safety net), post_tool_use (tool spans). NOT the score emitters.
 ```
 
 ### Braintrust score emit hooks are TypeScript, not Python
@@ -141,8 +152,8 @@ The **4 deterministic Braintrust score emitters are TypeScript hooks** in
 (`memory_store_quality` is emitted from the Python `store_learning.py`, not a hook.)
 
 `braintrust_hooks.py` (the `braintrust_hooks <event>` rows above) only does
-session/trace-level Braintrust *tracing* (init, tool-use spans, finalize) — it
-does **not** emit the score dimensions.
+Braintrust *tracing* — session init/finalize, per-turn span finalize (`stop`, on
+the Stop event), and tool-use spans — it does **not** emit the score dimensions.
 
 `opc/scripts/core/judge_session.py` is the Python **JUDGE pipeline**
 (factuality / closedqa / plan_rubric via subscription CLIs, run offline by the
