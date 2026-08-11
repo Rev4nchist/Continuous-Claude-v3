@@ -256,6 +256,33 @@ Corrections to what was believed before:
   layer 5 asserts exactly that, plus a single-helper chain and a firing URL rewrite.
 - **`gh-for.ps1 api …` for ad-hoc queries works now**, so the "no remote, no matching route" refusal
   is no longer a reason to reach for plain `gh`.
+- **Deleting the ambiguous `git:https://github.com` entry does NOT stay done.** GCM recreates it on
+  the next successful auth — observed the same day. That is fine, and it is why the ordering matters:
+  **`credential.<url>.username` is the load-bearing fix**, because git then never asks without a
+  username and the host-level entry is never consulted. Treat the deletion as hygiene, not as the
+  control. Layer 5 checks the property that actually matters (which account answers a bare probe).
+
+### Re-authenticating an account after revoking its OAuth grant
+
+Revoking **GitHub CLI** under Settings → Applications → Authorized OAuth Apps kills a `gho_` token
+that BOTH `gh` and Git Credential Manager may be holding, so `gh` and *plain git push* break
+together for that account. Verified 2026-08-11 on `david-hayes44`: `gh api user` returned
+`Bad credentials` and plain git returned `Invalid username or token`, while the other account was
+untouched.
+
+There is **no "reissue" button in the GitHub UI** — a revoked OAuth grant is recreated by re-running
+the client's own login flow, which re-prompts for authorization:
+
+1. Sign the browser into github.com **as the account being restored**. `--web` stores whichever
+   account the BROWSER session holds, not the one you intended — this trap has already put the work
+   credential in the personal config dir once.
+2. `$env:GH_CONFIG_DIR="$HOME\.config\gh-work"; gh auth login --hostname github.com --git-protocol https --web`
+3. In an **interactive** terminal, run a fetch in any work repo (`git -C <fourth repo> fetch origin`)
+   and complete GCM's browser prompt. Because the `insteadOf` rule puts `david-hayes44@` in the URL,
+   GCM is asked for that account specifically — no picker, no ambiguity.
+4. Confirm with `pwsh -File scripts/github/verify-github-accounts.ps1` and
+   `pwsh -File scripts/github/sweep-remotes.ps1`. A dead work credential shows up as exactly 9
+   failures, one per `fourth/*` remote.
 
 Rollback, credentials untouched throughout:
 `git config --global credential.helper wincred`,
