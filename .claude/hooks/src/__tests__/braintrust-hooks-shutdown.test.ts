@@ -415,3 +415,128 @@ describe('encoding', () => {
     rmSync(home, { recursive: true, force: true });
   }, 60_000);
 });
+
+/**
+ * `stop` moving from SessionEnd (once per session) to Stop (once per TURN).
+ * Scope and evidence: docs/hooks/braintrust-stop-event-scope.md.
+ *
+ * There is deliberately NO concurrent stop + user_prompt_submit test here.
+ * Probe 3.1 established that the CLI does not fire UserPromptSubmit until every
+ * Stop hook has returned, so such a test would assert against a fiction. What is
+ * guarded instead is the change that makes the concurrency moot: stop no longer
+ * writes current_turn_span_id at all.
+ */
+function readSession(home: string, sessionId: string): Record<string, unknown> {
+  return JSON.parse(
+    readFileSync(join(home, '.claude', 'state', 'braintrust_sessions', `${sessionId}.json`), 'utf8'),
+  );
+}
+
+function seedTurn(home: string, sessionId: string, turnSpanId: string, turnLastLine = 0) {
+  writeFileSync(
+    join(home, '.claude', 'state', 'braintrust_sessions', `${sessionId}.json`),
+    JSON.stringify({
+      root_span_id: sessionId,
+      project_id: 'proj-test',
+      turn_count: 1,
+      current_turn_span_id: turnSpanId,
+      turn_last_line: turnLastLine,
+      started: new Date().toISOString().replace(/\.\d{3}Z$/, 'Z'),
+    }),
+  );
+}
+
+/** One turn's worth of transcript: a user message then an assistant reply. */
+function turnLines(n: number): string[] {
+  return [
+    JSON.stringify({
+      type: 'user',
+      timestamp: `2026-08-11T00:0${n}:00Z`,
+      message: { content: `prompt ${n}` },
+    }),
+    JSON.stringify({
+      type: 'assistant',
+      timestamp: `2026-08-11T00:0${n}:01Z`,
+      message: {
+        model: 'claude-opus-5',
+        content: [{ type: 'text', text: `reply ${n}` }],
+        usage: { input_tokens: 10, output_tokens: 5 },
+      },
+    }),
+  ];
+}
+
+function writeTranscript(home: string, sessionId: string, turns: number): string {
+  const dir = join(home, '.claude', 'projects', 'proj');
+  mkdirSync(dir, { recursive: true });
+  const p = join(dir, `${sessionId}.jsonl`);
+  const lines: string[] = [];
+  for (let i = 1; i <= turns; i += 1) lines.push(...turnLines(i));
+  writeFileSync(p, lines.join('\n') + '\n');
+  return p;
+}
+
+const stopStdin = (sessionId: string, transcript: string) =>
+  JSON.stringify({ session_id: sessionId, transcript_path: transcript });
+
+describe('stop on the Stop event — per-turn finalization', () => {
+  it('leaves current_turn_span_id alone so user_prompt_submit is its only writer', async () => {
+    const home = makeHome(okUrl);
+    const sid = 'sess-keep-key';
+    seedTurn(home, sid, 'turn-A');
+    const transcript = writeTranscript(home, sid, 1);
+
+    const r = await runHook(home, okUrl, 'stop', stopStdin(sid, transcript));
+
+    expect(r.status).toBe(0);
+    // Pre-change this was cleared to ''. Clearing it is what made the key
+    // two-writer, and stop's whole-dict rewrite would take every other key with
+    // it on a collision.
+    expect(readSession(home, sid).current_turn_span_id).toBe('turn-A');
+    rmSync(home, { recursive: true, force: true });
+  }, 60_000);
+
+  it('advances turn_last_line monotonically and re-sends nothing across turns', async () => {
+    const home = makeHome(okUrl);
+    const sid = 'sess-advance';
+    seedTurn(home, sid, 'turn-1');
+
+    const t1 = writeTranscript(home, sid, 1);
+    await runHook(home, okUrl, 'stop', stopStdin(sid, t1));
+    const afterTurn1 = readSession(home, sid).turn_last_line as number;
+
+    // Turn 2 arrives: the transcript grows and user_prompt_submit hands stop a
+    // new span id, exactly as it does in a live session.
+    seedTurn(home, sid, 'turn-2', afterTurn1);
+    const t2 = writeTranscript(home, sid, 2);
+    const before = received.events;
+    await runHook(home, okUrl, 'stop', stopStdin(sid, t2));
+    const afterTurn2 = readSession(home, sid).turn_last_line as number;
+
+    expect(afterTurn1).toBeGreaterThan(0);
+    expect(afterTurn2).toBeGreaterThan(afterTurn1);
+    // Turn 2 must cost one LLM span plus one turn-close merge. More than that
+    // means it reprocessed turn 1's lines.
+    expect(received.events - before).toBe(2);
+    rmSync(home, { recursive: true, force: true });
+  }, 60_000);
+
+  it('does not re-finalize a turn when SessionEnd runs stop a second time', async () => {
+    const home = makeHome(okUrl);
+    const sid = 'sess-idempotent';
+    seedTurn(home, sid, 'turn-only');
+    const transcript = writeTranscript(home, sid, 1);
+
+    await runHook(home, okUrl, 'stop', stopStdin(sid, transcript));
+    const before = received.events;
+    // stop stays registered on SessionEnd as a safety net for an abrupt exit, so
+    // the last turn is always seen twice. Without the guard the second pass
+    // merges a later metrics.end and stretches the turn's duration.
+    const second = await runHook(home, okUrl, 'stop', stopStdin(sid, transcript));
+
+    expect(second.status).toBe(0);
+    expect(received.events - before).toBe(0);
+    expect(hookLog(home)).toMatch(/already finalized/);
+    rmSync(home, { recursive: true, force: true });
+  }, 60_000);
+});

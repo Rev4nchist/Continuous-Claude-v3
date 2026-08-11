@@ -1225,6 +1225,20 @@ def stop(input_data: dict) -> dict:
                        current_start_timestamp, current_end_timestamp,
                        current_tool_calls, conversation_history.copy())
 
+    # Nothing new in the transcript means this turn is already finalized. That
+    # happens on every session that ends normally: `stop` is registered on BOTH
+    # Stop (per turn) and SessionEnd (a safety net for an abrupt exit mid-turn),
+    # so the last turn is seen twice. Without this guard the second pass merges a
+    # later metrics.end and silently stretches the last turn's duration.
+    #
+    # This REPLACES a mechanism, it does not add one. Clearing current_turn_span_id
+    # below used to make a second stop bail at the "No current turn to finalize"
+    # check. That clear is gone (it was the only two-writer key), so re-entry has
+    # to be caught here instead -- on the transcript, which is the honest signal.
+    if llm_calls_created == 0 and line_num <= turn_last_line:
+        log("INFO", f"Turn {turn_span_id} already finalized (no new transcript lines) -- skipping")
+        return {"result": "continue"}
+
     # Add turn finalization event to the batch
     end_time = int(datetime.now().timestamp())
     turn_update = {
@@ -1238,9 +1252,15 @@ def stop(input_data: dict) -> dict:
     log("DEBUG", f"Batch inserting {len(pending_events)} events: turn={turn_span_id} project={project_id}")
     status, _rows = batch_insert_spans(project_id, pending_events)
 
-    # Update state
+    # Update state. `stop` deliberately does NOT clear current_turn_span_id: that
+    # made it the only key with two writers (see
+    # docs/hooks/braintrust-stop-event-scope.md section 2), and stop's whole-dict
+    # read-modify-write would clobber every other key on a collision.
+    # user_prompt_submit now owns the key outright -- it is the writer that
+    # assigns a real value, and it overwrites this one at the start of each turn.
+    # Cost: a post_tool_use span landing BETWEEN turns attaches to the previous
+    # turn instead of nothing, which is the more useful attribution anyway.
     set_session_value(session_id, "turn_last_line", line_num)
-    set_session_value(session_id, "current_turn_span_id", "")
 
     # Report what actually happened. These lines previously claimed success even
     # when the POST returned a non-200 or died, which is why the log's

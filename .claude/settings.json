@@ -675,6 +675,19 @@
             ]
           }
         ]
+      },
+      {
+        "matcher": "Edit|Write|Bash|PowerShell|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
       }
     ],
     "Notification": [
@@ -687,6 +700,21 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/coordination-notification.mjs"
             ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "stop"
+            ],
+            "timeout": 15000
           }
         ]
       }
