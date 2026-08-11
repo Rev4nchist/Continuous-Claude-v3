@@ -71,16 +71,9 @@ if (-not $GitArgs -or $GitArgs.Count -eq 0) {
   exit 2
 }
 
-function Resolve-AccountConfig {
-  $cfgPath = Join-Path $PSScriptRoot 'accounts.json'
-  if (-not (Test-Path $cfgPath)) { throw "missing $cfgPath" }
-  Get-Content $cfgPath -Raw | ConvertFrom-Json
-}
-
-function Expand-HomePath([string]$p) {
-  if ($p -like '~*') { return (Join-Path $HOME $p.Substring(1).TrimStart('/', '\')) }
-  return $p
-}
+# Config loading, path expansion and the owner -> account mapping are shared with
+# gh-for.ps1. Only Resolve-Remote below is specific to git.
+. (Join-Path $PSScriptRoot 'accounts-lib.ps1')
 
 # Which remote will git actually contact? Explicit -Remote wins. Otherwise take
 # the first argument that names a configured remote (covers `push fork branch`,
@@ -102,28 +95,9 @@ function Resolve-Remote([string]$forPath, [string[]]$gitArgs, [string]$explicit)
   throw "cannot determine which remote this command contacts. Pass -Remote explicitly."
 }
 
-function Resolve-Account($cfg, [string]$forPath, [string]$remoteName) {
-  $url = (& git -C $forPath remote get-url $remoteName 2>$null)
-  if (-not $url) { throw "remote '$remoteName' has no URL in '$forPath'" }
-
-  $owner = $null
-  if ($url -match 'github\.com[:/]([^/]+)/') { $owner = $Matches[1] }
-  if (-not $owner) { throw "remote '$remoteName' ($url) is not a github.com remote -- this wrapper only routes GitHub credentials." }
-
-  $name = $cfg.authByOwner.$owner
-  if (-not $name) { $name = $cfg.authByOwner._default }
-  if (-not $name) { throw "no account maps to owner '$owner' and no _default is set in accounts.json" }
-
-  $acct = $cfg.accounts.$name
-  if (-not $acct) { throw "resolved account '$name' is not defined in accounts.json" }
-  if ($acct.user -like 'TBD-*') { throw "account '$name' is still a placeholder (user = $($acct.user)). Fill in accounts.json first." }
-
-  return [pscustomobject]@{ Name = $name; Config = $acct; Owner = $owner; Url = $url }
-}
-
-$cfg = Resolve-AccountConfig
+$cfg = Get-AccountsConfig
 $remoteName = Resolve-Remote $Path $GitArgs $Remote
-$resolved = Resolve-Account $cfg $Path $remoteName
+$resolved = Resolve-AccountByRemote $cfg $Path $remoteName
 $ghDir = Expand-HomePath $resolved.Config.ghConfigDir
 
 if ($WhichAccount) {

@@ -17,7 +17,7 @@
 
 .EXAMPLE
   pwsh -File scripts/github/gh-for.ps1 pr list
-  pwsh -File scripts/github/gh-for.ps1 -Path C:\work\repo -- issue list
+  pwsh -File scripts/github/gh-for.ps1 -Path C:\work\repo issue list
   pwsh -File scripts/github/gh-for.ps1 -WhichAccount        # just tell me who I'd be
 
 .NOTES
@@ -26,7 +26,16 @@
   is the state this machine was in, and why `gh auth switch` could not work. This
   script clears BOTH for its child process so the config dir is authoritative.
 #>
-[CmdletBinding()]
+# PositionalBinding=$false is LOAD-BEARING, for the same reason it is in
+# git-for.ps1:57 -- which had it from the start; this script did not, and every
+# documented invocation was broken for it. Without it $Path is position 0, so
+# `gh-for.ps1 api repos/o/r` binds Path='api', resolution runs against a
+# directory that does not exist, and it dies with the baffling "cannot determine
+# an account for 'api'". A `--` separator does NOT rescue it either: pwsh -File
+# hands `--` to its own binder, which fails with "parameter name '' is
+# ambiguous". So bind the named switches explicitly and let
+# ValueFromRemainingArguments collect every positional.
+[CmdletBinding(PositionalBinding = $false)]
 param(
   [string]$Path = (Get-Location).Path,
   [switch]$WhichAccount,
@@ -35,17 +44,6 @@ param(
 )
 
 $ErrorActionPreference = 'Stop'
-
-function Resolve-AccountConfig {
-  $cfgPath = Join-Path $PSScriptRoot 'accounts.json'
-  if (-not (Test-Path $cfgPath)) { throw "missing $cfgPath" }
-  Get-Content $cfgPath -Raw | ConvertFrom-Json
-}
-
-function Expand-HomePath([string]$p) {
-  if ($p -like '~*') { return (Join-Path $HOME $p.Substring(1).TrimStart('/', '\')) }
-  return $p
-}
 
 <#
   AUTH is decided by the repo's REMOTE OWNER, not by the route.
@@ -58,42 +56,13 @@ function Expand-HomePath([string]$p) {
   Routes decide COMMIT IDENTITY (see apply-commit-identity.ps1). They are used
   here only as the fallback for a directory with no remote yet, e.g. the
   reserved Projects/fourth/ root, where the owner cannot be read.
+
+  The resolution itself lives in accounts-lib.ps1, shared with git-for.ps1.
 #>
-function Resolve-Account($cfg, [string]$forPath) {
-  $owner = $null
-  $url = (& git -C $forPath remote get-url origin 2>$null)
-  if (-not $url) { $url = (& git -C $forPath remote get-url --all 2>$null | Select-Object -First 1) }
-  if ($url -and $url -match 'github\.com[:/]([^/]+)/') { $owner = $Matches[1] }
+. (Join-Path $PSScriptRoot 'accounts-lib.ps1')
 
-  $name = $null
-  $why = $null
-  if ($owner) {
-    $mapped = $cfg.authByOwner.$owner
-    if (-not $mapped) { $mapped = $cfg.authByOwner._default }
-    $name = $mapped
-    $why = "remote owner '$owner'"
-  } else {
-    # No remote -- fall back to the longest matching route prefix.
-    $norm = ($forPath -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
-    $bestLen = -1
-    foreach ($r in $cfg.routes) {
-      $p = ($r.prefix -replace '\\', '/').TrimEnd('/').ToLowerInvariant()
-      if ($norm -eq $p -or $norm.StartsWith($p + '/')) {
-        if ($p.Length -gt $bestLen) { $bestLen = $p.Length; $name = $r.commitAccount }
-      }
-    }
-    $why = "no remote; longest matching route prefix"
-  }
-
-  if (-not $name) { throw "cannot determine an account for '$forPath' (no remote, no matching route). Add a route to accounts.json -- guessing is exactly the silent failure this design exists to prevent." }
-  $acct = $cfg.accounts.$name
-  if (-not $acct) { throw "resolved account '$name' is not defined in accounts.json" }
-  if ($acct.user -like 'TBD-*') { throw "account '$name' is still a placeholder (user = $($acct.user)). Fill in accounts.json first." }
-  return [pscustomobject]@{ Name = $name; Config = $acct; Why = $why }
-}
-
-$cfg = Resolve-AccountConfig
-$resolved = Resolve-Account $cfg $Path
+$cfg = Get-AccountsConfig
+$resolved = Resolve-AccountByPath $cfg $Path
 $ghDir = Expand-HomePath $resolved.Config.ghConfigDir
 
 if ($WhichAccount) {
