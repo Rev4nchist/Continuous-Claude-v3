@@ -24,6 +24,13 @@
      must come FIRST to clear the list. The failing and passing commands differ
      by exactly that one token, and the failure looks identical to having no
      override at all.
+
+     STATUS 2026-08-11: the global `wincred` helper is GONE, so there is no
+     longer a second helper for the empty token to clear. The clearing token
+     STAYS anyway -- it costs nothing, and it is the only thing standing between
+     this script and a silent wrong-account push if any helper is ever added
+     back. verify-github-accounts.ps1 layer 5 now fails if the chain grows a
+     second helper, so the regression is caught rather than discovered.
   2. `git push --dry-run` against an up-to-date branch returns exit 0
      "Everything up-to-date" WITHOUT ever exercising write authorization. It
      reads all-clear while credentials are still wrong. Never validate this

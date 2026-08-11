@@ -220,4 +220,46 @@ Caveat: the `destructive-command-guard` is a **Bash-tool** PreToolUse hook, so d
 - **`verify-github-accounts.ps1` layer 2 could hang the whole verifier** (fixed 2026-08-05). `git credential fill` asks Git Credential Manager, whose default on a MISS is a **GUI prompt** — which blocks forever in a tool/scheduled shell, at 0% CPU, producing ZERO output on kill. It now passes `GIT_TERMINAL_PROMPT=0`, `GCM_INTERACTIVE=never` and `-c credential.interactive=false` so a miss FAILS instead of asking. A verifier that can hang is a verifier nobody runs — which is how all four identity layers stayed unverified while the setup was misconfigured.
 - **A timed-out `gh`/`git` command (exit 143) is NOT proof of failure** — the op often already succeeded server-side. VERIFY (`gh api …/pulls/<N>` → `merged`) before retrying.
 
+### Plain `git` and bare `gh` now route themselves (2026-08-11)
+
+The wrappers are no longer the only correct path. Three changes, all verified by a
+64-remote sweep (`scripts/github/sweep-remotes.ps1`) that went from **25 failures to 1**:
+
+- **`~/.gitconfig` picks the account.** `credential."https://github.com".username = Rev4nchist`
+  gives GCM the tiebreak it lacked, and `url."https://david-hayes44@github.com/fourth/".insteadOf`
+  rewrites work URLs at transport time. All 9 `fourth/*` remotes match that prefix — verified by
+  `scripts/github/audit-remotes.ps1`, not assumed.
+- **The global `wincred` helper and the ambiguous `git:https://github.com` credential are gone.**
+  That pair was the real defect: with no username GCM could not choose, and wincred answered from a
+  host-level entry mapping to **david-hayes44**, so every *personal* repo silently authenticated as
+  the *work* account and 404'd. That is what "Repository not found" on a repo you own means here.
+  Removing wincred was safe because **every** `git:` entry in Credential Manager was github.com —
+  no other host depended on it.
+- **Bare `gh` routes by directory** via `scripts/github/gh-shim.ps1`, dot-sourced from both
+  PowerShell profiles. It shares `accounts-lib.ps1` with the wrappers rather than copying the
+  mapping. A function only affects profile-loading shells, so scripts calling `gh` directly are
+  unchanged — those should still use `gh-for.ps1`.
+
+Corrections to what was believed before:
+
+- **`gh-for.ps1` could not run any gh command in either of its documented forms** until 2026-08-11.
+  `[CmdletBinding()]` with `$Path` first made `$Path` positional 0, so `gh-for.ps1 api …` bound
+  `api` to `-Path` and failed with `cannot determine an account for 'api'` — an argument-binding
+  bug wearing a routing-config error message. A `--` separator does not help: `pwsh -File` hands
+  `--` to its own binder. Fixed with `PositionalBinding = $false`, which `git-for.ps1` had all along.
+- **`git remote -v` does NOT stay clean** under an `insteadOf` rule — it prints the rewritten URL.
+  The *stored* config is untouched (`git config --get remote.origin.url` shows the original), which
+  is the property that actually matters.
+- **A no-username `git credential fill` still returns a credential, and should.** Once
+  `credential.<url>.username` is set it resolves to the default account deterministically. The
+  invariant worth guarding is *which* account answers, not whether one does — `verify-github-accounts.ps1`
+  layer 5 asserts exactly that, plus a single-helper chain and a firing URL rewrite.
+- **`gh-for.ps1 api …` for ad-hoc queries works now**, so the "no remote, no matching route" refusal
+  is no longer a reason to reach for plain `gh`.
+
+Rollback, credentials untouched throughout:
+`git config --global credential.helper wincred`,
+`git config --global --unset credential.https://github.com.username`,
+`git config --global --unset url.https://david-hayes44@github.com/fourth/.insteadOf`.
+
 Full merge/branch-cleanup workflow using these: `.claude/rules/git-merge-workflow.md`.

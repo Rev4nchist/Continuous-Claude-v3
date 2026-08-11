@@ -232,6 +232,69 @@ if (Test-Path $mcpPath) {
   }
 }
 
+# --- layer 5: plain-git routing -----------------------------------------
+#
+# Layers 1-4 all go through a wrapper or a config dir. This one asks what PLAIN
+# `git` does -- no gh-for.ps1, no git-for.ps1 -- because that is what VS Code,
+# Claude Code's own git calls, and muscle memory actually use.
+#
+# The defect this guards was live until 2026-08-11: git asked the helper chain
+# for https://github.com with NO username, Git Credential Manager could not
+# choose between two accounts and raised a picker, and when that was suppressed
+# a second helper (wincred) answered from an ambiguous stored entry that mapped
+# to the WORK account. Every personal repo therefore authenticated as
+# david-hayes44 and 404'd -- 25 of 64 remotes were failing this way.
+#
+# NOTE ON CHECK 3, because the obvious form of it is wrong: the original plan
+# asserted that a no-username probe must NOT return a credential at all. That is
+# false once credential.<url>.username is configured -- a no-username probe then
+# resolves to the DEFAULT account, deterministically, which is the fix working
+# as designed. The invariant is not "nothing comes back", it is "the personal
+# account comes back, never the work account". Asserting the plan's version
+# would fail on a correctly configured machine.
+$defaultUser = $cfg.accounts.($cfg.authByOwner._default).user
+$prevTp = $env:GIT_TERMINAL_PROMPT; $prevGcmI = $env:GCM_INTERACTIVE
+$env:GIT_TERMINAL_PROMPT = '0'; $env:GCM_INTERACTIVE = 'never'
+try {
+  # 5a -- no username supplied: must resolve silently, as the DEFAULT account.
+  $checks++
+  $bare = ("protocol=https`nhost=github.com`n`n" | & git -c credential.interactive=false credential fill 2>&1) -join "`n"
+  $bareUser = if ($bare -match 'username=(\S+)') { $Matches[1] } else { '(none)' }
+  if ($bare -match 'Cannot prompt') {
+    Add-Finding 'plain-git' '(no username)' "the helper chain cannot answer a bare https://github.com request. Interactively this is the account picker. Fix: git config --global credential.https://github.com.username $defaultUser"
+  } elseif ($bareUser -ne $defaultUser) {
+    Add-Finding 'plain-git' '(no username)' "a bare request resolved to '$bareUser', not the default account '$defaultUser'. This is the silent-wrong-account bug: every personal repo would authenticate as the wrong user and 404. Check for a stale ambiguous credential (cmdkey /list | findstr `"target=git:`") and a second credential.helper."
+  }
+
+  # 5b -- exactly one credential helper. A second helper masks GCM's failure
+  # instead of surfacing it, which is how the wrong account went unnoticed.
+  $checks++
+  $helpers = @(& git config --get-all credential.helper 2>$null) | Where-Object { $_ }
+  if ($helpers.Count -ne 1) {
+    Add-Finding 'plain-git' '(helper chain)' "expected exactly one credential helper, found $($helpers.Count): $($helpers -join ', '). A fallback helper answers when GCM fails, silently and often as the wrong account."
+  }
+} finally {
+  if ($null -ne $prevTp) { $env:GIT_TERMINAL_PROMPT = $prevTp } else { Remove-Item Env:GIT_TERMINAL_PROMPT -ErrorAction SilentlyContinue }
+  if ($null -ne $prevGcmI) { $env:GCM_INTERACTIVE = $prevGcmI } else { Remove-Item Env:GCM_INTERACTIVE -ErrorAction SilentlyContinue }
+}
+
+# 5c -- the transport rewrite that routes work repos. Checked against a real
+# repo on disk rather than by re-reading the config we just wrote, so a rule
+# that parses but does not FIRE is caught.
+$workAcct = $cfg.accounts.($cfg.authByOwner.fourth)
+if ($workAcct) {
+  $probeRepo = @($cfg.routes | ForEach-Object { $_.prefix } | Where-Object { Test-Path $_ } |
+    Where-Object { (& git -C $_ remote get-url origin 2>$null) -match 'github\.com[:/]fourth/' }) |
+  Select-Object -First 1
+  if ($probeRepo) {
+    $checks++
+    $effective = (& git -C $probeRepo ls-remote --get-url origin 2>$null)
+    if ($effective -notmatch [regex]::Escape("$($workAcct.user)@github.com")) {
+      Add-Finding 'plain-git' 'work' "in '$probeRepo' the effective remote URL is '$effective' -- it does not carry '$($workAcct.user)@', so plain git will authenticate there as the default account. Fix: git config --global url.`"https://$($workAcct.user)@github.com/fourth/`".insteadOf https://github.com/fourth/"
+    }
+  }
+}
+
 # --- report --------------------------------------------------------------
 $ok = $findings.Count -eq 0 -and $checks -gt 0
 if ($checks -eq 0) {
