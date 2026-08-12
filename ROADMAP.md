@@ -305,6 +305,26 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-08-12: Land `agentic-os` on `main`
+**Key Decisions:**
+- Re-check mergeability immediately before merging.: A peer session (`8896640d`) is active on
+- Post the decision record on #29 first.: The PR body says "not proposed for immediate merge";
+- Advance local `main` without a checkout.: `main` is checked out in no worktree, so a ref-only
+- The SHAs the docs cite are still reachable from `main`: — this is the whole reason for the
+- The original symptom is gone: — the landing page is the actual acceptance test:
+
+**Implementation:**
+- Re-check mergeability immediately before merging.: A peer session (`8896640d`) is active on
+- -jq '"mergeable=\(.mergeable) state=\(.mergeable_state) head=\(.head.sha)"'
+- Post the decision record on #29 first.: The PR body says "not proposed for immediate merge";
+- Mark #29 ready for review.: A draft PR cannot be merged. REST cannot un-draft; this needs the
+- Merge via REST, not `gh pr merge`.: `gh pr merge` is interactive by default and hangs in a
+
+**Files:** .claude/rules/git-merge-workflow.md, .claude/rules/windows-platform.md, lane-context.ts, docs/harness-strategy/2026-08-10-cross-session-messaging-plan.md, BOOTSTRAP.md
+
+**Verification:** PR closed as merged, with a merge commit::
+
+
 ### 2026-08-07: Fix: Braintrust SessionEnd hooks cancelled at shutdown
 **Key Decisions:**
 - Add a `Stop` event containing `braintrust_hooks.py stop`, `timeout: 15000`.
