@@ -95,6 +95,24 @@ grep -r "def function_name" src/
 $CLAUDE_PROJECT_DIR/.claude/cache/agents/arbiter/output-{timestamp}.md
 ```
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "arbiter",
+  "status": "passed | failed | partial",
+  "suites": [
+    {"name": "<suite/command>", "total": 0, "passed": 0, "failed": 0, "skipped": 0, "evidence": "<the runner's actual summary line>"}
+  ],
+  "failures": [{"test": "<id>", "error": "<first error line>"}]
+}
+```
+
+`evidence` is the runner's verbatim summary line (e.g. `Tests 61 passed | 5 skipped`) — the orchestrator re-verifies against it; a paraphrased count is a contract violation.
+
 ## Output Format
 
 ```markdown

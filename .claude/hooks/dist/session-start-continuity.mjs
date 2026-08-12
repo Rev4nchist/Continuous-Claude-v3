@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-start-continuity.ts
 import * as fs2 from "fs";
 import * as path2 from "path";
@@ -944,7 +946,7 @@ async function readStdin() {
     let data = "";
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3);
+    setTimeout(() => resolve2(data), 1e3).unref();
   });
 }
 main().catch((err) => {

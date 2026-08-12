@@ -36,7 +36,9 @@ import { pathToFileURL } from 'node:url';
 import {
   queryDataSource, getPageBlocks, selectName, richText, dateStart,
 } from '../project-cards/lib/notion.mjs';
-import { REPORT_RUNS_DS_ID, REPORTS_HUB_PAGE_ID, CORRECTIVE_PREFIX_RE } from './config.mjs';
+import {
+  REPORT_RUNS_DS_ID, REPORTS_HUB_PAGE_ID, isCorrectiveSummary,
+} from './config.mjs';
 import {
   SCHEDULE, candidateForDay, isWatchdogMissRow,
   startOfDay, addDays, atTime, isoWeekLabel,
@@ -58,10 +60,6 @@ export function extractRunRow(row) {
     summary: richText(p.Summary) || '',
     status: selectName(p.Status) || '',
   };
-}
-
-function isCorrectiveSummary(summary) {
-  return CORRECTIVE_PREFIX_RE.test(String(summary || '').trim());
 }
 
 // --- week buckets (pure) ----------------------------------------------------------
@@ -192,6 +190,52 @@ function rowsInWindow(rows, start, end) {
   });
 }
 
+// --- standing failures / consecutive non-OK (U2, T9.2) --------------------------
+// The audit finding this closes: `landedForPeriod`'s "landed" coverage metric is
+// Status-BLIND by design (it only asks "did a genuine row land", not "did it
+// succeed") — that's a real and separate signal (coverage), kept unchanged above.
+// But NOTHING in this module previously branched on Status at all, so a row that
+// died mid-flight (e.g. the two real Self-Improvement rows stranded 2026-07-26/27)
+// was scored as a landed success and never surfaced. This is the Status-aware
+// counterpart: for each schedule type, walk its rows NEWEST-FIRST (by Run Date)
+// and count how many consecutive rows from the top have Status !== 'OK', stopping
+// at the first genuine 'OK'. A watchdog miss-row is Status='Failed' by construction
+// (buildMissRun) and DELIBERATELY COUNTS here — unlike the coverage metric above,
+// a watchdog miss-row IS a standing failure (a period nobody covered), and
+// excluding it would silently re-create this task's own audit bug in a new metric.
+// Rows with an unparseable/absent Run Date are excluded from the ordering (can't be
+// placed in the newest-first sequence) rather than crashing the sort.
+export function computeConsecutiveNonOk(rows, type) {
+  const dated = rows
+    .filter((r) => r.type === type)
+    .map((r) => ({ r, ms: Date.parse(r.runDate || '') }))
+    .filter((x) => !Number.isNaN(x.ms))
+    .sort((a, b) => b.ms - a.ms); // newest first
+  let count = 0;
+  for (const { r } of dated) {
+    // Corrective rows (backfill:/remap:) are human bookkeeping about a PAST
+    // period, not evidence the pipeline ran — skip them entirely: a backfill:
+    // OK must not zero the streak (it masked a real standing failure until
+    // 2026-08-03), and a remap: Failed must not inflate it (13 same-timestamp
+    // remap rows once inflated System Health's count).
+    if (isCorrectiveSummary(r.summary)) continue;
+    if (r.status === 'OK') break;
+    count += 1;
+  }
+  return count;
+}
+
+// One entry per schedule type (order = schedule order). `rows` are the FULL
+// normalized row set (not window-scoped) — a standing failure is a CURRENT-STATE
+// signal ("how many runs in a row, right now, are non-OK"), not a per-window count,
+// so it must see back past the lookback window to find the most recent genuine row.
+export function computeStandingFailures(rows, { schedule = SCHEDULE } = {}) {
+  return schedule.map((entry) => ({
+    type: entry.type,
+    consecutiveNonOk: computeConsecutiveNonOk(rows, entry.type),
+  }));
+}
+
 // --- the rollup (pure core) --------------------------------------------------------
 // `rawRows` are RAW Notion DS rows (extractRunRow applied internally) so callers
 // can hand this the direct output of queryDataSource(dsId, {}) with no
@@ -212,6 +256,7 @@ export function computeTrustMetrics({
   const silentMissRows = windowRows.filter((r) => isWatchdogMissRow(r.summary));
   const ttd = computeTimeToDetection(silentMissRows, { schedule });
   const corrective = computeCorrectiveRate(windowRows);
+  const standingFailures = computeStandingFailures(rows, { schedule });
 
   return {
     lookbackWeeks: weeks,
@@ -224,6 +269,7 @@ export function computeTrustMetrics({
     correctiveRowRate: corrective.rate,
     correctiveRowCount: corrective.correctiveCount,
     totalRowsInWindow: corrective.totalCount,
+    standingFailures,
   };
 }
 
@@ -367,6 +413,10 @@ function main() {
     console.log(`  silentMissCount=${summary.silentMissCount} (target 0)`);
     console.log(`  meanTimeToDetectionHours=${summary.meanTimeToDetectionHours ?? 'n/a'} (n=${summary.ttdSampleCount})`);
     console.log(`  correctiveRowRate=${summary.correctiveRowRate} (${summary.correctiveRowCount}/${summary.totalRowsInWindow})`);
+    console.log('  standing failures (consecutive non-OK rows, most-recent-first, per type):');
+    for (const s of summary.standingFailures) {
+      console.log(`    ${s.type}: ${s.consecutiveNonOk}`);
+    }
   }
 
   // Best-effort, non-fatal: freshness of the hub's human-authored sections.

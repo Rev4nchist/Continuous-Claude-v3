@@ -227,4 +227,6 @@ Interview complete. Plan presented.
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('maestro-enforcer')) {
+  main();
+}

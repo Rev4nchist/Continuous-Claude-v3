@@ -80,8 +80,8 @@ Then these sections:
 - `## 7. Open questions`
 
 ## After writing the proposal
-- Attempt a short digest to the Notion Bridge Code->Eve queue (use the `notion-bridge` skill / Notion MCP):
-  date, component, verdict, headline, and the proposal path. This is BEST-EFFORT — if the Notion MCP is
-  unavailable in this headless run, instead APPEND those lines to `docs/self-improvement/PENDING-DIGEST.md`
-  (create it if missing) so the next interactive session can sweep it into the Bridge.
+- Do NOT write the digest yourself — do not touch `docs/self-improvement/PENDING-DIGEST.md` and do not
+  attempt the Notion Bridge / Notion MCP (auto-denied in this headless run anyway). The parent wrapper
+  queues your digest deterministically from the proposal's frontmatter (verdict, component_name,
+  headline) after this session ends — so make sure those frontmatter fields are accurate and complete.
 - Do nothing else. Do NOT commit or push. End the session.

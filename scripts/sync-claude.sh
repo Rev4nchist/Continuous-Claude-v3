@@ -37,7 +37,7 @@ else
     DST="$USER_CLAUDE"
 fi
 
-$VERBOSE && echo "Syncing: $SRC -> $DST"
+$VERBOSE && echo "Syncing: $SRC -> $DST" || true
 
 # Pre-flight: refuse reverse-sync if repo audit invariant violated.
 # Reverse-sync used to propagate fossilized ~/.claude/hooks/src/ back to repo,
@@ -62,7 +62,7 @@ if [[ "$DIRECTION" == "to-repo" ]]; then
     # This makes an accidental or re-introduced automatic reverse-sync safe.
     if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
         DIRTY="$(git -C "$REPO_ROOT" status --porcelain -- \
-            .claude/rules .claude/agents .claude/skills .claude/scripts \
+            .claude/rules-src .claude/agents .claude/skills .claude/scripts \
             .claude/docs .claude/hooks 2>/dev/null)"
         if [ -n "$DIRTY" ]; then
             echo "ABORT: reverse-sync refused -- repo has uncommitted changes in synced dirs:" >&2
@@ -79,7 +79,19 @@ fi
 # regressions #1-#7). Forward sync-to-active.sh also excludes hooks/src --
 # both scripts are now symmetric. hooks/dist/*.mjs is what runs at hook time
 # and is synced by sync-to-active.sh's dedicated dist branch.
-SYNC_DIRS="rules agents skills scripts docs"
+# `rules` is NOT here: the two sides use DIFFERENT names. Active is
+# ~/.claude/rules/ (what Claude Code loads as user scope); repo is
+# .claude/rules-src/ so Claude Code does NOT also auto-load it as project scope.
+# Same-name copying would recreate the ~61k/session duplicate that commit 9f9b9d4
+# removed -- a reverse-sync would silently undo it. See sync-to-active.sh.
+SYNC_DIRS="agents skills scripts docs"
+
+# Direction-aware mapping for the rules tree (active name != repo name).
+if [[ "$DIRECTION" == "to-repo" ]]; then
+    RULES_SRC_DIR="rules"; RULES_DST_DIR="rules-src"
+else
+    RULES_SRC_DIR="rules-src"; RULES_DST_DIR="rules"
+fi
 
 # Files/patterns to never sync
 NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.jsonl knowledge-tree.json"
@@ -87,8 +99,11 @@ NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.json
 # Copy function
 copy_dir() {
     local dir="$1"
+    # Optional 2nd arg: dest dir name when it differs from the source name
+    # (used by the rules mapping above). Defaults to same-name.
+    local dst_dir="${2:-$1}"
     local src_path="$SRC/$dir"
-    local dst_path="$DST/$dir"
+    local dst_path="$DST/$dst_dir"
 
     [[ ! -d "$src_path" ]] && return 0
 
@@ -110,7 +125,13 @@ copy_dir() {
         else
             mkdir -p "$(dirname "$dst_file")"
             cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $dir/$rel"
+            # `|| true` is load-bearing (see note at end of file): this is the
+            # LAST command in the while body, so without it a non-verbose run
+            # makes the loop -> pipeline -> copy_dir all return 1, and `set -e`
+            # kills the script at the call site. Effect: --to-repo copied
+            # agents/ and silently stopped, never reaching skills, scripts,
+            # docs, rules or hooks. Verified by scripts/sync-claude-mapping.test.sh.
+            $VERBOSE && echo "Copied: $dir/$rel" || true
         fi
     done
 }
@@ -119,6 +140,9 @@ copy_dir() {
 for dir in $SYNC_DIRS; do
     copy_dir "$dir"
 done
+
+# rules, with its cross-name mapping (see RULES_*_DIR above).
+copy_dir "$RULES_SRC_DIR" "$RULES_DST_DIR"
 
 # Copy specific hook files
 for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/package.json" "hooks/tsconfig.json"; do
@@ -132,9 +156,13 @@ for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/pack
         else
             mkdir -p "$(dirname "$dst_file")"
             cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $rel"
+            $VERBOSE && echo "Copied: $rel" || true
         fi
     done
 done
 
-$VERBOSE && echo "Sync complete"
+# `|| true` is load-bearing: without it this `&&` list is the script's last
+# command, so a non-verbose run exits 1 on SUCCESS. The abort paths above also
+# exit 1, which made "sync completed" and "guard refused, nothing copied"
+# indistinguishable to any caller checking $?. sync-to-active.sh already had it.
+$VERBOSE && echo "Sync complete" || true

@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/typescript-preflight.ts
 import { execSync } from "child_process";
 import * as path from "path";
@@ -107,4 +109,6 @@ Fix before proceeding.`
     console.log(JSON.stringify({}));
   }
 }
-main();
+if ((process.argv[1] || "").includes("typescript-preflight")) {
+  main();
+}

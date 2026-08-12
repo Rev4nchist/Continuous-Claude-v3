@@ -1,8 +1,8 @@
 # FourthOS Weekly Sponsor Update — Generate Prompt
 
 This prompt is fed to `claude -p` by `scripts/fourthos-weekly/scheduled-fourthos-weekly.bat`
-every Thursday at 07:00 (ahead of Dave's 10:00 CST Thursday submit deadline; can be run manually
-the same way). It generates the weekly FourthOS
+every Wednesday at 07:00 (moved from Thursday 2026-08-04 — Dave's Carly/Christian meetings are now
+Thursday morning, so the package must be reviewed Wednesday; can be run manually the same way). It generates the weekly FourthOS
 sponsor update package and stages it UNLISTED for Dave's review.
 
 Read the `fourthos-weekly` skill for the full contract before acting:
@@ -10,7 +10,7 @@ Read the `fourthos-weekly` skill for the full contract before acting:
 
 ---
 
-You are a non-interactive `claude -p` session invoked by the Thursday 07:00 `CCv3-FourthOS-Weekly`
+You are a non-interactive `claude -p` session invoked by the Wednesday 07:00 `CCv3-FourthOS-Weekly`
 scheduled task on Windows. Your job: build this week's FourthOS sponsor update package for **Carly**
 (VP Enterprise Transformation & Technology) and **Christian** (CTO), stage it to an UNLISTED preview
 on the `ai-enablement-decks` GitHub Pages site, and notify Dave to review. **Do not promote it live** —
@@ -32,6 +32,32 @@ that is Dave's separate approval step (`promote.mjs`).
   newest-first, one row visible + collapse). The generate step only stages preview/.
 
 ## Steps
+
+0. **Stand-down check — do this FIRST, before any Notion call or any write.** If a preview for
+   today already exists, this run must NOT rebuild over it. An interactive generate (Dave building
+   the week's package by hand, often the night before) stages exactly the same artifact this task
+   would, and regenerating over it would silently replace a reviewed, hand-tuned package with a
+   default one. From the decks repo, `C:/Users/david.hayes/Projects/ai-enablement-decks`:
+
+   ```
+   git -C <decks-repo> fetch origin --quiet
+   git -C <decks-repo> log -1 --format=%cs -- fourthos/preview
+   ```
+
+   Treat the preview as ALREADY GENERATED when **all** of these hold:
+   - that commit date equals today (`YYYY-MM-DD`, local), **and**
+   - `fourthos/preview/index.html`, `briefing.html` and `deep-dive.html` all exist, **and**
+   - `fourthos/preview/_ERROR.md` does **not** exist.
+
+   If already generated: make **no** Notion writes, **no** git writes and **no** Slack message.
+   Print exactly `fourthos-weekly: SKIP reason=already-generated-today` and exit 0. This is a
+   deliberate no-publish condition, which is what the SKIP sentinel is for — the wrapper still
+   records a registry row, so the always-emit spine is preserved and the week reads as
+   "deliberately skipped" rather than "never ran". Do not disguise it as a failure, and do not
+   delete or overwrite the existing preview.
+
+   If `_ERROR.md` IS present, that is a prior failed run, **not** an already-generated preview —
+   continue with a normal generate (step 6 deletes the stale `_ERROR.md`).
 
 1. **Pre-flight.** Confirm the Notion MCP is reachable (`notion-fetch` the cockpit). If it fails or
    returns an auth error, follow Guardrail G1 and stop.
@@ -69,12 +95,25 @@ week-switcher) and footer. Brand = `.claude/skills/fourth-brand-guidelines/` (Fo
   and project-card decision flags link to the specific card.
 - Hub body: sponsor-lens glance FIRST, nav cards second. Chip row label is "This week".
 
-**Language rules (MANDATORY — see the skill's "Language rules" table for full replacements):**
+**Clarity Contract (MANDATORY — the #1 rule; read the skill's "Clarity Contract" section in full).**
+Carly and Christian are NOT inside the projects — write every unit so a smart non-technical leader
+understands it cold, in one pass. Clarity beats completeness.
+- **Change → Benefit (every progress item, each portfolio card's focus / latest update / next milestone,
+  every outcome, risk, and sponsor action):** state (1) *what concretely changed* this week — never
+  "worked on" / "progressed" / "continued" — and (2) *the benefit and the named beneficiary* (the
+  company, a specific team like CS or RevOps, end users, a customer, or the sponsors' own decision),
+  linked with "so that" / "which means". If you cannot name a benefit AND a beneficiary, it is activity,
+  not progress — dig for the real outcome or cut it.
+- **Outcome first, mechanism second. One idea per sentence. Halve any sentence you can.**
+- Climb the **So-What Ladder**: Raw (version/test/bug — never shown) → Capability (plain verb) → Value
+  (Trust / Usefulness / Risk retired / Readiness / Speed) → Sponsor sentence (≤25 words, one evidence
+  anchor, honesty badge, names the beneficiary). Match the before→after calibration table in the skill.
+
+**Language mechanics (MANDATORY — see the skill's "Language rules" table for full replacements):**
 BANNED: "topology". Technical terms are defined on first use or replaced with plain phrasing
 (SWA → "access-gated report site"; Entra groups → "per-audience security groups"; OBO → "each person
 signs in as themselves"; ADR → "architecture decision record"; drop rev numbers from Tier 1). Claim
 calibration: adversarial test results are "demonstrated"/"held 16/16", never "proven"/"secure".
-Writing is intelligent and clear — one idea per sentence, every item states its "so what".
 
 **Honesty / 3-state badge system (MANDATORY — never overstate to a VP/CTO).** Tag every capability:
 **LIVE** (running in prod now — teal filled) · **BUILT IN-REPO** (code-complete/proven, not yet

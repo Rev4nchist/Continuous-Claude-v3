@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/web-lookup-advisor.ts
 import { readFileSync } from "fs";
 var WEB_TOOLS = ["WebFetch", "WebSearch"];

@@ -140,4 +140,6 @@ async function main() {
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('ralph-delegation-enforcer')) {
+  main();
+}

@@ -94,7 +94,7 @@ This project is managed by Continuous Claude v3.
 | Global config | `~/.claude/CLAUDE.md` and `~/.claude/rules/` |
 | Memory | `/recall "<topic>"` to search past learnings |
 | Workflows | `/explore`, `/build`, `/fix`, `/ralph` for orchestrated development |
-| Code intelligence | `/code-intel` (who-calls, find-symbol) routing codegraph/Serena/TLDR |
+| Code intelligence | TLDR CLI (`tldr impact`, `tldr structure`) + ast-grep for AST rewrites |
 | Cross-model workers | `/codex` (GPT) and `/grok` (xAI) execute tasks in isolated worktrees |
 | Tri-model features | `/game-plan <feature>` + `/workroom` for multi-milestone builds |
 | Research | Oracle agent with Nia, Exa, Context7, OpenCLI |

@@ -1,22 +1,56 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/hook-health-monitor.ts
 import * as fs from "fs";
 import * as path from "path";
 import * as os from "os";
 
 // src/shared/braintrust-score.ts
+import { readFileSync } from "fs";
+import { homedir } from "os";
+import { join } from "path";
 var BRAINTRUST_FEEDBACK_TIMEOUT_MS = 2e3;
 var DEFAULT_API_URL = "https://api.braintrust.dev";
 var DEFAULT_PROJECT_NAME = "claude-code";
 var projectIdCache = {};
+var dotenvLoaded = false;
+var envTraceOverride;
+function loadClaudeDotEnv() {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
+  try {
+    const envPath = process.env.BRAINTRUST_DOTENV_PATH || join(homedir(), ".claude", ".env");
+    for (const line of readFileSync(envPath, "utf-8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const idx = trimmed.indexOf("=");
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) process.env[key] = value;
+    }
+  } catch {
+  }
+}
 function getApiUrl() {
+  loadClaudeDotEnv();
   return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
 }
 function getApiKey() {
+  loadClaudeDotEnv();
   const key = process.env.BRAINTRUST_API_KEY;
   return key && key.length > 0 ? key : null;
 }
 function isTraceEnabled() {
-  return (process.env.TRACE_TO_BRAINTRUST || "").toLowerCase() === "true";
+  loadClaudeDotEnv();
+  const effective = envTraceOverride !== void 0 ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || "";
+  return effective.toLowerCase() === "true";
+}
+async function consumeBody(resp) {
+  try {
+    await resp.arrayBuffer();
+  } catch {
+  }
 }
 function logErr(msg) {
   try {
@@ -26,6 +60,7 @@ function logErr(msg) {
   }
 }
 async function resolveProjectId(apiKey) {
+  loadClaudeDotEnv();
   const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
   if (directId && directId.length > 0) {
     return directId;
@@ -45,6 +80,7 @@ async function resolveProjectId(apiKey) {
     });
     if (!resp.ok) {
       logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
+      await consumeBody(resp);
       return null;
     }
     const data = await resp.json();
@@ -98,12 +134,45 @@ async function emitBraintrustScore(opts) {
       if (!resp.ok) {
         logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
       }
+      await consumeBody(resp);
     } catch (e) {
       logErr(`feedback POST ${opts.spanId} failed: ${e.message}`);
     }
   } catch (e) {
     logErr(`unexpected error: ${e.message}`);
   }
+}
+
+// src/shared/braintrust-span.ts
+import { existsSync, readFileSync as readFileSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join2 } from "path";
+function readBraintrustSessionState(sessionId) {
+  if (!sessionId) return null;
+  try {
+    const homeDir = process.env.HOME || process.env.USERPROFILE || homedir2();
+    if (!homeDir) return null;
+    const statePath = join2(homeDir, ".claude", "state", "braintrust_sessions", `${sessionId}.json`);
+    if (!existsSync(statePath)) return null;
+    return JSON.parse(readFileSync2(statePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function resolveBraintrustSpan(sessionId) {
+  const state = readBraintrustSessionState(sessionId);
+  if (!state) return null;
+  if (state.sampled_out) return null;
+  if (state.current_turn_span_id && state.current_turn_span_id.length > 0) {
+    return { spanId: state.current_turn_span_id, attachedTo: "turn" };
+  }
+  if (state.root_span_id && state.root_span_id.length > 0) {
+    return { spanId: state.root_span_id, attachedTo: "root" };
+  }
+  return null;
+}
+function resolveBraintrustSpanId(sessionId) {
+  return resolveBraintrustSpan(sessionId)?.spanId ?? "";
 }
 
 // src/hook-health-monitor.ts
@@ -120,7 +189,8 @@ function parseHookCommands(settings) {
       if (!group.hooks || !Array.isArray(group.hooks)) continue;
       for (const hook of group.hooks) {
         if (hook.type !== "command" || !hook.command) continue;
-        const distPath = extractDistPath(hook.command);
+        const commandLine = [hook.command, ...hook.args || []].join(" ");
+        const distPath = extractDistPath(commandLine);
         if (!distPath) continue;
         if (seen.has(distPath)) continue;
         seen.add(distPath);
@@ -250,7 +320,7 @@ async function main() {
     }
     const results = hookFiles.map((hf) => checkHookHealth(hf));
     try {
-      const spanId = (process.env.BRAINTRUST_SESSION_ID || "").trim() || (input.session_id || "");
+      const spanId = resolveBraintrustSpanId(input.session_id || "");
       const payload = buildHookHealthRatioPayload({ results, spanId });
       if (payload) {
         await emitBraintrustScore(payload);

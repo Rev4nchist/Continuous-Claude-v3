@@ -1,6 +1,6 @@
 ---
 name: init-project
-description: Initialize Continuous Claude v3 for a new project with full toolset activation. Creates project CLAUDE.md (interview-driven, 8 sections), ROADMAP.md, knowledge tree, Serena code intelligence, and project registry entry. Use when opening a new project folder for the first time, starting a new project, setting up CCv3 in an existing repo, or the user says "init project", "setup project", "new project", "initialize", "start new project".
+description: Initialize Continuous Claude v3 for a new project with full toolset activation. Creates project CLAUDE.md (interview-driven, 8 sections), ROADMAP.md, knowledge tree, and project registry entry. Use when opening a new project folder for the first time, starting a new project, setting up CCv3 in an existing repo, or the user says "init project", "setup project", "new project", "initialize", "start new project".
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep, Agent, AskUserQuestion]
 metadata:
   user-invocable: true
@@ -19,8 +19,6 @@ Set up a project with the complete Continuous Claude v3 infrastructure. This goe
 | `CLAUDE.md` | Project-specific instructions (stack, commands, conventions) | 1 (interview) |
 | `ROADMAP.md` | Goal tracking, auto-synced by hooks | 2 (auto) |
 | `.claude/knowledge-tree.json` | Project navigation map | 3 (auto) |
-| `.serena/project.yml` | LSP code intelligence activation | 4 (conditional) |
-| `.codegraph/` index | code-intel L3 symbol/caller queries | 4.6 (conditional) |
 | Registry entry | Repo-canonical `project-registry.json` updated + synced | 5 (auto) |
 | Sentry SDK | Per-framework error monitoring setup | 6 (conditional) |
 | E2E test scaffold | `e2e/smoke.spec.ts` + `playwright.config.ts` | 7 (conditional, web only) |
@@ -53,8 +51,6 @@ git rev-parse --show-toplevel 2>/dev/null          # where its root actually is
      .env*
      !.env.example
      .dev-server.pid
-     .codegraph/
-     .serena/cache/
      .claude/settings.local.json
      .claude/cache/
      .claude/knowledge-tree.json
@@ -101,7 +97,7 @@ The template has 8 sections. Every section matters:
 5. **Conventions** -- coding standards the project follows
 6. **Commands** -- every dev/test/build/deploy command
 7. **Git Workflow** -- remote convention, branch strategy
-8. **CCv3 Integration** -- pointers to global capabilities (memory, agents, hooks, Serena)
+8. **CCv3 Integration** -- pointers to global capabilities (memory, agents, hooks)
 
 Section 8 is critical because it tells future sessions about the full toolset. Without it, Claude operates on generic defaults and misses 90% of the infrastructure.
 
@@ -145,19 +141,7 @@ If this fails (missing dependencies, wrong env), note it and continue. The sessi
 
 ---
 
-### Phase 4: Serena Code Intelligence (Conditional)
-
-Check if the project has supported source files (`.ts`, `.tsx`, `.py`, `.go`, `.rs`). If yes, read `references/serena-setup.md` and follow the setup steps:
-
-1. Create `.serena/project.yml` with detected languages
-2. Try to activate via Serena MCP tools (fail gracefully if unavailable)
-3. Report activation status
-
-Skip entirely for HTML/CSS/Markdown-only projects.
-
----
-
-### Phase 4.5: Next.js DevTools MCP (Conditional)
+### Phase 4: Next.js DevTools MCP (Conditional)
 
 If the project is **Next.js 16 or above** (check the `next` version in `package.json` — the runtime endpoint `/_next/mcp` requires v16+), add the official Vercel devtools MCP to the project's **root `.mcp.json`** so the agent gets live runtime access (build/runtime/type errors, routes, server actions, dev logs) from the running dev server:
 
@@ -180,18 +164,6 @@ If the project is **Next.js 16 or above** (check the `next` version in `package.
 - **Skip if** Next.js < 16 (no `/_next/mcp` endpoint) or not a Next.js project.
 
 Reference: https://nextjs.org/docs/app/guides/mcp
-
----
-
-### Phase 4.6: codegraph Index (Conditional)
-
-If the project has TS/Py/Go/Rust source files AND the codegraph binary is installed (probe first; binary absent → skip silently and note "code-intel falls back to TLDR" in the summary):
-
-1. **Ensure `.codegraph/` is gitignored FIRST** — check the project's `.gitignore` and append `.codegraph/` if missing. This applies to brownfield repos with an existing `.gitignore` too, not just repos Phase 0 seeded; otherwise `codegraph.db` gets committed.
-2. Run `codegraph init` per the CLI shape in `rules/windows-platform.md` — invoke the real JS entrypoint via `node <pkg>/npm-shim.js`, never the `.cmd` shim directly (Node ≥18.20 EINVAL hardening).
-3. Expect ~10s for a small project; large brownfield repos take longer — tell the user it's running and that it's skippable.
-
-This makes `/code-intel` who-calls / find-symbol queries live from day one.
 
 ---
 
@@ -297,8 +269,6 @@ CCv3 initialized for [Project Name]:
   CLAUDE.md        -- [X lines], 8 sections
   ROADMAP.md       -- Created with current focus: [goal]
   Knowledge tree   -- [Generated / Deferred to next session]
-  Serena           -- [Activated / Skipped (no supported files)]
-  codegraph        -- [Indexed / Skipped (binary absent -- code-intel falls back to TLDR)]
   Registry         -- Added to repo-canonical registry (port [PORT]) + mirror synced
   Sentry SDK       -- [Configured / Skipped (user declined or local-only)]
   E2E tests        -- [Scaffolded / Skipped (not a web project)]
@@ -339,7 +309,6 @@ These hooks work in every project once CCv3 is installed globally. Init-project 
 | Issue | Fix |
 |-------|-----|
 | Knowledge tree fails | Skip it -- hooks auto-generate on next session start |
-| Serena activation fails | Create `.serena/project.yml` manually, it will activate when Serena is available |
 | Can't detect stack | Ask the user directly. Auto-detection is a convenience, not required. |
 | Port conflict | Check `~/.claude/project-registry.json` for used ports, pick next available |
 | User says "skip the interview" | Use auto-detected values and reasonable defaults. Generate CLAUDE.md with placeholder markers for missing info. |

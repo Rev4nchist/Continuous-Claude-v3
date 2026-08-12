@@ -187,8 +187,7 @@ export async function main(): Promise<void> {
   // Check if Docker is available
   if (!isDockerAvailable()) {
     const output: HookOutput = {
-      result: 'continue',
-      message: 'Docker not available - memory system will use SQLite fallback'
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: 'Docker not available - memory system will use SQLite fallback' }
     };
     console.log(JSON.stringify(output));
     return;
@@ -204,8 +203,7 @@ export async function main(): Promise<void> {
   const startResult = await startContainerWithRetry();
   if (!startResult.success) {
     const output: HookOutput = {
-      result: 'continue',
-      message: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.`
+      hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.` }
     };
     console.log(JSON.stringify(output));
     return;
@@ -213,8 +211,7 @@ export async function main(): Promise<void> {
 
   // Success - container is running (startContainerWithRetry includes health check)
   const output: HookOutput = {
-    result: 'continue',
-    message: startResult.message || 'PostgreSQL memory container started'
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: startResult.message || 'PostgreSQL memory container started' }
   };
   console.log(JSON.stringify(output));
 }

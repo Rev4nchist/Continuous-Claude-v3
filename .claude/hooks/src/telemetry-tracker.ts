@@ -3,6 +3,7 @@ import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
 import { join, dirname } from 'path';
 import { logSkill, logAgent } from './shared/session-activity.js';
 import { emitBraintrustScore } from './shared/braintrust-score.js';
+import { resolveBraintrustSpanId } from './shared/braintrust-span.js';
 import { detectToolError } from './shared/tool-error.js';
 
 interface HookInput {
@@ -86,15 +87,24 @@ function determineSource(toolInput: Record<string, unknown>): 'hook' | 'explicit
 // `tool_response_keys` to the jsonl telemetry so we can audit what
 // Claude Code actually sends in tool_response.
 //
-// spanId resolution: prefer BRAINTRUST_SESSION_ID env (set by the Python
-// hook chain when running inside a Claude Code session); fall back to the
-// hook payload session_id. The helper itself is fail-open, so a missing
-// span just skips emission silently.
+// spanId resolution: from the Python-written span state file, via
+// shared/braintrust-span.ts, keyed on the payload session id.
+//
+// It previously read BRAINTRUST_SESSION_ID -- which this comment claimed was
+// "set by the Python hook chain", and which is in fact set nowhere (verified
+// 2026-07-28) -- then fell back to the payload session_id. That fallback was
+// the more dangerous half: a Claude Code session id is NOT a Braintrust span
+// id, so it addressed feedback to a span that does not exist. Fail-open still
+// applies: no span, no emit.
 // ---------------------------------------------------------------------------
 export function resolveScoreSpanId(payloadSessionId: string | undefined): string {
-    const envSpan = (process.env.BRAINTRUST_SESSION_ID || '').trim();
-    if (envSpan.length > 0) return envSpan;
-    return payloadSessionId || '';
+    // Was: BRAINTRUST_SESSION_ID env, falling back to the payload session_id.
+    // The env var is set NOWHERE (checked 2026-07-28: process env,
+    // ~/.claude/.env, settings.json env block), and the fallback conflated two
+    // different identifiers -- a Claude Code session id is NOT a Braintrust
+    // span id, so the "fallback" posted feedback against a non-existent span.
+    // The real span state is written by braintrust_hooks.py; read that.
+    return resolveBraintrustSpanId(payloadSessionId || '');
 }
 
 export interface SkillTriggerEmitInput {
@@ -207,9 +217,27 @@ async function main() {
             try { logAgent(data.session_id, agentType); } catch { /* never break */ }
         }
 
-        process.exit(0);
+        // Deliberately NO process.exit(0) here.
+        //
+        // This hook reads stdin with readFileSync(0) and, since the Braintrust
+        // emit above started doing real network I/O, also has async handles in
+        // flight when main() returns. Calling process.exit() in that state tore
+        // libuv down mid-teardown, deterministically (4/4):
+        //
+        //   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING),
+        //   file src\win\async.c, line 76        -> exit 0xC0000409
+        //
+        // It was invisible until 2026-07-28 only because the emit was disabled
+        // and never opened a socket, so there was nothing in flight to race.
+        // Draining the response body was tried first and did NOT fix it -- the
+        // exit call itself is the problem.
+        //
+        // memory-awareness, hook-health-monitor and ralph-task-monitor all emit
+        // scores and none of them crash; none of them call process.exit either.
+        // Letting the loop drain naturally is the shape that works. The emit is
+        // bounded by a 2s AbortSignal timeout, so this cannot hang on the POST.
     } catch {
-        process.exit(0);
+        /* fail-open: never let telemetry break the tool call */
     }
 }
 

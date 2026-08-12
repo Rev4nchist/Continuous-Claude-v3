@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/skill-activation-prompt.ts
 import { readFileSync as readFileSync4, existsSync as existsSync4 } from "fs";
@@ -46,8 +47,14 @@ function readResourceState() {
 function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
 }
-function outputWithMessage(message) {
-  console.log(JSON.stringify({ result: "continue", message }));
+function outputWithMessage(message, hookEventName) {
+  if (!message || !message.trim()) {
+    outputContinue();
+    return;
+  }
+  console.log(JSON.stringify({
+    hookSpecificOutput: { hookEventName, additionalContext: message }
+  }));
 }
 
 // src/shared/session-activity.ts
@@ -1217,10 +1224,7 @@ Do NOT skip this step. The skill provides:
         const blockingSkills = matchedSkills.filter((s) => s.config.enforcement === "block");
         if (blockingSkills.length > 0) {
           const blockMessage = output + "\n\u26D4 BLOCKING: You MUST invoke " + blockingSkills.map((s) => s.name).join(", ") + " skill(s) before generating ANY response.";
-          console.log(JSON.stringify({
-            result: "block",
-            reason: blockMessage
-          }));
+          outputWithMessage(blockMessage, "UserPromptSubmit");
           process.exit(0);
         }
       }
@@ -1360,7 +1364,7 @@ Or use /find-skills to discover and install skills for this domain.`
       }
     }
     if (messages.length > 0) {
-      outputWithMessage(messages.join("\n\n"));
+      outputWithMessage(messages.join("\n\n"), "UserPromptSubmit");
     } else {
       outputContinue();
     }

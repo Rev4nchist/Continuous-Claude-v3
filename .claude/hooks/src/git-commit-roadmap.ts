@@ -15,7 +15,14 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { commitRanInProject } from './shared/roadmap-sync-guards.js';
+import { execFileSync } from 'node:child_process';
+import {
+  commitRanInProject,
+  isPathInsideProject,
+  parseGitCommitInvocations,
+} from './shared/roadmap-sync-guards.js';
+import { insertUnderSection } from './shared/roadmap-splice.js';
+import { writeRoadmapGuarded, appendRoadmapAuditRecord } from './shared/roadmap-audit.js';
 
 interface PostToolUseInput {
   session_id: string;
@@ -49,19 +56,40 @@ const COMMIT_PATTERNS = {
 
 const SKIP_TYPES = new Set(['chore', 'style', 'ci']);
 
+/**
+ * Harness tools that run a shell command and therefore can produce a commit.
+ * MUST stay in step with this hook's `matcher` in settings.json (currently
+ * `Bash|PowerShell`) -- a matcher that admits a tool this set rejects is an
+ * inert registration, which is exactly the 2026-08-05 defect.
+ */
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
 function readStdin(): Promise<string> {
   return new Promise((resolve) => {
     let data = '';
     process.stdin.setEncoding('utf8');
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 
+/**
+ * Recognise a `git commit` in any option form.
+ *
+ * Was `normalized.includes('git commit')`, which is FALSE for
+ * `git -C <path> commit` — so every commit made that way was invisible to this
+ * hook and never reached the ROADMAP (found 2026-08-05; `git -C` is the form
+ * .claude/rules/windows-platform.md recommends for the PowerShell tool, because
+ * the Bash tool hangs on git/network ops). Now tokenizes the invocation.
+ *
+ * The `--amend` exclusion is preserved, and is now per-invocation rather than a
+ * whole-string test — so `git commit -m "..."` in a command that ALSO mentions
+ * the word --amend elsewhere is still recorded correctly.
+ */
 function isGitCommitCommand(command: string): boolean {
-  const normalized = command.toLowerCase().trim();
-  return normalized.includes('git commit') && !normalized.includes('--amend');
+  const invocations = parseGitCommitInvocations(command);
+  return invocations.length > 0 && invocations.some((inv) => !inv.hasAmend);
 }
 
 function isSuccessfulCommit(response: string): boolean {
@@ -156,45 +184,244 @@ function isDuplicateEntry(content: string, commit: ParsedCommit): boolean {
   return false;
 }
 
+/**
+ * Private wrapper preserved at its original call site so behaviour and the
+ * existing pinned tests (`git-commit-roadmap.test.ts`,
+ * `git-commit-roadmap-qw12.test.ts`) are unchanged. The actual logic now lives
+ * once, in `shared/roadmap-splice.ts`'s `insertUnderSection` -- a verbatim
+ * behavioural promotion of what used to be this function's body. See that
+ * export's doc comment for the two quirks (dead `inSection` flag, first-prefix
+ * section match) preserved on purpose rather than fixed here.
+ */
 function appendToCompleted(content: string, entry: string): string {
-  const lines = content.split('\n');
-  const result: string[] = [];
-  let insertedEntry = false;
-  let inCompleted = false;
+  return insertUnderSection(content, '## completed', entry);
+}
 
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const stripped = line.trim().toLowerCase();
+// ---------------------------------------------------------------------------
+// H2 auto-commit follow-on (plan `i-was-working-in-composed-manatee.md` SS6).
+//
+// Recursion is prevented by three INDEPENDENT barriers, not one:
+//   1. Hooks fire on *tool* events. The `git commit --only` below is spawned
+//      directly by THIS hook process via execFileSync, never through the Bash
+//      tool -- so it cannot itself produce a PostToolUse:Bash event and
+//      re-enter this hook. (Proved by inspection: there is no Bash-tool call
+//      anywhere on this path, not merely assumed.)
+//   2. `chore` is in SKIP_TYPES (checked well above, before any of this runs)
+//      -- which is exactly why the auto-commit message below MUST start with
+//      `chore(roadmap):`. That is a deliberate belt, not cosmetics.
+//   3. `isDuplicateEntry` matches the 7-char commit hash already written into
+//      ROADMAP.md, so even a `chore` slipping past SKIP_TYPES would find its
+//      own entry already present and skip.
+//
+// NOTE: `commitRanInProject` (QW-12/D2d-10) does NOT cover recursion -- it
+// only rejects a `cd <other-repo> && git commit` that ran outside this
+// project directory. Do not assume it protects against this hook
+// re-triggering itself; nobody reading this later should have to rediscover
+// that boundary the hard way.
+// ---------------------------------------------------------------------------
 
-    if (stripped.startsWith('## completed')) {
-      inCompleted = true;
-      result.push(line);
-      result.push(entry);
-      insertedEntry = true;
-      continue;
-    }
+interface AutoCommitGitFacts {
+  isGitWorkTree: boolean;
+  operationInProgress: boolean;
+  isTracked: boolean;
+  preDirty: boolean;
+}
 
-    if (stripped.startsWith('## ') && inCompleted) {
-      inCompleted = false;
-    }
+export interface ShouldAutoCommitRoadmapOptions {
+  roadmapPath: string;
+  projectDir: string;
+  isGitWorkTree: boolean;
+  operationInProgress: boolean;
+  isTracked: boolean;
+  preDirty: boolean;
+  env?: NodeJS.ProcessEnv;
+}
 
-    result.push(line);
+/**
+ * Pure, git-free, fully table-testable gate for the H2 auto-commit
+ * follow-on. Every git-derived fact (work-tree membership, an operation in
+ * progress, whether ROADMAP.md is tracked, pre-existing dirtiness) is passed
+ * in as a plain boolean/string by the caller -- this function itself never
+ * shells out, so it needs no process mocking to unit test.
+ */
+export function shouldAutoCommitRoadmap(
+  opts: ShouldAutoCommitRoadmapOptions,
+): { ok: boolean; reason?: string } {
+  const env = opts.env ?? process.env;
+
+  if (env.CCV3_ROADMAP_AUTOCOMMIT === '0') {
+    return { ok: false, reason: 'autocommit_disabled' };
   }
 
-  if (!insertedEntry) {
-    const completedIndex = result.findIndex(l =>
-      l.trim().toLowerCase().startsWith('## planned') ||
-      l.trim().toLowerCase().startsWith('## recent')
+  const expectedPath = path.join(opts.projectDir, 'ROADMAP.md');
+  if (opts.roadmapPath !== expectedPath) {
+    return { ok: false, reason: 'path_mismatch' };
+  }
+  if (!isPathInsideProject(opts.roadmapPath, opts.projectDir)) {
+    return { ok: false, reason: 'path_outside_project' };
+  }
+  if (!opts.isGitWorkTree) {
+    return { ok: false, reason: 'not_git_worktree' };
+  }
+  if (opts.operationInProgress) {
+    return { ok: false, reason: 'git_operation_in_progress' };
+  }
+  if (!opts.isTracked) {
+    return { ok: false, reason: 'not_tracked' };
+  }
+  if (opts.preDirty) {
+    return { ok: false, reason: 'pre_dirty' };
+  }
+
+  return { ok: true };
+}
+
+function isInsideGitWorkTree(projectDir: string): boolean {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', projectDir, 'rev-parse', '--is-inside-work-tree'],
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf-8' },
     );
-
-    if (completedIndex > 0) {
-      result.splice(completedIndex, 0, '', '## Completed', entry, '');
-    } else {
-      result.push('', '## Completed', entry);
-    }
+    return out.trim() === 'true';
+  } catch {
+    return false;
   }
+}
 
-  return result.join('\n');
+function resolveGitDir(projectDir: string): string | null {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', projectDir, 'rev-parse', '--git-dir'],
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf-8' },
+    ).trim();
+    if (!out) return null;
+    return path.isAbsolute(out) ? out : path.resolve(projectDir, out);
+  } catch {
+    return null;
+  }
+}
+
+function isGitOperationInProgress(gitDir: string | null): boolean {
+  // Unknown git dir -> fail closed (an operation could be in progress).
+  if (!gitDir) return true;
+  const markers = ['MERGE_HEAD', 'CHERRY_PICK_HEAD', 'REVERT_HEAD', 'BISECT_LOG'];
+  for (const marker of markers) {
+    if (fs.existsSync(path.join(gitDir, marker))) return true;
+  }
+  return (
+    fs.existsSync(path.join(gitDir, 'rebase-merge')) ||
+    fs.existsSync(path.join(gitDir, 'rebase-apply'))
+  );
+}
+
+function isRoadmapTracked(projectDir: string, relPath: string): boolean {
+  try {
+    execFileSync(
+      'git',
+      ['-C', projectDir, 'ls-files', '--error-unmatch', '--', relPath],
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf-8' },
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+/**
+ * Item B: dirtiness MUST be captured before this hook's own write -- else the
+ * flag would just reflect our own pending append and every auto-commit would
+ * spuriously refuse.
+ */
+function isRoadmapPreDirty(projectDir: string, relPath: string): boolean {
+  try {
+    const out = execFileSync(
+      'git',
+      ['-C', projectDir, 'status', '--porcelain', '--', relPath],
+      { timeout: 5000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf-8' },
+    );
+    return out.trim().length > 0;
+  } catch {
+    // Unable to determine cleanliness -> fail closed, skip auto-commit.
+    return true;
+  }
+}
+
+function collectAutoCommitGitFacts(
+  projectDir: string,
+  relRoadmapPath: string,
+  preDirty: boolean,
+): AutoCommitGitFacts {
+  const isGitWorkTree = isInsideGitWorkTree(projectDir);
+  const gitDir = isGitWorkTree ? resolveGitDir(projectDir) : null;
+  return {
+    isGitWorkTree,
+    operationInProgress: isGitWorkTree ? isGitOperationInProgress(gitDir) : true,
+    isTracked: isGitWorkTree ? isRoadmapTracked(projectDir, relRoadmapPath) : false,
+    preDirty,
+  };
+}
+
+/**
+ * Mirrors `formatCommitEntry`'s prefix construction but is kept separate --
+ * `formatCommitEntry`'s output is pinned by existing tests and must not
+ * change shape to accommodate this message.
+ */
+function buildAutoCommitMessage(commit: ParsedCommit): string {
+  const typeLabel = commit.type !== 'other' ? commit.type : '';
+  const scopeLabel = commit.scope ? `(${commit.scope})` : '';
+  const prefix = typeLabel && scopeLabel ? `${typeLabel}${scopeLabel}: ` :
+                 typeLabel ? `${typeLabel}: ` :
+                 scopeLabel ? `${scopeLabel} ` : '';
+  const hashLabel = commit.hash ? ` \`${commit.hash.slice(0, 7)}\`` : '';
+  return `chore(roadmap): record ${prefix}${commit.description}${hashLabel}`;
+}
+
+interface AutoCommitResult {
+  committed: boolean;
+  commitHash: string | null;
+  failureReason?: string;
+}
+
+/**
+ * Item E: options MUST precede `--` --
+ * `git commit --only -m "<msg>" -- ROADMAP.md`. After `--`, git treats every
+ * token as a pathspec, so putting `-m` there makes it a bogus pathspec
+ * (error) or drops to an interactive editor (hangs the hook). NEVER
+ * `--amend` -- that would change the hash we just wrote into ROADMAP.md,
+ * pointing the entry at a commit that no longer exists.
+ *
+ * Item H: `windows-platform.md` documents this repo manufacturing an MSYS
+ * fork storm on every commit, and that `msys-crash.jsonl` only sees
+ * `git-safe.ps1`-wrapped git -- a raw execFileSync crash here would otherwise
+ * be invisible. Every failure is caught here and degrades to exactly today's
+ * behaviour (ROADMAP.md written, left uncommitted) -- never worse -- with the
+ * captured stderr riding in the audit record's `reason` field: this file does
+ * not own `shared/roadmap-audit.ts` and its `RoadmapAuditRecord` shape has no
+ * dedicated stderr field, so it is embedded (truncated) there instead of
+ * being silently dropped.
+ */
+function attemptRoadmapAutoCommit(projectDir: string, commit: ParsedCommit): AutoCommitResult {
+  const message = buildAutoCommitMessage(commit);
+  try {
+    const stdout = execFileSync(
+      'git',
+      ['-C', projectDir, 'commit', '--only', '-m', message, '--', 'ROADMAP.md'],
+      { cwd: projectDir, timeout: 20000, stdio: ['ignore', 'pipe', 'pipe'], windowsHide: true, encoding: 'utf-8' },
+    );
+    const match = stdout.match(COMMIT_PATTERNS.commitOutput);
+    return { committed: true, commitHash: match ? match[2] : null };
+  } catch (err) {
+    const anyErr = err as { killed?: boolean; stderr?: string | Buffer; message?: string };
+    const stderrText = anyErr.stderr
+      ? (Buffer.isBuffer(anyErr.stderr) ? anyErr.stderr.toString('utf-8') : String(anyErr.stderr))
+      : (anyErr.message ?? String(err));
+    const isTimeout = Boolean(anyErr.killed);
+    const reasonTag = isTimeout ? 'commit_timeout' : 'commit_failed';
+    const clipped = stderrText.slice(0, 500).replace(/\s+/g, ' ').trim();
+    return { committed: false, commitHash: null, failureReason: `${reasonTag}: ${clipped}` };
+  }
 }
 
 async function main() {
@@ -212,7 +439,17 @@ async function main() {
     return;
   }
 
-  if (data.tool_name !== 'Bash') {
+  // Both shell tools carry the command in `tool_input.command`, so both can
+  // produce a commit this hook must record.
+  //
+  // This gate is the SECOND of two layers, and forgetting it is what made the
+  // 2026-08-05 matcher fix inert. Widening the settings.json matcher to
+  // `Bash|PowerShell` let the event reach the hook; this line then dropped it
+  // anyway, so the symptom (PowerShell commits go unrecorded) did not move and
+  // looked exactly like a wrong matcher string. When a registration is widened,
+  // widen the runtime check in the same change -- grep the hook for its own
+  // tool_name comparison before believing a matcher edit did anything.
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
@@ -289,20 +526,94 @@ async function main() {
     return;
   }
 
+  const relRoadmapPath = path.relative(projectDir, roadmapPath) || 'ROADMAP.md';
+
+  // Item B: capture dirtiness BEFORE this hook's own write -- this is what
+  // guarantees the only ROADMAP.md diff in an auto-commit is ours. A file
+  // already modified before we touched it must never get folded into our
+  // commit.
+  const preDirty = isRoadmapPreDirty(projectDir, relRoadmapPath);
+
   const today = new Date().toISOString().split('T')[0];
   const entry = formatCommitEntry(commit, today);
   const updated = appendToCompleted(content, entry);
 
-  fs.writeFileSync(roadmapPath, updated);
+  const beforeLineCount = content.split('\n').length;
+  const afterLineCount = updated.split('\n').length;
+
+  // Item C: route the write through the guarded path. appendToCompleted is a
+  // pure insert (delegates to insertUnderSection), so no allowedDeletions.
+  const guardResult = writeRoadmapGuarded({
+    hook: 'git-commit-roadmap',
+    tool: data.tool_name,
+    roadmapPath,
+    projectDir,
+    before: content,
+    after: updated,
+    ops: [
+      {
+        label: 'completed-append',
+        lines_removed: 0,
+        lines_added: Math.max(0, afterLineCount - beforeLineCount),
+      },
+    ],
+    sessionId: data.session_id,
+  });
+
+  if (guardResult.outcome !== 'written') {
+    const reasonSuffix = guardResult.record.reason ? `: ${guardResult.record.reason}` : '';
+    console.error(`ℹ ROADMAP.md write skipped (${guardResult.outcome}${reasonSuffix})`);
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: `⚠️ ROADMAP.md entry NOT recorded (${guardResult.outcome}${reasonSuffix}). Commit was left untouched.`,
+      },
+    }));
+    return;
+  }
 
   const typeDesc = commit.type !== 'other' ? `${commit.type}: ` : '';
   const scopeDesc = commit.scope ? `(${commit.scope}) ` : '';
 
   console.error(`✓ ROADMAP.md: ${typeDesc}${scopeDesc}${commit.description}`);
 
+  // Items D-H: the H2 auto-commit follow-on. Only attempted after a
+  // successful (`written`) guarded write, so audit record #2 always has a
+  // record #1 to correlate against (by `before_sha256`) -- a mid-commit kill
+  // loses only this second record, never the ROADMAP.md write itself.
+  const gitFacts = collectAutoCommitGitFacts(projectDir, relRoadmapPath, preDirty);
+  const decision = shouldAutoCommitRoadmap({
+    roadmapPath,
+    projectDir,
+    isGitWorkTree: gitFacts.isGitWorkTree,
+    operationInProgress: gitFacts.operationInProgress,
+    isTracked: gitFacts.isTracked,
+    preDirty: gitFacts.preDirty,
+  });
+
+  if (!decision.ok) {
+    appendRoadmapAuditRecord(projectDir, {
+      ...guardResult.record,
+      ts: new Date().toISOString(),
+      committed: false,
+      reason: decision.reason,
+    });
+  } else {
+    const autoCommit = attemptRoadmapAutoCommit(projectDir, commit);
+    appendRoadmapAuditRecord(projectDir, {
+      ...guardResult.record,
+      ts: new Date().toISOString(),
+      committed: autoCommit.committed,
+      commit_hash: autoCommit.commitHash,
+      reason: autoCommit.failureReason,
+    });
+    if (!autoCommit.committed) {
+      console.error(`ℹ ROADMAP.md auto-commit skipped: ${autoCommit.failureReason}`);
+    }
+  }
+
   const output: HookOutput = {
-    result: 'continue',
-    message: `📋 ROADMAP updated: ${commit.description}`,
+    hookSpecificOutput: { hookEventName: 'PostToolUse', additionalContext: `📋 ROADMAP updated: ${commit.description}` },
   };
 
   console.log(JSON.stringify(output));

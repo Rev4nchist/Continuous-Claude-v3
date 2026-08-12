@@ -9,11 +9,20 @@ import {
   computeWeeklyExpectedVsLanded, expectedDeadlineForPeriod, computeTimeToDetection,
   computeCorrectiveRate, computeTrustMetrics, renderTrustRollupBlocks,
   scanHumanSections, assessSectionFreshness, checkHumanSectionFreshness,
+  computeConsecutiveNonOk, computeStandingFailures,
   DEFAULT_LOOKBACK_WEEKS, HUMAN_SECTION_MAX_AGE_DAYS,
 } from '../trust-metrics.mjs';
 import { SCHEDULE } from '../watchdog.mjs';
 
-function vpEntry() { return SCHEDULE.find((e) => e.type === 'VP Weekly'); }
+// Pinned literally rather than looked up from SCHEDULE: VP Weekly was RETIRED
+// 2026-07-25 and has no schedule entry, but it remains the only isoWeek weekly
+// shape and these tests exist to cover the weekly-cadence expectation math.
+function vpEntry() {
+  return {
+    type: 'VP Weekly', source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
+    grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
+  };
+}
 function portfolioEntry() { return SCHEDULE.find((e) => e.type === 'Project Portfolio'); }
 function selfImpEntry() { return SCHEDULE.find((e) => e.type === 'Self-Improvement'); }
 
@@ -184,6 +193,94 @@ test('computeCorrectiveRate: fraction of rows carrying the backfill:/remap: pref
 test('computeCorrectiveRate: empty input -> rate 0, no division by zero', () => {
   const r = computeCorrectiveRate([]);
   assert.deepEqual(r, { rate: 0, correctiveCount: 0, totalCount: 0 });
+});
+
+// --- computeConsecutiveNonOk / computeStandingFailures (U2, T9.2) -----------------
+// Audit finding this closes: two genuine Self-Improvement mid-flight-death rows
+// (2026-07-26, 2026-07-27) stood stranded for days scored as landed successes,
+// because nothing anywhere branched on Status. These are the status-aware metric.
+
+test('computeConsecutiveNonOk: counts consecutive non-OK rows from the most recent backward, stopping at the first genuine OK', () => {
+  const rows = [
+    { type: 'Self-Improvement', runDate: '2026-07-25T12:00:00Z', status: 'OK' },
+    { type: 'Self-Improvement', runDate: '2026-07-26T12:00:00Z', status: 'Failed' },
+    { type: 'Self-Improvement', runDate: '2026-07-27T12:00:00Z', status: 'Failed' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'Self-Improvement'), 2);
+});
+
+test('computeConsecutiveNonOk: zero when the most recent row is OK, even if older non-OK rows exist', () => {
+  const rows = [
+    { type: 'Self-Improvement', runDate: '2026-07-26T12:00:00Z', status: 'Failed' },
+    { type: 'Self-Improvement', runDate: '2026-07-27T12:00:00Z', status: 'OK' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'Self-Improvement'), 0);
+});
+
+test('computeConsecutiveNonOk: zero for a type with no rows', () => {
+  assert.equal(computeConsecutiveNonOk([], 'Self-Improvement'), 0);
+});
+
+// A corrective row (backfill:/remap:) is a human-authored record about a PAST
+// period, not evidence the pipeline ran. Before 2026-08-03 a single `backfill:`
+// OK row zeroed the streak — masking a standing failure behind bookkeeping.
+// Summaries below are the REAL live shapes (strict-prefix form), not synthetic.
+test('computeConsecutiveNonOk: a corrective OK row must NOT reset the streak (it is bookkeeping, not a run)', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-25T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-28T12:00:00Z', status: 'OK', summary: 'backfill: reconstructed from artifact, run was healthy' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 3, 'the backfill: OK row must not zero the only Status-aware signal');
+});
+
+test('computeConsecutiveNonOk: a corrective non-OK row must not INFLATE the streak either', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-25T12:00:00Z', status: 'OK', summary: 'health check ok (exit=0)' },
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Failed', summary: 'remap: backfill row said OK but artifact overall_status=CRITICAL_FAIL' },
+    { type: 'System Health', runDate: '2026-07-28T12:00:00Z', status: 'Warn', summary: 'health check completed with warnings (exit=1)' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 2, 'corrective rows are skipped entirely: neither break nor count');
+});
+
+test('computeConsecutiveNonOk: a genuine OK under a corrective non-OK row still ends the streak', () => {
+  const rows = [
+    { type: 'System Health', runDate: '2026-07-26T12:00:00Z', status: 'OK', summary: 'health check ok (exit=0)' },
+    { type: 'System Health', runDate: '2026-07-27T12:00:00Z', status: 'Failed', summary: 'remap: backfill row said OK but artifact overall_status=CRITICAL_FAIL' },
+  ];
+  assert.equal(computeConsecutiveNonOk(rows, 'System Health'), 0);
+});
+
+test('computeStandingFailures: one entry per schedule type; counts stranded non-OK rows for the audit\'s exact scenario (two consecutive mid-flight-death rows previously scored as landed successes)', () => {
+  const rawRows = [
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-26', runDate: '2026-07-26T12:00:00Z', summary: 'died mid-flight', status: 'Failed',
+    }),
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-27', runDate: '2026-07-27T12:00:00Z', summary: 'died mid-flight', status: 'Failed',
+    }),
+  ];
+  const rows = rawRows.map(extractRunRow);
+  const standing = computeStandingFailures(rows, { schedule: SCHEDULE });
+  assert.equal(standing.length, SCHEDULE.length); // every schedule type gets an entry, even zero-count ones
+  assert.equal(standing.find((s) => s.type === 'Self-Improvement').consecutiveNonOk, 2);
+  for (const s of standing) {
+    if (s.type !== 'Self-Improvement') assert.equal(s.consecutiveNonOk, 0);
+  }
+});
+
+test('computeTrustMetrics exposes standingFailures in its return shape', () => {
+  const now = new Date(2026, 6, 16, 13, 0, 0);
+  const rawRows = [
+    rawRow({
+      type: 'Self-Improvement', period: '2026-07-16', runDate: '2026-07-16T13:00:00Z', summary: 'died', status: 'Failed',
+    }),
+  ];
+  const summary = computeTrustMetrics({ rawRows, now });
+  assert.ok(Array.isArray(summary.standingFailures));
+  assert.equal(summary.standingFailures.find((s) => s.type === 'Self-Improvement').consecutiveNonOk, 1);
 });
 
 // --- computeTrustMetrics (integration of the pure pieces) -------------------------

@@ -9,18 +9,26 @@
  *
  * State file: $TEMP/claude-periodic-extract-{sessionId}.json
  *
- * On extraction (every 50th call):
- *   - Spawns `uv run python scripts/core/store_learning.py` detached
- *   - Returns a small system message noting extraction occurred
+ * On checkpoint (every 50th call):
+ *   - Returns a small system message noting the checkpoint
  *
  * All other calls:
  *   - Returns empty {} (no-op)
+ *
+ * STORAGE REMOVED (2026-07-24, proposal 07-09 R1): this hook used to spawn
+ * `store_learning.py --type OPEN_THREAD --confidence low` with a synthetic
+ * "Mid-session checkpoint at N tool uses" string every 50 tool uses. Those
+ * rows are exactly what CCv3's own curation rubric scores as ARCHIVE-worthy
+ * noise — ingestion-time filtering is the highest-leverage noise defense, so
+ * the write is gone. The counter/state machinery and the checkpoint system
+ * message are retained. buildLearningContent stays exported for tests only.
  */
 
 import { readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
-import { spawn } from 'child_process';
+
+import { touchSessionActivity } from './shared/session-touch.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -163,6 +171,20 @@ async function main() {
   const sessionId = rawSessionId.replace(/[^a-zA-Z0-9_-]/g, '_');
   const toolName = data.tool_name || '';
 
+  // Liveness stamp. This hook is registered on PostToolUse with an EMPTY matcher,
+  // making it the only node hook that already spawns on every single tool call —
+  // so it is the one place a per-tool-call DB touch costs zero additional process
+  // spawns, which matters on this machine. It is deliberately BEFORE the
+  // shouldExtract early-return below: that return fires on 49 of every 50 calls,
+  // and liveness that only updates every 50th tool call would reproduce the
+  // sparse-signal bug this is fixing.
+  //
+  // Awaited, not fire-and-forget: this process exits immediately after the
+  // console.log below, so a detached promise would be abandoned unresolved.
+  // touchSessionActivity throttles itself to one write per 30s and never
+  // rejects, so the cost here is bounded and cannot break the extraction path.
+  await touchSessionActivity(rawSessionId);
+
   // State file for this session
   const stateFile = join(tmpdir(), `claude-periodic-extract-${sessionId}.json`);
 
@@ -176,36 +198,8 @@ async function main() {
     return;
   }
 
-  // Time for extraction
-  const opcDir = process.env.CLAUDE_OPC_DIR;
-  if (!opcDir) {
-    saveState(stateFile, state);
-    console.log(JSON.stringify({}));
-    return;
-  }
-
-  const content = buildLearningContent(state, sessionId);
-
-  try {
-    const child = spawn('uv', [
-      'run', 'python', 'scripts/core/store_learning.py',
-      '--session-id', sessionId,
-      '--type', 'OPEN_THREAD',
-      '--content', content,
-      '--context', 'periodic mid-session extraction',
-      '--tags', 'periodic,extraction,scope:project',
-      '--confidence', 'low',
-    ], {
-      cwd: opcDir,
-      detached: true,
-      stdio: 'ignore',
-      env: { ...process.env, PYTHONPATH: '.' },
-    });
-    child.unref();
-  } catch {
-    // Fail open -- extraction is best-effort
-  }
-
+  // Checkpoint reached. NO storage write (07-09 R1, see header) — just stamp
+  // the checkpoint and emit the system message.
   state.lastExtract = Date.now();
   saveState(stateFile, state);
 

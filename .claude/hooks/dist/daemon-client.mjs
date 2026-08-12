@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { execSync, spawnSync } from "child_process";
@@ -152,6 +154,9 @@ function tryStartDaemon(projectDir) {
     }
     if (isDaemonReachable(projectDir)) {
       return true;
+    }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
     }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();

@@ -11,7 +11,19 @@ import { DEFAULT_MAX_AGE_HOURS } from '../check-drift.mjs';
 
 const DS = 'c7d2d9e3-d388-4640-a66e-88f7dd50f854';
 
-function vpEntry() { return SCHEDULE.find((e) => e.type === 'VP Weekly'); }
+// VP Weekly was RETIRED 2026-07-25, so it no longer has a SCHEDULE entry. This
+// fixture is now pinned LITERALLY (it used to be looked up from SCHEDULE) rather
+// than deleted, because it is the only isoWeek-period weekly shape and that code
+// path is deliberately retained — both for the retired type's historical ISO-week
+// rows and for any future weekly report that adopts the format. The type/source
+// still validate: retirement removes a type from the EXPECTATION domain
+// (ACTIVE_REPORT_TYPES), not from the VALIDATION domain (REPORT_TYPES).
+function vpEntry() {
+  return {
+    type: 'VP Weekly', source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
+    grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
+  };
+}
 function sponsorEntry() { return SCHEDULE.find((e) => e.type === 'FourthOS Sponsor'); }
 function healthEntry() { return SCHEDULE.find((e) => e.type === 'System Health'); }
 function dashboardEntry() { return SCHEDULE.find((e) => e.type === 'Team Dashboard'); }
@@ -62,11 +74,13 @@ test('weekly type IS due on its weekday after grace elapses, period = this week'
   assert.match(c.period, /^2026-W\d{2}$/);
 });
 
-test('FourthOS Sponsor (weekly, date-format period) due Thursday afternoon', () => {
-  const thuAfternoon = new Date(2026, 6, 16, 13, 0, 0);
-  const c = computeCandidate(sponsorEntry(), thuAfternoon);
+test('FourthOS Sponsor (weekly, date-format period) due Wednesday afternoon (moved Thu->Wed 2026-08-04)', () => {
+  const wedAfternoon = new Date(2026, 6, 15, 13, 0, 0);
+  const c = computeCandidate(sponsorEntry(), wedAfternoon);
   assert.equal(c.due, true);
-  assert.equal(c.period, '2026-07-16');
+  assert.equal(c.period, '2026-07-15');
+  // The old weekday: a Thursday afternoon is no longer a due instant for this type.
+  assert.equal(computeCandidate(sponsorEntry(), new Date(2026, 6, 16, 13, 0, 0)).due, false);
 });
 
 test('System Health (weekly Friday) is due Friday afternoon, not Thursday', () => {
@@ -121,6 +135,52 @@ test('hasRowForPeriod issues a compound Report Type + Period filter and reflects
 test('hasRowForPeriod returns false on an empty result set', () => {
   const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [] });
   assert.equal(present, false);
+});
+
+// --- T9.2: the watchdog no longer satisfies its own presence check ---------------
+
+test('hasRowForPeriod: false when the ONLY row for the period is the watchdog\'s OWN prior miss-row (a miss-row is not evidence the run launched)', () => {
+  const missRow = {
+    properties: {
+      Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] },
+    },
+  };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [missRow] });
+  assert.equal(present, false);
+});
+
+test('hasRowForPeriod: true when a genuine Failed row exists for the period (Status-blindness preserved — only the SYNTHETIC miss-row class is excluded)', () => {
+  const failedRow = {
+    properties: {
+      Status: { select: { name: 'Failed' } },
+      Summary: { rich_text: [{ plain_text: 'pipeline crashed: ECONNRESET' }] },
+    },
+  };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [failedRow] });
+  assert.equal(present, true);
+});
+
+test('hasRowForPeriod: a real row and its own watchdog miss-row can coexist for the same period (append-all-attempts) — presence is still true because of the REAL row', () => {
+  const realRow = { properties: { Status: { select: { name: 'OK' } }, Summary: { rich_text: [{ plain_text: 'ok' }] } } };
+  const missRow = { properties: { Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] } } };
+  const present = hasRowForPeriod('VP Weekly', '2026-W29', { dsId: DS, query: () => [missRow, realRow] });
+  assert.equal(present, true);
+});
+
+test('evaluateEntry: re-checking a period whose ONLY row is its own prior miss-row STILL reports MISSING, not ok (T9.2 fix — reproduces the audit\'s "re-running the watchdog at the exact instant it wrote a miss-row returns missing=0" bug and proves it is closed)', () => {
+  const missRow = {
+    properties: {
+      Summary: { rich_text: [{ plain_text: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace' }] },
+    },
+  };
+  const calls = { upsert: 0 };
+  const r = evaluateEntry(vpEntry(), new Date(2026, 6, 16, 13, 0, 0), {
+    query: () => [missRow],
+    upsert: () => { calls.upsert += 1; return { action: 'updated', pageId: 'page1' }; },
+    dryRun: true,
+  });
+  assert.equal(r.status, 'would-write');
+  assert.equal(calls.upsert, 0);
 });
 
 // --- buildMissRun: deterministic runId (the idempotency mechanism) --------------
@@ -214,9 +274,13 @@ test('evaluateEntry: query error is caught and reported, not thrown', () => {
 // --- maxAgeForType: per-cadence staleness threshold + guard ----------------------
 
 test('maxAgeForType: weekly -> MAX_AGE_HOURS_WEEKLY (192), daily -> DEFAULT (48)', () => {
-  assert.equal(maxAgeForType('VP Weekly'), MAX_AGE_HOURS_WEEKLY);
+  assert.equal(maxAgeForType('FourthOS Sponsor'), MAX_AGE_HOURS_WEEKLY);
   assert.equal(MAX_AGE_HOURS_WEEKLY, 192);
   assert.equal(maxAgeForType('System Health'), 192);
+  // RETIRED types have no SCHEDULE entry, so they hit the documented unknown-type
+  // guard and get the DAILY default rather than undefined. Asserted explicitly so
+  // the retirement's knock-on effect is pinned, not discovered later.
+  assert.equal(maxAgeForType('VP Weekly'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(maxAgeForType('Project Portfolio'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(DEFAULT_MAX_AGE_HOURS, 48);
 });

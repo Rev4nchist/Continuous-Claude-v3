@@ -52,7 +52,7 @@ maestro decomposes into:
 ```
 
 #### kraken
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** Implementation using strict TDD workflow
 - **When to use:** Need to implement with test-first discipline
 - **Features:**
@@ -142,7 +142,7 @@ plan-agent:
 ```
 
 #### validate-agent
-- **Model:** (not specified)
+- **Model:** Sonnet
 - **Purpose:** Validate plans against best practices and codebase
 - **When to use:** After creating a plan, before implementation
 - **Checks:**
@@ -178,7 +178,7 @@ scout:
 ```
 
 #### oracle
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** External research (web, docs, APIs)
 - **When to use:** Need best practices, library documentation, or external knowledge
 - **Tools:** Web search (Perplexity), docs (Nia), scraping (Firecrawl), GitHub search
@@ -199,7 +199,7 @@ oracle:
 ```
 
 #### pathfinder
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** Analyze external repositories
 - **When to use:** Need to understand how another project solves a problem
 - **Process:**
@@ -220,7 +220,7 @@ pathfinder:
 ```
 
 #### research-codebase
-- **Model:** (spawns sub-agents)
+- **Model:** Sonnet (spawns sub-agents)
 - **Purpose:** Document codebase as-is without evaluation
 - **When to use:** Need comprehensive technical documentation
 - **Process:**
@@ -254,7 +254,7 @@ spark:
   - Done (no test needed)
 ```
 
-#### agentica-agent
+#### agentica-agent (ARCHIVED 2026-07-25 — see .claude/agents-archive/)
 - **Model:** Sonnet
 - **Purpose:** Build Python agents using Agentica SDK
 - **When to use:** Implementing Python agents with agentic functions, spawn, or custom agent classes
@@ -300,7 +300,7 @@ sleuth:
 **Similar to sleuth but with MCP tool access.**
 
 #### profiler
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** Performance profiling, race conditions, memory issues
 - **When to use:** Need to identify bottlenecks, concurrency issues, or memory leaks
 - **Analyzes:**
@@ -317,7 +317,7 @@ sleuth:
 ### 6. Validators
 
 #### arbiter
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** Unit and integration test execution and validation
 - **When to use:** Need to run tests, analyze failures, validate acceptance criteria
 - **Features:**
@@ -340,7 +340,7 @@ arbiter:
 ```
 
 #### atlas
-- **Model:** Opus
+- **Model:** Sonnet
 - **Purpose:** End-to-end and acceptance test execution
 - **When to use:** Need to run E2E tests, browser automation, full-stack validation
 - **Tools:** Playwright, Cypress, Selenium
@@ -354,7 +354,7 @@ arbiter:
 ### 7. Reviewers
 
 #### critic
-- **Model:** Sonnet
+- **Model:** Opus
 - **Purpose:** Feature and implementation code review
 - **When to use:** Need code quality review for features or implementations
 - **Reviews:**
@@ -417,7 +417,7 @@ critic:
 - **Output:** `.claude/cache/agents/liaison/latest-output.md`
 
 #### plan-reviewer
-- **Model:** Sonnet
+- **Model:** Opus
 - **Purpose:** Reviews feature plans and change plans before implementation
 - **When to use:** After architect or phoenix creates a plan
 - **Auto-detects:** Feature plan vs change plan
@@ -488,7 +488,7 @@ critic:
   - Summaries: `.claude/cache/scribe/latest-summary.md`
 - **Follows:** create_handoff and continuity_ledger skill methodologies
 
-#### chronicler
+#### chronicler (ARCHIVED 2026-07-25 — see .claude/agents-archive/)
 - **Model:** Opus
 - **Purpose:** Session analysis, precedent lookup, learning extraction
 - **When to use:** Need to analyze past sessions or find relevant precedent
@@ -508,7 +508,7 @@ critic:
 - **Output:** `.claude/cache/agents/braintrust-analyst/latest-output.md`
 - **Note:** `session-analyst` was archived 2026-04-26 as a duplicate (same skill, same script). Use `braintrust-analyst` for all Braintrust retrospective work.
 
-#### memory-extractor
+#### memory-extractor (ARCHIVED 2026-07-25 — see .claude/agents-archive/)
 - **Model:** (not specified)
 - **Purpose:** Extract learnings from sessions for storage
 - **When to use:** After completing work, extract learnings for memory system
@@ -623,10 +623,13 @@ What needs validation?
 ## Best Practices
 
 ### 1. Choose the Right Model
-- **Sonnet agents** (faster, cheaper): scout, spark, critic, judge, surveyor, liaison, scribe, herald, onboard, agentica-agent
-- **Opus agents** (thorough, expensive): oracle, pathfinder, architect, phoenix, kraken, arbiter, sleuth, profiler, aegis, maestro, atlas, chronicler
 
-**Rule:** Use Sonnet for routine tasks, Opus for complex/critical work.
+Tiering is by **judgment density**, not task size (canonical: `.claude/rules/agent-model-selection.md`; live source of truth: each agent's `model:` frontmatter, verified by `scripts/check-agent-model-drift.mjs`).
+
+- **Opus agents** (12 — judgment-dense planning/review/forensics): aegis, architect, critic, debug-agent, maestro, phoenix, plan-agent, plan-reviewer, principal-reviewer, review-agent, sleuth, wizard
+- **Sonnet agents** (25 — execution/exploration/tests/docs): everything else, including kraken, scout, oracle, spark, arbiter, atlas
+
+**Rule:** Sonnet executes, Opus judges. Never haiku, never omit/inherit.
 
 ### 2. Scout, Not Explore
 Always use `scout` for codebase exploration. The deprecated `Explore` agent used Haiku and produced inaccurate results.
@@ -684,21 +687,21 @@ kraken (implement) → review-agent (verify) → arbiter (test)
 | Agent | Model | Speed | Cost | When to Use |
 |-------|-------|-------|------|-------------|
 | scout | Sonnet | Fast | Low | Routine exploration |
-| oracle | Opus | Slow | High | Critical research |
+| oracle | Sonnet | Fast | Low | Critical research |
 | architect | Opus | Slow | High | Feature planning |
 | phoenix | Opus | Slow | High | Refactoring planning |
 | plan-agent | Opus | Slow | High | Research-backed planning |
-| kraken | Opus | Slow | High | Implementation |
+| kraken | Sonnet | Fast | Low | Implementation |
 | spark | Sonnet | Fast | Low | Quick fixes |
 | sleuth | Opus | Slow | High | Bug investigation |
-| profiler | Opus | Slow | High | Performance analysis |
-| arbiter | Opus | Slow | High | Test execution |
-| atlas | Opus | Slow | High | E2E tests |
-| critic | Sonnet | Fast | Low | Code review |
+| profiler | Sonnet | Fast | Low | Performance analysis |
+| arbiter | Sonnet | Fast | Low | Test execution |
+| atlas | Sonnet | Fast | Low | E2E tests |
+| critic | Opus | Slow | High | Code review |
 | judge | Sonnet | Fast | Low | Refactoring review |
 | surveyor | Sonnet | Fast | Low | Migration review |
 | liaison | Sonnet | Fast | Low | Integration review |
-| plan-reviewer | Sonnet | Fast | Low | Plan validation |
+| plan-reviewer | Opus | Slow | High | Plan validation |
 | review-agent | Opus | Slow | High | Implementation verification |
 | scribe | Sonnet | Fast | Low | Documentation |
 | herald | Sonnet | Fast | Low | Release prep |

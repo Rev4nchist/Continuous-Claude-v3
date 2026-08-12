@@ -368,9 +368,27 @@ function readStdin(): Promise<string> {
 }
 
 /**
- * Classifies query type for optimal tool routing
+ * True when the Grep call is explicitly scoped (path/glob/type set) — the
+ * caller has already localized the search, so routing away would drop that
+ * scoping. Exported for tests.
  */
-function classifyQuery(pattern: string): QueryType {
+export function isScopedCall(toolInput: GrepInput): boolean {
+  return Boolean(toolInput.path || toolInput.glob || toolInput.type);
+}
+
+/**
+ * Classifies query type for optimal tool routing. Exported for tests.
+ */
+export function classifyQuery(pattern: string): QueryType {
+  // LITERAL FIRST (bug fix 2026-07-25): a pattern carrying regex machinery
+  // (escapes, char classes, alternation) is a hand-written ripgrep regex —
+  // exactly what native Grep handles best and what ast-grep patterns can NOT
+  // express. This check used to run AFTER the structural check, so e.g.
+  // `main\(\)` or `LearningResult \{` got denied as "structural" and rerouted.
+  if (pattern.includes('\\') || pattern.includes('[') || pattern.includes('|')) {
+    return 'literal';
+  }
+
   // STRUCTURAL: Code patterns that AST-grep handles best
   const structuralPatterns = [
     /^(class|function|def|async def|const|let|var|interface|type|export)\s+\w+/,
@@ -383,12 +401,6 @@ function classifyQuery(pattern: string): QueryType {
 
   if (structuralPatterns.some(p => p.test(pattern))) {
     return 'structural';
-  }
-
-  // LITERAL: Exact identifiers, regex, file paths
-  // Regex patterns
-  if (pattern.includes('\\') || pattern.includes('[') || /\([^)]*\|/.test(pattern)) {
-    return 'literal';
   }
 
   // Exact identifier patterns (CamelCase, snake_case, SCREAMING_CASE)
@@ -471,8 +483,25 @@ async function main() {
   }
 
   const pattern = input.tool_input.pattern;
-  const queryType = classifyQuery(pattern);
   const sessionId = input.session_id || 'default';
+
+  // Scoped-call pass-through (bug fix 2026-07-25, flagged in the 2026-07-24
+  // Serena-evaluation handoff): when the caller explicitly narrows the search
+  // with `path`, `glob`, or `type`, the search is already LOCALIZED — denying
+  // it and suggesting ast-grep/TLDR silently DROPS that scoping (the reroute
+  // text never carried the path), degrading a targeted lookup into a
+  // project-wide one. Explicit scope = the model knows where to look; let
+  // native Grep do its job.
+  if (isScopedCall(input.tool_input)) {
+    try { logHook(sessionId, 'smart-search-router'); } catch { /* never break */ }
+    trackHookActivitySync('smart-search-router', process.env.CLAUDE_PROJECT_DIR || '.', true, {
+      queries_routed: 1, scoped_passthrough: 1,
+    });
+    console.log('{}');
+    return;
+  }
+
+  const queryType = classifyQuery(pattern);
 
   // Log hook activation (fires whenever a Grep is intercepted for routing)
   try { logHook(sessionId, 'smart-search-router'); } catch { /* never break */ }
@@ -623,4 +652,9 @@ No code semantically similar to "${pattern}" found in the index.
   console.log(JSON.stringify(output));
 }
 
-main().catch(console.error);
+// Guard the on-import auto-run so unit tests can import the exported helpers
+// (classifyQuery/isScopedCall/buildRipgrepArgs) without main() consuming stdin.
+// Matches the guard used by sibling hooks (e.g. memory-awareness, QW-06).
+if (!process.env.VITEST) {
+  main().catch(console.error);
+}

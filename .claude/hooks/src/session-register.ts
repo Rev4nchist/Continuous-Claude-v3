@@ -11,7 +11,7 @@
 
 import { readFileSync } from 'fs';
 import { registerSession, getActiveSessions } from './shared/db-utils-pg.js';
-import { generateSessionId, writeSessionId, getProject } from './shared/session-id.js';
+import { resolveSessionId, writeSessionId, canonicalProject } from './shared/session-id.js';
 import { initActivity } from './shared/session-activity.js';
 import type { SessionStartInput, HookOutput } from './shared/types.js';
 
@@ -19,7 +19,7 @@ import type { SessionStartInput, HookOutput } from './shared/types.js';
  * Main entry point for the SessionStart hook.
  * Registers the session, persists the ID to file, and injects awareness message.
  */
-export function main(): void {
+export async function main(): Promise<void> {
   // Read hook input from stdin
   let input: SessionStartInput;
   try {
@@ -31,8 +31,14 @@ export function main(): void {
     return;
   }
 
-  const sessionId = generateSessionId();
-  const project = getProject();
+  // Coordinate under the id Claude Code gave us, NOT a freshly generated one.
+  // This line is the bug. It called generateSessionId() and produced an `s-*`
+  // identity that only this hook ever used, while heartbeat registered the
+  // payload id -- two rows per session, and every file claim filed under the
+  // `s-*` row whose heartbeat froze here at session start. Measured before the
+  // fix: 0 of 8,179 claims owned by a session that looked alive.
+  const sessionId = resolveSessionId(input.session_id);
+  const project = canonicalProject(input.cwd);
   const projectName = project.split('/').pop() || 'unknown';
 
   // Store session ID in environment and file for other hooks
@@ -50,10 +56,13 @@ export function main(): void {
   }
 
   // Register session in PostgreSQL
-  const registerResult = registerSession(sessionId, project, '');
+  const registerResult = await registerSession(sessionId, project, '');
+  if (!registerResult.success) {
+    console.error(`[session-register] registration failed: ${registerResult.error}`);
+  }
 
   // Get other active sessions
-  const sessionsResult = getActiveSessions(project);
+  const sessionsResult = await getActiveSessions(project);
   const otherSessions = sessionsResult.sessions.filter(s => s.id !== sessionId);
 
   // Build awareness message
@@ -86,12 +95,14 @@ You are the only session currently working here.
 
   // Output hook result with awareness injection
   const output: HookOutput = {
-    result: 'continue',
-    message: awarenessMessage,
+    hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: awarenessMessage },
   };
 
   console.log(JSON.stringify(output));
 }
 
 // Run if executed directly
-main();
+main().catch((err) => {
+  console.error('[session-register] unexpected error:', err);
+  console.log(JSON.stringify({ result: 'continue' }));
+});

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/ralph-progress-inject.ts
 import { readFileSync as readFileSync2, existsSync as existsSync3, writeFileSync } from "fs";
@@ -221,7 +222,7 @@ async function main() {
   if (elapsed > 100) {
     log2.warn("Progress injection slow", { elapsed });
   }
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: message } }));
 }
 main().catch(() => {
   console.log(JSON.stringify({ result: "continue" }));

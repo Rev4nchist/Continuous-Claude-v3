@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/prd-task-template-enforcer.ts
 import { readFileSync } from "fs";
@@ -158,4 +159,6 @@ ${"\u2501".repeat(50)}
     console.log(JSON.stringify(output));
   }
 }
-main();
+if ((process.argv[1] || "").includes("prd-task-template-enforcer")) {
+  main();
+}

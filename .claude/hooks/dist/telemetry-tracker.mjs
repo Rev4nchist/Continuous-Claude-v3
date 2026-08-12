@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/telemetry-tracker.ts
-import { readFileSync as readFileSync2, appendFileSync, existsSync as existsSync2, mkdirSync as mkdirSync2 } from "fs";
-import { join as join2 } from "path";
+import { readFileSync as readFileSync4, appendFileSync, existsSync as existsSync3, mkdirSync as mkdirSync2 } from "fs";
+import { join as join4 } from "path";
 
 // src/shared/session-activity.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
@@ -75,19 +76,51 @@ function logAgent(sessionId, agentType) {
 }
 
 // src/shared/braintrust-score.ts
+import { readFileSync as readFileSync2 } from "fs";
+import { homedir } from "os";
+import { join as join2 } from "path";
 var BRAINTRUST_FEEDBACK_TIMEOUT_MS = 2e3;
 var DEFAULT_API_URL = "https://api.braintrust.dev";
 var DEFAULT_PROJECT_NAME = "claude-code";
 var projectIdCache = {};
+var dotenvLoaded = false;
+var envTraceOverride;
+function loadClaudeDotEnv() {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
+  try {
+    const envPath = process.env.BRAINTRUST_DOTENV_PATH || join2(homedir(), ".claude", ".env");
+    for (const line of readFileSync2(envPath, "utf-8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const idx = trimmed.indexOf("=");
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) process.env[key] = value;
+    }
+  } catch {
+  }
+}
 function getApiUrl() {
+  loadClaudeDotEnv();
   return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
 }
 function getApiKey() {
+  loadClaudeDotEnv();
   const key = process.env.BRAINTRUST_API_KEY;
   return key && key.length > 0 ? key : null;
 }
 function isTraceEnabled() {
-  return (process.env.TRACE_TO_BRAINTRUST || "").toLowerCase() === "true";
+  loadClaudeDotEnv();
+  const effective = envTraceOverride !== void 0 ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || "";
+  return effective.toLowerCase() === "true";
+}
+async function consumeBody(resp) {
+  try {
+    await resp.arrayBuffer();
+  } catch {
+  }
 }
 function logErr(msg) {
   try {
@@ -97,6 +130,7 @@ function logErr(msg) {
   }
 }
 async function resolveProjectId(apiKey) {
+  loadClaudeDotEnv();
   const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
   if (directId && directId.length > 0) {
     return directId;
@@ -116,6 +150,7 @@ async function resolveProjectId(apiKey) {
     });
     if (!resp.ok) {
       logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
+      await consumeBody(resp);
       return null;
     }
     const data = await resp.json();
@@ -169,12 +204,45 @@ async function emitBraintrustScore(opts) {
       if (!resp.ok) {
         logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
       }
+      await consumeBody(resp);
     } catch (e) {
       logErr(`feedback POST ${opts.spanId} failed: ${e.message}`);
     }
   } catch (e) {
     logErr(`unexpected error: ${e.message}`);
   }
+}
+
+// src/shared/braintrust-span.ts
+import { existsSync as existsSync2, readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3 } from "path";
+function readBraintrustSessionState(sessionId) {
+  if (!sessionId) return null;
+  try {
+    const homeDir = process.env.HOME || process.env.USERPROFILE || homedir2();
+    if (!homeDir) return null;
+    const statePath = join3(homeDir, ".claude", "state", "braintrust_sessions", `${sessionId}.json`);
+    if (!existsSync2(statePath)) return null;
+    return JSON.parse(readFileSync3(statePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function resolveBraintrustSpan(sessionId) {
+  const state = readBraintrustSessionState(sessionId);
+  if (!state) return null;
+  if (state.sampled_out) return null;
+  if (state.current_turn_span_id && state.current_turn_span_id.length > 0) {
+    return { spanId: state.current_turn_span_id, attachedTo: "turn" };
+  }
+  if (state.root_span_id && state.root_span_id.length > 0) {
+    return { spanId: state.root_span_id, attachedTo: "root" };
+  }
+  return null;
+}
+function resolveBraintrustSpanId(sessionId) {
+  return resolveBraintrustSpan(sessionId)?.spanId ?? "";
 }
 
 // src/shared/tool-error.ts
@@ -205,11 +273,11 @@ function detectToolError(toolResponse) {
 // src/telemetry-tracker.ts
 function getTelemetryPath() {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const telemetryDir = join2(homeDir, ".claude", "cache");
-  if (!existsSync2(telemetryDir)) {
+  const telemetryDir = join4(homeDir, ".claude", "cache");
+  if (!existsSync3(telemetryDir)) {
     mkdirSync2(telemetryDir, { recursive: true });
   }
-  return join2(telemetryDir, "skill-telemetry.jsonl");
+  return join4(telemetryDir, "skill-telemetry.jsonl");
 }
 function logEvent(event) {
   const telemetryPath = getTelemetryPath();
@@ -224,9 +292,7 @@ function determineSource(toolInput) {
   return "llm";
 }
 function resolveScoreSpanId(payloadSessionId) {
-  const envSpan = (process.env.BRAINTRUST_SESSION_ID || "").trim();
-  if (envSpan.length > 0) return envSpan;
-  return payloadSessionId || "";
+  return resolveBraintrustSpanId(payloadSessionId || "");
 }
 function buildToolResponseKeys(toolResponse) {
   if (toolResponse === null || toolResponse === void 0) return [];
@@ -250,7 +316,7 @@ function buildSkillTriggerScorePayload(input) {
 }
 async function main() {
   try {
-    const input = readFileSync2(0, "utf-8");
+    const input = readFileSync4(0, "utf-8");
     const data = JSON.parse(input);
     if (data.tool_name === "Skill") {
       const skillName = data.tool_input?.skill || "unknown";
@@ -301,9 +367,7 @@ async function main() {
       } catch {
       }
     }
-    process.exit(0);
   } catch {
-    process.exit(0);
   }
 }
 if (!process.env.VITEST) {

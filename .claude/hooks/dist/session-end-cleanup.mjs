@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-end-cleanup.ts
 import * as fs from "fs";
 import * as path from "path";
@@ -128,4 +130,6 @@ async function readStdin() {
     process.stdin.on("end", () => resolve(data));
   });
 }
-main().catch(console.error);
+if ((process.argv[1] || "").includes("session-end-cleanup")) {
+  main().catch(console.error);
+}

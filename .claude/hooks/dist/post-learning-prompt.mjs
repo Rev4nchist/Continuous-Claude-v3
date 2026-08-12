@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/post-learning-prompt.ts
 import { readFileSync, existsSync, writeFileSync, mkdirSync } from "fs";
 import { homedir } from "os";
@@ -113,4 +115,6 @@ async function main() {
   saveState(input.session_id, state);
   console.log("{}");
 }
-main().catch(() => console.log("{}"));
+if ((process.argv[1] || "").includes("post-learning-prompt")) {
+  main().catch(() => console.log("{}"));
+}

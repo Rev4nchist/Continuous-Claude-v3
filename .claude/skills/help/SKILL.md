@@ -127,7 +127,6 @@ Spawn via Task tool with subagent_type.
 | Agent | Purpose | Model |
 |-------|---------|-------|
 | scribe | Documentation, session summaries | sonnet |
-| chronicler | Session analysis, learning extraction | sonnet |
 ```
 
 ### /help tools

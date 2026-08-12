@@ -54,4 +54,6 @@ function main(): void {
   emitAllow();
 }
 
-main();
+if ((process.argv[1] || '').includes('permission-auto-allow')) {
+  main();
+}

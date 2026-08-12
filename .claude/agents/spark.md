@@ -67,7 +67,7 @@ npx tsc --noEmit path/to/file.ts
 
 CRITICAL — Read this before editing any TypeScript hook in `.claude/hooks/src/`.
 
-1. **Use minimal-diff Edit, never whole-file regeneration.** The `void emitBraintrustScore(...)` block in `memory-awareness.ts` has been silently dropped 5 times by sparks that used Write or Serena `replace_symbol_body` instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
+1. **Use minimal-diff Edit, never whole-file regeneration.** The `void emitBraintrustScore(...)` block in `memory-awareness.ts` has been silently dropped 5 times by sparks that used Write (whole-file regeneration) instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
 
 2. **Verify every TS hook edit at write time.** After every Edit on a file under `.claude/hooks/src/`, run:
    ```bash
@@ -99,6 +99,23 @@ Interpret the output by exit code AND first line:
 - Exit 0 + `WARN:` → include `Audit: WARN (more emits than invariant — flag to orchestrator)` in your output. Do not treat as a blocker, but explain in your Notes that you may have added a new dimension that needs the invariant raised. **Do not raise the invariant yourself** — that is a deliberate orchestrator decision.
 - Exit 1 + `FAIL: Regression detected` → STOP. You have silently dropped an `emitBraintrustScore(...)` call. Report the failure to the orchestrator with the file and line number of your edits. Do NOT modify the audit script. Do NOT pass `--accept-new-invariant` or any other flag. Do NOT re-run the script after editing more code in an attempt to "fix" the count. Recovery is the orchestrator's job, not yours.
 - Any other exit code → include `Audit: ERROR (script crashed unexpectedly)` and report the full stdout+stderr to the orchestrator.
+
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "spark",
+  "status": "complete | partial | blocked",
+  "files_changed": ["<path>"],
+  "verification": {"check": "<what was run: syntax/test/audit>", "result": "PASS | FAIL", "evidence": "<the actual output line>"},
+  "followups": []
+}
+```
+
+`verification.evidence` is the runner's real output — never a paraphrase. If the emit-audit failed, status is `blocked`, never `complete`.
 
 ## Output Format
 

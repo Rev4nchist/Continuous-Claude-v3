@@ -159,4 +159,6 @@ function main() {
     }
 }
 
-main();
+if ((process.argv[1] || '').includes('ralph-template-inject')) {
+  main();
+}

@@ -3,7 +3,8 @@
     "CONTINUOUS_CLAUDE_COORDINATION": "true",
     "ENABLE_TOOL_SEARCH": "auto:5",
     "CLAUDE_OPC_DIR": "C:/Users/david.hayes/continuous-claude/opc",
-    "DATABASE_URL": "postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude"
+    "DATABASE_URL": "postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude",
+    "CCV3_ROADMAP_AUTOCOMMIT": "0"
   },
   "hooks": {
     "PreToolUse": [
@@ -12,8 +13,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/pre-plan-memory.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pre-plan-memory.mjs"
+            ]
           }
         ]
       },
@@ -22,48 +26,83 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/agent-model-guard.mjs",
+            "command": "node",
+            "timeout": 3000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/agent-model-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/explore-to-scout.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/no-haiku-enforcer.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/navigator-validate.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/task-router.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-template-inject.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/maestro-enforcer.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pre-tool-knowledge.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/tldr-context-inject.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/agent-recall-injector.mjs"
+            ],
             "timeout": 3000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/explore-to-scout.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/no-haiku-enforcer.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/navigator-validate.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/task-router.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-template-inject.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/maestro-enforcer.mjs",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/pre-tool-knowledge.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/tldr-context-inject.mjs",
-            "timeout": 5000
           }
         ]
       },
@@ -72,8 +111,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/smart-search-router.mjs",
-            "timeout": 30000
+            "command": "node",
+            "timeout": 30000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/smart-search-router.mjs"
+            ]
           }
         ]
       },
@@ -82,8 +124,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/tldr-read-enforcer.mjs",
-            "timeout": 30000
+            "command": "node",
+            "timeout": 30000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/tldr-read-enforcer.mjs"
+            ]
           }
         ]
       },
@@ -92,8 +137,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-delegation-enforcer.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-delegation-enforcer.mjs"
+            ]
           }
         ]
       },
@@ -102,13 +150,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/plan-to-ralph-enforcer.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/plan-to-ralph-enforcer.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/file-claims.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/file-claims.mjs"
+            ]
           }
         ]
       },
@@ -117,18 +171,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/test-before-done.mjs",
-            "timeout": 10000
-          }
-        ]
-      },
-      {
-        "matcher": "Grep|Agent",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/code-intel-enforcer.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/test-before-done.mjs"
+            ]
           }
         ]
       },
@@ -137,8 +184,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/destructive-command-guard.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/destructive-command-guard.mjs"
+            ]
           }
         ]
       }
@@ -148,63 +198,108 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/heartbeat.mjs",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/heartbeat.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/maestro-state-manager.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/guardrail-enforcer.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/skill-activation-prompt.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/bus-session-populator.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/memory-awareness.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/maestro-detector.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/user-confirmation-detector.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-watchdog.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 3000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-progress-inject.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-retry-reminder.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "python",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "user_prompt_submit"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
             "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/maestro-state-manager.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/guardrail-enforcer.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/skill-activation-prompt.mjs",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/bus-session-populator.mjs",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/memory-awareness.mjs",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/maestro-detector.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/user-confirmation-detector.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-watchdog.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-progress-inject.mjs",
-            "timeout": 3000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-retry-reminder.mjs",
-            "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py user_prompt_submit",
-            "timeout": 10000
           }
         ]
       }
@@ -214,43 +309,84 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-start-docker.mjs",
-            "timeout": 30000
+            "command": "node",
+            "timeout": 30000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-docker.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-register.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-register.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-start-continuity.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-continuity.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-start-init-check.mjs",
-            "timeout": 15000
+            "command": "node",
+            "timeout": 15000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-init-check.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-start-recovery.mjs",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-recovery.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "python",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "session_start"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/roadmap-reconcile.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-intel-prune.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/identity-probe.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
             "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py session_start",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/roadmap-reconcile.mjs",
-            "timeout": 10000
-          },
-          {
-            "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-start-intel-prune.mjs",
-            "timeout": 10000
           }
         ]
       }
@@ -260,13 +396,19 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/pre-compact-extract.mjs",
-            "timeout": 15000
+            "command": "node",
+            "timeout": 15000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pre-compact-extract.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/pre-compact-continuity.mjs",
-            "timeout": 15000
+            "command": "node",
+            "timeout": 15000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pre-compact-continuity.mjs"
+            ]
           }
         ]
       }
@@ -276,27 +418,52 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/maestro-cleanup.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/maestro-cleanup.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-end-extract.mjs",
-            "timeout": 15000
+            "command": "node",
+            "timeout": 15000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-end-extract.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py session_end",
-            "timeout": 10000
+            "command": "python",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "session_end"
+            ]
           },
           {
             "type": "command",
-            "command": "python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py stop",
-            "timeout": 15000
+            "command": "python",
+            "timeout": 30000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "stop"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/session-outcome.mjs",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-outcome.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/coordination-release.mjs"
+            ],
             "timeout": 10000
           }
         ]
@@ -307,8 +474,12 @@
         "hooks": [
           {
             "type": "command",
-            "command": "python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py post_tool_use",
-            "timeout": 5000
+            "command": "python",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "post_tool_use"
+            ]
           }
         ]
       },
@@ -317,18 +488,27 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/agent-error-capture.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/agent-error-capture.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/agent-verification.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/agent-verification.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-task-monitor.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-task-monitor.mjs"
+            ]
           }
         ]
       },
@@ -337,8 +517,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/epistemic-reminder.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/epistemic-reminder.mjs"
+            ]
           }
         ]
       },
@@ -347,43 +530,61 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/post-plan-roadmap.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/post-plan-roadmap.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/plan-exit-tracker.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/plan-exit-tracker.mjs"
+            ]
           }
         ]
       },
       {
-        "matcher": "TaskUpdate|Bash",
+        "matcher": "TaskUpdate|Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/roadmap-completion.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/roadmap-completion.mjs"
+            ]
           }
         ]
       },
       {
-        "matcher": "Bash",
+        "matcher": "Bash|PowerShell",
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/git-commit-roadmap.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 30000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/git-commit-roadmap.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/ralph-monitor.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/ralph-monitor.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/test-run-tracker.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/test-run-tracker.mjs"
+            ]
           }
         ]
       },
@@ -392,8 +593,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/smarter-everyday.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/smarter-everyday.mjs"
+            ]
           }
         ]
       },
@@ -402,23 +606,35 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/prd-roadmap-sync.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/prd-roadmap-sync.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/git-auto-commit.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/git-auto-commit.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/tree-invalidate.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/tree-invalidate.mjs"
+            ]
           },
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/pageindex-watch.mjs",
-            "timeout": 5000
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pageindex-watch.mjs"
+            ]
           }
         ]
       },
@@ -427,8 +643,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/import-validator.mjs",
-            "timeout": 10000
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/import-validator.mjs"
+            ]
           }
         ]
       },
@@ -436,8 +655,11 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/periodic-extract.mjs",
-            "timeout": 2000
+            "command": "node",
+            "timeout": 2000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/periodic-extract.mjs"
+            ]
           }
         ]
       },
@@ -446,8 +668,53 @@
         "hooks": [
           {
             "type": "command",
-            "command": "node C:/Users/david.hayes/.claude/hooks/dist/bus-tool-populator.mjs",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/bus-tool-populator.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash|PowerShell|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
+            ],
             "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/coordination-notification.mjs"
+            ]
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
+              "stop"
+            ],
+            "timeout": 15000
           }
         ]
       }

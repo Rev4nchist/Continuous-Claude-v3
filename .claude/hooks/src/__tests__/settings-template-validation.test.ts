@@ -20,14 +20,35 @@ const claudeDir = path.resolve(here, '../../../');               // .claude
 const distDir = path.resolve(here, '../../dist');                // .claude/hooks/dist
 const tplPath = path.join(claudeDir, 'settings.json.template');
 
+/**
+ * Extract the hook's dist name from EITHER form.
+ *
+ * String form  : { command: "node {{CLAUDE_HOME}}/hooks/dist/foo.mjs" }
+ * Exec form    : { command: "node", args: ["{{CLAUDE_HOME}}/hooks/dist/foo.mjs"] }
+ *
+ * Reading only `command` was correct until the 2026-07-21 exec-form migration
+ * (done to mitigate the MSYS fork storm), after which EVERY entry in the
+ * template moved its path into `args` -- 73 entries, 0 matchable via `command`.
+ * templateHookNames() therefore returned [], which did not fail loudly: the two
+ * NEGATIVE assertions ("every dist exists", "no stale hooks registered") both
+ * pass trivially on an empty list, so the guards protecting fresh installs went
+ * silently vacuous while only the two positive assertions went red. A test that
+ * passes because it sees nothing is worse than no test. Read both forms.
+ */
+function hookDistName(h: { command?: string; args?: string[] }): string | null {
+  const haystack = [h.command ?? '', ...(h.args ?? [])].join(' ');
+  const m = haystack.match(/dist\/([\w-]+)\.mjs/);
+  return m ? m[1] : null;
+}
+
 function templateHookNames(): string[] {
   const s = JSON.parse(readFileSync(tplPath, 'utf8'));
   const names: string[] = [];
   for (const evt of Object.keys(s.hooks || {})) {
     for (const b of s.hooks[evt]) {
       for (const h of b.hooks || []) {
-        const m = (h.command || '').match(/dist\/([\w-]+)\.mjs/);
-        if (m) names.push(m[1]);
+        const n = hookDistName(h);
+        if (n) names.push(n);
       }
     }
   }
@@ -42,10 +63,10 @@ function templateHookRegistrations(): Map<string, Set<string>> {
     for (const b of s.hooks[evt]) {
       const matcher = b.matcher ?? '';
       for (const h of b.hooks || []) {
-        const m = (h.command || '').match(/dist\/([\w-]+)\.mjs/);
-        if (!m) continue;
-        if (!reg.has(m[1])) reg.set(m[1], new Set());
-        reg.get(m[1])!.add(`${evt}::${matcher}`);
+        const n = hookDistName(h);
+        if (!n) continue;
+        if (!reg.has(n)) reg.set(n, new Set());
+        reg.get(n)!.add(`${evt}::${matcher}`);
       }
     }
   }

@@ -85,7 +85,7 @@ async function main() {
     '━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━━',
   ].join('\n');
 
-  console.log(JSON.stringify({ result: 'continue', message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: message } }));
 }
 
 main().catch(() => {

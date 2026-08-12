@@ -39,7 +39,28 @@ done
 $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 
 # hooks/src excluded: dist/*.mjs is what runs; copying src stomps mtimes and breaks hook-dist-freshness.
-SYNC_DIRS="rules agents skills scripts docs"
+#
+# NOTE: `rules` is NOT in this list. The repo keeps them at .claude/rules-src/ and
+# they land at ~/.claude/rules/ -- source name deliberately differs from dest name.
+# Why: Claude Code auto-loads .claude/rules/*.md from BOTH user scope and project
+# scope. With the repo copy at .claude/rules/, every session in this repo loaded all
+# 46 rules TWICE, byte-identical. Measured with /context on 2026-07-29:
+# 145.6k memory-file tokens here vs 82.1k in a project with no .claude/rules --
+# a ~61k/session duplicate, 13% of the 1M window, carrying zero information.
+# Renaming the SOURCE keeps the rules version-controlled and still fed to
+# ~/.claude/rules/ (which 18 of 19 projects rely on as their ONLY copy) while
+# removing the second load. See docs/harness-strategy/.
+# `commands` added 2026-07-29. The 59 slash commands had existed ONLY in
+# ~/.claude/commands -- one untracked copy on one machine. They are now committed,
+# but a committed copy that nothing propagates is a second source of truth waiting
+# to drift, which is the exact failure the rules-src rename above was fixing.
+# Safe to add: repo and active were verified hash-identical (58/58) when the backup
+# landed, so the first forward sync copies nothing.
+SYNC_DIRS="agents skills scripts docs commands"
+
+# Explicit source->dest mapping for the rules tree (names differ, see above).
+RULES_SRC_DIR="rules-src"
+RULES_DST_DIR="rules"
 
 NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.jsonl knowledge-tree.json"
 
@@ -53,6 +74,19 @@ copy_registry() {
         echo "[DRY RUN] Would copy: $src -> $dst"
         return 0
     fi
+    # Distinguish "cannot validate" from "invalid". Conflating them cost a real
+    # diagnosis on 2026-07-29: this printed "invalid JSON" for a file that node
+    # and PowerShell both parse fine. The actual cause is which bash is running.
+    # On this machine `bash` on PATH is WSL (C:\WINDOWS\system32\bash.exe), which
+    # has NO node and uses /mnt/c paths; git's hooks use Git Bash, which has node
+    # at /c/Program Files/nodejs. So a manual `bash scripts/sync-to-active.sh`
+    # silently skipped the registry while blaming the file, and the post-commit
+    # path synced it correctly -- which is why nobody noticed.
+    if ! command -v node >/dev/null 2>&1; then
+        echo "  WARNING: node not on PATH in this shell -- cannot validate project-registry.json, NOT synced"
+        echo "           (if this is WSL bash, re-run under Git Bash: it has node)"
+        return 0
+    fi
     if ! node -e "JSON.parse(require('fs').readFileSync(process.argv[1],'utf8'))" "$src" 2>/dev/null; then
         echo "  WARNING: repo project-registry.json is invalid JSON -- NOT synced"
         return 0
@@ -64,8 +98,11 @@ copy_registry() {
 
 copy_dir() {
     local dir="$1"
+    # Optional 2nd arg: dest dir name when it differs from the source name
+    # (used by the rules-src -> rules mapping). Defaults to same-name.
+    local dst_dir="${2:-$1}"
     local src_path="$REPO_CLAUDE/$dir"
-    local dst_path="$ACTIVE_CLAUDE/$dir"
+    local dst_path="$ACTIVE_CLAUDE/$dst_dir"
 
     [[ ! -d "$src_path" ]] && return 0
 
@@ -161,7 +198,18 @@ if $CHANGED; then
     changed_map_target() {
         local p="$1" rest skip
         case "$p" in
-            .claude/rules/*|.claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*)
+            # rules-src -> rules. Must be matched BEFORE the same-name subtrees.
+            # Deliberately NO `.claude/rules/*` case: that path is no longer a sync
+            # source, so the 46 D-entries produced by the rules -> rules-src rename
+            # map to nothing and cannot delete ~/.claude/rules/. That matters because
+            # renames are not detected here (no -M): a move appears as D(old)+A(new),
+            # and `.claude/rules-src/x` sorts BEFORE `.claude/rules/x` ('-' < '/'),
+            # so the add would be copied and the delete would then remove it.
+            .claude/rules-src/*)
+                changed_is_excluded "$p" && return 0
+                printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
+                ;;
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
@@ -313,6 +361,9 @@ fi
 for dir in $SYNC_DIRS; do
     copy_dir "$dir"
 done
+
+# rules: repo .claude/rules-src/ -> active ~/.claude/rules/ (see SYNC_DIRS note).
+copy_dir "$RULES_SRC_DIR" "$RULES_DST_DIR"
 
 # Sync the project registry (repo canonical -> active mirror, JSON-validated)
 copy_registry

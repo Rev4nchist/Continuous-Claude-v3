@@ -21,7 +21,7 @@
     },
     {
       "name": "NorthStar Transformation",
-      "path": "C:/Users/david.hayes/Projects/northstar-transformation",
+      "path": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -30,10 +30,11 @@
         "Neon"
       ],
       "description": "AI transformation platform for enterprise",
-      "port": 3002,
-      "url": "https://northstar.localhost/",
-      "devCommand": "npm run dev",
-      "status": "active",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (5 months untouched, 49 uncommitted files preserved as-is on move). Port 3002 / northstar.localhost freed for reuse.",
       "sentryProject": "",
       "linearTeam": "the-lab"
     },
@@ -117,7 +118,9 @@
       "devCommand": null,
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/ebr-presentations-plugin",
+      "notes": "Created directly in the fourth org 2026-08-05 (had no remote, so nothing to transfer)."
     },
     {
       "name": "gong-mcp",
@@ -133,7 +136,7 @@
       "url": "http://localhost:8000/mcp",
       "devCommand": "uv run python server.py",
       "status": "active",
-      "github": "Rev4nchist/gong-mcp",
+      "github": "fourth/gong-mcp",
       "deploy": "Railway (dev) + Azure Container Apps (prod)",
       "kind": "mcp-server",
       "notes": "v1: list_calls, get_transcript, list_users tools against Gong v2 API. v2: FastMCP middleware + apps.",
@@ -176,7 +179,7 @@
       "url": "http://localhost:8001/mcp",
       "devCommand": "uv run python server.py",
       "status": "active",
-      "github": "Rev4nchist/fourth-salesforce-mcp",
+      "github": "fourth/fourth-salesforce-mcp",
       "deploy": "Railway (dev) + Azure Container Apps (prod)",
       "kind": "mcp-server",
       "notes": "Governance proxy in front of Salesforce Hosted MCP (Headless 360). Entra-rooted per-user auth, audit, rate limiting, tool curation, custom-object schema awareness.",
@@ -186,38 +189,65 @@
     {
       "name": "fourth-playwright-mcp",
       "path": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
-      "stack": [],
-      "description": "Fourth Playwright MCP server",
-      "port": null,
-      "url": null,
-      "devCommand": null,
+      "stack": [
+        "Python 3.11",
+        "FastMCP v3",
+        "Playwright",
+        "uv"
+      ],
+      "description": "General-purpose web automation MCP server (navigate, extract, forms, a11y, performance)",
+      "port": 8000,
+      "url": "http://127.0.0.1:8000",
+      "devCommand": "uv run python src/server.py",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/fourth-playwright-mcp",
+      "kind": "mcp-server",
+      "deploy": "Railway (DOCKERFILE builder, healthcheck /health)",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. PORT COLLISION UNRESOLVED: .env.example sets PORT=8000, already assigned to gong-mcp. Next free 8xxx is 8003. Recorded as 8000 because that is what the repo actually does - the duplicate is left VISIBLE rather than papered over with an aspirational number. Railway service is not GitHub-bound (source null), deploys by CLI, project lives in the personal Railway workspace."
     },
     {
       "name": "agent-arch",
       "path": "C:/agent-arch",
-      "stack": [],
-      "description": "Agent architecture workspace",
-      "port": null,
-      "url": null,
-      "devCommand": null,
+      "stack": [
+        "Python",
+        "Dockerfile backend",
+        "Next.js 16.2.10",
+        "React 19"
+      ],
+      "description": "MSFT Agent Architecture Guide - Fourth agent architecture platform (Python backend + Next.js frontend)",
+      "port": 3008,
+      "url": "http://localhost:3008",
+      "devCommand": "cd frontend && npm run dev",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/agent-arch",
+      "kind": "web-app",
+      "deploy": "Azure via GitHub Actions (backend-deploy.yml, frontend-deploy.yml, staging-deploy.yml)",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. 3008 is the frontend dev port per .env.example; with Docker the reverse proxy is 8080. security-scan.yml fires on push/PR to main only."
     },
     {
       "name": "fourth-marketing-brain",
       "path": "C:/Users/david.hayes/fourth-marketing-brain",
-      "stack": [],
-      "description": "Fourth marketing brain",
+      "stack": [
+        "Python 3.12",
+        "FastMCP",
+        "Cosmos + SharePoint backends",
+        "uv"
+      ],
+      "description": "AI-powered marketing knowledge MCP server for Fourth - serves the Marketing Brain KB to any AI tool",
       "port": null,
-      "url": null,
-      "devCommand": null,
+      "url": "stdio (MCP_TRANSPORT=stdio default)",
+      "devCommand": "uv run python app.py",
       "status": "active",
       "sentryProject": "",
-      "linearTeam": ""
+      "linearTeam": "",
+      "github": "fourth/fourth-marketing-brain",
+      "kind": "mcp-server",
+      "deploy": "GitHub Actions deploy.yml",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. Defaults to stdio so claims NO port. MCP_PORT=8000 applies only when MCP_TRANSPORT=http, and that value collides with gong-mcp - reassign before running in http mode."
     },
     {
       "name": "Fourth Canvas",
@@ -255,6 +285,32 @@
       "notes": "SQL -> JSON ETL feeding the EBR presentation builder. Not a web app."
     },
     {
+      "name": "Fourth Presentation Hosting Platform",
+      "path": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
+      "stack": [],
+      "description": "Presentation hosting platform",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (4 months untouched, 293 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
+      "sentryProject": "",
+      "linearTeam": ""
+    },
+    {
+      "name": "fourth-workbook",
+      "path": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
+      "stack": [],
+      "description": "Fourth workbook project",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "archived",
+      "notes": "Archived 2026-07-24 (6 months untouched, 35 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
+      "sentryProject": "",
+      "linearTeam": ""
+    },
+    {
       "name": "fourth-netsuite-mcp",
       "path": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
       "stack": [
@@ -268,10 +324,64 @@
       "url": "http://localhost:8002/mcp",
       "devCommand": "uv run python server.py",
       "status": "active",
-      "github": "Rev4nchist/fourth-netsuite-mcp",
+      "github": "fourth/fourth-netsuite-mcp",
       "deploy": "Azure Container Apps (Cosmos + Key Vault)",
       "kind": "mcp-server",
       "notes": "Governance proxy in front of NetSuite AI Connector Service MCP. Connector #3 of the FourthOS ecosystem; cloned from the fourth-salesforce-mcp mold (~95% reuse). Entra-rooted edge auth + per-user NetSuite OAuth (AuthCode+PKCE, no OBO exists), distributed rotate-on-use token lock, distributed account-concurrency governor, read-audit, SuiteQL safety. Phase 0 (spike gate) as of 2026-07-15; build not started.",
+      "sentryProject": "",
+      "linearTeam": ""
+    },
+    {
+      "name": "Agentic OS",
+      "path": "C:/Users/david.hayes/continuous-claude/apps/agentic-os",
+      "stack": [
+        "Next.js",
+        "TypeScript",
+        "Drizzle",
+        "PostgreSQL"
+      ],
+      "description": "Local-first mission control / lane board over the CCv3 coordination plane. Reads the agentic_os schema plus read-only views of public.sessions, file_claims, archival_memory.",
+      "port": 3010,
+      "url": "http://localhost:3010",
+      "devCommand": "npm run dev",
+      "status": "in-development",
+      "sentryProject": "",
+      "linearTeam": "the-lab",
+      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os]."
+    },
+    {
+      "name": "buzz",
+      "path": "C:/Users/david.hayes/Projects/buzz",
+      "stack": [
+        "Rust",
+        "Tauri",
+        "React",
+        "Vite",
+        "Docker"
+      ],
+      "description": "Fork of block/buzz - runs the Fourth AI Enablement agent team (Claude Code, Codex, Grok) as a declarative persona pack in one shared room",
+      "port": 3011,
+      "url": "ws://localhost:3011",
+      "devCommand": "BUZZ_HTTP_PORT=3011 docker compose -f deploy/compose/compose.yml up -d",
+      "status": "active"
+    },
+    {
+      "name": "fourth-firecrawl",
+      "path": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
+      "stack": [
+        "Claude Code plugin",
+        "Markdown skills + commands",
+        "Firecrawl MCP"
+      ],
+      "description": "Fourth-tailored Firecrawl Claude plugin v1.2.1 - competitor intel, hospitality market scans, staged KB ingestion",
+      "port": null,
+      "url": "",
+      "devCommand": "",
+      "status": "active",
+      "github": "fourth/fourth-firecrawl",
+      "deploy": "n/a (plugin, distributed as .claude-plugin)",
+      "kind": "claude-plugin",
+      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. AGPL-3.0. Working copy dir is fourth-firecrawl-PLUGIN; the sibling fourth-firecrawl dir was the per-user output workspace and is archived at Projects/archive/fourth-firecrawl-workspace-2026-04. Superseded duplicate david-hayes44/fourth-firecrawl is archived on GitHub.",
       "sentryProject": "",
       "linearTeam": ""
     }

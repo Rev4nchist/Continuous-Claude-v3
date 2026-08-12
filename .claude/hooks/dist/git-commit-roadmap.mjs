@@ -1,8 +1,10 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/git-commit-roadmap.ts
 import * as fs from "fs";
 import * as path2 from "path";
+import { execFileSync } from "node:child_process";
 
 // src/shared/roadmap-sync-guards.ts
 import * as path from "path";
@@ -12,23 +14,526 @@ function isPathInsideProject(targetPath, projectDir) {
   const rel = path.relative(path.resolve(projectDir), path.resolve(targetPath));
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
+function normalizeShellPath(p) {
+  if (!p || process.platform !== "win32") return p;
+  let m = p.match(/^\/cygdrive\/([A-Za-z])(\/.*)?$/);
+  if (m) return `${m[1].toUpperCase()}:${m[2] || "/"}`;
+  m = p.match(/^\/([A-Za-z])(\/.*)?$/);
+  if (m) return `${m[1].toUpperCase()}:${m[2] || "/"}`;
+  return p;
+}
+var GIT_VALUE_OPTS = /* @__PURE__ */ new Set([
+  "-C",
+  "-c",
+  "--git-dir",
+  "--work-tree",
+  "--namespace",
+  "--exec-path",
+  "--super-prefix"
+]);
+var SHELL_SEPARATORS = /* @__PURE__ */ new Set(["&&", "||", ";", "|", "&"]);
+function tokenizeCommand(command) {
+  const tokens = [];
+  const re = /"([^"]*)"|'([^']*)'|(\S+)/g;
+  let m;
+  while ((m = re.exec(command)) !== null) {
+    tokens.push(m[1] ?? m[2] ?? m[3] ?? "");
+  }
+  return tokens;
+}
+function parseGitCommitInvocations(command) {
+  if (!command) return [];
+  const tokens = tokenizeCommand(command);
+  const found = [];
+  for (let i = 0; i < tokens.length; i++) {
+    if (tokens[i].toLowerCase() !== "git" && !/[\\/]git(\.exe)?$/i.test(tokens[i])) continue;
+    let cTarget = null;
+    let j = i + 1;
+    let subcommand = null;
+    while (j < tokens.length) {
+      const tok = tokens[j];
+      if (tok.startsWith("-")) {
+        const eq = tok.indexOf("=");
+        if (eq > 0) {
+          const name = tok.slice(0, eq);
+          if (name === "--work-tree" || name === "--git-dir") cTarget = tok.slice(eq + 1);
+          j += 1;
+          continue;
+        }
+        if (GIT_VALUE_OPTS.has(tok)) {
+          if (tok === "-C") cTarget = tokens[j + 1] ?? null;
+          j += 2;
+          continue;
+        }
+        j += 1;
+        continue;
+      }
+      subcommand = tok;
+      break;
+    }
+    if (subcommand?.toLowerCase() !== "commit") continue;
+    let hasAmend = false;
+    for (let k = j + 1; k < tokens.length; k++) {
+      if (SHELL_SEPARATORS.has(tokens[k])) break;
+      if (tokens[k] === "--amend") {
+        hasAmend = true;
+        break;
+      }
+    }
+    found.push({ cTarget, hasAmend });
+    i = j;
+  }
+  return found;
+}
 function extractCdTarget(command) {
   if (!command) return null;
-  const commitIdx = command.search(/git\s+(?:-[^\s]+\s+)*commit/i);
+  const commitIdx = command.search(/git\s+(?:-[^\s]+(?:\s+[^\s-]\S*)?\s+)*commit\b/i);
   const scope = commitIdx >= 0 ? command.slice(0, commitIdx) : command;
   const m = scope.match(/(?:^|[;&|]\s*|&&\s*)cd\s+(?:"([^"]+)"|'([^']+)'|([^\s;&|]+))/);
   if (!m) return null;
   return m[1] || m[2] || m[3] || null;
 }
-function commitRanInProject(command, projectDir) {
-  const target = extractCdTarget(command);
-  if (!target) return true;
-  let resolved = target;
+function resolveShellTarget(target, base) {
+  let resolved = normalizeShellPath(target);
   if (resolved === "~" || resolved.startsWith("~/") || resolved.startsWith("~\\")) {
     resolved = path.join(homedir(), resolved.slice(1));
   }
-  const abs = path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(projectDir, resolved);
-  return isPathInsideProject(abs, projectDir);
+  return path.isAbsolute(resolved) ? path.resolve(resolved) : path.resolve(base, resolved);
+}
+function commitRanInProject(command, projectDir) {
+  const cdTarget = extractCdTarget(command);
+  const cwd = cdTarget ? resolveShellTarget(cdTarget, projectDir) : path.resolve(projectDir);
+  if (cdTarget && !isPathInsideProject(cwd, projectDir)) return false;
+  for (const invocation of parseGitCommitInvocations(command)) {
+    if (!invocation.cTarget) continue;
+    const effective = resolveShellTarget(invocation.cTarget, cwd);
+    if (!isPathInsideProject(effective, projectDir)) return false;
+  }
+  return true;
+}
+
+// src/shared/roadmap-splice.ts
+function insertUnderSection(content, sectionPrefix, entry) {
+  const prefixLower = sectionPrefix.trim().toLowerCase();
+  const lines = content.split("\n");
+  const result = [];
+  let insertedEntry = false;
+  let inSection = false;
+  for (let i = 0; i < lines.length; i++) {
+    const line = lines[i];
+    const stripped = line.trim().toLowerCase();
+    if (stripped.startsWith(prefixLower)) {
+      inSection = true;
+      result.push(line);
+      result.push(entry);
+      insertedEntry = true;
+      continue;
+    }
+    if (stripped.startsWith("## ") && inSection) {
+      inSection = false;
+    }
+    result.push(line);
+  }
+  if (!insertedEntry) {
+    const sectionIndex = result.findIndex(
+      (l) => l.trim().toLowerCase().startsWith("## planned") || l.trim().toLowerCase().startsWith("## recent")
+    );
+    if (sectionIndex > 0) {
+      result.splice(sectionIndex, 0, "", "## Completed", entry, "");
+    } else {
+      result.push("", "## Completed", entry);
+    }
+  }
+  return result.join("\n");
+}
+
+// src/shared/roadmap-audit.ts
+import { createHash } from "node:crypto";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { dirname as dirname2, join as join4 } from "node:path";
+
+// src/shared/atomic-write.ts
+import {
+  writeFileSync,
+  renameSync as renameSync2,
+  unlinkSync,
+  existsSync as existsSync2,
+  openSync,
+  closeSync,
+  readFileSync,
+  statSync as statSync2,
+  constants
+} from "fs";
+import { dirname, basename, join as join3 } from "path";
+
+// src/shared/logger.ts
+import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
+import { join as join2 } from "path";
+import { homedir as homedir2 } from "os";
+var LOG_DIR = join2(homedir2(), ".claude", "logs");
+var LOG_FILE = join2(LOG_DIR, "hooks.log");
+var MAX_LOG_SIZE = 5 * 1024 * 1024;
+var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
+var LEVEL_ORDER = {
+  debug: 0,
+  info: 1,
+  warn: 2,
+  error: 3
+};
+function shouldLog(level) {
+  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
+}
+function ensureLogDir() {
+  if (!existsSync(LOG_DIR)) {
+    mkdirSync(LOG_DIR, { recursive: true });
+  }
+}
+function rotateIfNeeded() {
+  try {
+    if (existsSync(LOG_FILE)) {
+      const stat = statSync(LOG_FILE);
+      if (stat.size > MAX_LOG_SIZE) {
+        const rotated = LOG_FILE + ".1";
+        renameSync(LOG_FILE, rotated);
+      }
+    }
+  } catch {
+  }
+}
+function getSessionId() {
+  return process.env.CLAUDE_SESSION_ID || void 0;
+}
+function writeLog(entry) {
+  try {
+    ensureLogDir();
+    rotateIfNeeded();
+    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
+  } catch {
+  }
+}
+function createLogger(hookName) {
+  function log2(level, msg, data) {
+    if (!shouldLog(level)) return;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      level,
+      hook: hookName,
+      msg,
+      sessionId: getSessionId()
+    };
+    if (data && Object.keys(data).length > 0) {
+      entry.data = data;
+    }
+    writeLog(entry);
+    if (level === "error" || level === "warn") {
+      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
+    }
+  }
+  return {
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
+  };
+}
+
+// src/shared/atomic-write.ts
+var log = createLogger("atomic-write");
+var LOCK_STALE_MS = 1e4;
+var LOCK_RETRY_MS = 50;
+var LOCK_TIMEOUT_MS = 5e3;
+function atomicWriteSync(filePath, content) {
+  const dir = dirname(filePath);
+  const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  try {
+    writeFileSync(tmpFile, content, "utf-8");
+    renameSync2(tmpFile, filePath);
+  } catch (err) {
+    try {
+      if (existsSync2(tmpFile)) unlinkSync(tmpFile);
+    } catch {
+    }
+    throw err;
+  }
+}
+function acquireLockSync(filePath, timeoutMs = LOCK_TIMEOUT_MS) {
+  const lockFile = filePath + ".lock";
+  const startTime = Date.now();
+  while (true) {
+    try {
+      const fd = openSync(lockFile, constants.O_CREAT | constants.O_EXCL | constants.O_WRONLY);
+      writeFileSync(fd, `${process.pid}
+${Date.now()}`, "utf-8");
+      closeSync(fd);
+      return true;
+    } catch (err) {
+      if (err.code === "EEXIST") {
+        try {
+          const stat = statSync2(lockFile);
+          if (Date.now() - stat.mtimeMs > LOCK_STALE_MS) {
+            log.warn("Removing stale lock", { lockFile, ageMs: Date.now() - stat.mtimeMs });
+            unlinkSync(lockFile);
+            continue;
+          }
+        } catch {
+          continue;
+        }
+        if (Date.now() - startTime > timeoutMs) {
+          log.error("Lock acquisition timed out", { lockFile, timeoutMs });
+          return false;
+        }
+        const waitUntil = Date.now() + LOCK_RETRY_MS;
+        while (Date.now() < waitUntil) {
+        }
+      } else {
+        log.error("Lock acquisition failed", { lockFile, error: String(err) });
+        return false;
+      }
+    }
+  }
+}
+function releaseLockSync(filePath) {
+  const lockFile = filePath + ".lock";
+  try {
+    if (existsSync2(lockFile)) {
+      unlinkSync(lockFile);
+    }
+  } catch (err) {
+    log.warn("Failed to release lock", { lockFile, error: String(err) });
+  }
+}
+function mutateStateWithLock(filePath, transformFn, opts = {}) {
+  const lockTimeoutMs = opts.lockTimeoutMs ?? LOCK_TIMEOUT_MS;
+  const lockStart = Date.now();
+  const locked = acquireLockSync(filePath, lockTimeoutMs);
+  const waitMs = Date.now() - lockStart;
+  if (opts.onLockOutcome) {
+    try {
+      opts.onLockOutcome({ acquired: locked, wait_ms: waitMs });
+    } catch {
+    }
+  }
+  if (!locked) {
+    log.warn("mutateStateWithLock: lock not acquired, skipping write", { filePath });
+    return false;
+  }
+  try {
+    let current;
+    if (!existsSync2(filePath)) {
+      current = null;
+    } else {
+      try {
+        current = readFileSync(filePath, "utf-8");
+      } catch (err) {
+        log.warn("mutateStateWithLock: existing file unreadable, aborting write", {
+          filePath,
+          error: String(err)
+        });
+        return false;
+      }
+    }
+    let next;
+    try {
+      next = transformFn(current);
+    } catch (err) {
+      log.error("mutateStateWithLock: transform threw, leaving file untouched", {
+        filePath,
+        error: String(err)
+      });
+      return false;
+    }
+    if (next == null) {
+      return false;
+    }
+    const writeStart = Date.now();
+    atomicWriteSync(filePath, next);
+    if (opts.onWriteTiming) {
+      try {
+        opts.onWriteTiming({ write_ms: Date.now() - writeStart });
+      } catch {
+      }
+    }
+    return true;
+  } catch (err) {
+    log.error("mutateStateWithLock: write failed", { filePath, error: String(err) });
+    return false;
+  } finally {
+    releaseLockSync(filePath);
+  }
+}
+
+// src/shared/roadmap-audit.ts
+var MAX_REFUSED_DELETIONS = 20;
+var CATASTROPHIC_MIN_RATIO = 0.25;
+function sha256Prefix16(content) {
+  return createHash("sha256").update(content, "utf-8").digest("hex").slice(0, 16);
+}
+function multisetCounts(lines) {
+  const counts = /* @__PURE__ */ new Map();
+  for (const line of lines) {
+    counts.set(line, (counts.get(line) ?? 0) + 1);
+  }
+  return counts;
+}
+function computeRemovedLines(beforeLines, afterLines) {
+  const beforeCounts = multisetCounts(beforeLines);
+  const afterCounts = multisetCounts(afterLines);
+  const removed = [];
+  for (const [line, count] of beforeCounts) {
+    const remaining = count - (afterCounts.get(line) ?? 0);
+    for (let i = 0; i < remaining; i++) {
+      removed.push(line);
+    }
+  }
+  return removed;
+}
+function defaultWrite(roadmapPath, before, after) {
+  const captured = { transformDeclined: false, lockOutcome: null, writeMs: void 0 };
+  const wrote = mutateStateWithLock(
+    roadmapPath,
+    (current) => {
+      const observed = current ?? "";
+      if (observed === before) return after;
+      captured.transformDeclined = true;
+      return null;
+    },
+    {
+      onLockOutcome: (o) => {
+        captured.lockOutcome = o;
+      },
+      onWriteTiming: (o) => {
+        captured.writeMs = o.write_ms;
+      }
+    }
+  );
+  if (wrote) {
+    return { wrote: true, wait_ms: captured.lockOutcome?.wait_ms, write_ms: captured.writeMs };
+  }
+  if (captured.lockOutcome && !captured.lockOutcome.acquired) {
+    return { wrote: false, reason: "lock_timeout", wait_ms: captured.lockOutcome.wait_ms };
+  }
+  if (captured.transformDeclined) {
+    return {
+      wrote: false,
+      reason: "concurrent_modification",
+      wait_ms: captured.lockOutcome?.wait_ms
+    };
+  }
+  return { wrote: false, reason: "write_failed", wait_ms: captured.lockOutcome?.wait_ms };
+}
+function defaultBackup(bakPath, content) {
+  writeFileSync2(bakPath, content, "utf-8");
+}
+function defaultAppendLog(logPath, line) {
+  mkdirSync2(dirname2(logPath), { recursive: true });
+  appendFileSync2(logPath, line, "utf-8");
+}
+function appendAudit(projectDir, record, appendLogDep) {
+  try {
+    const logPath = join4(projectDir, ".claude", "logs", "roadmap-sync.jsonl");
+    const line = JSON.stringify(record) + "\n";
+    (appendLogDep ?? defaultAppendLog)(logPath, line);
+  } catch {
+  }
+}
+function writeRoadmapGuarded(args) {
+  const {
+    hook,
+    tool,
+    roadmapPath,
+    projectDir,
+    before,
+    after,
+    ops,
+    allowedDeletions,
+    allowFullRewrite,
+    sessionId,
+    deps
+  } = args;
+  const beforeLines = before.split("\n");
+  const afterLines = after.split("\n");
+  const beforeBytes = Buffer.byteLength(before, "utf-8");
+  const afterBytes = Buffer.byteLength(after, "utf-8");
+  const base = {
+    ts: (/* @__PURE__ */ new Date()).toISOString(),
+    hook,
+    tool: tool ?? "unknown",
+    project_dir: projectDir,
+    roadmap_path: roadmapPath,
+    before_sha256: sha256Prefix16(before),
+    after_sha256: sha256Prefix16(after),
+    before_lines: beforeLines.length,
+    after_lines: afterLines.length,
+    line_delta: afterLines.length - beforeLines.length,
+    before_bytes: beforeBytes,
+    after_bytes: afterBytes,
+    bytes_delta: afterBytes - beforeBytes,
+    ops,
+    session_id: sessionId ?? null
+  };
+  const finish = (outcome, extra = {}) => {
+    const record = {
+      ...base,
+      outcome,
+      bak_path: null,
+      bak_error: null,
+      ...extra
+    };
+    appendAudit(projectDir, record, deps?.appendLog);
+    return { outcome, record };
+  };
+  if (after === before) {
+    return finish("noop");
+  }
+  if (!allowFullRewrite) {
+    const allowedSet = new Set(allowedDeletions ?? []);
+    const removed = computeRemovedLines(beforeLines, afterLines);
+    const refused = removed.filter((line) => !allowedSet.has(line));
+    if (refused.length > 0) {
+      return finish("skipped", {
+        reason: "deletion_guard",
+        refused_deletions: refused.slice(0, MAX_REFUSED_DELETIONS)
+      });
+    }
+  } else {
+    const beforeTrim = before.trim();
+    const afterTrim = after.trim();
+    const tooSmall = beforeLines.length > 0 && afterLines.length < beforeLines.length * CATASTROPHIC_MIN_RATIO;
+    if (beforeTrim !== "" && (afterTrim === "" || tooSmall)) {
+      return finish("skipped", { reason: "catastrophic_rewrite" });
+    }
+  }
+  const bakPath = `${roadmapPath}.bak`;
+  let bakError = null;
+  try {
+    (deps?.backup ?? defaultBackup)(bakPath, before);
+  } catch (err) {
+    bakError = err instanceof Error ? err.message : String(err);
+  }
+  let writeResult;
+  try {
+    writeResult = (deps?.write ?? defaultWrite)(roadmapPath, before, after);
+  } catch {
+    writeResult = { wrote: false, reason: "write_failed" };
+  }
+  if (!writeResult.wrote) {
+    return finish("skipped", {
+      reason: writeResult.reason ?? "write_failed",
+      bak_path: bakPath,
+      bak_error: bakError,
+      wait_ms: writeResult.wait_ms,
+      write_ms: writeResult.write_ms
+    });
+  }
+  return finish("written", {
+    bak_path: bakPath,
+    bak_error: bakError,
+    wait_ms: writeResult.wait_ms,
+    write_ms: writeResult.write_ms
+  });
+}
+function appendRoadmapAuditRecord(projectDir, record) {
+  appendAudit(projectDir, record);
 }
 
 // src/git-commit-roadmap.ts
@@ -40,20 +545,21 @@ var COMMIT_PATTERNS = {
   revertIndicator: /^Revert\s+"/i
 };
 var SKIP_TYPES = /* @__PURE__ */ new Set(["chore", "style", "ci"]);
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 function readStdin() {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     let data = "";
     process.stdin.setEncoding("utf8");
     process.stdin.on("data", (chunk) => {
       data += chunk;
     });
-    process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3);
+    process.stdin.on("end", () => resolve3(data));
+    setTimeout(() => resolve3(data), 1e3).unref();
   });
 }
 function isGitCommitCommand(command) {
-  const normalized = command.toLowerCase().trim();
-  return normalized.includes("git commit") && !normalized.includes("--amend");
+  const invocations = parseGitCommitInvocations(command);
+  return invocations.length > 0 && invocations.some((inv) => !inv.hasAmend);
 }
 function isSuccessfulCommit(response) {
   return COMMIT_PATTERNS.commitOutput.test(response) && !COMMIT_PATTERNS.amendIndicator.test(response);
@@ -130,36 +636,126 @@ function isDuplicateEntry(content, commit) {
   return false;
 }
 function appendToCompleted(content, entry) {
-  const lines = content.split("\n");
-  const result = [];
-  let insertedEntry = false;
-  let inCompleted = false;
-  for (let i = 0; i < lines.length; i++) {
-    const line = lines[i];
-    const stripped = line.trim().toLowerCase();
-    if (stripped.startsWith("## completed")) {
-      inCompleted = true;
-      result.push(line);
-      result.push(entry);
-      insertedEntry = true;
-      continue;
-    }
-    if (stripped.startsWith("## ") && inCompleted) {
-      inCompleted = false;
-    }
-    result.push(line);
+  return insertUnderSection(content, "## completed", entry);
+}
+function shouldAutoCommitRoadmap(opts) {
+  const env = opts.env ?? process.env;
+  if (env.CCV3_ROADMAP_AUTOCOMMIT === "0") {
+    return { ok: false, reason: "autocommit_disabled" };
   }
-  if (!insertedEntry) {
-    const completedIndex = result.findIndex(
-      (l) => l.trim().toLowerCase().startsWith("## planned") || l.trim().toLowerCase().startsWith("## recent")
+  const expectedPath = path2.join(opts.projectDir, "ROADMAP.md");
+  if (opts.roadmapPath !== expectedPath) {
+    return { ok: false, reason: "path_mismatch" };
+  }
+  if (!isPathInsideProject(opts.roadmapPath, opts.projectDir)) {
+    return { ok: false, reason: "path_outside_project" };
+  }
+  if (!opts.isGitWorkTree) {
+    return { ok: false, reason: "not_git_worktree" };
+  }
+  if (opts.operationInProgress) {
+    return { ok: false, reason: "git_operation_in_progress" };
+  }
+  if (!opts.isTracked) {
+    return { ok: false, reason: "not_tracked" };
+  }
+  if (opts.preDirty) {
+    return { ok: false, reason: "pre_dirty" };
+  }
+  return { ok: true };
+}
+function isInsideGitWorkTree(projectDir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", projectDir, "rev-parse", "--is-inside-work-tree"],
+      { timeout: 5e3, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, encoding: "utf-8" }
     );
-    if (completedIndex > 0) {
-      result.splice(completedIndex, 0, "", "## Completed", entry, "");
-    } else {
-      result.push("", "## Completed", entry);
-    }
+    return out.trim() === "true";
+  } catch {
+    return false;
   }
-  return result.join("\n");
+}
+function resolveGitDir(projectDir) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", projectDir, "rev-parse", "--git-dir"],
+      { timeout: 5e3, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, encoding: "utf-8" }
+    ).trim();
+    if (!out) return null;
+    return path2.isAbsolute(out) ? out : path2.resolve(projectDir, out);
+  } catch {
+    return null;
+  }
+}
+function isGitOperationInProgress(gitDir) {
+  if (!gitDir) return true;
+  const markers = ["MERGE_HEAD", "CHERRY_PICK_HEAD", "REVERT_HEAD", "BISECT_LOG"];
+  for (const marker of markers) {
+    if (fs.existsSync(path2.join(gitDir, marker))) return true;
+  }
+  return fs.existsSync(path2.join(gitDir, "rebase-merge")) || fs.existsSync(path2.join(gitDir, "rebase-apply"));
+}
+function isRoadmapTracked(projectDir, relPath) {
+  try {
+    execFileSync(
+      "git",
+      ["-C", projectDir, "ls-files", "--error-unmatch", "--", relPath],
+      { timeout: 5e3, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, encoding: "utf-8" }
+    );
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isRoadmapPreDirty(projectDir, relPath) {
+  try {
+    const out = execFileSync(
+      "git",
+      ["-C", projectDir, "status", "--porcelain", "--", relPath],
+      { timeout: 5e3, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, encoding: "utf-8" }
+    );
+    return out.trim().length > 0;
+  } catch {
+    return true;
+  }
+}
+function collectAutoCommitGitFacts(projectDir, relRoadmapPath, preDirty) {
+  const isGitWorkTree = isInsideGitWorkTree(projectDir);
+  const gitDir = isGitWorkTree ? resolveGitDir(projectDir) : null;
+  return {
+    isGitWorkTree,
+    operationInProgress: isGitWorkTree ? isGitOperationInProgress(gitDir) : true,
+    isTracked: isGitWorkTree ? isRoadmapTracked(projectDir, relRoadmapPath) : false,
+    preDirty
+  };
+}
+function buildAutoCommitMessage(commit) {
+  const typeLabel = commit.type !== "other" ? commit.type : "";
+  const scopeLabel = commit.scope ? `(${commit.scope})` : "";
+  const prefix = typeLabel && scopeLabel ? `${typeLabel}${scopeLabel}: ` : typeLabel ? `${typeLabel}: ` : scopeLabel ? `${scopeLabel} ` : "";
+  const hashLabel = commit.hash ? ` \`${commit.hash.slice(0, 7)}\`` : "";
+  return `chore(roadmap): record ${prefix}${commit.description}${hashLabel}`;
+}
+function attemptRoadmapAutoCommit(projectDir, commit) {
+  const message = buildAutoCommitMessage(commit);
+  try {
+    const stdout = execFileSync(
+      "git",
+      ["-C", projectDir, "commit", "--only", "-m", message, "--", "ROADMAP.md"],
+      { cwd: projectDir, timeout: 2e4, stdio: ["ignore", "pipe", "pipe"], windowsHide: true, encoding: "utf-8" }
+    );
+    const match = stdout.match(COMMIT_PATTERNS.commitOutput);
+    return { committed: true, commitHash: match ? match[2] : null };
+  } catch (err) {
+    const anyErr = err;
+    const stderrText = anyErr.stderr ? Buffer.isBuffer(anyErr.stderr) ? anyErr.stderr.toString("utf-8") : String(anyErr.stderr) : anyErr.message ?? String(err);
+    const isTimeout = Boolean(anyErr.killed);
+    const reasonTag = isTimeout ? "commit_timeout" : "commit_failed";
+    const clipped = stderrText.slice(0, 500).replace(/\s+/g, " ").trim();
+    return { committed: false, commitHash: null, failureReason: `${reasonTag}: ${clipped}` };
+  }
 }
 async function main() {
   const input = await readStdin();
@@ -174,7 +770,7 @@ async function main() {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
-  if (data.tool_name !== "Bash") {
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
@@ -234,16 +830,74 @@ async function main() {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
+  const relRoadmapPath = path2.relative(projectDir, roadmapPath) || "ROADMAP.md";
+  const preDirty = isRoadmapPreDirty(projectDir, relRoadmapPath);
   const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
   const entry = formatCommitEntry(commit, today);
   const updated = appendToCompleted(content, entry);
-  fs.writeFileSync(roadmapPath, updated);
+  const beforeLineCount = content.split("\n").length;
+  const afterLineCount = updated.split("\n").length;
+  const guardResult = writeRoadmapGuarded({
+    hook: "git-commit-roadmap",
+    tool: data.tool_name,
+    roadmapPath,
+    projectDir,
+    before: content,
+    after: updated,
+    ops: [
+      {
+        label: "completed-append",
+        lines_removed: 0,
+        lines_added: Math.max(0, afterLineCount - beforeLineCount)
+      }
+    ],
+    sessionId: data.session_id
+  });
+  if (guardResult.outcome !== "written") {
+    const reasonSuffix = guardResult.record.reason ? `: ${guardResult.record.reason}` : "";
+    console.error(`\u2139 ROADMAP.md write skipped (${guardResult.outcome}${reasonSuffix})`);
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext: `\u26A0\uFE0F ROADMAP.md entry NOT recorded (${guardResult.outcome}${reasonSuffix}). Commit was left untouched.`
+      }
+    }));
+    return;
+  }
   const typeDesc = commit.type !== "other" ? `${commit.type}: ` : "";
   const scopeDesc = commit.scope ? `(${commit.scope}) ` : "";
   console.error(`\u2713 ROADMAP.md: ${typeDesc}${scopeDesc}${commit.description}`);
+  const gitFacts = collectAutoCommitGitFacts(projectDir, relRoadmapPath, preDirty);
+  const decision = shouldAutoCommitRoadmap({
+    roadmapPath,
+    projectDir,
+    isGitWorkTree: gitFacts.isGitWorkTree,
+    operationInProgress: gitFacts.operationInProgress,
+    isTracked: gitFacts.isTracked,
+    preDirty: gitFacts.preDirty
+  });
+  if (!decision.ok) {
+    appendRoadmapAuditRecord(projectDir, {
+      ...guardResult.record,
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      committed: false,
+      reason: decision.reason
+    });
+  } else {
+    const autoCommit = attemptRoadmapAutoCommit(projectDir, commit);
+    appendRoadmapAuditRecord(projectDir, {
+      ...guardResult.record,
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      committed: autoCommit.committed,
+      commit_hash: autoCommit.commitHash,
+      reason: autoCommit.failureReason
+    });
+    if (!autoCommit.committed) {
+      console.error(`\u2139 ROADMAP.md auto-commit skipped: ${autoCommit.failureReason}`);
+    }
+  }
   const output = {
-    result: "continue",
-    message: `\u{1F4CB} ROADMAP updated: ${commit.description}`
+    hookSpecificOutput: { hookEventName: "PostToolUse", additionalContext: `\u{1F4CB} ROADMAP updated: ${commit.description}` }
   };
   console.log(JSON.stringify(output));
 }
@@ -252,5 +906,6 @@ main().catch((err) => {
   console.log(JSON.stringify({ result: "continue" }));
 });
 export {
-  formatCommitEntry
+  formatCommitEntry,
+  shouldAutoCommitRoadmap
 };

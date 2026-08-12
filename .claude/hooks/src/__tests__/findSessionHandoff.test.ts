@@ -4,11 +4,10 @@
  * Phase 2b TDD: These tests are written BEFORE the implementation.
  * They should FAIL until the function is implemented.
  *
- * Run with: npx tsx --test src/__tests__/findSessionHandoff.test.ts
+ * Run with: npx vitest run src/__tests__/findSessionHandoff.test.ts
  */
 
-import { describe, it, beforeEach, afterEach } from 'node:test';
-import * as assert from 'node:assert';
+import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
@@ -50,7 +49,7 @@ describe('findSessionHandoff', () => {
     // Don't create any directories - session doesn't exist
     const result = findSessionHandoff('nonexistent-session');
 
-    assert.strictEqual(result, null, 'Should return null when session directory does not exist');
+    expect(result, 'Should return null when session directory does not exist').toBe(null);
   });
 
   it('should return null for empty directory (no .md files)', () => {
@@ -60,7 +59,7 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff('empty-session');
 
-    assert.strictEqual(result, null, 'Should return null when directory has no .md files');
+    expect(result, 'Should return null when directory has no .md files').toBe(null);
   });
 
   it('should return null for directory with only non-.md files', () => {
@@ -76,7 +75,7 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.strictEqual(result, null, 'Should return null when no .md files exist');
+    expect(result, 'Should return null when no .md files exist').toBe(null);
   });
 
   it('should return the most recent handoff by mtime', async () => {
@@ -97,8 +96,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should return a path');
-    assert.strictEqual(result, newerFile, 'Should return the most recent file by mtime');
+    expect(result, 'Should return a path').not.toBe(null);
+    expect(result, 'Should return the most recent file by mtime').toBe(newerFile);
   });
 
   it('should return current.md if it is the most recent (by mtime)', async () => {
@@ -119,8 +118,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should return a path');
-    assert.strictEqual(result, currentFile, 'Should return current.md when it is most recent');
+    expect(result, 'Should return a path').not.toBe(null);
+    expect(result, 'Should return current.md when it is most recent').toBe(currentFile);
   });
 
   it('should handle single .md file correctly', () => {
@@ -133,8 +132,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should return a path');
-    assert.strictEqual(result, singleFile, 'Should return the only .md file');
+    expect(result, 'Should return a path').not.toBe(null);
+    expect(result, 'Should return the only .md file').toBe(singleFile);
   });
 
   it('should ignore non-.md files when selecting most recent', async () => {
@@ -155,8 +154,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should return a path');
-    assert.strictEqual(result, mdFile, 'Should return the .md file, ignoring non-.md files');
+    expect(result, 'Should return a path').not.toBe(null);
+    expect(result, 'Should return the .md file, ignoring non-.md files').toBe(mdFile);
   });
 
   it('should return absolute path to the handoff file', () => {
@@ -169,9 +168,9 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should return a path');
-    assert.ok(path.isAbsolute(result!), 'Should return an absolute path');
-    assert.ok(result!.endsWith('.md'), 'Path should end with .md');
+    expect(result, 'Should return a path').not.toBe(null);
+    expect(path.isAbsolute(result!), 'Should return an absolute path').toBeTruthy();
+    expect(result!.endsWith('.md'), 'Path should end with .md').toBeTruthy();
   });
 
   it('should handle session name with special characters', () => {
@@ -185,8 +184,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should handle session names with special characters');
-    assert.strictEqual(result, handoffFile, 'Should return the correct file');
+    expect(result, 'Should handle session names with special characters').not.toBe(null);
+    expect(result, 'Should return the correct file').toBe(handoffFile);
   });
 
   it('should use CLAUDE_PROJECT_DIR environment variable', () => {
@@ -200,8 +199,8 @@ describe('findSessionHandoff', () => {
 
     const result = findSessionHandoff(sessionName);
 
-    assert.notStrictEqual(result, null, 'Should use CLAUDE_PROJECT_DIR');
-    assert.ok(result!.startsWith(testDir), 'Result should be within CLAUDE_PROJECT_DIR');
+    expect(result, 'Should use CLAUDE_PROJECT_DIR').not.toBe(null);
+    expect(result!.startsWith(testDir), 'Result should be within CLAUDE_PROJECT_DIR').toBeTruthy();
   });
 });
 
@@ -212,61 +211,46 @@ describe('findSessionHandoff', () => {
 describe('buildHandoffDirName', () => {
   it('should append 8-char UUID suffix to session name', () => {
     const result = buildHandoffDirName('auth-refactor', '550e8400-e29b-41d4-a716-446655440000');
-    assert.strictEqual(result, 'auth-refactor-550e8400');
+    expect(result).toBe('auth-refactor-550e8400');
   });
 
   it('should handle UUID without dashes', () => {
     const result = buildHandoffDirName('my-feature', '550e8400e29b41d4a716446655440000');
-    assert.strictEqual(result, 'my-feature-550e8400');
+    expect(result).toBe('my-feature-550e8400');
   });
 
   it('should handle short session names', () => {
     const result = buildHandoffDirName('fix', 'abcd1234-0000-0000-0000-000000000000');
-    assert.strictEqual(result, 'fix-abcd1234');
+    expect(result).toBe('fix-abcd1234');
   });
 });
 
 describe('parseHandoffDirName', () => {
   it('should extract session name and UUID from suffixed directory', () => {
     const result = parseHandoffDirName('auth-refactor-550e8400');
-    assert.deepStrictEqual(result, {
-      sessionName: 'auth-refactor',
-      uuidShort: '550e8400'
-    });
+    expect(result).toStrictEqual({ sessionName: 'auth-refactor', uuidShort: '550e8400' });
   });
 
   it('should handle legacy directory without UUID suffix', () => {
     const result = parseHandoffDirName('auth-refactor');
-    assert.deepStrictEqual(result, {
-      sessionName: 'auth-refactor',
-      uuidShort: null
-    });
+    expect(result).toStrictEqual({ sessionName: 'auth-refactor', uuidShort: null });
   });
 
   it('should handle session names with multiple hyphens', () => {
     const result = parseHandoffDirName('my-cool-feature-v2-abcd1234');
-    assert.deepStrictEqual(result, {
-      sessionName: 'my-cool-feature-v2',
-      uuidShort: 'abcd1234'
-    });
+    expect(result).toStrictEqual({ sessionName: 'my-cool-feature-v2', uuidShort: 'abcd1234' });
   });
 
   it('should not parse non-hex suffix as UUID', () => {
     // "v2" is not 8 hex chars, so treat as part of session name
     const result = parseHandoffDirName('my-feature-v2');
-    assert.deepStrictEqual(result, {
-      sessionName: 'my-feature-v2',
-      uuidShort: null
-    });
+    expect(result).toStrictEqual({ sessionName: 'my-feature-v2', uuidShort: null });
   });
 
   it('should require exactly 8 hex chars for UUID', () => {
     // "abc123" is only 6 chars
     const result = parseHandoffDirName('my-feature-abc123');
-    assert.deepStrictEqual(result, {
-      sessionName: 'my-feature-abc123',
-      uuidShort: null
-    });
+    expect(result).toStrictEqual({ sessionName: 'my-feature-abc123', uuidShort: null });
   });
 });
 
@@ -298,8 +282,8 @@ describe('findSessionHandoffWithUUID', () => {
 
     const result = findSessionHandoffWithUUID('auth-refactor', sessionId);
 
-    assert.notStrictEqual(result, null);
-    assert.ok(result!.includes('auth-refactor-550e8400'));
+    expect(result).not.toBe(null);
+    expect(result!.includes('auth-refactor-550e8400')).toBeTruthy();
   });
 
   it('should fall back to legacy path without UUID', () => {
@@ -311,9 +295,9 @@ describe('findSessionHandoffWithUUID', () => {
 
     const result = findSessionHandoffWithUUID('auth-refactor', sessionId);
 
-    assert.notStrictEqual(result, null);
-    assert.ok(result!.includes('auth-refactor'));
-    assert.ok(!result!.includes('550e8400'), 'Should use legacy path');
+    expect(result).not.toBe(null);
+    expect(result!.includes('auth-refactor')).toBeTruthy();
+    expect(!result!.includes('550e8400'), 'Should use legacy path').toBeTruthy();
   });
 
   it('should prefer UUID-suffixed directory over legacy', async () => {
@@ -333,8 +317,8 @@ describe('findSessionHandoffWithUUID', () => {
 
     const result = findSessionHandoffWithUUID('auth-refactor', sessionId);
 
-    assert.notStrictEqual(result, null);
-    assert.ok(result!.includes('550e8400'), 'Should prefer UUID-suffixed directory');
+    expect(result).not.toBe(null);
+    expect(result!.includes('550e8400'), 'Should prefer UUID-suffixed directory').toBeTruthy();
   });
 
   it('should find other sessions UUID dirs when no exact match', () => {
@@ -347,8 +331,8 @@ describe('findSessionHandoffWithUUID', () => {
     const result = findSessionHandoffWithUUID('auth-refactor', sessionId);
 
     // Should find the other session's handoff as fallback
-    assert.notStrictEqual(result, null);
-    assert.ok(result!.includes('auth-refactor'));
+    expect(result).not.toBe(null);
+    expect(result!.includes('auth-refactor')).toBeTruthy();
   });
 
   it('should return null when no matching session exists', () => {
@@ -359,6 +343,6 @@ describe('findSessionHandoffWithUUID', () => {
 
     const result = findSessionHandoffWithUUID('nonexistent', sessionId);
 
-    assert.strictEqual(result, null);
+    expect(result).toBe(null);
   });
 });

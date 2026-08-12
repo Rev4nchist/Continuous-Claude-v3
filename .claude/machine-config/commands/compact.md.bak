@@ -1,0 +1,54 @@
+---
+description: Compact conversation context using claude-code-templates (user)
+argument-hint: [custom focus areas]
+---
+
+# /compact - Smart Context Compaction
+
+Compact the current conversation while preserving critical context.
+
+## Compaction Instructions
+
+Summarize this conversation for continuity. Preserve with HIGH priority:
+
+### Must Preserve
+- **Current task**: What we're working on, acceptance criteria, blockers
+- **Key decisions**: Architecture choices, trade-offs made, rationale
+- **File paths**: All files read, edited, or referenced
+- **Code state**: What was changed, what still needs changing
+- **Errors/fixes**: Problems encountered and how they were resolved
+- **User preferences**: Stated preferences, corrections, style choices
+
+### Session Context
+- Active branch and git state
+- Running background tasks
+- Environment details (ports, URLs, tokens referenced)
+- Todo list status if applicable
+
+### Conversation Flow
+- Questions asked and answers given
+- Clarifications that changed approach
+- Anything user said "remember this" or similar
+
+## Format
+
+Structure the summary as:
+```
+## Task: [one-line description]
+## Status: [in-progress|blocked|complete]
+## Branch: [git branch if applicable]
+
+### Decisions Made
+- [decision]: [rationale]
+
+### Files Touched
+- [path]: [what was done]
+
+### Current State
+[What's working, what's not, immediate next step]
+
+### Key Context
+[Anything else critical for continuation]
+```
+
+$ARGUMENTS

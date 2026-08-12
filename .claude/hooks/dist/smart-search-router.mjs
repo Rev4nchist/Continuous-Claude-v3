@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/smart-search-router.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3 } from "fs";
 import { spawnSync as spawnSync2 } from "child_process";
@@ -151,6 +153,9 @@ function tryStartDaemon(projectDir) {
     }
     if (isDaemonReachable(projectDir)) {
       return true;
+    }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
     }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();
@@ -548,7 +553,13 @@ function readStdin() {
     process.stdin.on("end", () => resolve2(data));
   });
 }
+function isScopedCall(toolInput) {
+  return Boolean(toolInput.path || toolInput.glob || toolInput.type);
+}
 function classifyQuery(pattern) {
+  if (pattern.includes("\\") || pattern.includes("[") || pattern.includes("|")) {
+    return "literal";
+  }
   const structuralPatterns = [
     /^(class|function|def|async def|const|let|var|interface|type|export)\s+\w+/,
     /^(import|from|require)\s/,
@@ -562,9 +573,6 @@ function classifyQuery(pattern) {
   ];
   if (structuralPatterns.some((p) => p.test(pattern))) {
     return "structural";
-  }
-  if (pattern.includes("\\") || pattern.includes("[") || /\([^)]*\|/.test(pattern)) {
-    return "literal";
   }
   if (/^[A-Z][a-zA-Z0-9]*$/.test(pattern) || /^[a-z_][a-z0-9_]*$/.test(pattern) || /^[A-Z_][A-Z0-9_]*$/.test(pattern)) {
     return "literal";
@@ -623,8 +631,20 @@ async function main() {
     return;
   }
   const pattern = input.tool_input.pattern;
-  const queryType = classifyQuery(pattern);
   const sessionId = input.session_id || "default";
+  if (isScopedCall(input.tool_input)) {
+    try {
+      logHook(sessionId, "smart-search-router");
+    } catch {
+    }
+    trackHookActivitySync("smart-search-router", process.env.CLAUDE_PROJECT_DIR || ".", true, {
+      queries_routed: 1,
+      scoped_passthrough: 1
+    });
+    console.log("{}");
+    return;
+  }
+  const queryType = classifyQuery(pattern);
   try {
     logHook(sessionId, "smart-search-router");
   } catch {
@@ -753,7 +773,11 @@ No code semantically similar to "${pattern}" found in the index.
   };
   console.log(JSON.stringify(output));
 }
-main().catch(console.error);
+if (!process.env.VITEST) {
+  main().catch(console.error);
+}
 export {
-  buildRipgrepArgs
+  buildRipgrepArgs,
+  classifyQuery,
+  isScopedCall
 };

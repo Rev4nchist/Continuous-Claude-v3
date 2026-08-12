@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/pre-plan-memory.ts
 import { execSync } from "child_process";
@@ -31,7 +32,7 @@ async function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve(data));
-    setTimeout(() => resolve(data), 1e3);
+    setTimeout(() => resolve(data), 1e3).unref();
   });
 }
 function output(obj) {
@@ -86,4 +87,6 @@ ${truncated}`)
   }
   output({ decision: "allow" });
 }
-main().catch(() => output({ decision: "allow" }));
+if ((process.argv[1] || "").includes("pre-plan-memory")) {
+  main().catch(() => output({ decision: "allow" }));
+}

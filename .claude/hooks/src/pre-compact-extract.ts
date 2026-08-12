@@ -104,6 +104,14 @@ function runBackgroundExtraction(
 }
 
 async function main() {
+  // Recursion sentinel (07-09 R2, 2026-07-24): the LLM distiller spawned by
+  // incremental_extract.py runs a headless claude session with
+  // CCV3_DISTILL_CHILD=1. Never extract from that child — extraction ->
+  // distiller -> extraction would cascade.
+  if (process.env.CCV3_DISTILL_CHILD) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
   const input = await readStdin();
   if (!input.trim()) {
     console.log(JSON.stringify({ continue: true }));

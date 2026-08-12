@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/session-start-recovery.ts
 import { readFileSync as readFileSync2, readdirSync, existsSync as existsSync3, unlinkSync, statSync as statSync2 } from "fs";
@@ -216,7 +217,7 @@ async function main() {
       message = message.replace("**Options:**", unifiedRecoveryInfo + "\n**Options:**");
     }
   }
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } }));
 }
 main().catch(() => {
   console.log(JSON.stringify({ result: "continue" }));

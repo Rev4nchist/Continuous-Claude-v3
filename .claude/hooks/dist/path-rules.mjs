@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/path-rules.ts
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -77,4 +79,6 @@ async function main() {
     systemMessage: contents.join("\n\n---\n\n")
   }));
 }
-main().catch(() => process.exit(1));
+if ((process.argv[1] || "").includes("path-rules")) {
+  main().catch(() => process.exit(1));
+}

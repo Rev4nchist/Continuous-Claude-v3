@@ -132,12 +132,15 @@ test('watchdog SCHEDULE periodFormat never drifts from config.mjs PERIOD_FORMAT_
 });
 
 test('scheduleFormatMismatches flags a drifted periodFormat', () => {
-  const drifted = SCHEDULE.map((e) => (e.type === 'VP Weekly' ? { ...e, periodFormat: 'date' } : e));
+  // Retargeted from VP Weekly (retired 2026-07-25, no longer in SCHEDULE) to a
+  // still-scheduled type. Every ACTIVE type is date-format, so the injected drift
+  // is the inverse direction: scheduled=isoWeek vs expected=date.
+  const drifted = SCHEDULE.map((e) => (e.type === 'FourthOS Sponsor' ? { ...e, periodFormat: 'isoWeek' } : e));
   const mismatches = scheduleFormatMismatches(drifted);
   assert.equal(mismatches.length, 1);
-  assert.equal(mismatches[0].type, 'VP Weekly');
-  assert.equal(mismatches[0].scheduled, 'date');
-  assert.equal(mismatches[0].expected, 'isoWeek');
+  assert.equal(mismatches[0].type, 'FourthOS Sponsor');
+  assert.equal(mismatches[0].scheduled, 'isoWeek');
+  assert.equal(mismatches[0].expected, 'date');
 });
 
 test('runWatchdog warns (non-fatal) on a schedule missing a type, and still evaluates the rest', () => {

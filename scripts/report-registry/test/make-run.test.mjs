@@ -11,6 +11,7 @@ import { join } from 'node:path';
 import {
   buildRun, tempRunPath, writeRun, parseFlags,
 } from '../make-run.mjs';
+import { SOURCES } from '../config.mjs';
 
 const base = {
   type: 'Project Portfolio',
@@ -39,11 +40,11 @@ test('buildRun throws on an invalid source (T6.1 #4)', () => {
 });
 
 test('buildRun accepts every known Source select value', () => {
-  const knownSources = [
-    'AIWeeklyReport', 'FourthOS-Weekly', 'Dashboard-Sync',
-    'Health-Check', 'Project-Cards', 'Self-Improvement',
-  ];
-  for (const source of knownSources) {
+  // Derived from SOURCES (config.mjs) rather than a hardcoded literal list: the
+  // literal silently rotted when VP Weekly / AIWeeklyReport was retired 2026-07-25.
+  // Deriving it means retiring or adding a type can never break this test.
+  assert.ok(SOURCES.length > 0, 'SOURCES must be non-empty');
+  for (const source of SOURCES) {
     assert.doesNotThrow(() => buildRun({ ...base, source }));
   }
 });

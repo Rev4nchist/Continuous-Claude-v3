@@ -1,0 +1,874 @@
+<title>Agentic OS — Lane Board</title>
+
+<style>
+  :root {
+    --ground: #F4F7F7;
+    --panel: #FFFFFF;
+    --panel-2: #EDF2F2;
+    --line: #D6E1E1;
+    --line-soft: #E6EDED;
+    --ink: #0F1A1D;
+    --muted: #5C6E71;
+    --faint: #849698;
+
+    --ok: #0B7C72;
+    --warn: #A8630A;
+    --crit: #B23A32;
+    --info: #2A6296;
+    --agent: #6B57B0;
+
+    --ok-bg: #E2F1EF;
+    --warn-bg: #F8EEDD;
+    --crit-bg: #F8E6E4;
+    --info-bg: #E4EDF6;
+    --agent-bg: #EDE8F7;
+
+    --mono: ui-monospace, "Cascadia Code", "SF Mono", Menlo, Consolas, monospace;
+    --sans: "Segoe UI Variable Text", "Segoe UI", system-ui, -apple-system, sans-serif;
+    --display: "Segoe UI Variable Display", "Segoe UI", system-ui, sans-serif;
+
+    --r: 8px;
+    --shadow: 0 1px 2px rgba(15,26,29,.05), 0 8px 24px rgba(15,26,29,.05);
+  }
+
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --ground: #0E1417;
+      --panel: #161F23;
+      --panel-2: #1C282D;
+      --line: #2A383E;
+      --line-soft: #223037;
+      --ink: #E6EFEF;
+      --muted: #93A6AA;
+      --faint: #6D8188;
+
+      --ok: #3FB8A6;
+      --warn: #D99A3C;
+      --crit: #E4736A;
+      --info: #6BA3DA;
+      --agent: #A48EE8;
+
+      --ok-bg: #12302E;
+      --warn-bg: #33280F;
+      --crit-bg: #331C1A;
+      --info-bg: #14283A;
+      --agent-bg: #241E3D;
+
+      --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+    }
+  }
+
+  :root[data-theme="dark"] {
+    --ground: #0E1417; --panel: #161F23; --panel-2: #1C282D;
+    --line: #2A383E; --line-soft: #223037;
+    --ink: #E6EFEF; --muted: #93A6AA; --faint: #6D8188;
+    --ok: #3FB8A6; --warn: #D99A3C; --crit: #E4736A; --info: #6BA3DA; --agent: #A48EE8;
+    --ok-bg: #12302E; --warn-bg: #33280F; --crit-bg: #331C1A; --info-bg: #14283A; --agent-bg: #241E3D;
+    --shadow: 0 1px 2px rgba(0,0,0,.3), 0 8px 24px rgba(0,0,0,.25);
+  }
+  :root[data-theme="light"] {
+    --ground: #F4F7F7; --panel: #FFFFFF; --panel-2: #EDF2F2;
+    --line: #D6E1E1; --line-soft: #E6EDED;
+    --ink: #0F1A1D; --muted: #5C6E71; --faint: #849698;
+    --ok: #0B7C72; --warn: #A8630A; --crit: #B23A32; --info: #2A6296; --agent: #6B57B0;
+    --ok-bg: #E2F1EF; --warn-bg: #F8EEDD; --crit-bg: #F8E6E4; --info-bg: #E4EDF6; --agent-bg: #EDE8F7;
+    --shadow: 0 1px 2px rgba(15,26,29,.05), 0 8px 24px rgba(15,26,29,.05);
+  }
+
+  /* ---- recency glow -------------------------------------------------------
+     Marks everything touched in the last two working sessions (07-26 13:40
+     through now). White reads as "lit" on the dark ground directly; on paper
+     a white halo alone would vanish, so a 1px ink edge carries the boundary
+     and the white does the lifting. */
+  :root {
+    --glow-ring: rgba(255,255,255,.95);
+    --glow-halo: rgba(255,255,255,.90);
+    --glow-edge: rgba(15,26,29,.22);
+    --glow-tint: #FFFFFF;
+  }
+  @media (prefers-color-scheme: dark) {
+    :root {
+      --glow-ring: rgba(255,255,255,.58);
+      --glow-halo: rgba(226,242,246,.30);
+      --glow-edge: rgba(255,255,255,.34);
+      --glow-tint: rgba(255,255,255,.06);
+    }
+  }
+  :root[data-theme="dark"] {
+    --glow-ring: rgba(255,255,255,.58);
+    --glow-halo: rgba(226,242,246,.30);
+    --glow-edge: rgba(255,255,255,.34);
+    --glow-tint: rgba(255,255,255,.06);
+  }
+  :root[data-theme="light"] {
+    --glow-ring: rgba(255,255,255,.95);
+    --glow-halo: rgba(255,255,255,.90);
+    --glow-edge: rgba(15,26,29,.22);
+    --glow-tint: #FFFFFF;
+  }
+
+  .is-recent { position: relative; }
+  .is-recent::after {
+    content: ''; position: absolute; inset: -3px; pointer-events: none;
+    border-radius: calc(var(--r) + 3px);
+    box-shadow:
+      0 0 0 1px var(--glow-edge),
+      0 0 0 3px var(--glow-ring),
+      0 0 22px 3px var(--glow-halo);
+    animation: breathe 3.8s ease-in-out infinite;
+  }
+  @keyframes breathe { 0%, 100% { opacity: .62; } 50% { opacity: 1; } }
+
+  /* table rows can't carry an outer halo reliably — they get a lit band */
+  tr.is-recent td { background: var(--glow-tint); }
+  tr.is-recent td:first-child { box-shadow: inset 3px 0 0 var(--glow-ring), inset 4px 0 0 var(--glow-edge); }
+
+  .p-new {
+    color: var(--ink); background: var(--glow-tint);
+    border-color: var(--glow-ring);
+    box-shadow: 0 0 10px var(--glow-halo);
+  }
+
+  .glowkey {
+    display: inline-flex; align-items: center; gap: 8px;
+    font: 500 11px/1 var(--mono); color: var(--muted);
+  }
+  .glowkey i {
+    width: 11px; height: 11px; border-radius: 3px; display: inline-block;
+    background: var(--panel); border: 1px solid var(--glow-edge);
+    box-shadow: 0 0 0 2px var(--glow-ring), 0 0 12px var(--glow-halo);
+  }
+
+  * { box-sizing: border-box; }
+  body {
+    margin: 0; background: var(--ground); color: var(--ink);
+    font: 14px/1.55 var(--sans);
+    -webkit-font-smoothing: antialiased;
+  }
+  .wrap { width: min(1320px, 100%); margin: 0 auto; padding: 0 20px 80px; }
+  h1, h2, h3 { margin: 0; text-wrap: balance; }
+  :focus-visible { outline: 2px solid var(--ok); outline-offset: 2px; border-radius: 3px; }
+
+  .mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  .lbl {
+    font: 600 10px/1 var(--mono); letter-spacing: .1em; text-transform: uppercase;
+    color: var(--faint);
+  }
+
+  /* masthead */
+  header.top {
+    position: sticky; top: 0; z-index: 30;
+    background: color-mix(in srgb, var(--ground) 88%, transparent);
+    backdrop-filter: blur(10px);
+    border-bottom: 1px solid var(--line);
+    margin-bottom: 26px;
+  }
+  .top-in {
+    width: min(1320px, 100%); margin: 0 auto; padding: 12px 20px;
+    display: flex; align-items: center; gap: 20px; flex-wrap: wrap;
+  }
+  .brand { display: flex; align-items: center; gap: 10px; }
+  .mark {
+    width: 30px; height: 30px; border-radius: 7px; display: grid; place-items: center;
+    background: var(--ink); color: var(--ground);
+    font: 700 10px/1 var(--mono); letter-spacing: .04em;
+  }
+  .brand b { font: 650 15px/1.2 var(--display); letter-spacing: -.02em; }
+  .brand span { display: block; font: 400 11px/1.3 var(--mono); color: var(--faint); }
+
+  .counters { display: flex; gap: 8px; margin-left: auto; flex-wrap: wrap; }
+  .ctr {
+    display: flex; align-items: baseline; gap: 7px;
+    padding: 6px 11px; border: 1px solid var(--line); border-radius: 999px;
+    background: var(--panel);
+  }
+  .ctr b { font: 650 15px/1 var(--mono); font-variant-numeric: tabular-nums; }
+  .ctr span { font: 500 10px/1 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--muted); }
+  .ctr.is-crit { border-color: var(--crit); background: var(--crit-bg); }
+  .ctr.is-crit b { color: var(--crit); }
+  .ctr.is-warn { border-color: var(--warn); background: var(--warn-bg); }
+  .ctr.is-warn b { color: var(--warn); }
+  .ctr.is-ok { border-color: var(--ok); background: var(--ok-bg); }
+  .ctr.is-ok b { color: var(--ok); }
+
+  .themebtn {
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    border-radius: 999px; padding: 7px 12px; cursor: pointer;
+    font: 500 11px/1 var(--mono);
+  }
+  .themebtn:hover { color: var(--ink); border-color: var(--muted); }
+
+  /* intro */
+  .intro { display: grid; grid-template-columns: minmax(0,1.35fr) minmax(280px,.8fr); gap: 28px; padding: 8px 0 30px; align-items: start; }
+  .intro h1 { font: 640 clamp(26px, 3.4vw, 40px)/1.08 var(--display); letter-spacing: -.032em; margin-bottom: 12px; }
+  .intro p { color: var(--muted); max-width: 62ch; margin: 0 0 10px; font-size: 14.5px; }
+  .callout {
+    border: 1px solid var(--crit); background: var(--crit-bg);
+    border-radius: var(--r); padding: 15px 17px;
+  }
+  .callout .lbl { color: var(--crit); margin-bottom: 7px; display: block; }
+  .callout.is-fixed { border-color: var(--ok); background: var(--ok-bg); }
+  .callout.is-fixed .lbl { color: var(--ok); }
+  .callout p { margin: 0; font-size: 13px; color: var(--ink); }
+
+  /* sections */
+  section { margin-top: 34px; }
+  .sec-head { display: flex; align-items: baseline; gap: 14px; margin-bottom: 13px; flex-wrap: wrap; }
+  .sec-head h2 { font: 620 17px/1.2 var(--display); letter-spacing: -.015em; }
+  .sec-head p { margin: 0; color: var(--muted); font-size: 12.5px; max-width: 60ch; }
+
+  .card { background: var(--panel); border: 1px solid var(--line); border-radius: var(--r); box-shadow: var(--shadow); }
+
+  /* recon query — the trust affordance */
+  .recon {
+    display: block; border-top: 1px dashed var(--line); margin-top: 0;
+    padding: 9px 14px; font: 400 11px/1.5 var(--mono); color: var(--faint);
+    background: var(--panel-2); border-radius: 0 0 var(--r) var(--r);
+    overflow-x: auto; white-space: pre;
+  }
+  .recon b { color: var(--muted); font-weight: 600; }
+
+  /* filters */
+  .filters { display: flex; gap: 7px; flex-wrap: wrap; margin-bottom: 12px; }
+  .chip {
+    border: 1px solid var(--line); background: var(--panel); color: var(--muted);
+    border-radius: 999px; padding: 6px 12px; cursor: pointer;
+    font: 500 11px/1 var(--mono); letter-spacing: .02em;
+  }
+  .chip:hover { border-color: var(--muted); color: var(--ink); }
+  .chip[aria-pressed="true"] { background: var(--ink); color: var(--ground); border-color: var(--ink); }
+
+  /* lane board */
+  .grp { margin-bottom: 18px; }
+  .grp-h {
+    display: flex; align-items: center; gap: 10px; padding: 0 2px 7px;
+  }
+  .grp-h .nm { font: 600 12px/1 var(--mono); letter-spacing: .04em; }
+  .grp-h .ct { font: 500 10px/1 var(--mono); color: var(--faint); }
+  .grp-h .rule { flex: 1; height: 1px; background: var(--line); }
+
+  .lane {
+    display: grid;
+    grid-template-columns: 3px minmax(190px, 1.5fr) 108px minmax(150px, 1.15fr) 120px 1fr 96px;
+    align-items: center; gap: 0;
+    border: 1px solid var(--line); border-radius: var(--r);
+    background: var(--panel); margin-bottom: 6px;
+    cursor: pointer; text-align: left; width: 100%; padding: 0;
+    font: inherit; color: inherit;
+    transition: border-color .12s ease, transform .12s ease;
+  }
+  .lane:hover { border-color: var(--muted); transform: translateX(1px); }
+  .lane > * { padding: 11px 13px; min-width: 0; }
+  .stripe { padding: 0 !important; align-self: stretch; border-radius: var(--r) 0 0 var(--r); }
+  .s-crit { background: var(--crit); } .s-warn { background: var(--warn); }
+  .s-ok { background: var(--ok); } .s-idle { background: var(--line); }
+  .s-agent { background: var(--agent); }
+
+  .lane .nm { font: 600 13px/1.3 var(--mono); letter-spacing: -.01em; }
+  .lane .nm small { display: block; font: 400 11px/1.4 var(--sans); color: var(--muted); margin-top: 2px; }
+  .lane .scope { font: 400 11px/1.4 var(--mono); color: var(--muted); overflow: hidden; text-overflow: ellipsis; }
+  .lane .br { font: 400 11px/1.4 var(--mono); color: var(--muted); }
+  .lane .flags { display: flex; gap: 5px; flex-wrap: wrap; }
+
+  .pill {
+    display: inline-flex; align-items: center; gap: 5px;
+    border-radius: 999px; padding: 3px 8px;
+    font: 600 10px/1.4 var(--mono); letter-spacing: .04em; text-transform: uppercase;
+    border: 1px solid transparent; white-space: nowrap;
+  }
+  .p-ok { color: var(--ok); background: var(--ok-bg); border-color: color-mix(in srgb, var(--ok) 30%, transparent); }
+  .p-warn { color: var(--warn); background: var(--warn-bg); border-color: color-mix(in srgb, var(--warn) 30%, transparent); }
+  .p-crit { color: var(--crit); background: var(--crit-bg); border-color: color-mix(in srgb, var(--crit) 30%, transparent); }
+  .p-info { color: var(--info); background: var(--info-bg); border-color: color-mix(in srgb, var(--info) 30%, transparent); }
+  .p-agent { color: var(--agent); background: var(--agent-bg); border-color: color-mix(in srgb, var(--agent) 30%, transparent); }
+  .p-idle { color: var(--faint); background: var(--panel-2); border-color: var(--line); }
+
+  .lane .age { font: 500 11px/1.4 var(--mono); color: var(--faint); text-align: right; }
+
+  .detail {
+    display: none; margin: -4px 0 10px; padding: 14px 16px 14px 30px;
+    border: 1px solid var(--line); border-top: none;
+    border-radius: 0 0 var(--r) var(--r); background: var(--panel-2);
+    font-size: 12.5px;
+  }
+  .detail.open { display: block; }
+  .detail dl { display: grid; grid-template-columns: 96px 1fr; gap: 6px 14px; margin: 0 0 10px; }
+  .detail dt { font: 600 10px/1.5 var(--mono); letter-spacing: .07em; text-transform: uppercase; color: var(--faint); }
+  .detail dd { margin: 0; font-family: var(--mono); font-size: 11.5px; color: var(--ink); word-break: break-word; }
+  .detail .why { margin: 0; color: var(--muted); border-left: 2px solid var(--line); padding-left: 11px; }
+
+  /* two-col */
+  .duo { display: grid; grid-template-columns: minmax(0,1fr) minmax(0,1fr); gap: 18px; }
+
+  /* integrity */
+  .bigstat { padding: 16px 17px 6px; }
+  .bigstat .n { font: 650 40px/1 var(--mono); letter-spacing: -.03em; color: var(--crit); }
+  .bigstat .of { font: 500 12px/1 var(--mono); color: var(--muted); margin-left: 6px; }
+  .bigstat .cap { margin: 8px 0 0; color: var(--muted); font-size: 12.5px; }
+
+  .bar { display: flex; height: 22px; border-radius: 4px; overflow: hidden; margin: 13px 17px 4px; border: 1px solid var(--line); }
+  .bar i { display: block; height: 100%; }
+  .bar-key { display: flex; gap: 14px; flex-wrap: wrap; padding: 6px 17px 14px; }
+  .bar-key span { display: inline-flex; align-items: center; gap: 6px; font: 500 10.5px/1 var(--mono); color: var(--muted); }
+  .sw { width: 9px; height: 9px; border-radius: 2px; display: inline-block; }
+
+  table { width: 100%; border-collapse: collapse; font-size: 12.5px; }
+  .tw { overflow-x: auto; }
+  th, td { padding: 9px 13px; text-align: left; border-bottom: 1px solid var(--line-soft); vertical-align: top; }
+  th { font: 600 10px/1.4 var(--mono); letter-spacing: .08em; text-transform: uppercase; color: var(--faint); background: var(--panel-2); position: sticky; top: 0; }
+  tbody tr:last-child td { border-bottom: none; }
+  tbody tr:hover { background: var(--panel-2); }
+  td.mono, th.mono { font-family: var(--mono); font-variant-numeric: tabular-nums; }
+  td .src { display: block; font: 400 10.5px/1.5 var(--mono); color: var(--faint); margin-top: 3px; word-break: break-all; }
+
+  /* interaction model */
+  .im { display: grid; grid-template-columns: repeat(auto-fit, minmax(255px, 1fr)); gap: 14px; }
+  .im article { padding: 16px 17px; }
+  .im h3 { font: 620 13px/1.3 var(--display); margin-bottom: 7px; }
+  .im .lbl { display: block; margin-bottom: 9px; }
+  .im p { margin: 0 0 9px; color: var(--muted); font-size: 12.5px; }
+  .im code { font: 400 11.5px/1.5 var(--mono); background: var(--panel-2); padding: 1.5px 5px; border-radius: 3px; color: var(--ink); border: 1px solid var(--line-soft); }
+  .im ul { margin: 0; padding-left: 17px; color: var(--muted); font-size: 12.5px; }
+  .im li { margin-bottom: 4px; }
+  .im li::marker { color: var(--faint); }
+
+  footer {
+    margin-top: 44px; padding-top: 18px; border-top: 1px solid var(--line);
+    display: flex; justify-content: space-between; gap: 20px; flex-wrap: wrap;
+    color: var(--faint); font: 400 11.5px/1.6 var(--mono);
+  }
+
+  @media (max-width: 1080px) {
+    .lane { grid-template-columns: 3px minmax(160px,1.4fr) 100px 1fr 96px; }
+    .lane .scope, .lane .br { display: none; }
+    .duo { grid-template-columns: 1fr; }
+  }
+  @media (max-width: 720px) {
+    .intro { grid-template-columns: 1fr; }
+    .lane { grid-template-columns: 3px 1fr 96px; }
+    .lane .state-c, .lane .flags { display: none; }
+    .counters { width: 100%; }
+  }
+  @media (prefers-reduced-motion: reduce) {
+    *, *::before, *::after { transition-duration: .01ms !important; animation-duration: .01ms !important; }
+    /* an infinite animation squeezed to .01ms strobes — hold the glow steady instead */
+    .is-recent::after { animation: none !important; opacity: .88; }
+  }
+</style>
+
+<header class="top">
+  <div class="top-in">
+    <div class="brand">
+      <span class="mark">AOS</span>
+      <span>
+        <b>Lane Board</b>
+        <span>current state &middot; as of 2026-07-26 20:00 &middot; read-only prototype</span>
+      </span>
+    </div>
+    <div class="counters">
+      <span class="ctr"><b>16</b><span>lanes</span></span>
+      <span class="ctr is-warn"><b>5</b><span>unmerged</span></span>
+      <span class="ctr is-warn"><b>2</b><span>overlap</span></span>
+      <span class="ctr is-crit"><b>2</b><span>pipelines down</span></span>
+      <span class="ctr is-ok is-recent"><b>0</b><span>fail-open / 240</span></span>
+    </div>
+    <button class="themebtn" id="tt" type="button">theme</button>
+  </div>
+</header>
+
+<div class="wrap">
+
+  <div class="intro">
+    <div>
+      <h1>Everything in flight, on one screen.</h1>
+      <p>Sixteen lanes across four projects, rendered from the real state of this machine on 2026&#8209;07&#8209;26 — git, Postgres, Task Scheduler, and the handoff corpus. Every number carries the query that produced it, so any figure on this page can be falsified in about ten seconds.</p>
+      <p>This is also the v0 interface spec. The design package scored four interface directions and shipped prototypes for none of them; this is the first one with data behind it.</p>
+      <p class="glowkey" style="margin-top:14px"><i></i> a white glow marks everything completed or worked on in the last two sessions — 07&#8209;26 13:40 onward, commits <span class="mono">94d36a9..b6e7842</span> plus tonight's open work.</p>
+    </div>
+    <aside class="callout is-fixed is-recent">
+      <span class="lbl">Fixed — and now proven under load</span>
+      <p>The lock was repaired at 15:38, but the repair was verified single-shot. Under 20 concurrent writers the old Python-subprocess transport still let <b>6 of 60</b> intruders through. Replacing it with node <span class="mono">pg</span> took that to <b>0 of 240</b> at triple the load. A green quiet test was never evidence; the load probe is the gate now.</p>
+    </aside>
+  </div>
+
+  <!-- ================= LANE BOARD ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Lane board</h2>
+      <p>A lane is a durable, human-named thread: declared scope, a branch, and zero-or-one attached session. Sessions come and go; the lane survives. Click any row for detail.</p>
+    </div>
+
+    <div class="filters" role="group" aria-label="Filter lanes">
+      <button class="chip" data-f="all" aria-pressed="true">all 16</button>
+      <button class="chip" data-f="recent" aria-pressed="false">last 2 sessions 4</button>
+      <button class="chip" data-f="attention" aria-pressed="false">needs attention 5</button>
+      <button class="chip" data-f="unmerged" aria-pressed="false">unmerged 5</button>
+      <button class="chip" data-f="ccv3" aria-pressed="false">continuous-claude 11</button>
+      <button class="chip" data-f="other" aria-pressed="false">other projects 5</button>
+    </div>
+
+    <div id="board"></div>
+
+    <div class="card" style="margin-top:6px">
+      <span class="recon"><b>reconcile</b>  git for-each-ref --format='%(refname:short)' refs/heads/ | while read b; do git rev-list --left-right --count fork/main...$b; done
+<b>reconcile</b>  git worktree list  &middot;  git ls-remote --heads fork</span>
+    </div>
+  </section>
+
+  <!-- ================= OPS + INTEGRITY ================= -->
+  <section class="duo">
+
+    <div>
+      <div class="sec-head"><h2>Scheduled fleet</h2><p>Half the agent work here runs unattended.</p></div>
+      <div class="card">
+        <div class="tw">
+          <table>
+            <thead><tr><th>Task</th><th class="mono">Last run</th><th>Result</th></tr></thead>
+            <tbody>
+              <tr><td class="mono">Self-Improvement-Research</td><td class="mono">07-26 07:30</td><td><span class="pill p-crit">killed</span></td></tr>
+              <tr><td class="mono">Dashboard-Sync</td><td class="mono">07-25 20:00</td><td><span class="pill p-crit">killed</span></td></tr>
+              <tr class="is-recent"><td class="mono">Project-Cards</td><td class="mono">07-26 17:45</td><td><span class="pill p-ok">ok</span> <span class="pill p-new">was killed</span></td></tr>
+              <tr><td class="mono">Health-Check</td><td class="mono">07-24 08:03</td><td><span class="pill p-warn">exit 3</span></td></tr>
+              <tr><td class="mono">Outcome-Tagger</td><td class="mono">07-26 16:30</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">Blocklist-Update</td><td class="mono">07-26 11:46</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">UW-Daily-Snapshot</td><td class="mono">07-26 11:46</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">Judge-Batch</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">YouTube-Poll</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">Embedding-Daemon-Daily</td><td class="mono">07-26 07:25</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">Finance-Eval-Weekly</td><td class="mono">07-26 03:17</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">Embedding-Daemon</td><td class="mono">07-25 20:52</td><td><span class="pill p-ok">ok</span></td></tr>
+              <tr><td class="mono">FourthOS-Weekly</td><td class="mono">07-23 07:00</td><td><span class="pill p-ok">ok</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <span class="recon"><b>reconcile</b>  Get-ScheduledTaskInfo -TaskName CCv3-* | select TaskName,LastRunTime,LastTaskResult
+<b>changed</b>   Project-Cards returned 0x0 at 17:45, its first green run since 07-25. Down
+          from 3 killed to 2. ONE green run is not three — nothing was fixed on
+          purpose, so treat this as unexplained-good, not resolved.
+<b>note</b>      the other 2 still return 0xC000013A, dying at the headless `claude -p`
+          step after the registry row has already landed. Cause still unexplained.</span>
+      </div>
+    </div>
+
+    <div>
+      <div class="sec-head"><h2>Coordination integrity</h2><p>Is the lock telling the truth?</p></div>
+      <div class="card is-recent">
+        <div class="bigstat">
+          <span class="n" style="color:var(--ok)">0</span><span class="of">/ 240 concurrent intruders admitted</span>
+          <p class="cap">The load probe is the only test that has ever caught this lock failing. The old transport admitted <b>6 of 60</b> at n=20; node <span class="mono">pg</span> admits <b>0 of 240</b> at n=120 — past <span class="mono">max_connections</span> and still holding.</p>
+        </div>
+        <div class="bar" role="img" aria-label="0 orphaned, 29 stale-owner, 0 live">
+          <i style="width:100%;background:var(--warn)"></i>
+        </div>
+        <div class="bar-key">
+          <span><i class="sw" style="background:var(--crit)"></i> 0 orphaned</span>
+          <span><i class="sw" style="background:var(--warn)"></i> 29 stale owner</span>
+          <span><i class="sw" style="background:var(--ok)"></i> 0 live</span>
+        </div>
+        <div class="tw">
+          <table>
+            <thead><tr><th>Signal</th><th class="mono">Value</th><th>Reading</th></tr></thead>
+            <tbody>
+              <tr class="is-recent"><td>Fail-open under load (n=120)</td><td class="mono">0 / 240</td><td><span class="pill p-ok">holds</span> <span class="pill p-new">was 6/60</span></td></tr>
+              <tr class="is-recent"><td>Claim path latency</td><td class="mono">~250ms</td><td><span class="pill p-ok">was ~1530ms</span></td></tr>
+              <tr class="is-recent"><td>DB unreachable</td><td class="mono">degraded</td><td><span class="pill p-ok">announced, was silent</span></td></tr>
+              <tr><td>Claims owned by <span class="mono">s-*</span></td><td class="mono">0</td><td><span class="pill p-ok">was 8,170</span></td></tr>
+              <tr><td>Session rows per real session</td><td class="mono">1</td><td><span class="pill p-ok">was 2</span></td></tr>
+              <tr><td>Project spellings per repo</td><td class="mono">1</td><td><span class="pill p-ok">was 2</span></td></tr>
+              <tr><td>Cross-session edit</td><td class="mono">deny</td><td><span class="pill p-ok">blocks</span></td></tr>
+              <tr><td>Heartbeat renews on</td><td class="mono">edit</td><td><span class="pill p-ok">was prompt only</span></td></tr>
+              <tr class="is-recent"><td>Conflict events logged</td><td class="mono">—</td><td><span class="pill p-warn">step 4 · in progress</span></td></tr>
+              <tr><td>TOCTOU on an unclaimed file</td><td class="mono">—</td><td><span class="pill p-warn">open · step 4</span></td></tr>
+              <tr><td>Sessions with <span class="mono">ended_at</span></td><td class="mono">—</td><td><span class="pill p-idle">no column</span></td></tr>
+              <tr><td>Lease TTL + fencing</td><td class="mono">—</td><td><span class="pill p-warn">step 5</span></td></tr>
+              <tr><td>Stale <span class="mono">s-*</span> rows in <span class="mono">sessions</span></td><td class="mono">1,479</td><td><span class="pill p-idle">cosmetic · unclaimed</span></td></tr>
+            </tbody>
+          </table>
+        </div>
+        <span class="recon"><b>gate</b>       node scripts/coordination/load-probe.mjs --hook .claude/hooks/dist/file-claims.mjs \
+                --n 20 --rounds 3          # must print "verdict":"HOLDS", fail_open_count 0
+<b>reconcile</b>  SELECT count(*) FILTER (WHERE s.id IS NULL)                                  AS orphaned,
+                count(*) FILTER (WHERE s.last_heartbeat &lt;  now() - interval '5 min') AS stale,
+                count(*) FILTER (WHERE s.last_heartbeat &gt;= now() - interval '5 min') AS live
+         FROM file_claims fc LEFT JOIN sessions s ON s.id = fc.session_id;
+<b>reads</b>      0 orphaned | 29 stale | 0 live, at 19:28 local with nobody mid-edit.
+<b>clocks</b>     the DB runs Etc/UTC and this machine runs UTC-5, so a psql timestamp is
+           five hours ahead of every git timestamp on this page. Times here are
+           LOCAL. An earlier version of this refresh stamped the masthead with
+           the UTC clock and dated the board a day into the future; corrected.
+<b>careful</b>    "0 live" here is NOT the old bug returning. It is the correct resting state:
+           the last writer stopped two hours ago, so its claims aged out exactly as
+           designed. This gauge is point-in-time and only means something while a
+           session is actively editing. The DURABLE invariants are the ones above it —
+           0 orphaned, 0 `s-*`-owned claims, 1 namespace per repo — and they hold.
+           An earlier version of this panel printed "3/3 live" as a victory metric.
+           That was a snapshot dressed up as an invariant; corrected 07-26.
+<b>cause 1</b>    session-register minted an `s-*` id and froze; heartbeat used the payload uuid
+           and lived; file-claims filed under the frozen one. Two rows per session, every
+           claim owned by the corpse. All three now coordinate on the payload id.
+<b>cause 2</b>    CLAUDE_PROJECT_DIR is injected into hooks in BACKSLASH form while cwd gives
+           forward slashes, so one repo held two blind claim namespaces (5,737 of 8,179
+           rows, 7 repos). Fixing identity ALONE would not have restored blocking.
+<b>cause 3</b>    the repaired lock was still verified SINGLE-SHOT. Two `uv run python` spawns
+           per Edit at ~700ms each have no headroom in a 3s budget, so under 20 concurrent
+           writers 6 of 60 intruders were still admitted — a passing test over a broken
+           lock. node `pg` replaced the transport; 0 of 240 at n=120. (d4ecead)
+<b>migrated</b>   8,189 dead rows pg_dump'd, then deleted. 1,479 `s-*` rows remain in `sessions`
+           but own zero claims and are unrenewable by construction — cosmetic.
+<b>refuted</b>    a second cause was suspected — isSessionActive defaulting to :5434 while
+           claimFile defaulted to :5432. Not real: the only spawnSync always injected
+           CONTINUOUS_CLAUDE_DB_URL, so every inline port literal was unreachable.</span>
+      </div>
+    </div>
+  </section>
+
+  <!-- ================= THREADS ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>Thread inventory</h2>
+      <p>Open threads found across handoffs, plans, ROADMAP and the proposal corpus — with where each one actually lives.</p>
+    </div>
+    <div class="card">
+      <div class="tw">
+        <table>
+          <thead>
+            <tr><th>Thread</th><th>State</th><th>Blocking / note</th></tr>
+          </thead>
+          <tbody>
+            <tr class="is-recent">
+              <td>Session identity + claim repair<span class="src">ca1a16e · 3185fb1 · .claude/hooks/src/shared/session-id.ts</span></td>
+              <td><span class="pill p-ok">shipped</span></td>
+              <td>Designed twice, built zero times — built 07-26. Blocking verified live.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>Coordination transport → node <span class="mono">pg</span><span class="src">d4ecead · .claude/hooks/src/shared/pg-client.ts · scripts/coordination/load-probe.mjs</span></td>
+              <td><span class="pill p-ok">shipped</span></td>
+              <td>Step 1b. 6/60 fail-open → 0/240. The load probe is now the gate for any claim-path edit.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>Conflict + blocked-on event logging<span class="src">plan step 4 · agentic_os.coordination_event</span></td>
+              <td><span class="pill p-warn">in progress</span></td>
+              <td>The retrofit-hostile one — the event is computed in file-claims.ts and discarded today.</td>
+            </tr>
+            <tr class="is-recent">
+              <td>MSYS fork storm<span class="src">b6e7842 · scripts/msys/repro.ps1 · scripts/msys/reap.ps1</span></td>
+              <td><span class="pill p-warn">partial</span></td>
+              <td>Reproduced on demand (the rule said it wasn't). Reaper ships. Bash-tool root cause still NOT established.</td>
+            </tr>
+            <tr>
+              <td>Sync-layer integrity (mcpServers + dist hashes)<span class="src">docs/self-improvement/proposals/2026-07-26-hooks.md · scripts/sync-to-active.sh:283,443</span></td>
+              <td><span class="pill p-crit">ready</span></td>
+              <td>Verified live. Untracked, unindexed, never triaged.</td>
+            </tr>
+            <tr>
+              <td>Headless <span class="mono">claude -p</span> hang<span class="src">thoughts/shared/handoffs/reporting-watchdog/2026-07-25-always-emit-shipped-verification-pending.md</span></td>
+              <td><span class="pill p-crit">blocked</span></td>
+              <td>Root cause unexplained. 3 pipelines failing daily.</td>
+            </tr>
+            <tr>
+              <td>Agentic OS Slice 1 (board + fleet grid)<span class="src">~/.claude/plans/i-am-ready-to-noble-wilkinson.md · 94d36a9</span></td>
+              <td><span class="pill p-warn">backlog</span></td>
+              <td>Approved. Identity repair no longer blocking. Corpus committed 07-26 — 14 docs + 9 app files now tracked.</td>
+            </tr>
+            <tr>
+              <td>Reporting efficiency Phase 2<span class="src">thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md</span></td>
+              <td><span class="pill p-warn">backlog</span></td>
+              <td>Spec'd with mitigations. Dashboard-sync repoint stays blocked on 4 gaps.</td>
+            </tr>
+            <tr>
+              <td>Self-improvement digest sweep<span class="src">docs/self-improvement/PENDING-DIGEST.md</span></td>
+              <td><span class="pill p-warn">backlog</span></td>
+              <td>5 proposals awaiting a Bridge sweep. Cannot run headless.</td>
+            </tr>
+            <tr>
+              <td>Triage backlog ranks 1/5/6/7<span class="src">ROADMAP.md:247</span></td>
+              <td><span class="pill p-info">queued</span></td>
+              <td>Ranks 2 and 4 shipped 07-24/07-25. Ranks 8+14 superseded by the Serena cut.</td>
+            </tr>
+            <tr>
+              <td>Grok harness<span class="src">thoughts/shared/handoffs/grok-diagnosis/2026-07-12-grok-inference-hang.md</span></td>
+              <td><span class="pill p-idle">parked</span></td>
+              <td>Externally blocked — corp egress to <span class="mono">*.x.ai</span>. Needs an IT ticket.</td>
+            </tr>
+            <tr>
+              <td>Claude for Sales pilot<span class="src">thoughts/shared/handoffs/claude-for-sales/2026-07-13_build-complete.yaml</span></td>
+              <td><span class="pill p-idle">human-gated</span></td>
+              <td>All artifacts built. Remaining steps are all human actions.</td>
+            </tr>
+            <tr>
+              <td>FourthOS v4 report build<span class="src">~/.claude/plans/adaptive-wishing-spindle.md</span></td>
+              <td><span class="pill p-idle">parked</span></td>
+              <td>Design-approved, staged, not built. 4 open choices first.</td>
+            </tr>
+          </tbody>
+        </table>
+      </div>
+      <span class="recon"><b>reconcile</b>  ls thoughts/shared/handoffs/*/  &middot;  grep -n '^- \[ \]' ROADMAP.md  &middot;  ls docs/self-improvement/proposals/</span>
+    </div>
+  </section>
+
+  <!-- ================= INTERACTION MODEL ================= -->
+  <section>
+    <div class="sec-head">
+      <h2>How you would work this board</h2>
+      <p>The interaction model this prototype argues for. Everything below runs from a terminal first; the browser earns write access only where a terminal genuinely can't reach.</p>
+    </div>
+    <div class="im">
+
+      <article class="card">
+        <span class="lbl" style="color:var(--ok)">Open</span>
+        <h3>A lane before a session</h3>
+        <p>Nothing starts without a lane. Declaring scope up front is what turns overlap from a collision you discover into a query you can run.</p>
+        <p><code>ccb open coordination-repair --scope '.claude/hooks/src/**' --project ccv3</code></p>
+        <p><code>ccw coordination-repair</code> then creates the worktree, exports the terminal id, and launches the session already attached.</p>
+      </article>
+
+      <article class="card">
+        <span class="lbl" style="color:var(--agent)">Attach</span>
+        <h3>Sessions are badges, not rows</h3>
+        <p>A session attaches to a lane and detaches when it ends. Compaction, <code>/clear</code>, a crash, or a night's sleep changes the badge — never the lane.</p>
+        <ul>
+          <li><b>live</b> — heartbeat inside 5 minutes</li>
+          <li><b>idle</b> — attached, quiet</li>
+          <li><b>detached</b> — lane open, nobody home</li>
+        </ul>
+      </article>
+
+      <article class="card">
+        <span class="lbl" style="color:var(--warn)">Detect</span>
+        <h3>Overlap before it happens</h3>
+        <p>Two lanes with intersecting scope is one query over about six rows — not a scan of thousands of file claims after the damage.</p>
+        <p>Same terminal is a <b>warn</b>; a stranger on infra scope is a <b>block</b>; docs are advisory. Posture is a column on the lane, not a hardcoded path list.</p>
+      </article>
+
+      <article class="card is-recent">
+        <span class="lbl" style="color:var(--crit)">Answer</span>
+        <h3>The one thing worth a browser</h3>
+        <p>A session hits a permission prompt in a terminal you aren't watching and waits — silently, indefinitely, holding a worktree.</p>
+        <p>Nothing records that today: the <code>Notification</code> event Claude Code already fires is not registered by a single hook. Capturing it is step 4, in progress now, and <em>&ldquo;2 lanes waiting on you, oldest 47 min&rdquo;</em> is the line that justifies the app.</p>
+      </article>
+
+      <article class="card">
+        <span class="lbl" style="color:var(--info)">Close</span>
+        <h3>Done means merged</h3>
+        <p>Worktree-per-session means N branches. Five branches are unmerged right now and no existing view shows it.</p>
+        <p>A lane closes on its stated done-condition, and the board keeps the unmerged count in your face until it does.</p>
+      </article>
+
+      <article class="card">
+        <span class="lbl">Trust</span>
+        <h3>Every number is falsifiable</h3>
+        <p>This system has shipped pipelines that reported success while silently failing. So the board never renders a confident zero where the honest answer is <em>not measured</em>.</p>
+        <p>Four states, always distinguished: a value, a real zero, stale, unavailable — with the reconciling query printed beside it.</p>
+      </article>
+
+    </div>
+  </section>
+
+  <footer>
+    <span>Agentic OS &middot; lane board prototype &middot; read-only, no writes, no agents invoked</span>
+    <span>rendered from verified state &middot; last refreshed 2026-07-26 20:00 local &middot; glow = last 2 sessions</span>
+  </footer>
+</div>
+
+<script>
+  const LANES = [
+    { id:'coordination-repair', proj:'continuous-claude', grp:'ccv3', sev:'ok', state:'shipped', statec:'p-ok',
+      scope:'.claude/hooks/src/{session-id,session-register,heartbeat,file-claims}.ts',
+      branch:'agentic-os', age:'today', flags:['infra'], sess:null, recent:true,
+      why:'Shipped 07-26 in ca1a16e + 3185fb1. session-register minted an s-* id that froze while heartbeat used the payload uuid, so claims were filed under an owner that never beats. A second break — CLAUDE_PROJECT_DIR arriving in backslash form while cwd gives forward slashes — split one repo into two claim namespaces and had to be fixed too. The predicted sequencing trap turned out not to exist: a probe showed subagents already share the parent session_id, so the CC_TERMINAL_ID sibling rule was dropped rather than built.',
+      done:'DONE — a cross-session edit is denied, same-session is not, 8,189 dead rows migrated out.' },
+
+    { id:'coordination-transport', proj:'continuous-claude', grp:'ccv3', sev:'ok', state:'shipped', statec:'p-ok',
+      scope:'.claude/hooks/src/shared/{pg-client,db-utils-pg}.ts · scripts/coordination/load-probe.mjs',
+      branch:'agentic-os', age:'today', flags:['infra'], sess:null, recent:true,
+      why:'Step 1b, shipped 07-26 in d4ecead. The identity repair was verified single-shot, which is exactly how this layer has passed tests while broken before. Baselining under concurrency first showed the repaired lock STILL admitted 6 of 60 intruders onto a file an active session held: two `uv run python` spawns per Edit at ~700ms each leave no headroom in a 3s budget, spawnSync returns non-zero, and every caller read that failure as "no claim exists". Replacing the transport with node pg gives 0 of 240 at n=120 — past max_connections and still holding. Failure is also loud now: checkFileClaim returns `degraded` instead of silently permitting.',
+      done:'DONE — load probe prints HOLDS with fail_open_count 0. It is now the gate for any claim-path change; the unit tests deliberately do not cover this property.' },
+
+    { id:'conflict-events', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'in progress', statec:'p-warn',
+      scope:'agentic_os.coordination_event · file-claims.ts · a new Notification hook',
+      branch:'agentic-os', age:'now', flags:['infra','open'], sess:'live', recent:true,
+      why:'Step 4, and the most retrofit-hostile item in the plan: a block or stale-takeover is computed in file-claims.ts and thrown away — no row, no log. Every day without it is evidence that can never be recovered. Events go to Postgres in the same transaction as the claim decision, not JSONL, because concurrent hook processes interleave appends on Windows. The Notification hook is not registered at all today, so a session waiting on a permission prompt in an unwatched terminal is invisible — the cheapest high-value instrument missing.',
+      done:'A blocked edit and a permission prompt each land exactly one row, and the load probe still prints HOLDS afterwards.' },
+
+    { id:'msys-fork-storm', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'partial', statec:'p-warn',
+      scope:'scripts/msys/{repro,reap}.ps1 · scripts/git-safe.ps1 · .claude/rules/windows-platform.md',
+      branch:'agentic-os', age:'today', flags:['ops','open'], sess:null, recent:true,
+      why:'Shipped 07-26 in 2541b4f + b6e7842. The rule said this was not reproducible; it is — the earlier harness used the wrong shape. Bursts of N identical bash processes stay stubbornly bimodal. What reproduces is what real git hooks create: a long-lived MSYS process holding a cohort open while short-lived nested cold-starts arrive into it. Fired on the first attempt, twice. The crash is not the worst outcome — affected processes BLOCK rather than die, at ~0 CPU, and never exit; one trial left 51 alive, 46 of them untracked descendants that per-pid Stop-Process sails straight past.',
+      done:'PARTIAL — repro + reaper ship. What actually broke the Bash tool is still NOT established: it was probed three times mid-storm, including with 48 stuck processes alive, and worked every time. Do not write these up as one bug. The warm-keeper A/B is still untested, but now has something to measure against.' },
+
+    { id:'harness-security', proj:'continuous-claude', grp:'ccv3', sev:'crit', state:'ready', statec:'p-crit',
+      scope:'scripts/sync-to-active.sh · .claude/settings.json',
+      branch:'—', age:'new', flags:['overlap','infra'], sess:null,
+      why:'Post-commit sync replaces the global mcpServers key wholesale from a repo-tracked file, unvalidated. origin is a third-party upstream and git pull is in the documented workflow.',
+      done:'An unknown server in the repo settings is refused by sync, not applied.' },
+
+    { id:'claude-p-hang', proj:'continuous-claude', grp:'ccv3', sev:'crit', state:'blocked', statec:'p-crit',
+      scope:'scripts/self-improvement · scripts/project-cards · report-registry',
+      branch:'—', age:'2d', flags:['ops'], sess:null,
+      why:'Scheduled pipelines die at the headless claude -p step after their registry row lands. The always-emit contract works; what it records is genuinely broken. Root cause still unexplained. Project-Cards returned 0x0 at 17:45 on 07-26, its first green run since 07-25, taking this from 3 down to 2 — but nothing was changed on purpose, so that is unexplained-good, not fixed.',
+      done:'Three consecutive green runs each, landing exactly one non-Failed registry row.' },
+
+    { id:'agentic-os-board', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'backlog', statec:'p-warn',
+      scope:'apps/agentic-os/** · docs/architecture/agentic-os/**',
+      branch:'agentic-os', age:'8d', flags:[], sess:null,
+      why:'The untracked-corpus flag this lane carried is now false: 94d36a9 committed it on 07-26 and git tracks 14 docs plus 9 app files. What remains is that the schema still holds only project + project_alias and zero lanes — the board has no rows to render, and step 4 is about to add the first table that writes itself.',
+      done:'Lanes seeded from the 18-project registry; board usable from psql.' },
+
+    { id:'reporting-phase-2', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'backlog', statec:'p-warn',
+      scope:'scripts/report-registry · scripts/fourthos-weekly',
+      branch:'—', age:'9d', flags:[], sess:null,
+      why:'Batched STDIN bind and meaning-based hash gates. Fully spec’d with premortem mitigations. The dashboard-sync deterministic repoint stays blocked on four named gaps.',
+      done:'Phase 2 shipped; repoint still explicitly deferred.' },
+
+    { id:'youtube-research', proj:'continuous-claude', grp:'ccv3', sev:'agent', state:'in progress', statec:'p-agent',
+      scope:'scripts/youtube · .claude/skills/youtube-research',
+      branch:'feature/youtube-research', age:'1d', flags:['unmerged','worktree'], sess:'detached',
+      why:'Five commits, live worktree at cc-worktrees/youtube-research, and the branch exists nowhere but this disk. This is the pattern the whole isolation model formalizes — it just was never written down.',
+      done:'Merged to main, or explicitly parked with the worktree reclaimed.' },
+
+    { id:'self-improvement-triage', proj:'continuous-claude', grp:'ccv3', sev:'warn', state:'parked', statec:'p-idle',
+      scope:'scripts/self-improvement/triage',
+      branch:'feature/self-improvement-triage', age:'8d', flags:['unmerged'], sess:null,
+      why:'Five commits, local only, never pushed. Part C remainder is still open on the ROADMAP.',
+      done:'Pushed and merged, or folded into the reporting lane.' },
+
+    { id:'cma-integration', proj:'continuous-claude', grp:'ccv3', sev:'idle', state:'stale', statec:'p-idle',
+      scope:'.claude/skills/cma · scripts/cma',
+      branch:'feature/cma-integration', age:'29d', flags:['unmerged','188 behind'], sess:null,
+      why:'Four commits, local only, 188 behind main. The Console key blocker is resolved per memory, but nothing has moved in a month.',
+      done:'Rebase and merge, or delete the branch and close the thread.' },
+
+    { id:'um-b-resolver', proj:'agent-arch', grp:'other', sev:'warn', state:'declared next', statec:'p-warn',
+      scope:'effective-access resolver + authorization seams',
+      branch:'—', age:'5d', flags:['ext-blocked'], sess:null,
+      why:'Declared the next build unit. Enforcement step blocked on IT (Entra W7); the resolver itself is not blocked.',
+      done:'Resolver shipped; enforcement deferred behind the IT gate.' },
+
+    { id:'decision-record-pr2-5', proj:'decision-record', grp:'other', sev:'warn', state:'partial', statec:'p-warn',
+      scope:'PR-2 through PR-5',
+      branch:'—', age:'10d', flags:[], sess:null,
+      why:'PR-1 merged; PR-2 through PR-5 spec’d but unbuilt across two chained plans.',
+      done:'Merge train complete through PR-5.' },
+
+    { id:'linkmap-agent', proj:'linkmap', grp:'other', sev:'idle', state:'gated', statec:'p-idle',
+      scope:'Codex-powered browser agent, Phase 1',
+      branch:'—', age:'8d', flags:['spike-gated'], sess:null,
+      why:'Explicitly gated on a live spike of a Codex auto-cancel bug before Phase 1 can start.',
+      done:'Spike resolved, or the approach abandoned.' },
+
+    { id:'sf-mcp-semantic', proj:'fourth-salesforce-mcp', grp:'other', sev:'idle', state:'unknown', statec:'p-idle',
+      scope:'semantic layer / data dictionary',
+      branch:'—', age:'18d', flags:['untriaged'], sess:null,
+      why:'Two plans exist; neither was cross-checked against that repo’s own state this session. Status genuinely unknown.',
+      done:'Triaged — confirm live or close.' },
+
+    { id:'netsuite-connector', proj:'netsuite', grp:'other', sev:'idle', state:'design only', statec:'p-idle',
+      scope:'native OAuth PKCE + distributed token lock',
+      branch:'—', age:'13d', flags:['untriaged'], sess:null,
+      why:'Architecture designed. NetSuite MCP has no OBO, so a native OAuth path is required. Nothing built.',
+      done:'Triaged — schedule or shelve.' }
+  ];
+
+  const GROUPS = [
+    { key:'ccv3', name:'continuous-claude', note:'11 lanes · 4 branches unmerged' },
+    { key:'other', name:'other projects', note:'5 lanes · portfolio visibility only' }
+  ];
+
+  const board = document.getElementById('board');
+
+  function pillFor(f) {
+    const m = {
+      overlap:  ['p-warn','overlap'],
+      unmerged: ['p-warn','unmerged'],
+      infra:    ['p-crit','infra'],
+      worktree: ['p-agent','worktree'],
+      untracked:['p-crit','untracked'],
+      ops:      ['p-crit','ops'],
+      'ext-blocked':['p-idle','ext blocked'],
+      'spike-gated':['p-idle','spike gated'],
+      untriaged:['p-idle','untriaged'],
+      open:     ['p-warn','open'],
+      '188 behind':['p-idle','188 behind']
+    };
+    const [cls, txt] = m[f] || ['p-idle', f];
+    return '<span class="pill ' + cls + '">' + txt + '</span>';
+  }
+
+  function render(filter) {
+    board.innerHTML = '';
+    GROUPS.forEach(function (g) {
+      const rows = LANES.filter(function (l) {
+        if (l.grp !== g.key) return false;
+        if (filter === 'all') return true;
+        if (filter === 'ccv3') return l.grp === 'ccv3';
+        if (filter === 'other') return l.grp === 'other';
+        if (filter === 'unmerged') return l.flags.indexOf('unmerged') > -1;
+        if (filter === 'attention') return l.sev === 'crit' || l.sev === 'warn';
+        if (filter === 'recent') return l.recent === true;
+        return true;
+      });
+      if (!rows.length) return;
+
+      const wrap = document.createElement('div');
+      wrap.className = 'grp';
+      wrap.innerHTML = '<div class="grp-h"><span class="nm">' + g.name +
+        '</span><span class="ct">' + rows.length + ' of ' + g.note + '</span><span class="rule"></span></div>';
+
+      rows.forEach(function (l) {
+        const btn = document.createElement('button');
+        btn.type = 'button';
+        btn.className = 'lane' + (l.recent ? ' is-recent' : '');
+        btn.setAttribute('aria-expanded', 'false');
+        if (l.recent) btn.setAttribute('title', 'touched in the last 2 sessions');
+        btn.innerHTML =
+          '<span class="stripe s-' + l.sev + '"></span>' +
+          '<span class="nm">' + l.id + '<small>' + l.proj + '</small></span>' +
+          '<span class="state-c"><span class="pill ' + l.statec + '">' + l.state + '</span></span>' +
+          '<span class="scope">' + l.scope + '</span>' +
+          '<span class="br">' + (l.sess
+              ? '<span class="pill p-idle">' + l.sess + '</span>'
+              : '<span class="pill p-idle">no session</span>') + '</span>' +
+          '<span class="flags">' + l.flags.map(pillFor).join('') + '</span>' +
+          '<span class="age">' + l.age + '</span>';
+
+        const det = document.createElement('div');
+        det.className = 'detail';
+        det.innerHTML =
+          '<dl>' +
+            '<dt>scope</dt><dd>' + l.scope + '</dd>' +
+            '<dt>branch</dt><dd>' + l.branch + '</dd>' +
+            '<dt>session</dt><dd>' + (l.sess || 'detached — no session attached') + '</dd>' +
+            '<dt>done when</dt><dd>' + l.done + '</dd>' +
+          '</dl><p class="why">' + l.why + '</p>';
+
+        btn.addEventListener('click', function () {
+          const open = det.classList.toggle('open');
+          btn.setAttribute('aria-expanded', open ? 'true' : 'false');
+        });
+
+        wrap.appendChild(btn);
+        wrap.appendChild(det);
+      });
+      board.appendChild(wrap);
+    });
+  }
+
+  document.querySelectorAll('.chip').forEach(function (c) {
+    c.addEventListener('click', function () {
+      document.querySelectorAll('.chip').forEach(function (o) { o.setAttribute('aria-pressed', 'false'); });
+      c.setAttribute('aria-pressed', 'true');
+      render(c.dataset.f);
+    });
+  });
+
+  render('all');
+
+  document.getElementById('tt').addEventListener('click', function () {
+    const cur = document.documentElement.getAttribute('data-theme');
+    const dark = cur
+      ? cur === 'dark'
+      : window.matchMedia('(prefers-color-scheme: dark)').matches;
+    document.documentElement.setAttribute('data-theme', dark ? 'light' : 'dark');
+  });
+</script>

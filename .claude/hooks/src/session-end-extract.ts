@@ -140,6 +140,13 @@ function extractLearningsLegacy(sessionId: string, projectDir: string): void {
 }
 
 async function main() {
+  // Recursion sentinel (07-09 R2, 2026-07-24): never extract from the LLM
+  // distiller's own headless child session (CCV3_DISTILL_CHILD=1) — extraction
+  // -> distiller -> extraction would cascade.
+  if (process.env.CCV3_DISTILL_CHILD) {
+    console.log(JSON.stringify({ result: 'continue' }));
+    return;
+  }
   const input = await readStdin();
   if (!input.trim()) {
     console.log(JSON.stringify({ result: 'continue' }));

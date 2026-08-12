@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/maestro-enforcer.ts
 import { readFileSync as readFileSync3, existsSync as existsSync5, unlinkSync as unlinkSync3 } from "fs";
@@ -430,4 +431,6 @@ Interview complete. Plan presented.
     makeAllowOutput();
   }
 }
-main();
+if ((process.argv[1] || "").includes("maestro-enforcer")) {
+  main();
+}

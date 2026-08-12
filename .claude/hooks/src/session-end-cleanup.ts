@@ -193,4 +193,6 @@ async function readStdin(): Promise<string> {
   });
 }
 
-main().catch(console.error);
+if ((process.argv[1] || '').includes('session-end-cleanup')) {
+  main().catch(console.error);
+}

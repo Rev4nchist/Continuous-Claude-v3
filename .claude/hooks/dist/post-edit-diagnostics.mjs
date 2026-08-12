@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/post-edit-diagnostics.ts
 import { readFileSync as readFileSync5, existsSync as existsSync6 } from "fs";
 import { spawnSync as spawnSync2 } from "child_process";
@@ -151,6 +153,9 @@ function tryStartDaemon(projectDir) {
     }
     if (isDaemonReachable(projectDir)) {
       return true;
+    }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
     }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();

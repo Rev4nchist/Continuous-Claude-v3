@@ -176,7 +176,7 @@ function readStdin(): Promise<string> {
     });
     process.stdin.on('end', () => resolve(data));
     // Safety net — never hang the hook
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 

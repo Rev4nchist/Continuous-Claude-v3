@@ -15,7 +15,7 @@ import {
   refreshChildPage, refreshHub, refreshAll, parseTypeArg,
   CURRENT_RUN_HEADING, HUB_LAUNCHER_HEADING,
 } from '../refresh-pages.mjs';
-import { REPORT_CHILD_PAGES } from '../config.mjs';
+import { REPORT_CHILD_PAGES, ACTIVE_REPORT_TYPES } from '../config.mjs';
 
 // --- helpers to fabricate raw Notion rows ---
 function row({ runDate, status, summary, artifactUrl, title } = {}) {
@@ -103,13 +103,13 @@ test('buildCurrentRunBlocks(null) -> a single "No runs recorded yet." callout (i
 });
 
 test('buildCurrentRunBlocks(row) -> callout: bold "Latest:", run date, bold status, summary', () => {
-  const blocks = buildCurrentRunBlocks(row({ runDate: '2026-06-29', status: 'OK', summary: 'VP Weekly report 2026-W27' }));
+  const blocks = buildCurrentRunBlocks(row({ runDate: '2026-06-29', status: 'OK', summary: 'FourthOS Sponsor report 2026-W27' }));
   const c = findCallout(blocks);
   const text = flat(c.callout.rich_text);
   assert.match(text, /Latest:/);
   assert.match(text, /2026-06-29/);
   assert.match(text, /OK/);
-  assert.match(text, /VP Weekly report 2026-W27/);
+  assert.match(text, /FourthOS Sponsor report 2026-W27/);
   // "Latest:" segment is bold; a status segment is bold.
   const boldTexts = c.callout.rich_text.filter((s) => s.annotations?.bold).map((s) => s.text.content);
   assert.ok(boldTexts.some((t) => /Latest:/.test(t)), 'Latest label bold');
@@ -128,7 +128,7 @@ test('buildCurrentRunBlocks: http artifact becomes a link; non-http path renders
 // --- Hub launcher table builder ------------------------------------------------
 
 const CHILD = {
-  'VP Weekly': '39576fd7-ac82-817d-9658-d2c8b7f84ad2',
+  'FourthOS Sponsor': '39576fd7-ac82-8187-91ca-f012ac9728a3',
   'Team Dashboard': '39576fd7-ac82-810b-9fc8-c2d1f4f76fc3',
 };
 
@@ -138,13 +138,13 @@ const HUB_NOW = new Date(2026, 6, 16, 13, 0, 0); // Thursday 13:00
 test('buildHubLauncherBlocks -> a table (header + one row per type) + trailing overview link', () => {
   const blocks = buildHubLauncherBlocks({
     latestByType: {
-      'VP Weekly': { runDate: '2026-06-29', status: 'OK', artifactUrl: 'https://x/y' },
+      'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK', artifactUrl: 'https://x/y' },
       'Team Dashboard': null, // no runs yet
     },
     childPages: CHILD,
     hubId: '38f76fd7ac8280478e50dd2956ba6e8a',
     overviewViewId: '39576fd7-ac82-81d6-be38-000ce9bbd794',
-    types: ['VP Weekly', 'Team Dashboard'],
+    types: ['FourthOS Sponsor', 'Team Dashboard'],
     now: HUB_NOW,
   });
   const table = findTable(blocks);
@@ -158,14 +158,16 @@ test('buildHubLauncherBlocks -> a table (header + one row per type) + trailing o
     ['Report', 'Status', 'Run date', 'Artifact', 'Next expected', 'Log', 'Watchdog'],
   );
 
-  // VP Weekly row: name cell links to the child page url; status + date; http artifact link
+  // FourthOS Sponsor row: name cell links to the child page url; status + date; http artifact link
   const vp = table.table.children[1].table_row.cells;
-  assert.equal(vp[0][0].text.link.url, notionPageUrl(CHILD['VP Weekly']));
-  assert.equal(flat(vp[0]), 'VP Weekly');
+  assert.equal(vp[0][0].text.link.url, notionPageUrl(CHILD['FourthOS Sponsor']));
+  assert.equal(flat(vp[0]), 'FourthOS Sponsor');
   assert.match(flat(vp[1]), /OK/);
   assert.match(flat(vp[2]), /2026-06-29/);
   assert.equal(vp[3][0].text.link.url, 'https://x/y');
-  assert.match(flat(vp[4]), /^2026-W\d{2} \(by 2026-07-\d{2}\)$/); // next expected
+  // Date-format period (the retargeted type is FourthOS Sponsor; the ISO-week form
+  // belonged to VP Weekly, retired 2026-07-25).
+  assert.match(flat(vp[4]), /^2026-07-\d{2} \(by 2026-07-\d{2}\)$/); // next expected
   assert.notEqual(flat(vp[5]), '—'); // log hint present for a scheduled type
   assert.equal(flat(vp[6]), 'stale'); // present row from 2026-06-29 is > 48h old at HUB_NOW
 
@@ -215,12 +217,12 @@ test('buildHubLauncherBlocks: artCell degrades to a dash only when the type has 
 test('buildHubLauncherBlocks: a watchdog miss-row summary yields verdict "missing"', () => {
   const blocks = buildHubLauncherBlocks({
     latestByType: {
-      'VP Weekly': {
-        runDate: HUB_NOW.toISOString(), status: 'Failed', summary: 'watchdog: no "VP Weekly" row found for period 2026-W29 by its deadline+grace',
+      'FourthOS Sponsor': {
+        runDate: HUB_NOW.toISOString(), status: 'Failed', summary: 'watchdog: no "FourthOS Sponsor" row found for period 2026-W29 by its deadline+grace',
       },
     },
     childPages: CHILD,
-    types: ['VP Weekly'],
+    types: ['FourthOS Sponsor'],
     now: HUB_NOW,
   });
   const cells = findTable(blocks).table.children[1].table_row.cells;
@@ -229,9 +231,9 @@ test('buildHubLauncherBlocks: a watchdog miss-row summary yields verdict "missin
 
 test('buildHubLauncherBlocks: a fresh recent row yields verdict "present"', () => {
   const blocks = buildHubLauncherBlocks({
-    latestByType: { 'VP Weekly': { runDate: HUB_NOW.toISOString(), status: 'OK', summary: 'ok' } },
+    latestByType: { 'FourthOS Sponsor': { runDate: HUB_NOW.toISOString(), status: 'OK', summary: 'ok' } },
     childPages: CHILD,
-    types: ['VP Weekly'],
+    types: ['FourthOS Sponsor'],
     now: HUB_NOW,
   });
   const cells = findTable(blocks).table.children[1].table_row.cells;
@@ -287,12 +289,12 @@ test('buildHubLauncherBlocks: appends the trust rollup when trustSummary is supp
     totalRowsInWindow: 1,
   };
   const withSummary = buildHubLauncherBlocks({
-    latestByType: {}, childPages: CHILD, types: ['VP Weekly'], now: HUB_NOW, trustSummary,
+    latestByType: {}, childPages: CHILD, types: ['FourthOS Sponsor'], now: HUB_NOW, trustSummary,
   });
   assert.ok(withSummary.some((b) => b.type === 'paragraph' && flat(b.paragraph.rich_text).includes('Trust metrics')));
 
   const withoutSummary = buildHubLauncherBlocks({
-    latestByType: {}, childPages: CHILD, types: ['VP Weekly'], now: HUB_NOW,
+    latestByType: {}, childPages: CHILD, types: ['FourthOS Sponsor'], now: HUB_NOW,
   });
   assert.equal(withoutSummary.some((b) => b.type === 'paragraph' && flat(b.paragraph.rich_text).includes('Trust metrics')), false);
 });
@@ -341,13 +343,13 @@ function mockDeps({ rowsByType = {}, failWriteFor = null, hubHasSection = false,
 }
 
 test('refreshChildPage queries with the right filter/sort and splices to "## Current run"', () => {
-  const d = mockDeps({ rowsByType: { 'VP Weekly': [row({ runDate: '2026-06-29', status: 'OK', summary: 's' })] } });
-  const res = refreshChildPage('VP Weekly', 'page-vp', {
+  const d = mockDeps({ rowsByType: { 'FourthOS Sponsor': [row({ runDate: '2026-06-29', status: 'OK', summary: 's' })] } });
+  const res = refreshChildPage('FourthOS Sponsor', 'page-vp', {
     query: d.query, replaceSection: d.replaceSection, dsId: 'DS',
   });
   assert.equal(res.wrote, true);
   assert.equal(res.rows, 1);
-  assert.deepEqual(d.calls.query[0].opts.filter, { property: 'Report Type', select: { equals: 'VP Weekly' } });
+  assert.deepEqual(d.calls.query[0].opts.filter, { property: 'Report Type', select: { equals: 'FourthOS Sponsor' } });
   assert.deepEqual(d.calls.query[0].opts.sorts, [{ property: 'Run Date', direction: 'descending' }]);
   assert.equal(d.calls.replaceSection[0].pageId, 'page-vp');
   assert.equal(d.calls.replaceSection[0].heading, CURRENT_RUN_HEADING);
@@ -363,8 +365,8 @@ test('refreshChildPage with 0 rows writes the "No runs recorded yet." callout', 
 });
 
 test('refreshChildPage --dry-run queries but never writes', () => {
-  const d = mockDeps({ rowsByType: { 'VP Weekly': [row({ runDate: '2026-06-29', status: 'OK' })] } });
-  const res = refreshChildPage('VP Weekly', 'page-vp', { query: d.query, replaceSection: d.replaceSection, dryRun: true });
+  const d = mockDeps({ rowsByType: { 'FourthOS Sponsor': [row({ runDate: '2026-06-29', status: 'OK' })] } });
+  const res = refreshChildPage('FourthOS Sponsor', 'page-vp', { query: d.query, replaceSection: d.replaceSection, dryRun: true });
   assert.equal(res.wrote, false);
   assert.equal(d.calls.replaceSection.length, 0);
 });
@@ -372,8 +374,8 @@ test('refreshChildPage --dry-run queries but never writes', () => {
 test('refreshHub CREATES the section (heading + body) when absent, near the top', () => {
   const d = mockDeps({ hubHasSection: false });
   const res = refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'],
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'],
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: d.replaceSection, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   });
@@ -389,8 +391,8 @@ test('refreshHub CREATES the section (heading + body) when absent, near the top'
 test('refreshHub REPLACES only the section body when it already exists (idempotent)', () => {
   const d = mockDeps({ hubHasSection: true });
   const res = refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'],
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'],
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: d.replaceSection, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   });
@@ -404,8 +406,8 @@ test('refreshHub REPLACES only the section body when it already exists (idempote
 test('refreshHub acquires the hub lock, writes, then releases it (happy path)', () => {
   const d = mockDeps({ hubHasSection: true });
   const res = refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'],
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'],
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: d.replaceSection, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   });
@@ -419,8 +421,8 @@ test('refreshHub acquires the hub lock, writes, then releases it (happy path)', 
 test('refreshHub --dry-run takes NO hub lock (it writes nothing)', () => {
   const d = mockDeps({ hubHasSection: true });
   const res = refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'], dryRun: true,
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'], dryRun: true,
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: d.replaceSection, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   });
@@ -433,8 +435,8 @@ test('refreshHub --dry-run takes NO hub lock (it writes nothing)', () => {
 test('refreshHub PROCEEDS (and releases nothing) when the bounded wait times out on a live holder', () => {
   const d = mockDeps({ hubHasSection: true, hubLockAcquired: false });
   const res = refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'],
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'],
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: d.replaceSection, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   });
@@ -449,8 +451,8 @@ test('refreshHub releases the hub lock even when the write throws', () => {
   const d = mockDeps({ hubHasSection: true });
   const boom = () => { throw new Error('simulated hub write failure'); };
   assert.throws(() => refreshHub({
-    latestByType: { 'VP Weekly': { runDate: '2026-06-29', status: 'OK' } },
-    childPages: CHILD, types: ['VP Weekly'],
+    latestByType: { 'FourthOS Sponsor': { runDate: '2026-06-29', status: 'OK' } },
+    childPages: CHILD, types: ['FourthOS Sponsor'],
     getBlocks: d.getBlocks, findSection: d.findSection, replaceSection: boom, insertAfter: d.insertAfter,
     acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
   }), /simulated hub write failure/);
@@ -460,7 +462,7 @@ test('refreshHub releases the hub lock even when the write throws', () => {
 
 test('refreshAll threads the hub lock through to refreshHub (acquired + released once)', () => {
   const d = mockDeps({
-    rowsByType: { 'VP Weekly': [row({ runDate: '2026-06-29', status: 'OK' })] },
+    rowsByType: { 'FourthOS Sponsor': [row({ runDate: '2026-06-29', status: 'OK' })] },
     hubHasSection: true,
   });
   refreshAll({
@@ -477,10 +479,10 @@ test('refreshAll threads the hub lock through to refreshHub (acquired + released
 test('refreshAll is non-fatal per page: one child write failing still writes the others + the hub', () => {
   const d = mockDeps({
     rowsByType: {
-      'VP Weekly': [row({ runDate: '2026-06-29', status: 'OK' })],
+      'FourthOS Sponsor': [row({ runDate: '2026-06-29', status: 'OK' })],
       'Self-Improvement': [row({ runDate: '2026-07-05', status: 'OK' })],
     },
-    failWriteFor: '39576fd7-ac82-817d-9658-d2c8b7f84ad2', // VP Weekly child id
+    failWriteFor: '39576fd7-ac82-8187-91ca-f012ac9728a3', // FourthOS Sponsor child id
     hubHasSection: true,
   });
   const res = refreshAll({
@@ -490,39 +492,41 @@ test('refreshAll is non-fatal per page: one child write failing still writes the
       acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
     },
   });
-  // VP Weekly recorded an error but the run kept going; the hub still refreshed.
-  assert.ok(res.errors.some((e) => /VP Weekly/.test(e.scope)));
+  // FourthOS Sponsor recorded an error but the run kept going; the hub still refreshed.
+  assert.ok(res.errors.some((e) => /FourthOS Sponsor/.test(e.scope)));
   assert.ok(res.hub, 'hub still refreshed after a child failure');
   assert.equal(res.hub.action, 'replaced');
-  // every type was queried (all 6)
-  assert.equal(d.calls.query.length, 6);
+  // every ACTIVE type was queried — derived, not a hardcoded 6, so retiring a type
+  // keeps this assertion honest instead of failing on an arbitrary count.
+  assert.equal(d.calls.query.length, ACTIVE_REPORT_TYPES.length);
 });
 
 // --- scoped refresh (optimization 02: --type) ------------------------------------
 
 test('refreshAll onlyType writes ONLY that type\'s child page, still queries all types, still refreshes the hub', () => {
   const d = mockDeps({
-    rowsByType: { 'VP Weekly': [row({ runDate: '2026-06-29', status: 'OK' })] },
+    rowsByType: { 'FourthOS Sponsor': [row({ runDate: '2026-06-29', status: 'OK' })] },
     hubHasSection: true,
   });
   const res = refreshAll({
-    onlyType: 'VP Weekly',
+    onlyType: 'FourthOS Sponsor',
     deps: {
       query: d.query, replaceSection: d.replaceSection,
       getBlocks: d.getBlocks, findSection: d.findSection, insertAfter: d.insertAfter,
       acquireHubLock: d.acquireHubLock, releaseHubLock: d.releaseHubLock,
     },
   });
-  // all 6 types still queried (the hub table needs every type's latest row)
-  assert.equal(d.calls.query.length, 6);
+  // all ACTIVE types still queried (the hub table needs every type's latest row)
+  assert.equal(d.calls.query.length, ACTIVE_REPORT_TYPES.length);
   // exactly two section writes: the scoped child page + the hub launcher body
   assert.equal(d.calls.replaceSection.length, 2);
   const childWrite = d.calls.replaceSection.find((c) => c.heading === CURRENT_RUN_HEADING);
-  assert.equal(childWrite.pageId, REPORT_CHILD_PAGES['VP Weekly']);
+  assert.equal(childWrite.pageId, REPORT_CHILD_PAGES['FourthOS Sponsor']);
   assert.ok(d.calls.replaceSection.some((c) => c.heading === HUB_LAUNCHER_HEADING));
-  // the other 5 children are recorded as scoped skips, not silent omissions
+  // every OTHER active child is recorded as a scoped skip, not a silent omission
+  // (derived from ACTIVE_REPORT_TYPES so retiring a type can't leave a stale count)
   const skipped = res.children.filter((c) => c.skipped === 'scoped');
-  assert.equal(skipped.length, 5);
+  assert.equal(skipped.length, ACTIVE_REPORT_TYPES.length - 1);
   assert.equal(res.children.filter((c) => c.wrote).length, 1);
   assert.equal(res.hub.action, 'replaced');
 });
@@ -532,7 +536,7 @@ test('refreshAll onlyType rejects an unknown report type (fail loud)', () => {
 });
 
 test('parseTypeArg: space form, = form, absent, and missing value', () => {
-  assert.equal(parseTypeArg(['--type', 'VP Weekly']), 'VP Weekly');
+  assert.equal(parseTypeArg(['--type', 'FourthOS Sponsor']), 'FourthOS Sponsor');
   assert.equal(parseTypeArg(['--type=Team Dashboard']), 'Team Dashboard');
   assert.equal(parseTypeArg(['--dry-run']), null);
   assert.throws(() => parseTypeArg(['--type']), /--type requires/);

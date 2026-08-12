@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/maestro-state-manager.ts
 import { readFileSync as readFileSync2, existsSync as existsSync4, unlinkSync as unlinkSync3 } from "fs";
@@ -7,8 +8,14 @@ import { readFileSync as readFileSync2, existsSync as existsSync4, unlinkSync as
 function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
 }
-function outputWithMessage(message) {
-  console.log(JSON.stringify({ result: "continue", message }));
+function outputWithMessage(message, hookEventName) {
+  if (!message || !message.trim()) {
+    outputContinue();
+    return;
+  }
+  console.log(JSON.stringify({
+    hookSpecificOutput: { hookEventName, additionalContext: message }
+  }));
 }
 
 // src/shared/session-isolation.ts
@@ -286,6 +293,7 @@ function validateMaestroState(obj, sessionId) {
 }
 
 // src/maestro-state-manager.ts
+var say = (message) => outputWithMessage(message, "UserPromptSubmit");
 var log3 = createLogger("maestro-state-manager");
 var STATE_BASE_NAME = "maestro-state";
 var STATE_TTL = 4 * 60 * 60 * 1e3;
@@ -463,7 +471,7 @@ async function main() {
     if (matchesPattern(prompt, CANCEL_PATTERNS)) {
       log3.info("Maestro deactivated by user", { sessionId });
       clearState(sessionId);
-      outputWithMessage("MAESTRO DEACTIVATED\nMaestro orchestration mode disabled.\nReturning to normal operation.");
+      say("MAESTRO DEACTIVATED\nMaestro orchestration mode disabled.\nReturning to normal operation.");
       return;
     }
     if (!state.active && matchesAny(prompt, ACTIVATION_PATTERNS)) {
@@ -480,11 +488,11 @@ async function main() {
         activatedAt: Date.now()
       }, sessionId);
       if (isResearch) {
-        outputWithMessage(
+        say(
           "MAESTRO ACTIVATED (Research Mode)\n\nTask Type: **RESEARCH** (external docs, best practices)\n\n**WORKFLOW:**\n1. Discovery Interview (CURRENT)\n2. Propose Plan\n3. Await Approval\n4. Execute\n\n**YOUR FIRST ACTION:**\nUse AskUserQuestion to clarify:\n- What specifically to research?\n- What format for findings?\n- Any constraints or preferences?\n\nTask tool BLOCKED until interview complete."
         );
       } else {
-        outputWithMessage(
+        say(
           'MAESTRO ACTIVATED (Implementation Mode)\n\nTask Type: **IMPLEMENTATION** (coding, building, fixing)\n\n**WORKFLOW:**\n1. Codebase Recon (CURRENT) - scout allowed\n2. Discovery Interview\n3. Propose Plan\n4. Await Approval\n5. Execute\n\n**YOUR FIRST ACTION:**\nSpawn 1-2 scout agents to understand codebase:\n- Existing patterns relevant to task\n- File structure and conventions\n- Related code that might be affected\n\nOnly scout agents allowed. Other agents BLOCKED.\nSay "recon complete" when done exploring.'
         );
       }
@@ -495,7 +503,7 @@ async function main() {
         state.reconComplete = true;
         log3.info("State transition: recon complete", { sessionId });
         writeState(state, sessionId);
-        outputWithMessage(
+        say(
           'MAESTRO: Recon Complete\n\n**WORKFLOW PROGRESS:**\n1. [done] Codebase Recon\n2. Discovery Interview (CURRENT)\n3. Propose Plan\n4. Await Approval\n5. Execute\n\n**YOUR NEXT ACTION:**\nUse AskUserQuestion with INFORMED questions based on recon:\n- "I found X pattern, should we follow it?"\n- "Existing code uses Y approach, continue or change?"\n- "This will affect N files, confirm scope?"\n\nTask tool BLOCKED until interview complete.'
         );
         return;
@@ -506,7 +514,7 @@ async function main() {
         writeState(state, sessionId);
         const step = state.taskType === "research" ? 1 : 2;
         const progress = state.taskType === "implementation" ? "1. [done] Codebase Recon\n2. [done] Discovery Interview\n3. Propose Plan (CURRENT)\n4. Await Approval\n5. Execute" : "1. [done] Discovery Interview\n2. Propose Plan (CURRENT)\n3. Await Approval\n4. Execute";
-        outputWithMessage(
+        say(
           "MAESTRO: Interview Complete\n\n**WORKFLOW PROGRESS:**\n" + progress + "\n\n**YOUR NEXT ACTION:**\nPresent orchestration plan to user.\nTask tool still BLOCKED until plan approved."
         );
         return;
@@ -515,7 +523,7 @@ async function main() {
         state.planApproved = true;
         log3.info("State transition: plan approved", { sessionId });
         writeState(state, sessionId);
-        outputWithMessage(
+        say(
           "MAESTRO: Plan Approved\n\n**WORKFLOW PROGRESS:**\n1. [done] Discovery Interview\n2. [done] Propose Plan\n3. [done] Await Approval\n4. Execute (CURRENT)\n\n**Task tool is now UNBLOCKED.**\nYou may spawn agents to execute the plan."
         );
         return;
@@ -525,7 +533,7 @@ async function main() {
         if (looksLikeAnswers) {
           state.interviewComplete = true;
           writeState(state);
-          outputWithMessage(
+          say(
             "MAESTRO: Answers Received\n\nDiscovery answers received.\n\n**YOUR NEXT ACTION:**\n1. Classify task type based on answers\n2. Present orchestration plan\n3. Wait for approval\n\nTask tool still BLOCKED until plan approved."
           );
           return;
@@ -537,4 +545,6 @@ async function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("maestro-state-manager")) {
+  main();
+}

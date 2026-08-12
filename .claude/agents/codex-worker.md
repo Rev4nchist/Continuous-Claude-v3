@@ -419,7 +419,7 @@ Session id: <$SESSION_ID>   Worktree: <path>
 
 ## Windows platform notes (verified 2026-07-07 dogfood)
 
-1. **`workspace-write` sandbox blocks ALL subprocess launches on Windows** (`windows sandbox: runner error: CreateProcessAsUserW failed: 5`). Codex can create/edit files (pure I/O) but CANNOT run `git`/`node`/tests inside its own sandbox — it writes code BLIND and self-reports "done" without executing it. So the orchestrator's out-of-sandbox verification is the ONLY verification, and it MUST run changed runnable code, not just `node --check` (syntax-check missed a real `spawnSync` ENOENT bug). Same class as the `codegraph` `.cmd`-spawn footgun in `windows-platform.md`.
+1. **`workspace-write` sandbox blocks ALL subprocess launches on Windows** (`windows sandbox: runner error: CreateProcessAsUserW failed: 5`). Codex can create/edit files (pure I/O) but CANNOT run `git`/`node`/tests inside its own sandbox — it writes code BLIND and self-reports "done" without executing it. So the orchestrator's out-of-sandbox verification is the ONLY verification, and it MUST run changed runnable code, not just `node --check` (syntax-check missed a real `spawnSync` ENOENT bug). Same class as the Windows `.cmd`-shim spawn hardening (CVE-2024-27980: `.cmd`/`.bat` can't be spawned directly on modern Node without `shell:true`).
 2. **`codex exec resume` has no `--sandbox`/`-C`** — inherit cwd+sandbox from the resumed session; `cd` into the worktree + `resume --last` (or an explicit SESSION_ID). Passing `--sandbox`/`-C` errors RC=2.
 3. **Worktrees live OUTSIDE the repo** (sibling `../.codex-worktrees/`) — an in-repo worktree makes Claude Code re-scan `.claude/skills` as ~150 duplicate path-scoped skills.
 

@@ -87,6 +87,23 @@ rp-cli -e 'structure src/'
 $CLAUDE_PROJECT_DIR/.claude/cache/agents/critic/output-{timestamp}.md
 ```
 
+## Return Contract (final message — 07-02 R2)
+
+Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
+End it with exactly one fenced JSON block matching:
+
+```json
+{
+  "agent": "critic",
+  "status": "approve | request_changes | blocked",
+  "findings": [
+    {"severity": "critical | high | medium | low", "file": "<path>", "line": 0, "summary": "<one sentence>", "evidence": "<what you read that proves it>"}
+  ]
+}
+```
+
+Empty `findings` with `approve` is a valid clean review. Never report a finding without a `file` anchor and read-the-code evidence (claim-verification rule).
+
 ## Output Format
 
 ```markdown

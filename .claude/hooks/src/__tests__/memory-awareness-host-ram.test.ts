@@ -100,6 +100,19 @@ function isolatedEnv(): Record<string, string | undefined> {
     CLAUDE_PROJECT_DIR: projectDir,
     HOME: fakeHome,
     USERPROFILE: fakeHome,
+    // Kill-switch. This file spawns the REAL dist/memory-awareness.mjs, which
+    // calls ensureDaemonRunning(); resolveRepoRoot() walks process.argv[1] up to
+    // the REAL repo's opc/ and ignores the fake HOME/CLAUDE_PROJECT_DIR above. So
+    // without this, every run of this file leaks TWO detached
+    // `uv run embedding_daemon.py --daemon` trees that never exit -- each loading
+    // a ~1.3GB model and opening console windows.
+    //
+    // Measured 2026-07-29: this file leaked exactly 2 per run and accounted for
+    // the entire full-suite leak (9 suite runs -> 18 orphaned daemon trees, 45
+    // python + 22 uv processes). isolatedEnv() here is a near-copy of the one in
+    // memory-awareness.test.ts, which has carried this guard (and the comment
+    // explaining it) since 2026-06-05; the copy dropped the line.
+    CCV3_EMBEDDING_NO_SPAWN: '1',
     // These two are scrubbed by default; individual tests override.
     CCV3_HOST_RAM_OVERRIDE_BYTES: undefined,
     CCV3_HOST_RAM_FLOOR_BYTES: undefined,

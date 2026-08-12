@@ -88,9 +88,22 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
+/**
+ * LOCAL copy, which is why the shared/output.ts repair did not reach it and the
+ * compiler stayed silent -- a third independent spelling of the same bug.
+ *
+ * It emitted a bare {message}. The harness reads `hookSpecificOutput`, so every
+ * verification warning this hook produced was discarded while it exited 0.
+ * Registered on PostToolUse:Task, hence that event name.
+ */
 function outputWithMessage(message?: string): void {
   if (message) {
-    console.log(JSON.stringify({ message }));
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: 'PostToolUse',
+        additionalContext: message,
+      },
+    }));
   } else {
     console.log(JSON.stringify({}));
   }
@@ -244,4 +257,6 @@ Consider verifying the agent's claims before proceeding.
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('agent-verification')) {
+  main();
+}

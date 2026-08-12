@@ -40,7 +40,10 @@ test('healthStatus maps overall_status to a registry Status enum', () => {
   assert.equal(healthStatus('weird'), 'Warn');
 });
 
-// --- VP Weekly -----------------------------------------------------------------
+// --- VP Weekly (RETIRED 2026-07-25, extractor retained + still valid) -----------
+// The type stays in REPORT_TYPES (validation domain) so its historical rows remain
+// upsertable; only its EXPECTATION (watchdog schedule, hub row, drift) was removed.
+// This test therefore still holds and guards the revive path.
 
 test('vpRunsFromDirs: deterministic runId, real date, GH Pages url; ignores junk dirs', () => {
   const runs = vpRunsFromDirs(['2026-W07', '2026-W27', 'not-a-week', '.git']);

@@ -8,6 +8,10 @@
  * Design contract:
  *   - Fail-open: NEVER throws. All errors swallowed to stderr only.
  *   - Skips silently when TRACE_TO_BRAINTRUST != "true" or BRAINTRUST_API_KEY unset.
+ *   - PRECEDENCE: an explicit TRACE_TO_BRAINTRUST in the process environment wins
+ *     over ~/.claude/.env -- it is the off switch. Every OTHER variable still comes
+ *     from the file. braintrust_hooks.py applies the same rule so spans and scores
+ *     cannot disagree about whether tracing is on.
  *   - 2-second AbortController timeout (matches dashboard-reporter pattern).
  *   - Endpoint: POST {API_URL}/v1/project_logs/{project_id}/feedback
  *   - Payload shape: { feedback: [{ id, scores, metadata?, comment? }] }
@@ -20,7 +24,41 @@
  * the cache lives for one hook execution. The Python hook caches via the
  * shared `braintrust_global.json`; we don't share that file here (different
  * runtime, different lifetime).
+ *
+ * WHY THIS FILE READS ~/.claude/.env ITSELF (fixed 2026-07-28)
+ * -----------------------------------------------------------
+ * Everything above worked. Nothing was ever emitted, for months, because the
+ * config it depends on was never in the environment.
+ *
+ * `TRACE_TO_BRAINTRUST` and `BRAINTRUST_API_KEY` live in `~/.claude/.env`.
+ * Claude Code does NOT load that file into hook processes, and the
+ * `settings.json` `env` block does not carry them (correctly -- a live API key
+ * does not belong in a file that is synced and committed). The Python hook
+ * works only because `braintrust_hooks.py:884-889` loads the file MANUALLY.
+ * This module read `process.env` directly, so `isEnabled()` returned false on
+ * every invocation and every score emit returned silently at the guard.
+ *
+ * Proven by minimal reproduction, not inferred: the same hook, the same
+ * payload, run twice, differing ONLY in whether the .env values were injected
+ * into the child environment. Arm A (absent) produced nothing; Arm B (injected)
+ * landed `memory_recall_hit=1, memory_recall_relevance=0.0328` in Braintrust at
+ * 03:39:44Z. Two rival explanations were eliminated first: the span state file
+ * was present and valid (so `spanId` was never the blocker), and the API
+ * accepted the POST (so it was not a rejected write).
+ *
+ * WHY IT OVERRIDES process.env RATHER THAN DEFERRING TO IT
+ * -------------------------------------------------------
+ * Deliberately mirrors the Python loader, which also overwrites. It matters
+ * that the two AGREE: Python creates the spans, this module attaches scores to
+ * them. If a stray `TRACE_TO_BRAINTRUST=false` in the environment disabled this
+ * side while the file kept Python enabled, spans would be created with scores
+ * silently missing -- which is precisely the failure being fixed here, in a new
+ * costume. Parity with the span creator beats conventional dotenv semantics.
  */
+
+import { readFileSync } from 'fs';
+import { homedir } from 'os';
+import { join } from 'path';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -72,21 +110,114 @@ export function resetProjectIdCacheForTests(): void {
   projectIdCache = {};
 }
 
+/**
+ * Test-only: clear the once-per-process .env latch so the next call re-reads the
+ * environment (including BRAINTRUST_DOTENV_PATH). NOT for production use.
+ *
+ * The latch is why only ONE test in braintrust-score.test.ts ever failed: after
+ * the first read, tests 2-19 kept their own env values and passed. Order
+ * dependence made a systemic defect look like a single flaky assertion.
+ */
+export function resetDotEnvStateForTests(): void {
+  dotenvLoaded = false;
+  envTraceOverride = undefined;
+}
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
+/**
+ * Load `~/.claude/.env` into process.env, once per process.
+ *
+ * Mirrors `braintrust_hooks.py:884-889` deliberately, including the override --
+ * see the header for why parity with the span creator matters more than
+ * conventional dotenv semantics.
+ *
+ * Fail-open in every direction: a missing file, an unreadable file, a malformed
+ * line, or a thrown error all leave the environment untouched and the caller
+ * simply stays disabled. This module must never be the reason a hook dies.
+ */
+let dotenvLoaded = false;
+
+/**
+ * `TRACE_TO_BRAINTRUST` exactly as it appeared in the REAL process environment,
+ * captured BEFORE ~/.claude/.env is merged in. `undefined` means the environment
+ * said nothing about tracing.
+ *
+ * This is the kill switch, and it did not work. The file override below is what
+ * makes tracing work at all (see the header), but because it rewrote
+ * process.env unconditionally, `TRACE_TO_BRAINTRUST=false` in the environment --
+ * or in the settings.json `env` block -- was silently replaced with the file's
+ * `true` before the guard read it. Proven by execution 2026-07-29: the module
+ * POSTed using the FILE's project id and the FILE's API key while
+ * process.env.TRACE_TO_BRAINTRUST was 'false'. The only way to disable tracing
+ * was to edit a credentials file, which nothing documented.
+ *
+ * So for this ONE variable an explicit environment value now wins. Every other
+ * variable still comes from the file. braintrust_hooks.py carries the identical
+ * rule, deliberately: if only one layer honoured the switch, an env `false`
+ * would silence scores while the other kept minting spans, which is the
+ * spans-without-scores desync this module's header exists to prevent.
+ */
+let envTraceOverride: string | undefined;
+
+function loadClaudeDotEnv(): void {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
+  try {
+    // BRAINTRUST_DOTENV_PATH lets tests point at a nonexistent file (or a
+    // fixture) and stay hermetic. Production never sets it. Before this, the
+    // suite read the developer's real ~/.claude/.env -- and the failing test
+    // printed the live `Bearer sk-...` key into its output.
+    const envPath =
+      process.env.BRAINTRUST_DOTENV_PATH || join(homedir(), '.claude', '.env');
+    for (const line of readFileSync(envPath, 'utf-8').split('\n')) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith('#') || !trimmed.includes('=')) continue;
+      const idx = trimmed.indexOf('=');
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) process.env[key] = value;
+    }
+  } catch {
+    // No .env, or unreadable -> stay exactly as disabled as before.
+  }
+}
+
 function getApiUrl(): string {
+  loadClaudeDotEnv();
   return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
 }
 
 function getApiKey(): string | null {
+  loadClaudeDotEnv();
   const key = process.env.BRAINTRUST_API_KEY;
   return key && key.length > 0 ? key : null;
 }
 
 function isTraceEnabled(): boolean {
-  return (process.env.TRACE_TO_BRAINTRUST || '').toLowerCase() === 'true';
+  loadClaudeDotEnv();
+  // An explicit value in the real environment is authoritative -- that is the off
+  // switch. Only when the environment is silent does ~/.claude/.env decide.
+  const effective =
+    envTraceOverride !== undefined ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || '';
+  return effective.toLowerCase() === 'true';
+}
+
+/**
+ * Read and discard a response body so undici releases its socket.
+ *
+ * Never throws: a failure to drain is strictly less bad than a failure to emit,
+ * and this whole module is fail-open.
+ */
+async function consumeBody(resp: Response): Promise<void> {
+  try {
+    await resp.arrayBuffer();
+  } catch {
+    /* already consumed, aborted, or no body -- nothing to release */
+  }
 }
 
 function logErr(msg: string): void {
@@ -107,6 +238,13 @@ function logErr(msg: string): void {
  * Never throws.
  */
 async function resolveProjectId(apiKey: string): Promise<string | null> {
+  // Explicit, not inherited from call order. In the current emit path
+  // isTraceEnabled() and getApiKey() always run first, so the env is already
+  // loaded -- but depending on that is an implicit coupling, and a future
+  // caller reaching this function directly would silently read an unloaded
+  // environment. loadClaudeDotEnv() is idempotent and costs one boolean.
+  loadClaudeDotEnv();
+
   // Prefer explicit project id env var (cheapest path)
   const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
   if (directId && directId.length > 0) {
@@ -138,6 +276,9 @@ async function resolveProjectId(apiKey: string): Promise<string | null> {
 
     if (!resp.ok) {
       logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
+      // Same socket-release requirement as the feedback POST. The success path
+      // drains via resp.json() just below; this early return would not.
+      await consumeBody(resp);
       return null;
     }
 
@@ -224,6 +365,23 @@ export async function emitBraintrustScore(
       if (!resp.ok) {
         logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
       }
+
+      // MUST drain the body, even though we never read it.
+      //
+      // undici keeps the socket in its pool until the body is consumed. An
+      // undrained response leaves a live handle, and a hook that then calls
+      // process.exit() tears the loop down mid-teardown:
+      //
+      //   Assertion failed: !(handle->flags & UV_HANDLE_CLOSING),
+      //   file src\win\async.c, line 76        -> exit 0xC0000409
+      //
+      // Found by this crashing telemetry-tracker deterministically (3/3) the
+      // moment the emit started doing real network I/O. It was invisible before
+      // only because the emit was disabled and never opened a socket -- so
+      // fixing the .env gate is what surfaced it. telemetry-tracker is the only
+      // hook here that calls process.exit(), which is why it alone crashed;
+      // the others drain implicitly by letting the loop finish.
+      await consumeBody(resp);
     } catch (e) {
       logErr(`feedback POST ${opts.spanId} failed: ${(e as Error).message}`);
     }

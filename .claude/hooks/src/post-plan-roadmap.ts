@@ -19,12 +19,23 @@ import {
   type RoadmapDoc,
   type PlanningSession as SharedPlanningSession,
 } from './shared/roadmap-parser.js';
+import {
+  applySplices,
+  insertAfterHeader,
+  insertAtEof,
+  findSessionBlock,
+  replaceLine,
+  type SpliceOp,
+  type LineRange,
+} from './shared/roadmap-splice.js';
+import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
 
 interface PostToolUseInput {
   tool_name: string;
   tool_input: Record<string, unknown>;
   tool_output?: string;
   tool_result?: string;
+  session_id?: string;
 }
 
 // PlanningSession + parseRoadmap moved to shared/roadmap-parser.ts (Phase 3A).
@@ -35,8 +46,9 @@ type RoadmapSection = RoadmapDoc;
  * Render one managed section's body lines VERBATIM — the `## Header` line plus
  * its content, with NO trailing-blank normalization. This is the exact
  * per-section emit the pre-refactor generateRoadmap produced (sessions
- * sub-blocks keep their own trailing blanks). Used by both generateRoadmap
- * (byte-for-byte fresh-file output) and renderManagedSection (splice form).
+ * sub-blocks keep their own trailing blanks). Used ONLY by generateRoadmap
+ * (the fresh/empty-file byte-for-byte path) -- the append-only splice path in
+ * `applyRoadmapUpdate` never regenerates a managed section from this.
  */
 function renderSectionBody(
   key: 'current' | 'completed' | 'planned' | 'sessions',
@@ -83,43 +95,7 @@ function renderSectionBody(
     lines.push('## Recent Planning Sessions');
     if (sections.sessions.length > 0) {
       for (const session of sections.sessions.slice(0, 5)) {
-        lines.push(`### ${session.date}: ${session.title}`);
-
-        // Summary if available
-        if (session.summary) {
-          lines.push(`**Summary:** ${session.summary}`);
-          lines.push('');
-        }
-
-        // Key decisions
-        if (session.decisions.length > 0) {
-          lines.push('**Key Decisions:**');
-          for (const decision of session.decisions) {
-            lines.push(`- ${decision}`);
-          }
-          lines.push('');
-        }
-
-        // Implementation steps
-        if (session.steps && session.steps.length > 0) {
-          lines.push('**Implementation:**');
-          for (const step of session.steps) {
-            lines.push(`- ${step}`);
-          }
-          lines.push('');
-        }
-
-        // Affected files
-        if (session.files && session.files.length > 0) {
-          lines.push(`**Files:** ${session.files.join(', ')}`);
-          lines.push('');
-        }
-
-        // Verification
-        if (session.verification && session.verification.length > 0) {
-          lines.push(`**Verification:** ${session.verification[0]}`);
-          lines.push('');
-        }
+        lines.push(...renderSessionBlock(session));
       }
     } else {
       lines.push('_No planning sessions recorded._');
@@ -130,23 +106,53 @@ function renderSectionBody(
 }
 
 /**
- * Render a single managed section's lines, INCLUDING its `## Header` line and
- * exactly one trailing blank line.
- *
- * The body byte-matches what generateRoadmap emits for that section; the
- * uniform single trailing blank lets applyRoadmapUpdate splice sections in
- * place without accumulating or dropping blank lines.
+ * Render ONE `### YYYY-MM-DD: Title` session sub-block, including its own
+ * trailing blank lines exactly as each present field emits one. Byte-neutral
+ * lift out of `renderSectionBody`'s old inline `sessions` loop body (used to
+ * live at roughly lines 86-122) -- verbatim, not rewritten, so every existing
+ * caller renders identically. Also the unit the append-only writer inserts
+ * for a brand-new `### <today>` block (see `applyRoadmapUpdate` below).
  */
-function renderManagedSection(
-  key: 'current' | 'completed' | 'planned' | 'sessions',
-  sections: RoadmapSection,
-): string[] {
-  const lines = renderSectionBody(key, sections);
-  // Collapse any trailing blanks (sessions sub-blocks may leave one) to exactly one.
-  while (lines.length > 0 && lines[lines.length - 1] === '') {
-    lines.pop();
+export function renderSessionBlock(session: PlanningSession): string[] {
+  const lines: string[] = [];
+  lines.push(`### ${session.date}: ${session.title}`);
+
+  // Summary if available
+  if (session.summary) {
+    lines.push(`**Summary:** ${session.summary}`);
+    lines.push('');
   }
-  lines.push('');
+
+  // Key decisions
+  if (session.decisions.length > 0) {
+    lines.push('**Key Decisions:**');
+    for (const decision of session.decisions) {
+      lines.push(`- ${decision}`);
+    }
+    lines.push('');
+  }
+
+  // Implementation steps
+  if (session.steps && session.steps.length > 0) {
+    lines.push('**Implementation:**');
+    for (const step of session.steps) {
+      lines.push(`- ${step}`);
+    }
+    lines.push('');
+  }
+
+  // Affected files
+  if (session.files && session.files.length > 0) {
+    lines.push(`**Files:** ${session.files.join(', ')}`);
+    lines.push('');
+  }
+
+  // Verification
+  if (session.verification && session.verification.length > 0) {
+    lines.push(`**Verification:** ${session.verification[0]}`);
+    lines.push('');
+  }
+
   return lines;
 }
 
@@ -163,53 +169,177 @@ function generateRoadmap(sections: RoadmapSection): string {
 }
 
 /**
- * Regenerate ONLY the 4 managed sections in place, splicing every other line
- * (intro prose, `## Notes` / custom sections, loose prose) back verbatim from
- * the original file. Uses the parser's rawSections line-range map.
- *
- * Pure: depends only on `sections.rawContent` (original text) and
- * `sections.rawSections` (original line ranges — unaffected by main()'s later
- * mutation of the structured fields), plus the mutated structured fields the
- * managed sections are regenerated from.
+ * Function words common enough in a hand-written English title that their
+ * PRESENCE is evidence the title is NOT the mechanical
+ * `extractPlanInfo` filename fallback (`basename.split(/[-_]/).map(w =>
+ * w.charAt(0).toUpperCase() + w.slice(1)).join(' ')`), which title-cases
+ * every segment regardless of grammar.
  */
-export function applyRoadmapUpdate(sections: RoadmapDoc): string {
-  const original = sections.rawContent;
-  if (!original.trim()) return generateRoadmap(sections);   // fresh/empty file -> canonical
+const FOCUS_FUNCTION_WORDS = new Set([
+  'a', 'an', 'the', 'of', 'and', 'or', 'but', 'for', 'nor', 'so', 'yet',
+  'to', 'in', 'on', 'at', 'by', 'with', 'from', 'into', 'onto', 'over',
+  'under', 'via', 'is', 'are', 'as',
+]);
 
-  const lines = original.split('\n');
-  const MANAGED: Array<'current' | 'completed' | 'planned' | 'sessions'> = ['current', 'completed', 'planned', 'sessions'];
-
-  // present managed ranges, sorted by original start line
-  const present = MANAGED
-    .map(key => ({ key, range: sections.rawSections.get(key) }))
-    .filter(x => x.range)
-    .sort((a, b) => a.range!.start - b.range!.start);
-
-  const out: string[] = [];
-  let cursor = 0;
-  for (const { key, range } of present) {
-    // verbatim unmanaged lines before this managed section (preamble / custom sections / loose prose)
-    for (let i = cursor; i < range!.start; i++) out.push(lines[i]);
-    // regenerated managed block in place
-    out.push(...renderManagedSection(key, sections));
-    cursor = range!.end;
-  }
-  // trailing verbatim content after the last managed section
-  for (let i = cursor; i < lines.length; i++) out.push(lines[i]);
-
-  // append any managed section that did not exist in the original (canonical order)
-  for (const key of MANAGED) {
-    if (!sections.rawSections.get(key)) out.push(...renderManagedSection(key, sections));
-  }
-  return out.join('\n');
+/**
+ * A filename-derived title (the `extractPlanInfo` fallback, or a bare
+ * `'Planning Session'`) looks like: every word capitalized, no punctuation,
+ * and short (<=4 words). A real hand-written plan title almost always has
+ * SOME lowercase function word or punctuation. This is a heuristic with known
+ * false positives (a genuinely title-cased short goal name reads the same
+ * way) -- that is acceptable here because the only consequence of a false
+ * positive is leaving Current Focus vacant with an advisory, never data loss.
+ */
+function looksFilenameDerived(title: string): boolean {
+  const trimmed = title.trim();
+  if (!trimmed) return false;
+  if (/[.,;:!?()[\]{}"'`]/.test(trimmed)) return false;
+  const words = trimmed.split(/\s+/);
+  if (words.length === 0 || words.length > 4) return false;
+  if (words.some(w => FOCUS_FUNCTION_WORDS.has(w.toLowerCase()) && w === w.toLowerCase())) return false;
+  return words.every(w => /^[A-Z]/.test(w));
 }
 
-export function demoteCurrentFocusToPlanned(sections: RoadmapDoc, newTitle: string): void {
-  if (!sections.current || sections.current.title === newTitle) return;
-  const old = sections.current;
-  if (sections.planned.some(p => p.title === old.title)) return; // dedup
-  // Switching focus ≠ finishing the prior goal — return it to the backlog.
-  sections.planned.unshift({ title: old.title, priority: 'high', priorityBucket: 'high' });
+/**
+ * Seed quality gate for Current Focus (see the plan's SS3). Refuses to seed a
+ * title that is exactly `'Planning Session'` (the extractPlanInfo default) or
+ * that looks filename-derived. A refusal leaves the section vacant -- it does
+ * NOT fall back to seeding anyway.
+ */
+function isSeedableFocusTitle(title: string | null | undefined): title is string {
+  if (!title) return false;
+  const trimmed = title.trim();
+  if (!trimmed || trimmed === 'Planning Session') return false;
+  if (looksFilenameDerived(trimmed)) return false;
+  return true;
+}
+
+const CURRENT_FOCUS_PLACEHOLDER = 'No current focus set.';
+
+/** Index of the placeholder line within `range`, or null if not present. */
+function findPlaceholderLine(lines: string[], range: LineRange): number | null {
+  for (let i = range.start; i < range.end; i++) {
+    if (lines[i].trim() === CURRENT_FOCUS_PLACEHOLDER) return i;
+  }
+  return null;
+}
+
+export interface RoadmapUpdateOpSummary {
+  label: string;
+  lines_removed: number;
+  lines_added: number;
+}
+
+/**
+ * Build the ROADMAP.md content for a new planning session, append-only.
+ *
+ * This NEVER regenerates a managed section from a lossy structured re-parse
+ * (that was the whole bug class this rewrite exists to remove). Instead it
+ * builds a small list of `SpliceOp`s against the ORIGINAL line array --
+ * inserts only, plus the ONE declared exception (seeding the vacant Current
+ * Focus placeholder) -- and applies them all in one `applySplices` pass.
+ *
+ * - Current Focus: written ONLY when vacant (`doc.current === null`) AND
+ *   `update.focusTitle` passes the seed quality gate. When occupied, this
+ *   emits NO op for that section at all -- the caller is responsible for
+ *   surfacing an advisory that the new goal was not recorded there.
+ * - Recent Planning Sessions: pure append. No block for `today` -> insert
+ *   right after the header. A block for `today` under a DIFFERENT title ->
+ *   append a second block (still newest-first, still a pure insert). A block
+ *   for `today` under the SAME title -> emit NO op (caller records noop).
+ *   There is no cap and no trim, ever.
+ *
+ * Pure: never mutates `doc` or its nested fields.
+ */
+export function applyRoadmapUpdate(
+  doc: RoadmapDoc,
+  update: { session: PlanningSession; today: string; focusTitle: string | null },
+): { content: string; ops: RoadmapUpdateOpSummary[] } {
+  const original = doc.rawContent;
+
+  if (!original.trim()) {
+    // Fresh/empty file: the canonical byte-for-byte generateRoadmap output is
+    // the correct shape, but it needs to reflect this update -- build a LOCAL
+    // seeded copy for rendering only; `doc` itself is never mutated.
+    const seededCurrent =
+      doc.current === null && isSeedableFocusTitle(update.focusTitle)
+        ? { title: update.focusTitle, started: update.today }
+        : doc.current;
+    const seeded: RoadmapDoc = {
+      ...doc,
+      current: seededCurrent,
+      sessions: [update.session, ...doc.sessions],
+    };
+    const content = generateRoadmap(seeded);
+    return {
+      content,
+      ops: [{ label: 'fresh-file', lines_removed: 0, lines_added: content.split('\n').length }],
+    };
+  }
+
+  const lines = original.split('\n');
+  const ops: SpliceOp[] = [];
+  const opSummaries: RoadmapUpdateOpSummary[] = [];
+
+  const addOp = (op: SpliceOp): void => {
+    ops.push(op);
+    opSummaries.push({
+      label: op.label,
+      lines_removed: op.range.end - op.range.start,
+      lines_added: op.lines.length,
+    });
+  };
+
+  // --- Current Focus: vacant-only seed ------------------------------------
+  if (doc.current === null && isSeedableFocusTitle(update.focusTitle)) {
+    const currentRange = doc.rawSections.get('current');
+    if (currentRange) {
+      const placeholderIdx = findPlaceholderLine(lines, currentRange);
+      if (placeholderIdx !== null) {
+        // The ONE declared deletion in this whole module: the caller MUST
+        // pass CURRENT_FOCUS_PLACEHOLDER in `allowedDeletions`.
+        addOp(replaceLine(placeholderIdx, `**${update.focusTitle}**`, 'focus-seed'));
+      } else {
+        addOp(insertAfterHeader(currentRange, [`**${update.focusTitle}**`], 'focus-seed-insert'));
+      }
+    } else {
+      addOp(
+        insertAtEof(
+          lines,
+          ['', '## Current Focus', `**${update.focusTitle}**`, ''],
+          'focus-seed-new-section',
+        ),
+      );
+    }
+  }
+  // If occupied (doc.current !== null), or the gate refused: emit NO op here.
+  // The caller (main()) surfaces the advisory -- this function never touches
+  // an occupied Current Focus and never silently drops a low-quality title.
+
+  // --- Recent Planning Sessions: pure append, no replace, no cap ----------
+  const sessionsRange = doc.rawSections.get('sessions');
+  const sessionBlockLines = [...renderSessionBlock(update.session), ''];
+
+  if (sessionsRange) {
+    const existing = findSessionBlock(lines, sessionsRange, update.today);
+    if (!existing) {
+      addOp(insertAfterHeader(sessionsRange, sessionBlockLines, 'session-insert'));
+    } else {
+      const titleMatch = existing.header.match(/^###\s*\d{4}-\d{2}-\d{2}:\s*(.+)$/);
+      const existingTitle = titleMatch ? titleMatch[1].trim() : '';
+      if (existingTitle !== update.session.title) {
+        addOp(insertAfterHeader(sessionsRange, sessionBlockLines, 'session-insert-same-day'));
+      }
+      // else: same date + same title -> emit NO op (noop, hand edits survive).
+    }
+  } else {
+    addOp(
+      insertAtEof(lines, ['## Recent Planning Sessions', ...sessionBlockLines], 'session-insert-new-section'),
+    );
+  }
+
+  const content = applySplices(lines, ops).join('\n');
+  return { content, ops: opSummaries };
 }
 
 // Expanded keywords for content capture
@@ -263,7 +393,7 @@ function parseSections(content: string): Record<string, string> {
   return sections;
 }
 
-function extractBullets(content: string, keywords?: string[]): string[] {
+export function extractBullets(content: string, keywords?: string[]): string[] {
   const bullets: string[] = [];
   const lines = content.split('\n');
 
@@ -285,7 +415,14 @@ function extractBullets(content: string, keywords?: string[]): string[] {
       .replace(/^`([^`]+)`\s*[-–]\s*/, '')       // `code` - description → description
       .replace(/^\*([^*]+)\*:?\s*/g, '$1 ')      // *Italic* → Italic (global)
       .replace(/::\s*\*/g, ': ')                 // ::* → :
-      .replace(/\*\s+/g, ' ')                    // trailing * → space
+      // NOTE: a global, unanchored `.replace(/\*\s+/g, ' ')` used to live here
+      // ("trailing * → space"). It ate the closing `*` of any `**bold**`
+      // followed by whitespace -- "but **not** fix" became "but **not* fix" --
+      // because lines 284/286 above already anchor the leading-emphasis cases
+      // this was meant to mop up. Deleted rather than anchored: no fixture or
+      // test depended on it (verified via grep before removal), and the two
+      // anchored replaces are sufficient for every case this file's fixtures
+      // exercise. (Vector 5, `roadmap-sync-clobber` plan.)
       .replace(/\s+/g, ' ')                      // normalize whitespace
       .trim();
 
@@ -586,15 +723,6 @@ async function main() {
 
   const today = new Date().toISOString().split('T')[0];
 
-  if (planInfo.title && planInfo.title !== 'Planning Session') {
-    demoteCurrentFocusToPlanned(sections, planInfo.title);   // was: sections.completed.unshift(...)
-    sections.current = {
-      title: planInfo.title,
-      description: planInfo.decisions.slice(0, 2).join('; ') || '',
-      started: today,
-    };
-  }
-
   const newSession: PlanningSession = {
     date: today,
     title: planInfo.title,
@@ -605,23 +733,38 @@ async function main() {
     files: planInfo.affectedFiles.length > 0 ? planInfo.affectedFiles.slice(0, 8) : undefined,
   };
 
-  const existingToday = sections.sessions.findIndex(s => s.date === today);
-  if (existingToday >= 0) {
-    sections.sessions[existingToday] = newSession;
-  } else {
-    sections.sessions.unshift(newSession);
-  }
+  // NOTE: sections.current / sections.sessions are NEVER mutated here anymore
+  // (that mutation, plus the unshift+slice(0,5) cap, is exactly the class of
+  // bug this rewrite removes). applyRoadmapUpdate decides everything from the
+  // ORIGINAL parsed doc plus this explicit update.
+  const { content: newContent, ops } = applyRoadmapUpdate(sections, {
+    session: newSession,
+    today,
+    focusTitle: planInfo.title,
+  });
 
-  sections.sessions = sections.sessions.slice(0, 5);
+  const wasFreshFile = !sections.rawContent.trim();
+  const focusSeeded = ops.some(o => o.label === 'focus-seed');
+  const allowedDeletions = focusSeeded ? [CURRENT_FOCUS_PLACEHOLDER] : [];
 
-  const newContent = applyRoadmapUpdate(sections);
-  fs.mkdirSync(path.dirname(roadmapPath), { recursive: true });
-  fs.writeFileSync(roadmapPath, newContent, 'utf-8');
+  const { outcome, record } = writeRoadmapGuarded({
+    hook: 'post-plan-roadmap',
+    tool: data.tool_name,
+    roadmapPath,
+    projectDir,
+    before: sections.rawContent,
+    after: newContent,
+    ops,
+    allowedDeletions,
+    allowFullRewrite: wasFreshFile,
+    sessionId: data.session_id ?? null,
+  });
 
-  console.error(`[post-plan-roadmap] ROADMAP.md updated: ${planInfo.title}`);
-
-  // Store planning decisions in archival_memory for future recall
+  // Store planning decisions in archival_memory regardless of write outcome
+  // -- the plan itself happened even if the ROADMAP entry was skipped/noop.
   storePlanningLearnings(planInfo, projectDir);
+
+  console.error(`[post-plan-roadmap] ROADMAP.md ${outcome}: ${planInfo.title}`);
 
   const stats = [
     `Goal: ${planInfo.title}`,
@@ -630,13 +773,53 @@ async function main() {
     `Files: ${planInfo.affectedFiles.length}`,
   ].join(' | ');
 
+  // --- Advisory context: never a silent drop -------------------------------
+  const advisories: string[] = [];
+
+  const focusOpLabels = new Set(ops.map(o => o.label));
+  const focusWasSeeded =
+    focusOpLabels.has('focus-seed') ||
+    focusOpLabels.has('focus-seed-insert') ||
+    focusOpLabels.has('focus-seed-new-section');
+
+  if (sections.current !== null) {
+    advisories.push(
+      `Current Focus unchanged ("${sections.current.title}" is still active) -- new goal "${planInfo.title}" was NOT recorded there. Run /roadmap focus to switch.`,
+    );
+  } else if (!focusWasSeeded) {
+    advisories.push(
+      `Current Focus left vacant -- "${planInfo.title}" did not pass the seed quality gate (looks like a placeholder or filename-derived title). Run /roadmap focus to set it manually.`,
+    );
+  }
+
+  const sessionAdded = ops.some(o => o.label.startsWith('session-insert'));
+  const totalSessionBlocks = sections.sessions.length + (sessionAdded ? 1 : 0);
+  if (totalSessionBlocks > 8) {
+    advisories.push(
+      `Recent Planning Sessions now has ${totalSessionBlocks} entries -- consider an archive sweep into ROADMAP.archive.md.`,
+    );
+  }
+
+  const contextLines: string[] =
+    outcome === 'written'
+      ? ['Planning session recorded:', stats, `ROADMAP: ${roadmapPath}`]
+      : [
+          `ROADMAP entry NOT recorded (outcome: ${outcome}${record.reason ? `, reason: ${record.reason}` : ''}).`,
+          stats,
+          `ROADMAP: ${roadmapPath}`,
+        ];
+  contextLines.push(...advisories);
+
   const output = {
     result: 'continue',
-    message: `📋 ROADMAP.md updated: ${planInfo.title}`,
+    message:
+      outcome === 'written'
+        ? `📋 ROADMAP.md updated: ${planInfo.title}`
+        : `⚠️ ROADMAP.md NOT updated (${outcome}): ${planInfo.title}`,
     hookSpecificOutput: {
       hookEventName: 'PostToolUse',
-      additionalContext: `Planning session recorded:\n${stats}\nROADMAP: ${roadmapPath}`
-    }
+      additionalContext: contextLines.join('\n'),
+    },
   };
 
   console.log(JSON.stringify(output));
@@ -648,7 +831,7 @@ async function readStdin(): Promise<string> {
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', chunk => data += chunk);
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 

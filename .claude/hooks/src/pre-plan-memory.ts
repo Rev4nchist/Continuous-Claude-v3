@@ -32,7 +32,7 @@ async function readStdin(): Promise<string> {
     process.stdin.setEncoding('utf-8');
     process.stdin.on('data', (chunk) => { data += chunk; });
     process.stdin.on('end', () => resolve(data));
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 
@@ -101,4 +101,6 @@ async function main() {
   output({ decision: 'allow' });
 }
 
-main().catch(() => output({ decision: 'allow' }));
+if ((process.argv[1] || '').includes('pre-plan-memory')) {
+  main().catch(() => output({ decision: 'allow' }));
+}

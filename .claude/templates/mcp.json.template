@@ -5,14 +5,6 @@
       "args": ["/c", "npx", "-y", "@upstash/context7-mcp@latest"],
       "type": "stdio"
     },
-    "github": {
-      "command": "cmd",
-      "args": ["/c", "npx", "-y", "@modelcontextprotocol/server-github"],
-      "env": {
-        "GITHUB_PERSONAL_ACCESS_TOKEN": "${GITHUB_TOKEN}"
-      },
-      "type": "stdio"
-    },
     "shadcn": {
       "command": "shadcn",
       "args": ["mcp"],
@@ -47,11 +39,6 @@
         "NIA_API_URL": "https://apigcp.trynia.ai/"
       },
       "type": "stdio"
-    },
-    "serena": {
-      "type": "stdio",
-      "command": "serena",
-      "args": ["start-mcp-server", "--context", "claude-code"]
     }
   }
 }

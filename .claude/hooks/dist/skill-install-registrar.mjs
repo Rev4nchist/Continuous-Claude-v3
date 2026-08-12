@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/skill-install-registrar.ts
 import * as fs from "fs";
@@ -20,7 +21,7 @@ async function readStdin() {
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
     process.stdin.on("end", () => resolve(data));
-    setTimeout(() => resolve(data), 14e3);
+    setTimeout(() => resolve(data), 14e3).unref();
   });
 }
 function emitContinue(message) {

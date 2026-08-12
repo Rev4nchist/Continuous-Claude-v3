@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/post-edit-notify.ts
 import { readFileSync as readFileSync2 } from "fs";
 
@@ -149,6 +151,9 @@ function tryStartDaemon(projectDir) {
     }
     if (isDaemonReachable(projectDir)) {
       return true;
+    }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
     }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();
@@ -309,4 +314,6 @@ async function main() {
   }
   console.log("{}");
 }
-main().catch(() => console.log("{}"));
+if ((process.argv[1] || "").includes("post-edit-notify")) {
+  main().catch(() => console.log("{}"));
+}

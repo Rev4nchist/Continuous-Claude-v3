@@ -12,7 +12,7 @@
 | External research | oracle | Task |
 | Debugging | debug-agent | Task |
 | Code review | critic | Task |
-| Refactor/cleanup | strategic-refactorer OR judge | Task |
+| Refactor/cleanup | judge (strategic-refactorer archived 2026-07-25) | Task |
 | Deploy verification | deployer | Verify preview deployment succeeded after implementation |
 | Browser UI QA | sentinel | Live browser verification with auth-aware multi-role scenarios |
 | Acceptance suite | qa-suite (skill) | Plan-driven test orchestration — spawns sentinel per role |
@@ -91,7 +91,7 @@ Task atomicity: max 3-5 files, 1 behavior, 1-3 test cases per slice.
 After every 5 completed tasks (or when lint surfaces duplication warnings):
 
 ```
-Task(subagent_type: "strategic-refactorer" OR "judge")
+Task(subagent_type: "judge")
   prompt: "Review the last 5 completed tasks for duplication, dead code, and abstraction opportunities. Refactor only what tests already cover."
 ```
 

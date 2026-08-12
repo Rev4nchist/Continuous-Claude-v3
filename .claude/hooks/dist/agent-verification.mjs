@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/agent-verification.ts
 import { readFileSync, existsSync } from "fs";
@@ -44,7 +45,12 @@ function readStdin() {
 }
 function outputWithMessage(message) {
   if (message) {
-    console.log(JSON.stringify({ message }));
+    console.log(JSON.stringify({
+      hookSpecificOutput: {
+        hookEventName: "PostToolUse",
+        additionalContext: message
+      }
+    }));
   } else {
     console.log(JSON.stringify({}));
   }
@@ -156,4 +162,6 @@ Consider verifying the agent's claims before proceeding.
     outputWithMessage();
   }
 }
-main();
+if ((process.argv[1] || "").includes("agent-verification")) {
+  main();
+}

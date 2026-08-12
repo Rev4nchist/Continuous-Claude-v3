@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/maestro-cleanup.ts
 import { readFileSync, existsSync as existsSync3, unlinkSync as unlinkSync2, mkdirSync as mkdirSync2, writeFileSync } from "fs";

@@ -28,4 +28,6 @@ async function main() {
   }
 }
 
-main();
+if ((process.argv[1] || '').includes('mcp-activity-tracker')) {
+  main();
+}

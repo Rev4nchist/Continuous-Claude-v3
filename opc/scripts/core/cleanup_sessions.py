@@ -45,7 +45,11 @@ async def cleanup_sessions(hours: int = 24, dry_run: bool = False) -> int:
                 f"""
                 SELECT COUNT(*) as count
                 FROM sessions
-                WHERE last_heartbeat < NOW() - INTERVAL '{hours} hours'
+                -- GREATEST, not bare last_heartbeat: the heartbeat is written on
+                -- UserPromptSubmit only, so an unattended run (Ralph, a scheduled
+                -- job) can work for more than {hours}h without one and would be
+                -- DELETED here while still live, orphaning its file claims.
+                WHERE GREATEST(last_heartbeat, last_activity_at) < NOW() - INTERVAL '{hours} hours'
                 """
             )
             count = row["count"]
@@ -55,7 +59,11 @@ async def cleanup_sessions(hours: int = 24, dry_run: bool = False) -> int:
             result = await conn.execute(
                 f"""
                 DELETE FROM sessions
-                WHERE last_heartbeat < NOW() - INTERVAL '{hours} hours'
+                -- GREATEST, not bare last_heartbeat: the heartbeat is written on
+                -- UserPromptSubmit only, so an unattended run (Ralph, a scheduled
+                -- job) can work for more than {hours}h without one and would be
+                -- DELETED here while still live, orphaning its file claims.
+                WHERE GREATEST(last_heartbeat, last_activity_at) < NOW() - INTERVAL '{hours} hours'
                 """
             )
             count = int(result.split()[-1]) if result else 0

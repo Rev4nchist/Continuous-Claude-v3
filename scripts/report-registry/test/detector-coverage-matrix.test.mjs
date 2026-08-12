@@ -37,8 +37,16 @@ import {
 } from '../watchdog.mjs';
 import { computeDrift, DEFAULT_MAX_AGE_HOURS } from '../check-drift.mjs';
 
+// VP Weekly was RETIRED 2026-07-25 and no longer has a SCHEDULE entry. This matrix
+// characterizes DETECTOR behavior, not the live schedule, so the entry is pinned
+// literally rather than looked up — keeping the isoWeek weekly shape (the only one)
+// under test. The type still validates: retirement removes it from the EXPECTATION
+// domain (ACTIVE_REPORT_TYPES), not the VALIDATION domain (REPORT_TYPES).
 const TYPE = 'VP Weekly';
-const vpEntry = () => SCHEDULE.find((e) => e.type === TYPE);
+const vpEntry = () => ({
+  type: TYPE, source: 'AIWeeklyReport', cadence: 'weekly', weekday: 4,
+  grace: { h: 12, m: 0 }, periodFormat: 'isoWeek', crossesMidnight: false,
+});
 
 // A VP-Weekly-due instant: local Thursday 2026-07-16 13:00 (grace ends 12:00). The
 // LOCAL-constructor Date makes the weekday/grace gating host-TZ-independent, exactly
@@ -246,18 +254,27 @@ test('runWatchdog attaches a freshness verdict to every present (ok) entry in th
 // report ~5-6 days between runs is NOT reported stale, while a daily stays at 48h.
 
 test('maxAgeForType: weekly types = 192h, daily types = 48h (DEFAULT), unknown = DEFAULT (guard)', () => {
-  assert.equal(maxAgeForType('VP Weekly'), 192);
   assert.equal(maxAgeForType('FourthOS Sponsor'), 192);
   assert.equal(maxAgeForType('System Health'), 192);
   assert.equal(maxAgeForType('Team Dashboard'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(maxAgeForType('Self-Improvement'), DEFAULT_MAX_AGE_HOURS);
   assert.equal(maxAgeForType('Not A Real Type'), DEFAULT_MAX_AGE_HOURS); // ?? DEFAULT, never undefined
+  // A RETIRED type has no SCHEDULE entry, so it takes the same unknown-type guard.
+  assert.equal(maxAgeForType('VP Weekly'), DEFAULT_MAX_AGE_HOURS);
 });
 
 test('per-cadence default: a 120h-old WEEKLY row is FRESH in the sweep (not stale under 192h)', () => {
   // Same 120h STALE row that reads stale at the daily 48h threshold reads FRESH for a
   // weekly type once the per-cadence default (192h) applies — the false-"stale" fix.
-  const r = evaluateEntry(vpEntry(), NOW, { query: () => [row({ status: 'OK', runDate: STALE })], dryRun: true });
+  // Must use a type that is WEEKLY *in SCHEDULE* — evaluateEntry resolves the
+  // threshold via maxAgeForType(entry.type), which is schedule-driven. The pinned
+  // vpEntry() fixture no longer qualifies (retired 2026-07-25 -> unknown -> 48h).
+  // FourthOS Sponsor moved Thu->Wed 2026-08-04, so this test pins its OWN Wednesday
+  // due instant (the file-level NOW is a Thursday) with the row aged relative to it.
+  const weekly = SCHEDULE.find((e) => e.type === 'FourthOS Sponsor');
+  const wedNow = new Date(2026, 6, 15, 13, 0, 0); // local Wednesday, grace (12:00) elapsed
+  const staleForWeekly = new Date(wedNow.getTime() - 120 * 3_600_000).toISOString();
+  const r = evaluateEntry(weekly, wedNow, { query: () => [row({ status: 'OK', runDate: staleForWeekly })], dryRun: true });
   assert.equal(r.status, 'ok');
   assert.equal(r.freshness.stale, false);
   assert.equal(r.freshness.reason, 'fresh');

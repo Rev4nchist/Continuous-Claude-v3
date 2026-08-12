@@ -603,6 +603,104 @@ def test_get_registered_hooks_extracts_basenames(tmp_path):
         assert "\\" not in n
 
 
+def test_get_registered_hooks_handles_split_command_args_form(tmp_path):
+    """The SPLIT {"command": "node", "args": [path]} shape must resolve too.
+
+    REGRESSION GUARD, 2026-07-28. The test above covers only the INLINE form,
+    and that gap is exactly why this went unnoticed: the live
+    ~/.claude/settings.json uses the SPLIT form for 80 of its 85 registrations,
+    so the parser found ZERO paths in production while this suite stayed green.
+
+    The damage was silent rather than loud. check_hook_registrations reported
+    "0 hook registrations all resolve" and PASSED -- structurally unable to
+    catch the registered-but-missing hook it exists for -- check_hook_orphans
+    counted 114 false orphans, and get_registered_hooks returned an empty set,
+    so every hook-runtime comparison ran against nothing.
+    """
+    from scripts.health_check import get_registered_hooks
+
+    settings = {
+        "hooks": {
+            "PreToolUse": [
+                {
+                    "matcher": "EnterPlanMode",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "node",
+                            "args": [
+                                "C:/Users/david.hayes/.claude/hooks/"
+                                "dist/pre-plan-memory.mjs"
+                            ],
+                            "timeout": 5000,
+                        },
+                    ],
+                },
+            ],
+            "SessionEnd": [
+                {
+                    "hooks": [
+                        # Quoted inline: must not resolve to a path with a
+                        # leading apostrophe (a false MISSING). This shape is
+                        # live in ~/.codex/hooks.json.
+                        {
+                            "type": "command",
+                            "command": "node 'C:/x/dist/coordination-release.mjs'",
+                        },
+                        # Non-.mjs registrations (python hooks) are ignored by
+                        # design; asserted so the omission stays deliberate.
+                        {
+                            "type": "command",
+                            "command": "python",
+                            "args": ["C:/x/braintrust_hooks.py", "session_end"],
+                        },
+                    ],
+                },
+            ],
+        },
+    }
+    settings_path = tmp_path / "settings.json"
+    settings_path.write_text(json.dumps(settings), encoding="utf-8")
+
+    names = get_registered_hooks(settings_path=settings_path)
+    assert "pre-plan-memory" in names, "split command/args form was not parsed"
+    assert "coordination-release" in names, "quoted inline form was not parsed"
+    assert not any("'" in n or '"' in n for n in names)
+    assert "braintrust_hooks" not in names
+
+
+def test_extract_hook_paths_reads_args_array(tmp_path):
+    """check_hook_registrations' parser must see the split form as well.
+
+    Separate function, same defect -- fixing only one would leave
+    hook-registrations-valid passing vacuously while hook-runtime was correct.
+    """
+    from scripts.health_check import _extract_hook_paths
+
+    settings = {
+        "hooks": {
+            "PostToolUse": [
+                {
+                    "matcher": "Edit",
+                    "hooks": [
+                        {
+                            "type": "command",
+                            "command": "node",
+                            "args": ["C:/x/dist/memory-awareness.mjs"],
+                        },
+                    ],
+                },
+            ],
+        },
+    }
+
+    paths = _extract_hook_paths(settings)
+    assert len(paths) == 1, f"expected 1 path from the args array, got {paths}"
+    event, path = paths[0]
+    assert event == "PostToolUse"
+    assert path.endswith("memory-awareness.mjs")
+
+
 def test_compute_unfired_hooks_insufficient_history():
     """If history span < min_history_days, has_sufficient_history=False."""
     from scripts.health_check import compute_unfired_hooks

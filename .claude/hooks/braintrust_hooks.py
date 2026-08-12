@@ -21,7 +21,9 @@ import json
 import os
 import random
 import socket
+import subprocess
 import sys
+import time
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
@@ -33,6 +35,33 @@ import httpx
 STATE_DIR = Path.home() / ".claude" / "state" / "braintrust_sessions"
 LOG_FILE = Path.home() / ".claude" / "state" / "braintrust_hook.log"
 GLOBAL_STATE_FILE = Path.home() / ".claude" / "state" / "braintrust_global.json"
+
+# Durable spool. Every POST that fails (transport error OR non-200) lands here
+# instead of being dropped, and is retried by flush_spool(). This is what makes
+# a network blip a delay rather than data loss.
+SPOOL_FILE = Path.home() / ".claude" / "state" / "braintrust_spool.jsonl"
+SPOOL_LOCK = Path.home() / ".claude" / "state" / "braintrust_spool.lock"
+SPOOL_DEADLETTER = Path.home() / ".claude" / "state" / "braintrust_spool.deadletter.jsonl"
+
+# Entries older than this move to the dead-letter file. They are NEVER silently
+# discarded -- a prolonged outage must not become invisible telemetry loss.
+SPOOL_MAX_AGE_SECONDS = 7 * 24 * 3600
+# A flush that dies mid-run must not deadlock every later flush.
+LOCK_STALE_SECONDS = 300
+# Halving bound for oversized batches: 2^6 = 64 sub-batches. Past this the
+# payload is one enormous span, not a batching problem.
+MAX_SPLIT_DEPTH = 6
+# Bounds one flush so it cannot outlive its hook budget.
+FLUSH_MAX_SECONDS = 20.0
+
+LOG_MAX_BYTES = 5 * 1024 * 1024
+STATE_MAX_AGE_SECONDS = 30 * 24 * 3600
+
+# Every value stays under the smallest registered hook timeout (5s PostToolUse),
+# so a stalled TLS handshake fails fast instead of blocking until the harness
+# kills the process mid-POST. Replaces a flat timeout=30 that could never fail
+# gracefully inside a 10s budget.
+HTTP_TIMEOUT = httpx.Timeout(connect=3.0, read=8.0, write=8.0, pool=3.0)
 
 API_KEY = os.environ.get("BRAINTRUST_API_KEY", "")
 PROJECT = os.environ.get("BRAINTRUST_CC_PROJECT", "claude-code")
@@ -59,12 +88,45 @@ def ensure_dirs():
     LOG_FILE.parent.mkdir(parents=True, exist_ok=True)
 
 
+def _scrub_surrogates(obj: Any) -> Any:
+    """Strip lone surrogates so the value can be UTF-8 encoded.
+
+    Transcript text read from disk can carry unpaired surrogates (e.g. '\\udc90').
+    json.dumps() accepts them but .encode('utf-8') does not, so the failure
+    surfaced late -- at the HTTP write -- and killed the whole batch. The log
+    carries ~47 of these. Applied at EVERY encode point, not just the last one.
+    """
+    if isinstance(obj, str):
+        # Fast path: most strings are clean, and encode() is cheaper than a scan.
+        try:
+            obj.encode("utf-8")
+            return obj
+        except UnicodeEncodeError:
+            return obj.encode("utf-8", "replace").decode("utf-8")
+    if isinstance(obj, dict):
+        return {_scrub_surrogates(k): _scrub_surrogates(v) for k, v in obj.items()}
+    if isinstance(obj, list):
+        return [_scrub_surrogates(v) for v in obj]
+    return obj
+
+
+def _rotate_log_if_needed():
+    """Keep the hook log bounded. It reached 18MB unbroken since 2026-01-14."""
+    try:
+        if LOG_FILE.exists() and LOG_FILE.stat().st_size > LOG_MAX_BYTES:
+            os.replace(LOG_FILE, LOG_FILE.with_suffix(LOG_FILE.suffix + ".1"))
+    except OSError:
+        # Rotation is hygiene, never a reason to lose the log line itself.
+        pass
+
+
 def log(level: str, message: str):
     """Log to file."""
     ensure_dirs()
+    _rotate_log_if_needed()
     timestamp = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
     with open(LOG_FILE, "a", encoding="utf-8") as f:
-        f.write(f"{timestamp} [{level}] {message}\n")
+        f.write(f"{timestamp} [{level}] {_scrub_surrogates(message)}\n")
 
 
 def debug(message: str):
@@ -190,31 +252,318 @@ def get_project_id(project_name: str) -> str | None:
 
 
 def insert_span(project_id: str, event: dict) -> str | None:
-    """Insert a single span into Braintrust."""
-    result = batch_insert_spans(project_id, [event])
-    return result[0] if result else None
+    """Insert a single span into Braintrust. Spools on failure."""
+    _status, rows = batch_insert_spans(project_id, [event])
+    return rows[0] if rows else None
 
 
-def batch_insert_spans(project_id: str, events: list[dict]) -> list[str | None]:
-    """Insert multiple spans into Braintrust in a single API call."""
-    if not events:
-        return []
+def _post_events(
+    project_id: str, events: list[dict], client: httpx.Client | None = None
+) -> tuple[bool, str]:
+    """POST one batch. Returns (ok, detail). Never raises, never spools.
+
+    Split out from batch_insert_spans so flush_spool() can retry a batch without
+    re-spooling it on every attempt. Pass `client` to reuse one connection pool
+    across a whole flush: constructing a Client per batch cost ~0.5s each and
+    made a 40-batch drain overrun its own time budget.
+    """
+    owns_client = client is None
+    c = client or httpx.Client(timeout=HTTP_TIMEOUT)
     try:
-        with httpx.Client(timeout=30) as client:
-            resp = client.post(
-                f"{API_URL}/v1/project_logs/{project_id}/insert",
-                headers={
-                    "Authorization": f"Bearer {API_KEY}",
-                    "Content-Type": "application/json",
-                },
-                json={"events": events},
-            )
-            if resp.status_code == 200:
-                data = resp.json()
-                return data.get("row_ids", [])
+        resp = c.post(
+            f"{API_URL}/v1/project_logs/{project_id}/insert",
+            headers={
+                "Authorization": f"Bearer {API_KEY}",
+                "Content-Type": "application/json",
+            },
+            json={"events": _scrub_surrogates(events)},
+        )
+        if resp.status_code == 200:
+            return True, json.dumps(resp.json().get("row_ids", []))
+        # A non-200 previously returned [] with NO log line at all, so every
+        # rejected batch was invisible. Surface status and a body snippet.
+        return False, f"HTTP {resp.status_code}: {resp.text[:200]}"
     except Exception as e:
-        log("ERROR", f"Failed to batch insert {len(events)} spans: {e}")
-    return []
+        return False, f"{type(e).__name__}: {e}"
+    finally:
+        if owns_client:
+            c.close()
+
+
+def _is_payload_too_large(detail: str) -> bool:
+    """Braintrust rejects requests over 10 MiB with HTTP 413."""
+    return "HTTP 413" in detail or "content length exceeded" in detail.lower()
+
+
+def _split_and_post(
+    project_id: str, events: list[dict], client: httpx.Client | None = None, depth: int = 0
+) -> tuple[list[dict], list[dict], str]:
+    """Deliver an oversized batch by halving it. Returns (unsent, undeliverable, error).
+
+    A 413 is PERMANENT for the same bytes -- resending identical content can
+    never succeed, so the plain spool-and-retry path would retry it every session
+    for 7 days and then dead-letter it. Halving is the only thing that can make
+    progress. A SINGLE event that still 413s is undeliverable and is dead-lettered
+    immediately rather than burning a week of retries.
+
+    `unsent` are events that failed for some OTHER (transient) reason and should
+    be spooled. Tracking them separately means a partially-successful split does
+    not re-send the halves that already landed.
+    """
+    if not events:
+        return [], [], ""
+
+    ok, detail = _post_events(project_id, events, client)
+    if ok:
+        return [], [], ""
+    if not _is_payload_too_large(detail):
+        return list(events), [], detail
+    if len(events) == 1 or depth >= MAX_SPLIT_DEPTH:
+        return [], list(events), detail
+
+    mid = len(events) // 2
+    unsent_a, dead_a, err_a = _split_and_post(project_id, events[:mid], client, depth + 1)
+    unsent_b, dead_b, err_b = _split_and_post(project_id, events[mid:], client, depth + 1)
+    return unsent_a + unsent_b, dead_a + dead_b, err_a or err_b
+
+
+def batch_insert_spans(project_id: str, events: list[dict]) -> tuple[str, list]:
+    """Insert spans into Braintrust in a single API call.
+
+    Returns (status, row_ids) where status is
+    "empty" | "sent" | "split" | "spooled" | "undeliverable".
+
+    Callers MUST use the status rather than truthiness of the rows: the old
+    contract returned a bare [] for success-with-no-rows, non-200, AND transport
+    failure alike, so callers logged "Turn finalized" / "Session ended" even when
+    nothing reached Braintrust.
+    """
+    if not events:
+        return "empty", []
+
+    ok, detail = _post_events(project_id, events)
+    if ok:
+        try:
+            return "sent", json.loads(detail)
+        except (json.JSONDecodeError, TypeError):
+            return "sent", []
+
+    # Oversized batches take the splitting path. Everything else spools as-is.
+    if _is_payload_too_large(detail):
+        log("WARN", f"Batch of {len(events)} spans exceeded the size limit, splitting")
+        unsent, undeliverable, split_detail = _split_and_post(project_id, events)
+        if undeliverable:
+            _deadletter_events(project_id, undeliverable, f"oversized single span: {split_detail}")
+        if unsent:
+            log("ERROR", f"Failed to insert {len(unsent)} spans after split, spooling: {split_detail}")
+            spool_events(project_id, unsent)
+            return "spooled", []
+        return ("undeliverable" if undeliverable else "split"), []
+
+    log("ERROR", f"Failed to insert {len(events)} spans, spooling: {detail}")
+    spool_events(project_id, events)
+    return "spooled", []
+
+
+# --- Durable spool -----------------------------------------------------------
+
+
+def spool_events(project_id: str, events: list[dict]) -> bool:
+    """Append a batch to the spool, durably. No network, so it cannot stall.
+
+    fsync matters here: this is the last line of defence for events whose POST
+    already failed, and session_end hands off to a detached child immediately
+    after. A buffered write that dies with the process fixes nothing.
+    """
+    if not events:
+        return True
+    try:
+        ensure_dirs()
+        record = {
+            "project_id": project_id,
+            "events": _scrub_surrogates(events),
+            "spooled_at": time.time(),
+        }
+        with open(SPOOL_FILE, "a", encoding="utf-8") as f:
+            f.write(json.dumps(record) + "\n")
+            f.flush()
+            os.fsync(f.fileno())
+        return True
+    except Exception as e:
+        log("ERROR", f"Spool write failed for {len(events)} spans: {e}")
+        return False
+
+
+def _acquire_spool_lock() -> bool:
+    """Exclusive spool lock. 3+ sessions run concurrently on this machine, and
+    an unlocked read-modify-write rewrite of the spool loses entries."""
+    try:
+        ensure_dirs()
+        if SPOOL_LOCK.exists():
+            age = time.time() - SPOOL_LOCK.stat().st_mtime
+            if age < LOCK_STALE_SECONDS:
+                return False
+            # A flush that died mid-run must not deadlock every later flush.
+            SPOOL_LOCK.unlink(missing_ok=True)
+        fd = os.open(str(SPOOL_LOCK), os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+        os.write(fd, str(os.getpid()).encode())
+        os.close(fd)
+        return True
+    except FileExistsError:
+        return False
+    except OSError:
+        return False
+
+
+def _release_spool_lock():
+    try:
+        SPOOL_LOCK.unlink(missing_ok=True)
+    except OSError:
+        pass
+
+
+def flush_spool(input_data: dict | None = None) -> dict:
+    """Retry spooled batches. Safe to call concurrently -- the lock serializes.
+
+    Retries re-send the ALREADY-FORMED events with their original `id` fields, so
+    a POST that actually succeeded but lost its response merges rather than
+    duplicating. Span ids are never regenerated on retry.
+    """
+    if not SPOOL_FILE.exists():
+        return {"result": "continue"}
+    if not API_KEY:
+        return {"result": "continue"}
+    if not _acquire_spool_lock():
+        debug("Spool flush skipped: another flusher holds the lock")
+        return {"result": "continue"}
+
+    started = time.time()
+    sent = failed = dead = deferred = 0
+    first_error = ""
+    remaining: list[str] = []
+    client = httpx.Client(timeout=HTTP_TIMEOUT)
+    try:
+        try:
+            lines = SPOOL_FILE.read_text(encoding="utf-8").splitlines()
+        except OSError as e:
+            log("ERROR", f"Spool read failed: {e}")
+            return {"result": "continue"}
+
+        for idx, line in enumerate(lines):
+            if not line.strip():
+                continue
+            try:
+                record = json.loads(line)
+            except json.JSONDecodeError:
+                dead += 1
+                _deadletter(line, "unparseable spool line")
+                continue
+
+            age = time.time() - record.get("spooled_at", 0)
+            if age > SPOOL_MAX_AGE_SECONDS:
+                dead += 1
+                _deadletter(line, f"expired after {int(age / 86400)}d")
+                continue
+
+            # Budget guard: keep the rest for the next flush rather than
+            # overrunning the hook that called us.
+            if time.time() - started > FLUSH_MAX_SECONDS:
+                deferred = len(lines) - idx
+                remaining.extend(lines[idx:])
+                break
+
+            rec_project = record.get("project_id", "")
+            rec_events = record.get("events", [])
+            ok, detail = _post_events(rec_project, rec_events, client)
+
+            if not ok and _is_payload_too_large(detail):
+                # Retrying identical oversized bytes can never succeed. Halve it
+                # here too, or this entry retries every session until it expires.
+                # Say so: a silent split leaves the summary line unexplained.
+                log("WARN", f"Spooled batch of {len(rec_events)} spans too large, splitting")
+                unsent, undeliverable, detail = _split_and_post(rec_project, rec_events, client)
+                if undeliverable:
+                    dead += 1
+                    _deadletter_events(
+                        rec_project, undeliverable, f"oversized single span: {detail}"
+                    )
+                if unsent:
+                    ok = False
+                    remaining.append(
+                        json.dumps(
+                            {
+                                "project_id": rec_project,
+                                "events": unsent,
+                                "spooled_at": record.get("spooled_at", time.time()),
+                            }
+                        )
+                    )
+                    failed += 1
+                    if not first_error:
+                        first_error = detail
+                else:
+                    sent += 1
+                continue
+
+            if ok:
+                sent += 1
+            else:
+                failed += 1
+                # Record WHY the first failure happened. Without this a flush
+                # that keeps failing reports only a count, which is the same
+                # silent-failure problem this whole change exists to remove.
+                # Captured once per run so a large failing spool cannot spam.
+                if not first_error:
+                    first_error = detail
+                remaining.append(line)
+
+        _rewrite_spool(remaining)
+    finally:
+        client.close()
+        _release_spool_lock()
+
+    if sent or failed or dead or deferred:
+        # `deferred` is reported separately: a run that leaves entries behind
+        # must not read as a clean drain.
+        summary = f"Spool flush: sent={sent} retry={failed} deferred={deferred} deadlettered={dead}"
+        if first_error:
+            log("ERROR", f"{summary} first_error={first_error}")
+        else:
+            log("INFO", summary)
+    return {"result": "continue"}
+
+
+def _deadletter_events(project_id: str, events: list[dict], reason: str):
+    """Dead-letter events that can never be delivered as-is."""
+    _deadletter(
+        json.dumps(
+            {"project_id": project_id, "events": events, "spooled_at": time.time()}
+        ),
+        reason,
+    )
+
+
+def _deadletter(line: str, reason: str):
+    """Expired or corrupt entries are recorded, never silently discarded."""
+    try:
+        with open(SPOOL_DEADLETTER, "a", encoding="utf-8") as f:
+            f.write(line + "\n")
+        log("ERROR", f"Spool entry dead-lettered ({reason})")
+    except OSError as e:
+        log("ERROR", f"Dead-letter write failed ({reason}): {e}")
+
+
+def _rewrite_spool(remaining: list[str]):
+    """Atomic replace, matching save_session_state's temp+os.replace pattern."""
+    try:
+        if not remaining:
+            SPOOL_FILE.unlink(missing_ok=True)
+            return
+        temp = SPOOL_FILE.with_suffix(".tmp")
+        temp.write_text("\n".join(remaining) + "\n", encoding="utf-8")
+        os.replace(temp, SPOOL_FILE)
+    except OSError as e:
+        log("ERROR", f"Spool rewrite failed: {e}")
 
 
 # Hook implementations
@@ -230,6 +579,13 @@ def session_start(input_data: dict) -> dict:
         return {"result": "continue"}
 
     session_id = input_data.get("session_id", generate_uuid())
+
+    # Drain whatever a previous session spooled. This is the safe drain point:
+    # the network is healthy, the hook has real budget, and it runs once per
+    # session. Deliberately NOT post_tool_use -- that fires on every tool call
+    # inside a 5000ms budget.
+    flush_spool()
+    _prune_old_state(session_id)
 
     # Check if already has root span
     existing = get_session_value(session_id, "root_span_id")
@@ -286,6 +642,34 @@ def session_start(input_data: dict) -> dict:
     return {"result": "continue"}
 
 
+def _prune_old_state(current_session_id: str):
+    """Bound the session-state directory (1,865 files and never cleaned).
+
+    Keyed on each file's own `started` field, NEVER on mtime, and the current
+    session's file is always kept. A long-lived or resumed session can have a
+    stale mtime -- session 20c500e6 ran 08-06 into 08-07 -- and deleting its
+    state drops root_span_id/project_id, which makes every later hook for that
+    session silently no-op.
+    """
+    try:
+        now = datetime.now(timezone.utc)
+        for state_file in STATE_DIR.glob("*.json"):
+            if state_file.stem == current_session_id:
+                continue
+            try:
+                started = json.loads(state_file.read_text()).get("started", "")
+                if not started:
+                    continue  # No provenance -> not safe to judge. Keep it.
+                age = (now - datetime.strptime(started, "%Y-%m-%dT%H:%M:%SZ")
+                       .replace(tzinfo=timezone.utc)).total_seconds()
+                if age > STATE_MAX_AGE_SECONDS:
+                    state_file.unlink(missing_ok=True)
+            except (OSError, ValueError, json.JSONDecodeError):
+                continue
+    except OSError:
+        pass
+
+
 def session_end(input_data: dict) -> dict:
     """Handle SessionEnd hook.
 
@@ -337,18 +721,47 @@ def session_end(input_data: dict) -> dict:
         },
     }
 
-    try:
-        insert_span(project_id, close_event)
-        log(
-            "INFO",
-            f"Session ended: {session_id} (turns={turn_count}, root_span closed at {end_time})",
-        )
-    except Exception as e:
-        # Fail-open: local log success is still valuable for ops, even if the
-        # Braintrust POST fails. Don't break the hook pipeline.
-        log("ERROR", f"Session end span-close failed for {session_id}: {e}")
+    # NEVER POST inline here. This hook runs while the CLI is tearing the session
+    # down; a stalled connection leaves the process inside the POST when the
+    # harness cancels it ("Hook cancelled"), losing the event AND printing an
+    # error at the user. Spool durably, then hand the network to a detached child.
+    spool_events(project_id, [close_event])
+    _spawn_detached_flush()
+    log(
+        "INFO",
+        f"Session ended: {session_id} (turns={turn_count}, root_span close spooled at {end_time})",
+    )
 
     return {"result": "continue"}
+
+
+def _spawn_detached_flush():
+    """Drain the spool in a child that outlives this hook process.
+
+    Uses explicit Windows creation flags, NOT start_new_session=True: that
+    argument is silently ignored on Windows (CPython passes it through as
+    `unused_start_new_session`), so it is not a detachment mechanism here.
+    """
+    try:
+        kwargs: dict[str, Any] = {
+            "stdin": subprocess.DEVNULL,
+            "stdout": subprocess.DEVNULL,
+            "stderr": subprocess.DEVNULL,
+            "close_fds": True,
+        }
+        if sys.platform == "win32":
+            kwargs["creationflags"] = (
+                subprocess.DETACHED_PROCESS
+                | subprocess.CREATE_NEW_PROCESS_GROUP
+                | subprocess.CREATE_NO_WINDOW
+            )
+        else:
+            kwargs["start_new_session"] = True
+        subprocess.Popen([sys.executable, os.path.abspath(__file__), "flush"], **kwargs)
+    except Exception as e:
+        # The events are already durably spooled, so the next session_start
+        # drains them. A failed spawn delays delivery; it never loses it.
+        log("ERROR", f"Detached spool flush spawn failed: {e}")
 
 
 def user_prompt_submit(input_data: dict) -> dict:
@@ -406,15 +819,20 @@ def user_prompt_submit(input_data: dict) -> dict:
 
 
 def _truncate_payload(data: Any, max_chars: int = TOOL_PAYLOAD_MAX_CHARS) -> Any:
-    """Truncate large payloads to reduce Braintrust log volume."""
+    """Truncate large payloads to reduce Braintrust log volume.
+
+    Slicing can cut a surrogate pair in half and MANUFACTURE the lone surrogate
+    that breaks UTF-8 encoding downstream, so every truncated result is scrubbed
+    here rather than only at the outbound encode.
+    """
     if isinstance(data, str):
         if len(data) > max_chars:
-            return data[:max_chars] + f"... [truncated, {len(data)} total chars]"
+            return _scrub_surrogates(data[:max_chars]) + f"... [truncated, {len(data)} total chars]"
         return data
     if isinstance(data, dict):
         s = json.dumps(data, default=str)
         if len(s) > max_chars:
-            return s[:max_chars] + f"... [truncated, {len(s)} total chars]"
+            return _scrub_surrogates(s[:max_chars]) + f"... [truncated, {len(s)} total chars]"
         return data
     return data
 
@@ -807,6 +1225,20 @@ def stop(input_data: dict) -> dict:
                        current_start_timestamp, current_end_timestamp,
                        current_tool_calls, conversation_history.copy())
 
+    # Nothing new in the transcript means this turn is already finalized. That
+    # happens on every session that ends normally: `stop` is registered on BOTH
+    # Stop (per turn) and SessionEnd (a safety net for an abrupt exit mid-turn),
+    # so the last turn is seen twice. Without this guard the second pass merges a
+    # later metrics.end and silently stretches the last turn's duration.
+    #
+    # This REPLACES a mechanism, it does not add one. Clearing current_turn_span_id
+    # below used to make a second stop bail at the "No current turn to finalize"
+    # check. That clear is gone (it was the only two-writer key), so re-entry has
+    # to be caught here instead -- on the transcript, which is the honest signal.
+    if llm_calls_created == 0 and line_num <= turn_last_line:
+        log("INFO", f"Turn {turn_span_id} already finalized (no new transcript lines) -- skipping")
+        return {"result": "continue"}
+
     # Add turn finalization event to the batch
     end_time = int(datetime.now().timestamp())
     turn_update = {
@@ -818,15 +1250,24 @@ def stop(input_data: dict) -> dict:
 
     # Send all events in a single batch API call
     log("DEBUG", f"Batch inserting {len(pending_events)} events: turn={turn_span_id} project={project_id}")
-    batch_insert_spans(project_id, pending_events)
+    status, _rows = batch_insert_spans(project_id, pending_events)
 
-    # Update state
+    # Update state. `stop` deliberately does NOT clear current_turn_span_id: that
+    # made it the only key with two writers (see
+    # docs/hooks/braintrust-stop-event-scope.md section 2), and stop's whole-dict
+    # read-modify-write would clobber every other key on a collision.
+    # user_prompt_submit now owns the key outright -- it is the writer that
+    # assigns a real value, and it overwrites this one at the start of each turn.
+    # Cost: a post_tool_use span landing BETWEEN turns attaches to the previous
+    # turn instead of nothing, which is the more useful attribution anyway.
     set_session_value(session_id, "turn_last_line", line_num)
-    set_session_value(session_id, "current_turn_span_id", "")
 
+    # Report what actually happened. These lines previously claimed success even
+    # when the POST returned a non-200 or died, which is why the log's
+    # "Turn finalized" count was never evidence that spans reached Braintrust.
     if llm_calls_created > 0:
-        log("INFO", f"Created {llm_calls_created} LLM spans for turn")
-    log("INFO", f"Turn finalized (end={end_time})")
+        log("INFO", f"Created {llm_calls_created} LLM spans for turn ({status})")
+    log("INFO", f"Turn finalized (end={end_time}) ({status})")
 
     return {"result": "continue"}
 
@@ -837,6 +1278,9 @@ HOOKS = {
     "user_prompt_submit": user_prompt_submit,
     "post_tool_use": post_tool_use,
     "stop": stop,
+    # Not a Claude Code event -- an internal subcommand invoked by the detached
+    # child that session_end spawns. Never register this in settings.json.
+    "flush": flush_spool,
 }
 
 
@@ -861,8 +1305,13 @@ def main():
     # The full path (which mutates os.environ and re-parses every config var)
     # still runs whenever tracing is on or for any other subcommand.
     if hook_name == "user_prompt_submit":
-        trace_effective = os.environ.get("TRACE_TO_BRAINTRUST", "").lower() == "true"
-        if not trace_effective:
+        env_trace_raw = os.environ.get("TRACE_TO_BRAINTRUST")
+        trace_effective = (env_trace_raw or "").lower() == "true"
+        # An EXPLICIT value in the environment is the off switch and beats
+        # ~/.claude/.env; only fall through to the file when the environment is
+        # silent. Without the `is None` check, TRACE_TO_BRAINTRUST=false was
+        # overruled by the file and tracing could not be turned off at all.
+        if not trace_effective and env_trace_raw is None:
             try:
                 env_file_probe = Path.home() / ".claude" / ".env"
                 if env_file_probe.exists():
@@ -880,6 +1329,12 @@ def main():
             print(json.dumps({"result": "continue"}))
             sys.exit(0)
 
+    # Captured BEFORE the .env merge below: an explicit TRACE_TO_BRAINTRUST in the
+    # real environment is the off switch and beats the file. Mirrors
+    # hooks/src/shared/braintrust-score.ts so spans and scores cannot disagree
+    # about whether tracing is on.
+    pre_env_trace = os.environ.get("TRACE_TO_BRAINTRUST")
+
     # Load .env if exists
     env_file = Path.home() / ".claude" / ".env"
     if env_file.exists():
@@ -894,7 +1349,11 @@ def main():
     PROJECT = os.environ.get("BRAINTRUST_CC_PROJECT", "claude-code")
     API_URL = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
     DEBUG = os.environ.get("BRAINTRUST_CC_DEBUG", "false").lower() == "true"
-    TRACE_ENABLED = os.environ.get("TRACE_TO_BRAINTRUST", "false").lower() == "true"
+    TRACE_ENABLED = (
+        pre_env_trace
+        if pre_env_trace is not None
+        else os.environ.get("TRACE_TO_BRAINTRUST", "false")
+    ).lower() == "true"
     SAMPLE_RATE = float(os.environ.get("BRAINTRUST_SAMPLE_RATE", "1.0"))
 
     try:

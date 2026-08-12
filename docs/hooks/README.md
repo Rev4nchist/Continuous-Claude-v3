@@ -58,8 +58,9 @@ Triggered when a subagent completes.
 ### Stop
 Triggered when Claude generates a stop sequence (task completion).
 - **Input**: `{ session_id, transcript_path, stop_hook_active }`
-- **Use cases**: Auto-handoff creation, force continuation
+- **Use cases**: Per-turn span finalization (`braintrust_hooks.py stop`), auto-handoff creation, force continuation
 - **CRITICAL**: Check `stop_hook_active: true` to prevent infinite loops!
+- **Serializes with the next prompt**: the CLI does not fire UserPromptSubmit until every Stop hook returns (measured: a 90s hold delayed the next prompt to +90,444ms; a 40s hold to +40,327ms). Keep Stop hooks fast and idempotent — a Stop hook's timeout is paid by the user's next turn. See [braintrust-stop-event-scope.md](braintrust-stop-event-scope.md) section 3.1.
 
 ### SessionEnd
 Triggered when the session terminates (clear, logout).
@@ -103,6 +104,16 @@ Triggered when Claude Code sends a notification.
 - Prompts user to mark handoff outcome (SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS, FAILED)
 - Provides SQLite query to find handoff ID
 - Only prompts on user-initiated session end, not auto-compaction
+
+### Tracing
+
+**braintrust_hooks.py** (SessionStart, UserPromptSubmit, PostToolUse, Stop, SessionEnd)
+- Opens and closes Braintrust spans for the session, each turn, and each tool call
+- Subcommands: `session_start`, `user_prompt_submit`, `post_tool_use`, `session_end`, `stop`
+- `stop` finalizes the current turn span and is registered on **both** Stop (per turn, timeout 15000) and SessionEnd (safety net for an abrupt exit mid-turn, timeout 30000)
+- `stop` is idempotent — it returns early ("already finalized") when the transcript has no new lines, which is what makes the double registration safe. **Do not de-duplicate it.**
+- `user_prompt_submit` is the sole writer of `current_turn_span_id`; `stop` no longer writes it
+- Registered on the Stop event in commit `ccdd14b`. Before that, `stop` ran only on SessionEnd — once per session — so 7,610 of 8,726 turn spans (87%) across 1,637 sessions were opened and never closed. Detail: [braintrust-stop-event-scope.md](braintrust-stop-event-scope.md)
 
 ### User Prompt Processing
 
@@ -164,10 +175,11 @@ Triggered when Claude Code sends a notification.
 - Blocks with error message so Claude can fix before proceeding
 - Skips node_modules and test files
 
-**compiler-in-the-loop** (PostToolUse, Stop)
+**compiler-in-the-loop** (not registered)
 - Runs language-specific compiler/linter after code changes
 - Supports Python, TypeScript, Go, Rust
 - Injects errors into context for iterative fixing
+- **Not registered on any event** in either `.claude/settings.json` or `~/.claude/settings.json` — it does not run today. This entry previously claimed `(PostToolUse, Stop)`; the Stop half was impossible, because there was no `Stop` key in settings.json at all before commit `ccdd14b`. The only hook on Stop is `braintrust_hooks.py stop` — see [Tracing](#tracing).
 
 ## Hook Registration
 

@@ -1,0 +1,515 @@
+Date: 2026-08-05
+Commit SHA (HEAD): b04ea82
+This is the pre-fix RED test output for post-plan-roadmap-preserve.test.ts, retained as evidence per the repo convention that "a guard that has never been seen to fail is not yet a guard."
+
+---
+
+ RUN  v4.0.16 C:/Users/david.hayes/continuous-claude/.claude/hooks
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts (11 tests | 9 failed) 25ms
+     × removes NOTHING from the original -- no exemptions 6ms
+     × preserves all six Current Focus bullets byte-identically (vector 1) 1ms
+     × leaves Current Focus untouched even when the plan title differs 4ms
+     × preserves Planned parentheticals, bare items and sub-bullets (vectors 2, 3) 3ms
+     × preserves prose inside ## Completed (vector 3) 2ms
+     × preserves existing session sub-blocks (vector 4) 4ms
+     ✓ preserves the blockquote intro, a custom H2 and ## Notes 0ms
+     ✓ inserts the new session block immediately after the sessions header 0ms
+     × does not rewrite a hand-edited block for today (same title -> skip) 2ms
+     × never trims old session blocks, however many there are 1ms
+     × appends a second block for the same day under a different title 1ms
+
+⎯⎯⎯⎯⎯⎯⎯ Failed Tests 9 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > removes NOTHING from the original -- no exemptions
+AssertionError: expected [ …(13) ] to deeply equal []
+
+- Expected
++ Received
+
+- []
++ [
++   "- `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.",
++   "- Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.",
++   "- Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.",
++   "- **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.",
++   "- Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).",
++   "- Previous focus (lane-board repair) is complete; see the lane board for that track.",
++   "Newest first. Hook-appended entries land directly under this header.",
++   "- [ ] Fix the roadmap-sync clobber (H1 from handoff, see SS4)",
++   "- [ ] Archive the Completed log",
++   "  - depends on the 231-entry threshold warning firing at session start",
++   "**Files:** lane.mjs, apps/agentic-os/scripts/seed-projects.mjs, .claude/project-registry.json",
++   "**Verification:** State plainly in the code comment what this does and does not prove.",
++   "",
++ ]
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:171:40
+    169|     // no path that drops a line. Deliberate deletions, if any are eve…
+    170|     // must be declared -- never discovered here.
+    171|     expect(removedLines(FIXTURE, out)).toEqual([]);
+       |                                        ^
+    172|   });
+    173|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > preserves all six Current Focus bullets byte-identically (vector 1)
+AssertionError: expected [ '## Current Focus', …(3) ] to deeply equal [ '## Current Focus', …(8) ]
+
+- Expected
++ Received
+
+  [
+    "## Current Focus",
+    "**Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**",
+-   "- `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.",
+-   "- Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.",
+-   "- Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.",
+-   "- **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.",
+-   "- Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).",
+-   "- Previous focus (lane-board repair) is complete; see the lane board for that track.",
++   "- `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.",
+    "",
+  ]
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:177:42
+    175|   it('preserves all six Current Focus bullets byte-identically (vector…
+    176|     const out = runUpdate(FIXTURE, makeSession('ROADMAP clobber fix'));
+    177|     expect(sectionSlice(out, 'current')).toEqual(sectionSlice(FIXTURE,…
+       |                                          ^
+    178|   });
+    179|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > leaves Current Focus untouched even when the plan title differs
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain '**Harness repair -- hook test suite G…'
+
+- Expected
++ Received
+
+- **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Some Other Goal**
++ - append-only splice; no cap trim
++ - Started: 2026-08-05
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: Some Other Goal
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:187:17
+    185|     });
+    186|
+    187|     expect(out).toContain('**Harness repair -- hook test suite GREEN a…
+       |                 ^
+    188|     expect(out).not.toContain('- [ ] Harness repair -- hook test suite…
+    189|     expect(sectionSlice(out, 'current')).toEqual(sectionSlice(FIXTURE,…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > preserves Planned parentheticals, bare items and sub-bullets (vectors 2, 3)
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain '- [ ] Fix the roadmap-sync clobber (H…'
+
+- Expected
++ Received
+
+- - [ ] Fix the roadmap-sync clobber (H1 from handoff, see SS4)
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: ROADMAP clobber fix
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:197:17
+    195|
+    196|     // The non-priority parenthetical must not be rewritten to "(mediu…
+    197|     expect(out).toContain('- [ ] Fix the roadmap-sync clobber (H1 from…
+       |                 ^
+    198|     // A bare item must not acquire an invented priority.
+    199|     expect(out).toContain('- [ ] Archive the Completed log');
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > preserves prose inside ## Completed (vector 3)
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain 'Newest first. Hook-appended entries l…'
+
+- Expected
++ Received
+
+- Newest first. Hook-appended entries land directly under this header.
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: ROADMAP clobber fix
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:208:17
+    206|   it('preserves prose inside ## Completed (vector 3)', () => {
+    207|     const out = runUpdate(FIXTURE, makeSession('ROADMAP clobber fix'));
+    208|     expect(out).toContain('Newest first. Hook-appended entries land di…
+       |                 ^
+    209|     expect(sectionSlice(out, 'completed')).toEqual(sectionSlice(FIXTUR…
+    210|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > preserves existing session sub-blocks (vector 4)
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain '**Files:** lane.mjs, apps/agentic-os/…'
+
+- Expected
++ Received
+
+- **Files:** lane.mjs, apps/agentic-os/scripts/seed-projects.mjs, .claude/project-registry.json
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: ROADMAP clobber fix
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:215:17
+    213|   it('preserves existing session sub-blocks (vector 4)', () => {
+    214|     const out = runUpdate(FIXTURE, makeSession('ROADMAP clobber fix'));
+    215|     expect(out).toContain('**Files:** lane.mjs, apps/agentic-os/script…
+       |                 ^
+    216|     expect(out).toContain('**Verification:** State plainly in the code…
+    217|   });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > does not rewrite a hand-edited block for today (same title -> skip)
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain '**Files:** hand-added by Dave, must s…'
+
+- Expected
++ Received
+
+- **Files:** hand-added by Dave, must survive
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: ROADMAP clobber fix
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:249:17
+    247|     const out = runUpdate(handEdited, makeSession('ROADMAP clobber fix…
+    248|
+    249|     expect(out).toContain('**Files:** hand-added by Dave, must survive…
+       |                 ^
+    250|     expect(removedLines(handEdited, out)).toEqual([]);
+    251|     // And no duplicate header for the same day+title.
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > never trims old session blocks, however many there are
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain 'Session number 1'
+
+- Expected
++ Received
+
+- Session number 1
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-09: Session number 9
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-08-08: Session number 8
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-08-07: Session number 7
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-08-06: Session number 6
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-08-05: Session number 5
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:265:19
+    263|     // Every one of the nine, plus both original blocks, still present.
+    264|     for (let i = 1; i <= 9; i++) {
+    265|       expect(doc).toContain(`Session number ${i}`);
+       |                   ^
+    266|     }
+    267|     expect(doc).toContain('### 2026-07-27: Lane-board repair + Agentic…
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/9]⎯
+
+ FAIL  src/__tests__/post-plan-roadmap-preserve.test.ts > post-plan-roadmap: append-only invariant > appends a second block for the same day under a different title
+AssertionError: expected '# Project Roadmap\n\n> **! Multiple s…' to contain '### 2026-08-05: First goal of the day'
+
+- Expected
++ Received
+
+- ### 2026-08-05: First goal of the day
++ # Project Roadmap
++
++ > **! Multiple sessions run on branch `agentic-os`.** Coordination is in the
++ > database, not in a file: see [`COORDINATION.md`](COORDINATION.md) for the
++ > command list and the rules code does not enforce.
++
++ ## Current Focus
++ **Harness repair -- hook test suite GREEN and ratcheted (2026-07-29)**
++ - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail**, down from 93 failures.; Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `2026-07-29_suite-green-handoff.yaml`.; Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**.; **Action for Dave, not code: rotate the Braintrust API key.** The old failing test printed a bearer token.; Next: README SS5.1 (search router on a 143-day-stale index), Step 9 (`paths:` frontmatter, 0 of 46).; Previous focus (lane-board repair) is complete; see the lane board for that track.
++
++ ## Parked -- YouTube plugin (Dave, 2026-08-04)
++ **Pickup anchors:** repo `claude-youtube-research` (main @ `54b80dd`, tree clean).
++ - **#1 ON PICKUP: the GitHub-org question.** Must be a FOURTH-owned org.
++
++ ## Completed
++ - [x] docs(harness): both closed -- store lands rows, dead hook archived (2026-07-29) `c573384`
++ - [x] fix(memory): agent-error-capture stores again after 161 silent days (2026-07-29) `24e47a2`
++
++ ## Planned
++ - [ ] Fix the roadmap-sync clobber (medium priority)
++ - [ ] Archive the Completed log (medium priority)
++ - [ ] **Coordination repair -- ST-02 identity + claim hardening** (high priority)
++
++ ## Notes
++ - G4: never parallel-edit the same memory files.
++
++ ## Recent Planning Sessions
++ ### 2026-08-05: Second goal of the day
++ **Key Decisions:**
++ - append-only splice
++ - no cap trim
++
++ ### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
++ **Key Decisions:**
++ - Fix: drop `myId` from the params array, renumber `$4` -> `$3`.
++ - `note` is non-null wherever `project_key` is null.
++
++ ### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
++ **Key Decisions:**
++ - Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**.
++
+
+ ❯ src/__tests__/post-plan-roadmap-preserve.test.ts:275:17
+    273|     const out = runUpdate(first, makeSession('Second goal of the day')…
+    274|
+    275|     expect(out).toContain(`### ${TODAY}: First goal of the day`);
+       |                 ^
+    276|     expect(out).toContain(`### ${TODAY}: Second goal of the day`);
+    277|     expect(removedLines(first, out)).toEqual([]);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/9]⎯
+
+
+ Test Files  1 failed (1)
+      Tests  9 failed | 2 passed (11)
+   Start at  15:01:31
+   Duration  278ms (transform 69ms, setup 0ms, import 91ms, tests 25ms, environment 0ms)

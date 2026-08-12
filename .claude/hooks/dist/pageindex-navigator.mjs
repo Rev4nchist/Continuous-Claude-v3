@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/pageindex-navigator.ts
 import { readFileSync as readFileSync2, appendFileSync, mkdirSync as mkdirSync2 } from "fs";
 import { join as join3 } from "path";

@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/edit-context-inject.ts
 import { readFileSync as readFileSync2 } from "fs";
 import { basename } from "path";
@@ -150,6 +152,9 @@ function tryStartDaemon(projectDir) {
     }
     if (isDaemonReachable(projectDir)) {
       return true;
+    }
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === "1") {
+      return false;
     }
     if (!tryAcquireLock(projectDir)) {
       const start = Date.now();
@@ -365,4 +370,6 @@ ${parts.join("\n")}`
   });
   console.log(JSON.stringify(output));
 }
-main().catch(() => console.log("{}"));
+if ((process.argv[1] || "").includes("edit-context-inject")) {
+  main().catch(() => console.log("{}"));
+}

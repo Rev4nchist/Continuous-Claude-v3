@@ -33,6 +33,9 @@ interface RalphSignal {
 }
 
 // Pattern to detect Ralph signals in output
+/** Shell tools that carry a command. Must match the settings.json matcher. */
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
 const SIGNAL_PATTERNS = [
     { pattern: /<TASK_COMPLETE\s*\/?>/i, type: 'TASK_COMPLETE' as const },
     { pattern: /<COMPLETE\s*\/?>/i, type: 'COMPLETE' as const },
@@ -229,8 +232,10 @@ function main() {
         const input = readFileSync(0, 'utf-8');
         const data: HookInput = JSON.parse(input);
 
-        // Only process PostToolUse for Bash
-        if (data.event !== 'PostToolUse' || data.tool_name !== 'Bash') {
+        // Only process PostToolUse from a shell tool. Registered matcher is
+        // `Bash|PowerShell`; a narrower runtime check makes half the
+        // registration inert (the 2026-08-05 defect in git-commit-roadmap).
+        if (data.event !== 'PostToolUse' || !COMMAND_TOOLS.has(data.tool_name)) {
             process.exit(0);
             return;
         }
@@ -274,4 +279,6 @@ function main() {
     }
 }
 
-main();
+if ((process.argv[1] || '').includes('ralph-monitor')) {
+  main();
+}

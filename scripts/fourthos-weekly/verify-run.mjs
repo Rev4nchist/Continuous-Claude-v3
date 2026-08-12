@@ -150,7 +150,14 @@ try {
     } catch { allFresh = false; }
     if (allFresh) {
       if (okSentinel) emit("OK", "preview-staged");
-      // Good artifact, no sentinel: downgrade to Warn, not Failed.
+      // A fresh artifact PLUS a SKIP sentinel is the stand-down case: an
+      // interactive generate already staged this week's package and the
+      // scheduled run deliberately declined to rebuild over it. That is a
+      // clean Skipped, not a Warn — before the generate prompt grew its
+      // step-0 stand-down check, SKIP could only mean "nothing was
+      // published", so this combination had no meaning and fell through.
+      if (skipMatch) emit("Skipped", skipMatch[1] || "skip");
+      // Good artifact, no sentinel at all: downgrade to Warn, not Failed.
       emit("Warn", "artifact-fresh no-ok-sentinel");
     }
     // Present + committed but not today = stale leftover; fall through.

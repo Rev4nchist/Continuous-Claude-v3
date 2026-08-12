@@ -28,14 +28,28 @@
 // on its present-path, so a future consolidation can collapse to one superset
 // detector. The exhaustive class-by-class behavior of both is pinned in
 // test/detector-coverage-matrix.test.mjs.
+//
+// SYNTHETIC-ROW EXCLUSION (T9.2, 2026-08-02 audit fix): `checkDrift` used to compute
+// freshness over EVERY row for a type, including the watchdog's own miss-rows and
+// corrective backfill/remap re-emits. That let a dead pipeline look perpetually
+// fresh — the watchdog keeps minting a dated miss-row, and THAT row's Run Date is
+// what `newestRunDate` picked up, so `drift` stayed false forever. `isGenuineRow`
+// (below) now excludes both classes before freshness is computed. This file remains
+// Status-blind BY DESIGN: a genuine row of any Status (including Failed) still
+// counts — only the two SYNTHETIC classes are excluded.
 import { pathToFileURL } from 'node:url';
-import { queryDataSource, selectName, dateStart } from '../project-cards/lib/notion.mjs';
-import { REPORT_RUNS_DS_ID, REPORT_TYPES } from './config.mjs';
-// maxAgeForType lives in watchdog.mjs (it owns the SCHEDULE cadence map). This is a
-// static import into the module that watchdog itself imports from — an ESM cycle that
-// is SAFE because it is only ever CALLED at runtime (inside checkDrift/main), never at
-// module-eval time, and watchdog likewise never reads a check-drift binding at eval.
-import { maxAgeForType } from './watchdog.mjs';
+import {
+  queryDataSource, selectName, dateStart, richText,
+} from '../project-cards/lib/notion.mjs';
+// ACTIVE_REPORT_TYPES (not the full REPORT_TYPES validation domain): a retired type
+// has no future runs, so it would sit in permanent drift forever and drown the signal.
+import { REPORT_RUNS_DS_ID, ACTIVE_REPORT_TYPES, isCorrectiveSummary } from './config.mjs';
+// maxAgeForType + isWatchdogMissRow live in watchdog.mjs (it owns the SCHEDULE
+// cadence map and the miss-row prefix marker). This is a static import into the
+// module that watchdog itself imports from — an ESM cycle that is SAFE because it
+// is only ever CALLED at runtime (inside checkDrift/main), never at module-eval
+// time, and watchdog likewise never reads a check-drift binding at eval.
+import { maxAgeForType, isWatchdogMissRow } from './watchdog.mjs';
 
 export const DEFAULT_MAX_AGE_HOURS = 48;
 
@@ -58,6 +72,18 @@ export function newestRunDate(rows) {
   return best;
 }
 
+// A row counts toward freshness only if it is a GENUINE pipeline row — not a
+// watchdog-authored miss-row (Status='Failed', Summary prefixed "watchdog:") and
+// not a corrective backfill/remap re-emit (T9.2 fix). Without this, the watchdog's
+// OWN miss-rows make check-drift report `drift=false` for a pipeline that has
+// never actually run — the exact false-green the 2026-08-02 audit found for Team
+// Dashboard. A genuine row of ANY Status (including Failed) still counts: that is
+// a different, already-visible failure mode, not the drift this function detects.
+export function isGenuineRow(row) {
+  const summary = richText(row?.properties?.Summary);
+  return !isWatchdogMissRow(summary) && !isCorrectiveSummary(summary);
+}
+
 // Group DS rows by their Report Type select value.
 export function groupByType(rows) {
   const byType = {};
@@ -72,7 +98,7 @@ export function groupByType(rows) {
 // --- pure drift core -----------------------------------------------------------
 // newestByType: { [type]: newestRunDateString | '' }. Every type in `types` gets a
 // row in the result; a type with no/unparseable date is drift=true, ageHours=null.
-export function computeDrift(newestByType, { maxAgeHours = DEFAULT_MAX_AGE_HOURS, now = Date.now(), types = REPORT_TYPES } = {}) {
+export function computeDrift(newestByType, { maxAgeHours = DEFAULT_MAX_AGE_HOURS, now = Date.now(), types = ACTIVE_REPORT_TYPES } = {}) {
   const nowMs = typeof now === 'number' ? now : Date.parse(now);
   return types.map((type) => {
     const raw = newestByType[type] || '';
@@ -100,8 +126,9 @@ export function parseMaxAgeHours(argv) {
 export function checkDrift({ maxAgeHours = null, query = queryDataSource, dsId = REPORT_RUNS_DS_ID, now = Date.now() } = {}) {
   const rows = query(dsId, {});
   const byType = groupByType(rows);
-  return REPORT_TYPES.map((type) => {
-    const newest = newestRunDate(byType[type] || []);
+  return ACTIVE_REPORT_TYPES.map((type) => {
+    const genuineRows = (byType[type] || []).filter(isGenuineRow);
+    const newest = newestRunDate(genuineRows);
     const threshold = maxAgeHours ?? maxAgeForType(type);
     return computeDrift({ [type]: newest }, { maxAgeHours: threshold, now, types: [type] })[0];
   });

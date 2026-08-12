@@ -1,0 +1,807 @@
+[
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude",
+    "sessionCount": 753,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude",
+    "sessionCount": 714,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\fourth-salesforce-mcp",
+    "sessionCount": 87,
+    "projectKey": "fourth-salesforce-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\agent-arch",
+    "sessionCount": 68,
+    "projectKey": "agent-arch",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp",
+    "sessionCount": 64,
+    "projectKey": "fourth-salesforce-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/NorthStar Transformation",
+    "sessionCount": 58,
+    "projectKey": "northstar-transformation",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Fourth Presentation Hosting Platform",
+    "sessionCount": 57,
+    "projectKey": "fourth-presentation-hosting-platform",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\LinkMap",
+    "sessionCount": 53,
+    "projectKey": "linkmap",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes",
+    "sessionCount": 50,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "user home; session started outside any repo"
+  },
+  {
+    "raw": "C:/agent-arch",
+    "sessionCount": 34,
+    "projectKey": "agent-arch",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\Fourth Presentation Hosting Platform",
+    "sessionCount": 34,
+    "projectKey": "fourth-presentation-hosting-platform",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\NorthStar Transformation",
+    "sessionCount": 34,
+    "projectKey": "northstar-transformation",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "c:/users/david.hayes/continuous-claude",
+    "sessionCount": 31,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/LinkMap",
+    "sessionCount": 27,
+    "projectKey": "linkmap",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude/",
+    "sessionCount": 24,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\probe",
+    "sessionCount": 18,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\opc",
+    "sessionCount": 18,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/spark-platform",
+    "sessionCount": 14,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/ECG Lead Reactivation Engine",
+    "sessionCount": 13,
+    "projectKey": "ecg-lead-reactivation-engine",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects",
+    "sessionCount": 12,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "parent directory of many projects, not a project"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes",
+    "sessionCount": 10,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "user home; session started outside any repo"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.claude\\hooks",
+    "sessionCount": 10,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude/opc",
+    "sessionCount": 10,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\opc\\scripts\\dashboard\\frontend",
+    "sessionCount": 8,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/fourth-marketing-brain",
+    "sessionCount": 8,
+    "projectKey": "fourth-marketing-brain",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/agent-factory",
+    "sessionCount": 8,
+    "projectKey": "agent-factory",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects",
+    "sessionCount": 7,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "parent directory of many projects, not a project"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/ebr-presentations",
+    "sessionCount": 7,
+    "projectKey": "ebr-presentations",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 6,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.715.3651.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 6,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\probe",
+    "sessionCount": 6,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:/Users/david.hayes/ArsContexta-Vault",
+    "sessionCount": 6,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\wwfix",
+    "sessionCount": 5,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\fourth-marketing-brain",
+    "sessionCount": 5,
+    "projectKey": "fourth-marketing-brain",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\agent-factory",
+    "sessionCount": 5,
+    "projectKey": "agent-factory",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\ECG Lead Reactivation Engine",
+    "sessionCount": 5,
+    "projectKey": "ecg-lead-reactivation-engine",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/LinkMap/",
+    "sessionCount": 5,
+    "projectKey": "linkmap",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/MileageHQ",
+    "sessionCount": 5,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.609.4994.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 4,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 4,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
+    "sessionCount": 4,
+    "projectKey": "fourth-playwright-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/mileage-tracker",
+    "sessionCount": 4,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\WINDOWS\\system32",
+    "sessionCount": 4,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Windows system directory, not a project"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.claude\\agents",
+    "sessionCount": 3,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.codex-worktrees\\20260707-081041",
+    "sessionCount": 3,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Documents\\Codex\\2026-06-03\\goal-sites-create-a-real-time",
+    "sessionCount": 3,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex transcript output directory, not a project"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Documents\\Codex\\2026-07-16\\i-want-you-to-use-your",
+    "sessionCount": 3,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex transcript output directory, not a project"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Downloads/Claude-App-Skills/ebr-presentation suite skills",
+    "sessionCount": 3,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "downloaded skill bundle, not a project"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/ebr-presentation-suite",
+    "sessionCount": 3,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/gong-mcp",
+    "sessionCount": 3,
+    "projectKey": "gong-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\gong-mcp",
+    "sessionCount": 3,
+    "projectKey": "gong-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/world-cup-geocodes",
+    "sessionCount": 3,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.623.13972.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.715.10079.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0\\app",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Codex CLI install directory, not a project"
+  },
+  {
+    "raw": "c:/users/david.hayes",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "user home; session started outside any repo"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\ArsContexta-Vault",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260707-135755-2042",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260707-142042-724",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260711-155513-25436",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude/.claude/worktrees/distracted-booth",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\opc\\scripts",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude/scripts/project-cards",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\scripts\\project-cards",
+    "sessionCount": 2,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Downloads\\Claude-App-Skills\\ebr-presentation suite skills",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "downloaded skill bundle, not a project"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\fourth-playwright-mcp",
+    "sessionCount": 2,
+    "projectKey": "fourth-playwright-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "c:/users/david.hayes/projects/fourth-salesforce-mcp",
+    "sessionCount": 2,
+    "projectKey": "fourth-salesforce-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\MileageHQ",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\mileage-tracker",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\sf-mcp-ddphaseb-wt",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "looks like a fourth-salesforce-mcp worktree but NOT confirmed — map it only once verified"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/vibe-trading",
+    "sessionCount": 2,
+    "projectKey": "vibe-trading",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\vibe-trading",
+    "sessionCount": 2,
+    "projectKey": "vibe-trading",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\world-cup-geocodes",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Windows\\System32",
+    "sessionCount": 2,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "Windows system directory, not a project"
+  },
+  {
+    "raw": "C:/agent-arch/",
+    "sessionCount": 1,
+    "projectKey": "agent-arch",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\agent-arch\\backend",
+    "sessionCount": 1,
+    "projectKey": "agent-arch",
+    "confidence": 1,
+    "note": "subdirectory of agent-arch"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-apIuuN",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-BaN4s5",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-GcEK44",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-gNCwaQ",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-jF95Xb",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-NS0iQP",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-Q7G8c9",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\ccv3-stress-synth-wIaMyZ",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\wwfix",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\codexhookspike-gFPsZy",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\tmp.R9hz74JQTX\\wt",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\guard-test",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:/Users/david.hayes/AppData/Local/Temp/claude/C--Users-david-hayes-continuous-claude/f9c53122-d7cf-44ee-8a6c-b6ee1111bf71/scratchpad/wwfix/",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\codexhookspike-gFPsZy",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\tmp.R9hz74JQTX\\wt",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.claude\\worktrees\\distracted-booth",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/continuous-claude/.claude/worktrees/lucid-hellman",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.claude\\worktrees\\lucid-hellman",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.codex-worktrees\\20260706-194058",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\continuous-claude\\forge-landing",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "subdirectory of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Desktop/.claude",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0,
+    "note": "stray .claude directory on Desktop, not a project"
+  },
+  {
+    "raw": "C:/Users/david.hayes/.grok-worktrees/continuous-claude-20260711-145553-14947/",
+    "sessionCount": 1,
+    "projectKey": "continuous-claude",
+    "confidence": 1,
+    "note": "git worktree of continuous-claude"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Cowork/projects/ai-reporting-dashboard",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project (Cowork/projects/ai-reporting-dashboard), not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\Cowork\\projects\\ai-reporting-dashboard",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project (Cowork/projects/ai-reporting-dashboard), not in project-registry.json"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Cowork/projects/ebr-presentation suite",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project (Cowork/projects/ebr-presentation suite), not in project-registry.json"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Cowork/projects/fourth-design-system",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project (Cowork/projects/fourth-design-system), not in project-registry.json"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\ebr-presentations",
+    "sessionCount": 1,
+    "projectKey": "ebr-presentations",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/ebr-presentations-plugin",
+    "sessionCount": 1,
+    "projectKey": "ebr-presentations-plugin",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\ebr-presentations-plugin",
+    "sessionCount": 1,
+    "projectKey": "ebr-presentations-plugin",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\ebr-presentation-suite",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Fourth Canvas",
+    "sessionCount": 1,
+    "projectKey": "fourth-canvas",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\Fourth Canvas",
+    "sessionCount": 1,
+    "projectKey": "fourth-canvas",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/Fourth Canvas/.claude/worktrees/lucid-northcutt",
+    "sessionCount": 1,
+    "projectKey": "fourth-canvas",
+    "confidence": 1,
+    "note": "git worktree of Fourth Canvas"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\Fourth Canvas\\.claude\\worktrees\\lucid-northcutt",
+    "sessionCount": 1,
+    "projectKey": "fourth-canvas",
+    "confidence": 1,
+    "note": "git worktree of Fourth Canvas"
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
+    "sessionCount": 1,
+    "projectKey": "fourth-netsuite-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\Projects\\fourth-netsuite-mcp",
+    "sessionCount": 1,
+    "projectKey": "fourth-netsuite-mcp",
+    "confidence": 1,
+    "note": null
+  },
+  {
+    "raw": "C:/Users/david.hayes/Projects/salesforce-mcp",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "possible predecessor of fourth-salesforce-mcp, unconfirmed"
+  },
+  {
+    "raw": "C:\\Users\\david.hayes\\spark-platform",
+    "sessionCount": 1,
+    "projectKey": null,
+    "confidence": 0.5,
+    "note": "real project, not in project-registry.json"
+  }
+]

@@ -151,4 +151,6 @@ async function main() {
   console.log(JSON.stringify(output));
 }
 
-main().catch(() => console.log('{}'));
+if ((process.argv[1] || '').includes('import-validator')) {
+  main().catch(() => console.log('{}'));
+}

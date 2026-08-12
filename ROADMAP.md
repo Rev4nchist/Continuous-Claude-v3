@@ -1,12 +1,27 @@
 # Project Roadmap
 
+> **⚠ Multiple sessions run on branch `agentic-os` (2026-07-27).** Coordination is in the
+> database, not in a file: run `node scripts/coordination/lane.mjs board` to see every lane
+> and who holds it, and `claim <id>` before starting work. See
+> [`COORDINATION.md`](COORDINATION.md) for the command list and the rules code does not
+> enforce. This roadmap stays a record of work; the lane board is the live channel.
+
 ## Current Focus
-**Steady-state maintenance** — reporting optimization track COMPLETE for local work (2026-07-17: 01–03 + 05 + 07 + 08 + 09 shipped; 04 first slice shipped, remainder = efficiency Phase 2 dedicated session; 06 awaiting Dave's IT ticket submission). Next up: verify first unattended fourthos-weekly run Thu 2026-07-23 07:00.
-**Fable — close-out (CLOSED)**
-- Fable build work is DONE and CLOSED (harvest + corpus + standing trap harness; PRs #20/#21/#22). **Verified 2026-07-16:** nothing Fable-derived is installed on ANY active behavioral surface — no rule, agent prompt, skill judgment text, hook, template, or `settings.json` registration (two independent greps: zero). The always-on `reasoning-discipline` rule was cancelled by the `no_lift` trap gate (Opus 4.8 scored 16/16 with and without it — it already saturates that judgment ceiling). Every Fable artifact is inert docs under `docs/fable-manual/`. **No hindrance to Opus agents; nothing to revert.**
-- The only change that actually touched Opus was the separate model-tier retier (PR #17: explicit 12 Opus / 25 Sonnet, `kraken` → Sonnet) + one global `effortLevel: high` — a deliberate, reversible cost/judgment-density call, not a degradation.
-- Two Fable follow-ups intentionally PARKED as backlog (below) — each gated behind the standing trap harness before any prompt-layer change ships, so a future Opus-hindrance can't land unmeasured.
-- claude-for-sales SKO package parked until end of July (built + merged PR #25; remainder is human-gated).
+**Harness repair — hook test suite GREEN and ratcheted (2026-07-29)**
+- `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail / 7 skipped**, down from 93 failures. Held by two ratchets, each demonstrated failing on purpose.
+- Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `thoughts/shared/handoffs/suite-green/2026-07-29_suite-green-handoff.yaml` (outcome SUCCEEDED, nothing half-done).
+- Two live defects the tests were right about, both fixed: the Braintrust tracing **off switch never worked**, and `agent-error-capture` had **stored nothing for 161 days**.
+- ⚠️ **Action for Dave, not code: rotate the Braintrust API key.** The old failing test read the real `~/.claude/.env` and printed `Bearer sk-…` into its output.
+- Next: README §5.1 (search router on a 143-day-stale index), §5.2 (TLDR retarget 3KB→8KB), Step 9 (`paths:` frontmatter, 0 of 46), Step 10 (prune — the 12 unregistered hooks found this session are candidates). The 234 `tsc --noEmit` errors remain a separate, unmeasured axis.
+- Previous focus (lane-board repair + Agentic OS project identity data layer, started 2026-07-27) is complete; see the lane board for that track.
+
+## YouTube-Research Plugin — PARKED at v0.1.3, picking back up later (Dave, 2026-08-04)
+**Pickup anchors:** repo `C:\Users\david.hayes\claude-youtube-research` (main @ `54b80dd`, tree clean; NO remote yet — see #1) · latest zip `C:\Users\david.hayes\youtube-research-v0.1.3.zip` (org currently has **v0.1.2** — upload 0.1.3 on pickup) · handoff `thoughts/shared/handoffs/youtube-researcher-plugin/2026-08-04_11-42_v0.1.1-shipped-github-org-next.yaml` (covers the whole arc; local-only, thoughts/ is gitignored) · memory `youtube-research-plugin-web-limits.md` · original skill+machinery in this repo UNTOUCHED and still Notion-capable (`.claude/skills/youtube-research/`, `scripts/youtube/`).
+- **#1 ON PICKUP: the GitHub-org question.** Enterprise "Sync from GitHub" needs a repo; it must be a FOURTH-owned org, not Rev4nchist personal — same governance shape as the public `ai-enablement-decks` exposure raised in the 02-Aug IT Security thread (still undecided). Until decided, distribution stays manual zip upload. Then: create private repo, push, wire sync.
+- **Version arc, all committed + verified:** `508566f` v0.1.1 scripts-inside-skill-dir + $YTR + degraded mode §8 (web mounts skill dirs only; `$CLAUDE_PLUGIN_ROOT` empty in shell EVERYWHERE — probed both envs) → `f80aa1a` v0.1.2 yt-dlp self-bootstrap (download official release into `<STATE_ROOT>/bin/`, config auto-resolves; E2E-proven locally AND download+exec PROVEN on Claude web) → `54b80dd` v0.1.3 real-error surfacing (null-deref fix in `listTarget`, found by first live web ingest) + TLS escape hatches.
+- **Web status after the 0.1.2 live run:** status/bootstrap PASS; ingest FAIL only on the egress proxy's TLS interception (`CERTIFICATE_VERIFY_FAILED` — proxy CA not in yt-dlp's Python trust store; node trusts it). **First thing to try on pickup** (v0.1.3 uploaded, fresh web chat): `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt node "$YTR/scripts/ingest.mjs" "jNQXAC9IVRw"` — if the system bundle has the proxy CA, web ingest works with TLS intact; fallback `YT_INSECURE_TLS=1` (explicit opt-in, documented in SKILL.md §Known limits). Caveat either way: web corpora die with the conversation.
+- **Cowork:** still unprobed in the right place — the plugin lives in the COMPANY Cowork; the one probe ran in Dave's personal account (void). Same 4-command probe pattern (find SKILL.md → ls scripts → status → bootstrap).
+- **Retired unless revived:** pure-Node captions fetcher — only needed if a sandbox blocks *executing* downloaded binaries, and web demonstrably doesn't.
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.
@@ -20,6 +35,33 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
 
 ## Completed
+- [x] fix(github): plain `git` and bare `gh` now route themselves. ROOT CAUSE: with no `credential."https://github.com".username`, GCM could not choose between two accounts, and a second (`wincred`) helper answered from an ambiguous `git:https://github.com` entry mapping to the WORK account — so every PERSONAL repo silently authenticated as `david-hayes44` and returned "Repository not found" (a 404, not a permissions problem). Fixes: `~/.gitconfig` gains `credential."https://github.com".username = Rev4nchist` + a `url."https://david-hayes44@github.com/fourth/".insteadOf` rewrite; the global `wincred` helper is REMOVED (only the system `manager`/GCM remains). New `scripts/github/gh-shim.ps1` shadows bare `gh` with a directory-routing function, dot-sourced from BOTH PowerShell profiles (`~/Documents/PowerShell/…` created new + `~/Documents/WindowsPowerShell/…`) — EXPLICIT BEATS DIRECTORY (a `GH_CONFIG_DIR` differing from the User-scope default passes through untouched), never throws, works on pwsh 7 and PS 5.1. New `scripts/github/accounts-lib.ps1` holds the shared resolution (`Get-AccountsConfig`, `Expand-HomePath`, `Get-OwnerFromUrl`, `Get-AccountByName`, `Get-AccountNameForOwner`, `Get-AccountNameForPath`, `Resolve-AccountByPath`, `Resolve-AccountByRemote`), dot-sourced by `gh-for.ps1`, `git-for.ps1` and `gh-shim.ps1` — what stays split is WHICH remote to read (gh uses origin + route fallback; git uses a specific remote). New `audit-remotes.ps1` (insteadOf-rewrite coverage) and `sweep-remotes.ps1` (probes every remote read-only with prompts disabled — THE gate). **`gh-for.ps1` was broken in both of its documented forms until this commit**: `[CmdletBinding()]` with `[string]$Path` first made `$Path` positional 0, so `gh-for.ps1 api …` bound `api` to `-Path` and died with "cannot determine an account for 'api'" (a `--` separator does NOT help — `pwsh -File` hands `--` to its own binder); fixed with `[CmdletBinding(PositionalBinding = $false)]`, which `git-for.ps1` had all along — so the 2026-08-05 entry below overstated the prior state of `gh-for.ps1`. MEASURED: sweep 25 FAILURES / 64 remotes → **0 FAILURES / 63 remotes**. `verify-github-accounts.ps1` gained LAYER 5 (21 → 24 checks: bare probe resolves to the DEFAULT account, exactly one credential helper, URL rewrite actually fires against a real repo) and PASSES all 24. `accounts.json` gained per-account `emailAliases` (GitHub noreply addresses accepted when AUDITING; `email` stays canonical-for-WRITING because `apply-commit-identity.ps1` writes it — an alias is NOT a wildcard). `~/fourth-brain-demo` origin removed (404 under both accounts; its 2 local commits intact). Corrections to previously-documented beliefs: `git remote -v` does NOT stay clean under `insteadOf` (it prints the REWRITTEN url; the STORED config is untouched — `git config --get remote.origin.url`); deleting the ambiguous `git:https://github.com` credential does NOT stay done (GCM recreates it on the next successful auth — `credential.<url>.username` is the load-bearing fix, the deletion is hygiene only); a no-username `git credential fill` DOES still return a credential and should (the default account) — the invariant is WHICH account answers; `git-for.ps1`'s empty `-c credential.helper=` token now has no second helper to clear, but STAYS as defence (layer 5 catches a second helper); revoking the "GitHub CLI" OAuth grant breaks `gh` AND plain `git push` together for that account (both held the same `gho_` token) and there is NO reissue button in the GitHub UI — re-run the client login flow (2026-08-11) `65d1444` + `351a377` + `fd9c179` + `3779045`
+- [x] fix(braintrust): turn spans finalize per TURN, not per session. `stop` was registered ONLY on `SessionEnd` while being written for per-turn incremental work (it tracks `turn_last_line`), so **7,610 of 8,726 turn spans (87%) across 1,637 sessions were opened and NEVER closed** — open-ended, unbounded duration in the Braintrust UI. `stop` is now ALSO registered on a new `Stop` event key in BOTH settings.json copies (repo `.claude/settings.json` and active `~/.claude/settings.json`; there was no `Stop` key before), command `python`, timeout 15000 — and REMAINS on `SessionEnd` (timeout 30000) deliberately, as a safety net for an abrupt exit mid-turn. **Supersedes the 2026-08-07 planning note "Remove the `stop` entry from `SessionEnd`"** — nothing was removed from `SessionEnd`. `stop` no longer writes `current_turn_span_id` (the only two-writer key; `user_prompt_submit` now owns it exclusively) and is idempotent — it returns early ("already finalized") when the transcript has no new lines, REPLACING the old clear-the-id re-entry guard. Two blockers resolved empirically and recorded in `docs/hooks/braintrust-stop-event-scope.md` §3: (3.1) `Stop` and `UserPromptSubmit` are SERIALIZED — the CLI does not fire `UserPromptSubmit` until every `Stop` hook returns, proven with 90s and 40s holds (next prompt fired at +90,444ms and +40,327ms); (3.2) Braintrust TOLERATES a parent span arriving after its children — a child with a dangling `span_parents` reference is accepted (HTTP 200) and the hierarchy resolves on read. Consequence: the spool needs NO parent-before-child ordering, the originally planned locked merge is NOT needed (deferred as Option B), and the planned concurrent-writers test was dropped as it would assert against a fiction. 3 guards in `.claude/hooks/src/__tests__/braintrust-hooks-shutdown.test.ts` (12 tests in that file); full hook suite 117 files / 2284 passed / 0 failed. Verified live: STOP HOOK CALLED count incremented, `turn_last_line` appeared, `current_turn_span_id` held the NEW turn's id rather than `""` (2026-08-11) `ccdd14b`
+- [x] feat(github): git-for.ps1 routes git credentials per account, like gh-for.ps1 routes gh (2026-08-05) `271f4a6`
+- [x] fix(artifacts): lane board republished, and the registry now has to verify before it records (2026-08-05) `5c25df0`
+- [x] docs(roadmap): the PowerShell matcher is proven live, and turn the paired commit off (2026-08-05) `97220ca`
+- [x] docs(hooks): record the two-gate failure mode where widening a matcher does nothing (2026-08-05) `5ba820d`
+- [x] docs(artifacts): the lane-board URL is dead while the registry claims it was published today (2026-08-05) `df01d2a`
+- [x] docs(roadmap): record the four reasons a commit can go unrecorded in the audit README (2026-08-05) `5a5ccff`
+- [x] docs(harness): both closed — store lands rows, dead hook archived (2026-07-29) `c573384`
+- [x] fix(memory): agent-error-capture stores again after 161 silent days — THREE stacked causes: the `"Agent '"` noise-prefix blacklist (`05abf54`), a detached store that never completed (`unref()` + parent exiting in the same tick kills the child; 4-arm isolation ruled out job-object teardown), and a 0.88 dedup collapse caused by the first fix's own boilerplate. Also archived `hook-error-pipeline` (dead code, 3 prior audits agreed) (2026-07-29) `24e47a2`
+- [x] fix(memory): B1 — unblock the noise-prefix half + a guard that parses `NOISE_PREFIXES` out of `store_learning.py`; removed 6 fossil `recall_learnings.py` filters (2026-07-29) `84454e4`
+- [x] docs(harness): the suite is green, and two of the four groups were real bugs (2026-07-29) `1c7731e`, `a571425`
+- [x] test(hooks): two ratchets so the suite cannot silently rot again — pass/**collected**-count ratchet + shape guard (no module-scope `main()`, no `node:test`), each demonstrated failing on purpose. The `node:test` check shipped **vacuous** on first write and only the deliberate-violation control caught it (2026-07-29) `ea5187e`
+- [x] fix(hooks): suite green — 10 remaining failures to 0. Braintrust **off switch was inert** (`~/.claude/.env` overwrote the env var inside the guard; fixed in TS *and* Python); `plan-exit-tracker` 7 failures were one stale path (the gate itself was never broken); 27 hooks — not the documented 15 — got the `argv[1]` guard, verified 3 ways; the 93↔94 flapper was a 5-minute dedup marker in the real `$TEMP` (2026-07-29) `688228f`
+- [x] test(hooks): delete 83 fossil failures, salvage the 13 that were real — the arscontexta subsystem was removed by `f9cdbef`, but 13 of the 5 files' 32 *passing* tests were the only coverage of 254 `intentPattern` regexes and the only E2E spawn of a live hook (2026-07-29) `0773a9f`
+- [x] fix(spawn): reap the process TREE on timeout, not just the direct child (2026-07-26) `449e80e`
+- [x] fix(project-cards): give the pre-emit its own --out path (it was clobbering $emitFile) (2026-07-25) `d89c53a`
+- [x] feat(reporting): retire VP Weekly via an active-vs-retired type split (2026-07-25) `3adda93`
+- [x] fix(reporting): extend always-emit contract to dashboard-sync + project-cards (2026-07-25) `4f5f38b`
+- [x] fix(self-improvement): always-emit registry contract + bounded claude -p (2026-07-25) `f43755e`
+- [x] fix(reporting): drop angle brackets from skill description (2026-07-25) `0fd86e6`
+- [x] Rank-3 agent portfolio prune (07-02+07-14): 6 zero-usage agents archived (evidence-based; "delete .json twins" REJECTED — sidecars are live), recall-injector repo registration gap closed, structured return contracts on 6 core agents, README tier drift fixed (2026-07-25) `a02911e`
+- [x] Simplify CCv3 code-intel: cut Serena + codegraph + /code-intel facade (near-zero adoption; usage-data-driven) + smart-search-router false-deny fix (2026-07-25) `cb64d45`..`cdbae08`
+- [x] fix(reporting): trustworthy Reports Hub table + root-cause weekly false-stale (2026-07-20) `ac180c3`
+- [x] feat(self-improvement): triage cockpit — deterministic HTML proposal-review + prioritize + JSON/MD export (2026-07-18) `6e91693`
+- [x] docs(roadmap): absorb hook-appended completed entry (2026-07-18) `a37a9b7`
+- [x] docs(self-improvement): backfill INDEX to 16/16, commit 07-18 observability proposal; unify ROADMAP (2026-07-18) `ee7d026`
 - [x] docs(roadmap): close out reporting optimization track + commit sweep/viz state churn (2026-07-18) `3b6450a`
 - [x] feat(reporting): proposal 07 — /reporting ops verbs (status/run/heal) folded into the reporting skill (2026-07-17) `c38926b`
 - [x] feat(reporting): proposals 05+09 — hub Reporting Health strip + trust metrics rollup (2026-07-17) `b534dd5`
@@ -234,15 +276,23 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] Eliminate Excessive Permission Prompts for Autonomous Agent Tasks (2026-04-02)
 
 ## Planned
-*(curated 2026-07-17 — stale entries removed with evidence: Agent+Skill Fleet Review shipped as PR #17 `c2a9db2`; CCv3-Hardening through Phase C shipped — codegraph LIVE 2026-06-07 per `code-intel-boundaries.md`; WS-0/WS-1 + hardening waves shipped 2026-06-28/29 per `docs/system-update/BACKLOG.md` (Wave 0 + Wave 1 DONE); `snapshot/ccv3-system-update` close-out executed via the 2026-07-01 plan; early hygiene gate + scope decision long-since resolved.)*
+- [ ] **Coordination repair — ST-02 identity + claim hardening (THE GATE for multi-session work)** (high priority). Verified 2026-07-26: `sessions` = 1,476 `s-*` + 894 uuid rows (two per real session); `file_claims` = 8,170 rows, **0 owned by a live session**, 3,168 orphaned, 5,002 stale-owner. Cause: `SessionStart` has no matcher so it fires for subagents; `session-register.ts:34` discards the payload `session_id` and stomps the machine-global `~/.claude/.coordination-session-id`, while `heartbeat.ts:62` uses the payload id. Fix = payload-first identity + per-terminal cache + `CC_TERMINAL_ID` sibling rule **in one commit** (splitting them makes subagent fan-out hard-block itself). Then `file_claims` lease/TTL/fence + the G5 migration (`DELETE … WHERE session_id LIKE 's-%'` wipes all 8,170 — `pg_dump` first). Plan: `~/.claude/plans/we-have-been-working-jolly-token.md` (medium priority)
+- [ ] **Agentic OS — local-first Mission Control (Slice 1 of 4)** (high priority). **Supersedes this entry's earlier "psql for two weeks before any UI" scoping** — the plan approved 2026-07-25 (`~/.claude/plans/i-am-ready-to-noble-wilkinson.md`) deliberately inverts the documented phase order and makes the read-first dashboard Slice 1, not Phase 4. Localhost, single user, **writes nothing**: no auth/OIDC/RLS/`workspace_id`. Hybrid interface — fleet grid is home, click a project for its Canvas. Reads `agentic_os.*` joined to read-only `public.sessions`/`file_claims`/`archival_memory`. Port 3010 (registered). **Two plans are on disk and only this one is in force** — `docs/architecture/agentic-os/` (2026-07-18) describes a governed multi-tenant service and is the destination, not the spec; the five ADRs in `docs/architecture/agentic-os/adr/` record every departure. Lanes: `aos-scaffold` (prerequisite) → `aos-project-identity` (**the gate** — 111 raw `sessions.project` values hand-seeded into `project_alias`; get it wrong and Slice 1 is actively misleading, which is worse than shipping nothing) → `aos-fleet-grid`, `aos-project-canvas`. Counting hazards that must reach the UI: only **887 of 2,352** `sessions` rows are real (1,465 are `s-*` heartbeats), and only **342 of 494** transcripts join. Never `drizzle-kit push` (shared DB, 40 `public` tables belonging to 3 other apps); `schemaFilter: ['agentic_os']` + private `agentic_os.__migrations` journal, both already in `drizzle.config.ts`. (medium priority)
+- [ ] **Harness supply-chain integrity (R1/R2)** (high priority). Verified live: `scripts/sync-to-active.sh:283,443` run `jq '.mcpServers = $mcp'` — a wholesale **replace** of the global `~/.claude/settings.json` MCP server set from a repo-tracked file, unvalidated, on post-commit. With `origin` = third-party upstream and `git pull` in the documented workflow this is the CVE-2025-59536 primitive. **The allowlist/hash manifest must be anchored OUTSIDE the synced repo** (Codex premortem: a manifest inside the repo is shipped by the same malicious commit and passes itself). Also: 75 active hook registrations vs 59 in repo — 16 execute undescribed by VCS; `dist/*.mjs` verified by file *count*, never hash. Source: `docs/self-improvement/proposals/2026-07-26-hooks.md` (medium priority)
+- [ ] **Root-cause the headless `claude -p` hang** (high priority). 3 of 13 scheduled pipelines (Dashboard-Sync, Project-Cards, Self-Improvement-Research) exit `0xC000013A`. Identical signature: the always-emit registry row lands, then the process dies at the `claude -p` step, leaving every row `Failed`. The always-emit contract works; what it records is genuinely broken. Handoff: `thoughts/shared/handoffs/reporting-watchdog/2026-07-25-always-emit-shipped-verification-pending.md` (medium priority)
+- [ ] CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm (high priority)
+- [ ] Plan — Make the Reports Hub "Report pages" table trustworthy + root-cause the live failures (high priority)
+- [ ] **Self-Improvement loop — visibility & pipeline, Part C remainder** (2026-07-24 status: artifactUrl fix + silent-failure Warn gate ALREADY SHIPPED in `0c58413`; remaining = host cockpit on GitHub Pages `ai-enablement-decks` (mirror `scripts/fourthos-weekly/promote.mjs`), wire `triage/build.mjs` regen into `run-research.ps1`, recreate broken hub linked-view (`reportRunsViews` re-pin in `report-runs.ids.json`), live-verify registry row chain. Plan: `~/.claude/plans/we-are-working-in-abstract-nebula.md` (high priority)
+- [ ] **Self-Improvement triage backlog — ranked 2026-07-24** (Dave's cockpit export `Downloads/self-improvement-triage.json`, 16 proposals all bucket=next): in-flight this session → rank 2 memory routing defect (07-12 R1/R2) + rank 4 learning-loop distillation (07-09 R1-R3). Queued next sessions → rank 1 observability step-level scoring (07-18), rank 3 agents pruning/memory-blindness (07-14 + 07-02), rank 5 memory reranker wiring (06-30, reshaped async/manual-first per 07-12 R3), rank 6 workflows cheap ADOPTs (07-03/07-15), rank 7 skills hygiene+telemetry (07-07). SUPERSEDED: ranks 8+14 code-intel (07-04/07-16) — overridden by the 2026-07-24 Serena/codegraph cut (`cb64d45`); do not re-propose Serena. (high priority)
+- [ ] Fable — close-out (CLOSED) (high priority)
 - [ ] **Reporting optimization — remainder** (05/07/08/09 SHIPPED 2026-07-17: `62ff375` conventions, `b534dd5` health strip + trust metrics, `c38926b` /reporting ops verbs; statuses live in artifact `a45fad78`): **04 remainder** = reporting-efficiency Phase 2 (batched STDIN bind + meaning-based hash-gates — spec'd with premortem mitigations in `thoughts/shared/handoffs/reporting-efficiency/2026-07-17-phase1-shipped-phase2-next.md`; dedicated session; dashboard-sync deterministic repoint stays BLOCKED on GAP-1..4) · **06** unattended VP Weekly — IT ticket DRAFTED (`thoughts/shared/handoffs/reporting-optimization/it-ticket-batch-logon-draft.md`), Dave submits · manual follow-ups: live 7/02 hub-callout cleanup + reviewed-date stamps on human sections; ROADMAP-guard hook fix (H1/H2 file:line spec in the efficiency handoff) (high priority)
-- [ ] Verify first unattended fourthos-weekly run — Thu 2026-07-23 07:00; check `~/.claude/logs/fourthos-weekly/` + verify-run.mjs classification (high priority, time-gated)
+- [ ] Verify first unattended fourthos-weekly run — Thu 2026-07-23 07:00; check `~/.claude/logs/fourthos-weekly/` + verify-run.mjs classification (high priority)
 - [ ] fourthos v4 report enhancements — design-approved, staged on main via PR #12; dedicated session, resolve the 4 open choices first (memory: `fourthos-v4-build-queued`) (medium priority)
 - [ ] HELM — Notion-first command center (pivoted 2026-07-03: engine unchanged, presentation = Notion Projects DB + HTML daily brief via `ntn`; local SPA deferred behind daily-use gate) (medium priority)
-- [ ] Grok check-back — externally blocked (corp egress). When probe.ps1 shows READY: `/harness-update grok` (0.2.99 unverified) → grok-adversary pass on the parked plan. IT allowlist ticket for `*.x.ai` (medium priority, externally gated)
+- [ ] Grok check-back — externally blocked (corp egress). When probe.ps1 shows READY: `/harness-update grok` (0.2.99 unverified) → grok-adversary pass on the parked plan. IT allowlist ticket for `*.x.ai` (medium priority)
 - [ ] Fleet-review residuals (post-PR #17): DEL-11 curation, Pocock 7-point deep-review pass, downgrade canary, `updatedInput` spike (low priority)
 - [ ] CCv3 system-update backlog remainder — Tier 2 structural arcs, Tier 2b multi-session coordination, Tier 3 strategic programs, 12 deletions: tracked in `docs/system-update/BACKLOG.md` (medium priority)
-- [ ] WS-2 remainder: Phase B enforcement teeth (facade shipped inert; C codegraph is LIVE) → D memory bridge (needs GIN index) → E observability (medium priority)
+- [ ] WS-2 remainder: Phase B/C RETIRED 2026-07-24 (Serena/codegraph/facade cut, `cb64d45`) → remaining scope only: D memory bridge (needs GIN index) → E observability (medium priority)
 - [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; Codex flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s + warm recall (medium priority)
 - [ ] P2 — Ops: full parallel `vitest run` hangs on a pre-existing Windows daemon/socket suite — add a hard per-test timeout (medium priority)
 - [ ] P3 — Ops: async post-commit forward-sync race leaves active hook dist stale — hash-verify + `cp` after every hook commit until root-fixed (low priority)
@@ -255,51 +305,78 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
-### 2026-07-15: /init-project Review + Hardening Plan
+### 2026-08-07: Fix: Braintrust SessionEnd hooks cancelled at shutdown
 **Key Decisions:**
-- Interview → CLAUDE.md: — auto-scan (package.json/README/configs/git), confirm with user, fill 8-section template from `references/claude-md-template.md`
-- ROADMAP.md: — created with user's current focus
-- Sentry: (conditional, deploy targets) → **7. E2E scaffold* → **8. dev-server scripts* (conditional web) → **9. summary**
-- Hook table at bottom: all names verified real in dist except "memory-extraction" (actual family: `pre-compact-extract`, `session-end-extract`, `periodic-extract`)
-- P1 — would cause a wrong outcome on the next run: *
+- Add a `Stop` event containing `braintrust_hooks.py stop`, `timeout: 15000`.
+- Remove the `stop` entry from `SessionEnd`.
+- Lower `session_end`'s SessionEnd timeout to `5000` — it no longer does network I/O.
+- Do not: register on `SubagentStop`. Subagents dominate hook firings on this machine; adding
+- `SPOOL_FILE = ~/.claude/state/braintrust_spool.jsonl`.
+- SUPERSEDED at implementation by `ccdd14b`: `stop` was KEPT on `SessionEnd` (timeout 30000) as a safety net for an abrupt exit mid-turn, not removed. Only the new `Stop` registration (timeout 15000, both settings.json copies) was added. See the `ccdd14b` entry under `## Completed`.
+- ALSO NOT DONE, deliberately: the `session_end` timeout above was left at **10000**, not lowered to 5000 (verified live in both settings.json copies). `session_end` still spawns the detached spool flush, so the reduction buys nothing and risks a cancel. This bullet is a planning note that was never implemented — do not read it as current state.
 
-**Implementation:**
-- Normalize schema: in BOTH `continuous-claude/.claude/project-registry.json` and `~/.claude/project-registry.json` to the project-registry skill's schema: `name, path, stack[] (array), description, port, url, devCommand, status` (+ keep optional extras `github`, `deploy`, `kind`, `notes`, `sentryProject`, `linearTeam`). Convert the 7 string-stack entries to arrays; add missing `description` fields; make the two files byte-identical (repo ordering wins).
-- Add `project-registry.json` to forward sync: edit `scripts/sync-to-active.sh` to copy `.claude/project-registry.json` → `~/.claude/`, and add a row to `rules/sync-known-gaps.md`.
-- Rewrite init-project Phase 5: write the REPO copy (`~/continuous-claude/.claude/project-registry.json`) using the array schema, then run `bash ~/continuous-claude/scripts/sync-to-active.sh` (or copy both). Keep the port-conflict check, sourcing ports from the registry itself.
-- `references/dev-server-pattern.md`: delete the static port list; replace with "derive used ports from `~/.claude/project-registry.json` at run time; assign next free 3xxx."
-- `rules/dev-server-cleanup.md` + `rules/project-registry.md`: replace/trim their static tables the same way (keep 2–3 rows as *examples*, marked as examples, or point at the JSON). Prevents this class of rot permanently.
+**Files:** ~/.claude/settings.json, continuous-claude/.claude/settings.json, .claude/hooks/braintrust_hooks.py, .claude/hooks/src/__tests__/braintrust-hooks-shutdown.test.ts, braintrust_hooks.py, sync-to-active.sh
 
-**Files:** references/claude-md-template.md, knowledge_tree.py, .serena/project.yml, .mcp.json, ~/.claude/project-registry.json, .claude/project-registry.json, references/dev-server-pattern.md, rules/dev-server-cleanup.md
+**Verification:** `npx vitest run src/__tests__/braintrust-hooks-shutdown.test.ts` — red before, green after.
 
-**Verification:** `node -e` parse both registry copies → identical, all `stack` arrays, all have `description`.
 
-### 2026-07-03: Notion Platform Integration + Helm Notion-First Pivot
+### 2026-08-07: Using AI With Structure — build plan for this afternoon's team call
 **Key Decisions:**
-- Helm pivots Notion-first: the approved Helm plan's **engine** (collectors, salience rules, brief pipeline + its premortem constraints) survives unchanged, but the v0 **presentation** layer becomes a Notion surface (Projects DB + views + HTML daily brief) synced via `ntn`. The local SPA (:3005, launchers, drawer, palette) is **deferred** behind the same daily-use gate — the graveyard lesson applied: ship the simplest surface tied to the key resource (Notion = Bridge/Eve/reports home).
-- `ntn` surface: `login/logout` (keychain; `NOTION_API_TOKEN` env override; `NOTION_KEYRING=0` → file auth for headless), `api <path>` (httpie-style `=`/`:=`/`==`, `-X`, `--spec`, JSON stdout), `pages get/create/edit` (**Markdown I/O**; `--allow-deleting-content` gate), `datasources query/resolve`, `files`, `workers …` (deploy/exec/syncs/webhooks/env/oauth/runs), `doctor`, `--json/--plain/--yes` throughout. Windows Workers support added in 3.6.
-- Live MCP server already exposes the new tools (`notion-create-view` incl. dashboard type, `notion-query-data-sources` SQL, `notion-update-view`, `notion-query-database-view`, `notion-query-meeting-notes`, `notion-duplicate-page`, `notion-move-pages`, `notion-update-data-source`, `notion-get-async-task`, `notion-create-attachment`).
-- S1 CLI on Windows: `curl -fsSL https://ntn.dev | bash` under Git Bash → `ntn doctor`, `ntn login`, `ntn api v1/users` → 200. Headless: `NOTION_KEYRING=0` file auth works from a scheduled-task context. Never echo tokens.
-- S2 HTML block write path: (decides brief publishing): hand-create an HTML block on a scratch page; inspect via `notion-fetch` and `ntn pages get` (round-trip shape); attempt creation via MCP `notion-update-page`/`notion-create-pages` with HTML content. Verdict: MCP-writable / Agent-only / not-yet → pick HTML-block vs Embed-fallback.
+- Phase 3 — Build (1 agent, then 2 parallel) *
+- `deck-builder` — assemble `index.html` from the design system and the slide data.
+- `notes-writer` — `speaker_notes.md`, following the brief's talk track.
+- Phase 5 — Fix *
+- `fixer` — apply confirmed findings. Re-run the three critics' checks.
 
-### 2026-07-01: Plan — Close out `snapshot/ccv3-system-update` + stage the fourthos v4 build
-**Key Decisions:**
-- Decisions (confirmed): stage v4 → build later; PR to main now but **keep** the branch.
-- -title "feat(scheduled-tasks): self-improvement loop + 6 job fixes + Notion dashboard; stage fourthos v4" \
-- -body "<summary of the ~8 commits since PR #11: SI-01 loop, judge/health/AIWeeklyReport/blocklist/fourthos-restore fixes, dashboard-sync, + the 3 fourthos v4 staging commits>"
-- Merge the PR: into `fork/main` (`gh pr merge <n> --merge`, or the GitHub UI). Confirm the merge.
-- Keep the branch: — do NOT delete `snapshot/ccv3-system-update` (per decision). After merge it can
+**Files:** C:\Users\david.hayes\Downloads\call w Ryan.docx, <scratchpad>\ryan-call.txt, ~/.claude/projects/C--Users-david-hayes-continuous-claude/9d208d7e-.../tool-results/artifact-db54f755-1785988397-6a70.html, Projects\ai-enablement-decks\governed-ai-access\index.html, Projects\claude-pricing-presentation\index.html, ~/.claude/CLAUDE.md, ~/.claude/rules/agent-model-selection.md, index.html
 
-### 2026-06-10: CCv3 Fable-5 Deep Review — "Hone to Elegance" (2026-06-10)
-**Key Decisions:**
-- User decisions (locked): (1) **merge PRs #8/#9/#10 first** — review one unified main; (2) **whole-system scope, recent-weighted** (extra depth on the 145 commits since the 2026-05-16 memory-upgrade era); (3) deliver **report + ratified backlog + quick-wins executed** this arc (structural refactors are a later ratified arc).
-- Push **`fork`** (Rev4nchist), never `origin`. Never change BGE model/dim (`BAAI/bge-large-en-v1.5`, 1024).
-- The review is READ-ONLY: — no fixes during discovery/verification/synthesis. Fixes happen only in Phase 4 (quick wins) after ratification.
-- Windows-safe commands (array-arg spawns, `Remove-Item -LiteralPath`, no brace expansion). **Never run the full parallel vitest suite** (known hang on a Windows daemon/socket suite) — no test execution during the review at all.
-- Gates G4 (no parallel edits to memory files), G5 (WS-0.1 blocked), G6 (P3 archive cross-check) remain binding for the fix arc.
+**Verification:** Open `index.html` in a browser. Confirm 22 sections render, scroll-snap works,
 
-### 2026-06-06: CCv3-Hardening — Session 9 (reconciliation + P1 bus-bias)
+
+### 2026-08-05: Session plan — prove the roadmap matcher, then close three open threads
 **Key Decisions:**
-- Step 0 repo reconciliation DONE: herd-fix PR #8 opened; 7 logical reconciliation commits on `chore/session9-reconciliation` (PR #9); 4 junk stderr-artifact files deleted; `.codex/` mirror + `tools/PerfView.exe` gitignored; leading-# memory-eval doc renamed + inbound ref fixed.
-- P1 bus-bias hybrid-recall lift: **KEEP ENABLED** (user-ratified). Verified warm gate +7.3% top-score / flat 69% hit-rate (n=13, corpus 584); read-only PASS. The documented +33.6%/63->88% does NOT reproduce (stale snapshot; repr-only ~+14.5% matches the original +15.3%, diluted to +7.3% by the 5 STRONG cases). Deferred: tune focus-term weighting. Memory id 79da5d25.
-- Two live-hazard findings flagged for follow-up (out of this push's scope): (a) a `store_learning.py` invocation with unquoted shell metacharacters creates junk files under `opc/` (one regenerated mid-session); (b) the `post-plan-roadmap` hook clobbered this Current Focus with a foreign project's goal (Salesforce/FastMCP plan `abstract-coral`) — the cross-project contamination guard did not catch it; this entry restores the correct session-9 record.
+- A hook fix does not take effect until the NEXT commit.: `dist/*.mjs` reaches the live hook
+- Claim a lane: `node scripts/coordination/lane.mjs next`, then `claim <id>`.
+- Do not sweep in these 8 pre-existing uncommitted files: (verified unchanged this session;
+- `RoadmapAuditRecord` (lines 63–89): add `tool: string` as a **required** field. Required, not
+- `appendRoadmapAuditRecord` (373–375) needs no change — it takes a full record.
+
+**Files:** windows-platform.md, settings.json, dist/*.mjs, .git/index.lock, docs/research/youtube/jake-van-clief/_channel.json, scripts/project-cards/state.json, scripts/youtube/state/watchlist.json, ~/.claude/plans/we-are-picking-up-lovely-crab-agent-a95421aa735afc91b.md
+
+
+### 2026-07-27: Lane-board repair + Agentic OS project identity (data layer)
+**Key Decisions:**
+- Fix: drop `myId` from the params array, renumber `$4` → `$3`.
+- Deliberately NOT fixed: the `WHERE` is `id=$1` with no ownership check, so any session
+- `project` ← `.claude/project-registry.json` (19 entries), **`ON CONFLICT DO UPDATE`* —
+- Encode the review decision in `confidence`, not in a NULL FK. `confidence` is already
+- `note` is non-null wherever `project_key` is null.
+
+**Files:** lane.mjs, apps/agentic-os/scripts/seed-projects.mjs, .claude/project-registry.json, apps/agentic-os/scripts/project-aliases.json, apps/agentic-os/src/server/queries/projects.ts, health.ts, .claude/backups/*.sql, scripts/project-cards/state.json
+
+**Verification:** State plainly in the code comment what this does and does not prove: it proves no row
+
+### 2026-07-26: Wrangle: Current State, Coordination Protocol, and Execution Order
+**Key Decisions:**
+- Correction: ROADMAP.md *does have a `## Planned` section — 17 items — at **line 243, beneath a 226-line `## Completed` changelog**. `Current Focus` is empty. Several Planned entries stale. `## Notes` preserves six hard gates; **G4 (never parallel-edit the same memory files)* and **G5 (session-id consolidation needs a `file_claims` migration)* both directly constrain this plan.
+- Mechanism (traced to exact lines): `SessionStart` is registered with **no matcher**, so it fires for every subagent too. `session-register.ts:34` ignores `input.session_id`, calls `generateSessionId()`, and stomps the single machine-global file `~/.claude/.coordination-session-id`. Meanwhile `heartbeat.ts:62` correctly uses `input.session_id`. So a terminal **claims files under one identity while heartbeating as another**, and the claiming identity's heartbeat is frozen at session start.
+- False negative:: past minute five every `s-*` identity is permanently stale, so every conflict resolves as "took over stale lock." **Zero of 8,170 claims are live-owned. The lock has not blocked a real cross-session edit in a long time.**
+- Correction to the hooks proposal: its "6 `getSessionId` implementations" framing overstates the coordination impact. Five clones (`guardrail-enforcer.ts:98`, `lib/hook-trace.ts:34`, `shared/logger.ts:72`, `shared/resource-reader.ts:70`, `shared/session-isolation.ts:23`) only pick tmp-state filenames and are **not on the coordination path**. The break is entirely in the `session-id.ts` ↔ `session-register.ts` ↔ `heartbeat.ts` triangle. That makes the fix much smaller than the BACKLOG framing suggests.
+- The good news: Claude Code already hands every hook a `session_id` that is distinct per subagent and stable per process tree — exactly the `agent_id` MS-01 planned to build. We don't need a new identity scheme; we need to stop discarding the one we're given.
+
+### 2026-07-25: Planning Session
+### 2026-07-24: Simplify CCv3 code-intel: cut Serena + retire dormant codegraph//code-intel facade
+**Key Decisions:**
+- `C:\Users\david.hayes\.mcp.json` — delete the `"serena"` block (lines ~71-79). Use Node atomic read-modify-write, not the Edit tool.
+- Delete `scripts/code-intel.mjs` (the facade — confirmed guidance-only, no callers outside the skill).
+- `code-intel-enforcer` hook: delete `.claude/hooks/src/code-intel-enforcer.ts` + its test if present, remove from `settings.json` registration **if registered* (scout: default-OFF, wrong matcher, zero events — verify with `/hook-audit`-style grep of both settings.json copies; settings.json is NOT synced, edit repo + `~/.claude/` copies via Node atomic write). Rebuild hooks (`cd .claude/hooks && npm run build`).
+- Leave `shared/intel-bus.ts` and `shared/context-bus.ts` in place (substrate used by other hooks/tests; the `serena_lsp` type field and "serena" label comments are inert). Optional: drop `codegraph-platform-contract.test.ts` (it auto-skips when binary absent, but deleting removes ~7min of potential CI noise).
+- Delete `.claude/rules/code-intel-boundaries.md`. Fix its inbound references: `windows-platform.md` (remove/condense the codegraph Phase C section to a one-line historical note), `cli-integration-strategy.md` (remove Serena from the MCP inventory row), `tldr-cli.md` (now unambiguously the symbol-search path — remove any "deprecated for symbol search" language if present).
+
+### 2026-07-21: CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm
+**Key Decisions:**
+- Issue 1 has two compounding layers: *
+- Issue 2: the **Codex* harness SessionStart hook
+- Reuse the existing, tested converter:
+- iolo stop-and-test: (user's chosen first AV move). Stop `ioloTrayApp` and the iolo
+- Lever A dispatcher: (81 hooks → ~9 in-process; permissionDecision-merge risk) and

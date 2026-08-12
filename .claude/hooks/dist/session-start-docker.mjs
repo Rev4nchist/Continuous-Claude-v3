@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/session-start-docker.ts
 import { execSync } from "child_process";
 import { readFileSync } from "fs";
@@ -127,8 +129,7 @@ async function main() {
   }
   if (!isDockerAvailable()) {
     const output2 = {
-      result: "continue",
-      message: "Docker not available - memory system will use SQLite fallback"
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: "Docker not available - memory system will use SQLite fallback" }
     };
     console.log(JSON.stringify(output2));
     return;
@@ -140,15 +141,13 @@ async function main() {
   const startResult = await startContainerWithRetry();
   if (!startResult.success) {
     const output2 = {
-      result: "continue",
-      message: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.`
+      hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: `Failed to start PostgreSQL container: ${startResult.message}. Memory system will use SQLite fallback.` }
     };
     console.log(JSON.stringify(output2));
     return;
   }
   const output = {
-    result: "continue",
-    message: startResult.message || "PostgreSQL memory container started"
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: startResult.message || "PostgreSQL memory container started" }
   };
   console.log(JSON.stringify(output));
 }

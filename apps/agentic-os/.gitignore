@@ -1,0 +1,9 @@
+/node_modules
+/.next
+/out
+next-env.d.ts
+*.tsbuildinfo
+
+# Holds the real connection strings for all three database roles.
+.env.local
+.env*.local

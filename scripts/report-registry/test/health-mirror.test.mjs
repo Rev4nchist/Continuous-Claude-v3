@@ -364,3 +364,71 @@ test('mirrorHealth --dry-run touches no transport', () => {
   assert.equal(errors.length, 0);
   assert.equal(sections.every((x) => x.wrote === false), true);
 });
+
+// --- loadRuns freshness guard (2026-08-04) --------------------------------------
+// Real temp-dir fixtures: loadRuns does fs I/O, so these drive the actual reader.
+// The guard exists because "newest by filename" is not "this run's output" ? a
+// crashed run leaves last week's file newest, and mirroring it re-publishes old
+// data as fresh (page PASS, registry disagrees).
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as joinPath } from 'node:path';
+import { loadRuns, STALE_MAX_AGE_HOURS } from '../health-mirror.mjs';
+
+const T0 = Date.parse('2026-08-04T15:00:00.000+00:00'); // fixed "now" for determinism
+
+function healthDir(files) {
+  const dir = mkdtempSync(joinPath(tmpdir(), 'hm-fresh-'));
+  for (const [name, json] of Object.entries(files)) {
+    writeFileSync(joinPath(dir, name), JSON.stringify(json));
+  }
+  return dir;
+}
+
+test('loadRuns: fresh newest JSON loads; previous WARN names collected', () => {
+  const dir = healthDir({
+    'health_20260728_080000.json': healthJson({ timestamp: '2026-07-28T08:00:00+00:00' }),
+    'health_20260804_140000.json': healthJson({ timestamp: '2026-08-04T14:00:00+00:00' }),
+  });
+  try {
+    const { json, previousWarnNames } = loadRuns(dir, { now: T0 });
+    assert.equal(json.timestamp, '2026-08-04T14:00:00+00:00');
+    assert.equal(previousWarnNames.has('claude-opc-dir-set'), true);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadRuns: newest JSON older than threshold THROWS STALE (crashed run left last week newest)', () => {
+  const dir = healthDir({
+    'health_20260731_134321.json': healthJson({ timestamp: '2026-07-31T13:43:21+00:00' }),
+  });
+  try {
+    assert.throws(() => loadRuns(dir, { now: T0 }), /^Error: STALE:/);
+    assert.throws(() => loadRuns(dir, { now: T0 }), /refusing to re-publish/);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+test('loadRuns: age just inside the threshold passes; just outside throws', () => {
+  const mk = (iso) => healthDir({ 'health_20260804_120000.json': healthJson({ timestamp: iso }) });
+  const inside = mk(new Date(T0 - (STALE_MAX_AGE_HOURS * 3600000 - 60000)).toISOString());
+  const outside = mk(new Date(T0 - (STALE_MAX_AGE_HOURS * 3600000 + 60000)).toISOString());
+  try {
+    assert.equal(loadRuns(inside, { now: T0 }).json.overall_status, 'WARN');
+    assert.throws(() => loadRuns(outside, { now: T0 }), /STALE:/);
+  } finally {
+    rmSync(inside, { recursive: true, force: true });
+    rmSync(outside, { recursive: true, force: true });
+  }
+});
+
+test('loadRuns: missing/unparseable timestamp THROWS STALE (never mirror unverifiable data)', () => {
+  const noTs = healthJson(); delete noTs.timestamp;
+  const dir = healthDir({ 'health_20260804_140000.json': noTs });
+  const dir2 = healthDir({ 'health_20260804_140000.json': healthJson({ timestamp: 'not-a-date' }) });
+  try {
+    assert.throws(() => loadRuns(dir, { now: T0 }), /STALE:.*timestamp/);
+    assert.throws(() => loadRuns(dir2, { now: T0 }), /STALE:.*timestamp/);
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+    rmSync(dir2, { recursive: true, force: true });
+  }
+});

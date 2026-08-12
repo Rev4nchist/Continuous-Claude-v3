@@ -88,6 +88,8 @@ export function healthStatus(overall) {
 
 // VP Weekly: one run per archive week-dir (e.g. 2026-W27). runDate = Monday of the
 // ISO week; artifactUrl = the GH Pages report URL; stable marker = the dir name.
+// RETAINED after the 2026-07-25 retirement (the type stays in REPORT_TYPES, so this
+// still produces valid rows) but deliberately UNWIRED from collectAllRuns below.
 export function vpRunsFromDirs(dirNames) {
   const type = 'VP Weekly';
   const source = SOURCE_BY_TYPE[type];
@@ -210,15 +212,6 @@ function safe(label, fn) {
   }
 }
 
-export function loadVpRuns(dir = SOURCES.vpArchiveDir) {
-  return safe('VP Weekly', () => {
-    if (!existsSync(dir)) return [];
-    const dirs = readdirSync(dir).filter((d) => {
-      try { return statSync(join(dir, d)).isDirectory(); } catch { return false; }
-    });
-    return vpRunsFromDirs(dirs);
-  });
-}
 
 export function loadSponsorRuns(file = SOURCES.decksJson) {
   return safe('FourthOS Sponsor', () => {
@@ -253,10 +246,24 @@ export function loadHealthRuns(dir = SOURCES.healthChecksDir) {
   });
 }
 
+export function loadVpRuns(dir = SOURCES.vpArchiveDir) {
+  return safe('VP Weekly', () => {
+    if (!existsSync(dir)) return [];
+    const dirs = readdirSync(dir).filter((d) => {
+      try { return statSync(join(dir, d)).isDirectory(); } catch { return false; }
+    });
+    return vpRunsFromDirs(dirs);
+  });
+}
+
 // Aggregate every source into a single labelled map of run arrays.
+// VP Weekly is deliberately UNWIRED here — retired 2026-07-25 (see
+// report-runs.ids.json retiredTypes). Re-seeding history for a report nobody runs
+// adds churn without value; its already-backfilled rows stay in the registry
+// untouched, and vpRunsFromDirs above is kept (still valid, still unit-tested) so
+// reviving the type is a one-line change here.
 export function collectAllRuns() {
   return {
-    'VP Weekly': loadVpRuns(),
     'FourthOS Sponsor': loadSponsorRuns(),
     'Self-Improvement': loadSelfImprovementRuns(),
     'System Health': loadHealthRuns(),

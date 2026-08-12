@@ -141,3 +141,27 @@ export function computeAttention(project, series = [], now = new Date()) {
     trend,
   };
 }
+
+// --- hash canonicalization (2026-08-04) ------------------------------------------
+// staleDays/reviewDays are DAY COUNTERS: they tick every midnight, so feeding the
+// raw attention into the canonical (hash) render made every card flip changed=true
+// daily — all 11 cards republished every morning, and on slow-spawn mornings the
+// sweep's 18-min budget blew (ETIMEDOUTs, stale cards, cockpitPublished=false).
+// This quantizes the counters to their SCORING BANDS for the canonical render only:
+// the displayed card keeps exact day counts, while the hash moves only when a band
+// flips (fresh->stale, upcoming->due-soon->overdue) — i.e. when the card's meaning
+// changes, which is exactly when a republish is worth 11 Notion writes.
+export function quantizeAttentionForHash(a) {
+  if (!a) return a;
+  const reviewBand = a.reviewDays == null
+    ? null
+    : (a.reviewDays < 0 ? 'overdue' : (a.reviewDays <= REVIEW_SOON_DAYS ? 'due-soon' : 'later'));
+  return {
+    ...a,
+    staleDays: a.stale ? 'stale' : 'fresh',
+    reviewDays: reviewBand,
+    // reasons embed literal day counts ("⏳ 17d stale") — neutralize the digits so a
+    // consumer that renders reasons cannot silently reintroduce the daily churn.
+    reasons: (a.reasons || []).map((s) => String(s).replace(/\d+d/g, 'Nd')),
+  };
+}

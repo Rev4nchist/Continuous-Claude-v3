@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/linear-branch-context.ts
 import { readFileSync } from "fs";
 var BRANCH_CREATE = /(?:git\s+(?:checkout\s+-b|switch\s+-c))\s+\S*LIN-(\d+)/i;

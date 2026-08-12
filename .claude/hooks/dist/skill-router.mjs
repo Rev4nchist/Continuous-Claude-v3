@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/skill-router.ts
 import { readFileSync, existsSync, readdirSync, statSync } from "fs";

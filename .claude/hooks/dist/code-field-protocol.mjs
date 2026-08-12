@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/code-field-protocol.ts
 import { readFileSync } from "fs";
@@ -73,4 +74,6 @@ async function main() {
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("code-field-protocol")) {
+  main();
+}

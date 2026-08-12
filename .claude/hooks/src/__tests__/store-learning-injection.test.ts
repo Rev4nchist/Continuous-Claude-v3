@@ -26,7 +26,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach } from 'vitest';
-import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, mkdtempSync, mkdirSync, writeFileSync, rmSync } from 'fs';
 import { join, dirname } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -49,6 +49,20 @@ const spawnSyncMock = vi.fn(() => ({
   signal: null,
 }));
 const execSyncMock = vi.fn(() => '');
+
+/**
+ * agent-error-capture no longer uses spawnSync: 09ba655 made its store a DETACHED
+ * async spawn (fire-and-forget, so the store outlives the short-lived hook). It is
+ * reached through the injectable `deps.spawnFn` seam, so this stub is passed in
+ * directly rather than mocked globally.
+ *
+ * That injection also fixes a real side effect: because only spawnSync/execSync
+ * were stubbed, the unmocked spawn actually launched a detached
+ * `uv run python .../store_learning.py` on every single suite run -- which is where
+ * the "[AgentErrorCapture] Dispatched (detached)" line in the run log came from,
+ * and which contradicted this file's own premise that nothing ever shells out.
+ */
+const spawnMock = vi.fn(() => ({ pid: 4321, unref: () => {} }) as any);
 
 vi.mock('child_process', async (importOriginal) => {
   const actual = await importOriginal<typeof import('child_process')>();
@@ -74,32 +88,67 @@ function argAfter(argv: unknown, flag: string): string | undefined {
   return argv[i + 1] as string;
 }
 
-/** The first spawnSync call whose argv contains store_learning.py. */
-function storeCall(): any[] | undefined {
-  const calls = spawnSyncMock.mock.calls as unknown as any[][];
+/** The first call on `mock` whose argv contains store_learning.py. */
+function findStoreCall(mock: { mock: { calls: unknown[][] } }): any[] | undefined {
+  const calls = mock.mock.calls as unknown as any[][];
   return calls.find((c) => {
     const argv = c[1];
     return Array.isArray(argv) && argv.some((a: unknown) => typeof a === 'string' && a.includes('store_learning.py'));
   });
 }
 
+/** The first spawnSync call whose argv contains store_learning.py. */
+function storeCall(): any[] | undefined {
+  return findStoreCall(spawnSyncMock);
+}
+
+/**
+ * VESTIGIAL as of 2026-07-29: hook-error-pipeline is archived, so nothing in this
+ * file writes the marker any more. The cleanup is kept because it is free and the
+ * failure mode it documents is worth not relearning.
+ *
+ * hook-error-pipeline dedups identical errors for 5 minutes via a REAL file in the
+ * developer's temp dir ($TEMP/claude-hook-errors/recent-errors.json, keyed on
+ * hookName + errorMessage). Because this test always reports the same hook name
+ * and the same INJECTION message, it stored a marker on its first run and then
+ * SKIPPED the store on every run within the next 5 minutes -- so it passed once
+ * and failed on every rerun, with `expected undefined to be defined`.
+ *
+ * That is a pre-existing defect, not a new one, and it is the most likely
+ * explanation for the suite's total moving between 93 and 94 failures across runs.
+ * Proven 2026-07-29 by execution: delete the marker -> 7 passed; rerun
+ * immediately -> 1 failed / 6 passed, deterministically. The live marker held 20
+ * entries, several dated days earlier.
+ *
+ * Clearing it here makes the run independent of when the previous run happened.
+ */
+const HOOK_ERROR_STATE = join(tmpdir(), 'claude-hook-errors');
+
 beforeEach(() => {
   spawnSyncMock.mockClear();
   execSyncMock.mockClear();
+  spawnMock.mockClear();
+  try {
+    rmSync(join(HOOK_ERROR_STATE, 'recent-errors.json'), { force: true });
+  } catch {
+    // Never let cleanup fail the test.
+  }
 });
 
 describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
-  it('agent-error-capture.ts: stores via spawnSync with raw content argv', async () => {
+  it('agent-error-capture.ts: stores via detached spawn with raw content argv', async () => {
     const mod: any = await import('../agent-error-capture.js');
     const fn = mod.storeLearning;
     expect(typeof fn, 'storeLearning must be exported for testing').toBe('function');
 
     // Drive the store path directly with the injection payload as the error context.
-    fn('sess-1', 'kraken', 'do a thing', INJECTION);
+    // spawnFn is injected so nothing is really launched (see spawnMock above).
+    fn('sess-1', 'kraken', 'do a thing', INJECTION, { spawnFn: spawnMock });
 
     expect(execSyncMock, 'execSync must NOT be used for the store').not.toHaveBeenCalled();
-    const call = storeCall();
-    expect(call, 'spawnSync should have been called with store_learning.py').toBeDefined();
+    expect(spawnSyncMock, 'the store is a detached spawn, not spawnSync').not.toHaveBeenCalled();
+    const call = findStoreCall(spawnMock);
+    expect(call, 'spawn should have been called with store_learning.py').toBeDefined();
 
     const argv = call![1];
     expect(Array.isArray(argv)).toBe(true);
@@ -113,28 +162,13 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
     expect(opts.shell).not.toBe(true);
   });
 
-  it('hook-error-pipeline.ts: stores via spawnSync with raw content argv', async () => {
-    const mod: any = await import('../hook-error-pipeline.js');
-    const fn = mod.captureHookError;
-    expect(typeof fn, 'captureHookError must be exported').toBe('function');
-
-    const err = new Error(INJECTION);
-    fn('some-hook', err, 'sess-2', true);
-
-    expect(execSyncMock).not.toHaveBeenCalled();
-    const call = storeCall();
-    expect(call, 'spawnSync should have been called with store_learning.py').toBeDefined();
-
-    const argv = call![1];
-    expect(Array.isArray(argv)).toBe(true);
-
-    const content = argAfter(argv, '--content');
-    expect(content).toContain(INJECTION);
-    expect(content).not.toContain('\\"');
-
-    const opts: any = call![2] || {};
-    expect(opts.shell).not.toBe(true);
-  });
+  // hook-error-pipeline.ts was ARCHIVED 2026-07-29 -> .claude/hooks/archive/.
+  // It was dead code: zero importers outside this test, registered in no
+  // settings.json, and flagged for archive by three independent audits (35
+  // health_*.json orphan entries, hook-audit-2026-04.md:134, the 2026-06-10 WF2
+  // review). Its own QW-01 test is removed with it -- keeping a security test for
+  // a module nothing loads is what made the sibling arscontexta fossils survive a
+  // month of red. The two live producers below still carry their QW-01 coverage.
 
   it('user-confirmation-detector.ts: USER_PREFERENCE store via spawnSync with raw content', async () => {
     const mod: any = await import('../user-confirmation-detector.js');
@@ -200,9 +234,10 @@ describe('QW-01: store_learning.py injection — no-shell spawnSync', () => {
 });
 
 describe('QW-01: static-source regression guard', () => {
+  // hook-error-pipeline.ts removed 2026-07-29 -- archived as dead code. These are
+  // the two producers that are actually registered and actually run.
   const FILES = [
     'agent-error-capture.ts',
-    'hook-error-pipeline.ts',
     'user-confirmation-detector.ts',
   ];
 
@@ -218,8 +253,21 @@ describe('QW-01: static-source regression guard', () => {
       // No sh-style double-quote escaping near the store call sites.
       expect(/\.replace\(\/"\/g/.test(src), `${f} still does .replace(/"/g escaping`).toBe(false);
 
-      // Must use spawnSync for the store.
-      expect(/spawnSync\s*\(/.test(src), `${f} must use spawnSync`).toBe(true);
+      // Must dispatch the store through child_process WITHOUT a shell. The
+      // original assertion here was /spawnSync\s*\(/ -- a function NAME, which
+      // 09ba655 broke by moving agent-error-capture to a detached async spawn()
+      // while leaving the security invariant fully intact. A name is not the
+      // invariant; "argv array, no shell" is. Note /spawn\s*\(/ would not work
+      // either: agent-error-capture calls through an injected `spawnFn` seam and
+      // contains no literal spawn( at all. So assert the import.
+      expect(
+        /import\s*\{[^}]*\bspawn(Sync)?\b[^}]*\}\s*from\s*['"]child_process['"]/.test(src),
+        `${f} must import spawn or spawnSync from child_process`,
+      ).toBe(true);
+
+      // The actual invariant: never hand the store to a shell.
+      expect(/shell:\s*true/.test(src), `${f} must not pass shell: true`).toBe(false);
+      expect(/shell:\s*false/.test(src), `${f} must pass shell: false explicitly`).toBe(true);
     });
   }
 });

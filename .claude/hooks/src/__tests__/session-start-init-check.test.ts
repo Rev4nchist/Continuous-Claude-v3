@@ -13,7 +13,7 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -151,4 +151,74 @@ describe('session-start-init-check: hasCodeFiles extension detection (Phase 3B)'
     // No knowledge-tree messages should appear
     expect(result.stderr).not.toContain('Generating knowledge tree');
   });
+});
+
+/**
+ * Hook-build freshness warning.
+ *
+ * Both tests were confirmed to FAIL against the pre-fix predicate, which
+ * compared src mtimes against `statSync(distDir).mtimeMs` -- a DIRECTORY mtime,
+ * which does not move when a rebuild overwrites bundles in place -- and read src
+ * with a NON-RECURSIVE readdirSync, so `src/shared/*.ts` was invisible.
+ *
+ * The fixture is built in the order dist-then-src deliberately: it leaves the
+ * dist DIRECTORY older than the sources while the BUNDLE inside it is newer,
+ * which is exactly the state a rebuild leaves behind and exactly the state the
+ * old predicate misreported as stale.
+ */
+describe('session-start-init-check: hook build freshness', () => {
+  const HOUR = 3600;
+
+  /** Returns the project dir. `newerThanBundle` gets an mtime past the bundle's. */
+  function makeHookTree(newerThanBundle: string[] = []): string {
+    // The freshness block is gated on the path containing 'continuous-claude'.
+    const proj = join(tempDir, 'continuous-claude');
+    const src = join(proj, '.claude', 'hooks', 'src');
+    const dist = join(proj, '.claude', 'hooks', 'dist');
+    mkdirSync(join(src, 'shared'), { recursive: true });
+    mkdirSync(dist, { recursive: true });
+    // hasCodeFiles() scans the project ROOT; without a source file there the hook
+    // returns `continue` at the !hasCodeFiles gate and never reaches the
+    // freshness block. Omitting this made the silent-tree test below vacuous --
+    // the paired control test is what exposed it.
+    writeFileSync(join(proj, 'main.ts'), 'export const x = 1;\n');
+
+    // dist first, so the dist DIRECTORY mtime lands before the sources.
+    writeFileSync(join(dist, 'bundle.mjs'), '// built\n');
+    writeFileSync(join(src, 'top.ts'), 'export const a = 1;\n');
+    writeFileSync(join(src, 'shared', 'nested.ts'), 'export const b = 2;\n');
+
+    const now = Date.now() / 1000;
+    // Bundle is NEWER than every source -- i.e. the tree is freshly built.
+    utimesSync(join(dist, 'bundle.mjs'), now, now);
+    utimesSync(join(src, 'top.ts'), now - HOUR, now - HOUR);
+    utimesSync(join(src, 'shared', 'nested.ts'), now - HOUR, now - HOUR);
+    // ...while the dist DIRECTORY mtime stays OLDER than the sources. This is the
+    // real post-rebuild state (a directory mtime only moves when an entry is
+    // added/removed/renamed, not when bundles are overwritten), and it is what
+    // the old predicate read. Setting it last: writing into a dir bumps it.
+    utimesSync(dist, now - 2 * HOUR, now - 2 * HOUR);
+
+    for (const rel of newerThanBundle) {
+      utimesSync(join(src, rel), now + HOUR, now + HOUR);
+    }
+    return proj;
+  }
+
+  it('stays silent on a freshly built tree (dist dir older than src)', () => {
+    const result = runHook(makeHookTree());
+
+    expect(result.stderr).not.toContain('is stale');
+    expect(result.stdout).not.toContain('is stale');
+  }, 30000);
+
+  it('fires for a source under src/shared/ and names it', () => {
+    // Also the positive control for the test above: same fixture, same code
+    // path, so a silent result there cannot be a block that never ran.
+    const result = runHook(makeHookTree(['shared/nested.ts']));
+
+    const out = result.stderr + result.stdout;
+    expect(out).toContain('is stale');
+    expect(out).toContain('nested.ts');
+  }, 30000);
 });

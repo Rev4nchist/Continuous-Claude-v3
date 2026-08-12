@@ -1,8 +1,9 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/ralph-task-monitor.ts
-import { readFileSync as readFileSync2, existsSync as existsSync3 } from "fs";
-import { join as join3 } from "path";
+import { readFileSync as readFileSync4, existsSync as existsSync4 } from "fs";
+import { join as join5 } from "path";
 import { spawnSync } from "child_process";
 
 // src/shared/logger.ts
@@ -102,19 +103,51 @@ function readRalphUnifiedState(projectDir) {
 }
 
 // src/shared/braintrust-score.ts
+import { readFileSync as readFileSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join3 } from "path";
 var BRAINTRUST_FEEDBACK_TIMEOUT_MS = 2e3;
 var DEFAULT_API_URL = "https://api.braintrust.dev";
 var DEFAULT_PROJECT_NAME = "claude-code";
 var projectIdCache = {};
+var dotenvLoaded = false;
+var envTraceOverride;
+function loadClaudeDotEnv() {
+  if (dotenvLoaded) return;
+  dotenvLoaded = true;
+  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
+  try {
+    const envPath = process.env.BRAINTRUST_DOTENV_PATH || join3(homedir2(), ".claude", ".env");
+    for (const line of readFileSync2(envPath, "utf-8").split("\n")) {
+      const trimmed = line.trim();
+      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
+      const idx = trimmed.indexOf("=");
+      const key = trimmed.slice(0, idx).trim();
+      const value = trimmed.slice(idx + 1).trim();
+      if (key) process.env[key] = value;
+    }
+  } catch {
+  }
+}
 function getApiUrl() {
+  loadClaudeDotEnv();
   return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
 }
 function getApiKey() {
+  loadClaudeDotEnv();
   const key = process.env.BRAINTRUST_API_KEY;
   return key && key.length > 0 ? key : null;
 }
 function isTraceEnabled() {
-  return (process.env.TRACE_TO_BRAINTRUST || "").toLowerCase() === "true";
+  loadClaudeDotEnv();
+  const effective = envTraceOverride !== void 0 ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || "";
+  return effective.toLowerCase() === "true";
+}
+async function consumeBody(resp) {
+  try {
+    await resp.arrayBuffer();
+  } catch {
+  }
 }
 function logErr(msg) {
   try {
@@ -124,6 +157,7 @@ function logErr(msg) {
   }
 }
 async function resolveProjectId(apiKey) {
+  loadClaudeDotEnv();
   const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
   if (directId && directId.length > 0) {
     return directId;
@@ -143,6 +177,7 @@ async function resolveProjectId(apiKey) {
     });
     if (!resp.ok) {
       logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
+      await consumeBody(resp);
       return null;
     }
     const data = await resp.json();
@@ -196,12 +231,45 @@ async function emitBraintrustScore(opts) {
       if (!resp.ok) {
         logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
       }
+      await consumeBody(resp);
     } catch (e) {
       logErr(`feedback POST ${opts.spanId} failed: ${e.message}`);
     }
   } catch (e) {
     logErr(`unexpected error: ${e.message}`);
   }
+}
+
+// src/shared/braintrust-span.ts
+import { existsSync as existsSync3, readFileSync as readFileSync3 } from "fs";
+import { homedir as homedir3 } from "os";
+import { join as join4 } from "path";
+function readBraintrustSessionState(sessionId) {
+  if (!sessionId) return null;
+  try {
+    const homeDir = process.env.HOME || process.env.USERPROFILE || homedir3();
+    if (!homeDir) return null;
+    const statePath = join4(homeDir, ".claude", "state", "braintrust_sessions", `${sessionId}.json`);
+    if (!existsSync3(statePath)) return null;
+    return JSON.parse(readFileSync3(statePath, "utf-8"));
+  } catch {
+    return null;
+  }
+}
+function resolveBraintrustSpan(sessionId) {
+  const state = readBraintrustSessionState(sessionId);
+  if (!state) return null;
+  if (state.sampled_out) return null;
+  if (state.current_turn_span_id && state.current_turn_span_id.length > 0) {
+    return { spanId: state.current_turn_span_id, attachedTo: "turn" };
+  }
+  if (state.root_span_id && state.root_span_id.length > 0) {
+    return { spanId: state.root_span_id, attachedTo: "root" };
+  }
+  return null;
+}
+function resolveBraintrustSpanId(sessionId) {
+  return resolveBraintrustSpan(sessionId)?.spanId ?? "";
 }
 
 // src/ralph-task-monitor.ts
@@ -229,7 +297,7 @@ var FAILURE_PATTERNS = [
 ];
 function readStdin() {
   try {
-    return readFileSync2(0, "utf-8");
+    return readFileSync4(0, "utf-8");
   } catch {
     return "{}";
   }
@@ -240,7 +308,7 @@ function computeAgentTaskScore(input) {
   return retries === 0 ? 1 : 0.5;
 }
 function buildAgentTaskScorePayload(input) {
-  const spanId = (process.env.BRAINTRUST_SESSION_ID || "").trim();
+  const spanId = resolveBraintrustSpanId(input.sessionId || "");
   if (!spanId) return null;
   const score = computeAgentTaskScore(input);
   return {
@@ -273,6 +341,7 @@ function readRalphTaskById(projectDir, taskId) {
     duration_s: typeof task.duration_s === "number" ? task.duration_s : void 0
   };
 }
+var currentSessionId = "";
 async function emitRalphTaskScore(projectDir, taskId, transition, fallbackAgent) {
   try {
     const task = readRalphTaskById(projectDir, taskId);
@@ -282,7 +351,8 @@ async function emitRalphTaskScore(projectDir, taskId, transition, fallbackAgent)
       agent: task?.agent || fallbackAgent,
       retries: task?.retries,
       durationS: task?.duration_s,
-      transition
+      transition,
+      sessionId: currentSessionId
     });
     if (payload) {
       await emitBraintrustScore(payload);
@@ -346,8 +416,8 @@ function detectOutcome(text) {
 }
 function getV2ScriptPath() {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const v2Script = join3(homeDir, ".claude", "scripts", "ralph", "ralph-state-v2.py");
-  return existsSync3(v2Script) ? v2Script : null;
+  const v2Script = join5(homeDir, ".claude", "scripts", "ralph", "ralph-state-v2.py");
+  return existsSync4(v2Script) ? v2Script : null;
 }
 async function main() {
   let input = {};
@@ -356,6 +426,7 @@ async function main() {
   } catch {
     return;
   }
+  currentSessionId = input.session_id || "";
   if (input.tool_name !== "Agent" && input.tool_name !== "Task") return;
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const unified = readRalphUnifiedState(projectDir);

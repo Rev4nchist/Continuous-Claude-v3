@@ -19,11 +19,36 @@
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
 
+import { mkdtempSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
 import {
   emitBraintrustScore,
   resetProjectIdCacheForTests,
+  resetDotEnvStateForTests,
   BRAINTRUST_FEEDBACK_TIMEOUT_MS,
 } from '../shared/braintrust-score.js';
+
+/**
+ * A .env path that does not exist, so the loader fails open and these tests never
+ * read the developer's real ~/.claude/.env.
+ *
+ * That file carries a live BRAINTRUST_API_KEY and TRACE_TO_BRAINTRUST=true. Before
+ * this, the suite loaded it: the off-switch test failed because the file's `true`
+ * overwrote the test's `false`, and the failure output printed the real key as
+ * `Authorization: Bearer sk-...`. Any CI log or pasted failure leaked the
+ * credential.
+ */
+const NO_DOTENV = join(tmpdir(), 'braintrust-score-tests-no-such-file.env');
+
+/** Write a throwaway .env fixture and return its path. */
+function writeDotEnvFixture(contents: string): string {
+  const dir = mkdtempSync(join(tmpdir(), 'bt-score-'));
+  const p = join(dir, '.env');
+  writeFileSync(p, contents, 'utf-8');
+  return p;
+}
 
 // ---------------------------------------------------------------------------
 // Helpers
@@ -40,6 +65,7 @@ function snapshotEnv(): Record<string, string | undefined> {
     BRAINTRUST_API_URL: process.env.BRAINTRUST_API_URL,
     BRAINTRUST_CC_PROJECT: process.env.BRAINTRUST_CC_PROJECT,
     BRAINTRUST_CC_PROJECT_ID: process.env.BRAINTRUST_CC_PROJECT_ID,
+    BRAINTRUST_DOTENV_PATH: process.env.BRAINTRUST_DOTENV_PATH,
   };
 }
 
@@ -75,6 +101,11 @@ describe('emitBraintrustScore: skip conditions', () => {
     envSnap = snapshotEnv();
     originalFetch = globalThis.fetch;
     resetProjectIdCacheForTests();
+    // Hermetic: never read the developer's real ~/.claude/.env (live API key,
+    // TRACE_TO_BRAINTRUST=true). The latch must be cleared too, or only the first
+    // test in the file ever re-reads the environment.
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = NO_DOTENV;
   });
 
   afterEach(() => {
@@ -98,6 +129,44 @@ describe('emitBraintrustScore: skip conditions', () => {
     });
 
     expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // THE OFF SWITCH. ~/.claude/.env says true; the environment says false. The
+  // environment must win, or there is no way to disable tracing without editing a
+  // credentials file. This is the assertion the pre-2026-07-29 code failed.
+  it('an explicit TRACE_TO_BRAINTRUST=false beats ~/.claude/.env saying true', async () => {
+    const mockFetch = vi.fn();
+    globalThis.fetch = mockFetch as any;
+
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = writeDotEnvFixture(
+      'TRACE_TO_BRAINTRUST=true\nBRAINTRUST_API_KEY=sk-from-file\nBRAINTRUST_CC_PROJECT_ID=proj-from-file\n',
+    );
+    setEnv({ TRACE_TO_BRAINTRUST: 'false' });
+
+    await emitBraintrustScore({ spanId: 'span-1', scores: { quality: 0.9 } });
+
+    expect(mockFetch).not.toHaveBeenCalled();
+  });
+
+  // NEGATIVE CONTROL for the test above. "No requests" is also what a completely
+  // broken emitter looks like, so prove the switch did not over-shoot: environment
+  // silent + file says true => the POST still happens, from the file's values.
+  it('still emits when the environment is silent and ~/.claude/.env enables tracing', async () => {
+    const mockFetch = vi.fn().mockResolvedValue({ ok: true, status: 200 });
+    globalThis.fetch = mockFetch as any;
+
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = writeDotEnvFixture(
+      'TRACE_TO_BRAINTRUST=true\nBRAINTRUST_API_KEY=sk-from-file\nBRAINTRUST_CC_PROJECT_ID=proj-from-file\n',
+    );
+    setEnv({ TRACE_TO_BRAINTRUST: undefined });
+
+    await emitBraintrustScore({ spanId: 'span-1', scores: { quality: 0.9 } });
+
+    expect(mockFetch).toHaveBeenCalledTimes(1);
+    const [url] = mockFetch.mock.calls[0];
+    expect(url).toContain('/v1/project_logs/proj-from-file/feedback');
   });
 
   it('returns silently when TRACE_TO_BRAINTRUST is unset', async () => {
@@ -203,6 +272,11 @@ describe('emitBraintrustScore: POST shape', () => {
     envSnap = snapshotEnv();
     originalFetch = globalThis.fetch;
     resetProjectIdCacheForTests();
+    // Hermetic: never read the developer's real ~/.claude/.env (live API key,
+    // TRACE_TO_BRAINTRUST=true). The latch must be cleared too, or only the first
+    // test in the file ever re-reads the environment.
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = NO_DOTENV;
   });
 
   afterEach(() => {
@@ -330,6 +404,11 @@ describe('emitBraintrustScore: project id resolution', () => {
     envSnap = snapshotEnv();
     originalFetch = globalThis.fetch;
     resetProjectIdCacheForTests();
+    // Hermetic: never read the developer's real ~/.claude/.env (live API key,
+    // TRACE_TO_BRAINTRUST=true). The latch must be cleared too, or only the first
+    // test in the file ever re-reads the environment.
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = NO_DOTENV;
   });
 
   afterEach(() => {
@@ -429,6 +508,11 @@ describe('emitBraintrustScore: fail-open behavior', () => {
     envSnap = snapshotEnv();
     originalFetch = globalThis.fetch;
     resetProjectIdCacheForTests();
+    // Hermetic: never read the developer's real ~/.claude/.env (live API key,
+    // TRACE_TO_BRAINTRUST=true). The latch must be cleared too, or only the first
+    // test in the file ever re-reads the environment.
+    resetDotEnvStateForTests();
+    process.env.BRAINTRUST_DOTENV_PATH = NO_DOTENV;
   });
 
   afterEach(() => {

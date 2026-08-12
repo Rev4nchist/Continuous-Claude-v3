@@ -12,70 +12,19 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import type { RoadmapDoc } from '../shared/roadmap-parser.js';
 import { parseRoadmap } from '../shared/roadmap-parser.js';
-import { applyRoadmapUpdate, demoteCurrentFocusToPlanned } from '../post-plan-roadmap.js';
-
-function makeDoc(current: RoadmapDoc['current']): RoadmapDoc {
-  return {
-    current,
-    completed: [],
-    planned: [],
-    sessions: [],
-    rawContent: '',
-    rawSections: new Map(),
-  };
-}
-
-describe('demoteCurrentFocusToPlanned', () => {
-  it('demotes the prior focus into Planned (not Completed) when title changes', () => {
-    const sections = makeDoc({ title: 'Goal A' });
-    demoteCurrentFocusToPlanned(sections, 'Goal B');
-
-    // Demoted into the backlog as a high-priority planned item.
-    expect(sections.planned).toHaveLength(1);
-    expect(sections.planned[0].title).toBe('Goal A');
-    expect(sections.planned[0].priorityBucket).toBe('high');
-
-    // The core regression assertion: NOT pushed to completed.
-    expect(sections.completed.length).toBe(0);
-
-    // The helper only demotes; the caller reassigns current.
-    expect(sections.current).toEqual({ title: 'Goal A' });
-  });
-
-  it('is a no-op when the new title equals the current title', () => {
-    const sections = makeDoc({ title: 'Goal A' });
-    demoteCurrentFocusToPlanned(sections, 'Goal A');
-    expect(sections.planned).toHaveLength(0);
-    expect(sections.completed).toHaveLength(0);
-  });
-
-  it('does not duplicate an item already present in Planned', () => {
-    const sections = makeDoc({ title: 'Goal A' });
-    sections.planned.push({
-      title: 'Goal A',
-      priority: 'high',
-      priorityBucket: 'high',
-    });
-    demoteCurrentFocusToPlanned(sections, 'Goal B');
-    expect(sections.planned).toHaveLength(1);
-  });
-
-  it('is a no-op (no throw) when there is no current focus', () => {
-    const sections = makeDoc(null);
-    expect(() => demoteCurrentFocusToPlanned(sections, 'Goal B')).not.toThrow();
-    expect(sections.planned).toHaveLength(0);
-  });
-});
+import type { PlanningSession } from '../shared/roadmap-parser.js';
+import { applyRoadmapUpdate, renderSessionBlock, extractBullets } from '../post-plan-roadmap.js';
 
 /**
- * applyRoadmapUpdate: regenerate the 4 managed sections in place, splice every
- * other line (intro prose, `## Notes`, loose prose) back verbatim. Round-trips
- * through the shared parser so rawContent/rawSections come from real parsing.
+ * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
+ * vacant; an OCCUPIED Current Focus is left completely untouched (no more
+ * overwrite-in-place, no more demoteCurrentFocusToPlanned -- see the
+ * `roadmap-sync-clobber` plan SS3). Round-trips through the shared parser so
+ * rawContent/rawSections come from real parsing.
  */
 describe('applyRoadmapUpdate', () => {
-  it('preserves a ## Notes block byte-for-byte while regenerating Current Focus', () => {
+  it('leaves an OCCUPIED Current Focus untouched while regenerating nothing else (bf91c19 anchor)', () => {
     const fixture = [
       '# Project Roadmap',
       '',
@@ -96,10 +45,13 @@ describe('applyRoadmapUpdate', () => {
     ].join('\n');
 
     const parsed = parseRoadmap(fixture);
-    // Simulate main() mutating the structured Current Focus to the new plan.
-    parsed.current = { title: 'New goal', started: '2026-05-30' };
+    const session: PlanningSession = { date: '2026-05-30', title: 'New goal', decisions: [] };
 
-    const out = applyRoadmapUpdate(parsed);
+    const { content: out } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-05-30',
+      focusTitle: 'New goal',
+    });
 
     // The notes block survives verbatim (header + both bullets + trailing blank).
     const notesBlock = [
@@ -110,16 +62,19 @@ describe('applyRoadmapUpdate', () => {
     ].join('\n');
     expect(out).toContain(notesBlock);
 
-    // Current Focus reflects the mutated value, and the old title is gone.
-    expect(out).toContain('## Current Focus\n**New goal**');
-    expect(out).not.toContain('**Old goal**');
+    // Current Focus is OCCUPIED ("Old goal"), so the vacant-only seed rule
+    // leaves it completely untouched -- the new plan title is NOT written
+    // there (it is recorded in the new session block and the advisory
+    // main() emits, not by overwriting Current Focus).
+    expect(out).toContain('## Current Focus\n**Old goal**');
+    expect(out).not.toContain('**New goal**');
 
     // The other managed sections are still present.
     expect(out).toContain('## Completed');
     expect(out).toContain('## Planned');
   });
 
-  it('preserves intro prose and keeps a ## Notes placed ABOVE Current Focus in position', () => {
+  it('leaves an OCCUPIED Current Focus untouched with intro prose and a ## Notes ABOVE it', () => {
     const fixture = [
       '# Project Roadmap',
       '',
@@ -137,9 +92,13 @@ describe('applyRoadmapUpdate', () => {
     ].join('\n');
 
     const parsed = parseRoadmap(fixture);
-    parsed.current = { title: 'Fresh goal' };
+    const session: PlanningSession = { date: '2026-05-30', title: 'Fresh goal', decisions: [] };
 
-    const out = applyRoadmapUpdate(parsed);
+    const { content: out } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-05-30',
+      focusTitle: 'Fresh goal',
+    });
 
     // Intro prose preserved verbatim.
     expect(out).toContain('This roadmap is hand-curated. Read the notes before editing.');
@@ -147,9 +106,9 @@ describe('applyRoadmapUpdate', () => {
     expect(out).toContain('## Notes\n- top-of-file reminder');
     // Position: Notes appears BEFORE Current Focus in the output.
     expect(out.indexOf('## Notes')).toBeLessThan(out.indexOf('## Current Focus'));
-    // Current Focus regenerated.
-    expect(out).toContain('## Current Focus\n**Fresh goal**');
-    expect(out).not.toContain('**Old goal**');
+    // Current Focus is OCCUPIED, so it is left untouched -- NOT overwritten.
+    expect(out).toContain('## Current Focus\n**Old goal**');
+    expect(out).not.toContain('**Fresh goal**');
   });
 
   it('preserves loose prose that sits between managed sections (separated by an unmanaged header)', () => {
@@ -172,9 +131,13 @@ describe('applyRoadmapUpdate', () => {
     ].join('\n');
 
     const parsed = parseRoadmap(fixture);
-    parsed.current = { title: 'Goal' }; // unchanged title, still regenerates in place
+    const session: PlanningSession = { date: '2026-05-30', title: 'Goal', decisions: [] };
 
-    const out = applyRoadmapUpdate(parsed);
+    const { content: out } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-05-30',
+      focusTitle: 'Goal', // same title as the occupied focus -- still a no-op there
+    });
 
     const looseBlock = [
       '## Scratch',
@@ -205,9 +168,13 @@ describe('applyRoadmapUpdate', () => {
     ].join('\n');
 
     const parsed = parseRoadmap(fixture);
-    parsed.current = { title: 'Goal' };
+    const session: PlanningSession = { date: '2026-05-30', title: 'Goal', decisions: [] };
 
-    const out = applyRoadmapUpdate(parsed);
+    const { content: out } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-05-30',
+      focusTitle: 'Goal',
+    });
 
     const trailingBlock = [
       '## Scratch',
@@ -219,37 +186,15 @@ describe('applyRoadmapUpdate', () => {
     expect(out.indexOf('Trailing free-form prose')).toBeGreaterThan(out.indexOf('## Completed'));
   });
 
-  it('appends a Planned section when the original is missing it', () => {
-    const fixture = [
-      '# Project Roadmap',
-      '',
-      '## Current Focus',
-      '**Goal**',
-      '',
-      '## Completed',
-      '- [x] Done (2025-09-01)',
-      '',
-    ].join('\n');
-
-    const parsed = parseRoadmap(fixture);
-    expect(parsed.rawSections.has('planned')).toBe(false);
-    parsed.planned = [{ title: 'Newly planned', priorityBucket: 'high' }];
-
-    const out = applyRoadmapUpdate(parsed);
-
-    expect(out).toContain('## Planned');
-    expect(out).toContain('- [ ] Newly planned (high priority)');
-    // Existing managed sections still present, in original order.
-    expect(out.indexOf('## Current Focus')).toBeLessThan(out.indexOf('## Completed'));
-    // The appended Planned comes after the originally-present sections.
-    expect(out.indexOf('## Completed')).toBeLessThan(out.indexOf('## Planned'));
-  });
-
   it('falls back to canonical generateRoadmap output for an empty/fresh file', () => {
     const parsed = parseRoadmap('');
-    parsed.current = { title: 'First goal' };
+    const session: PlanningSession = { date: '2026-05-30', title: 'First goal', decisions: [] };
 
-    const out = applyRoadmapUpdate(parsed);
+    const { content: out } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-05-30',
+      focusTitle: 'First goal',
+    });
 
     expect(out.startsWith('# Project Roadmap')).toBe(true);
     expect(out).toContain('## Current Focus\n**First goal**');
@@ -257,33 +202,62 @@ describe('applyRoadmapUpdate', () => {
     expect(out).toContain('## Planned');
     expect(out).toContain('## Recent Planning Sessions');
   });
+});
 
-  it('integrates with demoteCurrentFocusToPlanned: demoted focus appears in regenerated Planned', () => {
-    const fixture = [
-      '# Project Roadmap',
-      '',
-      '## Current Focus',
-      '**Old goal**',
-      '',
-      '## Notes',
-      '- keep me',
-      '',
-      '## Planned',
-      '- [ ] Existing plan (medium priority)',
-      '',
-    ].join('\n');
+/**
+ * renderSessionBlock: byte-neutral lift of the old inline per-session render
+ * body out of renderSectionBody('sessions'). Golden-pins the exact line
+ * shape, then proves the public write path (applyRoadmapUpdate) emits that
+ * exact block verbatim -- i.e. the lift changed nothing observable.
+ */
+describe('renderSessionBlock', () => {
+  it('golden-pins the exact per-session line shape (byte-neutral lift regression anchor)', () => {
+    const session: PlanningSession = {
+      date: '2026-05-01',
+      title: 'Alpha goal',
+      summary: 'A short summary.',
+      decisions: ['decision one', 'decision two'],
+      steps: ['step one'],
+      files: ['a.ts', 'b.ts'],
+      verification: ['verify one', 'verify two'],
+    };
 
-    const parsed = parseRoadmap(fixture);
-    demoteCurrentFocusToPlanned(parsed, 'New goal');
-    parsed.current = { title: 'New goal' };
+    expect(renderSessionBlock(session)).toEqual([
+      '### 2026-05-01: Alpha goal',
+      '**Summary:** A short summary.',
+      '',
+      '**Key Decisions:**',
+      '- decision one',
+      '- decision two',
+      '',
+      '**Implementation:**',
+      '- step one',
+      '',
+      '**Files:** a.ts, b.ts',
+      '',
+      '**Verification:** verify one',
+      '',
+    ]);
+  });
 
-    const out = applyRoadmapUpdate(parsed);
+  it('is exactly what applyRoadmapUpdate inserts for a brand-new session block (equivalence check)', () => {
+    const parsed = parseRoadmap('');
+    const session: PlanningSession = { date: '2026-05-03', title: 'Gamma', decisions: ['only decision'] };
 
-    // New focus regenerated; old focus demoted into Planned.
-    expect(out).toContain('## Current Focus\n**New goal**');
-    expect(out).toContain('- [ ] Old goal (high priority)');
-    expect(out).toContain('- [ ] Existing plan (medium priority)');
-    // Notes preserved through the round-trip.
-    expect(out).toContain('## Notes\n- keep me');
+    const { content } = applyRoadmapUpdate(parsed, { session, today: '2026-05-03', focusTitle: null });
+
+    expect(content).toContain(renderSessionBlock(session).join('\n'));
+  });
+});
+
+/**
+ * extractBullets, vector 5: the old unanchored, global
+ * `.replace(/\*\s+/g, ' ')` ate the closing `*` of any `**bold**` followed by
+ * whitespace ("but **not** fix" -> "but **not* fix"). Deleted; this pins the
+ * fix.
+ */
+describe('extractBullets (vector 5: emphasis-corruption fix)', () => {
+  it('does not corrode a closing ** followed by whitespace', () => {
+    expect(extractBullets('- but **not** fix')).toEqual(['but **not** fix']);
   });
 });

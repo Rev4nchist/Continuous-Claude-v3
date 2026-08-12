@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/ralph-template-inject.ts
 import { readFileSync, existsSync } from "fs";
@@ -106,4 +107,6 @@ function main() {
     console.log(JSON.stringify({ result: "allow" }));
   }
 }
-main();
+if ((process.argv[1] || "").includes("ralph-template-inject")) {
+  main();
+}

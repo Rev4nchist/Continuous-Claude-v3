@@ -31,7 +31,7 @@ import { OUT_DIR, CARD_SECTION_HEADING } from './lib/config.mjs';
 import { slugify, dateStamp } from './lib/util.mjs';
 import { readState, writeState, needsPublish } from './lib/state.mjs';
 import { readSeries, latestPrev } from './lib/history.mjs';
-import { computeAttention } from './lib/attention.mjs';
+import { computeAttention, quantizeAttentionForHash } from './lib/attention.mjs';
 import { assembleCard } from './assembler.mjs';
 
 function sha256(s) {
@@ -140,7 +140,14 @@ function refreshProject(projectPage, state, assigned) {
   // IS in the canonical string, so a genuine state change still re-publishes.
   const cardSignals = { series, attention };
   const html = assembleCard(project, decisions, { ...cardSignals, asOf: dateStamp() });
-  const canonical = assembleCard(project, decisions, { ...cardSignals, asOf: '' });
+  // Canonical (hash) render QUANTIZES the day-counters (2026-08-04): staleDays/
+  // reviewDays tick daily, and feeding them raw made every card flip changed=true
+  // every morning — all 11 republished daily, blowing the sweep budget on
+  // slow-spawn mornings. Bands (fresh/stale, later/due-soon/overdue) still flip
+  // the hash; the displayed card above keeps exact day counts.
+  const canonical = assembleCard(project, decisions, {
+    series, attention: quantizeAttentionForHash(attention), asOf: '',
+  });
   const contentHash = sha256(canonical);
 
   const nowIso = new Date().toISOString();

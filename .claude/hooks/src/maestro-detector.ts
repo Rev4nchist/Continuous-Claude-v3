@@ -161,7 +161,7 @@ function makeSuggestionOutput(score: number, signals: DetectedSignal[], phases: 
     '--------------------------------------',
   ].join('\n');
 
-  console.log(JSON.stringify({ result: 'continue', message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: message } }));
 }
 
 async function main() {
@@ -229,4 +229,14 @@ async function main() {
   }
 }
 
-main();
+// Auto-run ONLY when invoked directly as the hook (argv[1] is this script).
+// A bare `main()` here HUNG THE WHOLE TEST SUITE: main() awaits readStdin(), and
+// stdin never closes under vitest, so importing this module to unit-test its pure
+// helpers (isMaestroActive / analyzeComplexity / countProcessPhases) blocked
+// forever. `npx vitest run` therefore produced no verdict at all -- one file's
+// import cost the entire suite. Same guard as session-start-init-check.ts.
+// Production is unchanged: it is registered as
+// `node ~/.claude/hooks/dist/maestro-detector.mjs`, so argv[1] contains this name.
+if ((process.argv[1] || '').includes('maestro-detector')) {
+  main();
+}

@@ -1,0 +1,10 @@
+{
+  "runId": "Project Portfolio|2026-07-27|2026-07-27T12:47:05.8755069Z",
+  "type": "Project Portfolio",
+  "period": "2026-07-27",
+  "runDate": "2026-07-27T12:47:05.8755069Z",
+  "status": "Failed",
+  "source": "Project-Cards",
+  "artifactUrl": "https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a",
+  "summary": "in-progress - sweep started at 2026-07-27T12:47:05.8755069Z. Updated in place on completion; if it still reads Failed the sweep was killed or aborted before finishing (see .claude/logs/project-cards/2026-07-27.log)."
+}

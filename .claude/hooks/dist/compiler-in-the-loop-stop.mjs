@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/compiler-in-the-loop-stop.ts
 import { readFileSync, existsSync, unlinkSync } from "fs";
 import { join } from "path";

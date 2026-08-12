@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/guardrail-enforcer.ts
 import { readFileSync, writeFileSync, existsSync } from "fs";
@@ -8,6 +9,15 @@ import { join } from "path";
 // src/shared/output.ts
 function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
+}
+function outputWithMessage(message, hookEventName) {
+  if (!message || !message.trim()) {
+    outputContinue();
+    return;
+  }
+  console.log(JSON.stringify({
+    hookSpecificOutput: { hookEventName, additionalContext: message }
+  }));
 }
 
 // src/guardrail-enforcer.ts
@@ -122,9 +132,9 @@ function checkGuardrails(prompt) {
   }
   return null;
 }
-function makeBlockOutput(guardrail) {
+function emitGuardrail(guardrail) {
   acknowledgeGuardrail(guardrail.name);
-  return JSON.stringify({ result: "block", reason: guardrail.message });
+  outputWithMessage(guardrail.message, "UserPromptSubmit");
 }
 async function main() {
   try {
@@ -146,7 +156,7 @@ async function main() {
     }
     const triggeredGuardrail = checkGuardrails(input.prompt);
     if (triggeredGuardrail) {
-      console.log(makeBlockOutput(triggeredGuardrail));
+      emitGuardrail(triggeredGuardrail);
       return;
     }
     outputContinue();
@@ -155,4 +165,6 @@ async function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("guardrail-enforcer")) {
+  main();
+}

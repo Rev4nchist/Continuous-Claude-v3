@@ -6,14 +6,32 @@ REM Updates malicious-packages.json from GitHub Advisory API, rebuilds hooks, co
 REM Self-redirect ALL output to a durable log (Task Scheduler discards the console, which is why
 REM this task's daily exit-1 failures were undiagnosable). The re-invoke runs the real body below.
 set "LOG=C:\Users\david.hayes\continuous-claude\.claude\logs\blocklist-update.log"
-if /i not "%~1"=="__LOGGED__" (
-    call "%~f0" __LOGGED__ >> "%LOG%" 2>&1
-    exit /b %ERRORLEVEL%
-)
+
+REM GOTO, not a parenthesized block. `%ERRORLEVEL%` inside ( ... ) is expanded when
+REM the BLOCK is parsed -- before `call` has run -- so it always substituted the
+REM errorlevel from BEFORE the inner invocation, i.e. 0. That is why Task Scheduler
+REM reported "Last Result: 0" for 28 consecutive runs while the log recorded 24
+REM [ERROR]s and zero completions: the failure was real, logged, and thrown away at
+REM the last line. Outside a block, %ERRORLEVEL% expands per-line at execution time.
+if /i not "%~1"=="__LOGGED__" goto :RELAUNCH_LOGGED
+goto :BODY
+
+:RELAUNCH_LOGGED
+call "%~f0" __LOGGED__ >> "%LOG%" 2>&1
+exit /b %ERRORLEVEL%
+
+:BODY
 
 echo [%date% %time%] Starting blocklist update...
 
 cd /d C:\Users\david.hayes\continuous-claude
+
+REM Pin gh to the personal account's own config dir. update-blocklist.mjs hard-gates on
+REM `gh auth status` and then calls bare `gh api`, so it needs a credential of its own --
+REM it used to borrow the ambient GITHUB_TOKEN, which is being removed. This repo's remote
+REM is Rev4nchist/parcadei, so personal is the correct account (see scripts/github/accounts.json).
+REM Inert while GITHUB_TOKEN still exists: gh precedence is GH_TOKEN > GITHUB_TOKEN > stored.
+set "GH_CONFIG_DIR=%USERPROFILE%\.config\gh-personal"
 
 REM Fetch latest advisories and update the blocklist
 echo Fetching advisories from GitHub...

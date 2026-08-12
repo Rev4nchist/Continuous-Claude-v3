@@ -9,7 +9,7 @@
  * pattern literal and terminates flag parsing before the path operand.
  */
 import { describe, it, expect } from 'vitest';
-import { buildRipgrepArgs } from '../smart-search-router.js';
+import { buildRipgrepArgs, classifyQuery, isScopedCall } from '../smart-search-router.js';
 
 describe('buildRipgrepArgs — injection-safe ripgrep argv', () => {
   it('passes the pattern via -e so a leading-dash pattern is literal, not a flag', () => {
@@ -42,5 +42,47 @@ describe('buildRipgrepArgs — injection-safe ripgrep argv', () => {
     expect(args).toContain('--line-number');
     expect(args).toContain('--max-count');
     expect(args).toContain('10');
+  });
+});
+
+// --- 2026-07-25 routing-bug fixes (flagged in the 2026-07-24 Serena-evaluation
+// handoff): regex-literal patterns misclassified as structural, and explicitly
+// scoped Grep calls (path/glob/type) rerouted with their scoping silently dropped.
+
+describe('classifyQuery — regex-literal patterns beat the structural check', () => {
+  it('treats escaped-paren patterns as literal (was: structural deny)', () => {
+    expect(classifyQuery(String.raw`main\(\)`)).toBe('literal');
+  });
+  it('treats escaped-brace patterns as literal', () => {
+    expect(classifyQuery(String.raw`LearningResult \{`)).toBe('literal');
+  });
+  it('treats alternation as literal', () => {
+    expect(classifyQuery('recallViaDaemon|DEFAULT_RECALL_TIMEOUT_MS')).toBe('literal');
+  });
+  it('treats char-class patterns as literal', () => {
+    expect(classifyQuery('^## [A-Z]')).toBe('literal');
+  });
+  it('still classifies plain declaration prefixes as structural', () => {
+    expect(classifyQuery('function checkDbMemory')).toBe('structural');
+    expect(classifyQuery('class Foo')).toBe('structural');
+    expect(classifyQuery('import os')).toBe('structural');
+  });
+  it('still classifies natural-language queries as semantic', () => {
+    expect(classifyQuery('how does the recall fallback work')).toBe('semantic');
+  });
+});
+
+describe('isScopedCall — explicit path/glob/type passes through to native Grep', () => {
+  it('true when path is set', () => {
+    expect(isScopedCall({ pattern: 'function checkDbMemory', path: 'src/memory-awareness.ts' })).toBe(true);
+  });
+  it('true when glob is set', () => {
+    expect(isScopedCall({ pattern: 'class Foo', glob: '**/*.ts' })).toBe(true);
+  });
+  it('true when type is set', () => {
+    expect(isScopedCall({ pattern: 'def main', type: 'py' })).toBe(true);
+  });
+  it('false for a bare project-wide pattern', () => {
+    expect(isScopedCall({ pattern: 'def main' })).toBe(false);
   });
 });

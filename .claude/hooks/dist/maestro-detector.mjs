@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/maestro-detector.ts
 import { readFileSync, statSync } from "fs";
@@ -106,7 +107,7 @@ function makeSuggestionOutput(score, signals, phases) {
     "Continue with your request normally.",
     "--------------------------------------"
   ].join("\n");
-  console.log(JSON.stringify({ result: "continue", message }));
+  console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "UserPromptSubmit", additionalContext: message } }));
 }
 async function main() {
   try {
@@ -155,7 +156,9 @@ async function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("maestro-detector")) {
+  main();
+}
 export {
   analyzeComplexity,
   countProcessPhases,

@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/roadmap-completion.ts
 import * as fs from "fs";
@@ -140,6 +141,7 @@ function parseRoadmap(content) {
 }
 
 // src/roadmap-completion.ts
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var COMPLETION_PATTERNS = [
   /\b(done|complete|completed|finished|shipped|deployed|merged)\b/i,
   /\btask\s+(is\s+)?(done|complete|finished)\b/i,
@@ -179,7 +181,7 @@ function readStdin() {
       data += chunk;
     });
     process.stdin.on("end", () => resolve(data));
-    setTimeout(() => resolve(data), 1e3);
+    setTimeout(() => resolve(data), 1e3).unref();
   });
 }
 function detectCompletionSignal(text) {
@@ -304,7 +306,7 @@ async function main() {
   let result;
   if ("tool_name" in data && data.tool_name === "TaskUpdate") {
     result = await handleTaskUpdate(data);
-  } else if ("tool_name" in data && data.tool_name === "Bash") {
+  } else if ("tool_name" in data && COMMAND_TOOLS.has(data.tool_name)) {
     result = await handleBashOutput(data);
   } else if ("prompt" in data) {
     result = await handleUserPrompt(data);

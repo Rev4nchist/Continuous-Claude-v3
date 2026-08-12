@@ -957,7 +957,7 @@ async function readStdin(): Promise<string> {
     // Fallback so importing this module in a test (which runs top-level main())
     // can't hang waiting on a stdin 'end' that never arrives. Mirrors
     // git-commit-roadmap.ts:57.
-    setTimeout(() => resolve(data), 1000);
+    setTimeout(() => resolve(data), 1000).unref();
   });
 }
 

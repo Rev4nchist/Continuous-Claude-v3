@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/task-router.ts
 import { readFileSync } from "fs";
@@ -155,4 +156,6 @@ async function main() {
     console.log(JSON.stringify(makeAllowOutput()));
   }
 }
-main();
+if ((process.argv[1] || "").includes("task-router")) {
+  main();
+}

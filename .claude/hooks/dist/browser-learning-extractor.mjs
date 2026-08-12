@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/browser-learning-extractor.ts
 import { readFileSync } from "fs";
 import { spawnSync } from "child_process";

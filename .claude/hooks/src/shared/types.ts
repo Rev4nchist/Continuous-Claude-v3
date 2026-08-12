@@ -28,10 +28,32 @@ export interface SubagentStopInput {
   agent_type?: string;
 }
 
+/**
+ * SessionStart payload.
+ *
+ * NOTE: session-register.ts has imported this type since it was written, but it
+ * was never actually declared here -- esbuild strips type imports without
+ * checking them, so the build stayed green while `input` silently had no type.
+ * Declared 2026-07-26 while fixing the identity split that lives in that file.
+ *
+ * `source` distinguishes startup / resume / clear / compact. Not used yet, but
+ * it is the field to reach for if duplicate SessionStart rows ever reappear.
+ */
+export interface SessionStartInput {
+  session_id: string;
+  source?: string;
+  cwd?: string;
+  transcript_path?: string;
+}
+
 export interface PreToolUseInput {
   session_id: string;
   tool_name: string;
   tool_input: Record<string, unknown>;
+  /** Present in the real payload (verified by identity-probe 2026-07-26); it is
+   *  the project dir the session was launched in, and the input to
+   *  canonicalProject(). Optional so existing test fixtures stay valid. */
+  cwd?: string;
 }
 
 export interface PostToolUseInput {
@@ -68,8 +90,35 @@ export interface PreToolUseHookOutput {
 }
 
 /**
- * Legacy hook output format (deprecated but still used by some hooks).
- * Prefer PreToolUseHookOutput for new hooks.
+ * Inject text into the model's context. Valid for UserPromptSubmit,
+ * PostToolUse and SessionStart.
+ *
+ * This is the shape the harness actually reads. Verified in production, not
+ * from docs: `memory-awareness` emits it and was observed injecting on
+ * 2026-07-28, in the same event and the same prompt where a hook emitting
+ * `LegacyHookOutput` below was observed reaching the model with nothing.
+ */
+export interface ContextInjectionHookOutput {
+  hookSpecificOutput: {
+    hookEventName: 'UserPromptSubmit' | 'PostToolUse' | 'SessionStart';
+    additionalContext: string;
+  };
+}
+
+/**
+ * DISCARDED BY THE HARNESS. Not "legacy" in the sense of older-but-working --
+ * `result`/`message`/`reason` are read by nothing, so a hook returning this
+ * exits 0, looks healthy, and says nothing at all.
+ *
+ * The previous doc comment here called it "deprecated but still used by some
+ * hooks", which reads as a style preference and is very likely why this
+ * survived ~186 days across 19 registered hooks: nobody deprecating something
+ * expects it to be inert.
+ *
+ * `{ result: 'continue' }` with NO message is the one honest use -- it carries
+ * nothing, so it loses nothing. It is the correct "I have nothing to say"
+ * signal. Anything with a `message` or `reason` belongs in
+ * ContextInjectionHookOutput instead.
  */
 export interface LegacyHookOutput {
   result: 'continue' | 'block';
@@ -77,7 +126,10 @@ export interface LegacyHookOutput {
   reason?: string;
 }
 
-export type HookOutput = PreToolUseHookOutput | LegacyHookOutput;
+export type HookOutput =
+  | PreToolUseHookOutput
+  | ContextInjectionHookOutput
+  | LegacyHookOutput;
 
 // =============================================================================
 // Database Query Result Types

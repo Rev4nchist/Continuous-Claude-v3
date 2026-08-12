@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/plan-mode-discovery.ts
 import { readFileSync, existsSync, readdirSync } from "fs";
@@ -187,4 +188,6 @@ async function main() {
     process.exit(0);
   }
 }
-main();
+if ((process.argv[1] || "").includes("plan-mode-discovery")) {
+  main();
+}

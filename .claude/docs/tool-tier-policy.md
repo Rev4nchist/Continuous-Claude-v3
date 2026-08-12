@@ -12,7 +12,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 
 ### 1.1 Hooks — own enforcement and always-on context injection
 
-**Definition.** Code that runs automatically as part of the Claude Code event loop. The model does not invoke a hook; the runtime fires it on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `PreCompact`, or `SessionEnd`. Hooks talk to the model only via two channels: (1) `permissionDecision: allow|deny` (gate) and (2) `additionalContext` (injector). They are the *only* tier that can deny a tool call.
+**Definition.** Code that runs automatically as part of the Claude Code event loop. The model does not invoke a hook; the runtime fires it on `SessionStart`, `UserPromptSubmit`, `PreToolUse`, `PostToolUse`, `Stop`, `PreCompact`, or `SessionEnd`. (`Stop` fires once per assistant turn and was first used on this machine by `ccdd14b`; `SubagentStop` exists too but is deliberately unused — subagents dominate hook firings here.) Hooks talk to the model only via two channels: (1) `permissionDecision: allow|deny` (gate) and (2) `additionalContext` (injector). They are the *only* tier that can deny a tool call.
 
 **Frontmatter `kind` field** (Phase 3 of the system-coherence plan, see `i-have-a-new-abstract-quail.md` lines 142-147):
 
@@ -44,7 +44,6 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 | `fetch` | `~/.claude/settings.json` | stdio (uvx) | Generic URL fetch fallback |
 | `pageindex` | `~/.claude/settings.json` + `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Document search (long PDFs) |
 | `nia` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (uv) | External-source semantic indexing |
-| `serena` | `~/.mcp.json` | stdio | Semantic code symbol navigation |
 | `context7` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Real-time library/SDK docs |
 | `github` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | GitHub API (issues, PRs, search) |
 | `playwright` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Browser automation (Tier 1) |

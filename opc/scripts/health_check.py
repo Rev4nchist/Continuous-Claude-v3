@@ -644,6 +644,74 @@ def check_tldr_daemon_running() -> CheckResult:
     )
 
 
+def check_gitbash_fork() -> CheckResult:
+    """Probe Git-Bash fork() reliability on Windows.
+
+    Claude Code runs the Bash tool (and historically string-form hook
+    commands) through Git-Bash. MSYS2 fork() can fail intermittently under
+    BLODA -- a third-party DLL (e.g. iolo System Mechanic) injected into
+    bash.exe collides with cygwin's heap/shared-memory region, producing
+    `*** fatal error - add_item (... "/", ...) failed, errno 1`. A single
+    Bash call spawning ~14 hooks then had a high chance of >=1 crash line;
+    exec-form hooks removed that amplifier, but the underlying fork can still
+    flake. This probe spawns `bash -c echo` repeatedly and reports the
+    failure rate so the degradation is caught proactively, not via crash spam.
+    """
+    import shutil
+
+    name = "gitbash-fork-reliability"
+    cat = "infrastructure"
+    if os.name != "nt":
+        return _pass(name, cat, "not applicable (non-Windows)", severity="INFO")
+
+    bash = os.environ.get("CLAUDE_CODE_GIT_BASH_PATH") or shutil.which("bash")
+    if not bash or not Path(bash).exists():
+        return _skip(name, cat,
+                     "git-bash not found (CLAUDE_CODE_GIT_BASH_PATH unset, "
+                     "no bash on PATH)")
+
+    start = time.perf_counter()
+    runs = 12
+    ok = 0
+    failures: list[str] = []
+    for _ in range(runs):
+        try:
+            p = _run([bash, "-c", "echo ok"], timeout=8)
+            blob = (p.stdout or "") + (p.stderr or "")
+            if (p.returncode == 0 and "ok" in (p.stdout or "")
+                    and "add_item" not in blob and "fatal error" not in blob):
+                ok += 1
+            else:
+                failures.append((blob or f"exit={p.returncode}").strip()[:80])
+        except subprocess.TimeoutExpired:
+            failures.append("timeout (fork hung)")
+        except Exception as exc:  # noqa: BLE001 -- probe must not crash the check
+            failures.append(f"{type(exc).__name__}: {exc}"[:80])
+
+    dur = int((time.perf_counter() - start) * 1000)
+    fail = runs - ok
+    sample = failures[0] if failures else ""
+    remediation = (
+        "Git-Bash fork() failing (MSYS2 add_item / BLODA). Prime suspect: "
+        "iolo System Mechanic. Disable its autostart in an elevated shell: "
+        "Get-ScheduledTask -TaskPath '\\iolo\\' | Disable-ScheduledTask . "
+        "Fallbacks: rebaseall via dash, or reinstall Git for Windows."
+    )
+    meta = {"runs": runs, "ok": ok, "failed": fail, "sample": sample}
+    if fail == 0:
+        return _pass(name, cat, f"{ok}/{runs} bash forks OK", dur, metadata=meta)
+    if fail / runs < 0.25:
+        return _warn(name, cat,
+                     f"intermittent bash fork failure: {ok}/{runs} OK; "
+                     f"sample: {sample}",
+                     severity="MEDIUM", remediation=remediation,
+                     duration_ms=dur, metadata=meta)
+    return _fail(name, cat,
+                 f"bash fork failing: only {ok}/{runs} OK; sample: {sample}",
+                 severity="HIGH", remediation=remediation,
+                 duration_ms=dur, metadata=meta)
+
+
 # ---- 2. Hooks --------------------------------------------------------------
 
 
@@ -698,6 +766,45 @@ def _load_settings() -> dict | None:
     return None
 
 
+def _hook_entry_mjs_path(h: dict) -> str | None:
+    """Extract the .mjs path from ONE hook entry, in either registration shape.
+
+    Two shapes exist in the wild and only one was ever handled:
+
+        inline  {"command": "node C:/.../foo.mjs"}
+        split   {"command": "node", "args": ["C:/.../foo.mjs"]}
+
+    Reading `command` alone was correct for the inline form and blind to the
+    split one. FOUND 2026-07-28: the live ~/.claude/settings.json uses the SPLIT
+    form for 84 of its 85 hooks (the repo copy: 78 args arrays, 1 inline), so
+    both callers below were finding ZERO paths.
+
+    That did not fail loudly. check_hook_registrations reported
+    "0 hook registrations all resolve" and PASSED -- vacuously true, and
+    structurally incapable of catching the registered-but-missing hook it exists
+    to catch. check_hook_orphans counted every dist file as an orphan (114).
+    get_registered_hooks returned an empty set, so the whole hook-runtime
+    category was comparing traces against nothing.
+
+    Quotes are stripped because a quoted inline command
+    ("node 'C:/.../foo.mjs'") would otherwise resolve to a path with a leading
+    apostrophe and be reported as MISSING -- a false alarm in the opposite
+    direction. That form is live in ~/.codex/hooks.json today.
+    """
+    candidates: list[str] = []
+    cmd = h.get("command")
+    if isinstance(cmd, str):
+        candidates.append(cmd)
+    args = h.get("args")
+    if isinstance(args, list):
+        candidates.extend(a for a in args if isinstance(a, str))
+    for text in candidates:
+        m = re.search(r"(\S+\.mjs)", text)
+        if m:
+            return m.group(1).strip("'\"")
+    return None
+
+
 def _extract_hook_paths(settings: dict) -> list[tuple[str, str]]:
     """Return list of (event, path) from hooks config."""
     hooks_cfg = settings.get("hooks") or {}
@@ -710,14 +817,10 @@ def _extract_hook_paths(settings: dict) -> list[tuple[str, str]]:
             for h in inner:
                 if not isinstance(h, dict):
                     continue
-                cmd = h.get("command", "")
-                # extract last .mjs path from the command
-                m = re.search(r"(\S+\.mjs)", cmd)
-                if m:
-                    raw = m.group(1)
+                raw = _hook_entry_mjs_path(h)
+                if raw:
                     # resolve ~
-                    resolved = os.path.expanduser(raw)
-                    paths.append((event, resolved))
+                    paths.append((event, os.path.expanduser(raw)))
     return paths
 
 
@@ -1130,13 +1233,14 @@ def get_registered_hooks(
             for h in inner:
                 if not isinstance(h, dict):
                     continue
-                cmd = h.get("command", "")
-                if not isinstance(cmd, str):
+                # Handles BOTH the inline and the split command/args shapes --
+                # see _hook_entry_mjs_path. Reading `command` alone returned an
+                # empty set against the live settings.json, which silently made
+                # every hook-runtime comparison below a comparison against
+                # nothing.
+                raw = _hook_entry_mjs_path(h)
+                if not raw:
                     continue
-                m = re.search(r"(\S+\.mjs)", cmd)
-                if not m:
-                    continue
-                raw = m.group(1)
                 # Normalize separators and strip dirname + extension
                 raw_norm = raw.replace("\\", "/")
                 bare = raw_norm.rsplit("/", 1)[-1]
@@ -2651,6 +2755,8 @@ def build_runner(output_dir: Path | None = None,
                check_opc_env_file)
     r.register("tldr-daemon-running", "infrastructure",
                check_tldr_daemon_running)
+    r.register("gitbash-fork-reliability", "infrastructure",
+               check_gitbash_fork)
 
     # 2. Hooks
     r.register("hook-dist-freshness", "hooks",

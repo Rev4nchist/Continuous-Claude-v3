@@ -23,6 +23,9 @@ interface PostToolUseInput {
   };
 }
 
+/** Shell tools that carry a command. Must match the settings.json matcher. */
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
 const TEST_PATTERNS = [
   /\bvitest\b/,
   /\bjest\b/,
@@ -65,7 +68,9 @@ async function main() {
     return;
   }
 
-  if (data.tool_name !== 'Bash') {
+  // Registered matcher is `Bash|PowerShell`; a narrower runtime check makes
+  // half the registration inert (the 2026-08-05 defect in git-commit-roadmap).
+  if (!COMMAND_TOOLS.has(data.tool_name)) {
     console.log(JSON.stringify({}));
     return;
   }

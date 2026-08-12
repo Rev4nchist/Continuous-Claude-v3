@@ -1,3 +1,5 @@
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
+
 // src/react-perf-context.ts
 import { readFileSync, existsSync } from "fs";
 import { join } from "path";
@@ -56,4 +58,6 @@ async function main() {
     }
   }));
 }
-main().catch(() => process.exit(1));
+if ((process.argv[1] || "").includes("react-perf-context")) {
+  main().catch(() => process.exit(1));
+}

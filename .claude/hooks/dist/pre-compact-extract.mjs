@@ -1,4 +1,5 @@
 #!/usr/bin/env node
+import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/pre-compact-extract.ts
 import { spawn } from "child_process";
@@ -227,6 +228,10 @@ function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile
   }
 }
 async function main() {
+  if (process.env.CCV3_DISTILL_CHILD) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
   const input = await readStdin();
   if (!input.trim()) {
     console.log(JSON.stringify({ continue: true }));

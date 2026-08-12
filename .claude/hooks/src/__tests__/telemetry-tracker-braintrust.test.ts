@@ -2,16 +2,28 @@
  * Tests for telemetry-tracker.ts Phase 3a Braintrust score emit.
  *
  * Validates the pure-helper layer for the skill_trigger_accuracy score:
- *   * resolveScoreSpanId prefers BRAINTRUST_SESSION_ID over payload session_id
+ *   * resolveScoreSpanId resolves a span from the braintrust session STATE FILE
  *   * buildSkillTriggerScorePayload returns the expected score + metadata
  *   * buildSkillTriggerScorePayload returns null when no spanId is available
  *
  * The actual emit call inside main() is fire-and-forget against the shared
  * emitBraintrustScore helper, which has its own 19-case test suite. We do not
  * re-test the network path here.
+ *
+ * CONTRACT CHANGE these tests were left behind by (`2542561`, 2026-07-28): the
+ * span id used to come from `process.env.BRAINTRUST_SESSION_ID`, falling back to
+ * treating the payload session_id AS the span id. That env var is set NOWHERE, so
+ * the layer never emitted. resolveScoreSpanId now calls resolveBraintrustSpanId,
+ * which uses session_id as a LOOKUP KEY into
+ * `~/.claude/state/braintrust_sessions/<sessionId>.json` written by
+ * braintrust_hooks.py. A session id is therefore no longer a span id, which is
+ * why 14 of these 22 tests failed against correct code.
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
+import { mkdirSync, mkdtempSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
 
 import {
   resolveScoreSpanId,
@@ -23,6 +35,8 @@ import { detectToolError } from '../shared/tool-error.js';
 function snapshotEnv(): Record<string, string | undefined> {
   return {
     BRAINTRUST_SESSION_ID: process.env.BRAINTRUST_SESSION_ID,
+    HOME: process.env.HOME,
+    USERPROFILE: process.env.USERPROFILE,
   };
 }
 
@@ -36,52 +50,96 @@ function restoreEnv(snap: Record<string, string | undefined>) {
   }
 }
 
+/**
+ * Redirect HOME/USERPROFILE at a temp dir and write span state into it.
+ * readBraintrustSessionState() reads those vars at CALL time, so this needs no
+ * module mocking. Returns the temp home so the caller can clean it up.
+ */
+function makeSpanHome(): string {
+  const home = mkdtempSync(join(tmpdir(), 'tt-braintrust-'));
+  process.env.HOME = home;
+  process.env.USERPROFILE = home;
+  return home;
+}
+
+function writeSpanState(home: string, sessionId: string, state: object): void {
+  const dir = join(home, '.claude', 'state', 'braintrust_sessions');
+  mkdirSync(dir, { recursive: true });
+  writeFileSync(join(dir, `${sessionId}.json`), JSON.stringify(state));
+}
+
 describe('telemetry-tracker: resolveScoreSpanId', () => {
   let envSnap: Record<string, string | undefined>;
+  let home: string;
 
   beforeEach(() => {
     envSnap = snapshotEnv();
     delete process.env.BRAINTRUST_SESSION_ID;
+    home = makeSpanHome();
   });
 
   afterEach(() => {
     restoreEnv(envSnap);
+    try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
-  it('prefers BRAINTRUST_SESSION_ID env when set', () => {
-    process.env.BRAINTRUST_SESSION_ID = 'env-span-abc';
-    expect(resolveScoreSpanId('payload-session-xyz')).toBe('env-span-abc');
+  it('resolves the root span recorded for the session', () => {
+    writeSpanState(home, 'sess-root', { root_span_id: 'span-root-abc' });
+    expect(resolveScoreSpanId('sess-root')).toBe('span-root-abc');
   });
 
-  it('falls back to payload session_id when env is unset', () => {
-    expect(resolveScoreSpanId('payload-session-xyz')).toBe('payload-session-xyz');
+  it('prefers the current turn span over the root span', () => {
+    writeSpanState(home, 'sess-turn', {
+      root_span_id: 'span-root-abc',
+      current_turn_span_id: 'span-turn-xyz',
+    });
+    expect(resolveScoreSpanId('sess-turn')).toBe('span-turn-xyz');
   });
 
-  it('falls back to payload session_id when env is empty string', () => {
-    process.env.BRAINTRUST_SESSION_ID = '';
-    expect(resolveScoreSpanId('payload-session-xyz')).toBe('payload-session-xyz');
+  it('returns empty string when the session has no state file', () => {
+    expect(resolveScoreSpanId('sess-missing')).toBe('');
   });
 
-  it('trims whitespace from env value', () => {
-    process.env.BRAINTRUST_SESSION_ID = '  env-span-trimmed  ';
-    expect(resolveScoreSpanId('payload-session-xyz')).toBe('env-span-trimmed');
+  it('returns empty string for a sampled-out session', () => {
+    writeSpanState(home, 'sess-sampled', { root_span_id: 'span-root-abc', sampled_out: true });
+    expect(resolveScoreSpanId('sess-sampled')).toBe('');
   });
 
-  it('returns empty string when both sources are missing', () => {
+  it('returns empty string when the session id is missing', () => {
     expect(resolveScoreSpanId(undefined)).toBe('');
+  });
+
+  it('does NOT treat the session id as a span id', () => {
+    // The retired contract returned the session id itself when the env var was
+    // unset, which is how a span id that no Braintrust trace contained got
+    // emitted. Regression guard: a session with no state file resolves to ''.
+    expect(resolveScoreSpanId('payload-session-xyz')).toBe('');
+  });
+
+  it('IGNORES BRAINTRUST_SESSION_ID', () => {
+    // Regression guard against reintroducing the retired env-var path. Nothing
+    // in this harness sets this variable; honouring it is how the score layer
+    // silently emitted nothing for months.
+    process.env.BRAINTRUST_SESSION_ID = 'env-span-abc';
+    expect(resolveScoreSpanId('sess-missing')).toBe('');
   });
 });
 
 describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
   let envSnap: Record<string, string | undefined>;
+  let home: string;
 
   beforeEach(() => {
     envSnap = snapshotEnv();
     delete process.env.BRAINTRUST_SESSION_ID;
+    home = makeSpanHome();
+    // 'sess-abc' is the session every positive case below resolves through.
+    writeSpanState(home, 'sess-abc', { root_span_id: 'span-abc' });
   });
 
   afterEach(() => {
     restoreEnv(envSnap);
+    try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ }
   });
 
   it('returns null when no spanId is available', () => {
@@ -94,9 +152,19 @@ describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
     expect(payload).toBeNull();
   });
 
+  it('returns null when the session has no span state', () => {
+    const payload = buildSkillTriggerScorePayload({
+      sessionId: 'sess-missing',
+      skillName: 'memory',
+      triggerSource: 'llm',
+      success: true,
+    });
+    expect(payload).toBeNull();
+  });
+
   it('emits 1.0 score when success is true', () => {
     const payload = buildSkillTriggerScorePayload({
-      sessionId: 'span-abc',
+      sessionId: 'sess-abc',
       skillName: 'memory',
       triggerSource: 'llm',
       success: true,
@@ -108,7 +176,7 @@ describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
 
   it('emits 0.0 score when success is false', () => {
     const payload = buildSkillTriggerScorePayload({
-      sessionId: 'span-abc',
+      sessionId: 'sess-abc',
       skillName: 'memory',
       triggerSource: 'llm',
       success: false,
@@ -119,7 +187,7 @@ describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
 
   it('includes skill_name, trigger_source, hook in metadata', () => {
     const payload = buildSkillTriggerScorePayload({
-      sessionId: 'span-abc',
+      sessionId: 'sess-abc',
       skillName: 'systematic-debugging',
       triggerSource: 'explicit',
       success: true,
@@ -131,15 +199,15 @@ describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
     });
   });
 
-  it('prefers BRAINTRUST_SESSION_ID env over sessionId arg', () => {
+  it('IGNORES BRAINTRUST_SESSION_ID when building the payload', () => {
     process.env.BRAINTRUST_SESSION_ID = 'env-span-xyz';
     const payload = buildSkillTriggerScorePayload({
-      sessionId: 'payload-span-abc',
+      sessionId: 'sess-abc',
       skillName: 'memory',
       triggerSource: 'hook',
       success: true,
     });
-    expect(payload!.spanId).toBe('env-span-xyz');
+    expect(payload!.spanId).toBe('span-abc');
   });
 });
 
@@ -155,6 +223,26 @@ describe('telemetry-tracker: buildSkillTriggerScorePayload', () => {
 // branches in __tests__/tool-error.test.ts; here we verify the composition.
 // ---------------------------------------------------------------------------
 describe('telemetry-tracker: detectToolError → score payload integration', () => {
+  let envSnap: Record<string, string | undefined>;
+  let home: string;
+
+  beforeEach(() => {
+    envSnap = snapshotEnv();
+    delete process.env.BRAINTRUST_SESSION_ID;
+    home = makeSpanHome();
+    // Each case below uses its own session id; every one needs span state, or
+    // buildSkillTriggerScorePayload returns null and the assertion dies on
+    // `payload!.scores` rather than reporting a wrong score.
+    for (const n of [1, 2, 3, 4, 5, 6]) {
+      writeSpanState(home, `span-${n}`, { root_span_id: `resolved-span-${n}` });
+    }
+  });
+
+  afterEach(() => {
+    restoreEnv(envSnap);
+    try { rmSync(home, { recursive: true, force: true }); } catch { /* best effort */ }
+  });
+
   it('error indicator #1 — is_error===true → score 0.0', () => {
     const success = !detectToolError({ is_error: true });
     const payload = buildSkillTriggerScorePayload({

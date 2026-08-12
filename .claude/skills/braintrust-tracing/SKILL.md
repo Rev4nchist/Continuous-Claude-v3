@@ -48,11 +48,37 @@ Comprehensive guide to tracing Claude Code sessions in Braintrust, including sub
 |------|---------|---------|------------|
 | **SessionStart** | Session begins | Root span | `session_id`, `root_span_id` |
 | **UserPromptSubmit** | User sends prompt | Turn span | `prompt`, `turn_number` |
-| **PreToolUse** | Before tool runs | (modifies Task prompts) | `tool_input.prompt` |
+| **PreToolUse** | Before tool runs | Nothing — not implemented | (see "What Doesn't Work") |
 | **PostToolUse** | After tool runs | Tool span | `tool_name`, `input`, `output` |
 | **Stop** | Turn completes | LLM spans | `model`, `tokens`, `tool_calls` |
 | **SubagentStop** | Sub-agent finishes | (no span) | `session_id` of sub-agent |
 | **SessionEnd** | Session ends | (finalizes root) | `turn_count`, `tool_count` |
+
+There is no `pre_tool_use` subcommand in `braintrust_hooks.py`. The prompt-injection
+attempt described below was abandoned; nothing runs at PreToolUse.
+
+### Stop registration
+
+`stop` is registered under its own `Stop` key in settings.json — in BOTH the repo
+copy (`.claude/settings.json`) and the active copy (`~/.claude/settings.json`) —
+command `python`, args `[.../braintrust_hooks.py, stop]`, timeout 15000.
+
+Before commit `ccdd14b` there was no `Stop` key at all. `stop` was registered only
+on SessionEnd, so it ran once per session while being written for per-turn
+incremental work (it tracks `turn_last_line`). Result: 7,610 of 8,726 turn spans
+(87%) across 1,637 sessions were opened and never closed — open-ended, unbounded
+duration in the Braintrust UI.
+
+`stop` REMAINS registered on SessionEnd too (timeout 30000), deliberately, as a
+safety net for an abrupt exit mid-turn. Double-firing is safe: `stop` is
+idempotent — it returns early ("already finalized") when the transcript has no new
+lines. That replaced the old re-entry guard, which worked by clearing
+`current_turn_span_id`.
+
+Full rationale and the two empirical blockers that were resolved — Stop and
+UserPromptSubmit are serialized by the CLI, and Braintrust tolerates a parent span
+arriving after its children — are in `docs/hooks/braintrust-stop-event-scope.md`
+section 3.
 
 ## Trace Hierarchy
 
@@ -140,10 +166,19 @@ Each session file contains:
   "tool_count": 23,
   "current_turn_span_id": "turn-789",
   "current_turn_start": 1703456789,
+  "turn_last_line": 4213,
+  "sampled_out": false,
   "started": "2025-12-24T10:00:00.000Z",
   "is_subagent": false
 }
 ```
+
+- `turn_last_line` — last transcript line consumed by `stop`. This is the
+  idempotency marker: `stop` skips a turn when it created no LLM calls and
+  `line_num <= turn_last_line`.
+- `current_turn_span_id` — written only by `user_prompt_submit`. `stop` no longer
+  writes it (it was the only two-writer key), and does NOT clear it, so it holds
+  the current turn's id rather than `""`.
 
 ### Global State
 ```
@@ -186,13 +221,13 @@ uv run python -m runtime.harness scripts/braintrust_analyze.py --agent-stats
 # Enable verbose logging
 export BRAINTRUST_CC_DEBUG=true
 
-# Test hooks manually
+# Test hooks manually (subcommand dispatch on one Python entry point)
 echo '{"session_id":"test-123","type":"resume"}' | \
-  bash "$CLAUDE_PROJECT_DIR/.claude/plugins/braintrust-tracing/hooks/session_start.sh"
+  python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py session_start
 
-# Test PreToolUse (Task injection)
-echo '{"session_id":"test-123","tool_name":"Task","tool_input":{"prompt":"test"}}' | \
-  bash "$CLAUDE_PROJECT_DIR/.claude/plugins/braintrust-tracing/hooks/pre_tool_use.sh"
+# Test turn finalization
+echo '{"session_id":"test-123"}' | \
+  python C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py stop
 ```
 
 ### Troubleshooting Checklist
@@ -220,16 +255,21 @@ echo '{"session_id":"test-123","tool_name":"Task","tool_input":{"prompt":"test"}
 
 | File | Purpose |
 |------|---------|
-| `.claude/plugins/braintrust-tracing/hooks/common.sh` | Shared utilities, API, state management |
-| `.claude/plugins/braintrust-tracing/hooks/session_start.sh` | Creates root span, handles sub-agent context |
-| `.claude/plugins/braintrust-tracing/hooks/user_prompt_submit.sh` | Creates Turn spans per user message |
-| `.claude/plugins/braintrust-tracing/hooks/pre_tool_use.sh` | Injects trace context into Task prompts |
-| `.claude/plugins/braintrust-tracing/hooks/post_tool_use.sh` | Creates tool spans, captures agent/skill metadata |
-| `.claude/plugins/braintrust-tracing/hooks/stop_hook.sh` | Creates LLM spans, finalizes Turns |
-| `.claude/plugins/braintrust-tracing/hooks/session_end.sh` | Finalizes session, triggers learning extraction |
+| `.claude/hooks/braintrust_hooks.py` | The whole implementation. Single Python entry point, dispatched by argv |
+| `~/.claude/hooks/braintrust_hooks.py` | Active mirror — the copy settings.json actually runs |
+| `docs/hooks/braintrust-stop-event-scope.md` | Stop-event rationale, blockers, evidence |
 | `scripts/braintrust_analyze.py` | Query and analyze traced sessions |
 | `~/.claude/state/braintrust_sessions/` | Per-session state files |
+| `~/.claude/state/braintrust_global.json` | Cached `project_id` |
 | `~/.claude/state/braintrust_hook.log` | Debug log |
+
+Subcommands on `braintrust_hooks.py`: `session_start`, `user_prompt_submit`,
+`post_tool_use`, `stop`, `session_end`. settings.json references it 6 times
+(`Stop` and `SessionEnd` both call `stop`).
+
+`.claude/plugins/braintrust-tracing/hooks/*` is an unregistered reference copy —
+no `hooks.json`, referenced nowhere in settings.json, and missing `pre_tool_use`
+entirely. Do not debug against it.
 
 ## Environment Variables
 

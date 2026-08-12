@@ -49,7 +49,7 @@ import {
 } from '../project-cards/lib/page-lock.mjs';
 import {
   REPORT_RUNS_DS_ID, REPORT_CHILD_PAGES, REPORTS_HUB_PAGE_ID,
-  REPORT_TYPES, REPORT_RUNS_VIEWS, LOG_HINT_BY_TYPE,
+  ACTIVE_REPORT_TYPES, REPORT_RUNS_VIEWS, LOG_HINT_BY_TYPE,
 } from './config.mjs';
 import {
   SCHEDULE, nextExpectedDeadline, isWatchdogMissRow, ymd,
@@ -273,7 +273,7 @@ export function buildHubLauncherBlocks({
   childPages = REPORT_CHILD_PAGES,
   hubId = REPORTS_HUB_PAGE_ID,
   overviewViewId = OVERVIEW_VIEW_ID,
-  types = REPORT_TYPES,
+  types = ACTIVE_REPORT_TYPES,
   schedule = SCHEDULE,
   now = new Date(),
   trustSummary = null,
@@ -415,7 +415,7 @@ const defaultReleaseHubLock = () => releasePageLock(HUB_LOCK_PATH);
 // deadlock the pipeline). --dry-run takes no lock (it writes nothing).
 export function refreshHub({
   latestByType = {}, dryRun = false, hubId = REPORTS_HUB_PAGE_ID,
-  childPages = REPORT_CHILD_PAGES, overviewViewId = OVERVIEW_VIEW_ID, types = REPORT_TYPES,
+  childPages = REPORT_CHILD_PAGES, overviewViewId = OVERVIEW_VIEW_ID, types = ACTIVE_REPORT_TYPES,
   now = new Date(), trustSummary = null,
   getBlocks = getPageBlocks, findSection = findSectionBlocks,
   replaceSection = replaceSectionBlocks, insertAfter = insertBlocksAfter,
@@ -463,8 +463,8 @@ export function refreshHub({
 export function refreshAll({
   dryRun = false, onlyType = null, now = new Date(), trustSummary = null, deps = {},
 } = {}) {
-  if (onlyType != null && !REPORT_TYPES.includes(onlyType)) {
-    throw new Error(`unknown --type "${onlyType}" (allowed: ${REPORT_TYPES.join(', ')})`);
+  if (onlyType != null && !ACTIVE_REPORT_TYPES.includes(onlyType)) {
+    throw new Error(`unknown --type "${onlyType}" (allowed: ${ACTIVE_REPORT_TYPES.join(', ')})`);
   }
   const d = {
     query: queryDataSource,
@@ -479,7 +479,7 @@ export function refreshAll({
   const results = { children: [], hub: null, errors: [] };
   const latestByType = {};
 
-  for (const type of REPORT_TYPES) {
+  for (const type of ACTIVE_REPORT_TYPES) {
     const pageId = REPORT_CHILD_PAGES[type];
     let rows = [];
     let newest = null;
@@ -574,7 +574,7 @@ function main() {
   const trustSummary = computeHubTrustSummary();
   const results = refreshAll({ dryRun, onlyType, trustSummary });
   const wrote = results.children.filter((c) => c.wrote).length;
-  const expected = onlyType ? 1 : REPORT_TYPES.length;
+  const expected = onlyType ? 1 : ACTIVE_REPORT_TYPES.length;
   const hubAction = results.hub ? results.hub.action : 'skipped';
   console.error(
     `[refresh-pages] ${dryRun ? 'DRY-RUN ' : ''}${onlyType ? `SCOPED(${onlyType}) ` : ''}done — children=${wrote}/${expected} written, `

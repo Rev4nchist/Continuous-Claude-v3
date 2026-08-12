@@ -159,7 +159,7 @@ Before writing ANY import statement:
 - Use Glob to verify the target file exists at the expected path
 - Confirm the target module actually exports what you're importing
 - Never assume paths — verify them. 57% of buggy code friction comes from import path errors.
-- For TypeScript: use Serena `go_to_definition` to resolve through barrel files and re-exports where Glob cannot follow the chain
+- For TypeScript barrel files / re-exports where Glob cannot follow the chain: trace the re-export chain by reading the barrel file, or use `tldr imports <file>`
 
 ### Code Smells to Catch
 - Repeated/copied code (DRY violations)

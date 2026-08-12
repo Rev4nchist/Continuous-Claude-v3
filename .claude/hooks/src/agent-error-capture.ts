@@ -170,6 +170,49 @@ export function buildStoreInvocation(
   };
 }
 
+/**
+ * Release a detached child, but only ONCE THE OS REPORTS IT RUNNING.
+ *
+ * `unref()` followed by the parent exiting in the SAME synchronous tick KILLS the
+ * child. That is not a guess -- measured 2026-07-29 with one variable, four arms,
+ * identical spawn:
+ *
+ *   exit in the same tick as the spawn (what this hook did)  -> NO row
+ *   exit one tick later, on the 'spawn' event                -> row lands
+ *   exit after a 500 ms grace                                 -> row lands
+ *   launched via an OS-level breakaway (cmd start /b)         -> row lands
+ *
+ * That pattern also RULES OUT Windows job-object teardown, the obvious rival
+ * explanation: if job closure at parent exit were killing the child, the two arms
+ * that merely exit a tick later would have failed too. Only the breakaway arm
+ * would have survived. It is a startup race, so one event-loop turn fixes it.
+ *
+ * Why this mattered: 09ba655 (QW-04) made this store detached + unref'd to stop a
+ * ~10 s `spawnSync` blocking Task completion. It fixed the latency and silently
+ * broke the delivery -- combined with the noise-prefix bug from 05abf54, this hook
+ * stored NOTHING for 161 days, while logging "Dispatched" and exiting 0.
+ *
+ * Cost of the fix: one event-loop turn (~1-5 ms), not the 10 s QW-04 removed. Node
+ * guarantees exactly one of 'spawn' / 'error' fires, so the loop cannot be held
+ * open indefinitely. A stub child without `.once` (unit tests) is released
+ * immediately, which is why the tests assert the real path separately.
+ */
+export function releaseWhenRunning(child: { unref?: () => void; once?: (e: string, f: () => void) => void }): void {
+  const release = () => {
+    try {
+      child.unref?.();
+    } catch {
+      // Already gone -- nothing to release.
+    }
+  };
+  if (typeof child.once !== 'function') {
+    release();
+    return;
+  }
+  child.once('spawn', release);
+  child.once('error', release);
+}
+
 /** Injectable seams so storeLearning is unit-testable without fs/scorer/child_process. */
 interface StoreDeps {
   spawnFn?: typeof spawn;
@@ -197,7 +240,34 @@ export function storeLearning(
   }
 
   // Build content for the learning.
-  const content = `Agent '${agentType}' error: ${errorContext}`;
+  //
+  // The wording is load-bearing, not cosmetic. From 2026-02-18 to 2026-07-29 this
+  // read `Agent '${agentType}' error: ...` and EVERY learning was silently
+  // discarded at ingestion: store_learning.py's NOISE_PREFIXES blacklists
+  // "Agent '" and checks it FIRST, before any other gate. Commit 05abf54 added
+  // that blacklist AND rewrote this line to emit the prefix it had just
+  // blacklisted, in the same diff -- while deleting 138 rows of this output as
+  // garbage. Verified 2026-07-29: 0 of 622 archival_memory rows came from here.
+  // The store returns {"success": true, "skipped": true} and exits 0, and the
+  // spawn below uses stdio:'ignore', so the drop was invisible from both ends.
+  //
+  // THREE constraints on any rewording, and the third bites hardest
+  // (store_learning.py:167, :152, and store_learning_v2's dedup):
+  //   1. must NOT start with any NOISE_PREFIXES entry -- currently "Agent '",
+  //      "Now I have", "Let me ", "The user wants", "I need to", "Looking at",
+  //      "I notice the", "The user sent".
+  //   2. FAILED_APPROACH has a 100-char minimum, so a very terse errorContext
+  //      (a bare "EPERM") is dropped as too_short. That is accepted -- see below.
+  //   3. **KEEP THE BOILERPLATE SHORT.** The store dedups at 0.85 EMBEDDING
+  //      similarity. A first attempt at this fix used a ~95-char fixed lead-in to
+  //      guarantee constraint 2, and measured 0.88 similarity between two
+  //      unrelated agent failures -- meaning the first failure would store and
+  //      every later one would be silently skipped as a duplicate. Trading a
+  //      guaranteed floor for boilerplate dominance is the wrong trade: dropping
+  //      an ultra-terse error loses one thin learning, while dedup collisions
+  //      lose ALL BUT THE FIRST. So the wording below is deliberately minimal and
+  //      leads with the distinctive material.
+  const content = `${errorContext} -- task failure in the ${agentType} agent, which did not complete.`;
 
   // G3 / Task #6: gate the store with the TypeScript memory-quality-scorer BEFORE
   // spawning. NOISE (<3) is dropped with a stderr log; SIGNAL (>=5) / BORDERLINE
@@ -235,7 +305,7 @@ export function storeLearning(
       tags.join(','),
     );
     const child = spawnFn(cmd, args, options);
-    child.unref();
+    releaseWhenRunning(child);
     console.error(`[AgentErrorCapture] Dispatched (detached) failure learning for agent '${agentType}'`);
   } catch (err) {
     console.error(`[AgentErrorCapture] Failed to dispatch learning: ${err}`);
