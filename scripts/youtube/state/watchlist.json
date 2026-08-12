@@ -11,7 +11,7 @@
       "topic": "LLM engineering",
       "paused": false,
       "addedAt": "2026-07-25T14:04:07.849Z",
-      "lastPolledAt": "2026-08-05T12:00:20.369Z",
+      "lastPolledAt": "2026-08-12T12:00:07.589Z",
       "lastNewCount": 0,
       "pendingDigest": 2
     },
@@ -25,9 +25,23 @@
       "topic": "agents, connectors, automation layers",
       "paused": false,
       "addedAt": "2026-07-25T15:27:24.392Z",
-      "lastPolledAt": "2026-08-05T12:00:22.986Z",
+      "lastPolledAt": "2026-08-12T12:00:13.681Z",
+      "lastNewCount": 0,
+      "pendingDigest": 6
+    },
+    {
+      "slug": "ai-engineer",
+      "name": "AI Engineer",
+      "target": "@aiDotEngineer",
+      "url": "https://www.youtube.com/@aiDotEngineer/videos",
+      "channelId": "UCLKPca3kwwd-B59HNr-_lvA",
+      "limit": 10,
+      "topic": "AI engineering conference talks; FDE track, evals, harness",
+      "paused": false,
+      "addedAt": "2026-08-06T11:08:37.756Z",
+      "lastPolledAt": "2026-08-12T12:00:17.713Z",
       "lastNewCount": 1,
-      "pendingDigest": 3
+      "pendingDigest": 16
     }
   ]
 }
