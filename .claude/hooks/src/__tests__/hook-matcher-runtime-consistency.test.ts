@@ -94,6 +94,24 @@ describe('hook matcher / runtime tool-check consistency', () => {
       const source = readFileSync(srcPath, 'utf-8');
       checked += 1;
 
+      /**
+       * Rule 0, added 2026-08-10: a hook that never reads `tool_name` cannot be
+       * narrower than its matcher, so rule 1 does not apply to it.
+       *
+       * Rule 1 infers "inert" from "does not name the tool". That inference
+       * holds only for hooks that dispatch ON the tool. `lane-context` branches
+       * purely on `hook_event_name` and ignores which tool fired, so there is no
+       * tool name to mention and nothing to be inert -- verified live: a message
+       * delivered through the `Bash` arm of its matcher, and
+       * `scripts/coordination/dm-delivery-probe.mjs` covers it.
+       *
+       * This does not weaken the guard against the four defects it was built
+       * for. Every one of them gated on `data.tool_name !== 'Bash'`, so all four
+       * reference `tool_name` and still face rule 1. The exemption is only
+       * reachable by a hook that reads the field nowhere at all.
+       */
+      if (!/\btool_name\b/.test(source)) continue;
+
       // Rule 1: the tool must be named somewhere in the source.
       for (const tool of tools) {
         if (!source.includes(tool)) {
