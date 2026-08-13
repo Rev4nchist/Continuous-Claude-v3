@@ -1014,31 +1014,60 @@ function parseSections(content) {
   }
   return sections;
 }
+function isFenceLine(trimmed) {
+  return /^(```|~~~)/.test(trimmed);
+}
+function isListMarker(trimmed) {
+  return /^[-*]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
+}
+function cleanBulletText(bulletText) {
+  if (!bulletText) return null;
+  let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, "");
+  cleanText = cleanText.replace(/^\*\*([^*]+?)[\s:.;,]*\*\*[\s:]*/, "$1: ").replace(/^`([^`]+)`\s*[-–]\s*/, "").replace(/^\*([^*]+)\*:?\s*/g, "$1 ").replace(/::\s*\*/g, ": ").replace(/\s+/g, " ").replace(/\s*:\s*$/, "").trim();
+  if (cleanText.length < 15) return null;
+  if (cleanText.startsWith("|") || cleanText.startsWith("```")) return null;
+  if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) return null;
+  if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) return null;
+  return cleanText;
+}
 function extractBullets(content, keywords) {
   const bullets = [];
   const lines = content.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("-") && !trimmed.startsWith("*") && !trimmed.match(/^\d+\./)) {
-      continue;
-    }
-    const bulletText = trimmed.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim();
-    if (!bulletText) continue;
-    let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, "");
-    cleanText = cleanText.replace(/^\*\*([^*]+)\*\*:?\s*/, "$1: ").replace(/^`([^`]+)`\s*[-–]\s*/, "").replace(/^\*([^*]+)\*:?\s*/g, "$1 ").replace(/::\s*\*/g, ": ").replace(/\s+/g, " ").trim();
-    if (cleanText.length < 15) continue;
-    if (cleanText.startsWith("|") || cleanText.startsWith("```")) continue;
-    if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) continue;
-    if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) continue;
+  let inFence = false;
+  let current = null;
+  const flush = () => {
+    if (current === null) return;
+    const raw = current.join(" ").trim();
+    current = null;
+    const cleanText = cleanBulletText(raw);
+    if (cleanText === null) return;
     if (keywords) {
       const lower = cleanText.toLowerCase();
-      if (keywords.some((kw) => lower.includes(kw))) {
-        bullets.push(cleanText);
-      }
-    } else {
-      bullets.push(cleanText);
+      if (!keywords.some((kw) => lower.includes(kw))) return;
     }
+    bullets.push(cleanText);
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (isFenceLine(trimmed)) {
+      flush();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (isListMarker(trimmed)) {
+      flush();
+      current = [trimmed.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim()];
+      continue;
+    }
+    if (current === null) continue;
+    if (!trimmed || /^#{1,6}\s/.test(trimmed) || trimmed.startsWith("|")) {
+      flush();
+      continue;
+    }
+    current.push(trimmed);
   }
+  flush();
   return bullets;
 }
 function extractFirstParagraph(content) {
@@ -1097,11 +1126,6 @@ function extractPlanInfo(planContent, filePath) {
   } else if (sections["_intro"]) {
     summary = extractFirstParagraph(sections["_intro"]);
   }
-  const decisionSection = sections["decisions"] || sections["key decisions"] || sections["approach"] || "";
-  let decisions = extractBullets(decisionSection);
-  if (decisions.length === 0) {
-    decisions = extractBullets(planContent, CAPTURE_KEYWORDS);
-  }
   const implSection = sections["implementation plan"] || sections["implementation"] || sections["steps"] || sections["plan"] || "";
   let steps = extractBullets(implSection);
   if (steps.length === 0 && sections["step 1"]) {
@@ -1109,6 +1133,13 @@ function extractPlanInfo(planContent, filePath) {
   }
   const verifySection = sections["verification"] || sections["verification plan"] || sections["testing"] || sections["test plan"] || "";
   const verification = extractBullets(verifySection);
+  const decisionSection = sections["decisions"] || sections["key decisions"] || sections["approach"] || "";
+  let decisions = extractBullets(decisionSection);
+  if (decisions.length === 0) {
+    const norm = (s) => s.toLowerCase().replace(/\s+/g, " ").trim();
+    const taken = new Set([...steps, ...verification].map(norm));
+    decisions = extractBullets(planContent, CAPTURE_KEYWORDS).filter((d) => !taken.has(norm(d)));
+  }
   const filesSection = sections["files to modify"] || sections["files"] || sections["affected files"] || "";
   let affectedFiles = extractFilesFromContent(filesSection);
   if (affectedFiles.length === 0) {
@@ -1338,5 +1369,6 @@ main().catch((err) => {
 export {
   applyRoadmapUpdate,
   extractBullets,
+  extractPlanInfo,
   renderSessionBlock
 };

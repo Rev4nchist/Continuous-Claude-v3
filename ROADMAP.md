@@ -305,6 +305,26 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-08-13: Fix the ROADMAP auto-sync entry generator
+**Key Decisions:**
+- Re-check mergeability immediately before merging.: A peer session (`8896640d`) is active on
+- `RoadmapAuditRecord` (lines 63–89): add `tool: string` as a **required** field. Required, not
+- Fix all four.: Confirmed with the user.
+- Fix forward only.: Existing degraded entries stay. No back-repair, no
+- This change stays entirely inside content generation. * `applyRoadmapUpdate`,
+
+**Implementation:**
+- 1. `extractBullets` becomes block-aware (D1, D2). * Replace the single-pass
+- Track ` ``` ` and `~~~` toggling. A line inside a fence can neither start an
+- On a list marker outside a fence, start an item and consume following lines as
+- Apply the existing cleanup chain to the **joined** text, unchanged. The
+- 2. Colon join stops doubling (D4). * At line 414, move the optional colon
+
+**Files:** shared/roadmap-audit.ts, shared/roadmap-splice.ts, post-plan-roadmap-preserve.test.ts, dist/*.mjs, settings.json, post-plan-roadmap.mjs, .claude/hooks/src/post-plan-roadmap.ts, .claude/hooks/src/__tests__/post-plan-roadmap.test.ts
+
+**Verification:** Red before, green after.: `cd .claude/hooks && npx vitest run src/__tests__/post-plan-roadmap.test.ts src/__tests__/post-plan-roadmap-preserve.test.ts`. Run the new tests against the unmodified source first and confirm they fail — a test that was never red proves nothing.
+
+
 ### 2026-08-12: Land `agentic-os` on `main`
 **Key Decisions:**
 - Re-check mergeability immediately before merging.: A peer session (`8896640d`) is active on
