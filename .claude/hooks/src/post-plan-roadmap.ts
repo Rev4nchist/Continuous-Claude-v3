@@ -29,6 +29,7 @@ import {
   type LineRange,
 } from './shared/roadmap-splice.js';
 import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
+import { localDateStamp } from './shared/roadmap-sync-guards.js';
 
 interface PostToolUseInput {
   tool_name: string;
@@ -808,7 +809,7 @@ async function main() {
     return;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStamp();
 
   const newSession: PlanningSession = {
     date: today,

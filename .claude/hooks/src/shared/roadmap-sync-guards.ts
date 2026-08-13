@@ -119,6 +119,32 @@ export function isPathInsideProject(targetPath: string, projectDir: string): boo
  * Windows-only by design: on a real POSIX host `/c/x` is a legitimate path and
  * must not be rewritten.
  */
+/**
+ * Today's date as `YYYY-MM-DD` in LOCAL time.
+ *
+ * Every ROADMAP writer used `new Date().toISOString().split('T')[0]`, which is
+ * UTC. West of UTC that files evening work a day ahead -- anything after about
+ * 19:00 CDT got tomorrow's date, and the commit that fixed the planning-entry
+ * extractor was itself stamped 2026-08-13 on the evening of the 12th.
+ *
+ * Not merely cosmetic. `applyRoadmapUpdate` and `git-commit-roadmap` both match
+ * an EXISTING same-day block by this exact string, so two writers running
+ * either side of UTC midnight disagreed about what "today" was in the same
+ * file -- one appending under `### 2026-08-12` while the other opened a second
+ * block for `### 2026-08-13`.
+ *
+ * Built from local date parts rather than a locale format (`toLocaleDateString`)
+ * so the output cannot drift with the runtime's ICU data.
+ *
+ * @param now - injectable clock for tests; defaults to the current time.
+ */
+export function localDateStamp(now: Date = new Date()): string {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, '0');
+  const day = String(now.getDate()).padStart(2, '0');
+  return `${year}-${month}-${day}`;
+}
+
 export function normalizeShellPath(p: string): string {
   if (!p || process.platform !== 'win32') return p;
   // /cygdrive/c/x -> C:/x

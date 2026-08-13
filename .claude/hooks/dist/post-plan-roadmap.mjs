@@ -740,6 +740,14 @@ function writeRoadmapGuarded(args) {
   });
 }
 
+// src/shared/roadmap-sync-guards.ts
+function localDateStamp(now = /* @__PURE__ */ new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // src/post-plan-roadmap.ts
 function renderSectionBody(key, sections) {
   const lines = [];
@@ -1280,7 +1288,7 @@ async function main() {
     }));
     return;
   }
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const today = localDateStamp();
   const newSession = {
     date: today,
     title: planInfo.title,

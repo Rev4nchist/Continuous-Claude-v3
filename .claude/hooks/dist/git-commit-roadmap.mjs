@@ -14,6 +14,12 @@ function isPathInsideProject(targetPath, projectDir) {
   const rel = path.relative(path.resolve(projectDir), path.resolve(targetPath));
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
+function localDateStamp(now = /* @__PURE__ */ new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 function normalizeShellPath(p) {
   if (!p || process.platform !== "win32") return p;
   let m = p.match(/^\/cygdrive\/([A-Za-z])(\/.*)?$/);
@@ -832,7 +838,7 @@ async function main() {
   }
   const relRoadmapPath = path2.relative(projectDir, roadmapPath) || "ROADMAP.md";
   const preDirty = isRoadmapPreDirty(projectDir, relRoadmapPath);
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const today = localDateStamp();
   const entry = formatCommitEntry(commit, today);
   const updated = appendToCompleted(content, entry);
   const beforeLineCount = content.split("\n").length;

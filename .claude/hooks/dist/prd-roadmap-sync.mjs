@@ -185,6 +185,12 @@ function isPathInsideProject(targetPath, projectDir) {
   const rel = path.relative(path.resolve(projectDir), path.resolve(targetPath));
   return rel === "" || !rel.startsWith("..") && !path.isAbsolute(rel);
 }
+function localDateStamp(now = /* @__PURE__ */ new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
 
 // src/shared/roadmap-audit.ts
 import { createHash } from "node:crypto";
@@ -633,7 +639,7 @@ function extractPRDMetadata(content) {
     status: "Draft",
     priority: "Normal",
     version: "1.0",
-    created: (/* @__PURE__ */ new Date()).toISOString().split("T")[0]
+    created: localDateStamp()
   };
   const lines = content.split("\n");
   for (const line of lines) {
@@ -802,7 +808,7 @@ function updateProgress(content, title, progress) {
   return { content: result.join("\n"), removed };
 }
 function moveToCompleted(content, title) {
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const today = localDateStamp();
   return {
     content: insertUnderSection(content, "## completed", `- [x] ${title} (${today})`),
     removed: []
@@ -815,7 +821,7 @@ function promoteToCurrent(content, item) {
   let inCurrent = false;
   let inPlanned = false;
   let removedFromPlanned = false;
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const today = localDateStamp();
   for (let i = 0; i < lines.length; i++) {
     const stripped = lines[i].trim();
     const lower = stripped.toLowerCase();
