@@ -55,11 +55,21 @@
       "publish_from": "lane-board.html",
       "title": "Agentic OS — Lane Board",
       "favicon": "🛤️",
-      "description": "Live lane board generated from agentic_os.lane: 33 lanes across 8 tracks, who holds what right now, and the reconciliation query behind every number.",
+      "description": "Live lane board generated from agentic_os.lane: 34 lanes across 8 tracks, who holds what right now, and the reconciliation query behind every number.",
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-08-05",
+      "last_published": "2026-08-12",
+      "SERVES_CURRENT_BOARD_CONFIRMED_2026-08-12": {
+        "by_session": "5ef0cdcc (agentic-os track, the owner the two open blocks asked for)",
+        "closes": "The one thing BOTH open blocks explicitly left unverified: 'Whether 9eb25020 currently SERVES a correct, current board. It was NOT WebFetched.' It has now been WebFetched, twice, before and after a republish.",
+        "before_republish": "WebFetch returned the live page: <title> 'Agentic OS — Lane Board', header 'generated from agentic_os.lane · 2026-08-05 07:32 local', chips 'open 16' / 'all 33'. So 9eb25020 was serving a real but 7-day-stale board. Reading (b) of the 08-08 contradiction is confirmed a second time, now on page CONTENT rather than on listing presence alone.",
+        "after_republish": "WebFetch of the same URL returns header 'generated from agentic_os.lane · 2026-08-12 20:57 local' and chips 'open 16' / 'all 34'. The lane count moving 33 -> 34 and the timestamp advancing are what prove the redeploy landed on THIS url rather than minting a new one.",
+        "listing_check": "`Artifact action:list scope=mine` returns 6 artifacts, 'Agentic OS — Lane Board' at 9eb25020 first, updated 2026-08-13. Both checks run BEFORE this block was written, per $schema_notes step 5.",
+        "date_note": "The platform stamps 'updated 2026-08-13' because it renders UTC; local time at publish was 2026-08-12 20:57. `last_published` here is the LOCAL date, deliberately - this same UTC-vs-local defect was fixed across the ROADMAP writers today in 7edfb33, and the board's own header renders local.",
+        "what_staled_it": "Two branch-wide `lane.mjs say` notes from this session (the ROADMAP extractor fix f315bcf and its follow-ups 7edfb33). render-board.mjs:114 renders the last 30 lane_event rows, so those notes belong on the page; a 34th lane had also been seeded since 08-05.",
+        "still_not_root_caused": "Why the 2026-08-05 session recorded b8692cef as verified-present when three independent listings since have never once shown it. Unchanged by this session - flagged so nobody reads this block as closing that."
+      },
       "RECONCILED": {
         "resolved": "2026-07-29",
         "by_session": "3831be22",
@@ -105,7 +115,7 @@
       "URL_CONTRADICTION_2026-08-08": {
         "found": "2026-08-08",
         "by_session": "75823f04 (greymatter-cto track, does NOT own this board)",
-        "status": "OPEN - recorded, deliberately not resolved",
+        "status": "CLOSED 2026-08-12 by session 5ef0cdcc - see SERVES_CURRENT_BOARD_CONFIRMED_2026-08-12 above. Reading (b) holds, now confirmed on page CONTENT and not just listing presence: 9eb25020 was WebFetched, found serving a real 2026-08-05 board, republished, and re-fetched showing the new render. This block's own 'what_is_NOT_verified' is the thing that was closed. Kept, not deleted - it is the record of a registry that asserted a dead URL twice.",
         "symptom": "The `url` above and the URL_UNREACHABLE_RESOLVED block below are contradicted by the live artifact listing. That block asserts b8692cef-68a5-4db5-baf1-100376015216 is the live board and that 9eb25020-1959-47b9-b51f-6589e0c0515a is 'absent from the Artifact listing' and 'cannot be revived'. On 2026-08-08 a FULL listing (`Artifact action:list scope=mine`, limit 50, 38 artifacts returned, reaching back to 2026-07-06) shows the exact opposite: 'Agentic OS - Lane Board' at 9eb25020 PRESENT, updated 2026-08-05; b8692cef ABSENT from all 38.",
         "what_is_verified": "Only the listing. 38 rows, sorted most-recent-first, spanning 2026-08-07 back to 2026-07-06 - so a 2026-08-05 artifact is inside the window and b8692cef's absence is not a paging artifact.",
         "what_is_NOT_verified": "Whether 9eb25020 actually SERVES the board. It was not WebFetched: WebFetch returns RAW HTML for an owned artifact (confirmed this session on a different page), and render-board.mjs output is ~100KB, which would have consumed the session's context for a side-quest. Someone with budget should fetch it and confirm before acting.",
