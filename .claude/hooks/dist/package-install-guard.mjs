@@ -7981,6 +7981,606 @@ var malicious_packages_default = {
       reason: "Malicious code in @years19/n8n-nodes-utils-helper-a (npm) (GHSA-3wg8-34g2-8xh6)",
       date: "2026-08-12",
       advisory: "https://github.com/advisories/GHSA-3wg8-34g2-8xh6"
+    },
+    "angular2-tesla-common": {
+      blocked_all: true,
+      reason: "Malware in angular2-tesla-common (GHSA-xr85-54wg-xm89)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-xr85-54wg-xm89"
+    },
+    "amplitude-ma-ts": {
+      blocked_all: true,
+      reason: "Malware in amplitude-ma-ts (GHSA-987f-7782-4mjj)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-987f-7782-4mjj"
+    },
+    "heft-storybook-v6-react-tutorial-storykit": {
+      blocked_all: true,
+      reason: "Malware in heft-storybook-v6-react-tutorial-storykit (GHSA-p9w8-w4px-249v)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-p9w8-w4px-249v"
+    },
+    "0vulns-dependency-confusion-poc": {
+      blocked_all: true,
+      reason: "Malware in 0vulns-dependency-confusion-poc (GHSA-r9cf-374f-9q9v)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-r9cf-374f-9q9v"
+    },
+    "redux-saga-task-cancel-rce": {
+      blocked_all: true,
+      reason: "Malware in redux-saga-task-cancel-rce (GHSA-6g6j-m6w3-ffvc)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-6g6j-m6w3-ffvc"
+    },
+    "redux-saga-channel-end-rce": {
+      blocked_all: true,
+      reason: "Malware in redux-saga-channel-end-rce (GHSA-x5xf-x6ww-rrf9)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-x5xf-x6ww-rrf9"
+    },
+    "redux-init-rce": {
+      blocked_all: true,
+      reason: "Malware in redux-init-rce (GHSA-8v66-3xv9-g895)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8v66-3xv9-g895"
+    },
+    cspotcode: {
+      blocked_all: true,
+      reason: "Malware in cspotcode (GHSA-5gjv-f2cp-9rmp)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-5gjv-f2cp-9rmp"
+    },
+    "elf-stats-sparkly-cushion-340": {
+      blocked_all: true,
+      reason: "Malware in elf-stats-sparkly-cushion-340 (GHSA-443f-9rv5-jgm4)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-443f-9rv5-jgm4"
+    },
+    "ak-mal-test-poc": {
+      blocked_all: true,
+      reason: "Malware in ak-mal-test-poc (GHSA-p2rc-847p-5jpq)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-p2rc-847p-5jpq"
+    },
+    "@genoma-ui/components": {
+      blocked_all: true,
+      reason: "Malware in @genoma-ui/components (GHSA-rxx8-qh66-9vfr)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rxx8-qh66-9vfr"
+    },
+    "fireblocks-netlink-v2-api-validator": {
+      blocked_all: true,
+      reason: "Malware in fireblocks-netlink-v2-api-validator (GHSA-rq6c-4p5q-xrjw)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rq6c-4p5q-xrjw"
+    },
+    "pie-docs": {
+      blocked_all: true,
+      reason: "Malware in pie-docs (GHSA-qv69-65wh-qgf6)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qv69-65wh-qgf6"
+    },
+    game_overlay: {
+      blocked_all: true,
+      reason: "Malware in game_overlay (GHSA-8g9r-jp73-9wqr)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8g9r-jp73-9wqr"
+    },
+    pocbitbarrontest: {
+      blocked_all: true,
+      reason: "Malware in pocbitbarrontest (GHSA-55p8-9h4q-g3jf)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-55p8-9h4q-g3jf"
+    },
+    "@corpweb-ui/wmkt-library": {
+      blocked_all: true,
+      reason: "Malware in @corpweb-ui/wmkt-library (GHSA-hq2v-f3x5-v66m)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-hq2v-f3x5-v66m"
+    },
+    "abina-amugui-anupcuamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anupcuamai (npm) (GHSA-f2gj-q2j8-f254)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-f2gj-q2j8-f254"
+    },
+    "@convera/ui-shared": {
+      blocked_all: true,
+      reason: "Malware in @convera/ui-shared (GHSA-wc9j-96q7-v8pq)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-wc9j-96q7-v8pq"
+    },
+    "abina-amugui-anumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anumai (npm) (GHSA-v7gx-m58v-xq3m)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-v7gx-m58v-xq3m"
+    },
+    "abina-amugui-anucamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anucamai (npm) (GHSA-5w29-x3cr-xr73)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-5w29-x3cr-xr73"
+    },
+    "abina-amugmi-amau": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amau (npm) (GHSA-6cc6-rhg9-mcw2)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-6cc6-rhg9-mcw2"
+    },
+    "abina-amugmi-amu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amu (npm) (GHSA-mm8c-jj2g-8rq5)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-mm8c-jj2g-8rq5"
+    },
+    "abina-amuguai-anuamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amuguai-anuamai (npm) (GHSA-f75f-78f3-q74f)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-f75f-78f3-q74f"
+    },
+    "abina-amugmi-amamgu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amamgu (npm) (GHSA-x4gh-44cm-wj2w)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-x4gh-44cm-wj2w"
+    },
+    "abina-amugmi-amm": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amm (npm) (GHSA-rm97-2j63-w7fm)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rm97-2j63-w7fm"
+    },
+    "abina-amugmi-amamagu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amamagu (npm) (GHSA-mvm5-r5qv-hqgg)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-mvm5-r5qv-hqgg"
+    },
+    "abina-amugi-anupcamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anupcamai (npm) (GHSA-pcrx-6vcw-2q2q)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-pcrx-6vcw-2q2q"
+    },
+    "abina-amugi-anuhbuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anuhbuai (npm) (GHSA-34w4-9h2h-qr33)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-34w4-9h2h-qr33"
+    },
+    "abina-amugmi-amanamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amanamu (npm) (GHSA-qhm4-v9jm-xm49)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qhm4-v9jm-xm49"
+    },
+    "abina-amugi-anuhuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anuhuai (npm) (GHSA-3rwx-vg7c-585q)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3rwx-vg7c-585q"
+    },
+    "abina-amugi-anuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anuai (npm) (GHSA-3gfw-mpw4-6cfr)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3gfw-mpw4-6cfr"
+    },
+    "abina-amugi-ani": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-ani (npm) (GHSA-6c9j-746j-9jqc)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-6c9j-746j-9jqc"
+    },
+    "abina-amugi-amiatamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiatamu (npm) (GHSA-jm36-rvqw-3pw8)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-jm36-rvqw-3pw8"
+    },
+    "abina-amugi-amiau": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiau (npm) (GHSA-32vv-rfcv-29g4)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-32vv-rfcv-29g4"
+    },
+    "zip-bundle": {
+      blocked_all: true,
+      reason: "Malware in zip-bundle (GHSA-c3r4-rgqq-2f7v)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-c3r4-rgqq-2f7v"
+    },
+    "abina-amuguai-anumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amuguai-anumai (npm) (GHSA-566f-xhr7-vpwm)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-566f-xhr7-vpwm"
+    },
+    "abina-amuguai-anuhabumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amuguai-anuhabumai (npm) (GHSA-jwq6-33qm-wxrw)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-jwq6-33qm-wxrw"
+    },
+    "abina-amuguai-anuabumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amuguai-anuabumai (npm) (GHSA-qwjr-8j6g-hp4v)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qwjr-8j6g-hp4v"
+    },
+    "abina-amugmi-amtanamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amtanamu (npm) (GHSA-22xf-hx5m-rhwv)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-22xf-hx5m-rhwv"
+    },
+    "abina-amugymi-amamagu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugymi-amamagu (npm) (GHSA-53c2-6rp8-qwcp)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-53c2-6rp8-qwcp"
+    },
+    "abina-amugui-anucuamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anucuamai (npm) (GHSA-676c-r2m6-p36p)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-676c-r2m6-p36p"
+    },
+    "abina-amugui-anuhabumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anuhabumai (npm) (GHSA-8v9p-4gcj-mr2j)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8v9p-4gcj-mr2j"
+    },
+    "abina-amugui-anucmai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugui-anucmai (npm) (GHSA-2p7m-h292-g86j)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-2p7m-h292-g86j"
+    },
+    "abina-amugmi-amiatanamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amiatanamu (npm) (GHSA-7h3r-vcph-vqwh)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-7h3r-vcph-vqwh"
+    },
+    "abina-amugi-anupmai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anupmai (npm) (GHSA-8qw9-6p95-phv7)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8qw9-6p95-phv7"
+    },
+    "abina-amugmi-amamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amamu (npm) (GHSA-6qr7-2c65-h2hm)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-6qr7-2c65-h2hm"
+    },
+    "abina-amugmi-amatanamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugmi-amatanamu (npm) (GHSA-hxmh-83q5-6rwc)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-hxmh-83q5-6rwc"
+    },
+    "abina-amugi-anupai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anupai (npm) (GHSA-7hrh-xj7q-p48x)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-7hrh-xj7q-p48x"
+    },
+    "abina-amugi-anuhabuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anuhabuai (npm) (GHSA-vm29-7946-8v3g)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-vm29-7946-8v3g"
+    },
+    "abina-amugi-amiatanamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiatanamu (npm) (GHSA-jfh9-r9q8-jjjc)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-jfh9-r9q8-jjjc"
+    },
+    "abina-amugi-anuhabumai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anuhabumai (npm) (GHSA-cr72-xvxp-c3q5)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-cr72-xvxp-c3q5"
+    },
+    "abina-amugi-anui": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anui (npm) (GHSA-4rww-24v7-q447)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-4rww-24v7-q447"
+    },
+    "abina-amugi-anupcuamai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-anupcuamai (npm) (GHSA-w7r6-55wm-ghqv)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-w7r6-55wm-ghqv"
+    },
+    "abina-amoavugi-aninahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugi-aninahi (npm) (GHSA-f7f6-rqwr-9xr6)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-f7f6-rqwr-9xr6"
+    },
+    "abina-amoavugi-anuianahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugi-anuianahi (npm) (GHSA-xxj2-fr53-8rvh)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-xxj2-fr53-8rvh"
+    },
+    "abina-amib-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amib-agu (npm) (GHSA-jg5q-9cmm-pv57)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-jg5q-9cmm-pv57"
+    },
+    "abina-ami-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-ami-agu (npm) (GHSA-vx42-9pq5-8pw2)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-vx42-9pq5-8pw2"
+    },
+    "abina-amoavugoi-anunhi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugoi-anunhi (npm) (GHSA-8gjm-95mg-7fvv)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8gjm-95mg-7fvv"
+    },
+    "abih-poke4": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke4 (npm) (GHSA-w839-pg86-q24m)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-w839-pg86-q24m"
+    },
+    "abina-amogoi-anuhi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amogoi-anuhi (npm) (GHSA-qq57-fm3j-w8pg)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qq57-fm3j-w8pg"
+    },
+    "abina-amogoi-anuhuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amogoi-anuhuai (npm) (GHSA-cx89-xhj8-prqw)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-cx89-xhj8-prqw"
+    },
+    "abina-amougoi-anuhi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amougoi-anuhi (npm) (GHSA-8h5w-pqh9-p3c9)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8h5w-pqh9-p3c9"
+    },
+    "abina-amibn-aguhami": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguhami (npm) (GHSA-h2mw-49mq-prhp)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-h2mw-49mq-prhp"
+    },
+    "abina-amogoi-anuhui": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amogoi-anuhui (npm) (GHSA-45gx-7ppr-vh63)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-45gx-7ppr-vh63"
+    },
+    "abina-amibon-aguphoupabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibon-aguphoupabmi (npm) (GHSA-423m-5p6q-cf9j)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-423m-5p6q-cf9j"
+    },
+    "abina-amogi-anuuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amogi-anuuai (npm) (GHSA-rfpv-pvw4-5vq3)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rfpv-pvw4-5vq3"
+    },
+    "abina-amibn-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-agu (npm) (GHSA-8vpg-h76x-g3ff)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8vpg-h76x-g3ff"
+    },
+    "abina-amoavugoi-anuhi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugoi-anuhi (npm) (GHSA-43fg-8424-p9gr)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-43fg-8424-p9gr"
+    },
+    "abih-poke9": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke9 (npm) (GHSA-fm2h-4m54-8jh6)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-fm2h-4m54-8jh6"
+    },
+    "abih-poke8": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke8 (npm) (GHSA-qxg2-cfpq-m3fw)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qxg2-cfpq-m3fw"
+    },
+    "abina-amibn-aguhabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguhabmi (npm) (GHSA-hf49-4w6r-77q8)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-hf49-4w6r-77q8"
+    },
+    "abina-amoaugoi-anuhi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoaugoi-anuhi (npm) (GHSA-7hmw-pq26-8fpm)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-7hmw-pq26-8fpm"
+    },
+    "abih-poke25": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke25 (npm) (GHSA-jwm2-3rq4-gqr9)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-jwm2-3rq4-gqr9"
+    },
+    "abina-amibn-aguhai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguhai (npm) (GHSA-r233-hp4q-2mjc)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-r233-hp4q-2mjc"
+    },
+    "abina-amibon-aguhoupabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibon-aguhoupabmi (npm) (GHSA-3qhq-jrcr-q9wq)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3qhq-jrcr-q9wq"
+    },
+    "abina-amiabu-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amiabu-agu (npm) (GHSA-76mg-jgw5-jvp4)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-76mg-jgw5-jvp4"
+    },
+    "abih-poke6": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke6 (npm) (GHSA-vxxx-g3fh-cfrh)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-vxxx-g3fh-cfrh"
+    },
+    "abih-poke7": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke7 (npm) (GHSA-8rjw-8wm9-f5xf)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-8rjw-8wm9-f5xf"
+    },
+    "abina-amugi-amiamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiamu (npm) (GHSA-xcfg-p22x-8h67)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-xcfg-p22x-8h67"
+    },
+    "abina-amugi-amiaamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiaamu (npm) (GHSA-48v9-rj45-rrrw)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-48v9-rj45-rrrw"
+    },
+    "abina-amugi-amia": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amia (npm) (GHSA-hfrh-6g3x-7282)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-hfrh-6g3x-7282"
+    },
+    "abina-amogi-anuhuai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amogi-anuhuai (npm) (GHSA-rh64-jh3p-8f6w)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rh64-jh3p-8f6w"
+    },
+    "abina-amugi-ai": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-ai (npm) (GHSA-mm55-6w48-r53j)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-mm55-6w48-r53j"
+    },
+    "abina-amoavugoi-anuinahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugoi-anuinahi (npm) (GHSA-3vr8-72vv-g6hg)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3vr8-72vv-g6hg"
+    },
+    "abina-amibn-aguhopabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguhopabmi (npm) (GHSA-3ph4-pvq8-fpvx)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3ph4-pvq8-fpvx"
+    },
+    "abina-amibon-aguhopabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibon-aguhopabmi (npm) (GHSA-f6pc-c34w-9jw3)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-f6pc-c34w-9jw3"
+    },
+    "abina-amibn-aguhpabmi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguhpabmi (npm) (GHSA-h5mg-qr2p-qgj4)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-h5mg-qr2p-qgj4"
+    },
+    "abina-amibn-aguha": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibn-aguha (npm) (GHSA-4jjw-xr87-93m3)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-4jjw-xr87-93m3"
+    },
+    "abina-amiab-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amiab-agu (npm) (GHSA-3g79-w6xg-fv9j)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3g79-w6xg-fv9j"
+    },
+    "abih-poke3": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke3 (npm) (GHSA-rpxm-gjm3-5qw6)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-rpxm-gjm3-5qw6"
+    },
+    "abih-poke23": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke23 (npm) (GHSA-f25r-hj7w-hxcv)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-f25r-hj7w-hxcv"
+    },
+    "abina-amugi-amiataamu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amugi-amiataamu (npm) (GHSA-v793-fr2x-69xx)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-v793-fr2x-69xx"
+    },
+    "abina-amovugi-aninahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amovugi-aninahi (npm) (GHSA-7gcc-mc78-w3c5)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-7gcc-mc78-w3c5"
+    },
+    "abina-amoavugoi-anuianahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugoi-anuianahi (npm) (GHSA-3c94-2q89-p2f7)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-3c94-2q89-p2f7"
+    },
+    "abina-amoavugi-anianahi": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amoavugi-anianahi (npm) (GHSA-mcfq-r6pm-mgwx)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-mcfq-r6pm-mgwx"
+    },
+    "abina-amibuan-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amibuan-agu (npm) (GHSA-wf38-4h45-fm7x)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-wf38-4h45-fm7x"
+    },
+    "abina-amiabuan-agu": {
+      blocked_all: true,
+      reason: "Malicious code in abina-amiabuan-agu (npm) (GHSA-54p8-96qh-6fjx)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-54p8-96qh-6fjx"
+    },
+    "abih-poke24": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke24 (npm) (GHSA-qh7j-rq8c-r8pf)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-qh7j-rq8c-r8pf"
+    },
+    "abih-poke22": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke22 (npm) (GHSA-2w78-7gff-hh7c)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-2w78-7gff-hh7c"
+    },
+    "abih-poke14": {
+      blocked_all: true,
+      reason: "Malicious code in abih-poke14 (npm) (GHSA-h7mw-fw62-ww2h)",
+      date: "2026-08-14",
+      advisory: "https://github.com/advisories/GHSA-h7mw-fw62-ww2h"
     }
   }
 };
