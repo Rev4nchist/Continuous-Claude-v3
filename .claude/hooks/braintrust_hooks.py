@@ -51,6 +51,27 @@ LOCK_STALE_SECONDS = 300
 # Halving bound for oversized batches: 2^6 = 64 sub-batches. Past this the
 # payload is one enormous span, not a batching problem.
 MAX_SPLIT_DEPTH = 6
+# Braintrust rejects a request body over 10 MiB.
+BRAINTRUST_MAX_BODY_BYTES = 10 * 1024 * 1024
+# Bound what we WRITE, comfortably under the server cap, so an unsendable record
+# can never be created in the first place.
+#
+# WHY THIS EXISTS (measured 2026-08-14): spool_events wrote a failed batch as ONE
+# json line containing every event, unbounded. A batch that failed BECAUSE it was
+# too big was therefore preserved at exactly the size that failed. The live spool
+# held a single 516.3 MiB record of 210 spans, re-read, re-attempted and
+# re-written on every session start and end since 2026-08-09.
+#
+# It could never drain, and the reason is circular: the only size-reduction path
+# (_split_and_post) is gated on _is_payload_too_large(), which needed the SERVER
+# to answer HTTP 413 -- but 516 MiB cannot be uploaded inside the 8s write
+# timeout, so the request died as `WriteTimeout` with no status code at all. The
+# system could only shrink a payload the server had managed to reject, while
+# being unable to send a payload large enough to be rejected.
+SPOOL_MAX_RECORD_BYTES = 8 * 1024 * 1024
+# A payload our OWN pre-flight measurement rejected. Distinct from the server's
+# 413 because we must not claim the server said something it never said.
+PREFLIGHT_TOO_LARGE = "payload exceeds local size cap"
 # Bounds one flush so it cannot outlive its hook budget.
 FLUSH_MAX_SECONDS = 20.0
 
@@ -270,13 +291,34 @@ def _post_events(
     owns_client = client is None
     c = client or httpx.Client(timeout=HTTP_TIMEOUT)
     try:
+        # Serialize ONCE, here, so we can measure the exact bytes we are about to
+        # send and then send those same bytes. Passing json= would serialize a
+        # second time inside httpx.
+        try:
+            body = json.dumps({"events": _scrub_surrogates(events)}).encode("utf-8")
+        except (TypeError, ValueError) as e:
+            return False, f"unserializable payload: {type(e).__name__}: {e}"
+
+        # PRE-FLIGHT. Do not attempt an upload we can already prove the server
+        # will refuse. Without this the request is not rejected, it TIMES OUT
+        # mid-write -- and a timeout carries no status code, so the caller's
+        # too-large branch never fires and the batch retries forever at full
+        # size. Measuring locally turns an unfalsifiable transport failure into
+        # a definite, actionable one.
+        if len(body) > BRAINTRUST_MAX_BODY_BYTES:
+            return (
+                False,
+                f"{PREFLIGHT_TOO_LARGE}: {len(body)} bytes > {BRAINTRUST_MAX_BODY_BYTES} "
+                f"({len(events)} spans)",
+            )
+
         resp = c.post(
             f"{API_URL}/v1/project_logs/{project_id}/insert",
             headers={
                 "Authorization": f"Bearer {API_KEY}",
                 "Content-Type": "application/json",
             },
-            json={"events": _scrub_surrogates(events)},
+            content=body,
         )
         if resp.status_code == 200:
             return True, json.dumps(resp.json().get("row_ids", []))
@@ -291,8 +333,19 @@ def _post_events(
 
 
 def _is_payload_too_large(detail: str) -> bool:
-    """Braintrust rejects requests over 10 MiB with HTTP 413."""
-    return "HTTP 413" in detail or "content length exceeded" in detail.lower()
+    """Is this failure a size problem, whoever noticed it?
+
+    Three ways to learn a payload is too big, and only the first two come from
+    the server: an explicit 413, its prose equivalent, and our own pre-flight
+    measurement. The third matters most -- a payload big enough to blow the
+    write timeout never gets a status code, so relying on the server to tell us
+    means the largest payloads are exactly the ones we cannot classify.
+    """
+    return (
+        "HTTP 413" in detail
+        or "content length exceeded" in detail.lower()
+        or PREFLIGHT_TOO_LARGE in detail
+    )
 
 
 def _split_and_post(
@@ -368,26 +421,98 @@ def batch_insert_spans(project_id: str, events: list[dict]) -> tuple[str, list]:
 # --- Durable spool -----------------------------------------------------------
 
 
+def chunk_events_by_bytes(
+    events: list[dict], max_bytes: int = SPOOL_MAX_RECORD_BYTES
+) -> tuple[list[list[dict]], list[dict]]:
+    """Group events into chunks that each serialize under max_bytes.
+
+    Returns (chunks, oversized). `oversized` are SINGLE events that exceed the
+    cap on their own -- no amount of grouping helps them, so the caller must
+    dead-letter them rather than spool something undeliverable.
+
+    Measured per event, not estimated from a count: span sizes here range over
+    four orders of magnitude (the 516 MiB record averaged 2.5 MiB/span but was
+    not remotely uniform), so an events-per-record limit would be simultaneously
+    too loose for big spans and needlessly tight for small ones.
+    """
+    chunks: list[list[dict]] = []
+    oversized: list[dict] = []
+    current: list[dict] = []
+    current_bytes = 0
+    # Each event costs its own length plus the ", " that joins it to the array.
+    for ev in events:
+        try:
+            size = len(json.dumps(ev).encode("utf-8"))
+        except (TypeError, ValueError):
+            # Unserializable alone means unserializable in a batch. Treat as
+            # oversized so it is dead-lettered with a reason instead of
+            # poisoning an entire chunk at write time.
+            oversized.append(ev)
+            continue
+        if size > max_bytes:
+            oversized.append(ev)
+            continue
+        if current and current_bytes + size + 2 > max_bytes:
+            chunks.append(current)
+            current = []
+            current_bytes = 0
+        current.append(ev)
+        current_bytes += size + 2
+    if current:
+        chunks.append(current)
+    return chunks, oversized
+
+
 def spool_events(project_id: str, events: list[dict]) -> bool:
     """Append a batch to the spool, durably. No network, so it cannot stall.
 
     fsync matters here: this is the last line of defence for events whose POST
     already failed, and session_end hands off to a detached child immediately
     after. A buffered write that dies with the process fixes nothing.
+
+    BOUNDED BY SIZE. This used to write every event as one line whatever its
+    size, which meant a batch that failed for being too large was persisted at
+    exactly the size that failed -- see SPOOL_MAX_RECORD_BYTES. Each record
+    written here is now independently postable, so a failed flush is a delay
+    rather than a permanent resident.
     """
     if not events:
         return True
     try:
         ensure_dirs()
-        record = {
-            "project_id": project_id,
-            "events": _scrub_surrogates(events),
-            "spooled_at": time.time(),
-        }
+        scrubbed = _scrub_surrogates(events)
+        # Pass the cap explicitly rather than relying on the parameter default:
+        # a default is bound once at import, so the module constant would be
+        # unreachable to any caller or test that adjusts it.
+        chunks, oversized = chunk_events_by_bytes(scrubbed, SPOOL_MAX_RECORD_BYTES)
+
+        for ev in oversized:
+            # Undeliverable at any batch size. Recorded, never silently dropped.
+            _deadletter_events(
+                project_id, [ev], f"single span exceeds {SPOOL_MAX_RECORD_BYTES} bytes"
+            )
+        if oversized:
+            log(
+                "WARN",
+                f"{len(oversized)} span(s) too large to ever send, dead-lettered",
+            )
+
+        if not chunks:
+            return not oversized
+
+        now = time.time()
         with open(SPOOL_FILE, "a", encoding="utf-8") as f:
-            f.write(json.dumps(record) + "\n")
+            for chunk in chunks:
+                record = {
+                    "project_id": project_id,
+                    "events": chunk,
+                    "spooled_at": now,
+                }
+                f.write(json.dumps(record) + "\n")
             f.flush()
             os.fsync(f.fileno())
+        if len(chunks) > 1:
+            log("INFO", f"Spooled {len(events)} spans as {len(chunks)} bounded records")
         return True
     except Exception as e:
         log("ERROR", f"Spool write failed for {len(events)} spans: {e}")
