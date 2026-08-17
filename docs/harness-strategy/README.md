@@ -300,9 +300,14 @@ was just left half-finished). Read that before search-heavy work here.
 ### 5.2 TLDR remediation is planned, not applied
 
 [`2026-07-29-tldr-remediation-plan.md`](2026-07-29-tldr-remediation-plan.md) —
-hardened by a cross-model premortem, 8 changes. **Not applied:** plan item 4 is
-"deregister `tldr-context-inject`", and it is still registered in live
-`settings.json`. Findings it rests on:
+hardened by a cross-model premortem, 8 changes. **Plan item 4 is now DONE and went
+further than planned (2026-08-17): `tldr-context-inject` was DELETED, not just
+deregistered.** The reason was not cost. It guarded `tool_name !== 'Task'` while the
+live subagent-spawn tool is named `Agent`, so it returned `{}` on every spawn and
+never injected once — 0 rows in `.tldr/stats/hook_activity.jsonl` against 1,310 rows
+from sibling hooks, and 0/20 injections when 20 real payloads were replayed with the
+guard simulated as fixed. Commit `d8d7343` (2026-03-06) widened ~10 sibling hooks for
+the Task→Agent rename and missed this one. Findings it rests on:
 [`2026-07-29-tldr-token-savings-findings.md`](2026-07-29-tldr-token-savings-findings.md).
 
 Headline from the findings, because it inverts the obvious conclusion: the

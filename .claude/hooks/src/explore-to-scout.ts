@@ -3,8 +3,8 @@
  * Explore to Scout Hook - PreToolUse (Agent|Task)
  *
  * Blocks subagent_type="Explore" with permissionDecision: "deny" (backstop).
- * Note: PreToolUse hooks CAN return updatedInput (tldr-context-inject rewrites `prompt`
- * on this same Task matcher), but rewriting `subagent_type` Explore->scout is UNVERIFIED
+ * Note: PreToolUse hooks CAN return updatedInput (a hook may rewrite `prompt` on
+ * this same Task matcher), but rewriting `subagent_type` Explore->scout is UNVERIFIED
  * (2026-07-07) — so we hard-deny rather than silently auto-rewrite an Explore onto Haiku.
  * The root-cause fixes are the smart-search-router self-contradiction patch (it used to
  * recommend Explore) + the use-scout-not-explore rule.

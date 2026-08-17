@@ -117,7 +117,9 @@ describe('settings.json.template', () => {
       ['package-install-guard', 'PreToolUse::Bash'],
       ['agent-model-guard', 'PreToolUse::Task'],
       ['agent-recall-injector', 'PreToolUse::Task'],
-      ['tldr-context-inject', 'PreToolUse::Task'],
+      // tldr-context-inject REMOVED 2026-08-17. It guarded `tool_name !== 'Task'`
+      // while the live subagent tool is named `Agent`, so it returned {} on every
+      // spawn and never injected once. Do not re-add it to this contract.
       ['plan-to-ralph-enforcer', 'PreToolUse::Edit|Write'],
       ['memory-awareness', 'UserPromptSubmit::'],
       ['post-edit-diagnostics', 'PostToolUse::Edit|Write'],

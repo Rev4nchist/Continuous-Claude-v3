@@ -19,7 +19,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 | `kind` | Behavior | Examples |
 |--------|----------|----------|
 | `gate` | PreToolUse with allow/deny decision | `package-install-guard.ts`, `plan-to-ralph-enforcer.ts`, `agent-model-guard.ts`, `explore-to-scout.ts`, `no-haiku-enforcer.ts`, `ralph-delegation-enforcer.ts` |
-| `injector` | PostToolUse or PreToolUse adding `additionalContext` | `tldr-context-inject.ts`, `tldr-read-enforcer.ts`, `react-perf-context.ts`, `pre-tool-knowledge.ts`, `memory-awareness.ts`, `epistemic-reminder.ts`, `signature-helper.ts` |
+| `injector` | PostToolUse or PreToolUse adding `additionalContext` | `tldr-read-enforcer.ts`, `react-perf-context.ts`, `pre-tool-knowledge.ts`, `memory-awareness.ts`, `epistemic-reminder.ts`, `signature-helper.ts` |
 | `orchestrator` | Multi-step state mgmt across hook events | `maestro-state-manager.ts`, `maestro-detector.ts`, `ralph-task-monitor.ts`, `ralph-progress-inject.ts`, `ralph-watchdog.ts`, `plan-exit-tracker.ts`, `roadmap-reconcile.ts`, `roadmap-completion.ts` |
 | `telemetry` | Logs/observes only; never blocks | `hook-health-monitor.ts`, `mcp-activity-tracker.ts`, `telemetry-tracker.ts`, `periodic-extract.ts`, `session-outcome.ts`, `heartbeat.mjs`, planned `hook-trace.ts` |
 

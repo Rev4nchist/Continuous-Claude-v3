@@ -90,14 +90,6 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/tldr-context-inject.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 3000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-recall-injector.mjs"

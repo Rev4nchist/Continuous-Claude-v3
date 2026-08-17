@@ -12,7 +12,7 @@ Token-efficient code analysis. **95% savings** vs raw file reads.
 
 Advanced features (daemon, semantic search, Python API, language table): `references/advanced-features.md`
 
-> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 8 hooks — see `tldr-context-inject`, `tldr-read-enforcer`, `smart-search-router`, `impact-refactor`, `arch-context-inject`, `edit-context-inject`, `post-edit-diagnostics`, `signature-helper`. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
+> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 7 hooks — see `tldr-read-enforcer`, `smart-search-router`, `impact-refactor`, `arch-context-inject`, `edit-context-inject`, `post-edit-diagnostics`, `signature-helper`. (`tldr-context-inject` was deleted 2026-08-17: it guarded `tool_name !== 'Task'` while the live subagent tool is named `Agent`, so it never once injected.) Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
 
 ## Quick Reference
 

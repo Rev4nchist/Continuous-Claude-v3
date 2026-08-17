@@ -45,7 +45,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | ralph-template-inject | Agent | Inject Ralph templates into agent prompts |
 | maestro-enforcer | Agent | Enforce Maestro phase gating (block skipping) |
 | pre-tool-knowledge | Agent | Inject knowledge tree context for agents |
-| tldr-context-inject | Agent | Inject TLDR analysis context for agents |
 | smart-search-router | Grep | Route to AST-grep or TLDR for structured searches |
 | tldr-read-enforcer | Read | Suggest TLDR structure before reading large files |
 | ralph-delegation-enforcer | Edit\|Write\|Bash | Block direct code edits when Ralph is active |
