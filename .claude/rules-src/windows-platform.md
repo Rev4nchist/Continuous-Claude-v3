@@ -151,11 +151,38 @@ surfaced is different and unlogged: affected bash processes **block instead of d
 at ~0 CPU, and never exit. One trial that should have created ~9 processes left **51
 live**, 46 of them descendants nothing had a handle on, still present ten minutes later.
 `Stop-Process` on the tracked pids sails straight past the descendants — the same
-spawn-tree leak already recorded for `spawnSync`; only `taskkill /T /F` clears them.
+spawn-tree leak already recorded for `spawnSync`.
 
-**Recovery:** `pwsh -File scripts/msys/reap.ps1` (dry-run) then `-Force`. It kills only
-processes that are BOTH older than 120s AND under 2s CPU, so a bash doing real work is
-never touched. Verified: cleared 3 stuck leftovers, bash healthy immediately after.
+**CORRECTION (2026-08-17): the recovery guidance below was wrong twice, and both
+errors could destroy a peer session's work. Do NOT reach for it reflexively.**
+
+- **`taskkill /T /F` is NOT the safe primitive.** `/T` resolves the tree by PPID **at
+  kill time**, and PIDs are reused on this box, so `/T` can kill a process that merely
+  inherited a recycled parent id. The safe form is: kill **leaves first, by explicit
+  PID**, revalidating `CreationDate` immediately before each kill.
+- **`reap.ps1`'s selection is both blind and non-discriminating.** It enumerates with
+  `Get-Process bash` (`reap.ps1:36`, `:76`), so it never sees `sh.exe`, `grep.exe` or
+  any other MSYS binary — it printed "no bash processes running" while two `sh.exe`
+  drove a 31-minute `docker compose build`. And its premise, "a bash doing real work
+  accumulates CPU", is false here: the dominant shape is a shell **waiting** on a child
+  that does the work (measured: 0.03s CPU over 463s while its child worked). CPU cannot
+  separate stuck from working, so "a bash doing real work is never touched" does not
+  hold. A read-only simulation on 2026-08-17 found `-Force` would have tree-killed two
+  live peer-session shells.
+
+**Recovery, revised.** The dry run (`pwsh -File scripts/msys/reap.ps1`, no `-Force`) is
+safe to execute — the kill is gated at `:64-67` — but read its output as incomplete,
+never as an inventory. Census by path instead, which sees every MSYS binary:
+
+```
+$g='C:\Users\david.hayes\AppData\Local\Programs\Git'
+Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($g,'OrdinalIgnoreCase') } |
+  Select ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Format-List
+```
+
+Reclaim ONLY a leaf orphan: no children of any kind, no `CreationDate`-validated
+ancestor reaching a live `claude`/`pwsh`/`node`, age over 600s, and two samples 60s
+apart agreeing. If any candidate has a live child, that is an absolute veto.
 
 **Not yet established, do not assume:** that this hang is what broke the Bash *tool* in
 the 2026-07-26 session. The Bash tool was probed three times during the storm, including
@@ -174,11 +201,29 @@ inside the critical section, i.e. **degraded process-spawn latency manufactures 
 race** — consistent with the separately-measured spawn pathology on this box (p50 814ms
 and later 2,167ms against a healthy 30–80ms).
 
+**CORRECTION (2026-08-17): the load hypothesis is UNSUPPORTED, and the instrument that
+was supposed to test it was measuring the wrong binary.**
+
+- **All 38 crash rows carrying `node_spawn_ms` sit at 42–81 ms — inside the healthy
+  30–80 ms band.** Every crash for which spawn latency was recorded happened while
+  spawn latency was normal. The "degraded latency manufactures the race" story above is
+  not supported by the only data that can speak to it.
+- **`spawn-latency.ps1` was probing WSL, not MSYS.** Its `bash -c true` probe resolved
+  `bash` from PATH, and on this machine `(Get-Command bash).Source` is
+  `C:\WINDOWS\system32\bash.exe` — the WSL launcher, which is not MSYS, never touches
+  the `shared.cc` mount table, and cannot exhibit the fork storm. So **every HEALTHY
+  verdict this script printed before 2026-08-17 was meaningless**, including the ones
+  that made the load hypothesis look testable. Fixed the same day: it now resolves Git
+  bash by full path, prints the path it chose, and hard-fails if Git bash is absent.
+
 Measure it, don't assume it: `pwsh -File scripts/msys/spawn-latency.ps1`. Strictly
 serial, no bursts, **safe to run at any time including inside a crash window** — unlike
-`repro.ps1`, which deliberately storms the machine. It samples `node`, `bash` and
+`repro.ps1`, which deliberately storms the machine. It samples `node`, `git-bash` and
 `git rev-parse` cold starts and prints a HEALTHY/ELEVATED/DEGRADED verdict against the
-30–80ms reference.
+30–80ms reference. **Confirm the `git bash:` line names a path under `Git\bin` before
+believing any verdict.** Note also that a "cold" sample is only cold when NO MSYS
+process is alive — the cohort caches `user_info` in shared memory, so a reading taken
+while any bash/sh/grep is running measures the warm path and answers nothing.
 
 Two measurement traps this lane already fell into, both worth avoiding:
 
