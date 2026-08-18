@@ -8814,6 +8814,168 @@
       "reason": "Malicious code in @cdnshell/loader (npm) (GHSA-r34v-w3v8-r8c8)",
       "date": "2026-08-14",
       "advisory": "https://github.com/advisories/GHSA-r34v-w3v8-r8c8"
+    },
+    "@oyo_tech/oyochat_user": {
+      "blocked_all": true,
+      "reason": "Malicious code in @oyo_tech/oyochat_user (npm) (GHSA-wm7q-9397-cw9f)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-wm7q-9397-cw9f"
+    },
+    "checkout-mobile-pay-button": {
+      "blocked_all": true,
+      "reason": "Malware in checkout-mobile-pay-button (GHSA-c2h8-p68f-vf8m)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-c2h8-p68f-vf8m"
+    },
+    "checkout-common-tokens": {
+      "blocked_all": true,
+      "reason": "Malware in checkout-common-tokens (GHSA-89gj-h4r8-g8gm)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-89gj-h4r8-g8gm"
+    },
+    "chai-foundry": {
+      "blocked_all": true,
+      "reason": "Malware in chai-foundry (GHSA-x29h-74hf-jq7x)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-x29h-74hf-jq7x"
+    },
+    "cerebrum-core": {
+      "blocked_all": true,
+      "reason": "Malware in cerebrum-core (GHSA-7886-2x59-rg2h)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-7886-2x59-rg2h"
+    },
+    "celonix-otp-react": {
+      "blocked_all": true,
+      "reason": "Malware in celonix-otp-react (GHSA-873w-7879-qpxv)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-873w-7879-qpxv"
+    },
+    "core-tailwindcss-utility": {
+      "blocked_all": true,
+      "reason": "Malicious code in core-tailwindcss-utility (npm) (GHSA-4j6f-r8pw-g5w5)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-4j6f-r8pw-g5w5"
+    },
+    "bcc-design": {
+      "blocked_all": true,
+      "reason": "Malicious code in bcc-design (npm) (GHSA-v36x-48h2-hc4f)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-v36x-48h2-hc4f"
+    },
+    "bcc-design-icons": {
+      "blocked_all": true,
+      "reason": "Malicious code in bcc-design-icons (npm) (GHSA-73q2-99qx-v576)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-73q2-99qx-v576"
+    },
+    "blastradar": {
+      "blocked_all": true,
+      "reason": "Malware in blastradar (GHSA-pp9x-4g56-7322)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-pp9x-4g56-7322"
+    },
+    "ulebkit": {
+      "blocked_all": true,
+      "reason": "Malware in ulebkit (GHSA-w4vj-4cxr-299x)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-w4vj-4cxr-299x"
+    },
+    "sui-move-graphql": {
+      "blocked_all": true,
+      "reason": "Malware in sui-move-graphql (GHSA-xgmm-vq93-f5vx)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-xgmm-vq93-f5vx"
+    },
+    "runtime-health": {
+      "blocked_all": true,
+      "reason": "Malicious code in runtime-health (npm) (GHSA-fg74-5f33-c553)",
+      "date": "2026-08-18",
+      "advisory": "https://github.com/advisories/GHSA-fg74-5f33-c553"
+    },
+    "sui-move-rpc": {
+      "blocked_all": true,
+      "reason": "Malware in sui-move-rpc (GHSA-342c-493g-f389)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-342c-493g-f389"
+    },
+    "leb128x": {
+      "blocked_all": true,
+      "reason": "Malware in leb128x (GHSA-p98p-7p39-8v79)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-p98p-7p39-8v79"
+    },
+    "sui-gql-core": {
+      "blocked_all": true,
+      "reason": "Malware in sui-gql-core (GHSA-rg66-wjvq-h8xm)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-rg66-wjvq-h8xm"
+    },
+    "bcs-core": {
+      "blocked_all": true,
+      "reason": "Malware in bcs-core (GHSA-5w7j-92p9-p5h4)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-5w7j-92p9-p5h4"
+    },
+    "bucket-protocol-sdk-v2": {
+      "blocked_all": true,
+      "reason": "Malware in bucket-protocol-sdk-v2 (GHSA-23pf-2cqf-xh64)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-23pf-2cqf-xh64"
+    },
+    "bnpl-blocks-independent-bnpl-search": {
+      "blocked_all": true,
+      "reason": "Malware in bnpl-blocks-independent-bnpl-search (GHSA-v43r-98qv-2v96)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-v43r-98qv-2v96"
+    },
+    "reseller-app": {
+      "blocked_all": true,
+      "reason": "Malware in reseller-app (GHSA-x3qj-pjpv-x4c6)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-x3qj-pjpv-x4c6"
+    },
+    "bolt-delivery-menu-app": {
+      "blocked_all": true,
+      "reason": "Malware in bolt-delivery-menu-app (GHSA-pfrq-994m-rxrr)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-pfrq-994m-rxrr"
+    },
+    "gator-client": {
+      "blocked_all": true,
+      "reason": "Malware in gator-client (GHSA-jrf3-vfx4-8vqh)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-jrf3-vfx4-8vqh"
+    },
+    "club-sauce": {
+      "blocked_all": true,
+      "reason": "Malware in club-sauce (GHSA-vm8j-8r82-992m)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-vm8j-8r82-992m"
+    },
+    "rendezvous-js": {
+      "blocked_all": true,
+      "reason": "Malware in rendezvous-js (GHSA-q26f-8xxj-pwwf)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-q26f-8xxj-pwwf"
+    },
+    "banana-stand": {
+      "blocked_all": true,
+      "reason": "Malware in banana-stand (GHSA-m27g-5q57-x86r)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-m27g-5q57-x86r"
+    },
+    "awesome-ts-jest": {
+      "blocked_all": true,
+      "reason": "Malware in awesome-ts-jest (GHSA-7xr4-v32m-4h8x)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-7xr4-v32m-4h8x"
+    },
+    "async-mutex-v2": {
+      "blocked_all": true,
+      "reason": "Malware in async-mutex-v2 (GHSA-f829-g84r-2fq7)",
+      "date": "2026-08-17",
+      "advisory": "https://github.com/advisories/GHSA-f829-g84r-2fq7"
     }
   }
 }
