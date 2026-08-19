@@ -1,7 +1,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/msys-crash-capture.ts
-import { appendFileSync, mkdirSync, readFileSync } from "fs";
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "fs";
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import { homedir } from "os";
@@ -68,9 +68,20 @@ function msysCensus() {
     return { count: null, names: [] };
   }
 }
+var MAX_BYTES = Number(process.env.MSYS_EVENT_LOG_MAX_BYTES) || 5 * 1024 * 1024;
+function rotateIfNeeded(path, maxBytes = MAX_BYTES) {
+  try {
+    if (statSync(path).size < maxBytes) return false;
+    renameSync(path, path + ".1");
+    return true;
+  } catch {
+    return false;
+  }
+}
 function append(row) {
   try {
     mkdirSync(dirname(LOG_PATH), { recursive: true });
+    rotateIfNeeded(LOG_PATH);
     appendFileSync(LOG_PATH, JSON.stringify(row) + "\n", "utf8");
   } catch {
   }
@@ -126,5 +137,6 @@ export {
   isMsysCrash,
   main,
   redactCommand,
-  responseText
+  responseText,
+  rotateIfNeeded
 };

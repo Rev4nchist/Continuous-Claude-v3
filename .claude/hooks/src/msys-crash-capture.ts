@@ -29,7 +29,7 @@
  *     limitation and its many `bash_alive=0` rows are not evidence against a
  *     concurrency cause.
  */
-import { appendFileSync, mkdirSync, readFileSync } from 'fs';
+import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'fs';
 import { dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
@@ -138,9 +138,38 @@ function msysCensus(): { count: number | null; names: string[] } {
   }
 }
 
+/**
+ * Size cap for the live log, matching the intel-bus precedent
+ * (CCV3_INTEL_BUS_MAX_BYTES). 5 MiB is roughly 85k rows -- months of data at
+ * this machine's call volume.
+ */
+const MAX_BYTES = Number(process.env.MSYS_EVENT_LOG_MAX_BYTES) || 5 * 1024 * 1024;
+
+/**
+ * Rotate the live log once it reaches the cap, keeping one previous generation.
+ *
+ * This exists because the DENOMINATOR makes the log high-volume: a row per
+ * Bash/PowerShell call, not just per crash. An append-only telemetry file with
+ * no cap is a known way to lose days on this machine -- the Braintrust spool
+ * reached a single 516 MiB record that could then neither be flushed nor
+ * shrunk. Bounding at WRITE time is what fixed that, so it is what is used here.
+ *
+ * Exported for test. Returns true when a rotation happened.
+ */
+export function rotateIfNeeded(path: string, maxBytes: number = MAX_BYTES): boolean {
+  try {
+    if (statSync(path).size < maxBytes) return false;
+    renameSync(path, path + '.1'); // clobbers the previous generation, by design
+    return true;
+  } catch {
+    return false; // missing file, or a peer rotated first -- both fine
+  }
+}
+
 function append(row: Record<string, unknown>): void {
   try {
     mkdirSync(dirname(LOG_PATH), { recursive: true });
+    rotateIfNeeded(LOG_PATH);
     appendFileSync(LOG_PATH, JSON.stringify(row) + '\n', 'utf8');
   } catch {
     /* telemetry is best-effort; never break the tool call */

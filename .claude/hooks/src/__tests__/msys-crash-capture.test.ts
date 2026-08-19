@@ -1,5 +1,8 @@
-import { describe, expect, it } from 'vitest';
-import { isMsysCrash, redactCommand, responseText } from '../msys-crash-capture';
+import { afterEach, beforeEach, describe, expect, it } from 'vitest';
+import { existsSync, mkdirSync, rmSync, writeFileSync } from 'fs';
+import { join } from 'path';
+import { tmpdir } from 'os';
+import { isMsysCrash, redactCommand, responseText, rotateIfNeeded } from '../msys-crash-capture';
 
 // The real signature, with the Windows path elided. The path is irrelevant to
 // detection and a literal one only invites the backslash-escaping bug that
@@ -71,5 +74,33 @@ describe('redactCommand', () => {
 
   it('handles empty input', () => {
     expect(redactCommand('')).toBe('');
+  });
+});
+
+describe('rotateIfNeeded - the log carries a denominator, so it grows fast', () => {
+  const tmp = join(tmpdir(), `msys-rot-${process.pid}-${Math.random().toString(36).slice(2)}`);
+
+  beforeEach(() => { mkdirSync(tmp, { recursive: true }); });
+  afterEach(() => { rmSync(tmp, { recursive: true, force: true }); });
+
+  it('leaves a small file alone', () => {
+    const f = join(tmp, 'events.jsonl');
+    writeFileSync(f, 'x'.repeat(100));
+    expect(rotateIfNeeded(f, 1000)).toBe(false);
+    expect(existsSync(f + '.1')).toBe(false);
+  });
+
+  it('rotates once the file reaches the cap, keeping one generation', () => {
+    const f = join(tmp, 'events.jsonl');
+    writeFileSync(f, 'x'.repeat(1000));
+    expect(rotateIfNeeded(f, 1000)).toBe(true);
+    expect(existsSync(f)).toBe(false);      // fresh file starts on next append
+    expect(existsSync(f + '.1')).toBe(true); // previous generation retained
+  });
+
+  it('never throws when the file does not exist', () => {
+    // A hook must not break a tool call because telemetry had nothing to rotate.
+    expect(() => rotateIfNeeded(join(tmp, 'nope.jsonl'), 10)).not.toThrow();
+    expect(rotateIfNeeded(join(tmp, 'nope.jsonl'), 10)).toBe(false);
   });
 });

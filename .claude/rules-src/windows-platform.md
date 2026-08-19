@@ -246,6 +246,10 @@ documented again:
   `MINGW64_NT-10.0-26200 ... 3.5.7 ... Msys`, not WSL), and `git-safe.ps1` mirrors its
   crash rows there too. `msys-crash.jsonl` still exists for backward compatibility and
   is still git-only; prefer the unified log for any analysis.
+  The live file is capped at 5 MiB (`MSYS_EVENT_LOG_MAX_BYTES`) and rotates to
+  `.1`, keeping one previous generation — the denominator makes it a row per
+  Bash/PowerShell call, and an uncapped telemetry file already cost five days
+  here once as a single 516 MiB Braintrust spool record.
 - **It carries a DENOMINATOR.** Both lanes write `ok:1` rows on success. Without a call
   count you cannot tell a cluster of crashes from a cluster of activity, which is
   precisely how "crashes come in windows" survived unchallenged. Compute a RATE, never
