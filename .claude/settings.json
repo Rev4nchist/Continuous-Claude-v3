@@ -217,14 +217,6 @@
             "command": "node",
             "timeout": 10000,
             "args": [
-              "C:/Users/david.hayes/.claude/hooks/dist/skill-activation-prompt.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 10000,
-            "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/bus-session-populator.mjs"
             ]
           },
