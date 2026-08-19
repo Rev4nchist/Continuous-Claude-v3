@@ -284,6 +284,14 @@
               "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/context-pct-warning.mjs"
+            ],
+            "timeout": 10000
           }
         ]
       }

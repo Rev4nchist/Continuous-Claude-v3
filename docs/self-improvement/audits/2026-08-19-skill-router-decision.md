@@ -73,8 +73,11 @@ The hook source and its tests remain in the repo; re-registration is one setting
 
 ## Follow-ups (not done here)
 
-- If the context-% prompt-time warning is missed, extract it into a standalone ~30-line
-  UserPromptSubmit hook (no skill matching).
+- ~~If the context-% prompt-time warning is missed, extract it into a standalone
+  UserPromptSubmit hook (no skill matching).~~ **DONE same day:** `hooks/src/context-pct-warning.ts`
+  carries the 70/80/90 tiers verbatim, registered on UserPromptSubmit in both settings.json
+  copies, 9/9 E2E tests against the dist artifact, live-probed on the active copy
+  (85 → CONTEXT WARNING in `hookSpecificOutput.additionalContext`).
 - `docs/hooks/README.md` and the system-visualization architecture map still describe the
   hook as active; refresh on next docs pass.
 - Global skill-rules.json ghosts (`vercel-cli`, `find-skills` missing dirs in `~/.claude/skills`)
