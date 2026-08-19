@@ -1,6 +1,6 @@
 ---
 name: build
-description: Workflow orchestrator that chains existing skills for feature development
+description: Chain skills into a feature-dev workflow: discovery, plan, implement, PR. Use when the user says "/build greenfield", "/build brownfield", "/build tdd", or asks to build a new feature.
 metadata:
   user_invocable: true
   keywords: [build, greenfield, brownfield, tdd, refactor, workflow, orchestrate]

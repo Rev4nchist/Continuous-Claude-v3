@@ -1,6 +1,6 @@
 ---
 name: cma
-description: Operator reference for Claude Managed Agents (CMA) — Anthropic's cloud-hosted agent harness. Use when running, inspecting, or scripting CMA agents, environments, sessions, events, outcomes, vaults, memory stores, or scheduled deployments via the ant CLI, the anthropic SDK, or curl against api.anthropic.com. Distinct from the launch-your-agent wizard (which interviews and builds a new agent); this skill is the call-shape and operator reference for working with CMA that already exists. Triggers on cma, managed agents api, ant cli, cma session, cma deployment, cma vault.
+description: Operator reference for scripting Claude Managed Agents (CMA) via ant CLI, SDK, or curl. Use when the user mentions "cma", "managed agents", "ant cli", or wants to run/inspect a CMA session, vault, or deployment. Not for building a new agent — use launch-your-agent.
 metadata:
   version: "1.0.0"
   authored: "2026-06-27 (continuous-claude harness)"

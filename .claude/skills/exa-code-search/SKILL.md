@@ -1,6 +1,6 @@
 ---
 name: exa-code-search
-description: Find real-world code examples via Exa. Searches GitHub, StackOverflow, and technical docs for copy-paste-ready snippets.
+description: "Find real-world code snippets and API usage examples via Exa. Use when the user asks \"find an example of\", \"how do I use X in code\", or wants a snippet."
 allowed-tools: [Task]
 metadata:
   model: sonnet

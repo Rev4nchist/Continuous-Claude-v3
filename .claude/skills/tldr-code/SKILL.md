@@ -1,6 +1,6 @@
 ---
 name: tldr-code
-description: Token-efficient code analysis via 5-layer stack (AST, Call Graph, CFG, DFG, PDG). 95% token savings.
+description: "Token-efficient AST code analysis: call graphs, dead code, complexity, impact. Use when asked to explore, refactor, understand, or find what calls or imports something."
 allowed-tools: [Bash]
 metadata:
   keywords: [debug, refactor, understand, complexity, "call graph", "data flow", "what calls", "how complex", search, explore, analyze, dead code, architecture, imports]

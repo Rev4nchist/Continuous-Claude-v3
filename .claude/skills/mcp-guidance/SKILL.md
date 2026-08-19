@@ -1,6 +1,6 @@
 ---
 name: mcp-guidance
-description: MCP tool usage patterns and best practices
+description: Decide when to use MCP tools (Context7 etc) vs native tools. Use when calling an MCP tool, unsure MCP vs native, or the user asks "docs for X", "how to use Y library".
 ---
 
 # MCP & Plugin Guidance

@@ -1,6 +1,6 @@
 ---
 name: sentry-cli
-description: Sentry error monitoring -- release management, source map upload, error queries, and SDK setup via CLI and MCP
+description: "Manage Sentry releases, source maps, and error queries via CLI. Use when the user says \"check sentry\", \"sentry errors\", \"upload source maps\", or \"create a release\"."
 ---
 
 # Sentry CLI Skill

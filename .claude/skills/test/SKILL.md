@@ -1,6 +1,6 @@
 ---
 name: test
-description: Comprehensive testing workflow - unit tests ∥ integration tests → E2E tests
+description: Run full test suite: unit and integration in parallel, then E2E. Use when the user says "/test", "run all tests", "test the feature", "full test suite".
 ---
 
 # /test - Testing Workflow

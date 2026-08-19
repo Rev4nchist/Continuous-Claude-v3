@@ -1,6 +1,6 @@
 ---
 name: refactor
-description: Code refactoring workflow - analyze → plan → implement → review → validate
+description: Orchestrate a refactor: analyze, plan, implement, review, verify. Use when the user says "/refactor", "refactor X", "clean up this code", "extract this into a module".
 ---
 
 # /refactor - Refactoring Workflow

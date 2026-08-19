@@ -1,6 +1,6 @@
 ---
 name: github-search
-description: Search GitHub code, repositories, issues, and PRs via MCP
+description: Search GitHub code, repos, issues, and PRs via MCP. Use when the user says "search GitHub for X", "find this issue or PR", "look up this repo" or asks to search code across repos.
 allowed-tools: [Bash, Read]
 ---
 

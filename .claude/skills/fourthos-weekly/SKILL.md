@@ -1,6 +1,7 @@
 ---
 name: fourthos-weekly
-description: Generate the weekly FourthOS sponsor update package for Carly (VP) and Christian (CTO). Pulls live portfolio data from the FourthOS Notion cockpit, refreshes the Notion Update Package page, renders a progressive-disclosure HTML artifact set (Tier 1 briefing dashboard, Tier 2 teaching deep-dive), stages it UNLISTED to the ai-enablement-decks GitHub Pages site, and notifies Dave to review before promoting it live. Use when asked to generate, build, preview, or promote the FourthOS weekly sponsor update, or when the CCv3-FourthOS-Weekly scheduled task runs. Triggers on "fourthos weekly", "sponsor update", "Carly update", "Christian update", "weekly portfolio update".
+description: Generates and stages the weekly FourthOS sponsor update (Carly/Christian) from Notion data. Use when asked to generate, build, preview, or promote the FourthOS weekly sponsor update, or when the scheduled task runs.
+disable-model-invocation: true
 ---
 
 # FourthOS Weekly Sponsor Update Pipeline

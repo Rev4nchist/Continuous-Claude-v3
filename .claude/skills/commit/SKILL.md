@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create git commits with user approval and no Claude attribution
+description: Create git commits with user approval, no Claude attribution. Use when user says "commit", "commit these changes", "create a commit", "/commit".
 ---
 
 # Commit Changes

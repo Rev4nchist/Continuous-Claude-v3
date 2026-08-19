@@ -1,6 +1,6 @@
 ---
 name: qlty-check
-description: Code quality checks, formatting, and metrics via qlty CLI
+description: Code quality checks, auto-fix, and metrics via qlty CLI. Use when the user says "check code quality", "lint this", "find code smells", "run qlty" or asks to auto-fix formatting before commit.
 allowed-tools: [Bash, Read]
 ---
 

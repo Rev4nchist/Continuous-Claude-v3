@@ -1,6 +1,7 @@
 ---
 name: workroom
-description: Manage tri-model Game Plan workrooms — the disk bus for multi-model feature work (Claude hub, Grok builder, Codex reviewer/fixer). Use when the user types /workroom (new/status/post/advance/resume), says "open a workroom", "room status", "advance the room", "post to the room", or when resuming multi-model feature work from CONTRACT.md + status.json. Opt-in: rooms are created deliberately, never auto-created. Protocol source of truth: .workroom/PROTOCOL.md.
+description: Manage tri-model Game Plan workrooms, the disk bus for Claude/Grok/Codex feature work. Use when the user types "/workroom", says "open a workroom", "room status", "advance the room", or "post to the room".
+disable-model-invocation: true
 ---
 
 # /workroom — Tri-Model Workroom Management

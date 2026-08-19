@@ -1,6 +1,6 @@
 ---
 name: create-handoff
-description: Create handoff document for transferring work to another session
+description: Write a YAML handoff doc to resume work in a new session. Use when user says "/create_handoff", "create a handoff", "hand this off", "wrap up the session".
 ---
 
 # Create Handoff

@@ -1,6 +1,6 @@
 ---
 name: youtube-research
-description: Turn YouTube channels and videos into organized, citation-backed research that moves projects forward or spins up lab experiments. Ingests transcripts into a local corpus, synthesizes cited briefs (what the field says, verdict per idea) or lab specs (hypothesis, method, kill criteria), and publishes them to the Notion "YouTube Research" database. Use when the user says "/yt", "/youtube", points at a channel or video for research, asks to deep-dive, digest, or synthesize video content, wants to watch a channel for new uploads, or asks what a creator has said about a topic across their videos. Triggers on "youtube research", "deep dive this channel", "digest these videos", "what does X say about Y", "watch this channel", "yt dig", "yt lab", "spin up a lab from".
+description: Turns YouTube channels/videos into cited research briefs or lab specs in Notion. Use when the user says "/yt", "/youtube", "deep dive this channel", "digest these videos", "watch this channel", or asks what a creator said about a topic.
 ---
 
 # YouTube Research Pipeline

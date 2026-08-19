@@ -1,6 +1,6 @@
 ---
 name: health-check
-description: Run a comprehensive CCv3 system health check that exercises real code paths across 13 categories (infrastructure, hooks, memory, skills, agents, RLM, CLI, tests, sync drift, external APIs, knowledge tree, git, roadmap). Use when users type /health-check, say "health check", "system check", "run diagnostics", "verify the system", or "is everything working", or when the user asks whether memory recall is functioning. This skill runs scripts/health_check.py and surfaces actionable findings with severity-ranked remediation steps. Scheduled weekly on Friday 8am as a recurring audit.
+description: Run the CCv3 system health check across infra, hooks, memory, skills, and more. Use when the user types /health-check, says "health check", "system check", "run diagnostics", or asks if everything is working.
 ---
 
 # Health Check

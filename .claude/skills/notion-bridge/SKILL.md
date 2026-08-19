@@ -1,6 +1,6 @@
 ---
 name: notion-bridge
-description: This skill governs the three-layer Bridge communication system between Claude.ai (Eve), Claude.ai (Donna), and Claude Code for Dave Hayes. Use when reading or writing to the Bridge HQ page, updating handoff queues between AI instances, logging decisions or implementation notes, syncing sprint state, or performing any operation on the Bridge Life Bucket, its Projects, or Tasks. Triggers on phrases like "update the bridge", "handoff to Code", "what did Code build", "bridge sync", "log this to the bridge", "pass this to Code", or "what's in the queue".
+description: Read/write the Bridge HQ page and handoff queues between Eve, Donna, and Claude Code. Use when the user says "update the bridge", "handoff to Code", "bridge sync", or "what's in the queue".
 ---
 
 # Notion Claude Bridge Skill

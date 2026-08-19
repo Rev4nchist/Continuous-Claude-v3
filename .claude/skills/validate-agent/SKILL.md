@@ -1,6 +1,6 @@
 ---
 name: validate-agent
-description: Validation agent that validates plan tech choices against current best practices
+description: Research and validate a plan's tech choices against current best practices. Use when asked to validate a plan, check tech choices, or vet a proposed library/pattern.
 ---
 
 > **Note:** The current year is 2025. When validating tech choices, check against 2024-2025 best practices.

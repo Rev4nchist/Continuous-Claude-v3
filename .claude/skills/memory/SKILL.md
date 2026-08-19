@@ -1,13 +1,13 @@
 ---
 name: memory
-description: Canonical reference for querying and storing learnings in the persistent memory system. Use when users request recall of prior work, want to store a learning, ask "what did we do before with X", or when starting implementation similar to past sessions. Covers CLI commands, backend architecture, score interpretation, quality bar, learning types, scope tagging, and when sub-agents should recall. Consolidates content previously split across dynamic-recall, proactive-learning, memory-usage-guidelines, and agent-memory-recall rules.
+description: Recall or store persistent learnings across sessions. Use when the user says "remember this", "store a learning", "what did we do before with X", or "/recall", or before implementing something similar to past work.
 metadata:
   user-invocable: true
 ---
 
 # Memory System
 
-Unified interface for storing and retrieving learnings across sessions. This skill is the canonical source — the rule files `dynamic-recall.md`, `proactive-learning.md`, `memory-usage-guidelines.md`, and `agent-memory-recall.md` are short pointer stubs that reference this document.
+Unified interface for storing and retrieving learnings across sessions. This skill is the canonical source — the rule file `memory-rules.md` is a short pointer stub that references this document.
 
 ## When to Use
 

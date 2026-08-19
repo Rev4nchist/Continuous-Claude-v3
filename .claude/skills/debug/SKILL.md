@@ -1,6 +1,6 @@
 ---
 name: debug
-description: Debug issues by investigating logs, database state, and git history
+description: Investigate logs, DB state, and git history to debug an issue, no edits. Use when user says "debug this", "why is this failing", "investigate the bug".
 ---
 
 # Debug

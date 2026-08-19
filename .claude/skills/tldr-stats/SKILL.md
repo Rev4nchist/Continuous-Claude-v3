@@ -1,6 +1,6 @@
 ---
 name: tldr-stats
-description: Show full session token usage, costs, TLDR savings, and hook activity
+description: Show session token usage, cost, and TLDR savings. Use when user says "session stats", "token usage", "how much am I spending", "show tldr stats", "hook activity".
 ---
 
 # TLDR Stats Skill

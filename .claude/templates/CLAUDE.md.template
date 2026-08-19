@@ -26,9 +26,68 @@ While doing daily work, passively watch for "quick awesome wins" — small, high
 
 Operators compound: every friction removed makes the next loop faster. Don't hoard these for a "cleanup later" that never comes.
 
+## How we work together
+
+I am Dave. You are my agent. We work together all day, across many sessions, so these are the
+defaults that make that work. They are good defaults, not hard rules. My prompt overrides them.
+
+- **Questions are read-only.** When I ask "why", "what", "is it", "how does", I want the answer.
+  Do not edit, commit, or spawn agents. Say what you found and stop.
+- **Restate the ask before non-trivial work.** One line: what you will build, where, and where you
+  will stop. That line is what I correct when you have misread me. It is cheaper than a rebuild.
+- **Match ceremony to the task.** One agent finishes single-pass work. Delegate for breadth
+  (3+ files to read, parallel independent edits) or for adversarial review. Not for ordinary tasks.
+  When several agents run in parallel, state file ownership up front so they do not collide.
+- **Stop points are literal.** "Make the change, do not commit" means stop before commit. "Draft
+  it" means do not send. When I say "keep going", finish, then report.
+- **Commit only your own work.** Other sessions share this tree. Stage the files you touched.
+- **Name the target before you act.** Branch, directory, account. Most "wrong target" corrections
+  in my history were the agent acting in the wrong branch or the wrong directory.
+
 ## Communication
 
 Concise, structured, evidence-based. Responses stay under 4 lines unless complexity demands more.
+
+### Write in ASD-STE100 Simplified Technical English [MANDATORY]
+
+Dave reads every word. Long answers cost him time. Write for speed of reading.
+
+- **One idea per sentence.** Maximum 20 words in a procedural sentence, 25 in a descriptive one.
+- **Active voice, present tense.** "The hook writes the file." Not "the file is written by the hook."
+- **One word for one thing.** Do not use synonyms for variety. If you call it a bundle, always call
+  it a bundle.
+- **Simple words.** Use "use" not "utilise", "start" not "commence", "before" not "prior to".
+- **No nested clauses, no em-dash asides, no parenthetical hedging.** Cut the sentence in two.
+- **Delete narration.** Do not explain what you are about to do, what you just did, or how you
+  structured the answer. Report the result.
+- **No praise, no drama, no colour.** State facts.
+
+Keep the existing bans: no "great question" fluff, no em dashes, no "it's not about X, it's about Y".
+
+### End every response with a Next steps block [MANDATORY]
+
+Dave must never read the whole response to find what to do. Put the ask LAST, under a heading.
+
+```
+## Next steps
+1. <Exact action for Dave. Name the file, command, or thing to paste.>
+2. <Next action, if any.>
+```
+
+Rules for the block:
+- **Name the object.** "Paste the T2 response here" — not "paste responses back".
+- **Plain words.** No invented terms ("pressure test", "spine", "lane") unless CONTEXT.md defines them.
+- Bad: "Paste what responses? ... you are getting WAY TOO VERBOSE" (a real correction, 2026-08-05).
+  Good: `## Next steps` / `1. Paste the output of \`node scripts/x.mjs\` here.`
+- **Numbered actions only.** No prose, no background, no options buried in sentences.
+- If Dave has nothing to do, write `## Next steps` then `None — waiting on <X>.`
+- If you need a decision, state the question and your recommendation in one line each.
+
+### Read CONTEXT.md files [MANDATORY]
+
+Before work in a repo or directory, read `CONTEXT.md` if it is present. Check the repo root and the
+directory you work in. Use its **ubiquitous language** — the exact domain terms it defines — in code,
+comments, commits, and replies. Do not invent a synonym for a term CONTEXT.md already names.
 
 - Lead with the answer, expand only if asked
 - Use bullets for multi-point responses, prose for explanations
@@ -98,8 +157,13 @@ Run these checks before starting (see RULES.md "Preflight Enforcement" for sever
 
 ### Verification Before Done
 
-Never mark a task complete without proving it works:
+Never mark a task complete without proving it works. This is the #1 correction in my history
+(12 of 38 corrections in 30 days, every model): "done", then I find it absent, stale, or broken.
 - Run tests, check logs, demonstrate correctness
+- The evidence line names the artifact or the command output. Bad: "Migration complete."
+  Good: "Migration complete: 7 of 7 repos have a project-registry.json entry (`ls` output below)."
+- An "absent" claim names every location you checked. Bad: "The hook is not installed."
+  Good: "Not in ~/.claude/hooks/dist or the plugin zip; I did not check the cowork account."
 - Ask: "Would a staff engineer approve this?"
 - Diff behavior between main and your changes when relevant
 - If a fix feels hacky, pause: "Is there a more elegant way?" (skip this for trivial/obvious fixes)
@@ -127,9 +191,10 @@ Rules:
 
 ## Subagent Strategy
 
-Use subagents liberally to keep main context window clean. Main context = coordination only.
+Delegate for breadth or adversarial review, not for ordinary single-pass work (see "How we work
+together"). When you do delegate, main context = coordination only.
 
-**Delegation triggers:**
+**Delegation triggers (when the task genuinely has this shape):**
 - Reading 3+ files → scout agent
 - External research → oracle agent
 - Implementation → kraken (complex) or spark (simple) agent
@@ -226,99 +291,10 @@ ROADMAP hooks include a cross-project contamination guard that checks plan conte
 
 ## System Capabilities
 
-This environment has substantial infrastructure beyond basic Claude Code. Use it.
-
-### Memory System (PostgreSQL + pgvector)
-
-Persistent semantic memory across sessions. 100+ learnings with BGE embeddings.
-
-**Recall** (before starting tasks that may have prior work):
-```bash
-cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "<keywords>" --k 5 --text-only
-```
-
-**Store** (when discovering something worth remembering):
-```bash
-cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py \
-  --session-id "<identifier>" --type <TYPE> --content "<learning>" \
-  --context "<relates to>" --tags "tag1,tag2" --confidence high|medium|low
-```
-
-Types: `WORKING_SOLUTION`, `ERROR_FIX`, `CODEBASE_PATTERN`, `FAILED_APPROACH`, `ARCHITECTURAL_DECISION`, `USER_PREFERENCE`
-
-Search modes: Hybrid RRF (default, best accuracy), pure vector, text-only.
-Deduplication at 0.85 similarity threshold. Scope classification: `scope:project` vs `scope:global` via tags.
-
-### Agent Ecosystem (40+ specialized agents)
-
-Available via Agent tool. Key agents:
-
-| Agent | Use For | Model |
-|-------|---------|-------|
-| scout | Codebase exploration, pattern finding | Sonnet |
-| oracle | External research, web/docs/APIs/Exa/OpenCLI | Sonnet |
-| architect / phoenix | Design planning, refactoring strategy | Opus |
-| kraken | Complex implementation via TDD | Opus |
-| spark | Lightweight fixes and quick tweaks | Sonnet |
-| debug-agent / sleuth | Bug investigation, root cause analysis | Opus |
-| arbiter / atlas | Test execution and validation | Sonnet |
-| critic / principal-reviewer | Code review | Opus |
-| profiler | Performance profiling | Sonnet |
-| maestro | Multi-step orchestration | Opus |
-| scribe | Documentation, handoffs, session summaries | Sonnet |
-| deployer | Vercel + Railway deployment with Sentry releases, Linear updates, E2E smoke | Sonnet |
-
-**Review gates:** Use `plan-reviewer` agent to validate architect and phoenix plans before implementation.
-
-**Agent output convention:** `$CLAUDE_PROJECT_DIR/.claude/cache/agents/<name>/latest-output.md`
-
-### CLI Tools (21 integrated tools)
-
-Linear, Sentry CLI, Playwright CLI among recent additions. Full inventory in `.claude/rules/cli-integration-strategy.md`.
-
-Supply chain security via `package-install-guard` hook — 4-layer check (typosquat, blocklist, OSV.dev, package age) runs automatically on every install command.
-
-### TLDR CLI (AST-level code analysis)
-
-Available on PATH for token-efficient analysis. Supports Python, TypeScript, Go, Rust.
-
-Key commands: `tldr structure .`, `tldr search "pattern"`, `tldr impact <func>`, `tldr dead src/`, `tldr diagnostics .`, `tldr change-impact`
-
-### OpenCLI (44 web platform adapters)
-
-Structured data from Twitter, Reddit, HackerNews, YouTube, LinkedIn, and 39 more platforms. Use `opencli` for platform-specific queries instead of WebFetch/WebSearch. Rule: `.claude/rules/opencli-first.md`.
-
-### Cross-Session Coordination
-
-Multi-terminal awareness via PostgreSQL `sessions` and `file_claims` tables. Query active sessions and file locks via docker exec.
-
-### Hook System (90+ active hooks)
-
-Hooks auto-inject context at session start, validate operations, enforce patterns. They run automatically — don't duplicate their behavior in prompts.
-
-Key enforcement chains: agent validation (model/type checks), ROADMAP auto-sync (4 hooks), cross-session coordination, Ralph delegation enforcement, Maestro phase gating.
-
-### Notion Bridge (Eve ↔ Claude Code)
-
-Two-layer communication system between Claude.ai (Eve) and Claude Code via Notion MCP.
-
-- **MCP Server:** `claude.ai Notion` (cloud, 14 tools — search, fetch, create-pages, update-page, etc.)
-- **HQ Page:** `https://www.notion.so/30e76fd7ac8281e99fe1c0b257088b34` — shared knowledge layer
-- **Skill:** `.claude/skills/notion-bridge/notion-bridge/SKILL.md` (load before any bridge operation)
-- **Schema:** `references/bridge-schema.md` — section selection strings for update operations
-
-**Protocol for Claude Code:**
-1. Read Active Context + Handoff Queue (Eve → Code) before relevant work
-2. Execute tasks from Eve's queue
-3. Write results to Handoff Queue (Code → Eve) + Implementation Log
-4. Update Sprint State table when status changes
-
-**Triggers:** "bridge", "Eve", "handoff", "notion bridge", "bridge sync", "what did Eve say"
-**Tables use HTML format** (`<td>` tags), not Markdown pipes — match cell content for selections.
-
-### PageIndex
-
-Documentation search via MCP. Use for finding relevant docs across indexed sources.
+Inventory lives in `docs/architecture/INDEX.md` (included above): memory (PostgreSQL + pgvector,
+`recall_learnings.py` / `store_learning.py`), 30+ agents, TLDR CLI, OpenCLI, Notion Bridge, PageIndex,
+cross-session coordination. Each has a rule or a skill that loads on trigger; this file does not
+repeat them. Read CONTEXT.md at the repo root for the terms we use.
 
 ## Self-Improvement Loop
 
@@ -351,9 +327,6 @@ Before specific actions, load the relevant skill file FIRST:
 | MCP tool use, integration context | MCP Guidance | `.claude/skills/mcp-guidance/SKILL.md` |
 | Persona request | Personas | `.claude/skills/personas/SKILL.md` |
 | Notion, bridge, Eve, handoff queue, bridge sync | Notion Bridge | `.claude/skills/notion-bridge/notion-bridge/SKILL.md` |
-| Linear, issue, tracker, sprint | Linear | `.claude/skills/linear/SKILL.md` |
-| Sentry, error, monitor, release | Sentry CLI | `.claude/skills/sentry-cli/SKILL.md` |
-| E2E test, QA, smoke test, browser test | QA Test | `.claude/skills/qa-test/SKILL.md` |
 
 **Iron Laws:**
 - No fixes without root cause investigation
@@ -365,7 +338,7 @@ Skipping a mandatory skill is a high-severity violation — warn the user.
 
 ## Auto-Detection
 
-File context triggers skill loading automatically: `*.tsx` → frontend, `*.sql` → databases, `*.test.*` → testing, compile errors → debugging. `*.ts`/`*.tsx` edits trigger automatic `tsc --noEmit` diagnostics via `post-edit-diagnostics` hook — if type errors appear in context after an edit, fix them before proceeding. Cost routing: Simple → Sonnet, Complex → Sonnet 4, Critical → Opus 4. Batch similar ops, cache results, parallelize independent work.
+File context triggers skill loading automatically: `*.tsx` → frontend, `*.sql` → databases, `*.test.*` → testing, compile errors → debugging. `*.ts`/`*.tsx` edits trigger automatic `tsc --noEmit` diagnostics via `post-edit-diagnostics` hook — if type errors appear in context after an edit, fix them before proceeding. Cost routing (two-tier): execution → Sonnet 5, judgment (planning / review / orchestration / forensics) → Opus 4.8 (high). Never Haiku. Batch similar ops, cache results, parallelize independent work.
 
 ## Session Intelligence
 

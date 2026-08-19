@@ -1,6 +1,6 @@
 ---
 name: vercel-cli
-description: Deploy, manage, and develop projects on Vercel from the command line
+description: Deploy and manage Vercel projects via CLI. Use when user says "deploy to vercel", "vercel link", "vercel dev", "check vercel deployment", "vercel logs".
 ---
 
 # Vercel CLI Skill

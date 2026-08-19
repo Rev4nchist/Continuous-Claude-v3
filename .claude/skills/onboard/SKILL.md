@@ -1,6 +1,6 @@
 ---
 name: onboard
-description: Analyze brownfield codebase and create initial continuity ledger
+description: Analyze a brownfield codebase and create an initial continuity ledger. Use when user says "onboard", "onboard me", "analyze this project", "get familiar with codebase".
 metadata:
   user-invocable: true
 ---

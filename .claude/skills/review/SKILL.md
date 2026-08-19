@@ -1,6 +1,6 @@
 ---
 name: review
-description: Comprehensive code review workflow - parallel specialized reviews → synthesis (includes cross-model Codex adversarial pass by default)
+description: Runs a multi-perspective code and plan review with a cross-model Codex pass. Use when the user says "review this code", "review my PR", "/review", or asks to check before merging.
 ---
 
 # /review - Code Review Workflow

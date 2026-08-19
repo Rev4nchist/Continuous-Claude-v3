@@ -1,6 +1,6 @@
 ---
 name: skill-developer
-description: Meta-skill for creating and managing Claude Code skills
+description: Meta-skill for creating and managing Claude Code skills. Use when the user says "create a skill for X", "make a new skill", "turn this into a skill" or asks how to build one.
 allowed-tools: [Bash, Read, Write, Edit]
 ---
 

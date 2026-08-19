@@ -1,6 +1,6 @@
 ---
 name: agent-development
-description: Agents MUST have valid YAML frontmatter starting at byte 0 (no leading newline).
+description: Build/validate Claude agent .md files with correct frontmatter. Use when the user says "create agent", "new agent", "agent file", "/skill:agent-development".
 ---
 
 # Agent Development Skill

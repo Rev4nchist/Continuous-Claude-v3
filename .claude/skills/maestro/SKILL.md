@@ -1,6 +1,7 @@
 ---
 name: maestro
-description: Versatile orchestrator for complex multi-step tasks - coordinates specialized agents
+description: "Interview-gated multi-agent orchestrator for complex tasks. Use when the user says \"/maestro\", \"orchestrate this\", or needs multi-step agent coordination."
+disable-model-invocation: true
 metadata:
   user-invocable: true
   model: claude-opus-4-5-20251101

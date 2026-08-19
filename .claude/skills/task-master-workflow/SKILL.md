@@ -1,6 +1,6 @@
 ---
 name: task-master-workflow
-description: Automatically assists with task-master-ai workflows when user discusses tasks, implementation work, opens .taskmaster files, or mentions what to work on. Proactively manages task status, logs progress, and suggests next tasks without explicit commands.
+description: Manages task-master-ai status and suggests next tasks automatically. Use when the user says "what's next", "mark task done", "task 1.2", or opens .taskmaster files.
 ---
 
 # Task Master Workflow Assistant

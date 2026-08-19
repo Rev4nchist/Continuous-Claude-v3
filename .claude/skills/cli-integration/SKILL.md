@@ -1,6 +1,6 @@
 ---
 name: cli-integration
-description: How to give Claude Code access to a new platform, tool, or application — the six-option priority order (native CLI, OpenCLI adapter, MCP, generated wrapper, thin REST wrapper, browser automation), the agent-compatibility checklist for scoring a candidate CLI, the current integration inventory, and the step-by-step checklist for wiring a new tool in. Use when adding or evaluating a tool integration, choosing between a CLI and an MCP server for the same platform, asking "how do I give Claude access to X", scoring whether a CLI is agent-friendly, or checking whether a platform is already integrated. Triggers on cli integration, integrate a platform, add a new cli, agent compatibility checklist, cli vs mcp, opencli adapter, new tool access.
+description: How to give Claude access to a new platform via CLI, OpenCLI, or MCP. Use when the user asks "how do I integrate X", "cli vs mcp", or to add or evaluate a tool integration.
 metadata:
   version: "1.0.0"
   authored: "2026-07-29 (context lever phase 2)"

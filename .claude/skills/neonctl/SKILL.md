@@ -1,6 +1,6 @@
 ---
 name: neonctl
-description: Neon Postgres CLI -- branch management, connection strings, SQL execution, and database migrations
+description: "Neon Postgres CLI: branches, connection strings, SQL, migrations. Use when the user asks to manage Neon branches, run neonctl, or connect to Postgres."
 ---
 
 # Neon CLI Skill

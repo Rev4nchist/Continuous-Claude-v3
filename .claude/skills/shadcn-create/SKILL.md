@@ -1,6 +1,6 @@
 ---
 name: shadcn-create
-description: Interactive UI theming via Shadcn/create platform with Claude in Chrome browser automation
+description: Configure Shadcn/ui theming, components, blocks via browser automation. Use when the user says "configure shadcn theme", "set up shadcn", "add shadcn components", "shadcn blocks", or asks for a design system.
 allowed-tools: [mcp__claude-in-chrome__*, mcp__shadcn__*, Bash, Read, Write, WebFetch]
 ---
 

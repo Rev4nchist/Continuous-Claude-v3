@@ -1,6 +1,7 @@
 ---
 name: help
-description: Interactive workspace discovery - learn what tools, workflows, agents, and hooks are available
+description: "Interactive discovery of tools, workflows, agents, and hooks. Use when the user says \"help\", \"what can you do\", \"/help\" or asks how to do something."
+disable-model-invocation: true
 allowed-tools: [AskUserQuestion, Bash, Read, Glob, Grep]
 metadata:
   triggers: ["help", "what can you do", "show capabilities", "how do I"]

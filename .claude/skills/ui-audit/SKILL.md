@@ -1,6 +1,6 @@
 ---
 name: ui-audit
-description: Web UI compliance audit - 100+ rules for accessibility, performance, UX
+description: Audits UI against 100+ accessibility, performance, and UX rules. Use when user says "/ui-audit", "accessibility check", "a11y check", "design review".
 allowed-tools: [Read, Grep, Glob, Bash, Task]
 metadata:
   user-invocable: true

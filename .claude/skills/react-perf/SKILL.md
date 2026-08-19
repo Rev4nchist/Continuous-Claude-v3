@@ -1,6 +1,6 @@
 ---
 name: react-perf
-description: React/Next.js performance optimization - 45 rules from Vercel engineering
+description: Audit React/Next.js code against 45 performance rules. Use when the user says "/react-perf", "React performance", "optimize Next.js", "bundle size", "waterfall issue".
 allowed-tools: [Read, Grep, Glob, Bash, Task]
 metadata:
   user-invocable: true

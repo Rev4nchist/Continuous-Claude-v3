@@ -1,6 +1,6 @@
 ---
 name: firecrawl-scrape
-description: Scrape web pages and extract content via Firecrawl MCP
+description: Scrape web pages and extract content via Firecrawl. Use when the user says "scrape this URL", "get the content of this page", "extract data from this site" or asks to search and scrape.
 allowed-tools: [Bash, Read]
 ---
 

@@ -1,6 +1,6 @@
 ---
 name: explore
-description: Meta-skill for internal codebase exploration at varying depths (quick/deep/architecture)
+description: Read-only codebase exploration at quick/deep/architecture depth. Use when the user says "/explore", "explore the codebase", "understand this repo", or asks how something works.
 allowed-tools: [Bash, Task, Read, Glob, Grep, Write]
 metadata:
   keywords: [explore, codebase, architecture, understand, analyze, layers, call graph, brownfield]

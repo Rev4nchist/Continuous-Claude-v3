@@ -1,6 +1,6 @@
 ---
 name: next-upgrade
-description: Upgrade Next.js to the latest version following official migration guides and codemods
+description: Upgrades Next.js to latest via official migration guides and codemods. Use when the user says "/next-upgrade", "upgrade Next.js", or "update to Next 16".
 argument-hint: "[target-version]"
 ---
 

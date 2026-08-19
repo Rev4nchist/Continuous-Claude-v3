@@ -1,6 +1,6 @@
 ---
 name: perplexity-search
-description: AI-powered web search, research, and reasoning via Perplexity
+description: AI web search and research via Perplexity, with citations. Use when the user says "search the web for X", "research this topic", "look this up online" or asks for deep/expert research.
 allowed-tools: [Bash, Read]
 ---
 

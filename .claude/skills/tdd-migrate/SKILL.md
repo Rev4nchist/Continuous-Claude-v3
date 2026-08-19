@@ -1,6 +1,7 @@
 ---
 name: tdd-migrate
-description: TDD workflow for migrations - orchestrate agents, zero main context growth
+description: Orchestrate TDD migrations across agents with zero main-context growth. Use "/tdd-migrate" or say "port X to Y", "migrate module to new architecture".
+disable-model-invocation: true
 allowed-tools: [Task, TodoWrite, Write, Read, Bash]
 ---
 

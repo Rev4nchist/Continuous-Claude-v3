@@ -1,6 +1,7 @@
 ---
 name: weekly-report
-description: Generate AI Enablement Team weekly status reports by collecting data from GitHub repos, NeonDB memory, local ROADMAP files, and handoff documents via MCP tools, then pushing structured content to the Railway-hosted dashboard. Use when asked to create a weekly report, status update, or generate a report for the team. This skill handles all external service integration — GitHub API, PostgreSQL memory, dashboard API.
+description: Generate AI Enablement Team weekly status report data via GitHub, memory, and dashboard MCP tools. Use when the user says "/weekly-report", "create a weekly report", "status update", or "generate the team report".
+disable-model-invocation: true
 ---
 
 # Weekly Report Generator (Claude Code — Data Half)

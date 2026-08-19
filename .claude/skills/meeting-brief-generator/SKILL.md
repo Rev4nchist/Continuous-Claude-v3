@@ -1,6 +1,6 @@
 ---
 name: meeting-brief-generator
-description: Generates structured meeting briefs when user opens meeting-agendas files, discusses meetings, or mentions calls. Auto-extracts context from related projects, creates checklists, and links to Q4 goals documentation.
+description: Builds a structured meeting brief with project context and a checklist. Use when the user says "prep for meeting", "meeting with X", "call with X", "agenda", or opens a meeting-agendas file.
 ---
 
 # Meeting Brief Generator

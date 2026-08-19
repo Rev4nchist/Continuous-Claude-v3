@@ -1,6 +1,6 @@
 ---
 name: grok
-description: Hand a task to the xAI Grok Build CLI (grok-4.5, on the X Premium+ subscription — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Cross-model execution, a third training family distinct from both Claude and GPT-5.5/Codex. Use when the user types /grok, says "hand this to Grok", "have Grok implement/audit X", "delegate to Grok", "grok, work through this", or wants Grok to execute a well-specified task. For adversarial code/plan REVIEW use /review or /premortem (those can already call Codex read-only; this skill's --review flag adds Grok); use this skill directly for getting work DONE.
+description: Delegates a task to xAI's Grok Build CLI (grok-4.5) to execute or answer it, not just review. Use when the user says "/grok", "hand this to Grok", "have Grok implement X", or "delegate to Grok". Not for adversarial review — use /review or /premortem.
 ---
 
 # /grok — Delegate a task to the Grok Build CLI (grok-4.5)

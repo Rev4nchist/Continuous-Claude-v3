@@ -1,6 +1,6 @@
 ---
 name: repoprompt
-description: Use RepoPrompt CLI for token-efficient codebase exploration
+description: Token-efficient codebase exploration via RepoPrompt CLI. Use when the user says "explore the codebase", "show the file tree", "get code signatures" or asks to search code without full reads.
 allowed-tools: [Bash, Read]
 ---
 

@@ -1,6 +1,7 @@
 ---
 name: launch-your-agent
-description: Help a technical founder build whatever they want on Claude Managed Agents — an internal worker, a piece of their product, a customer-facing agent. Find out what they want to build, scope a v0, launch it in their account, grade it, iterate, and (if it should run on a clock) put it on a scheduled deployment, with everything bigger laid out as v1/v2. Use when a founder says "launch my agent", "/launch-your-agent", "build me a managed agent", or wants to build something on CMA. Keywords: managed agents, CMA, founder, launch, scheduled deployment, outcome rubric.
+description: Interview a founder, scope v0, and launch/iterate their agent on Claude Managed Agents. Use when the user says "launch my agent", "/launch-your-agent", or wants to build something on CMA.
+disable-model-invocation: true
 metadata:
   version: "0.3.0"
   vendored_from: "anthropics/launch-your-agent@05e9627"

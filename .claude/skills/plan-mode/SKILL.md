@@ -1,6 +1,6 @@
 ---
 name: plan-mode
-description: Concise plan format - brevity over grammar, end with unresolved questions
+description: Write plans as concise bullets ending in unresolved questions. Use when drafting a plan, in plan mode, or asked to "make a plan".
 allowed-tools: [Read, Write, Edit, Glob, Grep]
 ---
 
