@@ -70,6 +70,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | git-commit-roadmap | Bash | Update ROADMAP.md after git commits |
 | ralph-monitor | Bash | Monitor Ralph bash command output |
 | test-run-tracker | Bash | Track test execution results |
+| msys-crash-capture | Bash\|PowerShell | Record MSYS init crashes AND a success denominator to `~/.claude/logs/msys-events.jsonl` |
 | smarter-everyday | Edit\|Write\|Bash\|TaskUpdate | Extract learnings from tool use patterns (L0) |
 | prd-roadmap-sync | Write\|Edit | Sync PRD changes to ROADMAP.md |
 | sync-to-repo | Write\|Edit | Auto-sync ~/.claude changes to continuous-claude repo |

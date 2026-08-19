@@ -236,6 +236,31 @@ Two measurement traps this lane already fell into, both worth avoiding:
   crashed cohort has already died and it reads 0. It is not a count at crash time, and
   the many `bash_alive=0` failure rows are not evidence against a concurrency cause.
 
+**FIXED 2026-08-19 — the blindness above is closed GOING FORWARD.** Both traps were
+the reason every MSYS hypothesis stayed unfalsifiable, so they were fixed rather than
+documented again:
+
+- **`~/.claude/logs/msys-events.jsonl` is the unified log.** Every lane writes to it
+  with a `lane` field: the new `msys-crash-capture` PostToolUse hook covers the
+  Bash *tool* lane (verified 2026-08-19: that lane runs real MSYS — `uname -a` returns
+  `MINGW64_NT-10.0-26200 ... 3.5.7 ... Msys`, not WSL), and `git-safe.ps1` mirrors its
+  crash rows there too. `msys-crash.jsonl` still exists for backward compatibility and
+  is still git-only; prefer the unified log for any analysis.
+- **It carries a DENOMINATOR.** Both lanes write `ok:1` rows on success. Without a call
+  count you cannot tell a cluster of crashes from a cluster of activity, which is
+  precisely how "crashes come in windows" survived unchallenged. Compute a RATE, never
+  a count.
+- Timestamps are UTC ISO in both lanes, deliberately — a naive sort over mixed
+  local-with-offset and UTC interleaves them wrongly, and time-clustering is the whole
+  question this log exists to answer.
+
+**The `msys_alive_after` caveat still stands and is not fixable from a PostToolUse
+seam:** it is sampled after the cohort has already died, so it is a LOWER BOUND, never
+a count at crash time. Do not read a low value as evidence against a concurrency cause.
+
+**Nothing here is retrospective.** These rows begin 2026-08-19. Any conclusion about
+crash frequency or clustering BEFORE that date still rests on the blind git-only log.
+
 `git-safe.ps1` now also records `node_spawn_ms` (one sample, crash path only) and
 `hooks_expected` per crash, so the next occurrence can settle both questions from its
 own row instead of from a probe run after the window has closed.
