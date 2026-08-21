@@ -9876,6 +9876,462 @@
       "reason": "Malware in dolyame-boxy-atom-bnpl-store-button (GHSA-j5r7-jm3x-rgch)",
       "date": "2026-08-19",
       "advisory": "https://github.com/advisories/GHSA-j5r7-jm3x-rgch"
+    },
+    "saas-f-testing": {
+      "blocked_all": true,
+      "reason": "Malware in saas-f-testing (GHSA-fvrj-4h6r-8rcg)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-fvrj-4h6r-8rcg"
+    },
+    "rollup-runtime-polyfill-core": {
+      "blocked_all": true,
+      "reason": "Malware in rollup-runtime-polyfill-core (GHSA-cx5m-r6wc-pp56)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-cx5m-r6wc-pp56"
+    },
+    "rollup-packages-polyfill-core": {
+      "blocked_all": true,
+      "reason": "Malware in rollup-packages-polyfill-core (GHSA-vw6c-rv4h-v5pw)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-vw6c-rv4h-v5pw"
+    },
+    "rollup-packages-node-polyfills": {
+      "blocked_all": true,
+      "reason": "Malware in rollup-packages-node-polyfills (GHSA-gp6f-mxh4-x3mh)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-gp6f-mxh4-x3mh"
+    },
+    "yastatic-s3": {
+      "blocked_all": true,
+      "reason": "Malware in yastatic-s3 (GHSA-mj8p-qhh7-gvg4)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-mj8p-qhh7-gvg4"
+    },
+    "react-wp-viewer": {
+      "blocked_all": true,
+      "reason": "Malware in react-wp-viewer (GHSA-566x-g457-qg8g)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-566x-g457-qg8g"
+    },
+    "pino-deploy": {
+      "blocked_all": true,
+      "reason": "Malware in pino-deploy (GHSA-9hw3-p3rx-59cw)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-9hw3-p3rx-59cw"
+    },
+    "yandex-geobase": {
+      "blocked_all": true,
+      "reason": "Malware in yandex-geobase (GHSA-86q5-cfp8-j54g)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-86q5-cfp8-j54g"
+    },
+    "express-bunker": {
+      "blocked_all": true,
+      "reason": "Malware in express-bunker (GHSA-w7r5-8cmj-m893)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-w7r5-8cmj-m893"
+    },
+    "react-native-ui-message": {
+      "blocked_all": true,
+      "reason": "Malware in react-native-ui-message (GHSA-w3j6-3pww-qfcw)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-w3j6-3pww-qfcw"
+    },
+    "react-hook-use-debounce-throttle-12": {
+      "blocked_all": true,
+      "reason": "Malware in react-hook-use-debounce-throttle-12 (GHSA-2x4w-64xc-78fv)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-2x4w-64xc-78fv"
+    },
+    "utils-common-helpers": {
+      "blocked_all": true,
+      "reason": "Malware in utils-common-helpers (GHSA-fq4g-5xjj-r935)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-fq4g-5xjj-r935"
+    },
+    "react-fontawesome-icons": {
+      "blocked_all": true,
+      "reason": "Malware in react-fontawesome-icons (GHSA-xvfg-jp9r-63q2)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-xvfg-jp9r-63q2"
+    },
+    "qr-code-styling-temp": {
+      "blocked_all": true,
+      "reason": "Malware in qr-code-styling-temp (GHSA-pp2c-4x5r-7h8j)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-pp2c-4x5r-7h8j"
+    },
+    "pvm-autodoc": {
+      "blocked_all": true,
+      "reason": "Malware in pvm-autodoc (GHSA-9352-468r-x8fr)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-9352-468r-x8fr"
+    },
+    "postcss-animate-css-vars": {
+      "blocked_all": true,
+      "reason": "Malware in postcss-animate-css-vars (GHSA-432g-6qr7-8hvh)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-432g-6qr7-8hvh"
+    },
+    "tailwind-animate-css-plugin": {
+      "blocked_all": true,
+      "reason": "Malware in tailwind-animate-css-plugin (GHSA-5w98-j73p-rv7m)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-5w98-j73p-rv7m"
+    },
+    "polymarket-ai-agent": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-ai-agent (GHSA-pm36-9m37-g548)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-pm36-9m37-g548"
+    },
+    "polymarket-claude-code": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-claude-code (GHSA-hqrj-3257-4cwr)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-hqrj-3257-4cwr"
+    },
+    "polymarket-trader": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-trader (GHSA-jgmf-qv79-wc9f)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-jgmf-qv79-wc9f"
+    },
+    "polymarket-trade": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-trade (GHSA-5qjv-f5g4-jx7w)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-5qjv-f5g4-jx7w"
+    },
+    "polymarket-terminal": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-terminal (GHSA-mhqj-q9r5-99vg)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-mhqj-q9r5-99vg"
+    },
+    "polymarket-trading-cli": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-trading-cli (GHSA-q888-mwhg-ccmp)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-q888-mwhg-ccmp"
+    },
+    "polymarket-auto-trade": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-auto-trade (GHSA-3j8p-hfj4-j6w6)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-3j8p-hfj4-j6w6"
+    },
+    "polymarket-copy-trading": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-copy-trading (GHSA-9jh7-4779-9m8r)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-9jh7-4779-9m8r"
+    },
+    "polymarket-bot": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-bot (GHSA-9x4c-gq65-ggmc)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-9x4c-gq65-ggmc"
+    },
+    "polymarket-bot-logger": {
+      "blocked_all": true,
+      "reason": "Malware in polymarket-bot-logger (GHSA-v4pc-gmg8-h48w)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-v4pc-gmg8-h48w"
+    },
+    "polygon-toolkit-validator": {
+      "blocked_all": true,
+      "reason": "Malware in polygon-toolkit-validator (GHSA-67fh-9pjj-6cpw)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-67fh-9pjj-6cpw"
+    },
+    "moidevy": {
+      "blocked_all": true,
+      "reason": "Malicious code in moidevy (npm) (GHSA-4j24-mrxm-5jfj)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-4j24-mrxm-5jfj"
+    },
+    "express-session-handler": {
+      "blocked_all": true,
+      "reason": "Malicious code in express-session-handler (npm) (GHSA-w25r-wmr3-97hj)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-w25r-wmr3-97hj"
+    },
+    "chai-as-soul": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-soul (npm) (GHSA-c7j2-7fxx-qjq2)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-c7j2-7fxx-qjq2"
+    },
+    "@js-lib-team/env-parser": {
+      "blocked_all": true,
+      "reason": "Malicious code in @js-lib-team/env-parser (npm) (GHSA-pqxh-h974-337x)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-pqxh-h974-337x"
+    },
+    "@next-fonts/font": {
+      "blocked_all": true,
+      "reason": "Malicious code in @next-fonts/font (npm) (GHSA-9c7m-jf5w-pq4v)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-9c7m-jf5w-pq4v"
+    },
+    "mcq-session": {
+      "blocked_all": true,
+      "reason": "Malicious code in mcq-session (npm) (GHSA-7hm6-5mgc-qm2c)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-7hm6-5mgc-qm2c"
+    },
+    "coin-fees": {
+      "blocked_all": true,
+      "reason": "Malicious code in coin-fees (npm) (GHSA-c7m8-52wr-gcp3)",
+      "date": "2026-08-21",
+      "advisory": "https://github.com/advisories/GHSA-c7m8-52wr-gcp3"
+    },
+    "exam-kit": {
+      "blocked_all": true,
+      "reason": "Malware in exam-kit (GHSA-3g8c-37c3-75vv)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-3g8c-37c3-75vv"
+    },
+    "@pablo_clueless/printr": {
+      "blocked_all": true,
+      "reason": "Malware in @pablo_clueless/printr (GHSA-3jxq-xch2-6hpm)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-3jxq-xch2-6hpm"
+    },
+    "@pablo_clueless/sniffr": {
+      "blocked_all": true,
+      "reason": "Malware in @pablo_clueless/sniffr (GHSA-2gvc-mrh5-885x)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-2gvc-mrh5-885x"
+    },
+    "polygon-toolkit-validate": {
+      "blocked_all": true,
+      "reason": "Malware in polygon-toolkit-validate (GHSA-w4vh-7827-g474)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-w4vh-7827-g474"
+    },
+    "goldstar-api-server": {
+      "blocked_all": true,
+      "reason": "Malware in goldstar-api-server (GHSA-w5wj-pp55-835w)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-w5wj-pp55-835w"
+    },
+    "ethereum-validator": {
+      "blocked_all": true,
+      "reason": "Malware in ethereum-validator (GHSA-f4c6-m557-c5qf)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-f4c6-m557-c5qf"
+    },
+    "devplatform-api-clients": {
+      "blocked_all": true,
+      "reason": "Malware in devplatform-api-clients (GHSA-rphm-c9jq-j4f6)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-rphm-c9jq-j4f6"
+    },
+    "dolyame-boxy-desktop-bnpl-card-panel": {
+      "blocked_all": true,
+      "reason": "Malware in dolyame-boxy-desktop-bnpl-card-panel (GHSA-c75h-f786-3xrc)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-c75h-f786-3xrc"
+    },
+    "bigops-watchdog-angular": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-watchdog-angular (GHSA-mm54-9954-hrcp)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-mm54-9954-hrcp"
+    },
+    "pfp-forms-sme-sitebuilder": {
+      "blocked_all": true,
+      "reason": "Malware in pfp-forms-sme-sitebuilder (GHSA-x4j8-fqq2-qv3q)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-x4j8-fqq2-qv3q"
+    },
+    "bigops-umf-statist": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-umf-statist (GHSA-65hm-c5q4-xqrc)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-65hm-c5q4-xqrc"
+    },
+    "pfp-forms-insurance-health": {
+      "blocked_all": true,
+      "reason": "Malware in pfp-forms-insurance-health (GHSA-262x-3pgh-mxj5)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-262x-3pgh-mxj5"
+    },
+    "pfp-forms-independent-sme-glossary-anchor": {
+      "blocked_all": true,
+      "reason": "Malware in pfp-forms-independent-sme-glossary-anchor (GHSA-fg28-xw73-5q8v)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-fg28-xw73-5q8v"
+    },
+    "pfp-block-mobile-steps": {
+      "blocked_all": true,
+      "reason": "Malware in pfp-block-mobile-steps (GHSA-627r-73p5-f9mm)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-627r-73p5-f9mm"
+    },
+    "pfa-errors": {
+      "blocked_all": true,
+      "reason": "Malware in pfa-errors (GHSA-c4mr-v4hr-px3m)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-c4mr-v4hr-px3m"
+    },
+    "rallycoding": {
+      "blocked_all": true,
+      "reason": "Malware in rallycoding (GHSA-xh99-h4gh-gcv6)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-xh99-h4gh-gcv6"
+    },
+    "create-react-app-text": {
+      "blocked_all": true,
+      "reason": "Malware in create-react-app-text (GHSA-9324-2pfx-4w9r)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-9324-2pfx-4w9r"
+    },
+    "optimize-regex": {
+      "blocked_all": true,
+      "reason": "Malware in optimize-regex (GHSA-vrj5-6f7q-fx9g)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-vrj5-6f7q-fx9g"
+    },
+    "create-react-app-ux": {
+      "blocked_all": true,
+      "reason": "Malware in create-react-app-ux (GHSA-rxpg-3mx3-fwqm)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-rxpg-3mx3-fwqm"
+    },
+    "create-react-app-ui": {
+      "blocked_all": true,
+      "reason": "Malware in create-react-app-ui (GHSA-qvrq-vg6m-5cr8)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-qvrq-vg6m-5cr8"
+    },
+    "o3forms": {
+      "blocked_all": true,
+      "reason": "Malware in o3forms (GHSA-gp6v-h28c-4fxf)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-gp6v-h28c-4fxf"
+    },
+    "cig-data-patcher": {
+      "blocked_all": true,
+      "reason": "Malware in cig-data-patcher (GHSA-wvvc-v5v3-7mcx)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-wvvc-v5v3-7mcx"
+    },
+    "node-multi-downloader": {
+      "blocked_all": true,
+      "reason": "Malware in node-multi-downloader (GHSA-hmxh-99g9-4v4j)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-hmxh-99g9-4v4j"
+    },
+    "n8n-nodes-pentest-rce": {
+      "blocked_all": true,
+      "reason": "Malware in n8n-nodes-pentest-rce (GHSA-hrxx-vwgp-4xff)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-hrxx-vwgp-4xff"
+    },
+    "mev-shield": {
+      "blocked_all": true,
+      "reason": "Malware in mev-shield (GHSA-5973-qc78-hqxv)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-5973-qc78-hqxv"
+    },
+    "mcp-server-figma": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-figma (GHSA-8j33-qh42-vjc6)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-8j33-qh42-vjc6"
+    },
+    "mcp-server-supabase": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-supabase (GHSA-m633-5vq7-98qx)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-m633-5vq7-98qx"
+    },
+    "mcp-server-sentry": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-sentry (GHSA-m5mm-f722-7vcq)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-m5mm-f722-7vcq"
+    },
+    "mcp-server-redis": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-redis (GHSA-wrqr-prmr-6x32)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-wrqr-prmr-6x32"
+    },
+    "mcp-server-notion": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-notion (GHSA-56wr-9mvj-77pf)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-56wr-9mvj-77pf"
+    },
+    "mcp-server-sequential-thinking": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-sequential-thinking (GHSA-hrmj-jj6j-m2m2)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-hrmj-jj6j-m2m2"
+    },
+    "mcp-server-git": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-git (GHSA-prf3-6rx4-9h5f)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-prf3-6rx4-9h5f"
+    },
+    "mcp-server-fetch": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-fetch (GHSA-rh9p-4pg3-8628)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-rh9p-4pg3-8628"
+    },
+    "mcp-server-github": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-github (GHSA-95pj-hrh5-27gq)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-95pj-hrh5-27gq"
+    },
+    "mcp-server-postgres": {
+      "blocked_all": true,
+      "reason": "Malware in mcp-server-postgres (GHSA-vm2g-qj5x-x234)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-vm2g-qj5x-x234"
+    },
+    "mc-reg": {
+      "blocked_all": true,
+      "reason": "Malware in mc-reg (GHSA-hvhc-6qpw-v5r9)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-hvhc-6qpw-v5r9"
+    },
+    "lusha-iam-widgets": {
+      "blocked_all": true,
+      "reason": "Malware in lusha-iam-widgets (GHSA-8xrv-62w2-rp6g)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-8xrv-62w2-rp6g"
+    },
+    "loadutils": {
+      "blocked_all": true,
+      "reason": "Malware in loadutils (GHSA-mvpj-6xxg-pjm9)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-mvpj-6xxg-pjm9"
+    },
+    "debug-fnt": {
+      "blocked_all": true,
+      "reason": "Malware in debug-fnt (GHSA-qpp9-fwpx-39f8)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-qpp9-fwpx-39f8"
+    },
+    "pino-debugging": {
+      "blocked_all": true,
+      "reason": "Malware in pino-debugging (GHSA-jwq5-g2xm-r48w)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-jwq5-g2xm-r48w"
+    },
+    "lessload": {
+      "blocked_all": true,
+      "reason": "Malware in lessload (GHSA-62jh-gmff-xfrm)",
+      "date": "2026-08-20",
+      "advisory": "https://github.com/advisories/GHSA-62jh-gmff-xfrm"
     }
   }
 }
