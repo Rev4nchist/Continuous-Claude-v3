@@ -11196,6 +11196,558 @@
       "reason": "Malware in @deepaksilaych/sess (GHSA-wxfm-64xv-2h3m)",
       "date": "2026-08-24",
       "advisory": "https://github.com/advisories/GHSA-wxfm-64xv-2h3m"
+    },
+    "@lordmega/baileys": {
+      "blocked_all": true,
+      "reason": "Malware in @lordmega/baileys (GHSA-98ch-w7w3-xfq9)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-98ch-w7w3-xfq9"
+    },
+    "baileys-mbuilder": {
+      "blocked_all": true,
+      "reason": "Malware in baileys-mbuilder (GHSA-8m87-xx52-4rjw)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-8m87-xx52-4rjw"
+    },
+    "@fongsidev/scraper": {
+      "blocked_all": true,
+      "reason": "Malware in @fongsidev/scraper (GHSA-cm89-9x7j-wr2g)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-cm89-9x7j-wr2g"
+    },
+    "baileys-inmemory-store": {
+      "blocked_all": true,
+      "reason": "Malware in baileys-inmemory-store (GHSA-gr9h-5xx6-g7cc)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-gr9h-5xx6-g7cc"
+    },
+    "infomedia": {
+      "blocked_all": true,
+      "reason": "Malware in infomedia (GHSA-mpxq-q6j7-77jh)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-mpxq-q6j7-77jh"
+    },
+    "omniauth-recharge-rails-example": {
+      "blocked_all": true,
+      "reason": "Malicious code in omniauth-recharge-rails-example (npm) (GHSA-88ff-297x-5h43)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-88ff-297x-5h43"
+    },
+    "model-poc-suhail": {
+      "blocked_all": true,
+      "reason": "Malicious code in model-poc-suhail (npm) (GHSA-c6hc-6w4g-fphm)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-c6hc-6w4g-fphm"
+    },
+    "express-security-policy": {
+      "blocked_all": true,
+      "reason": "Malware in express-security-policy (GHSA-3hxc-wppf-m25r)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-3hxc-wppf-m25r"
+    },
+    "array-shuffler-utils-99": {
+      "blocked_all": true,
+      "reason": "Malware in array-shuffler-utils-99 (GHSA-22jp-536p-wwgr)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-22jp-536p-wwgr"
+    },
+    "renovate-config-doctolib": {
+      "blocked_all": true,
+      "reason": "Malware in renovate-config-doctolib (GHSA-8327-2h3c-rm8g)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-8327-2h3c-rm8g"
+    },
+    "fivem-tool-helper-v2": {
+      "blocked_all": true,
+      "reason": "Malware in fivem-tool-helper-v2 (GHSA-qgxc-chq8-gvrg)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-qgxc-chq8-gvrg"
+    },
+    "fivem-tool-helper": {
+      "blocked_all": true,
+      "reason": "Malware in fivem-tool-helper (GHSA-7jgv-5jq7-38g6)",
+      "date": "2026-08-26",
+      "advisory": "https://github.com/advisories/GHSA-7jgv-5jq7-38g6"
+    },
+    "svelte-ui-cls": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-ui-cls (GHSA-q88r-gcjf-c3jc)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-q88r-gcjf-c3jc"
+    },
+    "hydration-ui-cls": {
+      "blocked_all": true,
+      "reason": "Malware in hydration-ui-cls (GHSA-596w-j9vp-pr5x)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-596w-j9vp-pr5x"
+    },
+    "wm-idp-sdk": {
+      "blocked_all": true,
+      "reason": "Malware in wm-idp-sdk (GHSA-hq9q-4jgc-997v)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-hq9q-4jgc-997v"
+    },
+    "wm-eslint-fe": {
+      "blocked_all": true,
+      "reason": "Malware in wm-eslint-fe (GHSA-59qg-7f2g-4p3c)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-59qg-7f2g-4p3c"
+    },
+    "wm-lib-env-provider": {
+      "blocked_all": true,
+      "reason": "Malware in wm-lib-env-provider (GHSA-54m9-xjx6-pf8x)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-54m9-xjx6-pf8x"
+    },
+    "vue-compiler-sfc-plugin": {
+      "blocked_all": true,
+      "reason": "Malware in vue-compiler-sfc-plugin (GHSA-v29w-qjvw-fm35)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-v29w-qjvw-fm35"
+    },
+    "hexdrift": {
+      "blocked_all": true,
+      "reason": "Malware in hexdrift (GHSA-4p5f-gmxw-44x3)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-4p5f-gmxw-44x3"
+    },
+    "foldmap": {
+      "blocked_all": true,
+      "reason": "Malware in foldmap (GHSA-q4hh-v9hg-92w7)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-q4hh-v9hg-92w7"
+    },
+    "vortnode": {
+      "blocked_all": true,
+      "reason": "Malware in vortnode (GHSA-c3fw-fh7f-9h58)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-c3fw-fh7f-9h58"
+    },
+    "snapbuf": {
+      "blocked_all": true,
+      "reason": "Malware in snapbuf (GHSA-82xg-f5h2-7xf8)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-82xg-f5h2-7xf8"
+    },
+    "vite-plugin-model": {
+      "blocked_all": true,
+      "reason": "Malware in vite-plugin-model (GHSA-p58m-2wrh-74xr)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-p58m-2wrh-74xr"
+    },
+    "dim-svelte-ui": {
+      "blocked_all": true,
+      "reason": "Malware in dim-svelte-ui (GHSA-w5m9-548m-c928)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-w5m9-548m-c928"
+    },
+    "svelte-cls-ui": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-cls-ui (GHSA-f6cw-gvwj-gw7f)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-f6cw-gvwj-gw7f"
+    },
+    "vite-plugin-logo": {
+      "blocked_all": true,
+      "reason": "Malware in vite-plugin-logo (GHSA-cw37-h4jm-63xh)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-cw37-h4jm-63xh"
+    },
+    "twork-data-services-proxy-prime-api-v1-account-overdraft-info": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-proxy-prime-api-v1-account-overdraft-info (GHSA-crw8-m6mj-q6qp)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-crw8-m6mj-q6qp"
+    },
+    "twork-data-services-sme-operations-authorizations": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-sme-operations-authorizations (GHSA-c4f8-h585-2c73)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-c4f8-h585-2c73"
+    },
+    "twork-data-services-aggregator-api-v2-data-view-company-company-profile-mf-data-transformer": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-aggregator-api-v2-data-view-company-company-profile-mf-data-transformer (GHSA-337w-cgvw-mpg3)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-337w-cgvw-mpg3"
+    },
+    "r4wk-book": {
+      "blocked_all": true,
+      "reason": "Malware in r4wk-book (GHSA-jqfp-p3qc-cqm9)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-jqfp-p3qc-cqm9"
+    },
+    "ulid-xyz": {
+      "blocked_all": true,
+      "reason": "Malware in ulid-xyz (GHSA-56hj-rr4f-w39g)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-56hj-rr4f-w39g"
+    },
+    "typedoc-xyz": {
+      "blocked_all": true,
+      "reason": "Malware in typedoc-xyz (GHSA-v386-vp36-g4h2)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-v386-vp36-g4h2"
+    },
+    "twork-data-services-eacq-company-service-v2-api-v1-identifiers-crm": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-eacq-company-service-v2-api-v1-identifiers-crm (GHSA-c75f-43pv-m83v)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-c75f-43pv-m83v"
+    },
+    "tailwind-scrollbar-hider": {
+      "blocked_all": true,
+      "reason": "Malware in tailwind-scrollbar-hider (GHSA-869j-r989-xpvr)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-869j-r989-xpvr"
+    },
+    "twork-data-services-aggregator-sme-task-info": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-aggregator-sme-task-info (GHSA-9rfw-4796-p982)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-9rfw-4796-p982"
+    },
+    "twork-data-services-proxy-invest-symbols-list": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-proxy-invest-symbols-list (GHSA-c38m-2rcq-3x56)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-c38m-2rcq-3x56"
+    },
+    "twork-data-services-customer-api-v2-customer-vip-status": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-customer-api-v2-customer-vip-status (GHSA-xcx3-rr77-frhq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-xcx3-rr77-frhq"
+    },
+    "twork-data-services-aggregator-company-sme-main-timeline-loader-with-customers": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-aggregator-company-sme-main-timeline-loader-with-customers (GHSA-cj3v-xccc-76vq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-cj3v-xccc-76vq"
+    },
+    "twork-products-taiga2-products-timeline": {
+      "blocked_all": true,
+      "reason": "Malware in twork-products-taiga2-products-timeline (GHSA-9qvm-6gf4-j2qh)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-9qvm-6gf4-j2qh"
+    },
+    "twork-data-services-invest-box-account": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-invest-box-account (GHSA-7c2j-v8mh-f457)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-7c2j-v8mh-f457"
+    },
+    "twork-data-services-counterfree": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-counterfree (GHSA-5g8h-2mx8-cxhm)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-5g8h-2mx8-cxhm"
+    },
+    "twork-mf-sandbox": {
+      "blocked_all": true,
+      "reason": "Malware in twork-mf-sandbox (GHSA-p94g-www2-hw8r)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-p94g-www2-hw8r"
+    },
+    "twork-data-services-procedure-engine-api-v1-procedure-info": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-procedure-engine-api-v1-procedure-info (GHSA-2pmw-74jm-69r8)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-2pmw-74jm-69r8"
+    },
+    "twork-data-services-getting-arrests": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-getting-arrests (GHSA-2gv9-x25v-532x)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-2gv9-x25v-532x"
+    },
+    "twork-data-services-role-app": {
+      "blocked_all": true,
+      "reason": "Malware in twork-data-services-role-app (GHSA-3qwr-p55r-5cjh)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-3qwr-p55r-5cjh"
+    },
+    "twork-mf-e2e-nitro": {
+      "blocked_all": true,
+      "reason": "Malware in twork-mf-e2e-nitro (GHSA-3x7v-w9ww-h4vm)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-3x7v-w9ww-h4vm"
+    },
+    "tw-theme-kit": {
+      "blocked_all": true,
+      "reason": "Malware in tw-theme-kit (GHSA-g2wq-vjqj-xc3h)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-g2wq-vjqj-xc3h"
+    },
+    "ts-vitest": {
+      "blocked_all": true,
+      "reason": "Malware in ts-vitest (GHSA-2g3m-3343-pgvq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-2g3m-3343-pgvq"
+    },
+    "new-eslint": {
+      "blocked_all": true,
+      "reason": "Malware in new-eslint (GHSA-8h72-5mvw-5f6r)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-8h72-5mvw-5f6r"
+    },
+    "mjs-eslint": {
+      "blocked_all": true,
+      "reason": "Malware in mjs-eslint (GHSA-r6f7-88jj-mg66)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-r6f7-88jj-mg66"
+    },
+    "travel-core-utils-object": {
+      "blocked_all": true,
+      "reason": "Malware in travel-core-utils-object (GHSA-m3rm-367q-8gf3)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-m3rm-367q-8gf3"
+    },
+    "transform-es2015-sticky-regex": {
+      "blocked_all": true,
+      "reason": "Malware in transform-es2015-sticky-regex (GHSA-2j63-q9jc-966c)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-2j63-q9jc-966c"
+    },
+    "video-crate-check": {
+      "blocked_all": true,
+      "reason": "Malware in video-crate-check (GHSA-gwcq-5jcj-p2x4)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-gwcq-5jcj-p2x4"
+    },
+    "voice-crate-check": {
+      "blocked_all": true,
+      "reason": "Malware in voice-crate-check (GHSA-3vqr-jqwr-7m6q)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-3vqr-jqwr-7m6q"
+    },
+    "text-crate-check": {
+      "blocked_all": true,
+      "reason": "Malware in text-crate-check (GHSA-c5pr-66ph-gfp9)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-c5pr-66ph-gfp9"
+    },
+    "tinkoff-statist-browser-typed-client-test.softwarecenter.metrics": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-test.softwarecenter.metrics (GHSA-vwg2-5528-w9wc)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-vwg2-5528-w9wc"
+    },
+    "tms-x-headers": {
+      "blocked_all": true,
+      "reason": "Malware in tms-x-headers (GHSA-35hv-47hh-35xx)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-35hv-47hh-35xx"
+    },
+    "tinkoff-statist-browser-typed-client-sme.platform.mobile.dynamicteasers.common": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-sme.platform.mobile.dynamicteasers.common (GHSA-6w5q-p9g3-26hf)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-6w5q-p9g3-26hf"
+    },
+    "tinkoff-ui-angular-addon-wysiwyg": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-ui-angular-addon-wysiwyg (GHSA-pmq9-57f4-g2v7)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-pmq9-57f4-g2v7"
+    },
+    "tinkoff-statist-browser-typed-client-sme.rko.conversionpayments.web": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-sme.rko.conversionpayments.web (GHSA-8g6h-h8m6-w7cq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-8g6h-h8m6-w7cq"
+    },
+    "tinkoff-statist-browser-typed-client-sme.rko.authorization.common": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-sme.rko.authorization.common (GHSA-8q7h-2qw7-c3cr)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-8q7h-2qw7-c3cr"
+    },
+    "tinkoff-statist-browser-typed-client-mb.product.tgeofencing": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-mb.product.tgeofencing (GHSA-rg3c-9vx6-5mfh)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-rg3c-9vx6-5mfh"
+    },
+    "tinkoff-terminal-kit-carousel": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-terminal-kit-carousel (GHSA-g537-jjq6-mv8m)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-g537-jjq6-mv8m"
+    },
+    "tinkoff-statist-browser-typed-client-mb.reliability.android.events": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-mb.reliability.android.events (GHSA-4rph-fx37-hfvw)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-4rph-fx37-hfvw"
+    },
+    "tinkoff-statist-browser-typed-client-sme.platform.web.companyprofile.metrics": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-sme.platform.web.companyprofile.metrics (GHSA-r3q8-h34r-9h8r)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-r3q8-h34r-9h8r"
+    },
+    "tinkoff-statist-browser-typed-client-sme.rko.ta.ios.events": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-sme.rko.ta.ios.events (GHSA-9g84-6755-r9f2)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-9g84-6755-r9f2"
+    },
+    "tinkoff-terminal-kit-test-commons": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-terminal-kit-test-commons (GHSA-p8g2-ph77-f7r9)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-p8g2-ph77-f7r9"
+    },
+    "tinkoff-statist-browser-typed-client-leasing.admin.events": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-leasing.admin.events (GHSA-pwcq-5xh6-9383)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-pwcq-5xh6-9383"
+    },
+    "tinkoff-statist-browser-typed-client-investing.product.pulse": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-investing.product.pulse (GHSA-953w-4w4x-wp59)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-953w-4w4x-wp59"
+    },
+    "tinkoff-statist-browser-typed-client-investaccounting.events.templatepage.mainpage": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-investaccounting.events.templatepage.mainpage (GHSA-48jc-v3r3-h4fr)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-48jc-v3r3-h4fr"
+    },
+    "devplatform-rest-resources-v1": {
+      "blocked_all": true,
+      "reason": "Malware in devplatform-rest-resources-v1 (GHSA-hmhf-45wm-x62q)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-hmhf-45wm-x62q"
+    },
+    "tinkoff-statist-browser-typed-client-eventea.projects.smartcam": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-eventea.projects.smartcam (GHSA-946m-r2w5-9p55)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-946m-r2w5-9p55"
+    },
+    "bigops-timeline": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-timeline (GHSA-4v4p-9667-cjpw)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-4v4p-9667-cjpw"
+    },
+    "tinkoff-statist-browser-typed-client-dwh.chimera.base": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-dwh.chimera.base (GHSA-w72w-w3fh-946m)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-w72w-w3fh-946m"
+    },
+    "devplatform-spa": {
+      "blocked_all": true,
+      "reason": "Malware in devplatform-spa (GHSA-544p-6vr9-4r6g)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-544p-6vr9-4r6g"
+    },
+    "tinkoff-statist-browser-typed-client-dss.insurance.service": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-dss.insurance.service (GHSA-h5ww-8cvp-mj62)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-h5ww-8cvp-mj62"
+    },
+    "tinkoff-statist-browser-typed-client-art.apps.reporegistry": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-statist-browser-typed-client-art.apps.reporegistry (GHSA-3h58-7m84-65h5)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-3h58-7m84-65h5"
+    },
+    "bigops-utils": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-utils (GHSA-m9jg-f26q-5hmq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-m9jg-f26q-5hmq"
+    },
+    "bigops-timers": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-timers (GHSA-q2qx-j3hh-f9p2)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-q2qx-j3hh-f9p2"
+    },
+    "tinkoff-pwa-confac-types": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-pwa-confac-types (GHSA-6rh3-gcq9-vmhv)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-6rh3-gcq9-vmhv"
+    },
+    "tinkoff-pfp-integration-mobile-slider-icons": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-pfp-integration-mobile-slider-icons (GHSA-6c78-688f-6vxq)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-6c78-688f-6vxq"
+    },
+    "tinkoff-pfp-block-mobile-panels": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-pfp-block-mobile-panels (GHSA-gp62-rq95-4fg5)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-gp62-rq95-4fg5"
+    },
+    "tinkoff-pfp-atom-styles-tiles": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-pfp-atom-styles-tiles (GHSA-9wpj-x935-r4fj)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-9wpj-x935-r4fj"
+    },
+    "tinkoff-fb-rf-add-application": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-fb-rf-add-application (GHSA-pvc7-jp4m-6758)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-pvc7-jp4m-6758"
+    },
+    "tinkoff-mutual-mgm-form": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-mutual-mgm-form (GHSA-6q5q-68cm-4f3c)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-6q5q-68cm-4f3c"
+    },
+    "tinkoff-component-page-loader": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-component-page-loader (GHSA-3p77-c6f9-pffh)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-3p77-c6f9-pffh"
+    },
+    "bigops-statements-timeline": {
+      "blocked_all": true,
+      "reason": "Malware in bigops-statements-timeline (GHSA-mrfg-393h-v67j)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-mrfg-393h-v67j"
+    },
+    "tinkoff-boxy-mobile-separator": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-boxy-mobile-separator (GHSA-rrcp-38vc-7qgw)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-rrcp-38vc-7qgw"
+    },
+    "chai-as-otc": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-otc (npm) (GHSA-25gq-jqh3-6q7g)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-25gq-jqh3-6q7g"
+    },
+    "spotify-url-infos": {
+      "blocked_all": true,
+      "reason": "Malicious code in spotify-url-infos (npm) (GHSA-2g79-q87f-wwc9)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-2g79-q87f-wwc9"
+    },
+    "tinkoff-boxy-mobile-documents": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-boxy-mobile-documents (GHSA-97hc-v95m-g3h9)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-97hc-v95m-g3h9"
+    },
+    "tinkoff-boxy-form-desktop-sme-registration-ooo": {
+      "blocked_all": true,
+      "reason": "Malware in tinkoff-boxy-form-desktop-sme-registration-ooo (GHSA-m24w-7xcq-wvr8)",
+      "date": "2026-08-25",
+      "advisory": "https://github.com/advisories/GHSA-m24w-7xcq-wvr8"
     }
   }
 }
