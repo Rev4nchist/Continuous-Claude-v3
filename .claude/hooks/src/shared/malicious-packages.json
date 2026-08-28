@@ -11910,6 +11910,732 @@
       "reason": "Malicious code in analytics-v2 (npm) (GHSA-c4w9-3vw5-6h6w)",
       "date": "2026-08-26",
       "advisory": "https://github.com/advisories/GHSA-c4w9-3vw5-6h6w"
+    },
+    "@fleetbo/svro": {
+      "blocked_all": true,
+      "reason": "Malware in @fleetbo/svro (GHSA-4hrx-gqq5-q956)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-4hrx-gqq5-q956"
+    },
+    "@znan/wabot": {
+      "blocked_all": true,
+      "reason": "Malware in @znan/wabot (GHSA-2jxx-8fv2-h8mj)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-2jxx-8fv2-h8mj"
+    },
+    "@postman-cse/okta-aio-darwin-arm64": {
+      "blocked_all": true,
+      "reason": "Malicious code in @postman-cse/okta-aio-darwin-arm64 (npm) (GHSA-2qc4-r3x2-xh47)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-2qc4-r3x2-xh47"
+    },
+    "pushgitquickx": {
+      "blocked_all": true,
+      "reason": "Malware in pushgitquickx (GHSA-wx29-h78g-ww4f)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-wx29-h78g-ww4f"
+    },
+    "@hd-team/app-impkg-test": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-impkg-test (GHSA-hxxw-mprp-h9w7)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-hxxw-mprp-h9w7"
+    },
+    "@hd-team/app-impkg-prod": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-impkg-prod (GHSA-g7cq-7vcf-rp48)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-g7cq-7vcf-rp48"
+    },
+    "@hd-team/app-dnpkg-prod": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-prod (GHSA-35w7-82wv-vwxj)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-35w7-82wv-vwxj"
+    },
+    "@hd-team/app-dnpkg-three": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-three (GHSA-qwcv-3958-fhq5)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-qwcv-3958-fhq5"
+    },
+    "@hd-team/app-dnpkg-beta": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-beta (GHSA-6p53-v557-745c)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-6p53-v557-745c"
+    },
+    "@hd-team/app-dnpkg-test": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-test (GHSA-6fm3-xp27-2556)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-6fm3-xp27-2556"
+    },
+    "@hd-team/app-dnpkg-ten": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-ten (GHSA-q7mf-7f69-7qpr)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-q7mf-7f69-7qpr"
+    },
+    "@hd-team/app-dnpkg-eight": {
+      "blocked_all": true,
+      "reason": "Malware in @hd-team/app-dnpkg-eight (GHSA-97qc-463w-p2jr)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-97qc-463w-p2jr"
+    },
+    "hydration-ui-dlx": {
+      "blocked_all": true,
+      "reason": "Malware in hydration-ui-dlx (GHSA-j5x7-qc6j-xwg4)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-j5x7-qc6j-xwg4"
+    },
+    "svelte-ui-dlx": {
+      "blocked_all": true,
+      "reason": "Malware in svelte-ui-dlx (GHSA-7qq8-vjh5-hpgw)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-7qq8-vjh5-hpgw"
+    },
+    "tailwindcss-3d-animate": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-3d-animate (GHSA-683p-54mf-9297)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-683p-54mf-9297"
+    },
+    "tailwindcss-form-styles": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-form-styles (GHSA-8wj9-gw6r-6vqh)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-8wj9-gw6r-6vqh"
+    },
+    "inspectstack": {
+      "blocked_all": true,
+      "reason": "Malware in inspectstack (GHSA-xjx7-pff2-34gp)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-xjx7-pff2-34gp"
+    },
+    "stackpaths": {
+      "blocked_all": true,
+      "reason": "Malware in stackpaths (GHSA-6hcw-m358-fq4q)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-6hcw-m358-fq4q"
+    },
+    "charclass": {
+      "blocked_all": true,
+      "reason": "Malware in charclass (GHSA-ccgj-rp72-9hvj)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-ccgj-rp72-9hvj"
+    },
+    "deepjoin": {
+      "blocked_all": true,
+      "reason": "Malware in deepjoin (GHSA-37cw-jw3f-qf4v)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-37cw-jw3f-qf4v"
+    },
+    "@vapi-ai/server-sdk": {
+      "blocked_all": true,
+      "reason": "Malware in @vapi-ai/server-sdk (GHSA-mjhg-2cvf-w2p4)",
+      "date": "2026-08-27",
+      "advisory": "https://github.com/advisories/GHSA-mjhg-2cvf-w2p4"
+    },
+    "3layerdipstackm7mock": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackm7mock (GHSA-2xmr-4cx4-q8xh)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-2xmr-4cx4-q8xh"
+    },
+    "3layerdipstackhr3ocw": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackhr3ocw (GHSA-xcr2-ph6w-v53x)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-xcr2-ph6w-v53x"
+    },
+    "3layerdipstackulgnp8": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackulgnp8 (GHSA-5grf-6834-4gx2)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-5grf-6834-4gx2"
+    },
+    "3layerdipstackcyqc7o": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackcyqc7o (GHSA-mrwr-vvf3-5cj3)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-mrwr-vvf3-5cj3"
+    },
+    "3layerdipstackesp1lb": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackesp1lb (GHSA-34fw-55mp-c63j)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-34fw-55mp-c63j"
+    },
+    "3layerdipstackt3wr5f": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackt3wr5f (GHSA-fjvm-qq3g-pfj8)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-fjvm-qq3g-pfj8"
+    },
+    "3layerdipstacktfieac": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacktfieac (GHSA-hx6j-pg3c-xp7h)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hx6j-pg3c-xp7h"
+    },
+    "3layerdipstackev4sn5": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackev4sn5 (GHSA-v5hh-fxh9-5jg2)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-v5hh-fxh9-5jg2"
+    },
+    "3layerdipstackjsuvtk": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackjsuvtk (GHSA-mwhw-pqwx-mcgc)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-mwhw-pqwx-mcgc"
+    },
+    "3layerdipstackpcv17m": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackpcv17m (GHSA-283x-m4wp-8428)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-283x-m4wp-8428"
+    },
+    "3layerdipstackru7mfn": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackru7mfn (GHSA-fx3x-5gff-392g)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-fx3x-5gff-392g"
+    },
+    "3layerdipstack1lkqg9": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack1lkqg9 (GHSA-gj6j-q87j-rmx5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-gj6j-q87j-rmx5"
+    },
+    "3layerdipstacklgszmx": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacklgszmx (GHSA-8gq9-v5rg-4v67)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-8gq9-v5rg-4v67"
+    },
+    "3layerdipstackkrgcjq": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackkrgcjq (GHSA-vc65-p3ww-752q)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-vc65-p3ww-752q"
+    },
+    "3layerdipstackuyd45d": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackuyd45d (GHSA-r328-vg5c-g98q)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-r328-vg5c-g98q"
+    },
+    "3layerdipstack1ykdgn": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack1ykdgn (GHSA-wrm3-cfhh-r2g7)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-wrm3-cfhh-r2g7"
+    },
+    "3layerdipstackvld3fr": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvld3fr (GHSA-7qh7-wh5v-4p7p)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-7qh7-wh5v-4p7p"
+    },
+    "3layerdipstack6ih5ru": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack6ih5ru (GHSA-6qfq-f3rx-r2rg)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-6qfq-f3rx-r2rg"
+    },
+    "3layerdipstack8lj8gm": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack8lj8gm (GHSA-q89v-f6q7-q4rf)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-q89v-f6q7-q4rf"
+    },
+    "3layerdipstackvdy7nf": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvdy7nf (GHSA-6j5j-jmv3-2vqc)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-6j5j-jmv3-2vqc"
+    },
+    "3layerdipstackvcdkrp": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvcdkrp (GHSA-5cqp-h6j9-xhff)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-5cqp-h6j9-xhff"
+    },
+    "3layerdipstack2pdlo4": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack2pdlo4 (GHSA-cjx7-rpp8-xjp7)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-cjx7-rpp8-xjp7"
+    },
+    "3layerdipstackebunld": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackebunld (GHSA-qvcf-62cq-22gw)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-qvcf-62cq-22gw"
+    },
+    "3layerdipstacko8li9w": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacko8li9w (GHSA-3fmf-7gp2-6qh7)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-3fmf-7gp2-6qh7"
+    },
+    "3layerdipstackvnmth1": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvnmth1 (GHSA-25h6-8cqx-xgh6)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-25h6-8cqx-xgh6"
+    },
+    "3layerdipstack74ooau": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack74ooau (GHSA-f836-85g9-539h)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-f836-85g9-539h"
+    },
+    "3layerdipstackmokfkh": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackmokfkh (GHSA-3vjx-v4f5-8553)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-3vjx-v4f5-8553"
+    },
+    "3layerdipstack4pstwd": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack4pstwd (GHSA-56jq-5fhp-g3gh)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-56jq-5fhp-g3gh"
+    },
+    "3layerdipstackx26ujd": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackx26ujd (GHSA-6m22-7jpm-3pwq)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-6m22-7jpm-3pwq"
+    },
+    "3layerdipstacktm8xp5": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacktm8xp5 (GHSA-3jj7-p8p6-fjjf)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-3jj7-p8p6-fjjf"
+    },
+    "3layerdipstackvm4qaj": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvm4qaj (GHSA-29f5-999f-rvqh)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-29f5-999f-rvqh"
+    },
+    "3layerdipstackqokw95": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackqokw95 (GHSA-wmhq-xfpx-rqmp)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-wmhq-xfpx-rqmp"
+    },
+    "3layerdipstackl52afz": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackl52afz (GHSA-jv27-p77q-fjc3)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-jv27-p77q-fjc3"
+    },
+    "3layerdipstackfywqmz": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackfywqmz (GHSA-2gr6-mqqx-ch77)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-2gr6-mqqx-ch77"
+    },
+    "3layerdipstackpvsk6r": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackpvsk6r (GHSA-4pfw-969w-75x8)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-4pfw-969w-75x8"
+    },
+    "3layerdipstack5zhcdq": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack5zhcdq (GHSA-pr38-fgvj-m5mw)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-pr38-fgvj-m5mw"
+    },
+    "3layerdipstackkpfva6": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackkpfva6 (GHSA-chrq-p6q9-7c3v)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-chrq-p6q9-7c3v"
+    },
+    "3layerdipstackkzelo0": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackkzelo0 (GHSA-hf47-w27p-rfg5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hf47-w27p-rfg5"
+    },
+    "3layerdipstackbndk47": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackbndk47 (GHSA-f6vp-8xqg-j5rv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-f6vp-8xqg-j5rv"
+    },
+    "3layerdipstackhcymwm": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackhcymwm (GHSA-w9gm-499c-j4q4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-w9gm-499c-j4q4"
+    },
+    "3layerdipstacko89fkl": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacko89fkl (GHSA-qr5w-pc8v-rw38)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-qr5w-pc8v-rw38"
+    },
+    "3layerdipstackr5ga2v": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackr5ga2v (GHSA-h6qm-wv83-7m6p)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-h6qm-wv83-7m6p"
+    },
+    "3layerdipstackoj4nf9": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackoj4nf9 (GHSA-hw8m-f396-69p5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hw8m-f396-69p5"
+    },
+    "3layerdipstackl3yyy": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackl3yyy (GHSA-4939-5f2v-6fq9)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-4939-5f2v-6fq9"
+    },
+    "3layerdipstackmu4bxx": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackmu4bxx (GHSA-jj42-42vv-mmff)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-jj42-42vv-mmff"
+    },
+    "3layerdipstack71tlcd": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack71tlcd (GHSA-66p2-q5q9-qw3c)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-66p2-q5q9-qw3c"
+    },
+    "3layerdipstackvaovrs": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvaovrs (GHSA-2hpp-55hq-v5cw)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-2hpp-55hq-v5cw"
+    },
+    "3layerdipstackwqo67k": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackwqo67k (GHSA-qc62-96fr-2g6m)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-qc62-96fr-2g6m"
+    },
+    "3layerdipstacklzflp": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacklzflp (GHSA-pq7p-f8jv-f9jx)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-pq7p-f8jv-f9jx"
+    },
+    "3layerdipstack97rmzr": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack97rmzr (GHSA-cqvj-f289-cg74)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-cqvj-f289-cg74"
+    },
+    "3layerdipstackoms1fe": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackoms1fe (GHSA-7879-xh4g-hwmv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-7879-xh4g-hwmv"
+    },
+    "3layerdipstackaudu38": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackaudu38 (GHSA-p9mm-wfw6-v67m)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-p9mm-wfw6-v67m"
+    },
+    "3layerdipstackdanp80": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackdanp80 (GHSA-p7x3-64wm-pc39)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-p7x3-64wm-pc39"
+    },
+    "3layerdipstackepcy6k": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackepcy6k (GHSA-m334-cccc-34j8)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-m334-cccc-34j8"
+    },
+    "3layerdipstackbopqb8": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackbopqb8 (GHSA-q7g9-w697-c8c5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-q7g9-w697-c8c5"
+    },
+    "3layerdipstackfoajna": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackfoajna (GHSA-chxp-34hf-jhcm)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-chxp-34hf-jhcm"
+    },
+    "3layerdipstackrvc9k": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackrvc9k (GHSA-f259-r2f6-r3fm)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-f259-r2f6-r3fm"
+    },
+    "3layerdipstackedqpy": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackedqpy (GHSA-pg2q-3xxw-9rx8)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-pg2q-3xxw-9rx8"
+    },
+    "3layerdipstack9ai4f": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack9ai4f (GHSA-355j-ch64-9vqj)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-355j-ch64-9vqj"
+    },
+    "3layerdipstack7d0vc": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack7d0vc (GHSA-v523-vhv6-gwr5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-v523-vhv6-gwr5"
+    },
+    "3layerdipstackhyazlk": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackhyazlk (GHSA-7qfw-93pf-98fr)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-7qfw-93pf-98fr"
+    },
+    "3layerdipstackvtd7og": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvtd7og (GHSA-xjqq-vrg3-cf35)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-xjqq-vrg3-cf35"
+    },
+    "3layerdipstackq6h8eq": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackq6h8eq (GHSA-qpxq-x45w-hxfv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-qpxq-x45w-hxfv"
+    },
+    "3layerdipstackoa1cxf": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackoa1cxf (GHSA-vcpp-4v3q-pvw3)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-vcpp-4v3q-pvw3"
+    },
+    "3layerdipstackfm45yj": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackfm45yj (GHSA-mj82-8qxc-9m2p)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-mj82-8qxc-9m2p"
+    },
+    "3layerdipstackcfu35": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackcfu35 (GHSA-hqrp-gx5g-v2qp)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hqrp-gx5g-v2qp"
+    },
+    "3layerdipstacknk2da": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacknk2da (GHSA-3prf-3723-rwv4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-3prf-3723-rwv4"
+    },
+    "3layerdipstacktmo3tu": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacktmo3tu (GHSA-vhq4-m9h9-pqww)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-vhq4-m9h9-pqww"
+    },
+    "3layerdipstackba23j": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackba23j (GHSA-9m4h-577w-hj8v)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-9m4h-577w-hj8v"
+    },
+    "3layerdipstackvd6za6": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackvd6za6 (GHSA-j7x4-2jjr-gqgw)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-j7x4-2jjr-gqgw"
+    },
+    "3layerdipstacktlt5o": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacktlt5o (GHSA-rf8x-7vp9-r7x5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-rf8x-7vp9-r7x5"
+    },
+    "3layerdipstackrkxyr1": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackrkxyr1 (GHSA-8527-mhpj-f5f4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-8527-mhpj-f5f4"
+    },
+    "3layerdipstackjj1l0": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackjj1l0 (GHSA-hv7p-cgwr-qpqq)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hv7p-cgwr-qpqq"
+    },
+    "3layerdipstackj3eh2": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackj3eh2 (GHSA-w982-5hfx-8cvq)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-w982-5hfx-8cvq"
+    },
+    "3layerdipstack7u3sgs": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack7u3sgs (GHSA-43v8-jjq7-9xf4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-43v8-jjq7-9xf4"
+    },
+    "3layerdipstacksh21o": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacksh21o (GHSA-xc5r-2vf9-94qx)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-xc5r-2vf9-94qx"
+    },
+    "3layerdipstackkl17i": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackkl17i (GHSA-65h5-ffqr-4rwv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-65h5-ffqr-4rwv"
+    },
+    "3layerdipstacknqbfz": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacknqbfz (GHSA-m2x3-8gfq-8jqv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-m2x3-8gfq-8jqv"
+    },
+    "3layerdipstackx70bgg": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackx70bgg (GHSA-x26f-8jgf-5qqp)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-x26f-8jgf-5qqp"
+    },
+    "3layerdipstackpsq4vf": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackpsq4vf (GHSA-mj5h-45qp-f8hm)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-mj5h-45qp-f8hm"
+    },
+    "3layerdipstackfhcuh": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackfhcuh (GHSA-hfqq-jwxh-xfq5)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hfqq-jwxh-xfq5"
+    },
+    "3layerdipstackicrmv": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackicrmv (GHSA-6q3p-2jr4-mx57)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-6q3p-2jr4-mx57"
+    },
+    "3layerdipstackjfp5u": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackjfp5u (GHSA-rprm-mjr4-2w83)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-rprm-mjr4-2w83"
+    },
+    "3layerdipstackd8ze8": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackd8ze8 (GHSA-46mx-vhr5-35xx)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-46mx-vhr5-35xx"
+    },
+    "3layerdipstackuu02ly": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackuu02ly (GHSA-7837-mhv3-vf5h)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-7837-mhv3-vf5h"
+    },
+    "3layerdipstackkxrxle": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackkxrxle (GHSA-9x8g-v6xv-3hw4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-9x8g-v6xv-3hw4"
+    },
+    "3layerdipstackihi1o9": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackihi1o9 (GHSA-3gxm-679f-6qg9)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-3gxm-679f-6qg9"
+    },
+    "3layerdipstackposh4n": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackposh4n (GHSA-mgcp-vrv4-54xx)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-mgcp-vrv4-54xx"
+    },
+    "3layerdipstackujt40": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackujt40 (GHSA-rxjr-pwq8-jjvv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-rxjr-pwq8-jjvv"
+    },
+    "3layerdipstacks0fpdw": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacks0fpdw (GHSA-fm8v-fxg4-pv6v)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-fm8v-fxg4-pv6v"
+    },
+    "3layerdipstackl7gab": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackl7gab (GHSA-jgqp-w6p4-7vqc)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-jgqp-w6p4-7vqc"
+    },
+    "3layerdipstackdit9j": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackdit9j (GHSA-jj92-g485-hgf4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-jj92-g485-hgf4"
+    },
+    "3layerdipstack6wovmj": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack6wovmj (GHSA-hqhg-265f-87r4)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hqhg-265f-87r4"
+    },
+    "3layerdipstack0y4arx": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack0y4arx (GHSA-fvwx-2fhw-24q6)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-fvwx-2fhw-24q6"
+    },
+    "3layerdipstacksokbgx": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacksokbgx (GHSA-8jmw-f6vr-mjcv)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-8jmw-f6vr-mjcv"
+    },
+    "3layerdipstackr8xy1r": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackr8xy1r (GHSA-pwhm-854g-8675)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-pwhm-854g-8675"
+    },
+    "3layerdipstackoo3m1u": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackoo3m1u (GHSA-hqp8-28c8-qp6c)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-hqp8-28c8-qp6c"
+    },
+    "3layerdipstack8b4dts": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstack8b4dts (GHSA-27v7-63j6-2p8q)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-27v7-63j6-2p8q"
+    },
+    "3layerdipstacklskknx": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstacklskknx (GHSA-x37f-fx6q-gvv9)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-x37f-fx6q-gvv9"
+    },
+    "3layerdipstackidjlc": {
+      "blocked_all": true,
+      "reason": "Malware in 3layerdipstackidjlc (GHSA-44cv-9rq2-vrcj)",
+      "date": "2026-08-28",
+      "advisory": "https://github.com/advisories/GHSA-44cv-9rq2-vrcj"
     }
   }
 }
