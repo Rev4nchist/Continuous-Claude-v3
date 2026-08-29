@@ -1,0 +1,69 @@
+{
+  "version": 1,
+  "strict": true,
+  "playlists": [
+    {
+      "playlistId": "PLg5FD0-TFyzP9PZmwFGw2VoADQubtACsi",
+      "name": "Life. Learning. Enrichment 🚀",
+      "topic": "Life, Learning, and Enrichment",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzP9PZmwFGw2VoADQubtACsi",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLg5FD0-TFyzOG4GU_pykZhuVJi-aKi-xE",
+      "name": "Claude Code",
+      "topic": "Claude Code",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzOG4GU_pykZhuVJi-aKi-xE",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLg5FD0-TFyzPfZ1qAkcgqSXvfA7GVDcC8",
+      "name": "Health & Longevity",
+      "topic": "Health and Longevity",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzPfZ1qAkcgqSXvfA7GVDcC8",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLGB4mkrHM1jc",
+      "name": "Ai 🫧",
+      "topic": "AI Landscape",
+      "url": "https://www.youtube.com/playlist?list=PLGB4mkrHM1jc",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLg5FD0-TFyzPO5n9yD4ZqT91BoHe1FvzJ",
+      "name": "AI Tools",
+      "topic": "AI Tools",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzPO5n9yD4ZqT91BoHe1FvzJ",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLg5FD0-TFyzNwmPYCybhpQqcoAoOFu2v1",
+      "name": "Mal Training",
+      "topic": "Malinois Training",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzNwmPYCybhpQqcoAoOFu2v1",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLAt38qX-zDTs",
+      "name": "AI Finance",
+      "topic": "AI Finance",
+      "url": "https://www.youtube.com/playlist?list=PLAt38qX-zDTs",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLE6eZbTQhX_s",
+      "name": "AI Site Design",
+      "topic": "AI Site Design",
+      "url": "https://www.youtube.com/playlist?list=PLE6eZbTQhX_s",
+      "enabled": true
+    },
+    {
+      "playlistId": "PLg5FD0-TFyzOvFDwnCKu0SvStm3pz5LLv",
+      "name": "Notion",
+      "topic": "Notion and Productivity",
+      "url": "https://www.youtube.com/playlist?list=PLg5FD0-TFyzOvFDwnCKu0SvStm3pz5LLv",
+      "enabled": true
+    }
+  ]
+}

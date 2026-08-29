@@ -121,22 +121,40 @@ export function dedupeCues(cues) {
 // Merge deduped cues into readable chunks, each stamped with the start time of
 // its FIRST cue (so a citation deep-link lands at or just before the claim,
 // never after it).
-export function chunkCues(cues, { chunkChars = CHUNK_CHARS } = {}) {
+export function chunkCues(cues, {
+  chunkChars = CHUNK_CHARS,
+  videoId = 'unknown',
+  provenance = 'caption',
+  confidence = null,
+} = {}) {
   const chunks = [];
   let buf = [];
   let bufLen = 0;
   let start = null;
+  let end = null;
 
   const flush = () => {
     if (buf.length === 0) return;
-    chunks.push({ t: start, text: buf.join(' ').replace(/\s+/g, ' ').trim() });
+    const text = buf.join(' ').replace(/\s+/g, ' ').trim();
+    const ordinal = chunks.length + 1;
+    chunks.push({
+      id: `transcript:${videoId}:${String(ordinal).padStart(5, '0')}`,
+      t: start,
+      start,
+      end,
+      text,
+      provenance,
+      confidence,
+    });
     buf = [];
     bufLen = 0;
     start = null;
+    end = null;
   };
 
   for (const cue of cues) {
     if (start === null) start = cue.start;
+    end = cue.end;
     buf.push(cue.text);
     bufLen += cue.text.length + 1;
     if (bufLen >= chunkChars) flush();

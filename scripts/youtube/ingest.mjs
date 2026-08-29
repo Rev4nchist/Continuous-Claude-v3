@@ -15,20 +15,21 @@
 // Incremental by construction: ids already present in the corpus are skipped
 // before any network call, so re-running against a channel costs one flat-list
 // request and fetches only genuinely new uploads.
-import { rmSync, mkdtempSync } from 'node:fs';
+import { existsSync, readFileSync, rmSync, mkdtempSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 import {
   DEFAULT_CHANNEL_LIMIT, slugify, formatTimestamp,
 } from './lib/config.mjs';
 import {
-  listTarget, fetchVideos, readInfoJson, readBestSubtitle, ytdlpVersion,
+  listTarget, fetchVideos, readInfoJson, readBestSubtitle, targetKindHint, ytdlpVersion,
 } from './lib/ytdlp.mjs';
 import { vttToChunks, countWords } from './lib/vtt.mjs';
 import {
   allIngestedIds, renderVideoDoc, writeVideoDoc, readChannelState,
-  writeChannelState, ensureDir, channelDir,
+  writeChannelState, writeVideoEvidence, videoEvidencePath, ensureDir, channelDir,
 } from './lib/corpus.mjs';
+import { contentHash, evidenceSourceChanged } from './lib/records.mjs';
 
 function parseArgs(argv) {
   const opts = {
@@ -74,19 +75,21 @@ async function main() {
   log(`yt-dlp ${ytdlpVersion()}`);
   log(`Resolving ${opts.target} ...`);
 
-  const limit = opts.limit ?? DEFAULT_CHANNEL_LIMIT;
+  const limit = opts.limit ?? (targetKindHint(opts.target) === 'channel' ? DEFAULT_CHANNEL_LIMIT : undefined);
   const listing = listTarget(opts.target, { limit });
   log(`  ${listing.kind}: ${listing.channel} — ${listing.entries.length} video(s) listed`);
 
   const known = opts.force ? new Set() : allIngestedIds();
-  const todo = listing.entries.filter((e) => !known.has(e.id));
-  const skipped = listing.entries.length - todo.length;
+  const availableEntries = listing.entries.filter((entry) => entry.id);
+  const unavailable = listing.entries.filter((entry) => !entry.id || entry.availability !== 'public').length;
+  const todo = availableEntries.filter((e) => !known.has(e.id));
+  const skipped = availableEntries.length - todo.length;
 
   if (skipped) log(`  ${skipped} already in corpus, skipping`);
   if (todo.length === 0) {
     const summary = {
       target: opts.target, listed: listing.entries.length,
-      ingested: 0, skipped, failed: 0, noCaptions: 0, files: [],
+      ingested: 0, skipped, unavailable, failed: 0, noCaptions: 0, files: [],
     };
     if (opts.json) console.log(JSON.stringify(summary, null, 2));
     else log('Nothing new to ingest.');
@@ -99,7 +102,7 @@ async function main() {
   const stage = mkdtempSync(join(tmpdir(), 'yt-ingest-'));
   const result = {
     target: opts.target, listed: listing.entries.length,
-    ingested: 0, skipped, failed: 0, noCaptions: 0, files: [],
+    ingested: 0, skipped, unavailable, failed: 0, noCaptions: 0, files: [],
   };
 
   try {
@@ -140,7 +143,10 @@ async function main() {
         if (sub) {
           lang = sub.lang;
           source = transcriptSource(info, sub.lang);
-          chunks = vttToChunks(sub.text);
+          chunks = vttToChunks(sub.text, {
+            videoId: entry.id,
+            provenance: source === 'manual' ? 'manual-caption' : 'auto-caption',
+          });
         } else {
           result.noCaptions += 1;
         }
@@ -162,7 +168,7 @@ async function main() {
         transcript_source: source,
         transcript_words: chunks.length ? countWords(chunks) : 0,
         ingested_at: new Date().toISOString(),
-        ingest_version: 1,
+        ingest_version: 2,
       };
 
       const doc = renderVideoDoc({
@@ -173,10 +179,50 @@ async function main() {
       });
 
       const path = writeVideoDoc(channelSlug, meta, doc);
+      const hashes = {
+        description: contentHash(info.description || ''),
+        chapters: contentHash(info.chapters || []),
+        captions: contentHash(chunks),
+        metadata: contentHash({ title: meta.title, duration: meta.duration_s, uploadDate: meta.upload_date }),
+      };
+      const existingEvidencePath = videoEvidencePath(channelSlug, meta.upload_date, meta.video_id);
+      const existingEvidence = existsSync(existingEvidencePath)
+        ? JSON.parse(readFileSync(existingEvidencePath, 'utf8'))
+        : null;
+      const evidenceUnchanged = existingEvidence
+        && !evidenceSourceChanged(existingEvidence.metadata?.hashes, hashes);
+      const evidence = evidenceUnchanged ? existingEvidence : {
+        schemaVersion: 1,
+        videoId: meta.video_id,
+        metadata: {
+          ...meta,
+          fullDescription: info.description || '',
+          chapters: info.chapters || [],
+          hashes,
+        },
+        duration: meta.duration_s,
+        transcript: {
+          status: chunks.length ? 'caption-staged' : 'missing',
+          language: lang,
+          provenance: source,
+          speechWindows: [],
+          chunks,
+        },
+        visuals: { status: 'pending', states: [], contactSheets: [] },
+        gaps: [
+          ...(!chunks.length ? [{ id: 'transcript:missing', reason: 'No usable caption track; Whisper fallback required.' }] : []),
+          { id: 'visuals:pending', reason: 'Visual evidence extraction and review required.' },
+        ],
+        coverageStatus: 'BLOCKED',
+      };
+      const evidencePath = evidenceUnchanged
+        ? existingEvidencePath
+        : writeVideoEvidence(channelSlug, meta, evidence);
       result.ingested += 1;
       result.files.push({
         videoId: meta.video_id, title: meta.title, channel: channelSlug,
-        uploadDate: meta.upload_date, words: meta.transcript_words, path,
+        uploadDate: meta.upload_date, words: meta.transcript_words, path, evidencePath,
+        evidenceChanged: !evidenceUnchanged,
       });
 
       touchedChannels.set(channelSlug, channelName);

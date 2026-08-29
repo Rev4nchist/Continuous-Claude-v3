@@ -11,7 +11,7 @@
       "topic": "LLM engineering",
       "paused": false,
       "addedAt": "2026-07-25T14:04:07.849Z",
-      "lastPolledAt": "2026-08-12T12:00:07.589Z",
+      "lastPolledAt": "2026-08-24T12:43:02.022Z",
       "lastNewCount": 0,
       "pendingDigest": 2
     },
@@ -25,9 +25,9 @@
       "topic": "agents, connectors, automation layers",
       "paused": false,
       "addedAt": "2026-07-25T15:27:24.392Z",
-      "lastPolledAt": "2026-08-12T12:00:13.681Z",
+      "lastPolledAt": "2026-08-24T12:43:05.010Z",
       "lastNewCount": 0,
-      "pendingDigest": 6
+      "pendingDigest": 8
     },
     {
       "slug": "ai-engineer",
@@ -39,9 +39,9 @@
       "topic": "AI engineering conference talks; FDE track, evals, harness",
       "paused": false,
       "addedAt": "2026-08-06T11:08:37.756Z",
-      "lastPolledAt": "2026-08-12T12:00:17.713Z",
-      "lastNewCount": 1,
-      "pendingDigest": 16
+      "lastPolledAt": "2026-08-24T12:43:07.987Z",
+      "lastNewCount": 0,
+      "pendingDigest": 70
     }
   ]
 }

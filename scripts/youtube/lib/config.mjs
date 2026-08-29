@@ -26,11 +26,33 @@ export const DIGEST_INDEX = join(DIGEST_ROOT, 'INDEX.md');
 // research output, and should never be confused for a readable artifact.
 export const STATE_ROOT = join(YT_ROOT, 'state');
 export const WATCHLIST_PATH = join(STATE_ROOT, 'watchlist.json');
+export const SOURCES_PATH = process.env.YT_SOURCES_PATH || join(STATE_ROOT, 'sources.json');
+export const PLAYLIST_ALLOWLIST_PATH = process.env.YT_PLAYLIST_ALLOWLIST_PATH
+  || join(STATE_ROOT, 'continuous-playlists.json');
 export const LOG_ROOT = join(YT_ROOT, 'logs');
+
+// Continuous-content intelligence records. Raw media and working frame batches
+// never live here; these paths contain only durable, reviewable evidence.
+export const PLAYLISTS_ROOT = join(CORPUS_ROOT, '_playlists');
+export const TOPICS_ROOT = join(CORPUS_ROOT, '_topics');
+export const TARGETS_ROOT = join(CORPUS_ROOT, '_targets');
+export const UPDATES_ROOT = join(CORPUS_ROOT, '_updates');
+export const CACHE_ROOT = process.env.YT_CACHE_ROOT || join(YT_ROOT, '.cache');
 
 // --- yt-dlp ------------------------------------------------------------------
 // Resolved from PATH. Overridable for CI / a pinned build.
 export const YTDLP_EXE = process.env.YTDLP_EXE || 'yt-dlp';
+export const FFMPEG_EXE = process.env.FFMPEG_EXE || 'ffmpeg';
+export const TESSERACT_EXE = process.env.TESSERACT_EXE || 'tesseract';
+export const PYTHON_EXE = process.env.YT_PYTHON_EXE || 'python';
+export const CLAUDE_EXE = process.env.YT_ANALYSIS_EXE || 'claude';
+export const CODEX_EXE = process.env.YT_CODEX_EXE || 'codex';
+export const ANALYSIS_PROVIDER = process.env.YT_ANALYSIS_PROVIDER || 'auto';
+export const WHISPER_MODEL = process.env.YT_WHISPER_MODEL || null;
+export const WHISPER_DEVICE = process.env.YT_WHISPER_DEVICE || null;
+export const WHISPER_COMPUTE_TYPE = process.env.YT_WHISPER_COMPUTE_TYPE || null;
+export const RESEARCH_VIDEO_HEIGHT = Number(process.env.YT_VIDEO_HEIGHT || 720);
+export const PERIODIC_FRAME_SECONDS = Number(process.env.YT_FRAME_INTERVAL || 30);
 
 // Hard ceiling per yt-dlp invocation. A channel batch is ONE process, so this
 // covers the whole batch, not a single video. Windows stall bugs mean we never

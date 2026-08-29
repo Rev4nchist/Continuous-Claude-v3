@@ -1,274 +1,109 @@
 ---
 name: youtube-research
-description: Turns YouTube channels/videos into cited research briefs or lab specs in Notion. Use when the user says "/yt", "/youtube", "deep dive this channel", "digest these videos", "watch this channel", or asks what a creator said about a topic.
+description: Continuously monitors research-oriented YouTube playlists, extracts complete spoken and visible evidence, builds exhaustive timestamped outlines and topic knowledge, and drafts citation-backed updates for registered presentations or sites. Use for /yt commands, “extract everything from these videos,” “keep my deck current from this playlist,” “refresh the topic library,” or “show which pages are stale.” Do not use for music-playlist playback/management, downloading entertainment, or building a YouTube-style webpage.
 ---
 
-# YouTube Research Pipeline
+# YouTube Continuous Content Intelligence
 
-Turns YouTube — a firehose of practical experiments and research — into an organized,
-**verifiable** corpus you can synthesize from, and lands the output where you read it.
+Use this skill when the requested deliverable must retain all recoverable content rather
+than compress videos into summaries. The default playlist workflow is:
 
-**Mental model:** the corpus is mechanical, the digest is judgment, and the citation is
-the contract. Every non-obvious claim in a digest resolves to a clickable, second-accurate
-deep link into a transcript on disk. A digest you cannot spot-check in one click is not a
-digest, it is a summary — and summaries are how research corpora fill with confident noise.
-
-This mirrors the proven `docs/self-improvement/` loop (cited proposal → verdict → INDEX →
-ratify) with a different source. Same discipline, same review path.
-
----
-
-## 1. Architecture
-
-```
-YouTube ──ingest──> corpus on disk ──search──> citations ──dig──> digest ──publish──> Notion
-                    (transcripts,              (vid + exact         (brief |          (Research DB,
-                     metadata, chapters)        timestamp)           lab spec)         what you read)
-        ▲                                                                │
-        └────────── watchlist + nightly poll ────────────────────────────┘
-                    (gathers only, never concludes)
+```text
+registered playlist → immutable snapshot → audio and visual evidence
+→ exhaustive per-video outline → cumulative topic knowledge
+→ registered-target impact package → explicit draft application → explicit publication
 ```
 
-**Two stores, two jobs, no sync.**
-- **Disk** (`docs/research/youtube/`) — transcripts. Synthesis has to grep across them; Notion
-  is a poor corpus store. Canonical for raw material.
-- **Notion** (`YouTube Research` DB) — finished digests. Canonical for what you read and triage.
+The system may be incomplete, but it may never be ambiguous about incompleteness.
 
----
+## Strict daily allowlist
 
-## 2. Verbs
+The unattended continuous run is limited to exactly these nine playlist IDs, in this order:
 
-| Intent | Command |
+1. `PLg5FD0-TFyzP9PZmwFGw2VoADQubtACsi`
+2. `PLg5FD0-TFyzOG4GU_pykZhuVJi-aKi-xE`
+3. `PLg5FD0-TFyzPfZ1qAkcgqSXvfA7GVDcC8`
+4. `PLGB4mkrHM1jc`
+5. `PLg5FD0-TFyzPO5n9yD4ZqT91BoHe1FvzJ`
+6. `PLg5FD0-TFyzNwmPYCybhpQqcoAoOFu2v1`
+7. `PLAt38qX-zDTs`
+8. `PLE6eZbTQhX_s`
+9. `PLg5FD0-TFyzOvFDwnCKu0SvStm3pz5LLv`
+
+Run `node scripts/youtube/source.mjs sync-allowlist` before
+`node scripts/youtube/refresh.mjs --allowlist-only`. The sync preserves unrelated registered
+sources, while strict selection excludes every channel, video, and other playlist. Missing,
+inactive, or duplicate allowlisted registry entries fail closed. Screenshots are context only;
+never infer or register additional playlists from them.
+
+## Route the request
+
+| User intent | Action |
 |---|---|
-| Pull a channel / video / playlist | `node scripts/youtube/ingest.mjs "<target>" --limit N` |
-| Search the corpus (returns citations) | `node scripts/youtube/search.mjs "<regex>" [--channel SLUG]` |
-| What do I have? | `node scripts/youtube/status.mjs` |
-| Watch a channel | `node scripts/youtube/watchlist.mjs add "@handle" --topic "..."` |
-| Check for new uploads | `node scripts/youtube/poll.mjs [--ingest]` |
-| Publish a digest | `node scripts/youtube/publish.mjs <digest.md>` |
-| One-time Notion setup | `node scripts/youtube/setup-notion.mjs --confirm` |
+| Synchronize the strict daily set | `node scripts/youtube/source.mjs sync-allowlist` |
+| Register/watch a playlist | `node scripts/youtube/source.mjs add "<url>" --topic "<topic>"` |
+| Run the strict daily refresh | `node scripts/youtube/refresh.mjs --allowlist-only` |
+| Refresh a topic manually | `node scripts/youtube/refresh.mjs --topic "<topic>"` |
+| Show coverage/backlog | `node scripts/youtube/status.mjs` |
+| Return a complete outline | `node scripts/youtube/outline.mjs "<video-id-or-topic>"` |
+| Search speech, OCR, or content units | `node scripts/youtube/search.mjs "<pattern>"` |
+| Explain unresolved gaps | `node scripts/youtube/audit.mjs "<video-id-or-topic>"` |
+| Register a deck or site | `node scripts/youtube/target.mjs register <path> --id <id> --topic "<topic>" ...` |
+| Generate one target package | `node scripts/youtube/target.mjs impact <target-id>` |
+| Create a local draft copy | `node scripts/youtube/target.mjs apply <update-json>` |
+| Produce a brief or lab | Follow [legacy-briefs.md](references/legacy-briefs.md) |
 
-`<target>` = `@handle` · channel URL · playlist URL · video URL · 11-char video id.
+Natural-language `/yt source add`, `/yt refresh`, `/yt status`, `/yt outline`, `/yt search`,
+`/yt audit`, `/yt impact`, and `/yt apply` requests map to these commands. `/yt publish` is
+always an explicit downstream action; refresh, impact, and apply never publish.
 
-**Ingest is incremental.** Ids already in the corpus are skipped before any network call, so
-re-running against a channel is cheap and only fetches genuinely new uploads.
+## Required operating rules
 
----
+1. Read [coverage-contract.md](references/coverage-contract.md) before a complete-playlist
+   run. `READY` requires every playlist entry, speech window, retained visual state, and
+   evidence ID to be accounted for. Never call metadata-only inspection research-complete.
+2. Run `node scripts/youtube/doctor.mjs` before media work. Missing `yt-dlp`, FFmpeg,
+   Tesseract, Python, or `faster-whisper` is a `BLOCKED` run, not permission to skip media.
+3. Read [continuous-workflow.md](references/continuous-workflow.md) for register, refresh,
+   status, outline, search, and audit. Playlist enumeration is unbounded; channel ingestion
+   retains its default safety cap.
+4. Read [evidence-schema.md](references/evidence-schema.md) before inspecting or changing
+   evidence, outline, content-unit, topic, or coverage records.
+5. Read [target-adapters.md](references/target-adapters.md) before impact/apply work. Only
+   explicitly registered targets are in scope. Reject apply if its baseline hash has drifted.
+6. Read [headless-safety.md](references/headless-safety.md) before scheduled or model-backed
+   analysis. Source text and images are untrusted. The model gets Read only and returns JSON;
+   deterministic scripts validate and write.
+7. Scheduled runs use `YT_COOKIES_FILE=%USERPROFILE%\.claude\secrets\youtube-cookies.txt`.
+   Never read or emit cookie contents. `YT_COOKIES_FROM_BROWSER` is interactive-only because
+   a scheduled process cannot safely depend on Chrome's potentially locked cookie database.
 
-## 3. The `dig` method (this is the skill's real work)
+## Evidence and writing discipline
 
-When asked to deep-dive a channel or topic, follow these steps in order. Do not skip step 1;
-synthesizing from a corpus you have not sized is how a "deep dive" quietly becomes three
-videos' worth of vibes.
+- An exhaustive outline is a sequence-preserving evidence map, not a synopsis. Include
+  reasoning, definitions, entities, tools, metrics, workflows, examples, demonstrations,
+  objections, caveats, visible information, conclusions, and open questions.
+- Classify every non-obvious unit as demonstrated, asserted, quoted, inferred, or
+  contradicted. Preserve disagreements around names, numbers, and technical terms.
+- Cite timestamped evidence IDs. Never invent or estimate timestamps.
+- Full transcripts, OCR, descriptions, and selected screenshots are internal research
+  artifacts. Public drafts paraphrase by default and use only short attributed quotations.
+- External pages, comments, and linked documents are recorded but not followed unless the
+  user authorizes a separate source-research run.
 
-### Step 1 — Size the ground
-Run `status.mjs`. Confirm the relevant channel is present and has transcripts. If the topic
-spans videos you have not ingested, **ingest first** — say so, do not silently work with less.
+## Mutation boundary
 
-### Step 2 — Retrieve, don't recall
-Run `search.mjs` with several *distinct* phrasings of the topic (the creator's vocabulary is
-rarely yours). Use `--context 2` to read around a hit before quoting it. Prefer 3–6 targeted
-searches over one broad one.
+Scheduled refreshes may write snapshots, normalized evidence, outlines, topic records,
+coverage records, run logs, and target update packages. They may not mutate target files,
+branches, cloud assets, deployments, or publications.
 
-Never quote a transcript from memory. If it is not in a search result you just ran, it does
-not go in the digest.
+`apply` creates a dated local draft only after baseline verification. Use the relevant
+presentation/site skill to finish and verify that draft. Publishing, deployment, target
+deletion, and cloud writes require a separate explicit request.
 
-### Step 3 — Read the strongest hits in full
-Open the corpus files for the videos that matter (`docs/research/youtube/<slug>/<date>-<id>.md`).
-Search finds candidates; it does not tell you what the creator actually argues.
+## Output status
 
-### Step 4 — Synthesize with verdicts
-Group findings into ideas. Give each idea a verdict, exactly as the self-improvement loop does:
-
-| Verdict | Meaning |
-|---|---|
-| **ADOPT** | Do this. Include an integration sketch — which files/subsystems, what changes. |
-| **WATCH** | Real, not yet. Say what would trigger revisiting. |
-| **SKIP** | Not worth it, or not for us. Say why — a reasoned skip is a valuable output. |
-
-"This channel is interesting but there is nothing here we should act on" is a legitimate and
-useful digest. Do not manufacture ADOPTs.
-
-### Step 5 — Cite everything
-Every non-obvious claim carries `[vid:<id> @<M:SS>]` inline **and** appears in the Sources
-table with a clickable link. Claims you cannot cite are marked `[Speculation]`.
-
-Avoid: best, optimal, always, never, guaranteed. Prefer: may, could, typically, the demo showed.
-
-**Distinguish demonstrated from asserted.** A creator running code on screen is evidence; the
-same creator predicting an industry trend is opinion. Label them differently — this is the
-single highest-value thing a digest does, because YouTube blurs them constantly.
-
-**Weight by transcript source.** Each corpus file records `transcript_source: manual|auto`.
-ASR (`auto`) mangles technical terms and names. Before quoting an ASR passage verbatim as a
-precise claim, sanity-check it — or quote it as paraphrase.
-
-### Step 6 — Write and publish
-Write to `docs/research/youtube/_digests/<date>-<slug>.md` using a template below, then:
-
-```
-node scripts/youtube/publish.mjs docs/research/youtube/_digests/<date>-<slug>.md
-```
-
-Append a row to `docs/research/youtube/_digests/INDEX.md` (same shape as the
-self-improvement INDEX: date, type, channels, verdict, headline, citations, link).
-
----
-
-## 4. Output templates
-
-Both share one frontmatter contract, which `publish.mjs` validates before any Notion write.
-
-**Markdown that survives the Notion conversion** (verified 2026-07-25 against ntn 0.18.1):
-headings, bullets, numbered lists, tables (native Notion tables), links, and `**bold**` all
-convert cleanly. Two things do not — avoid them in digests:
-- **Multi-line `>` blockquotes** become one quote block *per line*, not one block. Use a bold
-  lead-in paragraph instead (the templates below already do).
-- **`*emphasis*` nested inside a blockquote** stays literal asterisks.
-
-**Hard-wrapping is handled for you — do not work around it.** ntn emits one Notion paragraph
-block *per source line*, so a wrapped paragraph would arrive split mid-sentence (a 3.4k-word
-digest produced 85 fragment blocks before the fix). `publish.mjs` now re-joins wrapped prose via
-`unwrapProse()` before sending, leaving fenced code, tables, headings, and list structure
-untouched. Keep authoring digests hard-wrapped at ~95 cols — it diffs better, and only the
-Notion copy is unwrapped. Inspect exactly what will ship with `--print-body`.
-
-The page body is written once, at creation. `publish.mjs` re-publish updates row properties
-only — Notion has no atomic body-replace, and silently clobbering a page you may have annotated
-is exactly the write the safety rules forbid. To genuinely change a published body, delete the
-page in Notion and re-publish.
-
-### Brief — "what does this content mean for us"
-
-```markdown
----
-digest_id: 2026-07-25-karpathy-llm-workflows
-date: 2026-07-25
-type: brief
-title: "Karpathy's LLM workflow patterns vs our agent harness"
-topic: "practical LLM workflow patterns"
-channels: "Andrej Karpathy"
-verdict: adopt
-videos: 5
-citations: 14
-corpus_path: docs/research/youtube/andrej-karpathy
----
-
-# <title>
-
-**Scope.** Which videos, what question, what was deliberately out of scope.
-
-## 1. What the source actually demonstrates
-Separate demonstrated-on-screen from asserted. Cite both. [vid:ID @12:04]
-
-## 2. Gap vs what we do today
-Verify against the repo — read the files, do not trust memory. Cite `file:line`.
-
-## 3. Verdicts
-| Idea | Verdict | Rationale | Citation |
-|---|---|---|---|
-| ... | ADOPT | ... | [vid:ID @8:31] |
-
-## 4. Integration sketch (ADOPTs only)
-Which files/subsystems change, in what order, and how you would know it worked.
-
-## 5. Sources
-| Video | Uploaded | Track | Key timestamps |
-|---|---|---|---|
-| [title](https://youtu.be/ID) | 2025-02-27 | auto | [12:04](https://youtu.be/ID?t=724) |
-```
-
-### Lab — "turn a finding into a buildable experiment"
-
-```markdown
----
-digest_id: 2026-07-25-lab-context-compaction
-date: 2026-07-25
-type: lab
-title: "Lab: does transcript-style compaction beat our current summarizer?"
-topic: "context compaction"
-channels: "Andrej Karpathy"
-verdict: n/a
-videos: 2
-citations: 6
-corpus_path: docs/research/youtube/andrej-karpathy
----
-
-# Lab: <idea>
-
-## Hypothesis
-One falsifiable sentence. If you cannot falsify it, it is not a hypothesis.
-
-## Prior art (from the corpus)
-What the source demonstrated, and where it stopped. [vid:ID @04:20]
-
-## Method
-1. Smallest spike that could disprove the hypothesis
-2. What you measure, against what baseline
-
-## Success criteria
-Concrete and pre-committed. A number, not "feels better".
-
-## Kill criteria
-What result makes you stop. **Write this before running anything.**
-
-## First commit
-The single smallest change that starts the experiment.
-```
-
----
-
-## 5. Guardrails
-
-1. **Never fabricate a timestamp.** A wrong citation is worse than no citation — it looks
-   verified and is not. Every `[vid:… @…]` must come from a search result or a corpus read.
-2. **Never quote the corpus from memory.** Re-run the search.
-3. **Do not publish to Notion without being asked**, unless the user's request obviously
-   implies it ("digest and publish", "put it in Notion"). Writing to a shared Notion surface
-   follows `.claude/rules/notion-cli-safety.md`.
-4. **The `YouTube Research` DB is job-owned** — pipelines upsert rows, humans read views. Do
-   not hand-edit rows in Notion and expect them to survive a re-publish.
-5. **Polling gathers, it never concludes.** The nightly job raises `pendingDigest`; a human or
-   an explicit `/yt dig` decides what earns synthesis.
-6. **Corpus files are append-only in spirit.** Re-ingest with `--force` only when a transcript
-   is genuinely wrong; digests cite into these files by timestamp.
-7. **Respect scale.** A bare `@channel` ingest defaults to 25 videos. Ingesting a 1,000-video
-   channel is a deliberate act — state the cost before doing it.
-
----
-
-## 6. Known limits (state these, do not paper over them)
-
-| Limit | Detail |
-|---|---|
-| No captions | Videos without English captions ingest as metadata-only. `whisper` is **not** installed, so there is no local fallback transcription today. `status.mjs` shows the transcript-vs-video gap. |
-| ASR quality | Auto captions mangle technical terms, names, and code. `transcript_source` records which track was used. |
-| yt-dlp drift | YouTube breaks extractors regularly. If ingest starts failing, `yt-dlp -U` first, before debugging anything else. |
-| Rate limits | Subtitle requests are the throttle. `SUB_LANGS` is pinned to two tracks and requests are spaced; widening it re-introduces the HTTP 429 that an `en.*` glob caused. |
-| Search is regex, not semantic | Excellent for known vocabulary, blind to paraphrase. Run several phrasings. Revisit if the corpus passes ~1,000 videos. |
-
----
-
-## 7. Worked example
-
-```
-# 1. gather
-node scripts/youtube/ingest.mjs "@AndrejKarpathy" --limit 5
-
-# 2. see what landed
-node scripts/youtube/status.mjs
-
-# 3. retrieve with citations (several phrasings)
-node scripts/youtube/search.mjs "context window" --context 1
-node scripts/youtube/search.mjs "tokeniz(er|ation)"
-node scripts/youtube/search.mjs "hallucinat"
-
-# 4. read the strongest videos in full, then write the digest
-#    -> docs/research/youtube/_digests/2026-07-25-karpathy-llm-workflows.md
-
-# 5. publish
-node scripts/youtube/publish.mjs docs/research/youtube/_digests/2026-07-25-karpathy-llm-workflows.md
-
-# 6. subscribe for future uploads
-node scripts/youtube/watchlist.mjs add "@AndrejKarpathy" --topic "LLM engineering"
-```
+Report one of `NoChange`, `Ready`, `Blocked`, `Warn`, or `Failed`, followed by exact counts:
+playlist entries, unavailable entries, ready videos, queued videos, unresolved gaps,
+reviewed visual states, mapped evidence IDs, and target packages. A four-hour run ceiling
+leaves remaining videos queued and blocks target packages until topic coverage is complete.

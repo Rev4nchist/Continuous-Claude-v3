@@ -12,7 +12,10 @@
 // This is the retrieval half of a deep-dive. Each hit carries video id, exact
 // timestamp, and a clickable deep link, so a synthesis step can quote the corpus
 // and every claim is verifiable by construction rather than by trust.
-import { searchCorpus, listVideoFiles, readVideoDoc } from './lib/corpus.mjs';
+import { readFileSync } from 'node:fs';
+import {
+  searchCorpus, listChannels, listVideoEvidenceFiles, listVideoFiles, readVideoDoc,
+} from './lib/corpus.mjs';
 import { citationUrl } from './lib/config.mjs';
 
 function parseArgs(argv) {
@@ -60,6 +63,29 @@ function main() {
       flags: o.caseSensitive ? 'g' : 'ig',
       limit: o.limit,
     });
+    const re = new RegExp(o.pattern, o.caseSensitive ? '' : 'i');
+    for (const channel of o.channel ? [o.channel] : listChannels()) {
+      for (const path of listVideoEvidenceFiles(channel)) {
+        const evidence = JSON.parse(readFileSync(path, 'utf8'));
+        const candidates = [
+          ...(evidence.visuals?.states || []).map((item) => ({ sourceType: 'visual-ocr', evidenceId: item.id, seconds: item.timestamp, text: item.ocrText })),
+          ...(evidence.analysis?.contentUnits || []).map((item) => ({ sourceType: `content-${item.kind}`, evidenceId: item.id, seconds: null, text: item.text })),
+        ];
+        for (const item of candidates) {
+          if (!item.text || !re.test(item.text)) continue;
+          hits.push({
+            channel, channelName: evidence.metadata?.channel, videoId: evidence.videoId,
+            title: evidence.metadata?.title, uploadDate: evidence.metadata?.upload_date,
+            timestamp: item.seconds === null ? null : String(item.seconds), seconds: item.seconds || 0,
+            text: item.text, url: citationUrl(evidence.videoId, item.seconds || 0),
+            citation: item.evidenceId, sourceType: item.sourceType,
+          });
+          if (hits.length >= o.limit) break;
+        }
+        if (hits.length >= o.limit) break;
+      }
+      if (hits.length >= o.limit) break;
+    }
   } catch (e) {
     throw new Error(`Bad pattern /${o.pattern}/: ${e.message}`);
   }
@@ -93,7 +119,7 @@ function main() {
     for (const h of group) {
       console.log(`  [${h.timestamp}] ${h.text.slice(0, 160)}`);
       console.log(`           ${citationUrl(videoId, h.seconds)}`);
-      if (o.context > 0) {
+      if (o.context > 0 && h.timestamp?.includes(':')) {
         for (const line of contextFor(h, o.context)) console.log(`      | ${line.slice(0, 170)}`);
       }
     }

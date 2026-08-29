@@ -316,3 +316,7 @@ fastmcp-*.png
 # board exists to eliminate. The generator is the tracked source; see
 # .claude/artifacts.json -> agentic-os-lane-board.
 /lane-board.html
+
+# YouTube continuous-research raw media and intermediate extraction artifacts.
+# Normalized evidence, selected frames, outlines, and coverage under docs/ remain tracked.
+scripts/youtube/.cache/

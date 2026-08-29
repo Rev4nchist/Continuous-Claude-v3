@@ -15,6 +15,7 @@ import {
 } from 'node:fs';
 import { join } from 'node:path';
 import { CORPUS_ROOT, slugify, formatTimestamp, citationUrl } from './config.mjs';
+import { writeJsonAtomic } from './records.mjs';
 
 export function ensureDir(dir) {
   if (!existsSync(dir)) mkdirSync(dir, { recursive: true });
@@ -86,6 +87,22 @@ export function listVideoFiles(channelSlug) {
     .map((f) => join(dir, f));
 }
 
+export function listVideoEvidenceFiles(channelSlug) {
+  const dir = channelDir(channelSlug);
+  if (!existsSync(dir)) return [];
+  return readdirSync(dir)
+    .filter((name) => /\.analysis\.json$/.test(name))
+    .map((name) => join(dir, name));
+}
+
+export function findVideoEvidence(videoId) {
+  for (const channel of listChannels()) {
+    const match = listVideoEvidenceFiles(channel).find((path) => path.endsWith(`-${videoId}.analysis.json`));
+    if (match) return match;
+  }
+  return null;
+}
+
 // Set of video ids already in the corpus for a channel. This is the incremental
 // gate: an ingest only fetches ids NOT in here.
 export function ingestedIds(channelSlug) {
@@ -129,9 +146,9 @@ export function renderVideoDoc({ meta, description, chapters, chunks }) {
   parts.push(`${facts}  \n**Watch:** ${meta.url}\n`);
 
   if (description && description.trim()) {
-    // Descriptions are frequently link-spam walls; keep the useful head only.
-    const trimmed = description.trim().split('\n').slice(0, 25).join('\n');
-    parts.push(`\n## Description\n\n${trimmed}\n`);
+    // Descriptions are source evidence. Keep the complete creator-authored text;
+    // downstream public drafts decide what is relevant and safe to reuse.
+    parts.push(`\n## Description\n\n${description.trim()}\n`);
   }
 
   if (chapters && chapters.length) {
@@ -157,6 +174,21 @@ export function writeVideoDoc(channelSlug, meta, content) {
   const p = videoFilePath(channelSlug, meta.upload_date, meta.video_id);
   writeFileSync(p, content, 'utf8');
   return p;
+}
+
+export function videoEvidencePath(channelSlug, uploadDate, videoId) {
+  return videoFilePath(channelSlug, uploadDate, videoId).replace(/\.md$/, '.analysis.json');
+}
+
+export function videoOutlinePath(channelSlug, uploadDate, videoId) {
+  return videoFilePath(channelSlug, uploadDate, videoId).replace(/\.md$/, '.outline.md');
+}
+
+export function writeVideoEvidence(channelSlug, meta, evidence) {
+  ensureDir(channelDir(channelSlug));
+  const path = videoEvidencePath(channelSlug, meta.upload_date, meta.video_id);
+  writeJsonAtomic(path, evidence);
+  return path;
 }
 
 export function readVideoDoc(path) {

@@ -100,6 +100,12 @@ test('chunkCues stamps each chunk with its FIRST cue start time', () => {
   const chunks = chunkCues(cues, { chunkChars: 1000 }); // force a single chunk
   assert.equal(chunks.length, 1);
   assert.equal(chunks[0].t, 0.16, 'citation must land at or before the claim');
+  assert.equal(chunks[0].start, 0.16);
+  // The 4.24 bridge cue is a duplicate and is intentionally removed; evidence
+  // ends at the final retained cue rather than claiming coverage we discarded.
+  assert.equal(chunks[0].end, 4.23);
+  assert.match(chunks[0].id, /^transcript:/);
+  assert.equal(chunks[0].provenance, 'caption');
 });
 
 test('chunkCues splits once the char budget is exceeded', () => {
@@ -110,8 +116,10 @@ test('chunkCues splits once the char budget is exceeded', () => {
 });
 
 test('vttToChunks end-to-end produces non-empty, markup-free text', () => {
-  const chunks = vttToChunks(ROLLING);
+  const chunks = vttToChunks(ROLLING, { videoId: 'video123', provenance: 'auto-caption' });
   assert.ok(chunks.length >= 1);
+  assert.match(chunks[0].id, /^transcript:video123:/);
+  assert.equal(chunks[0].provenance, 'auto-caption');
   const all = chunks.map((c) => c.text).join(' ');
   assert.ok(!all.includes('<'), 'no residual markup');
   assert.ok(countWords(chunks) > 0);

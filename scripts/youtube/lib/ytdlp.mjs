@@ -9,13 +9,32 @@
 // yt-dlp accepts many URLs in a single invocation, so batching is free.
 import { spawnSync } from 'node:child_process';
 import { readFileSync, readdirSync, existsSync } from 'node:fs';
-import { join } from 'node:path';
+import { join, resolve } from 'node:path';
 import {
   YTDLP_EXE, YTDLP_TIMEOUT_MS, SUB_LANGS, SUB_LANG_PREFERENCE, SLEEP_REQUESTS_S,
 } from './config.mjs';
 
-function run(args, { timeout = YTDLP_TIMEOUT_MS, allowFailure = false } = {}) {
-  const res = spawnSync(YTDLP_EXE, args, {
+export function ytdlpAuthArgs({ env = process.env } = {}) {
+  const cookieFile = String(env.YT_COOKIES_FILE || '').trim();
+  if (cookieFile) {
+    if (/[\r\n\0]/.test(cookieFile)) throw new Error('Invalid YT_COOKIES_FILE value.');
+    const path = resolve(cookieFile);
+    if (!existsSync(path)) {
+      throw new Error(`YouTube authentication blocked: YT_COOKIES_FILE does not exist: ${path}`);
+    }
+    return ['--cookies', path];
+  }
+  const browser = String(env.YT_COOKIES_FROM_BROWSER || '').trim();
+  if (!browser) return [];
+  if (/[\r\n\0]/.test(browser)) throw new Error('Invalid YT_COOKIES_FROM_BROWSER value.');
+  return ['--cookies-from-browser', browser];
+}
+
+function run(args, {
+  timeout = YTDLP_TIMEOUT_MS, allowFailure = false, authenticated = false,
+} = {}) {
+  const commandArgs = authenticated ? [...ytdlpAuthArgs(), ...args] : args;
+  const res = spawnSync(YTDLP_EXE, commandArgs, {
     timeout,
     windowsHide: true,
     encoding: 'utf8',
@@ -73,6 +92,25 @@ export function normalizeTarget(target) {
   );
 }
 
+export function targetKindHint(target) {
+  const value = String(target).trim();
+  if (/^[\w-]{11}$/.test(value) || /youtu\.be\/|youtube\.com\/watch\?/i.test(value)) return 'video';
+  if (/youtube\.com\/playlist\?|[?&]list=/i.test(value)) return 'playlist';
+  if (/^@|youtube\.com\/(?:@|c\/|channel\/|user\/)/i.test(value)) return 'channel';
+  return 'unknown';
+}
+
+export function entryAvailability(entry) {
+  if (!entry) return 'unavailable';
+  if (entry.availability && entry.availability !== 'needs_auth') return entry.availability;
+  const title = String(entry.title || '').toLowerCase();
+  if (title.includes('private video')) return 'private';
+  if (title.includes('deleted video') || title.includes('removed video')) return 'removed';
+  if (title.includes('unavailable video') || title === '[unavailable]') return 'unavailable';
+  if (entry.availability === 'needs_auth') return 'restricted';
+  return entry.id ? 'public' : 'unavailable';
+}
+
 // Stage 1 — enumerate without extracting. Returns { kind, channel, entries[] }.
 // entries: [{ id, title, duration, url }]. upload_date is deliberately NOT read
 // here: the flat listing omits or approximates it. Real dates come from stage 2.
@@ -82,8 +120,13 @@ export function listTarget(target, { limit } = {}) {
   if (limit && Number(limit) > 0) args.push('--playlist-end', String(Number(limit)));
   args.push(url);
 
-  const { stdout } = run(args, { allowFailure: true });
-  if (!stdout.trim()) throw new Error(`yt-dlp returned no data for ${url}`);
+  const { stdout, stderr, status } = run(args, { allowFailure: true, authenticated: true });
+  if (!stdout.trim()) {
+    if (status !== 0 && /private|sign.?in|login|cookie|authentication/i.test(stderr)) {
+      throw new Error(`YouTube authentication blocked for ${url}: configure YT_COOKIES_FILE or refresh the exported cookies.`);
+    }
+    throw new Error(`yt-dlp returned no data for ${url}`);
+  }
 
   let data;
   try {
@@ -98,21 +141,30 @@ export function listTarget(target, { limit } = {}) {
       kind: 'video',
       channel: data.channel || data.uploader || 'Unknown',
       channelId: data.channel_id || null,
-      entries: [{ id: data.id, title: data.title, duration: data.duration, url }],
+      title: data.title || null,
+      playlistId: null,
+      entries: [{
+        id: data.id, title: data.title, duration: data.duration, url,
+        position: 1, availability: entryAvailability(data),
+        channel: data.channel || data.uploader || null,
+      }],
     };
   }
 
-  const entries = (data.entries || [])
-    .filter((e) => e && e.id)
-    .map((e) => ({
-      id: e.id,
-      title: e.title || '(untitled)',
-      duration: e.duration ?? null,
-      url: e.url || `https://www.youtube.com/watch?v=${e.id}`,
-    }));
+  const entries = (data.entries || []).map((e, index) => ({
+    id: e?.id ?? null,
+    title: e?.title || '(unavailable)',
+    duration: e?.duration ?? null,
+    url: e?.url || (e?.id ? `https://www.youtube.com/watch?v=${e.id}` : null),
+    position: Number(e?.playlist_index) || index + 1,
+    availability: entryAvailability(e),
+    channel: e?.channel || e?.uploader || null,
+  }));
 
   return {
-    kind: 'playlist',
+    kind: targetKindHint(target) === 'channel' ? 'channel' : 'playlist',
+    title: data.title || null,
+    playlistId: data.id || null,
     channel: data.channel || data.uploader || data.title || 'Unknown',
     channelId: data.channel_id || null,
     entries,
@@ -149,7 +201,7 @@ export function fetchVideos(ids, outDir, { since, transcript = true } = {}) {
   if (since) args.push('--dateafter', String(since).replace(/-/g, ''));
   for (const id of ids) args.push(`https://www.youtube.com/watch?v=${id}`);
 
-  const { stderr, status } = run(args, { allowFailure: true });
+  const { stderr, status } = run(args, { allowFailure: true, authenticated: true });
   return { status, stderr };
 }
 

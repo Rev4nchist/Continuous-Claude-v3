@@ -13,26 +13,15 @@
 // Exit code is 0 for "polled successfully, nothing new" AND for "found N new".
 // A non-zero exit means the poll itself failed — callers must distinguish these
 // by reading the JSON, never by exit code alone (.claude/rules/headless-claude-mcp.md).
-import { existsSync, readFileSync, writeFileSync, appendFileSync } from 'node:fs';
+import { appendFileSync } from 'node:fs';
 import { join } from 'node:path';
 import { spawnSync } from 'node:child_process';
-import { WATCHLIST_PATH, LOG_ROOT, YT_ROOT } from './lib/config.mjs';
-import { ensureDir, ingestedIds, allIngestedIds } from './lib/corpus.mjs';
+import { LOG_ROOT, YT_ROOT } from './lib/config.mjs';
+import { ensureDir, allIngestedIds } from './lib/corpus.mjs';
 import { listTarget } from './lib/ytdlp.mjs';
-
-function loadWatchlist() {
-  if (!existsSync(WATCHLIST_PATH)) return { version: 1, channels: [] };
-  try {
-    const w = JSON.parse(readFileSync(WATCHLIST_PATH, 'utf8'));
-    return { version: w.version ?? 1, channels: w.channels ?? [] };
-  } catch (e) {
-    throw new Error(`watchlist.json is unreadable: ${e.message}`);
-  }
-}
-
-function saveWatchlist(w) {
-  writeFileSync(WATCHLIST_PATH, `${JSON.stringify(w, null, 2)}\n`, 'utf8');
-}
+import {
+  createPlaylistSnapshot, loadSources, persistPlaylistSnapshot, readPlaylistManifest, saveSources,
+} from './lib/sources.mjs';
 
 function logLine(msg) {
   ensureDir(LOG_ROOT);
@@ -46,14 +35,14 @@ function main() {
   const json = argv.includes('--json');
   const log = (...a) => { if (!json) console.log(...a); };
 
-  const w = loadWatchlist();
-  const active = w.channels.filter((c) => !c.paused);
+  const registry = loadSources({ persistMigration: true });
+  const active = registry.sources.filter((source) => source.active);
 
   if (active.length === 0) {
     const out = { polled: 0, channels: [], totalNew: 0, errors: [] };
     if (json) console.log(JSON.stringify(out, null, 2));
-    else log('Watchlist has no active channels.');
-    logLine('poll: no active channels');
+    else log('Source registry has no active sources.');
+    logLine('poll: no active sources');
     return;
   }
 
@@ -63,10 +52,18 @@ function main() {
 
   for (const ch of active) {
     try {
-      const listing = listTarget(ch.target, { limit: ch.limit ?? 10 });
-      const fresh = listing.entries.filter((e) => !known.has(e.id));
+      const listing = listTarget(ch.target, { limit: ch.kind === 'channel' ? ch.limit ?? 25 : undefined });
+      const fresh = listing.entries.filter((e) => e.id && !known.has(e.id));
+
+      if (ch.kind === 'playlist') {
+        ch.playlistId = ch.playlistId || listing.playlistId;
+        persistPlaylistSnapshot(createPlaylistSnapshot(ch, listing, {
+          previous: readPlaylistManifest(ch.playlistId),
+        }));
+      }
 
       results.push({
+        sourceId: ch.id,
         slug: ch.slug,
         name: ch.name,
         checked: listing.entries.length,
@@ -85,7 +82,11 @@ function main() {
         // for "how a video becomes a corpus file", regardless of trigger.
         const res = spawnSync(
           process.execPath,
-          [join(YT_ROOT, 'ingest.mjs'), ch.target, '--limit', String(ch.limit ?? 10), '--quiet'],
+          [
+            join(YT_ROOT, 'ingest.mjs'), ch.target,
+            ...(ch.kind === 'channel' ? ['--limit', String(ch.limit ?? 25)] : []),
+            '--quiet',
+          ],
           { encoding: 'utf8', timeout: 20 * 60 * 1000, windowsHide: true, input: '' },
         );
         if (res.status !== 0) {
@@ -93,7 +94,7 @@ function main() {
           errors.push({ slug: ch.slug, stage: 'ingest', detail });
           log(`    ! ingest failed: ${detail}`);
         } else {
-          const after = ingestedIds(ch.slug);
+          const after = allIngestedIds();
           const landed = fresh.filter((f) => after.has(f.id)).length;
           ch.pendingDigest = (ch.pendingDigest ?? 0) + landed;
           results[results.length - 1].ingested = landed;
@@ -106,7 +107,7 @@ function main() {
     }
   }
 
-  saveWatchlist(w);
+  saveSources(registry);
 
   const out = {
     polledAt: new Date().toISOString(),

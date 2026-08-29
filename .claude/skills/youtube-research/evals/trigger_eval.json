@@ -1,0 +1,74 @@
+[
+  {
+    "id": 1,
+    "query": "Watch this YouTube playlist and keep my strategy deck current as new videos are added.",
+    "should_trigger": true,
+    "rationale": "Continuous playlist monitoring plus a registered target is a primary workflow."
+  },
+  {
+    "id": 2,
+    "query": "Extract everything from every video in this playlist, including slides and demos. I do not want summaries.",
+    "should_trigger": true,
+    "rationale": "Explicit video-complete spoken and visual evidence request."
+  },
+  {
+    "id": 3,
+    "query": "Refresh the Agentic AI topic library and show which pages on our site are stale.",
+    "should_trigger": true,
+    "rationale": "Topic refresh and target impact analysis."
+  },
+  {
+    "id": 4,
+    "query": "Build a complete timestamped outline from all playlist content.",
+    "should_trigger": true,
+    "rationale": "Exhaustive playlist outline is a primary output."
+  },
+  {
+    "id": 5,
+    "query": "/yt audit Agentic AI",
+    "should_trigger": true,
+    "rationale": "Explicit command mode."
+  },
+  {
+    "id": 6,
+    "query": "What did these research videos demonstrate about evaluation harnesses? Include on-screen evidence.",
+    "should_trigger": true,
+    "rationale": "Evidence-grounded transcript and visual research query."
+  },
+  {
+    "id": 7,
+    "query": "Play my YouTube music playlist while I work.",
+    "should_trigger": false,
+    "rationale": "Playback and music-playlist management are outside research scope."
+  },
+  {
+    "id": 8,
+    "query": "Build a responsive landing page that looks like YouTube.",
+    "should_trigger": false,
+    "rationale": "A YouTube-style frontend is a site-building request, not content research."
+  },
+  {
+    "id": 9,
+    "query": "Download this movie from YouTube for offline viewing.",
+    "should_trigger": false,
+    "rationale": "Entertainment downloading is outside the evidence workflow."
+  },
+  {
+    "id": 10,
+    "query": "Embed a YouTube player component in this React page.",
+    "should_trigger": false,
+    "rationale": "Frontend video embedding does not require research ingestion."
+  },
+  {
+    "id": 11,
+    "query": "Give me a one-paragraph summary of this video from the title only.",
+    "should_trigger": false,
+    "rationale": "Title-only summary explicitly avoids the complete research workflow."
+  },
+  {
+    "id": 12,
+    "query": "Organize my personal watch-later playlist by mood.",
+    "should_trigger": false,
+    "rationale": "Consumer playlist organization is outside continuous topic intelligence."
+  }
+]
