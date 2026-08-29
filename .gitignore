@@ -320,3 +320,8 @@ fastmcp-*.png
 # YouTube continuous-research raw media and intermediate extraction artifacts.
 # Normalized evidence, selected frames, outlines, and coverage under docs/ remain tracked.
 scripts/youtube/.cache/
+
+# Per-run refresh/poll output. Machine state written on every scheduled run, so
+# committing it produces churn on a file nobody reads from git. The durable
+# record is the coverage and manifest data under docs/research/youtube.
+scripts/youtube/logs/
