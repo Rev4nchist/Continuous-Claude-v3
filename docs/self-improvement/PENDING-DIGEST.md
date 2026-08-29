@@ -238,4 +238,114 @@ next interactive session. After posting one, delete its block from this file.
 
 ---
 
+## 2026-08-13 — skills (Skills System)
+
+- **Date:** 2026-08-13
+- **Component:** skills — Skills System
+- **Verdict:** adopt
+- **Headline:** Keep deterministic triggering (it is headless-proof), but fix precision — de-escalate the blocking banner, rebuild the stale eval baseline with real prompts, add an embedding rerank on the existing local BGE stack, and consolidate colliding skill clusters.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-13-skills.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-14 — cli-integration (CLI Integration Layer)
+
+- **Date:** 2026-08-14
+- **Component:** cli-integration — CLI Integration Layer
+- **Verdict:** adopt
+- **Headline:** Twelve days on, zero of the 08-02 recommendations landed — the uv-run harness fails identically today, the "32x" claim still sits at all six locations, and 22 digests are parked unswept since 07-18 — while the 08-01 skill census shows the dead pattern's flagship skills had zero loads anyway, so R1 escalates from "revive or retire" to "retire", and the only real frontier delta (Agent Plugins 1.0, Aug 6) leaves CLI outside the new five-vendor packaging standard, i.e. the strategy itself still needs no change.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-14-cli-integration.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-17 — learning-loop (Self-Improvement / Learning Extraction)
+
+- **Date:** 2026-08-17
+- **Component:** learning-loop — Self-Improvement / Learning Extraction
+- **Verdict:** adopt
+- **Headline:** The L1/L2 extraction path has stored nothing since 2026-03-09 because of a cross-session line-watermark ratchet in extraction-state.json (a 67-line transcript is recorded at line 18,487; the dedup hashes are byte-identical to the March commit) — the hooks fire, spawn the extractor detached with stdio ignored, and it silently scans zero lines; fix that two-line bug and add a run log BEFORE any frontier idea, then re-affirm the still-unlanded 08-03 join-key item and adopt Copilot Memory's two shipped, verifiable mechanisms (28-day unused-decay and citation-validation-before-use) as the utility signal.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-17-learning-loop.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-18 — coordination (Cross-Session Coordination)
+
+- **Date:** 2026-08-18
+- **Component:** coordination — Cross-Session Coordination
+- **Verdict:** adopt
+- **Headline:** Claude Code's hook payload documents an `agent_id` field CCv3 has never read; a small probe can overturn identity-probe Q1 and unlock MS-01 and consuming mid-turn DMs, while the vendor's own agent teams (no file lock) and cross-session messaging (absent on native Windows) confirm the Postgres lock + lane bus is ahead, not redundant.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-18-coordination.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-19 — browser (Browser Automation)
+
+- **Date:** 2026-08-19
+- **Component:** browser — Browser Automation
+- **Verdict:** adopt
+- **Headline:** The five-tier stack is sound and aligned with the frontier (a11y-tree default, vision opt-in); the actionable gap is maintenance and the self-QA loop — upgrade the 17-releases-stale playwright-cli and install its official skill, fix a non-existent tool name in sentinel, adopt Playwright's planner/generator/healer test agents in one target app, and keep the CDP CLI over chrome-devtools-mcp.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-19-browser.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-20 — memory (Memory)
+
+- **Date:** 2026-08-20
+- **Component:** memory — Memory
+- **Verdict:** adopt
+- **Headline:** Two live defects root-caused this pass — the text-only fallback arm injects zero memories in 8 of 8 events because QW-06 fixed the floor-after-decay math for hybrid only and said so in its own commit message, and the thinking-block extractor that the 07-24 distiller depends on is structurally dead because Claude Code now persists thinking blocks with an empty plaintext field (243 of 243 blocks in the retained transcript window).
+- **Proposal:** `docs/self-improvement/proposals/2026-08-20-memory.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-21 — hooks (Hooks)
+
+- **Date:** 2026-08-21
+- **Component:** hooks — Hooks
+- **Verdict:** adopt
+- **Headline:** "CCv3 uses 9 of the 31 documented hook events, one of five handler types, and zero async hooks — while its own Step-6 measurement shows the single braintrust_hooks post_tool_use process costs ~1 s on EVERY tool call and emits nothing Claude reads; flipping the pure-observer hooks to the platform's async=true field is the cheapest measurable hook win proposed in any pass to date, and ST-03's 13-spawn-serial premise is stale (the platform, and CCv3's own sampler, show parallel dispatch)."
+- **Proposal:** `docs/self-improvement/proposals/2026-08-21-hooks.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-24 — workflows (Workflows)
+
+- **Date:** 2026-08-24
+- **Component:** workflows — Workflows
+- **Verdict:** adopt
+- **Headline:** CCv3's workflow design already matches the 2026 frontier (fresh-context loops, deterministic orchestration, external verification); the real gaps are unverified enforcement wiring, iteration-only stop conditions without a cost ceiling, and an uncodified external-role framing rule for verifiers.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-24-workflows.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-26 — observability (Braintrust Observability)
+
+- **Date:** 2026-08-26
+- **Component:** observability — Braintrust Observability
+- **Verdict:** adopt
+- **Headline:** Both big 08-11 fixes shipped and are verified live, but 90 of the 101 records the spool remediation recovered aged out into a 459 MB deadletter because the drain rate loses to the 7-day cap — fix that interplay, dispose of ~1 GB of dead telemetry files deliberately, and spike Braintrust's new Group scope (Aug 2026), which is the first shipped vendor primitive matching CCv3's session-level scoring shape.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-26-observability.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-29 — cli-integration (CLI Integration Layer)
+
+- **Date:** 2026-08-29
+- **Component:** cli-integration — CLI Integration Layer
+- **Verdict:** adopt
+- **Headline:** Fourth pass — MCP's own 08-22 roadmap now names the resident-tool-surface cost problem our CLI-first tiering avoids ("progressive discovery"), validating the strategy a fourth time, but zero of ~16 recommendations from three prior passes have landed and the digest queue grew 22→30, so the one real ADOPT is to land the five re-verified XS/S fixes directly in a working session instead of routing them through the stalled digest channel again.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-29-cli-integration.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
 *Queue clear above this line — no pending digests. Last sweep: 2026-07-17 (07-14 Agents + 07-15 Workflows + 07-16 Code-Intel posted to Bridge Code→Eve queue as child pages + one-liners, with Tracker auto-mirror rows).*

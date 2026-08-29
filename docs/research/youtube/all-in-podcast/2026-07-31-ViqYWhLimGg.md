@@ -8,17 +8,17 @@ url: "https://www.youtube.com/watch?v=ViqYWhLimGg"
 upload_date: 2026-07-31
 duration_s: 5793
 duration: 1:36:33
-view_count: 474716
-like_count: 7792
+view_count: 536903
+like_count: 8185
 subtitle_lang: en-orig
 transcript_source: auto
 transcript_words: 18330
-ingested_at: 2026-08-06T11:09:13.636Z
-ingest_version: 1
+ingested_at: 2026-08-26T21:59:35.912Z
+ingest_version: 2
 ---
 
 # Chip Stocks Crash, $20B Fund Margin Called, Frontier Labs: SLOW DOWN AI, Mamdani's Grocery Stores
-**Channel:** All-In Podcast · **Uploaded:** 2026-07-31 · **Duration:** 1:36:33 · **Views:** 474,716  
+**Channel:** All-In Podcast · **Uploaded:** 2026-07-31 · **Duration:** 1:36:33 · **Views:** 536,903  
 **Watch:** https://www.youtube.com/watch?v=ViqYWhLimGg
 
 ## Description
@@ -48,6 +48,46 @@ https://www.instagram.com/theallinpod
 
 Follow on TikTok:
 https://www.tiktok.com/@allin
+
+Follow on LinkedIn: 
+https://www.linkedin.com/company/allinpod
+
+Intro Music Credit:
+https://rb.gy/tppkzl
+https://x.com/yung_spielburg
+
+Intro Video Credit:
+https://x.com/TheZachEffect
+
+Referenced in the show:
+https://www.cnbc.com/2026/07/30/leopold-aschenbrenners-hedge-fund-is-facing-steep-ai-losses.html
+https://www.wsj.com/finance/citadel-buys-situational-awarenesss-stock-portfolio-after-big-losses-in-ai-5117159b
+https://polymarket.com/event/fed-decision-in-september-762
+https://situational-awareness.ai
+https://www.cnbc.com/quotes/US30Y
+https://x.com/nicolasfulghum/status/2082083884578050299
+https://theprint.in/science/breakthrough-china-artificial-sun-project-6-5-tesla-magnet/2999321
+https://www.pacingthefrontier.com/
+https://www.cnbc.com/2026/07/29/openai-cfo-sarah-friar-tells-employees-arr-in-july-topped-all-of-q2.html
+https://www.dwarkesh.com/p/why-compute-might-get-10x-more-expensive
+vhttps://www.reuters.com/world/china/china-starts-production-home-grown-immersion-duv-chipmaking-tools-source-2026-07-28
+https://www.google.com/finance/beta/quote/ASML:NASDAQ
+https://www.cnbc.com/2026/07/27/cxmt-china-market-debut-chipmaker-ipo.html
+https://polymarket.com/event/ipos-before-2027
+https://polymarket.com/event/us-enacts-ai-safety-bill-before-2027/us-enacts-ai-safety-bill-before-2027
+https://x.com/v_nefodov/status/2082927219224060043
+https://www.wsj.com/opinion/the-ai-future-is-for-everyone-a0c24e20
+https://punchbowl.news/article/tech/thune-anthropic
+https://www.wsj.com/tech/ai/anthropic-doubles-midterm-spending-to-40-million-to-push-ai-regulation-9cd547ae
+https://x.com/OpenAI/status/2082577277246972300
+https://www.carltonfields.com/insights/publications/2025/no-copyright-protection-for-ai-assisted-creations-thaler-v-perlmutter
+https://x.com/Jason/status/2082577230941557068
+https://www.tomshardware.com/tech-industry/artificial-intelligence/ai-companies-are-reportedly-shredding-millions-of-books-to-train-models-tech-giants-outsource-to-middlemen-to-secretly-buy-up-books-for-training-material
+https://www.404media.co/ai-companies-are-buying-tons-of-old-books-because-theyre-free-of-ai-slop
+https://www.youtube.com/watch?v=d1azwUwKrPo&t=39s
+https://arxiv.org/pdf/2602.16417
+
+#allin #tech #news
 
 ## Chapters
 
