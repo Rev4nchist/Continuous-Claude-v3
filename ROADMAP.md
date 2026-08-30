@@ -15,13 +15,30 @@
 - Next: README §5.1 (search router on a 143-day-stale index), §5.2 (TLDR retarget 3KB→8KB), Step 9 (`paths:` frontmatter, 0 of 46), Step 10 (prune — the 12 unregistered hooks found this session are candidates). The 234 `tsc --noEmit` errors remain a separate, unmeasured axis.
 - Previous focus (lane-board repair + Agentic OS project identity data layer, started 2026-07-27) is complete; see the lane board for that track.
 
-## YouTube-Research Plugin — PARKED at v0.1.3, picking back up later (Dave, 2026-08-04)
-**Pickup anchors:** repo `C:\Users\david.hayes\claude-youtube-research` (main @ `54b80dd`, tree clean; NO remote yet — see #1) · latest zip `C:\Users\david.hayes\youtube-research-v0.1.3.zip` (org currently has **v0.1.2** — upload 0.1.3 on pickup) · handoff `thoughts/shared/handoffs/youtube-researcher-plugin/2026-08-04_11-42_v0.1.1-shipped-github-org-next.yaml` (covers the whole arc; local-only, thoughts/ is gitignored) · memory `youtube-research-plugin-web-limits.md` · original skill+machinery in this repo UNTOUCHED and still Notion-capable (`.claude/skills/youtube-research/`, `scripts/youtube/`).
-- **#1 ON PICKUP: the GitHub-org question.** Enterprise "Sync from GitHub" needs a repo; it must be a FOURTH-owned org, not Rev4nchist personal — same governance shape as the public `ai-enablement-decks` exposure raised in the 02-Aug IT Security thread (still undecided). Until decided, distribution stays manual zip upload. Then: create private repo, push, wire sync.
-- **Version arc, all committed + verified:** `508566f` v0.1.1 scripts-inside-skill-dir + $YTR + degraded mode §8 (web mounts skill dirs only; `$CLAUDE_PLUGIN_ROOT` empty in shell EVERYWHERE — probed both envs) → `f80aa1a` v0.1.2 yt-dlp self-bootstrap (download official release into `<STATE_ROOT>/bin/`, config auto-resolves; E2E-proven locally AND download+exec PROVEN on Claude web) → `54b80dd` v0.1.3 real-error surfacing (null-deref fix in `listTarget`, found by first live web ingest) + TLS escape hatches.
-- **Web status after the 0.1.2 live run:** status/bootstrap PASS; ingest FAIL only on the egress proxy's TLS interception (`CERTIFICATE_VERIFY_FAILED` — proxy CA not in yt-dlp's Python trust store; node trusts it). **First thing to try on pickup** (v0.1.3 uploaded, fresh web chat): `SSL_CERT_FILE=/etc/ssl/certs/ca-certificates.crt node "$YTR/scripts/ingest.mjs" "jNQXAC9IVRw"` — if the system bundle has the proxy CA, web ingest works with TLS intact; fallback `YT_INSECURE_TLS=1` (explicit opt-in, documented in SKILL.md §Known limits). Caveat either way: web corpora die with the conversation.
-- **Cowork:** still unprobed in the right place — the plugin lives in the COMPANY Cowork; the one probe ran in Dave's personal account (void). Same 4-command probe pattern (find SKILL.md → ls scripts → status → bootstrap).
-- **Retired unless revived:** pure-Node captions fetcher — only needed if a sandbox blocks *executing* downloaded binaries, and web demonstrably doesn't.
+## YouTube Research — REMOVED 2026-08-30, rebuilding from scratch (Dave)
+
+This implementation is torn down. A next-generation system will be built differently; the
+components below were deliberately retained to feed it.
+
+**Where everything went:**
+- **Pipeline, skill, corpus removed from `main`** — commit `20a800c`, 157 files, pushed to
+  `fork/main`. Kept: `docs/research/youtube/_digests` (cited by the session-prep-2026-08-06 pack).
+- **Reference copy retained on `fork/ai-frontier-research`** (deliberate archive, not a loose end).
+  The full pipeline also sits on the local `ai-frontier-research` branch.
+- **Plugin repo** (was `C:\Users\david.hayes\claude-youtube-research`, no remote, 5 commits) pushed
+  to `fork` as branch **`archive/youtube-research-plugin`**, verified, then deleted locally.
+- **Archives** under `C:\Users\david.hayes\archives\`: `youtube-corpus-2026-08-29.zip`
+  (2,398 files / 229,605,962 bytes, manifest-verified), `youtube-skills-2026-08-29.zip`
+  (all four divergent SKILL.md versions), `youtube-plugin-releases\` (v0.1.0–v0.1.3, SHA256-matched).
+- **Scheduled task `CCv3-YouTube-Poll` unregistered.** It had been failing since 08-28.
+
+**Retained for the next system (D6):** yt-dlp, both ffmpeg installs, Tesseract, the `.venv` ASR
+stack, the Whisper model, and `C:\Users\david.hayes\.claude\secrets\youtube-cookies.txt`.
+
+**⚠️ OPEN — needs Dave:** the enterprise org marketplace still has plugin **v0.1.2** published.
+No local deletion touches it. Unpublish it, or decide deliberately to leave it.
+
+Plan and full execution log: `thoughts/shared/plans/youtube-system-removal.md` (local-only).
 
 ## Fable Follow-ups — parked backlog (gated behind the trap harness)
 Not started; the organized parking spot so they aren't lost. Both build on the Fable harvest and are gated by `docs/fable-manual/TRAP-TESTS.md` (arm B must beat arm A). Full detail: memory `fable-intelligence-and-agent-model-policy-followup`.

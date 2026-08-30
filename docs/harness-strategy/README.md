@@ -541,12 +541,21 @@ may be 0-for-2.
 > a month earlier. Ninety seconds of `Get-ChildItem` would have caught it, and the
 > claim survived a commit because nothing checks a doc's assertions.
 
-### 5.5 The YouTube pipeline is unaudited
+### 5.5 The YouTube pipeline is unaudited — CLOSED 2026-08-30 (removed)
 
 `scripts/youtube/` landed this session — it had a registered Windows scheduled
 task and poll logs for 07-25 → 07-29 while being entirely untracked. **Not
 verified: that those runs are succeeding.** The logs exist; their contents were
 never read.
+
+**Resolution.** The logs were finally read on 2026-08-29 and the answer was no:
+the task had been failing since 08-28 (`LastTaskResult=2`, every playlist
+`Blocked: yt-dlp unavailable`), and no video ever passed the pipeline's own READY
+audit. Worse, the task executed a wrapper whose contents differed by checked-out
+branch, so what it ran depended on the shared tree's branch at 07:00. The whole
+system was removed (`20a800c`) and the task unregistered. This entry stands as the
+example: an unaudited scheduled job ran daily for five weeks, failed for the last
+two, and nothing noticed because nobody read the logs.
 
 ---
 
