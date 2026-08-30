@@ -360,7 +360,23 @@ export function tryStartDaemon(projectDir: string): boolean {
     // FAST CHECK: Is daemon process running? (checks PID file + kill -0)
     // This is faster and more reliable than socket ping
     if (isDaemonProcessRunning(projectDir)) {
-      return true;  // Process exists, even if socket not ready yet
+      // ZOMBIE DETECTION (remediation §6, 2026-08-30): callers only reach
+      // tryStartDaemon when the daemon was NOT reachable. A live pid with a
+      // dead listener is stale-but-locked — the pid-file lock blocks any
+      // replacement from starting, and returning true here sent callers into
+      // a 31s socket timeout. Verify the listener; if it's dead, surface the
+      // state and give up fast. Side-effect-free by design: no taskkill, no
+      // pid-file mutation — killing a process the harness doesn't own needs
+      // its own decision, and the enforcer's fail-open already removes the
+      // harm (the read proceeds either way).
+      if (isDaemonReachable(projectDir)) {
+        return true;
+      }
+      console.error(
+        '[daemon-client] tldr daemon pid is alive but its socket is unreachable ' +
+        '(zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover.'
+      );
+      return false;
     }
 
     // SLOW CHECK: Is daemon reachable via socket?
@@ -1019,6 +1035,100 @@ export function trackHookActivitySync(
       { cmd: 'track', hook: hookName, success, metrics },
       projectDir
     );
+  } catch {
+    // Silently ignore errors - stats tracking is best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fast reachability probe + shared negative cache (TLDR remediation §1, 2026-08-30)
+//
+// PreToolUse hooks must never pay the tryStartDaemon spawn path (seconds) just
+// to discover the daemon is down — and must NEVER start a daemon. This probe
+// is a raw socket connect with a short timeout, and the unreachable verdict is
+// cached in a tmpdir file so N parallel subagents don't each re-pay the probe
+// (and a zombie daemon can't be stampeded by concurrent attempts).
+// ---------------------------------------------------------------------------
+
+const FAST_PROBE_TIMEOUT_MS = 250;
+const NEG_CACHE_TTL_MS = 10_000;
+
+function negCachePath(): string {
+  return join(tmpdir(), 'tldr-daemon-unreachable.json');
+}
+
+/** True if a recent probe already found the daemon unreachable. */
+export function isDaemonUnreachableCached(): boolean {
+  try {
+    const { ts } = JSON.parse(readFileSync(negCachePath(), 'utf-8'));
+    return typeof ts === 'number' && Date.now() - ts < NEG_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function cacheDaemonUnreachable(): void {
+  try {
+    writeFileSync(negCachePath(), JSON.stringify({ ts: Date.now() }));
+  } catch { /* best-effort */ }
+}
+
+/** Probe daemon reachability with a raw socket connect. Never starts anything. */
+export function probeDaemonFast(
+  projectDir: string,
+  timeoutMs: number = FAST_PROBE_TIMEOUT_MS
+): Promise<boolean> {
+  return new Promise((resolveProbe) => {
+    let connInfo: ConnectionInfo;
+    try {
+      connInfo = getConnectionInfo(projectDir);
+    } catch {
+      resolveProbe(false);
+      return;
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolveProbe(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+    try {
+      if (connInfo.type === 'tcp') {
+        sock.connect(connInfo.port!, connInfo.host!);
+      } else {
+        sock.connect(connInfo.path!);
+      }
+    } catch {
+      done(false);
+    }
+  });
+}
+
+/**
+ * Best-effort activity tracking that can never pay the daemon-spawn path.
+ * Probe first (with the negative cache); track only when the daemon answers.
+ * Await it — an un-awaited socket either keeps the hook process alive or dies
+ * un-flushed at exit.
+ */
+export async function trackHookActivityFast(
+  hookName: string,
+  projectDir: string,
+  success: boolean = true,
+  metrics: Record<string, number> = {}
+): Promise<void> {
+  try {
+    if (isDaemonUnreachableCached()) return;
+    if (!(await probeDaemonFast(projectDir))) {
+      cacheDaemonUnreachable();
+      return;
+    }
+    await queryDaemon({ cmd: 'track', hook: hookName, success, metrics }, projectDir);
   } catch {
     // Silently ignore errors - stats tracking is best-effort
   }

@@ -2,16 +2,30 @@
  * TLDR Read Enforcer Hook - BLOCKING VERSION (DAEMON)
  *
  * Intercepts Read tool calls for code files and BLOCKS with TLDR context.
- * Instead of reading 1000+ line files, returns structured L1 AST context.
+ * Instead of reading whole large files, returns structured L1 AST context.
  *
- * Uses TLDR daemon for fast cached responses (50ms vs 500ms CLI).
+ * Savings are measured, not folklore — see the break-even table at the size
+ * threshold below and `scripts/hooks/tldr-savings-probe.mjs`. The saving is
+ * monotonic in file size: small files LOSE tokens, large files win.
  *
- * Result: 95% token savings (50-500 tokens vs 3000-20000 raw)
+ * Fail-open contract (remediation 2026-08-30): this hook must never deny on a
+ * degraded result. Daemon unreachable → allow the read immediately. A
+ * PreToolUse hook must never start a daemon.
  */
 
-import { readFileSync, existsSync, statSync } from 'fs';
+import { readFileSync, existsSync, statSync, unlinkSync } from 'fs';
 import { basename, extname } from 'path';
-import { queryDaemonSync, DaemonResponse, trackHookActivitySync } from './daemon-client';
+import {
+  extractDaemon,
+  contextDaemon,
+  cfgDaemon,
+  dfgDaemon,
+  sliceDaemon,
+  trackHookActivityFast,
+  probeDaemonFast,
+  isDaemonUnreachableCached,
+  cacheDaemonUnreachable,
+} from './daemon-client';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
 
 // Search context from smart-search-router
@@ -28,28 +42,55 @@ interface SearchContext {
 
 // CONTEXT_DIR is the search-context handshake dir, shared with smart-search-router.
 // Resolved under os.tmpdir() in ./shared/search-context-path (QW-02).
-const CONTEXT_MAX_AGE_MS = 30000; // 30 seconds - context expires after this
+const CONTEXT_MAX_AGE_MS = 30000; // 30 seconds backstop TTL (not the primary defence)
 
 /**
- * Read search context from smart-search-router (if recent)
+ * Read search context from smart-search-router — with exact-path match and
+ * consume-once semantics (remediation §5).
+ *
+ * The handshake is a single file keyed by session_id, and SUBAGENTS SHARE THE
+ * PARENT'S session_id — so parallel subagents contend for one file. Two rules
+ * neutralize the cross-talk without redesigning the transport:
+ *  - Exact-path match: a context whose definitionLocation does not correspond
+ *    to the file being read is ignored (a wrong targeted summary is worse than
+ *    a generic correct one — fall back to structure mode).
+ *  - Consume-once: the context file is deleted on successful use, so a stale
+ *    entry cannot be replayed by a second agent inside the TTL.
  */
-function getSearchContext(sessionId: string): SearchContext | null {
+function getSearchContext(sessionId: string, filePath: string): SearchContext | null {
   try {
     const contextPath = `${CONTEXT_DIR}/${sessionId}.json`;
     if (!existsSync(contextPath)) return null;
 
     const context: SearchContext = JSON.parse(readFileSync(contextPath, 'utf-8'));
 
-    // Check if context is stale
+    // Backstop TTL
     if (Date.now() - context.timestamp > CONTEXT_MAX_AGE_MS) {
       return null;
     }
+
+    // Exact-path match: only trust a targeted context when its definition
+    // location names the file actually being read. No location = no way to
+    // verify correspondence = ignore (structure mode is the safe default).
+    const fileName = basename(filePath);
+    if (!context.definitionLocation || !context.definitionLocation.includes(fileName)) {
+      return null;
+    }
+
+    // Consume-once: this context now belongs to this read.
+    try { unlinkSync(contextPath); } catch { /* best-effort */ }
 
     return context;
   } catch {
     return null;
   }
 }
+
+// Fail-open daemon probe (remediation §1): probeDaemonFast in daemon-client —
+// a direct socket connect with a short timeout plus a shared negative cache.
+// Deliberately NOT pingDaemon: pingDaemon → queryDaemon → isDaemonReachable →
+// tryStartDaemon, the exact slow path (spawn + up-to-10s wait) the fail-open
+// exists to avoid. A PreToolUse hook must never start a daemon.
 
 interface HookInput {
   session_id: string;
@@ -95,6 +136,25 @@ const ALLOWED_PATTERNS = [
 
 const ALLOWED_DIRS = ['/tmp/', 'node_modules/', '.venv/', '__pycache__/', '\\tmp\\'];
 
+// Size floor for interception (remediation §3). Below this, TLDR overhead
+// exceeds the saving. Measured break-even (138 interceptions, this repo,
+// 2026-07-29 — net token effect by raw-file-size bucket; NOTE the smallest
+// bucket is 3–5KB: files under 3000B were never intercepted under the prior
+// policy, so they contribute no observations):
+//   3–5KB   : net LOSS  (~-10k tokens across bucket)
+//   5–8KB   : ~break-even
+//   8–50KB  : net win
+//   >50KB   : win 5-for-5
+// 8000B keeps +183.7k tok across 82 cases vs +173.8k across 133 at 3000B —
+// more saving, 51 fewer interceptions. Empirical fit to THIS repo's size
+// distribution; re-derive rather than inherit (tldr-savings-probe.mjs).
+const MIN_INTERCEPT_BYTES = 8000;
+
+// Content-sufficiency floor (remediation §1). Symbol count alone is a weak
+// proxy — a header-only payload once passed the old `results.length > 3`
+// check and produced a one-function-name deny for a 12.7KB file.
+const MIN_INJECTED_CHARS = 200;
+
 function isCodeFile(filePath: string): boolean {
   return CODE_EXTENSIONS.has(extname(filePath));
 }
@@ -123,9 +183,9 @@ function detectLanguage(filePath: string): string {
  * Choose TLDR mode based on context signals.
  *
  * Simple logic: trust search-router, otherwise use structure.
- * - 'structure': Just function/class names (99% savings) - default
- * - 'context': Entry point focused (87% savings) - when search found target
- * - 'extract': Full AST dump (26% savings) - when advanced analysis needed
+ * - 'structure': Just function/class names - default
+ * - 'context': Entry point focused - when search found target
+ * - 'extract': Full AST dump - when advanced analysis needed
  */
 type TldrMode = 'structure' | 'context' | 'extract';
 
@@ -146,18 +206,24 @@ function chooseTldrMode(
     return { mode: 'extract', reason: 'flow analysis' };
   }
 
-  // Default: structure for navigation (99% savings)
+  // Default: structure for navigation
   return { mode: 'structure', reason: 'navigation' };
 }
 
-function getTldrContext(
+/** A daemon convenience-wrapper result is a failure when it carries a non-ok
+ *  status field (the wrappers return `response.result || response`). */
+function daemonOk(res: any): boolean {
+  return !!res && !(typeof res === 'object' && typeof res.status === 'string' && res.status !== 'ok');
+}
+
+async function getTldrContext(
   filePath: string,
   language: string,
   layers: string[] = ['ast', 'call_graph'],
   target: string | null = null,
   sessionId: string | null = null,
   contextSource: string = 'default'
-): string | null {
+): Promise<string | null> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   const fileName = basename(filePath);
   const results: string[] = [];
@@ -172,17 +238,14 @@ function getTldrContext(
     results.push(`Mode: ${mode} (${reason})`);
     results.push('');
 
-    // MODE: context - focused on target function (87% savings)
+    // MODE: context - focused on target function
     if (mode === 'context' && target) {
-      const contextResp = queryDaemonSync(
-        { cmd: 'context', entry: target, language, depth: 2 },
-        projectDir
-      );
-      if (contextResp.status === 'ok' && contextResp.result) {
+      const contextResp = await contextDaemon(projectDir, target, language, 2);
+      if (daemonOk(contextResp)) {
         results.push('## Focused Context');
-        results.push(typeof contextResp.result === 'string'
-          ? contextResp.result
-          : JSON.stringify(contextResp.result, null, 2));
+        results.push(typeof contextResp === 'string'
+          ? contextResp
+          : JSON.stringify(contextResp, null, 2));
         results.push('');
         results.push('---');
         results.push('To see more: Read with offset/limit, or ask about specific functions');
@@ -191,16 +254,12 @@ function getTldrContext(
       // Fall through to extract if context fails
     }
 
-    // MODE: structure - just names (99% savings)
+    // MODE: structure - just names
     // Note: use 'extract' for single files (structure is for directories)
     if (mode === 'structure') {
-      const extractResp = queryDaemonSync(
-        { cmd: 'extract', file: filePath, session: sessionId || undefined },
-        projectDir
-      );
-      if (extractResp.status === 'ok' && extractResp.result) {
+      const info = await extractDaemon(filePath, projectDir, sessionId || undefined);
+      if (info) {
         results.push('## Structure (names only)');
-        const info = extractResp.result;
         if (info.functions?.length > 0) {
           results.push('### Functions');
           for (const fn of info.functions.slice(0, 30)) {
@@ -234,18 +293,13 @@ function getTldrContext(
       // Fall through to extract if failed
     }
 
-    // MODE: extract - full AST (26% savings) - fallback and for editing
+    // MODE: extract - full AST - fallback and for editing
     // L1/L2: Extract file info (AST + Call Graph) using daemon
     // Pass session ID for token tracking (P7)
     if (layers.includes('ast') || layers.includes('call_graph') || mode === 'extract') {
-      const extractResp = queryDaemonSync(
-        { cmd: 'extract', file: filePath, session: sessionId || undefined },
-        projectDir
-      );
+      const info = await extractDaemon(filePath, projectDir, sessionId || undefined);
 
-      if (extractResp.status === 'ok' && extractResp.result) {
-        const info = extractResp.result;
-
+      if (info) {
         // Functions
         if (info.functions && info.functions.length > 0) {
           results.push('## Functions');
@@ -289,13 +343,9 @@ function getTldrContext(
     // L3: CFG (Control Flow Graph)
     if (layers.includes('cfg')) {
       const funcName = target || 'main';
-      const cfgResp = queryDaemonSync(
-        { cmd: 'cfg', file: filePath, function: funcName, language },
-        projectDir
-      );
+      const cfg = await cfgDaemon(filePath, funcName, projectDir, language);
 
-      if (cfgResp.status === 'ok' && cfgResp.result) {
-        const cfg = cfgResp.result;
+      if (daemonOk(cfg)) {
         results.push('');
         results.push(`## CFG: ${funcName}`);
         results.push(`  Blocks: ${cfg.num_blocks || 'N/A'}, Cyclomatic: ${cfg.cyclomatic_complexity || 'N/A'}`);
@@ -310,13 +360,9 @@ function getTldrContext(
     // L4: DFG (Data Flow Graph)
     if (layers.includes('dfg')) {
       const funcName = target || 'main';
-      const dfgResp = queryDaemonSync(
-        { cmd: 'dfg', file: filePath, function: funcName, language },
-        projectDir
-      );
+      const dfg = await dfgDaemon(filePath, funcName, projectDir, language);
 
-      if (dfgResp.status === 'ok' && dfgResp.result) {
-        const dfg = dfgResp.result;
+      if (daemonOk(dfg)) {
         results.push('');
         results.push(`## DFG: ${funcName}`);
         if (dfg.definitions && dfg.definitions.length > 0) {
@@ -337,12 +383,9 @@ function getTldrContext(
     // L5: PDG (Program Dependency Graph) via slice
     if (layers.includes('pdg')) {
       const funcName = target || 'main';
-      const sliceResp = queryDaemonSync(
-        { cmd: 'slice', file: filePath, function: funcName, line: 10, direction: 'backward' },
-        projectDir
-      );
+      const sliceResp = await sliceDaemon(filePath, funcName, 10, projectDir, 'backward');
 
-      if (sliceResp.status === 'ok' && sliceResp.result) {
+      if (sliceResp && sliceResp.status === 'ok' && sliceResp.result) {
         const slice = sliceResp.result;
         results.push('');
         results.push(`## PDG: ${funcName}`);
@@ -393,15 +436,32 @@ async function main() {
     return;
   }
 
-  // Small files: TLDR overhead not worth it, just read directly
+  // Small files: TLDR overhead not worth it, just read directly (see the
+  // measured break-even table at MIN_INTERCEPT_BYTES)
+  let rawBytes = 0;
   try {
     const stats = statSync(filePath);
-    if (stats.size < 3000) {  // ~100 lines
+    rawBytes = stats.size;
+    if (stats.size < MIN_INTERCEPT_BYTES) {
       console.log('{}');
       return;
     }
   } catch {
     // File doesn't exist or can't stat, let Read handle the error
+    console.log('{}');
+    return;
+  }
+
+  // FAIL-OPEN GATE (remediation §1): if the daemon is unreachable, allow the
+  // read immediately. Never attempt TLDR work, never start a daemon.
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  if (isDaemonUnreachableCached()) {
+    console.log('{}');
+    return;
+  }
+  const reachable = await probeDaemonFast(projectDir);
+  if (!reachable) {
+    cacheDaemonUnreachable();
     console.log('{}');
     return;
   }
@@ -414,8 +474,9 @@ async function main() {
   let target: string | null = null;
   let contextSource = 'default';
 
-  // Check for search context from smart-search-router (Bayesian: P(intent | current action))
-  const searchContext = getSearchContext(input.session_id);
+  // Check for search context from smart-search-router (Bayesian: P(intent | current action)).
+  // Exact-path matched + consume-once — see getSearchContext.
+  const searchContext = getSearchContext(input.session_id, filePath);
   if (searchContext) {
     layers = searchContext.suggestedLayers;
     target = searchContext.target;
@@ -424,10 +485,16 @@ async function main() {
   // No transcript analysis - retrospective prediction is epistemically weak
   // Default layers (ast, call_graph) used when no search context
 
-  const tldrContext = getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
+  const tldrContext = await getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
 
-  if (!tldrContext) {
-    // TLDR failed, allow normal read
+  // Content-sufficiency floor (remediation §1): deny only on a summary that is
+  // plausibly better than the raw file. Require a minimum injected size AND —
+  // when a search target exists — that the summary actually contains it.
+  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) {
+    console.log('{}');
+    return;
+  }
+  if (target && !tldrContext.includes(target)) {
     console.log('{}');
     return;
   }
@@ -466,31 +533,38 @@ ${callerLines.join('\n')}${searchContext.callers.length > 10 ? `\n  ... and ${se
     definitionSection = `\n📍 Defined at: ${searchContext.definitionLocation}\n`;
   }
 
-  // Track hook activity (P8)
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  trackHookActivitySync('tldr-read-enforcer', projectDir, true, {
-    reads_intercepted: 1,
-    layers_returned: layers.length,
-  });
-
-  // BLOCK the read and return TLDR context
-  const output: HookOutput = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: `📊 TLDR Context (${layerNames}) - 95% token savings:
+  // BLOCK the read and return TLDR context. The bypass that actually works is
+  // offset/limit (Read requires an absolute path, so "Read <basename>" was
+  // never followable advice) — lead with it.
+  const reasonText = `📊 TLDR Context (${layerNames}):
 ${searchContext ? `🔗 Context: ${contextSource}` : ''}${definitionSection}
 
 ${tldrContext}${crossFileSection}
 ---
-To read specific lines, use: Read with offset/limit
-To read full file anyway, use: Read ${basename(filePath)} (test files bypass this)`,
+To read the code itself, re-issue the Read with offset/limit (e.g. offset=1 limit=200).
+Test files and .claude/hooks|skills paths bypass this hook entirely.`;
+
+  // Track hook activity (P8) with net-savings inputs (remediation §7)
+  await trackHookActivityFast('tldr-read-enforcer', projectDir, true, {
+    reads_intercepted: 1,
+    layers_returned: layers.length,
+    bytes_raw: rawBytes,
+    bytes_injected: reasonText.length,
+  });
+
+  const output: HookOutput = {
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      permissionDecision: 'deny',
+      permissionDecisionReason: reasonText,
     }
   };
 
   console.log(JSON.stringify(output));
 }
 
+// Async exit discipline: exactly one stdout JSON write per path; any throw
+// allows the read; no un-awaited work remains when main settles.
 main().catch((err) => {
   console.error(`TLDR enforcer error: ${err.message}`);
   console.log('{}');

@@ -334,11 +334,14 @@ describe('PreToolUse:Task — pre-tool-knowledge', () => {
 
 describe('PreToolUse:Task — tldr-context-inject', () => {
   const hookPath = resolveHook('tldr-context-inject');
-  // FINDING: this hook takes ~15 s on Task events (Python tldr CLI cold start).
-  // Budget is widened to TLDR_LATENCY_BUDGET_MS (20 s) to avoid flakiness while
-  // the real fix (guard tldr call when tool_name==="Task") is tracked separately.
-  // The hook exits 0 and produces valid output — it is operational, just slow.
-  it.skipIf(!hookPath)(
+  // DEREGISTERED 2026-08-30 (TLDR remediation §4): the hook is removed from
+  // both settings.json copies — 63s/Task-call cost, zero real injections in a
+  // month. The harness never spawns it, so its spawn-latency contract is no
+  // longer load-bearing; the ~15s Python cold start also made this test flaky
+  // (measured 20,019ms vs the 20s budget). Skipped, not deleted: the source
+  // stays in tree until the Step-10 prune decides its fate, and a skipped test
+  // still counts toward the collected-count ratchet.
+  it.skip(
     'exits 0 with valid output on Task event (slow: ~15s Python CLI cold start)',
     () =>
       assertFailOpen(

@@ -149,7 +149,13 @@ function isDaemonReachable(projectDir) {
 function tryStartDaemon(projectDir) {
   try {
     if (isDaemonProcessRunning(projectDir)) {
-      return true;
+      if (isDaemonReachable(projectDir)) {
+        return true;
+      }
+      console.error(
+        "[daemon-client] tldr daemon pid is alive but its socket is unreachable (zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover."
+      );
+      return false;
     }
     if (isDaemonReachable(projectDir)) {
       return true;

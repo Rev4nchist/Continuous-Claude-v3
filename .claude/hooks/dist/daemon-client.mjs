@@ -150,7 +150,13 @@ function isDaemonReachable(projectDir) {
 function tryStartDaemon(projectDir) {
   try {
     if (isDaemonProcessRunning(projectDir)) {
-      return true;
+      if (isDaemonReachable(projectDir)) {
+        return true;
+      }
+      console.error(
+        "[daemon-client] tldr daemon pid is alive but its socket is unreachable (zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover."
+      );
+      return false;
     }
     if (isDaemonReachable(projectDir)) {
       return true;
@@ -468,9 +474,72 @@ function trackHookActivitySync(hookName, projectDir, success = true, metrics = {
   } catch {
   }
 }
+var FAST_PROBE_TIMEOUT_MS = 250;
+var NEG_CACHE_TTL_MS = 1e4;
+function negCachePath() {
+  return join(tmpdir(), "tldr-daemon-unreachable.json");
+}
+function isDaemonUnreachableCached() {
+  try {
+    const { ts } = JSON.parse(readFileSync(negCachePath(), "utf-8"));
+    return typeof ts === "number" && Date.now() - ts < NEG_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+function cacheDaemonUnreachable() {
+  try {
+    writeFileSync(negCachePath(), JSON.stringify({ ts: Date.now() }));
+  } catch {
+  }
+}
+function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
+  return new Promise((resolveProbe) => {
+    let connInfo;
+    try {
+      connInfo = getConnectionInfo(projectDir);
+    } catch {
+      resolveProbe(false);
+      return;
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolveProbe(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    try {
+      if (connInfo.type === "tcp") {
+        sock.connect(connInfo.port, connInfo.host);
+      } else {
+        sock.connect(connInfo.path);
+      }
+    } catch {
+      done(false);
+    }
+  });
+}
+async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
+  try {
+    if (isDaemonUnreachableCached()) return;
+    if (!await probeDaemonFast(projectDir)) {
+      cacheDaemonUnreachable();
+      return;
+    }
+    await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
+  } catch {
+  }
+}
 export {
   archDaemon,
   buildDaemonInvocation,
+  cacheDaemonUnreachable,
   callsDaemon,
   cfgDaemon,
   contextDaemon,
@@ -483,8 +552,10 @@ export {
   impactDaemon,
   importersDaemon,
   importsDaemon,
+  isDaemonUnreachableCached,
   isIndexing,
   pingDaemon,
+  probeDaemonFast,
   queryDaemon,
   queryDaemonSync,
   searchDaemon,
@@ -494,6 +565,7 @@ export {
   statusDaemon,
   structureDaemon,
   trackHookActivity,
+  trackHookActivityFast,
   trackHookActivitySync,
   treeDaemon,
   tryStartDaemon,

@@ -3,13 +3,13 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/smart-search-router.ts
 import { existsSync as existsSync3, mkdirSync as mkdirSync3, writeFileSync as writeFileSync3 } from "fs";
 import { spawnSync as spawnSync2 } from "child_process";
-import { join as join4 } from "path";
 
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { execSync, spawnSync } from "child_process";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
+import * as net from "net";
 import * as crypto from "crypto";
 function getTldrTmpDir() {
   if (process.platform === "win32") {
@@ -149,7 +149,13 @@ function isDaemonReachable(projectDir) {
 function tryStartDaemon(projectDir) {
   try {
     if (isDaemonProcessRunning(projectDir)) {
-      return true;
+      if (isDaemonReachable(projectDir)) {
+        return true;
+      }
+      console.error(
+        "[daemon-client] tldr daemon pid is alive but its socket is unreachable (zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover."
+      );
+      return false;
     }
     if (isDaemonReachable(projectDir)) {
       return true;
@@ -206,76 +212,144 @@ function tryStartDaemon(projectDir) {
     return false;
   }
 }
-function buildDaemonInvocation(connInfo, input) {
-  if (connInfo.type === "tcp") {
-    const psScript = [
-      '$ErrorActionPreference = "Stop"',
-      "$payload = [Console]::In.ReadLine()",
-      `$client = New-Object System.Net.Sockets.TcpClient('${connInfo.host}', ${connInfo.port})`,
-      "$stream = $client.GetStream()",
-      "$writer = New-Object System.IO.StreamWriter($stream)",
-      "$reader = New-Object System.IO.StreamReader($stream)",
-      "$writer.WriteLine($payload)",
-      "$writer.Flush()",
-      "$response = $reader.ReadLine()",
-      "$client.Close()",
-      "Write-Output $response"
-    ].join("; ");
-    return { file: "powershell", args: ["-NoProfile", "-NonInteractive", "-Command", psScript], stdin: input };
-  }
-  return { file: "nc", args: ["-U", connInfo.path || ""], stdin: input };
-}
-function queryDaemonSync(query, projectDir) {
-  if (isIndexing(projectDir)) {
-    return {
-      indexing: true,
-      status: "indexing",
-      message: "Daemon is still indexing, results may be incomplete"
-    };
-  }
-  const connInfo = getConnectionInfo(projectDir);
-  if (!isDaemonReachable(projectDir)) {
-    if (!tryStartDaemon(projectDir)) {
-      return { status: "unavailable", error: "Daemon not running and could not start" };
+function queryDaemon(query, projectDir) {
+  return new Promise((resolve2, reject) => {
+    if (isIndexing(projectDir)) {
+      resolve2({
+        indexing: true,
+        status: "indexing",
+        message: "Daemon is still indexing, results may be incomplete"
+      });
+      return;
     }
-  }
-  try {
-    const input = JSON.stringify(query);
-    const inv = buildDaemonInvocation(connInfo, input);
-    const r = spawnSync(inv.file, inv.args, {
-      input: inv.stdin,
-      encoding: "utf-8",
-      timeout: QUERY_TIMEOUT,
-      shell: false
+    const connInfo = getConnectionInfo(projectDir);
+    if (!isDaemonReachable(projectDir)) {
+      if (!tryStartDaemon(projectDir)) {
+        resolve2({ status: "unavailable", error: "Daemon not running and could not start" });
+        return;
+      }
+    }
+    const client = new net.Socket();
+    let data = "";
+    let resolved = false;
+    const timer = setTimeout(() => {
+      if (!resolved) {
+        resolved = true;
+        client.destroy();
+        resolve2({ status: "error", error: "timeout" });
+      }
+    }, QUERY_TIMEOUT);
+    if (connInfo.type === "tcp") {
+      client.connect(connInfo.port, connInfo.host, () => {
+        client.write(JSON.stringify(query) + "\n");
+      });
+    } else {
+      client.connect(connInfo.path, () => {
+        client.write(JSON.stringify(query) + "\n");
+      });
+    }
+    client.on("data", (chunk) => {
+      data += chunk.toString();
+      if (data.includes("\n")) {
+        if (!resolved) {
+          resolved = true;
+          clearTimeout(timer);
+          client.end();
+          try {
+            resolve2(JSON.parse(data.trim()));
+          } catch {
+            resolve2({ status: "error", error: "Invalid JSON response from daemon" });
+          }
+        }
+      }
     });
-    if (r.error) {
-      const code = r.error.code;
-      if (code === "ETIMEDOUT") return { status: "error", error: "timeout" };
-      if (code === "ENOENT") return { status: "unavailable", error: "Daemon transport not available" };
-      return { status: "error", error: r.error.message };
-    }
-    if (r.signal) return { status: "error", error: "timeout" };
-    const out = (r.stdout || "").trim();
-    if (r.status !== 0 || !out) {
-      return { status: "unavailable", error: "Daemon not running" };
-    }
-    return JSON.parse(out);
-  } catch (err) {
-    if (err.killed) {
-      return { status: "error", error: "timeout" };
-    }
-    if (err.message?.includes("ECONNREFUSED") || err.message?.includes("ENOENT")) {
-      return { status: "unavailable", error: "Daemon not running" };
-    }
-    return { status: "error", error: err.message || "Unknown error" };
+    client.on("error", (err) => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        if (err.message.includes("ECONNREFUSED") || err.message.includes("ENOENT")) {
+          resolve2({ status: "unavailable", error: "Daemon not running" });
+        } else {
+          resolve2({ status: "error", error: err.message });
+        }
+      }
+    });
+    client.on("close", () => {
+      if (!resolved) {
+        resolved = true;
+        clearTimeout(timer);
+        if (data) {
+          try {
+            resolve2(JSON.parse(data.trim()));
+          } catch {
+            resolve2({ status: "error", error: "Incomplete response" });
+          }
+        } else {
+          resolve2({ status: "error", error: "Connection closed without response" });
+        }
+      }
+    });
+  });
+}
+var FAST_PROBE_TIMEOUT_MS = 250;
+var NEG_CACHE_TTL_MS = 1e4;
+function negCachePath() {
+  return join(tmpdir(), "tldr-daemon-unreachable.json");
+}
+function isDaemonUnreachableCached() {
+  try {
+    const { ts } = JSON.parse(readFileSync(negCachePath(), "utf-8"));
+    return typeof ts === "number" && Date.now() - ts < NEG_CACHE_TTL_MS;
+  } catch {
+    return false;
   }
 }
-function trackHookActivitySync(hookName, projectDir, success = true, metrics = {}) {
+function cacheDaemonUnreachable() {
   try {
-    queryDaemonSync(
-      { cmd: "track", hook: hookName, success, metrics },
-      projectDir
-    );
+    writeFileSync(negCachePath(), JSON.stringify({ ts: Date.now() }));
+  } catch {
+  }
+}
+function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
+  return new Promise((resolveProbe) => {
+    let connInfo;
+    try {
+      connInfo = getConnectionInfo(projectDir);
+    } catch {
+      resolveProbe(false);
+      return;
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolveProbe(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    try {
+      if (connInfo.type === "tcp") {
+        sock.connect(connInfo.port, connInfo.host);
+      } else {
+        sock.connect(connInfo.path);
+      }
+    } catch {
+      done(false);
+    }
+  });
+}
+async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
+  try {
+    if (isDaemonUnreachableCached()) return;
+    if (!await probeDaemonFast(projectDir)) {
+      cacheDaemonUnreachable();
+      return;
+    }
+    await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
   } catch {
   }
 }
@@ -362,9 +436,9 @@ function storeSearchContext(sessionId, context) {
   } catch {
   }
 }
-function tldrSearch(pattern, projectDir = ".") {
+async function tldrSearch(pattern, projectDir = ".") {
   try {
-    const response = queryDaemonSync({ cmd: "search", pattern }, projectDir);
+    const response = await queryDaemon({ cmd: "search", pattern }, projectDir);
     if (response.indexing || response.status === "unavailable") {
       return ripgrepFallback(pattern, projectDir);
     }
@@ -408,33 +482,9 @@ function ripgrepFallback(pattern, projectDir) {
     return [];
   }
 }
-function checkSemanticIndexExists(projectDir) {
-  const indexPath = join4(projectDir, ".tldr", "cache", "semantic", "index.faiss");
-  return existsSync3(indexPath);
-}
-function tldrSemantic(query, projectDir = ".") {
-  if (!checkSemanticIndexExists(projectDir)) {
-    return { results: [], status: "no_index" };
-  }
+async function tldrImpact(funcName, projectDir = ".") {
   try {
-    const response = queryDaemonSync({ cmd: "semantic", query, k: 5 }, projectDir);
-    if (response.indexing) {
-      return { results: [], status: "indexing" };
-    }
-    if (response.status === "unavailable") {
-      return { results: [], status: "daemon_unavailable" };
-    }
-    if (response.status === "ok" && response.results) {
-      return { results: response.results, status: "ok" };
-    }
-    return { results: [], status: "ok" };
-  } catch {
-    return { results: [], status: "error" };
-  }
-}
-function tldrImpact(funcName, projectDir = ".") {
-  try {
-    const response = queryDaemonSync({ cmd: "impact", func: funcName }, projectDir);
+    const response = await queryDaemon({ cmd: "impact", func: funcName }, projectDir);
     if (response.indexing || response.status === "unavailable") {
       return [];
     }
@@ -446,20 +496,20 @@ function tldrImpact(funcName, projectDir = ".") {
     return [];
   }
 }
-function lookupCallers(pattern) {
+async function lookupCallers(pattern) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
-  return tldrImpact(pattern, projectDir).slice(0, 20);
+  return (await tldrImpact(pattern, projectDir)).slice(0, 20);
 }
-function lookupSymbol(pattern) {
+async function lookupSymbol(pattern) {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
-  const funcResults = tldrSearch(`def ${pattern}`, projectDir);
+  const funcResults = await tldrSearch(`def ${pattern}`, projectDir);
   if (funcResults.length > 0) {
     return {
       type: "function",
       location: `${funcResults[0].file}:${funcResults[0].line}`
     };
   }
-  const classResults = tldrSearch(`class ${pattern}`, projectDir);
+  const classResults = await tldrSearch(`class ${pattern}`, projectDir);
   if (classResults.length > 0) {
     return {
       type: "class",
@@ -467,7 +517,7 @@ function lookupSymbol(pattern) {
     };
   }
   if (/^[A-Z][A-Z0-9_]+$/.test(pattern)) {
-    const varResults = tldrSearch(`${pattern} =`, projectDir);
+    const varResults = await tldrSearch(`${pattern} =`, projectDir);
     if (varResults.length > 0) {
       return {
         type: "variable",
@@ -478,8 +528,8 @@ function lookupSymbol(pattern) {
   return null;
 }
 var FUNCTION_VERB_PREFIXES = /^(get|set|is|has|do|can|create|update|delete|fetch|load|save|read|write|parse|build|make|init|setup|run|start|stop|handle|process|validate|check|find|search|filter|sort|map|reduce|transform|convert|format|render|display|show|hide|enable|disable|add|remove|insert|append|push|pop|clear|reset|close|open|connect|disconnect|send|receive|emit|on_|async_|_get|_set|_is|_has|_do|_create|_update|_delete|_fetch|_load|_save|_read|_write|_parse|_build|_make|_init|_setup|_run|_handle|_process|_validate|_check|_find|poll|call|exec|execute|invoke|apply|bind|dispatch|trigger|fire|notify|broadcast|publish|subscribe|unsubscribe|listen|watch|observe|register|unregister|mount|unmount|attach|detach|flush|dump|log|warn|error|debug|trace|print|throw|raise|assert|test|mock|stub|spy|wait|sleep|delay|retry|abort|cancel|pause|resume|refresh|reload|rerun|revert|rollback|commit|merge|split|join|clone|copy|move|swap|toggle|flip|increment|decrement|next|prev|first|last|peek|drain|consume|produce|yield|spawn|fork|join|kill|terminate|shutdown|cleanup|destroy|dispose|release|acquire|lock|unlock|enter|exit|begin|end|finalize)(_|$)/;
-function extractTarget(pattern) {
-  const indexed = lookupSymbol(pattern);
+async function extractTarget(pattern, daemonUp) {
+  const indexed = daemonUp ? await lookupSymbol(pattern) : null;
   if (indexed) {
     return { target: pattern, targetType: indexed.type };
   }
@@ -599,21 +649,6 @@ function classifyQuery(pattern) {
   }
   return "literal";
 }
-function getAstGrepSuggestion(pattern, lang = "python") {
-  const suggestions = {
-    "function": `def $FUNC($$$):`,
-    "async": `async def $FUNC($$$):`,
-    "class": `class $NAME:`,
-    "import": `import $MODULE`,
-    "decorator": `@$DECORATOR`
-  };
-  for (const [keyword, astPattern] of Object.entries(suggestions)) {
-    if (pattern.toLowerCase().includes(keyword)) {
-      return astPattern;
-    }
-  }
-  return `$PATTERN($$$)`;
-}
 async function main() {
   let input;
   try {
@@ -637,7 +672,7 @@ async function main() {
       logHook(sessionId, "smart-search-router");
     } catch {
     }
-    trackHookActivitySync("smart-search-router", process.env.CLAUDE_PROJECT_DIR || ".", true, {
+    await trackHookActivityFast("smart-search-router", process.env.CLAUDE_PROJECT_DIR || ".", true, {
       queries_routed: 1,
       scoped_passthrough: 1
     });
@@ -649,10 +684,16 @@ async function main() {
     logHook(sessionId, "smart-search-router");
   } catch {
   }
-  const { target, targetType } = extractTarget(pattern);
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
+  let daemonUp = false;
+  if (!isDaemonUnreachableCached()) {
+    daemonUp = await probeDaemonFast(projectDir);
+    if (!daemonUp) cacheDaemonUnreachable();
+  }
+  const { target, targetType } = await extractTarget(pattern, daemonUp);
   const layers = suggestLayers(targetType, queryType);
-  const symbolInfo = target ? lookupSymbol(target) : null;
-  const callers = target ? lookupCallers(target) : [];
+  const symbolInfo = target && daemonUp ? await lookupSymbol(target) : null;
+  const callers = target && daemonUp ? await lookupCallers(target) : [];
   storeSearchContext(sessionId, {
     timestamp: Date.now(),
     queryType,
@@ -664,9 +705,8 @@ async function main() {
     callers: callers.slice(0, 20)
     // Limit to 20 callers for token efficiency
   });
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
   if (queryType === "literal") {
-    trackHookActivitySync("smart-search-router", projectDir, true, {
+    await trackHookActivityFast("smart-search-router", projectDir, true, {
       queries_routed: 1,
       literal_queries: 1
     });
@@ -674,104 +714,18 @@ async function main() {
     return;
   }
   if (queryType === "structural") {
-    trackHookActivitySync("smart-search-router", projectDir, true, {
+    await trackHookActivityFast("smart-search-router", projectDir, true, {
       queries_routed: 1,
       structural_queries: 1
     });
-    const astPattern = getAstGrepSuggestion(pattern);
-    const reason2 = `\u{1F3AF} Structural query - Use AST-grep OR TLDR:
-
-**Option 1 - AST-grep (pattern matching):**
-ast-grep --pattern "${astPattern}" --lang python
-
-**Option 2 - TLDR (richer context):**
-/tldr-search ${target || pattern}
-
-AST-grep: precise pattern match, file:line only
-TLDR: finds + call graph + docstrings + complexity`;
-    const output2 = {
-      hookSpecificOutput: {
-        hookEventName: "PreToolUse",
-        permissionDecision: "deny",
-        permissionDecisionReason: reason2
-      }
-    };
-    console.log(JSON.stringify(output2));
+    console.log("{}");
     return;
   }
-  trackHookActivitySync("smart-search-router", projectDir, true, {
+  await trackHookActivityFast("smart-search-router", projectDir, true, {
     queries_routed: 1,
     semantic_queries: 1
   });
-  const semanticSearch = tldrSemantic(pattern, projectDir);
-  let reason;
-  if (semanticSearch.status === "ok" && semanticSearch.results.length > 0) {
-    const resultsStr = semanticSearch.results.map((r) => {
-      const loc = `${r.file}:${r.function || "module"}`;
-      const score = r.score ? ` (${(r.score * 100).toFixed(0)}%)` : "";
-      return `  - ${loc}${score}`;
-    }).join("\n");
-    reason = `\u{1F9E0} **Semantic Search Results** (via TLDR daemon):
-
-${resultsStr}
-
-**Next steps:**
-1. Read the most relevant file: \`Read ${semanticSearch.results[0].file}\`
-2. For deeper analysis: \`/tldr-search ${target || pattern} --layer all\`
-
-The results above are semantically similar to "${pattern}".`;
-  } else if (semanticSearch.status === "no_index") {
-    reason = `\u{1F9E0} **Semantic Search Not Set Up**
-
-No semantic index found. To enable AI-powered code search:
-
-\`\`\`bash
-tldr semantic index . --lang all
-\`\`\`
-
-This creates embeddings for your codebase (one-time, ~30s).
-After indexing, natural language queries like "${pattern}" will find relevant code.
-
-**For now, use:**
-- \`/tldr-search ${target || pattern}\` - structured search
-- \`Task(subagent_type="scout", prompt="${pattern}")\` - agent exploration (scout = Sonnet; Explore/Haiku is banned)`;
-  } else if (semanticSearch.status === "daemon_unavailable") {
-    reason = `\u{1F9E0} **TLDR Daemon Not Running**
-
-Start the daemon for semantic search:
-\`\`\`bash
-tldr daemon start
-\`\`\`
-
-Then retry your query. The daemon provides fast, in-memory semantic search.
-
-**For now, use:**
-- \`/tldr-search ${target || pattern}\` - structured search (no daemon needed)`;
-  } else if (semanticSearch.status === "indexing") {
-    reason = `\u{1F9E0} **Semantic Index Building...**
-
-The daemon is currently building the semantic index. This takes ~30s.
-Retry in a moment, or use structured search for now:
-
-\`/tldr-search ${target || pattern}\``;
-  } else {
-    reason = `\u{1F9E0} **No Semantic Matches**
-
-No code semantically similar to "${pattern}" found in the index.
-
-**Try:**
-1. Rephrase the query with different keywords
-2. Use structured search: \`/tldr-search ${target || pattern}\`
-3. Delegate to an agent: \`Task(subagent_type="scout", prompt="${pattern}")\` (scout = Sonnet; Explore is banned)`;
-  }
-  const output = {
-    hookSpecificOutput: {
-      hookEventName: "PreToolUse",
-      permissionDecision: "deny",
-      permissionDecisionReason: reason
-    }
-  };
-  console.log(JSON.stringify(output));
+  console.log("{}");
 }
 if (!process.env.VITEST) {
   main().catch(console.error);
