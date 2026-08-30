@@ -1,3 +1,8 @@
+---
+paths:
+  - ".claude/hooks/**"
+---
+
 # Hook Development Lifecycle
 
 ## Full Workflow
