@@ -172,8 +172,8 @@ Two answers inside it that close off whole branches of investigation:
 | 6 | Re-measure hook latency with real payloads | **DONE** — ~1s per tool call, concentrated in 2 processes |
 | 7 | Decide on Braintrust tracing | **MEASURED, DECISION OPEN** — see §4.1. ⚠️ the off switch it assumed did not work until `688228f` |
 | 8 | Context lever | **DONE** — 145.6k → 67.4k memory-file tokens/session |
-| 9 | Fleet-wide `paths:` frontmatter | **OPEN, unstarted** — verified **0 of 46** rules carry `paths:` |
-| 10 | Re-derive prune list, then prune | **OPEN — do LAST** |
+| 9 | Fleet-wide `paths:` frontmatter | **DONE with a finding (2026-08-30)** — 4 of 46 rules scoped, both directions live-probed (headless `claude -p`: scoped rule absent in a neutral dir, present after reading a matching file). The finding that caps it at 4: `paths:` rules load **when Claude reads a matching file** (code.claude.com/docs/en/memory.md), so command-triggered rules — every CLI-safety rule, git workflow, windows-platform — would be DISARMED by scoping, not economized. Scoped: hook-dev-lifecycle, prefer-drizzle-orm, dev-server-cleanup, knowledge-tree-health (~9KB out of non-matching sessions). Candidates pending a Skill-tool-read probe: codex/grok worker safety (~24KB) scoped to their skill dirs |
+| 10 | Re-derive prune list, then prune | **QUALIFIED, awaiting Dave (2026-08-30)** — 114 src files, 81 registered names, 35 unregistered. Libraries (keep): daemon-client (11 importers), transcript-parser, skill-router/skill-validation-prompt (chain hangs off skill-activation-prompt, which is repo-registered but retired from ACTIVE 2026-08-19 — reconcile). 33 candidates swept: every reference is docs/audits/backups/archives; zero live consumers in scripts/, package.json, or either settings.json; zero telemetry rows (intel-bus + hook_activity; `diagnostics`' 350 rows are post-edit-diagnostics, a different hook). Deletion blocked on explicit approval per plan |
 
 Step 10's telemetry exists and is live: `.claude/logs/intel-bus.jsonl`, 764 KB,
 written today. (It is in the **repo** tree, not `~/.claude/logs` — checking the
@@ -283,7 +283,12 @@ work was interesting:
 
 ## 5. Fix-first items (verified active harm, cheap to fix)
 
-### 5.1 A search router that denies greps using a 143-day-stale index
+### 5.1 A search router that denies greps using a 143-day-stale index — FIXED 2026-08-30
+
+**Applied (`022d7cf`, branch `harness-repair-finish`):** both deny sites now
+allow; context routing survives; symbol/caller lookups are async socket calls
+gated on a 250ms reachability probe (was up to 6 PowerShell spawns per Grep —
+7.0s → 0.4s measured). The section below is the pre-fix record.
 
 **Verified today, not inferred:** `smart-search-router` is registered in live
 `settings.json`; it emits `permissionDecision: 'deny'` at two sites
@@ -297,7 +302,15 @@ index. This is the active-harm case the code-intel proposal measures
 verdict **skip** — the 2026-07-24 cut was right and should not be reversed, it
 was just left half-finished). Read that before search-heavy work here.
 
-### 5.2 TLDR remediation is planned, not applied
+### 5.2 TLDR remediation is planned, not applied — APPLIED 2026-08-30
+
+**All 8 changes landed (`022d7cf`, branch `harness-repair-finish`).** Headline
+acceptance: daemon DOWN → `{}` in 75ms (was a 31.6s deny); daemon UP → real
+TLDR context in 345ms. Threshold 8KB, fail-open probe + negative cache,
+exact-path + consume-once handshake, zombie detection, timeouts 30000→30
+(seconds), `tldr-context-inject` deregistered from BOTH settings copies (it
+was already gone from active — the copies had diverged). The section below is
+the pre-fix record.
 
 [`2026-07-29-tldr-remediation-plan.md`](2026-07-29-tldr-remediation-plan.md) —
 hardened by a cross-model premortem, 8 changes. **Not applied:** plan item 4 is
