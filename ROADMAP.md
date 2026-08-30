@@ -35,8 +35,18 @@ components below were deliberately retained to feed it.
 **Retained for the next system (D6):** yt-dlp, both ffmpeg installs, Tesseract, the `.venv` ASR
 stack, the Whisper model, and `C:\Users\david.hayes\.claude\secrets\youtube-cookies.txt`.
 
-**⚠️ OPEN — needs Dave:** the enterprise org marketplace still has plugin **v0.1.2** published.
-No local deletion touches it. Unpublish it, or decide deliberately to leave it.
+**⚠️ OPEN — needs Dave, console-only.** The enterprise org marketplace still has plugin
+**v0.1.2** published under Dave's name. **Decided 2026-08-30: upload v0.1.3 first, then unpublish.**
+Rationale: 0.1.2 is the release with the null-deref in `listTarget` — with `--ignore-errors`, a
+fully-failed extraction exits non-zero AND prints the literal string `"null"`, so `JSON.parse`
+succeeds and an unguarded `data._type` crashes, swallowing the real error (live case: a
+TLS-intercepting proxy's `CERTIFICATE_VERIFY_FAILED`). Anyone who installed 0.1.2 gets that crash
+instead of the cause. v0.1.3 adds `parseListOutput`, which throws yt-dlp's own error text.
+
+Upload artifact staged at `C:\Users\david.hayes\Desktop\youtube-research-v0.1.3.zip`
+(40.1 KB, SHA256-verified against the archive). **No CLI path exists** — `claude plugin
+marketplace` only supports add/list/remove/update for *consuming* marketplaces, so publishing and
+unpublishing are enterprise admin-console actions Dave must perform.
 
 Plan and full execution log: `thoughts/shared/plans/youtube-system-removal.md` (local-only).
 
