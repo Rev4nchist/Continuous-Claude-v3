@@ -17,7 +17,10 @@ describe('stale-scan skill', () => {
 
   beforeAll(() => {
     expect(existsSync(SKILL_PATH)).toBe(true);
-    content = readFileSync(SKILL_PATH, 'utf-8');
+    // Normalize CRLF: the blob is LF in git, but core.autocrlf checkouts hand
+    // Windows working copies CRLF, and '---\r' !== '---' failed this suite on
+    // a file that was committed correctly (2026-08-30).
+    content = readFileSync(SKILL_PATH, 'utf-8').replace(/\r\n/g, '\n');
     lines = content.split('\n');
   });
 
