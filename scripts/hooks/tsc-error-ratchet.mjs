@@ -15,7 +15,9 @@ import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve } from 'node:path';
 
-const BASELINE = Number(process.env.TSC_RATCHET_BASELINE ?? 235);
+// 235 at first census (2026-08-30); lowered to 229 by the Step-10 archive
+// moving 6 error-carrying orphan hooks out of src (2026-08-31).
+const BASELINE = Number(process.env.TSC_RATCHET_BASELINE ?? 229);
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const hooksDir = resolve(repoRoot, '.claude', 'hooks');

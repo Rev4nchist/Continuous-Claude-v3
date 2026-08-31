@@ -2,6 +2,13 @@
 
 Current registrations live in `~/.claude/settings.json`. For totals and per-event breakdown, see [hook-audit-2026-04.md](../../hook-audit-2026-04.md).
 
+> **Step-10 prune (2026-08-31):** 31 unregistered, zero-telemetry hook sources
+> were archived to `.claude/hooks/archive/2026-08-31-step10-prune/` (approved
+> by Dave; qualification in `docs/harness-strategy/README.md` step table).
+> Any hook named in this catalog that no longer exists in `src/` is there.
+> `tldr-context-inject` and `skill-activation-prompt` are deregistered
+> everywhere, including the settings template.
+
 ## SessionStart
 
 | Hook | Description |
