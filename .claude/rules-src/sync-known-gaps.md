@@ -26,3 +26,29 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 - `settings.json` remains intentionally local because hook registrations may differ between machines
 - Use `/sync-drift` skill to detect unexpected drift
 - Manual sync: `bash ~/continuous-claude/scripts/sync-to-active.sh`
+
+## settings.json reconciliation (2026-08-31, harness-security lane)
+
+The repo `.claude/settings.json` + `.claude/settings.json.template` are kept registration-complete
+by `node scripts/settings/capture-active-registrations.mjs` (idempotent; run it after registering a
+hook only in the active file). Two classes of divergence are EXPECTED and never captured:
+
+**Machine-local top-level keys** (active-only, UI/prefs — do not add to repo or template):
+`agentPushNotifEnabled`, `autoCompactEnabled`, `extraKnownMarketplaces`, `model`, `modelSettings`,
+`remoteControlAtStartup`, `skillListingBudgetFraction`, `skillListingMaxDescChars`,
+`skipAutoPermissionPrompt`, `skipWorkflowUsageWarning`, `switchModelsOnFlag`, `theme`, `tui`,
+`voiceEnabled`.
+
+**Machine-local hook registrations** (active-only by design; the capture script hard-excludes them):
+- `permission-auto-allow.mjs` (PermissionRequest) — **SECURITY**: a permission-bypass policy. Must be
+  opted into per machine, never inherited from the template by a fresh install.
+- `linear-branch-context.mjs`, `sentry-deploy-release.mjs`, `vercel-deploy-context.mjs`,
+  `sentry-error-context.mjs` — vendor integrations tied to this machine's accounts.
+
+## Clobber guard + quarantine (2026-08-31)
+
+`sync-to-active.sh` keeps a manifest (`~/.claude/state/sync-manifest.txt`) of the sha256 each
+destination had when the sync last wrote it. A destination that diverged from the manifest (edited
+directly in `~/.claude` since the last sync) is preserved to `~/.claude/.sync-quarantine/<ts>/`
+before the repo copy lands, and reported loudly. The quarantine dir is the only copy of a clobbered
+edit — review and delete it yourself; it is NEVER auto-purged. The script refuses to run under WSL.
