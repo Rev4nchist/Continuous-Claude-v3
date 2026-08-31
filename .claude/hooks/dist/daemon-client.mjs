@@ -101,7 +101,7 @@ function getStatusFile(projectDir) {
 function isIndexing(projectDir) {
   return getStatusFile(projectDir) === "indexing";
 }
-function isDaemonReachable(projectDir) {
+function isListenerAlive(projectDir) {
   const connInfo = getConnectionInfo(projectDir);
   if (connInfo.type === "tcp") {
     try {
@@ -114,6 +114,23 @@ function isDaemonReachable(projectDir) {
     } catch {
       return false;
     }
+  }
+  if (!existsSync(connInfo.path)) return false;
+  try {
+    execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
+      encoding: "utf-8",
+      timeout: 1e3,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+function isDaemonReachable(projectDir) {
+  const connInfo = getConnectionInfo(projectDir);
+  if (connInfo.type === "tcp") {
+    return isListenerAlive(projectDir);
   } else {
     if (!existsSync(connInfo.path)) {
       return false;
@@ -150,7 +167,7 @@ function isDaemonReachable(projectDir) {
 function tryStartDaemon(projectDir) {
   try {
     if (isDaemonProcessRunning(projectDir)) {
-      if (isDaemonReachable(projectDir)) {
+      if (isListenerAlive(projectDir)) {
         return true;
       }
       console.error(
@@ -555,6 +572,7 @@ export {
   importsDaemon,
   isDaemonUnreachableCached,
   isIndexing,
+  isListenerAlive,
   pingDaemon,
   probeDaemonFast,
   queryDaemon,

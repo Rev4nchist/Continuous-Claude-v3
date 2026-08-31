@@ -287,9 +287,16 @@ export function isIndexing(projectDir: string): boolean {
  * @param projectDir - Project directory path
  * @returns true if daemon is reachable
  */
-function isDaemonReachable(projectDir: string): boolean {
+/**
+ * STRICT listener probe: is something actually accepting connections on this
+ * project's daemon endpoint? Unlike isDaemonReachable, there is NO live-PID
+ * fallback — a merely-alive process with a dead listener is `false`. This is
+ * the probe zombie detection must use: the reachability check's "process
+ * exists, socket might just be busy → true" heuristic (kept below to prevent
+ * duplicate spawns) is exactly what let zombies pass as reachable.
+ */
+export function isListenerAlive(projectDir: string): boolean {
   const connInfo = getConnectionInfo(projectDir);
-
   if (connInfo.type === 'tcp') {
     // On Windows, use a subprocess to test TCP reachability.
     // Spin-loop with async net.Socket doesn't work (event loop blocked).
@@ -303,6 +310,26 @@ function isDaemonReachable(projectDir: string): boolean {
     } catch {
       return false;
     }
+  }
+  // Unix socket: a ping that fails is a dead listener, full stop.
+  if (!existsSync(connInfo.path!)) return false;
+  try {
+    execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
+      encoding: 'utf-8',
+      timeout: 1000,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function isDaemonReachable(projectDir: string): boolean {
+  const connInfo = getConnectionInfo(projectDir);
+
+  if (connInfo.type === 'tcp') {
+    return isListenerAlive(projectDir);
   } else {
     // Unix socket - check file exists AND daemon is actually listening
     if (!existsSync(connInfo.path!)) {
@@ -369,7 +396,13 @@ export function tryStartDaemon(projectDir: string): boolean {
       // pid-file mutation — killing a process the harness doesn't own needs
       // its own decision, and the enforcer's fail-open already removes the
       // harm (the read proceeds either way).
-      if (isDaemonReachable(projectDir)) {
+      //
+      // MUST be the STRICT probe: isDaemonReachable's Unix branch returns
+      // true for a live PID whose ping fails ("socket might just be busy"),
+      // which is indistinguishable from the zombie this branch exists to
+      // catch — it would return true here and send the caller into a query
+      // timeout (CodeRabbit, PR #30).
+      if (isListenerAlive(projectDir)) {
         return true;
       }
       console.error(
