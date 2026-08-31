@@ -332,6 +332,17 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
 ## Recent Planning Sessions
+### 2026-08-31: harness-security lane — clobber guard, repo sources, settings reconcile, ~/.claude history
+**Key Decisions:**
+- `dst` missing, or `dst == src` → copy / no-op, update manifest. Normal.
+- `dst` differs from `src` but `dst` hash == manifest entry → active is just stale; copy, update manifest. Normal forward sync.
+- `dst` differs from `src` AND (`dst` hash != manifest entry OR no manifest entry) → **active was edited since last sync**: move `dst` to `~/.claude/.sync-quarantine/<YYYY-MM-DD-HHmmss>/<relative-path>`, then copy, print a loud `CLOBBER-GUARD` report line per file and a summary block at the end. Never silently overwrite.
+- Missing/corrupt manifest fails safe: treated as "no entry" → quarantine path (over-quarantines rather than over-clobbers). First run after this ships will quarantine any currently-diverged files — that is the correct behavior; review the quarantine once.
+- Hash via `sha256sum` (Git Bash provides it); keep the manifest write atomic (temp file + `mv`).
+
+**Files:** scripts/sync-to-active.sh, docs/harness-strategy/README.md, every-surface-checklist.md, memory-rules.md, pr-and-commit-style.md, node scripts/hooks/registration-reconcile.mjs, hooks/src/<name>.ts, hooks/dist/<name>.mjs
+
+
 ### 2026-08-07: Fix: Braintrust SessionEnd hooks cancelled at shutdown
 **Key Decisions:**
 - Add a `Stop` event containing `braintrust_hooks.py stop`, `timeout: 15000`.
