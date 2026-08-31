@@ -154,10 +154,11 @@ try {
   log("committed.");
   if (PUSH) {
     git(REPO, "push");
-    log("pushed to main — GitHub Pages will deploy.");
-    log("verify: gh run list --repo Rev4nchist/ai-enablement-decks --limit 3");
-    log(`live card: https://rev4nchist.github.io/ai-enablement-decks/#${SECTION}`);
-    log(`live deck: https://rev4nchist.github.io/ai-enablement-decks/fourthos/${date}/`);
+    log("pushed to main.");
+    // NO Pages verification. The repo went private ~2026-08-06, which deletes Pages on
+    // the free tier, and it cannot be made public again. Deploys fail by design and the
+    // github.io URLs are HTTP 404 -- printing them told the operator to check a dead link.
+    // Git is still the version store; only publishing moved.
   } else {
     log("--no-push: committed locally, not pushed.");
   }
@@ -186,15 +187,36 @@ if (PUSH) {
     const runEmitPath = path.join(tmpDir, "report-run-FourthOS-Weekly.json");
     if (fs.existsSync(runEmitPath)) fs.rmSync(runEmitPath, { force: true });
 
-    const artifactUrl = `https://rev4nchist.github.io/ai-enablement-decks/fourthos/${date}/`;
-    const summary = `promoted live: dated deck published (commit ${commitSha || "unknown"})`;
+    // Publish the promoted dated package to the local share folder. This is the step
+    // that actually makes a promotion reachable now that Pages is gone: publish-local.mjs
+    // rewrites the deck's absolute /ai-enablement-decks/ links to relative and refuses to
+    // write if any survive. Non-fatal like the rest of this block -- a promotion that
+    // committed and pushed is still a promotion.
+    let publishedDir = null;
+    try {
+      const publishPath = path.join(path.dirname(fileURLToPath(import.meta.url)), "publish-local.mjs");
+      const out = execFileSync(nodeExe, [
+        publishPath, "--source", path.join(REPO, "fourthos", date), "--date", date,
+      ], { cwd: REPO, encoding: "utf8" });
+      publishedDir = out.trim().split(/\r?\n/).filter(Boolean).pop() || null;
+      if (publishedDir) log(`published locally: ${publishedDir}`);
+    } catch (e) {
+      log(`local publish failed (non-fatal): ${e.message}`);
+    }
+
+    // artifactUrl is OMITTED, not replaced. make-run.mjs rejects a non-http artifactUrl
+    // by design ("artifact URLs must outlive promotion"), and the old Pages URL here is
+    // now a dead link -- recording it would put a 404 in the registry and on the hub.
+    // The local folder goes in the summary, where a path is meaningful.
+    const summary = publishedDir
+      ? `promoted: dated deck published to ${publishedDir} (commit ${commitSha || "unknown"})`
+      : `promoted: dated deck committed, local publish did not run (commit ${commitSha || "unknown"})`;
     execFileSync(nodeExe, [
       makeRunPath,
       "--type", "FourthOS Sponsor",
       "--source", "FourthOS-Weekly",
       "--period", date,
       "--status", "OK",
-      "--artifactUrl", artifactUrl,
       "--summary", summary,
     ], { cwd: REPO, encoding: "utf8" });
 

@@ -1,6 +1,6 @@
 ---
 name: fourthos-weekly
-description: Generate the weekly FourthOS sponsor update package for Carly (VP) and Christian (CTO). Pulls live portfolio data from the FourthOS Notion cockpit, refreshes the Notion Update Package page, renders a progressive-disclosure HTML artifact set (Tier 1 briefing dashboard, Tier 2 teaching deep-dive), stages it UNLISTED to the ai-enablement-decks GitHub Pages site, and notifies Dave to review before promoting it live. Use when asked to generate, build, preview, or promote the FourthOS weekly sponsor update, or when the CCv3-FourthOS-Weekly scheduled task runs. Triggers on "fourthos weekly", "sponsor update", "Carly update", "Christian update", "weekly portfolio update".
+description: Generate the weekly FourthOS sponsor update package for Carly (VP) and Christian (CTO). Pulls live portfolio data from the FourthOS Notion cockpit, refreshes the Notion Update Package page, renders a progressive-disclosure HTML artifact set (Tier 1 briefing dashboard, Tier 2 teaching deep-dive), stages it in the ai-enablement-decks repo, publishes it to a local OneDrive folder Dave shares Fourth-internally, and notifies Dave to review before promoting. Use when asked to generate, build, preview, or promote the FourthOS weekly sponsor update, or when the CCv3-FourthOS-Weekly scheduled task runs. Triggers on "fourthos weekly", "sponsor update", "Carly update", "Christian update", "weekly portfolio update".
 ---
 
 # FourthOS Weekly Sponsor Update Pipeline
@@ -97,7 +97,11 @@ expects **≥2 active projects**.
 **Content bar (load-bearing):** Published Tiers 1–2 are **status-grade only** (RAG, current focus,
 milestones, outcomes) — the same public bar as the existing `governed-ai-access` VP briefing.
 Genuinely sensitive risk/decision detail lives ONLY in the Notion Tier-3 archive and is never
-rendered into the published HTML. **GitHub Pages is public; the preview slug is unlisted, not private.**
+rendered into the published HTML. **Distribution changed 2026-08-31 and the content bar did NOT relax with it.** The Pages site is
+gone (repo private since ~08-06, cannot be made public again); packages now go to
+`OneDrive - Fourth Limited/FourthOS Sponsor Updates/<date>/`, shared Fourth-internally. A
+permissioned folder is not a licence to render Tier-3 detail: share links get forwarded, and the
+Notion archive remains the only home for sensitive risk/decision content.
 
 ---
 
@@ -284,8 +288,10 @@ non-engineer (Carly) reads every sentence cold; a CTO (Christian) reads for soun
   (the renderer measures `offsetTop` so "one row" stays true at any width). Section + collapse logic
   live in the repo's `index.html`; the section is declared in `decks.json` `sections[0]`.
 - **Each week = its own dated card.** Promotion publishes `fourthos/<YYYY-MM-DD>/` and adds a
-  `fourthos-<date>` card to `sponsor-updates` (only the newest is `featured`). Bookmark the hub
-  (`https://rev4nchist.github.io/ai-enablement-decks/#sponsor-updates`); the top card is always newest.
+  `fourthos-<date>` card to `sponsor-updates` (only the newest is `featured`). NOTE: the hub and
+  its cards are the REPO's structure and no longer render anywhere -- the Pages site is gone. What
+  people actually open is the dated folder under `FourthOS Sponsor Updates/`. `decks.json` is still
+  maintained because the per-page week-switcher reads it.
 - Layout:
   ```
   fourthos/
@@ -338,12 +344,16 @@ surface for a skip, not a red Task Scheduler light).
 
 ## Verification (after generate / promote)
 
-- `gh run list --repo Rev4nchist/ai-enablement-decks --limit 3` → `success`.
-- Preview URL loads, brand-correct, SVG visible; hub root does NOT show a FourthOS card (correct while unlisted).
-- After promote: `fourthos/<date>/` is live at its own URL; the hub's **Sponsor Updates** section
-  (`https://rev4nchist.github.io/ai-enablement-decks/#sponsor-updates`) shows the new week as the top
-  `featured` card with prior weeks demoted behind the collapse; `decks.json` still parses; `preview/`
-  is gone. **The hub page itself is never hand-edited** — `#sponsor-updates` renders from `decks.json`
+- **Do NOT run `gh run list` and do NOT curl a `github.io` URL.** Deploys fail by design since the
+  repo went private; a failed deploy is not a failed run. Checking it is what produced three
+  consecutive `_ERROR.md` weeks (08-12, 08-19, 08-26).
+- `git -C <decks> status --porcelain -- fourthos/preview` is empty and its last commit is today.
+- `publish-local.mjs` reported `post-write check clean (0 absolute links on disk)`. That check is
+  the one that matters: the decks link to each other with ABSOLUTE `/ai-enablement-decks/...`
+  paths, so a plain copy produces a package whose navigation is entirely dead while looking fine.
+- Open `FourthOS Sponsor Updates/<date>/index.html` and click through to briefing and deep-dive.
+- After promote: `fourthos/<date>/` exists in the repo, its folder is published locally,
+  `decks.json` still parses, and `preview/` is gone. **The hub page itself is never hand-edited** — `#sponsor-updates` renders from `decks.json`
   at load, and `promote.mjs` is the ONLY thing that writes that manifest entry (generate must not, G4).
   The per-page week-switcher picks up the new week from the same manifest automatically.
 

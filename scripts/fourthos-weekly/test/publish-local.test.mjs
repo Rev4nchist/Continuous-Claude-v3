@@ -56,6 +56,21 @@ test('a link to another package is reported, never rewritten', () => {
   assert.equal(findAbsoluteHrefs(html).length, 1, 'so the caller can detect it and abort');
 });
 
+// The 2026-07-16 archive case: files live in fourthos/2026-07-16/ but every internal link
+// still says /fourthos/preview/, because that package was promoted before promote.mjs
+// learned to rewrite them. Default behaviour must refuse it; the explicit assertion fixes it.
+test('a package whose links name a different segment: refused by default, fixed by assertion', () => {
+  const src = `<a href="${B}/fourthos/preview/briefing.html#risk-radar">r</a>`;
+  const byDir = rewriteLinks(src, { segment: '2026-07-16' });
+  assert.equal(byDir.counts.unresolved, 1, 'the directory name must not be assumed correct');
+  assert.equal(byDir.html, src);
+
+  const asserted = rewriteLinks(src, { segment: 'preview' });
+  assert.equal(asserted.counts.unresolved, 0);
+  assert.equal(asserted.html, '<a href="briefing.html#risk-radar">r</a>');
+  assert.equal(findAbsoluteHrefs(asserted.html).length, 0);
+});
+
 test('relative and external links are untouched', () => {
   const src = '<a href="#local">a</a><a href="https://example.com/x">b</a><a href="other.html">c</a>';
   const { html, counts } = rewriteLinks(src, { segment: 'preview' });

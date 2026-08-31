@@ -184,6 +184,33 @@ if not "%RUN_STATUS%"=="OK" if not "%RUN_STATUS%"=="Warn" if not "%RUN_STATUS%"=
 )
 echo [%date% %time%] verified outcome: %RUN_STATUS% ^(%RUN_REASON%^)
 
+REM --- Local publish (2026-08-31) -------------------------------------------
+REM THE SPONSOR SITE IS GONE. ai-enablement-decks was made private ~2026-08-06,
+REM which deletes GitHub Pages on the free tier, and it CANNOT be made public
+REM again. The hub, all five promoted weeks and the preview have been HTTP 404
+REM since; three consecutive Wednesdays failed on exactly this.
+REM
+REM The replacement target is a folder under "OneDrive - Fourth Limited" that
+REM Dave shares from. This step runs HERE, in the wrapper, and not in the
+REM generate prompt, for the same reason the registry emit lives here: a
+REM mechanical, verifiable step must not depend on a model choosing to do it.
+REM publish-local.mjs rewrites the decks' 82 absolute /ai-enablement-decks/
+REM links to relative and refuses to write if any survive -- a copy alone
+REM produces a package whose navigation is dead but which looks fine.
+REM
+REM Gated on OK: a Warn/Skipped/Failed run has no fresh package worth sharing,
+REM and republishing over a good folder with a broken run would be worse than
+REM leaving last week's package in place. NON-FATAL either way -- it never
+REM changes RUN_STATUS or the exit contract.
+set "PUBLISH_DIR="
+set "PUBLISH_OUT=%TEMP%\fourthos-publish-out.txt"
+del "%PUBLISH_OUT%" 2>nul
+if "%RUN_STATUS%"=="OK" echo [%date% %time%] publishing package locally... log=%LOG_FILE%
+if "%RUN_STATUS%"=="OK" "%NODE_EXE%" scripts\fourthos-weekly\publish-local.mjs > "%PUBLISH_OUT%" 2>>"%LOG_FILE%"
+if "%RUN_STATUS%"=="OK" if exist "%PUBLISH_OUT%" for /f "usebackq delims=" %%p in ("%PUBLISH_OUT%") do set "PUBLISH_DIR=%%p"
+if defined PUBLISH_DIR echo [%date% %time%] published to: %PUBLISH_DIR%
+if "%RUN_STATUS%"=="OK" if not defined PUBLISH_DIR echo [%date% %time%] local publish produced no folder ^(non-fatal -- see %LOG_NAME%^)
+
 REM --- Report Runs registry (T3.3): FINAL non-fatal step. -------------------
 REM Observability, not the report's product -- it never changes the exit
 REM contract below. GUARD: without RUN_DATE an empty --period would emit a
@@ -193,15 +220,21 @@ if not defined RUN_DATE (
     goto :final_exit
 )
 
-REM Only advertise the preview URL for a verified-OK run. Pass the flag ONLY
-REM in that case: make-run.mjs REJECTS a non-http artifactUrl and exits 1
-REM without emitting, so the old `--artifactUrl "none"` on any non-OK status
-REM killed the emit and the registry upsert was skipped entirely. Effect: a
+REM artifactUrl is now ALWAYS omitted. It used to carry the Pages preview URL
+REM on an OK run; that URL has been HTTP 404 since 2026-08-06 and advertising
+REM a dead link in the registry is worse than advertising nothing. The local
+REM folder cannot take its place: make-run.mjs REJECTS a non-http artifactUrl
+REM BY DESIGN ("artifact URLs must outlive promotion"), and weakening that
+REM check to fit a machine-local path would be the wrong trade. The folder
+REM goes in the SUMMARY instead, where a path is meaningful.
+REM
+REM Keep omitting rather than passing a placeholder: the old `--artifactUrl
+REM "none"` on a non-OK status made make-run exit 1 without emitting, so a
 REM Warn, Skipped or Failed run recorded NO ROW AT ALL -- the always-emit
-REM spine was blind in exactly the cases it exists to record. Omitting the
-REM flag is the supported way to say "no artifact" (verified by execution).
+REM spine was blind in exactly the cases it exists to record.
 set "ARTIFACT_ARG="
-if "%RUN_STATUS%"=="OK" set "ARTIFACT_ARG=--artifactUrl https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/"
+set "PUBLISH_NOTE="
+if defined PUBLISH_DIR set "PUBLISH_NOTE= published to %PUBLISH_DIR%"
 
 set "RUN_EMIT=%TEMP%\report-run-FourthOS-Weekly.json"
 del "%RUN_EMIT%" 2>nul
@@ -210,7 +243,7 @@ REM runId matches and upsert UPDATES the pessimistic row rather than appending a
 REM second row for the period. If RUN_STAMP failed to resolve the arg is empty
 REM and make-run falls back to its own timestamp (two rows for the day is worse
 REM bookkeeping, never data loss).
-"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
+"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)%PUBLISH_NOTE%"
 if not exist "%RUN_EMIT%" (
     echo [%date% %time%] no report-run.json emitted -- skipping registry upsert
     goto :final_exit

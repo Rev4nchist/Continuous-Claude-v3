@@ -22,6 +22,16 @@
 //   node scripts/fourthos-weekly/publish-local.mjs --source <dir>     # a dated package
 //   node scripts/fourthos-weekly/publish-local.mjs --date 2026-08-05  # override folder name
 //   node scripts/fourthos-weekly/publish-local.mjs --dest <dir>       # override dest root
+//   node scripts/fourthos-weekly/publish-local.mjs --link-segment preview   # see below
+//
+// --link-segment exists for ONE real case, found publishing the archive on 2026-08-31.
+// fourthos/2026-07-16/ was promoted BEFORE promote.mjs gained its preview->dated link
+// rewrite, so its files sit in the dated folder while every internal link still points at
+// /fourthos/preview/. Its navigation was therefore broken on the live Pages site too, from
+// the day it was promoted. The default (segment = the source directory's name) correctly
+// refuses that package rather than guessing. --link-segment is the operator ASSERTING what
+// the links refer to; the output is still verified the same way, so a wrong assertion
+// produces an abort, not a bad package.
 //
 // Exit codes: 0 published (or dry run clean) - 1 nothing published, reason printed.
 import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
@@ -122,7 +132,8 @@ export function main() {
   const f = parseFlags(process.argv.slice(2));
   const dryRun = f['dry-run'] === true;
   const sourceDir = resolve(typeof f.source === 'string' ? f.source : DEFAULT_SOURCE);
-  const segment = basename(sourceDir);
+  const dirSegment = basename(sourceDir);
+  const segment = typeof f['link-segment'] === 'string' ? f['link-segment'] : dirSegment;
 
   if (!existsSync(sourceDir)) {
     console.error(`[publish-local] source does not exist: ${sourceDir}`);
@@ -154,6 +165,11 @@ export function main() {
   const destDir = join(destRoot, date);
 
   console.error(`[publish-local] ${sourceDir}  ->  ${destDir}${dryRun ? '  (DRY RUN)' : ''}`);
+  // Never let an override be silent: it changes which links are treated as this
+  // package's own, which is the single most consequential input to the rewrite.
+  if (segment !== dirSegment) {
+    console.error(`[publish-local] --link-segment "${segment}" overrides the directory name "${dirSegment}"`);
+  }
 
   const written = [];
   let totalSelf = 0;
