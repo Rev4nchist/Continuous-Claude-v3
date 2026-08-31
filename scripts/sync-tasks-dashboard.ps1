@@ -44,25 +44,44 @@ $runStamp = (Get-Date).ToUniversalTime().ToString('o')
 $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
 
 function Write-RunRow($status, $summary, $noRefresh) {
+  # MIGRATED to emit-run.mjs 2026-08-31 (the last of the three PowerShell copies
+  # of the always-emit contract). The old shape here was TWO chained native
+  # commands -- make-run, then a separate `upsert.mjs ... 2>&1 | ForEach-Object`
+  # -- which is the exact pair that made run-sweep.ps1's pre-emit abort on 16 of
+  # 16 runs. This wrapper never hit that (its global EAP is 'Continue', set at
+  # the top), but the divergence itself was the defect emit-run.mjs exists to
+  # end: one process, one contract, no second native command to guard.
+  #
+  # Contract #4: EAP is dropped to 'Continue' LOCALLY anyway. The global setting
+  # is not a guarantee -- any future edit that flips it, or a dot-sourced caller,
+  # silently reintroduces the trap.
+  # Contract #5 (--out is mandatory for a pre-emit) does NOT apply here: this
+  # wrapper has no `if exist <default path>` guard deciding whether the final
+  # emit fired, so the pre-emit cannot masquerade as one. Both emits share
+  # $runStamp (contract #6), so the final one UPDATES the pre-emit row.
+  # --json is passed so the log records `action` (created vs updated) -- the
+  # evidence that update-in-place actually happened, which the registry rows had
+  # to be read out of Notion to prove before today.
+  $prevEAP = $ErrorActionPreference
+  $ErrorActionPreference = 'Continue'
   try {
-    $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
-      --type 'Team Dashboard' --source 'Dashboard-Sync' --period $date --runDate $runStamp `
-      --status $status --artifactUrl 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a' `
-      --summary $summary
-    $emit = ($emit | Select-Object -Last 1)
-    if ($LASTEXITCODE -eq 0 -and $emit) {
-      # --no-refresh on the pre-emit only: the pessimistic Failed row must NOT
-      # publish to the live Team Dashboard page (it did nightly for ~5 min and
-      # doubled refresh volume). The final emit below keeps refresh ON.
-      $upsertArgs = @($emit); if ($noRefresh) { $upsertArgs += '--no-refresh' }
-      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') @upsertArgs 2>&1 |
-        ForEach-Object { "$_" } | Tee-Log
-      "[$(Get-Date -Format o)] report-run upsert exit=$LASTEXITCODE status=$status (non-fatal)" | Tee-Log
-    } else {
-      "[$(Get-Date -Format o)] make-run emitted no path (exit=$LASTEXITCODE) -- skipping upsert" | Tee-Log
-    }
+    $emitArgs = @(
+      (Join-Path $repo 'scripts\report-registry\emit-run.mjs'),
+      '--type', 'Team Dashboard', '--source', 'Dashboard-Sync',
+      '--period', $date, '--runDate', $runStamp, '--status', $status,
+      '--artifactUrl', 'https://www.notion.so/38f76fd7ac8280478e50dd2956ba6e8a',
+      '--summary', $summary, '--json'
+    )
+    # --no-refresh on the pre-emit only: the pessimistic Failed row must NOT
+    # publish to the live Team Dashboard page (it did nightly for ~5 min and
+    # doubled refresh volume). The final emit keeps refresh ON.
+    if ($noRefresh) { $emitArgs += '--no-refresh' }
+    & $node @emitArgs 2>&1 | ForEach-Object { "$_" } | Tee-Log
+    "[$(Get-Date -Format o)] report-run emit exit=$LASTEXITCODE status=$status (non-fatal)" | Tee-Log
   } catch {
     "[$(Get-Date -Format o)] report-run registry step threw (non-fatal): $_" | Tee-Log
+  } finally {
+    $ErrorActionPreference = $prevEAP
   }
 }
 

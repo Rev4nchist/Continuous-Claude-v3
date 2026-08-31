@@ -121,7 +121,24 @@ REM showed Bash `git -C <decks>`, Read and Write outside the workspace all work
 REM under this exact grant. The real cause was narrower -- a NON-GRANTED tool
 REM (PowerShell, absent from --allowedTools) used outside the workspace, which
 REM headless auto-denies. --add-dir removes the workspace half of that class.
-type %GEN_PROMPT% | call claude -p --output-format text --add-dir "C:\Users\david.hayes\Projects\ai-enablement-decks" --allowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" > "%LOG_FILE%" 2>&1
+REM BOUNDED since 2026-08-31. The old form here was a bare cmd pipe with NO
+REM ceiling of its own -- the task ExecutionTimeLimit (PT2H) was the only
+REM bound, and a task-limit kill takes the WRAPPER with it, so the final
+REM registry emit never runs and the pessimistic pre-emit row is all the
+REM period ever gets. Worse, a task-limit kill does not reliably reap the
+REM process tree on this machine: measured 2026-08-28 on CCv3-Health-Check,
+REM PT30M fired at 10:25 and the orphaned child kept running to 11:49
+REM (duration_s=6777 vs a normal 58). run-generate.ps1 moves the ceiling
+REM INSIDE the wrapper: it taskkill /T /F-s the tree and returns 124, then
+REM verify-run.mjs + the final emit below still record a truthful row.
+REM Override for a manual run: set CCV3_FOURTHOS_TIMEOUT_SEC before calling.
+REM Paths are relative to the REPO ROOT (this .bat cd /d-s there on line 13),
+REM NOT %~dp0. %~dp0 resolves to the running copy's own directory, which
+REM breaks the stubbed-copy probe technique these wrappers are tested with
+REM (found by that probe, 2026-08-31) while buying nothing in production.
+set "GEN_TIMEOUT_SEC=3600"
+if defined CCV3_FOURTHOS_TIMEOUT_SEC set "GEN_TIMEOUT_SEC=%CCV3_FOURTHOS_TIMEOUT_SEC%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fourthos-weekly\run-generate.ps1" -Prompt "%GEN_PROMPT%" -Out "%LOG_FILE%" -AddDir "C:\Users\david.hayes\Projects\ai-enablement-decks" -AllowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" -TimeoutSec %GEN_TIMEOUT_SEC%
 set EXIT_CODE=%ERRORLEVEL%
 
 echo [%date% %time%] FourthOS weekly generation finished. exit=%EXIT_CODE% log=%LOG_FILE%
@@ -198,7 +215,22 @@ if not exist "%RUN_EMIT%" (
     echo [%date% %time%] no report-run.json emitted -- skipping registry upsert
     goto :final_exit
 )
-"%NODE_EXE%" scripts\report-registry\upsert.mjs "%RUN_EMIT%"
+REM Redirect into the dated log. WHY (found 2026-08-31): this was the ONLY
+REM upsert call site in any wrapper with no redirect, so its stdout -- the
+REM `[report-registry] updated row for Run ID "..."` line that PROVES the final
+REM emit updated the pre-emit row in place -- went to the discarded scheduler
+REM console. Result: THIS pipeline has never once logged an updated-row line --
+REM its four August logs carry "created row" and nothing else -- while the
+REM Notion rows themselves showed created_time != last_edited_time on all four
+REM Wednesdays. The update was working; the only evidence of it was thrown away.
+REM Scope, checked before claiming it (the first version of this comment said
+REM "zero hits in any log" after grepping only ~/.claude/logs, and was WRONG):
+REM the three PowerShell pipelines log "updated row" routinely into the REPO
+REM tree at .claude/logs/ -- dashboard-sync 29 files, self-improvement 30,
+REM project-cards 25 -- and have since 2026-08-03. Only FourthOS was blind.
+REM `>>` (append) not `>`: %LOG_FILE% already holds the claude -p capture,
+REM written by the `>` on the type^|claude line above.
+"%NODE_EXE%" scripts\report-registry\upsert.mjs "%RUN_EMIT%" >> "%LOG_FILE%" 2>&1
 echo [%date% %time%] report-run upsert done ^(exit=%ERRORLEVEL%, non-fatal^)
 
 :final_exit
