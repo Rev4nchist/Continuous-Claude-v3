@@ -293,20 +293,21 @@ function queryDaemon(query, projectDir) {
 }
 var FAST_PROBE_TIMEOUT_MS = 250;
 var NEG_CACHE_TTL_MS = 1e4;
-function negCachePath() {
-  return join(tmpdir(), "tldr-daemon-unreachable.json");
+function negCachePath(projectDir) {
+  const hash = crypto.createHash("md5").update(resolveProjectDir(projectDir)).digest("hex").substring(0, 8);
+  return join(tmpdir(), `tldr-daemon-unreachable-${hash}.json`);
 }
-function isDaemonUnreachableCached() {
+function isDaemonUnreachableCached(projectDir) {
   try {
-    const { ts } = JSON.parse(readFileSync(negCachePath(), "utf-8"));
+    const { ts } = JSON.parse(readFileSync(negCachePath(projectDir), "utf-8"));
     return typeof ts === "number" && Date.now() - ts < NEG_CACHE_TTL_MS;
   } catch {
     return false;
   }
 }
-function cacheDaemonUnreachable() {
+function cacheDaemonUnreachable(projectDir) {
   try {
-    writeFileSync(negCachePath(), JSON.stringify({ ts: Date.now() }));
+    writeFileSync(negCachePath(projectDir), JSON.stringify({ ts: Date.now() }));
   } catch {
   }
 }
@@ -344,9 +345,9 @@ function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
 }
 async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
   try {
-    if (isDaemonUnreachableCached()) return;
+    if (isDaemonUnreachableCached(projectDir)) return;
     if (!await probeDaemonFast(projectDir)) {
-      cacheDaemonUnreachable();
+      cacheDaemonUnreachable(projectDir);
       return;
     }
     await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
@@ -424,6 +425,7 @@ import * as path from "path";
 var CONTEXT_DIR = path.join(os.tmpdir(), "claude-search-context");
 
 // src/smart-search-router.ts
+process.env.CCV3_DAEMON_NO_AUTOSTART = "1";
 function storeSearchContext(sessionId, context) {
   try {
     if (!existsSync3(CONTEXT_DIR)) {
@@ -686,9 +688,9 @@ async function main() {
   }
   const projectDir = process.env.CLAUDE_PROJECT_DIR || ".";
   let daemonUp = false;
-  if (!isDaemonUnreachableCached()) {
+  if (!isDaemonUnreachableCached(projectDir)) {
     daemonUp = await probeDaemonFast(projectDir);
-    if (!daemonUp) cacheDaemonUnreachable();
+    if (!daemonUp) cacheDaemonUnreachable(projectDir);
   }
   const { target, targetType } = await extractTarget(pattern, daemonUp);
   const layers = suggestLayers(targetType, queryType);

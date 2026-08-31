@@ -9,6 +9,11 @@
  * Uses TLDR daemon for fast symbol lookups when available.
  */
 
+// A PreToolUse hook must NEVER start a daemon — including the TOCTOU window
+// after a successful probe. tryStartDaemon honors this env var, so a dead
+// daemon yields 'unavailable' and the Grep proceeds (fail open).
+process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
+
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
@@ -525,9 +530,9 @@ async function main() {
   // parallel subagents, and fall back to heuristics.
   const projectDir = process.env.CLAUDE_PROJECT_DIR || '.';
   let daemonUp = false;
-  if (!isDaemonUnreachableCached()) {
+  if (!isDaemonUnreachableCached(projectDir)) {
     daemonUp = await probeDaemonFast(projectDir);
-    if (!daemonUp) cacheDaemonUnreachable();
+    if (!daemonUp) cacheDaemonUnreachable(projectDir);
   }
 
   // Extract target and store context for downstream hooks (tldr-read-enforcer)

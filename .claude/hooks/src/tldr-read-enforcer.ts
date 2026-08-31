@@ -13,6 +13,12 @@
  * PreToolUse hook must never start a daemon.
  */
 
+// A PreToolUse hook must NEVER start a daemon — not even in the TOCTOU window
+// where the fast probe succeeded and the daemon then exited before a query.
+// tryStartDaemon honors this env var after its fast liveness checks, so a
+// dead daemon yields 'unavailable' (fail open) instead of a blocking spawn.
+process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
+
 import { readFileSync, existsSync, statSync, unlinkSync } from 'fs';
 import { basename, extname } from 'path';
 import {
@@ -72,8 +78,7 @@ function getSearchContext(sessionId: string, filePath: string): SearchContext | 
     // Exact-path match: only trust a targeted context when its definition
     // location names the file actually being read. No location = no way to
     // verify correspondence = ignore (structure mode is the safe default).
-    const fileName = basename(filePath);
-    if (!context.definitionLocation || !context.definitionLocation.includes(fileName)) {
+    if (!contextMatchesFile(context.definitionLocation, filePath)) {
       return null;
     }
 
@@ -84,6 +89,25 @@ function getSearchContext(sessionId: string, filePath: string): SearchContext | 
   } catch {
     return null;
   }
+}
+
+/**
+ * Full normalized-path comparison, not basename `includes` — a basename match
+ * accepts `my-index.ts` for `index.ts` and any same-named file in another
+ * directory, which is exactly the cross-talk the exact-path rule exists to
+ * stop. `definitionLocation` is `path:line` (possibly relative); strip only a
+ * TRAILING `:digits` (Windows drive colons stay), normalize separators and
+ * case, and require equality or a `/`-boundary suffix match in either
+ * direction (one side may be relative).
+ */
+export function contextMatchesFile(defLoc: string | undefined, filePath: string): boolean {
+  if (!defLoc) return false;
+  const defPath = defLoc.replace(/:\d+$/, '');
+  const norm = (p: string) => p.replace(/\\/g, '/').toLowerCase();
+  const a = norm(defPath);
+  const b = norm(filePath);
+  if (!a || !b) return false;
+  return a === b || b.endsWith('/' + a) || a.endsWith('/' + b);
 }
 
 // Fail-open daemon probe (remediation §1): probeDaemonFast in daemon-client —
@@ -455,13 +479,13 @@ async function main() {
   // FAIL-OPEN GATE (remediation §1): if the daemon is unreachable, allow the
   // read immediately. Never attempt TLDR work, never start a daemon.
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (isDaemonUnreachableCached()) {
+  if (isDaemonUnreachableCached(projectDir)) {
     console.log('{}');
     return;
   }
   const reachable = await probeDaemonFast(projectDir);
   if (!reachable) {
-    cacheDaemonUnreachable();
+    cacheDaemonUnreachable(projectDir);
     console.log('{}');
     return;
   }

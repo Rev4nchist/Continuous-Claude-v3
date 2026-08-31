@@ -29,7 +29,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | heartbeat | Session keepalive heartbeat to PostgreSQL |
 | maestro-state-manager | Manage Maestro workflow phase state |
 | guardrail-enforcer | Enforce operational guardrails on user prompts |
-| skill-activation-prompt | Detect skill trigger keywords in user input |
+| ~~skill-activation-prompt~~ | ARCHIVED/DEREGISTERED 2026-08-31 (was: detect skill trigger keywords in user input) |
 | memory-awareness | Inject relevant memories from semantic search |
 | pageindex-navigator | Route to PageIndex for document queries (disabled 2026-06-01; on-demand only) |
 | maestro-detector | Detect /maestro workflow activation |
@@ -52,7 +52,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | ralph-template-inject | Agent | Inject Ralph templates into agent prompts |
 | maestro-enforcer | Agent | Enforce Maestro phase gating (block skipping) |
 | pre-tool-knowledge | Agent | Inject knowledge tree context for agents |
-| tldr-context-inject | Agent | Inject TLDR analysis context for agents |
+| ~~tldr-context-inject~~ | Agent | ARCHIVED/DEREGISTERED 2026-08-31 (was: inject TLDR analysis context for agents) |
 | smart-search-router | Grep | Route to AST-grep or TLDR for structured searches |
 | tldr-read-enforcer | Read | Suggest TLDR structure before reading large files |
 | ralph-delegation-enforcer | Edit\|Write\|Bash | Block direct code edits when Ralph is active |

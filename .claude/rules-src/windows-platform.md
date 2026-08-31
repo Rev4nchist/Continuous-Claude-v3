@@ -174,7 +174,7 @@ errors could destroy a peer session's work. Do NOT reach for it reflexively.**
 safe to execute — the kill is gated at `:64-67` — but read its output as incomplete,
 never as an inventory. Census by path instead, which sees every MSYS binary:
 
-```
+```powershell
 $g='C:\Users\david.hayes\AppData\Local\Programs\Git'
 Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($g,'OrdinalIgnoreCase') } |
   Select ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Format-List

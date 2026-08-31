@@ -41,8 +41,10 @@ Files with 1–4 errors each: `shared/index.ts` (4), `edit-context-inject.ts`
 ## Ratchet
 
 `scripts/hooks/tsc-error-ratchet.mjs` — fails when the count EXCEEDS the
-recorded baseline (235); lowering the baseline after a fix is manual and
-deliberate. Demonstrated failing on purpose at baseline 200 before shipping
+recorded baseline; lowering the baseline after a fix is manual and
+deliberate. 235 was the 2026-08-30 initial census; the Step-10 archive moved
+6 error-carrying orphan hooks out of src, so the ENFORCED baseline is **229**
+(2026-08-31). Demonstrated failing on purpose at baseline 200 before shipping
 (vacuous-gate lesson: a guard that has never failed proves nothing).
 
 Run: `node scripts/hooks/tsc-error-ratchet.mjs` (from the repo root).

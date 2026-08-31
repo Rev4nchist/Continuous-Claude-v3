@@ -1053,23 +1053,27 @@ export function trackHookActivitySync(
 const FAST_PROBE_TIMEOUT_MS = 250;
 const NEG_CACHE_TTL_MS = 10_000;
 
-function negCachePath(): string {
-  return join(tmpdir(), 'tldr-daemon-unreachable.json');
+// Keyed by project (same md5-of-resolved-path hash as getConnectionInfo):
+// each projectDir has its own daemon endpoint, so one project's unreachable
+// verdict must not make another project bypass its healthy daemon.
+function negCachePath(projectDir: string): string {
+  const hash = crypto.createHash('md5').update(resolveProjectDir(projectDir)).digest('hex').substring(0, 8);
+  return join(tmpdir(), `tldr-daemon-unreachable-${hash}.json`);
 }
 
-/** True if a recent probe already found the daemon unreachable. */
-export function isDaemonUnreachableCached(): boolean {
+/** True if a recent probe already found this project's daemon unreachable. */
+export function isDaemonUnreachableCached(projectDir: string): boolean {
   try {
-    const { ts } = JSON.parse(readFileSync(negCachePath(), 'utf-8'));
+    const { ts } = JSON.parse(readFileSync(negCachePath(projectDir), 'utf-8'));
     return typeof ts === 'number' && Date.now() - ts < NEG_CACHE_TTL_MS;
   } catch {
     return false;
   }
 }
 
-export function cacheDaemonUnreachable(): void {
+export function cacheDaemonUnreachable(projectDir: string): void {
   try {
-    writeFileSync(negCachePath(), JSON.stringify({ ts: Date.now() }));
+    writeFileSync(negCachePath(projectDir), JSON.stringify({ ts: Date.now() }));
   } catch { /* best-effort */ }
 }
 
@@ -1123,9 +1127,9 @@ export async function trackHookActivityFast(
   metrics: Record<string, number> = {}
 ): Promise<void> {
   try {
-    if (isDaemonUnreachableCached()) return;
+    if (isDaemonUnreachableCached(projectDir)) return;
     if (!(await probeDaemonFast(projectDir))) {
-      cacheDaemonUnreachable();
+      cacheDaemonUnreachable(projectDir);
       return;
     }
     await queryDaemon({ cmd: 'track', hook: hookName, success, metrics }, projectDir);
