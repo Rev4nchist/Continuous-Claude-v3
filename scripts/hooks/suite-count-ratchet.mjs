@@ -211,7 +211,9 @@ if (actual.collected < baseline.collected) {
 if (typeof baseline.suites === 'number' && actual.suites < baseline.suites) {
   failures.push(
     `SUITE COUNT DROPPED: ${actual.suites} < baseline ${baseline.suites} ` +
-      `(-${baseline.suites - actual.suites}). A describe block stopped being collected.`
+      `(-${baseline.suites - actual.suites}). A suite node stopped being collected — ` +
+      `numTotalTestSuites counts test-file roots AND nested describe blocks, so this ` +
+      `can mean a whole file or a single suite.`
   );
 }
 
