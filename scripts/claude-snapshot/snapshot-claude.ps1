@@ -64,7 +64,8 @@ try {
     # is the backstop for a gitignore regression. Never let them enter history.
     $staged = git -C $ClaudeHome diff --cached --name-only
     $secretHits = @($staged | Where-Object {
-        $_ -match '(^|/)\.env' -or $_ -match 'credential' -or $_ -match 'key.*\.json$' -or $_ -match '\.pem$'
+        $_ -match '(^|/)\.env' -or $_ -match 'credential' -or $_ -match 'key.*\.json$' -or $_ -match '\.pem$' -or
+        $_ -match 'settings\.json' -or $_ -match '\.env(\.|/|$)'
     })
     if ($secretHits.Count -gt 0) {
         git -C $ClaudeHome reset | Out-Null
