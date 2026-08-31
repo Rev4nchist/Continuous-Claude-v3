@@ -313,13 +313,24 @@ export function isListenerAlive(projectDir: string): boolean {
   }
   // Unix socket: a ping that fails is a dead listener, full stop.
   if (!existsSync(connInfo.path!)) return false;
+  return ncPing(connInfo.path!, 1000);
+}
+
+/**
+ * Ping a Unix daemon socket via nc with an argv spawn — NO shell (GAP4-02
+ * posture): interpolating the tmpdir-derived socket path into an execSync
+ * string let a hostile TMPDIR (`$(...)`) execute as the hook user.
+ */
+function ncPing(socketPath: string, timeoutMs: number): boolean {
   try {
-    execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
+    const r = spawnSync('nc', ['-U', socketPath], {
+      input: '{"cmd":"ping"}\n',
       encoding: 'utf-8',
-      timeout: 1000,
+      timeout: timeoutMs,
+      shell: false,
       stdio: ['pipe', 'pipe', 'pipe'],
     });
-    return true;
+    return !r.error && !r.signal && r.status === 0;
   } catch {
     return false;
   }
@@ -339,39 +350,26 @@ function isDaemonReachable(projectDir: string): boolean {
     // First check if daemon process is running via PID file
     // This is more reliable than socket ping which can timeout when busy
     if (isDaemonProcessRunning(projectDir)) {
-      // Process exists - socket might just be busy, don't delete it
-      // Try a quick ping but don't delete socket on failure
-      try {
-        execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-          encoding: 'utf-8',
-          timeout: 1000,  // Increased from 500ms
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        return true;
-      } catch {
-        // Ping failed but process exists - daemon is starting or busy
-        // Return true to prevent spawning duplicates
-        return true;
-      }
+      // Process exists - socket might just be busy, don't delete it.
+      // Ping failed but process exists -> daemon is starting or busy;
+      // still return true to prevent spawning duplicates. (Zombie detection
+      // must NOT rely on this function for exactly that reason — it uses
+      // the strict isListenerAlive above.)
+      ncPing(connInfo.path!, 1000);
+      return true;
     }
 
     // No daemon process running - try ping to verify socket isn't stale
-    try {
-      execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-        encoding: 'utf-8',
-        timeout: 500,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+    if (ncPing(connInfo.path!, 500)) {
       return true;
-    } catch {
-      // Connection failed AND no daemon process - socket is stale, safe to remove
-      try {
-        unlinkSync(connInfo.path!);
-      } catch {
-        // Ignore unlink errors
-      }
-      return false;
     }
+    // Connection failed AND no daemon process - socket is stale, safe to remove
+    try {
+      unlinkSync(connInfo.path!);
+    } catch {
+      // Ignore unlink errors
+    }
+    return false;
   }
 }
 

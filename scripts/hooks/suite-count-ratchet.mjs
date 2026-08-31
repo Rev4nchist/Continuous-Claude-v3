@@ -112,7 +112,9 @@ function runSuite() {
       failed: r.numFailedTests ?? 0,
       pending: r.numPendingTests ?? 0,
       collected: r.numTotalTests ?? 0,
-      files: r.numTotalTestSuites ?? (r.testResults?.length ?? 0),
+      // numTotalTestSuites is vitest's SUITE count (describe blocks), not
+      // file count — the field was previously misnamed `files` and unused.
+      suites: r.numTotalTestSuites ?? (r.testResults?.length ?? 0),
     };
   } finally {
     rmSync(dir, { recursive: true, force: true });
@@ -160,7 +162,7 @@ if (flags.has('--update')) {
           'change that moved it, with the reason in the commit message.',
         passed: actual.passed,
         collected: actual.collected,
-        files: actual.files,
+        suites: actual.suites,
         recorded: new Date().toISOString().slice(0, 10),
       },
       null,
@@ -202,6 +204,14 @@ if (actual.collected < baseline.collected) {
     `COLLECTED COUNT DROPPED: ${actual.collected} < baseline ${baseline.collected} ` +
       `(-${baseline.collected - actual.collected}). A test file stopped being collected -- check for an ` +
       `import that throws at load, a node:test import, or a deleted file.`
+  );
+}
+// Enforce the suite count too (baseline.suites absent on pre-rename baselines
+// -> skip rather than compare against undefined).
+if (typeof baseline.suites === 'number' && actual.suites < baseline.suites) {
+  failures.push(
+    `SUITE COUNT DROPPED: ${actual.suites} < baseline ${baseline.suites} ` +
+      `(-${baseline.suites - actual.suites}). A describe block stopped being collected.`
   );
 }
 

@@ -2,7 +2,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
 import * as net from "net";
@@ -116,13 +116,18 @@ function isListenerAlive(projectDir) {
     }
   }
   if (!existsSync(connInfo.path)) return false;
+  return ncPing(connInfo.path, 1e3);
+}
+function ncPing(socketPath, timeoutMs) {
   try {
-    execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
+    const r = spawnSync("nc", ["-U", socketPath], {
+      input: '{"cmd":"ping"}\n',
       encoding: "utf-8",
-      timeout: 1e3,
+      timeout: timeoutMs,
+      shell: false,
       stdio: ["pipe", "pipe", "pipe"]
     });
-    return true;
+    return !r.error && !r.signal && r.status === 0;
   } catch {
     return false;
   }
@@ -136,32 +141,17 @@ function isDaemonReachable(projectDir) {
       return false;
     }
     if (isDaemonProcessRunning(projectDir)) {
-      try {
-        execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-          encoding: "utf-8",
-          timeout: 1e3,
-          // Increased from 500ms
-          stdio: ["pipe", "pipe", "pipe"]
-        });
-        return true;
-      } catch {
-        return true;
-      }
+      ncPing(connInfo.path, 1e3);
+      return true;
+    }
+    if (ncPing(connInfo.path, 500)) {
+      return true;
     }
     try {
-      execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-        encoding: "utf-8",
-        timeout: 500,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      return true;
+      unlinkSync(connInfo.path);
     } catch {
-      try {
-        unlinkSync(connInfo.path);
-      } catch {
-      }
-      return false;
     }
+    return false;
   }
 }
 function tryStartDaemon(projectDir) {

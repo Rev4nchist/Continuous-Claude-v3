@@ -30,8 +30,10 @@ describe('daemon zombie detection (live PID, dead listener)', () => {
   // Unique per-run project dir -> unique endpoint nothing listens on.
   const projectDir = resolve(tmpdir(), `zombie-probe-${process.pid}-${Date.now()}`);
   const pidPath = pidPathFor(projectDir);
+  let priorNoAutostart: string | undefined;
 
   beforeEach(() => {
+    priorNoAutostart = process.env.CCV3_DAEMON_NO_AUTOSTART;
     mkdirSync(projectDir, { recursive: true });
     // A PID that is alive by definition: this test process.
     writeFileSync(pidPath, String(process.pid));
@@ -45,7 +47,9 @@ describe('daemon zombie detection (live PID, dead listener)', () => {
   afterEach(() => {
     rmSync(pidPath, { force: true });
     rmSync(projectDir, { recursive: true, force: true });
-    delete process.env.CCV3_DAEMON_NO_AUTOSTART;
+    // Restore, don't blindly delete — the runner may have started with it set.
+    if (priorNoAutostart === undefined) delete process.env.CCV3_DAEMON_NO_AUTOSTART;
+    else process.env.CCV3_DAEMON_NO_AUTOSTART = priorNoAutostart;
   });
 
   it('strict probe reports the dead listener', () => {
