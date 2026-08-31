@@ -48,6 +48,9 @@ try {
     }
 
     $dirty = git -C $ClaudeHome status --porcelain
+    # $ErrorActionPreference does not cover native commands: a missing git or
+    # unreadable repo would otherwise log CLEAN and stamp last-success forever.
+    if ($LASTEXITCODE -ne 0) { Write-Log "ERROR: git status failed ($LASTEXITCODE)"; exit 1 }
     if (-not $dirty) {
         Write-Log "CLEAN: nothing to snapshot"
         Set-Content -Path (Join-Path $LogDir 'last-success.txt') -Value (Get-Date -Format 'o')

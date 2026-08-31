@@ -60,6 +60,15 @@ describe('msys-crash-capture classifiers (unit)', () => {
     expect(redactCommand('x'.repeat(500)).length).toBe(200);
   });
 
+  it('redacts HTTP Authorization Bearer and Basic credentials', () => {
+    const bearer = redactCommand('curl -H "Authorization: Bearer eyJhbGciOi.secret" api.example.com');
+    expect(bearer).toContain('Authorization: Bearer <redacted>');
+    expect(bearer).not.toContain('eyJhbGciOi.secret');
+    const basic = redactCommand('curl -H "authorization: basic dXNlcjpwYXNz" api.example.com');
+    expect(basic).toContain('basic <redacted>');
+    expect(basic).not.toContain('dXNlcjpwYXNz');
+  });
+
   it('extracts text from string and object responses', () => {
     expect(responseText('plain')).toBe('plain');
     expect(responseText({ stdout: 'a', stderr: 'b' })).toBe('a\nb');

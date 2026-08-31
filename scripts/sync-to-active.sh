@@ -215,6 +215,9 @@ print_guard_summary() {
         [[ "$GUARD_ERRORS" -gt 0 ]] && echo "  $GUARD_ERRORS file(s) NOT synced (quarantine failed) -- resolve manually"
         echo "  Review, salvage what you need, then delete that dir yourself. It is never auto-purged."
     fi
+    # A quarantine FAILURE means files were left unsynced -- automated callers
+    # (health_check drift remediation) must see a non-zero exit, not success.
+    [[ "$GUARD_ERRORS" -gt 0 ]] && return 1
     return 0
 }
 
@@ -482,7 +485,7 @@ if $CHANGED; then
     fi
 
     save_manifest
-    print_guard_summary
+    print_guard_summary || exit 3
     $VERBOSE && echo "Incremental sync complete: continuous-claude -> ~/.claude" || true
     exit 0
 fi
@@ -658,5 +661,5 @@ if ! $DRY_RUN; then
 fi
 
 save_manifest
-print_guard_summary
+print_guard_summary || exit 3
 $VERBOSE && echo "Sync complete: continuous-claude -> ~/.claude" || true

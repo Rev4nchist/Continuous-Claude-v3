@@ -36,8 +36,11 @@ function main(): void {
     const sessionId = rawSessionId.slice(0, 8);
     const contextFile = join(tmpdir(), `claude-context-pct-${sessionId}.txt`);
     if (existsSync(contextFile)) {
-      const pct = parseInt(readFileSync(contextFile, 'utf-8').trim(), 10);
-      if (!Number.isNaN(pct)) {
+      // Strict parse: parseInt would accept "70stale" as 70. Only a complete
+      // integer 0-100 reaches the threshold branches (CodeRabbit PR #31).
+      const raw = readFileSync(contextFile, 'utf-8').trim();
+      const pct = /^\d{1,3}$/.test(raw) ? parseInt(raw, 10) : NaN;
+      if (!Number.isNaN(pct) && pct <= 100) {
         if (pct >= 90) {
           outputWithMessage(
             'CONTEXT CRITICAL: ' + pct + '%\nRun /create_handoff NOW before auto-compact!',

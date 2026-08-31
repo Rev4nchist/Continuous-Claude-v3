@@ -46,7 +46,7 @@ function exitCodeOf(resp) {
 }
 function redactCommand(cmd) {
   if (!cmd) return "";
-  return cmd.replace(/(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, "$1=<redacted>").replace(/\s+/g, " ").slice(0, 200);
+  return cmd.replace(/(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, "$1=<redacted>").replace(/\b(authorization\s*:\s*(?:bearer|basic)\s+)\S+/gi, "$1<redacted>").replace(/\s+/g, " ").slice(0, 200);
 }
 function msysCensus() {
   try {

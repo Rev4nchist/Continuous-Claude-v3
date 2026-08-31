@@ -67,8 +67,7 @@ function entryKey(h) {
   // A hook entry is identified by the basename of the script it runs plus any
   // extra args (braintrust_hooks.py runs once per event with different args).
   const args = h.args || [];
-  const script = args[0] ? basename(args[0]) : h.command;
-  return [script, ...args.slice(1)].join(' ');
+  return [scriptOf(h), ...args.slice(1)].join(' ');
 }
 
 function eventKeys(settings, ev) {
@@ -79,10 +78,17 @@ function eventKeys(settings, ev) {
   return out;
 }
 
+// Script path of a hook entry: exec form uses args[0]; command form embeds the
+// path in the command string ("node C:/.../dist/foo.mjs").
+function scriptOf(h) {
+  if (h.args?.[0]) return basename(h.args[0]);
+  const m = (h.command || '').match(/\S+\.(?:mjs|py|sh|ps1)\b/);
+  return m ? basename(m[0]) : h.command;
+}
+
 function codeExistsInRepo(h) {
-  const args = h.args || [];
-  if (!args[0]) return false;
-  const script = basename(args[0]);
+  const script = scriptOf(h);
+  if (!script) return false;
   if (script.endsWith('.mjs')) return existsSync(join(REPO_ROOT, '.claude', 'hooks', 'dist', script));
   if (script.endsWith('.py')) return existsSync(join(REPO_ROOT, '.claude', 'hooks', script));
   if (script.endsWith('.ps1') || script.endsWith('.sh'))
@@ -90,12 +96,15 @@ function codeExistsInRepo(h) {
   return false;
 }
 
+const HOME_RE = /([A-Za-z]:)?[/\\]Users[/\\][^/\\ ]+[/\\]\.claude/g;
+
 function templatize(h) {
   const clone = JSON.parse(JSON.stringify(h));
   if (clone.args) {
-    clone.args = clone.args.map((a) =>
-      a.replace(/^([A-Za-z]:)?[/\\]Users[/\\][^/\\]+[/\\]\.claude/, '{{CLAUDE_HOME}}'),
-    );
+    clone.args = clone.args.map((a) => a.replace(HOME_RE, '{{CLAUDE_HOME}}'));
+  }
+  if (typeof clone.command === 'string') {
+    clone.command = clone.command.replace(HOME_RE, '{{CLAUDE_HOME}}');
   }
   return clone;
 }
@@ -123,14 +132,20 @@ const template = read(TEMPLATE);
 
 const report = { captured: [], machineLocal: [], danglingSkipped: [], staleSkipped: [] };
 
-for (const ev of EVENTS) {
+// Iterate the ACTIVE file's own event keys, not just the known list -- a fixed
+// list silently skipped events like SubagentStop (CodeRabbit PR #31). Unknown
+// events are still captured, and reported so the EVENTS list gets updated.
+const activeEvents = Object.keys(active.hooks || {});
+report.unknownEvents = activeEvents.filter((ev) => !EVENTS.includes(ev));
+
+for (const ev of activeEvents) {
   const repoKeys = eventKeys(repo, ev);
   const tplKeys = eventKeys(template, ev);
   for (const g of active.hooks?.[ev] || []) {
     const matcher = g.matcher || '*';
     for (const h of g.hooks || []) {
       const key = matcher + ' :: ' + entryKey(h);
-      const script = h.args?.[0] ? basename(h.args[0]) : h.command;
+      const script = scriptOf(h);
       const inRepo = repoKeys.has(key);
       const inTpl = tplKeys.has(key);
       if (inRepo && inTpl) continue;

@@ -75,6 +75,7 @@ export function redactCommand(cmd: string): string {
   if (!cmd) return '';
   return cmd
     .replace(/(api[_-]?key|token|secret|password|passwd)\s*[=:]\s*\S+/gi, '$1=<redacted>')
+    .replace(/\b(authorization\s*:\s*(?:bearer|basic)\s+)\S+/gi, '$1<redacted>')
     .replace(/\s+/g, ' ')
     .slice(0, 200);
 }

@@ -74,6 +74,14 @@ describe('context-pct-warning', () => {
     expect(out).toEqual({ result: 'continue' });
   });
 
+  it('rejects partially numeric and out-of-range values (strict parse)', () => {
+    for (const bad of ['70stale', '-1', '101', '9999']) {
+      writeFileSync(STATE_FILE, bad);
+      const { out } = runHook(payload());
+      expect(out, `value ${bad}`).toEqual({ result: 'continue' });
+    }
+  });
+
   it('continues on malformed stdin (never crashes the prompt)', () => {
     const { out, status } = runHook('not json');
     expect(status).toBe(0);
