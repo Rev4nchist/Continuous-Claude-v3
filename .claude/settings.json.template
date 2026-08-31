@@ -296,6 +296,30 @@
               "{{CLAUDE_HOME}}/hooks/braintrust_hooks.py",
               "user_prompt_submit"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/bus-session-populator.mjs"
+            ],
+            "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/context-pct-warning.mjs"
+            ],
+            "timeout": 10000
           }
         ]
       }
@@ -382,6 +406,30 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-memory-loaders.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/session-start-intel-prune.mjs"
+            ],
+            "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/identity-probe.mjs"
+            ],
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
           }
         ]
       }
@@ -460,6 +508,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-end-handoff-indexer.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coordination-release.mjs"
+            ],
+            "timeout": 10000
           }
         ]
       }
@@ -475,6 +531,14 @@
               "{{CLAUDE_HOME}}/hooks/braintrust_hooks.py",
               "post_tool_use"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/mcp-activity-tracker.mjs"
+            ],
+            "timeout": 3000
           }
         ]
       },
@@ -604,6 +668,13 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/linear-branch-context.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/architecture-stats-sync.mjs"
+            ]
           }
         ]
       },
@@ -700,6 +771,110 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/web-lookup-advisor.mjs"
             ]
+          }
+        ]
+      },
+      {
+        "matcher": "TaskUpdate|Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/roadmap-completion.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/git-commit-roadmap.mjs"
+            ],
+            "timeout": 30000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/ralph-monitor.mjs"
+            ],
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/test-run-tracker.mjs"
+            ],
+            "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/msys-crash-capture.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "Read|Grep",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/bus-tool-populator.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Edit|Write|Bash|PowerShell|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Notification": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coordination-notification.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
+      }
+    ],
+    "Stop": [
+      {
+        "hooks": [
+          {
+            "type": "command",
+            "command": "python",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/braintrust_hooks.py",
+              "stop"
+            ],
+            "timeout": 15000
           }
         ]
       }

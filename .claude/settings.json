@@ -181,6 +181,26 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/destructive-command-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/package-install-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "ExitPlanMode",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/plan-mode-approval-gate.mjs"
+            ],
+            "timeout": 5000
           }
         ]
       }
@@ -284,6 +304,14 @@
               "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/context-pct-warning.mjs"
+            ],
+            "timeout": 10000
           }
         ]
       }
@@ -371,6 +399,29 @@
               "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-context-loaders.mjs"
+            ],
+            "timeout": 20000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-start-memory-loaders.mjs"
+            ],
+            "timeout": 15000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/hook-health-monitor.mjs"
+            ]
           }
         ]
       }
@@ -449,6 +500,14 @@
               "C:/Users/david.hayes/.claude/hooks/dist/coordination-release.mjs"
             ],
             "timeout": 10000
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/session-end-handoff-indexer.mjs"
+            ],
+            "timeout": 15000
           }
         ]
       }
@@ -464,6 +523,14 @@
               "C:/Users/david.hayes/.claude/hooks/braintrust_hooks.py",
               "post_tool_use"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/mcp-activity-tracker.mjs"
+            ],
+            "timeout": 3000
           }
         ]
       },
@@ -527,6 +594,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/plan-exit-tracker.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/plan-exit-premortem-prompt.mjs"
+            ],
+            "timeout": 5000
           }
         ]
       },
@@ -568,6 +643,13 @@
             "timeout": 5000,
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/test-run-tracker.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/msys-crash-capture.mjs"
             ]
           }
         ]
@@ -632,6 +714,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/import-validator.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/post-edit-diagnostics.mjs"
+            ],
+            "timeout": 35000
           }
         ]
       },
@@ -670,6 +760,43 @@
               "C:/Users/david.hayes/.claude/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Skill|Task",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/telemetry-tracker.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "WebFetch|WebSearch",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/web-lookup-advisor.mjs"
+            ],
+            "timeout": 5000
+          }
+        ]
+      },
+      {
+        "matcher": "Bash",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/architecture-stats-sync.mjs"
+            ]
           }
         ]
       }
