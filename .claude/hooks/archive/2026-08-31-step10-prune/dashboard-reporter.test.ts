@@ -23,7 +23,7 @@ import {
   parseInput,
   DASHBOARD_URL,
   TIMEOUT_MS,
-} from '../dashboard-reporter.js';
+} from './dashboard-reporter.js';
 
 // =============================================================================
 // Test 1: Constants

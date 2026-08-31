@@ -1,3 +1,10 @@
+---
+paths:
+  - "**/knowledge-tree.json"
+  - "**/knowledge_tree.py"
+  - "**/tree_schema.py"
+---
+
 # Knowledge Tree Health
 
 The knowledge tree (`knowledge-tree.json`) is critical for project navigation. It can silently break.

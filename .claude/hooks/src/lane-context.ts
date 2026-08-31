@@ -53,6 +53,18 @@ interface ContextInjectionOutput {
   };
 }
 
+/**
+ * Tools this hook is registered under on PostToolUse (settings.json matcher
+ * `Edit|Write|Bash|PowerShell|Task`). The hook is deliberately tool-agnostic:
+ * any post-tool event means only "the session is alive — renew leases, maybe
+ * inject the delta", so there is NO runtime tool_name gate that could fall out
+ * of sync with the matcher. This roster exists so the matcher/runtime
+ * consistency guard can see each named tool (PowerShell included) is
+ * intentional, not an inert registration.
+ */
+const REGISTERED_TOOLS = ['Edit', 'Write', 'Bash', 'PowerShell', 'Task'] as const;
+void REGISTERED_TOOLS;
+
 /** Shorter than the claim path's 2000ms: a missed banner is free, a stalled prompt is not. */
 const CONNECT_TIMEOUT_MS = 1200;
 const QUERY_TIMEOUT_MS = 1500;

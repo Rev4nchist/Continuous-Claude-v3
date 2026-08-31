@@ -1,3 +1,8 @@
+---
+paths:
+  - ".claude/hooks/**"
+---
+
 # Hook Development Lifecycle
 
 ## Full Workflow
@@ -26,6 +31,7 @@
 |---------|-------|-----|
 | Hook silently doesn't run | Missing registration in settings.json | Run `/hook-audit` to find unregistered hooks |
 | Widening a matcher changes nothing | **Two gates.** The hook's own `main()` still rejects the new tool (`if (data.tool_name !== 'Bash') return;`). The matcher lets the event in; the runtime check drops it, so the symptom does not move and the matcher edit looks wrong. Hit 2026-08-05 across all 4 PowerShell-registered hooks. | Widen the runtime check in the SAME change. Gate on a `COMMAND_TOOLS` set. Guard: `hook-matcher-runtime-consistency.test.ts` |
+| Hook runs forever and never does its job | **Both gates agree with each other and BOTH are wrong.** The matcher and the runtime check name the same tool, so `hook-matcher-runtime-consistency.test.ts` passes — but that tool no longer exists under that name. `tldr-context-inject` was registered on matcher `Task` and opened with `if (input.tool_name !== 'Task') return;` while the live subagent tool is named **`Agent`**. It returned `{}` on every spawn for ~159 days and injected exactly zero times. Commit `d8d7343` (2026-03-06, "Task→Agent rename") widened ~10 sibling hooks and missed it. Deleted 2026-08-17. | **No guard covers this today.** A green consistency test is not evidence the hook fires. Verify against REALITY: grep recent transcripts in `~/.claude/projects/*/` for `"name":"<Tool>"` to confirm the matcher names a tool that actually appears, and check the hook's own telemetry sink for a non-zero row count. |
 | dist file missing | Never built or build failed | `cd .claude/hooks && npm run build` |
 | Stale behavior | src changed but dist not rebuilt | `cd .claude/hooks && npm run build` |
 | Hook errors in stderr | Logic error in TS code | Check `~/.claude/hooks/dist/<name>.mjs` output |

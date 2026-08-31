@@ -9,10 +9,23 @@
  * Uses TLDR daemon for fast symbol lookups when available.
  */
 
+// A PreToolUse hook must NEVER start a daemon — including the TOCTOU window
+// after a successful probe. tryStartDaemon honors this env var, so a dead
+// daemon yields 'unavailable' and the Grep proceeds (fail open).
+process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
+
 import { existsSync, mkdirSync, writeFileSync, readFileSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
-import { queryDaemonSync, DaemonResponse, trackHookActivitySync } from './daemon-client.js';
+import {
+  queryDaemon,
+  queryDaemonSync,
+  DaemonResponse,
+  trackHookActivityFast,
+  probeDaemonFast,
+  isDaemonUnreachableCached,
+  cacheDaemonUnreachable,
+} from './daemon-client.js';
 import { logHook } from './shared/session-activity.js';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
 
@@ -72,10 +85,11 @@ interface TLDRSearchResult {
  * Search using TLDR daemon with ripgrep fallback.
  * Uses daemon when available, falls back to ripgrep when indexing/unavailable.
  */
-function tldrSearch(pattern: string, projectDir: string = '.'): TLDRSearchResult[] {
+async function tldrSearch(pattern: string, projectDir: string = '.'): Promise<TLDRSearchResult[]> {
   try {
-    // Try daemon first
-    const response = queryDaemonSync({ cmd: 'search', pattern }, projectDir);
+    // Try daemon first — async socket, not queryDaemonSync (which spawns a
+    // PowerShell process per query on Windows; remediation §2)
+    const response = await queryDaemon({ cmd: 'search', pattern }, projectDir);
 
     // If daemon is indexing or unavailable, fall back to ripgrep
     if (response.indexing || response.status === 'unavailable') {
@@ -192,9 +206,9 @@ function tldrSemantic(query: string, projectDir: string = '.'): SemanticSearchRe
 /**
  * Get callers of a function using TLDR daemon.
  */
-function tldrImpact(funcName: string, projectDir: string = '.'): string[] {
+async function tldrImpact(funcName: string, projectDir: string = '.'): Promise<string[]> {
   try {
-    const response = queryDaemonSync({ cmd: 'impact', func: funcName }, projectDir);
+    const response = await queryDaemon({ cmd: 'impact', func: funcName }, projectDir);
 
     // Skip if indexing or unavailable
     if (response.indexing || response.status === 'unavailable') {
@@ -212,16 +226,16 @@ function tldrImpact(funcName: string, projectDir: string = '.'): string[] {
   }
 }
 
-function lookupCallers(pattern: string): string[] {
+async function lookupCallers(pattern: string): Promise<string[]> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || '.';
-  return tldrImpact(pattern, projectDir).slice(0, 20);
+  return (await tldrImpact(pattern, projectDir)).slice(0, 20);
 }
 
-function lookupSymbol(pattern: string): { type: SearchContext['targetType']; location: string } | null {
+async function lookupSymbol(pattern: string): Promise<{ type: SearchContext['targetType']; location: string } | null> {
   const projectDir = process.env.CLAUDE_PROJECT_DIR || '.';
 
   // Try function first (most common)
-  const funcResults = tldrSearch(`def ${pattern}`, projectDir);
+  const funcResults = await tldrSearch(`def ${pattern}`, projectDir);
   if (funcResults.length > 0) {
     return {
       type: 'function',
@@ -230,7 +244,7 @@ function lookupSymbol(pattern: string): { type: SearchContext['targetType']; loc
   }
 
   // Try class
-  const classResults = tldrSearch(`class ${pattern}`, projectDir);
+  const classResults = await tldrSearch(`class ${pattern}`, projectDir);
   if (classResults.length > 0) {
     return {
       type: 'class',
@@ -240,7 +254,7 @@ function lookupSymbol(pattern: string): { type: SearchContext['targetType']; loc
 
   // Try variable (SCREAMING_CASE assignment)
   if (/^[A-Z][A-Z0-9_]+$/.test(pattern)) {
-    const varResults = tldrSearch(`${pattern} =`, projectDir);
+    const varResults = await tldrSearch(`${pattern} =`, projectDir);
     if (varResults.length > 0) {
       return {
         type: 'variable',
@@ -257,9 +271,14 @@ function lookupSymbol(pattern: string): { type: SearchContext['targetType']; loc
 // Standalone: poll, call, exec, sync, etc. (common method names that are single verbs)
 const FUNCTION_VERB_PREFIXES = /^(get|set|is|has|do|can|create|update|delete|fetch|load|save|read|write|parse|build|make|init|setup|run|start|stop|handle|process|validate|check|find|search|filter|sort|map|reduce|transform|convert|format|render|display|show|hide|enable|disable|add|remove|insert|append|push|pop|clear|reset|close|open|connect|disconnect|send|receive|emit|on_|async_|_get|_set|_is|_has|_do|_create|_update|_delete|_fetch|_load|_save|_read|_write|_parse|_build|_make|_init|_setup|_run|_handle|_process|_validate|_check|_find|poll|call|exec|execute|invoke|apply|bind|dispatch|trigger|fire|notify|broadcast|publish|subscribe|unsubscribe|listen|watch|observe|register|unregister|mount|unmount|attach|detach|flush|dump|log|warn|error|debug|trace|print|throw|raise|assert|test|mock|stub|spy|wait|sleep|delay|retry|abort|cancel|pause|resume|refresh|reload|rerun|revert|rollback|commit|merge|split|join|clone|copy|move|swap|toggle|flip|increment|decrement|next|prev|first|last|peek|drain|consume|produce|yield|spawn|fork|join|kill|terminate|shutdown|cleanup|destroy|dispose|release|acquire|lock|unlock|enter|exit|begin|end|finalize)(_|$)/;
 
-function extractTarget(pattern: string): { target: string | null; targetType: SearchContext['targetType'] } {
-  // 1. Try AST-based symbol index first (100% accurate if indexed)
-  const indexed = lookupSymbol(pattern);
+async function extractTarget(
+  pattern: string,
+  daemonUp: boolean
+): Promise<{ target: string | null; targetType: SearchContext['targetType'] }> {
+  // 1. Try AST-based symbol index first (100% accurate if indexed).
+  // Gated on the fast probe: when the daemon is down, a lookup would pay the
+  // tryStartDaemon spawn path just to fail — heuristics below cover it.
+  const indexed = daemonUp ? await lookupSymbol(pattern) : null;
   if (indexed) {
     return { target: pattern, targetType: indexed.type };
   }
@@ -494,7 +513,7 @@ async function main() {
   // native Grep do its job.
   if (isScopedCall(input.tool_input)) {
     try { logHook(sessionId, 'smart-search-router'); } catch { /* never break */ }
-    trackHookActivitySync('smart-search-router', process.env.CLAUDE_PROJECT_DIR || '.', true, {
+    await trackHookActivityFast('smart-search-router', process.env.CLAUDE_PROJECT_DIR || '.', true, {
       queries_routed: 1, scoped_passthrough: 1,
     });
     console.log('{}');
@@ -506,13 +525,23 @@ async function main() {
   // Log hook activation (fires whenever a Grep is intercepted for routing)
   try { logHook(sessionId, 'smart-search-router'); } catch { /* never break */ }
 
+  // One fast reachability probe gates every daemon lookup below (remediation
+  // §1/§2): daemon down → skip lookups entirely, cache the verdict for
+  // parallel subagents, and fall back to heuristics.
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || '.';
+  let daemonUp = false;
+  if (!isDaemonUnreachableCached(projectDir)) {
+    daemonUp = await probeDaemonFast(projectDir);
+    if (!daemonUp) cacheDaemonUnreachable(projectDir);
+  }
+
   // Extract target and store context for downstream hooks (tldr-read-enforcer)
-  const { target, targetType } = extractTarget(pattern);
+  const { target, targetType } = await extractTarget(pattern, daemonUp);
   const layers = suggestLayers(targetType, queryType);
 
   // Look up cross-file info from indexes
-  const symbolInfo = target ? lookupSymbol(target) : null;
-  const callers = target ? lookupCallers(target) : [];
+  const symbolInfo = (target && daemonUp) ? await lookupSymbol(target) : null;
+  const callers = (target && daemonUp) ? await lookupCallers(target) : [];
 
   storeSearchContext(sessionId, {
     timestamp: Date.now(),
@@ -525,12 +554,9 @@ async function main() {
     callers: callers.slice(0, 20),  // Limit to 20 callers for token efficiency
   });
 
-  // Track hook activity (P8) - get project dir early for tracking
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || '.';
-
   // LITERAL: Pass through to Grep (native tool handles literal patterns best)
   if (queryType === 'literal') {
-    trackHookActivitySync('smart-search-router', projectDir, true, {
+    await trackHookActivityFast('smart-search-router', projectDir, true, {
       queries_routed: 1, literal_queries: 1,
     });
 
@@ -539,117 +565,24 @@ async function main() {
     return;
   }
 
-  // STRUCTURAL: Suggest AST-grep (most token-efficient for patterns)
+  // STRUCTURAL: track and allow. The deny-and-redirect behavior was removed
+  // 2026-08-30 per docs/harness-strategy/2026-07-29-tldr-remediation-plan.md §5:
+  // 0/16 adoption, and the semantic index it steered toward was months stale.
+  // The search context stored above still routes downstream (tldr-read-enforcer).
   if (queryType === 'structural') {
-    trackHookActivitySync('smart-search-router', projectDir, true, {
+    await trackHookActivityFast('smart-search-router', projectDir, true, {
       queries_routed: 1, structural_queries: 1,
     });
-
-    const astPattern = getAstGrepSuggestion(pattern);
-    const reason = `🎯 Structural query - Use AST-grep OR TLDR:
-
-**Option 1 - AST-grep (pattern matching):**
-ast-grep --pattern "${astPattern}" --lang python
-
-**Option 2 - TLDR (richer context):**
-/tldr-search ${target || pattern}
-
-AST-grep: precise pattern match, file:line only
-TLDR: finds + call graph + docstrings + complexity`;
-
-    const output: HookOutput = {
-      hookSpecificOutput: {
-        hookEventName: 'PreToolUse',
-        permissionDecision: 'deny',
-        permissionDecisionReason: reason
-      }
-    };
-    console.log(JSON.stringify(output));
+    console.log('{}');
     return;
   }
 
-  // SEMANTIC: Actually run semantic search via daemon
-  trackHookActivitySync('smart-search-router', projectDir, true, {
+  // SEMANTIC: track and allow (same remediation §5). No semantic query is run —
+  // computing results only to discard them would re-pay the daemon latency.
+  await trackHookActivityFast('smart-search-router', projectDir, true, {
     queries_routed: 1, semantic_queries: 1,
   });
-
-  const semanticSearch = tldrSemantic(pattern, projectDir);
-
-  let reason: string;
-  if (semanticSearch.status === 'ok' && semanticSearch.results.length > 0) {
-    // We have results - provide them directly
-    const resultsStr = semanticSearch.results.map(r => {
-      const loc = `${r.file}:${r.function || 'module'}`;
-      const score = r.score ? ` (${(r.score * 100).toFixed(0)}%)` : '';
-      return `  - ${loc}${score}`;
-    }).join('\n');
-
-    reason = `🧠 **Semantic Search Results** (via TLDR daemon):
-
-${resultsStr}
-
-**Next steps:**
-1. Read the most relevant file: \`Read ${semanticSearch.results[0].file}\`
-2. For deeper analysis: \`/tldr-search ${target || pattern} --layer all\`
-
-The results above are semantically similar to "${pattern}".`;
-  } else if (semanticSearch.status === 'no_index') {
-    // Semantic index doesn't exist - offer to set it up
-    reason = `🧠 **Semantic Search Not Set Up**
-
-No semantic index found. To enable AI-powered code search:
-
-\`\`\`bash
-tldr semantic index . --lang all
-\`\`\`
-
-This creates embeddings for your codebase (one-time, ~30s).
-After indexing, natural language queries like "${pattern}" will find relevant code.
-
-**For now, use:**
-- \`/tldr-search ${target || pattern}\` - structured search
-- \`Task(subagent_type="scout", prompt="${pattern}")\` - agent exploration (scout = Sonnet; Explore/Haiku is banned)`;
-  } else if (semanticSearch.status === 'daemon_unavailable') {
-    // Daemon not running
-    reason = `🧠 **TLDR Daemon Not Running**
-
-Start the daemon for semantic search:
-\`\`\`bash
-tldr daemon start
-\`\`\`
-
-Then retry your query. The daemon provides fast, in-memory semantic search.
-
-**For now, use:**
-- \`/tldr-search ${target || pattern}\` - structured search (no daemon needed)`;
-  } else if (semanticSearch.status === 'indexing') {
-    // Daemon is indexing
-    reason = `🧠 **Semantic Index Building...**
-
-The daemon is currently building the semantic index. This takes ~30s.
-Retry in a moment, or use structured search for now:
-
-\`/tldr-search ${target || pattern}\``;
-  } else {
-    // No results but system is working - genuinely no matches
-    reason = `🧠 **No Semantic Matches**
-
-No code semantically similar to "${pattern}" found in the index.
-
-**Try:**
-1. Rephrase the query with different keywords
-2. Use structured search: \`/tldr-search ${target || pattern}\`
-3. Delegate to an agent: \`Task(subagent_type="scout", prompt="${pattern}")\` (scout = Sonnet; Explore is banned)`;
-  }
-
-  const output: HookOutput = {
-    hookSpecificOutput: {
-      hookEventName: 'PreToolUse',
-      permissionDecision: 'deny',
-      permissionDecisionReason: reason
-    }
-  };
-  console.log(JSON.stringify(output));
+  console.log('{}');
 }
 
 // Guard the on-import auto-run so unit tests can import the exported helpers

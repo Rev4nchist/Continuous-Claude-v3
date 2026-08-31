@@ -90,14 +90,6 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/tldr-context-inject.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 3000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-recall-injector.mjs"
@@ -238,14 +230,6 @@
             "timeout": 5000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/guardrail-enforcer.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 10000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/skill-activation-prompt.mjs"
             ]
           },
           {

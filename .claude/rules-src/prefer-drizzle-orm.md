@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/*.ts"
+  - "**/*.tsx"
+  - "**/drizzle.config.*"
+  - "**/prisma/**"
+---
+
 # Prefer Drizzle ORM over Prisma
 
 When a project needs a TypeScript ORM for PostgreSQL:

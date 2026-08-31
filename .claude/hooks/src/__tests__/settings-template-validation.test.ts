@@ -117,7 +117,9 @@ describe('settings.json.template', () => {
       ['package-install-guard', 'PreToolUse::Bash'],
       ['agent-model-guard', 'PreToolUse::Task'],
       ['agent-recall-injector', 'PreToolUse::Task'],
-      ['tldr-context-inject', 'PreToolUse::Task'],
+      // tldr-context-inject removed from the contract 2026-08-31: deregistered
+      // everywhere by the TLDR remediation (63s/Task-call, zero real injections)
+      // and archived by the Step-10 prune.
       ['plan-to-ralph-enforcer', 'PreToolUse::Edit|Write'],
       ['memory-awareness', 'UserPromptSubmit::'],
       ['post-edit-diagnostics', 'PostToolUse::Edit|Write'],

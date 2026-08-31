@@ -1,3 +1,11 @@
+---
+paths:
+  - "**/package.json"
+  - "**/dev-start.mjs"
+  - "**/dev-cleanup.mjs"
+  - "**/.env.local"
+---
+
 # Dev Server Cleanup Pattern
 
 ## Convention

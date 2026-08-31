@@ -2,7 +2,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
-import { execSync, spawnSync } from "child_process";
+import { spawnSync } from "child_process";
 import { join, resolve } from "path";
 import { tmpdir } from "os";
 import * as net from "net";
@@ -101,7 +101,7 @@ function getStatusFile(projectDir) {
 function isIndexing(projectDir) {
   return getStatusFile(projectDir) === "indexing";
 }
-function isDaemonReachable(projectDir) {
+function isListenerAlive(projectDir) {
   const connInfo = getConnectionInfo(projectDir);
   if (connInfo.type === "tcp") {
     try {
@@ -114,43 +114,56 @@ function isDaemonReachable(projectDir) {
     } catch {
       return false;
     }
+  }
+  if (!existsSync(connInfo.path)) return false;
+  return ncPing(connInfo.path, 1e3);
+}
+function ncPing(socketPath, timeoutMs) {
+  try {
+    const r = spawnSync("nc", ["-U", socketPath], {
+      input: '{"cmd":"ping"}\n',
+      encoding: "utf-8",
+      timeout: timeoutMs,
+      shell: false,
+      stdio: ["pipe", "pipe", "pipe"]
+    });
+    return !r.error && !r.signal && r.status === 0;
+  } catch {
+    return false;
+  }
+}
+function isDaemonReachable(projectDir) {
+  const connInfo = getConnectionInfo(projectDir);
+  if (connInfo.type === "tcp") {
+    return isListenerAlive(projectDir);
   } else {
     if (!existsSync(connInfo.path)) {
       return false;
     }
     if (isDaemonProcessRunning(projectDir)) {
-      try {
-        execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-          encoding: "utf-8",
-          timeout: 1e3,
-          // Increased from 500ms
-          stdio: ["pipe", "pipe", "pipe"]
-        });
-        return true;
-      } catch {
-        return true;
-      }
+      ncPing(connInfo.path, 1e3);
+      return true;
+    }
+    if (ncPing(connInfo.path, 500)) {
+      return true;
     }
     try {
-      execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-        encoding: "utf-8",
-        timeout: 500,
-        stdio: ["pipe", "pipe", "pipe"]
-      });
-      return true;
+      unlinkSync(connInfo.path);
     } catch {
-      try {
-        unlinkSync(connInfo.path);
-      } catch {
-      }
-      return false;
     }
+    return false;
   }
 }
 function tryStartDaemon(projectDir) {
   try {
     if (isDaemonProcessRunning(projectDir)) {
-      return true;
+      if (isListenerAlive(projectDir)) {
+        return true;
+      }
+      console.error(
+        "[daemon-client] tldr daemon pid is alive but its socket is unreachable (zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover."
+      );
+      return false;
     }
     if (isDaemonReachable(projectDir)) {
       return true;
@@ -468,9 +481,73 @@ function trackHookActivitySync(hookName, projectDir, success = true, metrics = {
   } catch {
   }
 }
+var FAST_PROBE_TIMEOUT_MS = 250;
+var NEG_CACHE_TTL_MS = 1e4;
+function negCachePath(projectDir) {
+  const hash = crypto.createHash("md5").update(resolveProjectDir(projectDir)).digest("hex").substring(0, 8);
+  return join(tmpdir(), `tldr-daemon-unreachable-${hash}.json`);
+}
+function isDaemonUnreachableCached(projectDir) {
+  try {
+    const { ts } = JSON.parse(readFileSync(negCachePath(projectDir), "utf-8"));
+    return typeof ts === "number" && Date.now() - ts < NEG_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+function cacheDaemonUnreachable(projectDir) {
+  try {
+    writeFileSync(negCachePath(projectDir), JSON.stringify({ ts: Date.now() }));
+  } catch {
+  }
+}
+function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
+  return new Promise((resolveProbe) => {
+    let connInfo;
+    try {
+      connInfo = getConnectionInfo(projectDir);
+    } catch {
+      resolveProbe(false);
+      return;
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolveProbe(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.once("connect", () => done(true));
+    sock.once("error", () => done(false));
+    try {
+      if (connInfo.type === "tcp") {
+        sock.connect(connInfo.port, connInfo.host);
+      } else {
+        sock.connect(connInfo.path);
+      }
+    } catch {
+      done(false);
+    }
+  });
+}
+async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
+  try {
+    if (isDaemonUnreachableCached(projectDir)) return;
+    if (!await probeDaemonFast(projectDir)) {
+      cacheDaemonUnreachable(projectDir);
+      return;
+    }
+    await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
+  } catch {
+  }
+}
 export {
   archDaemon,
   buildDaemonInvocation,
+  cacheDaemonUnreachable,
   callsDaemon,
   cfgDaemon,
   contextDaemon,
@@ -483,8 +560,11 @@ export {
   impactDaemon,
   importersDaemon,
   importsDaemon,
+  isDaemonUnreachableCached,
   isIndexing,
+  isListenerAlive,
   pingDaemon,
+  probeDaemonFast,
   queryDaemon,
   queryDaemonSync,
   searchDaemon,
@@ -494,6 +574,7 @@ export {
   statusDaemon,
   structureDaemon,
   trackHookActivity,
+  trackHookActivityFast,
   trackHookActivitySync,
   treeDaemon,
   tryStartDaemon,
