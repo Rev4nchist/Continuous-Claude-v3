@@ -618,7 +618,18 @@ Every one of these cost real time already.
   Prove a new test can fail by reconstructing the old behaviour.
 - **`~/.claude` drift recurs by design** after every forward sync. If it ever
   matters the fix is a scheduled snapshot commit, not a hook — `PostToolUse`
-  cannot see shell-copy writes.
+  cannot see shell-copy writes. **Both halves shipped 2026-08-31 (harness-security
+  lane):** (1) `sync-to-active.sh` now carries a clobber guard — a manifest at
+  `~/.claude/state/sync-manifest.txt` records what each destination held when the
+  sync last wrote it; a destination edited directly in `~/.claude` since then is
+  preserved to `~/.claude/.sync-quarantine/<ts>/` (never auto-purged) before the
+  repo copy lands, and reported loudly. The script refuses to run under WSL.
+  (2) The `CCv3-Claude-Snapshot` scheduled task commits the active tree daily at
+  18:00 (`scripts/claude-snapshot/snapshot-claude.ps1`; secret/size preflights,
+  single-flight lock). A snapshot older than ~3 days means the task is broken —
+  check `~/.claude/logs/claude-snapshot/`. Known guard gaps, accepted:
+  deletions/renames and dir↔file transitions are outside the manifest model
+  (`--changed` deletes stay scoped to mapped paths; full mode never deletes).
 - **Do not run `scripts/msys/repro.ps1` unattended.** It deliberately storms the
   machine and has twice left dozens of blocked processes behind.
 - **`git push` failing with "could not read Username" / "Repository not found" is
@@ -697,7 +708,7 @@ Relevant to CCv3 refinement specifically:
 
 | Lane | State | Note |
 |---|---|---|
-| `harness-security` | ready | scope `sync-to-active.sh` · `settings.json` — owns §5.3 |
+| `harness-security` | done (2026-08-31) | clobber guard + quarantine in `sync-to-active.sh`; repo sources for the 3 active-only rules + 2 orphan hooks (registration-reconcile GREEN); settings/template registration capture (`scripts/settings/capture-active-registrations.mjs`, 5 machine-local exclusions incl. `permission-auto-allow`); daily `CCv3-Claude-Snapshot` task re-enables `~/.claude` history |
 | `msys-fork-storm` | done, unresolved | instrumented, root cause NOT established |
 | `conflict-events` | ready | `claim_degraded` exists but nothing emits it |
 | `self-improvement-triage` | backlog | |

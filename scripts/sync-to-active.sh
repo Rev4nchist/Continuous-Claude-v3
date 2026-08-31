@@ -9,6 +9,24 @@ REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_CLAUDE="$REPO_ROOT/.claude"
 ACTIVE_CLAUDE="$HOME/.claude"
 
+# WSL refusal: on this machine `bash` on PATH is the WSL launcher (HOME=/home/<user>),
+# so a manual `bash scripts/sync-to-active.sh` from PowerShell syncs into the WSL
+# filesystem and prints plausible OK lines while the Windows ~/.claude is untouched
+# (proven 2026-08-14, commit 32e8d47 memory). It would also build a bogus clobber-guard
+# manifest there. Refuse outright; plain non-WSL Linux still passes.
+if [[ "$(uname -s 2>/dev/null)" == Linux* ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "ERROR: running under WSL bash -- this would sync into the WSL filesystem, not the Windows ~/.claude." >&2
+    echo "       Re-run under Git Bash (it has node and the real \$HOME), e.g.:" >&2
+    echo "       \"C:\\Users\\<you>\\AppData\\Local\\Programs\\Git\\bin\\bash.exe\" scripts/sync-to-active.sh" >&2
+    exit 1
+fi
+
+# The clobber guard hashes every file it touches; sha256sum ships with Git Bash.
+if ! command -v sha256sum >/dev/null 2>&1; then
+    echo "ERROR: sha256sum not found -- the clobber guard cannot run. Use Git Bash." >&2
+    exit 1
+fi
+
 DRY_RUN=false
 VERBOSE=false
 CHANGED=false
@@ -64,6 +82,147 @@ RULES_DST_DIR="rules"
 
 NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.jsonl knowledge-tree.json"
 
+# -----------------------------------------------------------------------------
+# Clobber guard (2026-08-31, harness-security lane).
+#
+# The forward sync destroyed active-only rule edits on 2026-08-30 (recovered in
+# e56c343): every copy site blindly overwrote the active file, so an edit made
+# directly in ~/.claude was silently lost on the next sync. The guard keeps a
+# manifest of the sha256 each destination had the last time THIS script wrote it.
+# On the next sync, three cases per file:
+#   dst == src                      -> identical, record hash, no copy
+#   dst == manifest entry           -> active is merely stale; normal forward copy
+#   dst != src AND != manifest (or  -> ACTIVE WAS EDITED SINCE LAST SYNC:
+#     no entry; fail-safe)             quarantine the active copy, THEN copy,
+#                                      report loudly. Never silently overwrite.
+# Sequencing is crash-safe (Codex premortem finding): the repo version is staged
+# as dst.sync-tmp first, the quarantine copy is hash-verified, and only then is
+# the staged file atomically renamed over dst. The active file is never missing
+# or half-written; if quarantine fails the active file is left untouched.
+# The quarantine dir is the ONLY copy of a clobbered edit -- never auto-purged.
+# Manifest: TAB-separated "sha256<TAB>active-relative-path", pruned (full mode
+# only) to paths visited this run so retired sync sources can't go stale.
+# -----------------------------------------------------------------------------
+MANIFEST_FILE="$ACTIVE_CLAUDE/state/sync-manifest.txt"
+QUARANTINE_ROOT="$ACTIVE_CLAUDE/.sync-quarantine/$(date +%Y-%m-%d-%H%M%S)"
+QUARANTINED=0
+GUARD_ERRORS=0
+declare -A MANIFEST
+declare -A SEEN
+
+file_hash() {
+    sha256sum "$1" | cut -d' ' -f1
+}
+
+load_manifest() {
+    [[ -f "$MANIFEST_FILE" ]] || return 0
+    local h r
+    while IFS=$'\t' read -r h r; do
+        [[ "$h" == \#* || -z "$h" || -z "$r" ]] && continue
+        MANIFEST["$r"]="$h"
+    done < "$MANIFEST_FILE"
+}
+
+manifest_set() {
+    MANIFEST["$1"]="$2"
+    SEEN["$1"]=1
+}
+
+manifest_unset() {
+    unset "MANIFEST[$1]" 2>/dev/null || true
+}
+
+save_manifest() {
+    $DRY_RUN && return 0
+    mkdir -p "$(dirname "$MANIFEST_FILE")"
+    local tmp="$MANIFEST_FILE.tmp.$$" r
+    {
+        echo $'# sync-manifest v1 -- sha256\tactive-relative-path (written by sync-to-active.sh)'
+        if $CHANGED; then
+            # Incremental run only visits changed files -- merge, never prune.
+            for r in "${!MANIFEST[@]}"; do printf '%s\t%s\n' "${MANIFEST[$r]}" "$r"; done
+        else
+            # Full mirror visits every sync source -- prune to what was visited.
+            for r in "${!SEEN[@]}"; do printf '%s\t%s\n' "${MANIFEST[$r]}" "$r"; done
+        fi
+    } | sort -t$'\t' -k2 > "$tmp"
+    mv -f "$tmp" "$MANIFEST_FILE"
+}
+
+# guarded_copy <src> <dst> -- the ONLY way this script writes a destination file.
+guarded_copy() {
+    local src="$1" dst="$2"
+    [[ -f "$src" ]] || return 0
+    local rel="${dst#$ACTIVE_CLAUDE/}"
+    if $DRY_RUN; then
+        echo "[DRY RUN] Would copy: $src -> $dst"
+        return 0
+    fi
+    mkdir -p "$(dirname "$dst")"
+    if [[ ! -f "$dst" ]]; then
+        cp "$src" "$dst"
+        manifest_set "$rel" "$(file_hash "$dst")"
+        $VERBOSE && echo "Copied: $rel" || true
+        return 0
+    fi
+    if cmp -s "$src" "$dst"; then
+        # Identical: keep the existing manifest entry instead of rehashing --
+        # a sha256sum spawn per file made the full mirror take >10 min on this
+        # box (spawn latency, see windows-platform.md). A stale entry is
+        # harmless in the fail-safe direction: a later divergence that doesn't
+        # match it quarantines rather than clobbers.
+        if [[ -n "${MANIFEST[$rel]-}" ]]; then
+            SEEN["$rel"]=1
+        else
+            manifest_set "$rel" "$(file_hash "$src")"
+        fi
+        return 0
+    fi
+    local src_hash dst_hash known
+    src_hash=$(file_hash "$src")
+    dst_hash=$(file_hash "$dst")
+    known="${MANIFEST[$rel]-}"
+    if [[ -n "$known" && "$dst_hash" == "$known" ]]; then
+        # Active copy is exactly what we last wrote -- normal forward update.
+        cp "$src" "$dst.sync-tmp"
+        mv -f "$dst.sync-tmp" "$dst"
+        manifest_set "$rel" "$src_hash"
+        $VERBOSE && echo "Copied: $rel" || true
+        return 0
+    fi
+    # CLOBBER RISK: active file was edited since last sync (or is unknown to the
+    # manifest -- fail-safe treats unknown as edited). Quarantine, then copy.
+    cp "$src" "$dst.sync-tmp"
+    mkdir -p "$QUARANTINE_ROOT/$(dirname "$rel")"
+    cp "$dst" "$QUARANTINE_ROOT/$rel"
+    if [[ "$(file_hash "$QUARANTINE_ROOT/$rel")" != "$dst_hash" ]]; then
+        rm -f "$dst.sync-tmp"
+        echo "  CLOBBER-GUARD ERROR: quarantine copy failed for $rel -- active file left untouched, NOT synced"
+        GUARD_ERRORS=$((GUARD_ERRORS + 1))
+        return 0
+    fi
+    mv -f "$dst.sync-tmp" "$dst"
+    manifest_set "$rel" "$src_hash"
+    echo "  CLOBBER-GUARD: active copy of $rel had diverged -- preserved at $QUARANTINE_ROOT/$rel"
+    QUARANTINED=$((QUARANTINED + 1))
+}
+
+print_guard_summary() {
+    if [[ "$QUARANTINED" -gt 0 || "$GUARD_ERRORS" -gt 0 ]]; then
+        echo ""
+        echo "CLOBBER-GUARD SUMMARY: $QUARANTINED file(s) had diverged active edits, preserved under:"
+        echo "  $QUARANTINE_ROOT"
+        [[ "$GUARD_ERRORS" -gt 0 ]] && echo "  $GUARD_ERRORS file(s) NOT synced (quarantine failed) -- resolve manually"
+        echo "  Review, salvage what you need, then delete that dir yourself. It is never auto-purged."
+    fi
+    # A quarantine FAILURE means files were left unsynced -- automated callers
+    # (health_check drift remediation) must see a non-zero exit, not success.
+    [[ "$GUARD_ERRORS" -gt 0 ]] && return 1
+    return 0
+}
+
+load_manifest
+
 # JSON-validated copy for .claude/project-registry.json (repo = canonical, active = mirror).
 # Never propagates a corrupt registry: parse must succeed before the copy happens.
 copy_registry() {
@@ -92,8 +251,7 @@ copy_registry() {
         return 0
     fi
     mkdir -p "$ACTIVE_CLAUDE"
-    cmp -s "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
-    $VERBOSE && echo "Copied: project-registry.json" || true
+    guarded_copy "$src" "$dst"
 }
 
 copy_dir() {
@@ -119,13 +277,7 @@ copy_dir() {
         done
         $skip_file && continue
 
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-        else
-            mkdir -p "$(dirname "$dst_file")"
-            cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $dir/$rel" || true
-        fi
+        guarded_copy "$src_file" "$dst_file"
     done < <(find "$src_path" -type f ! -name "*.pid" ! -name "*.lock" ! -path "*/.tldr/*" ! -path "*/node_modules/*" ! -path "*/cache/*" ! -path "*/dist/*" 2>/dev/null)
 }
 
@@ -246,17 +398,9 @@ if $CHANGED; then
         return 0
     }
 
-    # Content-guarded copy: only writes when src/dst differ (or dst is missing).
+    # Content- AND clobber-guarded copy (routes through guarded_copy).
     changed_copy_one() {
-        local src="$1" dst="$2"
-        [[ -f "$src" ]] || return 0
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src -> $dst"
-        else
-            mkdir -p "$(dirname "$dst")"
-            cmp -s "$src" "$dst" 2>/dev/null || cp "$src" "$dst"
-            $VERBOSE && echo "Copied: ${dst#$ACTIVE_CLAUDE/}" || true
-        fi
+        guarded_copy "$1" "$2"
     }
 
     while IFS=$'\t' read -r status path _rest; do
@@ -286,6 +430,7 @@ if $CHANGED; then
                             echo "[DRY RUN] Would delete: $dst"
                         else
                             rm -f "$dst"
+                            manifest_unset "${dst#$ACTIVE_CLAUDE/}"
                             $VERBOSE && echo "Deleted: ${dst#$ACTIVE_CLAUDE/}" || true
                         fi
                     fi
@@ -339,6 +484,8 @@ if $CHANGED; then
         fi
     fi
 
+    save_manifest
+    print_guard_summary || exit 3
     $VERBOSE && echo "Incremental sync complete: continuous-claude -> ~/.claude" || true
     exit 0
 fi
@@ -381,12 +528,7 @@ for src_file in "$REPO_CLAUDE"/*.md; do
     done
     $skip_file && continue
     dst_file="$ACTIVE_CLAUDE/$base"
-    if $DRY_RUN; then
-        echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-    else
-        cp "$src_file" "$dst_file"
-        $VERBOSE && echo "Copied: $base" || true
-    fi
+    guarded_copy "$src_file" "$dst_file"
 done
 
 for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/package.json" "hooks/tsconfig.json"; do
@@ -394,14 +536,7 @@ for pattern in "hooks/*.sh" "hooks/*.py" "hooks/*.mjs" "hooks/*.ps1" "hooks/pack
         [[ ! -f "$src_file" ]] && continue
         rel="${src_file#$REPO_CLAUDE/}"
         dst_file="$ACTIVE_CLAUDE/$rel"
-
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-        else
-            mkdir -p "$(dirname "$dst_file")"
-            cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: $rel" || true
-        fi
+        guarded_copy "$src_file" "$dst_file"
     done
 done
 
@@ -414,12 +549,7 @@ if [[ -d "$DIST_SRC" ]]; then
         [[ ! -f "$src_file" ]] && continue
         local_name=$(basename "$src_file")
         dst_file="$DIST_DST/$local_name"
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-        else
-            cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: hooks/dist/$local_name" || true
-        fi
+        guarded_copy "$src_file" "$dst_file"
     done
 fi
 
@@ -432,27 +562,14 @@ if [[ -d "$TEMPLATES_SRC" ]]; then
         [[ ! -f "$src_file" ]] && continue
         local_name=$(basename "$src_file")
         dst_file="$TEMPLATES_DST/$local_name"
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-        else
-            cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: templates/ralph/$local_name" || true
-        fi
+        guarded_copy "$src_file" "$dst_file"
     done
 fi
 
 # Sync opc/scripts/core/project_memory.py → scripts/core/ (needed by memory-awareness.ts)
 CORE_SRC="$REPO_ROOT/opc/scripts/core/project_memory.py"
 CORE_DST="$ACTIVE_CLAUDE/scripts/core/project_memory.py"
-if [[ -f "$CORE_SRC" ]]; then
-    $DRY_RUN || mkdir -p "$(dirname "$CORE_DST")"
-    if $DRY_RUN; then
-        echo "[DRY RUN] Would copy: $CORE_SRC -> $CORE_DST"
-    else
-        cp "$CORE_SRC" "$CORE_DST"
-        $VERBOSE && echo "Copied: opc/scripts/core/project_memory.py -> scripts/core/project_memory.py" || true
-    fi
-fi
+guarded_copy "$CORE_SRC" "$CORE_DST"
 
 # Sync scripts/ralph/*.py (create target directory if needed for fresh installs)
 RALPH_SRC="$REPO_CLAUDE/scripts/ralph"
@@ -463,12 +580,7 @@ if [[ -d "$RALPH_SRC" ]]; then
         [[ ! -f "$src_file" ]] && continue
         local_name=$(basename "$src_file")
         dst_file="$RALPH_DST/$local_name"
-        if $DRY_RUN; then
-            echo "[DRY RUN] Would copy: $src_file -> $dst_file"
-        else
-            cp "$src_file" "$dst_file"
-            $VERBOSE && echo "Copied: scripts/ralph/$local_name" || true
-        fi
+        guarded_copy "$src_file" "$dst_file"
     done
 fi
 
@@ -548,4 +660,6 @@ if ! $DRY_RUN; then
     fi
 fi
 
+save_manifest
+print_guard_summary || exit 3
 $VERBOSE && echo "Sync complete: continuous-claude -> ~/.claude" || true
