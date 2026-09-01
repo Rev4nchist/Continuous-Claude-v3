@@ -34,7 +34,7 @@
 // produces an abort, not a bad package.
 //
 // Exit codes: 0 published (or dry run clean) - 1 nothing published, reason printed.
-import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync } from 'node:fs';
+import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, renameSync, rmSync } from 'node:fs';
 import { join, resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
@@ -59,7 +59,20 @@ function escapeRe(s) {
 // Four shapes, and one that must NOT be guessed at:
 //   <base>/fourthos/<segment>/            -> index.html      (this package's own root)
 //   <base>/fourthos/<segment>/#frag       -> index.html#frag
-//   <base>/fourthos/<segment>/<file>      -> <file>          (sibling in the same folder)
+//   <base>/fourthos/<segment>/<file>      -> <file>          ONLY when <file> is one of
+//                                            DECK_FILES. Anything else under this package's
+//                                            own prefix is UNRESOLVED, not rewritten.
+//                                            Without that allowlist a typo
+//                                            (`briefng.html`), a traversal
+//                                            (`../../evil.html`), a nested path
+//                                            (`assets/x.js`) or a file this tool never
+//                                            copies (`notes.txt`) all became clean-looking
+//                                            RELATIVE links that findAbsoluteHrefs cannot
+//                                            see -- so the publish reported "post-write
+//                                            check clean" over a dead link. Verified by
+//                                            execution on 2026-09-01: all four passed
+//                                            through with unresolved=0. Caught by
+//                                            CodeRabbit on PR #33.
 //   <base>/ or <base>/#frag               -> the HUB, which does not exist locally.
 //                                            The href is STRIPPED, leaving the anchor's
 //                                            text in place. Rendering a dead breadcrumb
@@ -89,9 +102,17 @@ export function rewriteLinks(html, { segment, basePath = BASE_PATH } = {}) {
       return match;
     }
     const rest = target.slice(selfPrefix.length);
+    if (rest === '') { counts.self += 1; return 'href="index.html"'; }
+    if (rest.startsWith('#')) { counts.self += 1; return `href="index.html${rest}"`; }
+    // Allowlist: only the files this tool actually copies can be a valid in-package
+    // target. Anything else falls through to unresolved and aborts the publish.
+    const file = rest.split('#')[0];
+    if (!DECK_FILES.includes(file)) {
+      counts.unresolved += 1;
+      if (!unresolved.includes(target)) unresolved.push(target);
+      return match;
+    }
     counts.self += 1;
-    if (rest === '') return 'href="index.html"';
-    if (rest.startsWith('#')) return `href="index.html${rest}"`;
     return `href="${rest}"`;
   });
 
@@ -183,6 +204,17 @@ export function main() {
     totalHub += counts.hub;
     for (const u of unresolved) if (!allUnresolved.includes(u)) allUnresolved.push(u);
 
+    // Unresolved is checked BEFORE the absolute-href backstop, because an unresolved link
+    // is deliberately returned unrewritten and so is still absolute -- the generic
+    // "absolute link survived" message would fire first and hide the specific reason.
+    if (unresolved.length) {
+      console.error(`[publish-local] ABORT: ${name} has ${unresolved.length} link(s) with no valid target in this package:`);
+      for (const u of unresolved) console.error(`[publish-local]     ${u}`);
+      console.error(`[publish-local] in-package links may only target: ${DECK_FILES.join(', ')} (with an optional #fragment).`);
+      console.error('[publish-local] nothing written. A package with dead navigation must not be shared.');
+      return 1;
+    }
+
     const left = findAbsoluteHrefs(html);
     if (left.length) {
       console.error(`[publish-local] ABORT: ${name} still has ${left.length} absolute link(s) after rewrite:`);
@@ -206,24 +238,78 @@ export function main() {
     return 0;
   }
 
-  mkdirSync(destDir, { recursive: true });
-  for (const [name, html] of written) writeFileSync(join(destDir, name), html, 'utf8');
+  // STAGE, VERIFY, THEN SWAP. The destination is a live OneDrive-synced folder, so a
+  // partial write is not merely an incomplete directory -- it is a partial package
+  // uploaded to SharePoint and potentially shared. Writing the files one at a time
+  // directly into destDir left that window open for the whole write+verify, and a crash
+  // or a kill inside it published a half package. Everything is built and verified in a
+  // sibling staging directory first; destDir changes only once, by rename. Raised by
+  // CodeRabbit on PR #33.
+  mkdirSync(destRoot, { recursive: true });
+  const stageDir = join(destRoot, `.publish-tmp-${process.pid}-${Date.now()}`);
   const card = join(sourceDir, 'card.json');
-  if (existsSync(card)) writeFileSync(join(destDir, 'card.json'), readFileSync(card, 'utf8'), 'utf8');
+  try {
+    mkdirSync(stageDir, { recursive: true });
+    for (const [name, html] of written) writeFileSync(join(stageDir, name), html, 'utf8');
+    if (existsSync(card)) writeFileSync(join(stageDir, 'card.json'), readFileSync(card, 'utf8'), 'utf8');
 
-  // Verify from DISK, not from the in-memory string that was just checked. The write is
-  // the step that can still go wrong (encoding, truncation, a half-full volume).
-  for (const name of DECK_FILES) {
-    const back = readFileSync(join(destDir, name), 'utf8');
-    const left = findAbsoluteHrefs(back);
-    if (left.length) {
-      console.error(`[publish-local] POST-WRITE CHECK FAILED: ${name} on disk has ${left.length} absolute link(s).`);
-      return 1;
+    // Verify from DISK, not from the in-memory string that was just checked. The write is
+    // the step that can still go wrong (encoding, truncation, a half-full volume).
+    for (const name of DECK_FILES) {
+      const back = readFileSync(join(stageDir, name), 'utf8');
+      const left = findAbsoluteHrefs(back);
+      if (left.length) {
+        throw new Error(`post-write check failed: ${name} on disk has ${left.length} absolute link(s)`);
+      }
     }
+
+    swapIntoPlace(stageDir, destDir);
+  } catch (e) {
+    rmSync(stageDir, { recursive: true, force: true });
+    console.error(`[publish-local] ABORT: ${e.message}`);
+    console.error(`[publish-local] staging directory removed; ${existsSync(destDir) ? 'the previous package is untouched' : 'nothing was published'}.`);
+    return 1;
   }
+
   console.error(`[publish-local] published ${DECK_FILES.length} file(s); post-write check clean (0 absolute links on disk).`);
   console.log(destDir);
   return 0;
+}
+
+// Sync sleep. Needed because the retry below has to happen inside this synchronous
+// pipeline, and OneDrive's file handles clear in tens of milliseconds.
+function sleepSync(ms) {
+  Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+}
+
+// Replace destDir with stageDir by rename, never by writing into destDir.
+//
+// OneDrive holds transient handles on files it is syncing, so a rename can fail with
+// EPERM/EBUSY and then succeed moments later -- hence the retry. If the second rename
+// fails after the previous package has been moved aside, the previous package is put
+// BACK before the error propagates: a failed publish must never leave the operator with
+// no package at all.
+export function swapIntoPlace(stageDir, destDir, { attempts = 5, waitMs = 200, fs: io = { renameSync, existsSync, rmSync } } = {}) {
+  const retry = (fn, what) => {
+    let lastErr;
+    for (let i = 0; i < attempts; i += 1) {
+      try { return fn(); } catch (e) { lastErr = e; sleepSync(waitMs); }
+    }
+    throw new Error(`${what} failed after ${attempts} attempts: ${lastErr && lastErr.message}`);
+  };
+
+  const hadPrevious = io.existsSync(destDir);
+  const backup = `${destDir}.replacing-${Date.now()}`;
+  if (hadPrevious) retry(() => io.renameSync(destDir, backup), 'moving the previous package aside');
+  try {
+    retry(() => io.renameSync(stageDir, destDir), 'moving the new package into place');
+  } catch (e) {
+    if (hadPrevious) {
+      try { io.renameSync(backup, destDir); } catch { /* the throw below carries the real cause */ }
+    }
+    throw e;
+  }
+  if (hadPrevious) io.rmSync(backup, { recursive: true, force: true });
 }
 
 const invokedDirectly = process.argv[1]

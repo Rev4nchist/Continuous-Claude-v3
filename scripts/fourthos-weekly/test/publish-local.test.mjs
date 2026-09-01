@@ -2,7 +2,7 @@
 // package navigates or is silently dead.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { rewriteLinks, findAbsoluteHrefs, resolvePublishDate, parseFlags } from '../publish-local.mjs';
+import { rewriteLinks, findAbsoluteHrefs, resolvePublishDate, parseFlags, swapIntoPlace } from '../publish-local.mjs';
 
 const B = '/ai-enablement-decks';
 
@@ -71,6 +71,38 @@ test('a package whose links name a different segment: refused by default, fixed 
   assert.equal(findAbsoluteHrefs(asserted.html).length, 0);
 });
 
+// CodeRabbit, PR #33. Before the DECK_FILES allowlist all four of these rewrote to a
+// clean-looking RELATIVE link, which findAbsoluteHrefs cannot see -- so the publish
+// reported "post-write check clean" over a link that was guaranteed dead. Verified by
+// execution before the fix: all four returned unresolved=0.
+for (const [label, rest] of [
+  ['a typo in a filename', 'briefng.html'],
+  ['a path traversal', '../../../evil.html'],
+  ['a nested subdirectory', 'assets/x.js'],
+  ['a file the publisher never copies', 'notes.txt'],
+]) {
+  test(`${label} is unresolved, not silently rewritten`, () => {
+    const target = `${B}/fourthos/preview/${rest}`;
+    const src = `<a href="${target}">t</a>`;
+    const { html, counts, unresolved } = rewriteLinks(src, { segment: 'preview' });
+    assert.equal(counts.unresolved, 1, 'must be reported, not rewritten');
+    assert.equal(counts.self, 0);
+    assert.equal(html, src, 'left byte-identical so the caller can abort on it');
+    assert.deepEqual(unresolved, [target]);
+    assert.equal(findAbsoluteHrefs(html).length, 1, 'stays absolute so the backstop also catches it');
+  });
+}
+
+test('the three real deck files still rewrite, with and without a fragment', () => {
+  for (const f of ['index.html', 'briefing.html', 'deep-dive.html']) {
+    const plain = rewriteLinks(`<a href="${B}/fourthos/preview/${f}">t</a>`, { segment: 'preview' });
+    assert.equal(plain.html, `<a href="${f}">t</a>`, f);
+    assert.equal(plain.counts.unresolved, 0, f);
+    const frag = rewriteLinks(`<a href="${B}/fourthos/preview/${f}#s">t</a>`, { segment: 'preview' });
+    assert.equal(frag.html, `<a href="${f}#s">t</a>`, `${f} with fragment`);
+  }
+});
+
 test('relative and external links are untouched', () => {
   const src = '<a href="#local">a</a><a href="https://example.com/x">b</a><a href="other.html">c</a>';
   const { html, counts } = rewriteLinks(src, { segment: 'preview' });
@@ -106,4 +138,61 @@ test('resolvePublishDate: flag wins, then card.json, then today', () => {
 test('parseFlags handles value flags, bare flags and a bare flag before a value flag', () => {
   assert.deepEqual(parseFlags(['--dry-run', '--date', '2026-08-05']), { 'dry-run': true, date: '2026-08-05' });
   assert.deepEqual(parseFlags(['--source', 'x', '--dry-run']), { source: 'x', 'dry-run': true });
+});
+
+// --- swapIntoPlace (CodeRabbit, PR #33: publish through a staged directory) ---------
+// The filesystem is injected so the ORDER of operations and the failure paths are
+// assertable without touching a real OneDrive folder.
+function fakeIo(present = [], failOn = () => false) {
+  const calls = [];
+  const set = new Set(present);
+  return {
+    calls,
+    existsSync: (p) => set.has(p),
+    renameSync: (a, b) => {
+      calls.push(['rename', a, b]);
+      if (failOn(a, b, calls)) throw new Error('EPERM: locked');
+      set.delete(a); set.add(b);
+    },
+    rmSync: (p) => { calls.push(['rm', p]); set.delete(p); },
+  };
+}
+
+test('swapIntoPlace with no previous package: one rename, no backup, no delete', () => {
+  const io = fakeIo([]);
+  swapIntoPlace('/stage', '/dest', { fs: io, waitMs: 0 });
+  assert.deepEqual(io.calls, [['rename', '/stage', '/dest']]);
+});
+
+test('swapIntoPlace with a previous package: aside, in, then remove the backup', () => {
+  const io = fakeIo(['/dest']);
+  swapIntoPlace('/stage', '/dest', { fs: io, waitMs: 0 });
+  assert.equal(io.calls.length, 3);
+  assert.deepEqual(io.calls[0].slice(0, 2), ['rename', '/dest']);
+  assert.ok(io.calls[0][2].startsWith('/dest.replacing-'), 'previous package moved aside, not deleted');
+  assert.deepEqual(io.calls[1], ['rename', '/stage', '/dest']);
+  assert.deepEqual(io.calls[2].slice(0, 1), ['rm']);
+});
+
+// The load-bearing one: a failed publish must never leave the operator with NO package.
+test('swapIntoPlace restores the previous package when the second rename fails', () => {
+  const io = fakeIo(['/dest'], (a) => a === '/stage');
+  assert.throws(
+    () => swapIntoPlace('/stage', '/dest', { fs: io, attempts: 2, waitMs: 0 }),
+    /moving the new package into place failed/,
+  );
+  const last = io.calls[io.calls.length - 1];
+  assert.equal(last[0], 'rename');
+  assert.ok(last[1].startsWith('/dest.replacing-'), 'the backup is renamed back...');
+  assert.equal(last[2], '/dest', '...to the destination');
+  assert.ok(io.existsSync('/dest'), 'the previous package survives a failed publish');
+  assert.ok(!io.calls.some((c) => c[0] === 'rm'), 'and the backup is never deleted on the failure path');
+});
+
+test('swapIntoPlace retries a transiently locked rename (OneDrive holds handles)', () => {
+  let n = 0;
+  const io = fakeIo([], () => { n += 1; return n < 3; }); // fails twice, succeeds on the third
+  swapIntoPlace('/stage', '/dest', { fs: io, attempts: 5, waitMs: 0 });
+  assert.equal(io.calls.length, 3, 'two failures then success');
+  assert.ok(io.existsSync('/dest'));
 });

@@ -222,7 +222,12 @@ if (PUSH) {
 
     if (fs.existsSync(runEmitPath)) {
       execFileSync(nodeExe, [upsertPath, runEmitPath], { cwd: REPO, encoding: "utf8" });
-      log(`registry: recorded promotion row (${artifactUrl})`);
+      // NOT artifactUrl -- that binding was removed with the Pages URL and this line
+      // still read it, so the success path threw ReferenceError. It is inside the
+      // enclosing try/catch, so promote did not crash; it logged "promotion row step
+      // FAILED" for a step that had ALREADY succeeded -- a step misreporting its own
+      // outcome, which is the exact defect class this lane exists to remove.
+      log(`registry: recorded promotion row (${publishedDir || "no artifact URL; local publish only"})`);
     } else {
       log("registry: make-run.mjs emitted no report-run.json — skipping upsert (non-fatal)");
     }
