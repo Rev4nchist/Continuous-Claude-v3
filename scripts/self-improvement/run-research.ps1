@@ -81,22 +81,24 @@ function Write-RunRow($status, $summary) {
   try {
     # Absolute node path: Task Scheduler's minimal PATH does not include node.
     $node = if (Test-Path 'C:\Program Files\nodejs\node.exe') { 'C:\Program Files\nodejs\node.exe' } else { 'node' }
-    $emit = & $node (Join-Path $repo 'scripts\report-registry\make-run.mjs') `
+    # MIGRATED to emit-run.mjs 2026-08-31. This was the copy that "got it right"
+    # (the local EAP save/lower/restore around it, kept below), but it was still
+    # TWO chained native commands plus a hand-rolled stdout parse that had to
+    # distinguish make-run's path line from its stderr preamble by "has no
+    # whitespace". emit-run.mjs runs make-run and upsert in ONE process and its
+    # contract #1 guarantees exactly one stdout line, so the heuristic goes away
+    # with the second process that made it necessary.
+    # --json is passed so the log records `action` (created vs updated) -- the
+    # evidence that update-in-place actually happened.
+    $emit = & $node (Join-Path $repo 'scripts\report-registry\emit-run.mjs') `
       --type 'Self-Improvement' --source 'Self-Improvement' --period $date --runDate $runStamp `
-      --status $status --artifactUrl $artifact --summary $summary 2>&1
-    $makeRunExit = $LASTEXITCODE
-    # make-run prints the emitted run-JSON PATH on stdout and a preamble on stderr;
-    # 2>&1 merges both so a THROW is captured in the log instead of swallowed. The
-    # stdout PATH is whitespace-free, which distinguishes it from the preamble line.
-    $runPath = ($emit | ForEach-Object { "$_".Trim() } |
-      Where-Object { $_ -match '\.json$' -and $_ -notmatch '\s' } | Select-Object -Last 1)
-    if ($makeRunExit -eq 0 -and $runPath) {
-      Log "make-run SUCCEEDED (exit=0, status=$status) -> $runPath"
-      & $node (Join-Path $repo 'scripts\report-registry\upsert.mjs') $runPath 2>&1 |
-        ForEach-Object { "$_" } | Tee-Log
-      Log "report-run upsert exit=$LASTEXITCODE (non-fatal)"
+      --status $status --artifactUrl $artifact --summary $summary --json 2>&1
+    $emitExit = $LASTEXITCODE
+    $emit | ForEach-Object { "$_" } | Tee-Log
+    if ($emitExit -eq 0) {
+      Log "report-run emit SUCCEEDED (exit=0, status=$status)"
     } else {
-      Log "make-run FAILED or emitted no path (exit=$makeRunExit) -- skipping upsert. Output: $($emit -join ' | ')"
+      Log "report-run emit FAILED (exit=$emitExit) -- no row landed. Output: $($emit -join ' | ')"
     }
   } catch {
     Log "report-run registry step threw (non-fatal): $_"

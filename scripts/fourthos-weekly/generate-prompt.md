@@ -13,7 +13,7 @@ Read the `fourthos-weekly` skill for the full contract before acting:
 You are a non-interactive `claude -p` session invoked by the Wednesday 07:00 `CCv3-FourthOS-Weekly`
 scheduled task on Windows. Your job: build this week's FourthOS sponsor update package for **Carly**
 (VP Enterprise Transformation & Technology) and **Christian** (CTO), stage it to an UNLISTED preview
-on the `ai-enablement-decks` GitHub Pages site, and notify Dave to review. **Do not promote it live** —
+in the `ai-enablement-decks` repo, and notify Dave to review. **Do not promote it live** —
 that is Dave's separate approval step (`promote.mjs`).
 
 ## Sources (Notion — via the claude.ai Notion MCP)
@@ -25,8 +25,23 @@ that is Dave's separate approval step (`promote.mjs`).
 
 ## Publish target
 
-- Repo (local): `C:/Users/david.hayes/Projects/ai-enablement-decks` — PUBLIC, auto-deploys on push to `main`.
+**THE GITHUB PAGES SITE IS GONE AND IS NOT COMING BACK.** The repo was made private
+~2026-08-06, which deletes Pages on the free tier, and it cannot be made public again
+(Dave, 2026-08-31). `https://rev4nchist.github.io/ai-enablement-decks/...` has been HTTP 404
+ever since. Three consecutive Wednesdays (08-12, 08-19, 08-26) failed on exactly this.
+
+- Repo (local): `C:/Users/david.hayes/Projects/ai-enablement-decks` — **PRIVATE**. It is still the
+  build store and version history; **git works fine, only Pages is dead.** Push as normal.
+- **Do NOT check whether the site is live. Do NOT run `gh run list`. Do NOT curl a
+  `github.io` URL.** Deploys fail by design now and are not a failure of your run. Treating a
+  dead deploy as your own failure is what produced the last three `_ERROR.md` files.
 - Read its `CLAUDE.md` first. Stage into `fourthos/preview/` and **never** add the preview to `decks.json`.
+- **Sharing happens outside this run.** After you exit, the wrapper runs
+  `scripts/fourthos-weekly/publish-local.mjs`, which rewrites the decks' absolute
+  `/ai-enablement-decks/...` links to relative and copies the package into
+  `OneDrive - Fourth Limited/FourthOS Sponsor Updates/<date>/` for Dave to share
+  Fourth-internally. **You do not do this step and must not attempt it.** Your job ends at a
+  committed, pushed `fourthos/preview/`.
 - On promotion (Dave's separate step), `promote.mjs` turns the preview into a dated deck
   `fourthos/<YYYY-MM-DD>/` and adds a card to the **`sponsor-updates`** section (top of the hub,
   newest-first, one row visible + collapse). The generate step only stages preview/.
@@ -156,14 +171,17 @@ for these rules. Reusable patterns proven in `fourthos/2026-06-24/`: badge compo
    prior failed week, DELETE it as part of this staging (a successful run must not leave it behind).
    Then `git add fourthos/preview/`, commit `chore(fourthos): weekly preview YYYY-MM-DD`, push to
    `main`. Do NOT touch `decks.json`.
-7. **Verify deploy.** `gh run list --repo Rev4nchist/ai-enablement-decks --limit 3` → expect `success`.
-   Confirm `https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/` loads.
+7. **Verify the COMMIT, not a deploy.** `git -C <decks-repo> status --porcelain -- fourthos/preview`
+   must be empty (everything committed) and `git -C <decks-repo> log -1 --format=%cs -- fourthos/preview`
+   must be today. That is the whole check. **There is no deploy to verify** — see "Publish target".
 8. **Notify Dave (both channels).**
-   - Slack DM via `slack_send_message`: the preview URL + a ≤5-bullet summary of what changed since
-     last week + the one-line "to publish: run `node scripts/fourthos-weekly/promote.mjs`".
+   - Slack DM via `slack_send_message`: a ≤5-bullet summary of what changed since last week, plus
+     "the package will be in `OneDrive - Fourth Limited/FourthOS Sponsor Updates/<today>/` once the
+     wrapper publishes it" and the one-line "to promote: run `node scripts/fourthos-weekly/promote.mjs`".
+     **Do not include a `github.io` URL** — it is a dead link.
    - Notion comment on the cockpit's **Sponsor Update Workspace** section: same content.
 9. **Final stdout line** (exactly one):
-   - success: `fourthos-weekly: OK preview=https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/ changed=<n>`
+   - success: `fourthos-weekly: OK staged=fourthos/preview changed=<n>`
    - failure (INCLUDING Notion unreachable / auth error — see G1): `fourthos-weekly: FAILED reason=<short>`
      (note: a model inside `claude -p` cannot set the process exit code — the FAILED **sentinel line**
      plus `_ERROR.md` are the real failure signals; the wrapper's verify step turns them into a

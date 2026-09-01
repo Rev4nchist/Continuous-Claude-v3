@@ -121,7 +121,24 @@ REM showed Bash `git -C <decks>`, Read and Write outside the workspace all work
 REM under this exact grant. The real cause was narrower -- a NON-GRANTED tool
 REM (PowerShell, absent from --allowedTools) used outside the workspace, which
 REM headless auto-denies. --add-dir removes the workspace half of that class.
-type %GEN_PROMPT% | call claude -p --output-format text --add-dir "C:\Users\david.hayes\Projects\ai-enablement-decks" --allowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" > "%LOG_FILE%" 2>&1
+REM BOUNDED since 2026-08-31. The old form here was a bare cmd pipe with NO
+REM ceiling of its own -- the task ExecutionTimeLimit (PT2H) was the only
+REM bound, and a task-limit kill takes the WRAPPER with it, so the final
+REM registry emit never runs and the pessimistic pre-emit row is all the
+REM period ever gets. Worse, a task-limit kill does not reliably reap the
+REM process tree on this machine: measured 2026-08-28 on CCv3-Health-Check,
+REM PT30M fired at 10:25 and the orphaned child kept running to 11:49
+REM (duration_s=6777 vs a normal 58). run-generate.ps1 moves the ceiling
+REM INSIDE the wrapper: it taskkill /T /F-s the tree and returns 124, then
+REM verify-run.mjs + the final emit below still record a truthful row.
+REM Override for a manual run: set CCV3_FOURTHOS_TIMEOUT_SEC before calling.
+REM Paths are relative to the REPO ROOT (this .bat cd /d-s there on line 13),
+REM NOT %~dp0. %~dp0 resolves to the running copy's own directory, which
+REM breaks the stubbed-copy probe technique these wrappers are tested with
+REM (found by that probe, 2026-08-31) while buying nothing in production.
+set "GEN_TIMEOUT_SEC=3600"
+if defined CCV3_FOURTHOS_TIMEOUT_SEC set "GEN_TIMEOUT_SEC=%CCV3_FOURTHOS_TIMEOUT_SEC%"
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fourthos-weekly\run-generate.ps1" -Prompt "%GEN_PROMPT%" -Out "%LOG_FILE%" -AddDir "C:\Users\david.hayes\Projects\ai-enablement-decks" -AllowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" -TimeoutSec %GEN_TIMEOUT_SEC%
 set EXIT_CODE=%ERRORLEVEL%
 
 echo [%date% %time%] FourthOS weekly generation finished. exit=%EXIT_CODE% log=%LOG_FILE%
@@ -167,6 +184,33 @@ if not "%RUN_STATUS%"=="OK" if not "%RUN_STATUS%"=="Warn" if not "%RUN_STATUS%"=
 )
 echo [%date% %time%] verified outcome: %RUN_STATUS% ^(%RUN_REASON%^)
 
+REM --- Local publish (2026-08-31) -------------------------------------------
+REM THE SPONSOR SITE IS GONE. ai-enablement-decks was made private ~2026-08-06,
+REM which deletes GitHub Pages on the free tier, and it CANNOT be made public
+REM again. The hub, all five promoted weeks and the preview have been HTTP 404
+REM since; three consecutive Wednesdays failed on exactly this.
+REM
+REM The replacement target is a folder under "OneDrive - Fourth Limited" that
+REM Dave shares from. This step runs HERE, in the wrapper, and not in the
+REM generate prompt, for the same reason the registry emit lives here: a
+REM mechanical, verifiable step must not depend on a model choosing to do it.
+REM publish-local.mjs rewrites the decks' 82 absolute /ai-enablement-decks/
+REM links to relative and refuses to write if any survive -- a copy alone
+REM produces a package whose navigation is dead but which looks fine.
+REM
+REM Gated on OK: a Warn/Skipped/Failed run has no fresh package worth sharing,
+REM and republishing over a good folder with a broken run would be worse than
+REM leaving last week's package in place. NON-FATAL either way -- it never
+REM changes RUN_STATUS or the exit contract.
+set "PUBLISH_DIR="
+set "PUBLISH_OUT=%TEMP%\fourthos-publish-out.txt"
+del "%PUBLISH_OUT%" 2>nul
+if "%RUN_STATUS%"=="OK" echo [%date% %time%] publishing package locally... log=%LOG_FILE%
+if "%RUN_STATUS%"=="OK" "%NODE_EXE%" scripts\fourthos-weekly\publish-local.mjs > "%PUBLISH_OUT%" 2>>"%LOG_FILE%"
+if "%RUN_STATUS%"=="OK" if exist "%PUBLISH_OUT%" for /f "usebackq delims=" %%p in ("%PUBLISH_OUT%") do set "PUBLISH_DIR=%%p"
+if defined PUBLISH_DIR echo [%date% %time%] published to: %PUBLISH_DIR%
+if "%RUN_STATUS%"=="OK" if not defined PUBLISH_DIR echo [%date% %time%] local publish produced no folder ^(non-fatal -- see %LOG_NAME%^)
+
 REM --- Report Runs registry (T3.3): FINAL non-fatal step. -------------------
 REM Observability, not the report's product -- it never changes the exit
 REM contract below. GUARD: without RUN_DATE an empty --period would emit a
@@ -176,15 +220,21 @@ if not defined RUN_DATE (
     goto :final_exit
 )
 
-REM Only advertise the preview URL for a verified-OK run. Pass the flag ONLY
-REM in that case: make-run.mjs REJECTS a non-http artifactUrl and exits 1
-REM without emitting, so the old `--artifactUrl "none"` on any non-OK status
-REM killed the emit and the registry upsert was skipped entirely. Effect: a
+REM artifactUrl is now ALWAYS omitted. It used to carry the Pages preview URL
+REM on an OK run; that URL has been HTTP 404 since 2026-08-06 and advertising
+REM a dead link in the registry is worse than advertising nothing. The local
+REM folder cannot take its place: make-run.mjs REJECTS a non-http artifactUrl
+REM BY DESIGN ("artifact URLs must outlive promotion"), and weakening that
+REM check to fit a machine-local path would be the wrong trade. The folder
+REM goes in the SUMMARY instead, where a path is meaningful.
+REM
+REM Keep omitting rather than passing a placeholder: the old `--artifactUrl
+REM "none"` on a non-OK status made make-run exit 1 without emitting, so a
 REM Warn, Skipped or Failed run recorded NO ROW AT ALL -- the always-emit
-REM spine was blind in exactly the cases it exists to record. Omitting the
-REM flag is the supported way to say "no artifact" (verified by execution).
+REM spine was blind in exactly the cases it exists to record.
 set "ARTIFACT_ARG="
-if "%RUN_STATUS%"=="OK" set "ARTIFACT_ARG=--artifactUrl https://rev4nchist.github.io/ai-enablement-decks/fourthos/preview/"
+set "PUBLISH_NOTE="
+if defined PUBLISH_DIR set "PUBLISH_NOTE= published to %PUBLISH_DIR%"
 
 set "RUN_EMIT=%TEMP%\report-run-FourthOS-Weekly.json"
 del "%RUN_EMIT%" 2>nul
@@ -193,12 +243,27 @@ REM runId matches and upsert UPDATES the pessimistic row rather than appending a
 REM second row for the period. If RUN_STAMP failed to resolve the arg is empty
 REM and make-run falls back to its own timestamp (two rows for the day is worse
 REM bookkeeping, never data loss).
-"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)"
+"%NODE_EXE%" scripts\report-registry\make-run.mjs --type "FourthOS Sponsor" --source "FourthOS-Weekly" --period %RUN_DATE% %RUNDATE_ARG% --status %RUN_STATUS% %ARTIFACT_ARG% --summary "%RUN_REASON% (exit=%EXIT_CODE%, log=%LOG_NAME%)%PUBLISH_NOTE%"
 if not exist "%RUN_EMIT%" (
     echo [%date% %time%] no report-run.json emitted -- skipping registry upsert
     goto :final_exit
 )
-"%NODE_EXE%" scripts\report-registry\upsert.mjs "%RUN_EMIT%"
+REM Redirect into the dated log. WHY (found 2026-08-31): this was the ONLY
+REM upsert call site in any wrapper with no redirect, so its stdout -- the
+REM `[report-registry] updated row for Run ID "..."` line that PROVES the final
+REM emit updated the pre-emit row in place -- went to the discarded scheduler
+REM console. Result: THIS pipeline has never once logged an updated-row line --
+REM its four August logs carry "created row" and nothing else -- while the
+REM Notion rows themselves showed created_time != last_edited_time on all four
+REM Wednesdays. The update was working; the only evidence of it was thrown away.
+REM Scope, checked before claiming it (the first version of this comment said
+REM "zero hits in any log" after grepping only ~/.claude/logs, and was WRONG):
+REM the three PowerShell pipelines log "updated row" routinely into the REPO
+REM tree at .claude/logs/ -- dashboard-sync 29 files, self-improvement 30,
+REM project-cards 25 -- and have since 2026-08-03. Only FourthOS was blind.
+REM `>>` (append) not `>`: %LOG_FILE% already holds the claude -p capture,
+REM written by the `>` on the type^|claude line above.
+"%NODE_EXE%" scripts\report-registry\upsert.mjs "%RUN_EMIT%" >> "%LOG_FILE%" 2>&1
 echo [%date% %time%] report-run upsert done ^(exit=%ERRORLEVEL%, non-fatal^)
 
 :final_exit
