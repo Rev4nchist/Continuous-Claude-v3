@@ -226,15 +226,38 @@ REM a dead link in the registry is worse than advertising nothing. The local
 REM folder cannot take its place: make-run.mjs REJECTS a non-http artifactUrl
 REM BY DESIGN ("artifact URLs must outlive promotion"), and weakening that
 REM check to fit a machine-local path would be the wrong trade. The folder
-REM goes in the SUMMARY instead, where a path is meaningful.
+REM goes in the SUMMARY, where a path is meaningful.
+REM
+REM But omitting it ENTIRELY left the Notion hub with no link at all for these
+REM rows (refresh-pages.mjs guards both render sites with isHttpUrl, so it
+REM degrades to showing nothing rather than breaking) -- a downgrade for anyone
+REM using the hub to find the report. So artifactUrl now points at the FourthOS
+REM report CHILD PAGE under the Reports hub. That page is not the artifact, but
+REM it is the canonical http place the artifact is ANNOUNCED: refresh-pages.mjs
+REM keeps its "Current run" callout in sync with the newest row, so it carries
+REM this run's status and the published folder path from the summary below.
+REM Hub -> report page -> where the package actually is.
+REM
+REM Gated on PUBLISH_DIR, not on RUN_STATUS: "Artifact URL is present" should
+REM keep meaning "something was produced". A Warn/Skipped/Failed run produced
+REM nothing and gets no link, exactly as before.
 REM
 REM Keep omitting rather than passing a placeholder: the old `--artifactUrl
 REM "none"` on a non-OK status made make-run exit 1 without emitting, so a
 REM Warn, Skipped or Failed run recorded NO ROW AT ALL -- the always-emit
-REM spine was blind in exactly the cases it exists to record.
+REM spine was blind in exactly the cases it exists to record. artifact-url.mjs
+REM keeps that property: it prints NOTHING on stdout when it cannot resolve a
+REM valid 32-hex page id, so the for/f below sets nothing and the flag stays
+REM absent. A missing link must never cost us the row.
 set "ARTIFACT_ARG="
 set "PUBLISH_NOTE="
 if defined PUBLISH_DIR set "PUBLISH_NOTE= published to %PUBLISH_DIR%"
+set "ARTIFACT_OUT=%TEMP%\fourthos-artifact-url.txt"
+del "%ARTIFACT_OUT%" 2>nul
+if defined PUBLISH_DIR "%NODE_EXE%" scripts\report-registry\artifact-url.mjs "FourthOS Sponsor" > "%ARTIFACT_OUT%" 2>>"%LOG_FILE%"
+if defined PUBLISH_DIR if exist "%ARTIFACT_OUT%" for /f "usebackq delims=" %%u in ("%ARTIFACT_OUT%") do set "ARTIFACT_ARG=--artifactUrl %%u"
+if defined ARTIFACT_ARG echo [%date% %time%] artifact link: %ARTIFACT_ARG%
+if defined PUBLISH_DIR if not defined ARTIFACT_ARG echo [%date% %time%] could not resolve an artifact URL ^(non-fatal; row still emitted^) -- see %LOG_NAME%
 
 set "RUN_EMIT=%TEMP%\report-run-FourthOS-Weekly.json"
 del "%RUN_EMIT%" 2>nul
