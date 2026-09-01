@@ -26,6 +26,7 @@ import path from "node:path";
 import os from "node:os";
 import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
+import { artifactUrlForType, loadIds } from "../report-registry/artifact-url.mjs";
 
 const DEFAULT_REPO = "C:/Users/david.hayes/Projects/ai-enablement-decks";
 const SECTION = "sponsor-updates";
@@ -204,10 +205,23 @@ if (PUSH) {
       log(`local publish failed (non-fatal): ${e.message}`);
     }
 
-    // artifactUrl is OMITTED, not replaced. make-run.mjs rejects a non-http artifactUrl
-    // by design ("artifact URLs must outlive promotion"), and the old Pages URL here is
-    // now a dead link -- recording it would put a 404 in the registry and on the hub.
-    // The local folder goes in the summary, where a path is meaningful.
+    // artifactUrl points at the FourthOS report CHILD PAGE, not the old Pages URL and
+    // not the local folder. make-run.mjs rejects a non-http artifactUrl by design
+    // ("artifact URLs must outlive promotion") so the folder can never go here, and the
+    // Pages URL is a 404 -- recording it would put a dead link in the registry and on
+    // the hub. Omitting it entirely (the first pass) left the hub with no link at all.
+    // The child page is the canonical http place the artifact is ANNOUNCED, and
+    // refresh-pages.mjs keeps its "Current run" callout carrying the folder path.
+    // Resolution failure is non-fatal: no link is bad, no ROW is worse.
+    let artifactArgs = [];
+    try {
+      const { url, error } = artifactUrlForType("FourthOS Sponsor", loadIds());
+      if (url) artifactArgs = ["--artifactUrl", url];
+      else log(`registry: no artifact URL (${error}) -- emitting the row without one`);
+    } catch (e) {
+      log(`registry: artifact URL lookup failed (${e.message}) -- emitting the row without one`);
+    }
+
     const summary = publishedDir
       ? `promoted: dated deck published to ${publishedDir} (commit ${commitSha || "unknown"})`
       : `promoted: dated deck committed, local publish did not run (commit ${commitSha || "unknown"})`;
@@ -217,6 +231,7 @@ if (PUSH) {
       "--source", "FourthOS-Weekly",
       "--period", date,
       "--status", "OK",
+      ...artifactArgs,
       "--summary", summary,
     ], { cwd: REPO, encoding: "utf8" });
 
