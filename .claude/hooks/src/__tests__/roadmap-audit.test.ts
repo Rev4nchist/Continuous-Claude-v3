@@ -398,6 +398,10 @@ describe('defaultWrite (real fs, no deps.write) -- absent-file CAS semantics', (
       after,
       allowFullRewrite: true,
       // No deps.write -- this is the real defaultWrite/mutateStateWithLock path.
+      // backup IS stubbed: the real one writes under ~/.claude/state/roadmap-bak
+      // keyed by this tmp dir, and afterEach only removes the tmp dir, so every
+      // run left an orphan pre-image dir behind (16 found 2026-09-02).
+      deps: { backup: vi.fn() },
     });
 
     expect(outcome).toBe('written');
@@ -423,6 +427,7 @@ describe('defaultWrite (real fs, no deps.write) -- absent-file CAS semantics', (
       before,
       after,
       // No deps.write -- real defaultWrite/mutateStateWithLock path.
+      deps: { backup: vi.fn() }, // see above: keep ~/.claude/state clean
     });
 
     // Expecting non-empty content but finding an absent file genuinely IS a

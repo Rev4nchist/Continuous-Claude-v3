@@ -157,20 +157,6 @@ export function renderSessionBlock(session: PlanningSession): string[] {
 }
 
 /**
- * Render the session block that gets APPENDED to a live ROADMAP.md.
- *
- * Deliberately not `renderSessionBlock` (2026-09-02, defect 2). That renderer
- * emits Summary / Key Decisions / Implementation / Files / Verification
- * stanzas scraped out of the plan, and in every hand-maintained ROADMAP the
- * human deleted the whole thing and wrote a real entry instead. Generated
- * paraphrase of a document that still exists on disk is not worth the diff
- * noise, so the entry now POINTS AT the plan rather than restating it.
- *
- * `renderSessionBlock` is untouched and still used by `generateRoadmap`, whose
- * byte-for-byte output is pinned by existing tests -- this is an additional
- * renderer for the append path, not a rewrite of the existing one.
- */
-/**
  * How a plan file is named in the ROADMAP entry: project-relative with forward
  * slashes when the plan lives inside the project, absolute otherwise.
  *
@@ -195,6 +181,20 @@ export function planPathForRoadmap(
   return rel.split(path.sep).join('/');
 }
 
+/**
+ * Render the session block that gets APPENDED to a live ROADMAP.md.
+ *
+ * Deliberately not `renderSessionBlock` (2026-09-02, defect 2). That renderer
+ * emits Summary / Key Decisions / Implementation / Files / Verification
+ * stanzas scraped out of the plan, and in every hand-maintained ROADMAP the
+ * human deleted the whole thing and wrote a real entry instead. Generated
+ * paraphrase of a document that still exists on disk is not worth the diff
+ * noise, so the entry now POINTS AT the plan rather than restating it.
+ *
+ * `renderSessionBlock` is untouched and still used by `generateRoadmap`, whose
+ * byte-for-byte output is pinned by existing tests -- this is an additional
+ * renderer for the append path, not a rewrite of the existing one.
+ */
 export function renderSessionBlockCompact(session: PlanningSession): string[] {
   const lines = [`### ${session.date}: ${session.title}`];
   if (session.planPath) {
