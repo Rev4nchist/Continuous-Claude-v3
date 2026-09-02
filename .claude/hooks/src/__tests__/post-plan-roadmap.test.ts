@@ -14,7 +14,7 @@
 import { describe, it, expect } from 'vitest';
 import { parseRoadmap } from '../shared/roadmap-parser.js';
 import type { PlanningSession } from '../shared/roadmap-parser.js';
-import { applyRoadmapUpdate, renderSessionBlock, extractBullets } from '../post-plan-roadmap.js';
+import { applyRoadmapUpdate, renderSessionBlock, extractBullets, extractPlanInfo } from '../post-plan-roadmap.js';
 
 /**
  * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
@@ -259,5 +259,138 @@ describe('renderSessionBlock', () => {
 describe('extractBullets (vector 5: emphasis-corruption fix)', () => {
   it('does not corrode a closing ** followed by whitespace', () => {
     expect(extractBullets('- but **not** fix')).toEqual(['but **not** fix']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 2 (2026-09-02): the appended block invented "Key Decisions".
+//
+// extractPlanInfo fell back to keyword-scraping the WHOLE plan document when a
+// plan had no Decisions/Key Decisions/Approach section. CAPTURE_KEYWORDS
+// includes 'note', 'why', 'reason', 'change', 'add', 'update', 'fix' -- so
+// ordinary Context prose was lifted out and rendered under a "**Key
+// Decisions:**" heading in ROADMAP.md, and stored to archival memory as
+// decisions. Neither is true: a plan with no decisions section recorded no
+// decisions.
+// ---------------------------------------------------------------------------
+describe('extractPlanInfo -- context bullets are not decisions', () => {
+  const planWithOnlyContext = [
+    '# Plan: Tidy the widget loader',
+    '',
+    '## Context',
+    '- The loader has a note about why the retry count is 3.',
+    '- We should update the docstring and fix the stale path reference.',
+    '- Root cause: the config is read before the environment is applied.',
+    '',
+    '## Implementation',
+    '- Move the config read below the environment apply.',
+    '',
+  ].join('\n');
+
+  it('does not turn Context bullets into Key Decisions', () => {
+    const info = extractPlanInfo(planWithOnlyContext, 'plans/tidy-widget-loader.md');
+    expect(info.decisions).toEqual([]);
+  });
+
+  it('renders no Key Decisions heading for such a plan', () => {
+    const info = extractPlanInfo(planWithOnlyContext, 'plans/tidy-widget-loader.md');
+    const block = renderSessionBlock({
+      date: '2026-09-02',
+      title: info.title,
+      summary: info.summary || undefined,
+      decisions: info.decisions,
+    }).join('\n');
+    expect(block).not.toContain('Key Decisions');
+  });
+
+  it('still reads decisions from a real Decisions section', () => {
+    const planWithDecisions = [
+      '# Plan: Real one',
+      '',
+      '## Context',
+      '- Some background note about why this matters.',
+      '',
+      '## Decisions',
+      '- Use the bounded launcher instead of a bare pipe.',
+      '- Keep the pre-image outside the project tree.',
+      '',
+    ].join('\n');
+    const info = extractPlanInfo(planWithDecisions, 'plans/real-one.md');
+    expect(info.decisions).toHaveLength(2);
+    expect(info.decisions[0]).toContain('bounded launcher');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 2c (2026-09-02): the appended block is one line of body, not five
+// generated stanzas.
+//
+// DEVIATION from the handoff's literal "one line: date, plan title, plan file
+// path": the `### YYYY-MM-DD: Title` header line is kept intact and the plan
+// path goes on its own `**Plan:**` line beneath it. Appending the path to the
+// header would be captured by findSessionBlock's title regex
+// (/^###\s*\d{4}-\d{2}-\d{2}:\s*(.+)$/), so same-day-different-title detection
+// would start comparing "Title -- path" against "Title" and re-append a block
+// it already wrote. Two lines that keep that contract beat one that breaks it.
+// ---------------------------------------------------------------------------
+describe('applyRoadmapUpdate -- appended session block is compact', () => {
+  const ROADMAP = [
+    '# ROADMAP',
+    '',
+    '## Current Focus',
+    '**Something already active**',
+    '',
+    '## Recent Planning Sessions',
+    '',
+  ].join('\n');
+
+  const session: PlanningSession = {
+    date: '2026-09-02',
+    title: 'Tidy the widget loader',
+    planPath: 'plans/tidy-widget-loader.md',
+    summary: 'A summary that must NOT be emitted into the ROADMAP any more.',
+    decisions: ['Use the bounded launcher', 'Keep the pre-image out of the tree'],
+    steps: ['Step one', 'Step two'],
+    verification: ['Run the suite'],
+    files: ['a.ts', 'b.ts', 'a.ts'],
+  };
+
+  it('emits the header plus exactly one body line naming the plan file', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).toContain('### 2026-09-02: Tidy the widget loader');
+    expect(content).toContain('**Plan:** plans/tidy-widget-loader.md');
+  });
+
+  it('emits none of the generated stanzas that humans kept deleting', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).not.toContain('**Key Decisions:**');
+    expect(content).not.toContain('**Implementation:**');
+    expect(content).not.toContain('**Verification:**');
+    expect(content).not.toContain('**Files:**');
+    expect(content).not.toContain('**Summary:**');
+  });
+
+  it('omits the Plan line entirely when there is no plan path', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session: { ...session, planPath: undefined },
+      today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).toContain('### 2026-09-02: Tidy the widget loader');
+    expect(content).not.toContain('**Plan:**');
+  });
+
+  it('adds at most 3 lines to the document', () => {
+    const before = ROADMAP.split('\n').length;
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+    expect(content.split('\n').length - before).toBeLessThanOrEqual(3);
   });
 });

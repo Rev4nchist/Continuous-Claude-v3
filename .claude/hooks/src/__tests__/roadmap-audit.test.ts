@@ -28,6 +28,13 @@ import {
 const PROJECT_DIR = 'C:/fake/project';
 const ROADMAP_PATH = 'C:/fake/project/ROADMAP.md';
 
+/**
+ * A single backslash, built from its char code so no layer between here and
+ * disk (heredoc, shell, editor) can eat the escape. Used only to normalise
+ * Windows separators before comparing paths.
+ */
+const SEP_BACKSLASH = String.fromCharCode(92);
+
 /** A `deps` bundle that always succeeds, recording every call for assertions. */
 function makeSpyDeps() {
   const writeCalls: Array<{ roadmapPath: string; before: string; after: string }> = [];
@@ -100,11 +107,14 @@ describe('writeRoadmapGuarded -- a real change', () => {
     expect(record.before_sha256).toHaveLength(16);
     expect(record.after_sha256).toHaveLength(16);
 
-    // .bak holds the BEFORE content, not the after content.
+    // The pre-image holds the BEFORE content, not the after content, and it
+    // lands OUTSIDE the project tree (changed 2026-09-02 -- the old
+    // `<roadmapPath>.bak` polluted every project's git status).
     expect(backupCalls).toHaveLength(1);
-    expect(backupCalls[0].bakPath).toBe(`${ROADMAP_PATH}.bak`);
+    expect(backupCalls[0].bakPath).not.toBe(`${ROADMAP_PATH}.bak`);
+    expect(backupCalls[0].bakPath.startsWith(PROJECT_DIR)).toBe(false);
     expect(backupCalls[0].content).toBe(before);
-    expect(record.bak_path).toBe(`${ROADMAP_PATH}.bak`);
+    expect(record.bak_path).toBe(backupCalls[0].bakPath);
     expect(record.bak_error).toBeNull();
 
     expect(writeCalls).toHaveLength(1);
@@ -648,5 +658,215 @@ describe('appendRoadmapAuditRecord', () => {
     };
 
     expect(() => appendRoadmapAuditRecord(badProjectDir, record)).not.toThrow();
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression: the two REAL clobber incidents gate 2 exists to refuse.
+//
+// Added 2026-09-02. These are not hypotheticals -- both happened, in named
+// repos, on named dates, and both are what edbbe2d's deletion-free invariant
+// was built for. A guard nobody has seen refuse is not a guard
+// (repo lesson: vacuous-gate-class), and a guard whose refusal is not pinned
+// by a test can be silently weakened by the next refactor.
+// ---------------------------------------------------------------------------
+describe('writeRoadmapGuarded -- gate 2 regression: the real incidents', () => {
+  it('agent-arch 2026-07-16: refuses replacing a 329-line tracker with an 18-line summary', () => {
+    const { deps, writeCalls, backupCalls } = makeSpyDeps();
+
+    // 329 lines of hand-maintained tracker.
+    const before = Array.from({ length: 329 }, (_, i) => `- tracker row ${i + 1}`).join('\n');
+    // The 18-line "summary" that replaced it.
+    const after = Array.from({ length: 18 }, (_, i) => `- summary line ${i + 1}`).join('\n');
+
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap',
+      tool: 'ExitPlanMode',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before,
+      after,
+      deps,
+    });
+
+    expect(outcome).toBe('skipped');
+    expect(record.reason).toBe('deletion_guard');
+    expect(writeCalls).toHaveLength(0);
+    // Gate 2 runs BEFORE gate 3, so a refused write leaves no pre-image behind.
+    expect(backupCalls).toHaveLength(0);
+    expect(record.refused_deletions!.length).toBeGreaterThan(0);
+  });
+
+  it('fourth-netsuite-mcp 2026-07-29: refuses a write that deletes 67 lines while adding others', () => {
+    const { deps, writeCalls } = makeSpyDeps();
+
+    // The shape that defeats a percentage-shrink check: the file GROWS overall
+    // (+80 added vs 67 removed) while 67 real lines silently vanish.
+    const kept = Array.from({ length: 120 }, (_, i) => `- kept line ${i + 1}`);
+    const doomed = Array.from({ length: 67 }, (_, i) => `- hand-written note ${i + 1}`);
+    const added = Array.from({ length: 80 }, (_, i) => `- generated line ${i + 1}`);
+
+    const before = [...kept, ...doomed].join('\n');
+    const after = [...kept, ...added].join('\n');
+
+    // Guard against the test lying to itself: this must be a NET GROWTH write,
+    // otherwise it is not reproducing the incident that motivated the invariant.
+    expect(after.split('\n').length).toBeGreaterThan(before.split('\n').length);
+
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap',
+      tool: 'ExitPlanMode',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before,
+      after,
+      deps,
+    });
+
+    expect(outcome).toBe('skipped');
+    expect(record.reason).toBe('deletion_guard');
+    expect(writeCalls).toHaveLength(0);
+    expect(record.refused_deletions).toContain('- hand-written note 1');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 1 (2026-09-02): the pre-image must NOT land in the project tree.
+//
+// `<roadmapPath>.bak` is untracked and not gitignored, so every guarded write
+// left a file in `git status` of whatever project the hook fired in.
+// ---------------------------------------------------------------------------
+describe('writeRoadmapGuarded -- gate 3: pre-image lives outside the project tree', () => {
+  it('does not write the pre-image next to ROADMAP.md', () => {
+    const { deps, backupCalls } = makeSpyDeps();
+
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap',
+      tool: 'ExitPlanMode',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before: '# ROADMAP\n\n- one\n',
+      after: '# ROADMAP\n\n- one\n- two\n',
+      deps,
+    });
+
+    expect(outcome).toBe('written');
+    expect(backupCalls).toHaveLength(1);
+
+    const bakPath = backupCalls[0].bakPath.split(SEP_BACKSLASH).join('/');
+
+    // The actual defect: the old code produced `<roadmapPath>.bak`.
+    expect(bakPath).not.toBe(`${ROADMAP_PATH}.bak`);
+    // Nothing may be written anywhere under the project directory.
+    expect(bakPath.startsWith(PROJECT_DIR)).toBe(false);
+    // And the audit row must point at wherever it really went.
+    expect(record.bak_path!.split(SEP_BACKSLASH).join('/')).toBe(bakPath);
+  });
+
+  it('namespaces the pre-image by project so two projects cannot collide', () => {
+    const a = makeSpyDeps();
+    const b = makeSpyDeps();
+
+    writeRoadmapGuarded({
+      hook: 'post-plan-roadmap', roadmapPath: 'C:/repos/alpha/ROADMAP.md',
+      projectDir: 'C:/repos/alpha', before: '- a\n', after: '- a\n- b\n', deps: a.deps,
+    });
+    writeRoadmapGuarded({
+      hook: 'post-plan-roadmap', roadmapPath: 'C:/repos/beta/ROADMAP.md',
+      projectDir: 'C:/repos/beta', before: '- a\n', after: '- a\n- b\n', deps: b.deps,
+    });
+
+    const pathA = a.backupCalls[0].bakPath.split(SEP_BACKSLASH).join('/');
+    const pathB = b.backupCalls[0].bakPath.split(SEP_BACKSLASH).join('/');
+    expect(pathA).not.toBe(pathB);
+    expect(pathA).toContain('alpha');
+    expect(pathB).toContain('beta');
+  });
+
+  it('a backup failure still never blocks the write', () => {
+    const { deps, writeCalls } = makeSpyDeps();
+    deps.backup = vi.fn(() => { throw new Error('disk full'); });
+
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap', roadmapPath: ROADMAP_PATH, projectDir: PROJECT_DIR,
+      before: '- one\n', after: '- one\n- two\n', deps,
+    });
+
+    expect(outcome).toBe('written');
+    expect(writeCalls).toHaveLength(1);
+    expect(record.bak_error).toBe('disk full');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 2b (2026-09-02): per-project opt-out.
+//
+// A hand-maintained ROADMAP.md can declare itself off-limits to the sync hooks
+// with a marker comment. The hooks then still record the audit row and still
+// surface session context -- they just never touch the file. Placed in
+// writeRoadmapGuarded (not in one hook) so ALL writers inherit it: that is the
+// defect-3 requirement satisfied in one place rather than five.
+// ---------------------------------------------------------------------------
+describe('writeRoadmapGuarded -- gate 0: per-project manual opt-out', () => {
+  const MARKER = '<!-- roadmap-sync: manual -->';
+
+  it('refuses to write a ROADMAP that declares itself manual, but still audits', () => {
+    const { deps, writeCalls, backupCalls, logCalls } = makeSpyDeps();
+    const before = `# ROADMAP\n${MARKER}\n\n## Current Focus\n- hand written\n`;
+
+    const { outcome, record } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap',
+      tool: 'ExitPlanMode',
+      roadmapPath: ROADMAP_PATH,
+      projectDir: PROJECT_DIR,
+      before,
+      after: `${before}\n### 2026-09-02: Some Plan\n`,
+      deps,
+    });
+
+    expect(outcome).toBe('skipped');
+    expect(record.reason).toBe('opt_out_manual');
+    expect(writeCalls).toHaveLength(0);
+    expect(backupCalls).toHaveLength(0);
+    // The audit row is the whole point -- an opt-out must stay observable.
+    expect(logCalls).toHaveLength(1);
+  });
+
+  it('tolerates spacing and case in the marker', () => {
+    for (const marker of [
+      '<!--roadmap-sync:manual-->',
+      '<!--   roadmap-sync:   manual   -->',
+      '<!-- ROADMAP-SYNC: MANUAL -->',
+    ]) {
+      const { deps } = makeSpyDeps();
+      const before = `# ROADMAP\n${marker}\n\n- x\n`;
+      const { outcome, record } = writeRoadmapGuarded({
+        hook: 'post-plan-roadmap', roadmapPath: ROADMAP_PATH, projectDir: PROJECT_DIR,
+        before, after: `${before}- y\n`, deps,
+      });
+      expect(outcome, `marker: ${marker}`).toBe('skipped');
+      expect(record.reason, `marker: ${marker}`).toBe('opt_out_manual');
+    }
+  });
+
+  it('a ROADMAP without the marker is written normally', () => {
+    const { deps, writeCalls } = makeSpyDeps();
+    const before = '# ROADMAP\n\n## Current Focus\n- hand written\n';
+    const { outcome } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap', roadmapPath: ROADMAP_PATH, projectDir: PROJECT_DIR,
+      before, after: `${before}- more\n`, deps,
+    });
+    expect(outcome).toBe('written');
+    expect(writeCalls).toHaveLength(1);
+  });
+
+  it('does not fire on prose that merely mentions the marker name', () => {
+    const { deps } = makeSpyDeps();
+    const before = '# ROADMAP\n\n- We considered a roadmap-sync manual mode.\n';
+    const { outcome } = writeRoadmapGuarded({
+      hook: 'post-plan-roadmap', roadmapPath: ROADMAP_PATH, projectDir: PROJECT_DIR,
+      before, after: `${before}- more\n`, deps,
+    });
+    expect(outcome).toBe('written');
   });
 });

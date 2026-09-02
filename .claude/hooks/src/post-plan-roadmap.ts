@@ -156,6 +156,28 @@ export function renderSessionBlock(session: PlanningSession): string[] {
   return lines;
 }
 
+/**
+ * Render the session block that gets APPENDED to a live ROADMAP.md.
+ *
+ * Deliberately not `renderSessionBlock` (2026-09-02, defect 2). That renderer
+ * emits Summary / Key Decisions / Implementation / Files / Verification
+ * stanzas scraped out of the plan, and in every hand-maintained ROADMAP the
+ * human deleted the whole thing and wrote a real entry instead. Generated
+ * paraphrase of a document that still exists on disk is not worth the diff
+ * noise, so the entry now POINTS AT the plan rather than restating it.
+ *
+ * `renderSessionBlock` is untouched and still used by `generateRoadmap`, whose
+ * byte-for-byte output is pinned by existing tests -- this is an additional
+ * renderer for the append path, not a rewrite of the existing one.
+ */
+export function renderSessionBlockCompact(session: PlanningSession): string[] {
+  const lines = [`### ${session.date}: ${session.title}`];
+  if (session.planPath) {
+    lines.push(`**Plan:** ${session.planPath}`);
+  }
+  return lines;
+}
+
 function generateRoadmap(sections: RoadmapSection): string {
   // Reproduce the pre-refactor byte output exactly: title, then each managed
   // section body followed by a single blank line — EXCEPT the trailing sessions
@@ -318,7 +340,7 @@ export function applyRoadmapUpdate(
 
   // --- Recent Planning Sessions: pure append, no replace, no cap ----------
   const sessionsRange = doc.rawSections.get('sessions');
-  const sessionBlockLines = [...renderSessionBlock(update.session), ''];
+  const sessionBlockLines = [...renderSessionBlockCompact(update.session), ''];
 
   if (sessionsRange) {
     const existing = findSessionBlock(lines, sessionsRange, update.today);
@@ -342,22 +364,12 @@ export function applyRoadmapUpdate(
   return { content, ops: opSummaries };
 }
 
-// Expanded keywords for content capture
-const CAPTURE_KEYWORDS = [
-  // Decisions
-  'decision', 'decided', 'approach', 'strategy', 'chose', 'selected',
-  // Goals
-  'goal', 'objective', 'purpose', 'target', 'aim',
-  // Implementation
-  'implement', 'create', 'add', 'modify', 'update', 'fix', 'build',
-  'step', 'action', 'task', 'change',
-  // Verification
-  'verify', 'test', 'check', 'confirm', 'validate', 'ensure',
-  // Risks
-  'risk', 'edge case', 'caveat', 'limitation', 'warning', 'note',
-  // Analysis
-  'problem', 'issue', 'cause', 'root cause', 'reason', 'why',
-];
+// CAPTURE_KEYWORDS was deleted 2026-09-02 along with its only caller, the
+// whole-document decision fallback in extractPlanInfo. It listed 'note',
+// 'why', 'reason', 'change', 'add', 'update' and 'fix' among others, which is
+// why it matched ordinary Context prose and published it as decisions. The
+// `keywords` parameter on the exported `extractBullets` is retained -- it is
+// part of that function's tested surface -- but nothing in this hook passes it.
 
 interface PlanInfo {
   title: string;
@@ -499,7 +511,7 @@ function extractFilesFromContent(content: string): string[] {
   return [...new Set(files)];
 }
 
-function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
+export function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
   const sections = parseSections(planContent);
 
   // Extract title
@@ -524,13 +536,20 @@ function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
     summary = extractFirstParagraph(sections['_intro']);
   }
 
-  // Extract decisions with expanded keywords
+  // Decisions come ONLY from a section that actually declares them.
+  //
+  // There used to be a fallback here: when no Decisions/Key Decisions/Approach
+  // section existed, it ran `extractBullets(planContent, CAPTURE_KEYWORDS)`
+  // over the WHOLE plan. CAPTURE_KEYWORDS included 'note', 'why', 'reason',
+  // 'change', 'add', 'update' and 'fix', so ordinary Context prose was lifted
+  // out, rendered into ROADMAP.md under a "**Key Decisions:**" heading, and
+  // stored to archival memory as decisions. It was fabrication in both places,
+  // and it is why hand-maintained ROADMAPs had this block deleted by humans
+  // every week (defect 2, 2026-09-02).
+  //
+  // A plan with no decisions section recorded no decisions. Say nothing.
   const decisionSection = sections['decisions'] || sections['key decisions'] || sections['approach'] || '';
-  let decisions = extractBullets(decisionSection);
-  if (decisions.length === 0) {
-    // Fallback to keyword matching across entire content
-    decisions = extractBullets(planContent, CAPTURE_KEYWORDS);
-  }
+  const decisions = extractBullets(decisionSection);
 
   // Extract implementation steps
   const implSection = sections['implementation plan'] || sections['implementation'] ||
@@ -723,8 +742,17 @@ async function main() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  // Relative to the project when the plan lives inside it, so the ROADMAP entry
+  // stays readable and portable; absolute otherwise rather than guessing.
+  const planPathForEntry = latestPlanPath
+    ? (path.isAbsolute(latestPlanPath) && latestPlanPath.startsWith(projectDir)
+        ? path.relative(projectDir, latestPlanPath).split(path.sep).join('/')
+        : latestPlanPath)
+    : undefined;
+
   const newSession: PlanningSession = {
     date: today,
+    planPath: planPathForEntry,
     title: planInfo.title,
     summary: planInfo.summary || undefined,
     decisions: planInfo.decisions.slice(0, 5),

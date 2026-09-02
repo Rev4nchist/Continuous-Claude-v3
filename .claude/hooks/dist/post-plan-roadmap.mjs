@@ -356,8 +356,9 @@ function replaceLine(index, line, label) {
 
 // src/shared/roadmap-audit.ts
 import { createHash } from "node:crypto";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename3, dirname as dirname2, join as join4 } from "node:path";
 
 // src/shared/atomic-write.ts
 import {
@@ -628,8 +629,31 @@ function defaultWrite(roadmapPath, before, after) {
   }
   return { wrote: false, reason: "write_failed", wait_ms: captured.lockOutcome?.wait_ms };
 }
+var ROADMAP_MANUAL_MARKER = /<!--\s*roadmap-sync\s*:\s*manual\s*-->/i;
+var BAK_KEEP = 10;
+function roadmapBakPath(projectDir, when = /* @__PURE__ */ new Date()) {
+  const slug = basename3(projectDir).replace(/[^A-Za-z0-9._-]/g, "_") || "project";
+  const hash = sha256Prefix16(projectDir).slice(0, 8);
+  const stamp = when.toISOString().replace(/[:.]/g, "-");
+  return join4(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}.md`);
+}
+function rotateBaks(dir) {
+  try {
+    const entries = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    for (const stale of entries.slice(0, Math.max(0, entries.length - BAK_KEEP))) {
+      try {
+        unlinkSync2(join4(dir, stale));
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 function defaultBackup(bakPath, content) {
+  const dir = dirname2(bakPath);
+  mkdirSync2(dir, { recursive: true });
   writeFileSync2(bakPath, content, "utf-8");
+  rotateBaks(dir);
 }
 function defaultAppendLog(logPath, line) {
   mkdirSync2(dirname2(logPath), { recursive: true });
@@ -692,6 +716,9 @@ function writeRoadmapGuarded(args) {
   if (after === before) {
     return finish("noop");
   }
+  if (ROADMAP_MANUAL_MARKER.test(before)) {
+    return finish("skipped", { reason: "opt_out_manual" });
+  }
   if (!allowFullRewrite) {
     const allowedSet = new Set(allowedDeletions ?? []);
     const removed = computeRemovedLines(beforeLines, afterLines);
@@ -710,7 +737,7 @@ function writeRoadmapGuarded(args) {
       return finish("skipped", { reason: "catastrophic_rewrite" });
     }
   }
-  const bakPath = `${roadmapPath}.bak`;
+  const bakPath = roadmapBakPath(projectDir);
   let bakError = null;
   try {
     (deps?.backup ?? defaultBackup)(bakPath, before);
@@ -819,6 +846,13 @@ function renderSessionBlock(session) {
   }
   return lines;
 }
+function renderSessionBlockCompact(session) {
+  const lines = [`### ${session.date}: ${session.title}`];
+  if (session.planPath) {
+    lines.push(`**Plan:** ${session.planPath}`);
+  }
+  return lines;
+}
 function generateRoadmap(sections) {
   const lines = ["# Project Roadmap", ""];
   lines.push(...renderSectionBody("current", sections), "");
@@ -924,7 +958,7 @@ function applyRoadmapUpdate(doc, update) {
     }
   }
   const sessionsRange = doc.rawSections.get("sessions");
-  const sessionBlockLines = [...renderSessionBlock(update.session), ""];
+  const sessionBlockLines = [...renderSessionBlockCompact(update.session), ""];
   if (sessionsRange) {
     const existing = findSessionBlock(lines, sessionsRange, update.today);
     if (!existing) {
@@ -944,54 +978,6 @@ function applyRoadmapUpdate(doc, update) {
   const content = applySplices(lines, ops).join("\n");
   return { content, ops: opSummaries };
 }
-var CAPTURE_KEYWORDS = [
-  // Decisions
-  "decision",
-  "decided",
-  "approach",
-  "strategy",
-  "chose",
-  "selected",
-  // Goals
-  "goal",
-  "objective",
-  "purpose",
-  "target",
-  "aim",
-  // Implementation
-  "implement",
-  "create",
-  "add",
-  "modify",
-  "update",
-  "fix",
-  "build",
-  "step",
-  "action",
-  "task",
-  "change",
-  // Verification
-  "verify",
-  "test",
-  "check",
-  "confirm",
-  "validate",
-  "ensure",
-  // Risks
-  "risk",
-  "edge case",
-  "caveat",
-  "limitation",
-  "warning",
-  "note",
-  // Analysis
-  "problem",
-  "issue",
-  "cause",
-  "root cause",
-  "reason",
-  "why"
-];
 function parseSections(content) {
   const sections = {};
   const lines = content.split("\n");
@@ -1085,9 +1071,9 @@ function extractPlanInfo(planContent, filePath) {
   if (titleMatch && titleMatch[1].trim() !== "Planning Session") {
     title = titleMatch[1].trim();
   } else if (filePath) {
-    const basename3 = filePath.replace(/\\/g, "/").split("/").pop()?.replace(".md", "") || "";
-    if (basename3 && !basename3.match(/^plan[-_]?\d*$/i)) {
-      title = basename3.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
+    const basename4 = filePath.replace(/\\/g, "/").split("/").pop()?.replace(".md", "") || "";
+    if (basename4 && !basename4.match(/^plan[-_]?\d*$/i)) {
+      title = basename4.split(/[-_]/).map((w) => w.charAt(0).toUpperCase() + w.slice(1)).join(" ");
     }
   }
   let summary = "";
@@ -1098,10 +1084,7 @@ function extractPlanInfo(planContent, filePath) {
     summary = extractFirstParagraph(sections["_intro"]);
   }
   const decisionSection = sections["decisions"] || sections["key decisions"] || sections["approach"] || "";
-  let decisions = extractBullets(decisionSection);
-  if (decisions.length === 0) {
-    decisions = extractBullets(planContent, CAPTURE_KEYWORDS);
-  }
+  const decisions = extractBullets(decisionSection);
   const implSection = sections["implementation plan"] || sections["implementation"] || sections["steps"] || sections["plan"] || "";
   let steps = extractBullets(implSection);
   if (steps.length === 0 && sections["step 1"]) {
@@ -1250,8 +1233,10 @@ async function main() {
     return;
   }
   const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const planPathForEntry = latestPlanPath ? path2.isAbsolute(latestPlanPath) && latestPlanPath.startsWith(projectDir) ? path2.relative(projectDir, latestPlanPath).split(path2.sep).join("/") : latestPlanPath : void 0;
   const newSession = {
     date: today,
+    planPath: planPathForEntry,
     title: planInfo.title,
     summary: planInfo.summary || void 0,
     decisions: planInfo.decisions.slice(0, 5),
@@ -1338,5 +1323,7 @@ main().catch((err) => {
 export {
   applyRoadmapUpdate,
   extractBullets,
-  renderSessionBlock
+  extractPlanInfo,
+  renderSessionBlock,
+  renderSessionBlockCompact
 };

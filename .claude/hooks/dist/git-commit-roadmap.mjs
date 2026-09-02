@@ -149,8 +149,9 @@ function insertUnderSection(content, sectionPrefix, entry) {
 
 // src/shared/roadmap-audit.ts
 import { createHash } from "node:crypto";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir3 } from "node:os";
+import { basename as basename2, dirname as dirname2, join as join4 } from "node:path";
 
 // src/shared/atomic-write.ts
 import {
@@ -421,8 +422,31 @@ function defaultWrite(roadmapPath, before, after) {
   }
   return { wrote: false, reason: "write_failed", wait_ms: captured.lockOutcome?.wait_ms };
 }
+var ROADMAP_MANUAL_MARKER = /<!--\s*roadmap-sync\s*:\s*manual\s*-->/i;
+var BAK_KEEP = 10;
+function roadmapBakPath(projectDir, when = /* @__PURE__ */ new Date()) {
+  const slug = basename2(projectDir).replace(/[^A-Za-z0-9._-]/g, "_") || "project";
+  const hash = sha256Prefix16(projectDir).slice(0, 8);
+  const stamp = when.toISOString().replace(/[:.]/g, "-");
+  return join4(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}.md`);
+}
+function rotateBaks(dir) {
+  try {
+    const entries = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    for (const stale of entries.slice(0, Math.max(0, entries.length - BAK_KEEP))) {
+      try {
+        unlinkSync2(join4(dir, stale));
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 function defaultBackup(bakPath, content) {
+  const dir = dirname2(bakPath);
+  mkdirSync2(dir, { recursive: true });
   writeFileSync2(bakPath, content, "utf-8");
+  rotateBaks(dir);
 }
 function defaultAppendLog(logPath, line) {
   mkdirSync2(dirname2(logPath), { recursive: true });
@@ -485,6 +509,9 @@ function writeRoadmapGuarded(args) {
   if (after === before) {
     return finish("noop");
   }
+  if (ROADMAP_MANUAL_MARKER.test(before)) {
+    return finish("skipped", { reason: "opt_out_manual" });
+  }
   if (!allowFullRewrite) {
     const allowedSet = new Set(allowedDeletions ?? []);
     const removed = computeRemovedLines(beforeLines, afterLines);
@@ -503,7 +530,7 @@ function writeRoadmapGuarded(args) {
       return finish("skipped", { reason: "catastrophic_rewrite" });
     }
   }
-  const bakPath = `${roadmapPath}.bak`;
+  const bakPath = roadmapBakPath(projectDir);
   let bakError = null;
   try {
     (deps?.backup ?? defaultBackup)(bakPath, before);
