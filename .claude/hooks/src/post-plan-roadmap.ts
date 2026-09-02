@@ -170,6 +170,31 @@ export function renderSessionBlock(session: PlanningSession): string[] {
  * byte-for-byte output is pinned by existing tests -- this is an additional
  * renderer for the append path, not a rewrite of the existing one.
  */
+/**
+ * How a plan file is named in the ROADMAP entry: project-relative with forward
+ * slashes when the plan lives inside the project, absolute otherwise.
+ *
+ * Extracted and exported 2026-09-02 because the inline version shipped broken
+ * and no unit test could reach it. Both paths go through `path.resolve` before
+ * comparison: a naive `planPath.startsWith(projectDir)` fails whenever the two
+ * disagree about separators, which is the NORMAL case on Windows --
+ * CLAUDE_PROJECT_DIR arrives with forward slashes while `path.join` returns
+ * backslashes. The live ExitPlanMode run emitted a full
+ * `C:\Users\...\.claude\plans\foo.md` into a ROADMAP before this was fixed.
+ */
+export function planPathForRoadmap(
+  projectDir: string,
+  planPath: string | undefined,
+): string | undefined {
+  if (!planPath) return undefined;
+  const root = path.resolve(projectDir);
+  const full = path.resolve(planPath);
+  const rel = path.relative(root, full);
+  // Inside the project iff the relative path neither escapes nor is absolute.
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return full;
+  return rel.split(path.sep).join('/');
+}
+
 export function renderSessionBlockCompact(session: PlanningSession): string[] {
   const lines = [`### ${session.date}: ${session.title}`];
   if (session.planPath) {
@@ -744,11 +769,15 @@ async function main() {
 
   // Relative to the project when the plan lives inside it, so the ROADMAP entry
   // stays readable and portable; absolute otherwise rather than guessing.
-  const planPathForEntry = latestPlanPath
-    ? (path.isAbsolute(latestPlanPath) && latestPlanPath.startsWith(projectDir)
-        ? path.relative(projectDir, latestPlanPath).split(path.sep).join('/')
-        : latestPlanPath)
-    : undefined;
+  //
+  // Both sides go through path.resolve FIRST. A naive
+  // `latestPlanPath.startsWith(projectDir)` fails on Windows whenever the two
+  // disagree about separators, which is the NORMAL case here: CLAUDE_PROJECT_DIR
+  // arrives with forward slashes while latestPlanPath is built by path.join and
+  // comes back with backslashes. The unit tests passed planPath in directly and
+  // so never saw it; the live ExitPlanMode run on 2026-09-02 emitted a full
+  // absolute path into ROADMAP.md and that is how this was caught.
+  const planPathForEntry = planPathForRoadmap(projectDir, latestPlanPath);
 
   const newSession: PlanningSession = {
     date: today,

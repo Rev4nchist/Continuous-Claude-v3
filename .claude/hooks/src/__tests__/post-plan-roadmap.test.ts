@@ -12,9 +12,10 @@
  */
 
 import { describe, it, expect } from 'vitest';
+const SEP_BS = String.fromCharCode(92);
 import { parseRoadmap } from '../shared/roadmap-parser.js';
 import type { PlanningSession } from '../shared/roadmap-parser.js';
-import { applyRoadmapUpdate, renderSessionBlock, extractBullets, extractPlanInfo } from '../post-plan-roadmap.js';
+import { applyRoadmapUpdate, renderSessionBlock, extractBullets, extractPlanInfo, planPathForRoadmap } from '../post-plan-roadmap.js';
 
 /**
  * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
@@ -392,5 +393,47 @@ describe('applyRoadmapUpdate -- appended session block is compact', () => {
       session, today: '2026-09-02', focusTitle: session.title,
     });
     expect(content.split('\n').length - before).toBeLessThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression (2026-09-02): the **Plan:** path must be project-relative.
+//
+// Found by the live ExitPlanMode run, NOT by the unit suite -- the earlier
+// tests handed `planPath` to the renderer directly and so never exercised the
+// projectDir comparison. The shipped bug compared a forward-slash
+// CLAUDE_PROJECT_DIR against a backslash path.join result with startsWith, so
+// it never matched and a full absolute path landed in ROADMAP.md.
+// ---------------------------------------------------------------------------
+describe('planPathForRoadmap -- separator-agnostic', () => {
+  it('relativises a plan inside the project even when separators differ', () => {
+    const out = planPathForRoadmap(
+      'C:/repos/widget',
+      ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),
+    );
+    expect(out).toBe('.claude/plans/add-jitter.md');
+  });
+
+  it('relativises when both sides already agree', () => {
+    expect(planPathForRoadmap('C:/repos/widget', 'C:/repos/widget/plans/p.md'))
+      .toBe('plans/p.md');
+  });
+
+  it('keeps an absolute path when the plan is outside the project', () => {
+    const out = planPathForRoadmap('C:/repos/widget', 'C:/Users/dave/.claude/plans/p.md');
+    expect(out!.split(SEP_BS).join('/')).toBe('C:/Users/dave/.claude/plans/p.md');
+  });
+
+  it('never emits a Windows drive letter for an in-project plan', () => {
+    const out = planPathForRoadmap(
+      'C:/repos/widget',
+      ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),
+    );
+    expect(out).not.toMatch(/^[A-Za-z]:/);
+    expect(out).not.toContain(SEP_BS);
+  });
+
+  it('returns undefined when there is no plan file', () => {
+    expect(planPathForRoadmap('C:/repos/widget', undefined)).toBeUndefined();
   });
 });

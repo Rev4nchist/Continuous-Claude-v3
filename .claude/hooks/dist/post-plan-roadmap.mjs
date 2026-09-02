@@ -846,6 +846,14 @@ function renderSessionBlock(session) {
   }
   return lines;
 }
+function planPathForRoadmap(projectDir, planPath) {
+  if (!planPath) return void 0;
+  const root = path2.resolve(projectDir);
+  const full = path2.resolve(planPath);
+  const rel = path2.relative(root, full);
+  if (!rel || rel.startsWith("..") || path2.isAbsolute(rel)) return full;
+  return rel.split(path2.sep).join("/");
+}
 function renderSessionBlockCompact(session) {
   const lines = [`### ${session.date}: ${session.title}`];
   if (session.planPath) {
@@ -1233,7 +1241,7 @@ async function main() {
     return;
   }
   const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
-  const planPathForEntry = latestPlanPath ? path2.isAbsolute(latestPlanPath) && latestPlanPath.startsWith(projectDir) ? path2.relative(projectDir, latestPlanPath).split(path2.sep).join("/") : latestPlanPath : void 0;
+  const planPathForEntry = planPathForRoadmap(projectDir, latestPlanPath);
   const newSession = {
     date: today,
     planPath: planPathForEntry,
@@ -1308,12 +1316,12 @@ async function main() {
   console.log(JSON.stringify(output));
 }
 async function readStdin() {
-  return new Promise((resolve2) => {
+  return new Promise((resolve3) => {
     let data = "";
     process.stdin.setEncoding("utf-8");
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve2(data));
-    setTimeout(() => resolve2(data), 1e3).unref();
+    process.stdin.on("end", () => resolve3(data));
+    setTimeout(() => resolve3(data), 1e3).unref();
   });
 }
 main().catch((err) => {
@@ -1324,6 +1332,7 @@ export {
   applyRoadmapUpdate,
   extractBullets,
   extractPlanInfo,
+  planPathForRoadmap,
   renderSessionBlock,
   renderSessionBlockCompact
 };
