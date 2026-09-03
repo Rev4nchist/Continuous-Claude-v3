@@ -68,6 +68,18 @@ const FILES = [
 // docs/codex-integration for the old id and annotate (do not rewrite) history,
 // but fix any present-tense acceptance criterion outright.
 
+// Adding a docs/ path to FILES must FAIL LOUDLY rather than quietly inherit the
+// strict equality check. The KNOWN LIMIT above explains why that tree cannot be
+// equality-checked; an earlier revision carried a `startsWith('docs/')` softening
+// branch here, which became unreachable the moment docs came out of FILES and
+// would have silently loosened the check for whoever put one back (flagged in
+// review, 2026-09-03). Better to stop and make them read the note.
+const stray = FILES.find((f) => f.startsWith('docs/'));
+if (stray) {
+  console.error(`FAIL: ${stray} is in FILES, but docs/ cannot be equality-checked -- read the KNOWN LIMIT note above.`);
+  process.exit(1);
+}
+
 let failed = 0;
 for (const rel of FILES) {
   const p = join(REPO, rel);
@@ -76,13 +88,6 @@ for (const rel of FILES) {
     // Pin context only: the line must be about the explorer AND about pinning it.
     if (!/explorer/i.test(line)) return;
     if (!/\bpin(ned|s)?\b|profile/i.test(line)) return;
-    // docs/codex-integration is a DATED ARCHIVE. Its July sections legitimately
-    // record `gpt-5.5` because that is what the pin was then, and the 2026-09-03
-    // correction quotes the old value on purpose. Forcing those to CANON would
-    // falsify the record, and a guard that fights history gets switched off. So
-    // in docs, only PRESCRIPTIVE lines are checked -- an acceptance criterion or
-    // a "requires ... to pin" clause, which is what a future reader would act on.
-    if (rel.startsWith('docs/') && !/acceptance|must pin|requires? .*to (already )?have|hard-require/i.test(line)) return;
     const ids = [...new Set((line.match(/gpt-[0-9][0-9a-z.\\-]*/g) || []).map((s) => s.replace(/\\/g, '').replace(/\.$/, '')))];
     // Only a REAL allowlisted id can be a pin value. This deliberately ignores
     // narrative tokens that are not pins and were false positives in the first
