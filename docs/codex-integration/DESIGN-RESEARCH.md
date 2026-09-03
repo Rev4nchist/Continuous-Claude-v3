@@ -658,3 +658,57 @@ Recorded rather than explained: do NOT read it as a version pin, and do not
 **Scope not included:** no `/harness-update codex` run, because no CLI version
 changed and no new id was admitted. The next actual CLI upgrade still owes the
 full §3 re-verification.
+
+## 16. `--complex` fan-out could NOT be verified (2026-09-03) — negative result
+
+Dave asked whether `~/.codex/agents/explorer.toml` should move to Luna with
+everything else. Trying to answer it produced a more useful finding than the
+question deserved: **there is no evidence that `--complex` spawns a sub-agent on
+this machine at all**, so the pin it hard-requires may be guarding nothing.
+
+Three attempts, each read-only, each on `codex-cli 0.144.1`:
+
+1. **Probe A — ask the run to spawn an explorer and report its model.** Pin left
+   at the existing `gpt-5.5 @ xhigh`. Result:
+   `{"explorer_spawned":true,"explorer_model":"GPT-5","explorer_effort":"not available","orchestrator_model":"GPT-5"}`.
+   **The built-in control invalidates the instrument:** the ORCHESTRATOR was
+   launched with `--model gpt-5.6-luna` and described itself as `"GPT-5"`. A
+   model cannot reliably report its own exact id, so `explorer_model` cannot
+   distinguish a pin that was honoured from one that was ignored — and
+   `explorer_spawned:true` is the same unreliable channel.
+
+2. **Probe B — negative control, pin set to a known-400 id.**
+   `explorer.toml` temporarily pinned to `gpt-5.6-bogus` (the id proven in §13
+   to return HTTP 400 on this account). If the pin were honoured, the spawn had
+   to fail. Result: **no 400, exit 0**, and
+   `{"explorer_spawned":true,"explorer_model":null,...}`.
+
+3. **Log inspection, both runs.** The only occurrences of "explorer" in either
+   log are the prompt text echoed back. No agent-tool call, no spawn event, no
+   second turn. Token counts (41,468 and 35,902) are consistent with a single
+   agent answering in both runs.
+
+**Conclusion, stated at the strength the evidence supports:** the most economical
+reading is that no sub-agent spawned in either run, which would make both the
+"pin honoured" and "pin ignored" hypotheses untested rather than one of them
+proven. This is consistent with openai/codex#19399 (subagent TOML ignored on
+Windows) but does not confirm it. What IS established: the pin cannot be called a
+verified guard, and `--complex` must not be trusted unattended until a probe
+shows an actual spawn in the logs.
+
+**What was changed anyway, and why that is safe in both worlds.** The pin now
+reads `model = "gpt-5.6-luna"`, `model_reasoning_effort = "max"`. If the pin is
+inert, this changes nothing. If it is honoured, the explorer runs a model+effort
+pair that probe A proved works live on this CLI. There is no third case in which
+5.5 would have been better, so the change carries no risk the old value avoided,
+and it satisfies the "all Codex on Luna MAX" decision. The five repo references
+asserting the literal `model = "gpt-5.5"` precondition were retargeted in the
+same change — leaving them would have made `--complex` refuse to run against the
+file it requires.
+
+**What would actually settle it** (not attempted; costs quota and needs a run
+that genuinely fans out): a `--complex` task broad enough to force delegation,
+with the log inspected for a spawn event, and only then a pin-vs-no-pin A/B.
+Until someone does that, the caveat in `codex-worker-safety.md` stands.
+
+`explorer.toml` backup from before this work: `~/.codex/agents/explorer.toml.bak-2026-09-03`.
