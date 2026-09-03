@@ -591,3 +591,70 @@ Executed via the tri-model plan (`plans/we-have-worked-in-snuggly-pony.md`); thi
 - The invocation that completed returned `{"verdict":"approve","findings":[]}` with no notes — treat a zero-finding read-only pass that follows storms as THIN evidence, not deep engagement.
 
 **Operational guidance until bounded:** keep adversary prompts compact (embed the diff + contract, avoid long per-item checklists); rely on the external Bash-tool timeout AND check for orphaned `codex.exe` children after any adversary timeout (`tasklist | findstr codex`); a supplemental Claude-critic lens is warranted whenever the Codex pass returns empty findings after a storm. Follow-up candidate: a wrapper that watches child-process count and kills the tree on runaway fork (flagged from the 2026-07-11 booth run).
+
+## 15. Default model moved to gpt-5.6-luna @ max (2026-09-03)
+
+**What changed.** Every Codex lane now defaults to `gpt-5.6-luna` at `max`
+reasoning — the worker (`/codex` ask / implement / resume) and the adversary
+(`/review`, `/premortem`) alike. Dave's call, 2026-09-03: "all Codex use should
+be using gpt 5.6 luna on MAX", explicitly including unattended runs.
+
+**No new model id was admitted, so no admission probe was owed.** This is worth
+stating plainly because the harness-update rule reads as though every model
+change needs a fresh probe. `gpt-5.6-luna` entered the allowlist on 2026-07-11
+(§13) through exactly that gate: live-probed on this account at exit 0, with a
+fabricated id reproducing the documented HTTP 400. Today's change selects a
+DIFFERENT ALREADY-VERIFIED id as the default. Nothing was added to any
+allowlist; all six ids in §13 remain valid and unchanged.
+
+**What DID need verifying, and was.** The edit that introduced the switch
+asserted in two files that "the current models_cache fetched 2026-09-03 lists
+Luna with `max` support" with no record behind it. Unsourced, that is precisely
+the "never from docs or memory" failure the rule exists to prevent, so it was
+checked against ground truth rather than deleted or believed:
+
+```
+$ node -e "...read ~/.codex/models_cache.json..."
+fetched_at     = 2026-09-03T22:54:13.310763200Z
+client_version = 0.151.0
+gpt-5.6-sol       default=medium  efforts=[low, medium, high, xhigh, max, ultra]
+gpt-5.6-terra     default=medium  efforts=[low, medium, high, xhigh, max, ultra]
+gpt-5.6-luna      default=medium  efforts=[low, medium, high, xhigh, max]
+gpt-5.5           default=xhigh   efforts=[low, medium, high, xhigh]
+gpt-5.4           default=medium  efforts=[low, medium, high, xhigh]
+gpt-5.4-mini      default=medium  efforts=[low, medium, high, xhigh]
+```
+
+The claim is TRUE: luna offers `max`. Two facts nobody had recorded fell out of
+the same read, and both are load-bearing:
+
+1. **Effort ceilings are not uniform, and `max` is not universal.** `gpt-5.5`
+   tops out at `xhigh` — it has NO `max`. So `--model gpt-5.5 --effort max` is
+   an invalid pair, and it is the exact combination someone gets by overriding
+   the model back to 5.5 and leaving the new default effort alone.
+2. **`ultra` is sol/terra only.** Luna does NOT offer it, so
+   `--model gpt-5.6-luna --effort ultra` is invalid too.
+
+Neither is a typo the model allowlist can catch — both are well-formed requests
+that the account rejects only after the run is set up. So both workers gained an
+effort guard that resolves the ceiling FROM the chosen model and downgrades
+loudly instead of sending a doomed request. Verified by exercising all 6 models
+x 8 effort inputs (48 combinations, including unset and a bogus value) against
+the cache as the oracle: every combination resolves to a level that model
+actually supports.
+
+**Auth and CLI, re-asserted the same day:** `codex login status` -> "Logged in
+using ChatGPT"; `codex --version` -> `codex-cli 0.144.1`, matching the pin in
+`.claude/rules-src/harness-update.md`. No CLI upgrade happened and none was
+needed.
+
+**One unexplained observation, deliberately not resolved here.** The cache's own
+`client_version` field reads `0.151.0` while the installed CLI is `0.144.1`. It
+is not evidence of an upgrade — `codex --version` is authoritative and says
+otherwise — and the field may simply record a server-advertised client version.
+Recorded rather than explained: do NOT read it as a version pin, and do not
+"correct" the pin to match it without a real `codex --version` disagreeing.
+
+**Scope not included:** no `/harness-update codex` run, because no CLI version
+changed and no new id was admitted. The next actual CLI upgrade still owes the
+full §3 re-verification.

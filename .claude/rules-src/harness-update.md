@@ -18,5 +18,5 @@ Version pins below are informational mirrors — the DESIGN-RESEARCH docs are th
 
 | Harness | Design doc | Verified as of |
 |---|---|---|
-| Codex | `docs/codex-integration/DESIGN-RESEARCH.md` (§13 = latest) | 0.144.1, 2026-07-11 |
+| Codex | `docs/codex-integration/DESIGN-RESEARCH.md` (§15 = latest) | CLI 0.144.1, 2026-07-11; default model `gpt-5.6-luna @ max` re-verified against `models_cache` 2026-09-03 (§15) |
 | Grok | `docs/grok-integration/DESIGN-RESEARCH.md` | 0.2.93, 2026-07-11 |

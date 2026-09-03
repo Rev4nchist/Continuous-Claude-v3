@@ -1,11 +1,11 @@
 ---
 name: codex
-description: Hand a task to the OpenAI Codex harness (gpt-5.5, on the ChatGPT subscription — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Cross-model execution, complementary to Claude. Use when the user types /codex, says "hand this to Codex", "have Codex implement/do X", "delegate to Codex", "codex, work through this", or wants GPT-5.5 to execute a well-specified task. For adversarial code/plan REVIEW use /review or /premortem (those already call Codex read-only); this skill is for getting work DONE.
+description: Hand a task to the OpenAI Codex harness (default gpt-5.6-luna @ max, on the ChatGPT subscription — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Cross-model execution, complementary to Claude. Use when the user types /codex, says "hand this to Codex", "have Codex implement/do X", "delegate to Codex", "codex, work through this", or wants GPT-5.6 Luna to execute a well-specified task. For adversarial code/plan REVIEW use /review or /premortem (those already call Codex read-only); this skill is for getting work DONE.
 ---
 
-# /codex — Delegate a task to the Codex harness (gpt-5.5)
+# /codex — Delegate a task to the Codex harness (gpt-5.6-luna @ max)
 
-Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (never an API key) to work through it. A different training family (GPT-5.5) executing the task gives cross-model leverage — Theo's "let Codex do the well-spec'd execution, keep Claude for orchestration" pattern, realized in CCv3. The read-only `codex-adversary` reviewer is untouched; this is its write-capable sibling.
+Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (never an API key) to work through it. A different training family (GPT-5.6 Luna) executing the task gives cross-model leverage — Theo's "let Codex do the well-spec'd execution, keep Claude for orchestration" pattern, realized in CCv3. The read-only `codex-adversary` reviewer is untouched; this is its write-capable sibling.
 
 **Roster position (Game Plan):** Codex's primary roles are **reviewer and fixer** — deep review via `codex-adversary`, fix patches via `--implement` scoped to booth findings. For milestone *building*, **Grok is the default builder** (`/grok --implement`); Codex builds only as **failover** (Grok dead/quota-capped/hung) or when the human explicitly overrides with `--builder codex` for a specialized milestone. A failover-built milestone is then graded by Claude critics, never by Codex itself. Doctrine: `.workroom/PROTOCOL.md`.
 
@@ -15,19 +15,19 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 
 - `/codex <request>` — explicit invocation (primary path)
 - "hand this to Codex", "have Codex implement …", "delegate this to Codex", "codex, work through …"
-- You want GPT-5.5 to actually DO a well-specified task — **fix patches, focused refactors, scripts, analysis**. For workroom milestone builds, default to `/grok --implement` (Grok is the rostered builder); reach for `/codex --implement` as failover or explicit `--builder codex` override
+- You want GPT-5.6 Luna to actually DO a well-specified task — **fix patches, focused refactors, scripts, analysis**. For workroom milestone builds, default to `/grok --implement` (Grok is the rostered builder); reach for `/codex --implement` as failover or explicit `--builder codex` override
 - NOT for code/plan review as a workflow → use `/review` / `/premortem` (they already run Codex read-only); `--review` below is the one-off alias
 
 ## Modes
 
 | Mode | Invoke | Sandbox | Confirm? | Default effort | Writes land where |
 |------|--------|---------|----------|----------------|-------------------|
-| **ask** (default) | `/codex <question>` | `read-only` | no | xhigh | nowhere (answer only) |
-| **implement** | `/codex --implement <task>` | `workspace-write` | **yes** (unless `--yes`) | high | isolated git worktree → you review the diff → apply/discard |
+| **ask** (default) | `/codex <question>` | `read-only` | no | max | nowhere (answer only) |
+| **implement** | `/codex --implement <task>` | `workspace-write` | **yes** (unless `--yes`) | max | isolated git worktree → you review the diff → apply/discard |
 | **resume** | `/codex --resume <followup>` | inherits | yes | inherits | same worktree/thread |
 | **review** (alias) | `/codex --review [base]` | read-only | no | xhigh | delegates to `codex-adversary` unchanged |
 
-**Flags:** `--model gpt-5.5|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.4|gpt-5.4-mini` (default `gpt-5.5`; 5.6 family live-verified 2026-07-11 on codex-cli 0.144.1; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh` (5.6 models additionally accept `max|ultra`; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; requires `~/.codex/agents/explorer.toml` pinned to gpt-5.5 or it refuses; ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
+**Flags:** `--model gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini` (default `gpt-5.6-luna`; the current model cache fetched 2026-09-03 lists Luna with `max` support; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; requires `~/.codex/agents/explorer.toml` pinned to gpt-5.5 or it refuses; ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
 
 ## Execution
 
@@ -44,10 +44,10 @@ Task(
   [the user's task, verbatim + any clarifying context]
 
   ## Model
-  gpt-5.5
+  gpt-5.6-luna
 
   ## Effort
-  [xhigh for ask, high for implement — or the user's --effort]
+  [max for the default gpt-5.6-luna profile; xhigh for ask or high for implement when an older model is explicitly selected — or the user's --effort]
 
   ## Autonomy
   confirm            # or "yes" if the user passed --yes
@@ -96,13 +96,13 @@ Task(
 - **Model allowlist** — `gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5/gpt-5.4/gpt-5.4-mini` only (live-probed 2026-07-11).
 - **No hook can see inside Codex's sandbox** — enforcement is `--sandbox` + this preflight, not any Claude Code hook.
 - **Usage-limit aware** — if the ChatGPT subscription quota is exhausted, `/codex` returns a clean "usage limit hit; resets ~<time>" message (never a fabricated result) and logs `usage_limited:true`. Detection is reactive — the subscription exposes no queryable quota surface to preflight.
-- **`--complex` is gated** — multi_agent fan-out (ask/implement) runs only after asserting `~/.codex/agents/explorer.toml` pins gpt-5.5 (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399).
+- **`--complex` is gated** — multi_agent fan-out (ask/implement) runs only after asserting `~/.codex/agents/explorer.toml` pins the separately verified gpt-5.5 explorer profile (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399). The primary `/codex` worker still defaults to gpt-5.6-luna @ max.
 
 ## Examples
 
 ```
 User: /codex how does the report-registry upsert dedupe by Run ID?
-→ ask mode, read-only. Returns GPT-5.5's answer sourced from the clean -o capture. No confirm, no writes.
+→ ask mode, read-only. Returns GPT-5.6 Luna's answer sourced from the clean -o capture. No confirm, no writes.
 
 User: /codex --implement add a --limit flag to scripts/report-registry/query.mjs
 → implement mode. Shows the codex exec command + worktree path, waits for your OK,
@@ -241,7 +241,7 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ```markdown
 # Codex Adversarial Review Rules
 
-OpenAI Codex (default `gpt-5.5 @ xhigh`; override via `CODEX_ADVERSARY_MODEL` env var; requires `@openai/codex` CLI >= 0.131 — verified working on `codex-cli 0.131.0` as of 2026-06-01; CLI upgraded to `0.144.1` + re-verified 2026-07-11) is wired into CCv3 as a **cross-model adversarial reviewer** via:
+OpenAI Codex (default `gpt-5.6-luna @ max` since 2026-09-03; override via `CODEX_ADVERSARY_MODEL` env var; requires `@openai/codex` CLI >= 0.131 — verified working on `codex-cli 0.131.0` as of 2026-06-01; CLI upgraded to `0.144.1` + re-verified 2026-07-11) is wired into CCv3 as a **cross-model adversarial reviewer** via:
 - `codex-plugin-cc` plugin (slash commands `/codex:*`)
 - `codex-adversary` agent (used by `/review` and `/premortem`)
 - `plan-exit-premortem-prompt` hook (auto-offers `/premortem` after every approved plan)
@@ -313,7 +313,7 @@ The whole review then fails. SMALL diffs don't spawn sub-agents, so they succeed
 ## Cost Awareness
 
 Each `codex-adversary` invocation:
-- Spends one Codex turn at gpt-5.5 (default) or whatever `CODEX_ADVERSARY_MODEL` resolves to, at xhigh reasoning
+- Spends one Codex turn at gpt-5.6-luna (default) or whatever `CODEX_ADVERSARY_MODEL` resolves to, at `max` reasoning
 - Latency: typically 30-90 seconds for code review, 45-120 seconds for plan review
 - xhigh reasoning is the expensive setting - we picked it because adversarial review needs depth
 

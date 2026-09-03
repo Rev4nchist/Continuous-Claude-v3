@@ -1,6 +1,6 @@
 # Codex Worker Safety Rules
 
-Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence trail: probe archaeology, benchmarks, flag history, the resolved hooks-collision spike) and the `codex-worker` agent. Write-capable sibling of `.claude/rules/codex-adversarial.md` (read-only review). `/codex` hands a task to the OpenAI Codex harness (`gpt-5.5`) on Dave's **ChatGPT subscription** to actually execute — it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence trail: probe archaeology, benchmarks, flag history, the resolved hooks-collision spike) and the `codex-worker` agent. Write-capable sibling of `.claude/rules/codex-adversarial.md` (read-only review). `/codex` hands a task to the OpenAI Codex harness (`gpt-5.6-luna @ max` by default) on Dave's **ChatGPT subscription** to actually execute — it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
 Grounding: verified 2026-07-11 against `codex-cli 0.144.1`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
 
@@ -36,7 +36,22 @@ Grounding: verified 2026-07-11 against `codex-cli 0.144.1`, `Logged in using Cha
 
 Before each `implement` run the worker opportunistically GCs stale `../.codex-worktrees/<repo>-*` dirs older than `$CODEX_WT_GC_DAYS` (default **7**) via `git worktree prune` + `git worktree remove --force`. **It skips any worktree with uncommitted changes** — `implement` only STAGES, so a dormant / awaiting-`resume` worktree holds UNREVIEWED work and is never reclaimed regardless of age. Reclaim is confirmed-clean only: `git status --porcelain` must EXIT 0 AND be empty (a broken/unreadable worktree is KEPT, never assumed clean). **There is no `rm -rf` anywhere in the auto path** (that would route a recursive delete around the destructive-guard); an unregistered orphan is **reported, never auto-deleted**. `scripts/codex/gc-worktrees.sh` follows the same rules (`CODEX_WT_GC_FORCE_DIRTY=1` reclaims dirty *registered* worktrees only; still no `rm -rf`).
 
-## Model allowlist (enforced before shelling out)
+## Model allowlist + effort ceiling (both enforced before shelling out)
+
+**Default since 2026-09-03 is `gpt-5.6-luna @ max`, for every lane** — worker
+and adversary, attended and unattended (Dave's call; evidence in
+`docs/codex-integration/DESIGN-RESEARCH.md` §15). No new id was admitted: luna
+was already live-probed on 2026-07-11 (§13), so the allowlist below is unchanged.
+
+**The effort ceiling is per-MODEL, not per-family, and a wrong pair is not a
+typo the model allowlist can catch.** Ground truth `~/.codex/models_cache.json`
+(read 2026-09-03): sol and terra offer `max` AND `ultra`; **luna offers `max`
+but NOT `ultra`**; **gpt-5.5 / 5.4 / 5.4-mini top out at `xhigh` and have NO
+`max`**. So `--model gpt-5.5 --effort max` and `--model gpt-5.6-luna --effort
+ultra` are both well-formed requests this account rejects. Each worker resolves
+the ceiling from the chosen model and downgrades loudly rather than sending one.
+Re-read the cache before changing either table — do not carry these levels from
+memory.
 
 Hard-reject any `--model` not in `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, gpt-5.4-mini}`. Any `-codex`-suffixed or fabricated id returns HTTP 400 on this account. Treat ANY other id as **unverified-until-live-probed on this exact account via `/harness-update`**, regardless of what public docs claim. (Probe evidence + the 400 taxonomy live in the skill / DESIGN-RESEARCH.)
 
@@ -56,7 +71,7 @@ Hard-reject any `--model` not in `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt
 
 ## Cost / quota (subscription, not dollars)
 
-Cost is ChatGPT-subscription quota, not dollars (a rolling 5-hour window plus a separate weekly cap — the 5h meter can look healthy while the weekly cap is exhausted). A multi-file `gpt-5.5` implement run can be a meaningful fraction of a weekly allowance. **A quota preflight is impossible**; detection is reactive — grep every run's log for `You've hit your usage limit … try again at <time>`, return a clean "usage limit hit; resets ~<time>" message **instead of a fabricated result**, and record `usage_limited:true` + the non-zero exit in telemetry. Implement/resume additionally skip verify/apply (no changes exist) and remove the worktree.
+Cost is ChatGPT-subscription quota, not dollars (a rolling 5-hour window plus a separate weekly cap — the 5h meter can look healthy while the weekly cap is exhausted). A multi-file `gpt-5.6-luna` implement run can be a meaningful fraction of a weekly allowance. **A quota preflight is impossible**; detection is reactive — grep every run's log for `You've hit your usage limit … try again at <time>`, return a clean "usage limit hit; resets ~<time>" message **instead of a fabricated result**, and record `usage_limited:true` + the non-zero exit in telemetry. Implement/resume additionally skip verify/apply (no changes exist) and remove the worktree.
 
 ## Version drift
 
