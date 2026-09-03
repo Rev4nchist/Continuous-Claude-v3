@@ -96,7 +96,7 @@ Task(
 - **Model allowlist** — `gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5/gpt-5.4/gpt-5.4-mini` only (live-probed 2026-07-11).
 - **No hook can see inside Codex's sandbox** — enforcement is `--sandbox` + this preflight, not any Claude Code hook.
 - **Usage-limit aware** — if the ChatGPT subscription quota is exhausted, `/codex` returns a clean "usage limit hit; resets ~<time>" message (never a fabricated result) and logs `usage_limited:true`. Detection is reactive — the subscription exposes no queryable quota surface to preflight.
-- **`--complex` is gated** — multi_agent fan-out (ask/implement) runs only after asserting `~/.codex/agents/explorer.toml` pins the separately verified gpt-5.5 explorer profile (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399). The primary `/codex` worker still defaults to gpt-5.6-luna @ max.
+- **`--complex` is gated** — multi_agent fan-out (ask/implement) runs only after asserting `~/.codex/agents/explorer.toml` pins the gpt-5.6-luna explorer profile (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399). The primary `/codex` worker still defaults to gpt-5.6-luna @ max.
 
 ## Examples
 
@@ -110,8 +110,8 @@ User: /codex --implement add a --limit flag to scripts/report-registry/query.mjs
   applies it to your working tree on approval. Logs a telemetry row.
 
 User: /codex --implement --complex refactor the report-registry pipeline end-to-end
-→ implement + multi_agent fan-out (explorer/worker sub-agents on gpt-5.5). Asserts
-  ~/.codex/agents/explorer.toml is pinned to gpt-5.5 first, prints the #19399 re-probe
+→ implement + multi_agent fan-out (explorer/worker sub-agents on gpt-5.6-luna). Asserts
+  ~/.codex/agents/explorer.toml is pinned to gpt-5.6-luna first, prints the #19399 re-probe
   caveat, then the usual worktree + diff-review flow. For genuinely BROAD tasks; costs
   extra tokens + latency. Refuses if the explorer pin is missing.
 

@@ -149,14 +149,14 @@ case "${COMPLEX:-false}" in true|TRUE|True|yes|1|on) COMPLEX=true ;; *) COMPLEX=
 # mode-scope the gate: a resume with --complex must NOT be refused/mislabelled here.
 if [ "$COMPLEX" = "true" ] && [ "${MODE:-ask}" != "resume" ]; then
   # --complex opt-in: enable multi_agent fan-out for a genuinely BROAD task. HARD-REQUIRE
-  # ~/.codex/agents/explorer.toml pinned to gpt-5.5 — else the built-in explorer role drops to
+  # ~/.codex/agents/explorer.toml pinned to gpt-5.6-luna — else the built-in explorer role drops to
   # gpt-4.1 (400 on the subscription; openai/codex #19399 / #16893). Refuse, don't crash mid-run.
   EXPLORER="$HOME/.codex/agents/explorer.toml"
-  if [ ! -f "$EXPLORER" ] || ! grep -Eq "^[[:space:]]*model[[:space:]]*=[[:space:]]*[\"']gpt-5\.5[\"']" "$EXPLORER"; then
-    echo "REFUSED --complex: $EXPLORER must exist AND pin model = \"gpt-5.5\" (double- or single-quoted; mitigates the gpt-4.1 fallback 400). Fix it or drop --complex."; exit 2
+  if [ ! -f "$EXPLORER" ] || ! grep -Eq "^[[:space:]]*model[[:space:]]*=[[:space:]]*[\"']gpt-5\.6-luna[\"']" "$EXPLORER"; then
+    echo "REFUSED --complex: $EXPLORER must exist AND pin model = \"gpt-5.6-luna\" (double- or single-quoted; mitigates the gpt-4.1 fallback 400). Fix it or drop --complex."; exit 2
   fi
   MULTI_AGENT_FLAG="--enable multi_agent"
-  echo "NOTE (--complex): multi_agent fan-out ENABLED; explorer pinned to gpt-5.5. Verified ONCE on Windows 2026-07-07 — RE-PROBE before unattended use (openai/codex#19399: subagent TOML can be ignored on Windows). Extra ~1,940 tok/call + fan-out latency."
+  echo "NOTE (--complex): multi_agent fan-out ENABLED; explorer pinned to gpt-5.6-luna. FAN-OUT UNVERIFIED on this machine — two probes on 2026-09-03 found no sub-agent spawn in the logs, and a known-400 pin produced no 400 (DESIGN-RESEARCH section 16). Do NOT rely on this unattended (openai/codex#19399: subagent TOML can be ignored on Windows). Extra ~1,940 tok/call + fan-out latency."
   # VERIFIED 2026-07-07 (live probe): for ASK, --ignore-user-config skips config.toml but explorer.toml
   # (in ~/.codex/agents/) IS still honored — a `--enable multi_agent --ignore-user-config` probe spawned
   # an explorer on gpt-5 (the pinned family), ZERO gpt-4.1 400s. So ASK --complex keeps the fast path.

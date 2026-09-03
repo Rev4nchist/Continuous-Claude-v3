@@ -698,13 +698,33 @@ shows an actual spawn in the logs.
 
 **What was changed anyway, and why that is safe in both worlds.** The pin now
 reads `model = "gpt-5.6-luna"`, `model_reasoning_effort = "max"`. If the pin is
-inert, this changes nothing. If it is honoured, the explorer runs a model+effort
-pair that probe A proved works live on this CLI. There is no third case in which
+inert, this changes nothing. If it is honoured, the explorer would run a
+model+effort pair that probe A showed the CLI accepts at the TOP level — probe A
+proved nothing about the explorer itself, which is the whole point of this
+section. There is no third case in which
 5.5 would have been better, so the change carries no risk the old value avoided,
-and it satisfies the "all Codex on Luna MAX" decision. The five repo references
-asserting the literal `model = "gpt-5.5"` precondition were retargeted in the
-same change — leaving them would have made `--complex` refuse to run against the
-file it requires.
+and it satisfies the "all Codex on Luna MAX" decision. **Correction (same day, caught by review of PR #36).** The first version of this
+section claimed "the five repo references asserting the literal
+`model = "gpt-5.5"` precondition were retargeted". That was FALSE, and the miss
+was the dangerous half. Those five were PROSE. The **executable** guard in
+`codex-worker.md` Step 2 — a `grep -Eq` for `gpt-5.5` in `explorer.toml`, plus
+its refusal string and its NOTE line — was NOT retargeted. So for the length of
+one commit `--complex` was BROKEN on this machine: the config file said luna,
+the guard demanded 5.5, and any `--complex` run would have exited 2. Changing a
+config without its executable check is precisely the two-copy failure
+`every-surface-checklist.md` exists to prevent, committed one message after
+citing that checklist. The guard, its refusal text, its NOTE and three
+`SKILL.md` references now all name `gpt-5.6-luna`.
+
+**An unresolved contradiction, recorded rather than smoothed over.** A comment in
+`codex-worker.md` dated 2026-07-07 asserts a live probe "spawned an explorer on
+gpt-5 (the pinned family), ZERO gpt-4.1 400s" — i.e. that fan-out DID work once,
+here. Today's two probes found no spawn evidence at all. Both cannot be plainly
+true of the same machine. Either the July claim rested on the same unreliable
+self-report this section debunks, or something changed between July and
+September, or today's prompt simply failed to trigger delegation. Not resolved.
+Until it is, prefer today's negative result for SAFETY decisions (do not treat
+the pin as a proven guard) and read the July claim as unconfirmed.
 
 **What would actually settle it** (not attempted; costs quota and needs a run
 that genuinely fans out): a `--complex` task broad enough to force delegation,
