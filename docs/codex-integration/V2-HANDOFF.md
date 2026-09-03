@@ -40,7 +40,8 @@ Add `--complex` to `/codex` enabling multi_agent fan-out for broad tasks (opt-in
 - **Agent enforces before honoring `--complex`:** assert `~/.codex/agents/explorer.toml` exists AND pins `model = "gpt-5.6-luna"` (as of 2026-09-03; was `gpt-5.5` when this brief was written) — else refuse; swap `--disable multi_agent` → `--enable multi_agent` for this call; print the "verified once 2026-07-07; re-probe if unattended (#19399)" caveat; keep allowlist/subscription/worktree/confirm unchanged.
 - Cost: ~1,940 tok/call + fan-out latency (opt-in justifies it).
 - **Files:** `.claude/skills/codex/SKILL.md`, `.claude/agents/codex-worker.md` (Step 1 parse + Step 3b invocation swap + explorer.toml assertion), `.claude/rules/codex-worker-safety.md`, `.claude/logs/codex-worker.README.md` (telemetry `multi_agent:true`).
-- **Acceptance:** `/codex --implement --complex "<broad task>"` → sub-agents on gpt-5.5 (no gpt-4.1 400), reviewable worktree diff, caveat shown.
+- **Acceptance:** `/codex --implement --complex "<broad task>"` → sub-agents on gpt-5.6-luna (no gpt-4.1 400), reviewable worktree diff, caveat shown.
+  > **2026-09-03:** "no gpt-4.1 400" is the only half of this that is checkable from outside. A `--json` probe on 2026-09-03 confirmed real fan-out (9 `spawn_agent` events) but showed NO model id anywhere in the event stream and never named the `explorer` role — so "sub-agents on <model>" cannot currently be verified at all. Treat it as intent, not as an assertion. See DESIGN-RESEARCH §16.
 
 ### Item 2 — reactive usage-limit handling
 Detect the usage-limit error (preflight impossible — no quota surface) and handle it cleanly.

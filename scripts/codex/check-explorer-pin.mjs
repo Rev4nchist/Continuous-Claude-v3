@@ -55,6 +55,19 @@ const FILES = [
   '.claude/rules-src/codex-adversarial.md',
 ];
 
+// KNOWN LIMIT, stated rather than papered over: `docs/codex-integration/**` is
+// NOT checked. It was added on 2026-09-03 after review found a stale
+// `sub-agents on gpt-5.5` acceptance criterion there, and then removed again the
+// same hour because the check cannot work on that tree. Those docs are a DATED
+// ARCHIVE: their July sections legitimately record `gpt-5.5` (it was the pin
+// then), and the 2026-09-03 correction quotes the old value deliberately.
+// Annotating such a line leaves the old id ON the line, so an equality check
+// stays red forever and gets switched off -- worse than no check. Separating
+// "history" from "instruction" needs a per-line marker nobody will maintain.
+// So: docs drift is a HUMAN review item. If you change the pin, grep
+// docs/codex-integration for the old id and annotate (do not rewrite) history,
+// but fix any present-tense acceptance criterion outright.
+
 let failed = 0;
 for (const rel of FILES) {
   const p = join(REPO, rel);
@@ -63,6 +76,13 @@ for (const rel of FILES) {
     // Pin context only: the line must be about the explorer AND about pinning it.
     if (!/explorer/i.test(line)) return;
     if (!/\bpin(ned|s)?\b|profile/i.test(line)) return;
+    // docs/codex-integration is a DATED ARCHIVE. Its July sections legitimately
+    // record `gpt-5.5` because that is what the pin was then, and the 2026-09-03
+    // correction quotes the old value on purpose. Forcing those to CANON would
+    // falsify the record, and a guard that fights history gets switched off. So
+    // in docs, only PRESCRIPTIVE lines are checked -- an acceptance criterion or
+    // a "requires ... to pin" clause, which is what a future reader would act on.
+    if (rel.startsWith('docs/') && !/acceptance|must pin|requires? .*to (already )?have|hard-require/i.test(line)) return;
     const ids = [...new Set((line.match(/gpt-[0-9][0-9a-z.\\-]*/g) || []).map((s) => s.replace(/\\/g, '').replace(/\.$/, '')))];
     // Only a REAL allowlisted id can be a pin value. This deliberately ignores
     // narrative tokens that are not pins and were false positives in the first
