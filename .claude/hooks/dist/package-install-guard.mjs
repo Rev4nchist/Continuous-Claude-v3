@@ -7561,6 +7561,606 @@ var malicious_packages_default = {
       reason: "Malicious code in test-in-one (npm) (GHSA-34hr-xghx-cfj4)",
       date: "2026-08-29",
       advisory: "https://github.com/advisories/GHSA-34hr-xghx-cfj4"
+    },
+    "sliding-score-window": {
+      blocked_all: true,
+      reason: "Malware in sliding-score-window (GHSA-7wm7-mj8v-49f7)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-7wm7-mj8v-49f7"
+    },
+    "ordered-freq-counter": {
+      blocked_all: true,
+      reason: "Malware in ordered-freq-counter (GHSA-xjh3-6ch8-mr8c)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-xjh3-6ch8-mr8c"
+    },
+    "neighbor-key-map": {
+      blocked_all: true,
+      reason: "Malware in neighbor-key-map (GHSA-c7w5-hg7j-94q4)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-c7w5-hg7j-94q4"
+    },
+    "ordered-kv-index": {
+      blocked_all: true,
+      reason: "Malware in ordered-kv-index (GHSA-r948-p23m-ffg3)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-r948-p23m-ffg3"
+    },
+    "btree-lru-cache": {
+      blocked_all: true,
+      reason: "Malware in btree-lru-cache (GHSA-p5xg-f96c-j538)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-p5xg-f96c-j538"
+    },
+    "btree-time-index": {
+      blocked_all: true,
+      reason: "Malware in btree-time-index (GHSA-7r97-jh52-2rx8)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-7r97-jh52-2rx8"
+    },
+    "priority-slot-queue": {
+      blocked_all: true,
+      reason: "Malware in priority-slot-queue (GHSA-7gh9-f2pq-8vf3)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-7gh9-f2pq-8vf3"
+    },
+    "btree-range-store": {
+      blocked_all: true,
+      reason: "Malware in btree-range-store (GHSA-5p9f-98mr-w2hr)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-5p9f-98mr-w2hr"
+    },
+    "btree-core": {
+      blocked_all: true,
+      reason: "Malware in btree-core (GHSA-wj64-2cmx-c3j4)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-wj64-2cmx-c3j4"
+    },
+    "btree-leaderboard": {
+      blocked_all: true,
+      reason: "Malware in btree-leaderboard (GHSA-jj56-73wg-7pff)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-jj56-73wg-7pff"
+    },
+    "indexed-btree": {
+      blocked_all: true,
+      reason: "Malware in indexed-btree (GHSA-f3xx-wvxc-5vh4)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-f3xx-wvxc-5vh4"
+    },
+    cbc97b7a: {
+      blocked_all: true,
+      reason: "Malware in cbc97b7a (GHSA-9m3c-67f2-gjwf)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-9m3c-67f2-gjwf"
+    },
+    "element-utils-guci": {
+      blocked_all: true,
+      reason: "Malware in element-utils-guci (GHSA-xmq8-5hmm-8m7p)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-xmq8-5hmm-8m7p"
+    },
+    "element-guci-util": {
+      blocked_all: true,
+      reason: "Malware in element-guci-util (GHSA-rv3j-whh5-7gwg)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-rv3j-whh5-7gwg"
+    },
+    "fullcalendar-windos": {
+      blocked_all: true,
+      reason: "Malware in fullcalendar-windos (GHSA-r79q-6mfx-5r5v)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-r79q-6mfx-5r5v"
+    },
+    "element-icon-guci": {
+      blocked_all: true,
+      reason: "Malware in element-icon-guci (GHSA-vmx8-58pp-r729)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-vmx8-58pp-r729"
+    },
+    "guci-wxrout": {
+      blocked_all: true,
+      reason: "Malware in guci-wxrout (GHSA-wm72-hv9c-mxxr)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-wm72-hv9c-mxxr"
+    },
+    "guci-main": {
+      blocked_all: true,
+      reason: "Malware in guci-main (GHSA-xv44-v947-3jrh)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-xv44-v947-3jrh"
+    },
+    "guci-date": {
+      blocked_all: true,
+      reason: "Malware in guci-date (GHSA-pg5x-8f3x-f3x5)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-pg5x-8f3x-f3x5"
+    },
+    "frank-apple-utils": {
+      blocked_all: true,
+      reason: "Malware in frank-apple-utils (GHSA-xg8f-3qvf-9cfp)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-xg8f-3qvf-9cfp"
+    },
+    "apple-internal-test-utility": {
+      blocked_all: true,
+      reason: "Malware in apple-internal-test-utility (GHSA-54h3-c256-wpw8)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-54h3-c256-wpw8"
+    },
+    "frank-apple-sync-service": {
+      blocked_all: true,
+      reason: "Malware in frank-apple-sync-service (GHSA-463x-3972-8874)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-463x-3972-8874"
+    },
+    "frank-research-poc-apple": {
+      blocked_all: true,
+      reason: "Malware in frank-research-poc-apple (GHSA-78hq-gp8w-grwp)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-78hq-gp8w-grwp"
+    },
+    "google-cloud-internal-core-utils": {
+      blocked_all: true,
+      reason: "Malware in google-cloud-internal-core-utils (GHSA-4vvq-8686-f44c)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-4vvq-8686-f44c"
+    },
+    "frank-bot-gogle-cloning": {
+      blocked_all: true,
+      reason: "Malware in frank-bot-gogle-cloning (GHSA-52j3-fx2q-cqm9)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-52j3-fx2q-cqm9"
+    },
+    "google-cloud-internal-build-helper": {
+      blocked_all: true,
+      reason: "Malware in google-cloud-internal-build-helper (GHSA-3qp7-c8c6-w6vj)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-3qp7-c8c6-w6vj"
+    },
+    "google-internal-cloud-audit-security-check": {
+      blocked_all: true,
+      reason: "Malware in google-internal-cloud-audit-security-check (GHSA-cw6m-gmx9-x556)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-cw6m-gmx9-x556"
+    },
+    "apple-cktool-internal-api-v9": {
+      blocked_all: true,
+      reason: "Malware in apple-cktool-internal-api-v9 (GHSA-5cfx-4hvj-jxm8)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-5cfx-4hvj-jxm8"
+    },
+    "google-cloud-mono-repo-helper": {
+      blocked_all: true,
+      reason: "Malware in google-cloud-mono-repo-helper (GHSA-8rcc-3mvv-4c2x)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-8rcc-3mvv-4c2x"
+    },
+    "tailwindcss-fluid-styles": {
+      blocked_all: true,
+      reason: "Malicious code in tailwindcss-fluid-styles (npm) (GHSA-qmfx-363x-c6gj)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-qmfx-363x-c6gj"
+    },
+    "@stellarshift/token-units": {
+      blocked_all: true,
+      reason: "Malicious code in @stellarshift/token-units (npm) (GHSA-f7jv-2wj8-grw7)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-f7jv-2wj8-grw7"
+    },
+    "real-router-utils": {
+      blocked_all: true,
+      reason: "Malicious code in real-router-utils (npm) (GHSA-fw7f-xj7r-p9v6)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-fw7f-xj7r-p9v6"
+    },
+    "@stellarshift/evm-address-kit": {
+      blocked_all: true,
+      reason: "Malicious code in @stellarshift/evm-address-kit (npm) (GHSA-9wh4-p3rc-w4r3)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-9wh4-p3rc-w4r3"
+    },
+    "@stellarshift/chain-metadata": {
+      blocked_all: true,
+      reason: "Malicious code in @stellarshift/chain-metadata (npm) (GHSA-3qrc-cxw6-3956)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-3qrc-cxw6-3956"
+    },
+    "@stellarshift/abi-tools": {
+      blocked_all: true,
+      reason: "Malicious code in @stellarshift/abi-tools (npm) (GHSA-75j4-5w9p-f97f)",
+      date: "2026-09-03",
+      advisory: "https://github.com/advisories/GHSA-75j4-5w9p-f97f"
+    },
+    beltful: {
+      blocked_all: true,
+      reason: "Malicious code in beltful (npm) (GHSA-g3fv-f7jr-rm3v)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-g3fv-f7jr-rm3v"
+    },
+    "bem-page-object": {
+      blocked_all: true,
+      reason: "Malicious code in bem-page-object (npm) (GHSA-8xvw-4jvh-gvf2)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-8xvw-4jvh-gvf2"
+    },
+    "bellatrix-proxima-xenos-mantle": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-proxima-xenos-mantle (npm) (GHSA-qq35-399h-mg53)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-qq35-399h-mg53"
+    },
+    "bellatrix-nextjs-jupiter-dagda": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-nextjs-jupiter-dagda (npm) (GHSA-mqr7-hp6h-7jf5)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-mqr7-hp6h-7jf5"
+    },
+    "bellatrix-paleoecology-gammarayburst-orbit": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-paleoecology-gammarayburst-orbit (npm) (GHSA-hpfc-8c95-x82h)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-hpfc-8c95-x82h"
+    },
+    "benchmark-deserialize-mu-epsilon-shell": {
+      blocked_all: true,
+      reason: "Malicious code in benchmark-deserialize-mu-epsilon-shell (npm) (GHSA-g57v-rhgj-45mc)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-g57v-rhgj-45mc"
+    },
+    "bellatrix-polaris-resolvers-xenos": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-polaris-resolvers-xenos (npm) (GHSA-gfjx-rhpc-hc4h)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-gfjx-rhpc-hc4h"
+    },
+    "bellatrix-websockets-filament-biohacking": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-websockets-filament-biohacking (npm) (GHSA-989q-4g7h-22qr)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-989q-4g7h-22qr"
+    },
+    "bellatrix-spawn-iota-convict": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-spawn-iota-convict (npm) (GHSA-xrx8-v3gj-7mcg)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-xrx8-v3gj-7mcg"
+    },
+    "bellatrix-rest-blitz-style-loader": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-rest-blitz-style-loader (npm) (GHSA-hx67-h65v-c94h)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-hx67-h65v-c94h"
+    },
+    "bellatrix-pulsar-bionics-cryovolcano": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-pulsar-bionics-cryovolcano (npm) (GHSA-7xhf-r74v-qwjj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-7xhf-r74v-qwjj"
+    },
+    "bellatrix-oberon-halley-convict": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-oberon-halley-convict (npm) (GHSA-m4x3-6f55-f7mp)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-m4x3-6f55-f7mp"
+    },
+    "bellatrix-odin-redis-commitlint": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-odin-redis-commitlint (npm) (GHSA-4348-x54w-9jjg)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-4348-x54w-9jjg"
+    },
+    "bellatrix-quantum-computing-non-blocking-package": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-quantum-computing-non-blocking-package (npm) (GHSA-9h89-7wvx-v322)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-9h89-7wvx-v322"
+    },
+    "bem-mvc-direct": {
+      blocked_all: true,
+      reason: "Malicious code in bem-mvc-direct (npm) (GHSA-p4wg-jxfp-v4c7)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-p4wg-jxfp-v4c7"
+    },
+    "benchmark-epsilon-runtime-authenticate-slow": {
+      blocked_all: true,
+      reason: "Malicious code in benchmark-epsilon-runtime-authenticate-slow (npm) (GHSA-9pr2-9mgf-66f3)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-9pr2-9mgf-66f3"
+    },
+    "bellatrix-yonder-umbra-polaris": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-yonder-umbra-polaris (npm) (GHSA-jwjp-xfv5-c42f)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-jwjp-xfv5-c42f"
+    },
+    "bellatrix-pino-nebula-comet": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-pino-nebula-comet (npm) (GHSA-5wp7-2f6x-9x3p)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-5wp7-2f6x-9x3p"
+    },
+    "bellatrix-spica-rollup-forever": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-spica-rollup-forever (npm) (GHSA-cj4w-p84h-5cx2)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-cj4w-p84h-5cx2"
+    },
+    "bellatrix-resolvers-inquirer-orbit": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-resolvers-inquirer-orbit (npm) (GHSA-r6r9-gwph-r63j)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-r6r9-gwph-r63j"
+    },
+    "bellatrix-mira-europa-commitlint": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-mira-europa-commitlint (npm) (GHSA-xvmf-h223-wxrm)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-xvmf-h223-wxrm"
+    },
+    "bellatrix-nightmare-sequelize-materialize": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-nightmare-sequelize-materialize (npm) (GHSA-fvgf-8h24-pch6)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-fvgf-8h24-pch6"
+    },
+    "bellatrix-titan-eslint-config-envconfig": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-titan-eslint-config-envconfig (npm) (GHSA-qj56-2g73-jgcj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-qj56-2g73-jgcj"
+    },
+    "benchmark-refactor-secure-scale-array": {
+      blocked_all: true,
+      reason: "Malicious code in benchmark-refactor-secure-scale-array (npm) (GHSA-96c4-92xx-r5fh)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-96c4-92xx-r5fh"
+    },
+    "bellatrix-quantum-inquirer-child-process": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-quantum-inquirer-child-process (npm) (GHSA-65hr-8grh-6mjj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-65hr-8grh-6mjj"
+    },
+    "bellatrix-protractor-fomalhaut-css-loader": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-protractor-fomalhaut-css-loader (npm) (GHSA-jj8q-jhr7-ff3g)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-jj8q-jhr7-ff3g"
+    },
+    "bellatrix-panspermia-websockets-gulp": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-panspermia-websockets-gulp (npm) (GHSA-4878-h7hw-845m)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-4878-h7hw-845m"
+    },
+    "bellatrix-oberon-prettier-alphard": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-oberon-prettier-alphard (npm) (GHSA-gq5v-hcj6-6vqj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-gq5v-hcj6-6vqj"
+    },
+    bemutato: {
+      blocked_all: true,
+      reason: "Malicious code in bemutato (npm) (GHSA-rx47-2g5j-w4qr)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-rx47-2g5j-w4qr"
+    },
+    bemjst: {
+      blocked_all: true,
+      reason: "Malicious code in bemjst (npm) (GHSA-rv92-pmc9-cj65)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-rv92-pmc9-cj65"
+    },
+    "belmgr-plugins": {
+      blocked_all: true,
+      reason: "Malicious code in belmgr-plugins (npm) (GHSA-592q-5rph-cm2c)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-592q-5rph-cm2c"
+    },
+    "bellatrix-upgrade-janus-dynamo": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-upgrade-janus-dynamo (npm) (GHSA-387x-5gv2-f5jf)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-387x-5gv2-f5jf"
+    },
+    "bellatrix-yildun-lint-staged-wolf": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-yildun-lint-staged-wolf (npm) (GHSA-5r75-xrf9-jvf4)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-5r75-xrf9-jvf4"
+    },
+    "bellatrix-prompts-webpack-paleobotany": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-prompts-webpack-paleobotany (npm) (GHSA-jqcc-mphv-7qhj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-jqcc-mphv-7qhj"
+    },
+    "bellatrix-process-buffer-sequelize": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-process-buffer-sequelize (npm) (GHSA-598f-42h3-wf2v)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-598f-42h3-wf2v"
+    },
+    "bellatrix-proteomics-meissa-redis": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-proteomics-meissa-redis (npm) (GHSA-c963-jfm5-9fqj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-c963-jfm5-9fqj"
+    },
+    "bellatrix-tool-hyperion-prettier-stylelint": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-tool-hyperion-prettier-stylelint (npm) (GHSA-4hw3-96xw-ppg9)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-4hw3-96xw-ppg9"
+    },
+    "bellatrix-passport-quantum-levels": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-passport-quantum-levels (npm) (GHSA-cmg8-m2gq-925v)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-cmg8-m2gq-925v"
+    },
+    "bellatrix-mocha-eridanus-gridsome": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-mocha-eridanus-gridsome (npm) (GHSA-r63x-wp52-6rg7)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-r63x-wp52-6rg7"
+    },
+    "bellatrix-pipe-dione-cordelia": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-pipe-dione-cordelia (npm) (GHSA-qp8w-fx79-gfgh)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-qp8w-fx79-gfgh"
+    },
+    "bellatrix-local-puppeteer-epigenetics": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-local-puppeteer-epigenetics (npm) (GHSA-w86h-f66f-9chp)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-w86h-f66f-9chp"
+    },
+    "bellatrix-jabbah-websockets-ignite": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-jabbah-websockets-ignite (npm) (GHSA-w3gj-rc2p-v92g)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-w3gj-rc2p-v92g"
+    },
+    "bellatrix-library-ganymede-equinox": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-library-ganymede-equinox (npm) (GHSA-2429-qq2r-954w)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-2429-qq2r-954w"
+    },
+    "bellatrix-graphql-lynx-nova": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-graphql-lynx-nova (npm) (GHSA-rr36-g79x-p99m)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-rr36-g79x-p99m"
+    },
+    "bellatrix-luna-markdownlint-oberon": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-luna-markdownlint-oberon (npm) (GHSA-638r-r6hc-xmvh)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-638r-r6hc-xmvh"
+    },
+    "bellatrix-figures-mongodb-warp": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-figures-mongodb-warp (npm) (GHSA-4qcg-9jrj-6hxq)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-4qcg-9jrj-6hxq"
+    },
+    "bellatrix-gulp-barnard-dagda": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-gulp-barnard-dagda (npm) (GHSA-qp32-33jg-6qgw)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-qp32-33jg-6qgw"
+    },
+    "bellatrix-element-ui-native-graphql": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-element-ui-native-graphql (npm) (GHSA-76vr-693c-6q7h)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-76vr-693c-6q7h"
+    },
+    "bellatrix-jsonp-octans-stream": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-jsonp-octans-stream (npm) (GHSA-4j49-6cp7-6qc6)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-4j49-6cp7-6qc6"
+    },
+    "bellatrix-middleware-yildun-eslint-config": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-middleware-yildun-eslint-config (npm) (GHSA-54xg-7v7m-6vrx)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-54xg-7v7m-6vrx"
+    },
+    "bellatrix-dorado-halley-sagitta": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-dorado-halley-sagitta (npm) (GHSA-jx8v-gj9q-9pw7)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-jx8v-gj9q-9pw7"
+    },
+    "bellatrix-eris-yaml-celeste": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-eris-yaml-celeste (npm) (GHSA-7hhr-xw97-x8v5)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-7hhr-xw97-x8v5"
+    },
+    "bellatrix-middleware-update-uglify-js": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-middleware-update-uglify-js (npm) (GHSA-x6x2-xv8r-3c38)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-x6x2-xv8r-3c38"
+    },
+    "bellatrix-less-blaze-uglify-js": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-less-blaze-uglify-js (npm) (GHSA-656w-vm9c-8hxv)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-656w-vm9c-8hxv"
+    },
+    "bellatrix-comet-spica-nightwatch": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-comet-spica-nightwatch (npm) (GHSA-cgv3-3pqj-8625)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-cgv3-3pqj-8625"
+    },
+    "bellatrix-equinox-commitizen-cors": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-equinox-commitizen-cors (npm) (GHSA-v5j4-r26g-6chg)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-v5j4-r26g-6chg"
+    },
+    "bellatrix-axios-spica-geoarchaeology": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-axios-spica-geoarchaeology (npm) (GHSA-q635-8cvf-vrw6)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-q635-8cvf-vrw6"
+    },
+    "bellatrix-astro-sedna-nightwatch": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-astro-sedna-nightwatch (npm) (GHSA-3php-897w-99mx)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-3php-897w-99mx"
+    },
+    "bellatrix-bulma-postcss-deimos": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-bulma-postcss-deimos (npm) (GHSA-252x-9777-jxgh)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-252x-9777-jxgh"
+    },
+    "bellatrix-child-process-playwright-geodynamo": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-child-process-playwright-geodynamo (npm) (GHSA-7pmx-c4gg-ppf8)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-7pmx-c4gg-ppf8"
+    },
+    "bellatrix-aldebaran-mira-centauri": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-aldebaran-mira-centauri (npm) (GHSA-399j-ffc2-qvw5)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-399j-ffc2-qvw5"
+    },
+    "bellatrix-axios-babel-element-ui": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-axios-babel-element-ui (npm) (GHSA-3rqv-x9h7-vr77)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-3rqv-x9h7-vr77"
+    },
+    "bellatrix-async-yildun-morgan": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-async-yildun-morgan (npm) (GHSA-rhx5-76gm-r3gj)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-rhx5-76gm-r3gj"
+    },
+    "bellatrix-aldebaran-hexo-prettier": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-aldebaran-hexo-prettier (npm) (GHSA-6h3h-2m52-93h5)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-6h3h-2m52-93h5"
+    },
+    "bellatrix-command-testcafe-pino-pretty": {
+      blocked_all: true,
+      reason: "Malicious code in bellatrix-command-testcafe-pino-pretty (npm) (GHSA-mw7h-r3p7-723x)",
+      date: "2026-09-02",
+      advisory: "https://github.com/advisories/GHSA-mw7h-r3p7-723x"
     }
   }
 };
