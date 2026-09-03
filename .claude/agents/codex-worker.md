@@ -454,7 +454,7 @@ Session id: <$SESSION_ID>   Worktree: <path>
 | `codex` not on PATH | command not found | Tell user to install/verify Codex CLI |
 | Not subscription-logged-in | `codex login status` ≠ "Logged in using ChatGPT" | STOP; tell user `codex login`. Never fall back to an API key. |
 | Bad model | not in allowlist | Reject before shelling out; cite the 400 evidence |
-| `--complex` w/o explorer pin | `~/.codex/agents/explorer.toml` missing or not pinned to the verified gpt-5.6-luna explorer profile | Refuse (Step 2, exit 2) before shelling out; tell user to pin `model = "gpt-5.5"` or drop `--complex` |
+| `--complex` w/o explorer pin | `~/.codex/agents/explorer.toml` missing or not pinned to the verified gpt-5.6-luna explorer profile | Refuse (Step 2, exit 2) before shelling out; tell user to pin `model = "gpt-5.6-luna"` or drop `--complex` |
 | `codex exec` hangs | timeout wrapper (rely on the Bash-tool timeout / external `timeout`, not Codex's own) | Kill; return partial `$LOG`; flag in summary |
 | Usage limit hit (subscription quota) | `You've hit your usage limit` in `$LOG`; `-o $FINAL` empty; non-zero exit | Short-circuit: no result, surface reset time, telemetry `usage_limited:true`; retry after reset. Preflight impossible (no quota surface). |
 | Patch apply conflict | `git apply` nonzero | Leave worktree intact; report; let user reconcile |

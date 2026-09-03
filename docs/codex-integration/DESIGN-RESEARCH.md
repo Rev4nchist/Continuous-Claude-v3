@@ -716,15 +716,30 @@ config without its executable check is precisely the two-copy failure
 citing that checklist. The guard, its refusal text, its NOTE and three
 `SKILL.md` references now all name `gpt-5.6-luna`.
 
-**An unresolved contradiction, recorded rather than smoothed over.** A comment in
-`codex-worker.md` dated 2026-07-07 asserts a live probe "spawned an explorer on
-gpt-5 (the pinned family), ZERO gpt-4.1 400s" — i.e. that fan-out DID work once,
-here. Today's two probes found no spawn evidence at all. Both cannot be plainly
-true of the same machine. Either the July claim rested on the same unreliable
-self-report this section debunks, or something changed between July and
-September, or today's prompt simply failed to trigger delegation. Not resolved.
-Until it is, prefer today's negative result for SAFETY decisions (do not treat
-the pin as a proven guard) and read the July claim as unconfirmed.
+**The apparent contradiction with 2026-07-07 is RESOLVED — the two findings were
+never in conflict.** `codex-worker.md` and `V2-HANDOFF.md` both carry a July
+claim that a probe "spawned an explorer subagent that ran and self-reported
+GPT-5 ... the `model = "gpt-5.5"` pin **is honored** here." Reading the original
+wording settles it: the pin conclusion was inferred FROM THE SELF-REPORT, which
+is the exact channel this section's control invalidates. Today's orchestrator
+was launched `--model gpt-5.6-luna` and also self-reported "GPT-5". That string
+identifies a family, not a model, so it cannot separate a honoured `gpt-5.5` pin
+from an explorer that inherited the caller's model with the pin ignored
+entirely.
+
+So the July record decomposes into a hard half and a soft half:
+
+- **VERIFIED, and it still stands:** zero `gpt-4.1` rejections. That is
+  log-visible, and it rules out the role-fallback the gate exists to prevent.
+- **NOT ESTABLISHED:** that the pin was honoured. The observation is equally
+  consistent with the pin being ignored, because the fallback model would have
+  been another GPT-5 either way.
+
+Nothing about July therefore contradicts today's inability to find a spawn: both
+are consistent with "the gate has never been shown to do anything, and has never
+needed to." `V2-HANDOFF.md` has been annotated in place rather than rewritten.
+The operational conclusion is unchanged and now better founded: treat the pin as
+a cheap precaution, not a proven guard.
 
 **What would actually settle it** (not attempted; costs quota and needs a run
 that genuinely fans out): a `--complex` task broad enough to force delegation,
