@@ -22,7 +22,7 @@
  *                           refuse (`skipped` / `catastrophic_rewrite`). This
  *                           is the legitimate fresh-file rewrite path only.
  *   3. pre-image         -- write the BEFORE content to
- *                           `~/.claude/state/roadmap-bak/<slug>-<hash8>/<ts>.md`
+ *                           `~/.claude/state/roadmap-bak/<slug>-<hash8>/<ts>-<nonce>.md`
  *                           (see `roadmapBakPath`), NOT to `<roadmapPath>.bak`.
  *                           Changed 2026-09-02: the old in-tree path left an
  *                           untracked, un-gitignored file in the project root
@@ -60,7 +60,7 @@
  * ever prevent a write.
  */
 
-import { createHash } from 'node:crypto';
+import { createHash, randomBytes } from 'node:crypto';
 import { appendFileSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { basename, dirname, join } from 'node:path';
@@ -272,7 +272,18 @@ export function roadmapBakPath(projectDir: string, when: Date = new Date()): str
   const slug = basename(projectDir).replace(/[^A-Za-z0-9._-]/g, '_') || 'project';
   const hash = sha256Prefix16(projectDir).slice(0, 8);
   const stamp = when.toISOString().replace(/[:.]/g, '-');
-  return join(homedir(), '.claude', 'state', 'roadmap-bak', `${slug}-${hash}`, `${stamp}.md`);
+  // Random suffix AFTER the timestamp (2026-09-03). The stamp alone resolves
+  // to the millisecond, so two guarded writes against the same project in the
+  // same millisecond produced the SAME path -- and because the pre-image is
+  // written before the CAS write, the second process silently overwrote the
+  // first one's backup. Both audit rows then named one file and one
+  // recoverable version was gone. This tree is shared by concurrent sessions,
+  // so that is a real race, not a theoretical one.
+  //
+  // The suffix trails the timestamp so `rotateBaks`'s lexicographic sort still
+  // orders by time.
+  const nonce = randomBytes(3).toString('hex');
+  return join(homedir(), '.claude', 'state', 'roadmap-bak', `${slug}-${hash}`, `${stamp}-${nonce}.md`);
 }
 
 /**

@@ -15,7 +15,14 @@ import { describe, it, expect } from 'vitest';
 const SEP_BS = String.fromCharCode(92);
 import { parseRoadmap } from '../shared/roadmap-parser.js';
 import type { PlanningSession } from '../shared/roadmap-parser.js';
-import { applyRoadmapUpdate, renderSessionBlock, extractBullets, extractPlanInfo, planPathForRoadmap } from '../post-plan-roadmap.js';
+import {
+  applyRoadmapUpdate,
+  renderSessionBlock,
+  renderSessionBlockCompact,
+  extractBullets,
+  extractPlanInfo,
+  planPathForRoadmap,
+} from '../post-plan-roadmap.js';
 
 /**
  * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
@@ -203,6 +210,54 @@ describe('applyRoadmapUpdate', () => {
     expect(out).toContain('## Planned');
     expect(out).toContain('## Recent Planning Sessions');
   });
+
+  // Regression (2026-09-03, CodeRabbit on PR #35). A brand-new or empty
+  // ROADMAP.md takes the generateRoadmap branch, which was still on the
+  // verbose renderer -- so a project's VERY FIRST plan approval got the exact
+  // shape this change set out to remove, and no `**Plan:**` pointer. Every new
+  // project hit it once.
+  it('renders the first session of a fresh ROADMAP compact, with the plan pointer', () => {
+    const parsed = parseRoadmap('');
+    const session: PlanningSession = {
+      date: '2026-09-03',
+      title: 'Add jitter to the retry backoff',
+      summary: 'A summary that must NOT be rendered.',
+      decisions: ['a decision that must NOT be rendered'],
+      steps: ['a step that must NOT be rendered'],
+      files: ['a.ts'],
+      verification: ['a check that must NOT be rendered'],
+      planPath: '.claude/plans/add-jitter.md',
+    };
+
+    const { content } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-09-03',
+      focusTitle: 'Add jitter to the retry backoff',
+    });
+
+    expect(content).toContain('### 2026-09-03: Add jitter to the retry backoff');
+    expect(content).toContain('**Plan:** .claude/plans/add-jitter.md');
+    // The retired stanzas, none of which may come back on this path.
+    expect(content).not.toContain('**Key Decisions:**');
+    expect(content).not.toContain('**Summary:**');
+    expect(content).not.toContain('**Implementation:**');
+    expect(content).not.toContain('**Files:**');
+    expect(content).not.toContain('**Verification:**');
+  });
+
+  it('omits the plan line on a fresh ROADMAP when the session has no plan file', () => {
+    const parsed = parseRoadmap('');
+    const session: PlanningSession = { date: '2026-09-03', title: 'No plan file', decisions: [] };
+
+    const { content } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-09-03',
+      focusTitle: null,
+    });
+
+    expect(content).toContain('### 2026-09-03: No plan file');
+    expect(content).not.toContain('**Plan:**');
+  });
 });
 
 /**
@@ -241,13 +296,24 @@ describe('renderSessionBlock', () => {
     ]);
   });
 
-  it('is exactly what applyRoadmapUpdate inserts for a brand-new session block (equivalence check)', () => {
+  it('is NOT what applyRoadmapUpdate writes any more -- both paths render compact', () => {
+    // This assertion used to run the other way round, and that is exactly how
+    // the fresh-file gap survived: it built its fixture from an EMPTY ROADMAP,
+    // so it exercised the generateRoadmap branch and pinned the retired shape
+    // as if it were the contract. Inverted 2026-09-03 so the fresh-file path
+    // can never drift back to the verbose renderer unnoticed.
     const parsed = parseRoadmap('');
-    const session: PlanningSession = { date: '2026-05-03', title: 'Gamma', decisions: ['only decision'] };
+    const session: PlanningSession = {
+      date: '2026-05-03',
+      title: 'Gamma',
+      decisions: ['only decision'],
+      planPath: 'plans/gamma.md',
+    };
 
     const { content } = applyRoadmapUpdate(parsed, { session, today: '2026-05-03', focusTitle: null });
 
-    expect(content).toContain(renderSessionBlock(session).join('\n'));
+    expect(content).toContain(renderSessionBlockCompact(session).join('\n'));
+    expect(content).not.toContain(renderSessionBlock(session).join('\n'));
   });
 });
 

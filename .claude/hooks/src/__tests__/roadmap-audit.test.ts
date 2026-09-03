@@ -21,6 +21,7 @@ import { join } from 'node:path';
 import {
   writeRoadmapGuarded,
   appendRoadmapAuditRecord,
+  roadmapBakPath,
   type RoadmapAuditRecord,
   type RoadmapWriteResult,
 } from '../shared/roadmap-audit.js';
@@ -786,6 +787,34 @@ describe('writeRoadmapGuarded -- gate 3: pre-image lives outside the project tre
     expect(pathA).not.toBe(pathB);
     expect(pathA).toContain('alpha');
     expect(pathB).toContain('beta');
+  });
+
+  // Regression (2026-09-03, CodeRabbit on PR #35). The name resolved only to
+  // the millisecond, so two guarded writes against the SAME project in the
+  // same millisecond produced one path -- and since the pre-image is written
+  // before the CAS write, the second process overwrote the first one's backup.
+  // Both audit rows then named the same file and one recoverable version was
+  // lost. Passing a fixed `when` makes the collision deterministic instead of
+  // relying on winning a race.
+  it('does not collide when two writes share a project AND a millisecond', () => {
+    const when = new Date('2026-09-03T10:00:00.000Z');
+
+    const paths = new Set(
+      Array.from({ length: 50 }, () => roadmapBakPath(PROJECT_DIR, when)),
+    );
+
+    expect(paths.size).toBe(50);
+  });
+
+  it('still sorts by time, so rotation drops the oldest pre-image first', () => {
+    // rotateBaks sorts filenames lexicographically and keeps the newest N, so
+    // the collision suffix has to trail the timestamp, never lead it.
+    const earlier = roadmapBakPath(PROJECT_DIR, new Date('2026-09-03T10:00:00.000Z'));
+    const later = roadmapBakPath(PROJECT_DIR, new Date('2026-09-03T10:00:00.001Z'));
+
+    const nameOf = (p: string) => p.split(SEP_BACKSLASH).join('/').split('/').pop()!;
+
+    expect(nameOf(earlier) < nameOf(later)).toBe(true);
   });
 
   it('a backup failure still never blocks the write', () => {

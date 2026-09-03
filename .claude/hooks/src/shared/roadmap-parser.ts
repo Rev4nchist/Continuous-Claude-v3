@@ -48,9 +48,11 @@ export interface PlanningSession {
    * paraphrasing it. Optional -- a session with no plan file simply omits the
    * `**Plan:**` line.
    *
-   * The other fields above are still populated and still used by
-   * `renderSessionBlock` (the full-document render path) and by the session's
-   * advisory context; they are just no longer appended to a live ROADMAP.
+   * The other fields above are still populated, and still read back off
+   * ROADMAPs written before 2026-09-02, but as of 2026-09-03 NO write path
+   * renders them: both the append path and the fresh-file path emit the
+   * compact block. They survive for the session's advisory context and for
+   * parsing older documents.
    */
   planPath?: string;
 }

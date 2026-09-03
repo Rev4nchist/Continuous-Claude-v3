@@ -95,7 +95,15 @@ function renderSectionBody(
     lines.push('## Recent Planning Sessions');
     if (sections.sessions.length > 0) {
       for (const session of sections.sessions.slice(0, 5)) {
-        lines.push(...renderSessionBlock(session));
+        // Compact, exactly like the append path (2026-09-03). This is the
+        // FRESH/EMPTY-file path, and it was the one place still emitting the
+        // old Summary / Key Decisions / Implementation / Files / Verification
+        // paraphrase -- so a brand-new project's very first plan approval got
+        // the shape this change set out to remove, and no `**Plan:**` line.
+        // The explicit trailing '' matches renderSessionBlock's old contract
+        // (its last element was always a blank line), so section spacing is
+        // unchanged.
+        lines.push(...renderSessionBlockCompact(session), '');
       }
     } else {
       lines.push('_No planning sessions recorded._');
@@ -106,12 +114,17 @@ function renderSectionBody(
 }
 
 /**
- * Render ONE `### YYYY-MM-DD: Title` session sub-block, including its own
- * trailing blank lines exactly as each present field emits one. Byte-neutral
- * lift out of `renderSectionBody`'s old inline `sessions` loop body (used to
- * live at roughly lines 86-122) -- verbatim, not rewritten, so every existing
- * caller renders identically. Also the unit the append-only writer inserts
- * for a brand-new `### <today>` block (see `applyRoadmapUpdate` below).
+ * Render ONE `### YYYY-MM-DD: Title` session sub-block in the PRE-2026-09-02
+ * shape: Summary / Key Decisions / Implementation / Files / Verification, each
+ * present field emitting its own trailing blank line.
+ *
+ * NO PRODUCTION CALLER as of 2026-09-03. Both write paths now use
+ * `renderSessionBlockCompact` -- the append path since 2026-09-02, and the
+ * fresh/empty-file path (`generateRoadmap`) since today. It is retained,
+ * exported and golden-pinned as the executable record of the shape a ROADMAP
+ * written before that change carries, which the parser still has to read back.
+ * Delete it only together with that golden test, and only once no ROADMAP in
+ * the wild still holds blocks of this shape.
  */
 export function renderSessionBlock(session: PlanningSession): string[] {
   const lines: string[] = [];
@@ -191,9 +204,13 @@ export function planPathForRoadmap(
  * paraphrase of a document that still exists on disk is not worth the diff
  * noise, so the entry now POINTS AT the plan rather than restating it.
  *
- * `renderSessionBlock` is untouched and still used by `generateRoadmap`, whose
- * byte-for-byte output is pinned by existing tests -- this is an additional
- * renderer for the append path, not a rewrite of the existing one.
+ * Used by BOTH write paths. It took two passes to get there: 2026-09-02 moved
+ * the append path over and left `generateRoadmap` on the old renderer, on the
+ * reasoning that its byte-for-byte output was pinned by existing tests. That
+ * reasoning was wrong in a way the suite could not show -- the pinning test
+ * built its fixture from an EMPTY ROADMAP, so it exercised the fresh-file
+ * branch and simply re-pinned the shape being retired. Caught in review of
+ * PR #35 (2026-09-03).
  */
 export function renderSessionBlockCompact(session: PlanningSession): string[] {
   const lines = [`### ${session.date}: ${session.title}`];

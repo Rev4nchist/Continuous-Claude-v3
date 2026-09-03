@@ -148,7 +148,7 @@ function insertUnderSection(content, sectionPrefix, entry) {
 }
 
 // src/shared/roadmap-audit.ts
-import { createHash } from "node:crypto";
+import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
 import { basename as basename2, dirname as dirname2, join as join4 } from "node:path";
@@ -428,7 +428,8 @@ function roadmapBakPath(projectDir, when = /* @__PURE__ */ new Date()) {
   const slug = basename2(projectDir).replace(/[^A-Za-z0-9._-]/g, "_") || "project";
   const hash = sha256Prefix16(projectDir).slice(0, 8);
   const stamp = when.toISOString().replace(/[:.]/g, "-");
-  return join4(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}.md`);
+  const nonce = randomBytes(3).toString("hex");
+  return join4(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}-${nonce}.md`);
 }
 function rotateBaks(dir) {
   try {
