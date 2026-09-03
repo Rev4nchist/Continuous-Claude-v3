@@ -25,7 +25,7 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 | **ask** (default) | `/codex <question>` | `read-only` | no | max | nowhere (answer only) |
 | **implement** | `/codex --implement <task>` | `workspace-write` | **yes** (unless `--yes`) | max | isolated git worktree → you review the diff → apply/discard |
 | **resume** | `/codex --resume <followup>` | inherits | yes | inherits | same worktree/thread |
-| **review** (alias) | `/codex --review [base]` | read-only | no | xhigh | delegates to `codex-adversary` unchanged |
+| **review** (alias) | `/codex --review [base]` | read-only | no | max | delegates to `codex-adversary` unchanged |
 
 **Flags:** `--model gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini` (default `gpt-5.6-luna`; the current model cache fetched 2026-09-03 lists Luna with `max` support; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; requires `~/.codex/agents/explorer.toml` pinned to gpt-5.5 or it refuses; ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
 
@@ -241,7 +241,7 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ```markdown
 # Codex Adversarial Review Rules
 
-OpenAI Codex (default `gpt-5.6-luna @ max` since 2026-09-03; override via `CODEX_ADVERSARY_MODEL` env var; requires `@openai/codex` CLI >= 0.131 — verified working on `codex-cli 0.131.0` as of 2026-06-01; CLI upgraded to `0.144.1` + re-verified 2026-07-11) is wired into CCv3 as a **cross-model adversarial reviewer** via:
+OpenAI Codex (default `gpt-5.6-luna @ max` since 2026-09-03; override via `CODEX_ADVERSARY_MODEL` env var; requires `@openai/codex` CLI **>= 0.144.1** — the gpt-5.6 family returns `400 requires a newer version of Codex` on `0.131.0`, so now that luna is the DEFAULT a 0.131 install fails every run; verified working on `codex-cli 0.131.0` as of 2026-06-01; CLI upgraded to `0.144.1` + re-verified 2026-07-11) is wired into CCv3 as a **cross-model adversarial reviewer** via:
 - `codex-plugin-cc` plugin (slash commands `/codex:*`)
 - `codex-adversary` agent (used by `/review` and `/premortem`)
 - `plan-exit-premortem-prompt` hook (auto-offers `/premortem` after every approved plan)
@@ -315,7 +315,7 @@ The whole review then fails. SMALL diffs don't spawn sub-agents, so they succeed
 Each `codex-adversary` invocation:
 - Spends one Codex turn at gpt-5.6-luna (default) or whatever `CODEX_ADVERSARY_MODEL` resolves to, at `max` reasoning
 - Latency: typically 30-90 seconds for code review, 45-120 seconds for plan review
-- xhigh reasoning is the expensive setting - we picked it because adversarial review needs depth
+- `max` reasoning is the expensive setting - we picked it because adversarial review needs depth (was `xhigh` until 2026-09-03; luna's ceiling is `max`, and gpt-5.5 has no `max` at all)
 
 A typical `/review` run with codex enabled = 1 Codex call. A typical `/premortem` with codex enabled = 1 Codex call. The auto-prompt hook only OFFERS premortem - doesn't auto-run it.
 

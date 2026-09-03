@@ -39,7 +39,7 @@ ask | implement | resume        (default: ask)
 gpt-5.6-luna (default) | gpt-5.6-sol | gpt-5.6-terra | gpt-5.5 | gpt-5.4 | gpt-5.4-mini    — REJECT anything else, especially *-codex
 
 ## Effort
-low | medium | high | xhigh | max | ultra     (default: max for gpt-5.6-luna; xhigh for ask or high for implement when an older model is explicitly selected). The gpt-5.6 family accepts `max` and `ultra` (current models_cache fetched 2026-09-03) — pass through only for a 5.6 model, and note `ultra` implies automatic task delegation (unprobed; avoid unattended).
+low | medium | high | xhigh | max | ultra     (default: max for gpt-5.6-luna; xhigh for ask or high for implement when an older model is explicitly selected). Ceilings are per MODEL, not per family (models_cache read 2026-09-03): sol and terra accept `max` AND `ultra`; **luna accepts `max` but NOT `ultra`**; gpt-5.5/5.4/5.4-mini stop at `xhigh` with no `max`. The resolver below downgrades an unsupported level to that model's ceiling rather than sending it. `ultra` additionally implies automatic task delegation (unprobed; avoid unattended).
 
 ## Autonomy
 confirm (default) | yes         — "yes" skips the interactive pause (orchestrator/Ralph use) but NEVER skips the sandbox boundary, telemetry, or the separate review step

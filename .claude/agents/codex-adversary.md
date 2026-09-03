@@ -184,7 +184,9 @@ esac
 #   gpt-5.5 / gpt-5.4 / -mini   -> low medium high xhigh            (no max)
 # So `max` on gpt-5.5 is an invalid pair, and it is exactly what someone gets by
 # overriding CODEX_ADVERSARY_MODEL back to 5.5 and leaving the effort alone.
-# Degrade to xhigh rather than sending a request the account will reject.
+# Degrade to the CHOSEN model's own ceiling (MAX_EFFORT below) rather than
+# sending a request the account will reject — that is xhigh for gpt-5.5/5.4,
+# but max for luna and ultra for sol/terra, so it is not a fixed value.
 # Same shape as codex-worker.md — keep the two in step if either changes.
 CODEX_ADVERSARY_EFFORT="${CODEX_ADVERSARY_EFFORT:-max}"
 case "$CODEX_ADVERSARY_MODEL" in
