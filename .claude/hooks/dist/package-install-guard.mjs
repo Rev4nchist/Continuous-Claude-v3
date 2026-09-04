@@ -8161,6 +8161,606 @@ var malicious_packages_default = {
       reason: "Malicious code in bellatrix-command-testcafe-pino-pretty (npm) (GHSA-mw7h-r3p7-723x)",
       date: "2026-09-02",
       advisory: "https://github.com/advisories/GHSA-mw7h-r3p7-723x"
+    },
+    "@crysnovax/plug": {
+      blocked_all: true,
+      reason: "Malware in @crysnovax/plug (GHSA-vg98-2r8g-7qw2)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-vg98-2r8g-7qw2"
+    },
+    "@crysnovax/baileys-fixed": {
+      blocked_all: true,
+      reason: "Malware in @crysnovax/baileys-fixed (GHSA-262v-p7h8-9574)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-262v-p7h8-9574"
+    },
+    "@crysnovax/baileys-stable": {
+      blocked_all: true,
+      reason: "Malware in @crysnovax/baileys-stable (GHSA-p579-542j-6v98)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-p579-542j-6v98"
+    },
+    "@crysnovax/baileys": {
+      blocked_all: true,
+      reason: "Malware in @crysnovax/baileys (GHSA-c34p-4828-cg5g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-c34p-4828-cg5g"
+    },
+    "line-through": {
+      blocked_all: true,
+      reason: "Malicious code in line-through (npm) (GHSA-j28f-v2rv-5qxh)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-j28f-v2rv-5qxh"
+    },
+    "box-sign-client": {
+      blocked_all: true,
+      reason: "Malicious code in box-sign-client (npm) (GHSA-g83p-hr9q-m2pp)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-g83p-hr9q-m2pp"
+    },
+    "tailwind-contact-forms": {
+      blocked_all: true,
+      reason: "Malicious code in tailwind-contact-forms (npm) (GHSA-389v-79qp-mvg6)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-389v-79qp-mvg6"
+    },
+    "real-router-telemetry": {
+      blocked_all: true,
+      reason: "Malicious code in real-router-telemetry (npm) (GHSA-cwm2-j3h3-g35f)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-cwm2-j3h3-g35f"
+    },
+    "claude-channel-discord": {
+      blocked_all: true,
+      reason: "Malicious code in claude-channel-discord (npm) (GHSA-787m-xjf4-8gx6)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-787m-xjf4-8gx6"
+    },
+    "box-sign-client-poc": {
+      blocked_all: true,
+      reason: "Malicious code in box-sign-client-poc (npm) (GHSA-33rh-wv8r-6q4r)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-33rh-wv8r-6q4r"
+    },
+    damp_tuna_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_tuna_z3n (npm) (GHSA-73pw-wf6r-mg3g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-73pw-wf6r-mg3g"
+    },
+    damp_hippopotamus_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_hippopotamus_z3n (npm) (GHSA-c5qr-hfqr-35qq)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-c5qr-hfqr-35qq"
+    },
+    "dandelion-dune-cli341-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-dune-cli341-project (npm) (GHSA-2pxv-fj7p-ww84)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-2pxv-fj7p-ww84"
+    },
+    "dandelion-giraffe-mpa122-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-giraffe-mpa122-project (npm) (GHSA-f227-2985-97vw)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-f227-2985-97vw"
+    },
+    "damp_swift-gooddev": {
+      blocked_all: true,
+      reason: "Malicious code in damp_swift-gooddev (npm) (GHSA-vcjp-28q4-pppr)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-vcjp-28q4-pppr"
+    },
+    damp_pelican_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_pelican_z3n (npm) (GHSA-xhpp-pv6j-7vh7)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-xhpp-pv6j-7vh7"
+    },
+    damp_hawk_0xrequest: {
+      blocked_all: true,
+      reason: "Malicious code in damp_hawk_0xrequest (npm) (GHSA-4457-x2x6-w34v)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-4457-x2x6-w34v"
+    },
+    damp_dog_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_dog_z3n (npm) (GHSA-gxj3-54c6-2xpf)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-gxj3-54c6-2xpf"
+    },
+    "dandelion-cliff-atc189-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-cliff-atc189-project (npm) (GHSA-p4xq-cr56-6gcq)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-p4xq-cr56-6gcq"
+    },
+    damp_vulture_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_vulture_z3n (npm) (GHSA-wrwv-fxq6-8q6r)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-wrwv-fxq6-8q6r"
+    },
+    damp_gayal_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_gayal_z3n (npm) (GHSA-qr2r-6mhq-gf5m)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-qr2r-6mhq-gf5m"
+    },
+    "dandelion-amber-owt940-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-amber-owt940-project (npm) (GHSA-p99r-5928-7c9g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-p99r-5928-7c9g"
+    },
+    damp_guanaco_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_guanaco_z3n (npm) (GHSA-j66j-xc9w-j3hv)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-j66j-xc9w-j3hv"
+    },
+    "damp_spoonbill_coral-60": {
+      blocked_all: true,
+      reason: "Malicious code in damp_spoonbill_coral-60 (npm) (GHSA-wh9f-ggrf-84rc)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-wh9f-ggrf-84rc"
+    },
+    damp_mastodon_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_mastodon_z3n (npm) (GHSA-6jgv-hgwg-42hg)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6jgv-hgwg-42hg"
+    },
+    damp_coyote_0xrequest: {
+      blocked_all: true,
+      reason: "Malicious code in damp_coyote_0xrequest (npm) (GHSA-q54v-gwff-98wm)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-q54v-gwff-98wm"
+    },
+    "dandelion-coral-rpv024-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-coral-rpv024-project (npm) (GHSA-m68q-x8h5-7w44)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-m68q-x8h5-7w44"
+    },
+    "dandelion-brook-wuk348-project": {
+      blocked_all: true,
+      reason: "Malicious code in dandelion-brook-wuk348-project (npm) (GHSA-5j95-p237-g537)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-5j95-p237-g537"
+    },
+    danasah: {
+      blocked_all: true,
+      reason: "Malicious code in danasah (npm) (GHSA-pfw8-mr2f-cp5r)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-pfw8-mr2f-cp5r"
+    },
+    danangwijaya: {
+      blocked_all: true,
+      reason: "Malicious code in danangwijaya (npm) (GHSA-5823-mcwm-qf79)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-5823-mcwm-qf79"
+    },
+    "damp_wolverine_white-89": {
+      blocked_all: true,
+      reason: "Malicious code in damp_wolverine_white-89 (npm) (GHSA-v6gc-q43j-8426)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-v6gc-q43j-8426"
+    },
+    dampradio: {
+      blocked_all: true,
+      reason: "Malicious code in dampradio (npm) (GHSA-999m-66cp-63m9)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-999m-66cp-63m9"
+    },
+    damp_manatee_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_manatee_z3n (npm) (GHSA-8hhr-82g8-mqjp)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-8hhr-82g8-mqjp"
+    },
+    damp_haddock_requirement: {
+      blocked_all: true,
+      reason: "Malicious code in damp_haddock_requirement (npm) (GHSA-rwh5-jm6q-5w97)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-rwh5-jm6q-5w97"
+    },
+    damp_guineafowl_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_guineafowl_z3n (npm) (GHSA-4qch-r9f4-6rh4)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-4qch-r9f4-6rh4"
+    },
+    damp_ermine_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_ermine_z3n (npm) (GHSA-8qg5-8x3v-x5j4)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-8qg5-8x3v-x5j4"
+    },
+    "damp-crimson-mule": {
+      blocked_all: true,
+      reason: "Malicious code in damp-crimson-mule (npm) (GHSA-6h42-q2g3-v99g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6h42-q2g3-v99g"
+    },
+    damaged_wasp_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_wasp_z3n (npm) (GHSA-grmf-w25p-w99v)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-grmf-w25p-w99v"
+    },
+    damaged_marmot_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_marmot_z3n (npm) (GHSA-f5jf-8rq5-wqmf)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-f5jf-8rq5-wqmf"
+    },
+    damaged_bison_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_bison_z3n (npm) (GHSA-pr2g-v83v-32r3)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-pr2g-v83v-32r3"
+    },
+    damasco: {
+      blocked_all: true,
+      reason: "Malicious code in damasco (npm) (GHSA-7496-4qqf-8mhx)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-7496-4qqf-8mhx"
+    },
+    damaged_bobcat_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_bobcat_z3n (npm) (GHSA-cw98-q8hf-727p)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-cw98-q8hf-727p"
+    },
+    "damaged-rose-vole": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-rose-vole (npm) (GHSA-vff9-wjg4-4qwj)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-vff9-wjg4-4qwj"
+    },
+    "damaged-rose-hedgehog": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-rose-hedgehog (npm) (GHSA-m82h-2mg2-h298)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-m82h-2mg2-h298"
+    },
+    damp_chicken_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_chicken_z3n (npm) (GHSA-45p6-c37c-w2w3)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-45p6-c37c-w2w3"
+    },
+    damaged_nightingale_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_nightingale_z3n (npm) (GHSA-gc89-jc52-j377)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-gc89-jc52-j377"
+    },
+    damaged_herring_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_herring_z3n (npm) (GHSA-pr47-8v7v-55ch)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-pr47-8v7v-55ch"
+    },
+    damaged_crane_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_crane_z3n (npm) (GHSA-8grf-ph8f-9hr6)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-8grf-ph8f-9hr6"
+    },
+    "damaged-brown-cicada": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-brown-cicada (npm) (GHSA-gwqm-hgwm-42qm)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-gwqm-hgwm-42qm"
+    },
+    damp_beaver_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_beaver_z3n (npm) (GHSA-hrh9-wj44-5r5v)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-hrh9-wj44-5r5v"
+    },
+    "damp-jade-sole": {
+      blocked_all: true,
+      reason: "Malicious code in damp-jade-sole (npm) (GHSA-366p-8v93-gq4q)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-366p-8v93-gq4q"
+    },
+    damaged_dragon_0xrequest: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_dragon_0xrequest (npm) (GHSA-22fq-9chv-jwc2)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-22fq-9chv-jwc2"
+    },
+    damp_beetle_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damp_beetle_z3n (npm) (GHSA-rfcf-wrr5-ff5j)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-rfcf-wrr5-ff5j"
+    },
+    "daliusheng-tongjie-zhong": {
+      blocked_all: true,
+      reason: "Malicious code in daliusheng-tongjie-zhong (npm) (GHSA-m4gh-4w76-3q55)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-m4gh-4w76-3q55"
+    },
+    "damaged-black-mosquito": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-black-mosquito (npm) (GHSA-f5xg-4qvp-cqj9)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-f5xg-4qvp-cqj9"
+    },
+    "daliuren-zhinan": {
+      blocked_all: true,
+      reason: "Malicious code in daliuren-zhinan (npm) (GHSA-mxfp-jpf6-x8cw)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-mxfp-jpf6-x8cw"
+    },
+    damaged_coral_replicate_automation: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_coral_replicate_automation (npm) (GHSA-c29p-3mjj-58m5)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-c29p-3mjj-58m5"
+    },
+    damaged_angelfish_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_angelfish_z3n (npm) (GHSA-6fcf-9mph-pwx7)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6fcf-9mph-pwx7"
+    },
+    damaged_minnow_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_minnow_z3n (npm) (GHSA-7wv3-h8wq-5mgj)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-7wv3-h8wq-5mgj"
+    },
+    damaged_moth_0xrequest: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_moth_0xrequest (npm) (GHSA-m3rg-2f6h-pm9m)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-m3rg-2f6h-pm9m"
+    },
+    "damaged_cricket-appteadev": {
+      blocked_all: true,
+      reason: "Malicious code in damaged_cricket-appteadev (npm) (GHSA-3fgv-q85w-f98f)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-3fgv-q85w-f98f"
+    },
+    damaged_firefly_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_firefly_z3n (npm) (GHSA-3wqr-8mr4-p759)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-3wqr-8mr4-p759"
+    },
+    "damaged-salmon-angelfish": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-salmon-angelfish (npm) (GHSA-3jmq-7c3r-853f)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-3jmq-7c3r-853f"
+    },
+    "damaged-emerald-hookworm": {
+      blocked_all: true,
+      reason: "Malicious code in damaged-emerald-hookworm (npm) (GHSA-4gmq-jq3g-cr8c)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-4gmq-jq3g-cr8c"
+    },
+    damaged_asp_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_asp_z3n (npm) (GHSA-mjxx-6fvm-96g7)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-mjxx-6fvm-96g7"
+    },
+    "damp_angelfish_gray-42": {
+      blocked_all: true,
+      reason: "Malicious code in damp_angelfish_gray-42 (npm) (GHSA-76m4-rm34-h2w4)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-76m4-rm34-h2w4"
+    },
+    "damaged_rooster-teagooddev": {
+      blocked_all: true,
+      reason: "Malicious code in damaged_rooster-teagooddev (npm) (GHSA-6whh-6w7j-v9hm)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6whh-6w7j-v9hm"
+    },
+    damaged_cat_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_cat_z3n (npm) (GHSA-6mq9-wfjf-g95p)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6mq9-wfjf-g95p"
+    },
+    damaged_bass_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_bass_z3n (npm) (GHSA-fpvx-6w77-r6wh)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-fpvx-6w77-r6wh"
+    },
+    damaged_stoat_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_stoat_z3n (npm) (GHSA-4q6w-2j7g-2q8f)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-4q6w-2j7g-2q8f"
+    },
+    damaged_spider_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_spider_z3n (npm) (GHSA-77x2-7wpf-r59h)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-77x2-7wpf-r59h"
+    },
+    damaged_chimpanzee_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_chimpanzee_z3n (npm) (GHSA-wrq9-9ggf-rj9q)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-wrq9-9ggf-rj9q"
+    },
+    "dam-driver-agoda": {
+      blocked_all: true,
+      reason: "Malicious code in dam-driver-agoda (npm) (GHSA-6mm3-9hj8-c4ff)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-6mm3-9hj8-c4ff"
+    },
+    damaged_rat_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_rat_z3n (npm) (GHSA-2cp2-22xq-6p44)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-2cp2-22xq-6p44"
+    },
+    damaged_sheep_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_sheep_z3n (npm) (GHSA-89qv-8p56-45hp)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-89qv-8p56-45hp"
+    },
+    damaged_flea_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_flea_z3n (npm) (GHSA-vrh8-3hm3-pph7)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-vrh8-3hm3-pph7"
+    },
+    damaged_cicada_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in damaged_cicada_z3n (npm) (GHSA-cfm5-pr82-4q58)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-cfm5-pr82-4q58"
+    },
+    "daliuren-duanan-shuzheng": {
+      blocked_all: true,
+      reason: "Malicious code in daliuren-duanan-shuzheng (npm) (GHSA-hghj-w3xr-8r44)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-hghj-w3xr-8r44"
+    },
+    "dam-pkg-ckeditor": {
+      blocked_all: true,
+      reason: "Malicious code in dam-pkg-ckeditor (npm) (GHSA-qrg6-f2rf-4hhx)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-qrg6-f2rf-4hhx"
+    },
+    "dallify-ts": {
+      blocked_all: true,
+      reason: "Malicious code in dallify-ts (npm) (GHSA-c4w8-483w-8x56)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-c4w8-483w-8x56"
+    },
+    "dajouka-tsfdaa-ta15": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-ta15 (npm) (GHSA-xq3q-6mfh-2xx9)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-xq3q-6mfh-2xx9"
+    },
+    "dajouka-tsfdaa-ta13": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-ta13 (npm) (GHSA-fpcj-7mq4-pqv2)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-fpcj-7mq4-pqv2"
+    },
+    dakado: {
+      blocked_all: true,
+      reason: "Malicious code in dakado (npm) (GHSA-fjgf-p2r9-3x23)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-fjgf-p2r9-3x23"
+    },
+    "dajouka-tsfdaa-t6a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t6a (npm) (GHSA-44vx-wr2f-wm7p)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-44vx-wr2f-wm7p"
+    },
+    "dajouka-trssusra-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-trssusra-tazc12 (npm) (GHSA-mp4c-g7xp-2m6m)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-mp4c-g7xp-2m6m"
+    },
+    "dajouka-tsfdaa-t1a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t1a (npm) (GHSA-xqv9-4chc-p7m9)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-xqv9-4chc-p7m9"
+    },
+    "dajouka-trefdua-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-trefdua-tazc12 (npm) (GHSA-gv2w-pwjg-hfvv)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-gv2w-pwjg-hfvv"
+    },
+    "dajouka-trura-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-trura-tazc12 (npm) (GHSA-hv4c-5wcw-mr5g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-hv4c-5wcw-mr5g"
+    },
+    dakruz: {
+      blocked_all: true,
+      reason: "Malicious code in dakruz (npm) (GHSA-9mp2-qrw5-5647)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-9mp2-qrw5-5647"
+    },
+    dalilbaguette: {
+      blocked_all: true,
+      reason: "Malicious code in dalilbaguette (npm) (GHSA-p5gq-x32g-4rcv)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-p5gq-x32g-4rcv"
+    },
+    daktyloskop: {
+      blocked_all: true,
+      reason: "Malicious code in daktyloskop (npm) (GHSA-jghj-mcv2-qvwx)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-jghj-mcv2-qvwx"
+    },
+    "dajouka-tsfdaa-t2a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t2a (npm) (GHSA-7g85-59pr-8qc7)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-7g85-59pr-8qc7"
+    },
+    "dajouka-tsfdaa-t9a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t9a (npm) (GHSA-w37w-3vcc-mh34)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-w37w-3vcc-mh34"
+    },
+    "dajouka-tsfdaa-t4a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t4a (npm) (GHSA-95fh-37pq-348g)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-95fh-37pq-348g"
+    },
+    "dajouka-tsfdaa-t8a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t8a (npm) (GHSA-h5h5-9f29-7c5f)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-h5h5-9f29-7c5f"
+    },
+    "dajouka-trusra-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-trusra-tazc12 (npm) (GHSA-4c27-jgqx-7rm5)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-4c27-jgqx-7rm5"
+    },
+    "dajouka-treua-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-treua-tazc12 (npm) (GHSA-whpw-mcgh-8jjg)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-whpw-mcgh-8jjg"
+    },
+    "dajouka-tsfdaa-ta12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-ta12 (npm) (GHSA-wfwc-g3g2-64rf)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-wfwc-g3g2-64rf"
+    },
+    "dajouka-trefddua-tazc12": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-trefddua-tazc12 (npm) (GHSA-xhqc-w4gf-665q)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-xhqc-w4gf-665q"
+    },
+    "dajouka-tsfdaa-t7a": {
+      blocked_all: true,
+      reason: "Malicious code in dajouka-tsfdaa-t7a (npm) (GHSA-77h8-5qcm-6fvx)",
+      date: "2026-09-04",
+      advisory: "https://github.com/advisories/GHSA-77h8-5qcm-6fvx"
     }
   }
 };
