@@ -94,8 +94,28 @@ for (const rel of FILES) {
     // version: bare `gpt-5` (a family, e.g. "an explorer on gpt-5"), the
     // deliberately-invalid `gpt-5.6-bogus` used in probe write-ups, and
     // `gpt-4.1`, which these lines WARN about rather than pin.
+    // BLIND SPOT 1, found on PR #37: a single line can be BOTH an allowlist and
+    // a pin statement. SKILL.md:30 enumerates all six model ids AND, 400 chars
+    // later on the same line, said "explorer.toml pinned to gpt-5.5 or it
+    // refuses". The old "3+ ids means allowlist, skip the line" rule skipped the
+    // whole line and never saw the stale pin. So before that rule applies, pull
+    // out any EXPLICIT pin clause and check it on its own.
+    // Match ANY allowlisted id named within ~140 chars AFTER `explorer.toml` on
+    // a pin-context line, rather than only the "pinned to <id>" phrasing. The
+    // narrower version missed "checks explorer.toml for the <id> pin", which is
+    // exactly how SKILL.md:30 words it -- and line 30 is the allowlist line, so
+    // the fallback check below skips it and this pass is its ONLY coverage.
+    for (const m of line.matchAll(/explorer\.toml`?[^.]{0,140}?(gpt-[0-9][0-9a-z.-]*)/gi)) {
+      const id = m[1].replace(/\.$/, '');
+      if (ALLOWLIST.has(id) && id !== CANON) {
+        console.log(`DRIFT ${rel}:${i + 1} pin clause names '${id}', guard demands '${CANON}'`);
+        console.log(`      ...${m[0].slice(0, 130)}`);
+        failed = 1;
+      }
+    }
     const pinnable = ids.filter((id) => ALLOWLIST.has(id));
-    // A line enumerating 3+ distinct ids is an allowlist, not a pin statement.
+    // A line enumerating 3+ distinct ids is an allowlist, not a pin statement --
+    // but only AFTER the explicit-pin-clause pass above has had a look at it.
     if (pinnable.length >= 3) return;
     for (const id of pinnable) {
       if (id !== CANON) {
@@ -104,6 +124,38 @@ for (const rel of FILES) {
         failed = 1;
       }
     }
+  });
+}
+
+// BLIND SPOT 2, found on PR #37: a stale claim need not contain a model id at
+// all. SKILL.md:117 read "Refuses if the explorer pin is missing" -- zero ids on
+// the line, so an id-comparison guard is blind to it BY CONSTRUCTION, no matter
+// how the line rules are tuned. Since 2026-09-03 the runtime WARNS and proceeds,
+// so any live surface still promising a refusal is simply wrong. Checked as
+// language, not as a value.
+for (const rel of FILES) {
+  const p = join(REPO, rel);
+  if (!existsSync(p)) continue;
+  readFileSync(p, 'utf8').split(/\r?\n/).forEach((line, i) => {
+    // Must be about the EXPLORER PIN specifically. `--complex` alone is too
+    // broad: codex-worker.md:149 says a resume with --complex must NOT be
+    // refused/mislabelled, which is about resume mode-scoping, not the gate.
+    if (!/explorer/i.test(line)) return;
+    if (!/\brefus(e|es|ed|al|ing)\b/i.test(line)) return;
+    // Discriminator, deliberately dumb: every CORRECT line now says WARNS,
+    // because that is what the runtime does. An earlier attempt enumerated
+    // negations (no longer refuses, false refusal, ...) and kept missing
+    // phrasings -- it went red at baseline on lines that were already right.
+    // Worse, writing that pattern from Python turned \b into a literal
+    // BACKSPACE byte, so the exclusion silently matched nothing. Presence of
+    // 'warn' is a far more reliable signal than absence of every negation.
+    if (/\bwarn/i.test(line)) return;
+    // Past tense is a different claim from a promise. One narrow exclusion,
+    // not an open-ended negation list: 'This USED TO REFUSE ...' is history.
+    if (/\bused to\b/i.test(line)) return;
+    console.log(`STALE ${rel}:${i + 1} still promises a refusal; --complex warns and proceeds since 2026-09-03`);
+    console.log(`      ${line.trim().slice(0, 140)}`);
+    failed = 1;
   });
 }
 
