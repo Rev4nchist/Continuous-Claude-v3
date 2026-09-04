@@ -105,12 +105,20 @@ for (const rel of FILES) {
     // narrower version missed "checks explorer.toml for the <id> pin", which is
     // exactly how SKILL.md:30 words it -- and line 30 is the allowlist line, so
     // the fallback check below skips it and this pass is its ONLY coverage.
-    for (const m of line.matchAll(/explorer\.toml`?[^.]{0,140}?(gpt-[0-9][0-9a-z.-]*)/gi)) {
-      const id = m[1].replace(/\.$/, '');
-      if (ALLOWLIST.has(id) && id !== CANON) {
-        console.log(`DRIFT ${rel}:${i + 1} pin clause names '${id}', guard demands '${CANON}'`);
-        console.log(`      ...${m[0].slice(0, 130)}`);
-        failed = 1;
+    // Scan EVERY id in each clause, not just the first. The previous version
+    // used matchAll with the id inside the pattern, so each match consumed
+    // through the FIRST id and a second one in the same window was never seen --
+    // e.g. "explorer.toml ... gpt-5.6-luna ... or gpt-5.5" would pass. Take the
+    // bounded window after each `explorer.toml` and check all of it.
+    for (const anchor of line.matchAll(/explorer\.toml/gi)) {
+      const window = line.slice(anchor.index, anchor.index + 160).split('.md')[0];
+      for (const idm of window.matchAll(/gpt-[0-9][0-9a-z.-]*/gi)) {
+        const id = idm[0].replace(/\.$/, '');
+        if (ALLOWLIST.has(id) && id !== CANON) {
+          console.log(`DRIFT ${rel}:${i + 1} pin clause names '${id}', guard demands '${CANON}'`);
+          console.log(`      ...${window.slice(0, 130)}`);
+          failed = 1;
+        }
       }
     }
     const pinnable = ids.filter((id) => ALLOWLIST.has(id));
@@ -149,7 +157,11 @@ for (const rel of FILES) {
     // Worse, writing that pattern from Python turned \b into a literal
     // BACKSPACE byte, so the exclusion silently matched nothing. Presence of
     // 'warn' is a far more reliable signal than absence of every negation.
-    if (/\bwarn/i.test(line)) return;
+    // "warn" ALONE is not enough, and that was a real hole: "the pin warning is
+    // emitted, then execution refuses" contains "warn" and would have been
+    // suppressed while asserting exactly the behaviour this check exists to
+    // catch. Require warn AND explicit proceed / non-refusal wording.
+    if (/\bwarn/i.test(line) && /\bproceed|no longer refus|does not refus|doesn't refus|not refuse|instead of refus/i.test(line)) return;
     // Past tense is a different claim from a promise. One narrow exclusion,
     // not an open-ended negation list: 'This USED TO REFUSE ...' is history.
     if (/\bused to\b/i.test(line)) return;
