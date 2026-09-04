@@ -7,6 +7,23 @@
 > enforce. This roadmap stays a record of work; the lane board is the live channel.
 
 ## Current Focus
+
+### ▶ NEXT SESSION — PRIORITY 1: `codex-skills-budget` (set by Dave, 2026-09-03)
+
+**Every Codex run on this machine starts with ZERO skill descriptions visible to the model.** It cannot route to a skill at all. Found 2026-09-03 in a `--json` probe stream while investigating something else — nobody was looking for it, and nothing has been actioned.
+
+Every `codex exec` emits one error item:
+
+> `Exceeded skills context budget of 2%. All skill descriptions were removed and 921 additional skills were not included in the model-visible skills list.`
+
+Counted, not inferred: `~/.agents/skills` holds **673** `SKILL.md`, of which **527 (78%) are under `archive/` or `_snapshots/`**. `~/.claude/skills` holds 687; `~/.codex/skills` holds 6. So the bulk of what blows the 2% budget is archived snapshots, not live skills — which also explains the flood of `failed to load skill … missing YAML frontmatter` errors in every run, since those snapshots predate the frontmatter contract.
+
+Two open questions: (1) is the 2% budget configurable in `~/.codex/config.toml`, and (2) should `archive/` and `_snapshots/` be excluded or relocated so the real skills fit. Likely cheaper to move the archives than to raise a budget.
+
+Start from the lane, which carries the full evidence: `node scripts/coordination/lane.mjs next` returns `codex-skills-budget` first (state `ready`, priority 1). Scope: `~/.agents/skills/**` · `~/.codex/config.toml` · `scripts/codex`.
+
+### Previously (2026-07-29)
+
 **Harness repair — hook test suite GREEN and ratcheted (2026-07-29)**
 - `npx vitest run` in `.claude/hooks`: **109 files / 2164 pass / 0 fail / 7 skipped**, down from 93 failures. Held by two ratchets, each demonstrated failing on purpose.
 - Entry point: [`docs/harness-strategy/README.md`](docs/harness-strategy/README.md). Handoff: `thoughts/shared/handoffs/suite-green/2026-07-29_suite-green-handoff.yaml` (outcome SUCCEEDED, nothing half-done).
