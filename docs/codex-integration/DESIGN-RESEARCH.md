@@ -253,7 +253,7 @@ Every invocation additionally carries `--skip-git-repo-check` (worktrees are rea
   # on approval: git -C "$PROJECT" apply --3way <patch>; always: git -C "$PROJECT" worktree remove --force "$WORKTREE"
   ```
   Being outside the repo, worktrees need **no** `.gitignore` entry — the `.codex-worktrees/` line is kept only as a harmless backstop against an accidental in-repo path — and they cannot pollute Claude Code's skill scan (one of the two in-repo failures §10 fixed). This sidesteps the `file_claims` DB entirely (no concurrent-edit collision possible against an isolated worktree). `--in-place` (§8) was **dropped in v2** (Dave-approved) — worktree isolation is the retained safety win.
-- **`multi_agent` handling:** default `--disable multi_agent`. The `--complex` opt-in requires `~/.codex/agents/explorer.toml` to already have `model = "gpt-5.5"` pinned (the documented 2026-06-01 mitigation) — the skill checks this file exists and contains the pin before honoring `--complex`, and prints a standing caveat every time it's used: *"Windows subagent TOML pinning is unverified on this host per `openai/codex#19399` — re-verify with a probe before trusting `--complex` unattended."*
+- **[Superseded 2026-09-03 — the pin is now `gpt-5.6-luna`; see §16, which also finds the pin's effect UNVERIFIED. Left as written because it records the July design.]** **`multi_agent` handling:** default `--disable multi_agent`. The `--complex` opt-in requires `~/.codex/agents/explorer.toml` to already have `model = "gpt-5.5"` pinned (the documented 2026-06-01 mitigation) — the skill checks this file exists and contains the pin before honoring `--complex`, and prints a standing caveat every time it's used: *"Windows subagent TOML pinning is unverified on this host per `openai/codex#19399` — re-verify with a probe before trusting `--complex` unattended."*
 - **Profile overlay (v1+):** ~~`--profile-v2 worker` layering `$CODEX_HOME/worker.config.toml` to disable the 16 noisy MCP-server connection attempts specifically for worker invocations, without touching Dave's interactive config.~~ **REFUTED in v1 (2026-07-07) — see §11.** `--profile-v2` layering deep-merges, so an empty `[mcp_servers]` overlay (and `-c mcp_servers={}`) does NOT remove the base MCP servers. The confirmed replacement is **`--ignore-user-config`** (skips the whole base config where the MCP servers live; ~47s→18s; no machine-local file).
 
 ### 5.4 Safety rule: new `.claude/rules/codex-worker-safety.md`
@@ -591,3 +591,239 @@ Executed via the tri-model plan (`plans/we-have-worked-in-snuggly-pony.md`); thi
 - The invocation that completed returned `{"verdict":"approve","findings":[]}` with no notes — treat a zero-finding read-only pass that follows storms as THIN evidence, not deep engagement.
 
 **Operational guidance until bounded:** keep adversary prompts compact (embed the diff + contract, avoid long per-item checklists); rely on the external Bash-tool timeout AND check for orphaned `codex.exe` children after any adversary timeout (`tasklist | findstr codex`); a supplemental Claude-critic lens is warranted whenever the Codex pass returns empty findings after a storm. Follow-up candidate: a wrapper that watches child-process count and kills the tree on runaway fork (flagged from the 2026-07-11 booth run).
+
+## 15. Default model moved to gpt-5.6-luna @ max (2026-09-03)
+
+**What changed.** Every Codex lane now defaults to `gpt-5.6-luna` at `max`
+reasoning — the worker (`/codex` ask / implement / resume) and the adversary
+(`/review`, `/premortem`) alike. Dave's call, 2026-09-03: "all Codex use should
+be using gpt 5.6 luna on MAX", explicitly including unattended runs.
+
+**No new model id was admitted, so no admission probe was owed.** This is worth
+stating plainly because the harness-update rule reads as though every model
+change needs a fresh probe. `gpt-5.6-luna` entered the allowlist on 2026-07-11
+(§13) through exactly that gate: live-probed on this account at exit 0, with a
+fabricated id reproducing the documented HTTP 400. Today's change selects a
+DIFFERENT ALREADY-VERIFIED id as the default. Nothing was added to any
+allowlist; all six ids in §13 remain valid and unchanged.
+
+**What DID need verifying, and was.** The edit that introduced the switch
+asserted in two files that "the current models_cache fetched 2026-09-03 lists
+Luna with `max` support" with no record behind it. Unsourced, that is precisely
+the "never from docs or memory" failure the rule exists to prevent, so it was
+checked against ground truth rather than deleted or believed:
+
+```
+$ node -e "...read ~/.codex/models_cache.json..."
+fetched_at     = 2026-09-03T22:54:13.310763200Z
+client_version = 0.151.0
+gpt-5.6-sol       default=medium  efforts=[low, medium, high, xhigh, max, ultra]
+gpt-5.6-terra     default=medium  efforts=[low, medium, high, xhigh, max, ultra]
+gpt-5.6-luna      default=medium  efforts=[low, medium, high, xhigh, max]
+gpt-5.5           default=xhigh   efforts=[low, medium, high, xhigh]
+gpt-5.4           default=medium  efforts=[low, medium, high, xhigh]
+gpt-5.4-mini      default=medium  efforts=[low, medium, high, xhigh]
+```
+
+The claim is TRUE: luna offers `max`. Two facts nobody had recorded fell out of
+the same read, and both are load-bearing:
+
+1. **Effort ceilings are not uniform, and `max` is not universal.** `gpt-5.5`
+   tops out at `xhigh` — it has NO `max`. So `--model gpt-5.5 --effort max` is
+   an invalid pair, and it is the exact combination someone gets by overriding
+   the model back to 5.5 and leaving the new default effort alone.
+2. **`ultra` is sol/terra only.** Luna does NOT offer it, so
+   `--model gpt-5.6-luna --effort ultra` is invalid too.
+
+Neither is a typo the model allowlist can catch — both are well-formed requests
+that the account rejects only after the run is set up. So both workers gained an
+effort guard that resolves the ceiling FROM the chosen model and downgrades
+loudly instead of sending a doomed request. Verified by exercising all 6 models
+x 8 effort inputs (48 combinations, including unset and a bogus value) against
+the cache as the oracle: every combination resolves to a level that model
+actually supports.
+
+**Auth and CLI, re-asserted the same day:** `codex login status` -> "Logged in
+using ChatGPT"; `codex --version` -> `codex-cli 0.144.1`, matching the pin in
+`.claude/rules-src/harness-update.md`. No CLI upgrade happened and none was
+needed.
+
+**One unexplained observation, deliberately not resolved here.** The cache's own
+`client_version` field reads `0.151.0` while the installed CLI is `0.144.1`. It
+is not evidence of an upgrade — `codex --version` is authoritative and says
+otherwise — and the field may simply record a server-advertised client version.
+Recorded rather than explained: do NOT read it as a version pin, and do not
+"correct" the pin to match it without a real `codex --version` disagreeing.
+
+**Scope not included:** no `/harness-update codex` run, because no CLI version
+changed and no new id was admitted. The next actual CLI upgrade still owes the
+full §3 re-verification.
+
+## 16. `--complex` fan-out could NOT be verified (2026-09-03) — negative result
+
+Dave asked whether `~/.codex/agents/explorer.toml` should move to Luna with
+everything else. Trying to answer it produced a more useful finding than the
+question deserved: **there is no evidence that `--complex` spawns a sub-agent on
+this machine at all**, so the pin it hard-requires may be guarding nothing.
+
+Three attempts, each read-only, each on `codex-cli 0.144.1`:
+
+1. **Probe A — ask the run to spawn an explorer and report its model.** Pin left
+   at the existing `gpt-5.5 @ xhigh`. Result:
+   `{"explorer_spawned":true,"explorer_model":"GPT-5","explorer_effort":"not available","orchestrator_model":"GPT-5"}`.
+   **The built-in control invalidates the instrument:** the ORCHESTRATOR was
+   launched with `--model gpt-5.6-luna` and described itself as `"GPT-5"`. A
+   model cannot reliably report its own exact id, so `explorer_model` cannot
+   distinguish a pin that was honoured from one that was ignored — and
+   `explorer_spawned:true` is the same unreliable channel.
+
+2. **Probe B — negative control, pin set to a known-400 id.**
+   `explorer.toml` temporarily pinned to `gpt-5.6-bogus` (the id proven in §13
+   to return HTTP 400 on this account). If the pin were honoured, the spawn had
+   to fail. Result: **no 400, exit 0**, and
+   `{"explorer_spawned":true,"explorer_model":null,...}`.
+
+3. **Log inspection, both runs.** The only occurrences of "explorer" in either
+   log are the prompt text echoed back. No agent-tool call, no spawn event, no
+   second turn. Token counts (41,468 and 35,902) are consistent with a single
+   agent answering in both runs.
+
+**Conclusion, stated at the strength the evidence supports:** the most economical
+reading is that no sub-agent spawned in either run, which would make both the
+"pin honoured" and "pin ignored" hypotheses untested rather than one of them
+proven. This is consistent with openai/codex#19399 (subagent TOML ignored on
+Windows) but does not confirm it. What IS established: the pin cannot be called a
+verified guard, and `--complex` must not be trusted unattended until a probe
+shows an actual spawn in the logs.
+
+**What was changed anyway, and why that is safe in both worlds.** The pin now
+reads `model = "gpt-5.6-luna"`, `model_reasoning_effort = "max"`. If the pin is
+inert, this changes nothing. If it is honoured, the explorer would run a
+model+effort pair that probe A showed the CLI accepts at the TOP level — probe A
+proved nothing about the explorer itself, which is the whole point of this
+section. There is no third case in which
+5.5 would have been better, so the change carries no risk the old value avoided,
+and it satisfies the "all Codex on Luna MAX" decision. **Correction (same day, caught by review of PR #36).** The first version of this
+section claimed "the five repo references asserting the literal
+`model = "gpt-5.5"` precondition were retargeted". That was FALSE, and the miss
+was the dangerous half. Those five were PROSE. The **executable** guard in
+`codex-worker.md` Step 2 — a `grep -Eq` for `gpt-5.5` in `explorer.toml`, plus
+its refusal string and its NOTE line — was NOT retargeted. So for the length of
+one commit `--complex` was BROKEN on this machine: the config file said luna,
+the guard demanded 5.5, and any `--complex` run would have exited 2. Changing a
+config without its executable check is precisely the two-copy failure
+`every-surface-checklist.md` exists to prevent, committed one message after
+citing that checklist. The guard, its refusal text, its NOTE and three
+`SKILL.md` references now all name `gpt-5.6-luna`.
+
+**The apparent contradiction with 2026-07-07 is RESOLVED — the two findings were
+never in conflict.** `codex-worker.md` and `V2-HANDOFF.md` both carry a July
+claim that a probe "spawned an explorer subagent that ran and self-reported
+GPT-5 ... the `model = "gpt-5.5"` pin **is honored** here." Reading the original
+wording settles it: the pin conclusion was inferred FROM THE SELF-REPORT, which
+is the exact channel this section's control invalidates. Today's orchestrator
+was launched `--model gpt-5.6-luna` and also self-reported "GPT-5". That string
+identifies a family, not a model, so it cannot separate a honoured `gpt-5.5` pin
+from an explorer that inherited the caller's model with the pin ignored
+entirely.
+
+So the July record decomposes into a hard half and a soft half:
+
+- **VERIFIED, and it still stands:** zero `gpt-4.1` rejections. That is
+  log-visible, and it rules out the role-fallback the gate exists to prevent.
+- **NOT ESTABLISHED:** that the pin was honoured. The observation is equally
+  consistent with the pin being ignored, because the fallback model would have
+  been another GPT-5 either way.
+
+Nothing about July therefore contradicts today's inability to find a spawn: both
+are consistent with "the gate has never been shown to do anything, and has never
+needed to." `V2-HANDOFF.md` has been annotated in place rather than rewritten.
+The operational conclusion is unchanged and now better founded: treat the pin as
+a cheap precaution, not a proven guard.
+
+**What would actually settle it** (not attempted; costs quota and needs a run
+that genuinely fans out): a `--complex` task broad enough to force delegation,
+with the log inspected for a spawn event, and only then a pin-vs-no-pin A/B.
+Until someone does that, the caveat in `codex-worker-safety.md` stands.
+
+`explorer.toml` backup from before this work: `~/.codex/agents/explorer.toml.bak-2026-09-03`.
+
+## 17. The `--complex` explorer gate guards nothing — A/B, and a §16 correction (2026-09-03)
+
+Two corrections and one verdict, in that order, because the second correction
+is mine and it matters more than the verdict.
+
+### Correction: §16's "no evidence of a spawn" was a FALSE NEGATIVE
+
+§16 concluded that `--complex` might not fan out on this machine at all. That
+was wrong, and the instrument was the problem, not the harness. Re-running with
+**`codex exec --json`** — which streams harness events as JSONL, independent of
+anything the model says about itself — produced, on a 328KB / 47-file inline
+diff with the prompt explicitly inviting delegation:
+
+```
+item.started  :: collab_tool_call   x9      tool = "spawn_agent"
+item.completed:: collab_tool_call   x8      receiver_thread_ids populated, agents_states = pending_init
+```
+
+Nine real spawns, each with its own per-file review prompt, all from one
+`sender_thread_id`. **Fan-out is real.** §16's probes used a task that was not
+broad enough and a prompt that did not ask for delegation; nothing fanned out,
+and "no spawn observed" was read as "cannot spawn". The lesson is the same one
+§16 was itself about: an instrument that cannot see a thing is not evidence the
+thing is absent.
+
+### The A/B: does `explorer.toml` do anything?
+
+Same prompt, same flags, same model+effort. Arm 1 with the pin present. Arm 2
+with `~/.codex/agents/explorer.toml` **deleted outright** (moved aside, restore
+chained to the run's exit).
+
+| | pin = `gpt-5.6-luna` | pin file ABSENT |
+|---|---|---|
+| total events | 25 | 26 |
+| `spawn_agent` started | 9 | 7 |
+| completed with receiver thread | 6 | 6 |
+| **`gpt-4.1` mentions** | **0** | **0** |
+| `explorer` mentions | 0 | 0 |
+| `turn.completed` | 1 | 1 |
+
+**Verdict: the file makes no observable difference.** The gate's entire premise
+is "without the pin, sub-agents drop to `gpt-4.1` and 400 on this subscription".
+Deleting the file did not produce a single `gpt-4.1` mention. And the string
+`explorer` appears **nowhere** in either stream: this path spawns generic
+`spawn_agent` workers, never the named role that `explorer.toml` configures.
+
+Read honestly, this also retro-explains every earlier observation at once —
+July's zero `gpt-4.1` 400s, §16's bogus-pin producing no 400, and the pin
+appearing to "work" whatever its value. None of them were evidence the pin
+worked; all are what you see when the pin is simply not consulted.
+
+**What is NOT claimed.** The 9-vs-7 spawn difference is not an effect — an LLM
+decomposes a 47-file diff differently run to run. This is n=1 per arm, on CLI
+`0.144.1`; the July claim it supersedes was on `0.131.0`, so the harness may
+genuinely have changed which agent machinery it uses. A binary `gpt-4.1` signal
+would have been loud, which is why one pair is enough to act on and not enough
+to close the question forever.
+
+### What changed
+
+The Step 2 check is **downgraded from refuse to warn**, not deleted. Refusing on
+this file could only ever produce a FALSE refusal — blocking `--complex` on a
+fresh machine for a hazard that is not there. It is kept as a warning because of
+the n=1 caveat above, and the warning text tells the operator what to do if they
+DO see `gpt-4.1` 400s: report it, because then this A/B is wrong for their case.
+
+This is the "false-premise diagnosis" pattern this repo has paid for before —
+hardening against a failure mode that was never occurring. The tell was the same
+both times: a guard nobody had ever seen fire, protecting against a symptom
+nobody had ever observed.
+
+### Incidental, and its own lane
+
+Both arms logged an identical error item: `Exceeded skills context budget of 2%.
+All skill descriptions were removed and 921 additional skills were not included
+in the model-visible skills list.` Every Codex run here starts with ZERO skill
+descriptions visible to the model. Counted, not inferred: `~/.agents/skills`
+holds 673 `SKILL.md`, of which **527 (78%) are under `archive/` or `_snapshots/`**.
+Tracked as lane `codex-skills-budget`; not investigated here.

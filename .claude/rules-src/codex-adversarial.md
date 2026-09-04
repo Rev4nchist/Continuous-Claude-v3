@@ -27,7 +27,7 @@ Codex authenticates via OAuth against Dave's **ChatGPT subscription** (Plus/Pro)
 
 ## Model allowlist
 
-**Supported ChatGPT-subscription models** for Codex exec (CLI `0.144.1` + re-verified 2026-07-11; live-probed on this account): `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Default for review is `gpt-5.5 @ xhigh` (override via `CODEX_ADVERSARY_MODEL`). `gpt-4.1` is API-key-only. **Never admit an id from docs or memory** — an earlier claim that `gpt-5.3-codex` was supported was WRONG: every `-codex`-suffixed id probed on this account 400s. New ids enter only via `/harness-update codex` (live probe on this exact account).
+**Supported ChatGPT-subscription models** for Codex exec (CLI `0.144.1` + re-verified 2026-07-11; live-probed on this account): `gpt-5.6-sol`, `gpt-5.6-terra`, `gpt-5.6-luna`, `gpt-5.5`, `gpt-5.4`, `gpt-5.4-mini`. Default for review is `gpt-5.6-luna @ max` (override via `CODEX_ADVERSARY_MODEL`, effort via `CODEX_ADVERSARY_EFFORT`), matching the worker so both Codex lanes run the same model. Effort ceilings differ by model and are NOT uniform (ground truth `~/.codex/models_cache.json`, fetched 2026-09-03T22:54:13Z): sol/terra offer `max` and `ultra`, luna offers `max` but NOT `ultra`, and gpt-5.5/5.4/5.4-mini top out at `xhigh` — so `max` on gpt-5.5 is an invalid pair the workers now downgrade rather than send. `gpt-4.1` is API-key-only. **Never admit an id from docs or memory** — an earlier claim that `gpt-5.3-codex` was supported was WRONG: every `-codex`-suffixed id probed on this account 400s. New ids enter only via `/harness-update codex` (live probe on this exact account).
 
 ## Hard requirements for every adversary run
 
@@ -37,4 +37,4 @@ Codex authenticates via OAuth against Dave's **ChatGPT subscription** (Plus/Pro)
 
 ## Cost / quota
 
-One `/review` or `/premortem` with Codex enabled = **one** Codex turn at xhigh reasoning (typically 30–120s), spending ChatGPT-subscription quota. Skip it with `--no-codex` for doc-only changes, trivial diffs (<20 lines, single-file, no logic change), latency-critical hotfixes, or when the session has already burned the quota. Cross-model lift is logged to `.claude/logs/codex-lift.jsonl` — if `codex_only` is consistently zero, the pass is not earning its quota cost.
+One `/review` or `/premortem` with Codex enabled = **one** Codex turn at `max` reasoning (typically 30–120s), spending ChatGPT-subscription quota. Skip it with `--no-codex` for doc-only changes, trivial diffs (<20 lines, single-file, no logic change), latency-critical hotfixes, or when the session has already burned the quota. Cross-model lift is logged to `.claude/logs/codex-lift.jsonl` — if `codex_only` is consistently zero, the pass is not earning its quota cost.
