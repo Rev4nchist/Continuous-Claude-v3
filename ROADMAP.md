@@ -22,6 +22,25 @@ Two open questions: (1) is the 2% budget configurable in `~/.codex/config.toml`,
 
 Start from the lane, which carries the full evidence: `node scripts/coordination/lane.mjs next` returns `codex-skills-budget` first (state `ready`, priority 1). Scope: `~/.agents/skills/**` · `~/.codex/config.toml` · `scripts/codex`.
 
+### ▶ ALSO QUEUED — the CRLF trap (Dave, 2026-09-03)
+
+**Any script that edits a repo file by exact-string match can silently no-op, because the working tree has BOTH line endings.** Hit three times in one session on 2026-09-03: two edits raised an assertion (loud, recoverable) and two test fixtures no-opped without complaint — a replay that appeared to pass while testing nothing.
+
+Root cause, verified not assumed:
+
+- `.gitattributes` declares eol for **only** `*.sh` (lf), `*.bat` and `*.cmd` (crlf). `git check-attr` confirms `.md`, `.ts`, `.mjs` and `.ps1` are all **unspecified**.
+- Those fall through to `core.autocrlf=true` (set at repo level), which writes CRLF on checkout and normalises to LF on commit.
+- So a file git has checked out is CRLF, while a file a tool wrote directly (Python `newline=''`, Node `writeFileSync`) stays LF until git next touches it. Sampled: `.claude/hooks/src` 29 CRLF / 11 LF; `.claude/rules-src` 25 CRLF / 15 LF.
+
+Both existing rules are load-bearing and must survive any fix: `*.sh` MUST stay LF (a CRLF shebang makes a git hook fail `bad interpreter` and BLOCKS commits) and `*.bat` MUST stay CRLF (cmd.exe seeks by byte offset; LF garbles execution latently). Read the comments in `.gitattributes` before changing anything.
+
+Two directions, not yet chosen:
+
+1. **Declare eol for text files** (`* text=auto` plus explicit `.md`/`.ts`/`.mjs`). Fixes it at the source, but renormalises the tree — a large one-time diff that will collide with other sessions' in-flight work. Needs a quiet moment and `--renormalize`.
+2. **Make the edit tooling newline-agnostic** — read with `newline=''`, detect, and match on both. Smaller blast radius, but every future script has to remember.
+
+Whichever is chosen, add a guard: an exact-string edit helper that FAILS when its anchor matches zero times, so a no-op can never masquerade as a successful edit. That property, not the line endings, is what actually cost time.
+
 ### Previously (2026-07-29)
 
 **Harness repair — hook test suite GREEN and ratcheted (2026-07-29)**
