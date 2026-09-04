@@ -95,7 +95,15 @@ function renderSectionBody(
     lines.push('## Recent Planning Sessions');
     if (sections.sessions.length > 0) {
       for (const session of sections.sessions.slice(0, 5)) {
-        lines.push(...renderSessionBlock(session));
+        // Compact, exactly like the append path (2026-09-03). This is the
+        // FRESH/EMPTY-file path, and it was the one place still emitting the
+        // old Summary / Key Decisions / Implementation / Files / Verification
+        // paraphrase -- so a brand-new project's very first plan approval got
+        // the shape this change set out to remove, and no `**Plan:**` line.
+        // The explicit trailing '' matches renderSessionBlock's old contract
+        // (its last element was always a blank line), so section spacing is
+        // unchanged.
+        lines.push(...renderSessionBlockCompact(session), '');
       }
     } else {
       lines.push('_No planning sessions recorded._');
@@ -106,12 +114,17 @@ function renderSectionBody(
 }
 
 /**
- * Render ONE `### YYYY-MM-DD: Title` session sub-block, including its own
- * trailing blank lines exactly as each present field emits one. Byte-neutral
- * lift out of `renderSectionBody`'s old inline `sessions` loop body (used to
- * live at roughly lines 86-122) -- verbatim, not rewritten, so every existing
- * caller renders identically. Also the unit the append-only writer inserts
- * for a brand-new `### <today>` block (see `applyRoadmapUpdate` below).
+ * Render ONE `### YYYY-MM-DD: Title` session sub-block in the PRE-2026-09-02
+ * shape: Summary / Key Decisions / Implementation / Files / Verification, each
+ * present field emitting its own trailing blank line.
+ *
+ * NO PRODUCTION CALLER as of 2026-09-03. Both write paths now use
+ * `renderSessionBlockCompact` -- the append path since 2026-09-02, and the
+ * fresh/empty-file path (`generateRoadmap`) since today. It is retained,
+ * exported and golden-pinned as the executable record of the shape a ROADMAP
+ * written before that change carries, which the parser still has to read back.
+ * Delete it only together with that golden test, and only once no ROADMAP in
+ * the wild still holds blocks of this shape.
  */
 export function renderSessionBlock(session: PlanningSession): string[] {
   const lines: string[] = [];
@@ -153,6 +166,57 @@ export function renderSessionBlock(session: PlanningSession): string[] {
     lines.push('');
   }
 
+  return lines;
+}
+
+/**
+ * How a plan file is named in the ROADMAP entry: project-relative with forward
+ * slashes when the plan lives inside the project, absolute otherwise.
+ *
+ * Extracted and exported 2026-09-02 because the inline version shipped broken
+ * and no unit test could reach it. Both paths go through `path.resolve` before
+ * comparison: a naive `planPath.startsWith(projectDir)` fails whenever the two
+ * disagree about separators, which is the NORMAL case on Windows --
+ * CLAUDE_PROJECT_DIR arrives with forward slashes while `path.join` returns
+ * backslashes. The live ExitPlanMode run emitted a full
+ * `C:\Users\...\.claude\plans\foo.md` into a ROADMAP before this was fixed.
+ */
+export function planPathForRoadmap(
+  projectDir: string,
+  planPath: string | undefined,
+): string | undefined {
+  if (!planPath) return undefined;
+  const root = path.resolve(projectDir);
+  const full = path.resolve(planPath);
+  const rel = path.relative(root, full);
+  // Inside the project iff the relative path neither escapes nor is absolute.
+  if (!rel || rel.startsWith('..') || path.isAbsolute(rel)) return full;
+  return rel.split(path.sep).join('/');
+}
+
+/**
+ * Render the session block that gets APPENDED to a live ROADMAP.md.
+ *
+ * Deliberately not `renderSessionBlock` (2026-09-02, defect 2). That renderer
+ * emits Summary / Key Decisions / Implementation / Files / Verification
+ * stanzas scraped out of the plan, and in every hand-maintained ROADMAP the
+ * human deleted the whole thing and wrote a real entry instead. Generated
+ * paraphrase of a document that still exists on disk is not worth the diff
+ * noise, so the entry now POINTS AT the plan rather than restating it.
+ *
+ * Used by BOTH write paths. It took two passes to get there: 2026-09-02 moved
+ * the append path over and left `generateRoadmap` on the old renderer, on the
+ * reasoning that its byte-for-byte output was pinned by existing tests. That
+ * reasoning was wrong in a way the suite could not show -- the pinning test
+ * built its fixture from an EMPTY ROADMAP, so it exercised the fresh-file
+ * branch and simply re-pinned the shape being retired. Caught in review of
+ * PR #35 (2026-09-03).
+ */
+export function renderSessionBlockCompact(session: PlanningSession): string[] {
+  const lines = [`### ${session.date}: ${session.title}`];
+  if (session.planPath) {
+    lines.push(`**Plan:** ${session.planPath}`);
+  }
   return lines;
 }
 
@@ -318,7 +382,7 @@ export function applyRoadmapUpdate(
 
   // --- Recent Planning Sessions: pure append, no replace, no cap ----------
   const sessionsRange = doc.rawSections.get('sessions');
-  const sessionBlockLines = [...renderSessionBlock(update.session), ''];
+  const sessionBlockLines = [...renderSessionBlockCompact(update.session), ''];
 
   if (sessionsRange) {
     const existing = findSessionBlock(lines, sessionsRange, update.today);
@@ -342,22 +406,12 @@ export function applyRoadmapUpdate(
   return { content, ops: opSummaries };
 }
 
-// Expanded keywords for content capture
-const CAPTURE_KEYWORDS = [
-  // Decisions
-  'decision', 'decided', 'approach', 'strategy', 'chose', 'selected',
-  // Goals
-  'goal', 'objective', 'purpose', 'target', 'aim',
-  // Implementation
-  'implement', 'create', 'add', 'modify', 'update', 'fix', 'build',
-  'step', 'action', 'task', 'change',
-  // Verification
-  'verify', 'test', 'check', 'confirm', 'validate', 'ensure',
-  // Risks
-  'risk', 'edge case', 'caveat', 'limitation', 'warning', 'note',
-  // Analysis
-  'problem', 'issue', 'cause', 'root cause', 'reason', 'why',
-];
+// CAPTURE_KEYWORDS was deleted 2026-09-02 along with its only caller, the
+// whole-document decision fallback in extractPlanInfo. It listed 'note',
+// 'why', 'reason', 'change', 'add', 'update' and 'fix' among others, which is
+// why it matched ordinary Context prose and published it as decisions. The
+// `keywords` parameter on the exported `extractBullets` is retained -- it is
+// part of that function's tested surface -- but nothing in this hook passes it.
 
 interface PlanInfo {
   title: string;
@@ -499,7 +553,7 @@ function extractFilesFromContent(content: string): string[] {
   return [...new Set(files)];
 }
 
-function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
+export function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
   const sections = parseSections(planContent);
 
   // Extract title
@@ -524,13 +578,20 @@ function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
     summary = extractFirstParagraph(sections['_intro']);
   }
 
-  // Extract decisions with expanded keywords
+  // Decisions come ONLY from a section that actually declares them.
+  //
+  // There used to be a fallback here: when no Decisions/Key Decisions/Approach
+  // section existed, it ran `extractBullets(planContent, CAPTURE_KEYWORDS)`
+  // over the WHOLE plan. CAPTURE_KEYWORDS included 'note', 'why', 'reason',
+  // 'change', 'add', 'update' and 'fix', so ordinary Context prose was lifted
+  // out, rendered into ROADMAP.md under a "**Key Decisions:**" heading, and
+  // stored to archival memory as decisions. It was fabrication in both places,
+  // and it is why hand-maintained ROADMAPs had this block deleted by humans
+  // every week (defect 2, 2026-09-02).
+  //
+  // A plan with no decisions section recorded no decisions. Say nothing.
   const decisionSection = sections['decisions'] || sections['key decisions'] || sections['approach'] || '';
-  let decisions = extractBullets(decisionSection);
-  if (decisions.length === 0) {
-    // Fallback to keyword matching across entire content
-    decisions = extractBullets(planContent, CAPTURE_KEYWORDS);
-  }
+  const decisions = extractBullets(decisionSection);
 
   // Extract implementation steps
   const implSection = sections['implementation plan'] || sections['implementation'] ||
@@ -723,8 +784,21 @@ async function main() {
 
   const today = new Date().toISOString().split('T')[0];
 
+  // Relative to the project when the plan lives inside it, so the ROADMAP entry
+  // stays readable and portable; absolute otherwise rather than guessing.
+  //
+  // Both sides go through path.resolve FIRST. A naive
+  // `latestPlanPath.startsWith(projectDir)` fails on Windows whenever the two
+  // disagree about separators, which is the NORMAL case here: CLAUDE_PROJECT_DIR
+  // arrives with forward slashes while latestPlanPath is built by path.join and
+  // comes back with backslashes. The unit tests passed planPath in directly and
+  // so never saw it; the live ExitPlanMode run on 2026-09-02 emitted a full
+  // absolute path into ROADMAP.md and that is how this was caught.
+  const planPathForEntry = planPathForRoadmap(projectDir, latestPlanPath);
+
   const newSession: PlanningSession = {
     date: today,
+    planPath: planPathForEntry,
     title: planInfo.title,
     summary: planInfo.summary || undefined,
     decisions: planInfo.decisions.slice(0, 5),

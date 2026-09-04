@@ -187,9 +187,10 @@ function isPathInsideProject(targetPath, projectDir) {
 }
 
 // src/shared/roadmap-audit.ts
-import { createHash } from "node:crypto";
-import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { createHash, randomBytes } from "node:crypto";
+import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
+import { homedir as homedir2 } from "node:os";
+import { basename as basename2, dirname as dirname2, join as join4 } from "node:path";
 
 // src/shared/atomic-write.ts
 import {
@@ -460,8 +461,32 @@ function defaultWrite(roadmapPath, before, after) {
   }
   return { wrote: false, reason: "write_failed", wait_ms: captured.lockOutcome?.wait_ms };
 }
+var ROADMAP_MANUAL_MARKER = /<!--\s*roadmap-sync\s*:\s*manual\s*-->/i;
+var BAK_KEEP = 10;
+function roadmapBakPath(projectDir, when = /* @__PURE__ */ new Date()) {
+  const slug = basename2(projectDir).replace(/[^A-Za-z0-9._-]/g, "_") || "project";
+  const hash = sha256Prefix16(projectDir).slice(0, 8);
+  const stamp = when.toISOString().replace(/[:.]/g, "-");
+  const nonce = randomBytes(3).toString("hex");
+  return join4(homedir2(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}-${nonce}.md`);
+}
+function rotateBaks(dir) {
+  try {
+    const entries = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
+    for (const stale of entries.slice(0, Math.max(0, entries.length - BAK_KEEP))) {
+      try {
+        unlinkSync2(join4(dir, stale));
+      } catch {
+      }
+    }
+  } catch {
+  }
+}
 function defaultBackup(bakPath, content) {
+  const dir = dirname2(bakPath);
+  mkdirSync2(dir, { recursive: true });
   writeFileSync2(bakPath, content, "utf-8");
+  rotateBaks(dir);
 }
 function defaultAppendLog(logPath, line) {
   mkdirSync2(dirname2(logPath), { recursive: true });
@@ -524,6 +549,9 @@ function writeRoadmapGuarded(args) {
   if (after === before) {
     return finish("noop");
   }
+  if (ROADMAP_MANUAL_MARKER.test(before)) {
+    return finish("skipped", { reason: "opt_out_manual" });
+  }
   if (!allowFullRewrite) {
     const allowedSet = new Set(allowedDeletions ?? []);
     const removed = computeRemovedLines(beforeLines, afterLines);
@@ -542,7 +570,7 @@ function writeRoadmapGuarded(args) {
       return finish("skipped", { reason: "catastrophic_rewrite" });
     }
   }
-  const bakPath = `${roadmapPath}.bak`;
+  const bakPath = roadmapBakPath(projectDir);
   let bakError = null;
   try {
     (deps?.backup ?? defaultBackup)(bakPath, before);
@@ -620,12 +648,12 @@ function readStdin() {
   });
 }
 function isPRDFile(filePath) {
-  const basename3 = path2.basename(filePath).toLowerCase();
-  return basename3.startsWith("prd-") && basename3.endsWith(".md");
+  const basename4 = path2.basename(filePath).toLowerCase();
+  return basename4.startsWith("prd-") && basename4.endsWith(".md");
 }
 function isTasksFile(filePath) {
-  const basename3 = path2.basename(filePath).toLowerCase();
-  return basename3.startsWith("tasks-") && basename3.endsWith(".md");
+  const basename4 = path2.basename(filePath).toLowerCase();
+  return basename4.startsWith("tasks-") && basename4.endsWith(".md");
 }
 function extractPRDMetadata(content) {
   const result = {
@@ -657,11 +685,11 @@ function extractPRDMetadata(content) {
   return result;
 }
 function extractTaskProgress(content, filePath) {
-  const basename3 = path2.basename(filePath);
-  const featureMatch = basename3.match(/tasks?-(.+)\.md/i);
+  const basename4 = path2.basename(filePath);
+  const featureMatch = basename4.match(/tasks?-(.+)\.md/i);
   const featureName = featureMatch ? featureMatch[1].replace(/-/g, " ") : "Unknown Feature";
   const dir = path2.dirname(filePath);
-  const prdPattern = basename3.replace(/^tasks?-/i, "prd-");
+  const prdPattern = basename4.replace(/^tasks?-/i, "prd-");
   const prdPath = path2.join(dir, prdPattern.replace("tasks-", "PRD-"));
   const prdFile = fs.existsSync(prdPath) ? prdPath : null;
   const taskPattern = /^-\s*\[([ x])\]/gm;

@@ -42,6 +42,19 @@ export interface PlanningSession {
   steps?: string[];
   verification?: string[];
   files?: string[];
+  /**
+   * Path to the plan file this session came from. Added 2026-09-02 for the
+   * compact append block: the ROADMAP entry now points AT the plan instead of
+   * paraphrasing it. Optional -- a session with no plan file simply omits the
+   * `**Plan:**` line.
+   *
+   * The other fields above are still populated, and still read back off
+   * ROADMAPs written before 2026-09-02, but as of 2026-09-03 NO write path
+   * renders them: both the append path and the fresh-file path emit the
+   * compact block. They survive for the session's advisory context and for
+   * parsing older documents.
+   */
+  planPath?: string;
 }
 
 export interface RoadmapDoc {

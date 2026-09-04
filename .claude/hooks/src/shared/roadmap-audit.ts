@@ -21,9 +21,17 @@
  *      backstop             after is empty or under 25% of before's lines ->
  *                           refuse (`skipped` / `catastrophic_rewrite`). This
  *                           is the legitimate fresh-file rewrite path only.
- *   3. .bak              -- write `<roadmapPath>.bak` = the BEFORE content.
- *                           Single generation, own try/catch: a failure sets
- *                           `bak_error` and never blocks the write.
+ *   3. pre-image         -- write the BEFORE content to
+ *                           `~/.claude/state/roadmap-bak/<slug>-<hash8>/<ts>-<nonce>.md`
+ *                           (see `roadmapBakPath`), NOT to `<roadmapPath>.bak`.
+ *                           Changed 2026-09-02: the old in-tree path left an
+ *                           untracked, un-gitignored file in the project root
+ *                           after every guarded write, so it surfaced in
+ *                           `git status` of every project on every plan
+ *                           approval. Rotated to the newest `BAK_KEEP`; own
+ *                           try/catch, so a failure sets `bak_error` and still
+ *                           never blocks the write. The real path lands in the
+ *                           audit row's `bak_path`.
  *   4. the write          -- via atomic-write's `mutateStateWithLock`, so a
  *                           concurrent modification safely no-ops instead of
  *                           losing an update. `mutateStateWithLock` returns
@@ -52,9 +60,10 @@
  * ever prevent a write.
  */
 
-import { createHash } from 'node:crypto';
-import { appendFileSync, mkdirSync, writeFileSync } from 'node:fs';
-import { dirname, join } from 'node:path';
+import { createHash, randomBytes } from 'node:crypto';
+import { appendFileSync, mkdirSync, readdirSync, unlinkSync, writeFileSync } from 'node:fs';
+import { homedir } from 'node:os';
+import { basename, dirname, join } from 'node:path';
 
 import { mutateStateWithLock } from './atomic-write.js';
 
@@ -228,8 +237,76 @@ function defaultWrite(roadmapPath: string, before: string, after: string): Roadm
   return { wrote: false, reason: 'write_failed', wait_ms: captured.lockOutcome?.wait_ms };
 }
 
+/**
+ * The per-project opt-out marker. A ROADMAP.md containing this comment is
+ * hand-owned: every guarded writer records its audit row and surfaces session
+ * context as usual, but none of them modify the file.
+ *
+ * Tolerant of internal spacing and case so a human writing it from memory gets
+ * it right; still requires the real `<!-- ... -->` delimiters, so prose that
+ * merely mentions "roadmap-sync manual" does not silently disable the hooks.
+ *
+ * Documented for humans in docs/hooks/roadmap-sync-opt-out.md.
+ */
+export const ROADMAP_MANUAL_MARKER = /<!--\s*roadmap-sync\s*:\s*manual\s*-->/i;
+
+/** How many pre-images to keep per project before the oldest are dropped. */
+const BAK_KEEP = 10;
+
+/**
+ * Where a ROADMAP pre-image goes.
+ *
+ * NOT `<roadmapPath>.bak` (2026-09-02). That is what this used to be, and it
+ * dropped an untracked, un-gitignored file into the project root on EVERY
+ * guarded write -- so a hook whose whole job is to be unobtrusive showed up in
+ * `git status` of every project after every plan approval. A backup is our
+ * diagnostic, not the project's content, so it belongs in our state dir.
+ *
+ * Namespaced `<basename>-<hash8 of full path>` rather than by basename alone:
+ * two checkouts of the same repo, or any two projects that happen to share a
+ * directory name, must not overwrite each other's pre-images. The hash keeps
+ * them distinct; the basename keeps the directory human-readable when someone
+ * is actually looking for a lost ROADMAP.
+ */
+export function roadmapBakPath(projectDir: string, when: Date = new Date()): string {
+  const slug = basename(projectDir).replace(/[^A-Za-z0-9._-]/g, '_') || 'project';
+  const hash = sha256Prefix16(projectDir).slice(0, 8);
+  const stamp = when.toISOString().replace(/[:.]/g, '-');
+  // Random suffix AFTER the timestamp (2026-09-03). The stamp alone resolves
+  // to the millisecond, so two guarded writes against the same project in the
+  // same millisecond produced the SAME path -- and because the pre-image is
+  // written before the CAS write, the second process silently overwrote the
+  // first one's backup. Both audit rows then named one file and one
+  // recoverable version was gone. This tree is shared by concurrent sessions,
+  // so that is a real race, not a theoretical one.
+  //
+  // The suffix trails the timestamp so `rotateBaks`'s lexicographic sort still
+  // orders by time.
+  const nonce = randomBytes(3).toString('hex');
+  return join(homedir(), '.claude', 'state', 'roadmap-bak', `${slug}-${hash}`, `${stamp}-${nonce}.md`);
+}
+
+/**
+ * Keep only the newest `BAK_KEEP` pre-images in `dir`. Best-effort: a rotation
+ * failure must never surface, because the caller's contract is that nothing in
+ * the backup path can block the ROADMAP write.
+ */
+function rotateBaks(dir: string): void {
+  try {
+    const entries = readdirSync(dir).filter((f) => f.endsWith('.md')).sort();
+    for (const stale of entries.slice(0, Math.max(0, entries.length - BAK_KEEP))) {
+      try { unlinkSync(join(dir, stale)); } catch { /* best effort */ }
+    }
+  } catch {
+    /* directory unreadable -- nothing to rotate, never escalate */
+  }
+}
+
 function defaultBackup(bakPath: string, content: string): void {
+  const dir = dirname(bakPath);
+  mkdirSync(dir, { recursive: true });
   writeFileSync(bakPath, content, 'utf-8');
+  rotateBaks(dir);
 }
 
 function defaultAppendLog(logPath: string, line: string): void {
@@ -328,6 +405,22 @@ export function writeRoadmapGuarded(args: {
     return finish('noop');
   }
 
+  // Gate 1.5: per-project manual opt-out (2026-09-02).
+  //
+  // A ROADMAP.md that carries `<!-- roadmap-sync: manual -->` is hand-owned.
+  // The hooks still record the audit row and still surface session context to
+  // the session -- they simply never modify the file. Deliberately placed
+  // AFTER the no-op gate so a run that would have changed nothing still
+  // reports the more precise `noop`.
+  //
+  // It lives HERE, in the one function every ROADMAP writer routes through,
+  // rather than in each hook: post-plan-roadmap, git-commit-roadmap and
+  // prd-roadmap-sync all inherit it from this single check, and any future
+  // writer gets it by construction instead of by remembering to add it.
+  if (ROADMAP_MANUAL_MARKER.test(before)) {
+    return finish('skipped', { reason: 'opt_out_manual' });
+  }
+
   // Gate 2: deletion-free invariant (skipped for the legitimate full-rewrite
   // path, which instead runs the catastrophic backstop below).
   if (!allowFullRewrite) {
@@ -350,8 +443,9 @@ export function writeRoadmapGuarded(args: {
     }
   }
 
-  // Gate 3: .bak of the BEFORE content. Own try/catch -- never blocks the write.
-  const bakPath = `${roadmapPath}.bak`;
+  // Gate 3: pre-image of the BEFORE content, written OUTSIDE the project tree
+  // (see roadmapBakPath). Own try/catch -- never blocks the write.
+  const bakPath = roadmapBakPath(projectDir);
   let bakError: string | null = null;
   try {
     (deps?.backup ?? defaultBackup)(bakPath, before);

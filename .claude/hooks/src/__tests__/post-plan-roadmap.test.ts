@@ -12,9 +12,17 @@
  */
 
 import { describe, it, expect } from 'vitest';
+const SEP_BS = String.fromCharCode(92);
 import { parseRoadmap } from '../shared/roadmap-parser.js';
 import type { PlanningSession } from '../shared/roadmap-parser.js';
-import { applyRoadmapUpdate, renderSessionBlock, extractBullets } from '../post-plan-roadmap.js';
+import {
+  applyRoadmapUpdate,
+  renderSessionBlock,
+  renderSessionBlockCompact,
+  extractBullets,
+  extractPlanInfo,
+  planPathForRoadmap,
+} from '../post-plan-roadmap.js';
 
 /**
  * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
@@ -202,6 +210,54 @@ describe('applyRoadmapUpdate', () => {
     expect(out).toContain('## Planned');
     expect(out).toContain('## Recent Planning Sessions');
   });
+
+  // Regression (2026-09-03, CodeRabbit on PR #35). A brand-new or empty
+  // ROADMAP.md takes the generateRoadmap branch, which was still on the
+  // verbose renderer -- so a project's VERY FIRST plan approval got the exact
+  // shape this change set out to remove, and no `**Plan:**` pointer. Every new
+  // project hit it once.
+  it('renders the first session of a fresh ROADMAP compact, with the plan pointer', () => {
+    const parsed = parseRoadmap('');
+    const session: PlanningSession = {
+      date: '2026-09-03',
+      title: 'Add jitter to the retry backoff',
+      summary: 'A summary that must NOT be rendered.',
+      decisions: ['a decision that must NOT be rendered'],
+      steps: ['a step that must NOT be rendered'],
+      files: ['a.ts'],
+      verification: ['a check that must NOT be rendered'],
+      planPath: '.claude/plans/add-jitter.md',
+    };
+
+    const { content } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-09-03',
+      focusTitle: 'Add jitter to the retry backoff',
+    });
+
+    expect(content).toContain('### 2026-09-03: Add jitter to the retry backoff');
+    expect(content).toContain('**Plan:** .claude/plans/add-jitter.md');
+    // The retired stanzas, none of which may come back on this path.
+    expect(content).not.toContain('**Key Decisions:**');
+    expect(content).not.toContain('**Summary:**');
+    expect(content).not.toContain('**Implementation:**');
+    expect(content).not.toContain('**Files:**');
+    expect(content).not.toContain('**Verification:**');
+  });
+
+  it('omits the plan line on a fresh ROADMAP when the session has no plan file', () => {
+    const parsed = parseRoadmap('');
+    const session: PlanningSession = { date: '2026-09-03', title: 'No plan file', decisions: [] };
+
+    const { content } = applyRoadmapUpdate(parsed, {
+      session,
+      today: '2026-09-03',
+      focusTitle: null,
+    });
+
+    expect(content).toContain('### 2026-09-03: No plan file');
+    expect(content).not.toContain('**Plan:**');
+  });
 });
 
 /**
@@ -240,13 +296,24 @@ describe('renderSessionBlock', () => {
     ]);
   });
 
-  it('is exactly what applyRoadmapUpdate inserts for a brand-new session block (equivalence check)', () => {
+  it('is NOT what applyRoadmapUpdate writes any more -- both paths render compact', () => {
+    // This assertion used to run the other way round, and that is exactly how
+    // the fresh-file gap survived: it built its fixture from an EMPTY ROADMAP,
+    // so it exercised the generateRoadmap branch and pinned the retired shape
+    // as if it were the contract. Inverted 2026-09-03 so the fresh-file path
+    // can never drift back to the verbose renderer unnoticed.
     const parsed = parseRoadmap('');
-    const session: PlanningSession = { date: '2026-05-03', title: 'Gamma', decisions: ['only decision'] };
+    const session: PlanningSession = {
+      date: '2026-05-03',
+      title: 'Gamma',
+      decisions: ['only decision'],
+      planPath: 'plans/gamma.md',
+    };
 
     const { content } = applyRoadmapUpdate(parsed, { session, today: '2026-05-03', focusTitle: null });
 
-    expect(content).toContain(renderSessionBlock(session).join('\n'));
+    expect(content).toContain(renderSessionBlockCompact(session).join('\n'));
+    expect(content).not.toContain(renderSessionBlock(session).join('\n'));
   });
 });
 
@@ -259,5 +326,180 @@ describe('renderSessionBlock', () => {
 describe('extractBullets (vector 5: emphasis-corruption fix)', () => {
   it('does not corrode a closing ** followed by whitespace', () => {
     expect(extractBullets('- but **not** fix')).toEqual(['but **not** fix']);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 2 (2026-09-02): the appended block invented "Key Decisions".
+//
+// extractPlanInfo fell back to keyword-scraping the WHOLE plan document when a
+// plan had no Decisions/Key Decisions/Approach section. CAPTURE_KEYWORDS
+// includes 'note', 'why', 'reason', 'change', 'add', 'update', 'fix' -- so
+// ordinary Context prose was lifted out and rendered under a "**Key
+// Decisions:**" heading in ROADMAP.md, and stored to archival memory as
+// decisions. Neither is true: a plan with no decisions section recorded no
+// decisions.
+// ---------------------------------------------------------------------------
+describe('extractPlanInfo -- context bullets are not decisions', () => {
+  const planWithOnlyContext = [
+    '# Plan: Tidy the widget loader',
+    '',
+    '## Context',
+    '- The loader has a note about why the retry count is 3.',
+    '- We should update the docstring and fix the stale path reference.',
+    '- Root cause: the config is read before the environment is applied.',
+    '',
+    '## Implementation',
+    '- Move the config read below the environment apply.',
+    '',
+  ].join('\n');
+
+  it('does not turn Context bullets into Key Decisions', () => {
+    const info = extractPlanInfo(planWithOnlyContext, 'plans/tidy-widget-loader.md');
+    expect(info.decisions).toEqual([]);
+  });
+
+  it('renders no Key Decisions heading for such a plan', () => {
+    const info = extractPlanInfo(planWithOnlyContext, 'plans/tidy-widget-loader.md');
+    const block = renderSessionBlock({
+      date: '2026-09-02',
+      title: info.title,
+      summary: info.summary || undefined,
+      decisions: info.decisions,
+    }).join('\n');
+    expect(block).not.toContain('Key Decisions');
+  });
+
+  it('still reads decisions from a real Decisions section', () => {
+    const planWithDecisions = [
+      '# Plan: Real one',
+      '',
+      '## Context',
+      '- Some background note about why this matters.',
+      '',
+      '## Decisions',
+      '- Use the bounded launcher instead of a bare pipe.',
+      '- Keep the pre-image outside the project tree.',
+      '',
+    ].join('\n');
+    const info = extractPlanInfo(planWithDecisions, 'plans/real-one.md');
+    expect(info.decisions).toHaveLength(2);
+    expect(info.decisions[0]).toContain('bounded launcher');
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Defect 2c (2026-09-02): the appended block is one line of body, not five
+// generated stanzas.
+//
+// DEVIATION from the handoff's literal "one line: date, plan title, plan file
+// path": the `### YYYY-MM-DD: Title` header line is kept intact and the plan
+// path goes on its own `**Plan:**` line beneath it. Appending the path to the
+// header would be captured by findSessionBlock's title regex
+// (/^###\s*\d{4}-\d{2}-\d{2}:\s*(.+)$/), so same-day-different-title detection
+// would start comparing "Title -- path" against "Title" and re-append a block
+// it already wrote. Two lines that keep that contract beat one that breaks it.
+// ---------------------------------------------------------------------------
+describe('applyRoadmapUpdate -- appended session block is compact', () => {
+  const ROADMAP = [
+    '# ROADMAP',
+    '',
+    '## Current Focus',
+    '**Something already active**',
+    '',
+    '## Recent Planning Sessions',
+    '',
+  ].join('\n');
+
+  const session: PlanningSession = {
+    date: '2026-09-02',
+    title: 'Tidy the widget loader',
+    planPath: 'plans/tidy-widget-loader.md',
+    summary: 'A summary that must NOT be emitted into the ROADMAP any more.',
+    decisions: ['Use the bounded launcher', 'Keep the pre-image out of the tree'],
+    steps: ['Step one', 'Step two'],
+    verification: ['Run the suite'],
+    files: ['a.ts', 'b.ts', 'a.ts'],
+  };
+
+  it('emits the header plus exactly one body line naming the plan file', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).toContain('### 2026-09-02: Tidy the widget loader');
+    expect(content).toContain('**Plan:** plans/tidy-widget-loader.md');
+  });
+
+  it('emits none of the generated stanzas that humans kept deleting', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).not.toContain('**Key Decisions:**');
+    expect(content).not.toContain('**Implementation:**');
+    expect(content).not.toContain('**Verification:**');
+    expect(content).not.toContain('**Files:**');
+    expect(content).not.toContain('**Summary:**');
+  });
+
+  it('omits the Plan line entirely when there is no plan path', () => {
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session: { ...session, planPath: undefined },
+      today: '2026-09-02', focusTitle: session.title,
+    });
+
+    expect(content).toContain('### 2026-09-02: Tidy the widget loader');
+    expect(content).not.toContain('**Plan:**');
+  });
+
+  it('adds at most 3 lines to the document', () => {
+    const before = ROADMAP.split('\n').length;
+    const { content } = applyRoadmapUpdate(parseRoadmap(ROADMAP), {
+      session, today: '2026-09-02', focusTitle: session.title,
+    });
+    expect(content.split('\n').length - before).toBeLessThanOrEqual(3);
+  });
+});
+
+// ---------------------------------------------------------------------------
+// Regression (2026-09-02): the **Plan:** path must be project-relative.
+//
+// Found by the live ExitPlanMode run, NOT by the unit suite -- the earlier
+// tests handed `planPath` to the renderer directly and so never exercised the
+// projectDir comparison. The shipped bug compared a forward-slash
+// CLAUDE_PROJECT_DIR against a backslash path.join result with startsWith, so
+// it never matched and a full absolute path landed in ROADMAP.md.
+// ---------------------------------------------------------------------------
+describe('planPathForRoadmap -- separator-agnostic', () => {
+  it('relativises a plan inside the project even when separators differ', () => {
+    const out = planPathForRoadmap(
+      'C:/repos/widget',
+      ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),
+    );
+    expect(out).toBe('.claude/plans/add-jitter.md');
+  });
+
+  it('relativises when both sides already agree', () => {
+    expect(planPathForRoadmap('C:/repos/widget', 'C:/repos/widget/plans/p.md'))
+      .toBe('plans/p.md');
+  });
+
+  it('keeps an absolute path when the plan is outside the project', () => {
+    const out = planPathForRoadmap('C:/repos/widget', 'C:/Users/dave/.claude/plans/p.md');
+    expect(out!.split(SEP_BS).join('/')).toBe('C:/Users/dave/.claude/plans/p.md');
+  });
+
+  it('never emits a Windows drive letter for an in-project plan', () => {
+    const out = planPathForRoadmap(
+      'C:/repos/widget',
+      ['C:', 'repos', 'widget', '.claude', 'plans', 'add-jitter.md'].join(SEP_BS),
+    );
+    expect(out).not.toMatch(/^[A-Za-z]:/);
+    expect(out).not.toContain(SEP_BS);
+  });
+
+  it('returns undefined when there is no plan file', () => {
+    expect(planPathForRoadmap('C:/repos/widget', undefined)).toBeUndefined();
   });
 });
