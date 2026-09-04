@@ -20,7 +20,7 @@ You are a thin orchestrator that delegates a real task to OpenAI Codex (default 
 1. **Subscription only.** `codex exec` runs on the ChatGPT login. Never rely on `OPENAI_API_KEY`/`CODEX_API_KEY`; strip them from the child env (defensive — a repo-controlled env var must not silently switch auth to a paid API key).
 2. **Sandbox is the ONLY safety boundary.** `codex exec` (0.131.0; still true on 0.144.1 per `--help` 2026-07-11) has **no** `--ask-for-approval` dial — the approval gate lives entirely in this agent's confirm-first preflight (per the safety rule). Choose `--sandbox` deliberately per mode.
 3. **Model allowlist = `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, gpt-5.4-mini}`** (5.6 family live-probed 2026-07-11 on 0.144.1, exit 0 each; ground truth `~/.codex/models_cache.json`). Any `-codex`-suffixed or fabricated id returns HTTP 400 under ChatGPT auth (empirically proven, incl. `gpt-5.6-bogus` 2026-07-11). **Reject a bad `--model` before ever shelling out.**
-4. **`--disable multi_agent` by default; `--complex` opts in.** Global config has `multi_agent = true`; leaving it on makes Codex spawn built-in sub-agents that fall back to `gpt-4.1` (400 on subscription) AND taxes ~1,940 tokens/call even when unused — so every call passes `--disable multi_agent` unless `--complex` is set. `--complex` (ask/implement, NOT resume) swaps in `--enable multi_agent` for genuinely broad tasks, but ONLY after Step 2 asserts `~/.codex/agents/explorer.toml` pins `model = "gpt-5.6-luna"` (else the explorer role drops to gpt-4.1 → 400; it refuses). Standing caveat: the pin was verified once on Windows 2026-07-07 — re-probe before unattended use (openai/codex#19399).
+4. **`--disable multi_agent` by default; `--complex` opts in.** Global config has `multi_agent = true`; leaving it on makes Codex spawn built-in sub-agents that fall back to `gpt-4.1` (400 on subscription) AND taxes ~1,940 tokens/call even when unused — so every call passes `--disable multi_agent` unless `--complex` is set. `--complex` (ask/implement, NOT resume) swaps in `--enable multi_agent` for genuinely broad tasks. Step 2 checks `~/.codex/agents/explorer.toml` for the `model = "gpt-5.6-luna"` pin and WARNS if absent — it no longer refuses (2026-09-03). The refusal rested on "without the pin the explorer role drops to gpt-4.1 → 400", and an A/B that DELETED the file found identical fan-out and ZERO gpt-4.1 in both arms (DESIGN-RESEARCH §17), so refusing could only ever be a false refusal. Fan-out itself IS real (9 harness-level `spawn_agent` events, §16) — what is unproven is that this file affects it.
 5. **Windows stdin discipline.** Always feed the prompt from a FILE via `- < "$PROMPT_FILE"`, never an inherited TTY (documented hang, openai/codex#20919).
 6. **Startup profile (latency, v1) — `ask` ONLY.** The **`ask`** mode passes **`--ignore-user-config`** to skip loading Dave's interactive `~/.codex/config.toml` (which defines ~16 MCP servers whose network handshakes dominate cold-start): it cut a read-only smoke **47s → 18s** and dropped the config-defined MCP connection failures (verified 2026-07-07 v1 benchmark). **`implement`/`resume` must NOT pass it** — verified 2026-07-07 (v2 dogfood + independent A/B) that `--ignore-user-config` **silently BREAKS workspace-write file creation on Windows**: `config.toml` carries the sandbox writable-root/approval policy, so stripping it makes the sandbox reject writes (**exit 0, ZERO diff — a silent no-op**). Write modes accept the slower cold-start for a working write. **Auth is unaffected either way** — the flag still reads `CODEX_HOME`/`auth.json` (subscription); model / `model_reasoning_effort` / `multi_agent` are explicit CLI flags regardless. **Do NOT use `--profile-v2 worker` / a `worker.config.toml`** — verified 2026-07-07 that overlay layering deep-merges and does NOT remove the base MCP servers (the design-doc §5.3 approach was empirically refuted).
 
@@ -45,7 +45,7 @@ low | medium | high | xhigh | max | ultra     (default: max for gpt-5.6-luna; xh
 confirm (default) | yes         — "yes" skips the interactive pause (orchestrator/Ralph use) but NEVER skips the sandbox boundary, telemetry, or the separate review step
 
 ## Complex
-false (default) | true          — `--complex` enables multi_agent fan-out (explorer/worker sub-agents) for genuinely BROAD tasks (ask/implement; NOT re-applied on resume). Opt-in only; HARD-REQUIRES `~/.codex/agents/explorer.toml` pinned to `model = "gpt-5.6-luna"` (else refuse). Extra ~1,940 tok/call + fan-out latency.
+false (default) | true          — `--complex` enables multi_agent fan-out (explorer/worker sub-agents) for genuinely BROAD tasks (ask/implement; NOT re-applied on resume). Opt-in only; warns (no longer refuses, 2026-09-03) if `~/.codex/agents/explorer.toml` is missing or not pinned to `model = "gpt-5.6-luna"`. Extra ~1,940 tok/call + fan-out latency.
 
 ## Scope        (resume only)
 <SESSION_ID>    (the Codex thread id (UUID) from the prior implement run's summary; LEAVE EMPTY to fall back to --last — do NOT pass the literal "last")
@@ -148,15 +148,29 @@ case "${COMPLEX:-false}" in true|TRUE|True|yes|1|on) COMPLEX=true ;; *) COMPLEX=
 # --complex is ask/implement ONLY — resume inherits its thread's config and never re-fans-out, so
 # mode-scope the gate: a resume with --complex must NOT be refused/mislabelled here.
 if [ "$COMPLEX" = "true" ] && [ "${MODE:-ask}" != "resume" ]; then
-  # --complex opt-in: enable multi_agent fan-out for a genuinely BROAD task. HARD-REQUIRE
-  # ~/.codex/agents/explorer.toml pinned to gpt-5.6-luna — else the built-in explorer role drops to
-  # gpt-4.1 (400 on the subscription; openai/codex #19399 / #16893). Refuse, don't crash mid-run.
+  # --complex opt-in: enable multi_agent fan-out for a genuinely BROAD task.
+  #
+  # This USED TO REFUSE when ~/.codex/agents/explorer.toml was missing or not
+  # pinned. Downgraded to a WARNING 2026-09-03 (DESIGN-RESEARCH §17) after an A/B
+  # showed the file makes no difference on this path: with the pin present and
+  # with the file DELETED OUTRIGHT, both runs fanned out, both completed 6
+  # spawn_agent calls with real receiver threads, and both logged ZERO gpt-4.1
+  # mentions. The premise of the gate -- "without the pin, sub-agents drop to
+  # gpt-4.1 and 400" -- did not reproduce in either arm, and the string
+  # "explorer" never appears in the event stream at all: this path spawns generic
+  # `spawn_agent` workers, not the named role explorer.toml configures.
+  #
+  # So refusing on this file could only ever produce a FALSE refusal -- blocking
+  # --complex on a fresh machine for a hazard that is not there. The check is kept
+  # as a warning, not deleted, because the A/B is n=1 per arm and was run on CLI
+  # 0.144.1; the July observation it replaces was on 0.131.0, so the harness may
+  # simply use different agent machinery now. Warn, record, proceed.
   EXPLORER="$HOME/.codex/agents/explorer.toml"
   if [ ! -f "$EXPLORER" ] || ! grep -Eq "^[[:space:]]*model[[:space:]]*=[[:space:]]*[\"']gpt-5\.6-luna[\"']" "$EXPLORER"; then
-    echo "REFUSED --complex: $EXPLORER must exist AND pin model = \"gpt-5.6-luna\" (double- or single-quoted; mitigates the gpt-4.1 fallback 400). Fix it or drop --complex."; exit 2
+    echo "WARN --complex: $EXPLORER missing or not pinned to model = \"gpt-5.6-luna\". Proceeding anyway -- the 2026-09-03 A/B (DESIGN-RESEARCH §17) found this file makes no observable difference to fan-out or to gpt-4.1 fallback. If you see gpt-4.1 400s in this run, that A/B is wrong for your case: say so and re-pin." >&2
   fi
   MULTI_AGENT_FLAG="--enable multi_agent"
-  echo "NOTE (--complex): multi_agent fan-out ENABLED; explorer pinned to gpt-5.6-luna. FAN-OUT UNVERIFIED on this machine — two probes on 2026-09-03 found no sub-agent spawn in the logs, and a known-400 pin produced no 400 (DESIGN-RESEARCH section 16). Do NOT rely on this unattended (openai/codex#19399: subagent TOML can be ignored on Windows). Extra ~1,940 tok/call + fan-out latency."
+  echo "NOTE (--complex): multi_agent fan-out ENABLED. Fan-out itself IS real on this machine — a --json probe on 2026-09-03 recorded 9 harness-level spawn_agent events (DESIGN-RESEARCH §16/§17), correcting an earlier same-day claim that it never spawned. What is NOT established is that explorer.toml influences it. Extra ~1,940 tok/call + fan-out latency."
   # VERIFIED 2026-07-07 (live probe): for ASK, --ignore-user-config skips config.toml but explorer.toml
   # (in ~/.codex/agents/) IS still honored — a `--enable multi_agent --ignore-user-config` probe spawned
   # an explorer on gpt-5 (the pinned family), ZERO gpt-4.1 400s. So ASK --complex keeps the fast path.
@@ -454,7 +468,7 @@ Session id: <$SESSION_ID>   Worktree: <path>
 | `codex` not on PATH | command not found | Tell user to install/verify Codex CLI |
 | Not subscription-logged-in | `codex login status` ≠ "Logged in using ChatGPT" | STOP; tell user `codex login`. Never fall back to an API key. |
 | Bad model | not in allowlist | Reject before shelling out; cite the 400 evidence |
-| `--complex` w/o explorer pin | `~/.codex/agents/explorer.toml` missing or not pinned to the verified gpt-5.6-luna explorer profile | Refuse (Step 2, exit 2) before shelling out; tell user to pin `model = "gpt-5.6-luna"` or drop `--complex` |
+| `--complex` w/o explorer pin | `~/.codex/agents/explorer.toml` missing or not pinned to the verified gpt-5.6-luna explorer profile | **WARN and proceed** (Step 2) — downgraded from refuse 2026-09-03: an A/B with the file DELETED showed identical fan-out and zero gpt-4.1, so refusing could only be a false refusal (DESIGN-RESEARCH §17) |
 | `codex exec` hangs | timeout wrapper (rely on the Bash-tool timeout / external `timeout`, not Codex's own) | Kill; return partial `$LOG`; flag in summary |
 | Usage limit hit (subscription quota) | `You've hit your usage limit` in `$LOG`; `-o $FINAL` empty; non-zero exit | Short-circuit: no result, surface reset time, telemetry `usage_limited:true`; retry after reset. Preflight impossible (no quota surface). |
 | Patch apply conflict | `git apply` nonzero | Leave worktree intact; report; let user reconcile |

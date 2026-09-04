@@ -747,3 +747,83 @@ with the log inspected for a spawn event, and only then a pin-vs-no-pin A/B.
 Until someone does that, the caveat in `codex-worker-safety.md` stands.
 
 `explorer.toml` backup from before this work: `~/.codex/agents/explorer.toml.bak-2026-09-03`.
+
+## 17. The `--complex` explorer gate guards nothing — A/B, and a §16 correction (2026-09-03)
+
+Two corrections and one verdict, in that order, because the second correction
+is mine and it matters more than the verdict.
+
+### Correction: §16's "no evidence of a spawn" was a FALSE NEGATIVE
+
+§16 concluded that `--complex` might not fan out on this machine at all. That
+was wrong, and the instrument was the problem, not the harness. Re-running with
+**`codex exec --json`** — which streams harness events as JSONL, independent of
+anything the model says about itself — produced, on a 328KB / 47-file inline
+diff with the prompt explicitly inviting delegation:
+
+```
+item.started  :: collab_tool_call   x9      tool = "spawn_agent"
+item.completed:: collab_tool_call   x8      receiver_thread_ids populated, agents_states = pending_init
+```
+
+Nine real spawns, each with its own per-file review prompt, all from one
+`sender_thread_id`. **Fan-out is real.** §16's probes used a task that was not
+broad enough and a prompt that did not ask for delegation; nothing fanned out,
+and "no spawn observed" was read as "cannot spawn". The lesson is the same one
+§16 was itself about: an instrument that cannot see a thing is not evidence the
+thing is absent.
+
+### The A/B: does `explorer.toml` do anything?
+
+Same prompt, same flags, same model+effort. Arm 1 with the pin present. Arm 2
+with `~/.codex/agents/explorer.toml` **deleted outright** (moved aside, restore
+chained to the run's exit).
+
+| | pin = `gpt-5.6-luna` | pin file ABSENT |
+|---|---|---|
+| total events | 25 | 26 |
+| `spawn_agent` started | 9 | 7 |
+| completed with receiver thread | 6 | 6 |
+| **`gpt-4.1` mentions** | **0** | **0** |
+| `explorer` mentions | 0 | 0 |
+| `turn.completed` | 1 | 1 |
+
+**Verdict: the file makes no observable difference.** The gate's entire premise
+is "without the pin, sub-agents drop to `gpt-4.1` and 400 on this subscription".
+Deleting the file did not produce a single `gpt-4.1` mention. And the string
+`explorer` appears **nowhere** in either stream: this path spawns generic
+`spawn_agent` workers, never the named role that `explorer.toml` configures.
+
+Read honestly, this also retro-explains every earlier observation at once —
+July's zero `gpt-4.1` 400s, §16's bogus-pin producing no 400, and the pin
+appearing to "work" whatever its value. None of them were evidence the pin
+worked; all are what you see when the pin is simply not consulted.
+
+**What is NOT claimed.** The 9-vs-7 spawn difference is not an effect — an LLM
+decomposes a 47-file diff differently run to run. This is n=1 per arm, on CLI
+`0.144.1`; the July claim it supersedes was on `0.131.0`, so the harness may
+genuinely have changed which agent machinery it uses. A binary `gpt-4.1` signal
+would have been loud, which is why one pair is enough to act on and not enough
+to close the question forever.
+
+### What changed
+
+The Step 2 check is **downgraded from refuse to warn**, not deleted. Refusing on
+this file could only ever produce a FALSE refusal — blocking `--complex` on a
+fresh machine for a hazard that is not there. It is kept as a warning because of
+the n=1 caveat above, and the warning text tells the operator what to do if they
+DO see `gpt-4.1` 400s: report it, because then this A/B is wrong for their case.
+
+This is the "false-premise diagnosis" pattern this repo has paid for before —
+hardening against a failure mode that was never occurring. The tell was the same
+both times: a guard nobody had ever seen fire, protecting against a symptom
+nobody had ever observed.
+
+### Incidental, and its own lane
+
+Both arms logged an identical error item: `Exceeded skills context budget of 2%.
+All skill descriptions were removed and 921 additional skills were not included
+in the model-visible skills list.` Every Codex run here starts with ZERO skill
+descriptions visible to the model. Counted, not inferred: `~/.agents/skills`
+holds 673 `SKILL.md`, of which **527 (78%) are under `archive/` or `_snapshots/`**.
+Tracked as lane `codex-skills-budget`; not investigated here.
