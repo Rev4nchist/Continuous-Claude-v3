@@ -108,12 +108,15 @@ for (const rel of FILES) {
 }
 
 // The live machine file is not in the repo, so disagreement is a warning, not a
-// failure -- but it is the disagreement that actually breaks `--complex`.
+// failure. Since 2026-09-03 the runtime only WARNS on a mismatch too (§17: an
+// A/B with the file deleted found identical fan-out and zero gpt-4.1), so a
+// mismatch no longer blocks anything -- it just means the repo and the machine
+// disagree about a value neither has been shown to use.
 const LIVE = join(homedir(), '.codex', 'agents', 'explorer.toml');
 if (existsSync(LIVE)) {
   const lm = readFileSync(LIVE, 'utf8').match(/^\s*model\s*=\s*["']([^"']+)/m);
   const liveModel = lm ? lm[1] : '(unset)';
-  if (liveModel !== CANON) console.log(`WARN: ${LIVE} pins '${liveModel}' -- '--complex' would REFUSE`);
+  if (liveModel !== CANON) console.log(`WARN: ${LIVE} pins '${liveModel}', repo expects '${CANON}' -- '--complex' WARNS and proceeds (no longer refuses)`);
   else console.log(`OK: live explorer.toml pins ${liveModel}`);
 }
 

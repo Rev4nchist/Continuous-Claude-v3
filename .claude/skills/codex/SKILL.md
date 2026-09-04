@@ -111,7 +111,8 @@ User: /codex --implement add a --limit flag to scripts/report-registry/query.mjs
 
 User: /codex --implement --complex refactor the report-registry pipeline end-to-end
 → implement + multi_agent fan-out (explorer/worker sub-agents on gpt-5.6-luna). Asserts
-  ~/.codex/agents/explorer.toml is pinned to gpt-5.6-luna first, prints the #19399 re-probe
+  ~/.codex/agents/explorer.toml is pinned to gpt-5.6-luna and WARNS if not (it no longer
+  refuses, 2026-09-03), prints the #19399 re-probe
   caveat, then the usual worktree + diff-review flow. For genuinely BROAD tasks; costs
   extra tokens + latency. Refuses if the explorer pin is missing.
 
