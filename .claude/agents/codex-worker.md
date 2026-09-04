@@ -171,11 +171,16 @@ if [ "$COMPLEX" = "true" ] && [ "${MODE:-ask}" != "resume" ]; then
   fi
   MULTI_AGENT_FLAG="--enable multi_agent"
   echo "NOTE (--complex): multi_agent fan-out ENABLED. Fan-out itself IS real on this machine — a --json probe on 2026-09-03 recorded 9 harness-level spawn_agent events (DESIGN-RESEARCH §16/§17), correcting an earlier same-day claim that it never spawned. What is NOT established is that explorer.toml influences it. Extra ~1,940 tok/call + fan-out latency."
-  # VERIFIED 2026-07-07 (live probe): for ASK, --ignore-user-config skips config.toml but explorer.toml
-  # (in ~/.codex/agents/) IS still honored — a `--enable multi_agent --ignore-user-config` probe spawned
-  # an explorer on gpt-5 (the pinned family), ZERO gpt-4.1 400s. So ASK --complex keeps the fast path.
-  # IMPLEMENT --complex runs WITHOUT --ignore-user-config anyway (the ask-ONLY write-bug note above),
-  # which loads config.toml fully — explorer.toml is honored there too.
+  # 2026-07-07, RESTATED at the strength the evidence supports (2026-09-03). The
+  # original note here said explorer.toml "IS still honored" under
+  # --ignore-user-config. That does not follow: its basis was ZERO gpt-4.1 400s,
+  # which shows only that the sub-agent was not gpt-4.1 -- true whether the pin
+  # was loaded or ignored, since the fallback is another GPT-5 either way.
+  # §17's A/B then DELETED explorer.toml and saw identical fan-out and still zero
+  # gpt-4.1, so "honored" is unsupported in both modes. What survives is the
+  # useful half: ASK --complex with --ignore-user-config produced no gpt-4.1
+  # rejections, so the fast path is safe to keep. Do not restate it as pin
+  # enforcement.
 fi
 # telemetry truth: reflect what ACTUALLY ran (resume forces --disable regardless of $COMPLEX).
 MULTI_AGENT_ON=false; [ "$MULTI_AGENT_FLAG" = "--enable multi_agent" ] && MULTI_AGENT_ON=true

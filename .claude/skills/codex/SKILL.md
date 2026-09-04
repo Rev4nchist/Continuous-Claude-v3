@@ -27,7 +27,7 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 | **resume** | `/codex --resume <followup>` | inherits | yes | inherits | same worktree/thread |
 | **review** (alias) | `/codex --review [base]` | read-only | no | max | delegates to `codex-adversary` unchanged |
 
-**Flags:** `--model gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini` (default `gpt-5.6-luna`; the current model cache fetched 2026-09-03 lists Luna with `max` support; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; requires `~/.codex/agents/explorer.toml` pinned to gpt-5.5 or it refuses; ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
+**Flags:** `--model gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini` (default `gpt-5.6-luna`; the current model cache fetched 2026-09-03 lists Luna with `max` support; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17); ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
 
 ## Execution
 
@@ -111,9 +111,10 @@ User: /codex --implement add a --limit flag to scripts/report-registry/query.mjs
 
 User: /codex --implement --complex refactor the report-registry pipeline end-to-end
 → implement + multi_agent fan-out (explorer/worker sub-agents on gpt-5.6-luna). Asserts
-  ~/.codex/agents/explorer.toml is pinned to gpt-5.6-luna first, prints the #19399 re-probe
+  ~/.codex/agents/explorer.toml is pinned to gpt-5.6-luna and WARNS if not (it no longer
+  refuses, 2026-09-03), prints the #19399 re-probe
   caveat, then the usual worktree + diff-review flow. For genuinely BROAD tasks; costs
-  extra tokens + latency. Refuses if the explorer pin is missing.
+  extra tokens + latency. WARNS (does not refuse) if the explorer pin is missing.
 
 User: /codex --resume also add a test for the new flag
 → continues the same Codex thread + worktree.
@@ -180,7 +181,7 @@ Hard-reject any `--model` not in `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt
 
 ## multi_agent
 
-`--disable multi_agent` on every call by default. Global config has `[features] multi_agent = true`; leaving it on makes a complex task spawn built-in explorer/worker sub-agents that fall back to `gpt-4.1` (400 on subscription) and adds ~1,940 tokens/call even unused. The **`--complex` opt-in** (ask/implement; NOT resume) swaps in `--enable multi_agent`, but the agent HARD-REQUIRES `~/.codex/agents/explorer.toml` to pin `model = "gpt-5.6-luna"` FIRST — else it refuses (the pin mitigates the gpt-4.1 role-fallback 400; openai/codex #19399 / #16893). Standing caveat printed every `--complex` run: the pin was verified ONCE on Windows 2026-07-07 — **re-probe before trusting `--complex` unattended** (#19399: subagent TOML can be ignored on Windows). Confirm-gated like any write (implement already confirms); on read-only ask the explicit flag + printed caveat is the acknowledgment.
+`--disable multi_agent` on every call by default. Global config has `[features] multi_agent = true`; leaving it on makes a complex task spawn built-in explorer/worker sub-agents that fall back to `gpt-4.1` (400 on subscription) and adds ~1,940 tokens/call even unused. The **`--complex` opt-in** (ask/implement; NOT resume) swaps in `--enable multi_agent`, but the agent checks `~/.codex/agents/explorer.toml` for the `model = "gpt-5.6-luna"` pin and WARNS if absent — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17: an A/B with the file deleted found identical fan-out and zero gpt-4.1, so the refusal could only ever be a false one; openai/codex #19399 / #16893). Standing caveat printed every `--complex` run: the pin was verified ONCE on Windows 2026-07-07 — **re-probe before trusting `--complex` unattended** (#19399: subagent TOML can be ignored on Windows). Confirm-gated like any write (implement already confirms); on read-only ask the explicit flag + printed caveat is the acknowledgment.
 
 ## Startup profile — `--ignore-user-config` is `ask`-ONLY (latency v1; write-bug v2)
 
