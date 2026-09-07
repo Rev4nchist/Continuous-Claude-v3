@@ -8862,6 +8862,606 @@
       "reason": "Malware in eth-lib-helpers (GHSA-h3xf-4f7r-v9xf)",
       "date": "2026-09-05",
       "advisory": "https://github.com/advisories/GHSA-h3xf-4f7r-v9xf"
+    },
+    "feishu-docx-mcp": {
+      "blocked_all": true,
+      "reason": "Malware in feishu-docx-mcp (GHSA-q5c6-p5q5-g3px)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-q5c6-p5q5-g3px"
+    },
+    "blueai-cli": {
+      "blocked_all": true,
+      "reason": "Malware in blueai-cli (GHSA-c2v5-8c2f-jj54)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-c2v5-8c2f-jj54"
+    },
+    "bmc-i18n-extract-cli": {
+      "blocked_all": true,
+      "reason": "Malware in bmc-i18n-extract-cli (GHSA-327g-rcr8-hp3p)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-327g-rcr8-hp3p"
+    },
+    "bmc-translate-utils": {
+      "blocked_all": true,
+      "reason": "Malware in bmc-translate-utils (GHSA-997w-vpm2-ww7x)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-997w-vpm2-ww7x"
+    },
+    "orbitron-tui": {
+      "blocked_all": true,
+      "reason": "Malicious code in orbitron-tui (npm) (GHSA-q9gw-fmw5-2mwc)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-q9gw-fmw5-2mwc"
+    },
+    "orbitron-cli": {
+      "blocked_all": true,
+      "reason": "Malicious code in orbitron-cli (npm) (GHSA-4m89-qrv7-j3hv)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-4m89-qrv7-j3hv"
+    },
+    "agent-free": {
+      "blocked_all": true,
+      "reason": "Malicious code in agent-free (npm) (GHSA-7r6p-r7pv-prmg)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-7r6p-r7pv-prmg"
+    },
+    "prime-coding-agent": {
+      "blocked_all": true,
+      "reason": "Malicious code in prime-coding-agent (npm) (GHSA-cxgp-c3r5-8xhr)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-cxgp-c3r5-8xhr"
+    },
+    "vishal_312pkg": {
+      "blocked_all": true,
+      "reason": "Malicious code in vishal_312pkg (npm) (GHSA-v7f2-5vcp-m653)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-v7f2-5vcp-m653"
+    },
+    "agentrc-security-poc-policy": {
+      "blocked_all": true,
+      "reason": "Malicious code in agentrc-security-poc-policy (npm) (GHSA-8gv3-q4hj-3764)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-8gv3-q4hj-3764"
+    },
+    "omni-channel-configurator-wireline-frontend": {
+      "blocked_all": true,
+      "reason": "Malicious code in omni-channel-configurator-wireline-frontend (npm) (GHSA-p429-pvx5-xj55)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-p429-pvx5-xj55"
+    },
+    "b2b-frontend-external-library": {
+      "blocked_all": true,
+      "reason": "Malicious code in b2b-frontend-external-library (npm) (GHSA-hmhj-jhrj-285j)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-hmhj-jhrj-285j"
+    },
+    "@caliperx2/components": {
+      "blocked_all": true,
+      "reason": "Malicious code in @caliperx2/components (npm) (GHSA-4jpr-935q-33r2)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-4jpr-935q-33r2"
+    },
+    "scw-mobile": {
+      "blocked_all": true,
+      "reason": "Malware in scw-mobile (GHSA-h9g8-rwcg-hpmh)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-h9g8-rwcg-hpmh"
+    },
+    "base-account-core": {
+      "blocked_all": true,
+      "reason": "Malware in base-account-core (GHSA-vgm8-2vf8-769j)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-vgm8-2vf8-769j"
+    },
+    "cb-wallet-solana-provider": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-solana-provider (GHSA-5cg4-38v4-j4vc)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-5cg4-38v4-j4vc"
+    },
+    "cb-wallet-metadata": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-metadata (GHSA-cxwc-958j-45g8)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-cxwc-958j-45g8"
+    },
+    "cb-wallet-http": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-http (GHSA-mv3f-92cr-83h7)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-mv3f-92cr-83h7"
+    },
+    "cb-wallet-store": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-store (GHSA-gw4f-3mgw-h64x)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-gw4f-3mgw-h64x"
+    },
+    "base-app-data": {
+      "blocked_all": true,
+      "reason": "Malware in base-app-data (GHSA-9hpg-rmwp-vg4p)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-9hpg-rmwp-vg4p"
+    },
+    "wallet-engine-signing": {
+      "blocked_all": true,
+      "reason": "Malware in wallet-engine-signing (GHSA-qw4m-ccr9-7r43)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-qw4m-ccr9-7r43"
+    },
+    "cb-wallet-env": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-env (GHSA-m477-pr6m-v2fp)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-m477-pr6m-v2fp"
+    },
+    "cb-wallet-analytics": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-analytics (GHSA-7944-c265-3ff7)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-7944-c265-3ff7"
+    },
+    "cb-wallet-data": {
+      "blocked_all": true,
+      "reason": "Malware in cb-wallet-data (GHSA-7w56-x3g2-57fg)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-7w56-x3g2-57fg"
+    },
+    "scw-core": {
+      "blocked_all": true,
+      "reason": "Malware in scw-core (GHSA-fv48-xvcx-h3qh)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-fv48-xvcx-h3qh"
+    },
+    "wallet-cds-web": {
+      "blocked_all": true,
+      "reason": "Malware in wallet-cds-web (GHSA-qh9w-32r6-2qpw)",
+      "date": "2026-09-07",
+      "advisory": "https://github.com/advisories/GHSA-qh9w-32r6-2qpw"
+    },
+    "eka-esdoger53-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-esdoger53-breki (npm) (GHSA-p8xp-vqhv-j4c4)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-p8xp-vqhv-j4c4"
+    },
+    "eka-empal71-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal71-sluey (npm) (GHSA-662p-fwq5-mp67)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-662p-fwq5-mp67"
+    },
+    "eka-esdoger35-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-esdoger35-breki (npm) (GHSA-pw7m-cwxx-j43p)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-pw7m-cwxx-j43p"
+    },
+    "eka-enting14-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-enting14-breki (npm) (GHSA-xh92-fg6r-46j3)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-xh92-fg6r-46j3"
+    },
+    "eka-empal81-kyuki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal81-kyuki (npm) (GHSA-fjhh-fr66-j7p3)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-fjhh-fr66-j7p3"
+    },
+    "eka-enting87-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-enting87-breki (npm) (GHSA-rppw-gq7q-4v3m)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-rppw-gq7q-4v3m"
+    },
+    "eka-enting48-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-enting48-breki (npm) (GHSA-3xx4-frfh-8ph6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-3xx4-frfh-8ph6"
+    },
+    "eka-empal98-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal98-miaww (npm) (GHSA-65mp-cfv9-8pqm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-65mp-cfv9-8pqm"
+    },
+    "eka-empal71-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal71-ruro (npm) (GHSA-72xh-8mhp-xhrp)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-72xh-8mhp-xhrp"
+    },
+    "eka-empal42-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal42-sukiwir (npm) (GHSA-fq2f-vpxp-rmj6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-fq2f-vpxp-rmj6"
+    },
+    "eka-esdoger71-pore": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-esdoger71-pore (npm) (GHSA-h2qx-fpq7-93f7)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-h2qx-fpq7-93f7"
+    },
+    "eka-buburayam38-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam38-riris (npm) (GHSA-5px8-2xmx-7372)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-5px8-2xmx-7372"
+    },
+    "eka-donat14-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-donat14-sluey (npm) (GHSA-c5w6-qmvw-f9m6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-c5w6-qmvw-f9m6"
+    },
+    "eka-bubursumsum2-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum2-riris (npm) (GHSA-jvxc-crrx-f62g)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-jvxc-crrx-f62g"
+    },
+    "eka-bakwan14-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bakwan14-breki (npm) (GHSA-f3j8-vvcv-6cjm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-f3j8-vvcv-6cjm"
+    },
+    "eka-dradag100-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dradag100-miaww (npm) (GHSA-f2w2-g68x-hrgc)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-f2w2-g68x-hrgc"
+    },
+    "eka-bubursumsum24-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum24-breki (npm) (GHSA-x73r-rvr2-r4ff)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-x73r-rvr2-r4ff"
+    },
+    "eka-dodol77-apidev": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol77-apidev (npm) (GHSA-5qxp-rjq8-26j6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-5qxp-rjq8-26j6"
+    },
+    "eka-bubursumsum20-pore": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum20-pore (npm) (GHSA-263q-x35h-hc9w)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-263q-x35h-hc9w"
+    },
+    "eka-botok87-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-botok87-riris (npm) (GHSA-f6wm-hqf8-489m)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-f6wm-hqf8-489m"
+    },
+    "eka-brengkes16-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes16-sluey (npm) (GHSA-23q4-mwpm-m5cm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-23q4-mwpm-m5cm"
+    },
+    "eka-donat34-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-donat34-breki (npm) (GHSA-4fv3-8w34-4vcp)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-4fv3-8w34-4vcp"
+    },
+    "eka-bika74-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bika74-sukiwir (npm) (GHSA-9mvc-4cgq-675j)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-9mvc-4cgq-675j"
+    },
+    "eka-bika31-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bika31-breki (npm) (GHSA-gvvf-r2mm-jxvm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-gvvf-r2mm-jxvm"
+    },
+    "eka-buburayam42-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam42-miaww (npm) (GHSA-6h2v-8m36-6r9c)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-6h2v-8m36-6r9c"
+    },
+    "eka-buburayam24-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam24-miaww (npm) (GHSA-3f8q-x5f5-fw9g)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-3f8q-x5f5-fw9g"
+    },
+    "eka-brongkos63-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brongkos63-sluey (npm) (GHSA-xm32-jcrm-w5c8)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-xm32-jcrm-w5c8"
+    },
+    "eka-brengkes56-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes56-riris (npm) (GHSA-5m4p-vv7m-q4xf)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-5m4p-vv7m-q4xf"
+    },
+    "eka-bakwan21-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bakwan21-breki (npm) (GHSA-mm6v-v8wr-62cr)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-mm6v-v8wr-62cr"
+    },
+    "eka-empal53-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal53-sukiwir (npm) (GHSA-cxhc-8rxc-v49h)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-cxhc-8rxc-v49h"
+    },
+    "eka-bubursumsum92-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum92-miaww (npm) (GHSA-64p6-xr37-v8fh)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-64p6-xr37-v8fh"
+    },
+    "eka-buburayam37-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam37-breki (npm) (GHSA-qg7q-mr6r-mj6p)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-qg7q-mr6r-mj6p"
+    },
+    "eka-dodol26-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol26-miaww (npm) (GHSA-vqf5-5x6g-2w2h)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-vqf5-5x6g-2w2h"
+    },
+    "eka-brongkos66-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brongkos66-sluey (npm) (GHSA-rcvr-qc75-jfmp)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-rcvr-qc75-jfmp"
+    },
+    "eka-dradag43-kuki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dradag43-kuki (npm) (GHSA-vwqr-p8wj-xfj2)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-vwqr-p8wj-xfj2"
+    },
+    "eka-donat40-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-donat40-riris (npm) (GHSA-5qgq-x93q-gq6m)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-5qgq-x93q-gq6m"
+    },
+    "eka-dodol98-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol98-breki (npm) (GHSA-6rv6-h3pw-vrwq)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-6rv6-h3pw-vrwq"
+    },
+    "eka-bika97-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bika97-sukiwir (npm) (GHSA-457p-c9fc-84rf)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-457p-c9fc-84rf"
+    },
+    "eka-bakwan94-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bakwan94-miaww (npm) (GHSA-6p8m-cw53-xw3m)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-6p8m-cw53-xw3m"
+    },
+    "eka-bakwan35-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bakwan35-riris (npm) (GHSA-58rj-q85x-3629)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-58rj-q85x-3629"
+    },
+    "eka-empal52-pore": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal52-pore (npm) (GHSA-3mh9-xh82-f5vp)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-3mh9-xh82-f5vp"
+    },
+    "eka-empal64-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal64-breki (npm) (GHSA-2p3p-m32m-72x2)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-2p3p-m32m-72x2"
+    },
+    "eka-dodol16-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol16-miaww (npm) (GHSA-fx8c-53xf-658h)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-fx8c-53xf-658h"
+    },
+    "eka-brongkos41-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brongkos41-sukiwir (npm) (GHSA-qxpv-x89f-xq89)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-qxpv-x89f-xq89"
+    },
+    "eka-brongkos84-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brongkos84-riris (npm) (GHSA-8mp3-c979-pxvv)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-8mp3-c979-pxvv"
+    },
+    "eka-brengkes98-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes98-breki (npm) (GHSA-2vcf-v2vr-m25f)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-2vcf-v2vr-m25f"
+    },
+    "eka-brengkes76-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes76-sukiwir (npm) (GHSA-4x27-fc32-22jm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-4x27-fc32-22jm"
+    },
+    "eka-brongkos29-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brongkos29-sluey (npm) (GHSA-fgjm-wcg2-xqg7)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-fgjm-wcg2-xqg7"
+    },
+    "eka-dodol85-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol85-miaww (npm) (GHSA-9pm8-66jh-25vq)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-9pm8-66jh-25vq"
+    },
+    "eka-buburayam47-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam47-sluey (npm) (GHSA-4fg9-38vw-492m)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-4fg9-38vw-492m"
+    },
+    "eka-bubursumsum84-sumpek": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum84-sumpek (npm) (GHSA-5qq2-h3gg-hcjm)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-5qq2-h3gg-hcjm"
+    },
+    "eka-buburayam76-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam76-ruro (npm) (GHSA-rm97-cj7h-376c)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-rm97-cj7h-376c"
+    },
+    "eka-bubur49-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubur49-sluey (npm) (GHSA-r99j-cwjg-3jcx)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-r99j-cwjg-3jcx"
+    },
+    "eka-bubur69-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubur69-breki (npm) (GHSA-gv5x-g7jf-j8c6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-gv5x-g7jf-j8c6"
+    },
+    "eka-bika1-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bika1-sukiwir (npm) (GHSA-82g5-m2gm-47c8)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-82g5-m2gm-47c8"
+    },
+    "eka-empal30-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal30-sluey (npm) (GHSA-jhv7-pwvv-f582)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-jhv7-pwvv-f582"
+    },
+    "eka-empal63-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-empal63-sukiwir (npm) (GHSA-54v4-99w4-hmx3)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-54v4-99w4-hmx3"
+    },
+    "eka-buburayam35-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-buburayam35-sluey (npm) (GHSA-cxgc-7x3r-xw57)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-cxgc-7x3r-xw57"
+    },
+    "eka-dodol73-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol73-ruro (npm) (GHSA-54pf-qmjv-hch5)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-54pf-qmjv-hch5"
+    },
+    "eka-brengkes44-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes44-ruro (npm) (GHSA-3jw7-h4c4-3v5f)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-3jw7-h4c4-3v5f"
+    },
+    "eka-brengkes59-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-brengkes59-sluey (npm) (GHSA-4vqq-g77c-wwhr)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-4vqq-g77c-wwhr"
+    },
+    "eka-botok35-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-botok35-miaww (npm) (GHSA-pcgx-mp52-32q6)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-pcgx-mp52-32q6"
+    },
+    "eka-dodol98-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol98-sukiwir (npm) (GHSA-3vxj-2wx6-9w65)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-3vxj-2wx6-9w65"
+    },
+    "eka-donat34-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-donat34-sluey (npm) (GHSA-c75q-382r-q6j3)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-c75q-382r-q6j3"
+    },
+    "eka-dodol91-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-dodol91-sukiwir (npm) (GHSA-g4x3-gm44-rp95)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-g4x3-gm44-rp95"
+    },
+    "eka-bubursumsum17-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-bubursumsum17-breki (npm) (GHSA-fr2x-gj3j-9p4f)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-fr2x-gj3j-9p4f"
+    },
+    "eka-asinan60-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-asinan60-sukiwir (npm) (GHSA-v6x9-6675-rrwr)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-v6x9-6675-rrwr"
+    },
+    "ejbwdr-devapptea": {
+      "blocked_all": true,
+      "reason": "Malicious code in ejbwdr-devapptea (npm) (GHSA-r9c3-q9c9-492c)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-r9c3-q9c9-492c"
+    },
+    "eivybsafunmzpxlg": {
+      "blocked_all": true,
+      "reason": "Malicious code in eivybsafunmzpxlg (npm) (GHSA-q44q-q8fv-453f)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-q44q-q8fv-453f"
+    },
+    "ejercico": {
+      "blocked_all": true,
+      "reason": "Malicious code in ejercico (npm) (GHSA-2pv9-fhmj-jxp5)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-2pv9-fhmj-jxp5"
+    },
+    "eka-asinan10-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in eka-asinan10-breki (npm) (GHSA-7x59-j5pj-q59r)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-7x59-j5pj-q59r"
+    },
+    "ejs-client": {
+      "blocked_all": true,
+      "reason": "Malicious code in ejs-client (npm) (GHSA-94xv-vvc9-6f2j)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-94xv-vvc9-6f2j"
+    },
+    "eimearmartin": {
+      "blocked_all": true,
+      "reason": "Malicious code in eimearmartin (npm) (GHSA-gjrj-q8fx-pgx5)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-gjrj-q8fx-pgx5"
+    },
+    "ejdgrvaqkioslhbf": {
+      "blocked_all": true,
+      "reason": "Malicious code in ejdgrvaqkioslhbf (npm) (GHSA-j7pj-jc8f-q3fp)",
+      "date": "2026-09-06",
+      "advisory": "https://github.com/advisories/GHSA-j7pj-jc8f-q3fp"
     }
   }
 }
