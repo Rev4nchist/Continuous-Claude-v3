@@ -384,6 +384,25 @@
       "notes": "Transferred Rev4nchist -> fourth 2026-08-05. AGPL-3.0. Working copy dir is fourth-firecrawl-PLUGIN; the sibling fourth-firecrawl dir was the per-user output workspace and is archived at Projects/archive/fourth-firecrawl-workspace-2026-04. Superseded duplicate david-hayes44/fourth-firecrawl is archived on GitHub.",
       "sentryProject": "",
       "linearTeam": ""
+    },
+    {
+      "name": "FourthBot",
+      "path": "C:/Users/david.hayes/Projects/FourthBot",
+      "stack": [
+        "TypeScript",
+        "Node.js",
+        "pnpm",
+        "Hono",
+        "PostgreSQL",
+        "AKS"
+      ],
+      "description": "Fourth Harness control plane + Agent Delivery Platform monorepo (Azure, Entra-only, Kata sandbox)",
+      "port": 3002,
+      "url": "https://fourthbot.localhost/",
+      "devCommand": "pnpm dev",
+      "status": "active",
+      "sentryProject": "",
+      "linearTeam": ""
     }
   ]
 }
