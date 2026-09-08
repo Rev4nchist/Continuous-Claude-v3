@@ -920,3 +920,16 @@ produced zero diff. The playbook's own registry table pointed at
 `.claude/rules/`; corrected to `.claude/rules-src/` (the canonical copy per the
 every-surface checklist). `codex-adversary.md` is CRLF on disk; the patch
 normalises the search strings per file.
+
+### Smoke through the skill path (2026-09-08)
+
+`codex-worker` ask, `--model gpt-6-astra`, effort low, read-only, against FourthBot:
+auth asserted, allowlist gate passed, exit 0, telemetry row records
+`model: gpt-6-astra`. The model did NOT answer: asked to read one file, it
+shelled out (`pwsh -Command Get-Content ...`) and the read-only sandbox rejected
+the spawn (`exec_command failed ... blocked by policy`), the documented Windows
+constraint (section 13). New observation, model-specific: gpt-6-astra reaches
+for a subprocess where gpt-5.6-luna answered the same shape of question from
+inline context. Consequence: an astra ask/review must carry its context INLINE
+in the prompt (which the reviewer already does) and must be told not to spawn
+tools; do not point astra at "read file X" tasks on Windows.
