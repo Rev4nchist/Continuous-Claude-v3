@@ -27,7 +27,7 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 | **resume** | `/codex --resume <followup>` | inherits | yes | inherits | same worktree/thread |
 | **review** (alias) | `/codex --review [base]` | read-only | no | max | delegates to `codex-adversary` unchanged |
 
-**Flags:** `--model gpt-5.6-luna|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5|gpt-5.4|gpt-5.4-mini` (default `gpt-5.6-luna`; the current model cache fetched 2026-09-03 lists Luna with `max` support; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17); ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
+**Flags:** `--model gpt-5.6-luna|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5` (default `gpt-5.6-luna`; the model cache fetched 2026-09-08 lists Luna with `max` support and Astra with `ultra`; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17); ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
 
 ## Execution
 
@@ -93,7 +93,7 @@ Task(
 - **Worktree isolation by default** — write runs happen in a throwaway git worktree **outside** the repo (sibling `../.codex-worktrees/<repo>-<ts>-<pid>`), never in-place, so they can't collide with your live session or the `file_claims` DB. (An `--in-place` mode was considered and **dropped** in v2 — worktree isolation is the retained safety win.)
 - **Auto worktree GC** — before each implement run, stale *clean* worktree dirs (~190MB each) older than `$CODEX_WT_GC_DAYS` (default 7d) are reclaimed; a worktree with unreviewed (dirty) changes is never touched, so a dormant awaiting-`resume` one is safe. Manual sweep: `scripts/codex/gc-worktrees.sh`.
 - **Review-gate** — never auto-commits/auto-merges; produces a patch you approve first.
-- **Model allowlist** — `gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5/gpt-5.4/gpt-5.4-mini` only (live-probed 2026-07-11).
+- **Model allowlist** — `gpt-6-astra/gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5` only (live-probed 2026-09-08 on 0.153.4).
 - **No hook can see inside Codex's sandbox** — enforcement is `--sandbox` + this preflight, not any Claude Code hook.
 - **Usage-limit aware** — if the ChatGPT subscription quota is exhausted, `/codex` returns a clean "usage limit hit; resets ~<time>" message (never a fabricated result) and logs `usage_limited:true`. Detection is reactive — the subscription exposes no queryable quota surface to preflight.
 - **`--complex` warns, no longer gates** (2026-09-03) — multi_agent fan-out (ask/implement) checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds; an A/B with the file deleted found identical fan-out and zero gpt-4.1 (DESIGN-RESEARCH §17) (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399). The primary `/codex` worker still defaults to gpt-5.6-luna @ max.
@@ -177,7 +177,7 @@ Before each `implement` run the worker opportunistically GCs stale worktree dirs
 
 ## Model allowlist (enforced before shelling out)
 
-Hard-reject any `--model` not in `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, gpt-5.4-mini}` (5.6 family live-probed 2026-07-11 on 0.144.1, exit 0 each; ground truth `~/.codex/models_cache.json`), citing the verified evidence: `gpt-5.2-codex` and `gpt-5.5-codex` both return byte-identical HTTP 400 ("model is not supported when using Codex with a ChatGPT account") on this account, and `gpt-5.6-bogus` reproduced the same 400 on 0.144.1 (2026-07-11). Treat ANY future id as unverified-until-tested against this exact account via `/harness-update`, regardless of what the docs' model table says. Note: on 0.131.0 the 5.6 family returned a DIFFERENT 400 ("requires a newer version of Codex") — that message shape means upgrade-the-CLI, not model-unavailable.
+Hard-reject any `--model` not in `{gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}` (5.6 family live-probed 2026-07-11 on 0.144.1; gpt-6-astra admitted and gpt-5.4/-mini dropped after live probes 2026-09-08 on 0.153.4, exit 0 / 400 each; ground truth `~/.codex/models_cache.json`), citing the verified evidence: `gpt-5.2-codex` and `gpt-5.5-codex` both return byte-identical HTTP 400 ("model is not supported when using Codex with a ChatGPT account") on this account, and `gpt-5.6-bogus` reproduced the same 400 on 0.144.1 (2026-07-11). Treat ANY future id as unverified-until-tested against this exact account via `/harness-update`, regardless of what the docs' model table says. Note: on 0.131.0 the 5.6 family returned a DIFFERENT 400 ("requires a newer version of Codex") — that message shape means upgrade-the-CLI, not model-unavailable.
 
 ## multi_agent
 
@@ -203,7 +203,7 @@ The **`ask`** mode passes **`--ignore-user-config`** to skip loading Dave's inte
 
 ## Version drift
 
-Installed CLI is `0.144.1` (upgraded from `0.131.0` on 2026-07-11 with full re-verification; rollback pin `npm i -g @openai/codex@0.131.0`). `exec --help` on 0.144.1 still shows NO `--full-auto`/`--ask-for-approval` — sandbox remains the only boundary. Code against the installed surface. Any CLI upgrade must go through `/harness-update` (re-runs the `docs/codex-integration/DESIGN-RESEARCH.md` §3 verification) before trusting new flags.
+Installed CLI is `0.153.4` (upgraded from `0.144.1` on 2026-09-08 with re-verification, DESIGN-RESEARCH §18; rollback pin `npm i -g @openai/codex@0.144.1`). `exec --help` on 0.153.4 still shows NO `--full-auto`/`--ask-for-approval`; it added `--approve-for-me`, which the workers never pass — sandbox remains the only boundary. Code against the installed surface. Any CLI upgrade must go through `/harness-update` (re-runs the `docs/codex-integration/DESIGN-RESEARCH.md` §3 verification) before trusting new flags.
 
 ## Cost / quota (subscription, not dollars)
 

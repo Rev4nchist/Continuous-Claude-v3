@@ -2,7 +2,7 @@
 
 Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence trail: probe archaeology, benchmarks, flag history, the resolved hooks-collision spike) and the `codex-worker` agent. Write-capable sibling of `.claude/rules/codex-adversarial.md` (read-only review). `/codex` hands a task to the OpenAI Codex harness (`gpt-5.6-luna @ max` by default) on Dave's **ChatGPT subscription** to actually execute — it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
-Grounding: verified 2026-07-11 against `codex-cli 0.144.1`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
+Grounding: verified 2026-07-11 against `codex-cli 0.144.1` and re-verified 2026-09-08 against `codex-cli 0.153.4`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
 
 ## The one thing to internalize
 
@@ -53,7 +53,7 @@ the ceiling from the chosen model and downgrades loudly rather than sending one.
 Re-read the cache before changing either table — do not carry these levels from
 memory.
 
-Hard-reject any `--model` not in `{gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5, gpt-5.4, gpt-5.4-mini}`. Any `-codex`-suffixed or fabricated id returns HTTP 400 on this account. Treat ANY other id as **unverified-until-live-probed on this exact account via `/harness-update`**, regardless of what public docs claim. (Probe evidence + the 400 taxonomy live in the skill / DESIGN-RESEARCH.)
+Hard-reject any `--model` not in `{gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`. Any `-codex`-suffixed or fabricated id returns HTTP 400 on this account. Treat ANY other id as **unverified-until-live-probed on this exact account via `/harness-update`**, regardless of what public docs claim. (Probe evidence + the 400 taxonomy live in the skill / DESIGN-RESEARCH.)
 
 ## multi_agent and `--ignore-user-config`
 
@@ -77,7 +77,7 @@ Cost is ChatGPT-subscription quota, not dollars (a rolling 5-hour window plus a 
 
 ## Version drift
 
-Installed CLI is `0.144.1` (rollback pin `npm i -g @openai/codex@0.131.0`). `exec --help` shows NO `--full-auto`/`--ask-for-approval` — sandbox remains the only boundary. Code against the installed surface. **Any CLI upgrade or new-model enablement must go through `/harness-update`** (re-runs the DESIGN-RESEARCH §3 verification, including the hooks-collision fixture) before trusting new flags.
+Installed CLI is `0.153.4` (upgraded from `0.144.1` on 2026-09-08; rollback pin `npm i -g @openai/codex@0.144.1`). `exec --help` shows NO `--full-auto`/`--ask-for-approval`; 0.153.4 added `--approve-for-me` (approvals routed to an automatic review) which the workers never pass — sandbox remains the only boundary. Code against the installed surface. **Any CLI upgrade or new-model enablement must go through `/harness-update`** (re-runs the DESIGN-RESEARCH §3 verification, including the hooks-collision fixture) before trusting new flags.
 
 ## Quick decision table
 

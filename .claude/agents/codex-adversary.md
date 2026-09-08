@@ -164,33 +164,33 @@ PROMPT_EOF
 
 # Invoke - read-only sandbox, since adversarial review never writes
 # Model selection: env var override, else gpt-5.6-luna. Valid overrides
-# (live-probed 2026-07-11 on codex-cli 0.144.1): gpt-5.6-sol | gpt-5.6-terra |
-# gpt-5.6-luna | gpt-5.5 | gpt-5.4 | gpt-5.4-mini. Validate the override against
+# (live-probed 2026-09-08 on codex-cli 0.153.4): gpt-6-astra | gpt-5.6-sol |
+# gpt-5.6-terra | gpt-5.6-luna | gpt-5.5. Validate the override against
 # that list — on mismatch, WARN and fall back to the default (a stale env var
 # must not silently reintroduce an unsupported id, e.g. the old gpt-5.3-codex
 # claim).
 # "requires a newer version of Codex" errors mean upgrade the CLI, not the model.
 CODEX_ADVERSARY_MODEL="${CODEX_ADVERSARY_MODEL:-gpt-5.6-luna}"
 case "$CODEX_ADVERSARY_MODEL" in
-  gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.5|gpt-5.4|gpt-5.4-mini) : ;;
+  gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.5) : ;;
   *) echo "WARN: CODEX_ADVERSARY_MODEL='$CODEX_ADVERSARY_MODEL' not in the verified allowlist — falling back to gpt-5.6-luna" >&2
      CODEX_ADVERSARY_MODEL="gpt-5.6-luna" ;;
 esac
 
 # Effort must be one the CHOSEN model actually offers, and that is not uniform.
-# Ground truth `~/.codex/models_cache.json` (fetched 2026-09-03T22:54:13Z):
-#   gpt-5.6-sol / gpt-5.6-terra -> low medium high xhigh max ultra
+# Ground truth `~/.codex/models_cache.json` (fetched 2026-09-08T22:03:15Z):
+#   gpt-6-astra / gpt-5.6-sol / gpt-5.6-terra -> low medium high xhigh max ultra
 #   gpt-5.6-luna                -> low medium high xhigh max        (no ultra)
-#   gpt-5.5 / gpt-5.4 / -mini   -> low medium high xhigh            (no max)
+#   gpt-5.5                     -> low medium high xhigh            (no max)
 # So `max` on gpt-5.5 is an invalid pair, and it is exactly what someone gets by
 # overriding CODEX_ADVERSARY_MODEL back to 5.5 and leaving the effort alone.
 # Degrade to the CHOSEN model's own ceiling (MAX_EFFORT below) rather than
-# sending a request the account will reject — that is xhigh for gpt-5.5/5.4,
+# sending a request the account will reject — that is xhigh for gpt-5.5,
 # but max for luna and ultra for sol/terra, so it is not a fixed value.
 # Same shape as codex-worker.md — keep the two in step if either changes.
 CODEX_ADVERSARY_EFFORT="${CODEX_ADVERSARY_EFFORT:-max}"
 case "$CODEX_ADVERSARY_MODEL" in
-  gpt-5.6-sol|gpt-5.6-terra) MAX_EFFORT="ultra" ;;
+  gpt-6-astra|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra) MAX_EFFORT="ultra" ;;
   gpt-5.6-*)                 MAX_EFFORT="max" ;;
   *)                         MAX_EFFORT="xhigh" ;;
 esac

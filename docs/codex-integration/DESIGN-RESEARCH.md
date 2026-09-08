@@ -827,3 +827,96 @@ in the model-visible skills list.` Every Codex run here starts with ZERO skill
 descriptions visible to the model. Counted, not inferred: `~/.agents/skills`
 holds 673 `SKILL.md`, of which **527 (78%) are under `archive/` or `_snapshots/`**.
 Tracked as lane `codex-skills-budget`; not investigated here.
+
+
+## 18. Upgrade 0.144.1 -> 0.153.4; gpt-6-astra admitted, gpt-5.4 / gpt-5.4-mini dropped (2026-09-08)
+
+Run of `/harness-update codex`, reactive: a FourthBot session on 2026-09-07 saw
+`codex exec` fail with `models_cache.json: missing field base_instructions`
+(the CLI's cache schema had drifted). By the time this playbook ran, the cache
+had self-refreshed (`fetched_at 2026-09-08T16:57`) and 0.144.1 answered a
+read-only ask again, so the failure is recorded as transient cache drift, not
+reproduced. The upgrade went ahead regardless: 0.144.1 was nine minor versions
+behind.
+
+### Snapshot and rollback pin
+
+- Before: `codex-cli 0.144.1`, `codex login status` -> `Logged in using ChatGPT`.
+- Cache copied to `docs/codex-integration/snapshots/models_cache.0.144.1.json`.
+- Rollback: `npm i -g @openai/codex@0.144.1`.
+- After: `npm i -g @openai/codex@0.153.4` -> `codex-cli 0.153.4`; auth re-asserted,
+  still `Logged in using ChatGPT`. (The first `@latest` attempt hit a hook error in
+  `package-install-guard`, "No stderr output"; the exact-version retry passed the
+  guard cleanly. Not a block, a guard hiccup.)
+
+### Capability surface on 0.153.4 (`codex exec --help`)
+
+Present: `-o/--output-last-message`, `--ephemeral`, `--ignore-user-config`,
+`--json`, `-s/--sandbox`, `--disable`/`--enable`, `-C`, `-m/--model`. Absent:
+`--full-auto`, `--ask-for-approval`. **New: `--approve-for-me`** ("Route approval
+requests through automatic review using the workspace-write sandbox") next to
+`--dangerously-bypass-approvals-and-sandbox` and a new
+`--dangerously-bypass-hook-trust`. None of the three is used by any worker; the
+sandbox remains the only boundary. `codex exec resume [SESSION_ID]` unchanged.
+
+### Fixtures
+
+- Read-only ask (`gpt-5.6-luna`, effort low, `--ephemeral`, `--disable multi_agent`):
+  `-o` file = `PONG`, rc 0.
+- Workspace-write in a throwaway repo (`git init` + one empty commit), `--json`:
+  `hello.txt` = `HELLO`, `git rev-list --count HEAD` = 1 (no auto-commit),
+  `thread.started` carried `"thread_id":"01a0830c-ad2b-7230-a3f5-95148dec8987"`,
+  event types seen: thread.started, turn.started, item.started, item.completed x4,
+  file_change x2, agent_message x2, turn.completed, plus one `error` event (the
+  skills-budget warning, non-fatal). Hooks-collision fixture NOT re-run this pass.
+- Startup noise unchanged in kind: `failed to load skill ... invalid YAML` and
+  `Exceeded skills context budget. All skill descriptions were removed and 353
+  additional skills were not included` on every run (lane `codex-skills-budget`).
+
+### Two-probe model ids (this account, 2026-09-08, effort low, read-only, ephemeral)
+
+| id | result |
+|---|---|
+| gpt-5.6-luna | rc 0, `PONG` |
+| gpt-6-astra | rc 0, `PONG` -- NEW, admitted |
+| gpt-5.5 | rc 0, `PONG` |
+| gpt-5.4 | rc 1, `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-5.4' model is not supported when using Codex with a ChatGPT account."}}` -- DROPPED |
+| gpt-5.6-luna-bogus | rc 1, same 400 shape (negative control) |
+
+Ground truth `~/.codex/models_cache.json` (`client_version 0.153.4`, fetched
+`2026-09-08T22:03:15Z`), visible ids and effort levels:
+
+| id | picker | efforts | default |
+|---|---|---|---|
+| gpt-6-astra | list | low medium high xhigh max ultra | low |
+| gpt-5.6-sol | list | low medium high xhigh max ultra | medium |
+| gpt-5.6-terra | list | low medium high xhigh max ultra | medium |
+| gpt-5.6-luna | list | low medium high xhigh max | medium |
+| gpt-5.5 | list | low medium high xhigh | xhigh |
+| gpt-reserve | hide | low..max | medium |
+| codex-auto-review | hide | low..max | medium |
+
+`gpt-5.4` and `gpt-5.4-mini` are no longer in the cache. The two hidden ids were
+NOT probed and are NOT admitted (a hidden id is not something a person should
+type; admit only through this playbook if ever needed).
+
+### Allowlist after this pass
+
+`{gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`. Effort ceiling
+per model: astra/sol/terra `ultra`, luna `max`, gpt-5.5 `xhigh`. Default stays
+`gpt-5.6-luna @ max` (Dave's call, §15); astra is available by explicit
+`--model gpt-6-astra` and its `ultra` implies delegation, still unprobed, avoid
+unattended.
+
+### Registry walk
+
+Idempotent exact-string patch over: `agents/codex-worker.md` (12 edits: constraint
+header, sandbox note with the `--approve-for-me` caveat, allowlist prose, `## Model`
+contract, effort table, ceiling `case`, gate `case`, reject message),
+`agents/codex-adversary.md` (7), `rules-src/codex-worker-safety.md` (3),
+`rules-src/codex-adversarial.md` (2), `rules-src/harness-update.md` (1),
+`skills/codex/SKILL.md` (5), `skills/cli-integration/SKILL.md` (1). A second run
+produced zero diff. The playbook's own registry table pointed at
+`.claude/rules/`; corrected to `.claude/rules-src/` (the canonical copy per the
+every-surface checklist). `codex-adversary.md` is CRLF on disk; the patch
+normalises the search strings per file.
