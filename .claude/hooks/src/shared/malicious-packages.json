@@ -10596,6 +10596,48 @@
       "reason": "Malicious code in familiar_hare_z3n (npm) (GHSA-ggqm-w32h-4qfg)",
       "date": "2026-09-10",
       "advisory": "https://github.com/advisories/GHSA-ggqm-w32h-4qfg"
+    },
+    "strapi-plugin-vinsoc-1109": {
+      "blocked_all": true,
+      "reason": "Malicious code in strapi-plugin-vinsoc-1109 (npm) (GHSA-244v-fw48-794m)",
+      "date": "2026-09-11",
+      "advisory": "https://github.com/advisories/GHSA-244v-fw48-794m"
+    },
+    "daytona-test-miner": {
+      "blocked_all": true,
+      "reason": "Malware in daytona-test-miner (GHSA-7fxg-v94h-8j5g)",
+      "date": "2026-09-11",
+      "advisory": "https://github.com/advisories/GHSA-7fxg-v94h-8j5g"
+    },
+    "daytona-test-filereader": {
+      "blocked_all": true,
+      "reason": "Malware in daytona-test-filereader (GHSA-f2vx-rj2m-pmp8)",
+      "date": "2026-09-11",
+      "advisory": "https://github.com/advisories/GHSA-f2vx-rj2m-pmp8"
+    },
+    "daytona-test-npm": {
+      "blocked_all": true,
+      "reason": "Malware in daytona-test-npm (GHSA-j8pm-8rv6-xg64)",
+      "date": "2026-09-11",
+      "advisory": "https://github.com/advisories/GHSA-j8pm-8rv6-xg64"
+    },
+    "@yongot/canary-mcp-test-2": {
+      "blocked_all": true,
+      "reason": "Malware in @yongot/canary-mcp-test-2 (GHSA-93xr-jvm3-jpch)",
+      "date": "2026-09-10",
+      "advisory": "https://github.com/advisories/GHSA-93xr-jvm3-jpch"
+    },
+    "pinochiomathm": {
+      "blocked_all": true,
+      "reason": "Malicious code in pinochiomathm (npm) (GHSA-cq4w-8cp6-cmvf)",
+      "date": "2026-09-10",
+      "advisory": "https://github.com/advisories/GHSA-cq4w-8cp6-cmvf"
+    },
+    "tailwindcss-contact-forms": {
+      "blocked_all": true,
+      "reason": "Malicious code in tailwindcss-contact-forms (npm) (GHSA-h9xr-6q2x-2v47)",
+      "date": "2026-09-10",
+      "advisory": "https://github.com/advisories/GHSA-h9xr-6q2x-2v47"
     }
   }
 }
