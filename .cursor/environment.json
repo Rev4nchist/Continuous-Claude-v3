@@ -1,0 +1,8 @@
+{
+  "name": "Continuous Claude v3",
+  "install": "bash .cursor/install.sh",
+  "start": "bash .cursor/start.sh",
+  "ports": [
+    { "name": "postgres", "port": 5432 }
+  ]
+}
