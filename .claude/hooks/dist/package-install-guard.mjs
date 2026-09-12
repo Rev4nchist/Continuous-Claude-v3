@@ -10897,6 +10897,36 @@ var malicious_packages_default = {
       reason: "Malicious code in tailwindcss-contact-forms (npm) (GHSA-h9xr-6q2x-2v47)",
       date: "2026-09-10",
       advisory: "https://github.com/advisories/GHSA-h9xr-6q2x-2v47"
+    },
+    "tailwind-form-kit": {
+      blocked_all: true,
+      reason: "Malicious code in tailwind-form-kit (npm) (GHSA-p7c5-phj5-qm49)",
+      date: "2026-09-12",
+      advisory: "https://github.com/advisories/GHSA-p7c5-phj5-qm49"
+    },
+    "cr-bot-common": {
+      blocked_all: true,
+      reason: "Malicious code in cr-bot-common (npm) (GHSA-mjmf-5pc4-pfrp)",
+      date: "2026-09-12",
+      advisory: "https://github.com/advisories/GHSA-mjmf-5pc4-pfrp"
+    },
+    greensaver: {
+      blocked_all: true,
+      reason: "Malicious code in greensaver (npm) (GHSA-jfw2-6254-9cwg)",
+      date: "2026-09-12",
+      advisory: "https://github.com/advisories/GHSA-jfw2-6254-9cwg"
+    },
+    "tracker-cloudflare": {
+      blocked_all: true,
+      reason: "Malicious code in tracker-cloudflare (npm) (GHSA-f874-m83r-9vqh)",
+      date: "2026-09-12",
+      advisory: "https://github.com/advisories/GHSA-f874-m83r-9vqh"
+    },
+    "@nimbusedge/auth": {
+      blocked_all: true,
+      reason: "Malicious code in @nimbusedge/auth (npm) (GHSA-gr7r-8wrc-f3mw)",
+      date: "2026-09-11",
+      advisory: "https://github.com/advisories/GHSA-gr7r-8wrc-f3mw"
     }
   }
 };
