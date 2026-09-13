@@ -651,6 +651,13 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/msys-crash-capture.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/pr-opened-coderabbit-loop.mjs"
+            ]
           }
         ]
       },
