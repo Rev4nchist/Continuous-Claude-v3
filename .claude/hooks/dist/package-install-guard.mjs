@@ -10927,6 +10927,606 @@ var malicious_packages_default = {
       reason: "Malicious code in @nimbusedge/auth (npm) (GHSA-gr7r-8wrc-f3mw)",
       date: "2026-09-11",
       advisory: "https://github.com/advisories/GHSA-gr7r-8wrc-f3mw"
+    },
+    "ida-gado-gado74-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gado-gado74-sukiwir (npm) (GHSA-9fv6-vg84-r4x6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9fv6-vg84-r4x6"
+    },
+    "ida-gado-gado47-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gado-gado47-ruro (npm) (GHSA-7xh6-mjpr-h9hf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7xh6-mjpr-h9hf"
+    },
+    "ida-enting39-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting39-riris (npm) (GHSA-jw5q-jwgr-6w4p)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jw5q-jwgr-6w4p"
+    },
+    "ida-enting48-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting48-sukiwir (npm) (GHSA-3rjm-xpcf-mj6r)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-3rjm-xpcf-mj6r"
+    },
+    "ida-gandul100-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gandul100-riris (npm) (GHSA-vv4p-226g-fg38)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vv4p-226g-fg38"
+    },
+    "ida-enting56-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting56-ruro (npm) (GHSA-qrqw-v7vm-p76v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qrqw-v7vm-p76v"
+    },
+    "ida-enting60-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting60-sukiwir (npm) (GHSA-9fq3-wvcc-wp3x)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9fq3-wvcc-wp3x"
+    },
+    "ida-gandul37-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gandul37-breki (npm) (GHSA-xgx8-mr59-q3pq)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-xgx8-mr59-q3pq"
+    },
+    "ida-gandul24-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gandul24-miaww (npm) (GHSA-qc87-3gwr-r3qm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qc87-3gwr-r3qm"
+    },
+    "ida-enting65-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting65-sluey (npm) (GHSA-jpxh-fp8f-q8mc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jpxh-fp8f-q8mc"
+    },
+    "ida-gado-gado10-tititugel": {
+      blocked_all: true,
+      reason: "Malicious code in ida-gado-gado10-tititugel (npm) (GHSA-f2j8-h5h9-xj9f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f2j8-h5h9-xj9f"
+    },
+    "ida-empal83-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal83-sluey (npm) (GHSA-553g-fw7c-fqfx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-553g-fw7c-fqfx"
+    },
+    "ida-empal23-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal23-sukiwir (npm) (GHSA-5xmq-xgc7-jq84)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-5xmq-xgc7-jq84"
+    },
+    "ida-dodol92-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol92-riris (npm) (GHSA-gjj4-9qff-2rfc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-gjj4-9qff-2rfc"
+    },
+    "ida-donat18-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-donat18-sluey (npm) (GHSA-vr62-p52v-gh4q)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vr62-p52v-gh4q"
+    },
+    "ida-empal18-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal18-sluey (npm) (GHSA-hgxf-mrw8-mhp3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-hgxf-mrw8-mhp3"
+    },
+    "ida-empal27-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal27-ruro (npm) (GHSA-6392-2f9j-qvm7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6392-2f9j-qvm7"
+    },
+    "ida-empal18-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal18-ruro (npm) (GHSA-w5qr-jj4x-xr8g)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w5qr-jj4x-xr8g"
+    },
+    "ida-dradag60-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dradag60-breki (npm) (GHSA-9wq8-cfg8-fg7r)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9wq8-cfg8-fg7r"
+    },
+    "ida-dodol60-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol60-breki (npm) (GHSA-7m5m-pg98-v2qm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7m5m-pg98-v2qm"
+    },
+    "ida-enting20-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting20-miaww (npm) (GHSA-c429-536w-28c2)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-c429-536w-28c2"
+    },
+    "ida-enting24-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-enting24-sluey (npm) (GHSA-jwcv-4p8j-7j9j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jwcv-4p8j-7j9j"
+    },
+    "ida-empal98-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal98-breki (npm) (GHSA-2fxh-gcqr-cr3m)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-2fxh-gcqr-cr3m"
+    },
+    "ida-empal80-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal80-sluey (npm) (GHSA-749x-pg6v-rcvj)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-749x-pg6v-rcvj"
+    },
+    "ida-empal37-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal37-riris (npm) (GHSA-m492-p72c-f8g7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-m492-p72c-f8g7"
+    },
+    "ida-empal55-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal55-breki (npm) (GHSA-pfvr-56qg-qpgv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-pfvr-56qg-qpgv"
+    },
+    "ida-empal74-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal74-breki (npm) (GHSA-7xp9-98j9-w28p)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7xp9-98j9-w28p"
+    },
+    "ida-empal15-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal15-sluey (npm) (GHSA-9fmj-4x5j-4cp3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9fmj-4x5j-4cp3"
+    },
+    "ida-dradag70-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dradag70-miaww (npm) (GHSA-rm2m-87cr-f6fh)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rm2m-87cr-f6fh"
+    },
+    "ida-dodol83-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol83-sukiwir (npm) (GHSA-5vp9-mv53-9864)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-5vp9-mv53-9864"
+    },
+    "ida-dodol64-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol64-sukiwir (npm) (GHSA-pmp6-9f47-whwr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-pmp6-9f47-whwr"
+    },
+    "ida-dodol25-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol25-breki (npm) (GHSA-4gp6-4v7q-pmg8)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4gp6-4v7q-pmg8"
+    },
+    "ida-bubursumsum36-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubursumsum36-miaww (npm) (GHSA-jmhf-753f-m99m)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jmhf-753f-m99m"
+    },
+    "ida-empal77-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-empal77-miaww (npm) (GHSA-48mf-6qwf-4x9g)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-48mf-6qwf-4x9g"
+    },
+    "ida-dradag78-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dradag78-miaww (npm) (GHSA-q556-pm43-jj6v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-q556-pm43-jj6v"
+    },
+    "ida-dradag80-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dradag80-sukiwir (npm) (GHSA-h4mj-8pw7-hcp8)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h4mj-8pw7-hcp8"
+    },
+    "ida-donat78-remi": {
+      blocked_all: true,
+      reason: "Malicious code in ida-donat78-remi (npm) (GHSA-2g89-xcv3-gch5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-2g89-xcv3-gch5"
+    },
+    "ida-dodol88-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol88-sukiwir (npm) (GHSA-cxxg-7hw3-vf32)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-cxxg-7hw3-vf32"
+    },
+    "ida-dodol70-crottsekebon": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol70-crottsekebon (npm) (GHSA-rr5c-m9mg-qwfr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rr5c-m9mg-qwfr"
+    },
+    "ida-dodol22-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-dodol22-ruro (npm) (GHSA-wrcq-jc4r-gfx7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wrcq-jc4r-gfx7"
+    },
+    "ida-bubur42-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur42-miaww (npm) (GHSA-cc6r-x69m-cvrv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-cc6r-x69m-cvrv"
+    },
+    "ida-bubur68-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur68-breki (npm) (GHSA-83wc-8rc3-fgwf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-83wc-8rc3-fgwf"
+    },
+    "ida-brongkos40-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brongkos40-sluey (npm) (GHSA-qhjc-mj9r-qh5v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qhjc-mj9r-qh5v"
+    },
+    "ida-brongkos79-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brongkos79-sukiwir (npm) (GHSA-gvmv-9f43-r6ph)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-gvmv-9f43-r6ph"
+    },
+    "ida-brengkes64-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes64-riris (npm) (GHSA-23gc-6x3r-h8p3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-23gc-6x3r-h8p3"
+    },
+    "ida-brengkes68-pore": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes68-pore (npm) (GHSA-hh52-jgpf-w6mp)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-hh52-jgpf-w6mp"
+    },
+    "ida-botok37-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-botok37-breki (npm) (GHSA-r2xm-3rf7-cxch)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-r2xm-3rf7-cxch"
+    },
+    "ida-bika91-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bika91-sluey (npm) (GHSA-f4pp-7w86-55gq)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f4pp-7w86-55gq"
+    },
+    "ida-bubur42-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur42-sluey (npm) (GHSA-6vfg-r83x-mfxr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6vfg-r83x-mfxr"
+    },
+    "ida-brongkos2-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brongkos2-miaww (npm) (GHSA-623g-9hhq-8rqx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-623g-9hhq-8rqx"
+    },
+    "ida-brongkos75-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brongkos75-sluey (npm) (GHSA-6hxm-pvjq-gw3v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6hxm-pvjq-gw3v"
+    },
+    "ida-brengkes53-sumpek": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes53-sumpek (npm) (GHSA-hvv5-7rcm-fh9q)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-hvv5-7rcm-fh9q"
+    },
+    "ida-brengkes46-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes46-miaww (npm) (GHSA-3r46-76mq-r8fv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-3r46-76mq-r8fv"
+    },
+    "ida-botok50-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-botok50-ruro (npm) (GHSA-qmrr-85rr-v6pf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qmrr-85rr-v6pf"
+    },
+    "ida-bubur86-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur86-sluey (npm) (GHSA-7q66-f25m-7p8v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7q66-f25m-7p8v"
+    },
+    "ida-bubursumsum28-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubursumsum28-breki (npm) (GHSA-569v-6xv5-j5v2)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-569v-6xv5-j5v2"
+    },
+    "ida-bubur55-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur55-breki (npm) (GHSA-vjm6-5prx-ghgm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vjm6-5prx-ghgm"
+    },
+    "ida-brengkes26-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes26-riris (npm) (GHSA-mwrr-p82r-f3jh)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-mwrr-p82r-f3jh"
+    },
+    "ida-botok73-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in ida-botok73-sukiwir (npm) (GHSA-pvw3-mr34-977h)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-pvw3-mr34-977h"
+    },
+    "ida-brengkes50-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes50-breki (npm) (GHSA-gxmj-wwrp-vgqg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-gxmj-wwrp-vgqg"
+    },
+    "ida-bakwan79-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakwan79-miaww (npm) (GHSA-vg4f-vrq4-f343)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vg4f-vrq4-f343"
+    },
+    "ida-bubur44-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur44-breki (npm) (GHSA-26x3-hr3w-mh2g)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-26x3-hr3w-mh2g"
+    },
+    "ida-bubur1-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bubur1-miaww (npm) (GHSA-x2g3-f2vx-6frr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-x2g3-f2vx-6frr"
+    },
+    "ida-brongkos14-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brongkos14-miaww (npm) (GHSA-62wr-7wh4-mg8c)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-62wr-7wh4-mg8c"
+    },
+    "ida-bakwan96-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakwan96-riris (npm) (GHSA-9q8g-67x7-5qgx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9q8g-67x7-5qgx"
+    },
+    "ida-botok22-kyuki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-botok22-kyuki (npm) (GHSA-5gh2-p742-884j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-5gh2-p742-884j"
+    },
+    "ida-brengkes11-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-brengkes11-sluey (npm) (GHSA-cv28-h7gx-qq38)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-cv28-h7gx-qq38"
+    },
+    "ida-bika85-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bika85-sluey (npm) (GHSA-fgm7-42rm-rfw6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-fgm7-42rm-rfw6"
+    },
+    "ida-bakwan74-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakwan74-breki (npm) (GHSA-h9fh-2v23-rqjw)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h9fh-2v23-rqjw"
+    },
+    "ida-bakso95-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso95-miaww (npm) (GHSA-vqv5-rm3c-mg39)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vqv5-rm3c-mg39"
+    },
+    "ida-bakso49-crottsekebon": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso49-crottsekebon (npm) (GHSA-52x2-xx32-h4h5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-52x2-xx32-h4h5"
+    },
+    "ida-bakso42-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso42-breki (npm) (GHSA-wh5c-p9mj-vjp6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wh5c-p9mj-vjp6"
+    },
+    "ida-asinan64-riris": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan64-riris (npm) (GHSA-jq6f-w4rr-3vqh)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jq6f-w4rr-3vqh"
+    },
+    "ida-asinan46-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan46-breki (npm) (GHSA-m23f-4g8v-q4qg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-m23f-4g8v-q4qg"
+    },
+    "id-cookies": {
+      blocked_all: true,
+      reason: "Malicious code in id-cookies (npm) (GHSA-7h96-j5j5-qhwp)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7h96-j5j5-qhwp"
+    },
+    icy_mammal_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_mammal_z3n (npm) (GHSA-f963-rv58-5635)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f963-rv58-5635"
+    },
+    "ida-bakso54-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso54-sluey (npm) (GHSA-x4wr-jw64-hcg4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-x4wr-jw64-hcg4"
+    },
+    "ida-bakso55-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso55-miaww (npm) (GHSA-7c6h-rxwx-6p7c)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7c6h-rxwx-6p7c"
+    },
+    "ida-asinan98-sumpek": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan98-sumpek (npm) (GHSA-r83h-hfc6-fx6q)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-r83h-hfc6-fx6q"
+    },
+    "ida-asinan93-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan93-miaww (npm) (GHSA-47jf-4w5q-v3c7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-47jf-4w5q-v3c7"
+    },
+    icy_stork_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_stork_z3n (npm) (GHSA-7r3q-xc77-gcf4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7r3q-xc77-gcf4"
+    },
+    icy_otter_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_otter_z3n (npm) (GHSA-v978-gc65-cqvg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-v978-gc65-cqvg"
+    },
+    icy_pig_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_pig_z3n (npm) (GHSA-w363-vwxm-rfgc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w363-vwxm-rfgc"
+    },
+    icy_ostrich_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_ostrich_z3n (npm) (GHSA-xq52-jqqq-mjf7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-xq52-jqqq-mjf7"
+    },
+    icy_marsupial_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_marsupial_z3n (npm) (GHSA-757q-crmv-4jrv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-757q-crmv-4jrv"
+    },
+    "ida-bakwan25-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakwan25-breki (npm) (GHSA-rhq4-xgxv-p43f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rhq4-xgxv-p43f"
+    },
+    "ida-bakso58-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso58-ruro (npm) (GHSA-7p9h-rprr-9vgc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7p9h-rprr-9vgc"
+    },
+    "ida-bakso91-breki": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso91-breki (npm) (GHSA-f37g-58pv-6cwm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f37g-58pv-6cwm"
+    },
+    "ida-asinan17-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan17-sluey (npm) (GHSA-mm39-24hc-pm4w)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-mm39-24hc-pm4w"
+    },
+    icy_orca_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_orca_z3n (npm) (GHSA-rhc7-9m28-2v88)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rhc7-9m28-2v88"
+    },
+    icy_snail_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_snail_z3n (npm) (GHSA-xpgh-xjfx-mhgm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-xpgh-xjfx-mhgm"
+    },
+    icy_prawn_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_prawn_z3n (npm) (GHSA-p8m8-mrgj-5734)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p8m8-mrgj-5734"
+    },
+    "ida-bakso73-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso73-sluey (npm) (GHSA-p73w-2qq4-wm4c)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p73w-2qq4-wm4c"
+    },
+    "ida-bakso42-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in ida-bakso42-miaww (npm) (GHSA-wrhp-7pqm-c537)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wrhp-7pqm-c537"
+    },
+    "ida-asinan46-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in ida-asinan46-sluey (npm) (GHSA-vgfv-vq74-rq7p)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vgfv-vq74-rq7p"
+    },
+    icy_sheep_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_sheep_z3n (npm) (GHSA-fcjq-vv8f-576g)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-fcjq-vv8f-576g"
+    },
+    icy_rhinoceros_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_rhinoceros_z3n (npm) (GHSA-7qwr-hv3p-w546)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7qwr-hv3p-w546"
+    },
+    icy_leech_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_leech_z3n (npm) (GHSA-x6q8-44gx-89wm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-x6q8-44gx-89wm"
+    },
+    icy_jackal_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_jackal_z3n (npm) (GHSA-ppr9-pxxg-433r)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-ppr9-pxxg-433r"
+    },
+    icy_condor_z3n: {
+      blocked_all: true,
+      reason: "Malicious code in icy_condor_z3n (npm) (GHSA-wg4h-w5f9-ghv2)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wg4h-w5f9-ghv2"
     }
   }
 };
