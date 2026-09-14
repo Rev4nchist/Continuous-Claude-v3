@@ -1,0 +1,293 @@
+{
+  "schema_version": 1,
+  "diagram_type": "architecture",
+  "meta": {
+    "title": "CCv3 Hook Pipeline",
+    "output": "docs/architecture/diagrams/ccv3-hook-pipeline.html",
+    "visual_preset": "blueprint",
+    "quality_profile": "showcase",
+    "views": [
+      {
+        "id": "build",
+        "label": "Source to active",
+        "focus": [
+          "dev",
+          "src",
+          "dist"
+        ],
+        "note": "TypeScript in the repo becomes .mjs in ~/.claude. A src edit without a build changes nothing."
+      },
+      {
+        "id": "fire",
+        "label": "Event to hook process",
+        "focus": [
+          "claude",
+          "settings",
+          "runtime"
+        ],
+        "note": "Two gates: the settings.json matcher and the hook's own tool_name check. Both must match."
+      },
+      {
+        "id": "effects",
+        "label": "Side effects and reply",
+        "focus": [
+          "runtime",
+          "postgres",
+          "braintrust",
+          "artifacts",
+          "claude"
+        ],
+        "note": "Only hookSpecificOutput reaches the harness. Everything else is a side channel."
+      }
+    ]
+  },
+  "components": [
+    {
+      "id": "dev",
+      "type": "external",
+      "label": "Developer",
+      "sublabel": "edits hooks/src/*.ts",
+      "pos": [
+        30,
+        300
+      ],
+      "size": [
+        122,
+        60
+      ]
+    },
+    {
+      "id": "src",
+      "type": "backend",
+      "label": "hooks/src/*.ts",
+      "sublabel": "repo only, never synced",
+      "pos": [
+        200,
+        300
+      ],
+      "size": [
+        136,
+        62
+      ],
+      "tag": "continuous-claude"
+    },
+    {
+      "id": "dist",
+      "type": "backend",
+      "label": "hooks/dist/*.mjs",
+      "sublabel": "153 built files",
+      "pos": [
+        390,
+        300
+      ],
+      "size": [
+        136,
+        62
+      ],
+      "tag": "~/.claude"
+    },
+    {
+      "id": "settings",
+      "type": "security",
+      "label": "settings.json",
+      "sublabel": "89 hook registrations",
+      "pos": [
+        740,
+        510
+      ],
+      "size": [
+        136,
+        62
+      ],
+      "tag": "gate 1: matcher"
+    },
+    {
+      "id": "claude",
+      "type": "frontend",
+      "label": "Claude Code session",
+      "sublabel": "emits lifecycle events",
+      "pos": [
+        200,
+        510
+      ],
+      "size": [
+        136,
+        62
+      ]
+    },
+    {
+      "id": "runtime",
+      "type": "backend",
+      "label": "Hook process",
+      "sublabel": "node dist/<hook>.mjs",
+      "pos": [
+        740,
+        300
+      ],
+      "size": [
+        136,
+        62
+      ],
+      "tag": "gate 2: tool_name"
+    },
+    {
+      "id": "artifacts",
+      "type": "cloud",
+      "label": "Local state",
+      "sublabel": "logs, $TEMP, ROADMAP",
+      "pos": [
+        930,
+        190
+      ],
+      "size": [
+        150,
+        62
+      ]
+    },
+    {
+      "id": "postgres",
+      "type": "database",
+      "label": "PostgreSQL",
+      "sublabel": "sessions, claims, memory",
+      "pos": [
+        930,
+        410
+      ],
+      "size": [
+        150,
+        62
+      ],
+      "tag": "Docker"
+    },
+    {
+      "id": "braintrust",
+      "type": "external",
+      "label": "Braintrust",
+      "sublabel": "via durable spool",
+      "pos": [
+        1140,
+        300
+      ],
+      "size": [
+        126,
+        62
+      ]
+    }
+  ],
+  "boundaries": [
+    {
+      "kind": "region",
+      "label": "continuous-claude repo",
+      "wraps": [
+        "src"
+      ],
+      "pad": 16
+    },
+    {
+      "kind": "region",
+      "label": "~/.claude active",
+      "wraps": [
+        "dist",
+        "settings",
+        "runtime"
+      ],
+      "pad": 20
+    },
+    {
+      "kind": "security-group",
+      "label": "Docker postgres",
+      "wraps": [
+        "postgres"
+      ],
+      "pad": 14
+    }
+  ],
+  "connections": [
+    {
+      "from": "dev",
+      "to": "src",
+      "label": "edit .ts"
+    },
+    {
+      "from": "src",
+      "to": "dist",
+      "label": "build + sync",
+      "variant": "emphasis",
+      "labelDy": 55
+    },
+    {
+      "from": "dist",
+      "to": "runtime",
+      "label": "loaded at spawn",
+      "variant": "dashed"
+    },
+    {
+      "from": "claude",
+      "to": "settings",
+      "label": "event + tool matcher",
+      "variant": "emphasis"
+    },
+    {
+      "from": "settings",
+      "to": "runtime",
+      "label": "spawn node",
+      "variant": "emphasis"
+    },
+    {
+      "from": "runtime",
+      "to": "claude",
+      "label": "hookSpecificOutput",
+      "variant": "security",
+      "fromSide": "bottom",
+      "toSide": "top"
+    },
+    {
+      "from": "runtime",
+      "to": "artifacts",
+      "label": "jsonl, state files",
+      "variant": "dashed",
+      "labelDy": 9
+    },
+    {
+      "from": "runtime",
+      "to": "postgres",
+      "label": "node pg",
+      "labelDy": -20
+    },
+    {
+      "from": "runtime",
+      "to": "braintrust",
+      "label": "spool then emit",
+      "variant": "dashed"
+    }
+  ],
+  "cards": [
+    {
+      "dot": "cyan",
+      "title": "Two gates, both must match",
+      "items": [
+        "settings.json matcher selects the hook per event and tool",
+        "The hook re-checks tool_name in code",
+        "Widening one gate alone changes nothing"
+      ]
+    },
+    {
+      "dot": "amber",
+      "title": "The only reply channel",
+      "items": [
+        "PreToolUse: permissionDecision allow or deny",
+        "Other events: additionalContext injected into the turn",
+        "Plain stdout with exit 0 is ignored by the harness"
+      ]
+    },
+    {
+      "dot": "rose",
+      "title": "Source vs active",
+      "items": [
+        "hooks/src stays repo-only; dist is what runs",
+        "A src edit without npm run build is inert",
+        "PostToolUse 31, PreToolUse 19, UserPromptSubmit 14, SessionStart 13"
+      ]
+    }
+  ]
+}
