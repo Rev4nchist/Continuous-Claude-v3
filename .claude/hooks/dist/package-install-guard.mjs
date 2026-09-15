@@ -11527,6 +11527,792 @@ var malicious_packages_default = {
       reason: "Malicious code in icy_condor_z3n (npm) (GHSA-wg4h-w5f9-ghv2)",
       date: "2026-09-13",
       advisory: "https://github.com/advisories/GHSA-wg4h-w5f9-ghv2"
+    },
+    "joko-klanting28-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting28-sluey (npm) (GHSA-58wm-27h4-6hm5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-58wm-27h4-6hm5"
+    },
+    "joko-ketoprak70-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak70-breki (npm) (GHSA-wh59-q7c6-vf3c)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wh59-q7c6-vf3c"
+    },
+    "joko-klanting57-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting57-breki (npm) (GHSA-p9qw-3fxw-g994)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p9qw-3fxw-g994"
+    },
+    "joko-klanting72-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting72-miaww (npm) (GHSA-w38j-pq3p-49r9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w38j-pq3p-49r9"
+    },
+    "joko-klanting70-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting70-riris (npm) (GHSA-5wcv-3mmw-mj84)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-5wcv-3mmw-mj84"
+    },
+    "joko-klanting55-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting55-breki (npm) (GHSA-623r-mc89-3j8j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-623r-mc89-3j8j"
+    },
+    "joko-ketoprak97-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak97-ruro (npm) (GHSA-w38j-5jxr-jc29)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w38j-5jxr-jc29"
+    },
+    "joko-ketan92-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan92-miaww (npm) (GHSA-h62x-m5q5-3fm9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h62x-m5q5-3fm9"
+    },
+    "joko-ketan33-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan33-sluey (npm) (GHSA-mg2q-qf2h-h649)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-mg2q-qf2h-h649"
+    },
+    "joko-ketan77-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan77-ruro (npm) (GHSA-q427-ww3g-9cvc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-q427-ww3g-9cvc"
+    },
+    "joko-keraktelor71-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor71-breki (npm) (GHSA-vh64-6c4m-hqg5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vh64-6c4m-hqg5"
+    },
+    "joko-keraktelor64-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor64-riris (npm) (GHSA-7646-rm66-476f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7646-rm66-476f"
+    },
+    "joko-keraktelor75-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor75-breki (npm) (GHSA-3xw6-mq9c-27fg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-3xw6-mq9c-27fg"
+    },
+    "joko-keraktelor64-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor64-breki (npm) (GHSA-rp65-5jv3-2cch)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rp65-5jv3-2cch"
+    },
+    "joko-ketoprak59-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak59-riris (npm) (GHSA-j8pg-8fg4-r2f4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-j8pg-8fg4-r2f4"
+    },
+    "joko-ketan89-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan89-breki (npm) (GHSA-mr99-x72h-rrmv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-mr99-x72h-rrmv"
+    },
+    "joko-keripik82-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik82-riris (npm) (GHSA-8cj3-6w77-8mmp)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-8cj3-6w77-8mmp"
+    },
+    "joko-keripik2-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik2-ruro (npm) (GHSA-c324-x6x9-h254)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-c324-x6x9-h254"
+    },
+    "joko-keripik55-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik55-sluey (npm) (GHSA-m3p7-x429-qf85)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-m3p7-x429-qf85"
+    },
+    "joko-keripik1-apidev": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik1-apidev (npm) (GHSA-4gp3-hr68-wrp7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4gp3-hr68-wrp7"
+    },
+    "joko-ketoprak52-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak52-sukiwir (npm) (GHSA-66jc-p4q8-xcp9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-66jc-p4q8-xcp9"
+    },
+    "joko-keripik93-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik93-miaww (npm) (GHSA-p2mp-mqfr-668v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p2mp-mqfr-668v"
+    },
+    "joko-keripik33-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik33-riris (npm) (GHSA-wq2p-mwx7-4qpc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wq2p-mwx7-4qpc"
+    },
+    "joko-ketoprak89-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak89-breki (npm) (GHSA-xv9r-7qp8-chvr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-xv9r-7qp8-chvr"
+    },
+    "joko-ketoprak39-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak39-breki (npm) (GHSA-hv3g-2x5h-4x6g)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-hv3g-2x5h-4x6g"
+    },
+    "joko-ketan75-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan75-miaww (npm) (GHSA-pv3f-xpvx-qqm4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-pv3f-xpvx-qqm4"
+    },
+    "joko-ketan40-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan40-breki (npm) (GHSA-4jr4-fgjh-x88j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4jr4-fgjh-x88j"
+    },
+    "joko-ketan37-apidev": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan37-apidev (npm) (GHSA-4gjm-q57v-6xhx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4gjm-q57v-6xhx"
+    },
+    "joko-ketan29-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan29-breki (npm) (GHSA-vw6c-h27w-g729)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vw6c-h27w-g729"
+    },
+    "joko-keripik89-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik89-sluey (npm) (GHSA-c4p2-m6ff-hvrp)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-c4p2-m6ff-hvrp"
+    },
+    "joko-ketoprak99-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak99-miaww (npm) (GHSA-q6fg-8jvq-rvc9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-q6fg-8jvq-rvc9"
+    },
+    "joko-keripik43-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik43-sukiwir (npm) (GHSA-f6p9-mxr8-8vxf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f6p9-mxr8-8vxf"
+    },
+    "joko-ketan28-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan28-sukiwir (npm) (GHSA-4fmj-3h5p-cf4m)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4fmj-3h5p-cf4m"
+    },
+    "joko-keripik42-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik42-sukiwir (npm) (GHSA-cp5h-f7fq-23j3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-cp5h-f7fq-23j3"
+    },
+    "joko-keripik33-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik33-sluey (npm) (GHSA-7qm8-wmh2-pfhf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7qm8-wmh2-pfhf"
+    },
+    "joko-keripik100-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik100-sluey (npm) (GHSA-5xp5-ccrf-45q9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-5xp5-ccrf-45q9"
+    },
+    "joko-keraktelor76-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor76-breki (npm) (GHSA-h2vw-r235-hvjm)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h2vw-r235-hvjm"
+    },
+    "joko-keraktelor62-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor62-sluey (npm) (GHSA-9qq2-85f6-3q23)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9qq2-85f6-3q23"
+    },
+    "joko-kepok90-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok90-riris (npm) (GHSA-7vjr-536f-mjxw)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-7vjr-536f-mjxw"
+    },
+    "joko-keraktelor36-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor36-sukiwir (npm) (GHSA-jfcm-65r8-8mw4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jfcm-65r8-8mw4"
+    },
+    "joko-ketoprak93-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak93-ruro (npm) (GHSA-v4vf-x4r8-rxx3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-v4vf-x4r8-rxx3"
+    },
+    "joko-klanting26-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-klanting26-miaww (npm) (GHSA-w8xf-496j-3hrg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w8xf-496j-3hrg"
+    },
+    "joko-ketan94-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketan94-breki (npm) (GHSA-h2c7-hmvh-qgc5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h2c7-hmvh-qgc5"
+    },
+    "joko-ketoprak31-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-ketoprak31-breki (npm) (GHSA-jf9q-f9wx-758j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jf9q-f9wx-758j"
+    },
+    "joko-keripik88-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik88-riris (npm) (GHSA-22qv-hrmh-q3vr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-22qv-hrmh-q3vr"
+    },
+    "joko-keripik32-remi": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik32-remi (npm) (GHSA-584c-w97g-c5q5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-584c-w97g-c5q5"
+    },
+    "joko-keraktelor90-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keraktelor90-breki (npm) (GHSA-6hqx-w3fj-pqqc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6hqx-w3fj-pqqc"
+    },
+    "joko-keripik64-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik64-sluey (npm) (GHSA-g297-m582-9xgv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-g297-m582-9xgv"
+    },
+    "joko-keripik36-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-keripik36-miaww (npm) (GHSA-g5m9-v64p-c9jv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-g5m9-v64p-c9jv"
+    },
+    "joko-kemplang72-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang72-breki (npm) (GHSA-vp7q-vfmw-ggqc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vp7q-vfmw-ggqc"
+    },
+    "joko-kentang83-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang83-riris (npm) (GHSA-9gcm-7p4c-fq93)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-9gcm-7p4c-fq93"
+    },
+    "joko-kepok33-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok33-breki (npm) (GHSA-vr3q-fv2p-w6wr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-vr3q-fv2p-w6wr"
+    },
+    "joko-kepok61-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok61-ruro (npm) (GHSA-2h6g-cqm8-3562)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-2h6g-cqm8-3562"
+    },
+    "joko-kentang14-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang14-breki (npm) (GHSA-r8hr-r5pf-f3c8)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-r8hr-r5pf-f3c8"
+    },
+    "joko-kemplang69-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang69-sluey (npm) (GHSA-8g7h-7v7p-ff9f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-8g7h-7v7p-ff9f"
+    },
+    "joko-kepok21-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok21-riris (npm) (GHSA-p282-4j74-x8h6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p282-4j74-x8h6"
+    },
+    "joko-kentang65-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang65-breki (npm) (GHSA-xjqc-rw2p-rjcx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-xjqc-rw2p-rjcx"
+    },
+    "joko-kemplang27-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang27-sukiwir (npm) (GHSA-qf75-h93f-r6wj)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qf75-h93f-r6wj"
+    },
+    "joko-kentang4-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang4-miaww (npm) (GHSA-cppq-fq2j-c5jc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-cppq-fq2j-c5jc"
+    },
+    "joko-kentang26-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang26-sluey (npm) (GHSA-6h3v-8wg5-hj5f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6h3v-8wg5-hj5f"
+    },
+    "joko-kepok53-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok53-sukiwir (npm) (GHSA-mvqw-pr38-4xqv)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-mvqw-pr38-4xqv"
+    },
+    "joko-kepok37-crottsekebon": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok37-crottsekebon (npm) (GHSA-jw9x-3hhj-h268)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-jw9x-3hhj-h268"
+    },
+    "joko-kepok15-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok15-riris (npm) (GHSA-f5wf-vqpq-fjj6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f5wf-vqpq-fjj6"
+    },
+    "joko-kepok4-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok4-breki (npm) (GHSA-wxj4-rvf6-7ffx)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wxj4-rvf6-7ffx"
+    },
+    "joko-kentang46-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang46-miaww (npm) (GHSA-4r48-m5rv-4q4j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4r48-m5rv-4q4j"
+    },
+    "joko-kemplang7-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang7-breki (npm) (GHSA-v73w-4pwj-42rf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-v73w-4pwj-42rf"
+    },
+    "joko-kemplang60-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang60-sukiwir (npm) (GHSA-r5jv-hgv6-x875)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-r5jv-hgv6-x875"
+    },
+    "joko-kepok57-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok57-riris (npm) (GHSA-p4jj-gg4r-c4jc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-p4jj-gg4r-c4jc"
+    },
+    "joko-kemplang79-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang79-breki (npm) (GHSA-f3x8-35wc-fp3w)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f3x8-35wc-fp3w"
+    },
+    "joko-kepok64-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok64-riris (npm) (GHSA-c39m-cc55-9mq7)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-c39m-cc55-9mq7"
+    },
+    "joko-kepok30-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kepok30-sukiwir (npm) (GHSA-v465-j258-vr6v)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-v465-j258-vr6v"
+    },
+    "joko-kentang37-wekto": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kentang37-wekto (npm) (GHSA-rxg5-8v5q-9x83)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-rxg5-8v5q-9x83"
+    },
+    "joko-kemplang66-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang66-riris (npm) (GHSA-h947-wrwj-p39j)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h947-wrwj-p39j"
+    },
+    "joko-kembang64-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang64-riris (npm) (GHSA-74vq-4xxm-fmvc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-74vq-4xxm-fmvc"
+    },
+    "joko-kemplang47-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang47-breki (npm) (GHSA-h2qx-j5vx-w8h3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-h2qx-j5vx-w8h3"
+    },
+    "joko-kembang53-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang53-breki (npm) (GHSA-j7r7-4rgv-p4p9)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-j7r7-4rgv-p4p9"
+    },
+    "joko-kembang58-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang58-miaww (npm) (GHSA-m637-46w8-rvmq)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-m637-46w8-rvmq"
+    },
+    "joko-kembang42-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang42-sukiwir (npm) (GHSA-hrhg-7m2v-945f)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-hrhg-7m2v-945f"
+    },
+    "joko-kembang98-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang98-riris (npm) (GHSA-38wv-m2xp-v8g3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-38wv-m2xp-v8g3"
+    },
+    "joko-kembang49-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang49-sukiwir (npm) (GHSA-qqj8-3gj6-m6xc)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qqj8-3gj6-m6xc"
+    },
+    "joko-kembang90-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang90-ruro (npm) (GHSA-565q-jgxr-g88r)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-565q-jgxr-g88r"
+    },
+    "joko-kemplang45-kyuki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang45-kyuki (npm) (GHSA-58mq-57hm-vf2x)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-58mq-57hm-vf2x"
+    },
+    "joko-kembang90-miaww": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang90-miaww (npm) (GHSA-3w3x-2v3h-p2m6)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-3w3x-2v3h-p2m6"
+    },
+    "joko-kemplang16-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kemplang16-sukiwir (npm) (GHSA-gmg4-qcm7-hfhg)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-gmg4-qcm7-hfhg"
+    },
+    "joko-kacang44-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang44-breki (npm) (GHSA-8fgh-g836-v3w4)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-8fgh-g836-v3w4"
+    },
+    "joko-jus98-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-jus98-sluey (npm) (GHSA-55hv-2gv6-g7g8)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-55hv-2gv6-g7g8"
+    },
+    "joko-kembang2-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang2-sluey (npm) (GHSA-x569-9pfw-vj96)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-x569-9pfw-vj96"
+    },
+    "joko-kacang87-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang87-riris (npm) (GHSA-phhq-q665-j2fh)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-phhq-q665-j2fh"
+    },
+    "joko-kacang44-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang44-sluey (npm) (GHSA-w249-hg9c-vgf3)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w249-hg9c-vgf3"
+    },
+    "joko-kembang28-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kembang28-sluey (npm) (GHSA-g24r-8mvx-g9mf)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-g24r-8mvx-g9mf"
+    },
+    "joko-kacang62-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang62-sukiwir (npm) (GHSA-qp84-7m2q-ph36)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-qp84-7m2q-ph36"
+    },
+    "joko-kacang93-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang93-breki (npm) (GHSA-557v-4hjg-59mp)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-557v-4hjg-59mp"
+    },
+    "joko-kacang92-breki": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang92-breki (npm) (GHSA-w695-2j6r-6q36)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-w695-2j6r-6q36"
+    },
+    "joko-kacang41-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang41-sukiwir (npm) (GHSA-f6mc-fv32-g25w)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-f6mc-fv32-g25w"
+    },
+    "joko-jus93-pore": {
+      blocked_all: true,
+      reason: "Malicious code in joko-jus93-pore (npm) (GHSA-wf44-7gxc-m5jr)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-wf44-7gxc-m5jr"
+    },
+    "joko-kacang39-riris": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang39-riris (npm) (GHSA-6g9w-6qrc-mw65)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-6g9w-6qrc-mw65"
+    },
+    "joko-kacang6-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-kacang6-sluey (npm) (GHSA-g8q5-6rqf-5764)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-g8q5-6rqf-5764"
+    },
+    "joko-jengkol78-sukiwir": {
+      blocked_all: true,
+      reason: "Malicious code in joko-jengkol78-sukiwir (npm) (GHSA-c8cx-6r92-37hq)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-c8cx-6r92-37hq"
+    },
+    "joko-jengkol30-sluey": {
+      blocked_all: true,
+      reason: "Malicious code in joko-jengkol30-sluey (npm) (GHSA-8gq9-xvf4-wf53)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-8gq9-xvf4-wf53"
+    },
+    "joko-jamblang90-ruro": {
+      blocked_all: true,
+      reason: "Malicious code in joko-jamblang90-ruro (npm) (GHSA-4hhp-527w-vwf5)",
+      date: "2026-09-13",
+      advisory: "https://github.com/advisories/GHSA-4hhp-527w-vwf5"
+    },
+    "@biz44/process-runtime-utils": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/process-runtime-utils (npm) (GHSA-85j9-pqgv-pr94)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-85j9-pqgv-pr94"
+    },
+    "@biz44/runtime-utils": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/runtime-utils (npm) (GHSA-fc79-g66m-pjph)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-fc79-g66m-pjph"
+    },
+    "@biz44/id99-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id99-client (npm) (GHSA-2r46-q2c6-8xv3)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-2r46-q2c6-8xv3"
+    },
+    "@biz44/id44-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id44-client (npm) (GHSA-5j4q-j7xc-mcjq)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-5j4q-j7xc-mcjq"
+    },
+    "id79-client": {
+      blocked_all: true,
+      reason: "Malicious code in id79-client (npm) (GHSA-c62r-crr7-5qfm)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-c62r-crr7-5qfm"
+    },
+    "@biz44/id95-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id95-client (npm) (GHSA-h5qm-2mw2-cpj7)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-h5qm-2mw2-cpj7"
+    },
+    "@biz44/id79-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id79-client (npm) (GHSA-38g4-jrgw-cqgh)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-38g4-jrgw-cqgh"
+    },
+    "@biz44/id12-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id12-client (npm) (GHSA-57p7-wfrw-75gv)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-57p7-wfrw-75gv"
+    },
+    "@biz44/id10-client": {
+      blocked_all: true,
+      reason: "Malicious code in @biz44/id10-client (npm) (GHSA-3fp9-rc4g-j5v2)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-3fp9-rc4g-j5v2"
+    },
+    "n8n-nodes-sysdiag2": {
+      blocked_all: true,
+      reason: "Malicious code in n8n-nodes-sysdiag2 (npm) (GHSA-mx46-3mx3-r66x)",
+      date: "2026-09-15",
+      advisory: "https://github.com/advisories/GHSA-mx46-3mx3-r66x"
+    },
+    "@yggbrasil/api": {
+      blocked_all: true,
+      reason: "Malware in @yggbrasil/api (GHSA-cmxv-8vgc-m43c)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-cmxv-8vgc-m43c"
+    },
+    "get-power": {
+      blocked_all: true,
+      reason: "Malicious code in get-power (npm) (GHSA-pjxw-c7p6-x2gq)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-pjxw-c7p6-x2gq"
+    },
+    "app-rrhh": {
+      blocked_all: true,
+      reason: "Malicious code in app-rrhh (npm) (GHSA-c9r8-qhjh-h69j)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-c9r8-qhjh-h69j"
+    },
+    "web-main": {
+      blocked_all: true,
+      reason: "Malicious code in web-main (npm) (GHSA-mq47-gfmg-59pp)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-mq47-gfmg-59pp"
+    },
+    "@aiwfm/communitywfm.scripts.api": {
+      blocked_all: true,
+      reason: "Malicious code in @aiwfm/communitywfm.scripts.api (npm) (GHSA-cj6r-j9c8-88qp)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-cj6r-j9c8-88qp"
+    },
+    "sql-limit-enforcer": {
+      blocked_all: true,
+      reason: "Malicious code in sql-limit-enforcer (npm) (GHSA-vjjr-9qv2-mh33)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-vjjr-9qv2-mh33"
+    },
+    "strapi-plugin-os-info-meeb322k": {
+      blocked_all: true,
+      reason: "Malicious code in strapi-plugin-os-info-meeb322k (npm) (GHSA-3jh2-p873-gc7r)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-3jh2-p873-gc7r"
+    },
+    postgreesqlhelper: {
+      blocked_all: true,
+      reason: "Malicious code in postgreesqlhelper (npm) (GHSA-87qj-rx96-4w66)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-87qj-rx96-4w66"
+    },
+    "n8n-nodes-sysdiag": {
+      blocked_all: true,
+      reason: "Malicious code in n8n-nodes-sysdiag (npm) (GHSA-mfvv-xhj7-524c)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-mfvv-xhj7-524c"
+    },
+    "noblox-asset.js": {
+      blocked_all: true,
+      reason: "Malicious code in noblox-asset.js (npm) (GHSA-9pp6-m94w-8jhp)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-9pp6-m94w-8jhp"
+    },
+    "os-info-meeb322k": {
+      blocked_all: true,
+      reason: "Malicious code in os-info-meeb322k (npm) (GHSA-5wwx-6p5f-p9vh)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-5wwx-6p5f-p9vh"
+    },
+    "concierge-sdk": {
+      blocked_all: true,
+      reason: "Malicious code in concierge-sdk (npm) (GHSA-7gx4-hj9w-hx25)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-7gx4-hj9w-hx25"
+    },
+    "ultra-ws": {
+      blocked_all: true,
+      reason: "Malicious code in ultra-ws (npm) (GHSA-h35p-624w-rrp4)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-h35p-624w-rrp4"
+    },
+    "pino-ulid": {
+      blocked_all: true,
+      reason: "Malicious code in pino-ulid (npm) (GHSA-5qw6-rpv6-623h)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-5qw6-rpv6-623h"
+    },
+    afhmxiewpsf: {
+      blocked_all: true,
+      reason: "Malware in afhmxiewpsf (GHSA-59f6-ch49-395j)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-59f6-ch49-395j"
+    },
+    "expect-dotenv": {
+      blocked_all: true,
+      reason: "Malware in expect-dotenv (GHSA-h7q6-7chv-cgh2)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-h7q6-7chv-cgh2"
+    },
+    "@gfe/lx-watcher": {
+      blocked_all: true,
+      reason: "Malware in @gfe/lx-watcher (GHSA-wg37-hw83-hqwf)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-wg37-hw83-hqwf"
+    },
+    "meraz-project-tracker": {
+      blocked_all: true,
+      reason: "Malware in meraz-project-tracker (GHSA-54v8-j59m-366h)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-54v8-j59m-366h"
+    },
+    "@merazmz/project-tracker": {
+      blocked_all: true,
+      reason: "Malware in @merazmz/project-tracker (GHSA-x98w-cqq8-v3q2)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-x98w-cqq8-v3q2"
+    },
+    lpulogin: {
+      blocked_all: true,
+      reason: "Malware in lpulogin (GHSA-5823-3hg3-27v8)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-5823-3hg3-27v8"
+    },
+    dilxztech: {
+      blocked_all: true,
+      reason: "Malware in dilxztech (GHSA-5wh2-j94m-rwpf)",
+      date: "2026-09-14",
+      advisory: "https://github.com/advisories/GHSA-5wh2-j94m-rwpf"
     }
   }
 };
