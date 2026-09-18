@@ -12924,6 +12924,606 @@
       "reason": "Malicious code in leadconduit-versium (npm) (GHSA-wcwc-w55p-pxxg)",
       "date": "2026-09-17",
       "advisory": "https://github.com/advisories/GHSA-wcwc-w55p-pxxg"
+    },
+    "sinful": {
+      "blocked_all": true,
+      "reason": "Malware in sinful (GHSA-2xjj-r8mc-xpf6)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-2xjj-r8mc-xpf6"
+    },
+    "@sanzoffc/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @sanzoffc/baileys (npm) (GHSA-grqc-r63w-6845)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-grqc-r63w-6845"
+    },
+    "tailwindcss-form": {
+      "blocked_all": true,
+      "reason": "Malicious code in tailwindcss-form (npm) (GHSA-xhr7-h7hc-7785)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-xhr7-h7hc-7785"
+    },
+    "blue-string-formatter-utils": {
+      "blocked_all": true,
+      "reason": "Malicious code in blue-string-formatter-utils (npm) (GHSA-5mc6-ff2p-32qj)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-5mc6-ff2p-32qj"
+    },
+    "zero-baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in zero-baileys (npm) (GHSA-2q5p-vqh2-8c92)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-2q5p-vqh2-8c92"
+    },
+    "xzvbailsx": {
+      "blocked_all": true,
+      "reason": "Malicious code in xzvbailsx (npm) (GHSA-m364-pjc8-42wc)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-m364-pjc8-42wc"
+    },
+    "xzvbailey": {
+      "blocked_all": true,
+      "reason": "Malicious code in xzvbailey (npm) (GHSA-rg4j-jh5f-w982)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-rg4j-jh5f-w982"
+    },
+    "xa424234657567": {
+      "blocked_all": true,
+      "reason": "Malicious code in xa424234657567 (npm) (GHSA-h7pm-6wh6-7xvw)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-h7pm-6wh6-7xvw"
+    },
+    "@lekzo/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @lekzo/baileys (npm) (GHSA-75mc-fj4c-6pfm)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-75mc-fj4c-6pfm"
+    },
+    "@tink/tink-link-core": {
+      "blocked_all": true,
+      "reason": "Malicious code in @tink/tink-link-core (npm) (GHSA-hvcc-qwg6-972c)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-hvcc-qwg6-972c"
+    },
+    "test89078-auth": {
+      "blocked_all": true,
+      "reason": "Malicious code in test89078-auth (npm) (GHSA-x9mp-cqw3-368c)",
+      "date": "2026-09-18",
+      "advisory": "https://github.com/advisories/GHSA-x9mp-cqw3-368c"
+    },
+    "kartykgithub-multiversion-a": {
+      "blocked_all": true,
+      "reason": "Malware in kartykgithub-multiversion-a (GHSA-p957-4pc7-x6hp)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-p957-4pc7-x6hp"
+    },
+    "@railone/image-utils": {
+      "blocked_all": true,
+      "reason": "Malicious code in @railone/image-utils (npm) (GHSA-h72c-8fwp-p292)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-h72c-8fwp-p292"
+    },
+    "tailwindcss-form-ui": {
+      "blocked_all": true,
+      "reason": "Malicious code in tailwindcss-form-ui (npm) (GHSA-hxjv-cpxc-564m)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-hxjv-cpxc-564m"
+    },
+    "tailwindcss-form-utils": {
+      "blocked_all": true,
+      "reason": "Malicious code in tailwindcss-form-utils (npm) (GHSA-fm65-924g-pg2g)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-fm65-924g-pg2g"
+    },
+    "lisa-jamblang60-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jamblang60-sluey (npm) (GHSA-r59m-hqhw-848c)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-r59m-hqhw-848c"
+    },
+    "lisa-jamblang9-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jamblang9-sluey (npm) (GHSA-j332-339q-x927)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-j332-339q-x927"
+    },
+    "lisa-jamblang72-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jamblang72-breki (npm) (GHSA-mpj7-hpwc-c7v4)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-mpj7-hpwc-c7v4"
+    },
+    "lisa-jamblang15-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jamblang15-sukiwir (npm) (GHSA-3x2v-hmhg-pxj9)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-3x2v-hmhg-pxj9"
+    },
+    "lisa-jamblang16-remi": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jamblang16-remi (npm) (GHSA-h83g-rm38-rmfc)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-h83g-rm38-rmfc"
+    },
+    "lisa-gulai61-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gulai61-sukiwir (npm) (GHSA-8mpg-5m8p-wcw7)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-8mpg-5m8p-wcw7"
+    },
+    "lisa-gulai37-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gulai37-sukiwir (npm) (GHSA-3369-4xx7-cv2c)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-3369-4xx7-cv2c"
+    },
+    "lisa-ikan25-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-ikan25-riris (npm) (GHSA-xp28-3f2x-3j5v)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-xp28-3f2x-3j5v"
+    },
+    "lisa-gulai32-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gulai32-sluey (npm) (GHSA-cf79-2m6r-r8wc)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-cf79-2m6r-r8wc"
+    },
+    "lisa-gudeg30-sumpek": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gudeg30-sumpek (npm) (GHSA-4xh7-mxv6-hx24)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-4xh7-mxv6-hx24"
+    },
+    "lisa-jus17-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jus17-ruro (npm) (GHSA-2939-4rc4-gwgw)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-2939-4rc4-gwgw"
+    },
+    "lisa-jengkol34-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jengkol34-miaww (npm) (GHSA-c24q-4578-v2x7)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-c24q-4578-v2x7"
+    },
+    "lisa-ikan40-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-ikan40-breki (npm) (GHSA-xg5x-23mm-cpqw)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-xg5x-23mm-cpqw"
+    },
+    "lisa-gulai65-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gulai65-sukiwir (npm) (GHSA-85hh-jqvp-8x89)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-85hh-jqvp-8x89"
+    },
+    "lisa-jengkol46-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-jengkol46-miaww (npm) (GHSA-qj73-5wfj-q4mh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-qj73-5wfj-q4mh"
+    },
+    "lisa-gulai30-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gulai30-breki (npm) (GHSA-4w4c-2mjf-phmf)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-4w4c-2mjf-phmf"
+    },
+    "lisa-gudeg42-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gudeg42-riris (npm) (GHSA-5rvm-w2j4-3xp5)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-5rvm-w2j4-3xp5"
+    },
+    "lisa-gudeg59-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gudeg59-breki (npm) (GHSA-g8vm-vq94-chc3)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-g8vm-vq94-chc3"
+    },
+    "lisa-getuk10-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk10-ruro (npm) (GHSA-rv5r-rqvj-h4wh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-rv5r-rqvj-h4wh"
+    },
+    "lisa-gado-gado86-apidev": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado86-apidev (npm) (GHSA-878m-vqjr-gvvj)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-878m-vqjr-gvvj"
+    },
+    "lisa-gado-gado8-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado8-ruro (npm) (GHSA-4f7v-pghf-x9cm)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-4f7v-pghf-x9cm"
+    },
+    "lisa-getas76-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas76-ruro (npm) (GHSA-393c-whh6-8qpw)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-393c-whh6-8qpw"
+    },
+    "lisa-getas81-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas81-sukiwir (npm) (GHSA-96jv-2hg6-f4wg)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-96jv-2hg6-f4wg"
+    },
+    "lisa-getas76-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas76-miaww (npm) (GHSA-g273-5c9w-fw8f)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-g273-5c9w-fw8f"
+    },
+    "lisa-getas23-apidev": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas23-apidev (npm) (GHSA-99xq-2683-f596)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-99xq-2683-f596"
+    },
+    "lisa-gandul37-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gandul37-breki (npm) (GHSA-7p6x-45gm-q8r6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-7p6x-45gm-q8r6"
+    },
+    "lisa-esdoger16-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-esdoger16-miaww (npm) (GHSA-82gp-c3vm-2ghg)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-82gp-c3vm-2ghg"
+    },
+    "lisa-gado-gado88-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado88-ruro (npm) (GHSA-r872-cf42-w4hh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-r872-cf42-w4hh"
+    },
+    "lisa-gorengan76-kyuki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gorengan76-kyuki (npm) (GHSA-79hg-4gfq-v6hm)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-79hg-4gfq-v6hm"
+    },
+    "lisa-gorengan62-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gorengan62-sluey (npm) (GHSA-w9fm-54j3-f476)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-w9fm-54j3-f476"
+    },
+    "lisa-esdoger24-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-esdoger24-miaww (npm) (GHSA-wx93-q3rv-xf84)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-wx93-q3rv-xf84"
+    },
+    "lisa-getas37-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas37-miaww (npm) (GHSA-pf67-5v96-fvgw)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-pf67-5v96-fvgw"
+    },
+    "lisa-getas43-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas43-miaww (npm) (GHSA-68jq-5r2m-5w4x)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-68jq-5r2m-5w4x"
+    },
+    "lisa-gandul17-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gandul17-riris (npm) (GHSA-4x4p-p9p3-75m6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-4x4p-p9p3-75m6"
+    },
+    "lisa-esdoger11-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-esdoger11-ruro (npm) (GHSA-p9g7-qvmc-m3hh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-p9g7-qvmc-m3hh"
+    },
+    "lisa-esdoger78-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-esdoger78-miaww (npm) (GHSA-r7xw-gqq2-9vm9)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-r7xw-gqq2-9vm9"
+    },
+    "lisa-getuk7-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk7-riris (npm) (GHSA-f7r9-cp59-wv38)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-f7r9-cp59-wv38"
+    },
+    "lisa-getuk77-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk77-sluey (npm) (GHSA-v9x4-3xh7-7397)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-v9x4-3xh7-7397"
+    },
+    "lisa-getas75-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas75-ruro (npm) (GHSA-v7qg-6r7w-7hpx)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-v7qg-6r7w-7hpx"
+    },
+    "lisa-getas63-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getas63-sukiwir (npm) (GHSA-797j-4w4q-vfv9)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-797j-4w4q-vfv9"
+    },
+    "lisa-gandul81-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gandul81-breki (npm) (GHSA-xmmr-3fgr-jh9x)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-xmmr-3fgr-jh9x"
+    },
+    "lisa-gado-gado55-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado55-riris (npm) (GHSA-4pcp-rq23-9qc6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-4pcp-rq23-9qc6"
+    },
+    "lisa-gado-gado20-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado20-sukiwir (npm) (GHSA-pg4c-c639-v77v)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-pg4c-c639-v77v"
+    },
+    "lisa-gado-gado96-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gado-gado96-miaww (npm) (GHSA-68pc-9gmw-g68f)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-68pc-9gmw-g68f"
+    },
+    "lisa-esdoger6-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-esdoger6-breki (npm) (GHSA-88wh-qrwm-9687)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-88wh-qrwm-9687"
+    },
+    "lisa-gaplek51-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gaplek51-riris (npm) (GHSA-cxvw-9wpw-3h9w)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-cxvw-9wpw-3h9w"
+    },
+    "lisa-gembus35-sumpek": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gembus35-sumpek (npm) (GHSA-46x9-p5ww-85p5)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-46x9-p5ww-85p5"
+    },
+    "lisa-gaplek6-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gaplek6-sluey (npm) (GHSA-wjrv-8v2v-x336)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-wjrv-8v2v-x336"
+    },
+    "lisa-enting89-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-enting89-sluey (npm) (GHSA-45gh-6m7h-fcp2)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-45gh-6m7h-fcp2"
+    },
+    "lisa-gepuk92-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gepuk92-sluey (npm) (GHSA-mjf7-9fpx-45r5)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-mjf7-9fpx-45r5"
+    },
+    "lisa-gembus37-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gembus37-miaww (npm) (GHSA-9fjg-h4qp-pgvh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-9fjg-h4qp-pgvh"
+    },
+    "lisa-gembus72-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gembus72-riris (npm) (GHSA-j9f2-827v-j232)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-j9f2-827v-j232"
+    },
+    "lisa-getuk80-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk80-miaww (npm) (GHSA-8j77-5v75-8ghm)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-8j77-5v75-8ghm"
+    },
+    "lisa-gudeg13-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gudeg13-sluey (npm) (GHSA-fcv6-9h6p-pm3c)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-fcv6-9h6p-pm3c"
+    },
+    "lisa-gorengan43-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gorengan43-miaww (npm) (GHSA-qq8f-5v2p-vc5w)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-qq8f-5v2p-vc5w"
+    },
+    "lisa-getuk69-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk69-miaww (npm) (GHSA-v3j4-h59p-5v62)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-v3j4-h59p-5v62"
+    },
+    "lisa-getuk11-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-getuk11-miaww (npm) (GHSA-9f6m-99g5-4x38)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-9f6m-99g5-4x38"
+    },
+    "lisa-gandul10-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gandul10-breki (npm) (GHSA-7fj6-94w4-77vv)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-7fj6-94w4-77vv"
+    },
+    "lisa-gembus100-pore": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gembus100-pore (npm) (GHSA-w63c-3j2q-q4hq)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-w63c-3j2q-q4hq"
+    },
+    "lisa-gepuk30-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gepuk30-breki (npm) (GHSA-g8cg-rj37-x6m6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-g8cg-rj37-x6m6"
+    },
+    "lisa-gaplek22-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gaplek22-ruro (npm) (GHSA-3r6h-22vr-jvcq)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-3r6h-22vr-jvcq"
+    },
+    "lisa-gaplek22-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-gaplek22-sukiwir (npm) (GHSA-qc83-7484-gwf8)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-qc83-7484-gwf8"
+    },
+    "lisa-empal62-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal62-ruro (npm) (GHSA-qvv6-hhcj-9fcj)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-qvv6-hhcj-9fcj"
+    },
+    "lisa-empal39-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal39-sukiwir (npm) (GHSA-p269-8wq7-9mpp)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-p269-8wq7-9mpp"
+    },
+    "lisa-bubursumsum4-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-bubursumsum4-sluey (npm) (GHSA-5fhh-8r8q-j558)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-5fhh-8r8q-j558"
+    },
+    "lisa-buburayam83-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-buburayam83-ruro (npm) (GHSA-22r3-pvx4-9pv6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-22r3-pvx4-9pv6"
+    },
+    "lisa-bubur5-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-bubur5-miaww (npm) (GHSA-jh3q-xpj9-qcj3)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-jh3q-xpj9-qcj3"
+    },
+    "lisa-empal87-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal87-breki (npm) (GHSA-vm3m-gm6m-g29c)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-vm3m-gm6m-g29c"
+    },
+    "lisa-empal72-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal72-ruro (npm) (GHSA-3926-r8rj-3v4v)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-3926-r8rj-3v4v"
+    },
+    "lisa-dodol81-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-dodol81-miaww (npm) (GHSA-pcch-vcw5-vxf4)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-pcch-vcw5-vxf4"
+    },
+    "lisa-brongkos35-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-brongkos35-breki (npm) (GHSA-xg28-w7w5-f6p6)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-xg28-w7w5-f6p6"
+    },
+    "lisa-brongkos17-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-brongkos17-sluey (npm) (GHSA-rm2w-j77j-4rr5)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-rm2w-j77j-4rr5"
+    },
+    "lisa-botok73-sumpek": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-botok73-sumpek (npm) (GHSA-r9jq-7qvq-6pgx)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-r9jq-7qvq-6pgx"
+    },
+    "lisa-empal58-ruro": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal58-ruro (npm) (GHSA-7f47-59xv-hrjm)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-7f47-59xv-hrjm"
+    },
+    "lisa-bubursumsum30-miaww": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-bubursumsum30-miaww (npm) (GHSA-h6xp-gxjg-p7c7)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-h6xp-gxjg-p7c7"
+    },
+    "lisa-bubur56-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-bubur56-sluey (npm) (GHSA-cx7j-9j8m-xx56)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-cx7j-9j8m-xx56"
+    },
+    "lisa-dradag98-wekto": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-dradag98-wekto (npm) (GHSA-g59r-vp82-9843)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-g59r-vp82-9843"
+    },
+    "lisa-brongkos58-riris": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-brongkos58-riris (npm) (GHSA-2xc3-32cr-ch72)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-2xc3-32cr-ch72"
+    },
+    "lisa-brongkos16-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-brongkos16-breki (npm) (GHSA-q96f-8486-mwfg)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-q96f-8486-mwfg"
+    },
+    "lisa-donat56-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-donat56-sluey (npm) (GHSA-pqgv-wf7x-4p54)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-pqgv-wf7x-4p54"
+    },
+    "lisa-empal1-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-empal1-sluey (npm) (GHSA-pvr8-4xf7-hrwm)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-pvr8-4xf7-hrwm"
+    },
+    "lisa-dradag70-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-dradag70-sluey (npm) (GHSA-36v7-7hwj-6c37)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-36v7-7hwj-6c37"
+    },
+    "lisa-buburayam23-breki": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-buburayam23-breki (npm) (GHSA-jhqw-rv95-x5h7)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-jhqw-rv95-x5h7"
+    },
+    "lisa-bubur33-sluey": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-bubur33-sluey (npm) (GHSA-97xp-gf3m-m3mj)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-97xp-gf3m-m3mj"
+    },
+    "lisa-buburayam31-sukiwir": {
+      "blocked_all": true,
+      "reason": "Malicious code in lisa-buburayam31-sukiwir (npm) (GHSA-7222-jv76-3fgh)",
+      "date": "2026-09-17",
+      "advisory": "https://github.com/advisories/GHSA-7222-jv76-3fgh"
     }
   }
 }
