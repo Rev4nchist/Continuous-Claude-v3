@@ -13783,6 +13783,90 @@ var malicious_packages_default = {
       reason: "Malicious code in lisa-buburayam31-sukiwir (npm) (GHSA-7222-jv76-3fgh)",
       date: "2026-09-17",
       advisory: "https://github.com/advisories/GHSA-7222-jv76-3fgh"
+    },
+    keroeltop: {
+      blocked_all: true,
+      reason: "Malicious code in keroeltop (npm) (GHSA-gg5m-rqpp-c9xf)",
+      date: "2026-09-19",
+      advisory: "https://github.com/advisories/GHSA-gg5m-rqpp-c9xf"
+    },
+    internallib_v949: {
+      blocked_all: true,
+      reason: "Malware in internallib_v949 (GHSA-f863-m366-9cfm)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-f863-m366-9cfm"
+    },
+    "@shared-web/utils": {
+      blocked_all: true,
+      reason: "Malicious code in @shared-web/utils (npm) (GHSA-29f7-pqf4-c94j)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-29f7-pqf4-c94j"
+    },
+    "tailwindcss-forms-ui": {
+      blocked_all: true,
+      reason: "Malicious code in tailwindcss-forms-ui (npm) (GHSA-fc5q-m33g-rp9c)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-fc5q-m33g-rp9c"
+    },
+    "chai-as-indexed": {
+      blocked_all: true,
+      reason: "Malicious code in chai-as-indexed (npm) (GHSA-727r-6hg5-947x)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-727r-6hg5-947x"
+    },
+    "x509-escaping": {
+      blocked_all: true,
+      reason: "Malicious code in x509-escaping (npm) (GHSA-fq85-7xqm-cgj9)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-fq85-7xqm-cgj9"
+    },
+    "@shared-runtime/modules": {
+      blocked_all: true,
+      reason: "Malicious code in @shared-runtime/modules (npm) (GHSA-g85c-jph7-8q4r)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-g85c-jph7-8q4r"
+    },
+    "@insiderintelligence/googleadmanager": {
+      blocked_all: true,
+      reason: "Malicious code in @insiderintelligence/googleadmanager (npm) (GHSA-76rx-jxhm-vhww)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-76rx-jxhm-vhww"
+    },
+    "openmct-heatmap": {
+      blocked_all: true,
+      reason: "Malware in openmct-heatmap (GHSA-qx52-2xq4-3x3v)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-qx52-2xq4-3x3v"
+    },
+    "test899-auth": {
+      blocked_all: true,
+      reason: "Malware in test899-auth (GHSA-jf2q-w77c-99vv)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-jf2q-w77c-99vv"
+    },
+    "test89-auth": {
+      blocked_all: true,
+      reason: "Malware in test89-auth (GHSA-7868-hxr7-g8r6)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-7868-hxr7-g8r6"
+    },
+    "test8999-auth": {
+      blocked_all: true,
+      reason: "Malware in test8999-auth (GHSA-25wf-vfrc-2r82)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-25wf-vfrc-2r82"
+    },
+    "test890-auth": {
+      blocked_all: true,
+      reason: "Malware in test890-auth (GHSA-xvpv-wq7p-548c)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-xvpv-wq7p-548c"
+    },
+    "@shared-web/assets": {
+      blocked_all: true,
+      reason: "Malicious code in @shared-web/assets (npm) (GHSA-vmr9-5w3x-4v98)",
+      date: "2026-09-18",
+      advisory: "https://github.com/advisories/GHSA-vmr9-5w3x-4v98"
     }
   }
 };
