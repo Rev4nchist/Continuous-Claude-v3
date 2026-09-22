@@ -31,6 +31,26 @@ param(
     [string]$Label = 'adhoc'
 )
 
+# Resolve GIT BASH explicitly. Do NOT trust `bash` on PATH.
+#
+# CORRECTION (2026-08-17): every "HEALTHY" verdict this script printed before
+# today was meaningless. On this machine `bash` on PATH resolves to
+# C:\WINDOWS\system32\bash.exe -- the WSL launcher, which is not MSYS, does not
+# touch the shared.cc mount table, and cannot exhibit the fork storm. The probe
+# named 'bash -c true' was measuring the wrong binary entirely, so it reported
+# ~100ms while Git bash was stalling for ~30s in the same window.
+$GitBash = @(
+    "$env:LOCALAPPDATA\Programs\Git\bin\bash.exe",
+    "$env:ProgramFiles\Git\bin\bash.exe",
+    "${env:ProgramFiles(x86)}\Git\bin\bash.exe"
+) | Where-Object { $_ -and (Test-Path $_) } | Select-Object -First 1
+
+if (-not $GitBash) {
+    Write-Error "Git bash not found. This script measures MSYS bash; PATH `bash` is WSL and is not a valid substitute."
+    exit 2
+}
+Write-Output "git bash: $GitBash"
+
 function Measure-Spawn {
     param([string]$Name, [scriptblock]$Invoke, [int]$Count)
     $samples = New-Object System.Collections.Generic.List[double]
@@ -72,7 +92,7 @@ function Measure-Spawn {
 
 $results = @()
 $results += Measure-Spawn -Name 'node -e 0' -Count $N -Invoke { & node -e "0" }
-$results += Measure-Spawn -Name 'bash -c true' -Count $N -Invoke { & bash -c "true" }
+$results += Measure-Spawn -Name 'git-bash -c true' -Count $N -Invoke { & $GitBash -c "true" }
 # git rev-parse is what BOTH git hooks call first, so it is the spawn that
 # actually sits on the critical path of every commit in this repo.
 $results += Measure-Spawn -Name 'git rev-parse' -Count $N -Invoke { & git rev-parse --show-toplevel }
