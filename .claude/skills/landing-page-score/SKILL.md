@@ -1,6 +1,6 @@
 ---
 name: landing-page-score
-description: Score and audit any landing page against a research-backed conversion rubric. Use when users ask to review, score, audit, critique, evaluate, or improve a landing page — whether they provide a URL, screenshot, HTML file, wireframe, copy doc, or describe the page verbally. Also triggers when users mention "landing page," "conversion rate," "CRO audit," "page score," "LP review," or ask why a page isn't converting. Covers design, messaging, CTA, trust signals, forms, performance, mobile, and post-conversion. Returns a 0-100 score with letter grade and prioritized fix list.
+description: Score a landing page against a 0-100 conversion rubric. Use when the user says "review", "score", "audit", "critique" a landing page, or asks why a page isn't converting.
 ---
 
 # Landing Page Score

@@ -1,6 +1,7 @@
 ---
 name: iq360-event-audit
-description: Produce a structured coverage/quality audit report (with CSVs, named users, callouts, and Rally-story-ready dev gaps) on any iQ360 event for any customer. Use whenever the user asks for "metrics", "an audit", "coverage", "EBR/QBR numbers", "what's broken with event X", or "who's doing X" on iQ360 event data — even if they don't say the word "audit". Differs from `iq360-events`: that skill answers single ad-hoc KQL questions; this skill is for multi-step analyses that end in a report. If the user just wants a single count or one-liner query, defer to `iq360-events` instead.
+description: Produce a multi-step iQ360 event coverage/quality audit report with CSVs and dev-gap callouts. Use when the user asks for "metrics", "an audit", "coverage", "EBR/QBR numbers" on an iQ360 event. Not for single ad-hoc counts — use iq360-events.
+disable-model-invocation: true
 ---
 
 # iQ360 Event Audit

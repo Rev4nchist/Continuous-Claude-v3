@@ -1,6 +1,6 @@
 ---
 name: premortem
-description: Identify failure modes before they occur using structured risk analysis, with a cross-model adversarial pass (Codex, Grok, or both)
+description: "Stress-test a plan or diff for failure modes before building. Use when the user says \"premortem\", \"/premortem\", \"what could go wrong\", or before a risky implementation."
 allowed-tools: [Read, Grep, Glob, Task, AskUserQuestion, TodoWrite, Bash]
 ---
 

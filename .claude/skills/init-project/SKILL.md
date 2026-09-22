@@ -1,6 +1,7 @@
 ---
 name: init-project
-description: Initialize Continuous Claude v3 for a new project with full toolset activation. Creates project CLAUDE.md (interview-driven, 8 sections), ROADMAP.md, knowledge tree, and project registry entry. Use when opening a new project folder for the first time, starting a new project, setting up CCv3 in an existing repo, or the user says "init project", "setup project", "new project", "initialize", "start new project".
+description: Initialize Continuous Claude v3 in a new project, CLAUDE.md, ROADMAP.md, knowledge tree, and registry entry. Use when the user says "/init-project", "init project", "setup project", or "new project".
+disable-model-invocation: true
 allowed-tools: [Bash, Read, Write, Edit, Glob, Grep, Agent, AskUserQuestion]
 metadata:
   user-invocable: true

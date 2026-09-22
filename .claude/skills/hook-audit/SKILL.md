@@ -1,6 +1,6 @@
 ---
 name: hook-audit
-description: Audit hook registrations -- find unregistered, broken, and stale hooks
+description: Audits hook registrations for unregistered, broken, and stale hooks. Use when user says "/skill:hook-audit", "hook audit", "check hooks", "missing hook registration".
 ---
 
 # Hook Registration Audit

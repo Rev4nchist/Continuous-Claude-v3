@@ -1,6 +1,6 @@
 ---
 name: security
-description: Security audit workflow - vulnerability scan → verification
+description: Security audit workflow -- vulnerability scan then verification. Use when the user says "security audit", "check for vulnerabilities", "is this secure", "/security" or asks to review auth or payment code.
 ---
 
 # /security - Security Audit Workflow

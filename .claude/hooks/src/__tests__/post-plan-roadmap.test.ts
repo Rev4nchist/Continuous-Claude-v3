@@ -12,6 +12,9 @@
  */
 
 import { describe, it, expect } from 'vitest';
+import * as fs from 'fs';
+import * as path from 'path';
+import { fileURLToPath } from 'url';
 const SEP_BS = String.fromCharCode(92);
 import { parseRoadmap } from '../shared/roadmap-parser.js';
 import type { PlanningSession } from '../shared/roadmap-parser.js';
@@ -23,6 +26,8 @@ import {
   extractPlanInfo,
   planPathForRoadmap,
 } from '../post-plan-roadmap.js';
+
+const FIXTURE_DIR = path.join(path.dirname(fileURLToPath(import.meta.url)), '__fixtures__');
 
 /**
  * applyRoadmapUpdate: append-only writer. Current Focus is written ONLY when
@@ -501,5 +506,174 @@ describe('planPathForRoadmap -- separator-agnostic', () => {
 
   it('returns undefined when there is no plan file', () => {
     expect(planPathForRoadmap('C:/repos/widget', undefined)).toBeUndefined();
+  });
+});
+
+/**
+ * Block-aware capture. The generator used to read only the FIRST PHYSICAL LINE
+ * of a list item, so every hard-wrapped bullet in a plan lost everything after
+ * its first line -- the ~90-char cut in the committed entries is the wrap
+ * column of the SOURCE, not a budget in the code. Verified against two real
+ * plans (`picking-up-from-a-dynamic-bentley.md:41-42` and
+ * `we-are-picking-up-lovely-crab.md:79-81`), whose output was byte-identical
+ * to line 1 of each item.
+ *
+ * Capture rule pinned here: an item captures its FIRST PARAGRAPH. A blank
+ * line, a code fence, a header, a table row, or the next list item ends it.
+ */
+describe('extractBullets: block-aware capture', () => {
+  it('D1: joins a hard-wrapped item instead of keeping only its first line', () => {
+    const src = [
+      '1. **Re-check mergeability immediately before merging.** A peer session (`8896640d`) is active on',
+      '   this branch; state can move between now and the merge.',
+    ].join('\n');
+
+    expect(extractBullets(src)).toEqual([
+      'Re-check mergeability immediately before merging: A peer session (`8896640d`) is active on this branch; state can move between now and the merge.',
+    ]);
+  });
+
+  it('D1: a blank line ends the item -- the following paragraph is not absorbed', () => {
+    const src = [
+      '- **First item.** Its wrapped continuation line belongs to it.',
+      '  still the same paragraph here.',
+      '',
+      'Loose prose that is NOT part of the bullet and must not be appended.',
+    ].join('\n');
+
+    expect(extractBullets(src)).toEqual([
+      'First item: Its wrapped continuation line belongs to it. still the same paragraph here.',
+    ]);
+  });
+
+  it('D2: never emits a line from inside a fenced code block', () => {
+    const src = [
+      '1. **Check the pull request.** Run the command below before merging.',
+      '   ```',
+      '   gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/29 `',
+      '     --jq \'"mergeable=\\(.mergeable) state=\\(.mergeable_state)"\'',
+      '   ```',
+    ].join('\n');
+
+    const out = extractBullets(src);
+    expect(out).toEqual([
+      'Check the pull request: Run the command below before merging.',
+    ]);
+    // The exact fragment that reached ROADMAP.md in a71e13e.
+    expect(out.join(' ')).not.toContain('-jq');
+  });
+
+  it('D2: a fence ends the item -- prose after the fence is not absorbed', () => {
+    const src = [
+      '1. **Run it.** This sentence is the captured body of the item.',
+      '   ```',
+      '   some --command here',
+      '   ```',
+      '   Trailing commentary after the fence is deliberately not captured.',
+    ].join('\n');
+
+    expect(extractBullets(src)).toEqual([
+      'Run it: This sentence is the captured body of the item.',
+    ]);
+  });
+
+  it('D4: a colon inside the bold label does not produce a doubled colon', () => {
+    // The exact shape that produced "...with a merge commit::" in a71e13e.
+    expect(extractBullets('- **PR closed as merged, with a merge commit:**'))
+      .toEqual(['PR closed as merged, with a merge commit']);
+  });
+
+  it('D4: a sentence-ending period in the bold label does not produce ".:"', () => {
+    expect(extractBullets('- **Advance local main without a checkout.** It is checked out nowhere.'))
+      .toEqual(['Advance local main without a checkout: It is checked out nowhere.']);
+  });
+
+  it('a table row does not continue an item', () => {
+    const src = [
+      '- **Item with a table after it.** Body sentence for the item.',
+      '| a | b |',
+    ].join('\n');
+
+    expect(extractBullets(src)).toEqual([
+      'Item with a table after it: Body sentence for the item.',
+    ]);
+  });
+});
+
+/**
+ * D3: Key Decisions and Implementation used to overlap because a plan with no
+ * `## Decisions` header sent `decisions` down a WHOLE-DOCUMENT keyword scan
+ * that re-collected the very `## Steps` items already in `steps` (and pulled
+ * `## Verification` items too). Confirmed against a71e13e, whose Key Decisions
+ * held "The SHAs the docs cite..." and "The original symptom is gone" -- text
+ * that exists only under `## Verification` in the source plan.
+ */
+describe('extractPlanInfo: disjoint decision / step / verification sources', () => {
+  const plan = fs.readFileSync(path.join(FIXTURE_DIR, 'plan-hardwrapped-2026-08-12.md'), 'utf-8');
+
+  it('D3: no bullet appears in both Key Decisions and Implementation', () => {
+    const info = extractPlanInfo(plan);
+    const overlap = info.decisions.filter(d => info.steps.includes(d));
+    expect(overlap).toEqual([]);
+  });
+
+  it('D3: no bullet appears in both Key Decisions and Verification', () => {
+    const info = extractPlanInfo(plan);
+    const overlap = info.decisions.filter(d => info.verification.includes(d));
+    expect(overlap).toEqual([]);
+  });
+
+  it('parses a CRLF plan the same as its LF form', () => {
+    const lf = plan.replace(/\r\n/g, '\n');
+    expect(extractPlanInfo(lf.replace(/\n/g, '\r\n'))).toEqual(extractPlanInfo(lf));
+    expect(extractPlanInfo(lf.replace(/\n/g, '\r\n')).steps).toHaveLength(3);
+  });
+
+  it('an explicit ## Decisions section stays authoritative and is not filtered', () => {
+    const explicit = [
+      '# A plan',
+      '',
+      '## Decisions',
+      '',
+      '- **Ship the fix now.** It is a one-file change with a verified root cause.',
+      '',
+      '## Steps',
+      '',
+      '- **Ship the fix now.** It is a one-file change with a verified root cause.',
+      '',
+    ].join('\n');
+
+    const info = extractPlanInfo(explicit);
+    expect(info.decisions).toEqual(['Ship the fix now: It is a one-file change with a verified root cause.']);
+  });
+});
+
+/**
+ * End-to-end golden: the real 2026-08-12 plan shape through extractPlanInfo ->
+ * renderSessionBlock, asserting the block a71e13e SHOULD have been.
+ */
+describe('golden: the 2026-08-12 plan renders a clean session block', () => {
+  const plan = fs.readFileSync(path.join(FIXTURE_DIR, 'plan-hardwrapped-2026-08-12.md'), 'utf-8');
+
+  it('produces a block with no truncation, no code fragment and no doubled colon', () => {
+    const info = extractPlanInfo(plan);
+    const session: PlanningSession = {
+      date: '2026-08-12',
+      title: info.title,
+      decisions: info.decisions.slice(0, 5),
+      steps: info.steps.length > 0 ? info.steps.slice(0, 5) : undefined,
+      verification: info.verification.length > 0 ? info.verification.slice(0, 3) : undefined,
+    };
+    const block = renderSessionBlock(session).join('\n');
+
+    // D1: the continuation line survives.
+    expect(block).toContain('state can move between now and the merge.');
+    // D2: nothing from inside a fence.
+    expect(block).not.toContain('-jq');
+    expect(block).not.toContain('gh api repos');
+    // D4: no doubled colon anywhere in the block.
+    expect(block).not.toMatch(/::/);
+    // The header is still the plan title.
+    expect(block.split('\n')[0]).toBe('### 2026-08-12: Land `agentic-os` on `main`');
   });
 });

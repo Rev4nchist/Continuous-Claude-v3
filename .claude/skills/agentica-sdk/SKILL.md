@@ -1,6 +1,6 @@
 ---
 name: agentica-sdk
-description: Build Python agents with Agentica SDK - @agentic decorator, spawn(), persistence, MCP integration
+description: "Build Python agents with Agentica SDK: @agentic decorator, spawn(), MCP tools. Use when building, adding agentic capabilities, or debugging Agentica agents."
 allowed-tools: [Bash, Read, Write, Edit]
 ---
 

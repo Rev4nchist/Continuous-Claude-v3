@@ -163,7 +163,12 @@ if (flags.has('--update')) {
         passed: actual.passed,
         collected: actual.collected,
         suites: actual.suites,
-        recorded: new Date().toISOString().slice(0, 10),
+        // LOCAL date, not UTC. `toISOString()` stamped this baseline
+        // 2026-08-13 on the evening of the 12th -- the same defect being fixed
+        // across the ROADMAP writers in this commit, demonstrated by the very
+        // tool recording it. Inlined rather than importing the hooks' shared
+        // localDateStamp(): this script is plain .mjs outside the TS build.
+        recorded: (d => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`)(new Date()),
       },
       null,
       2

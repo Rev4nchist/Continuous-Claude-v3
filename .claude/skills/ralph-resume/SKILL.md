@@ -1,6 +1,7 @@
 ---
 name: ralph-resume
-description: Resume or retry failed Ralph agents
+description: Resume or retry failed/stalled Ralph agents. Use when the user says "/ralph resume", "/ralph status", "resume ralph", "retry failed agent".
+disable-model-invocation: true
 allowed-tools: [Read, Bash, Task, AskUserQuestion]
 ---
 

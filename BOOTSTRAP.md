@@ -14,11 +14,31 @@
 
 ## Quick Start
 
+The repo is **private**, so you need a GitHub credential before you can clone it.
+Do [GitHub Identity](#github-identity) step 1 first, then:
+
 ```bash
-git clone https://github.com/parcadei/Continuous-Claude-v3.git continuous-claude
-cd continuous-claude/opc
+git clone https://github.com/Rev4nchist/Continuous-Claude-v3.git continuous-claude
+cd continuous-claude
+
+# Reproduce the remote naming this repo's scripts hardcode
+git remote rename origin fork
+git remote add origin https://github.com/parcadei/Continuous-Claude-v3.git
+
+cd opc
 uv run python -m scripts.setup.wizard
 ```
+
+> **Clone `Rev4nchist`, not `parcadei`.** `parcadei` is the upstream and it is
+> **837 commits behind**, last moved 2026-01-26. Cloning it gives you a system
+> most of a year old that looks correct.
+>
+> **Both remote names are load-bearing, so do not skip the rename.**
+> `scripts/scheduled-blocklist-update.bat` runs `git push fork HEAD` and
+> `scripts/check-upstream.sh:13-14` hardcodes `UPSTREAM_REMOTE="origin"` /
+> `FORK_REMOTE="fork"`. A clone that leaves Rev4nchist as `origin` breaks both,
+> and the daily blocklist job fails silently in the Task Scheduler where nobody
+> reads it. Convention: **push to `fork`, never to `origin`.**
 
 The wizard handles:
 - Docker PostgreSQL + pgvector container (4 tables, idempotent schema)
@@ -49,6 +69,154 @@ echo $CLAUDE_OPC_DIR  # Should point to <repo>/opc
 # Memory system works
 cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "test" --k 1 --text-only
 ```
+
+GitHub identity is **not** covered by the wizard and is verified separately -- see
+[GitHub Identity](#github-identity):
+
+```
+pwsh -File scripts/github/verify-github-accounts.ps1   # expect PASS, 24 checks
+```
+
+## GitHub Identity
+
+**Manual. The wizard does NOT do this, and this is the largest hole in a machine
+rebuild.** The wizard reproduces everything that lives in git. GitHub identity does
+not: it is **machine state outside version control** --
+`~/.gitconfig`, the gh OAuth credentials, a User-scope environment variable, two
+PowerShell profiles, and Windows Credential Manager. None of it is in the repo, and
+none of it is restored by cloning.
+
+**Why it is worth the twenty minutes.** Two GitHub accounts are in play --
+`Rev4nchist` (personal) and `david-hayes44` (Fourth work) -- across five layers that
+are configured separately and fail separately. **They fail silently, with the wrong
+identity rather than an error:**
+
+| Layer | Silent failure |
+|---|---|
+| gh CLI | the wrong account opens the PR |
+| git push credential | the wrong account is authenticated for push |
+| commit identity | the wrong email is baked into the commit, **permanently** |
+| plain `git` routing | every personal repo authenticates as the work account and 404s |
+| gh MCP server | wrong account for everything done via MCP |
+
+Each produces a successful-looking operation attributed to the wrong person. You find
+out days later, in someone else's repo history. This was live until 2026-08-11:
+**25 of 64 remotes** were authenticating as the wrong account.
+
+**What IS in git:** `scripts/github/accounts.json` is the single source of truth for
+both accounts, the owner-to-account auth map, and the per-directory commit-identity
+routes. `accounts-lib.ps1` holds the shared resolution logic. Do not re-derive any of
+this by hand -- fill in `accounts.json` and let the scripts apply it.
+
+### Setup order
+
+Order matters. Step 1 must precede the clone, because the repo is private.
+
+**1. Install Git for Windows, then authenticate the personal account.**
+
+Git for Windows registers Git Credential Manager at **system** scope. That is the
+single credential helper the setup expects -- do not add another (see the trap below).
+
+```
+$env:GH_CONFIG_DIR = "$HOME\.config\gh-personal"
+gh auth login --hostname github.com --git-protocol https --web
+```
+
+**2. Authenticate the work account** into its own config dir.
+
+```
+$env:GH_CONFIG_DIR = "$HOME\.config\gh-work"
+gh auth login --hostname github.com --git-protocol https --web
+```
+
+> **`--web` stores whichever account the BROWSER session holds, not the one you
+> intended.** Sign the browser into the target account first. This trap already put
+> the work credential in the personal config dir once. Never trust the login's own
+> success message -- verify with ambient tokens cleared:
+> `$env:GH_CONFIG_DIR="$HOME\.config\gh-work"; gh api user --jq .login`
+
+**3. Set the default account** at User scope. Without a default, bare `gh` has **no
+credential at all** -- it falls back to `%APPDATA%\GitHub CLI\`, which does not exist.
+
+```
+[Environment]::SetEnvironmentVariable('GH_CONFIG_DIR', "$HOME\.config\gh-personal", 'User')
+```
+
+> Use this, **not** `setx GH_CONFIG_DIR "%USERPROFILE%\..."`. PowerShell does not
+> expand `%USERPROFILE%`, so setx would store that literal string as a `REG_SZ` and
+> gh would look for a directory that does not exist. The stored value must be an
+> absolute path. Open a **new terminal** afterwards -- User-scope variables are not
+> visible in the session that set them.
+
+**4. Point plain `git` at the right account.** These two lines are the load-bearing
+fix. Without the username, Git Credential Manager cannot choose between two accounts;
+it either raises a picker or lets a second helper answer from an ambiguous entry.
+
+```
+git config --global credential.https://github.com.username Rev4nchist
+git config --global url."https://david-hayes44@github.com/fourth/".insteadOf https://github.com/fourth/
+```
+
+**5. Apply commit identity** from `accounts.json`. Plan first, then apply. It writes
+two generated files and appends **one** include line to `~/.gitconfig`; nothing
+hand-written is parsed or rewritten.
+
+```
+pwsh -File scripts/github/apply-commit-identity.ps1
+pwsh -File scripts/github/apply-commit-identity.ps1 -Apply
+```
+
+**6. Route bare `gh` by directory.** Add this line to **both** profiles -- PowerShell 7
+(`~\Documents\PowerShell\Microsoft.PowerShell_profile.ps1`) and Windows PowerShell 5.1
+(`~\Documents\WindowsPowerShell\Microsoft.PowerShell_profile.ps1`). Scheduled tasks run
+5.1; a shim in only one profile routes correctly in only half of your shells.
+
+```
+. "$HOME\continuous-claude\scripts\github\gh-shim.ps1"   # route bare `gh` by directory
+```
+
+**7. Prime Git Credential Manager for the work account**, in an **interactive**
+terminal -- it opens a browser prompt that blocks forever in a tool or scheduled shell.
+The `insteadOf` rule puts `david-hayes44@` in the URL, so GCM is asked for that account
+specifically and there is no picker.
+
+Any repo whose remote owner is `fourth` will do, for example:
+
+```
+git -C "C:\Users\david.hayes\Projects\fourth-salesforce-mcp" fetch origin
+```
+
+### Verify -- both gates must pass
+
+```
+pwsh -File scripts/github/verify-github-accounts.ps1
+pwsh -File scripts/github/sweep-remotes.ps1
+```
+
+The verifier checks all five layers independently and asks each one *who are you*,
+rather than *did it error*. Expect `PASS ... 24 checks` (the count scales with the
+number of routes in `accounts.json`). The sweep contacts every remote read-only and
+reports which account answered; on a correct machine it is **0 failures**. A dead work
+credential shows up as one failure per `fourth/*` remote -- 9 of them as of 2026-08-11,
+which is the signature to recognise rather than a fixed number.
+
+Verified on the reference machine 2026-08-12: `PASS verify-github-accounts 24 checks`.
+
+### Traps that cost real sessions
+
+| Trap | Reality |
+|---|---|
+| `gh auth refresh` to fix a bad token | **Dead end against an env-var token.** It refreshes gh's own OAuth credential. If a `GITHUB_TOKEN`/`GH_TOKEN` PAT is set, that outranks stored credentials (`GH_TOKEN` > `GITHUB_TOKEN` > stored) and a classic PAT's scopes live on github.com, not in gh. Remove the env var instead. |
+| Adding `wincred` as a credential helper | **This was the actual defect.** With no username GCM could not choose, and wincred answered from a host-level entry mapping to the work account. Keep exactly **one** helper (`manager`, system scope) -- verifier layer 5b asserts this. |
+| Deleting the ambiguous `git:https://github.com` credential | Hygiene, **not** the control. GCM recreates it on the next successful auth. Step 4's `credential.<url>.username` is what makes it never be consulted. |
+| `git remote -v` showing a rewritten URL | Expected under `insteadOf`. The **stored** config is untouched -- check `git config --get remote.origin.url`. |
+| A bare `git credential fill` returning a credential | **Correct**, not a leak. Once step 4 is applied it resolves to the default account deterministically. The invariant is *which* account answers, never *whether* one does. |
+| Running the verifier and getting no output | Pre-2026-08-05 it hung on a GCM GUI prompt at 0% CPU. Fixed with `GIT_TERMINAL_PROMPT=0` + `GCM_INTERACTIVE=never`. If it hangs again, suspect a new interactive path -- a verifier that can hang is one nobody runs. |
+
+**Revoking the GitHub CLI OAuth grant breaks `gh` and plain `git push` together** for
+that account, and GitHub has no reissue button. Recovery is to re-run the login flow
+for that account (steps 1-2), then step 7. Full detail:
+`.claude/rules-src/windows-platform.md`.
 
 ## What The System Provides
 
@@ -137,6 +305,10 @@ Manual sync: `bash scripts/sync-to-active.sh`
 | Python encoding crash (Windows) | Set env var: `PYTHONUTF8=1` |
 | settings.json wrong paths | Re-run wizard or regenerate from `.claude/settings.json.template` |
 | Hooks stale after source edit | `cd ~/.claude/hooks && npm run build` then restart session |
+| "Repository not found" on a repo you own | Wrong-account auth. Run `verify-github-accounts.ps1`; usually a missing `credential.https://github.com.username` (step 4) or a second credential helper |
+| `gh` acts as the wrong account | `Get-GhAccount` shows who `gh` would be in the current directory. If it says `ambient GH_CONFIG_DIR`, the shim is not loaded in this profile (step 6) |
+| Commits authored with the wrong email | `pwsh -File scripts/github/apply-commit-identity.ps1` to plan, `-Apply` to fix. This does **not** rewrite existing commits |
+| Push prompts for credentials, or hangs with no output | Git Credential Manager raising a GUI prompt in a non-interactive shell. Prime it once interactively (step 7) |
 
 ## Windows-Specific Notes
 
@@ -149,9 +321,14 @@ Manual sync: `bash scripts/sync-to-active.sh`
 ## For Claude Code on a New Machine
 
 If you are Claude Code reading this after a fresh clone:
-1. Run the wizard: `cd opc && uv run python -m scripts.setup.wizard`
-2. Verify with the post-setup checks above
-3. Read `~/.claude/CLAUDE.md` for behavioral instructions
-4. Read `~/.claude/RULES.md` for constraints and enforcement
-5. Read `docs/ARCHITECTURE.md` for full system documentation
-6. Run `/help` skill for interactive discovery of available commands
+1. Confirm the clone came from `Rev4nchist` and that remotes are named `fork` / `origin`:
+   `git remote -v`. If not, fix it now -- scheduled scripts hardcode both names.
+2. Run the wizard: `cd opc && uv run python -m scripts.setup.wizard`
+3. Verify with the post-setup checks above
+4. **Do the GitHub Identity steps** -- the wizard does not, and four of its five layers
+   fail silently with the wrong identity rather than an error. Gate:
+   `pwsh -File scripts/github/verify-github-accounts.ps1` must PASS.
+5. Read `~/.claude/CLAUDE.md` for behavioral instructions
+6. Read `~/.claude/RULES.md` for constraints and enforcement
+7. Read `docs/ARCHITECTURE.md` for full system documentation
+8. Run `/help` skill for interactive discovery of available commands

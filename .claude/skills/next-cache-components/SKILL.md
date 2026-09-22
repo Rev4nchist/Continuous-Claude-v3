@@ -1,6 +1,6 @@
 ---
 name: next-cache-components
-description: Next.js 16 Cache Components - PPR, use cache directive, cacheLife, cacheTag, updateTag
+description: Next.js 16 Cache Components: PPR, use cache, cacheLife, cacheTag, updateTag. Use when the user asks about Next.js caching, PPR, or "use cache" directives.
 ---
 
 # Cache Components (Next.js 16+)

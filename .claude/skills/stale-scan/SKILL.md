@@ -1,6 +1,6 @@
 ---
 name: stale-scan
-description: Scan for references to archived or deleted components across configuration files. Finds stale references that cause confusion when Claude follows outdated instructions.
+description: Scans config and rule files for references to archived or deleted components. Use when the user says "stale scan", "stale references", "dead references", or "stale check".
 allowed-tools: [Bash, Read, Grep, Glob]
 metadata:
   keywords: [stale scan, stale references, dead references, stale check, archived, cleanup]

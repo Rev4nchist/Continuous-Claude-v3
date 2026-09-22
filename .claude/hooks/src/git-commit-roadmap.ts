@@ -19,6 +19,7 @@ import { execFileSync } from 'node:child_process';
 import {
   commitRanInProject,
   isPathInsideProject,
+  localDateStamp,
   parseGitCommitInvocations,
 } from './shared/roadmap-sync-guards.js';
 import { insertUnderSection } from './shared/roadmap-splice.js';
@@ -534,7 +535,7 @@ async function main() {
   // commit.
   const preDirty = isRoadmapPreDirty(projectDir, relRoadmapPath);
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStamp();
   const entry = formatCommitEntry(commit, today);
   const updated = appendToCompleted(content, entry);
 

@@ -55,6 +55,32 @@ $MaxAttempts = if ($env:GIT_SAFE_MAX_ATTEMPTS) { [int]$env:GIT_SAFE_MAX_ATTEMPTS
 $BackoffSeconds = if ($env:GIT_SAFE_BACKOFF_SECONDS) { [int]$env:GIT_SAFE_BACKOFF_SECONDS } else { 6 }
 $LogPath = if ($env:GIT_SAFE_LOG) { $env:GIT_SAFE_LOG } else { "$env:USERPROFILE\.claude\logs\msys-crash.jsonl" }
 
+# UNIFIED event log, shared with the msys-crash-capture hook (Bash-tool lane).
+# msys-crash.jsonl stays for backward compatibility, but it is BLIND to every
+# lane except this one -- which is why no MSYS hypothesis has ever been
+# falsifiable. Rows here carry a lane field and, crucially, SUCCESS rows:
+# without a denominator, crash COUNT clustering cannot be told apart from
+# ACTIVITY clustering, and that is the flaw in the standing "crashes come in
+# windows" claim.
+$EventLog = if ($env:MSYS_EVENT_LOG) { $env:MSYS_EVENT_LOG } else { Join-Path $env:USERPROFILE ".claude/logs/msys-events.jsonl" }
+
+function Write-MsysEvent {
+    param([hashtable]$Row)
+    try {
+        # ONE clock, ONE format. The node-side hook stamps UTC; PowerShell
+        # defaults to local-with-offset. Both are valid ISO 8601, but this log
+        # exists to answer a TIME-CLUSTERING question, and a naive sort over
+        # mixed representations interleaves them wrongly. Stamp here so no
+        # caller can get it wrong.
+        $Row['ts'] = (Get-Date).ToUniversalTime().ToString('o')
+        $dir = Split-Path -Parent $EventLog
+        if ($dir -and -not (Test-Path $dir)) { New-Item -ItemType Directory -Force -Path $dir | Out-Null }
+        Add-Content -Path $EventLog -Value ($Row | ConvertTo-Json -Compress) -Encoding utf8
+    } catch {
+        # Telemetry must never be the reason a git command fails.
+    }
+}
+
 # The signature of an MSYS init crash, NOT of a git error.
 $MSYS_PATTERNS = @(
     'fatal error - add_item',
@@ -139,6 +165,13 @@ function Write-CrashLog {
             hooks_expected = $hooksExpected
         }
         Add-Content -Path $LogPath -Value ($row | ConvertTo-Json -Compress) -Encoding utf8
+        # Mirror into the unified log so this lane is comparable with the others.
+        Write-MsysEvent @{
+            ts = $row.ts; lane = 'git-safe'; tool = 'git'; ok = 0
+            signature = $Snippet; exit_code = $ExitCode; attempt = $Attempt
+            recovered = $Recovered; command = ($GitArgs -join ' ')
+            msys_alive_after = $row.bash_alive; node_spawn_ms = $spawnMs
+        }
     } catch {
         # Telemetry must never be the reason a git command fails.
     }
@@ -152,6 +185,14 @@ while ($true) {
     $text = ($output | Out-String)
 
     if ($code -eq 0) {
+        # THE DENOMINATOR. One row per successful git invocation, so this lane
+        # has a call count to divide crashes by. Recording only failures is how
+        # "crashes cluster in windows" became unfalsifiable: with no denominator
+        # a cluster of crashes is indistinguishable from a cluster of commits.
+        Write-MsysEvent @{
+            ts = (Get-Date).ToString('o'); lane = 'git-safe'; tool = 'git'; ok = 1
+            attempt = $attempt; command = ($GitArgs -join ' ')
+        }
         if ($attempt -gt 1) {
             Write-CrashLog -Attempt ($attempt - 1) -ExitCode $code -Snippet 'recovered' -Recovered $true
             Write-Host "[git-safe] recovered on attempt $attempt" -ForegroundColor DarkYellow

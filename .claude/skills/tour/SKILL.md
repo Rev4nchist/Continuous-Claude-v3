@@ -1,6 +1,7 @@
 ---
 name: tour
-description: Friendly onboarding when users ask about capabilities.
+description: Friendly onboarding tour of my capabilities. Use when the user says "what can you do", "what can I do", "help me get started", "show me around", "/tour".
+disable-model-invocation: true
 ---
 
 # Tour: What Can I Do?

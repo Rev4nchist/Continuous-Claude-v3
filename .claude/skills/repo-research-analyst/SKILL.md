@@ -1,6 +1,6 @@
 ---
 name: repo-research-analyst
-description: Analyze repository structure, patterns, conventions, and documentation for understanding a new codebase
+description: "Research a repo's structure, conventions, and docs before working in it. Use when the user says \"research this repo\", \"understand this codebase\", or onboarding to a new project."
 ---
 
 > **Note:** The current year is 2025. Use this when searching for recent documentation and patterns.

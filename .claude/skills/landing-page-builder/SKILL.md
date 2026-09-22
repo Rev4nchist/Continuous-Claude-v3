@@ -1,6 +1,6 @@
 ---
 name: landing-page-builder
-description: Build high-converting landing pages from a brief, product description, or conversation. Use when users ask to create, build, design, or generate a landing page, squeeze page, lead capture page, sales page, or product page. Also triggers on "build me a page," "I need a landing page for," "create an LP," "design a conversion page," or any request to turn a product/service into a web page that captures leads or drives action. Outputs a production-ready single-file HTML page built on research-backed conversion principles. Works with the landing-page-score skill for post-build quality verification.
+description: Build a conversion-optimized landing page from a brief or product description. Use when the user says "build me a page", "create an LP", "I need a landing page for", or asks to design a sales/lead-capture page.
 ---
 
 # Landing Page Builder

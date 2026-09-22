@@ -1,6 +1,6 @@
 ---
 name: code-review
-description: Verification before completion claims
+description: Verification gates required before any completion claim. Use before saying "done"/"fixed", when the user says "review this", "/review", "is this ready to merge".
 ---
 
 # Code Review Skill

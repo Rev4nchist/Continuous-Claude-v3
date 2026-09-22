@@ -1,6 +1,7 @@
 ---
 name: mot
-description: System health check (MOT) for skills, agents, hooks, memory, ROADMAP, knowledge tree, and Braintrust
+description: "System health check for skills, agents, hooks, memory, and Braintrust. Use when the user says \"run mot\", \"health check\", \"/mot\" or asks to audit the system."
+disable-model-invocation: true
 allowed-tools: [Read, Bash, Glob, Grep]
 metadata:
   model: sonnet

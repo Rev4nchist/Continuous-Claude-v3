@@ -1,6 +1,6 @@
 ---
 name: pageindex-search
-description: Tree-based RAG for large markdown documents using LLM reasoning.
+description: Tree-based RAG search for large structured docs like ROADMAP or ARCHITECTURE. Use when user says "search the roadmap", "pageindex search", "find in architecture docs".
 ---
 
 # PageIndex Search Skill

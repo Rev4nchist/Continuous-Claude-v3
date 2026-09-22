@@ -1,6 +1,6 @@
 ---
 name: resume-handoff
-description: Resume work from handoff document with context analysis and validation
+description: Resumes work from a handoff document with context analysis. Use when user says "resume this handoff", "continue from ENG-XXXX", "pick up where we left off".
 ---
 
 # Resume work from a handoff document

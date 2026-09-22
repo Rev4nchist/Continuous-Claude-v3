@@ -1,6 +1,6 @@
 ---
 name: azure-deployment
-description: Azure SWA + Container Apps deployment workflows
+description: Azure Static Web Apps + Container Apps deployment workflows. Use when the user says "deploy to azure", "deploy frontend/backend", or hits API returning HTML, 404s, or staticwebapp.config issues.
 allowed-tools: [Bash, Read]
 ---
 

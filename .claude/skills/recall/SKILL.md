@@ -1,6 +1,6 @@
 ---
 name: recall
-description: Query the memory system for relevant learnings from past sessions.
+description: Query semantic memory for relevant learnings from past sessions. Use when user says "/recall", "recall", "did we solve this before", "check memory for X".
 ---
 
 # Recall - Semantic Memory Retrieval

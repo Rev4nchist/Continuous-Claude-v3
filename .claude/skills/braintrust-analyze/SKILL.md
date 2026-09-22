@@ -1,6 +1,6 @@
 ---
 name: braintrust-analyze
-description: Analyze Claude Code sessions via Braintrust
+description: Analyze Claude Code sessions via Braintrust tracing for patterns and issues. Use when the user says "analyze my session", "why did that fail", "token usage", "detect loops", "replay session".
 ---
 
 # Braintrust Analysis

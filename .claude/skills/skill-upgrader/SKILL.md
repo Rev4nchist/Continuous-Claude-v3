@@ -1,6 +1,6 @@
 ---
 name: skill-upgrader
-description: Upgrade any skill to v5 Hybrid format using decision theory + modal logic
+description: Upgrades a SKILL.md to v5 Hybrid decision-theory format. Use when user says "upgrade this skill to v5", "formalize this skill", "add MDP structure", "apply skill-upgrader to X".
 allowed-tools: [Bash, Read, Write, Edit, Task, Glob, Grep]
 ---
 

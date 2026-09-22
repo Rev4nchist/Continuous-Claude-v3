@@ -1,6 +1,6 @@
 ---
 name: sync-drift
-description: Detect drift between the continuous-claude repo and the active ~/.claude/ directory
+description: Compare repo vs active ~/.claude and list drift. Use when the user says "sync drift", "check sync", "what's out of sync", "drift check".
 allowed-tools: [Bash, Read]
 metadata:
   keywords: [sync drift, check sync, drift check, out of sync, sync status, repo drift, active drift]
@@ -257,4 +257,4 @@ echo "=== End Drift Report ==="
 | `scripts/sync-to-active.sh` | Forward sync: repo to active |
 | `scripts/sync-claude.sh --to-repo` | Reverse sync: active to repo |
 | `.claude/rules/git-sync-workflow.md` | Full sync workflow documentation |
-| `.claude/rules/manual-sync.md` | Manual sync quick reference |
+| `.claude/rules/every-surface-checklist.md` | Two-copy surfaces and what syncs |

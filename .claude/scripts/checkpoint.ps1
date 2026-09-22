@@ -28,9 +28,40 @@ function Create-Checkpoint {
         return
     }
 
-    # Stash all changes including untracked
-    git stash push -u -m $stashMsg
-    Write-Host "[CHECKPOINT] Created: $stashMsg"
+    # NON-DESTRUCTIVE snapshot (2026-08-24). The old `git stash push -u` MOVED
+    # the changes into the stash — every dirty turn-end wiped the working tree
+    # (the agent-arch tree-wipe hazard, 320-stash pile). `git stash create`
+    # writes the same stash commit WITHOUT touching the working tree.
+    # Known limitation: untracked files are NOT captured (stash create has no
+    # -u). Tracked modifications only.
+    $sha = git stash create $stashMsg
+    if (-not $sha) {
+        Write-Host "[CHECKPOINT] Nothing stashable (untracked-only changes; stash create skips untracked)"
+        return
+    }
+    git stash store -m $stashMsg $sha
+    Write-Host "[CHECKPOINT] Created (non-destructive): $stashMsg"
+
+    # Cap the pile: keep only the newest 30 claude-checkpoint entries so it
+    # can never rebuild to 320. Only prefix-matched entries are dropped;
+    # manual stashes are never touched.
+    $stashes = @(git stash list)
+    $seen = 0
+    $dropIdx = @()
+    for ($i = 0; $i -lt $stashes.Count; $i++) {
+        if ($stashes[$i] -match [regex]::Escape($CHECKPOINT_PREFIX)) {
+            $seen++
+            if ($seen -gt 30) { $dropIdx += $i }
+        }
+    }
+    # Drop from highest index down so indices don't shift under us
+    [array]::Reverse($dropIdx)
+    foreach ($i in $dropIdx) {
+        git stash drop "stash@{$i}" 2>$null | Out-Null
+    }
+    if ($dropIdx.Count -gt 0) {
+        Write-Host "[CHECKPOINT] Pruned $($dropIdx.Count) old checkpoint(s) beyond the 30 newest"
+    }
 }
 
 function List-Checkpoints {

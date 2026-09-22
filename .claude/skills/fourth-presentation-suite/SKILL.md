@@ -1,6 +1,6 @@
 ---
 name: fourth-presentation-suite
-description: Generate Fourth-branded EBR/QBR and sales presentations using a two-phase workflow. Phase 1 builds a stunning animated HTML presentation for design review and approval. Phase 2 converts the approved HTML to PPTX for distribution. HTML is always built first -- PPTX is never built until the user explicitly approves the HTML design. Uses the bundled html-engine for visual quality with Fourth brand identity. v6 adds Fourth Midnight palette, 4-color glow rotation, and corrected brand colors.
+description: Build Fourth-branded EBR/QBR and sales presentations, HTML design first then PPTX export. Use when the user asks for a Fourth presentation, deck, EBR, QBR, or sales slides.
 ---
 
 # Fourth Presentation Suite v6

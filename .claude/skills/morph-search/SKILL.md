@@ -1,6 +1,6 @@
 ---
 name: morph-search
-description: Fast codebase search via WarpGrep (20x faster than grep)
+description: Fast AI-powered codebase search via WarpGrep, faster than grep. Use when the user says "search the codebase for X", "find where this is used" or asks to search or edit code fast.
 allowed-tools: [Bash, Read]
 ---
 

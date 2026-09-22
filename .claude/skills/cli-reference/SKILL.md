@@ -1,6 +1,6 @@
 ---
 name: cli-reference
-description: Claude Code CLI commands, flags, headless mode, and automation patterns
+description: Claude Code CLI command and flag reference. Use when user asks "what CLI flags exist", "how do I use headless mode", "automate Claude in CI", "system prompt via CLI".
 allowed-tools: [Read]
 ---
 

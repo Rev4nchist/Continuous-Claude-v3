@@ -1,6 +1,7 @@
 ---
 name: ralph
-description: Maestro's autonomous dev mode - orchestrates agents for PRD-driven feature development
+description: "Maestro's autonomous PRD-driven dev mode; orchestrates agents, never edits code directly. Use when the user says \"/ralph\", \"ralph mode\", \"build feature\", \"create PRD\"."
+disable-model-invocation: true
 allowed-tools: [Read, Glob, Grep, Task, AskUserQuestion]
 ---
 

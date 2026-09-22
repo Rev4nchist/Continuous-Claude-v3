@@ -1,6 +1,6 @@
 ---
 name: workflow-router
-description: Goal-based workflow orchestration - routes tasks to specialist agents based on user goals
+description: Routes an unclear task to the right specialist workflow. Use when the user asks "how should I approach this?", hasn't picked explore/plan/build/fix, or wants task orchestration.
 ---
 
 # Workflow Router

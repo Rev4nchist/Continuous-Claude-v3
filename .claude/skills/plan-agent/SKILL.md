@@ -1,6 +1,6 @@
 ---
 name: plan-agent
-description: Planning agent that creates implementation plans and handoffs from conversation context
+description: Creates an implementation plan and handoff from conversation context. Use when the user asks to "make a plan", "write an implementation plan", or needs a handoff before building.
 ---
 
 > **Note:** The current year is 2025. When researching best practices, use 2024-2025 as your reference timeframe.

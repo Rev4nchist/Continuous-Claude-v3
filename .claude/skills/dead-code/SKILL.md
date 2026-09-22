@@ -1,6 +1,6 @@
 ---
 name: dead-code
-description: Find unused functions and dead code in the codebase
+description: Find unused functions and dead code via TLDR static analysis. Use when the user says "find dead code", "unused functions", "/dead-code" or asks to clean up before a refactor.
 allowed-tools: [Bash]
 metadata:
   keywords: [dead code, unused, cleanup, refactor, unreachable]

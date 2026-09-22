@@ -1,6 +1,6 @@
 ---
 name: fourth-presentation-builder
-description: Expert guidance for creating Fourth-branded PowerPoint presentations (PPTX files only) using official brand guidelines, templates, colors, typography, and layout principles. Ensures professional, on-brand presentations every time.
+description: Fourth brand guidance for PowerPoint decks -- colors, typography, iQ branding, layout. Use when the user says "build a PPTX", "Fourth presentation", "slide deck", or asks for Fourth-branded slides. Not for non-PPTX content -- use fourth-brand-guidelines.
 ---
 
 # Fourth Presentation Builder

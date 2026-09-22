@@ -1,6 +1,6 @@
 ---
 name: hook-scaffold
-description: Scaffolds new Claude Code hooks end-to-end from templates -- generates TypeScript source, registers in settings.json, builds, and verifies
+description: Scaffolds a new Claude Code hook end-to-end -- source, registration, build, verify. Use when the user says "new hook", "scaffold hook", "create hook", "/hook-scaffold".
 metadata:
   user_invocable: true
   keywords: [hook, scaffold, create hook, new hook, hook scaffold, generate hook]

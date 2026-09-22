@@ -1,6 +1,6 @@
 ---
 name: discovery-interview
-description: Deep interview process to transform vague ideas into detailed specs. Works for technical and non-technical users.
+description: "Interview the user to turn a vague idea into a detailed spec. Use when the user says \"help me flesh this out\", \"interview me\", or has an idea but no plan yet."
 metadata:
   user-invocable: true
   model: claude-opus-4-5-20251101

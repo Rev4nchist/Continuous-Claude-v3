@@ -54,14 +54,43 @@ REM Commit if there are changes
 cd /d C:\Users\david.hayes\continuous-claude
 git add .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs
 git diff --cached --quiet
-if errorlevel 1 (
-    echo Committing updated blocklist...
-    git commit -m "chore(security): daily blocklist update [automated]"
-    git push fork main
-    echo Pushed to fork/main
-) else (
-    echo No blocklist changes detected
-)
+if not errorlevel 1 goto :NO_BLOCKLIST_CHANGES
+
+REM PUSH THE BRANCH WE JUST COMMITTED TO -- not `main`.
+REM This said `git push fork main`, which pushes the local `main` REF, while the
+REM commit above lands on whatever branch is checked out (agentic-os for the whole
+REM life of this job). Because local main was strictly BEHIND fork/main, git had
+REM nothing to send and reported "Everything up-to-date" -- exit 0, a success line
+REM in the log, and the blocklist commit never left the machine. Every automated
+REM blocklist commit that reached the remote got there on someone's manual push.
+REM
+REM `HEAD` pushes the current branch to the same-named branch on fork, so the job
+REM follows a branch switch instead of silently no-opping again.
+echo Committing updated blocklist...
+git commit -m "chore(security): daily blocklist update [automated]"
+if errorlevel 1 goto :BLOCKLIST_COMMIT_FAILED
+
+set "BRANCH=(unknown)"
+for /f "usebackq tokens=*" %%B in (`git rev-parse --abbrev-ref HEAD`) do set "BRANCH=%%B"
+
+git push fork HEAD
+if errorlevel 1 goto :BLOCKLIST_PUSH_FAILED
+echo Pushed to fork/%BRANCH%
+goto :AFTER_BLOCKLIST_COMMIT
+
+:NO_BLOCKLIST_CHANGES
+echo No blocklist changes detected
+goto :AFTER_BLOCKLIST_COMMIT
+
+:BLOCKLIST_COMMIT_FAILED
+echo [ERROR] Blocklist commit failed
+exit /b 1
+
+:BLOCKLIST_PUSH_FAILED
+echo [ERROR] Push to fork/%BRANCH% failed -- the commit is local only
+exit /b 1
+
+:AFTER_BLOCKLIST_COMMIT
 
 REM Sync to active ~/.claude/
 echo Syncing to active directory...

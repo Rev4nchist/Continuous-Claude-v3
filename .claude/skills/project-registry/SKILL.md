@@ -1,6 +1,6 @@
 ---
 name: project-registry
-description: Query and manage the centralized project registry for port assignments, stack info, dev commands, and project status
+description: "Query or update the project registry for ports, URLs, stack, and dev commands. Use when the user asks \"what port does X use\", \"project registry\", or \"which project\"."
 allowed-tools: [Read, Write, Bash]
 metadata:
   triggers: ["project registry", "what port", "project info", "which project", "project list"]

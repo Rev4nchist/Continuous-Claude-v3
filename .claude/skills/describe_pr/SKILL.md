@@ -1,6 +1,6 @@
 ---
 name: describe-pr
-description: Generate comprehensive PR descriptions following repository templates
+description: Generates a PR description following the repo template. Use when user says "/describe_pr", "write the PR description", "describe this PR".
 ---
 
 # Generate PR Description

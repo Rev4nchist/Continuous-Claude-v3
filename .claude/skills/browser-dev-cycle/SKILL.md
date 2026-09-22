@@ -1,6 +1,6 @@
 ---
 name: browser-dev-cycle
-description: Full development cycle browser automation for viewing, debugging, testing, and visual inspection of web apps. Five-tier strategy: @playwright/mcp (interaction), @playwright/cli (AI agent disk-based), CDP CLI (`scripts/cdp.mjs`) (performance), Playwright-core (scripting), and Playwright CLI (e2e test suites). Use when users need to browse, take screenshots, debug network/performance, run e2e tests, record tests with codegen, or do visual QA. Triggers on "browser", "screenshot", "viewport", "performance trace", "network debug", "visual QA", "responsive test", "e2e test", "playwright test", "codegen", "test suite".
+description: Five-tier browser automation: Playwright MCP/CLI, CDP, Playwright-core, Playwright test runner. Use when the user says "screenshot this", "debug network", "run e2e tests", "visual QA", or "codegen".
 ---
 
 # Browser Dev Cycle: Five-Tier Automation Strategy

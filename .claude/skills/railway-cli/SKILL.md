@@ -1,6 +1,6 @@
 ---
 name: railway-cli
-description: Railway deployment management -- deploy, logs, environment variables, and service management via Railway CLI
+description: "Deploy, view logs, and manage env vars on Railway via CLI. Use when the user says \"deploy to railway\", \"railway logs\", or \"check railway status\"."
 ---
 
 # Railway CLI Skill
