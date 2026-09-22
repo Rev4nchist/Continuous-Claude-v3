@@ -161,4 +161,81 @@ next interactive session. After posting one, delete its block from this file.
 
 ---
 
+## 2026-08-06 — memory (Memory)
+
+- **Date:** 2026-08-06
+- **Component:** memory — Memory
+- **Verdict:** adopt
+- **Headline:** The read path passed its re-baseline (228 events, 3.9% fallback) but every quality field we log is constant by construction — we always inject exactly 3 memories and cannot tell if any were useful — while the write path's flagship 2026-07-24 distill feature has produced 0 of 90 new rows because it is wired only to a thinking-block extractor that last fired 2026-03-05.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-06-memory.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-07 — hooks (Hooks)
+
+- **Date:** 2026-08-07
+- **Component:** hooks — Hooks
+- **Verdict:** adopt
+- **Headline:** The hook layer's last 12 days went entirely into detection (ratchets that work and have already caught real 186-day-silent failures) while every enforcement item from the 2026-07-26 pass stayed unshipped and the drift it measures grew — and the sharpest newly-verified finding is that CCv3's one permission-widening hook, `permission-auto-allow`, is registered ONLY in the un-version-controlled active settings and is a live instance of an upstream hazard Anthropic closed as not planned.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-07-hooks.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-08 — agents (Agents)
+
+- **Date:** 2026-08-08
+- **Component:** agents — Agents
+- **Verdict:** adopt
+- **Headline:** The agent memory fix shipped but is vacuous — `agent-recall-injector` has fired 415 times and injected exactly zero memories because its 0.05 score floor sits above the maximum score its scorer can emit; fixing one constant is a bigger win than anything on the frontier list, and it does not need ST-05.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-08-agents.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-09 — workflows (Workflows)
+
+- **Date:** 2026-08-09
+- **Component:** workflows — Workflows
+- **Verdict:** adopt
+- **Headline:** Ralph and Maestro are dormant — no Ralph agent output since 2026-02-04 and no Maestro state file exists — so the five items three prior passes kept re-proposing are improvements to code paths that have not run in six months; close them, ship the now-unambiguous doc fix, and re-target the frontier upgrades at the orchestration surfaces that actually execute (hand-run kraken waves, lane.mjs, /review + /premortem).
+- **Proposal:** `docs/self-improvement/proposals/2026-08-09-workflows.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-10 — code-intel (Code Intelligence)
+
+- **Date:** 2026-08-10
+- **Component:** code-intel — Code Intelligence
+- **Verdict:** adopt
+- **Headline:** The capability CCv3 cut in July (Serena's LSP symbol layer) has since shipped inside Claude Code itself as a first-party LSP tool with no index, no staleness, and no MCP routing tax — enabling two official plugins is a ~30-minute change that recovers it, while last iteration's P0 (a now-5.1-month-stale FAISS index that still DENIES greps) went unactioned for 12 days and is still live.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-10-code-intel.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-11 — observability (Braintrust Observability)
+
+- **Date:** 2026-08-11
+- **Component:** observability — Braintrust Observability
+- **Verdict:** adopt
+- **Headline:** The durable spool shipped on 2026-08-08 is currently holding a single 541 MB record that has failed on every flush for four days — the 413-halving guard never fires because the upload times out before the server can return a status — so the top recommendation is to bound the batch at write time, and the frontier's genuinely new offer this pass is trajectory-level failure attribution (FALAT, AgenTracer) plus automatic failure clustering, which is what a harness that runs most of its work in sub-agents actually needs next.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-11-observability.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
+## 2026-08-12 — doc-rag (Doc-RAG (PageIndex))
+
+- **Date:** 2026-08-12
+- **Component:** doc-rag — Doc-RAG (PageIndex)
+- **Verdict:** skip
+- **Headline:** Do not evolve PageIndex along frontier lines — 74 of 84 indexed docs are stale, zero retrievals appear in 1,497 recall log rows, the advertised "98.7% vs ~50%" figure is a vendor PDF-QA number that does not transfer, and the harness's own agentic grep already covers this ground; correct the false claims, cap the 84-LLM-call fan-out, fix the refresh trigger, and shrink the component to a cheap FTS locator.
+- **Proposal:** `docs/self-improvement/proposals/2026-08-12-doc-rag.md`
+- **Note:** Deterministic parent-process append (run-research.ps1) — headless session does not write this queue.
+
+---
+
 *Queue clear above this line — no pending digests. Last sweep: 2026-07-17 (07-14 Agents + 07-15 Workflows + 07-16 Code-Intel posted to Bridge Code→Eve queue as child pages + one-liners, with Tracker auto-mirror rows).*
