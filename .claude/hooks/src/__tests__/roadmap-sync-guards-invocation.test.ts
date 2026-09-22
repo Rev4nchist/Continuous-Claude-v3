@@ -30,6 +30,7 @@ import {
   containsGitCommit,
   commitRanInProject,
   extractCdTarget,
+  localDateStamp,
 } from '../shared/roadmap-sync-guards.js';
 
 const isWin = process.platform === 'win32';
@@ -193,5 +194,41 @@ describe('commitRanInProject', () => {
   it('blocks when ANY invocation in a compound command escapes', () => {
     expect(commitRanInProject('git commit -m "a" && git -C ../other commit -m "b"', PROJECT))
       .toBe(false);
+  });
+});
+
+/**
+ * localDateStamp: every ROADMAP writer used `toISOString().split('T')[0]`,
+ * which is UTC. West of UTC that files evening work a day ahead -- the commit
+ * fixing the planning-entry extractor was itself stamped 2026-08-13 on the
+ * evening of the 12th. It also let two writers straddling UTC midnight
+ * disagree about "today" while both matched same-day blocks by that string.
+ *
+ * These assertions are timezone-INDEPENDENT by construction: `new Date(y, m,
+ * d, ...)` builds in local time and getFullYear/getMonth/getDate read it back
+ * in local time, so they hold on any machine.
+ */
+describe('localDateStamp (UTC-vs-local date drift)', () => {
+  it('uses the LOCAL calendar date, not the UTC one', () => {
+    // 23:30 local on the 12th. In any timezone west of UTC, toISOString()
+    // would already say the 13th here.
+    expect(localDateStamp(new Date(2026, 7, 12, 23, 30))).toBe('2026-08-12');
+  });
+
+  it('holds at 00:30 local, where timezones EAST of UTC would still say the 11th', () => {
+    expect(localDateStamp(new Date(2026, 7, 12, 0, 30))).toBe('2026-08-12');
+  });
+
+  it('zero-pads single-digit months and days', () => {
+    expect(localDateStamp(new Date(2026, 0, 5, 12, 0))).toBe('2026-01-05');
+  });
+
+  it('emits exactly YYYY-MM-DD, the shape the same-day block match depends on', () => {
+    expect(localDateStamp(new Date(2026, 11, 31, 18, 45))).toMatch(/^\d{4}-\d{2}-\d{2}$/);
+  });
+
+  it('defaults to now when no clock is injected', () => {
+    const now = new Date();
+    expect(localDateStamp()).toBe(localDateStamp(now));
   });
 });

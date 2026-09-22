@@ -768,6 +768,14 @@ function writeRoadmapGuarded(args) {
   });
 }
 
+// src/shared/roadmap-sync-guards.ts
+function localDateStamp(now = /* @__PURE__ */ new Date()) {
+  const year = now.getFullYear();
+  const month = String(now.getMonth() + 1).padStart(2, "0");
+  const day = String(now.getDate()).padStart(2, "0");
+  return `${year}-${month}-${day}`;
+}
+
 // src/post-plan-roadmap.ts
 function renderSectionBody(key, sections) {
   const lines = [];
@@ -1009,31 +1017,60 @@ function parseSections(content) {
   }
   return sections;
 }
+function isFenceLine(trimmed) {
+  return /^(```|~~~)/.test(trimmed);
+}
+function isListMarker(trimmed) {
+  return /^[-*]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
+}
+function cleanBulletText(bulletText) {
+  if (!bulletText) return null;
+  let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, "");
+  cleanText = cleanText.replace(/^\*\*([^*]+?)[\s:.;,]*\*\*[\s:]*/, "$1: ").replace(/^`([^`]+)`\s*[-–]\s*/, "").replace(/^\*([^*]+)\*:?\s*/g, "$1 ").replace(/::\s*\*/g, ": ").replace(/\s+/g, " ").replace(/\s*:\s*$/, "").trim();
+  if (cleanText.length < 15) return null;
+  if (cleanText.startsWith("|") || cleanText.startsWith("```")) return null;
+  if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) return null;
+  if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) return null;
+  return cleanText;
+}
 function extractBullets(content, keywords) {
   const bullets = [];
   const lines = content.split("\n");
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith("-") && !trimmed.startsWith("*") && !trimmed.match(/^\d+\./)) {
-      continue;
-    }
-    const bulletText = trimmed.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim();
-    if (!bulletText) continue;
-    let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, "");
-    cleanText = cleanText.replace(/^\*\*([^*]+)\*\*:?\s*/, "$1: ").replace(/^`([^`]+)`\s*[-–]\s*/, "").replace(/^\*([^*]+)\*:?\s*/g, "$1 ").replace(/::\s*\*/g, ": ").replace(/\s+/g, " ").trim();
-    if (cleanText.length < 15) continue;
-    if (cleanText.startsWith("|") || cleanText.startsWith("```")) continue;
-    if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) continue;
-    if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) continue;
+  let inFence = false;
+  let current = null;
+  const flush = () => {
+    if (current === null) return;
+    const raw = current.join(" ").trim();
+    current = null;
+    const cleanText = cleanBulletText(raw);
+    if (cleanText === null) return;
     if (keywords) {
       const lower = cleanText.toLowerCase();
-      if (keywords.some((kw) => lower.includes(kw))) {
-        bullets.push(cleanText);
-      }
-    } else {
-      bullets.push(cleanText);
+      if (!keywords.some((kw) => lower.includes(kw))) return;
     }
+    bullets.push(cleanText);
+  };
+  for (const line of lines) {
+    const trimmed = line.trim();
+    if (isFenceLine(trimmed)) {
+      flush();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+    if (isListMarker(trimmed)) {
+      flush();
+      current = [trimmed.replace(/^[-*]\s*/, "").replace(/^\d+\.\s*/, "").trim()];
+      continue;
+    }
+    if (current === null) continue;
+    if (!trimmed || /^#{1,6}\s/.test(trimmed) || trimmed.startsWith("|")) {
+      flush();
+      continue;
+    }
+    current.push(trimmed);
   }
+  flush();
   return bullets;
 }
 function extractFirstParagraph(content) {
@@ -1073,7 +1110,8 @@ function extractFilesFromContent(content) {
   }
   return [...new Set(files)];
 }
-function extractPlanInfo(planContent, filePath) {
+function extractPlanInfo(rawPlanContent, filePath) {
+  const planContent = rawPlanContent.replace(/\r\n?/g, "\n");
   const sections = parseSections(planContent);
   let title = "Planning Session";
   const titleMatch = planContent.match(/^#\s+(?:Plan:\s*)?(.+)/m);
@@ -1241,7 +1279,7 @@ async function main() {
     }));
     return;
   }
-  const today = (/* @__PURE__ */ new Date()).toISOString().split("T")[0];
+  const today = localDateStamp();
   const planPathForEntry = planPathForRoadmap(projectDir, latestPlanPath);
   const newSession = {
     date: today,

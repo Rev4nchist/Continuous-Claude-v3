@@ -18,7 +18,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseRoadmap, type RoadmapItem as SharedRoadmapItem } from './shared/roadmap-parser.js';
-import { isPathInsideProject, isTasksRelatedToGoal } from './shared/roadmap-sync-guards.js';
+import { isPathInsideProject, isTasksRelatedToGoal, localDateStamp } from './shared/roadmap-sync-guards.js';
 import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
 import { insertUnderSection } from './shared/roadmap-splice.js';
 
@@ -96,7 +96,7 @@ function extractPRDMetadata(content: string): PRDMetadata {
     status: 'Draft',
     priority: 'Normal',
     version: '1.0',
-    created: new Date().toISOString().split('T')[0],
+    created: localDateStamp(),
   };
 
   const lines = content.split('\n');
@@ -352,7 +352,7 @@ function updateProgress(content: string, title: string, progress: TaskProgress):
  * header meant the entry was dropped on the floor).
  */
 function moveToCompleted(content: string, title: string): RoadmapEdit {
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStamp();
   return {
     content: insertUnderSection(content, '## completed', `- [x] ${title} (${today})`),
     removed: [],
@@ -377,7 +377,7 @@ function promoteToCurrent(content: string, item: RoadmapItem): RoadmapEdit {
   let inCurrent = false;
   let inPlanned = false;
   let removedFromPlanned = false;
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStamp();
 
   for (let i = 0; i < lines.length; i++) {
     const stripped = lines[i].trim();

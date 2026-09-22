@@ -29,6 +29,7 @@ import {
   type LineRange,
 } from './shared/roadmap-splice.js';
 import { writeRoadmapGuarded } from './shared/roadmap-audit.js';
+import { localDateStamp } from './shared/roadmap-sync-guards.js';
 
 interface PostToolUseInput {
   tool_name: string;
@@ -447,58 +448,130 @@ function parseSections(content: string): Record<string, string> {
   return sections;
 }
 
+/** Opens or closes a fenced code block. */
+function isFenceLine(trimmed: string): boolean {
+  return /^(```|~~~)/.test(trimmed);
+}
+
+/**
+ * Starts a markdown list item. The whitespace after the marker is REQUIRED --
+ * markdown demands it, and without it a shell flag inside a code block
+ * (`--jq '...'`) reads as a bullet and loses one dash to the marker strip.
+ * That is exactly how `- -jq '"mergeable=..."'` reached ROADMAP.md in a71e13e.
+ */
+function isListMarker(trimmed: string): boolean {
+  return /^[-*]\s/.test(trimmed) || /^\d+\.\s/.test(trimmed);
+}
+
+/**
+ * Normalize one accumulated list item to its ROADMAP bullet text, or null if
+ * it should be dropped. Split out of the old inline loop body so the cleanup
+ * runs ONCE on the fully joined item rather than on a single physical line.
+ */
+function cleanBulletText(bulletText: string): string | null {
+  if (!bulletText) return null;
+
+  // Skip checkbox syntax but keep content
+  let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, '');
+
+  // Clean up markdown formatting artifacts
+  cleanText = cleanText
+    // **Bold:** → "Bold: ". The trailing-punctuation class sits INSIDE the
+    // bold: a colon or period written by the author used to survive into $1
+    // while the replacement appended its own ": ", yielding "commit::" and
+    // "merging.:" in the committed entries (defect D4).
+    .replace(/^\*\*([^*]+?)[\s:.;,]*\*\*[\s:]*/, '$1: ')
+    .replace(/^`([^`]+)`\s*[-–]\s*/, '')       // `code` - description → description
+    .replace(/^\*([^*]+)\*:?\s*/g, '$1 ')      // *Italic* → Italic (global)
+    .replace(/::\s*\*/g, ': ')                 // ::* → :
+    // NOTE: a global, unanchored `.replace(/\*\s+/g, ' ')` used to live here
+    // ("trailing * → space"). It ate the closing `*` of any `**bold**`
+    // followed by whitespace -- "but **not** fix" became "but **not* fix" --
+    // because the leading-emphasis cases above already anchor what this was
+    // meant to mop up. Deleted rather than anchored: no fixture or test
+    // depended on it (verified via grep before removal), and the two anchored
+    // replaces are sufficient for every case this file's fixtures exercise.
+    // (Vector 5, `roadmap-sync-clobber` plan.)
+    .replace(/\s+/g, ' ')                      // normalize whitespace
+    .replace(/\s*:\s*$/, '')                   // never emit a hanging colon
+    .trim();
+
+  // Skip if too short (likely markdown fragments) or starts with special chars
+  if (cleanText.length < 15) return null;
+  if (cleanText.startsWith('|') || cleanText.startsWith('```')) return null;
+
+  // Skip pure code references without context
+  if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) return null;
+
+  // Skip lines that are mostly placeholders/variables
+  if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) return null;
+
+  return cleanText;
+}
+
+/**
+ * Collect markdown list items from `content`, one bullet per item.
+ *
+ * BLOCK-AWARE, deliberately. The previous implementation looped over physical
+ * lines and `continue`d on anything without a leading marker, so every
+ * hard-wrapped bullet lost all but its first line. Plan files here wrap at
+ * ~95-100 columns, which is why the committed entries looked like they had
+ * been cut at a ~90-character budget. There was never a budget.
+ *
+ * Capture rule: an item captures its FIRST PARAGRAPH. A blank line, a code
+ * fence, a header, a table row, or the next list item ends it. Lines inside a
+ * fence are never read at all.
+ */
 export function extractBullets(content: string, keywords?: string[]): string[] {
   const bullets: string[] = [];
   const lines = content.split('\n');
 
-  for (const line of lines) {
-    const trimmed = line.trim();
-    if (!trimmed.startsWith('-') && !trimmed.startsWith('*') && !trimmed.match(/^\d+\./)) {
-      continue;
-    }
+  let inFence = false;
+  let current: string[] | null = null;
 
-    const bulletText = trimmed.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, '').trim();
-    if (!bulletText) continue;
+  const flush = (): void => {
+    if (current === null) return;
+    const raw = current.join(' ').trim();
+    current = null;
 
-    // Skip checkbox syntax but keep content
-    let cleanText = bulletText.replace(/^\[[ x]\]\s*/i, '');
-
-    // Clean up markdown formatting artifacts
-    cleanText = cleanText
-      .replace(/^\*\*([^*]+)\*\*:?\s*/, '$1: ')  // **Bold:** → Bold:
-      .replace(/^`([^`]+)`\s*[-–]\s*/, '')       // `code` - description → description
-      .replace(/^\*([^*]+)\*:?\s*/g, '$1 ')      // *Italic* → Italic (global)
-      .replace(/::\s*\*/g, ': ')                 // ::* → :
-      // NOTE: a global, unanchored `.replace(/\*\s+/g, ' ')` used to live here
-      // ("trailing * → space"). It ate the closing `*` of any `**bold**`
-      // followed by whitespace -- "but **not** fix" became "but **not* fix" --
-      // because lines 284/286 above already anchor the leading-emphasis cases
-      // this was meant to mop up. Deleted rather than anchored: no fixture or
-      // test depended on it (verified via grep before removal), and the two
-      // anchored replaces are sufficient for every case this file's fixtures
-      // exercise. (Vector 5, `roadmap-sync-clobber` plan.)
-      .replace(/\s+/g, ' ')                      // normalize whitespace
-      .trim();
-
-    // Skip if too short (likely markdown fragments) or starts with special chars
-    if (cleanText.length < 15) continue;
-    if (cleanText.startsWith('|') || cleanText.startsWith('```')) continue;
-
-    // Skip pure code references without context
-    if (cleanText.match(/^`[^`]+`$/) || cleanText.match(/^[A-Za-z_]+\.[a-z]+$/)) continue;
-
-    // Skip lines that are mostly placeholders/variables
-    if (cleanText.match(/\{[^}]+\}/) && cleanText.length < 50) continue;
+    const cleanText = cleanBulletText(raw);
+    if (cleanText === null) return;
 
     if (keywords) {
       const lower = cleanText.toLowerCase();
-      if (keywords.some(kw => lower.includes(kw))) {
-        bullets.push(cleanText);
-      }
-    } else {
-      bullets.push(cleanText);
+      if (!keywords.some(kw => lower.includes(kw))) return;
     }
+    bullets.push(cleanText);
+  };
+
+  for (const line of lines) {
+    const trimmed = line.trim();
+
+    // A fence both toggles the skip state and terminates the item it sits in.
+    if (isFenceLine(trimmed)) {
+      flush();
+      inFence = !inFence;
+      continue;
+    }
+    if (inFence) continue;
+
+    if (isListMarker(trimmed)) {
+      flush();
+      current = [trimmed.replace(/^[-*]\s*/, '').replace(/^\d+\.\s*/, '').trim()];
+      continue;
+    }
+
+    if (current === null) continue;
+
+    // Anything that is not plain prose ends the item.
+    if (!trimmed || /^#{1,6}\s/.test(trimmed) || trimmed.startsWith('|')) {
+      flush();
+      continue;
+    }
+
+    current.push(trimmed);
   }
+  flush();
 
   return bullets;
 }
@@ -553,7 +626,12 @@ function extractFilesFromContent(content: string): string[] {
   return [...new Set(files)];
 }
 
-export function extractPlanInfo(planContent: string, filePath?: string): PlanInfo {
+export function extractPlanInfo(rawPlanContent: string, filePath?: string): PlanInfo {
+  // Normalize line endings first. Every header and list regex below anchors on
+  // `$` or splits on '\n', so a CRLF plan (any git checkout with
+  // core.autocrlf=true) parsed as one header-less blob: no steps, no
+  // verification, no decisions.
+  const planContent = rawPlanContent.replace(/\r\n?/g, '\n');
   const sections = parseSections(planContent);
 
   // Extract title
@@ -782,7 +860,7 @@ async function main() {
     return;
   }
 
-  const today = new Date().toISOString().split('T')[0];
+  const today = localDateStamp();
 
   // Relative to the project when the plan lives inside it, so the ROADMAP entry
   // stays readable and portable; absolute otherwise rather than guessing.
