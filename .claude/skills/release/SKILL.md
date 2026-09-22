@@ -1,6 +1,7 @@
 ---
 name: release
-description: Release preparation workflow - security audit → E2E tests → review → changelog → docs
+description: "Release prep: security audit, E2E tests, review, changelog, docs. Use when the user says \"/release\", \"prepare a release\", \"ship version X\", \"cut a release\"."
+disable-model-invocation: true
 ---
 
 # /release - Release Workflow

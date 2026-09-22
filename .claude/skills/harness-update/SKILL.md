@@ -1,6 +1,7 @@
 ---
 name: harness-update
-description: Safely update a cross-model harness (Codex, Grok, or a future one) — upgrade its CLI, re-verify the capability surface, live-probe new model ids, and propagate the verified allowlist to every registered edit point. Use when the user says "/harness-update", "update codex", "update grok", "enable model X", "new codex/grok version", "add a model to the allowlist", or when a worker run errors with "requires a newer version". Never add a model id from public docs without a live probe on this account.
+description: Upgrade a cross-model harness (Codex/Grok) and re-verify its live-probed model allowlist. Use when the user says "/harness-update", "update codex", "update grok", "enable model X", or hits a "requires a newer version" error.
+disable-model-invocation: true
 ---
 
 # Harness Update Playbook

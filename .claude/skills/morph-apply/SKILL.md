@@ -1,6 +1,6 @@
 ---
 name: morph-apply
-description: Fast file editing via Morph Apply API (10,500 tokens/sec, 98% accuracy)
+description: Fast AI file editing via Morph Apply, no read-first needed. Use when user says "morph edit", "fast apply this change", "batch edit this large file".
 allowed-tools: [Bash, Read]
 ---
 

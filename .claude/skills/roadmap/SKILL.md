@@ -1,6 +1,6 @@
 ---
 name: roadmap
-description: ROADMAP management - view, update, and track project goals and progress
+description: Manages ROADMAP.md sections manually. Use when user says "/roadmap show", "/roadmap add", "update the roadmap", "set current focus".
 ---
 
 # /roadmap - ROADMAP Management

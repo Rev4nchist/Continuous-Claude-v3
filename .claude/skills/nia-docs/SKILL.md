@@ -1,6 +1,6 @@
 ---
 name: nia-docs
-description: Search library documentation and code examples via Nia API
+description: Search library docs and code examples via Nia. Use when the user says "look up docs for X", "find usage examples", "check the library documentation" before falling back to WebFetch.
 allowed-tools: [Bash, Read]
 metadata:
   user-invocable: true

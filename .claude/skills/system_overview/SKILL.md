@@ -1,6 +1,7 @@
 ---
 name: system-overview
-description: Show users how Continuous Claude works - the opinionated setup with hooks, memory, and coordination.
+description: "Explains how Continuous Claude works: hooks, memory, coordination. Use when the user asks \"how does this work\", \"what can you remember\", \"/system_overview\"."
+disable-model-invocation: true
 ---
 
 # System Overview

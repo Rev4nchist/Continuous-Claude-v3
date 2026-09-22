@@ -1,6 +1,6 @@
 ---
 name: date-logic-management
-description: Parse natural language date expressions into exact ISO 8601 timestamps using deterministic system date utilities
+description: "Convert phrases like \"last week\" or \"next Friday\" into exact ISO 8601 dates. Use when the user mentions a relative date needing resolution before a query."
 ---
 
 # Date Logic Management Skill

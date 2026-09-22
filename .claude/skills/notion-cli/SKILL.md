@@ -1,6 +1,6 @@
 ---
 name: notion-cli
-description: Notion CLI (ntn) operator reference — direct API requests, Markdown page I/O, data-source queries, file uploads, and the parked Workers charter. Use when scripting Notion reads/writes from Bash or PowerShell, refitting scheduled jobs away from claude -p + MCP, publishing HTML attachments via embed blocks, querying or upserting Notion databases from the command line, or when the user mentions "ntn", "notion cli", "notion workers", or "notion api from terminal". For semantic search, page-section edits with selection strings, views/DB creation, or Bridge operations, prefer the Notion MCP (see decision table).
+description: Script Notion reads/writes from the CLI (ntn) — API calls, page I/O, DB queries, file uploads. Use when the user says "ntn", "notion cli", "notion api from terminal", or wants to script Notion from Bash/PowerShell. Not for semantic search, view/DB creation, or Bridge ops — use Notion MCP.
 ---
 
 # Notion CLI (`ntn`)

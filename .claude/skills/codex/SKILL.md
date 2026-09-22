@@ -1,6 +1,6 @@
 ---
 name: codex
-description: Hand a task to the OpenAI Codex harness (default gpt-5.6-luna @ max, on the ChatGPT subscription — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Cross-model execution, complementary to Claude. Use when the user types /codex, says "hand this to Codex", "have Codex implement/do X", "delegate to Codex", "codex, work through this", or wants GPT-5.6 Luna to execute a well-specified task. For adversarial code/plan REVIEW use /review or /premortem (those already call Codex read-only); this skill is for getting work DONE.
+description: Hand a well-specified task to OpenAI Codex (gpt-5.6-luna @ max, ChatGPT subscription) to answer or implement with write access. Use when the user types /codex, says "hand this to Codex", or "delegate to Codex". Not for review — use /review or /premortem.
 ---
 
 # /codex — Delegate a task to the Codex harness (gpt-5.6-luna @ max)

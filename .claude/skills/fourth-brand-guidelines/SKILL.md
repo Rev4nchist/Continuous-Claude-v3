@@ -1,6 +1,6 @@
 ---
 name: fourth-brand-guidelines
-description: Expert guidance for creating Fourth-branded content across all formats (excluding PowerPoint). Covers brand voice, messaging, visual identity, Fourth iQ branding, tone principles, color systems, typography, and photography for marketing materials, documents, web content, and all communications.
+description: Fourth brand voice, tone, color, and typography guidance for non-PPTX content. Use when the user says "brand review", "is this on-brand", "Fourth brand guidelines", or asks to write or review Fourth marketing, blog, or web content. Not for PowerPoint -- use fourth-presentation-builder.
 ---
 
 # Fourth Brand Guidelines

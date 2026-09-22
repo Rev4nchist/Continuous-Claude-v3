@@ -1,6 +1,6 @@
 ---
 name: full-test
-description: Complete platform testing suite - functional + frontend design quality testing with graded report
+description: "Functional and design QA suite: unit tests, API smoke tests, browser tests, 25-check audit. Use when the user says \"/full-test\", \"test the platform\", \"run full test suite\"."
 metadata:
   user_invocable: true
 ---

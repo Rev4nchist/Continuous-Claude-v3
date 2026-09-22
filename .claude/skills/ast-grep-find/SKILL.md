@@ -1,6 +1,6 @@
 ---
 name: ast-grep-find
-description: AST-based code search and refactoring via ast-grep MCP
+description: AST-based structural code search and refactoring via ast-grep. Use when the user says "find this pattern", "refactor this across the codebase", "rename this everywhere" or asks for syntax-aware search.
 allowed-tools: [Bash, Read]
 ---
 

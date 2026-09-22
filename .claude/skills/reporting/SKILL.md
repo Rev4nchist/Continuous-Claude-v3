@@ -1,6 +1,6 @@
 ---
 name: reporting
-description: The Code reporting discipline AND the reporting-system operations command. Discipline half — the "one spine" rule (every reportable unit of work lands one Weekly Work Tracker row, Source-tagged), field mapping, Bridge auto-mirror tie-in. Operations half (proposal 07) — /reporting status (registry tail, trust metrics, drift, next scheduled runs, log locations), /reporting run [pipeline], /reporting heal. Use when finishing reportable work, when asked "how should I report this" / "log this for the report", at session end to capture unreported work, or for pipeline ops — "/reporting", "reporting status", "is reporting healthy", "run the health check", "why is a report row missing/stale".
+description: Reporting discipline and /reporting ops (status, run, heal) for the Weekly Work Tracker spine. Use when finishing reportable work, at session end, or the user asks "/reporting status", "is reporting healthy", "log this for the report".
 ---
 
 # Reporting Discipline (Claude Code)

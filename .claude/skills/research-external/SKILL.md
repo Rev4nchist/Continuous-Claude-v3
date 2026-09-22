@@ -1,6 +1,6 @@
 ---
 name: research-external
-description: External research workflow for docs, web, APIs - NOT codebase exploration
+description: External docs/web/API research. Use when user says "/research-external", "research this library", "look up the docs for X". Not for codebase exploration.
 allowed-tools: [Bash, Read, Write, Task]
 metadata:
   model: sonnet

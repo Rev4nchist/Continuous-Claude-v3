@@ -1,6 +1,6 @@
 ---
 name: continuity-ledger
-description: Create or update continuity ledger for state preservation across clears
+description: Creates a YAML continuity ledger for state preservation across /clear. Use when user says "continuity ledger", "save context before clearing", "create a handoff".
 ---
 
 # Continuity Ledger

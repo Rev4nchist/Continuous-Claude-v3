@@ -1,6 +1,6 @@
 ---
 name: notion-dashboard
-description: Build and maintain machine-refreshed Notion dashboard pages that combine interactive HTML embeds, native DB views, and Notion-AI-readable markdown sections. Use when creating a new auto-refreshed Notion page/dashboard, wiring a page into the project-cards sweep, refreshing the FourthOS Mobile Cockpit, or when the user says "notion dashboard", "mobile cockpit", "refresh mobile cockpit", or "machine-maintained page". Codifies the two-phase publish pattern (deterministic ntn vs MCP-only embed bind) with its 200KiB/1-hour constraints and section-ownership contract.
+description: Build and refresh machine-maintained Notion dashboard pages with HTML embeds and DB views. Use when the user says "notion dashboard", "mobile cockpit", "refresh mobile cockpit", or wants a new auto-refreshed Notion page.
 ---
 
 # Notion Dashboard (machine-refreshed pages)

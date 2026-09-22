@@ -1,6 +1,6 @@
 ---
 name: remember
-description: Store a learning, pattern, or decision in the memory system for future recall.
+description: Store a learning, pattern, or decision in the memory system. Use when the user says "/remember", "remember this", "store this learning", "note this pattern".
 ---
 
 # Remember - Store Learning in Memory

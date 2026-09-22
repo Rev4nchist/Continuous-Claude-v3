@@ -1,6 +1,6 @@
 ---
 name: rlm-analyze
-description: Use when users request deep analysis of very large inputs (whole repositories, lengthy documents, multi-file corpora) via Docker-sandboxed Recursive Language Models. Use when the user asks to "analyze a whole repo/codebase/directory", "summarize a huge document", "find all occurrences of X across many files", "trace patterns or safety checks across the project", or describes work that would overflow normal context windows. Also triggers on the explicit slash command /rlm-analyze followed by a path and a quoted question. Works in any project directory. Requires ANTHROPIC_API_KEY and a running Docker Desktop.
+description: Docker-sandboxed Recursive Language Model analysis of huge repos or documents. Use when the user says "/rlm-analyze", "analyze the whole repo for X", "summarize this huge document", or "find X across all files".
 ---
 
 # /rlm-analyze -- Recursive analysis of large inputs

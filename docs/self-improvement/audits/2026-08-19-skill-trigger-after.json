@@ -1,0 +1,865 @@
+{
+ "summary": {
+  "cases": 45,
+  "hook": {
+   "hits": 14,
+   "hitRate": 0.31,
+   "promptsWithFalseFire": 22
+  },
+  "native": {
+   "answered": 45,
+   "hits": 45,
+   "hitRate": 1,
+   "falseFires": 0
+  },
+  "ts": "2026-08-19T21:12:52.567Z"
+ },
+ "results": [
+  {
+   "prompt": "commit what we have so far",
+   "expect": [
+    "commit"
+   ],
+   "hook": {
+    "fired": [
+     "commit"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "commit",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "write up a handoff so the next session can pick this up",
+   "expect": [
+    "create_handoff"
+   ],
+   "hook": {
+    "fired": [
+     "create_handoff"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "create_handoff",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "resume from the handoff in thoughts/shared/handoffs/reporting-efficiency",
+   "expect": [
+    "resume_handoff"
+   ],
+   "hook": {
+    "fired": [
+     "create_handoff",
+     "resume_handoff"
+    ],
+    "hit": true,
+    "falseFires": [
+     "create_handoff"
+    ]
+   },
+   "native": {
+    "fired": "resume_handoff",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "find dead code in the hooks dir",
+   "expect": [
+    "dead-code"
+   ],
+   "hook": {
+    "fired": [
+     "github-search",
+     "morph-search"
+    ],
+    "hit": false,
+    "falseFires": [
+     "github-search",
+     "morph-search"
+    ]
+   },
+   "native": {
+    "fired": "dead-code",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "the SessionEnd hook isn't firing, figure out why",
+   "expect": [
+    "debug-hooks"
+   ],
+   "hook": {
+    "fired": [
+     "hook-developer"
+    ],
+    "hit": false,
+    "falseFires": [
+     "hook-developer"
+    ]
+   },
+   "native": {
+    "fired": "debug-hooks",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "write a PR description for this branch",
+   "expect": [
+    "describe_pr"
+   ],
+   "hook": {
+    "fired": [
+     "describe_pr"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "describe_pr",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "is there drift between the repo and ~/.claude?",
+   "expect": [
+    "sync-drift"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "sync-drift",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "which hooks are registered but have no dist file?",
+   "expect": [
+    "hook-audit"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "hook-audit",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "scaffold a new PostToolUse hook that logs Edit calls",
+   "expect": [
+    "hook-scaffold"
+   ],
+   "hook": {
+    "fired": [
+     "hook-developer",
+     "debug-agent"
+    ],
+    "hit": false,
+    "falseFires": [
+     "hook-developer",
+     "debug-agent"
+    ]
+   },
+   "native": {
+    "fired": "hook-scaffold",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "what port does NorthStar run on?",
+   "expect": [
+    "project-registry"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "project-registry",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "run the system health check",
+   "expect": [
+    "health-check"
+   ],
+   "hook": {
+    "fired": [
+     "mot"
+    ],
+    "hit": false,
+    "falseFires": [
+     "mot"
+    ]
+   },
+   "native": {
+    "fired": "health-check",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "what did we learn last time we touched the braintrust spool?",
+   "expect": [
+    "recall"
+   ],
+   "hook": {
+    "fired": [
+     "memory",
+     "braintrust-analyze"
+    ],
+    "hit": false,
+    "falseFires": [
+     "memory",
+     "braintrust-analyze"
+    ]
+   },
+   "native": {
+    "fired": "recall",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "remember this: the spool cap binds at import time",
+   "expect": [
+    "remember"
+   ],
+   "hook": {
+    "fired": [
+     "memory"
+    ],
+    "hit": false,
+    "falseFires": [
+     "memory"
+    ]
+   },
+   "native": {
+    "fired": "remember",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "show me the roadmap status",
+   "expect": [
+    "roadmap"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "roadmap",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "score this session",
+   "expect": [
+    "session-score"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "session-score",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "run the playwright e2e tests for the login flow",
+   "expect": [
+    "qa-test"
+   ],
+   "hook": {
+    "fired": [
+     "arbiter"
+    ],
+    "hit": false,
+    "falseFires": [
+     "arbiter"
+    ]
+   },
+   "native": {
+    "fired": "qa-test",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "audit this page for accessibility issues",
+   "expect": [
+    "ui-audit"
+   ],
+   "hook": {
+    "fired": [
+     "systematic-debugging",
+     "ui-audit"
+    ],
+    "hit": true,
+    "falseFires": [
+     "systematic-debugging"
+    ]
+   },
+   "native": {
+    "fired": "ui-audit",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "deploy this to vercel",
+   "expect": [
+    "vercel-cli"
+   ],
+   "hook": {
+    "fired": [
+     "vercel-cli"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "vercel-cli",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "tail the railway logs for the api service",
+   "expect": [
+    "railway-cli"
+   ],
+   "hook": {
+    "fired": [
+     "debug-agent"
+    ],
+    "hit": false,
+    "falseFires": [
+     "debug-agent"
+    ]
+   },
+   "native": {
+    "fired": "railway-cli",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "create a linear issue for the spool bug",
+   "expect": [
+    "linear"
+   ],
+   "hook": {
+    "fired": [
+     "systematic-debugging",
+     "debug-agent"
+    ],
+    "hit": false,
+    "falseFires": [
+     "systematic-debugging",
+     "debug-agent"
+    ]
+   },
+   "native": {
+    "fired": "linear",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "push a row to the weekly work tracker for this fix",
+   "expect": [
+    "log-work"
+   ],
+   "hook": {
+    "fired": [
+     "commit"
+    ],
+    "hit": false,
+    "falseFires": [
+     "commit"
+    ]
+   },
+   "native": {
+    "fired": "log-work",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "what's in the Eve handoff queue?",
+   "expect": [
+    "notion-bridge"
+   ],
+   "hook": {
+    "fired": [
+     "create_handoff"
+    ],
+    "hit": false,
+    "falseFires": [
+     "create_handoff"
+    ]
+   },
+   "native": {
+    "fired": "notion-bridge",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "digest the last 5 videos from IndyDevDan",
+   "expect": [
+    "youtube-research"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "youtube-research",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "build the weekly FourthOS sponsor update",
+   "expect": [
+    "fourthos-weekly"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "fourthos-weekly",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "make a Fourth-branded pptx for the QBR",
+   "expect": [
+    "fourth-presentation-builder",
+    "fourth-presentation-suite"
+   ],
+   "hook": {
+    "fired": [
+     "fourth-presentation-suite"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "fourth-presentation-builder",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "research how other harnesses do context compaction, cite sources",
+   "expect": [
+    "research-external"
+   ],
+   "hook": {
+    "fired": [
+     "morph-search"
+    ],
+    "hit": false,
+    "falseFires": [
+     "morph-search"
+    ]
+   },
+   "native": {
+    "fired": "research-external",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "explore how the lane board works in this codebase",
+   "expect": [
+    "explore"
+   ],
+   "hook": {
+    "fired": [
+     "explore",
+     "repoprompt",
+     "scout"
+    ],
+    "hit": true,
+    "falseFires": [
+     "repoprompt",
+     "scout"
+    ]
+   },
+   "native": {
+    "fired": "explore",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "hand this to codex to implement in a worktree",
+   "expect": [
+    "codex"
+   ],
+   "hook": {
+    "fired": [
+     "codex"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "codex",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "run the premortem on this plan",
+   "expect": [
+    "premortem"
+   ],
+   "hook": {
+    "fired": [
+     "implement_plan",
+     "premortem"
+    ],
+    "hit": true,
+    "falseFires": [
+     "implement_plan"
+    ]
+   },
+   "native": {
+    "fired": "premortem",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "review the diff on this branch",
+   "expect": [
+    "review"
+   ],
+   "hook": {
+    "fired": [
+     "review"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "review",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "what's using the most tokens this session?",
+   "expect": [
+    "tldr-stats"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "tldr-stats",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "query the knowledge tree for where tests live",
+   "expect": [
+    "knowledge-tree"
+   ],
+   "hook": {
+    "fired": [
+     "databases"
+    ],
+    "hit": false,
+    "falseFires": [
+     "databases"
+    ]
+   },
+   "native": {
+    "fired": "knowledge-tree",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "scan for references to archived skills in settings",
+   "expect": [
+    "stale-scan"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "stale-scan",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "vet the skill I just installed from skills.sh",
+   "expect": [
+    "vet-skill"
+   ],
+   "hook": {
+    "fired": [
+     "vet-skill",
+     "find-skills"
+    ],
+    "hit": true,
+    "falseFires": [
+     "find-skills"
+    ]
+   },
+   "native": {
+    "fired": "vet-skill",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "check this file for windows anti-patterns before I commit",
+   "expect": [
+    "win-preflight"
+   ],
+   "hook": {
+    "fired": [
+     "commit"
+    ],
+    "hit": false,
+    "falseFires": [
+     "commit"
+    ]
+   },
+   "native": {
+    "fired": "win-preflight",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "run KQL against the fabric eventhouse for yesterday's ingestion failures",
+   "expect": [
+    "kusto-cli"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "kusto-cli",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "upload this html to notion as an embed on the cockpit page",
+   "expect": [
+    "notion-dashboard",
+    "notion-cli"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "notion-dashboard",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "refresh the project card for iQ360",
+   "expect": [
+    "project-card"
+   ],
+   "hook": {
+    "fired": [
+     "plan-agent"
+    ],
+    "hit": false,
+    "falseFires": [
+     "plan-agent"
+    ]
+   },
+   "native": {
+    "fired": "project-card",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "how is reporting doing, any stale rows?",
+   "expect": [
+    "reporting"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "reporting",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "set up CCv3 in this new repo",
+   "expect": [
+    "init-project"
+   ],
+   "hook": {
+    "fired": [
+     "onboard",
+     "pathfinder"
+    ],
+    "hit": false,
+    "falseFires": [
+     "onboard",
+     "pathfinder"
+    ]
+   },
+   "native": {
+    "fired": "init-project",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "how do I rebind ctrl+s in claude code",
+   "expect": [
+    "keybindings-help"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "keybindings-help",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "allow npm commands without prompting",
+   "expect": [
+    "update-config"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "update-config",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "what model ids and prices does the claude api have right now",
+   "expect": [
+    "claude-api"
+   ],
+   "hook": {
+    "fired": [],
+    "hit": false,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "claude-api",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "fix the failing vitest in skill-router-integration",
+   "expect": [
+    "fix",
+    "systematic-debugging"
+   ],
+   "hook": {
+    "fired": [
+     "systematic-debugging",
+     "fix",
+     "debug-agent"
+    ],
+    "hit": true,
+    "falseFires": [
+     "debug-agent"
+    ]
+   },
+   "native": {
+    "fired": "fix",
+    "hit": true,
+    "falseFire": false
+   }
+  },
+  {
+   "prompt": "add a feature flag to the agentic-os fleet grid",
+   "expect": [
+    "build"
+   ],
+   "hook": {
+    "fired": [
+     "build"
+    ],
+    "hit": true,
+    "falseFires": []
+   },
+   "native": {
+    "fired": "build",
+    "hit": true,
+    "falseFire": false
+   }
+  }
+ ]
+}

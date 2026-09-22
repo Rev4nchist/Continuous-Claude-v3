@@ -1,6 +1,6 @@
 ---
 name: memory-curate
-description: Audit and curate the memory system -- identify signal vs noise, score entries, and archive low-quality learnings.
+description: "Score and archive noisy memory entries. Use when the user says \"curate memory\", \"clean memory\", \"memory audit\", or \"prune old learnings\"."
 allowed-tools: [Bash, Read]
 ---
 

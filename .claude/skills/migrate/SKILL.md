@@ -1,6 +1,7 @@
 ---
 name: migrate
-description: Migration workflow - research → analyze → plan → implement → review
+description: Orchestrate a research-plan-implement-review migration workflow. Use when user says "/migrate", "migrate to X", "upgrade framework", "move from X to Y".
+disable-model-invocation: true
 ---
 
 # /migrate - Migration Workflow

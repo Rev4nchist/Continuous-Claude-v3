@@ -1,6 +1,6 @@
 ---
 name: databases
-description: Query optimization and migration best practices
+description: Query optimization, indexing, and migration best practices for Postgres/Neon/Kusto. Use when the user says "optimize this query", "add an index", "migration", "N+1", or asks about slow queries.
 ---
 
 # Databases Skill

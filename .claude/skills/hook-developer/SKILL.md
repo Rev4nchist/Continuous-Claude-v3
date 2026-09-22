@@ -1,6 +1,6 @@
 ---
 name: hook-developer
-description: Complete Claude Code hooks reference - input/output schemas, registration, testing patterns
+description: "Complete Claude Code hooks reference: schemas, registration, testing patterns. Use when creating, debugging, or registering a Claude Code hook."
 ---
 
 # Hook Developer

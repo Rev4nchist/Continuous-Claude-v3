@@ -1,6 +1,6 @@
 ---
 name: fix
-description: Meta-skill workflow orchestrator for bug investigation and resolution. Routes to debug, implement, test, and commit based on scope.
+description: "Debug, implement, test, and commit fixes for a bug. Use when the user says \"fix this\", \"debug this\", \"/fix\", or reports something broken."
 allowed-tools: [Bash, Read, Grep, Write, Edit, Task]
 ---
 

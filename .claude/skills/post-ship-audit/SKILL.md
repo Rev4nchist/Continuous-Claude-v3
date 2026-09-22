@@ -1,6 +1,6 @@
 ---
 name: post-ship-audit
-description: Standardized post-ship audit checklist to verify system health after feature deployment
+description: 6-step post-deploy health check: tests, ROADMAP, regressions. Use when the user says "post-ship audit", "verify ship", "check after deploy", "post-ship".
 allowed-tools: [Bash, Read, Grep, Glob]
 metadata:
   keywords: [post-ship, audit, verify ship, post-ship audit, ship check, post deploy, regression check]

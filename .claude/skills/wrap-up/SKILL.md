@@ -1,6 +1,7 @@
 ---
 name: wrap-up
-description: Close out (or revisit) a Claude Managed Agent build — regenerate the overview page, recap every primitive the founder now owns, show the run log and live status, suggest 1–2 tailored next upgrades, and sweep hygiene (sessions archived, key only in .env, no literal dates in deployment kickoffs). Use when the founder says "/wrap-up", "wrap up", "close it out", "where do things stand with my agent", or at the end of a /launch-your-agent build.
+description: Close out or check status of a Claude Managed Agent build, run log, and hygiene sweep. Use when the founder says "/wrap-up", "wrap up", "close it out", or "where do things stand with my agent".
+disable-model-invocation: true
 metadata:
   version: "0.2.0"
   vendored_from: "anthropics/launch-your-agent@05e9627"

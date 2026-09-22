@@ -1,6 +1,6 @@
 ---
 name: kusto-cli
-description: Microsoft Kusto.Cli for KQL queries against Azure Data Explorer and Microsoft Fabric Eventhouse — connection strings, headless execution, CSV export
+description: Kusto.Cli reference for KQL queries against Azure Data Explorer or Fabric Eventhouse. Use when the user says "run this KQL", "query Kusto", "Eventhouse", "kusto-cli", or asks to export results to CSV.
 ---
 
 # Kusto CLI Skill

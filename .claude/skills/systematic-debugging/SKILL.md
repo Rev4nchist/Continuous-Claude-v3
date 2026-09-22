@@ -1,6 +1,6 @@
 ---
 name: systematic-debugging
-description: Root cause analysis before fixes - NO fixes without investigation
+description: Root-cause investigation framework applied before writing any fix. Use when user says "debug", "fix this bug", "why is X broken", "find the root cause".
 ---
 
 # Systematic Debugging Skill

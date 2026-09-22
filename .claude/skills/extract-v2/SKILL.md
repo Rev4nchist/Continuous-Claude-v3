@@ -1,6 +1,6 @@
 ---
 name: extract-v2
-description: Smart learning extraction with signal/noise classification. Scans conversation for extractable insights, scores confidence, and generates store commands. Triggered by "extract learnings", "smart extract", or "extract v2".
+description: Extracts and scores learnings from the conversation before storing. Use when the user says "extract learnings", "smart extract", "extract v2", or ends a session with new insight.
 user-invocable: true
 ---
 

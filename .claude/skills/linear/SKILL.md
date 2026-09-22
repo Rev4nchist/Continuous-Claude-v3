@@ -1,6 +1,6 @@
 ---
 name: linear
-description: Linear issue tracking -- create, manage, and search issues, projects, and cycles via CLI and MCP
+description: "Linear issue tracking: create, search, and manage issues, projects, cycles. Use when the user asks to create a Linear issue, check tickets, or search Linear."
 ---
 
 # Linear Skill
