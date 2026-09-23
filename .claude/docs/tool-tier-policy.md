@@ -34,7 +34,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 
 ### 1.2 MCPs — own external service access
 
-**Definition.** Model Context Protocol servers that expose tools to the model. The model calls MCP tools by name (e.g. `notion-fetch`, `linear-create-issue`, `paper-write_html`). MCPs are the only tier that can wrap a credentialed external service that the main session does not have a CLI for.
+**Definition.** Model Context Protocol servers that expose tools to the model. The model calls MCP tools by name (e.g. `notion-fetch`, `linear-create-issue`). MCPs are the only tier that can wrap a credentialed external service that the main session does not have a CLI for.
 
 **MCP inventory across all three configs (post-cleanup):**
 
@@ -51,7 +51,6 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 | `next-devtools` | `~/.mcp.json` + `~/.claude/mcp.json` | stdio (npx) | Next.js devtools |
 | `excalidraw` | `~/.claude/mcp.json` | stdio (node) | Architecture diagram canvas |
 | `idearalph` | `~/.claude/mcp.json` | stdio (node) | IdeaRalph startup-ideation co-founder |
-| `paper` | `~/.claude.json` mcpServers | http (127.0.0.1) | Paper.design UI canvas (24 tools) |
 | `Neon` | `~/.claude.json` mcpServers | http | Neon Postgres ops |
 | `linear` | `~/.claude.json` mcpServers | http | Linear issue tracker |
 | `sentry` | `~/.claude.json` mcpServers | http (sse) | Sentry error monitoring |
@@ -89,11 +88,11 @@ When adding any new capability, walk this matrix top-to-bottom. The first row th
 | **Always-on context injection** triggered by tool use | Hook (PostToolUse `additionalContext`) | The user does not request it; it has to fire automatically on every Edit/Read/Grep | `tldr-context-inject` (injects call graph before agent calls), `react-perf-context` (auto-loads react-perf skill on `.tsx` reads), `epistemic-reminder` (warns after Grep), `pre-tool-knowledge` (knowledge tree context before agent spawn) |
 | **Per-tool gate** (allow/deny) | Hook (PreToolUse `permissionDecision`) | Only hooks can deny | `plan-to-ralph-enforcer` (blocks Edit/Write after plan approval unless Ralph), `package-install-guard` (blocks malicious package installs), `agent-model-guard` / `no-haiku-enforcer` (blocks haiku model), `explore-to-scout` (forces scout instead of Explore) |
 | **State across hook events** | Hook (orchestrator with state file) | Multi-event coordination needs a shared state file in `$TEMP` | `maestro-state-manager` + `maestro-detector` (track maestro phase progress), `plan-exit-tracker` + `plan-to-ralph-enforcer` (plan-approved state file), `ralph-task-monitor` + `ralph-watchdog` |
-| **External authenticated service** with vendor-maintained API | MCP | Auth, rate limits, API surface lives elsewhere | Notion (claude.ai bundled), Linear (`mcp.linear.app`), Sentry (`mcp.sentry.dev`), Neon (`mcp.neon.tech`), Paper (local 127.0.0.1), GitHub (npx server) |
+| **External authenticated service** with vendor-maintained API | MCP | Auth, rate limits, API surface lives elsewhere | Notion (claude.ai bundled), Linear (`mcp.linear.app`), Sentry (`mcp.sentry.dev`), Neon (`mcp.neon.tech`), GitHub (npx server) |
 | **External authenticated service** with batch/scripted use | CLI + skill + safety rule | 32x token savings, predictable structured output | `vercel`, `railway`, `gh`, `linearis`, `sentry-cli`, `neonctl`, `tldr`, `opencli`, `qlty` |
 | **Web platform with browser login** | OpenCLI adapter | Reuses Chrome cookies, zero API keys | Twitter, Reddit, HN, LinkedIn (44 platforms; see `opencli list`) |
 | **User-prompted multi-step workflow** | Skill | Skill body is the playbook the model reads | `build`, `fix`, `release`, `tdd`, `refactor`, `maestro`, `ralph`, `security`, `test`, `review` |
-| **One-step methodology guide** | Skill (lightweight) | The skill body is short but the trigger is real | `databases` (guardrail), `code-review` (guardrail), `systematic-debugging` (guardrail), `paper-design`, `notion-bridge`, `tldr-code` |
+| **One-step methodology guide** | Skill (lightweight) | The skill body is short but the trigger is real | `databases` (guardrail), `code-review` (guardrail), `systematic-debugging` (guardrail), `notion-bridge`, `tldr-code` |
 | **Reusable library called by other components** | `.claude/hooks/src/lib/` (Phase 3) | Imported by hooks; not registered as a hook itself | `daemon-client.ts`, `skill-router.ts`, `transcript-parser.ts`, `skill-validation-prompt.ts`, `hook-trace.ts` |
 | **Per-platform conventional script** | Plain script under `scripts/` | Not a hook, not an MCP — just a CLI helper | `scripts/cdp.mjs`, `scripts/sync-to-active.sh`, `scripts/dev-cleanup.mjs`, `scripts/audit_hook_state.mjs` (planned Phase 2) |
 
@@ -190,9 +189,9 @@ These are the shapes that break the tier model. Catching them early is cheap; ca
 
 **Symptom.** A skill assumes the MCP works, but the MCP only works if a desktop app is running.
 
-**Real example.** `paper` MCP requires the Paper.design desktop app to be running (Windows). If the app is closed, all tool calls fail.
+**Historical example.** The `paper` MCP (retired 2026-09-23) required the Paper.design desktop app to be running. With the app closed, every tool call failed.
 
-**Mitigation.** Skills that depend on such MCPs (like `paper-design`) should explicitly check availability before using. The skill body for paper-design should call out the requirement at the top.
+**Mitigation.** Skills that depend on such MCPs should explicitly check availability before using, and say so at the top of the skill body.
 
 ### A7. Adding a skill for a single-step instruction
 
@@ -209,7 +208,7 @@ These are the shapes that break the tier model. Catching them early is cheap; ca
 1. **Hook frontmatter `kind` field.** Section 1.1 lists the four kinds (gate, injector, orchestrator, telemetry) per the plan Phase 3 (`i-have-a-new-abstract-quail.md` line 142-147). The frontmatter validator (Phase 3 deliverable) checks `kind` matches actual behavior (gates have `permissionDecision`, injectors have `additionalContext`, orchestrators read state files). Confirm this scheme is the canonical source of truth, not a parallel `subdir/` reorg.
 2. **MCP cleanup.** Several MCP entries are `disabled: true` (`firecrawl`, `morph`, `perplexity`, `ast-grep`, `repoprompt`, `qlty`). Should they be deleted, or kept as future-use placeholders? Default proposal: delete from active configs; preserve in a `~/.claude/_archived/mcp.json` for revival.
 3. **Three MCP config files** (`~/.claude/settings.json` mcpServers, `~/.mcp.json`, `~/.claude/mcp.json`, `~/.claude.json` mcpServers). The MEMORY.md note from 2026-03-09 documented the priority order: `~/.mcp.json` > `~/.claude/mcp.json` > `~/.claude/settings.json`. Is consolidating to one file desirable, or does the layered approach serve a real need?
-4. **`paper` MCP availability.** Section A6 anti-pattern. Confirm the `paper-design` skill body has an availability check; if not, propose adding it as a separate cleanup item.
+4. **`paper` MCP availability.** Closed 2026-09-23: the `paper` MCP and the `paper-design` skill were retired.
 5. **Out of scope confirmation.** This document does not propose changes to: any existing hook source code, any skill that uses an MCP, the `cli-integration-strategy.md` rule (which already codifies the CLI-first decision tree), or the canonical-skill consolidation pattern for memory.
 
 ---
