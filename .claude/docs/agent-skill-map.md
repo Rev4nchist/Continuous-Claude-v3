@@ -148,7 +148,6 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | react-perf | react-perf-reviewer |
 | browser-dev-cycle | sentinel (bidirectional, R4) |
 | ui-audit | ui-compliance-reviewer |
-| paper-design | — |
 | shadcnspace | — |
 
 ### Skill / Agent Development (8)
