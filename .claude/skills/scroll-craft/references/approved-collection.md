@@ -1,7 +1,7 @@
 # The approved ten-site standard
 
 Read this before planning a premium marketing site, alongside
-[hero-depth.md](hero-depth.md). On September 4, 2026, Nate approved the rebuilt
+[hero-depth.md](hero-depth.md). On September 4, 2026, the reviewer approved the rebuilt
 ten-site collection and asked for its process to become part of Scrollcraft.
 The first collection had been rejected as generic, flat, and poorly branded.
 The approval belongs to the rebuilt collection, not the original output.

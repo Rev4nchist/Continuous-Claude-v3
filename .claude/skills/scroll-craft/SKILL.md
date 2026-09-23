@@ -46,7 +46,11 @@ Four rules follow from that, and they are the spine of this skill:
    deliberately or every build inherits the same skeleton. The first four builds
    did exactly that. Read [references/uniqueness.md](references/uniqueness.md).
 
-## Nate's standing hero preference
+## Standing hero preference
+
+This is the house standard for every scroll-craft build. Provenance: it comes
+from the upstream author's reviewer (Nate), who approved the Sonder hero and the
+ten-site rebuild on 2026-09-04. Later references to "the reviewer" mean him.
 
 **Dimensional layering is a baseline requirement for a premium marketing hero.**
 Plan independently moving background, subject, foreground, and atmospheric
@@ -66,8 +70,8 @@ directions, and keep depth in the static composition when motion is reduced.
 ## Approved collection standard
 
 Read [references/approved-collection.md](references/approved-collection.md)
-before planning a premium marketing site. It distills the ten-site rebuild Nate
-approved: real brand research, layer contracts, meaningful pointer/scroll depth,
+before planning a premium marketing site. It distills the approved ten-site
+rebuild: real brand research, layer contracts, meaningful pointer/scroll depth,
 appropriate photographic or 3D rendering, distinct navigation and endings,
 useful interactions, mobile art direction, and evidence from the final package.
 These are execution principles and worked examples, not a reusable page skeleton.
@@ -197,6 +201,11 @@ project root pointing at it and nothing moves.
    the brand has a folder in this repo, read it before generating anything, and
    obey its hard rules. A brand that forbids invented numbers means no stat
    counters, however good they look.
+3. **Fourth work (CCv3):** if the brand is Fourth, Fourth iQ or a Fourth
+   product, load the `fourth-brand-guidelines` skill and read
+   [references/fourth.md](references/fourth.md) before Step 1. It maps the
+   brand onto the layer contract: the focal subject is a person using the real
+   product, never technology without people.
 
 Copy `engine/scrollcraft.js` and `engine/scrollcraft.css` into the build folder.
 Never edit the engine per-project; it is the mechanism. Theme it with tokens and
@@ -314,6 +323,12 @@ bash  <skill>/scripts/encode.sh out/01.mp4 assets/01.mp4
 bash  <skill>/scripts/encode.sh out/01.mp4 assets/01-m.mp4 mobile
 ```
 
+Every paid `still` and `shot` appends a row to `<workspace>/kie-spend.jsonl`
+with the balance before and after it (CCv3). `node <skill>/scripts/spend.mjs
+--build <name>` sums a build. Plan first at the published rates in
+[assets.md](references/assets.md), and confirm the batch with Dave before
+running it (CCv3 rule `design-work.md`).
+
 Four things that decide whether this looks premium or generated:
 
 - **One style preamble, reused verbatim in every prompt.** This is what makes
@@ -372,8 +387,14 @@ trap 'kill $SERVE_PID 2>/dev/null' EXIT     # never leave the server running
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/shots
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/mobile --width 390 --height 844
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/reduced --reduced-motion
+if node <skill>/scripts/budget.mjs --url http://localhost:4500;          then D=0; else D=$?; fi   # CCv3 budget, desktop
+if node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; then M=0; else M=$?; fi   # CCv3 budget, phone
 kill $SERVE_PID
+[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # cleanup must not hide a budget failure; safe under set -e
 ```
+
+The budget run fails the build on opening weight, LCP or layout shift; the
+numbers and their sources are in [verify.md](references/verify.md#ccv3-performance-budgets).
 
 The harness walks each act at six positions, waits for the scrub video to
 actually settle, and reports **dead scroll**, **cues that never reach full
@@ -442,7 +463,9 @@ the other seven lost, the signature move, the fingerprint gate result against
 each existing row, the journey, the feeling curve and the peak, the feel-check
 diff (intended curve against felt curve, and what you changed), the score table
 (device per beat), what you
-generated, what you verified with screenshots, and anything you could not
+generated and what it cost (`node <skill>/scripts/spend.mjs --build <name>`,
+also written into `BUILD-REPORT.md`), the performance budget result (see
+[verify.md](references/verify.md#ccv3-performance-budgets)), what you verified with screenshots, and anything you could not
 verify. Say if the brief was self-authored rather than interviewed. Give the
 local URL. Keep it brief; the page is the deliverable.
 

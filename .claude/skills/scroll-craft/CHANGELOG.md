@@ -1,8 +1,35 @@
 # scroll-craft changelog
 
 Dated notes on what changed in the skill and which build's finding drove it.
-Builds live in `OtherWorlds/Ultimate Websites/builds/`; each carries a
-`BUILD-REPORT.md`.
+Builds live in `$SCROLLCRAFT_HOME/builds/` (see `scripts/workspace.mjs` for
+how the workspace resolves); each carries a `BUILD-REPORT.md`. Paths below
+under `OtherWorlds/` are the upstream author's machine and do not exist here.
+
+## 2026-09-23: CCv3 house standard (second local change)
+
+- The standard is now the house standard, not one person's preference.
+  SKILL.md names its provenance once (the upstream reviewer, Nate, 2026-09-04);
+  `hero-depth.md` and `approved-collection.md` say "the reviewer".
+- New `references/fourth.md`: Fourth brand floor (token map, iQ, Poppins, tone),
+  the layer contract for a B2B platform (the focal subject is a person using
+  the real product), demo data only, no customer material in kie.ai uploads,
+  and brand-review acceptance. SKILL.md Bootstrap points to it.
+- New `scripts/budget.mjs` and a budget section in `verify.md`: opening weight
+  (desktop 4,000 KB, phone 2,000 KB), LCP 2,500 ms, CLS 0.1, with a throttled
+  phone run. Bytes come from the browser network log, CLS is the largest
+  session window, and observation runs until the page settles (capped at 30 s).
+- `references/template.html` reserves each pinned act's span in CSS before the
+  engine mounts (JS-only class from a head script). The stock template shifted
+  every section on a throttled phone (CLS 0.524); with the reservation it
+  passes on phone (LCP ~2,000 ms, CLS 0) and desktop.
+- New `scripts/spend.mjs`; `kie.mjs` reads the free balance before and after
+  each paid still or shot and appends a row to `<workspace>/kie-spend.jsonl`
+  (same workspace resolver as the other scripts). A row is written even when
+  the task fails or the download throws, with a `status`; a missing balance is
+  recorded as unmeasured, never as 0. `spend.mjs --build <name>` totals a build
+  for `BUILD-REPORT.md`.
+- Removed the dead `OtherWorlds/sonder-studio/` example path; the header above
+  now says where builds live on this machine.
 
 ## 2026-09-23: CCv3 local changes (vendored from release 0.3.0)
 

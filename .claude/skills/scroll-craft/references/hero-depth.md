@@ -2,7 +2,7 @@
 
 ## Standing preference
 
-For Nate's hero-led marketing websites, **layering is part of the baseline, not an optional polish pass**. A beautiful full-screen photograph with one parallax transform and some text fades can still feel flat. Design a memorable spatial relationship in the hero from the beginning, rather than waiting for Nate to ask for more depth.
+For hero-led marketing websites, **layering is part of the baseline, not an optional polish pass**. A beautiful full-screen photograph with one parallax transform and some text fades can still feel flat. Design a memorable spatial relationship in the hero from the beginning, rather than waiting for a reviewer to ask for more depth.
 
 This preference applies to the hero, not to every section of every website. Preserve the requested brand, content, framework, and functionality. Honor explicit static or simpler directions. Working surfaces such as dashboards do not need an invented marketing hero.
 
@@ -55,9 +55,9 @@ A successful build or transform unit test alone does not prove the visual effect
 
 ## Approved example: Sonder Studio
 
-On September 4, 2026, Nate called the original single-image hero premium but lacking layers and wow factor. He preferred the revision with separate mountains, rear clouds, woman and red dress, volcanic ground, and foreground mist; different depth rates; a shared foot anchor; typography behind the subject; a second scroll beat; and a gallery-frame transition. His response: "Yes, that is so much better."
+On September 4, 2026, the reviewer called the original single-image hero premium but lacking layers and wow factor. He preferred the revision with separate mountains, rear clouds, woman and red dress, volcanic ground, and foreground mist; different depth rates; a shared foot anchor; typography behind the subject; a second scroll beat; and a gallery-frame transition. His response: "Yes, that is so much better."
 
-Local implementation, when available: `OtherWorlds/sonder-studio/` in Nate’s optional example workspace. See `components/SceneHero.tsx`, `lib/scene-motion.ts`, and `VERIFICATION.md` for the worked example. The principles above are self-contained; this path is optional reference material.
+The Sonder source files lived on the upstream author's machine and are not part of this install. The principles above are self-contained.
 
 
 ## Further approved examples
