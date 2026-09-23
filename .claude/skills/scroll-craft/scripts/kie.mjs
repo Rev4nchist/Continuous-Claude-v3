@@ -22,6 +22,7 @@
 
 import fs from "node:fs";
 import path from "node:path";
+import { appendSpend, buildOf, ledgerPath } from "./spend.mjs";
 
 const API = "https://api.kie.ai";
 const UPLOAD = "https://kieai.redpandaai.co/api/file-base64-upload";
@@ -121,6 +122,24 @@ async function download(url, out) {
   return out;
 }
 
+// Balance read for the spend ledger (CCv3). The credit endpoint is free; a
+// failed read records null rather than blocking a job already paid for.
+async function credit() {
+  try {
+    const r = await fetch(`${API}/api/v1/chat/credit`, { headers: H });
+    const n = Number((await r.json())?.data);
+    return r.ok && Number.isFinite(n) ? n : null;
+  } catch { return null; }
+}
+
+async function recordSpend(cmd, model, out, taskId, creditsBefore) {
+  const row = appendSpend({
+    cmd, model, taskId, out: path.resolve(out), build: buildOf(out),
+    creditsBefore, creditsAfter: await credit(),
+  });
+  console.error(`  spend: ${row.spent ?? "unmeasured"} credits -> ${ledgerPath()}`);
+}
+
 function flag(argv, name, dflt = null) {
   const i = argv.indexOf(name);
   return i > -1 && argv[i + 1] ? argv[i + 1] : dflt;
@@ -160,9 +179,11 @@ try {
       model = MODELS.stillEdit;
       input.image_urls = await Promise.all(refs.map(asUrl));
     }
+    const before = await credit();
     const id = await createTask(model, input);
     const urls = await waitTask(id, { label: path.basename(out) });
     await download(urls[0], out);
+    await recordSpend("still", model, out, id, before);
     console.log(out);
 
   } else if (cmd === "shot") {
@@ -182,9 +203,11 @@ try {
       cfg_scale: 0.5,
     };
     if (tail) input.tail_image_url = await asUrl(tail);
+    const before = await credit();
     const id = await createTask(MODELS.shot, input);
     const urls = await waitTask(id, { label: path.basename(out), timeoutMs: 20 * 60 * 1000 });
     await download(urls[0], out);
+    await recordSpend("shot", MODELS.shot, out, id, before);
     console.log(out);
 
   } else {
