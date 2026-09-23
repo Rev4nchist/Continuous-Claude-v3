@@ -1,10 +1,9 @@
 # scroll-craft changelog
 
 Dated notes on what changed in the skill and which build's finding drove it.
-Builds live in `$SCROLLCRAFT_HOME/builds/` (on this machine
-`C:\Users\david.hayes\Projects\scrollcraft\builds\`); each carries a
-`BUILD-REPORT.md`. Paths below under `OtherWorlds/` are the upstream author's
-machine and do not exist here.
+Builds live in `$SCROLLCRAFT_HOME/builds/` (see `scripts/workspace.mjs` for
+how the workspace resolves); each carries a `BUILD-REPORT.md`. Paths below
+under `OtherWorlds/` are the upstream author's machine and do not exist here.
 
 ## 2026-09-23: CCv3 house standard (second local change)
 
@@ -17,12 +16,18 @@ machine and do not exist here.
   and brand-review acceptance. SKILL.md Bootstrap points to it.
 - New `scripts/budget.mjs` and a budget section in `verify.md`: opening weight
   (desktop 4,000 KB, phone 2,000 KB), LCP 2,500 ms, CLS 0.1, with a throttled
-  phone run. Calibrated on the stock template with local test assets: desktop
-  passes (2,703 KB, LCP ~1,060 ms, CLS 0); the throttled phone fails on LCP
-  (~2,520 ms) and CLS (0.524), a known template baseline, not yet fixed.
+  phone run. Bytes come from the browser network log, CLS is the largest
+  session window, and observation runs until the page settles (capped at 30 s).
+- `references/template.html` reserves each pinned act's span in CSS before the
+  engine mounts (JS-only class from a head script). The stock template shifted
+  every section on a throttled phone (CLS 0.524); with the reservation it
+  passes on phone (LCP ~2,000 ms, CLS 0) and desktop.
 - New `scripts/spend.mjs`; `kie.mjs` reads the free balance before and after
-  each paid still or shot and appends a row to `<workspace>/kie-spend.jsonl`.
-  `spend.mjs --build <name>` totals a build for `BUILD-REPORT.md`.
+  each paid still or shot and appends a row to `<workspace>/kie-spend.jsonl`
+  (same workspace resolver as the other scripts). A row is written even when
+  the task fails or the download throws, with a `status`; a missing balance is
+  recorded as unmeasured, never as 0. `spend.mjs --build <name>` totals a build
+  for `BUILD-REPORT.md`.
 - Removed the dead `OtherWorlds/sonder-studio/` example path; the header above
   now says where builds live on this machine.
 

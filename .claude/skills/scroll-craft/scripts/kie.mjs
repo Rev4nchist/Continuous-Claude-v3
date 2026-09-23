@@ -127,17 +127,34 @@ async function download(url, out) {
 async function credit() {
   try {
     const r = await fetch(`${API}/api/v1/chat/credit`, { headers: H });
-    const n = Number((await r.json())?.data);
-    return r.ok && Number.isFinite(n) ? n : null;
+    if (!r.ok) return null;
+    const d = (await r.json())?.data;
+    // Number(null) and Number("") are 0: a missing balance must stay unmeasured,
+    // never read as an empty account.
+    if (d === null || d === undefined || d === "") return null;
+    const n = Number(d);
+    return Number.isFinite(n) ? n : null;
   } catch { return null; }
 }
 
-async function recordSpend(cmd, model, out, taskId, creditsBefore) {
-  const row = appendSpend({
-    cmd, model, taskId, out: path.resolve(out), build: buildOf(out),
-    creditsBefore, creditsAfter: await credit(),
-  });
-  console.error(`  spend: ${row.spent ?? "unmeasured"} credits -> ${ledgerPath()}`);
+// Run one paid job and ALWAYS write its ledger row once the task exists, even
+// if the task fails or the download throws: the credits are spent either way.
+async function runPaid(cmd, model, input, out, waitOpts) {
+  const before = await credit();
+  const id = await createTask(model, input);
+  let status = "task-not-completed";
+  try {
+    const urls = await waitTask(id, waitOpts);
+    status = "download-failed";
+    await download(urls[0], out);
+    status = "ok";
+  } finally {
+    const row = appendSpend({
+      cmd, model, taskId: id, status, out: path.resolve(out), build: buildOf(out),
+      creditsBefore: before, creditsAfter: await credit(),
+    });
+    console.error(`  spend: ${row.spent ?? "unmeasured"} credits (${status}) -> ${ledgerPath()}`);
+  }
 }
 
 function flag(argv, name, dflt = null) {
@@ -179,11 +196,7 @@ try {
       model = MODELS.stillEdit;
       input.image_urls = await Promise.all(refs.map(asUrl));
     }
-    const before = await credit();
-    const id = await createTask(model, input);
-    const urls = await waitTask(id, { label: path.basename(out) });
-    await download(urls[0], out);
-    await recordSpend("still", model, out, id, before);
+    await runPaid("still", model, input, out, { label: path.basename(out) });
     console.log(out);
 
   } else if (cmd === "shot") {
@@ -203,11 +216,7 @@ try {
       cfg_scale: 0.5,
     };
     if (tail) input.tail_image_url = await asUrl(tail);
-    const before = await credit();
-    const id = await createTask(MODELS.shot, input);
-    const urls = await waitTask(id, { label: path.basename(out), timeoutMs: 20 * 60 * 1000 });
-    await download(urls[0], out);
-    await recordSpend("shot", MODELS.shot, out, id, before);
+    await runPaid("shot", MODELS.shot, input, out, { label: path.basename(out), timeoutMs: 20 * 60 * 1000 });
     console.log(out);
 
   } else {

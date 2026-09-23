@@ -16,10 +16,12 @@
 import fs from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { resolveWorkspace } from "./workspace.mjs";
 
-export function ledgerPath() {
-  const home = process.env.SCROLLCRAFT_HOME;
-  return path.join(home ? path.resolve(home) : process.cwd(), "kie-spend.jsonl");
+// The same resolver as every other script, so a paid job and the report that
+// sums it always agree on which ledger they mean.
+export function ledgerPath(cwd = process.cwd()) {
+  return path.join(resolveWorkspace(cwd).root, "kie-spend.jsonl");
 }
 
 // "…/builds/<name>/…" names the build; anything else is filed under "(none)".
@@ -44,16 +46,19 @@ export function readSpend(file = ledgerPath()) {
 }
 
 export function totals(rows) {
-  const by = {};
+  // A Map, not an object: a build named "constructor" or "__proto__" still
+  // gets its own accumulator.
+  const by = new Map();
   for (const r of rows) {
-    const b = (by[r.build] ||= { build: r.build, jobs: 0, stills: 0, shots: 0, spent: 0, unmeasured: 0 });
+    if (!by.has(r.build)) by.set(r.build, { build: r.build, jobs: 0, stills: 0, shots: 0, spent: 0, unmeasured: 0 });
+    const b = by.get(r.build);
     b.jobs++;
     if (r.cmd === "still") b.stills++;
     if (r.cmd === "shot") b.shots++;
     if (Number.isFinite(r.spent)) b.spent = +(b.spent + r.spent).toFixed(2);
     else b.unmeasured++;
   }
-  return Object.values(by);
+  return [...by.values()];
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) {
@@ -63,7 +68,7 @@ if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.me
   const rows = readSpend().filter((r) => !want || r.build === want);
   console.log(`ledger: ${ledgerPath()}`);
   if (!rows.length) { console.log("no paid jobs recorded"); process.exit(0); }
-  if (want) for (const r of rows) console.log(`  ${r.ts}  ${r.cmd.padEnd(5)}  ${String(r.spent ?? "?").padStart(6)}  ${r.out}`);
+  if (want) for (const r of rows) console.log(`  ${r.ts}  ${r.cmd.padEnd(5)}  ${String(r.spent ?? "?").padStart(6)}  ${(r.status || "ok").padEnd(15)}  ${r.out}`);
   for (const t of totals(rows)) {
     console.log(`${t.build}: ${t.jobs} jobs (${t.stills} stills, ${t.shots} shots), ${t.spent} credits` +
       (t.unmeasured ? `, ${t.unmeasured} unmeasured` : ""));

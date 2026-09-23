@@ -188,9 +188,10 @@ and dense-GOP scrub clips are heavy, so the opening has a budget:
 
 ```bash
 node <skill>/scripts/serve.mjs --root . --port 4500 & SERVE_PID=$!
-node <skill>/scripts/budget.mjs --url http://localhost:4500            # desktop
-node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile   # phone, throttled
-kill $SERVE_PID
+node <skill>/scripts/budget.mjs --url http://localhost:4500;          D=$?   # desktop
+node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; M=$?   # phone, throttled
+kill $SERVE_PID                      # clean up first, then report the real result
+[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # non-zero if either budget failed
 ```
 
 | Budget | Desktop | Phone (throttled) | Source |
@@ -203,6 +204,10 @@ kill $SERVE_PID
   clips further down stay unfetched. The engine does fetch the hero act's clip
   at open (any act within 3 viewport-heights), which is why the byte budget
   carries one clip.
+- Bytes come from the browser's network log, so a cross-origin file cannot
+  count as zero. CLS is the largest session window (web.dev definition). The
+  script observes until the network is idle and LCP and CLS have held for
+  1.5 s, capped at 30 s; a capped run says so. An HTTP error fails the run.
 - `--mobile` throttles like Lighthouse's mobile preset (150 ms round trip,
   1.6 Mbit/s, 4x CPU). A localhost LCP without throttling proves nothing.
 - The ~9 MB whole-page video guideline in assets.md still applies; this check
@@ -212,10 +217,14 @@ kill $SERVE_PID
   clip served to a phone.
 - A budget is a gate, not a target. Override with `--max-kb`, `--max-lcp` or
   `--max-cls` only with a reason written into `BUILD-REPORT.md`.
-- Known baseline: the stock `template.html` with test-pattern assets passes on
-  desktop (2,703 KB, LCP 1,064 ms, CLS 0) but fails on a throttled phone (LCP
-  ~2,520 ms, CLS 0.524). A build inherits that CLS unless it fixes the layout
-  that shifts on mobile.
+- **Reserve pinned heights before the engine mounts.** The engine sets each
+  pinned act's height to `data-sc-span` x 100vh at mount. On a slow phone the
+  first paint comes first, so every section below jumps: the stock template
+  measured CLS 0.524 on a throttled phone. `template.html` now adds an `sc-js`
+  class from a head script and reserves each span in CSS (JS-only, so a no-JS
+  visitor keeps natural heights). With it the template passes on both devices
+  (phone: LCP ~2,000 ms, CLS 0). Keep those rules equal to your acts' spans;
+  this check fails on CLS when they drift apart.
 
 ---
 

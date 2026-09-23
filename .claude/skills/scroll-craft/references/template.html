@@ -21,6 +21,20 @@
 <meta name="description" content="One sentence a search result would show.">
 <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 32 32'><rect width='32' height='32' rx='7' fill='%230A0807'/></svg>">
 <link rel="stylesheet" href="scrollcraft.css">
+<script>document.documentElement.classList.add("sc-js")</script>
+<style>
+  /* CCv3: reserve each pinned act's scroll span before the engine mounts. The
+     engine sets height = data-sc-span x 100vh at mount (scrollcraft.js:557); on a
+     slow phone the first paint happens before that and every section below jumps
+     (CLS 0.524 measured by budget.mjs --mobile). JS-only, so a no-JS visitor still
+     gets natural heights and a readable page. Keep each rule equal to its act's
+     data-sc-span: budget.mjs fails on CLS when they drift apart. */
+  .sc-js [data-sc-span="2.6"]  { height: 260vh; }
+  .sc-js [data-sc-span="3.4"]  { height: 340vh; }
+  .sc-js [data-sc-span="2.2"]  { height: 220vh; }
+  .sc-js [data-sc-span="3.2"]  { height: 320vh; }
+  .sc-js [data-sc-span="1.15"] { height: 115vh; }
+</style>
 <style>
   /* The whole rebrand: six colours and two faces. Everything else in
      scrollcraft.css derives from these. */
