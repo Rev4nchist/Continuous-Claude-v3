@@ -1715,7 +1715,7 @@
           "data lineage"
         ],
         "intentPatterns": [
-          "(draw|create|generate|make|build|render|visuali[sz]e|convert|beautify)[^.]{0,80}(diagram|mermaid|topology|lineage)"
+          "(draw|create|generate|make|build|render|visuali[sz]e|convert|beautify)[^.]{0,80}(diagram|mermaid|topology|lineage|architecture)"
         ]
       },
       "source": {
