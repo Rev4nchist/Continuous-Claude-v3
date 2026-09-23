@@ -441,7 +441,11 @@ if $CHANGED; then
         else
             changed_copy_one "$REPO_ROOT/$path" "$dst"
         fi
-    done < <(git -C "$REPO_ROOT" diff-tree --no-commit-id --name-status -r HEAD 2>/dev/null)
+    # -m --first-parent: a plain `diff-tree HEAD` prints NOTHING for a merge
+    # commit, so after fast-forwarding to a PR merge this synced 0 of 177
+    # changed files (2026-09-22, PR #39). Against the first parent it lists
+    # exactly what the merge brought in; ordinary commits are unaffected.
+    done < <(git -C "$REPO_ROOT" diff-tree -m --first-parent --no-commit-id --name-status -r HEAD 2>/dev/null)
 
     # Conditional agent .json sidecar regen -- only when an agent .md changed
     # (full mode runs it unconditionally). The regen writes .json into the repo
