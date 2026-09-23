@@ -180,6 +180,45 @@ silently, which looks fine and is not.
 
 ---
 
+## CCv3 performance budgets
+
+The contact sheet proves the page looks right while scrolling. It says nothing
+about what the visitor downloads before the first frame. Layered alpha planes
+and dense-GOP scrub clips are heavy, so the opening has a budget:
+
+```bash
+node <skill>/scripts/serve.mjs --root . --port 4500 & SERVE_PID=$!
+node <skill>/scripts/budget.mjs --url http://localhost:4500            # desktop
+node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile   # phone, throttled
+kill $SERVE_PID
+```
+
+| Budget | Desktop | Phone (throttled) | Source |
+|---|---|---|---|
+| Bytes fetched before any scroll | 4,000 KB | 2,000 KB | One hero clip at the [assets.md](assets.md) sizes (~3 MB / ~1.5 MB), plus ~1 MB / ~0.5 MB of posters, fonts and engine |
+| Largest Contentful Paint | 2,500 ms | 2,500 ms | web.dev "good" threshold |
+| Cumulative Layout Shift | 0.1 | 0.1 | web.dev "good" threshold |
+
+- The page is loaded once in a fresh headless Chrome and never scrolled, so
+  clips further down stay unfetched. The engine does fetch the hero act's clip
+  at open (any act within 3 viewport-heights), which is why the byte budget
+  carries one clip.
+- `--mobile` throttles like Lighthouse's mobile preset (150 ms round trip,
+  1.6 Mbit/s, 4x CPU). A localhost LCP without throttling proves nothing.
+- The ~9 MB whole-page video guideline in assets.md still applies; this check
+  covers only the opening.
+- The script exits 1 on any failure and lists the five heaviest files. Fix the
+  heaviest first: a poster that should be WebP, an uncropped plate, a desktop
+  clip served to a phone.
+- A budget is a gate, not a target. Override with `--max-kb`, `--max-lcp` or
+  `--max-cls` only with a reason written into `BUILD-REPORT.md`.
+- Known baseline: the stock `template.html` with test-pattern assets passes on
+  desktop (2,703 KB, LCP 1,064 ms, CLS 0) but fails on a throttled phone (LCP
+  ~2,520 ms, CLS 0.524). A build inherits that CLS unless it fixes the layout
+  that shifts on mobile.
+
+---
+
 ## What the harness cannot tell you
 
 Read the sheet for these. They are the ones that matter most.
