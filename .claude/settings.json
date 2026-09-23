@@ -952,5 +952,11 @@
       "disabled": true
     }
   },
-  "effortLevel": "high"
+  "effortLevel": "high",
+  "skillOverrides": {
+    "anthropic-skills:frontend-design": "off",
+    "anthropic-skills:frontend-slides": "off",
+    "anthropic-skills:fourth-presentation-suite": "off",
+    "anthropic-skills:scroll-craft": "off"
+  }
 }
