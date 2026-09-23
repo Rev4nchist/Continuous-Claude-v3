@@ -387,10 +387,10 @@ trap 'kill $SERVE_PID 2>/dev/null' EXIT     # never leave the server running
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/shots
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/mobile --width 390 --height 844
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/reduced --reduced-motion
-node <skill>/scripts/budget.mjs --url http://localhost:4500;          D=$?   # CCv3 budget, desktop
-node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; M=$?   # CCv3 budget, phone
+if node <skill>/scripts/budget.mjs --url http://localhost:4500;          then D=0; else D=$?; fi   # CCv3 budget, desktop
+if node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; then M=0; else M=$?; fi   # CCv3 budget, phone
 kill $SERVE_PID
-[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # cleanup must not hide a budget failure
+[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # cleanup must not hide a budget failure; safe under set -e
 ```
 
 The budget run fails the build on opening weight, LCP or layout shift; the

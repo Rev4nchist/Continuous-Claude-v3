@@ -28,7 +28,11 @@
  *   web.dev definition, not the sum of every shift.
  * - After load it keeps observing until the network is idle and LCP/CLS have
  *   not changed for 1.5 s, capped at --settle-ms (default 30000). A capped run
- *   says so.
+ *   FAILS ("settled"), and bytes of transfers still open are counted from
+ *   their dataReceived chunks.
+ * - Any request made during the opening that answers 400+ fails the run
+ *   ("opening requests"), e.g. a missing hero clip; Chrome's favicon probe is
+ *   ignored. Unknown arguments are a usage error.
  * --mobile also throttles like Lighthouse's mobile preset (150 ms RTT,
  * 1.6 Mbit/s down, 4x CPU), because localhost LCP is otherwise meaningless.
  * Exits 1 when any budget fails or the page answers with an HTTP error, 2 on a
@@ -55,6 +59,15 @@ function num(name, dflt, { min = 0 } = {}) {
   const n = Number(v);
   if (!Number.isFinite(n) || n < min) usage(`${name} must be a number >= ${min}, got "${v}"`);
   return n;
+}
+
+// Reject anything unrecognised: a misspelled --mobile must not silently run
+// the desktop budget.
+const VALUE_FLAGS = new Set(["--url", "--max-kb", "--max-lcp", "--max-cls", "--settle-ms"]);
+const BOOL_FLAGS = new Set(["--mobile"]);
+for (let i = 0; i < argv.length; i++) {
+  if (VALUE_FLAGS.has(argv[i])) { i++; continue; }
+  if (!BOOL_FLAGS.has(argv[i])) usage(`unknown argument "${argv[i]}"`);
 }
 
 const MOBILE = argv.includes("--mobile");
@@ -93,10 +106,16 @@ try {
 
   // Browser-level byte and in-flight accounting.
   const cdp = await context.newCDPSession(page);
-  const urls = new Map(), bytes = new Map(), inflight = new Set();
+  // bytes: finished requests use loadingFinished's total (authoritative);
+  // partial counts partial dataReceived chunks, so a transfer still running at
+  // the cap is counted rather than dropped. A finished request replaces its
+  // partial count, so nothing is double-counted.
+  const urls = new Map(), bytes = new Map(), partial = new Map(), statuses = new Map(), inflight = new Set();
   let lastNet = Date.now();
   cdp.on("Network.requestWillBeSent", (e) => { urls.set(e.requestId, e.request.url); inflight.add(e.requestId); lastNet = Date.now(); });
-  cdp.on("Network.loadingFinished", (e) => { bytes.set(e.requestId, e.encodedDataLength || 0); inflight.delete(e.requestId); lastNet = Date.now(); });
+  cdp.on("Network.responseReceived", (e) => { statuses.set(e.requestId, e.response.status); lastNet = Date.now(); });
+  cdp.on("Network.dataReceived", (e) => { partial.set(e.requestId, (partial.get(e.requestId) || 0) + (e.encodedDataLength || 0)); lastNet = Date.now(); });
+  cdp.on("Network.loadingFinished", (e) => { bytes.set(e.requestId, e.encodedDataLength || 0); partial.delete(e.requestId); inflight.delete(e.requestId); lastNet = Date.now(); });
   cdp.on("Network.loadingFailed", (e) => { inflight.delete(e.requestId); lastNet = Date.now(); });
   await cdp.send("Network.enable");
   if (MOBILE) {
@@ -151,11 +170,18 @@ try {
   }));
   let total = 0;
   const files = [];
-  for (const [id, n] of bytes) { total += n; files.push({ url: urls.get(id) || id, kb: Math.round(n / 1024) }); }
+  for (const [id, n] of [...bytes, ...partial]) { total += n; files.push({ url: urls.get(id) || id, kb: Math.round(n / 1024) }); }
   const kb = Math.round(total / 1024);
+  // Every request made during the opening is one the opening needs (lazy
+  // assets further down are never requested here). Chrome's own favicon probe
+  // is the one exception.
+  const broken = [...statuses].filter(([id, s]) => s >= 400 && !/\/favicon\.ico(\?|$)/.test(urls.get(id) || ""))
+    .map(([id, s]) => `${s} ${urls.get(id) || id}`);
 
   const checks = [
     ["HTTP status", `${status ?? "none"}`, "< 400", status !== null && status < 400],
+    ["opening requests", broken.length ? `${broken.length} failed` : "all ok", "no HTTP errors", broken.length === 0],
+    ["settled", capped ? `capped, ${inflight.size} open` : "network idle", "before the cap", !capped],
     ["initial payload", `${kb} KB`, `<= ${MAX_KB} KB`, kb <= MAX_KB],
     ["LCP", `${m.lcp} ms`, `<= ${MAX_LCP} ms`, m.lcp > 0 && m.lcp <= MAX_LCP],
     ["CLS", `${m.cls}`, `<= ${MAX_CLS}`, m.cls <= MAX_CLS],
@@ -163,6 +189,7 @@ try {
   console.log(`budget ${MOBILE ? "mobile (throttled)" : "desktop"}  ${URL}  ${bytes.size} requests  ` +
     (capped ? `observation CAPPED at ${SETTLE_CAP} ms (still loading)` : `settled after ${Date.now() - t0} ms`));
   for (const [name, got, want, ok] of checks) console.log(`  ${ok ? "PASS" : "FAIL"}  ${name.padEnd(16)} ${got.padStart(10)}   ${want}`);
+  for (const b of broken) console.log(`    broken: ${b}`);
   console.log("  heaviest at open:");
   for (const f of files.sort((a, b) => b.kb - a.kb).slice(0, 5)) console.log(`    ${String(f.kb).padStart(6)} KB  ${f.url}`);
   if (m.shifts.length) {

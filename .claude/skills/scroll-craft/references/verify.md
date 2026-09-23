@@ -188,10 +188,10 @@ and dense-GOP scrub clips are heavy, so the opening has a budget:
 
 ```bash
 node <skill>/scripts/serve.mjs --root . --port 4500 & SERVE_PID=$!
-node <skill>/scripts/budget.mjs --url http://localhost:4500;          D=$?   # desktop
-node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; M=$?   # phone, throttled
-kill $SERVE_PID                      # clean up first, then report the real result
-[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # non-zero if either budget failed
+trap 'kill $SERVE_PID 2>/dev/null' EXIT     # the server stops even if a check aborts
+if node <skill>/scripts/budget.mjs --url http://localhost:4500;          then D=0; else D=$?; fi   # desktop
+if node <skill>/scripts/budget.mjs --url http://localhost:4500 --mobile; then M=0; else M=$?; fi   # phone
+[ "$D" -eq 0 ] && [ "$M" -eq 0 ]     # non-zero if either budget failed; safe under set -e
 ```
 
 | Budget | Desktop | Phone (throttled) | Source |
@@ -207,7 +207,9 @@ kill $SERVE_PID                      # clean up first, then report the real resu
 - Bytes come from the browser's network log, so a cross-origin file cannot
   count as zero. CLS is the largest session window (web.dev definition). The
   script observes until the network is idle and LCP and CLS have held for
-  1.5 s, capped at 30 s; a capped run says so. An HTTP error fails the run.
+  1.5 s, capped at 30 s; a capped run fails, with open transfers counted. An
+  HTTP error on the page or on any request the opening makes (a missing hero
+  clip, a broken poster) fails the run, and unknown arguments are rejected.
 - `--mobile` throttles like Lighthouse's mobile preset (150 ms round trip,
   1.6 Mbit/s, 4x CPU). A localhost LCP without throttling proves nothing.
 - The ~9 MB whole-page video guideline in assets.md still applies; this check
