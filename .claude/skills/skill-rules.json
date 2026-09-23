@@ -1726,6 +1726,38 @@
         "evalScores": null,
         "note": "Structural validation passed 7/7 (1 warning: no examples section). Trigger eval SKIPPED: ANTHROPIC_API_KEY deliberately unset on this machine (a set key disables Remote Control and claude.ai connectors). Functional test: deliver architecture example -> 9/9 showcase checks, 0 errors. Re-run eval with a scoped key to promote tier."
       }
+    },
+    "scroll-craft": {
+      "type": "domain",
+      "enforcement": "suggest",
+      "priority": "medium",
+      "description": "Premium scroll-driven landing pages: layered cinematic heroes, scrollytelling, video-scrub acts, verified on desktop, mobile and reduced motion.",
+      "promptTriggers": {
+        "keywords": [
+          "scroll craft",
+          "scrollcraft",
+          "scrollytelling",
+          "cinematic hero",
+          "layered hero",
+          "premium hero",
+          "scroll animation site",
+          "apple-style landing page",
+          "3d scroll world",
+          "scroll experience"
+        ],
+        "intentPatterns": [
+          "(scroll|scrolling)[^.]{0,40}(plays|scrubs|drives)[^.]{0,20}(video|film|clip|story)",
+          "(site|page|website)[^.]{0,60}(feels|feel) like an experience"
+        ]
+      },
+      "source": {
+        "registry": "zip",
+        "repo": "claude.ai account skill anthropic-skills:scroll-craft (release 0.3.0)",
+        "installedAt": "2026-09-23T00:00:00Z",
+        "trustTier": "provisional",
+        "evalScores": null,
+        "note": "Vendored from scroll-craft.zip, byte-identical to the account copy. Security review 2026-09-23: no malware/telemetry; serve.mjs patched (loopback, separator-safe root, no dotfiles, bad-escape 400); Bash removed from allowed-tools. kie.ai generation is paid: confirm-first per rules-src/design-work.md. Trigger eval not run."
+      }
     }
   },
   "agents": {
