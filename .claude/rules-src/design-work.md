@@ -35,6 +35,8 @@ Before calling a design done, look at it in a browser. A green build is not a wo
 
 1. Render and read it: Tier 1 `@playwright/mcp` snapshot, or the `browser-automation` skill for
    console errors and failed requests (`browser-automation.md`; never `claude-in-chrome`).
+   Then look at it: a screenshot at desktop width and at phone width (~390px). A snapshot is the
+   accessibility tree; it cannot show overlap, clipping, contrast or a broken layout.
 2. Accessibility: `ui-audit`, or the `ui-compliance-reviewer` agent for a full pass.
 3. User flows that matter: `qa-test`, or the `sentinel` agent for role-based flows.
 4. scroll-craft pages add the skill's own `shoot.mjs` contact sheet and the `budget.mjs` gate.
