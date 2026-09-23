@@ -18,8 +18,21 @@ these changes close what it did find:
 - `SKILL.md`: description cut to the repo's 400-character cap; `Bash` removed
   from `allowed-tools` so paid `kie.mjs` calls are not pre-approved; a pointer
   to the CCv3 rule `design-work.md` (spend confirmation, workspace, server).
-- Known upstream bug, not patched: `scripts/worldflight-assert.mjs` reads
-  `window.__sc`, which the engine never defines.
+- CodeRabbit on PR #42, fixed: `serve.mjs` now re-checks the canonical target
+  after `realpath`, so a symlink or junction in the build folder cannot reach
+  outside it (was 200, now 403); `worldflight-assert.mjs` read `window.__sc`,
+  which does not exist, and now reads `ScrollCraft.instances[].clips`; its lerp
+  check accepts the engine's clamp range instead of exactly 0.18; SKILL.md
+  keeps the server PID and kills it after the last shot.
+- CodeRabbit on PR #42, deferred as upstream follow-ups (not verified here):
+  `references/assets.md` ffmpeg lookup order; `data-sc-cue` vs
+  `data-sc-kinetic` placement in `references/template.html` and `devices.md`;
+  unique upload filenames and HTTP-error handling in `scripts/kie.mjs`;
+  `shoot.mjs` removing its injected style by handle.
+- CodeRabbit on PR #42, declined: widening `kie.mjs`'s `.env` search (CCv3
+  keeps the key in the environment, and a wider search reads more unrelated
+  files); moving the default workspace out of the repo in code (CCv3 sets
+  `SCROLLCRAFT_HOME`, and the documented resolution order stays upstream's).
 
 ## 2026-09-04: approved ten-site rebuild, public release 0.3.0
 

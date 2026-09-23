@@ -367,10 +367,12 @@ happened to look at. Full procedure: [references/verify.md](references/verify.md
 
 ```bash
 cd <build project> && npm i playwright-core     # once
-node <skill>/scripts/serve.mjs --root . --port 4500 &
+node <skill>/scripts/serve.mjs --root . --port 4500 & SERVE_PID=$!
+trap 'kill $SERVE_PID 2>/dev/null' EXIT     # never leave the server running
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/shots
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/mobile --width 390 --height 844
 node <skill>/scripts/shoot.mjs --url http://localhost:4500 --out lab/reduced --reduced-motion
+kill $SERVE_PID
 ```
 
 The harness walks each act at six positions, waits for the scrub video to

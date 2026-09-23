@@ -18,6 +18,15 @@ const arg = (n, d) => { const i = argv.indexOf(n); return i > -1 && argv[i + 1] 
 
 const ROOT = path.resolve(arg("--root", "."));
 const PORT = parseInt(arg("--port", "4500"), 10);
+const REAL_ROOT = fs.existsSync(ROOT) ? fs.realpathSync(ROOT) : ROOT;
+
+// Inside the root, and no dotfile or dot-directory on the way. The separator
+// matters: a bare startsWith(root) lets --root builds/x serve builds/x-other.
+// Dotfiles are refused so a .env holding the kie key is never downloadable.
+function servable(root, file) {
+  if (file !== root && !file.startsWith(root + path.sep)) return false;
+  return !path.relative(root, file).split(path.sep).some((p) => p.startsWith("."));
+}
 
 const TYPES = {
   ".html": "text/html; charset=utf-8", ".css": "text/css; charset=utf-8",
@@ -35,14 +44,13 @@ http.createServer((req, res) => {
   catch { res.writeHead(400).end("bad request"); return; }
   let file = path.join(ROOT, url === "/" ? "/index.html" : url);
 
-  // Refuse to serve outside the root even if the path walks up. The separator
-  // matters: a bare startsWith(ROOT) lets --root builds/x serve builds/x-other.
-  if (file !== ROOT && !file.startsWith(ROOT + path.sep)) { res.writeHead(403).end("forbidden"); return; }
-  // Never serve dotfiles or dot-directories: a .env holding the kie key must
-  // not be downloadable from the build folder.
-  if (path.relative(ROOT, file).split(path.sep).some((p) => p.startsWith("."))) { res.writeHead(403).end("forbidden"); return; }
+  if (!servable(ROOT, file)) { res.writeHead(403).end("forbidden"); return; }
   if (fs.existsSync(file) && fs.statSync(file).isDirectory()) file = path.join(file, "index.html");
   if (!fs.existsSync(file)) { res.writeHead(404).end("not found"); return; }
+  // Check again on the canonical target: a symlink or junction inside the
+  // build folder must not reach a file outside it or a dotfile behind it.
+  file = fs.realpathSync(file);
+  if (!servable(REAL_ROOT, file)) { res.writeHead(403).end("forbidden"); return; }
 
   const ext = path.extname(file).toLowerCase();
   const stat = fs.statSync(file);
