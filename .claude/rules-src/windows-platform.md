@@ -281,6 +281,19 @@ Observed repeatedly 2026-07-06: while GitHub was slow, **every** Bash-tool comma
 
 Caveat: the `destructive-command-guard` is a **Bash-tool** PreToolUse hook, so destructive git ops run via PowerShell are **not** gated — apply the same confirm-first judgment yourself.
 
+## Deleting a junction from the PowerShell tool [H:7]
+
+`cmd /c rmdir <junction>` is **blocked by Claude Code itself**, not by a CCv3 hook. The PowerShell tool's built-in path guard (the message is compiled into `claude.exe`) reads it as `Remove-Item` on the system path `/c` and refuses the whole command: `Remove-Item on system path '/c' is blocked`. Verified 2026-09-22. It also fires when that text only appears inside a quoted string, such as a commit message built inline, so write such messages to a file with the Write tool. Nothing in `.claude/hooks` can change this, so do not look for the hook.
+
+To remove only the link, never its target:
+
+```powershell
+if ((Get-Item $J).LinkType -ne 'Junction') { throw 'not a junction' }
+[System.IO.Directory]::Delete($J, $false)
+```
+
+Remove any such link before `git worktree remove --force` on a worktree that holds one (e.g. a `node_modules` junction into the main repo), so nothing walks into the target. Count the target's entries before and after.
+
 ## `gh` CLI: interactive by default + `read:org` scope gaps → use the REST API [H:8]
 
 - `gh pr merge` / `gh pr create` are **interactive by default** → they HANG in the non-interactive tool shells. For scripted use, prefer `gh api` (REST): `gh api repos/<O>/<R>/pulls/<N>/merge -X PUT -f merge_method=merge`.
