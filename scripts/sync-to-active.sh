@@ -441,11 +441,15 @@ if $CHANGED; then
         else
             changed_copy_one "$REPO_ROOT/$path" "$dst"
         fi
-    # -m --first-parent: a plain `diff-tree HEAD` prints NOTHING for a merge
+    # Explicit HEAD^1..HEAD: a plain `diff-tree HEAD` prints NOTHING for a merge
     # commit, so after fast-forwarding to a PR merge this synced 0 of 177
-    # changed files (2026-09-22, PR #39). Against the first parent it lists
-    # exactly what the merge brought in; ordinary commits are unaffected.
-    done < <(git -C "$REPO_ROOT" diff-tree -m --first-parent --no-commit-id --name-status -r HEAD 2>/dev/null)
+    # changed files (2026-09-22, PR #39). Do not use `-m --first-parent`:
+    # diff-tree ignores --first-parent and -m then diffs against EVERY parent
+    # (merge 2f5c761: 32 paths vs 10 from the first parent). Two explicit trees
+    # give exactly what the commit or merge brought in; for an ordinary commit
+    # this equals the old form. A root commit has no HEAD^1 and syncs nothing,
+    # as before.
+    done < <(git -C "$REPO_ROOT" diff-tree --no-commit-id --name-status -r HEAD^1 HEAD 2>/dev/null)
 
     # Conditional agent .json sidecar regen -- only when an agent .md changed
     # (full mode runs it unconditionally). The regen writes .json into the repo
