@@ -56,7 +56,8 @@ const sessions = new Set(fires.map((f) => f.session));
 const blocksPerSession = [...sessions].map((s) => fires.filter((f) => f.session === s && f.kind === 'deny').length);
 const median = (a) => (a.length ? [...a].sort((x, y) => x - y)[Math.floor(a.length / 2)] : 0);
 let manifestIds = [];
-try { manifestIds = JSON.parse(readFileSync(manifestPath, 'utf8')).rules.map((r) => r.id); } catch { /* reported below */ }
+let manifestOk = true; // the router cannot work without it, so a missing manifest fails the run
+try { manifestIds = JSON.parse(readFileSync(manifestPath, 'utf8')).rules.map((r) => r.id); } catch { manifestOk = false; }
 const neverFired = manifestIds.filter((id) => !byRule.has(id));
 
 const L = [];
@@ -74,10 +75,11 @@ for (const [rule, e] of [...byRule].sort((a, b) => b[1].fires - a[1].fires)) {
   L.push(`| ${rule} | ${e.fires} | ${e.deny} | ${e.inject} | ${e.sessions.size} | ${words} |`);
 }
 L.push('', `## Never fired in the window (${neverFired.length} of ${manifestIds.length})`, '');
-L.push(manifestIds.length ? (neverFired.length ? neverFired.map((id) => `\`${id}\``).join(', ') : 'None.') : `Manifest not readable at \`${manifestPath}\`.`);
+L.push(manifestOk ? (neverFired.length ? neverFired.map((id) => `\`${id}\``).join(', ') : 'None.') : `**Manifest not readable at \`${manifestPath}\`: the router loads no rules. This run exits 1.**`);
 L.push('', 'A rule here is either unused in the window or has a trigger that never matches; check the second against its tool.', '');
 
 mkdirSync(dirname(outPath), { recursive: true });
 writeFileSync(outPath, L.join('\n'));
 console.log(`rule-router audit: ${fires.length} fires, ${sessions.size} sessions, ${dedupeBreaks.length} dedupe breaks, ${neverFired.length} rules never fired -> ${outPath}`);
-process.exit(dedupeBreaks.length ? 1 : 0);
+if (!manifestOk) console.log(`manifest not readable at ${manifestPath}: the rule-router loads no rules`);
+process.exit(dedupeBreaks.length || !manifestOk ? 1 : 0);

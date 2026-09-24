@@ -352,7 +352,8 @@ function triggerWords(input, fired) {
   const segs = quotedSegments(String(ti.command ?? ""), tool);
   const plain = (seg) => stripLeaders(stripQuotedStrings(seg, tool));
   const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
-  return plain(hit ?? segs[0] ?? "").split(/\s+/).slice(0, 2).join(" ");
+  const [cmd = "", arg] = plain(hit ?? segs[0] ?? "").split(/\s+/);
+  return arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
 }
 function logFire(input, d, fired) {
   try {
@@ -360,9 +361,10 @@ function logFire(input, d, fired) {
     mkdirSync(dirname(path), { recursive: true });
     const what = triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
+      // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
       ts: (/* @__PURE__ */ new Date()).toISOString(),
-      session: (input.session_id || "").slice(0, 8),
-      agent: input.agent_id || null,
+      session: input.session_id || "no-session",
+      agent: input.agent_id || process.env.CLAUDE_AGENT_ID || "main",
       tool: input.tool_name,
       rules: d.ids,
       kind: d.kind,

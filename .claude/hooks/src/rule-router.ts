@@ -206,7 +206,10 @@ export function triggerWords(input: HookInput, fired: RuleEntry[]): string {
   const segs = quotedSegments(String(ti.command ?? ''), tool);
   const plain = (seg: string) => stripLeaders(stripQuotedStrings(seg, tool));
   const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
-  return plain(hit ?? segs[0] ?? '').split(/\s+/).slice(0, 2).join(' ');
+  const [cmd = '', arg] = plain(hit ?? segs[0] ?? '').split(/\s+/);
+  // The second word stays only when it is a plain word or flag (`commit`, `-File`, `exec`). A URL,
+  // a path or anything with `:`, `@` or `=` can carry a credential (psql postgresql://user:pass@...).
+  return arg === undefined ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : '<arg>'}`;
 }
 
 function logFire(input: HookInput, d: Decision, fired: RuleEntry[]): void {
@@ -215,7 +218,9 @@ function logFire(input: HookInput, d: Decision, fired: RuleEntry[]): void {
     mkdirSync(dirname(path), { recursive: true });
     const what = triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
-      ts: new Date().toISOString(), session: (input.session_id || '').slice(0, 8), agent: input.agent_id || null,
+      // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
+      ts: new Date().toISOString(), session: input.session_id || 'no-session',
+      agent: input.agent_id || process.env.CLAUDE_AGENT_ID || 'main',
       tool: input.tool_name, rules: d.ids, kind: d.kind, what,
     }) + '\n');
   } catch { /* logging never blocks a tool call */ }
