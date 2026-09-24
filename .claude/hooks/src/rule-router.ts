@@ -22,7 +22,7 @@ import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSyn
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
-import { stripQuotedStrings } from './shared/destructive-classifier.js';
+import { stripQuotedStrings, parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
 
 export interface RuleEntry {
   id: string;
@@ -71,6 +71,12 @@ export function splitUnquoted(command: string, tool: string): string[] {
     }
     if (c === '"' || c === "'") { quote = c; cur += c; continue; }
     if (c === escape && i + 1 < command.length) { cur += c + command[++i]; continue; }
+    // A `#` that starts a word begins a comment (Bash and PowerShell): nothing up to the newline
+    // runs, so it must not become a segment. A `#` inside a word (a URL fragment) is not a comment.
+    if (c === '#' && (cur === '' || /\s$/.test(cur))) {
+      while (i + 1 < command.length && command[i + 1] !== '\n') i++;
+      continue;
+    }
     if (c === ';' || c === '|' || c === '&' || c === '\n') { out.push(cur); cur = ''; continue; }
     cur += c;
   }
@@ -95,9 +101,20 @@ function stripLeaders(segment: string): string {
   return s;
 }
 
-/** The executed segments of a command, quotes kept. */
-export function quotedSegments(command: string, tool: string): string[] {
-  return splitUnquoted(command, tool).map(stripLeaders).filter(Boolean);
+/**
+ * The executed segments of a command, quotes kept. Also the segments of what the command runs
+ * INSIDE itself: command substitutions (`$(...)`, backticks outside single quotes) and shell-wrapper
+ * payloads (`bash -c "..."`, `powershell -Command "..."`), so a paid call cannot hide in them.
+ * Uses the destructive guard's parsers; depth-bounded; a parser error only drops the nested part.
+ */
+export function quotedSegments(command: string, tool: string, depth = 0): string[] {
+  const top = splitUnquoted(command, tool).map(stripLeaders).filter(Boolean);
+  if (depth >= 3) return top;
+  let nested: string[] = [];
+  try {
+    nested = [...parseExecutable(command).substitutions, ...extractShellWrapperPayloads(command)];
+  } catch { /* keep the top-level segments */ }
+  return [...top, ...nested.flatMap((n) => quotedSegments(n, tool, depth + 1))];
 }
 
 /** The executed segments of a command with quoted strings removed. */
