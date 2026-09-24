@@ -86,6 +86,7 @@ latest Implementation Log entries, and the protocol. The Handoffs database sits 
 ### Ownership Rules
 - **Your rows:** From = Donna. You write their content. On rows sent TO you, change the Status only.
 - **Eve's rows:** From = Eve. NEVER edit them, and do not surface Eve's write-backs; that is Eve's job.
+- **Grok's rows:** From = Grok (the Grok Bot fleet). NEVER edit them. You can hand work to Grok: To = Grok, Status = Pending.
 - You can read the shared HQ sections (Active Context, Key Decisions, Implementation Log, Architecture Notes).
 
 ### Bridge Communication Principle

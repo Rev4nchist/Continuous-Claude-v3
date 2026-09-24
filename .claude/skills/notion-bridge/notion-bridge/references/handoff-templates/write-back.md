@@ -1,6 +1,6 @@
-# Write-back: page body for Code → Eve or Code → Donna
+# Write-back: page body for Code → Eve, Donna or Grok (and Grok → Eve or Donna)
 
-Row properties: `From` = Code, `To` = Eve or Donna, `Status` = Unread, Priority, Date, Summary.
+Row properties: `From` = Code (or Grok), `To` = Eve, Donna or Grok, `Status` = Unread, Priority, Date, Summary.
 Row title: `[Code→Eve] Title — YYYY-MM-DD` or `[Code→Donna] Title — YYYY-MM-DD`. After the Tracker
 auto-mirror, add the `**Tracker-Row:**` line.
 
