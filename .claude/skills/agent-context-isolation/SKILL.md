@@ -1,6 +1,6 @@
 ---
 name: agent-context-isolation
-description: Agent Context Isolation
+description: 'Use when delegating to agents, to keep their output from filling the main context: background agents with file-based results.'
 metadata:
   user-invocable: false
 ---

@@ -23,18 +23,40 @@ const QUIET = args.includes('--quiet');
 
 const TRIGGER_RE = /\b(use when|use this (skill )?when|triggers? on|when the user (says|asks|types|mentions|wants)|when asked|invoke when|load when|user says|user asks)\b/i;
 
+// A plain (unquoted) YAML scalar cannot contain ": " or " #": the first ends the value with a
+// parse error, the second silently cuts it at a comment. Claude Code then drops the description
+// and lists the skill under its first body heading, so the skill never triggers.
+function plainScalarError(v) {
+  if (!v || /^[>|]/.test(v)) return null;
+  // A quoted scalar must close on the same line, followed only by a comment or nothing.
+  // (A value that spans lines is not used by any SKILL.md here, so it is reported too.)
+  // Double-quoted escapes must be ones YAML defines (\n, \t, \", \\, \xXX, \uXXXX, ...);
+  // an unknown one such as \q is a parse error.
+  if (v[0] === '"') return /^"(?:[^"\\]|\\(?:[0abtnvfre "\/\\N_LP\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}))*"\s*(#.*)?$/.test(v) ? null : 'yaml-bad-double-quoted-scalar';
+  if (v[0] === "'") return /^'(?:[^']|'')*'\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
+  if (/:\s/.test(v)) return 'yaml-colon-in-plain-scalar';
+  if (/\s#/.test(v)) return 'yaml-comment-in-plain-scalar';
+  return null;
+}
+
 function frontmatter(src) {
   const m = src.match(/^---\r?\n([\s\S]*?)\r?\n---/);
   if (!m) return null;
-  const fm = {};
+  const fm = { __errors: [] };
   let cur = null;
   for (const raw of m[1].split(/\r?\n/)) {
     const kv = raw.match(/^([A-Za-z0-9_-]+):\s*(.*)$/);
     if (kv) {
       cur = kv[1];
       let v = kv[2].trim();
+      const err = plainScalarError(v);
+      if (err) fm.__errors.push(`${err}(${cur})`);
       if (v === '>' || v === '|' || v === '>-' || v === '|-') v = '';
       fm[cur] = v.replace(/^["']|["']$/g, '');
+    } else if (/^[^\s#]/.test(raw)) {
+      // A top-level line that is not `key: value` (e.g. a bare `implement-task` where `name:` was
+      // meant) is a YAML error; the whole frontmatter is then ignored.
+      fm.__errors.push('yaml-bad-line');
     } else if (cur && /^\s+\S/.test(raw)) {
       // continuation of a folded/indented value or nested key (metadata: user-invocable: false)
       const nested = raw.match(/^\s+([A-Za-z0-9_-]+):\s*(.*)$/);
@@ -55,13 +77,16 @@ for (const d of fs.readdirSync(ROOT, { withFileTypes: true })) {
   if (!d.isDirectory()) continue;
   const f = path.join(ROOT, d.name, 'SKILL.md');
   if (!fs.existsSync(f)) continue;
-  const fm = frontmatter(fs.readFileSync(f, 'utf8')) || {};
+  const fm = frontmatter(fs.readFileSync(f, 'utf8')) || { __errors: ['no-frontmatter'] };
   const desc = fm.description || '';
-  const userOnly = fm['disable-model-invocation'] === 'true' || fm['metadata.user-invocable'] === 'false';
+  // Only disable-model-invocation hides a skill from the model. `user-invocable: false` hides it
+  // from the slash menu but the model still sees and routes on its description, so it needs a trigger.
+  const userOnly = fm['disable-model-invocation'] === 'true';
   rows.push({
     name: d.name, len: desc.length, trigger: TRIGGER_RE.test(desc), userOnly,
     inRouter: Boolean(rules[d.name]), desc: desc.slice(0, 120),
     violations: [
+      ...fm.__errors,
       ...(desc.length === 0 ? ['no-description'] : []),
       ...(desc.length > MAX ? [`too-long>${MAX}`] : []),
       ...(!TRIGGER_RE.test(desc) && !userOnly ? ['no-trigger-phrase'] : []),

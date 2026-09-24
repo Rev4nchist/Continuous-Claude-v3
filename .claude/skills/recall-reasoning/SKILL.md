@@ -1,6 +1,6 @@
 ---
 name: recall-reasoning
-description: Search past reasoning for relevant decisions and approaches
+description: 'Use when asking what was decided before or how a similar problem was solved. Searches past reasoning and decisions.'
 metadata:
   user-invocable: false
 ---

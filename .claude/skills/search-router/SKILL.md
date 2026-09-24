@@ -1,6 +1,6 @@
 ---
 name: search-router
-description: Choose the right search tool for each query type
+description: 'Use when choosing which search tool fits a query (text grep, AST search, TLDR structure, docs or web) to spend the fewest tokens.'
 metadata:
   user-invocable: false
 ---

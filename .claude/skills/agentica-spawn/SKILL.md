@@ -1,6 +1,6 @@
 ---
 name: agentica-spawn
-description: Spawn Agentica multi-agent patterns
+description: 'Use when the user has picked an Agentica multi-agent pattern and it must now be spawned.'
 metadata:
   user-invocable: false
 ---

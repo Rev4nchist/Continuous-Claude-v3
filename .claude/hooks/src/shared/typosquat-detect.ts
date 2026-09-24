@@ -36,6 +36,32 @@ const POPULAR_NPM: string[] = [
 ];
 
 // ---------------------------------------------------------------------------
+// Legitimate packages within Levenshtein 2 of a popular name.
+// The distance check alone cannot tell "vitest" from "vitte". Each entry here
+// is a real, widely used package that the distance heuristic would otherwise
+// block; add with a one-line justification, never speculatively.
+// ---------------------------------------------------------------------------
+
+const LEGITIMATE_NEAR_MISSES_NPM = new Set<string>([
+  'vitest',      // Vite-team test runner (vitest-dev/vitest); 2 from "vite"
+  'vite-node',   // Vitest's node runner; 2+ from "vite" once hyphen counted, kept explicit
+  'vitepress',   // Vite-team docs generator
+  'chai',        // assertion library; 2 from "chalk"
+  'ora',         // spinner (sindresorhus); 2 from "cors"
+  'uid',         // tiny id generator; 1 from "uuid"
+  'zx',          // Google shell scripting; 2 from "zod"
+]);
+
+const LEGITIMATE_NEAR_MISSES_PYPI = new Set<string>([
+  'sympy',       // symbolic math; 2 from "numpy"
+  'pipx',        // PyPA tool; 1 from "pip"
+  'httpie',      // HTTP client; 2 from "httpx"
+  'hiredis',     // redis C parser binding; 2 from "redis"
+  'torchx',      // Meta's TorchX; 1 from "torch"
+  'sh',          // subprocess wrapper; 1 from "six"
+]);
+
+// ---------------------------------------------------------------------------
 // Known typosquat variants (curated)
 // Key = typosquat name, Value = legitimate package it mimics
 // ---------------------------------------------------------------------------
@@ -252,6 +278,10 @@ export function checkTyposquat(
   // 1. Check if it IS a known popular package (exact match = safe)
   const popularList = ecosystem === 'pypi' ? POPULAR_PYPI : POPULAR_NPM;
   if (popularList.includes(name)) {
+    return { isTyposquat: false };
+  }
+  const legit = ecosystem === 'pypi' ? LEGITIMATE_NEAR_MISSES_PYPI : LEGITIMATE_NEAR_MISSES_NPM;
+  if (legit.has(name)) {
     return { isTyposquat: false };
   }
 

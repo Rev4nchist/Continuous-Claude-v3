@@ -1,6 +1,6 @@
 ---
 name: parallel-agents
-description: Parallel Agent Orchestration
+description: 'Use when launching several agents at once, to keep their output out of the main context and collect results from files.'
 metadata:
   user-invocable: false
 ---
