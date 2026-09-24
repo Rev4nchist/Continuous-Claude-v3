@@ -175,12 +175,23 @@ function ruleText(entry: RuleEntry, dir: string): string {
 
 export interface Decision { kind: 'none' | 'deny' | 'inject'; ids: string[]; text: string }
 
+/**
+ * The session that sees a rule fire is the best judge of whether it applies. When it does not,
+ * this line lets the session record the false fire at once; the weekly review judges the rest.
+ */
+function falseFireFooter(ids: string[]): string {
+  const script = join(process.env.CCV3_REPO || join(homedir(), 'continuous-claude'), 'scripts', 'rules', 'rule-router-false-fires.mjs')
+    .replace(/\\/g, '/');
+  return `\n\n----- If a rule above is NOT about this call -----\nRecord the false fire, then carry on: ` +
+    `\`node ${script} add --rule <${ids.join('|')}> --what "<first words of the call>" --note "<why it does not apply>" --source agent\``;
+}
+
 /** What to emit for the unseen matches. A deny-first match turns the whole emission into a deny. */
 export function decide(matched: RuleEntry[], seen: string[], dir: string): Decision {
   const fresh = matched.filter((r) => !seen.includes(r.id));
   if (fresh.length === 0) return { kind: 'none', ids: [], text: '' };
   const ids = fresh.map((r) => r.id);
-  const body = fresh.map((r) => ruleText(r, dir)).join('\n\n');
+  const body = fresh.map((r) => ruleText(r, dir)).join('\n\n') + falseFireFooter(ids);
   if (fresh.some((r) => r.mode === 'deny-first')) {
     return {
       kind: 'deny',

@@ -50,4 +50,4 @@ CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agent
 
 Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
 Weekly audit (task `CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
-False fires (a rule on the wrong command) go to `~/.claude/logs/rule-router-false-fires.jsonl`: judged weekly by `CCv3-RuleRouter-Review`; when Dave names one, record it with `node scripts/rules/rule-router-false-fires.mjs add --rule <id> --what "<words>" --note "<why>"`.
+False fires (a rule on the wrong command) go to `~/.claude/logs/rule-router-false-fires.jsonl`. When a fired rule is not about the call, record it at once (the rule text shows the command); `CCv3-RuleRouter-Review` judges the rest each Monday and posts a review page to Dave's Notion Scratchpad.

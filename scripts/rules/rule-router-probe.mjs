@@ -129,6 +129,10 @@ const s37 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((
 results.push({ name: 'a URL credential never reaches the log', ok: s37?.what === 'psql <arg>' && !logText.includes('PWPROBE'), expected: 'psql <arg>', got: String(s37?.what), ids: '' });
 results.push({ name: 'the log keeps the full session id and the agent', ok: s37?.agent === 'main', expected: 'full id, agent main', got: s37 ? `${s37.session} / ${s37.agent}` : 'missing', ids: '' });
 
+// A session that sees a rule fire on the wrong call must be told how to record it.
+const footer = fire(bash('s38', 'psql -c "select 1"'));
+results.push({ name: 'every fired rule carries the record-a-false-fire line', ok: footer.text.includes('rule-router-false-fires.mjs add') && footer.text.includes('--source agent'), expected: 'footer present', got: footer.kind, ids: '' });
+
 const fires = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').length : 0;
 const failed = results.filter((r) => !r.ok);
 if (process.argv.includes('--json')) {

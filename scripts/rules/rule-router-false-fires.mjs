@@ -21,6 +21,7 @@ import { homedir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import { spawnSync } from 'node:child_process';
+import { NTN_EXE } from '../project-cards/lib/config.mjs';
 
 const repo = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const [cmd, ...rest] = process.argv.slice(2);
@@ -93,7 +94,7 @@ function review(days, reportPath) {
     section.push('No fires to judge this week.');
     writeReport(reportPath, section);
     console.log('false-fire review: 0 pairs to judge');
-    return 0;
+    return { code: 0, judged: 0, found: [] };
   }
   const prompt = [
     'You audit a hook that loads a rule file when a matching tool call happens. For each fire below,',
@@ -118,14 +119,16 @@ function review(days, reportPath) {
     section.push(`**The judge call failed** (exit ${run.status}). Fires were not judged; re-run \`node scripts/rules/rule-router-false-fires.mjs review\`.`);
     writeReport(reportPath, section);
     console.log(`false-fire review: judge call failed (exit ${run.status}) ${String(run.stderr || '').slice(0, 200)}`);
-    return 1;
+    return { code: 1, judged: 0, found: [], error: `the judge call failed (exit ${run.status})` };
   }
   let falseFires = 0;
+  const found = [];
   section.push('| Rule | Trigger words | Count | Verdict | Reason |', '|---|---|---|---|---|');
   items.forEach((p, i) => {
     const v = verdicts.find((x) => x.n === i + 1) || { verdict: 'unjudged', reason: 'missing from the judge reply' };
     if (v.verdict === 'false_fire') {
       falseFires++;
+      found.push({ rule: p.rule, what: p.what, count: p.count, reason: v.reason, source: 'review' });
       capture({ rule: p.rule, what: p.what, tool: p.tool, count: p.count, reason: v.reason, source: 'review' });
     }
     section.push(`| ${p.rule} | \`${p.what.replace(/\|/g, '\\|')}\` | ${p.count} | ${v.verdict === 'false_fire' ? '**false fire**' : v.verdict} | ${String(v.reason || '').replace(/\|/g, '/')} |`);
@@ -133,7 +136,7 @@ function review(days, reportPath) {
   section.push('', `False fires this week: **${falseFires}**, added to \`${capturePath}\`. All time: \`node scripts/rules/rule-router-false-fires.mjs list\`.`);
   writeReport(reportPath, section);
   console.log(`false-fire review: ${items.length} pairs judged, ${falseFires} false fires captured`);
-  return 0;
+  return { code: 0, judged: items.length, found };
 }
 
 function writeReport(reportPath, lines) {
@@ -141,16 +144,60 @@ function writeReport(reportPath, lines) {
   appendFileSync(reportPath, lines.join('\n') + '\n');
 }
 
+/**
+ * One Notion page per week under Dave's Scratchpad, where he looks on Mondays (his choice,
+ * 2026-09-24; a Windows toast did not show). False fires are checkboxes for him to review: the
+ * judge's finds plus any a session or Dave recorded during the week.
+ */
+function publishNotion(parent, days, result, reportPath) {
+  const since = Date.now() - days * 86400000;
+  const recorded = readJsonl(capturePath).filter((r) => r.source !== 'review' && Date.parse(r.ts) >= since);
+  const esc = (s) => String(s ?? '').replace(/[<>]/g, '');
+  const boxes = [
+    ...result.found.map((f) => `- [ ] **${f.rule}** fired on \`${esc(f.what)}\` (x${f.count}): ${esc(f.reason)}`),
+    ...recorded.map((r) => `- [ ] **${r.rule}** fired on \`${esc(r.what)}\`: ${esc(r.reason) || 'no note'} (recorded by ${r.source === 'agent' ? 'a session' : 'you'})`),
+  ];
+  const status = result.error
+    ? `**The review failed: ${result.error}.** Re-run \`node scripts/rules/rule-router-false-fires.mjs review\` in continuous-claude.`
+    : `${result.judged} rule and command pairs judged in the last ${days} days. False fires to review: **${boxes.length}**.`;
+  const md = [
+    `# Rule-router weekly review — ${today}`, '',
+    status, '',
+    '## False fires to review',
+    boxes.length ? boxes.join('\n') : 'None this week.', '',
+    boxes.length ? 'Tick a box when you agree the rule fired on the wrong command, then ask Claude to tighten that rule\'s trigger. Leave it unticked if the rule was right.' : '',
+    '## Where the detail is',
+    `- Full weekly audit: \`${reportPath}\``,
+    '- Every false fire so far: `node scripts/rules/rule-router-false-fires.mjs list` (in continuous-claude)',
+  ].join('\n');
+  const ntn = NTN_EXE;
+  const run = spawnSync(ntn, ['pages', 'create', '--parent', `page:${parent}`, '--content', md, '--json'], {
+    input: '', encoding: 'utf8', timeout: 60000, windowsHide: true,
+  });
+  let url = '';
+  try { url = JSON.parse(run.stdout).url || ''; } catch { /* reported below */ }
+  if (run.status !== 0 || !url) {
+    console.log(`notion: page create failed (exit ${run.status}) ${String(run.stderr || run.stdout || '').slice(0, 300)}`);
+    return 1;
+  }
+  console.log(`notion: ${url}`);
+  return 0;
+}
+
 if (cmd === 'add') {
   const rule = opt('--rule'); const what = opt('--what');
   if (!rule || !what) { console.log('usage: add --rule <id> --what "<trigger words>" [--note "<why>"]'); process.exit(2); }
-  capture({ rule, what, tool: opt('--tool', null), count: 1, reason: opt('--note', ''), source: 'manual' });
+  capture({ rule, what, tool: opt('--tool', null), count: 1, reason: opt('--note', ''), source: opt('--source', 'manual') });
   console.log(`captured: ${rule} <- ${what}`);
 } else if (cmd === 'list') {
   list(rest.includes('--json'));
 } else if (cmd === 'review') {
   const report = opt('--report', join(repo, 'docs', 'self-improvement', 'audits', `rule-router-${today}.md`));
-  process.exit(review(Number(opt('--days', '7')), report));
+  const days = Number(opt('--days', '7'));
+  const result = review(days, report);
+  const parent = opt('--notion-parent');
+  const notionCode = parent ? publishNotion(parent, days, result, report) : 0;
+  process.exit(result.code || notionCode);
 } else {
   console.log('usage: rule-router-false-fires.mjs add | list | review   (see the header for options)');
   process.exit(2);

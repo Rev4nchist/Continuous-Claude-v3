@@ -1,11 +1,12 @@
-# Weekly rule-router false-fire review + reminder (Task Scheduler: CCv3-RuleRouter-Review, Mondays 09:20).
+# Weekly rule-router false-fire review (Task Scheduler: CCv3-RuleRouter-Review, Mondays 09:20).
 # Runs under Windows PowerShell 5.1 (powershell.exe): no PS7-only syntax here.
 #   1. Makes sure today's audit report exists (runs the audit if the 09:07 task has not).
 #   2. Judges this week's fires and adds false fires to ~/.claude/logs/rule-router-false-fires.jsonl.
-#   3. Shows a Windows notification that the audit and the review are ready.
-# Exit code = the review's (1 = the judge call failed; the report says so).
+#   3. Creates this week's review page under Dave's Notion Scratchpad (where he looks on Mondays).
+# Exit code = 1 if the judge call or the Notion page failed (the log and the report say which).
 $R = 'C:\Users\david.hayes\continuous-claude'
 $node = 'C:\Program Files\nodejs\node.exe'
+$scratchpad = '1f576fd7ac82807ab8c3f03b2002d40c'   # Dave's Scratchpad; this job only CREATES one page a week
 $log = Join-Path $R '.claude\logs\rule-router-review.log'
 $day = (Get-Date).ToUniversalTime().ToString('yyyy-MM-dd')   # the scripts name reports by UTC date
 $report = Join-Path $R "docs\self-improvement\audits\rule-router-$day.md"
@@ -21,14 +22,7 @@ if (-not (Test-Path $report)) {
   & $node scripts\rules\rule-router-audit.mjs --days 7 2>&1 | ForEach-Object { Write-Log "$_" }
 }
 
-$out = & $node scripts\rules\rule-router-false-fires.mjs review --days 7 2>&1
+& $node scripts\rules\rule-router-false-fires.mjs review --days 7 --notion-parent $scratchpad 2>&1 | ForEach-Object { Write-Log "$_" }
 $rc = $LASTEXITCODE
-$out | ForEach-Object { Write-Log "$_" }
-$summary = ($out | Select-String 'false-fire review:' | Select-Object -Last 1)
-$summary = if ($summary) { $summary.Line -replace '^false-fire review:\s*', '' } else { 'no summary line' }
-
-$title = if ($rc -eq 0) { 'Rule-router audit ready' } else { 'Rule-router review FAILED' }
-$body = "$summary. Report: docs\self-improvement\audits\rule-router-$day.md"
-& (Join-Path $R 'scripts\notify-toast.ps1') -Title $title -Body $body | ForEach-Object { Write-Log "$_" }
 Write-Log "review finished, exit $rc"
 exit $rc

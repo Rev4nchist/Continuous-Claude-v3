@@ -327,11 +327,18 @@ function ruleText(entry, dir) {
   return entry.files.map((f) => `----- ~/.claude/rules-ondemand/${f} -----
 ${readFileSync(join(dir, f), "utf8").trim()}`).join("\n\n");
 }
+function falseFireFooter(ids) {
+  const script = join(process.env.CCV3_REPO || join(homedir(), "continuous-claude"), "scripts", "rules", "rule-router-false-fires.mjs").replace(/\\/g, "/");
+  return `
+
+----- If a rule above is NOT about this call -----
+Record the false fire, then carry on: \`node ${script} add --rule <${ids.join("|")}> --what "<first words of the call>" --note "<why it does not apply>" --source agent\``;
+}
 function decide(matched, seen, dir) {
   const fresh = matched.filter((r) => !seen.includes(r.id));
   if (fresh.length === 0) return { kind: "none", ids: [], text: "" };
   const ids = fresh.map((r) => r.id);
-  const body = fresh.map((r) => ruleText(r, dir)).join("\n\n");
+  const body = fresh.map((r) => ruleText(r, dir)).join("\n\n") + falseFireFooter(ids);
   if (fresh.some((r) => r.mode === "deny-first")) {
     return {
       kind: "deny",
