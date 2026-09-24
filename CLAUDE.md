@@ -18,6 +18,7 @@ Glossary, loaded in every session. Use these exact terms: @CONTEXT.md
 - Hook tests: `npm test` in `.claude/hooks` (vitest, not jest).
 - Forward sync to active: `bash scripts/sync-to-active.sh`. It runs on commit. Reverse sync is manual only.
 - Before "done", walk `.claude/rules-src/every-surface-checklist.md`.
+- Testing: what "done" means per surface in this repo: @AGENTS.md
 
 ## Git
 

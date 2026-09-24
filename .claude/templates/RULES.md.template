@@ -182,7 +182,7 @@ This is enforced, not optional. Branch confusion causes 57% of wrong-approach fr
 - Run the relevant test suite and show it passes
 - Check logs for errors or warnings
 - Demonstrate the behavior works as specified
-- If tests don't exist for the change, write them first (TDD)
+- No E2E check or test covers the change: write one first (see Testing Standards)
 
 ### Self-Healing Pattern
 
@@ -233,7 +233,7 @@ Retry loops are bounded -- never loop silently:
 ### External Verification [H:8]
 
 Don't trust agent claims of success -- verify externally:
-- Run tests (`pytest`, `jest`, etc.) -- green suite is the only valid evidence
+- Run the E2E check and the tests: a green run plus its saved artifact is the only valid evidence
 - Run type checks (`tsc --noEmit`, `pyright`) for TypeScript/Python changes
 - Run linting for style compliance
 - Agent says "done" without evidence = not done
@@ -248,12 +248,24 @@ Don't trust agent claims of success -- verify externally:
 | DRY | MEDIUM | Extract common patterns. Config over duplication. |
 | DDD | HIGH | Bounded contexts. Aggregates. Domain events. |
 
-### Testing Standards
+### Testing Standards [H:8]
 
-- TDD cycle: Red -> Green -> Refactor
-- AAA pattern: Arrange -> Act -> Assert
-- Priority: Unit > Integration > E2E
-- Test edge cases. Mock external dependencies. Full coverage for critical paths.
+Proof comes from running the real thing, not from tests that restate the code (adopted 2026-09-24).
+
+1. **End to end first.** Verify a feature the way a user or the harness uses it: a browser flow, the
+   CLI, a built hook fed a real payload. Save a repeatable artifact: the command plus its output
+   file, JSON or screenshot. That artifact is the "done" evidence.
+2. **Isolated tests only where E2E cannot reach cheaply** (parsers, regexes, guards, date or money
+   math). First write down every way the unit can fail. Then write one test per listed failure,
+   then the code.
+3. **No test that only restates the code.** Do not write a test after the code to mirror what it
+   does. Exception: a bug fix starts with a test or probe that reproduces the bug and fails. Keep it.
+4. **A test must fail when the behaviour it guards breaks.** If you cannot name the code change that
+   would make it fail, do not write it.
+
+A project's E2E command and artifact path live in the "Testing" section of its AGENTS.md and in
+`project-registry.json` (`e2e`). The project's CLAUDE.md must import it with `@AGENTS.md`; add that line
+if it is missing (the `/init-project` template includes it since 2026-09-24).
 
 ### Performance Rules
 

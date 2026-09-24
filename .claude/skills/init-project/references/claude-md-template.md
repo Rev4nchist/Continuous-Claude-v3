@@ -2,6 +2,8 @@
 
 Use this template when generating a project-level CLAUDE.md. Replace all `{{PLACEHOLDER}}` values with project-specific information gathered during the interview phase. Delete sections that don't apply (e.g., Local Dev for a library with no server).
 
+Also create `AGENTS.md` at the project root with a `## Testing` section: the end-to-end check (command + the artifact it saves), or "none yet" plus the smoke check to build first. Keep the `@AGENTS.md` line in CLAUDE.md: Claude Code reads AGENTS.md only through that import when a CLAUDE.md exists.
+
 ---
 
 ```markdown
@@ -68,6 +70,10 @@ Use this template when generating a project-level CLAUDE.md. Replace all `{{PLAC
 | DB push | `{{npx drizzle-kit push}}` |
 | DB studio | `{{npx drizzle-kit studio}}` |
 | Deploy | `{{vercel --prod}}` |
+
+## Testing
+
+What "done" means here (E2E command, artifact path, when an isolated test is allowed): @AGENTS.md
 
 ## Git Workflow
 
