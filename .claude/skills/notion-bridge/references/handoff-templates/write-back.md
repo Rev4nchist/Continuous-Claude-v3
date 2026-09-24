@@ -1,13 +1,14 @@
 # Write-back: page body for Code → Eve, Donna or Grok (and Grok → Eve or Donna)
 
 Row properties: `From` = Code (or Grok), `To` = Eve, Donna or Grok, `Status` = Unread, Priority, Date, Summary.
-Row title: `[Code→Eve] Title — YYYY-MM-DD` or `[Code→Donna] Title — YYYY-MM-DD`. After the Tracker
-auto-mirror, add the `**Tracker-Row:**` line.
+Row title: `[From→To] Title — YYYY-MM-DD`, with From = the writer. Tracker: Claude Code write-backs are
+mirrored to the Weekly Work Tracker, then get the `**Tracker-Row:**` line. Grok write-backs are NOT
+mirrored: delete the `**Tracker-Row:**` line.
 
 ---
 
 **Commits:** {{commit_shas}}
-**Tracker-Row:** {{tracker_row_url}}
+**Tracker-Row:** {{tracker_row_url}}   (Claude Code only; delete this line for a Grok write-back)
 
 ## What Shipped
 

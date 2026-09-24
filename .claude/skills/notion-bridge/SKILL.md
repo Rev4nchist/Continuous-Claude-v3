@@ -102,7 +102,7 @@ edits another assistant's rows (Eve, Donna, Grok, Code). Dave may edit anything.
 3. Write back (next workflow), then set the original row `Status` = `Done`.
 
 ### Write back (Code → Eve, Donna or Grok; Grok → Eve or Donna)
-1. Create a row: `From` = Code, `To` = the requester, `Status` = `Unread`, `Priority`, `Date`,
+1. Create a row: `From` = the writer (`Code` or `Grok`), `To` = the requester, `Status` = `Unread`, `Priority`, `Date`,
    `Summary`. Content: the write-back template (`references/handoff-templates/write-back.md`).
 2. Claude Code only: mirror it to the Weekly Work Tracker (see "Tracker auto-mirror" below). Grok
    does NOT mirror its write-backs.
