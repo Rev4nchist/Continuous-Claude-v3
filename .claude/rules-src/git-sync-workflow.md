@@ -14,6 +14,19 @@ continuous-claude (repo)  →  ~/.claude (active)
 
 **Note:** Post-commit sync runs in the background (`&`) so `git commit` returns instantly. Sync completes asynchronously.
 
+## Only `main` goes live (2026-09-23)
+
+`sync-to-active.sh` syncs only from `main` in the primary checkout. A commit on a feature branch
+or in a linked worktree prints `Sync skipped` and changes nothing in `~/.claude`, so a PR's hooks
+and rules are not live before review. After a PR merges and local `main` advances (a fast-forward
+fires no commit hook), run `bash scripts/sync-to-active.sh --changed` from `main`.
+
+`--changed` diffs from a cursor (`~/.claude/state/sync-cursor`, the last commit synced from main)
+to `HEAD`, so one run picks up every merged commit. A run that finds the lock held leaves
+`~/.claude/.sync.pending`, and the lock holder syncs those commits before it exits. A cursor that
+is not an ancestor of `HEAD` falls back to the full mirror. Override for a deliberate branch sync:
+`SYNC_ALLOW_BRANCH=1` (it never moves the cursor). Test: `bash scripts/sync-to-active-cursor.test.sh`.
+
 ## Reverse Sync is MANUAL-ONLY (root-cause fix, 2026-06-01)
 
 **The repo is the single source of truth.** Forward sync (repo → active) is the ONLY automatic direction. Reverse sync (active → repo) is **manual-only** — run it deliberately, and only when you edited `~/.claude/` directly and want those edits captured in the repo:
