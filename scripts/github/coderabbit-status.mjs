@@ -78,7 +78,8 @@ function main() {
     const rt = g.data.repository.pullRequest.reviewThreads;
     if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
     const threads = rt.nodes;
-    const reviews = gh([`repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]);
+    // Reviews come oldest first, so the head review can sit past page one: read every page.
+    const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
     result = evaluate({ pull, combined, checkRuns, threads, reviews });
   } catch (err) {
     console.error(`coderabbit-status: could not determine (${String(err.message).split('\n')[0]})`);
