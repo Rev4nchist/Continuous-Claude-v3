@@ -52,6 +52,7 @@ I read every word. Write for speed of reading.
 - Name the object ("Paste the T2 response here", not "paste responses back").
 - Numbered actions only, plain words, no invented terms.
 - Nothing for me to do: `None — waiting on <X>.` A decision: the question and your recommendation.
+- A subagent or headless run with its own output contract (a JSON block, a schema) ends with that contract, not a Next steps block.
 
 ### Output I will copy
 
