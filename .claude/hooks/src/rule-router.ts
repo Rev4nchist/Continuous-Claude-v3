@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*).
+ * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*|mcp__playwright__.*|mcp__claude-in-chrome__.*|WebFetch|WebSearch).
  *
  * Loads a tool-specific rule at the moment it applies, instead of keeping it in every session's
  * always-loaded context (phase 2 of docs/self-improvement/proposals/2026-09-24-context-loading.md).
@@ -22,14 +22,14 @@ import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSyn
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
-import { stripQuotedStrings } from './shared/destructive-classifier.js';
+import { stripQuotedStrings, parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
 
 export interface RuleEntry {
   id: string;
   files: string[];
   mode: 'deny-first' | 'inject';
   command?: string[];
-  raw?: string[];
+  segment?: string[];
   agent?: string[];
   skill?: string[];
   tools?: string[];
@@ -51,33 +51,86 @@ export function rulesDir(): string {
   return process.env.CLAUDE_RULES_ONDEMAND_DIR || join(homedir(), '.claude', 'rules-ondemand');
 }
 
-/** A command split into segments, each with leading env assignments, `env`, `&` and `cmd /c` dropped. */
+/**
+ * Split a command at separators OUTSIDE quotes (`;`, `|`, `&`, newline, so also `&&` and `||`).
+ * Quotes are kept, so a quoted path stays visible to `segment` matchers, while a separator inside
+ * a quoted string never starts a segment.
+ */
+export function splitUnquoted(command: string, tool: string): string[] {
+  const escape = tool === 'PowerShell' ? '`' : '\\';
+  const out: string[] = [];
+  let cur = '';
+  let quote: string | null = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      cur += c;
+      if (c === escape && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") { quote = c; cur += c; continue; }
+    if (c === escape && i + 1 < command.length) { cur += c + command[++i]; continue; }
+    // A `#` that starts a word begins a comment (Bash and PowerShell): nothing up to the newline
+    // runs, so it must not become a segment. A `#` inside a word (a URL fragment) is not a comment.
+    if (c === '#' && (cur === '' || /\s$/.test(cur))) {
+      while (i + 1 < command.length && command[i + 1] !== '\n') i++;
+      continue;
+    }
+    if (c === ';' || c === '|' || c === '&' || c === '\n') { out.push(cur); cur = ''; continue; }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+
+/** Drop what runs a command without being it: leading `&`, `cmd /c`, `env -u X`, `VAR=x`, `sudo`, `npx`. */
+function stripLeaders(segment: string): string {
+  let s = segment.trim();
+  let prev;
+  do {
+    prev = s;
+    s = s
+      .replace(/^&\s*/, '')
+      .replace(/^cmd(\.exe)?\s+\/[cC]\s+/, '')
+      .replace(/^env(\s+-u\s+\S+|\s+-i)*\s+/, '')
+      .replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, '')
+      .replace(/^(sudo|time|npx(\s+-y)?)\s+/, '')
+      .trim();
+  } while (s !== prev);
+  return s;
+}
+
+/**
+ * The executed segments of a command, quotes kept. Also the segments of what the command runs
+ * INSIDE itself: command substitutions (`$(...)`, backticks outside single quotes) and shell-wrapper
+ * payloads (`bash -c "..."`, `powershell -Command "..."`), so a paid call cannot hide in them.
+ * Uses the destructive guard's parsers; depth-bounded; a parser error only drops the nested part.
+ */
+export function quotedSegments(command: string, tool: string, depth = 0): string[] {
+  const top = splitUnquoted(command, tool).map(stripLeaders).filter(Boolean);
+  if (depth >= 3) return top;
+  let nested: string[] = [];
+  try {
+    nested = [...parseExecutable(command).substitutions, ...extractShellWrapperPayloads(command)];
+  } catch { /* keep the top-level segments */ }
+  return [...top, ...nested.flatMap((n) => quotedSegments(n, tool, depth + 1))];
+}
+
+/** The executed segments of a command with quoted strings removed. */
 export function commandSegments(command: string, tool: string): string[] {
-  const stripped = stripQuotedStrings(command, tool);
-  return stripped
-    .split(/\|\||&&|[;|\n]/)
-    .map((seg) => {
-      let s = seg.trim();
-      let prev;
-      do {
-        prev = s;
-        s = s
-          .replace(/^&\s*/, '')
-          .replace(/^cmd(\.exe)?\s+\/[cC]\s+/, '')
-          .replace(/^env(\s+-u\s+\S+|\s+-i)*\s+/, '')
-          .replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, '')
-          .replace(/^(sudo|time|npx(\s+-y)?)\s+/, '')
-          .trim();
-      } while (s !== prev);
-      return s;
-    })
-    .filter(Boolean);
+  return quotedSegments(command, tool).map((s) => stripLeaders(stripQuotedStrings(s, tool))).filter(Boolean);
 }
 
 const test = (patterns: string[] | undefined, value: string): boolean =>
   !!patterns && patterns.some((p) => new RegExp(p).test(value));
 
-/** The manifest entries this tool call matches, in manifest order. */
+/**
+ * The manifest entries this tool call matches, in manifest order. `command` regexes see each
+ * segment without its quoted strings; `segment` regexes see it with quotes kept (for a quoted
+ * script path). Both are anchored to an EXECUTED segment, never to text an `echo` prints: a
+ * mention must not claim a once-per-session rule before the real call.
+ */
 export function matchRules(input: HookInput, manifest: Manifest): RuleEntry[] {
   const tool = input.tool_name || '';
   const ti = input.tool_input || {};
@@ -85,7 +138,8 @@ export function matchRules(input: HookInput, manifest: Manifest): RuleEntry[] {
     if (COMMAND_TOOLS.has(tool)) {
       const command = typeof ti.command === 'string' ? ti.command : '';
       if (!command) return false;
-      return commandSegments(command, tool).some((seg) => test(r.command, seg)) || test(r.raw, command);
+      return commandSegments(command, tool).some((seg) => test(r.command, seg))
+        || quotedSegments(command, tool).some((seg) => test(r.segment, seg));
     }
     if (AGENT_TOOLS.has(tool)) return test(r.agent, String(ti.subagent_type || ''));
     if (tool === 'Skill') return test(r.skill, String(ti.skill || ''));

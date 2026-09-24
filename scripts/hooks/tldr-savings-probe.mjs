@@ -3,7 +3,7 @@
  * tldr-savings-probe — does the TLDR read-enforcer actually save tokens, and
  * what does it cost to do so?
  *
- * The `95% token savings` claim in .claude/rules/tldr-cli.md has no measurement
+ * The `95% token savings` claim in the (since retired) tldr-cli rule, now .claude/skills/tldr-code/SKILL.md, has no measurement
  * behind it anywhere in the repo. This measures it, on the real hook, with real
  * payloads, against real files.
  *

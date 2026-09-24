@@ -1,92 +1,177 @@
 {
-  "$comment": "Read by hooks/dist/rule-router.mjs. Each entry loads its rule files the FIRST time a matching tool call happens in a session. mode 'deny-first' refuses that first call with the rule text as the reason (for rules that must change the decision); 'inject' adds the text as context and lets the call run. Matchers: command = regexes tested against each command segment with quoted strings removed and leading env/&/cmd /c prefixes dropped; raw = regexes tested against the whole command as typed; agent = subagent_type; skill = Skill name; tools = tool_name (MCP tools). Keep the always-loaded index rules-src/on-demand-rules.md in step with this file.",
+  "$comment": "Read by hooks/dist/rule-router.mjs. Each entry loads its rule files the FIRST time a matching tool call happens in a session. mode 'deny-first' refuses that first call with the rule text as the reason (for rules that must change the decision); 'inject' adds the text as context and lets the call run. Matchers: command = regexes tested against each command segment with quoted strings removed and leading env/&/cmd /c prefixes dropped; segment = regexes tested against each executed segment with quotes KEPT (for quoted script paths; anchor them with ^ so an echo of the text never claims the rule); agent = subagent_type; skill = Skill name; tools = tool_name (MCP tools). Keep the always-loaded index rules-src/on-demand-rules.md in step with this file.",
   "rules": [
     {
       "id": "codex",
-      "files": ["codex-worker-safety.md", "codex-adversarial.md"],
+      "files": [
+        "codex-worker-safety.md",
+        "codex-adversarial.md"
+      ],
       "mode": "deny-first",
-      "command": ["^codex(\\.cmd|\\.exe)?(\\s|$)"],
-      "agent": ["^codex-"],
-      "skill": ["^codex(:|$)"]
+      "command": [
+        "^codex(\\.cmd|\\.exe)?(\\s|$)"
+      ],
+      "agent": [
+        "^codex-"
+      ],
+      "skill": [
+        "^codex(:|$)"
+      ]
     },
     {
       "id": "harness-update",
-      "files": ["harness-update.md"],
+      "files": [
+        "harness-update.md"
+      ],
       "mode": "inject",
-      "command": ["^(npm|pnpm)\\s+(i|install)\\s+(-g|--global)\\s+@openai/codex", "^grok(\\.cmd|\\.exe)?\\s+update\\b"],
-      "skill": ["^harness-update$"]
+      "command": [
+        "^(npm|pnpm)\\s+(i|install)\\s+(-g|--global)\\s+@openai/codex",
+        "^grok(\\.cmd|\\.exe)?\\s+update\\b"
+      ],
+      "skill": [
+        "^harness-update$"
+      ]
     },
     {
       "id": "grok",
-      "files": ["grok-worker-safety.md"],
+      "files": [
+        "grok-worker-safety.md"
+      ],
       "mode": "deny-first",
-      "command": ["^grok(\\.cmd|\\.exe)?(\\s|$)"],
-      "agent": ["^grok-"],
-      "skill": ["^grok$"]
+      "command": [
+        "^grok(\\.cmd|\\.exe)?(\\s|$)"
+      ],
+      "agent": [
+        "^grok-"
+      ],
+      "skill": [
+        "^grok$"
+      ]
     },
     {
       "id": "cma",
-      "files": ["cma-safety.md"],
+      "files": [
+        "cma-safety.md"
+      ],
       "mode": "deny-first",
-      "command": ["^ant(\\.exe)?(\\s|$)"],
-      "raw": ["api\\.anthropic\\.com/v1/(agents|sessions|environments|deployments|vaults)"],
-      "agent": ["^cma-operator$"],
-      "skill": ["^(cma|launch-your-agent|wrap-up)$"]
+      "command": [
+        "^ant(\\.exe)?(\\s|$)"
+      ],
+      "segment": [
+        "^(curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)(\\.exe)?\\s.*api\\.anthropic\\.com/v1/(agents|sessions|environments|deployments|vaults)"
+      ],
+      "agent": [
+        "^cma-operator$"
+      ],
+      "skill": [
+        "^(cma|launch-your-agent|wrap-up)$"
+      ]
     },
     {
       "id": "notion-cli",
-      "files": ["notion-cli-safety.md"],
+      "files": [
+        "notion-cli-safety.md"
+      ],
       "mode": "inject",
-      "command": ["^ntn(\\.exe)?(\\s|$)"],
-      "skill": ["^notion-cli$"]
+      "command": [
+        "^ntn(\\.exe)?(\\s|$)"
+      ],
+      "skill": [
+        "^notion-cli$"
+      ]
     },
     {
       "id": "railway",
-      "files": ["railway-deploy.md"],
+      "files": [
+        "railway-deploy.md"
+      ],
       "mode": "inject",
-      "command": ["^railway(\\s|$)"]
+      "command": [
+        "^railway(\\s|$)"
+      ]
     },
     {
       "id": "neonctl",
-      "files": ["neonctl-safety.md"],
+      "files": [
+        "neonctl-safety.md"
+      ],
       "mode": "inject",
-      "command": ["^(neonctl|neon)(\\s|$)"],
-      "tools": ["^mcp__Neon__"]
+      "command": [
+        "^(neonctl|neon)(\\s|$)"
+      ],
+      "tools": [
+        "^mcp__Neon__"
+      ]
     },
     {
       "id": "kusto",
-      "files": ["kusto-cli-safety.md"],
+      "files": [
+        "kusto-cli-safety.md"
+      ],
       "mode": "inject",
-      "command": ["^kusto\\.cli(\\.exe)?(\\s|$)"],
-      "raw": ["[Kk]usto\\.[Cc]li"],
-      "skill": ["^kusto-cli$"]
+      "command": [
+        "^kusto\\.cli(\\.exe)?(\\s|$)"
+      ],
+      "segment": [
+        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)"
+      ],
+      "skill": [
+        "^kusto-cli$"
+      ]
     },
     {
       "id": "sentry",
-      "files": ["sentry-safety.md"],
+      "files": [
+        "sentry-safety.md"
+      ],
       "mode": "inject",
-      "command": ["^sentry-cli(\\s|$)"],
-      "tools": ["^mcp__sentry__"],
-      "skill": ["^sentry-cli$"]
+      "command": [
+        "^sentry-cli(\\s|$)"
+      ],
+      "tools": [
+        "^mcp__sentry__"
+      ],
+      "skill": [
+        "^sentry-cli$"
+      ]
     },
     {
       "id": "linear",
-      "files": ["linear-safety.md"],
+      "files": [
+        "linear-safety.md"
+      ],
       "mode": "inject",
-      "command": ["^(linear|linearis)(\\s|$)"],
-      "tools": ["^mcp__linear__", "^mcp__claude_ai_Linear__"],
-      "skill": ["^linear$"]
+      "command": [
+        "^(linear|linearis)(\\s|$)"
+      ],
+      "tools": [
+        "^mcp__linear__",
+        "^mcp__claude_ai_Linear__"
+      ],
+      "skill": [
+        "^linear$"
+      ]
     },
     {
       "id": "git-merge",
-      "files": ["git-merge-workflow.md"],
+      "files": [
+        "git-merge-workflow.md"
+      ],
       "mode": "inject",
-      "command": ["^git(\\s+-[Cc]\\s+\\S+)*\\s+merge(\\s|$)", "^gh\\s+pr\\s+merge\\b", "^gh\\s+api\\s+\\S*/pulls/\\d+/merge\\b"],
-      "raw": ["land-pr\\.ps1"]
+      "command": [
+        "^git(\\s+-[Cc]\\s+\\S+)*\\s+merge(\\s|$)",
+        "^gh\\s+pr\\s+merge\\b",
+        "^gh\\s+api\\s+\\S*/pulls/\\d+/merge\\b"
+      ],
+      "segment": [
+        "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
+      ]
     },
     {
       "id": "pr-and-commit-style",
-      "files": ["pr-and-commit-style.md"],
+      "files": [
+        "pr-and-commit-style.md"
+      ],
       "mode": "deny-first",
       "command": [
         "^git(\\s+-[Cc]\\s+\\S+)*\\s+commit(\\s|$)",
@@ -97,23 +182,103 @@
     },
     {
       "id": "pr-coderabbit-loop",
-      "files": ["pr-coderabbit-loop.md"],
+      "files": [
+        "pr-coderabbit-loop.md"
+      ],
       "mode": "inject",
-      "command": ["^gh\\s+pr\\s+create\\b", "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"],
-      "raw": ["coderabbit-status\\.mjs", "land-pr\\.ps1"]
+      "command": [
+        "^gh\\s+pr\\s+create\\b",
+        "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
+      ],
+      "segment": [
+        "^node(\\.exe)?\\s.*coderabbit-status\\.mjs",
+        "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
+      ]
     },
     {
       "id": "cross-terminal-db",
-      "files": ["cross-terminal-db.md"],
+      "files": [
+        "cross-terminal-db.md"
+      ],
       "mode": "inject",
-      "command": ["^(psql|pg_dump|pg_restore)(\\.exe)?(\\s|$)"],
-      "raw": ["docker(\\.exe)?\"?\\s+exec\\b.*postgres"]
+      "command": [
+        "^(psql|pg_dump|pg_restore)(\\.exe)?(\\s|$)"
+      ],
+      "segment": [
+        "^([\"'][^\"']*|[^\\s\"']*)docker(\\.exe)?[\"']?\\s+exec\\b.*postgres"
+      ]
     },
     {
       "id": "headless-claude",
-      "files": ["headless-claude-mcp.md"],
+      "files": [
+        "headless-claude-mcp.md"
+      ],
       "mode": "inject",
-      "command": ["^claude(\\.exe)?\\s(.*\\s)?(-p|--print)(\\s|$)"]
+      "command": [
+        "^claude(\\.exe)?\\s(.*\\s)?(-p|--print)(\\s|$)"
+      ]
+    },
+    {
+      "id": "design",
+      "files": [
+        "design-work.md"
+      ],
+      "mode": "inject",
+      "skill": [
+        "^([\\w-]+:)?(frontend-design|scroll-craft|landing-page-builder|landing-page-score|impeccable|ui-audit|dataviz|artifact-design|frontend-slides|fourth-presentation-suite|fourth-brand-guidelines|ui-ux-pro-max|shadcn-create|archify)$"
+      ]
+    },
+    {
+      "id": "kie-spend",
+      "files": [
+        "design-work.md"
+      ],
+      "mode": "deny-first",
+      "segment": [
+        "^node(\\.exe)?\\s+([\"'][^\"']*|[^\\s\"']*)kie\\.mjs[\"']?\\s+(still|shot)\\b"
+      ]
+    },
+    {
+      "id": "browser-deprecated",
+      "files": [
+        "browser-automation.md"
+      ],
+      "mode": "deny-first",
+      "tools": [
+        "^mcp__claude-in-chrome__"
+      ]
+    },
+    {
+      "id": "browser",
+      "files": [
+        "browser-automation.md"
+      ],
+      "mode": "inject",
+      "tools": [
+        "^mcp__playwright__"
+      ],
+      "command": [
+        "^(npx\\s+)?playwright(\\s|$)"
+      ],
+      "segment": [
+        "^node(\\.exe)?\\s+([\"'][^\"']*|[^\\s\"']*)cdp\\.mjs"
+      ],
+      "skill": [
+        "^(browser-dev-cycle|qa-test)$"
+      ]
+    },
+    {
+      "id": "opencli",
+      "files": [
+        "opencli-first.md"
+      ],
+      "mode": "inject",
+      "tools": [
+        "^(WebFetch|WebSearch)$"
+      ],
+      "command": [
+        "^opencli(\\s|$)"
+      ]
     }
   ]
 }

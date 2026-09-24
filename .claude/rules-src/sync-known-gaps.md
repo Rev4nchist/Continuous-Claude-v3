@@ -1,3 +1,18 @@
+---
+paths:
+  - ".claude/rules-src/**"
+  - ".claude/rules-ondemand/**"
+  - ".claude/hooks/**"
+  - ".claude/skills/**"
+  - ".claude/agents/**"
+  - ".claude/templates/**"
+  - ".claude/settings.json"
+  - ".claude/settings.json.template"
+  - ".claude/project-registry.json"
+  - "scripts/sync-to-active.sh"
+  - "scripts/sync-claude.sh"
+---
+
 # Sync Known Gaps
 
 What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.claude/` (active).
