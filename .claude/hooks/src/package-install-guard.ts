@@ -8,7 +8,10 @@
  * - Known malicious versions (litellm 1.82.7/1.82.8)
  * - Suspiciously new packages (<24h = block, <7d = warn)
  *
- * Exit 0 = allow, Exit 2 = block
+ * Output contract: ALWAYS exit 0. A block is the PreToolUse
+ * {hookSpecificOutput:{permissionDecision:'deny'}} envelope from shared/output.ts.
+ * (Until 2026-09-01 this hook printed its own JSON shape and exited 2, which
+ * Claude Code reports as "hook error: No stderr output" and drops the reason.)
  *
  * Override: prefix command with SKIP_PACKAGE_GUARD=1
  */
@@ -16,7 +19,7 @@
 import { readFileSync } from 'fs';
 import https from 'https';
 import http from 'http';
-import { outputContinue } from './shared/output.js';
+import { outputContinue, outputDeny } from './shared/output.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
@@ -382,16 +385,17 @@ interface AgeCheckResult {
   error?: string;
 }
 
-async function checkPackageAge(
+export async function checkPackageAge(
   name: string,
-  ecosystem: Exclude<Ecosystem, null>
+  ecosystem: Exclude<Ecosystem, null>,
+  requestedVersion?: string
 ): Promise<AgeCheckResult> {
   if (ecosystem !== 'pypi' && ecosystem !== 'npm') {
     return { ageHours: null, blocked: false };
   }
 
   try {
-    const publishDate = await fetchPublishDate(name, ecosystem);
+    const publishDate = await fetchPublishDate(name, ecosystem, requestedVersion);
     if (!publishDate) {
       return { ageHours: null, blocked: false };
     }
@@ -423,9 +427,62 @@ async function checkPackageAge(
   }
 }
 
+/**
+ * Pick the publish date to age-check from a registry document.
+ *
+ * If the command pinned an EXACT version that the registry knows, use that
+ * version's date -- that is what will be installed. Otherwise (no version, or
+ * a range like ^1.2.0 / >=1.0) fall back to the latest release, which is the
+ * conservative choice because a range usually resolves to it.
+ *
+ * Before 2026-09-01 this always used latest, so `@types/node@24.13.3`
+ * (8 weeks old) was blocked because 25.x had shipped an hour earlier.
+ */
+export function publishDateFromRegistryJson(
+  json: unknown,
+  ecosystem: 'pypi' | 'npm',
+  requestedVersion?: string
+): Date | null {
+  const doc = json as Record<string, any> | null;
+  if (!doc) return null;
+
+  if (ecosystem === 'pypi') {
+    // PEP 440 public versions, which npm's semver pattern rejects: 1.9.0rc1, 2.0, 1.0.post1,
+    // 3.1.dev4. A rejected pin fell back to info.version, so a brand-new pre-release could be
+    // aged by an older stable release's date and pass.
+    const exact = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion)
+      ? requestedVersion.replace(/^v/, '')
+      : undefined;
+    // PEP 440 treats trailing zero release segments as equal (1.8 == 1.8.0), but PyPI keys the
+    // release dict by the published string. Match on the normalized form so a shortened pin
+    // does not fall back to info.version and age-check the wrong release.
+    const norm = (v: string) => v.toLowerCase().replace(/^v/, '').replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.replace(/(\.0+)+$/, ''));
+    const releaseKey = exact
+      ? (doc.releases?.[exact] ? exact : Object.keys(doc.releases ?? {}).find((k) => norm(k) === norm(exact)))
+      : undefined;
+    const version = releaseKey ?? doc.info?.version;
+    // A release is several files uploaded separately, and pip may pick a wheel added long after
+    // the sdist. Age-check the NEWEST upload, or a fresh wheel on an old release passes.
+    let newest: Date | null = null;
+    for (const file of doc.releases?.[version] ?? []) {
+      const d = file?.upload_time_iso_8601 ? new Date(file.upload_time_iso_8601) : null;
+      if (d && !Number.isNaN(d.getTime()) && (!newest || d > newest)) newest = d;
+    }
+    return newest;
+  }
+
+  const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion)
+    ? requestedVersion.replace(/^v/, '')
+    : undefined;
+  const version = exact && doc.time?.[exact] ? exact : doc['dist-tags']?.latest;
+  const timeEntry = doc.time?.[version];
+  return timeEntry ? new Date(timeEntry) : null;
+}
+
 function fetchPublishDate(
   name: string,
-  ecosystem: 'pypi' | 'npm'
+  ecosystem: 'pypi' | 'npm',
+  requestedVersion?: string
 ): Promise<Date | null> {
   return new Promise((resolve) => {
     const url = ecosystem === 'pypi'
@@ -442,25 +499,7 @@ function fetchPublishDate(
       res.on('end', () => {
         clearTimeout(timer);
         try {
-          const json = JSON.parse(data);
-          if (ecosystem === 'pypi') {
-            // PyPI: info.version -> releases[version][0].upload_time_iso_8601
-            const version = json?.info?.version;
-            const releases = json?.releases?.[version];
-            if (releases && releases.length > 0) {
-              resolve(new Date(releases[0].upload_time_iso_8601));
-              return;
-            }
-          } else {
-            // npm: time[latest-version]
-            const latest = json?.['dist-tags']?.latest;
-            const timeEntry = json?.time?.[latest];
-            if (timeEntry) {
-              resolve(new Date(timeEntry));
-              return;
-            }
-          }
-          resolve(null);
+          resolve(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
         } catch {
           resolve(null);
         }
@@ -586,15 +625,6 @@ function parsePackageToken(
 // Output helpers
 // ---------------------------------------------------------------------------
 
-function outputDeny(reason: string): void {
-  const output = {
-    permissionDecision: 'deny',
-    reason,
-  };
-  console.log(JSON.stringify(output));
-  process.exit(2);
-}
-
 function outputAllowWithAdvisory(advisory: string): void {
   const output = {
     hookSpecificOutput: {
@@ -671,7 +701,7 @@ async function main() {
         outputDeny(
           `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
         );
-        return; // exit(2) already called in outputDeny
+        return;
       }
     }
 
@@ -705,7 +735,7 @@ async function main() {
 
     // 4. Package age check (pypi and npm only)
     if (ecosystem === 'pypi' || ecosystem === 'npm') {
-      const ageResult = await checkPackageAge(pkg.name, ecosystem);
+      const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
       if (ageResult.blocked) {
         outputDeny(
           `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`

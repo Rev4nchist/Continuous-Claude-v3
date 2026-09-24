@@ -18,14 +18,14 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname, basename, join as join2 } from "path";
+import { dirname as dirname2, basename, join as join2 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { homedir } from "os";
-var LOG_DIR = join(homedir(), ".claude", "logs");
-var LOG_FILE = join(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -97,7 +97,7 @@ var LOCK_STALE_MS = 1e4;
 var LOCK_RETRY_MS = 50;
 var LOCK_TIMEOUT_MS = 5e3;
 function atomicWriteSync(filePath, content) {
-  const dir = dirname(filePath);
+  const dir = dirname2(filePath);
   const tmpFile = join2(dir, `.${basename(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync(tmpFile, content, "utf-8");

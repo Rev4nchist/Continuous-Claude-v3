@@ -1,4 +1,5 @@
 {
+  "cleanupPeriodDays": 180,
   "env": {
     "CONTINUOUS_CLAUDE_COORDINATION": "true",
     "ENABLE_TOOL_SEARCH": "auto:5",
@@ -147,6 +148,19 @@
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
             ]
           },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
+        "matcher": "PowerShell",
+        "hooks": [
           {
             "type": "command",
             "command": "node",

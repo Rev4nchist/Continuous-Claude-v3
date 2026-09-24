@@ -1,6 +1,6 @@
 ---
-implement-task
-description: Implementation agent that executes a single task and creates handoff on completion
+name: implement_task
+description: 'Use when an orchestrator hands one task from a plan to an implementation agent. Executes that single task and writes a handoff when done.'
 metadata:
   user-invocable: false
 ---

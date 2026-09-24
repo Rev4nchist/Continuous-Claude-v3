@@ -1,6 +1,6 @@
 ---
-implement-plan-micro
-description: Implement technical plans from thoughts/shared/plans with verification
+name: implement_plan_micro
+description: 'Use when implementing an approved plan from thoughts/shared/plans under a formal, step-level specification (the micro variant of implement_plan).'
 metadata:
   version: 3.0
   user-invocable: false

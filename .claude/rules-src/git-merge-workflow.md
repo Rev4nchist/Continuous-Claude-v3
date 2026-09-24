@@ -24,12 +24,16 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
    - Merging via the PR records the merge against the review, closes the PR, applies the strategy server-side, and needs **no clean local working tree**.
 5. **Clean up.** Delete the merged branch (remote + local), advance local `main`, verify `0 0` divergence.
 
+**For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
+It refuses unless `scripts/github/coderabbit-status.mjs` reports READY for the current head, merges
+with `sha=<head>`, fast-forwards `main`, syncs `~/.claude`, and removes the worktree and branches.
+
 ## Gotchas (all real, all hit 2026-07-06)
 
 - **A timed-out command (exit 143) is NOT necessarily a failure.** VERIFY state before concluding — `gh pr merge` timed out yet the merge had already succeeded (`gh api …/pulls/<N>` → `merged=true`). Same for pushes/deletes.
 - **The Bash tool hangs on git/network ops when GitHub is slow.** Its shell-profile init does a network step, so *every* Bash command times out (even local `git branch`). **Switch to the PowerShell tool for git/remote operations** — different init, unaffected: `git -C <repo> <cmd>`. (See `windows-platform.md`.)
 - **`gh` GraphQL hits `read:org` scope errors** on some fields (`gh pr edit`/`gh pr view`) with the current token. **Use the REST API (`gh api`)** — it needs no org scope. `gh api repos/<O>/<R>/pulls/<N> … -X PATCH -f title=… -f body="$BODY"` to edit a PR.
-- **Deleting a remote branch is destructive-guard-gated** (`git push --delete`). To do it deliberately for a *merged* branch: `SKIP_DESTRUCTIVE_GUARD=1` as the **LEADING token**, **foreground** (a background run reads as unattended → fail-closed regardless of the flag). Or run it via the **PowerShell tool** (the guard is a Bash-tool PreToolUse hook, so PS is not gated — use that responsibly).
+- **Deleting a remote branch is destructive-guard-gated** (`git push --delete`). To do it deliberately for a *merged* branch: `SKIP_DESTRUCTIVE_GUARD=1` as the **LEADING token**, **foreground** (a background run reads as unattended → fail-closed regardless of the flag). On the **PowerShell tool** the guard applies too (since 2026-09-23); the override there is a leading `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement.
 - **`git branch -d` refusing "not fully merged" right after a PR merge is usually a STALE tracking ref, not real divergence.** Do **NOT** jump to `-D`. Instead: `git fetch fork --prune`, then VERIFY — `git merge-base --is-ancestor <feature-tip> main` (exit 0 = truly merged) and `git rev-list --left-right --count fork/main...main` (`N 0` = local main is only *behind*, safe). Only after that confirms do you advance/delete. **Verify before you force.**
 - **Local `main` can silently lag/diverge from the canonical remote via auto-commit hooks** (a roadmap-sync hook committed a "post-merge carryover" stamp onto local main). After a remote merge: `git fetch fork --prune`; if local main is behind with **0 divergence** (verified above), `git reset --hard fork/main` cleanly advances it AND clears a messy working tree in one move. Untracked real content (e.g. `docs/self-improvement/proposals/*`) survives; regenerable churn is preserved in any prior `git stash`.
 

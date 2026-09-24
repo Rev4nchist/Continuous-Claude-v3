@@ -1,6 +1,6 @@
 ---
 name: browser-dev-cycle
-description: Five-tier browser automation: Playwright MCP/CLI, CDP, Playwright-core, Playwright test runner. Use when the user says "screenshot this", "debug network", "run e2e tests", "visual QA", or "codegen".
+description: 'Five-tier browser automation: Playwright MCP/CLI, CDP, Playwright-core, Playwright test runner. Use when the user says "screenshot this", "debug network", "run e2e tests", "visual QA", or "codegen".'
 ---
 
 # Browser Dev Cycle: Five-Tier Automation Strategy

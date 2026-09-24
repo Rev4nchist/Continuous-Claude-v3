@@ -1,6 +1,6 @@
 ---
-implement-plan
-description: Implement technical plans from thoughts/shared/plans with verification
+name: implement_plan
+description: 'Use when implementing an approved plan from thoughts/shared/plans, phase by phase, checking each phase against its success criteria.'
 metadata:
   user-invocable: false
 ---

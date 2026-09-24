@@ -7,7 +7,7 @@ import { resolve as resolve2, relative, isAbsolute } from "path";
 
 // src/shared/context-bus.ts
 import { readFileSync as readFileSync3 } from "node:fs";
-import { dirname as dirname3, join as join5, resolve, sep } from "node:path";
+import { dirname as dirname4, join as join5, resolve, sep } from "node:path";
 import { mkdirSync as mkdirSync4, existsSync as existsSync4 } from "node:fs";
 
 // src/shared/session-bus-id.ts
@@ -100,14 +100,14 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname, basename, join as join3 } from "path";
+import { dirname as dirname2, basename, join as join3 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync as mkdirSync2, statSync, renameSync } from "fs";
-import { join as join2 } from "path";
+import { dirname, join as join2 } from "path";
 import { homedir as homedir2 } from "os";
-var LOG_DIR = join2(homedir2(), ".claude", "logs");
-var LOG_FILE = join2(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -179,7 +179,7 @@ var LOCK_STALE_MS = 1e4;
 var LOCK_RETRY_MS = 50;
 var LOCK_TIMEOUT_MS = 5e3;
 function atomicWriteSync(filePath, content) {
-  const dir = dirname(filePath);
+  const dir = dirname2(filePath);
   const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync2(tmpFile, content, "utf-8");
@@ -300,7 +300,7 @@ function mutateStateWithLock(filePath, transformFn, opts = {}) {
 
 // src/shared/intel-bus.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync3, mkdirSync as mkdirSync3, renameSync as renameSync3, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname2, join as join4 } from "node:path";
+import { dirname as dirname3, join as join4 } from "node:path";
 var MAX_LINE_BYTES = 4096;
 var MAX_INTEL_BUS_BYTES = 2e6;
 var DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -405,7 +405,7 @@ function appendIntelBus(event, opts = {}) {
   }
 }
 function defaultAppend(path, line) {
-  const dir = dirname2(path);
+  const dir = dirname3(path);
   if (!existsSync3(dir)) {
     mkdirSync3(dir, { recursive: true });
   }
@@ -722,7 +722,7 @@ function mutateViaSeam(id, path, fn, opts) {
 function ensureDir(path, opts) {
   if (opts.write) return;
   try {
-    const dir = dirname3(path);
+    const dir = dirname4(path);
     if (!existsSync4(dir)) mkdirSync4(dir, { recursive: true });
   } catch {
   }

@@ -1,6 +1,6 @@
 ---
 name: hooks
-description: Hook Development Rules
+description: 'Use when writing or changing a hook under .claude/hooks: the TypeScript source, the build to dist, registration and tests.'
 metadata:
   user-invocable: false
 ---

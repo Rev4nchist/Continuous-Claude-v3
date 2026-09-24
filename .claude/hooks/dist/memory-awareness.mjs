@@ -953,7 +953,7 @@ ${body}
 
 // src/shared/context-bus.ts
 import { readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname2, join as join8, resolve as resolve2, sep } from "node:path";
+import { dirname as dirname3, join as join8, resolve as resolve2, sep } from "node:path";
 
 // src/shared/session-bus-id.ts
 import { createHash } from "node:crypto";
@@ -1035,10 +1035,10 @@ function getBusId(opts = {}) {
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, statSync as statSync2, renameSync } from "fs";
-import { join as join6 } from "path";
+import { dirname, join as join6 } from "path";
 import { homedir as homedir4 } from "os";
-var LOG_DIR = join6(homedir4(), ".claude", "logs");
-var LOG_FILE = join6(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join6(homedir4(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -1109,7 +1109,7 @@ var log = createLogger("atomic-write");
 
 // src/shared/intel-bus.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname, join as join7 } from "node:path";
+import { dirname as dirname2, join as join7 } from "node:path";
 var MAX_LINE_BYTES = 4096;
 var MAX_INTEL_BUS_BYTES = 2e6;
 var DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
@@ -1214,7 +1214,7 @@ function appendIntelBus(event, opts = {}) {
   }
 }
 function defaultAppend(path2, line) {
-  const dir = dirname(path2);
+  const dir = dirname2(path2);
   if (!existsSync5(dir)) {
     mkdirSync5(dir, { recursive: true });
   }

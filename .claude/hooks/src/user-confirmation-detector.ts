@@ -20,6 +20,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { spawnSync } from 'child_process';
 import { writeStateWithLock } from './shared/atomic-write.js';
+import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
 
 interface UserPromptSubmitInput {
   session_id: string;
@@ -234,6 +235,15 @@ async function main() {
 
   // Skip empty or very short prompts
   if (prompt.length < 3) {
+    console.log(JSON.stringify({ continue: true }));
+    return;
+  }
+
+  // UserPromptSubmit also fires for task notifications and subagent hand-backs. Their text
+  // ("done", "works") read as Dave confirming, and 5 were stored as verified, high-confidence
+  // "User confirmed" memories (2026-09-23 eval, P29). Only a human's prompt can confirm.
+  // Explicit wrappers only: a long or XML-heavy HUMAN prompt must still be able to confirm.
+  if (isHarnessWrappedPrompt(prompt)) {
     console.log(JSON.stringify({ continue: true }));
     return;
   }

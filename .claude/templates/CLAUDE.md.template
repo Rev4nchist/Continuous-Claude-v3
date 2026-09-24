@@ -43,6 +43,13 @@ defaults that make that work. They are good defaults, not hard rules. My prompt 
 - **Commit only your own work.** Other sessions share this tree. Stage the files you touched.
 - **Name the target before you act.** Branch, directory, account. Most "wrong target" corrections
   in my history were the agent acting in the wrong branch or the wrong directory.
+- **Give full absolute paths.** Relative paths are ambiguous across repos, worktrees and `~/.claude`.
+- **Two or more open decisions: ask with AskUserQuestion**, one recommended option each, instead of
+  a prose list I have to parse.
+- **Test web UI changes yourself** with `@playwright/mcp` (screens at desktop and phone width)
+  before asking me to look. Tell me only what a headless run cannot cover.
+- **When background work finishes, say so in one line** with the result, so I do not have to ask
+  "status?".
 
 ## Communication
 
