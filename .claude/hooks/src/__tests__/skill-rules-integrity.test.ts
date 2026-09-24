@@ -1,5 +1,5 @@
 /**
- * skill-rules.json integrity + skill-activation-prompt E2E.
+ * skill-rules.json integrity.
  *
  * Salvaged 2026-07-29 from the 5 arscontexta-* test files deleted in the same
  * commit. Those files were fossils -- the arscontexta subsystem was removed by
@@ -11,9 +11,7 @@
  *      The production matcher wraps `new RegExp(p)` in try/catch and returns
  *      false on throw, so a malformed pattern does not error -- it silently
  *      stops a skill from ever triggering. Nothing else checks this.
- *   2. dist/skill-activation-prompt.mjs survives empty and malformed input.
- *      arscontexta-hook-e2e.test.ts was the ONLY test that spawned that built
- *      hook at all.
+ *   2. (Removed 2026-09-24 with the retired skill-activation-prompt hook, P39.)
  *   3. Named live skills still have triggers that fire. f9cdbef purged 25
  *      skills; this is the canary for the next purge taking a live one.
  *
@@ -30,7 +28,6 @@
  */
 
 import { describe, it, expect, beforeAll } from 'vitest';
-import { spawnSync } from 'child_process';
 import { readFileSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
@@ -38,9 +35,6 @@ import { fileURLToPath } from 'url';
 const __filename_ = fileURLToPath(import.meta.url);
 const __dirname_ = resolve(__filename_, '..');
 const RULES_PATH = resolve(__dirname_, '..', '..', '..', 'skills', 'skill-rules.json');
-const HOOK_PATH = resolve(__dirname_, '..', '..', 'dist', 'skill-activation-prompt.mjs');
-/** continuous-claude root, not .claude/ -- the hook has a ~/.claude guard. */
-const PROJECT_DIR = resolve(__dirname_, '..', '..', '..', '..');
 
 interface PromptTriggers {
   keywords?: string[];
@@ -193,50 +187,3 @@ describe('skill-rules.json integrity', () => {
   });
 });
 
-describe('skill-activation-prompt hook E2E', () => {
-  /** Returns the spawn result; callers assert on it rather than on parsed output. */
-  function runHook(rawStdin: string) {
-    return spawnSync('node', [HOOK_PATH], {
-      input: rawStdin,
-      encoding: 'utf-8',
-      timeout: 15_000,
-      env: { ...process.env, CLAUDE_PROJECT_DIR: PROJECT_DIR },
-      stdio: ['pipe', 'pipe', 'pipe'],
-    });
-  }
-
-  const payload = (prompt: string) =>
-    JSON.stringify({
-      session_id: 'skill-rules-integrity-test',
-      transcript_path: '',
-      cwd: PROJECT_DIR,
-      permission_mode: 'default',
-      prompt,
-    });
-
-  beforeAll(() => {
-    expect(existsSync(HOOK_PATH), `built hook missing at ${HOOK_PATH} -- run npm run build`).toBe(
-      true
-    );
-  });
-
-  it('exits cleanly on an empty prompt', () => {
-    const r = runHook(payload(''));
-    expect(r.error).toBeUndefined();
-    expect(r.status).toBe(0);
-  });
-
-  it('exits cleanly on malformed stdin', () => {
-    const r = runHook('{ this is not json');
-    expect(r.error).toBeUndefined();
-    expect(r.status).toBe(0);
-  });
-
-  it('emits parseable JSON or nothing at all for a generic prompt', () => {
-    const r = runHook(payload('what is the weather today'));
-    expect(r.error).toBeUndefined();
-    expect(r.status).toBe(0);
-    const stdout = (r.stdout || '').trim();
-    if (stdout) expect(() => JSON.parse(stdout)).not.toThrow();
-  });
-});
