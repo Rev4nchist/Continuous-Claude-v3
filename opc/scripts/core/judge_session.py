@@ -108,7 +108,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -973,22 +973,54 @@ def list_sessions_since(scan_since: str) -> list[dict[str, Any]]:
     """List session_ids from the local cache that started on/after ``scan_since``.
 
     ``scan_since`` is an ISO date or datetime string. Best-effort: any cache
-    entry whose ``started`` field is missing or unparseable is included so
-    we don't silently lose sessions.
+    entry whose ``started`` field is missing or unparseable is skipped and
+    counted on stderr (it used to be re-judged on every daily run). Results
+    are newest first, so a cap keeps the most recent sessions.
     """
     if not LOCAL_SESSION_CACHE.exists():
         return []
     cutoff = _parse_iso(scan_since)
     sessions: list[dict[str, Any]] = []
+    undated = 0
     for path in sorted(LOCAL_SESSION_CACHE.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         started = _parse_iso(str(data.get("started") or ""))
-        if cutoff is None or started is None or started >= cutoff:
-            sessions.append({"session_id": path.stem, "started": data.get("started")})
+        if started is None:
+            # 2026-09-23 (Opus 5.5 eval, P32): undated sessions used to be included on EVERY
+            # daily run, so the same stale sessions were re-judged forever and crowded out
+            # new ones. They are now skipped and counted instead.
+            undated += 1
+            continue
+        if cutoff is None or started >= cutoff:
+            sessions.append({"session_id": path.stem, "started": data.get("started"), "_started": _utc_sort_key(str(data.get("started")))})
+    if undated:
+        print(f"[judge-batch] skipped {undated} cached session(s) with no 'started' date", file=sys.stderr)
+    # Newest first, so the max_sessions cap keeps the most recent sessions rather than the
+    # first N by UUID order.
+    sessions.sort(key=lambda s: s["_started"], reverse=True)
+    for s in sessions:
+        s.pop("_started", None)
     return sessions
+
+
+def _utc_sort_key(value: str) -> float:
+    """Seconds since the epoch in UTC, for ordering only.
+
+    _parse_iso converts to naive LOCAL time, which can reorder sessions across a
+    daylight-saving fall-back hour; sorting on UTC avoids that. Naive inputs are
+    treated as UTC. Unparseable values sort last.
+    """
+    v = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        dt = datetime.fromisoformat(v)
+    except Exception:
+        return float("-inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 def _parse_iso(value: str) -> datetime | None:

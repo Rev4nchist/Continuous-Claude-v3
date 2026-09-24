@@ -1559,8 +1559,20 @@ def _serialize_results_json(results: list[dict[str, Any]]) -> list[dict[str, Any
         else:
             created_str = str(created_at)
 
+        # Learning type: stored under metadata "type" by most writers and "learning_type" by
+        # others. It was never copied into this JSON, so every memory the awareness hook
+        # injected showed as [UNKNOWN] (660 of 660 on 2026-09-23, Opus 5.5 eval P13).
+        metadata = result.get("metadata") or {}
+        if isinstance(metadata, str):
+            try:
+                metadata = json.loads(metadata)
+            except (ValueError, TypeError):
+                metadata = {}
+        learning_type = (metadata.get("type") or metadata.get("learning_type")) if isinstance(metadata, dict) else None
+
         entry: dict[str, Any] = {
             "id": result.get("id"),
+            "type": learning_type,
             "score": result["similarity"],
             "base_score": result.get("base_score"),
             "decay_weight": result.get("decay_weight"),
