@@ -95,7 +95,8 @@ Append a new entry to the `projects` array in `.claude/project-registry.json`:
 ```
 
 Required fields: `name`, `path`, `stack`, `description`, `status`.
-Optional fields (nullable): `port`, `url`, `devCommand`.
+Optional fields (nullable): `port`, `url`, `devCommand`, `e2e`.
+`e2e` is the project's end-to-end check (RULES.md "Testing Standards"): `{ "command": "...", "artifact": "<path the run writes>" }`. The project's AGENTS.md "Testing" section states the same values.
 
 ### Update Project Info
 
@@ -124,6 +125,7 @@ Set `status` to `"inactive"`. Do not remove the entry -- inactive projects remai
       "port": "number | null",
       "url": "string | null (local dev URL)",
       "devCommand": "string | null (e.g. 'npm run dev')",
+      "e2e": "{ command, artifact } | null (end-to-end check and the file it writes)",
       "status": "'active' | 'inactive'"
     }
   ]
