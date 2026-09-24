@@ -800,3 +800,28 @@ def test_read_top_recall_picks_highest_score_across_logs(monkeypatch, tmp_path):
     monkeypatch.setattr(js, "PROJECT_REGISTRY", reg_file)
 
     assert js._read_top_recall_from_log("sess-xproj-multi") == "high"
+
+
+# ---------------------------------------------------------------------------
+# Batch sampling (2026-09-23 Opus 5.5 eval, P32)
+# ---------------------------------------------------------------------------
+
+
+def test_list_sessions_since_skips_undated_and_returns_newest_first(tmp_path, monkeypatch):
+    js = _import_judge_session()
+    cache = tmp_path / "cache"
+    cache.mkdir()
+    (cache / "old.json").write_text(json.dumps({"started": "2026-09-01T10:00:00Z"}), encoding="utf-8")
+    (cache / "new.json").write_text(json.dumps({"started": "2026-09-20T10:00:00Z"}), encoding="utf-8")
+    (cache / "mid.json").write_text(json.dumps({"started": "2026-09-10T10:00:00Z"}), encoding="utf-8")
+    (cache / "undated.json").write_text(json.dumps({"foo": 1}), encoding="utf-8")
+    (cache / "before.json").write_text(json.dumps({"started": "2026-08-01T10:00:00Z"}), encoding="utf-8")
+    monkeypatch.setattr(js, "LOCAL_SESSION_CACHE", cache)
+
+    got = [s["session_id"] for s in js.list_sessions_since("2026-08-15")]
+
+    # Undated sessions used to be re-judged on every daily run; they are skipped now.
+    assert "undated" not in got
+    assert "before" not in got
+    # Newest first, so the max_sessions cap keeps the most recent sessions.
+    assert got == ["new", "mid", "old"]

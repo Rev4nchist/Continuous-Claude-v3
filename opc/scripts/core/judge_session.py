@@ -973,21 +973,36 @@ def list_sessions_since(scan_since: str) -> list[dict[str, Any]]:
     """List session_ids from the local cache that started on/after ``scan_since``.
 
     ``scan_since`` is an ISO date or datetime string. Best-effort: any cache
-    entry whose ``started`` field is missing or unparseable is included so
-    we don't silently lose sessions.
+    entry whose ``started`` field is missing or unparseable is skipped and
+    counted on stderr (it used to be re-judged on every daily run). Results
+    are newest first, so a cap keeps the most recent sessions.
     """
     if not LOCAL_SESSION_CACHE.exists():
         return []
     cutoff = _parse_iso(scan_since)
     sessions: list[dict[str, Any]] = []
+    undated = 0
     for path in sorted(LOCAL_SESSION_CACHE.glob("*.json")):
         try:
             data = json.loads(path.read_text(encoding="utf-8"))
         except Exception:
             continue
         started = _parse_iso(str(data.get("started") or ""))
-        if cutoff is None or started is None or started >= cutoff:
-            sessions.append({"session_id": path.stem, "started": data.get("started")})
+        if started is None:
+            # 2026-09-23 (Opus 5.5 eval, P32): undated sessions used to be included on EVERY
+            # daily run, so the same stale sessions were re-judged forever and crowded out
+            # new ones. They are now skipped and counted instead.
+            undated += 1
+            continue
+        if cutoff is None or started >= cutoff:
+            sessions.append({"session_id": path.stem, "started": data.get("started"), "_started": started})
+    if undated:
+        print(f"[judge-batch] skipped {undated} cached session(s) with no 'started' date", file=sys.stderr)
+    # Newest first, so the max_sessions cap keeps the most recent sessions rather than the
+    # first N by UUID order.
+    sessions.sort(key=lambda s: s["_started"], reverse=True)
+    for s in sessions:
+        s.pop("_started", None)
     return sessions
 
 

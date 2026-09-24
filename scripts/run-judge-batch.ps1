@@ -44,5 +44,16 @@ $out  = & $uv run python -m scripts.core.judge_session --scan-since $since --max
 $code = $LASTEXITCODE
 $out | ForEach-Object { Add-Content -Path $logFile -Value $_ }
 
+# Zero-post ratchet (2026-09-23 Opus 5.5 eval, P32). Across 102 runs the judges posted 22 scores
+# and exited 0 every day, so the scheduler showed green while the eval layer measured nothing.
+# If sessions were sampled but nothing was posted, exit 3 so the registry and dashboard show it.
+$text    = ($out | Out-String)
+$sampled = ([regex]::Matches($text, '"sampled":\s*true')).Count
+$posted  = ([regex]::Matches($text, '"posts":\s*[1-9]')).Count
+if ($code -eq 0 -and $sampled -gt 0 -and $posted -eq 0) {
+    Write-Log "ZERO-POST: $sampled session(s) sampled, 0 judge scores posted -- the judges measured nothing"
+    $code = 3
+}
+
 Write-Log "END exit=$code"
 exit $code
