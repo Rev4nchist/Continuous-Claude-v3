@@ -27,6 +27,7 @@ import {
   checkOverride,
   checkMaliciousPackage,
   checkOsvAdvisory,
+  publishDateFromRegistryJson,
 } from '../package-install-guard.js';
 
 import { checkTyposquat } from '../shared/typosquat-detect.js';
@@ -502,6 +503,102 @@ describe('package-install-guard', () => {
       if (result.advisoryId) {
         expect(typeof result.advisoryId).toBe('string');
       }
+    });
+  });
+
+  // =========================================================================
+  // 2026-09-01 regressions: legitimate near-misses, pinned-version age check,
+  // and the deny envelope shape.
+  // =========================================================================
+  describe('legitimate near-miss allowlist', () => {
+    it.each([
+      ['vitest', 'npm'],
+      ['vite-node', 'npm'],
+      ['chai', 'npm'],
+      ['ora', 'npm'],
+      ['uid', 'npm'],
+      ['zx', 'npm'],
+      ['sympy', 'pypi'],
+      ['pipx', 'pypi'],
+      ['httpie', 'pypi'],
+      ['hiredis', 'pypi'],
+      ['torchx', 'pypi'],
+    ] as const)('does not flag %s (%s) even though it is within 2 edits of a popular name', (name, eco) => {
+      expect(checkTyposquat(name, eco).isTyposquat).toBe(false);
+    });
+
+    it('still flags real near-miss typosquats', () => {
+      expect(checkTyposquat('vitte', 'npm').isTyposquat).toBe(true);
+      expect(checkTyposquat('vitest1', 'npm').isTyposquat).toBe(false); // 3 from vite, not in list: fine either way
+      expect(checkTyposquat('numpyy', 'pypi').isTyposquat).toBe(true);
+    });
+  });
+
+  describe('publishDateFromRegistryJson', () => {
+    const npmDoc = {
+      'dist-tags': { latest: '25.0.0' },
+      time: {
+        created: '2016-01-01T00:00:00.000Z',
+        '24.13.3': '2026-07-08T06:48:03.261Z',
+        '25.0.0': '2026-09-01T14:00:00.000Z',
+      },
+    };
+    const pypiDoc = {
+      info: { version: '2.0.0' },
+      releases: {
+        '1.9.0': [{ upload_time_iso_8601: '2026-05-01T00:00:00.000Z' }],
+        '2.0.0': [{ upload_time_iso_8601: '2026-09-01T13:00:00.000Z' }],
+      },
+    };
+
+    it('npm: uses the pinned exact version when the registry knows it', () => {
+      expect(publishDateFromRegistryJson(npmDoc, 'npm', '24.13.3')?.toISOString()).toBe('2026-07-08T06:48:03.261Z');
+    });
+    it('npm: falls back to latest for no version or a range', () => {
+      expect(publishDateFromRegistryJson(npmDoc, 'npm')?.toISOString()).toBe('2026-09-01T14:00:00.000Z');
+      expect(publishDateFromRegistryJson(npmDoc, 'npm', '^24.13.0')?.toISOString()).toBe('2026-09-01T14:00:00.000Z');
+      expect(publishDateFromRegistryJson(npmDoc, 'npm', 'latest')?.toISOString()).toBe('2026-09-01T14:00:00.000Z');
+    });
+    it('npm: an unknown pinned version falls back to latest rather than passing silently', () => {
+      expect(publishDateFromRegistryJson(npmDoc, 'npm', '9.9.9')?.toISOString()).toBe('2026-09-01T14:00:00.000Z');
+    });
+    it('pypi: same rules', () => {
+      expect(publishDateFromRegistryJson(pypiDoc, 'pypi', '1.9.0')?.toISOString()).toBe('2026-05-01T00:00:00.000Z');
+      expect(publishDateFromRegistryJson(pypiDoc, 'pypi')?.toISOString()).toBe('2026-09-01T13:00:00.000Z');
+    });
+    it('returns null on malformed documents', () => {
+      expect(publishDateFromRegistryJson(null, 'npm')).toBeNull();
+      expect(publishDateFromRegistryJson({}, 'pypi')).toBeNull();
+    });
+    it('extractPackageNames carries the pinned version through to the age check input', () => {
+      const pkgs = extractPackageNames('pnpm add -Dw @types/node@24.13.3');
+      expect(pkgs).toEqual([{ name: '@types/node', version: '24.13.3' }]);
+    });
+  });
+
+  describe('deny envelope (built hook, subprocess)', () => {
+    it('emits the PreToolUse hookSpecificOutput deny envelope on stdout and exits 0', async () => {
+      const { spawnSync } = await import('node:child_process');
+      const { existsSync } = await import('node:fs');
+      const { fileURLToPath } = await import('node:url');
+      const dist = fileURLToPath(new URL('../../dist/package-install-guard.mjs', import.meta.url));
+      if (!existsSync(dist)) return; // dist not built in this checkout; the build step runs this in CI
+      // The hook skips main() when VITEST is set (so importing it in tests is side-effect free);
+      // the subprocess must not inherit that or it prints nothing.
+      const env = { ...process.env };
+      delete env.VITEST;
+      delete env.VITEST_WORKER_ID;
+      const res = spawnSync(process.execPath, [dist], {
+        input: makePayload('pip install requets'),
+        encoding: 'utf8',
+        timeout: 20_000,
+        env,
+      });
+      expect(res.status).toBe(0);
+      const out = JSON.parse(res.stdout.trim().split('\n').pop()!);
+      expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse');
+      expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/typosquat/i);
     });
   });
 });
