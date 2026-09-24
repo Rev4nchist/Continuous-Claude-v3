@@ -1,15 +1,33 @@
 ---
 name: resume-handoff
-description: Resumes work from a handoff document with context analysis. Use when user says "resume this handoff", "continue from ENG-XXXX", "pick up where we left off".
+description: Resumes work from a handoff (Notion Scratchpad page or local YAML) with context analysis. Use when user says "resume the handoff in Notion", "resume this handoff", "picking up from a previous session", "read HANDOFF.md", "continue from ENG-XXXX", "pick up where we left off".
 ---
 
 # Resume work from a handoff document
 
 You are tasked with resuming work from a handoff document through an interactive process. These handoffs contain critical context, learnings, and next steps from previous work sessions that need to be understood and continued.
 
+**Handoffs live in Notion** (decided 2026-09-24, P36): child pages of Dave's Scratchpad
+(`1f576fd7ac82807ab8c3f03b2002d40c`) titled `Handoff: <topic> (<repo>) - YYYY-MM-DD`. The local YAML in
+`thoughts/shared/handoffs/` is a generated copy for the statusline and recall; when it has a
+`notion_url:`, read the Notion page, not the YAML. Notion wins when they differ.
+
 ## Initial Response
 
 When this command is invoked:
+
+0. **If a handoff title, "in Notion", or a Notion URL was given** (the usual case):
+   - Push first: any local YAML with `notion: pending` gets its Notion page created now (see
+     create_handoff "Where a handoff lives").
+   - Find the page: a Notion URL is used directly. Otherwise `notion-search` with
+     `page_url: 1f576fd7ac82807ab8c3f03b2002d40c` and the title words as `query`. Take the exact
+     title match. If several match, list them with dates and ask.
+   - If the page `is_archived`, Dave has archived it, which usually means the work is done. Say so
+     in one line and ask before resuming.
+   - `notion-fetch` the page and read it FULLY. Then continue with Step 1 below, treating the page
+     as the handoff document.
+   - Not found: say which query and page you searched, then check `thoughts/shared/handoffs/` for a
+     YAML copy with the same topic.
 
 1. **If the path to a handoff document was provided**:
    - If a handoff document path was provided as a parameter, skip the default message
@@ -29,7 +47,9 @@ When this command is invoked:
    - Begin the analysis process by ingesting relevant context from the handoff document, reading additional files it mentions
    - Then propose a course of action to the user and confirm, or ask for clarification on direction.
 
-3. **If no parameters provided**, respond with:
+3. **If no parameters provided**: `notion-search` the Scratchpad (`page_url` as above, query
+   `Handoff`) and list the non-archived `Handoff:` pages, newest first, then any local YAML with
+   `notion: pending`. Ask which one. If Notion is unreachable, fall back to the message below.
 ```
 I'll help you resume work from a handoff document. Let me find the available handoffs.
 

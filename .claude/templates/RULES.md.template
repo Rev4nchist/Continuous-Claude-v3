@@ -222,7 +222,7 @@ When a session ends with incomplete work:
 - Outcome marking is REQUIRED: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`
 - Handoff doc MUST be created with resumption instructions via `/create_handoff`
 - Session-end hooks monitor and prompt for outcome marking
-- Location: `thoughts/shared/handoffs/{branch-or-task}/`
+- Location: Notion Scratchpad (`Handoff: <topic> (<repo>) - YYYY-MM-DD`); the local YAML copy is generated from it
 
 ### Iteration Limits [H:8]
 
