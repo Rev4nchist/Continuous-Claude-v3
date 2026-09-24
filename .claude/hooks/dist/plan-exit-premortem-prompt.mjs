@@ -6,10 +6,10 @@ import { readFileSync as readFileSync2 } from "fs";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { join } from "path";
+import { dirname, join } from "path";
 import { homedir } from "os";
-var LOG_DIR = join(homedir(), ".claude", "logs");
-var LOG_FILE = join(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -165,17 +165,18 @@ function buildDirective(planPath) {
     '  Header: "Premortem"',
     "  Options:",
     '    - "Codex (Recommended)" (description: "GPT-family adversarial pass on the plan (ChatGPT subscription). The proven default.")',
-    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Codex AND Claude.")',
+    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Codex AND Claude. PARKED on this machine since 2026-07-13: corp egress stalls completions.")',
     '    - "Both -- Codex + Grok in parallel" (description: "Maximum cross-model coverage; two parallel passes, findings merged with [Codex]/[Grok] source tags. Double quota burn.")',
     '    - "Skip -- proceed to implementation" (description: "Move directly to implementation without an explicit risk pass. Use when the plan is trivial or already heavily vetted.")',
     "",
     "After the user answers: Codex -> invoke the `/premortem` skill on the plan file (default Codex pass); Grok -> invoke `/premortem --grok`; Both -> invoke `/premortem --reviewers both`; Skip -> continue with whatever next step the workflow calls for."
   ].join("\n");
 }
-function handlePlanExitPrompt(input) {
+function handlePlanExitPrompt(input, env = process.env) {
   try {
     if (!input || typeof input !== "object") return {};
     if (input.tool_name !== "ExitPlanMode") return {};
+    if (env.CLAUDE_AGENT_ID || env.CI === "true" || env.CI === "1") return {};
     const planPath = extractPlanPath(input.tool_input);
     const additionalContext = buildDirective(planPath);
     try {

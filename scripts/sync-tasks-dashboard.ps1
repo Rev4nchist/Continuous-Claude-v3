@@ -104,7 +104,7 @@ $code = -1
 $syncTimedOut = $false
 try {
   $proc = Start-Process -FilePath 'C:\Users\david.hayes\.local\bin\claude.exe' `
-    -ArgumentList '-p', '--allowedTools', 'Bash,ReadMcpResourceTool,mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-update-page' `
+    -ArgumentList '-p', '--model', $(if ($env:CCV3_HEADLESS_MODEL) { $env:CCV3_HEADLESS_MODEL } else { 'sonnet' }), '--allowedTools', 'Bash,ReadMcpResourceTool,mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-update-page' `
     -RedirectStandardInput $prompt -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
     -NoNewWindow -PassThru
   # Touch .Handle so .ExitCode remains readable after exit (PS -PassThru quirk).

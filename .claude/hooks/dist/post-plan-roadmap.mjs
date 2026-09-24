@@ -358,7 +358,7 @@ function replaceLine(index, line, label) {
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename3, dirname as dirname2, join as join4 } from "node:path";
+import { basename as basename3, dirname as dirname3, join as join4 } from "node:path";
 
 // src/shared/atomic-write.ts
 import {
@@ -372,14 +372,14 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname, basename as basename2, join as join3 } from "path";
+import { dirname as dirname2, basename as basename2, join as join3 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { join as join2 } from "path";
+import { dirname, join as join2 } from "path";
 import { homedir as homedir2 } from "os";
-var LOG_DIR = join2(homedir2(), ".claude", "logs");
-var LOG_FILE = join2(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -451,7 +451,7 @@ var LOCK_STALE_MS = 1e4;
 var LOCK_RETRY_MS = 50;
 var LOCK_TIMEOUT_MS = 5e3;
 function atomicWriteSync(filePath, content) {
-  const dir = dirname(filePath);
+  const dir = dirname2(filePath);
   const tmpFile = join3(dir, `.${basename2(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync(tmpFile, content, "utf-8");
@@ -651,13 +651,13 @@ function rotateBaks(dir) {
   }
 }
 function defaultBackup(bakPath, content) {
-  const dir = dirname2(bakPath);
+  const dir = dirname3(bakPath);
   mkdirSync2(dir, { recursive: true });
   writeFileSync2(bakPath, content, "utf-8");
   rotateBaks(dir);
 }
 function defaultAppendLog(logPath, line) {
-  mkdirSync2(dirname2(logPath), { recursive: true });
+  mkdirSync2(dirname3(logPath), { recursive: true });
   appendFileSync2(logPath, line, "utf-8");
 }
 function appendAudit(projectDir, record, appendLogDep) {

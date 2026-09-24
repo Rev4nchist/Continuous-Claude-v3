@@ -163,6 +163,19 @@
         ]
       },
       {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/destructive-command-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "ExitPlanMode",
         "hooks": [
           {
@@ -503,7 +516,7 @@
         ]
       },
       {
-        "matcher": "Grep|Read",
+        "matcher": "Grep",
         "hooks": [
           {
             "type": "command",
@@ -880,6 +893,8 @@
     "anthropic-skills:frontend-design": "off",
     "anthropic-skills:frontend-slides": "off",
     "anthropic-skills:fourth-presentation-suite": "off",
-    "anthropic-skills:scroll-craft": "off"
+    "anthropic-skills:scroll-craft": "off",
+    "anthropic-skills:notion-bridge": "off",
+    "anthropic-skills:skill-forge": "off"
   }
 }

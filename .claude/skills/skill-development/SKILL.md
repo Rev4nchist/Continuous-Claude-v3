@@ -1,6 +1,6 @@
 ---
 name: skill-development
-description: Skill Development Rules
+description: 'Use when creating or editing a skill under .claude/skills: SKILL.md structure, frontmatter and trigger descriptions.'
 metadata:
   user-invocable: false
 ---

@@ -125,7 +125,8 @@ describe('settings.json.template', () => {
       ['agent-error-capture', 'PostToolUse::Task'],
       ['agent-verification', 'PostToolUse::Task'],
       ['telemetry-tracker', 'PostToolUse::Skill|Task'],
-      ['epistemic-reminder', 'PostToolUse::Grep|Read'],
+      // Grep only since 2026-09-23 (P22): the hook's code handles Grep alone.
+      ['epistemic-reminder', 'PostToolUse::Grep'],
     ];
     for (const [name, expected] of contract) {
       const got = reg.get(name);

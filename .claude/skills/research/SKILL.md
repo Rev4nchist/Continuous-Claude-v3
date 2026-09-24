@@ -1,6 +1,6 @@
 ---
 name: research
-description: Document codebase as-is with thoughts directory for historical context
+description: 'Use when asked to document how part of the codebase works today, using the thoughts/ directory for history. Describes the code as-is; does not propose changes.'
 metadata:
   model: claude-opus-4-5-20251101
   user-invocable: false

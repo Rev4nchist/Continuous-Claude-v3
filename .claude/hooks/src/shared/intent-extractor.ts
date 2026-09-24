@@ -84,10 +84,26 @@ export function extractIntent(prompt: string): string {
 // ---------------------------------------------------------------------------
 
 // Known Claude Code synthetic-prompt wrapper tags + any *-hook wrapper.
+// agent-message / teammate-message: subagent hand-backs and peer messages arrive as a
+// UserPromptSubmit turn too; one was stored as a "User confirmed" memory (2026-09-23 eval, P29).
 const SYNTHETIC_TAG =
-  /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+  /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
 
 const MAX_HUMAN_PROMPT_LEN = 8000;
+
+/**
+ * True only for an EXPLICIT harness wrapper (<task-notification>, <agent-message>,
+ * <system-reminder>, command output, *-hook). Unlike isMachineGeneratedPrompt it does NOT
+ * use the length or XML-density heuristics, so a long human prompt, or one that pastes
+ * some XML, is never mistaken for harness text. Use it where a false positive would drop
+ * a real human signal (user-confirmation-detector).
+ */
+export function isHarnessWrappedPrompt(prompt: string): boolean {
+  if (typeof prompt !== 'string') return false;
+  const t = prompt.trim();
+  // Anchored only: a human prompt that pastes a <task-notification> mid-text is still human.
+  return SYNTHETIC_TAG.test(t);
+}
 
 /**
  * True when a prompt is machine-generated content (Claude Code synthetic

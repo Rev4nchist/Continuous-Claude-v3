@@ -4,6 +4,15 @@ Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence tra
 
 Grounding: verified 2026-07-11 against `codex-cli 0.144.1` and re-verified 2026-09-08 against `codex-cli 0.153.4`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
 
+## Scope: `codex exec` only, NOT the Codex Desktop app
+
+Everything below governs `codex exec` as run by `/codex`, `codex-worker` and `codex-adversary`.
+**The Codex Desktop app is outside it.** Its sandbox is whatever the app is set to. A 2026-09-23
+scan found 47 Desktop sessions with the live repo as the working directory, 21+ in full-access
+mode, on the tree that concurrent Claude sessions share. Nothing in CCv3 can see or gate those
+runs. When Dave uses Desktop on a CCv3 repo, point it at a separate worktree, not the live
+checkout. See `docs/security/authorization-matrix.md`.
+
 ## The one thing to internalize
 
 **`codex exec` has no approval dial, and no Claude Code hook can see inside Codex's sandboxed process.** The `codex exec …` command line itself passes `destructive-command-guard` like any Bash call, but everything Codex does *inside* its sandbox — every file write, every shell command — is invisible to Claude Code's hook layer. **The entire safety boundary is `--sandbox` + this rule's confirm-first preflight.** There is no second line of defense. Choose the sandbox deliberately and confirm write runs.
@@ -58,7 +67,7 @@ Hard-reject any `--model` not in `{gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-
 ## multi_agent and `--ignore-user-config`
 
 - **`--disable multi_agent` on every call by default.** Leaving the global `[features] multi_agent = true` on makes complex tasks spawn built-in sub-agents that fall back to `gpt-4.1` and 400 on this subscription.
-- **`--complex` (ask/implement only, never resume)** swaps in `--enable multi_agent` but **WARNS (no longer refuses, 2026-09-03) if `~/.codex/agents/explorer.toml` is missing or not pinned to `model = "gpt-5.6-luna"`.** **Corrected 2026-09-03 (§17 supersedes §16): fan-out IS real; the PIN's effect is what is unproven.** An earlier same-day note here claimed fan-out was unverified. That was a false negative from a task too narrow to trigger delegation. A `--json` probe recorded **9 harness-level `spawn_agent` events**, so `--complex` genuinely fans out on this machine. What remains unestablished is that `explorer.toml` influences it: an A/B that DELETED the file produced identical fan-out and ZERO `gpt-4.1` in both arms, and the string `explorer` never appears in the event stream — this path spawns generic `spawn_agent` workers, not the named role the file configures. Model self-report is also not a usable oracle: the orchestrator, launched as `gpt-5.6-luna`, described itself as "GPT-5". So: treat the pin as a cheap precaution, NOT a proven guard, and do not infer the sub-agents' exact model from anything currently observable.
+- **`--complex` (ask/implement only, never resume)** swaps in `--enable multi_agent` but **WARNS (no longer refuses, 2026-09-03) if `~/.codex/agents/explorer.toml` is missing or not pinned to `model = "gpt-5.6-luna"`.** **Fan-out IS real; the PIN's effect is unproven** (DESIGN-RESEARCH §17 supersedes §16). A `--json` probe recorded 9 `spawn_agent` events, but an A/B that deleted `explorer.toml` gave identical fan-out and zero `gpt-4.1`: this path spawns generic workers, not the named role. Model self-report is no oracle either. Treat the pin as a cheap precaution, NOT a proven guard, and do not infer the sub-agents' model.
 
   Never default. Print the standing caveat: the pin was verified once on Windows and must be re-probed before unattended use. Confirm-gated like any write; on read-only `ask` the explicit flag + printed caveat is the acknowledgment.
 - **`--ignore-user-config` is `ask`-ONLY.** `implement`/`resume` must NOT pass it: it **silently breaks workspace-write file creation on Windows** — `exit 0` with ZERO diff, a no-op that looks like success. Write modes take the slower cold-start.
@@ -95,4 +104,4 @@ Installed CLI is `0.153.4` (upgraded from `0.144.1` on 2026-09-08; rollback pin 
 ## Standing constraints (restored by adversarial review, 2026-07-29)
 
 - **Re-verify after any Codex CLI upgrade or `~/.codex/hooks.json` change** (one fixture, one run).
-- **Refuted alternative (do NOT use):** the design-doc §5.3 `--profile-v2 worker` + `~/.codex/worker.config.toml` overlay was **empirically refuted 2026-07-07** — overlay layering deep-merges, so an empty `[mcp_servers]` (or `-c mcp_servers={}`) does NOT remove the base MCP servers (MCP-fail count unchanged from baseline). No machine-local `worker.config.toml` is created; `--ignore-user-config` is self-contained and portable across machines.
+- **Refuted alternative (do NOT use):** the design-doc §5.3 `--profile-v2 worker` + `~/.codex/worker.config.toml` overlay was **refuted 2026-07-07**: overlays deep-merge, so an empty `[mcp_servers]` does NOT remove the base MCP servers. No `worker.config.toml` is created.

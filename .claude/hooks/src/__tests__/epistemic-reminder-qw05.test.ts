@@ -99,9 +99,12 @@ beforeAll(() => {
 });
 
 describe('epistemic-reminder QW-05: tool_name field contract', () => {
+  // Unique per run: the hook now fires once per session (P22), keyed by session_id.
+  const grepSession = `qw05-grep-${process.pid}-${Date.now()}`;
+
   it('injects the claim-verification warning for tool_name: "Grep"', () => {
     const result = runHook({
-      session_id: 'qw05-grep',
+      session_id: grepSession,
       hook_event_name: 'PostToolUse',
       tool_name: 'Grep',
       tool_input: { pattern: 'try.*catch', path: 'src/' },
@@ -121,6 +124,18 @@ describe('epistemic-reminder QW-05: tool_name field contract', () => {
     expect(result.parsed?.hookSpecificOutput?.hookEventName).toBe('PostToolUse');
     expect(result.parsed?.hookSpecificOutput?.additionalContext).toContain('EPISTEMIC REMINDER');
     expect(result.parsed?.hookSpecificOutput?.systemPromptSuffix).toBeUndefined();
+  }, TEST_TIMEOUT_MS);
+
+  it('does NOT repeat the warning on a second Grep in the same session (P22)', () => {
+    const result = runHook({
+      session_id: grepSession,
+      hook_event_name: 'PostToolUse',
+      tool_name: 'Grep',
+      tool_input: { pattern: 'x' },
+      tool_response: { content: '' },
+    });
+    expect(result.exitCode).toBe(0);
+    expect(result.parsed).toEqual({});
   }, TEST_TIMEOUT_MS);
 
   it('does NOT inject the warning for an unrelated tool (tool_name: "Read")', () => {

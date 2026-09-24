@@ -232,7 +232,7 @@ These rules already codify pieces of this policy. This document does not duplica
 
 - `.claude/rules/cli-integration-strategy.md` — CLI vs MCP vs OpenCLI decision tree (sections 1-6) and current 21-tool inventory
 - `.claude/rules/hook-dev-lifecycle.md` — full hook workflow (scaffold, build, register, test, sync, verify) and event-type contracts
-- `.claude/rules/nia-first-external.md` — Nia MCP vs WebFetch/WebSearch precedence
+- (`nia-first-external.md` was removed 2026-09-23: the Nia MCP server was down and the rule was followed about 1 time in 260.)
 - `.claude/rules/opencli-first.md` — OpenCLI for structured web data (44 platforms)
 - `.claude/rules/plan-to-ralph-enforcement.md` — gate-hook example with bypass-permissions interaction caveat
 - `.claude/rules/package-install-safety.md` — gate-hook example with 4-layer security check

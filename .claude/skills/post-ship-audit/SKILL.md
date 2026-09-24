@@ -1,6 +1,6 @@
 ---
 name: post-ship-audit
-description: 6-step post-deploy health check: tests, ROADMAP, regressions. Use when the user says "post-ship audit", "verify ship", "check after deploy", "post-ship".
+description: '6-step post-deploy health check: tests, ROADMAP, regressions. Use when the user says "post-ship audit", "verify ship", "check after deploy", "post-ship".'
 allowed-tools: [Bash, Read, Grep, Glob]
 metadata:
   keywords: [post-ship, audit, verify ship, post-ship audit, ship check, post deploy, regression check]

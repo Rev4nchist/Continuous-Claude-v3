@@ -461,7 +461,10 @@ function killTree(pid) {
 function spawnClaude(prompt) {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY;
-  const res = spawnSync('claude', ['-p', prompt, '--allowedTools', NOTION_PUBLISH_TOOLS], {
+  // Pinned model (Opus 5.5 eval, P34): 4-10 publishes twice a day ran on the interactive
+  // session's model and died on its usage limit (09-09..09-11). Execution tier = sonnet.
+  const model = process.env.CCV3_HEADLESS_MODEL || 'sonnet';
+  const res = spawnSync('claude', ['-p', prompt, '--model', model, '--allowedTools', NOTION_PUBLISH_TOOLS], {
     input: '',
     env,
     timeout: CLAUDE_TIMEOUT_MS,

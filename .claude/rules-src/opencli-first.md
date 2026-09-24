@@ -1,6 +1,6 @@
 # Prefer opencli for Structured Web Data
 
-Before using WebFetch, WebSearch, or browser automation (Claude-in-Chrome, Playwright)
+Before using WebFetch, WebSearch, or browser automation (@playwright/mcp)
 for structured, repeatable web queries:
 
 1. Check if opencli has an adapter: `opencli list | grep <site>`
@@ -20,7 +20,7 @@ for structured, repeatable web queries:
 
 - One-off page reads: WebFetch
 - General web search: WebSearch
-- Interactive browser tasks: Claude-in-Chrome
+- Interactive browser tasks: @playwright/mcp (Tier 1; Claude-in-Chrome is deprecated, see browser-automation.md)
 - Performance profiling: CDP CLI (node scripts/cdp.mjs perf)
 
 ## Why

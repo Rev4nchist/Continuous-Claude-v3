@@ -1,6 +1,6 @@
 ---
 name: sub-agents
-description: Create and configure Claude Code sub-agents with custom prompts, tools, and models
+description: 'Use when creating or editing a Claude Code sub-agent: its prompt, tools and model.'
 allowed-tools: [Read, Write, Bash]
 metadata:
   user-invocable: false

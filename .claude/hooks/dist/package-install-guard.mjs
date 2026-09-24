@@ -9,6 +9,15 @@ import https from "https";
 function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
 }
+function outputDeny(reason, decision = "deny") {
+  console.log(JSON.stringify({
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      permissionDecision: decision,
+      permissionDecisionReason: reason
+    }
+  }));
+}
 
 // src/shared/typosquat-detect.ts
 var POPULAR_PYPI = [
@@ -75,6 +84,36 @@ var POPULAR_NPM = [
   "drizzle-orm",
   "turbo"
 ];
+var LEGITIMATE_NEAR_MISSES_NPM = /* @__PURE__ */ new Set([
+  "vitest",
+  // Vite-team test runner (vitest-dev/vitest); 2 from "vite"
+  "vite-node",
+  // Vitest's node runner; 2+ from "vite" once hyphen counted, kept explicit
+  "vitepress",
+  // Vite-team docs generator
+  "chai",
+  // assertion library; 2 from "chalk"
+  "ora",
+  // spinner (sindresorhus); 2 from "cors"
+  "uid",
+  // tiny id generator; 1 from "uuid"
+  "zx"
+  // Google shell scripting; 2 from "zod"
+]);
+var LEGITIMATE_NEAR_MISSES_PYPI = /* @__PURE__ */ new Set([
+  "sympy",
+  // symbolic math; 2 from "numpy"
+  "pipx",
+  // PyPA tool; 1 from "pip"
+  "httpie",
+  // HTTP client; 2 from "httpx"
+  "hiredis",
+  // redis C parser binding; 2 from "redis"
+  "torchx",
+  // Meta's TorchX; 1 from "torch"
+  "sh"
+  // subprocess wrapper; 1 from "six"
+]);
 var KNOWN_PYPI_TYPOSQUATS = {
   // requests variants
   "requets": "requests",
@@ -233,6 +272,10 @@ function checkTyposquat(packageName, ecosystem) {
   const name = packageName.toLowerCase();
   const popularList = ecosystem === "pypi" ? POPULAR_PYPI : POPULAR_NPM;
   if (popularList.includes(name)) {
+    return { isTyposquat: false };
+  }
+  const legit = ecosystem === "pypi" ? LEGITIMATE_NEAR_MISSES_PYPI : LEGITIMATE_NEAR_MISSES_NPM;
+  if (legit.has(name)) {
     return { isTyposquat: false };
   }
   const knownList = ecosystem === "pypi" ? KNOWN_PYPI_TYPOSQUATS : KNOWN_NPM_TYPOSQUATS;
@@ -15104,12 +15147,12 @@ function queryOsv(name, version, ecosystem) {
     req.end();
   });
 }
-async function checkPackageAge(name, ecosystem) {
+async function checkPackageAge(name, ecosystem, requestedVersion) {
   if (ecosystem !== "pypi" && ecosystem !== "npm") {
     return { ageHours: null, blocked: false };
   }
   try {
-    const publishDate = await fetchPublishDate(name, ecosystem);
+    const publishDate = await fetchPublishDate(name, ecosystem, requestedVersion);
     if (!publishDate) {
       return { ageHours: null, blocked: false };
     }
@@ -15135,7 +15178,27 @@ async function checkPackageAge(name, ecosystem) {
     return { ageHours: null, blocked: false, error: "Registry check failed (network)" };
   }
 }
-function fetchPublishDate(name, ecosystem) {
+function publishDateFromRegistryJson(json, ecosystem, requestedVersion) {
+  const doc = json;
+  if (!doc) return null;
+  if (ecosystem === "pypi") {
+    const exact2 = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
+    const norm = (v) => v.toLowerCase().replace(/^v/, "").replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.replace(/(\.0+)+$/, ""));
+    const releaseKey = exact2 ? doc.releases?.[exact2] ? exact2 : Object.keys(doc.releases ?? {}).find((k) => norm(k) === norm(exact2)) : void 0;
+    const version2 = releaseKey ?? doc.info?.version;
+    let newest = null;
+    for (const file of doc.releases?.[version2] ?? []) {
+      const d = file?.upload_time_iso_8601 ? new Date(file.upload_time_iso_8601) : null;
+      if (d && !Number.isNaN(d.getTime()) && (!newest || d > newest)) newest = d;
+    }
+    return newest;
+  }
+  const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
+  const version = exact && doc.time?.[exact] ? exact : doc["dist-tags"]?.latest;
+  const timeEntry = doc.time?.[version];
+  return timeEntry ? new Date(timeEntry) : null;
+}
+function fetchPublishDate(name, ecosystem, requestedVersion) {
   return new Promise((resolve) => {
     const url = ecosystem === "pypi" ? `https://pypi.org/pypi/${encodeURIComponent(name)}/json` : `https://registry.npmjs.org/${encodeURIComponent(name)}`;
     const timer = setTimeout(() => {
@@ -15149,23 +15212,7 @@ function fetchPublishDate(name, ecosystem) {
       res.on("end", () => {
         clearTimeout(timer);
         try {
-          const json = JSON.parse(data);
-          if (ecosystem === "pypi") {
-            const version = json?.info?.version;
-            const releases = json?.releases?.[version];
-            if (releases && releases.length > 0) {
-              resolve(new Date(releases[0].upload_time_iso_8601));
-              return;
-            }
-          } else {
-            const latest = json?.["dist-tags"]?.latest;
-            const timeEntry = json?.time?.[latest];
-            if (timeEntry) {
-              resolve(new Date(timeEntry));
-              return;
-            }
-          }
-          resolve(null);
+          resolve(publishDateFromRegistryJson(JSON.parse(data), ecosystem, requestedVersion));
         } catch {
           resolve(null);
         }
@@ -15254,14 +15301,6 @@ function parsePackageToken(token, ecosystem) {
   }
   return null;
 }
-function outputDeny(reason) {
-  const output = {
-    permissionDecision: "deny",
-    reason
-  };
-  console.log(JSON.stringify(output));
-  process.exit(2);
-}
 function outputAllowWithAdvisory(advisory) {
   const output = {
     hookSpecificOutput: {
@@ -15347,7 +15386,7 @@ async function main() {
       }
     }
     if (ecosystem === "pypi" || ecosystem === "npm") {
-      const ageResult = await checkPackageAge(pkg.name, ecosystem);
+      const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
       if (ageResult.blocked) {
         outputDeny(
           `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
@@ -15374,7 +15413,9 @@ export {
   checkMaliciousPackage,
   checkOsvAdvisory,
   checkOverride,
+  checkPackageAge,
   extractPackageNames,
   isPackageInstallCommand,
-  parseEcosystem
+  parseEcosystem,
+  publishDateFromRegistryJson
 };

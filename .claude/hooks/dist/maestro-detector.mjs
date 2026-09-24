@@ -10,6 +10,14 @@ function outputContinue() {
   console.log(JSON.stringify({ result: "continue" }));
 }
 
+// src/shared/intent-extractor.ts
+var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+function isHarnessWrappedPrompt(prompt) {
+  if (typeof prompt !== "string") return false;
+  const t = prompt.trim();
+  return SYNTHETIC_TAG.test(t);
+}
+
 // src/maestro-detector.ts
 var COMPLEXITY_SIGNALS = [
   // Multi-task indicators
@@ -84,7 +92,7 @@ function formatSignals(signals) {
   return top;
 }
 function makeSuggestionOutput(score, signals, phases) {
-  const confidencePct = Math.round(score * 100);
+  const confidencePct = Math.min(100, Math.round(score * 100));
   const message = [
     "--- MAESTRO ORCHESTRATION SUGGESTED ---",
     "",
@@ -128,7 +136,7 @@ async function main() {
       return;
     }
     const prompt = input.prompt;
-    if (prompt.length < 50) {
+    if (prompt.length < 50 || isHarnessWrappedPrompt(prompt)) {
       outputContinue();
       return;
     }
