@@ -9,6 +9,7 @@
  * Usage:
  *   node scripts/tri-model/preflight.mjs
  *   node scripts/tri-model/preflight.mjs --json
+ *   node scripts/tri-model/preflight.mjs --project <dir>   (git_state for <dir>; default: the cwd)
  *
  * Env:
  *   PREFLIGHT_PINS_FILE  override path to harness-update.md (tamper tests)
@@ -22,10 +23,11 @@ import { fileURLToPath } from "node:url";
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const REPO_ROOT = path.resolve(__dirname, "..", "..");
+// harness-update.md moved from .claude/rules/ to .claude/rules-ondemand/ on 2026-09-24 (context phase 2).
 const DEFAULT_PINS_FILE = path.join(
   REPO_ROOT,
   ".claude",
-  "rules",
+  "rules-ondemand",
   "harness-update.md",
 );
 const GROK_AUTH_EMAIL_PIN = "dkhayes44@gmail.com";
@@ -35,6 +37,10 @@ delete CLEAN_ENV.OPENAI_API_KEY;
 delete CLEAN_ENV.CODEX_API_KEY;
 delete CLEAN_ENV.XAI_API_KEY;
 const WANT_JSON = process.argv.includes("--json");
+// git_state reports the project the caller works in (/game-plan runs from that project), not this
+// repo. --project <dir> overrides the working directory.
+const PROJECT_ARG = process.argv.indexOf("--project");
+const PROJECT_DIR = path.resolve(PROJECT_ARG >= 0 ? process.argv[PROJECT_ARG + 1] : process.cwd());
 
 /** @typedef {{ name: string, ok: boolean, detail: string, informational?: boolean }} Check */
 
@@ -455,14 +461,14 @@ function checkGitState() {
       encoding: "utf8",
       timeout: EXEC_TIMEOUT_MS,
       windowsHide: true,
-      cwd: REPO_ROOT,
+      cwd: PROJECT_DIR,
     }).trim();
   } catch {
     return {
       name: "git_state",
       ok: true,
       informational: true,
-      detail: "branch=(unavailable) dirty=(unavailable)",
+      detail: `project=${path.basename(PROJECT_DIR)} branch=(unavailable, not a git repo?) dirty=(unavailable)`,
     };
   }
   try {
@@ -470,7 +476,7 @@ function checkGitState() {
       encoding: "utf8",
       timeout: EXEC_TIMEOUT_MS,
       windowsHide: true,
-      cwd: REPO_ROOT,
+      cwd: PROJECT_DIR,
     });
     dirtyCount = status
       .split(/\r?\n/)
@@ -483,7 +489,7 @@ function checkGitState() {
     name: "git_state",
     ok: true,
     informational: true,
-    detail: `branch=${branch} dirty=${dirtyLabel}`,
+    detail: `project=${path.basename(PROJECT_DIR)} branch=${branch} dirty=${dirtyLabel}`,
   };
 }
 

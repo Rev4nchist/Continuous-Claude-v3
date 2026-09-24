@@ -71,7 +71,7 @@ _Refresh: `node scripts/tri-model/sync-current-state.mjs` (narrative below the m
 2. `docs/tri-model/SESSION-REVIEW-2026-07-11.md` — combined build order + corrections (Tracks A/B/C/E/G now DONE per above; remaining: merge, Track F, Track D).
 3. `docs/tri-model/COLLABORATION-PLAN.md` — full governance design (roster doctrine §3.1, phase machine §3.4, open decisions §7).
 4. `.workroom/PROTOCOL.md` (on the governance branch) — the live message/phase schema.
-5. Safety rules: `.claude/rules/{grok,codex}-worker-safety.md`, `harness-update.md`.
+5. Safety rules: `.claude/rules-ondemand/{grok,codex}-worker-safety.md`, `harness-update.md`.
 
 ## Dogfood room disposition (2026-07-11-tri-model-preflight)
 

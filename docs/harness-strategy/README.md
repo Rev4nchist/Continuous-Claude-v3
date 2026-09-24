@@ -597,7 +597,7 @@ Every one of these cost real time already.
   `pwsh -File scripts/git-safe.ps1 -C <repo> commit -F <msgfile>` — it recovered
   on attempt 2 twice today. Root cause is **not** established; the lane's own
   log is structurally blind to Bash-tool crashes. See
-  `.claude/rules/windows-platform.md`.
+  `.claude/docs/windows/platform-notes.md`.
 - **Hung test runners accumulate silently.** Found a vitest tree from
   **2026-07-28 13:33 still alive 29 hours later** at ~0 CPU with a 0-byte output
   file. `Stop-Process` misses the descendants; use `taskkill /PID <n> /T /F`, or
