@@ -221,8 +221,8 @@ The deployer agent automatically runs `e2e/smoke.spec.ts` against the deploy URL
 | qa-suite skill | `continuous-claude/.claude/skills/qa-suite/SKILL.md` | `~/.claude/skills/qa-suite/SKILL.md` |
 | browser-dev-cycle | `continuous-claude/.claude/skills/browser-dev-cycle/SKILL.md` | `~/.claude/skills/browser-dev-cycle/SKILL.md` |
 | deployer agent | `continuous-claude/.claude/agents/deployer.md` | `~/.claude/agents/deployer.md` |
-| browser-automation rule | `continuous-claude/.claude/rules/browser-automation.md` | `~/.claude/rules/browser-automation.md` |
-| CLI strategy | `continuous-claude/.claude/rules/cli-integration-strategy.md` | `~/.claude/rules/cli-integration-strategy.md` |
+| browser-automation rule (on demand) | `continuous-claude/.claude/rules-ondemand/browser-automation.md` | `~/.claude/rules-ondemand/browser-automation.md` |
+| CLI strategy (a skill now) | `continuous-claude/.claude/skills/cli-integration/SKILL.md` | `~/.claude/skills/cli-integration/SKILL.md` |
 | tool comparison | `continuous-claude/.claude/skills/browser-dev-cycle/references/tool-comparison.md` | synced |
 | init-project | `continuous-claude/.claude/skills/init-project/SKILL.md` | `~/.claude/skills/init-project/SKILL.md` |
 

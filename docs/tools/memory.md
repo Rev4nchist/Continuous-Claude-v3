@@ -561,6 +561,6 @@ for result in results:
 - [Skills: /remember](/docs/skills/remember.md) - Interactive learning storage
 - [Skills: /recall](/docs/skills/recall.md) - Interactive learning retrieval
 - [Rules: dynamic-recall](/.claude/rules/dynamic-recall.md) - Proactive memory usage
-- [Rules: proactive-memory-disclosure](/.claude/rules/proactive-memory-disclosure.md) - Memory awareness protocol
+- Memory awareness protocol: one line in `~/.claude/CLAUDE.md` ("Sessions, handoffs, memory"); the `proactive-memory-disclosure` rule was folded in on 2026-09-24
 - [Tools: TLDR](tools/README.md#tldr-cli) - Code analysis tool
 - [Hooks](hooks/README.md) - Session-start recall and auto-learning hooks

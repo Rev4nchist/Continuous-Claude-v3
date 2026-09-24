@@ -35,9 +35,9 @@ tri-model change: `node scripts/tri-model/sync-current-state.mjs` (`--check` = s
 | `/game-plan` skill (full pipeline orchestrator) | `.claude/skills/game-plan/SKILL.md` |
 | Preflight gate (auth, identity pin, version-pin block) | `scripts/tri-model/preflight.mjs` |
 | Static consistency suite | `scripts/tri-model/tri-model-suite.sh` |
-| Grok skill / safety rule | `.claude/skills/grok/SKILL.md` · `.claude/rules/grok-worker-safety.md` |
-| Codex skill / safety rule | `.claude/skills/codex/SKILL.md` · `.claude/rules/codex-worker-safety.md` |
-| Harness update playbook (the ONLY model/CLI update path) | `.claude/skills/harness-update/SKILL.md` · `.claude/rules/harness-update.md` |
+| Grok skill / safety rule | `.claude/skills/grok/SKILL.md` · `.claude/rules-ondemand/grok-worker-safety.md` |
+| Codex skill / safety rule | `.claude/skills/codex/SKILL.md` · `.claude/rules-ondemand/codex-worker-safety.md` |
+| Harness update playbook (the ONLY model/CLI update path) | `.claude/skills/harness-update/SKILL.md` · `.claude/rules-ondemand/harness-update.md` |
 
 ## Human-facing mirrors (Notion)
 

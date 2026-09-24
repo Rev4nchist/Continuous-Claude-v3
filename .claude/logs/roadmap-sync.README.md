@@ -48,7 +48,7 @@ means the hook adds nothing on top of it.
    look at, and `roadmap-sync-guards-invocation.test.ts` is the guard.
 5. **The hook was registered on the `Bash` matcher only, CLOSED 2026-08-05** —
    so a commit made through the **PowerShell tool** never fired it. That is not a
-   corner case: `.claude/rules/windows-platform.md` tells you to prefer the
+   corner case: `.claude/docs/windows/platform-notes.md` tells you to prefer the
    PowerShell tool for git precisely because the Bash tool hangs on git/network
    ops, so the recommended way to commit was the one way that went unrecorded.
    Caught in the wild by this very log — a concurrent session's `fix(github)`
@@ -68,7 +68,7 @@ means the hook adds nothing on top of it.
    not even a `skipped` one.
 
    This is the same shape as item 5 and just as load-bearing.
-   `.claude/rules/windows-platform.md` mandates `git-safe.ps1` for commits and
+   `.claude/docs/windows/platform-notes.md` mandates `git-safe.ps1` for commits and
    pushes because of the MSYS fork storm, so once again **the recommended way to
    commit is a way that goes unrecorded**.
 

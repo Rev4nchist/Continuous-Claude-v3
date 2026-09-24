@@ -368,8 +368,8 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 | Grok skill | `.claude/skills/grok/SKILL.md` |
 | Codex skill | `.claude/skills/codex/SKILL.md` |
 | Premortem dual reviewers | `.claude/skills/premortem/SKILL.md` |
-| Grok safety | `.claude/rules/grok-worker-safety.md` |
-| Codex safety | `.claude/rules/codex-worker-safety.md` |
+| Grok safety | `.claude/rules-ondemand/grok-worker-safety.md` |
+| Codex safety | `.claude/rules-ondemand/codex-worker-safety.md` |
 | Coordination research | `docs/self-improvement/proposals/2026-07-10-coordination.md` |
 | Video outline (Dave) | `Downloads/Great resource here___https___youtu.be_zXZkuFxpwL....md` |
 

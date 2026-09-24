@@ -5,8 +5,8 @@ checks it runs, what each block class means, and how the malicious-package block
 current. This is procedural detail you read *deliberately* — when a block needs interpreting,
 or when the blocklist needs updating — not something an agent needs loaded on every turn.
 
-**The enforcement is the hook, not this document.** The always-on rule
-(`.claude/rules/package-install-safety.md`) keeps only what must be true unprompted: that
+**The enforcement is the hook, not this document.** The core `~/.claude/CLAUDE.md` ("A hook block
+is a finding"; the separate rule was folded in on 2026-09-24) keeps only what must be true unprompted: that
 installs are intercepted, that `SKIP_PACKAGE_GUARD=1` exists, and that routing around a block
 is not an option. Everything below is the detail behind that.
 

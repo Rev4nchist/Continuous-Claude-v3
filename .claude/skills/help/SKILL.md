@@ -276,7 +276,7 @@ External tool integrations:
 Always-on instructions injected into context:
 
 - `claim-verification.md` - Verify before asserting
-- `memory-rules.md` - How to use memory system
+- `memory` skill - How to use the memory system (the `memory-rules.md` rule was folded into it)
 - `tldr-cli.md` - TLDR usage reference
 
 ### Creating Custom Skills

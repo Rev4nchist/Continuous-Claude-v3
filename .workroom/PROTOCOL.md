@@ -126,7 +126,7 @@ block, behave exactly as the one-shot `/codex` / `/grok` flows do today.
   jsonl row (`.claude/logs/*-worker.jsonl`); a milestone is not `complete` without it and
   Claude-recorded smoke evidence (exit codes) in `milestones/M*-result.md`.
 - **Grok research role** uses a widened write-free `--tools` allowlist (see
-  `.claude/rules/grok-worker-safety.md`) — a deliberate egress expansion, distinct from
+  `.claude/rules-ondemand/grok-worker-safety.md`) — a deliberate egress expansion, distinct from
   the ask guard. Never silently reuse ask's allowlist for research or vice versa.
 - **Worktree paths** for milestones live in `status.json.worktrees` — Grok/Codex implement
   runs happen in `../.grok-worktrees/` / `../.codex-worktrees/` siblings; the room only
