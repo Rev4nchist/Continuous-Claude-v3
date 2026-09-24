@@ -56,7 +56,7 @@ Parse this carefully - it defines the scope of your implementation.
 
 ## Step 2: Failure-First Workflow
 
-**Always follow this workflow** (RULES.md "Testing Standards"):
+**Always follow this workflow** (CLAUDE.md "Testing standard"):
 
 ### 2.1 List Failure Modes, Then Make the Check Fail
 

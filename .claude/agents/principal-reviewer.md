@@ -119,7 +119,7 @@ For each finding, mark:
 - ? INFERRED — based on diff context, needs verification
 - ✗ UNCERTAIN — flagged for the author to confirm
 
-Per `.claude/rules/claim-verification.md`. Senior reviewers do not guess in writing.
+Per `~/.claude/CLAUDE.md ("Done means proven")`. Senior reviewers do not guess in writing.
 
 ## What You Do NOT Do
 

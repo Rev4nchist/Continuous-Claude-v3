@@ -3,7 +3,7 @@
  * Epistemic Reminder Hook - PostToolUse (Grep|Read)
  *
  * After Grep or Read results, reminds the user about claim verification.
- * Per ~/.claude/rules/claim-verification.md - prevents false claims
+ * Per ~/.claude/CLAUDE.md ("Done means proven") - prevents false claims
  * based on pattern matching without reading actual file content.
  */
 

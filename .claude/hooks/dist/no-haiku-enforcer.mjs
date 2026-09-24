@@ -26,7 +26,7 @@ Unset it (it must never be set) \u2014 see ~/.claude/rules/agent-model-selection
   }
   return deny(`BLOCKED: model='haiku' not allowed.
 
-Per ~/.claude/rules/no-haiku.md:
+Per ~/.claude/CLAUDE.md ("Agents and delegation"):
 - Haiku is unreliable for agent tasks
 - Use model='sonnet' (or model='opus' for judgment-dense work)
 - Or omit the model parameter for a genuinely ad-hoc chat-level call`);

@@ -2,7 +2,7 @@
 /**
  * Model-Policy Enforcer Hook - PreToolUse (Agent|Task)
  *
- * (1) Blocks Task/Agent calls with model="haiku" (~/.claude/rules/no-haiku.md).
+ * (1) Blocks Task/Agent calls with model="haiku" (~/.claude/CLAUDE.md ("Agents and delegation")).
  * (2) Standing guard: denies all spawns if CLAUDE_CODE_SUBAGENT_MODEL is set — it
  *     overrides every agent's frontmatter and flattens the two-tier map to one model
  *     (~/.claude/rules/agent-model-selection.md).
@@ -64,7 +64,7 @@ Unset it (it must never be set) — see ~/.claude/rules/agent-model-selection.md
 
   return deny(`BLOCKED: model='haiku' not allowed.
 
-Per ~/.claude/rules/no-haiku.md:
+Per ~/.claude/CLAUDE.md ("Agents and delegation"):
 - Haiku is unreliable for agent tasks
 - Use model='sonnet' (or model='opus' for judgment-dense work)
 - Or omit the model parameter for a genuinely ad-hoc chat-level call`);

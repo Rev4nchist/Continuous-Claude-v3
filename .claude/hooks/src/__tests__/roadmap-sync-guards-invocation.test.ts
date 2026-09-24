@@ -13,7 +13,7 @@
  *
  *  GAP 2 -- `isGitCommitCommand` was `command.includes('git commit')`, which is
  *  FALSE for `git -C <path> commit`. That form was invisible to the hook, and
- *  it is the form .claude/rules/windows-platform.md recommends for the
+ *  it is the form .claude/docs/windows/platform-notes.md recommends for the
  *  PowerShell tool (the Bash tool hangs on git/network ops).
  *
  * The two fixes are a PAIR, and the `-C` escape tests below are why: teaching

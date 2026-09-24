@@ -96,7 +96,7 @@ Append a new entry to the `projects` array in `.claude/project-registry.json`:
 
 Required fields: `name`, `path`, `stack`, `description`, `status`.
 Optional fields (nullable): `port`, `url`, `devCommand`, `e2e`.
-`e2e` is the project's end-to-end check (RULES.md "Testing Standards"): `{ "command": "...", "artifact": "<path the run writes>" }`. The project's AGENTS.md "Testing" section states the same values.
+`e2e` is the project's end-to-end check (CLAUDE.md "Testing standard"): `{ "command": "...", "artifact": "<path the run writes>" }`. The project's AGENTS.md "Testing" section states the same values.
 
 ### Update Project Info
 

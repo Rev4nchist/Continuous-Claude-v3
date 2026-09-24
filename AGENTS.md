@@ -1,7 +1,7 @@
 # AGENTS.md: continuous-claude (CCv3)
 
 Read by Codex and other agents directly, and by Claude Code through `@AGENTS.md` in CLAUDE.md.
-Global policy: RULES.md "Testing Standards". This file says what it means in this repo.
+Global policy: CLAUDE.md "Testing standard". This file says what it means in this repo.
 
 ## Testing
 

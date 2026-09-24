@@ -70,6 +70,8 @@ const CASES = [
   ['codex-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'codex-adversary' } }, 'deny', ['codex'], []],
   ['Task tool name works too', { session_id: 's10b', tool_name: 'Task', tool_input: { subagent_type: 'grok-worker' } }, 'deny', ['grok'], []],
   ['a subagent gets its own copy', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
+  ['any Agent spawn injects the delegation rule once', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'scout' } }, 'inject', ['delegation'], ['codex']],
+  ['...and not again in the same session', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'kraken' } }, 'none', [], []],
   ['harness-update skill injects', { session_id: 's11', tool_name: 'Skill', tool_input: { skill: 'harness-update' } }, 'inject', ['harness-update'], []],
   ['Neon MCP tool injects neonctl rule', { session_id: 's12', tool_name: 'mcp__Neon__delete_branch', tool_input: {} }, 'inject', ['neonctl'], []],
   ['psql via docker exec injects the DB rule', bash('s13', 'docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c "SELECT 1"'), 'inject', ['cross-terminal-db'], []],

@@ -2,7 +2,7 @@
  * msys-crash-capture -- PostToolUse hook (matcher: Bash|PowerShell).
  *
  * The unified MSYS fork-storm event log for the Bash-tool lane (see
- * .claude/rules-src/windows-platform.md, "FIXED 2026-08-19"). Writes one row
+ * .claude/docs/windows/platform-notes.md, "FIXED 2026-08-19"). Writes one row
  * per Bash/PowerShell call to ~/.claude/logs/msys-events.jsonl:
  *   success -> {ts, lane:"bash-tool", tool, ok:1}   (the DENOMINATOR)
  *   crash   -> {ts, lane:"bash-tool", tool, ok:0, signature, exit_code,

@@ -6,7 +6,7 @@
   Idempotent. Replaces any existing task with the same name.
   Runs the embedding daemon pre-warm at logon with a 30s delay (no admin required).
   Mirrors the CCv3-Blocklist-Update pattern documented in
-  .claude/rules/package-install-safety.md.
+  docs/hooks/package-install-guard.md.
 
 .NOTES
   Run this script ONCE after a fresh clone. Do NOT run automatically.

@@ -279,6 +279,16 @@
       "command": [
         "^opencli(\\s|$)"
       ]
+    },
+    {
+      "id": "delegation",
+      "files": [
+        "proactive-delegation.md"
+      ],
+      "mode": "inject",
+      "agent": [
+        "^"
+      ]
     }
   ]
 }

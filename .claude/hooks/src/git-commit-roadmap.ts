@@ -81,7 +81,7 @@ function readStdin(): Promise<string> {
  * Was `normalized.includes('git commit')`, which is FALSE for
  * `git -C <path> commit` — so every commit made that way was invisible to this
  * hook and never reached the ROADMAP (found 2026-08-05; `git -C` is the form
- * .claude/rules/windows-platform.md recommends for the PowerShell tool, because
+ * .claude/docs/windows/platform-notes.md recommends for the PowerShell tool, because
  * the Bash tool hangs on git/network ops). Now tokenizes the invocation.
  *
  * The `--amend` exclusion is preserved, and is now per-invocation rather than a

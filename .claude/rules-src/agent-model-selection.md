@@ -1,3 +1,10 @@
+---
+paths:
+  - ".claude/agents/**"
+  - "scripts/check-agent-model-drift.mjs"
+  - "opc/scripts/claude_spawn.py"
+---
+
 # Agent Model Selection
 
 Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where one exists — 17 of 37 have one) carries an **explicit two-tier** `model:` — no omit, no inherit, never haiku.

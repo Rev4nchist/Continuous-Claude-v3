@@ -4,7 +4,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/explore-to-scout.ts
 var DENY_REASON = `BLOCKED: subagent_type='Explore' is not allowed.
 
-Per ~/.claude/rules/use-scout-not-explore.md:
+Per ~/.claude/CLAUDE.md ("Agents and delegation"):
 - Explore uses Haiku -- fast but inaccurate
 - Scout uses Sonnet with a detailed prompt -- accurate results
 

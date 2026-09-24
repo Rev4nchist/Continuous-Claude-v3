@@ -193,7 +193,7 @@ export interface GitCommitInvocation {
  * Tokenizing rather than substring-matching is what makes `git -C <dir> commit`
  * visible at all — `command.includes('git commit')` is false for it, which is
  * the second half of the 2026-08-05 finding: such commits were invisible to the
- * hook, and `git -C` is the form .claude/rules/windows-platform.md actively
+ * hook, and `git -C` is the form .claude/docs/windows/platform-notes.md actively
  * recommends for the PowerShell tool.
  */
 export function parseGitCommitInvocations(command: string): GitCommitInvocation[] {
