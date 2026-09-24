@@ -896,5 +896,7 @@
     "anthropic-skills:scroll-craft": "off",
     "anthropic-skills:notion-bridge": "off",
     "anthropic-skills:skill-forge": "off"
-  }
+  },
+  "skillListingMaxDescChars": 2048,
+  "skillListingBudgetFraction": 0.05
 }

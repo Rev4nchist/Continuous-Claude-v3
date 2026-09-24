@@ -42,7 +42,7 @@ uv run python -m scripts.setup.wizard
 
 The wizard handles:
 - Docker PostgreSQL + pgvector container (4 tables, idempotent schema)
-- Hook installation + TypeScript build (95 source hooks compiled to dist/*.mjs)
+- Hook installation + TypeScript build (about 75 source hooks compiled to dist/*.mjs)
 - Skills (150+), agents (50), rules (28) installed to `~/.claude/`
 - CLAUDE.md and RULES.md behavioral config from templates
 - Environment variables (`CLAUDE_OPC_DIR`, `PYTHONUTF8=1` on Windows)
@@ -58,7 +58,7 @@ The wizard handles:
 docker ps | grep continuous-claude-postgres
 
 # Hooks compiled
-ls ~/.claude/hooks/dist/*.mjs | wc -l  # Expect 90+
+ls ~/.claude/hooks/dist/*.mjs | wc -l  # Expect 70+
 
 # Behavioral config exists
 ls ~/.claude/CLAUDE.md ~/.claude/RULES.md
@@ -69,6 +69,21 @@ echo $CLAUDE_OPC_DIR  # Should point to <repo>/opc
 # Memory system works
 cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "test" --k 1 --text-only
 ```
+
+### Third-party skills (not in this repo, not installed by the wizard)
+
+Three skills that rules route to live outside the repo. `~/.claude/skills/<name>` is a
+directory junction to the install location. `bash scripts/verify-setup.sh` fails on a missing
+archify and warns on the other two.
+
+| Skill | Source | Install location | Why it matters |
+|---|---|---|---|
+| `archify` | github.com/tt-a1i/archify (MIT), installed with the `skills` CLI (`npx skills add tt-a1i/archify`) | `~/.agents/skills/archify` | `design-work.md` routes diagrams to it |
+| `browser-automation` | seeded by the CodeGPT app | `~/.codegpt/skills/browser-automation` | `design-work.md` names it for console and network checks |
+| `game-development` | seeded by the CodeGPT app | `~/.codegpt/skills/game-development` | game run-and-look loop |
+
+Link each one after it is installed (PowerShell):
+`New-Item -ItemType Junction -Path "$HOME\.claude\skills\archify" -Target "$HOME\.agents\skills\archify"`
 
 GitHub identity is **not** covered by the wizard and is verified separately -- see
 [GitHub Identity](#github-identity):
