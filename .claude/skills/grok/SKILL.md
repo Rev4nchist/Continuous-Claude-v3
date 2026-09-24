@@ -303,14 +303,14 @@ Hard-reject any `--model` not in `{grok-4.5, grok-composer-2.5-fast}`. Compariso
 
 Every `/grok` run auto-ingests `~/.claude/Claude.md`, Claude Code's `settings.local.json` permissions, and all installed Claude skills as context — shipped to xAI under Dave's account on EVERY invocation, not just content-bearing ones.
 
-- **First-use-per-session confirmation.** Any run whose Request includes repo content, a diff, file paths to read, or anything beyond a bare generic question requires explicit user confirmation naming xAI as the destination, the first time in a session. Skippable on repeats in the SAME session only when Autonomy=`yes` and the session already confirmed once.
+- **First-use-per-session confirmation — for EVERY run, even a bare generic question.** Because every run ships the context above, the first Grok run in a session requires explicit user confirmation naming xAI as the destination, whatever the Request says (tightened 2026-09-23, CodeRabbit #48: the old wording exempted "a bare generic question", which still sends the context). Skippable on repeats in the SAME session only when Autonomy=`yes` and the session already confirmed once.
 - **Secret-scan every assembled prompt file** before sending: `grep -Ei 'api[_-]?key|token|secret|BEGIN[A-Z ]*PRIVATE KEY'`. On any hit, STOP — do not send, report the match location.
 - **Never reference or read `.env*` files** as part of a Grok prompt/context.
 - Do not assume any flag (`--verbatim`, `--rules`, `--system-prompt-override`) suppresses the auto-ingestion without a probe.
 
 ## Headless flags + version gate
 
-Every headless invocation (worker ask/implement/resume, adversary review) passes **`--no-auto-update`** — the CLI auto-updates itself unattended, so version pins are not self-enforcing — and **`--always-approve`**, because an unanswerable tool-approval prompt silently stalls headless output. `--always-approve` is safe ONLY because of the existing boundaries: ask/review bounded by the `--tools` read-only allowlist, implement/resume by worktree isolation. **Never treat `--always-approve` as license to drop those boundaries.**
+Every headless invocation (worker ask/implement/resume, adversary review) passes **`--no-auto-update`** — the CLI auto-updates itself unattended, so version pins are not self-enforcing — and **`--always-approve`**, because an unanswerable tool-approval prompt silently stalls headless output. `--always-approve` is safe ONLY where a real boundary exists: ask/review are bounded by the `--tools` read-only allowlist. **Implement/resume are NOT bounded by worktree isolation**: a git worktree does not stop `run_terminal_command` from reaching files or services outside it, so an erroneous or prompt-injected command could act on the host before patch review (corrected 2026-09-23, CodeRabbit #48). Until an OS-level sandbox enforces those limits, do not run implement/resume with `--always-approve`; Grok is parked on this machine in any case. **Never treat `--always-approve` as license to drop a boundary.**
 
 **Version gate:** `0.2.99` is an UNVERIFIED version (guards not re-probed since the unattended update) — **do not run implement/resume on it until `/harness-update grok` goes green.** Any version change re-probes the guards before trusting new flags or model ids.
 

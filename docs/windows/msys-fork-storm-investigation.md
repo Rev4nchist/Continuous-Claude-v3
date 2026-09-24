@@ -95,6 +95,11 @@ errors could destroy a peer session's work. Do NOT reach for it reflexively.**
   hold. A read-only simulation on 2026-08-17 found `-Force` would have tree-killed two
   live peer-session shells.
 
+> **Superseded example (note added 2026-09-23).** The census command below is kept as recorded.
+> Do not copy it: it hard-codes one profile path and has no trailing separator, so a sibling such
+> as `...\GitHubDesktop\` would match. Use the current version in
+> `.claude/rules-src/windows-platform.md`, which resolves the active Git root with a trailing `\`.
+
 **Recovery, revised.** The dry run (`pwsh -File scripts/msys/reap.ps1`, no `-Force`) is
 safe to execute — the kill is gated at `:64-67` — but read its output as incomplete,
 never as an inventory. Census by path instead, which sees every MSYS binary:

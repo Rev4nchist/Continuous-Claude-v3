@@ -11,11 +11,13 @@ Must-know, even when parked:
   headless runs; both were live-probed and let writes through. Every ask and review run passes that
   `--tools` list.
 - Implement mode writes only in a hand-rolled sibling worktree (`-w/--worktree` is ignored headless),
-  is confirm-first every run, and its patch is reviewed before it touches the live tree.
+  is confirm-first every run, and its patch is reviewed before it touches the live tree. A worktree
+  does not contain terminal commands, so no implement/resume with `--always-approve` until an
+  OS-level sandbox exists.
 - Subscription auth only: `grok models` must say "logged in", and the identity pin
   `~/.grok/auth.json` email must be `dkhayes44@gmail.com`. Run with `env -u XAI_API_KEY`. Never print
   auth file contents or tokens.
-- Every run ships `~/.claude` context to xAI: confirm the first content-bearing run per session,
+- Every run ships `~/.claude` context to xAI: confirm the first run per session (even a bare question),
   secret-scan the prompt file, never include `.env*`.
 - Model allowlist `{grok-4.5, grok-composer-2.5-fast}`; any CLI version change goes through
   `/harness-update grok` before implement/resume.
