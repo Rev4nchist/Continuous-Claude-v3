@@ -1,7 +1,7 @@
 #!/bin/bash
 # No Haiku Enforcer Hook
 # Blocks Task tool calls with model: haiku
-# Rule: ~/.claude/rules/no-haiku.md
+# Rule: ~/.claude/CLAUDE.md ("Agents and delegation")
 set -euo pipefail
 
 read -r input
@@ -14,7 +14,7 @@ if [[ "$tool_name" == "Task" && "$model" == "haiku" ]]; then
   "hookSpecificOutput": {
     "hookEventName": "PreToolUse",
     "permissionDecision": "deny",
-    "permissionDecisionReason": "BLOCKED: model='haiku' not allowed.\n\nPer ~/.claude/rules/no-haiku.md:\n- Haiku is unreliable for agent tasks\n- REMOVE the model parameter (inherits Opus from parent)\n- Or use model='sonnet' if you need a specific model"
+    "permissionDecisionReason": "BLOCKED: model='haiku' not allowed.\n\nPer ~/.claude/CLAUDE.md ("Agents and delegation"):\n- Haiku is unreliable for agent tasks\n- REMOVE the model parameter (inherits Opus from parent)\n- Or use model='sonnet' if you need a specific model"
   }
 }
 EOF

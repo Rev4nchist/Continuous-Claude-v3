@@ -82,7 +82,7 @@ cross-model agreement is visible at a glance.
   outside the explicit Files list.
 
 **Orchestrator post-spark audit re-run:** Per
-`.claude/rules/proactive-delegation.md`, after spark touches
+`.claude/rules-ondemand/proactive-delegation.md`, after spark touches
 `.claude/hooks/src/*.ts` the orchestrator MUST independently re-run
 `bash scripts/audit-braintrust-emits.sh` — do not trust spark's self-report
 alone, since spark may have run the audit before its last edit. If the

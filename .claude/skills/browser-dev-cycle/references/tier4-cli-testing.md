@@ -128,7 +128,7 @@ Add these to `package.json` for project-standard commands:
 1. spark/kraken writes the `.spec.ts` file
 2. arbiter runs `npx playwright test tests/<file>.spec.ts`
 3. arbiter reports: pass count, fail count, and path to trace on failure
-4. kraken fixes failures (max 3 attempts per RULES.md self-healing limit)
+4. kraken fixes failures (max 3 attempts per the CLAUDE.md self-healing limit)
 
 ### Browser QA flow
 
@@ -136,4 +136,4 @@ Add these to `package.json` for project-standard commands:
 2. sentinel navigates key user flows from the PRD
 3. sentinel captures failures with screenshots + console errors
 4. sentinel generates graded report (A-F)
-5. Grade B+ or above: PASS. Below B+: kraken fixes, sentinel re-verifies (max 3 attempts per RULES.md self-healing limit)
+5. Grade B+ or above: PASS. Below B+: kraken fixes, sentinel re-verifies (max 3 attempts per the CLAUDE.md self-healing limit)

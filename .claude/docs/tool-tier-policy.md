@@ -235,12 +235,12 @@ These rules already codify pieces of this policy. This document does not duplica
 - (`nia-first-external.md` was removed 2026-09-23: the Nia MCP server was down and the rule was followed about 1 time in 260.)
 - `.claude/rules-ondemand/opencli-first.md` — OpenCLI for structured web data (44 platforms)
 - `.claude/rules/plan-to-ralph-enforcement.md` — gate-hook example with bypass-permissions interaction caveat
-- `.claude/rules/package-install-safety.md` — gate-hook example with 4-layer security check
+- `docs/hooks/package-install-guard.md` — gate-hook example with 4-layer security check
 - `.claude/rules-ondemand/sentry-safety.md`, `.claude/rules-ondemand/linear-safety.md`, `.claude/rules-ondemand/neonctl-safety.md`, `.claude/rules-ondemand/railway-deploy.md` — destructive-CLI gating patterns (skill body + rule + agent quarantine)
 - `.claude/rules-ondemand/browser-automation.md` — 5-tier browser tool decision tree
-- `.claude/rules/windows-platform.md` — Windows-specific quirks affecting hook + MCP config (`.claude.json` race window, `python3` alias, `npx` cmd /c wrapper)
-- `.claude/rules/agent-model-selection.md`, `.claude/rules/no-haiku.md` — model-selection gate hook context
-- `.claude/rules/proactive-delegation.md` — agent vs skill routing rules
+- `.claude/docs/windows/platform-notes.md` — Windows-specific quirks affecting hook + MCP config (`.claude.json` race window, `python3` alias, `npx` cmd /c wrapper)
+- `.claude/rules/agent-model-selection.md`, `~/.claude/CLAUDE.md ("Agents and delegation")` — model-selection gate hook context
+- `.claude/rules-ondemand/proactive-delegation.md` — agent vs skill routing rules
 
 Companion design doc:
 - `.claude/docs/composition-design.md` — Agent x skill pairing decisions; references this policy for the hook/MCP/skill split

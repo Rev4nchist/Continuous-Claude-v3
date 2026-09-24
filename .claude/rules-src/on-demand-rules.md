@@ -23,6 +23,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the action,
 | `cross-terminal-db.md` | `psql`, `pg_dump`, `docker exec ... postgres` | inject |
 | `headless-claude-mcp.md` | `claude -p` / `--print` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP tools, or its skill | inject |
+| `proactive-delegation.md` | the first Agent spawn (spark scope, post-spark checks, kraken waves) | inject |
 
 Decisions these rules shape before any tool call (keep them in mind without loading):
 - Codex and Grok write runs, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
@@ -37,6 +38,7 @@ Decisions these rules shape before any tool call (keep them in mind without load
 `every-surface-checklist.md`, `git-sync-workflow.md`, `sync-known-gaps.md` load when you read or edit
 CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agents/`, `templates/`,
 `settings.json`, the sync scripts). Before "done" on harness work, walk the every-surface checklist.
+`agent-model-selection.md` (tier mechanics, the `.json` mirror) loads when agent files are in play.
 
 ## Folded into skills (one line each here)
 

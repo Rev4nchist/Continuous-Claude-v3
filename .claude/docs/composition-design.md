@@ -37,7 +37,7 @@ Start: a piece of work needs to happen.
 |        e.g. what port does NorthStar use; show me the file
 |   YES -> Main session. No skill, no agent. Matches the
 |         Do-Not-Over-Delegate guidance in
-|         .claude/rules/proactive-delegation.md.
+|         .claude/rules-ondemand/proactive-delegation.md.
 |   NO -> continue
 |
 +- Q2: Does the work fit in <3 file reads + 1 short edit, with all
@@ -326,5 +326,5 @@ The agent x skill map (`agent-skill-map.md`) was updated to reflect the new agen
   - [`.claude/docs/hook-audit-2026-04.md`](./hook-audit-2026-04.md) — Phase 2/3/5c audit decisions and open follow-ups
   - [`.claude/docs/architecture/DECISION-TREES.md`](./architecture/DECISION-TREES.md) — task-type detection (links forward to §2 above)
 - Archive READMEs (gitignored): `.claude/agents/_archived/2026-04-26-duplicates/README.md`, `.claude/skills/_archived/2026-04-26-tldr-cleanup/README.md`
-- Rules: `.claude/rules/proactive-delegation.md`, `.claude/rules/use-scout-not-explore.md`, `.claude/rules/no-haiku.md`, `.claude/rules/agent-model-selection.md`
+- Rules: `.claude/rules-ondemand/proactive-delegation.md`, `~/.claude/CLAUDE.md ("Agents and delegation")`, `~/.claude/CLAUDE.md ("Agents and delegation")`, `.claude/rules/agent-model-selection.md`
 - Hooks: `.claude/hooks/src/ralph-delegation-enforcer.ts`, `.claude/hooks/src/maestro-detector.ts`, `.claude/hooks/src/agent-model-guard.ts`, `.claude/hooks/src/skill-router.ts`

@@ -125,7 +125,7 @@ function reasonFor(decision: 'ask' | 'deny', pattern: string, command: string): 
   return `${head}\n\nMatched: ${pattern}\nCommand: ${command.slice(0, 300)}\n\n${
     decision === 'deny'
       ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. If you genuinely intend it here, re-run with SKIP_DESTRUCTIVE_GUARD=1 prefixed (PowerShell tool: start the command with $env:SKIP_DESTRUCTIVE_GUARD='1'; ), or run it interactively.`
-      : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/rules/destructive-commands.md.)`
+      : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`
   }`;
 }
 

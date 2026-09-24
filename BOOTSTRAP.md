@@ -233,7 +233,7 @@ Verified on the reference machine 2026-08-12: `PASS verify-github-accounts 24 ch
 **Revoking the GitHub CLI OAuth grant breaks `gh` and plain `git push` together** for
 that account, and GitHub has no reissue button. Recovery is to re-run the login flow
 for that account (steps 1-2), then step 7. Full detail:
-`.claude/rules-src/windows-platform.md`.
+`.claude/docs/windows/platform-notes.md`.
 
 ## What The System Provides
 
