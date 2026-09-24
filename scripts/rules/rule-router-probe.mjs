@@ -123,11 +123,15 @@ results.push({ name: 'fire log never contains command arguments', ok: logText.le
 
 // The log must name the segment that fired, not the first segment (`$R=...` told an audit nothing).
 const s35 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's35');
-results.push({ name: 'fire log names the segment that fired', ok: s35?.what === 'pwsh -File', expected: 'pwsh -File', got: String(s35?.what), ids: '' });
+results.push({ name: 'fire log names the segment and script that fired', ok: s35?.what === 'pwsh -File land-pr.ps1', expected: 'pwsh -File land-pr.ps1', got: String(s35?.what), ids: '' });
 // A credential in the second word (a connection URL) is replaced, and the identity matches the claim key.
 const s37 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's37-full-session-id');
 results.push({ name: 'a URL credential never reaches the log', ok: s37?.what === 'psql <arg>' && !logText.includes('PWPROBE'), expected: 'psql <arg>', got: String(s37?.what), ids: '' });
 results.push({ name: 'the log keeps the full session id and the agent', ok: s37?.agent === 'main', expected: 'full id, agent main', got: s37 ? `${s37.session} / ${s37.agent}` : 'missing', ids: '' });
+
+// A session that sees a rule fire on the wrong call must be told how to record it.
+const footer = fire(bash('s38', 'psql -c "select 1"'));
+results.push({ name: 'every fired rule carries the record-a-false-fire line', ok: footer.text.includes('rule-router-false-fires.mjs add') && footer.text.includes('--source agent'), expected: 'footer present', got: footer.kind, ids: '' });
 
 const fires = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').length : 0;
 const failed = results.filter((r) => !r.ok);

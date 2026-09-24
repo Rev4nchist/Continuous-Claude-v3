@@ -79,7 +79,11 @@ L.push(manifestOk ? (neverFired.length ? neverFired.map((id) => `\`${id}\``).joi
 L.push('', 'A rule here is either unused in the window or has a trigger that never matches; check the second against its tool.', '');
 
 mkdirSync(dirname(outPath), { recursive: true });
-writeFileSync(outPath, L.join('\n'));
+// Keep a false-fire review section already in today's report: if a missed 09:07 run starts after
+// the 09:20 review (both catch up at logon), the rewrite must not erase the review.
+const prior = existsSync(outPath) ? readFileSync(outPath, 'utf8') : '';
+const reviewAt = prior.indexOf('\n## False-fire review');
+writeFileSync(outPath, L.join('\n') + (reviewAt >= 0 ? prior.slice(reviewAt) : ''));
 console.log(`rule-router audit: ${fires.length} fires, ${sessions.size} sessions, ${dedupeBreaks.length} dedupe breaks, ${neverFired.length} rules never fired -> ${outPath}`);
 if (!manifestOk) console.log(`manifest not readable at ${manifestPath}: the rule-router loads no rules`);
 process.exit(dedupeBreaks.length || !manifestOk ? 1 : 0);
