@@ -340,6 +340,7 @@ Run before delivering any presentation.
 - [ ] No pure black (#000000) — use Midnight Navy (#002747); no Teal text on white backgrounds
 - [ ] Logo IMAGE (base64 from `references/logo-data-uris.md`) on title and closing — ALWAYS required
 - [ ] One key idea per slide; insight-driven titles; active voice; no jargon
+- [ ] Plain-language pass done (design-work.md): a fresh subagent read the slide text as the named audience; every title and term it flagged is fixed
 - [ ] Narrative arc: Hook → Problem → Solution → Evidence → Action
 
 ---

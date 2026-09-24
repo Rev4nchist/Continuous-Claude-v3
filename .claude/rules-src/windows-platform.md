@@ -17,6 +17,12 @@ fs.writeFileSync('C:/Users/david.hayes/.claude.json', JSON.stringify(data, null,
 
 This reads, modifies, and writes in a single process — no race window.
 
+## Scripted exact-string edits fail silently on CRLF [H:8]
+
+This tree mixes CRLF and LF files, so a script's `.replace(anchor, …)` with an LF anchor can match
+nothing and still "succeed". Use `node scripts/tools/safe-replace.mjs <file> --old … --new …`: it
+matches either ending, keeps the file's own, and exits 1 when the anchor count is wrong (P30).
+
 ## Python is not `python3` on Windows [H:8]
 
 Windows does not have `python3` on PATH. The `python3` command triggers the Microsoft Store alias and fails.
