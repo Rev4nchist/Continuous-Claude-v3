@@ -47,7 +47,7 @@ staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" || exit
 # Ratchets that already existed but that nothing ran (2026-09-23 Opus 5.5 eval,
 # P21). Each runs only when its paths are staged, and only if node is on PATH
 # (fail-open otherwise). Escape hatch: SKIP_RATCHETS=1 git commit ...
-#   - rules-src, CLAUDE/RULES templates, .claude/docs, root CLAUDE/AGENTS/CONTEXT ->
+#   - rules-src, CLAUDE/RULES templates, .claude/docs, project CLAUDE/AGENTS/CONTEXT/local, .claude/rules ->
 #                    scripts/rules/context-budget-guard.mjs --repo --staged (counts the
 #                    chars of the always-loaded set in the STAGED blobs)
 #   - agents      -> scripts/check-agent-model-drift.mjs (two-tier model policy)
@@ -73,7 +73,7 @@ if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
     fi
     rm -f "$out"
   }
-  if printf '%s\n' "$staged" | grep -qE '^(AGENTS|CLAUDE|CONTEXT)\.md$|^\.claude/(rules-src/|templates/(CLAUDE|RULES)\.md\.template|docs/)|^scripts/rules/context-budget'; then
+  if printf '%s\n' "$staged" | grep -qE '^(AGENTS|CLAUDE|CONTEXT|CLAUDE\.local)\.md$|^\.claude/(CLAUDE\.md$|rules/|rules-src/|templates/(CLAUDE|RULES)\.md\.template|docs/)|^scripts/rules/context-budget'; then
     run_ratchet "context-budget-guard" "" node "$root/scripts/rules/context-budget-guard.mjs" --repo --staged
   fi
   if printf '%s\n' "$staged" | grep -q '^\.claude/agents/'; then
