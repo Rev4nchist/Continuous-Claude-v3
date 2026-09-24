@@ -6,7 +6,7 @@ allowed-tools: Read, Write, Edit, Glob, Grep, AskUserQuestion
 
 # scroll-craft
 
-> **CCv3 install.** Read `.claude/rules-src/design-work.md` (active: `~/.claude/rules/design-work.md`)
+> **CCv3 install.** Read `.claude/rules-ondemand/design-work.md` (active: `~/.claude/rules-ondemand/design-work.md`)
 > before Step 3. Every `kie.mjs still`/`shot` call spends credits and uploads its reference
 > files: confirm it with Dave first, even under creative delegation. Local changes to this
 > vendored copy are listed at the top of [CHANGELOG.md](CHANGELOG.md).

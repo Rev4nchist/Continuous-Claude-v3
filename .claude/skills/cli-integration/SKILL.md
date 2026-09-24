@@ -4,14 +4,13 @@ description: How to give Claude access to a new platform via CLI, OpenCLI, or MC
 metadata:
   version: "1.0.0"
   authored: "2026-07-29 (context lever phase 2)"
-  companions: ".claude/rules/cli-integration-strategy.md"
 ---
 
 # CLI Integration Strategy
 
-The always-on rule (`rules/cli-integration-strategy.md`) carries only the priority order — the
-one thing that must be true unprompted, because it shapes a choice an agent otherwise makes on
-instinct (usually by reaching for browser automation when a CLI already exists).
+The always-on rule `rules/cli-integration-strategy.md` was folded into this skill on 2026-09-24
+(context-loading phase 3). One line of it stays in `rules/on-demand-rules.md`: prefer a native CLI,
+then OpenCLI, then MCP, and use browser automation last.
 
 Everything else is consulted deliberately, at the moment you are actually integrating something,
 and lives below:

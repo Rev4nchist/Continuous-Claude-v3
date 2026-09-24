@@ -78,6 +78,12 @@ const CASES = [
   ['CMA call with a key in its header blocks (log checked below)', bash('s15b', 'curl -s -H x-api-key:SECRET-PROBE-123 https://api.anthropic.com/v1/sessions'), 'deny', ['cma'], []],
   ['a rule file that cannot be read: fail open', bash('s18', 'codex exec -'), 'none', [], [], brokenDir],
   ['...and the claim is released, so the rule still shows later', bash('s18', 'codex exec -'), 'deny', ['codex'], []],
+  ['design skill injects design-work', { session_id: 's20', tool_name: 'Skill', tool_input: { skill: 'frontend-design:frontend-design' } }, 'inject', ['design'], ['kie-spend']],
+  ['paid kie.ai still blocks', bash('s20', 'node "C:/x/scroll-craft/scripts/kie.mjs" still --prompt hero'), 'deny', ['kie-spend'], []],
+  ['free kie.ai probe does not block', bash('s21', 'node scripts/kie.mjs probe'), 'none', [], []],
+  ['a claude-in-chrome tool blocks (deprecated)', { session_id: 's22', tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, 'deny', ['browser-deprecated'], ['browser']],
+  ['Playwright MCP injects the browser rule', { session_id: 's23', tool_name: 'mcp__playwright__browser_navigate', tool_input: {} }, 'inject', ['browser'], []],
+  ['WebFetch injects opencli-first', { session_id: 's24', tool_name: 'WebFetch', tool_input: { url: 'https://x' } }, 'inject', ['opencli'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];

@@ -215,7 +215,7 @@ $mcpPath = Join-Path $HOME '.mcp.json'
 # @modelcontextprotocol/server-github, which upstream DEPRECATED and archived in
 # favour of github/github-mcp-server. It could not connect, and nothing in this
 # repo ever called an mcp__github__* tool -- the gh CLI is the GitHub path here
-# (see .claude/rules/cli-integration-strategy.md: native CLI is tier 1). So
+# (see .claude/skills/cli-integration/SKILL.md: native CLI is tier 1). So
 # "absent" is the PASS state for this layer, not a misconfiguration to repair.
 # If a github MCP server is ever reinstated, it must be the github/ one, and its
 # identity has to be verified here like any other layer.

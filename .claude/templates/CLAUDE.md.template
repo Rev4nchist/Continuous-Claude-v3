@@ -354,13 +354,12 @@ File context triggers skill loading automatically: `*.tsx` → frontend, `*.sql`
 ## Operational Rules
 
 Specific operational rules are loaded automatically from `.claude/rules/` files. These cover:
-- Destructive command safety, git workflow, agent model selection
-- Memory recall/storage patterns, proactive delegation
-- Browser automation, claim verification, TLDR CLI usage
-- Hook auto-execution, sync workflows
+- Destructive command safety, agent model selection, claim verification
+- Proactive delegation, Windows platform quirks, paste-ready output, command format
 
-Tool-specific rules (Codex, Grok, CMA, the CLIs, merge, commit and PR style, DB) load on demand:
-see `rules/on-demand-rules.md`. Do not duplicate their content here.
+Tool-specific rules (Codex, Grok, CMA, the CLIs, merge, commit and PR style, DB, design, browser)
+load on demand, and harness-only rules load when harness files are in play. The index is
+`rules/on-demand-rules.md`. Do not duplicate their content here.
 
 ---
 *Global config — constraints and enforcement live in RULES.md. Operational specifics live in .claude/rules/.*

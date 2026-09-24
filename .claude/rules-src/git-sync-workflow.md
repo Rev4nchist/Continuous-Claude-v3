@@ -1,3 +1,18 @@
+---
+paths:
+  - ".claude/rules-src/**"
+  - ".claude/rules-ondemand/**"
+  - ".claude/hooks/**"
+  - ".claude/skills/**"
+  - ".claude/agents/**"
+  - ".claude/templates/**"
+  - ".claude/settings.json"
+  - ".claude/settings.json.template"
+  - ".claude/project-registry.json"
+  - "scripts/sync-to-active.sh"
+  - "scripts/sync-claude.sh"
+---
+
 # Git Sync Workflow: continuous-claude → ~/.claude
 
 ## Primary Flow (Forward Sync)

@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*).
+ * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*|mcp__playwright__.*|mcp__claude-in-chrome__.*|WebFetch|WebSearch).
  *
  * Loads a tool-specific rule at the moment it applies, instead of keeping it in every session's
  * always-loaded context (phase 2 of docs/self-improvement/proposals/2026-09-24-context-loading.md).

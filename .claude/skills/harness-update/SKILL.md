@@ -82,7 +82,7 @@ Update every registered location with the verified allowlist + new version stamp
 | `.claude/skills/codex/SKILL.md` | user-facing `--model`/`--effort` flags line |
 | `.claude/agents/codex-adversary.md` | `CODEX_ADVERSARY_MODEL` validation `case` + comment |
 | `.claude/rules-ondemand/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
-| `.claude/rules-src/cli-integration-strategy.md` | Codex inventory row |
+| `.claude/skills/cli-integration/SKILL.md` | Codex inventory row |
 | `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Codex row) |
 
 **Grok edit points:**
@@ -92,7 +92,7 @@ Update every registered location with the verified allowlist + new version stamp
 | `.claude/rules-ondemand/grok-worker-safety.md` | allowlist + probe evidence + version drift + §Research role egress list |
 | `.claude/skills/grok/SKILL.md` | `--model` flags line |
 | `.claude/agents/grok-adversary.md` | `GROK_ADVERSARY_MODEL` validation |
-| `.claude/rules-src/cli-integration-strategy.md` | Grok inventory row |
+| `.claude/skills/cli-integration/SKILL.md` | Grok inventory row |
 | `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Grok row) |
 
 **Workroom-coupled surfaces (both harnesses):** the four agents above also carry an optional `## Workroom` block (`.workroom/PROTOCOL.md` is the schema owner). A harness update does not normally touch these, but if worker prompt contracts change shape, keep the workroom blocks + `.claude/skills/workroom/SKILL.md` dispatch snippet consistent in the same pass.

@@ -230,14 +230,14 @@ This tool-tier policy is *successful* when:
 
 These rules already codify pieces of this policy. This document does not duplicate their content; it cites them.
 
-- `.claude/rules/cli-integration-strategy.md` — CLI vs MCP vs OpenCLI decision tree (sections 1-6) and current 21-tool inventory
+- `.claude/skills/cli-integration/SKILL.md` — CLI vs MCP vs OpenCLI decision tree (sections 1-6) and current 21-tool inventory (the rule was folded into it 2026-09-24)
 - `.claude/rules/hook-dev-lifecycle.md` — full hook workflow (scaffold, build, register, test, sync, verify) and event-type contracts
 - (`nia-first-external.md` was removed 2026-09-23: the Nia MCP server was down and the rule was followed about 1 time in 260.)
-- `.claude/rules/opencli-first.md` — OpenCLI for structured web data (44 platforms)
+- `.claude/rules-ondemand/opencli-first.md` — OpenCLI for structured web data (44 platforms)
 - `.claude/rules/plan-to-ralph-enforcement.md` — gate-hook example with bypass-permissions interaction caveat
 - `.claude/rules/package-install-safety.md` — gate-hook example with 4-layer security check
 - `.claude/rules-ondemand/sentry-safety.md`, `.claude/rules-ondemand/linear-safety.md`, `.claude/rules-ondemand/neonctl-safety.md`, `.claude/rules-ondemand/railway-deploy.md` — destructive-CLI gating patterns (skill body + rule + agent quarantine)
-- `.claude/rules/browser-automation.md` — 5-tier browser tool decision tree
+- `.claude/rules-ondemand/browser-automation.md` — 5-tier browser tool decision tree
 - `.claude/rules/windows-platform.md` — Windows-specific quirks affecting hook + MCP config (`.claude.json` race window, `python3` alias, `npx` cmd /c wrapper)
 - `.claude/rules/agent-model-selection.md`, `.claude/rules/no-haiku.md` — model-selection gate hook context
 - `.claude/rules/proactive-delegation.md` — agent vs skill routing rules

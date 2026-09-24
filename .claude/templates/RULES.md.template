@@ -308,15 +308,12 @@ if it is missing (the `/init-project` template includes it since 2026-09-24).
 ## Operational Rules in .claude/rules/
 
 Specific operational rules are loaded automatically from `.claude/rules/` files. They cover detailed procedures for:
-- Destructive commands, git workflow safety, claim verification
-- Agent model selection, proactive delegation patterns
-- Memory recall/store procedures, browser automation
-- TLDR CLI usage, hook auto-execution, sync workflows
-- Linear issue safety (confirm before create/update/delete)
-- Sentry release safety (confirm before new/delete/resolve)
+- Destructive commands, claim verification, agent model selection
+- Proactive delegation, Windows platform quirks
 - Package install guard (4-layer supply chain security check)
 
-Those rules are always in context -- this file does not duplicate them.
+Tool-specific and harness-only rules load on demand (index: `rules/on-demand-rules.md`).
+This file does not duplicate them.
 
 ---
 *Constraints & enforcement -- workflow guidance lives in CLAUDE.md. Operational specifics live in .claude/rules/.*

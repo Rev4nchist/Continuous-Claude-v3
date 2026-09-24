@@ -61,7 +61,7 @@ check S22 "grok SKILL has all four modes + model flag" \
 check S23 "grok telemetry README exists" \
   "test -s '$REPO/.claude/logs/grok-worker.README.md'"
 check S24 "cli-integration-strategy has Grok INTEGRATED row" \
-  "grep -q 'Grok (xAI) | INTEGRATED' '$REPO/.claude/rules/cli-integration-strategy.md'"
+  "grep -q 'Grok (xAI) | INTEGRATED' '$REPO/.claude/skills/cli-integration/SKILL.md'"
 
 # --- Plan-reviewer panel (Track 3) ---
 HK="$REPO/.claude/hooks/src/plan-exit-premortem-prompt.ts"

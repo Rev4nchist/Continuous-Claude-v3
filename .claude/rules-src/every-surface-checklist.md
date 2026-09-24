@@ -1,3 +1,18 @@
+---
+paths:
+  - ".claude/rules-src/**"
+  - ".claude/rules-ondemand/**"
+  - ".claude/hooks/**"
+  - ".claude/skills/**"
+  - ".claude/agents/**"
+  - ".claude/templates/**"
+  - ".claude/settings.json"
+  - ".claude/settings.json.template"
+  - ".claude/project-registry.json"
+  - "scripts/sync-to-active.sh"
+  - "scripts/sync-claude.sh"
+---
+
 # Every-Surface Checklist
 
 The most common defect in this repo is a change that works on the path you tested and is missing

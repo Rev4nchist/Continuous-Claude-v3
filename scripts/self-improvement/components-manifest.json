@@ -62,7 +62,7 @@
       "id": "cli-integration",
       "name": "CLI Integration Layer",
       "summary": "CLI/tool integration strategy (23 tools): native CLI > OpenCLI > MCP > wrapper > browser. Agent-friendly CLI design.",
-      "currentImpl": [".claude/rules/cli-integration-strategy.md", "scripts/cdp.mjs"],
+      "currentImpl": [".claude/skills/cli-integration/SKILL.md", "scripts/cdp.mjs"],
       "frontierHints": ["building CLIs for agents", "MCP vs CLI tradeoffs", "structured tool output", "tool design ergonomics for LLMs", "MCP ecosystem evolution"]
     },
     {
@@ -83,7 +83,7 @@
       "id": "browser",
       "name": "Browser Automation",
       "summary": "Browser automation tier: Playwright MCP/CLI, CDP CLI for perf, computer-use fallback.",
-      "currentImpl": [".claude/rules/browser-automation.md", "scripts/cdp.mjs", ".claude/skills/browser-dev-cycle/"],
+      "currentImpl": [".claude/rules-ondemand/browser-automation.md", "scripts/cdp.mjs", ".claude/skills/browser-dev-cycle/"],
       "frontierHints": ["computer-use agents", "browser agents reliability", "DOM vs vision grounding", "web automation benchmarks (WebArena)", "accessibility-tree navigation"]
     }
   ]
