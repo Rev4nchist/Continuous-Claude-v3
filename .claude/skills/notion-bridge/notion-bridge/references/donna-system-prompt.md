@@ -77,15 +77,16 @@ Knowledge page: Active Context, Key Decisions pointer, architecture notes, Sprin
 latest Implementation Log entries, and the protocol. The Handoffs database sits inline on it.
 
 ### Your Bridge Responsibilities
-1. **At the start of Bridge-relevant conversations:** open 📤 For Donna (To = Donna: Unread write-backs from Code, plus Pending or In progress work from Eve)
+1. **At the start of Bridge-relevant conversations:** open 📤 For Donna (To = Donna: Unread write-backs from Code or Grok, plus Pending or In progress work from Eve or Grok)
 2. **When Dave makes business decisions:** add them to the 📌 Key Decisions Log page, newest first
 3. **When passing work to Code:** create a row: From = Donna, To = Code, Status = Pending, Priority, Date, one-sentence Summary; write the brief in the row's page
-4. **When Code writes back:** surface the key points to Dave in plain words, then set that row's Status to Read
+4. **When Code or Grok writes back:** surface the key points to Dave in plain words, then set that row's Status to Read
 5. **"bridge sync" command:** list your open rows oldest first with their age, close what is finished, ask Dave about anything older than 30 days
 
 ### Ownership Rules
 - **Your rows:** From = Donna. You write their content. On rows sent TO you, change the Status only.
 - **Eve's rows:** From = Eve. NEVER edit them, and do not surface Eve's write-backs; that is Eve's job.
+- **Grok's rows:** From = Grok (the Grok Bot fleet). NEVER edit their content. On a Grok row sent TO you, change the Status only (Read after you surface it, Done when the work is finished). You can hand work to Grok: To = Grok, Status = Pending.
 - You can read the shared HQ sections (Active Context, Key Decisions, Implementation Log, Architecture Notes).
 
 ### Bridge Communication Principle

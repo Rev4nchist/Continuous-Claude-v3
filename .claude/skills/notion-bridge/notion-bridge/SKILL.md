@@ -1,12 +1,12 @@
 ---
 name: notion-bridge
-description: Use when reading or writing Claude Bridge between Eve, Donna and Claude Code — handing work off, reading or closing a handoff, writing back results, session handoffs, "bridge sync", or logging decisions and implementation notes. Handoffs are rows in the 📬 Handoffs database on Bridge HQ.
+description: Use when reading or writing Claude Bridge between Eve, Donna, Grok and Claude Code — handing work off, reading or closing a handoff, writing back results, session handoffs, "bridge sync", or logging decisions and implementation notes. Handoffs are rows in the 📬 Handoffs database on Bridge HQ.
 ---
 
 # Notion Claude Bridge
-## v2.0 | 2026-09-24 | Handoffs database (replaces child pages + HQ one-liners)
+## v2.1 | 2026-09-24 | Grok joins the Bridge (v2.0: Handoffs database replaces child pages + HQ one-liners)
 
-Claude Bridge is how three assistants and Dave pass work. It has two parts:
+Claude Bridge is how four assistants and Dave pass work. It has two parts:
 
 - **📬 Handoffs database** (the action layer). Every handoff is ONE row. The row's page holds the
   full handoff. Queues are views of the database, so nothing is copied onto HQ by hand.
@@ -17,6 +17,7 @@ Claude Bridge is how three assistants and Dave pass work. It has two parts:
 |---|---|---|
 | **Eve** (claude.ai, personal) | Strategy: ideas, decisions, project direction | Handoffs From = Eve; Active Context; Key Decisions |
 | **Donna** (Cowork, Fourth business) | Work strategy: Fourth AI projects, SPARK, RFP, competitive intel | Handoffs From = Donna; Key Decisions |
+| **Grok** (Grok Bot fleet; its Chief of Staff acts for it) | Fourth / DevWork / Lab / Portfolio coordination and execution | Handoffs From = Grok; optionally an Implementation Log entry. Always the select value `Grok`, never an individual bot name |
 | **Claude Code** (CLI) | Execution: builds, writes results back | Handoffs From = Code; Implementation Log; architecture notes |
 | **Dave** | Owner | Anything; his edits win |
 
@@ -52,8 +53,8 @@ research he has not introduced to his AI surfaces yet.
 | Property | Type | Values / rule |
 |---|---|---|
 | `Handoff` | title | `[From→To] Title — YYYY-MM-DD` |
-| `From` | select | Eve, Donna, Code, Dave |
-| `To` | select | Code, Eve, Donna, Next session |
+| `From` | select | Eve, Donna, Grok, Code, Dave |
+| `To` | select | Code, Eve, Donna, Grok, Next session |
 | `Status` | select | see below |
 | `Priority` | select | High, Mid, Low (never "Medium") |
 | `Date` | date | the day it was written (`date:Date:start` = `YYYY-MM-DD`) |
@@ -67,22 +68,22 @@ research he has not introduced to his AI surfaces yet.
 
 | Row kind | Open | Closed |
 |---|---|---|
-| Work (someone → Code, or Eve ↔ Donna) | `Pending` → `In progress` | `Done` |
-| Write-back (Code → Eve or Donna) | `Unread` | `Read` (after it was surfaced to Dave) |
+| Work (to Code, to Grok, or Eve ↔ Donna) | `Pending` → `In progress` | `Done` |
+| Write-back (Code → Eve, Donna or Grok; Grok → Eve or Donna) | `Unread` | `Read` (after it was surfaced to Dave) |
 | Any row replaced by a newer one | | `Superseded` (say which one in `Summary`) |
 
 **Views** (tabs on the database, shown inline on HQ): 📥 For Code (To = Code, Pending or In
-progress) · 📤 For Eve (To = Eve: Unread write-backs plus Pending or In progress work from Donna) · 📤 For Donna (the same for To = Donna) · 🔁 Next session ·
+progress) · 📤 For Eve (To = Eve: Unread write-backs plus Pending or In progress work from Donna) · 📤 For Donna and 📤 For Grok (the same for To = Donna, To = Grok) · 🔁 Next session ·
 ✅ Closed. A closed row leaves the queue views by itself.
 
-**Ownership:** the sender writes the row and its page. The receiver changes `Status` only. Eve never
-edits Donna's rows; Donna never edits Eve's rows. Dave may edit anything.
+**Ownership:** the sender writes the row and its page. The receiver changes `Status` only. No assistant
+edits another assistant's rows (Eve, Donna, Grok, Code). Dave may edit anything.
 
 ---
 
 ## Workflows
 
-### Hand work to someone (Eve → Code, Donna → Code, Eve ↔ Donna)
+### Hand work to someone (to Code, to Grok, or Eve ↔ Donna)
 1. `notion-create-pages` with parent `{"type":"data_source_id","data_source_id":"13b919c8-b7af-4609-b4c6-87e5504809f0"}`.
 2. Properties: `Handoff`, `From`, `To`, `Status` = `Pending`, `Priority`, `date:Date:start`, `Summary`.
 3. Content: the task-brief template (`references/handoff-templates/task-brief.md`).
@@ -91,7 +92,7 @@ edits Donna's rows; Donna never edits Eve's rows. Dave may edit anything.
 ### Read your queue
 - **SQL** (`notion-query-data-sources`, data source URL above):
   - Code: `SELECT * FROM "collection://13b919c8-b7af-4609-b4c6-87e5504809f0" WHERE "To" = 'Code' AND "Status" IN ('Pending','In progress') ORDER BY "date:Date:start" DESC`
-  - Eve / Donna: `... WHERE "To" = 'Eve' AND "Status" IN ('Unread','Pending','In progress')` (or `'Donna'`). Unread rows are Code's write-backs; Pending / In progress rows are work from the other assistant.
+  - Eve / Donna: `... WHERE "To" = 'Eve' AND "Status" IN ('Unread','Pending','In progress')` (or `'Donna'`, `'Grok'`). Unread rows are write-backs; Pending / In progress rows are work handed to you.
 - **By title:** `notion-search` with `data_source_url` = the data source URL and the title words.
 - Then `notion-fetch` each row to read its page in full. SQL text drops links and mentions; read the page.
 
@@ -100,13 +101,14 @@ edits Donna's rows; Donna never edits Eve's rows. Dave may edit anything.
 2. Do the work.
 3. Write back (next workflow), then set the original row `Status` = `Done`.
 
-### Write back (Code → Eve or Donna)
-1. Create a row: `From` = Code, `To` = the requester, `Status` = `Unread`, `Priority`, `Date`,
+### Write back (Code → Eve, Donna or Grok; Grok → Eve or Donna)
+1. Create a row: `From` = the writer (`Code` or `Grok`), `To` = the requester, `Status` = `Unread`, `Priority`, `Date`,
    `Summary`. Content: the write-back template (`references/handoff-templates/write-back.md`).
-2. Mirror it to the Weekly Work Tracker (see "Tracker auto-mirror" below).
+2. Claude Code only: mirror it to the Weekly Work Tracker (see "Tracker auto-mirror" below). Grok
+   does NOT mirror its write-backs.
 3. Add an Implementation Log entry on HQ (see "HQ page").
 
-### Surface write-backs (Eve, Donna)
+### Surface write-backs (Eve, Donna, Grok)
 Read your 📤 view. Tell Dave what matters, in plain words. Then set each surfaced row to `Read`.
 
 ### Session handoff (Claude Code → the next Code session)
@@ -145,7 +147,7 @@ Rules:
 
 ## Tracker auto-mirror (Claude Code write-backs only)
 
-Every Code → Eve or Code → Donna write-back also gets one row in the AI Enablement Weekly Work Tracker
+Every Code → Eve, Code → Donna or Code → Grok write-back also gets one row in the AI Enablement Weekly Work Tracker
 (data source `6e8d9b17-f8ef-4d56-9f13-00344650ac03`), which feeds `/weekly-report`.
 
 | Tracker property | Source | Default |
@@ -179,6 +181,9 @@ a `**Tracker-Row:** <url>` line to the handoff page. `bridge sync` never touches
   non-Bridge jobs only (see the `notion-cli` skill).
 
 ## Safety rules
+
+0. Bridge is for work between assistants. Do not put DevWork PR-factory traffic (automated PR
+   churn) on it.
 
 1. Fetch before you write; return the URL after you write.
 2. Only the sender writes a handoff's content; the receiver changes its status.
