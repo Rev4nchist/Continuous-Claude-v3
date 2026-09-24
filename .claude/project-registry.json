@@ -403,6 +403,24 @@
       "status": "active",
       "sentryProject": "",
       "linearTeam": ""
+    },
+    {
+      "name": "FlatClicker",
+      "path": "C:/Users/david.hayes/Projects/FlatClicker",
+      "stack": [
+        "Tauri v2",
+        "Rust",
+        "React",
+        "TypeScript",
+        "Vite"
+      ],
+      "description": "Desktop-wide cursor highlighter overlay for screen shares (Windows first)",
+      "port": 3006,
+      "url": "http://localhost:3006",
+      "devCommand": "npm run tauri dev",
+      "status": "planning",
+      "sentryProject": "",
+      "linearTeam": ""
     }
   ]
 }
