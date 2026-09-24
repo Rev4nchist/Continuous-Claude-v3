@@ -14,7 +14,7 @@ End-to-end check per surface:
 | A hook (`.claude/hooks/src/*.ts`) | `npm run build` in `.claude/hooks`, then pipe a real payload into the built hook: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` | the hook's stdout JSON |
 | Sync (`scripts/sync-to-active.sh`) | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temp home) | its PASS/FAIL lines |
 | Coordination (lanes, claims, leases) | the matching `scripts/coordination/*-probe.mjs` | the probe's output |
-| A rule, skill or agent file | its ratchet: `node scripts/rules/rules-budget-guard.mjs`, `node scripts/skills/audit-descriptions.mjs`, `node scripts/check-agent-model-drift.mjs .` | the ratchet's summary line |
+| A rule, skill or agent file | behaviour: after the sync, run a fresh headless session on a prompt the change targets, `claude -p "<prompt>" --output-format json`, and confirm the new behaviour appears (for a skill: that it loads). Then its static ratchet: `node scripts/rules/rules-budget-guard.mjs`, `node scripts/skills/audit-descriptions.mjs`, `node scripts/check-agent-model-drift.mjs .` | the session JSON, plus the ratchet's summary line |
 
 Put artifacts in `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>` (gitignored) and name the file in the
 PR's Evidence section.
