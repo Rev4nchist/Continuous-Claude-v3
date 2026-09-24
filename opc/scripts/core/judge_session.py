@@ -1,31 +1,53 @@
 #!/usr/bin/env python3
 """Gate C: Phase 3b judge runner (subscription-OAuth backends, NO API keys).
 
-Stack 3 LLM judges (factuality, closedqa, plan_rubric) against a sampled
-subset of Claude Code sessions captured in Braintrust. This is an offline /
-async runner: it is NOT in the live hook path. It reads completed-session
-traces from the local cache or BTQL, runs the judges, and emits one feedback
-POST per judge per sampled session.
+Runs a REGISTRY of LLM judges against a sampled subset of Claude Code
+sessions captured in Braintrust. This is an offline / async runner: it is
+NOT in the live hook path. It reads completed-session traces from the local
+cache or BTQL, runs every registered judge, and emits one feedback POST per
+judge per sampled session.
+
+Retirement (P32, 2026-09-24)
+-----------------------------
+The original three judges (``factuality``, ``closedqa``, ``plan_rubric``)
+were retired. None of the three produced a usable score in production:
+``closedqa`` filtered on a span name that never matched a live span, so it
+never scored; ``plan_rubric`` never scored either; and ``factuality``
+compared a prompt against an intent string derived from that same prompt,
+which is circular by construction. Across 102 scheduled runs the judges
+posted 22 scores and exited 0 every day, so the scheduler showed green while
+the eval layer measured nothing.
+
+This file keeps the RUNNER (sampling, feedback POST, idempotency, trace
+loading, CLI, batch mode) and retires only the three broken rubrics. New
+judges register in ``JUDGE_REGISTRY`` below. ``JUDGE_REGISTRY`` ships EMPTY.
+A later change (P17) is expected to add binary judges -- one failure mode
+each, pass/fail, validated against human labels -- rather than a three-point
+rubric. When the registry is empty, ``judge_session()`` makes no subprocess
+calls, POSTs nothing, and returns its normal result dict plus a
+``"retired"`` key explaining why.
+
+Judge registry
+--------------
+Each entry is a ``JudgeSpec``: a name, a subscription-OAuth backend
+(``"claude"`` or ``"codex"``), and a ``build(trace)`` callable that returns
+either ``(prompt, metadata)`` when the judge has what it needs, or a skip
+reason string (e.g. ``"missing_input_or_output"``) when the trace lacks it.
+``judge_session()`` iterates the registry and calls ``_score_and_post`` for
+each entry that can build a prompt.
 
 LLM backends (NO API keys -- both subscription-billed via OAuth)
 ----------------------------------------------------------------
-The judges are NOT autoevals' OpenAI-client calls. Each judge prompt is a
-hand-written rubric + a structured-output demand, evaluated by one of two
-subscription-OAuth subprocess CLIs:
+A registered judge is graded by one of two subscription-OAuth subprocess
+CLIs, never autoevals' OpenAI-client calls:
 
 - ``codex exec --sandbox read-only "<prompt>"`` -- the ChatGPT subscription
-  (this is a SAFE codex command: read-only sandbox, no file mutation). Used
-  for ``plan_rubric`` so GPT cross-grades Claude-authored plans (highest
-  cross-model lift).
+  (this is a SAFE codex command: read-only sandbox, no file mutation).
 
 - ``claude -p "<prompt>" --output-format json --model sonnet`` -- the Claude
-  Code subscription (Sonnet bucket). Used for ``factuality`` and
-  ``closedqa``. NOTE: the child env strips ``ANTHROPIC_API_KEY`` /
-  ``ANTHROPIC_AUTH_TOKEN`` so the subprocess uses subscription OAuth rather
-  than an inherited external API key.
-
-Judge -> backend map (see ``JUDGE_BACKENDS``):
-    plan_rubric -> codex      factuality -> claude      closedqa -> claude
+  Code subscription (Sonnet bucket). NOTE: the child env strips
+  ``ANTHROPIC_API_KEY`` / ``ANTHROPIC_AUTH_TOKEN`` so the subprocess uses
+  subscription OAuth rather than an inherited external API key.
 
 Sampling
 --------
@@ -34,31 +56,13 @@ The same session_id always lands in or out of the sample. ~35% of sessions
 are sampled overall. This keeps quota predictable and the decision easy to
 audit.
 
-Judges
-------
-- ``factuality`` (claude) -- does ``output`` (the top recall chunk) factually
-  align with ``input`` (the user prompt)? autoevals Factuality semantics,
-  hand-written as a rubric. Top recall chunk is read from
-  ``.claude/logs/memory-recall.jsonl`` (intent text) or reconstructed from
-  the trace.
-
-- ``closedqa`` (claude) -- did the sub-agent (``output``) answer the question
-  it was given (``input`` = orchestrator task request)? Criteria: "Did the
-  sub-agent answer the question it was given?" TOP-LEVEL Task spans only. If
-  a Task span has parent_span_id pointing to another Task (nested case),
-  ClosedQA is skipped with reason ``nested_subagent_no_correlation``.
-  Sub-agent correlation is Phase 4 work.
-
-- ``plan_rubric`` (codex) -- is the plan (``output``) complete, ordered, and
-  verifiable given the request (``input``)? Read from the
-  ``PostToolUse:ExitPlanMode`` span tool_input.
-
 Per-judge skip (don't crash the whole run)
 -------------------------------------------
 A subprocess non-zero exit / timeout / unparseable output skips THAT judge
 with a reason (``codex_unavailable``, ``claude_timeout``,
-``unparseable_score``, etc.), records it, and continues the others. A session
-emits 0-3 scores depending on backend success + artifact presence.
+``unparseable_score``, etc.), records it, and continues the others. A
+session emits 0..N scores depending on backend success + artifact presence,
+where N is the registry size (currently 0).
 
 Idempotency
 -----------
@@ -75,12 +79,13 @@ CLI
 
 Environment / preflight
 -----------------------
-NO API keys are required for the judges. Preflight verifies the CLIs are
-authenticated (subscription OAuth):
-- If any judge uses the codex backend: ``codex login status`` must exit 0
-  (fix: ``codex login``).
-- If any judge uses the claude backend: ``claude --version`` must exit 0
-  (fix: ``claude login``).
+NO API keys are required for the judges. Preflight verifies only the CLIs a
+REGISTERED judge actually needs (subscription OAuth):
+- If any registered judge uses the codex backend: ``codex login status``
+  must exit 0 (fix: ``codex login``).
+- If any registered judge uses the claude backend: ``claude --version`` must
+  exit 0 (fix: ``claude login``).
+With an empty registry, preflight requires no CLI at all.
 
 For the feedback POST:
 - ``BRAINTRUST_API_KEY`` (required to actually POST feedback; the dry-run
@@ -93,6 +98,7 @@ For the feedback POST:
 Out of scope (deferred to follow-ups):
 - Online scoring rule UI configuration (see
   ``docs/braintrust-online-scoring-recipe.md``).
+- New binary judge definitions (P17).
 - Phase 4 sub-agent correlation.
 - Phase 5 closed-loop tuning.
 - Distribution review of judge outputs.
@@ -108,9 +114,10 @@ import re
 import shutil
 import subprocess
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Union
 
 import requests
 from dotenv import load_dotenv
@@ -136,16 +143,6 @@ LOCAL_SESSION_CACHE = Path.home() / ".claude" / "state" / "braintrust_sessions"
 PROJECT_REGISTRY = Path.home() / ".claude" / "project-registry.json"
 FEEDBACK_TIMEOUT_SECONDS = 5.0
 
-# Each judge is graded by ONE subscription-OAuth backend (no API keys).
-#   codex  -> `codex exec --sandbox read-only "<prompt>"`  (ChatGPT subscription)
-#   claude -> `claude -p "<prompt>" --output-format json --model sonnet`
-# plan_rubric goes to codex for cross-model lift (GPT grades Claude plans).
-JUDGE_BACKENDS = {
-    "plan_rubric": "codex",
-    "factuality": "claude",
-    "closedqa": "claude",
-}
-
 # Subprocess judge calls are slow LLM turns; allow up to 3 minutes each.
 JUDGE_SUBPROCESS_TIMEOUT_SECONDS = 180
 
@@ -161,6 +158,38 @@ class JudgeBackendError(Exception):
 
 
 # ---------------------------------------------------------------------------
+# Judge registry (P32, 2026-09-24: ships EMPTY -- see module docstring)
+# ---------------------------------------------------------------------------
+
+# A judge's ``build`` callable inspects a session trace and either returns
+# ``(prompt, metadata)`` when it has what it needs, or a skip-reason string
+# (e.g. ``"missing_input_or_output"``) when it doesn't.
+JudgeBuildResult = Union["tuple[str, dict[str, Any]]", str]
+
+
+@dataclass(frozen=True)
+class JudgeSpec:
+    """One registered judge: a name, its subscription backend, and a prompt
+    builder. See the module docstring for how the registry is used."""
+
+    name: str
+    backend: str  # "claude" | "codex"
+    build: Callable[[dict[str, Any]], JudgeBuildResult]
+
+
+# Ships empty (P32, 2026-09-24): the three original judges (factuality,
+# closedqa, plan_rubric) were retired because none produced a usable score.
+# New binary judges (one failure mode each, pass/fail, validated against
+# human labels -- P17) register here.
+JUDGE_REGISTRY: list[JudgeSpec] = []
+
+
+def _current_judge_backends() -> dict[str, str]:
+    """Judge name -> backend, derived live from the registry (never stale)."""
+    return {spec.name: spec.backend for spec in JUDGE_REGISTRY}
+
+
+# ---------------------------------------------------------------------------
 # Preflight: verify the subscription-OAuth CLIs are authenticated
 # ---------------------------------------------------------------------------
 
@@ -168,21 +197,25 @@ class JudgeBackendError(Exception):
 def check_cli_preflight() -> None:
     """Fail fast if a REQUIRED judge CLI isn't ready.
 
-    Replaces the old OPENAI_API_KEY check. No API keys are used now; instead
-    we verify the subscription-OAuth CLIs are authenticated:
+    No API keys are used; instead we verify the subscription-OAuth CLIs are
+    authenticated, but ONLY for backends a currently-registered judge uses:
 
-    - If any judge uses the codex backend: ``codex login status`` must exit 0.
-    - If any judge uses the claude backend: ``claude --version`` must exit 0.
+    - If any registered judge uses the codex backend: ``codex login status``
+      must exit 0.
+    - If any registered judge uses the claude backend: ``claude --version``
+      must exit 0.
 
-    Names WHICH CLI isn't ready and the fix command, then exits non-zero.
+    With an empty registry, no CLI is required. Names WHICH CLI isn't ready
+    and the fix command, then exits non-zero.
     """
-    backends = set(JUDGE_BACKENDS.values())
+    backends = {spec.backend for spec in JUDGE_REGISTRY}
 
     if "codex" in backends:
         if _probe_cli(["codex", "login", "status"]) != 0:
             print(
-                "ERROR: the `codex` CLI is not authenticated (required for the "
-                "plan_rubric judge). `codex login status` did not exit 0.\n"
+                "ERROR: the `codex` CLI is not authenticated (required by a "
+                "registered codex-backed judge). `codex login status` did not "
+                "exit 0.\n"
                 "Fix: run `codex login` (ChatGPT subscription OAuth), then retry.",
                 file=sys.stderr,
             )
@@ -191,8 +224,8 @@ def check_cli_preflight() -> None:
     if "claude" in backends:
         if _probe_cli(["claude", "--version"]) != 0:
             print(
-                "ERROR: the `claude` CLI is not available (required for the "
-                "factuality and closedqa judges). `claude --version` did not "
+                "ERROR: the `claude` CLI is not available (required by a "
+                "registered claude-backed judge). `claude --version` did not "
                 "exit 0.\n"
                 "Fix: install/authenticate Claude Code (`claude login`), then retry.",
                 file=sys.stderr,
@@ -490,83 +523,19 @@ def _coerce_str(value: Any) -> str:
 
 
 # ---------------------------------------------------------------------------
-# Judge prompts (hand-written rubrics + structured-output demand)
+# Judge prompt infrastructure
 # ---------------------------------------------------------------------------
+#
+# 2026-09-24 (P32): the three hand-written rubrics that used to live here
+# (factuality, closedqa, plan_rubric) are retired -- see the module
+# docstring. ``_STRUCTURED_OUTPUT_DEMAND`` stays: a new judge's ``build``
+# function (registered in ``JUDGE_REGISTRY``) can still append it to its
+# prompt so the backend returns ONLY parseable JSON.
 
-# Every judge prompt ends with this so the backend returns ONLY parseable JSON.
 _STRUCTURED_OUTPUT_DEMAND = (
     'Respond with ONLY this JSON and nothing else: '
     '{"score": <float 0.0-1.0>, "rationale": "<one sentence>"}'
 )
-
-
-def _factuality_prompt(*, input: str, output: str) -> str:
-    """Factuality rubric (autoevals Factuality semantics).
-
-    Does ``output`` (the top recall chunk) factually align with ``input``
-    (the user's prompt)? We grade whether the recalled context is actually
-    about what the user asked.
-    """
-    return (
-        "You are a strict grader judging FACTUALITY: does the OUTPUT factually "
-        "align with, and stay on-topic for, the INPUT? The INPUT is a user's "
-        "request to an AI coding assistant. The OUTPUT is a chunk of context "
-        "that was recalled from memory and surfaced for that request.\n\n"
-        "Grade whether the recalled OUTPUT is factually consistent with and "
-        "relevant to what the user asked in the INPUT:\n"
-        "  - 1.0 = fully on-topic and factually consistent with the request\n"
-        "  - 0.5 = partially relevant, or mixes relevant and off-topic content\n"
-        "  - 0.0 = off-topic, contradictory, or unrelated to the request\n\n"
-        f"<input>\n{input}\n</input>\n\n"
-        f"<output>\n{output}\n</output>\n\n"
-        f"{_STRUCTURED_OUTPUT_DEMAND}"
-    )
-
-
-def _closedqa_prompt(*, input: str, output: str) -> str:
-    """ClosedQA rubric: did the sub-agent answer the question it was given?
-
-    ``input`` is the orchestrator's task request to a sub-agent; ``output``
-    is the sub-agent's final answer. Criteria: "Did the sub-agent answer the
-    question it was given?"
-    """
-    return (
-        "You are a strict grader. CRITERIA: \"Did the sub-agent answer the "
-        "question it was given?\" The INPUT is the task request an orchestrator "
-        "handed to a sub-agent. The OUTPUT is the sub-agent's final answer.\n\n"
-        "Grade ONLY whether the OUTPUT actually addresses and answers the task "
-        "described in the INPUT:\n"
-        "  - 1.0 = directly and completely answers the task it was given\n"
-        "  - 0.5 = partially answers, or answers a related but different question\n"
-        "  - 0.0 = does not answer the task, or is off-topic\n\n"
-        f"<input>\n{input}\n</input>\n\n"
-        f"<output>\n{output}\n</output>\n\n"
-        f"{_STRUCTURED_OUTPUT_DEMAND}"
-    )
-
-
-def _plan_rubric_prompt(*, input: str, output: str) -> str:
-    """Plan-quality rubric: is the plan complete, ordered, and verifiable?
-
-    ``input`` is the user's request; ``output`` is the plan authored in
-    response (from ExitPlanMode). Graded by codex (cross-model lift).
-    """
-    return (
-        "You are a strict grader judging the QUALITY of a development plan. "
-        "The INPUT is a user's request. The OUTPUT is a plan authored in "
-        "response to that request.\n\n"
-        "Grade the plan on three criteria, all relative to the INPUT:\n"
-        "  1. Complete: covers the user's request without obvious gaps.\n"
-        "  2. Ordered: steps are in a sensible execution order.\n"
-        "  3. Verifiable: includes how to confirm each step actually worked.\n\n"
-        "Map your judgement to a score:\n"
-        "  - 1.0 = all three criteria are clearly met\n"
-        "  - 0.5 = two of three criteria are clearly met\n"
-        "  - 0.0 = one or zero criteria are clearly met\n\n"
-        f"<input>\n{input}\n</input>\n\n"
-        f"<output>\n{output}\n</output>\n\n"
-        f"{_STRUCTURED_OUTPUT_DEMAND}"
-    )
 
 
 # ---------------------------------------------------------------------------
@@ -729,9 +698,8 @@ def _claude_child_env() -> dict[str, str]:
     return env
 
 
-def _run_judge(judge_name: str, prompt: str) -> dict[str, Any]:
-    """Dispatch a judge prompt to its configured subscription backend."""
-    backend = JUDGE_BACKENDS.get(judge_name)
+def _run_judge(backend: str, prompt: str) -> dict[str, Any]:
+    """Dispatch a judge prompt to the given subscription backend."""
     if backend == "codex":
         return _judge_via_codex(prompt)
     if backend == "claude":
@@ -795,11 +763,15 @@ def _post_feedback(
 def judge_session(
     trace: dict[str, Any], dry_run: bool = False, force: bool = False
 ) -> dict[str, Any]:
-    """Score a single session's trace.
+    """Score a single session's trace against every registered judge.
 
     ``force`` bypasses the 35% sampler (single-session/on-demand use). When a
     session is judged only because of ``force``, the result carries
     ``"forced": True`` and ``"sampled"`` reflects the true (un-forced) hash.
+
+    When ``JUDGE_REGISTRY`` is empty (the shipped state as of P32,
+    2026-09-24), no judge runs: no subprocess calls, no POSTs. The result
+    carries a ``"retired"`` key explaining why instead.
 
     Returns a result dict:
         {
@@ -808,6 +780,7 @@ def judge_session(
           "posts": int,         # actual POSTs performed
           "would_post": int,    # planned POSTs in dry-run mode
           "skipped": { judge_name: reason, ... },
+          "retired": "...",     # present only when the registry is empty
         }
     """
     session_id = trace.get("session_id", "")
@@ -826,73 +799,26 @@ def judge_session(
     if force and not in_sample:
         result["forced"] = True
 
-    user_prompt = str(trace.get("user_prompt") or "").strip()
-    top_recall_chunk = str(trace.get("top_recall_chunk") or "").strip()
-    plan_body = str(trace.get("plan_body") or "").strip()
-    task_spans = trace.get("task_spans") or []
-
-    # --- Judge 1: factuality (recall) -- claude backend -----------------
-    if not user_prompt or not top_recall_chunk:
-        result["skipped"]["factuality"] = "missing_input_or_output"
-    else:
-        _score_and_post(
-            result,
-            session_id=session_id,
-            judge_name="factuality",
-            prompt=_factuality_prompt(input=user_prompt, output=top_recall_chunk),
-            metadata={
-                "judge": "factuality",
-                "session_id": session_id,
-                "backend": JUDGE_BACKENDS["factuality"],
-                "source": "judge_session.py",
-            },
-            dry_run=dry_run,
+    if not JUDGE_REGISTRY:
+        result["retired"] = (
+            "no judges registered (P32, 2026-09-24); new binary judges "
+            "arrive with P17"
         )
+        return result
 
-    # --- Judge 2: closedqa (sub-agent answered the question) -- claude ---
-    top_level_task = _find_top_level_task(task_spans)
-    if top_level_task is None:
-        # No usable Task span at all (could be all nested, or none).
-        if any(_is_nested(t) for t in task_spans):
-            result["skipped"]["closedqa"] = "nested_subagent_no_correlation"
-        else:
-            result["skipped"]["closedqa"] = "no_task_span"
-    else:
-        req = str(top_level_task.get("task_request") or "").strip()
-        out_text = str(top_level_task.get("agent_output") or "").strip()
-        if not req or not out_text:
-            result["skipped"]["closedqa"] = "missing_input_or_output"
-        else:
-            _score_and_post(
-                result,
-                session_id=session_id,
-                judge_name="closedqa",
-                prompt=_closedqa_prompt(input=req, output=out_text),
-                metadata={
-                    "judge": "closedqa",
-                    "session_id": session_id,
-                    "task_span_id": top_level_task.get("span_id"),
-                    "backend": JUDGE_BACKENDS["closedqa"],
-                    "source": "judge_session.py",
-                },
-                dry_run=dry_run,
-            )
-
-    # --- Judge 3: plan_rubric (plan quality) -- codex backend -----------
-    if not user_prompt or not plan_body:
-        result["skipped"]["plan_rubric"] = "missing_input_or_output"
-    else:
+    for spec in JUDGE_REGISTRY:
+        built = spec.build(trace)
+        if isinstance(built, str):
+            result["skipped"][spec.name] = built
+            continue
+        prompt, metadata = built
         _score_and_post(
             result,
             session_id=session_id,
-            judge_name="plan_rubric",
-            prompt=_plan_rubric_prompt(input=user_prompt, output=plan_body),
-            metadata={
-                "judge": "plan_rubric",
-                "session_id": session_id,
-                "backend": JUDGE_BACKENDS["plan_rubric"],
-                "source": "judge_session.py",
-            },
+            judge_name=spec.name,
+            backend=spec.backend,
+            prompt=prompt,
+            metadata=metadata,
             dry_run=dry_run,
         )
 
@@ -904,6 +830,7 @@ def _score_and_post(
     *,
     session_id: str,
     judge_name: str,
+    backend: str,
     prompt: str,
     metadata: dict[str, Any],
     dry_run: bool,
@@ -922,7 +849,7 @@ def _score_and_post(
         return
 
     try:
-        parsed = _run_judge(judge_name, prompt)
+        parsed = _run_judge(backend, prompt)
     except JudgeBackendError as e:
         result["skipped"][judge_name] = str(e)
         return
@@ -942,26 +869,6 @@ def _score_and_post(
         result["posts"] += 1
     else:
         result["skipped"][judge_name] = "post_failed_or_disabled"
-
-
-def _find_top_level_task(task_spans: list[dict[str, Any]]) -> dict[str, Any] | None:
-    """Return the first non-nested Task span, or None."""
-    for span in task_spans:
-        if not _is_nested(span):
-            return span
-    return None
-
-
-def _is_nested(span: dict[str, Any]) -> bool:
-    """A Task span is 'nested' if its parent_span_id points to another Task."""
-    parent = span.get("parent_span_id")
-    if not parent:
-        return False
-    # In real BTQL output we'd resolve the parent's span_attributes['name'].
-    # For the fixture / unit tests we use the convention that parent ids
-    # starting with 'task-' indicate another Task span. In production this
-    # function is wrapped by the BTQL fetcher which can do the real lookup.
-    return isinstance(parent, str) and parent.startswith("task-")
 
 
 # ---------------------------------------------------------------------------
@@ -1143,7 +1050,7 @@ def main(argv: list[str] | None = None) -> int:
                     "scan_since": args.scan_since,
                     "max_sessions": args.max_sessions,
                     "dry_run": args.dry_run,
-                    "backends": JUDGE_BACKENDS,
+                    "backends": _current_judge_backends(),
                     "count": len(results),
                     "results": results,
                 },
@@ -1176,7 +1083,7 @@ def main(argv: list[str] | None = None) -> int:
             {
                 "mode": "single",
                 "dry_run": args.dry_run,
-                "backends": JUDGE_BACKENDS,
+                "backends": _current_judge_backends(),
                 "result": result,
             },
             indent=2,

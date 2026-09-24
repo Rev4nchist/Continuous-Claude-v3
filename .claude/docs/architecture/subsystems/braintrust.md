@@ -25,9 +25,8 @@ slower LLM-judge scores run offline on a sampled subset of sessions.
 │                                                                         │
 │  LAYER 2 — LLM JUDGES (offline, scheduled, sampled)                     │
 │    opc/scripts/core/judge_session.py                                   │
-│      factuality + closedqa  → claude -p --model sonnet                 │
-│      plan_rubric            → codex exec --sandbox read-only           │
-│    NO API keys — both backends authenticate via subscription OAuth     │
+│      JUDGE_REGISTRY ships EMPTY (P32, 2026-09-24) — see below          │
+│    NO API keys — registered judges authenticate via subscription OAuth │
 │    35% deterministic sampler · --force bypass · cross-project recall   │
 │                                                                         │
 └─────────────────────────────────────────────────────────────────────────┘
@@ -148,45 +147,25 @@ edited only in the repo.
 
 ## Layer 2 — LLM Judges
 
-Three LLM judges run offline against a sampled subset of completed sessions,
-driven by `opc/scripts/core/judge_session.py`. This runner is **not** in the
-live hook path — it reads completed-session traces from the local cache
-(`~/.claude/state/braintrust_sessions/<session_id>.json`) or BTQL, runs the
-judges, and emits one feedback POST per judge per sampled session.
+`opc/scripts/core/judge_session.py` runs a registry of LLM judges offline
+against a sampled subset of completed sessions. This runner is **not** in
+the live hook path — it reads completed-session traces from the local cache
+(`~/.claude/state/braintrust_sessions/<session_id>.json`) or BTQL, runs each
+registered judge, and emits one feedback POST per judge per sampled session.
 
-### Subscription-CLI judge model (no API keys)
+### Judges retired (P32, 2026-09-24)
 
-Each judge is a hand-written rubric evaluated by one of two
-**subscription-OAuth subprocess CLIs** — there are no API keys for the
-judges. The `JUDGE_BACKENDS` map routes each judge:
-
-| Judge | Backend | Invocation | Subscription |
-|-------|---------|------------|--------------|
-| `factuality` | `claude` | `claude -p "<prompt>" --output-format json --model sonnet` | Claude Code (Sonnet bucket) |
-| `closedqa` | `claude` | `claude -p "<prompt>" --output-format json --model sonnet` | Claude Code (Sonnet bucket) |
-| `plan_rubric` | `codex` | `codex exec --sandbox read-only "<prompt>"` | ChatGPT (cross-model lift) |
-
-- `factuality` — does the top recall chunk (`output`) factually align with
-  the user prompt (`input`)? The top recall chunk is read from
-  `memory-recall.jsonl`.
-- `closedqa` — did the sub-agent (`output`) answer the orchestrator's task
-  request (`input`)? **Top-level Task spans only**; nested Task spans are
-  skipped with reason `nested_subagent_no_correlation` (sub-agent correlation
-  is deferred Phase 4 work).
-- `plan_rubric` — is the plan (`output`) complete, ordered, and verifiable
-  given the request (`input`)? Read from the `PostToolUse:ExitPlanMode` span.
-  It routes to **codex** so GPT cross-grades Claude-authored plans, which is
-  where the cross-model lift comes from.
-
-The `claude` backend strips `ANTHROPIC_API_KEY` / `ANTHROPIC_AUTH_TOKEN` from
-the child env so the subprocess uses subscription OAuth rather than an
-inherited external key. Preflight (`check_cli_preflight`) verifies the
-required CLIs are authenticated (`codex login status` and/or
-`claude --version`) and fails fast with the fix command if not.
-
-A subprocess failure (non-zero exit, timeout, or unparseable output) skips
-**only that judge** with a recorded reason — one backend failure never
-crashes the whole run, so a session emits 0–3 scores.
+The original three judges (`factuality`, `closedqa`, `plan_rubric`) are
+retired. None produced a usable score in production: `closedqa` filtered on
+a span name that never matched a live span, `plan_rubric` never scored
+either, and `factuality` compared a prompt against text derived from that
+same prompt, which is circular. The runner and its `JUDGE_REGISTRY` remain —
+a registered judge is still graded by one of two subscription-OAuth
+subprocess CLIs (`codex exec --sandbox read-only` or
+`claude -p --output-format json --model sonnet`, no API keys), preflight
+still checks only the CLIs a registered judge needs, and a subprocess
+failure still skips only that judge. New binary judges (one failure mode
+each, pass/fail, validated against human labels) are expected with P17.
 
 ### Sampling and `--force`
 
@@ -206,11 +185,12 @@ result carries `"forced": True` while `"sampled"` still reflects the true
 
 `memory-awareness.ts` writes its recall log per-project at
 `<projectDir>/.claude/logs/memory-recall.jsonl`, so recall data is fragmented
-across project directories. To score `factuality` for a session from any
-project, the runner searches the global log, the current working directory,
-and **every project path in `~/.claude/project-registry.json`** (deduped). A
-session from any registered project is therefore scorable, not just the one
-whose `.claude/logs` the runner happens to sit in.
+across project directories. To score a recall-based judge for a session from
+any project, the runner searches the global log, the current working
+directory, and **every project path in `~/.claude/project-registry.json`**
+(deduped). This read-side helper (`_read_top_recall_from_log`) stays even
+while `JUDGE_REGISTRY` is empty, so a future recall-based judge (P17) can use
+it without rebuilding it.
 
 ### Idempotency
 
