@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { execSync, spawnSync } from 'child_process';
-import { readRalphUnifiedState, RalphUnifiedState } from './shared/state-schema.js';
 import { getProjectIdentity, isContentRelevantToProject } from './shared/project-relevance.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 
@@ -472,74 +471,6 @@ function getUnmarkedHandoffs(): UnmarkedHandoff[] {
   }
 }
 
-/**
- * Detect active Ralph session from .ralph/state.json.
- * Returns a context string for injection, or null if no active Ralph session.
- */
-function getRalphSessionContext(projectDir: string, sessionType: string | undefined): { message: string; detail: string } | null {
-  try {
-    const state = readRalphUnifiedState(projectDir);
-    if (!state) return null;
-
-    // Check if Ralph is active or has in-progress tasks
-    const hasActiveSession = state.session?.active === true;
-    const inProgressTasks = (state.tasks || []).filter(t => t.status === 'in_progress' || t.status === 'in-progress');
-    const completedTasks = (state.tasks || []).filter(t => t.status === 'complete' || t.status === 'completed');
-    const problemTasks = (state.tasks || []).filter(t =>
-      ['failed', 'blocked', 'paused', 'cancelled'].includes(t.status)
-    );
-    const totalTasks = (state.tasks || []).length;
-
-    if (!hasActiveSession) return null;
-
-    const storyId = state.story_id || 'unknown';
-    const stage = state.stage || 'unknown';
-    const iteration = state.iteration ?? 0;
-    const maxIterations = state.max_iterations ?? 30;
-    const retryCount = (state.retry_queue || []).length;
-    const currentTask = inProgressTasks[0];
-
-    if (sessionType === 'startup') {
-      // Brief one-liner for fresh startup
-      const taskInfo = currentTask ? `, task ${currentTask.id} in progress` : '';
-      return {
-        message: `RALPH SESSION ACTIVE: Story ${storyId}${taskInfo}. ${completedTasks.length}/${totalTasks} tasks done. Run /ralph to resume.`,
-        detail: ''
-      };
-    }
-
-    // Full state summary for compact/clear/resume
-    const lines: string[] = [];
-    lines.push(`## Ralph Session State`);
-    lines.push(`- **Story:** ${storyId} | **Stage:** ${stage}`);
-    lines.push(`- **Iteration:** ${iteration}/${maxIterations}`);
-    lines.push(`- **Progress:** ${completedTasks.length}/${totalTasks} tasks complete`);
-    if (retryCount > 0) lines.push(`- **Retry queue:** ${retryCount} items`);
-    if (problemTasks.length > 0) {
-      lines.push(`- **Needs attention:** ${problemTasks.map(t => `${t.id}(${t.status})`).join(', ')}`);
-    }
-    if (currentTask) {
-      lines.push(`- **Current task:** ${currentTask.id} — ${currentTask.name || 'unnamed'} (${currentTask.agent || 'unassigned'})`);
-    }
-
-    // List pending tasks briefly
-    const pendingTasks = (state.tasks || []).filter(t => t.status === 'pending');
-    if (pendingTasks.length > 0) {
-      lines.push(`- **Pending:** ${pendingTasks.slice(0, 5).map(t => t.id).join(', ')}${pendingTasks.length > 5 ? ` (+${pendingTasks.length - 5} more)` : ''}`);
-    }
-
-    lines.push(`\nRun \`/ralph\` to resume orchestration.`);
-
-    return {
-      message: `RALPH SESSION ACTIVE: Story ${storyId}, ${completedTasks.length}/${totalTasks} done, iteration ${iteration}/${maxIterations}. Run /ralph to resume.`,
-      detail: lines.join('\n')
-    };
-  } catch {
-    // Fail open — don't break non-Ralph sessions
-    return null;
-  }
-}
-
 async function main() {
   let input: SessionStartInput;
   try {
@@ -622,7 +553,7 @@ async function main() {
             }
 
             // Skip completed handoffs. Accept both 'complete' and 'completed'
-            // (the handoff/Ralph convention writes 'complete'); a terminal
+            // (the handoff convention writes 'complete'); a terminal
             // outcome marker is also a done signal. Matching only 'completed'
             // previously let 'complete'-marked handoffs linger on the banner.
             const statusMatch = content.match(/^status:\s*(\w+)/m);
@@ -758,23 +689,6 @@ async function main() {
     } catch (error) {
       // Gracefully handle errors scanning handoffs directory
       console.error(`Warning: Error scanning handoffs: ${error}`);
-    }
-  }
-
-  // ============================================
-  // RALPH: Detect active Ralph session from .ralph/state.json
-  // ============================================
-  const ralphContext = getRalphSessionContext(projectDir, sessionType);
-  if (ralphContext) {
-    if (message) {
-      message += ' | ' + ralphContext.message;
-    } else {
-      message = ralphContext.message;
-    }
-    if (ralphContext.detail) {
-      additionalContext = additionalContext
-        ? additionalContext + '\n\n---\n\n' + ralphContext.detail
-        : ralphContext.detail;
     }
   }
 

@@ -85,7 +85,6 @@ echo '{}' | node C:\Users\<username>\.claude\hooks\dist\session-register.mjs
 | `user-confirmation-detector.mjs` | UserPromptSubmit | Capture "it's fixed" signals |
 | `session-end-extract.mjs` | SessionEnd | Final learning extraction (calls `lazy_memory.py`) |
 | `maestro-state-manager.mjs` | UserPromptSubmit | Track maestro workflow state |
-| `ralph-delegation-enforcer.mjs` | PreToolUse:Task | Enforce ralph routing (**BLOCKS**) |
 | `git-memory-check.mjs` | PreToolUse:Bash | Check memory before git (**BLOCKS**) |
 | `pre-tool-knowledge.mjs` | PreToolUse:Task | Inject knowledge tree context |
 | `post-plan-roadmap.mjs` | PostToolUse:ExitPlanMode | Update ROADMAP from plan |

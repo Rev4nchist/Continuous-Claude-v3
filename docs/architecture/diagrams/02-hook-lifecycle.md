@@ -15,7 +15,7 @@ sequenceDiagram
     Note over S: Session begins
     S->>S: session-start-continuity (load ledger)
     S->>S: session-register (register in DB)
-    S->>S: session-start-recovery (resume Ralph)
+    S->>S: session-start-recovery (resume Maestro)
     S->>S: session-start-init-check (knowledge tree)
     S->>S: smarter-everyday (inject learnings)
 
@@ -24,22 +24,16 @@ sequenceDiagram
     P->>P: skill-activation-prompt (keyword + intent match)
     P->>P: skill-router.ts (graph: prereqs + co-activation)
     P->>P: memory-awareness (recall learnings)
-    P->>P: ralph-progress-inject (show progress)
-    P->>P: ralph-retry-reminder (retry context)
     P->>P: roadmap-reconcile (sync ROADMAP)
 
     Note over Pre: Before tool executes
     Pre->>Pre: tldr-read-enforcer (token savings)
     Pre->>Pre: smart-search-router (route to AST)
-    Pre->>Pre: ralph-delegation-enforcer (block edits)
-    Pre->>Pre: ralph-watchdog (iteration limits)
-    Pre->>Pre: plan-to-ralph-enforcer (plan gate)
+    Pre->>Pre: maestro-enforcer (phase gate)
     Note right of Pre: Can BLOCK with deny
 
     Note over Post: After tool executes
     Post->>Post: post-edit-diagnostics (type check)
-    Post->>Post: ralph-monitor (track agents)
-    Post->>Post: ralph-task-monitor (update state)
     Post->>Post: tree-invalidate (mark stale)
     Post->>Post: roadmap-auto-update (sync goals)
 
@@ -57,7 +51,7 @@ sequenceDiagram
 
 | Event | Timing | Can Block? | Key Hooks |
 |-------|--------|-----------|-----------|
-| **SessionStart** | Session opens | No | Load ledger, register DB, resume Ralph, init knowledge tree |
+| **SessionStart** | Session opens | No | Load ledger, register DB, resume Maestro, init knowledge tree |
 | **UserPromptSubmit** | Before processing prompt | No (inject only) | Suggest skills, recall memories, inject progress |
 | **PreToolUse** | Before any tool call | **Yes (deny)** | Token savings, search routing, delegation enforcement |
 | **PostToolUse** | After tool completes | No | Diagnostics, state tracking, tree invalidation |
@@ -71,9 +65,7 @@ These hooks can return `deny` to prevent a tool from executing:
 
 | Hook | Blocks When |
 |------|------------|
-| ralph-delegation-enforcer | Edit/Write during Ralph mode |
-| ralph-watchdog | Iteration limit exceeded |
-| plan-to-ralph-enforcer | Code edit after plan approval without Ralph |
+| maestro-enforcer | Phase-skipping in a Maestro workflow |
 | tldr-read-enforcer | File read when TLDR summary available |
 | smart-search-router | Grep when AST search is better |
 

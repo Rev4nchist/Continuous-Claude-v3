@@ -13,13 +13,13 @@
 
 - [**What Is This?**](#what-is-this) — The 30-second explanation
 - [**Can I Build Software Without Coding?**](#-can-i-build-software-without-knowing-how-to-code) — Yes, and here's how
-- [**What Makes This Fork Special?**](#-what-makes-this-fork-special) — Maestro, Ralph, 137+ skills, persistent memory, and more
+- [**What Makes This Fork Special?**](#-what-makes-this-fork-special) — Maestro, 137+ skills, persistent memory, and more
 - [**Who Is This For?**](#who-is-this-for) — Marketing, sales, ops, product, engineering
 - [**Quick Start**](#quick-start) — Install in 5 minutes
 - [**What You Get**](#what-you-get) — Skills, agents, hooks, rules, browser automation
-- [**Common Use Cases**](#common-use-cases) — 8 real workflows from exploration to autonomous builds
+- [**Common Use Cases**](#common-use-cases) — 7 real workflows from exploration to E2E testing
 - [**Common Questions**](#common-questions) — API keys, privacy, uninstall, comparisons
-- [**For Developers**](#for-developers) — Architecture, memory system, hooks, Ralph internals
+- [**For Developers**](#for-developers) — Architecture, memory system, hooks, Maestro internals
 
 ---
 
@@ -47,7 +47,7 @@ Continuous Claude was built so that **non-technical people can create working so
 ### How This Works
 
 1. **You describe what you want:** "Build me a dashboard that shows sales by region"
-2. **Maestro orchestrates the work:** Breaks your request into tasks and assigns them to specialist agents. Or Ralph handles it fully autonomously — describe your feature, approve the plan, walk away.
+2. **Maestro orchestrates the work:** Breaks your request into tasks and assigns them to specialist agents — describe your feature, approve the plan, and it runs the build.
 3. **Agents do the technical work:** Research agent finds best practices, architect agent designs the solution, builder agent writes the code, tester agent verifies it works
 4. **You review and refine:** See the results, give feedback in plain English, iterate until it's right
 
@@ -74,7 +74,7 @@ This fork includes significant improvements over the original Continuous Claude,
 > **Why Continuous Claude?**
 >
 > - **Stop Repeating Yourself** — Context persists across sessions. Claude recalls past work automatically. Decisions and learnings accumulate like compound interest.
-> - **Work Faster** — Delegate to specialized agents. Get structured workflows instead of back-and-forth prompting. Set-and-forget autonomous builds with Ralph.
+> - **Work Faster** — Delegate to specialized agents. Get structured workflows instead of back-and-forth prompting.
 > - **Stay Organized** — Automatic session summaries and handoffs. Track progress on multi-day projects. Resume exactly where you left off.
 
 <details>
@@ -111,44 +111,6 @@ Maestro: [Executes each phase, reports progress, delivers working system]
 </details>
 
 <details>
-<summary><strong>Ralph: Autonomous Development Mode</strong> — Describe a feature, approve a plan, come back to working code</summary>
-
-**The Problem:** Even with Maestro, you're still in the loop for every decision. Sometimes you just want to describe a feature, approve the plan, and come back to working code.
-
-**Our Solution:** Ralph is Maestro's autonomous mode — pure delegation. Ralph never writes a single line of code. Instead, it:
-
-1. **Gathers Context** — Checks memory for similar past work, loads project structure
-2. **Generates a PRD** — Creates a product requirements document from your description
-3. **Breaks Into Tasks** — Splits the PRD into atomic, delegatable subtasks
-4. **Delegates to Agents** — Spawns kraken (builder), arbiter (tester), scout (researcher) — in parallel when possible
-5. **Verifies Everything** — Runs tests, type checks, and linting after each agent completes
-
-**Key Capabilities:**
-- **Retry escalation** — If an agent fails, Ralph retries with more context, then escalates to a different agent
-- **Crash recovery** — If a session dies mid-build, Ralph resumes from the last checkpoint
-- **Parallel execution** — Independent tasks run simultaneously across multiple agents
-- **Bounded iterations** — 10/30/50 iteration limits prevent runaway builds
-
-**Plain English Example:**
-```
-You: "Build a contact form with email validation"
-
-Ralph: "Let me understand what you need..."
-  → Asks: Fields? Validation rules? Where should submissions go?
-
-Ralph: "Here's my plan: 6 tasks across 3 phases"
-  → Phase 1: Form component + validation logic (kraken, parallel)
-  → Phase 2: API endpoint + email integration (kraken)
-  → Phase 3: Tests + review (arbiter + critic)
-
-You: "Go ahead"
-
-[Walk away. Come back to: working form, passing tests, clean commit]
-```
-
-</details>
-
-<details>
 <summary><strong>137+ Skills</strong> — Pre-built workflows triggered by describing what you want</summary>
 
 Skills are pre-built workflows you trigger by describing what you want:
@@ -159,7 +121,6 @@ Skills are pre-built workflows you trigger by describing what you want:
 | `/fix` | Investigates and repairs broken things | "This button doesn't work" |
 | `/research` | Deep-dives into topics with sources | "Research competitor pricing" |
 | `/review` | Gets multiple perspectives on work | "Review this document" |
-| `/ralph` | Autonomous feature development | "Build this feature while I'm away" |
 | `/premortem` | Identifies what could go wrong | "What risks does this plan have?" |
 
 </details>
@@ -276,7 +237,7 @@ Build production-quality interfaces from concept to code:
 | **Marketing & Content** | Research competitors, analyze feedback trends, create campaign briefs | Oracle agent for research, persistent brand voice, cross-session campaign tracking |
 | **Sales** | Prepare meeting briefs, track prospect context, build proposals | Memory recalls past conversations, competitive intelligence persists across sessions |
 | **Operations & Finance** | Analyze spending patterns, generate reports, create process docs | Persistent templates, recall data sources, multi-session report building |
-| **Product / Project** | Describe features in plain English, get working software back | Ralph autonomous PRD workflow, Maestro orchestration, task tracking |
+| **Product / Project** | Describe features in plain English, get working software back | Maestro orchestration, task tracking |
 | **Engineering** | Build features, fix bugs, refactor safely, understand codebases | `/build`, `/fix`, `/refactor`, structural code analysis, impact analysis |
 
 ---
@@ -363,7 +324,6 @@ That's it. You're now using Continuous Claude.
 | "What could go wrong with this plan?" | `/premortem` → TIGERS (clear threats) + ELEPHANTS (unspoken concerns) |
 | "Research authentication patterns" | `oracle` agent → searches web, docs, examples |
 | "Find all calls to this function" | `tldr impact` → structural analysis, not text search |
-| "Build this while I'm away" | `/ralph` → autonomous PRD → tasks → agents → verify → commit |
 | "Done for today" | `create_handoff` → saves state for next session |
 
 **Key workflows:**
@@ -467,11 +427,6 @@ That's it. You're now using Continuous Claude.
 - Updates code indexes
 - Tracks which files changed (for testing later)
 
-**During autonomous builds (Ralph):**
-- Enforces Ralph delegation rules — blocks direct code edits
-- Monitors agent progress, retries, and iteration limits
-- Injects progress context and retry reminders
-
 **Before running out of tokens:**
 - Automatically creates a handoff document
 - Saves state so you can resume later
@@ -527,7 +482,6 @@ Browser-based QA with graded reports (A-F scale):
 - `/qa-test` — Record, run, debug, and maintain E2E test suites
 - `/qa-suite` — Plan-driven acceptance testing across multiple user roles
 - **sentinel agent** — Drives live browser with auth-aware multi-role scenarios
-- Integrated into Ralph GSD lifecycle as Phase 4.1.6 (conditional browser QA gate)
 
 ### Supply Chain Security
 
@@ -717,29 +671,6 @@ Spawns oracle agent:
   → Synthesizes recommendations
 
 Result: Structured findings with sources
-```
-
-</details>
-
-<details>
-<summary><strong>"Build This Feature While I'm Away"</strong></summary>
-
-```
-> /ralph "Add a contact form with email validation and spam filtering"
-
-Ralph:
-  1. Interviews you (3 questions) → generates PRD
-  2. Breaks PRD into 6 tasks → presents for approval
-  3. You: "Go ahead" → walk away
-
-Ralph (autonomously):
-  → Spawns kraken: form component + validation (parallel)
-  → Spawns kraken: API endpoint + email integration
-  → Spawns arbiter: unit tests + integration tests
-  → Spawns critic: code review
-  → Verifies: all tests pass, types check, lint clean
-
-You return: Working feature, passing tests, clean commit ready for review
 ```
 
 </details>
@@ -1176,54 +1107,6 @@ Chain:
 | **PreCompact** | pre-compact-continuity | Auto-save before context clears |
 | **UserPromptSubmit** | skill-activation-prompt, memory-awareness | Route to skills (95 auto-matched), recall learnings |
 | **SessionEnd** | session-end-cleanup, session-outcome | Extract learnings, cleanup |
-| **Ralph hooks** | ralph-delegation-enforcer, ralph-task-monitor, ralph-retry-reminder, ralph-progress-inject | Enforce delegation, track progress, bounded iterations |
-
-</details>
-
-<details>
-<summary><strong>Ralph Architecture</strong></summary>
-
-Ralph is the autonomous development orchestrator — Maestro's "set and forget" mode.
-
-**State Management:**
-```
-.ralph/
-├── state.json              # Unified state (version 2.x) — tasks, status, retries
-├── IMPLEMENTATION_PLAN.md  # Human-readable task checklist
-├── agent-output.json       # Last agent's structured results
-└── orchestration.json      # Iteration counts, timing, escalation state
-```
-
-**8 Ralph Hooks:**
-
-| Hook | Event | Purpose |
-|------|-------|---------|
-| ralph-delegation-enforcer | PreToolUse | Blocks Edit/Write/Bash during Ralph mode |
-| ralph-monitor | PostToolUse | Tracks agent spawns and completions |
-| ralph-task-monitor | PostToolUse | Updates task status in state.json |
-| ralph-watchdog | PreToolUse | Enforces iteration limits (10/30/50) |
-| ralph-retry-reminder | UserPromptSubmit | Injects retry context for failed tasks |
-| ralph-progress-inject | UserPromptSubmit | Shows current progress in context |
-| ralph-template-inject | UserPromptSubmit | Injects PRD templates |
-| session-start-recovery | SessionStart | Resumes interrupted Ralph sessions |
-
-**Retry Escalation Pattern:**
-```
-Attempt 1: Same agent with original instruction
-Attempt 2: Same agent with error context
-Attempt 3: Escalate to spark (quick fix specialist)
-Attempt 4: Escalate to debug-agent (root cause analysis)
-Attempt 5: BLOCKED → requires user intervention
-```
-
-**Supporting Scripts:**
-
-| Script | Purpose |
-|--------|---------|
-| `ralph-state-v2.py` | Unified state management (CRUD for tasks) |
-| `ralph-checkpoint.py` | Commit/restore progress checkpoints |
-| `ralph-scheduler.py` | Task ordering: ready-tasks, parallel-batch, critical-path |
-| `ralph-skill-query.py` | Routes tasks to optimal agents |
 
 </details>
 
@@ -1284,9 +1167,6 @@ continuous-claude/
 │   ├── docs/architecture/ # Navigable architecture docs
 │   ├── scripts/          # Python utilities
 │   └── settings.json     # Hook configuration
-├── .ralph/               # Ralph autonomous build state
-│   ├── state.json        # Unified task/status tracking
-│   └── orchestration.json # Iteration counts and timing
 ├── opc/
 │   ├── packages/
 │   │   └── tldr-code/    # 5-layer code analysis
@@ -1397,7 +1277,6 @@ After installation, try these in order:
 4. **Build something:** `/build greenfield "describe feature"`
 5. **Fix something:** `/fix bug "describe problem"`
 6. **Risk analysis:** `/premortem` → See what could go wrong before implementing
-7. **Go autonomous:** `/ralph "describe a feature"` → Set it and forget it
 
 The system learns from each session. The more you use it, the smarter it gets.
 

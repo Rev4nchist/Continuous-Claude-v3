@@ -4,7 +4,6 @@
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `/ralph` | Full product build | PRD → Design → Implement |
 | `/maestro` | Multi-agent orchestration | Complex multi-step tasks |
 | `/fix` | Bug resolution | Debug → Fix → Test |
 | `/build` | Feature development | Plan → Implement → Review |
@@ -95,7 +94,7 @@ Research:     /explore, /recall, scout, oracle
 Implement:    /build, /fix, kraken, spark
 Review:       /review, critic, judge
 Release:      /release, /commit
-Orchestrate:  /ralph, /maestro
+Orchestrate:  /maestro
 ```
 
 ## Agent Shortcuts

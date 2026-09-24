@@ -78,7 +78,7 @@ describe('findRecentHandoff', () => {
 
   it('returns the newest handoff when it is within the recent window', () => {
     const now = Date.now();
-    const recent = makeHandoff('ralph-auto/h.yaml', now - 5_000);
+    const recent = makeHandoff('auto-handoff-dir/h.yaml', now - 5_000);
     makeHandoff('kraken-x/current.md', now - 60_000);
     const found = findRecentHandoff({ projectDir, now });
     expect(found).toBe(recent);
@@ -86,7 +86,7 @@ describe('findRecentHandoff', () => {
 
   it('returns null when the newest handoff is older than the window', () => {
     const now = Date.now();
-    makeHandoff('ralph-auto/h.yaml', now - RECENT_WINDOW_MS - 10_000);
+    makeHandoff('auto-handoff-dir/h.yaml', now - RECENT_WINDOW_MS - 10_000);
     expect(findRecentHandoff({ projectDir, now })).toBeNull();
   });
 
@@ -99,7 +99,7 @@ describe('findRecentHandoff', () => {
 
   it('honours the recentMs override', () => {
     const now = Date.now();
-    const recent = makeHandoff('ralph-auto/h.yaml', now - 90_000);
+    const recent = makeHandoff('auto-handoff-dir/h.yaml', now - 90_000);
     expect(findRecentHandoff({ projectDir, now })).toBeNull();
     expect(
       findRecentHandoff({ projectDir, now, recentMs: 120_000 }),
@@ -158,7 +158,7 @@ describe('decideIndex', () => {
 
   it('skips when the indexer script is missing', () => {
     const now = Date.now();
-    makeHandoff('ralph-auto/h.yaml', now - 1_000);
+    makeHandoff('auto-handoff-dir/h.yaml', now - 1_000);
     // Stub fsApi so it can see the handoff but never matches any script path
     const realFs = fs;
     const handoff = path.join(
@@ -166,7 +166,7 @@ describe('decideIndex', () => {
       'thoughts',
       'shared',
       'handoffs',
-      'ralph-auto',
+      'auto-handoff-dir',
       'h.yaml',
     );
     const fakeFs = {
@@ -190,7 +190,7 @@ describe('decideIndex', () => {
 
   it('returns index decision when handoff is recent and script exists', () => {
     const now = Date.now();
-    const handoff = makeHandoff('ralph-auto/h.yaml', now - 5_000);
+    const handoff = makeHandoff('auto-handoff-dir/h.yaml', now - 5_000);
     const script = makeIndexerScript();
     const result = decideIndex({ projectDir, opcDir, now });
     expect(result.action).toBe('index');

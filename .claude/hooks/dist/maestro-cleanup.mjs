@@ -140,7 +140,7 @@ function createLogger(hookName) {
 
 // src/maestro-cleanup.ts
 var log = createLogger("maestro-cleanup");
-var STATE_FILES = ["maestro-state", "ralph-state"];
+var STATE_FILES = ["maestro-state"];
 var RECOVERY_DIR = join3(homedir2(), ".claude", "recovery");
 function readStdin() {
   try {
@@ -158,9 +158,6 @@ function isIncompleteWorkflow(content, baseName) {
   try {
     const state = JSON.parse(content);
     if (!state.active) return false;
-    if (baseName === "ralph-state") {
-      return true;
-    }
     if (baseName === "maestro-state") {
       return true;
     }

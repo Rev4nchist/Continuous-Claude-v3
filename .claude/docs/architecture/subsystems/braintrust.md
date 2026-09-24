@@ -87,7 +87,6 @@ Python `store_learning.py`.
 | `memory_store_quality` | `store_learning.py` (opc) | store-time (Python) |
 | `tool_call_success` | `telemetry-tracker.ts` | PostToolUse |
 | `skill_trigger_accuracy` | `telemetry-tracker.ts` | PostToolUse |
-| `agent_task_success` | `ralph-task-monitor.ts` | PostToolUse:Task |
 | `hook_health_ratio` | `hook-health-monitor.ts` | SessionStart |
 
 **Why `await`, not `void`:** `emitBraintrustScore` POSTs feedback over HTTPS.
@@ -99,9 +98,10 @@ site must use `await ... ` on a single line.
 
 `scripts/audit-braintrust-emits.sh` is the regression tripwire. It greps
 `.claude/hooks/src/` (excluding `__tests__/`) for `await emitBraintrustScore(`
-and compares the count to `INVARIANT_4=4` — the four TS emit sites
-(`memory-awareness`, `telemetry-tracker`, `ralph-task-monitor`,
-`hook-health-monitor`). It exits non-zero if the count shrinks below 4.
+and compares the count against an invariant — the TS emit sites
+(`memory-awareness`, `telemetry-tracker`, `hook-health-monitor`; `ralph-task-monitor`
+was removed with the rest of Ralph's live machinery). It exits non-zero if the
+count shrinks below the invariant.
 
 - The grep matches `await` only — a revert to `void` or a call split across
   lines trips the check (the old grep matched both and would have falsely

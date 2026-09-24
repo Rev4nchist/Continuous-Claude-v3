@@ -80,9 +80,7 @@ PageIndex Layer:
 │                      skill-activation-prompt                 │
 │                                                              │
 │  PreToolUse ───────→ file-claims (can BLOCK)                 │
-│                      ralph-delegation-enforcer (can BLOCK)   │
 │                      git-memory-check (can BLOCK)            │
-│                      plan-to-ralph-enforcer (can BLOCK)      │
 │                      package-install-guard:Bash (can BLOCK)  │
 │                      task-router                             │
 │                      explore-to-scout                        │
@@ -95,9 +93,6 @@ PageIndex Layer:
 │                      telemetry-tracker:Skill|Task            │
 │                          [BT: tool_call_success,             │
 │                               skill_trigger_accuracy]        │
-│                      ralph-task-monitor:Task                 │
-│                          [BT: agent_task_success]            │
-│                      plan-exit-tracker:ExitPlanMode          │
 │                      plan-exit-premortem-prompt:ExitPlanMode │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
@@ -114,17 +109,16 @@ Braintrust Observability section below.
 ├──────────────────────────────────────────────────────────────┤
 │                                                              │
 │  LAYER 1 — DETERMINISTIC (live, in hook path)                │
-│    4 TS hooks → await emitBraintrustScore()                  │
+│    3 TS hooks → await emitBraintrustScore()                  │
 │    helper: hooks/src/shared/braintrust-score.ts             │
 │                                                              │
 │    memory-awareness ───→ memory_recall_relevance / _hit      │
 │    store_learning.py ──→ memory_store_quality  (Python)      │
 │    telemetry-tracker ──→ tool_call_success                   │
 │                          skill_trigger_accuracy              │
-│    ralph-task-monitor ─→ agent_task_success                  │
 │    hook-health-monitor → hook_health_ratio                   │
 │                                                              │
-│    GUARD: scripts/audit-braintrust-emits.sh (INVARIANT_4=4)  │
+│    GUARD: scripts/audit-braintrust-emits.sh                  │
 │           run after ANY TS hook edit; await-only grep        │
 │                                                              │
 │  LAYER 2 — LLM JUDGES (offline, sampled, scheduled)          │
@@ -179,17 +173,6 @@ Agent Selection Rule:
 ## Workflow Composition
 
 ```
-/ralph Workflow (GSD autonomous-dev lifecycle):
-  Phase 0       Phase 0.5    Phase 1   Phase 2   Phase 2.5  Phase 3       Phase 4   Phase 4.1.5
-  (context)  →  (research) → (PRD)  → (tasks) → (premortem) → (delegate) → (review) → (goal verify)
-       │              │          │        │           │              │           │           │
-       ▼              ▼          ▼        ▼           ▼              ▼           ▼           ▼
-  Load prior     oracle/     Generate  Break     codex-        Agents     principal-  Verify goals
-  context +      scout       PRD doc   into      adversary     implement  reviewer    met against
-  handoffs       research              tasks     premortem     (ralph     synthesize  original
-                                                 review        never      findings    objective
-                                                               edits)
-
 /maestro Workflow:
   Analyze task → Spawn specialists → Coordinate → Synthesize
                       │

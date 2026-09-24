@@ -100,12 +100,6 @@ const WORKFLOW_TRIGGERS: WorkflowTrigger[] = [
         description: 'Codebase exploration and understanding'
     },
     {
-        skill: 'ralph',
-        pattern: /\b(start|run|launch|use)\s+ralph/i,
-        confidence: 0.99,
-        description: 'Ralph autonomous development workflow'
-    },
-    {
         skill: 'refactor',
         pattern: /\brefactor\s+(the\s+)?(this\s+)?(code|function|class|module|component)/i,
         confidence: 0.90,

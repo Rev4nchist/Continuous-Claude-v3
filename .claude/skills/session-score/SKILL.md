@@ -33,25 +33,9 @@ Scoring:
 
 ### Metric 2: Task Completion (2 pts)
 
-If `.ralph/state.json` exists, check task status:
-
-```bash
-node -e "
-try {
-  const s = JSON.parse(require('fs').readFileSync('.ralph/state.json','utf8'));
-  const tasks = s.tasks || [];
-  const done = tasks.filter(t => t.status === 'complete' || t.status === 'completed').length;
-  const total = tasks.length;
-  console.log(done + '/' + total);
-} catch(e) { console.log('no-task-file'); }
-" 2>/dev/null
-```
-
-Scoring:
-- 2 pts: all tasks complete, or >75% done
-- 1 pt: 25-75% done
-- 0.5 pts: <25% done but progress exists
-- 0 pts: no task tracking active (note: not penalized, just untracked — give 1 pt default)
+No structured, file-backed task-state tracker exists in the harness (the old `.ralph/state.json`
+signal was removed with Ralph's live machinery). Give the 1 pt default — not penalized, just
+untracked.
 
 ### Metric 3: Agent Spawn Count (2 pts)
 

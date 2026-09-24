@@ -2,41 +2,6 @@
   "version": "1.0",
   "description": "Skill activation triggers for Claude Code. Controls when skills automatically suggest or block actions.",
   "skills": {
-    "ralph": {
-      "type": "workflow",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Autonomous feature development using Ralph methodology - PRD-driven, Docker-sandboxed, deterministic loops",
-      "promptTriggers": {
-        "keywords": [
-          "/ralph",
-          "ralph mode",
-          "ralph build",
-          "ralph plan",
-          "ralph loop",
-          "development loop",
-          "dev loop",
-          "create prd",
-          "generate prd",
-          "new feature from scratch",
-          "autonomous development",
-          "set and forget",
-          "build feature autonomously"
-        ],
-        "intentPatterns": [
-          "ralph.*?(mode|build|plan|start|loop|workflow|dev)",
-          "(development|dev|iterative).*?loop",
-          "(create|generate|write).*?prd",
-          "(build|create|implement).*?(new.*?)?feature.*?(from scratch|autonomously)",
-          "(set|walk).*?(and|away).*?(forget|come back)",
-          "autonomous.*?(dev|development|implementation)",
-          "deterministic.*?loop"
-        ]
-      },
-      "evalScore": 100,
-      "evalTier": "verified",
-      "evalDate": "2026-03-07"
-    },
     "plan-mode": {
       "type": "guardrail",
       "enforcement": "suggest",
@@ -2145,7 +2110,6 @@
         "keywords": [
           "coordinate",
           "orchestrate",
-          "ralph loop",
           "development loop",
           "parallel agents",
           "multiple agents",
@@ -2157,7 +2121,7 @@
           "(coordinate|orchestrate).*?(agents?|tasks?)",
           "(parallel|multiple|multi).*?agents?",
           "agent.*?(workflow|pipeline|coordination)",
-          "(ralph|development|dev).*?loop"
+          "(development|dev).*?loop"
         ]
       }
     },

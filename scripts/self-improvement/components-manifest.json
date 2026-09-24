@@ -26,8 +26,8 @@
     {
       "id": "workflows",
       "name": "Workflows",
-      "summary": "Autonomous + orchestrated workflows: Ralph (GSD autonomous dev), Maestro (multi-step orchestration), and the deterministic Workflow tool (fan-out/pipeline/verify).",
-      "currentImpl": [".claude/skills/ralph/", ".claude/skills/maestro/", ".claude/scripts/ralph/"],
+      "summary": "Orchestrated workflows: Maestro (multi-step orchestration) and the deterministic Workflow tool (fan-out/pipeline/verify).",
+      "currentImpl": [".claude/skills/maestro/"],
       "frontierHints": ["agentic workflow patterns", "plan-execute-verify loops", "deterministic vs model-driven orchestration", "LangGraph/agent supervisors", "self-correcting workflows", "adversarial verification"]
     },
     {

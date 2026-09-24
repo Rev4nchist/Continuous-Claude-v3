@@ -143,7 +143,6 @@ Agents add latency. Use directly when task is simple.
 | /explore | scout (with depth control) |
 | /review | critic + plan-reviewer + codex-adversary (parallel Phase 1) |
 | /premortem | inline failure-mode analysis + codex-adversary cross-model pass |
-| /ralph | GSD autonomous lifecycle (Phase 0→0.5→1→2→2.5→3→4→4.1.5) — delegates all code work to agents; never edits directly (plan-to-ralph-enforcer blocks it). Bounded iterations (10/30/50). |
 | /maestro | Coordinates any specialists |
 
 ## Deep Dive

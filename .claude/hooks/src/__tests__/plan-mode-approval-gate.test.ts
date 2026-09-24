@@ -11,10 +11,9 @@
  *   - Non-ExitPlanMode tool                              -> allow
  *   - ExitPlanMode + BYPASS_PLAN_GATE=1                  -> allow
  *   - ExitPlanMode + /goal active                        -> allow
- *   - ExitPlanMode + Ralph active                        -> allow
  *   - ExitPlanMode + permissionMode = bypassPermissions  -> deny
  *   - ExitPlanMode + permissionMode = plan/acceptEdits   -> ask
- *   - ExitPlanMode + no bypass + no goal + no Ralph      -> ask
+ *   - ExitPlanMode + no bypass + no goal                 -> ask
  */
 
 import { describe, it, expect } from 'vitest';
@@ -29,7 +28,6 @@ describe('decideGate', () => {
   const base = {
     toolName: 'ExitPlanMode',
     bypassEnv: false,
-    ralphActive: false,
     goalActive: false,
   };
 
@@ -49,10 +47,6 @@ describe('decideGate', () => {
     expect(decideGate({ ...base, goalActive: true }).action).toBe('allow');
   });
 
-  it('allows ExitPlanMode when Ralph is active', () => {
-    expect(decideGate({ ...base, ralphActive: true }).action).toBe('allow');
-  });
-
   it('asks for confirmation when no bypass signal is set', () => {
     const result = decideGate(base);
     expect(result.action).toBe('ask');
@@ -60,12 +54,11 @@ describe('decideGate', () => {
       expect(result.reason).toContain('Plan-mode approval gate');
       expect(result.reason).toContain('BYPASS_PLAN_GATE=1');
       expect(result.reason).toContain('/goal');
-      expect(result.reason).toContain('/ralph');
     }
   });
 
   it('bypass env takes priority over ask', () => {
-    expect(decideGate({ ...base, bypassEnv: true, goalActive: false, ralphActive: false }).action).toBe('allow');
+    expect(decideGate({ ...base, bypassEnv: true, goalActive: false }).action).toBe('allow');
   });
 
   // ---------------------------------------------------------------------------
@@ -75,7 +68,7 @@ describe('decideGate', () => {
   // `permissionDecision: "ask"` and auto-approves ExitPlanMode via the
   // PermissionRequest layer ~187 ms later. To make the gate effective, we
   // emit `deny` when permissionMode === 'bypassPermissions'. Every existing
-  // allow path (env override, /goal, /ralph) must still win over deny so
+  // allow path (env override, /goal) must still win over deny so
   // autonomous flows are unaffected.
   // ---------------------------------------------------------------------------
 
@@ -97,15 +90,6 @@ describe('decideGate', () => {
     const result = decideGate({
       ...base,
       goalActive: true,
-      permissionMode: 'bypassPermissions',
-    });
-    expect(result.action).toBe('allow');
-  });
-
-  it('ralphActive wins over bypass-mode deny', () => {
-    const result = decideGate({
-      ...base,
-      ralphActive: true,
       permissionMode: 'bypassPermissions',
     });
     expect(result.action).toBe('allow');
@@ -137,7 +121,6 @@ describe('decideGate', () => {
       expect(result.reason).toContain('AskUserQuestion');
       expect(result.reason).toContain('--dangerously-skip-permissions');
       expect(result.reason).toContain('/goal');
-      expect(result.reason).toContain('/ralph');
     }
   });
 });

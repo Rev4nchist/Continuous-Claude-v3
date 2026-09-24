@@ -43,12 +43,16 @@
 # Expected emit sites (do NOT lower this invariant to silence regressions):
 #   memory-awareness.ts     (memory_recall_relevance)
 #   telemetry-tracker.ts    (skill_trigger_accuracy)
-#   ralph-task-monitor.ts   (agent_task_success)
 #   hook-health-monitor.ts  (hook_health_ratio)
+# 2026-09-23: 4 -> 3 DELIBERATELY. ralph-task-monitor.ts
+# (agent_task_success) was deleted with the rest of Ralph at
+# Dave's request (Opus 5.5 eval, P43); the score has no emitter
+# because its hook no longer exists, not because an emit was
+# dropped. This is not the "lower it to silence it" case.
 # The real guard is in .claude/agents/spark.md Rule 7 — this
 # header is just for human readers reviewing the diff.
 # ==============================================================
-INVARIANT_4=4
+INVARIANT_4=3
 
 cd "$(dirname "$0")/.."
 

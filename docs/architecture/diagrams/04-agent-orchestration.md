@@ -4,10 +4,9 @@ Delegation patterns, agent categories, and retry escalation.
 
 ```mermaid
 flowchart TD
-    subgraph Modes["3 Delegation Modes"]
+    subgraph Modes["2 Delegation Modes"]
         D[Direct Delegation<br/>Claude spawns agent directly]
         M[Maestro Mode<br/>Multi-step orchestration]
-        R[Ralph Mode<br/>Fully autonomous]
     end
 
     subgraph Categories["Agent Categories (31 total)"]
@@ -28,9 +27,6 @@ flowchart TD
     M --> IMP
     M --> TST
     M --> REV
-    R --> IMP
-    R --> TST
-    R --> REV
 
     subgraph Retry["Retry Escalation"]
         A1[Attempt 1: Same agent] --> A2[Attempt 2: Same + error context]
@@ -48,7 +44,6 @@ flowchart TD
 |------|---------|--------------|----------|
 | **Direct** | Claude routes task to agent | Per-task approval | No |
 | **Maestro** | `/maestro` command | Interview + phase gates | Phase-level |
-| **Ralph** | `/ralph` command | Plan approval only | 10/30/50 iterations |
 
 ## Agent Selection Guide
 
@@ -63,14 +58,6 @@ flowchart TD
 | Refactoring | phoenix (plan) | kraken (execute) |
 | Documentation | scribe | herald (releases) |
 | Security audit | aegis | - |
-
-## Iteration Limits (Ralph Mode)
-
-| Task Size | Max Iterations | Escalation At |
-|-----------|---------------|--------------|
-| Small | 10 | After limit |
-| Medium | 30 | After limit |
-| Large | 50 | After limit |
 
 ## Retry Escalation Chain
 

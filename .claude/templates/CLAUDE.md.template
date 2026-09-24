@@ -160,7 +160,6 @@ Run these checks before starting (see RULES.md "Preflight Enforcement" for sever
 - State: which files change, why, how to verify
 - If a major problem surfaces → pause → return to Plan mode
 - Use TDD when adding features: write failing test → implement → verify green → refactor → deploy (Vercel projects with `.vercel/project.json`)
-- **Plan-to-Ralph enforcement:** After `ExitPlanMode`, the `plan-to-ralph-enforcer` hook blocks direct code edits (`.ts`, `.py`, `.go`, etc.). Use `/ralph` to implement via delegated agents. Config/doc files (`.md`, `.json`, `.yaml`) pass through. Bypass: delete `$TEMP/claude-plan-approved-*.json`. See rule: `plan-to-ralph-enforcement.md`.
 
 ### Verification Before Done
 
@@ -264,7 +263,6 @@ Complex work uses skill-based workflows. Choose based on task:
 | `/fix` | Debugging / bug resolution | Premortem risk assessment before changes |
 | `/explore` | Understanding codebase | 3 depths: quick, deep, architecture |
 | `/maestro` | Multi-step complex tasks | 5 orchestration patterns, interview-gated |
-| `/ralph` | Autonomous dev mode | GSD lifecycle: Phase 0→0.5 (research)→1→2→2.5 (premortem)→3→4→4.1.5 (goal verifier). `ralph_status` JSON required from agents. |
 
 All workflows follow: recon → plan → approve → execute → verify.
 Human checkpoints at critical decision points.
@@ -293,8 +291,6 @@ Project navigation via `.claude/knowledge-tree.json`:
 Goal tracking in `ROADMAP.md` — auto-synced by PostToolUse hooks.
 Plans, commits, and task completions automatically update it.
 ROADMAP hooks include a cross-project contamination guard that checks plan content against the project registry before writing — prevents pollution when multiple terminals run planning sessions for different projects.
-
-**Ralph compaction survival:** Ralph sessions automatically survive `/compact` via hook-managed YAML handoffs. Running `/compact` mid-Ralph is safe. Manual checkpoints: `ralph-checkpoint.py commit`.
 
 ## System Capabilities
 

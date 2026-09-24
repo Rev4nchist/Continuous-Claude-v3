@@ -175,7 +175,7 @@ describe('skill-rules.json integrity', () => {
     const cases: Array<[string, string]> = [
       ['fix the bug in auth', 'systematic-debugging'],
       ['commit these changes', 'commit'],
-      ['ralph mode', 'ralph'],
+      ['implement feature', 'build'],
       ['health check', 'mot'],
     ];
 

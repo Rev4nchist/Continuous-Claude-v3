@@ -67,14 +67,6 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-template-inject.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 10000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/maestro-enforcer.mjs"
@@ -125,19 +117,6 @@
         ]
       },
       {
-        "matcher": "Edit|Write|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 10000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-delegation-enforcer.mjs"
-            ]
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
           {
@@ -174,14 +153,6 @@
       {
         "matcher": "Edit|Write",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/plan-to-ralph-enforcer.mjs"
-            ]
-          },
           {
             "type": "command",
             "command": "node",
@@ -273,33 +244,9 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-watchdog.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 3000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-progress-inject.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 3000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/sentry-error-context.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-retry-reminder.mjs"
             ]
           },
           {
@@ -574,14 +521,6 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-verification.mjs"
             ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 10000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-task-monitor.mjs"
-            ]
           }
         ]
       },
@@ -607,14 +546,6 @@
             "timeout": 10000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/post-plan-roadmap.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/plan-exit-tracker.mjs"
             ]
           },
           {
@@ -649,14 +580,6 @@
             "timeout": 5000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/git-commit-roadmap.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-monitor.mjs"
             ]
           },
           {
@@ -811,14 +734,6 @@
               "{{CLAUDE_HOME}}/hooks/dist/git-commit-roadmap.mjs"
             ],
             "timeout": 30000
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/ralph-monitor.mjs"
-            ],
-            "timeout": 5000
           },
           {
             "type": "command",

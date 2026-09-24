@@ -35,7 +35,6 @@ graph TB
 
     subgraph Orchestration["Orchestration"]
         MA[Maestro<br/>Multi-step tasks]
-        RA[Ralph<br/>Autonomous dev]
     end
 
     UP --> SAP
@@ -54,9 +53,7 @@ graph TB
     CO --> MS
     RM --> CL
     MA --> AG
-    RA --> AG
     CC --> MA
-    CC --> RA
 ```
 
 ## Subsystem Summary

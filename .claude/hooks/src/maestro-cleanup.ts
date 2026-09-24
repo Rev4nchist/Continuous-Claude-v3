@@ -2,7 +2,7 @@
 /**
  * Maestro Cleanup Hook (SessionEnd)
  *
- * Cleans up Maestro and Ralph state files when a session ends.
+ * Cleans up Maestro state files when a session ends.
  * Before deleting, archives incomplete workflows to ~/.claude/recovery/
  * so the next session can offer to resume.
  */
@@ -19,7 +19,7 @@ interface SessionEndInput {
   session_id?: string;
 }
 
-const STATE_FILES = ['maestro-state', 'ralph-state'];
+const STATE_FILES = ['maestro-state'];
 const RECOVERY_DIR = join(homedir(), '.claude', 'recovery');
 
 function readStdin(): string {
@@ -43,11 +43,6 @@ function isIncompleteWorkflow(content: string, baseName: string): boolean {
   try {
     const state = JSON.parse(content);
     if (!state.active) return false;
-
-    if (baseName === 'ralph-state') {
-      // Ralph is active — workflow was in progress
-      return true;
-    }
 
     if (baseName === 'maestro-state') {
       // Maestro is active but not fully completed (plan not approved or still executing)

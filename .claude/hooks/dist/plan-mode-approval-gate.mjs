@@ -2,13 +2,9 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/plan-mode-approval-gate.ts
-import { readFileSync as readFileSync3, statSync as statSync2 } from "fs";
-import { join as join4 } from "path";
+import { readFileSync as readFileSync2, statSync as statSync2 } from "fs";
+import { join as join3 } from "path";
 import { homedir as homedir2 } from "os";
-
-// src/shared/state-schema.ts
-import { existsSync as existsSync2, readFileSync } from "fs";
-import { join as join2 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
@@ -56,7 +52,7 @@ function writeLog(entry) {
   }
 }
 function createLogger(hookName) {
-  function log3(level, msg, data) {
+  function log2(level, msg, data) {
     if (!shouldLog(level)) return;
     const entry = {
       ts: (/* @__PURE__ */ new Date()).toISOString(),
@@ -74,64 +70,34 @@ function createLogger(hookName) {
     }
   }
   return {
-    debug: (msg, data) => log3("debug", msg, data),
-    info: (msg, data) => log3("info", msg, data),
-    warn: (msg, data) => log3("warn", msg, data),
-    error: (msg, data) => log3("error", msg, data)
+    debug: (msg, data) => log2("debug", msg, data),
+    info: (msg, data) => log2("info", msg, data),
+    warn: (msg, data) => log2("warn", msg, data),
+    error: (msg, data) => log2("error", msg, data)
   };
 }
 
-// src/shared/state-schema.ts
-var log = createLogger("state-schema");
-function readRalphUnifiedState(projectDir) {
-  const dir = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const statePath = join2(dir, ".ralph", "state.json");
-  if (!existsSync2(statePath)) return null;
-  try {
-    const content = readFileSync(statePath, "utf-8");
-    const state = JSON.parse(content);
-    if (!state.version || !state.version.startsWith("2.")) {
-      log.warn("Ralph unified state version mismatch (expected 2.x) \u2014 returning null", {
-        version: state.version,
-        statePath: join2(dir, ".ralph", "state.json")
-      });
-      return null;
-    }
-    return state;
-  } catch (err) {
-    log.warn("Failed to read Ralph unified state", { error: String(err) });
-    return null;
-  }
-}
-function isRalphActive(projectDir) {
-  const unified = readRalphUnifiedState(projectDir);
-  if (unified?.session?.active) {
-    return { active: true, storyId: unified.story_id, source: "unified" };
-  }
-  return { active: false, storyId: "", source: "none" };
-}
-
 // src/shared/session-activity.ts
-import { existsSync as existsSync3, mkdirSync as mkdirSync2, readFileSync as readFileSync2, writeFileSync } from "fs";
-import { join as join3 } from "path";
+import { existsSync as existsSync2, mkdirSync as mkdirSync2, readFileSync, writeFileSync } from "fs";
+import { join as join2 } from "path";
 function getHomeDir() {
   return process.env.HOME || process.env.USERPROFILE || "/tmp";
 }
 function getActivityPath(sessionId) {
-  const dir = join3(getHomeDir(), ".claude", "cache", "session-activity");
+  const dir = join2(getHomeDir(), ".claude", "cache", "session-activity");
   try {
     mkdirSync2(dir, { recursive: true });
   } catch {
   }
-  return join3(dir, `${sessionId}.json`);
+  return join2(dir, `${sessionId}.json`);
 }
 function readActivity(sessionId) {
   const filePath = getActivityPath(sessionId);
   try {
-    if (!existsSync3(filePath)) {
+    if (!existsSync2(filePath)) {
       return null;
     }
-    const raw = readFileSync2(filePath, "utf-8");
+    const raw = readFileSync(filePath, "utf-8");
     if (!raw.trim()) {
       return null;
     }
@@ -176,21 +142,20 @@ function logHook(sessionId, hookName) {
 }
 
 // src/plan-mode-approval-gate.ts
-var log2 = createLogger("plan-mode-approval-gate");
+var log = createLogger("plan-mode-approval-gate");
 function decideGate(params) {
   if (params.toolName !== "ExitPlanMode") return { action: "allow" };
   if (params.bypassEnv) return { action: "allow" };
   if (params.goalActive) return { action: "allow" };
-  if (params.ralphActive) return { action: "allow" };
   if (params.permissionMode === "bypassPermissions") {
     return {
       action: "deny",
-      reason: "Plan-mode approval gate: ExitPlanMode is blocked while Claude Code is running with --dangerously-skip-permissions. The plan-approval dialog is suppressed in that mode, so this gate cannot ask. To proceed: (a) use AskUserQuestion to get explicit user approval, then set BYPASS_PLAN_GATE=1 in the environment and retry ExitPlanMode; (b) restart Claude Code without --dangerously-skip-permissions; or (c) run inside /goal or /ralph for autonomous flows."
+      reason: "Plan-mode approval gate: ExitPlanMode is blocked while Claude Code is running with --dangerously-skip-permissions. The plan-approval dialog is suppressed in that mode, so this gate cannot ask. To proceed: (a) use AskUserQuestion to get explicit user approval, then set BYPASS_PLAN_GATE=1 in the environment and retry ExitPlanMode; (b) restart Claude Code without --dangerously-skip-permissions; or (c) run inside /goal for autonomous flows."
     };
   }
   return {
     action: "ask",
-    reason: "Plan-mode approval gate: confirm before exiting plan mode and executing the proposed plan. Set BYPASS_PLAN_GATE=1 to skip this gate, or run /goal / /ralph to auto-bypass for autonomous flows."
+    reason: "Plan-mode approval gate: confirm before exiting plan mode and executing the proposed plan. Set BYPASS_PLAN_GATE=1 to skip this gate, or run /goal to auto-bypass for autonomous flows."
   };
 }
 function mangleProjectDir(projectDir) {
@@ -219,7 +184,7 @@ function isGoalModeActive(projectDir, sessionId) {
   if (!sessionId) return false;
   try {
     const mangled = mangleProjectDir(projectDir);
-    const transcriptPath = join4(
+    const transcriptPath = join3(
       homedir2(),
       ".claude",
       "projects",
@@ -233,7 +198,7 @@ function isGoalModeActive(projectDir, sessionId) {
       return false;
     }
     if (size === 0 || size > MAX_TRANSCRIPT_BYTES) return false;
-    const text = readFileSync3(transcriptPath, "utf-8");
+    const text = readFileSync2(transcriptPath, "utf-8");
     return detectGoalActiveFromTranscript(text) === true;
   } catch {
     return false;
@@ -261,7 +226,7 @@ function resolveEffectivePermissionMode(projectDir, sessionId) {
   if (!sessionId) return null;
   try {
     const mangled = mangleProjectDir(projectDir);
-    const transcriptPath = join4(
+    const transcriptPath = join3(
       homedir2(),
       ".claude",
       "projects",
@@ -275,7 +240,7 @@ function resolveEffectivePermissionMode(projectDir, sessionId) {
       return null;
     }
     if (size === 0 || size > MAX_TRANSCRIPT_BYTES) return null;
-    const text = readFileSync3(transcriptPath, "utf-8");
+    const text = readFileSync2(transcriptPath, "utf-8");
     return detectUnderlyingPermissionMode(text);
   } catch {
     return null;
@@ -306,7 +271,7 @@ function emitDeny(reason) {
 }
 function main() {
   try {
-    const raw = readFileSync3(0, "utf-8");
+    const raw = readFileSync2(0, "utf-8");
     if (!raw.trim()) {
       emitAllow();
       return;
@@ -325,12 +290,6 @@ function main() {
     const sessionId = input.session_id || "";
     const bypassEnv = process.env.BYPASS_PLAN_GATE === "1";
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-    let ralphActive = false;
-    try {
-      ralphActive = isRalphActive(projectDir).active;
-    } catch {
-      ralphActive = false;
-    }
     let goalActive = false;
     try {
       goalActive = isGoalModeActive(projectDir, sessionId);
@@ -351,7 +310,6 @@ function main() {
     const decision = decideGate({
       toolName: input.tool_name,
       bypassEnv,
-      ralphActive,
       goalActive,
       permissionMode
     });
@@ -360,32 +318,31 @@ function main() {
     } catch {
     }
     if (decision.action === "ask") {
-      log2.info("Forcing plan-mode approval dialog", {
+      log.info("Forcing plan-mode approval dialog", {
         sessionId,
         rawPermissionMode,
         permissionMode
       });
       emitAsk(decision.reason);
     } else if (decision.action === "deny") {
-      log2.info("Denying ExitPlanMode in bypass-permissions mode", {
+      log.info("Denying ExitPlanMode in bypass-permissions mode", {
         sessionId,
         rawPermissionMode,
         permissionMode
       });
       emitDeny(decision.reason);
     } else {
-      log2.info("Allowing ExitPlanMode without prompt", {
+      log.info("Allowing ExitPlanMode without prompt", {
         sessionId,
         bypassEnv,
         goalActive,
-        ralphActive,
         rawPermissionMode,
         permissionMode
       });
       emitAllow();
     }
   } catch (err) {
-    log2.error("Unexpected error, failing open", { error: String(err) });
+    log.error("Unexpected error, failing open", { error: String(err) });
     emitAllow();
   }
 }

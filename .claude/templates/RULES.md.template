@@ -208,13 +208,6 @@ Never let work evaporate into a closed session. Persistent artifacts > ephemeral
 
 ## Workflow Enforcement [CRITICAL]
 
-### Ralph Mode [C:10]
-
-When Ralph is active, the `ralph-delegation-enforcer` hook LOGS delegation activity but does NOT block tools -- soft enforcement since 2026-04-23 (it cannot distinguish orchestrator from sub-agents on a shared session_id, so blocking caused broad collateral damage). "Ralph orchestrates -> agents implement" is a convention maintained by prompts + CLAUDE.md, not a hook denial.
-- Ralph proposes work -> delegates to agents -> should not touch code directly (convention, not hook-enforced)
-- The real post-plan code-edit gate is the SEPARATE `plan-to-ralph-enforcer` hook -- it denies Edit/Write on code files after ExitPlanMode unless Ralph is active (see `plan-to-ralph-enforcement.md`)
-- Bounded iterations: 10 (small), 30 (medium), 50 (large) -- escalate after limit
-
 ### Maestro Mode [C:10]
 
 When Maestro is active, agents are BLOCKED until interview phase completes.
@@ -235,7 +228,6 @@ When a session ends with incomplete work:
 
 Retry loops are bounded -- never loop silently:
 - Max 3 attempts for self-healing (test failure -> fix -> retry)
-- Max 10/30/50 iterations for Ralph agents by task size (small/medium/large)
 - Escalate to user after limit with: what was tried, what failed, recommended next step
 
 ### External Verification [H:8]

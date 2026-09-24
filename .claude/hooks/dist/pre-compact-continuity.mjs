@@ -215,144 +215,7 @@ if (isMainModule) {
   console.log(generateAutoHandoff(summary, sessionName));
 }
 
-// src/shared/state-schema.ts
-import { existsSync as existsSync3, readFileSync as readFileSync2 } from "fs";
-import { join as join2 } from "path";
-
-// src/shared/logger.ts
-import { appendFileSync, existsSync as existsSync2, mkdirSync, statSync, renameSync } from "fs";
-import { dirname, join } from "path";
-import { homedir } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
-var LOG_DIR = dirname(LOG_FILE);
-var MAX_LOG_SIZE = 5 * 1024 * 1024;
-var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
-var LEVEL_ORDER = {
-  debug: 0,
-  info: 1,
-  warn: 2,
-  error: 3
-};
-function shouldLog(level) {
-  return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
-}
-function ensureLogDir() {
-  if (!existsSync2(LOG_DIR)) {
-    mkdirSync(LOG_DIR, { recursive: true });
-  }
-}
-function rotateIfNeeded() {
-  try {
-    if (existsSync2(LOG_FILE)) {
-      const stat = statSync(LOG_FILE);
-      if (stat.size > MAX_LOG_SIZE) {
-        const rotated = LOG_FILE + ".1";
-        renameSync(LOG_FILE, rotated);
-      }
-    }
-  } catch {
-  }
-}
-function getSessionId() {
-  return process.env.CLAUDE_SESSION_ID || void 0;
-}
-function writeLog(entry) {
-  try {
-    ensureLogDir();
-    rotateIfNeeded();
-    appendFileSync(LOG_FILE, JSON.stringify(entry) + "\n");
-  } catch {
-  }
-}
-function createLogger(hookName) {
-  function log2(level, msg, data) {
-    if (!shouldLog(level)) return;
-    const entry = {
-      ts: (/* @__PURE__ */ new Date()).toISOString(),
-      level,
-      hook: hookName,
-      msg,
-      sessionId: getSessionId()
-    };
-    if (data && Object.keys(data).length > 0) {
-      entry.data = data;
-    }
-    writeLog(entry);
-    if (level === "error" || level === "warn") {
-      console.error(`[${hookName}] ${level.toUpperCase()}: ${msg}`);
-    }
-  }
-  return {
-    debug: (msg, data) => log2("debug", msg, data),
-    info: (msg, data) => log2("info", msg, data),
-    warn: (msg, data) => log2("warn", msg, data),
-    error: (msg, data) => log2("error", msg, data)
-  };
-}
-
-// src/shared/state-schema.ts
-var log = createLogger("state-schema");
-function readRalphUnifiedState(projectDir) {
-  const dir = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const statePath = join2(dir, ".ralph", "state.json");
-  if (!existsSync3(statePath)) return null;
-  try {
-    const content = readFileSync2(statePath, "utf-8");
-    const state = JSON.parse(content);
-    if (!state.version || !state.version.startsWith("2.")) {
-      log.warn("Ralph unified state version mismatch (expected 2.x) \u2014 returning null", {
-        version: state.version,
-        statePath: join2(dir, ".ralph", "state.json")
-      });
-      return null;
-    }
-    return state;
-  } catch (err) {
-    log.warn("Failed to read Ralph unified state", { error: String(err) });
-    return null;
-  }
-}
-
 // src/pre-compact-continuity.ts
-function getRalphStateYaml(projectDir) {
-  try {
-    const state = readRalphUnifiedState(projectDir);
-    if (!state) return null;
-    const hasActive = state.session?.active === true;
-    const inProgress = (state.tasks || []).filter((t) => t.status === "in_progress" || t.status === "in-progress");
-    const completed = (state.tasks || []).filter((t) => t.status === "complete" || t.status === "completed");
-    const problemTasks = (state.tasks || []).filter(
-      (t) => ["failed", "blocked", "paused", "cancelled"].includes(t.status)
-    );
-    const total = (state.tasks || []).length;
-    if (!hasActive && inProgress.length === 0 && problemTasks.length === 0) return null;
-    const currentTaskName = inProgress.length > 0 ? (inProgress[0].name || inProgress[0].id || "current task").replace(/"/g, '\\"') : "orchestration complete";
-    const lines = [];
-    lines.push(`ralph_state:`);
-    lines.push(`  story_id: "${state.story_id || "unknown"}"`);
-    lines.push(`  stage: "${state.stage || "unknown"}"`);
-    lines.push(`  iteration: ${state.iteration || 0}`);
-    lines.push(`  max_iterations: ${state.max_iterations || 30}`);
-    lines.push(`  progress: "${completed.length}/${total} tasks complete"`);
-    lines.push(`  retry_queue_size: ${(state.retry_queue || []).length}`);
-    if (inProgress.length > 0) {
-      lines.push(`  active_task:`);
-      lines.push(`    id: "${inProgress[0].id}"`);
-      lines.push(`    name: "${(inProgress[0].name || "").replace(/"/g, '\\"')}"`);
-      lines.push(`    agent: "${inProgress[0].agent || "unassigned"}"`);
-    }
-    const pending = (state.tasks || []).filter((t) => t.status === "pending");
-    if (pending.length > 0) {
-      lines.push(`  pending_tasks: [${pending.slice(0, 10).map((t) => `"${t.id}"`).join(", ")}]`);
-    }
-    if (problemTasks.length > 0) {
-      lines.push(`  problem_tasks: [${problemTasks.slice(0, 10).map((t) => `"${t.id}(${t.status})"`).join(", ")}]`);
-    }
-    return lines.join("\n");
-  } catch {
-    return null;
-  }
-}
 async function main() {
   const input = JSON.parse(await readStdin());
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
@@ -377,9 +240,7 @@ async function main() {
         const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
         handoffFile = `auto-handoff-${timestamp}.yaml`;
         const handoffPath = path.join(handoffDir, handoffFile);
-        const ralphYaml2 = getRalphStateYaml(projectDir);
-        const finalContent = ralphYaml2 ? handoffContent + "\n\n" + ralphYaml2 + "\n" : handoffContent;
-        fs2.writeFileSync(handoffPath, finalContent);
+        fs2.writeFileSync(handoffPath, handoffContent);
         const briefSummary = generateAutoSummary(projectDir, input.session_id);
         if (briefSummary) {
           appendToLedger(ledgerPath, briefSummary);
@@ -394,35 +255,6 @@ async function main() {
     } else {
       ledgerMessage = `[PreCompact] Consider updating ledger before compacting: /continuity_ledger
 Ledger: ${mostRecent}`;
-    }
-  }
-  const ralphYaml = getRalphStateYaml(projectDir);
-  if (ralphYaml) {
-    if (handoffFile) {
-      ledgerMessage += " (Ralph state preserved)";
-    } else {
-      const handoffDir = path.join(projectDir, "thoughts", "shared", "handoffs", "ralph-auto");
-      fs2.mkdirSync(handoffDir, { recursive: true });
-      const timestamp = (/* @__PURE__ */ new Date()).toISOString().replace(/[:.]/g, "-").slice(0, 19);
-      const ralphHandoffFile = `ralph-handoff-${timestamp}.yaml`;
-      const storyId = ralphYaml.match(/story_id:\s*"([^"]+)"/)?.[1] || "";
-      const currentTask = ralphYaml.match(/name:\s*"([^"]+)"/)?.[1] || "orchestration";
-      const goal = storyId ? `Ralph orchestration for story ${storyId}` : `Ralph orchestration: ${currentTask}`;
-      fs2.writeFileSync(
-        path.join(handoffDir, ralphHandoffFile),
-        `---
-type: auto-handoff
-session: ralph-auto
-date: ${(/* @__PURE__ */ new Date()).toISOString().split("T")[0]}
----
-
-goal: "${goal}"
-now: "${currentTask}"
-
-${ralphYaml}
-`
-      );
-      ledgerMessage = `[PreCompact] Ralph state preserved to thoughts/shared/handoffs/ralph-auto/${ralphHandoffFile}`;
     }
   }
   const output = {

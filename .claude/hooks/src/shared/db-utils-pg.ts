@@ -1531,7 +1531,7 @@ export function getListenCommand(channel: string): string {
 }
 
 // =============================================================================
-// COORDINATION LAYER: Agent Tracking (Ralph Error Escalation)
+// COORDINATION LAYER: Agent Tracking
 // =============================================================================
 
 // Type definitions for agents

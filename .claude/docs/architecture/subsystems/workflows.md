@@ -7,7 +7,6 @@
 │                    WORKFLOWS                                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  /ralph    - Autonomous dev: PRD → Tasks → Delegate → Verify│
 │  /maestro  - Coordinate multiple specialists               │
 │  /fix      - Debug → Implement → Test                      │
 │  /build    - Plan → Implement → Review                     │
@@ -19,47 +18,10 @@
 └─────────────────────────────────────────────────────────────┘
 ```
 
-## /ralph Workflow
-
-Maestro's **autonomous development mode** (GSD lifecycle). Ralph orchestrates
-specialized agents to take a defined requirement from PRD through verified
-implementation. **Ralph NEVER edits code directly** — it delegates ALL
-implementation to agents (kraken, spark, arbiter, debug-agent, etc.) via the
-Task tool. It is not an idea-generation or brainstorm pipeline.
-
-```
-Phase 0   → 0.5   → 1    → 2     → 2.5      → 3        → 4      → 4.1.5
-Context     Deep    PRD    Task    Premortem  Delegation Review   Goal
-loading     research        breakdown (adversarial loop      & merge  verify
-(memory +  (optional)              gate)      (spawn
- tree)                                          agents)
-```
-
-**Phases:**
-1. **Phase 0** - Context loading (memory recall + knowledge tree)
-2. **Phase 0.5** - Deep research (optional, for complex features)
-3. **Phase 1** - PRD generation (ai-dev-tasks templates)
-4. **Phase 2** - Task breakdown (`generate-tasks.md`)
-5. **Phase 2.5** - Adversarial plan gate (`/premortem`, includes a codex-adversary cross-model pass)
-6. **Phase 3** - Delegation loop (spawn agents; each must emit a `ralph_status` JSON)
-7. **Phase 4** - Review & merge
-8. **Phase 4.1.5** - Goal verification
-
-**Enforcement:** After plan approval, the `plan-to-ralph-enforcer` hook blocks
-direct code edits (Edit/Write on `.ts`/`.py`/etc.) — implementation must flow
-through delegated agents. The `ralph-delegation-enforcer` hook blocks
-Edit/Write/Bash for implementation while Ralph mode is active.
-
-**Bounded iterations:** 10 (small) / 30 (medium) / 50 (large) — Ralph escalates
-to the user after hitting the limit rather than looping silently.
-
-**Usage:** `/ralph "build a task management app"`
-
 ## /premortem Workflow
 
 First-class adversarial failure-mode analysis of an approved plan. Auto-offered
-by the `plan-exit-premortem-prompt` hook after every `ExitPlanMode`, and run as
-Phase 2.5 inside `/ralph`.
+by the `plan-exit-premortem-prompt` hook after every `ExitPlanMode`.
 
 ```
 Plan ──→ Imagine failure modes ──→ codex-adversary ──→ Folded mitigations
@@ -190,5 +152,4 @@ Skills in `~/.claude/skills/` can compose workflows:
 | Single focused task | Direct agent |
 | Multi-step with dependencies | Workflow |
 | Need coordination | /maestro |
-| Autonomous feature build (PRD → verified impl) | /ralph |
 | Stress-test a plan before building | /premortem |

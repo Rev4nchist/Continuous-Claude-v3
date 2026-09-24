@@ -9,8 +9,6 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 | `rules/*.md` | Yes | Post-commit hook copies | N/A |
 | `skills/*/` | Yes | Post-commit hook copies | N/A |
 | `agents/*.yml` | Yes | Post-commit hook copies | N/A |
-| `scripts/ralph/*.py` | Yes (NEW) | Enhanced sync script | `bash scripts/sync-to-active.sh` |
-| `templates/ralph/*` | Yes (NEW) | Enhanced sync script | `bash scripts/sync-to-active.sh` |
 | `docs/**/*.md` | Yes (NEW) | Added to SYNC_DIRS | `bash scripts/sync-to-active.sh` |
 | `project-registry.json` | Yes (2026-07-15) | Repo copy is canonical; JSON-validated copy in BOTH full and `--changed` modes; active mirror never auto-deleted | `bash scripts/sync-to-active.sh` |
 | `settings.json` | NO | Intentional — local config | Manual copy (risky) |

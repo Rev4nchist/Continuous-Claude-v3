@@ -21,7 +21,7 @@
 | Hooks | Intercept & modify Claude behavior | `.claude/hooks/` |
 | Agents | Specialized task delegation | Task tool |
 | PageIndex | Document navigation & search | `pageindex_cli.py` |
-| Workflows | Multi-step orchestration | `/ralph`, `/maestro` |
+| Workflows | Multi-step orchestration | `/maestro` |
 | Braintrust | Observability — score system performance | `emitBraintrustScore()`, `judge_session.py` |
 | RLM | Analyze inputs that overflow the context window — the large-context escape hatch (dormant; Docker-gated) | `/rlm-analyze`, `rlm_client.py` |
 
@@ -36,8 +36,8 @@
         ▼           ▼           ▼           ▼           ▼           ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
 │  MEMORY  │ │  HOOKS   │ │  AGENTS  │ │ PAGEINDEX│ │ WORKFLOWS│ │BRAINTRUST│
-│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Ralph/    │ │7 scores +│
-│+pgvector │ │ → dist   │ │ delegate │ │LLM reason│ │Maestro   │ │3 judges  │
+│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Maestro   │ │7 scores +│
+│+pgvector │ │ → dist   │ │ delegate │ │LLM reason│ │          │ │3 judges  │
 └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
 
@@ -58,7 +58,7 @@ For current inventory: see [agent-skill-map.md](../agent-skill-map.md), [hook-ca
 - [ROADMAP System](subsystems/roadmap.md) - Goal tracking, 4 hooks, /roadmap skill
 - [Hook System](subsystems/hooks.md) - Lifecycle, blocking, patterns
 - [Agent Orchestration](subsystems/agents.md) - When to use which agent
-- [Workflows](subsystems/workflows.md) - Ralph, Maestro, compound workflows
+- [Workflows](subsystems/workflows.md) - Maestro, compound workflows
 - [Braintrust Observability](subsystems/braintrust.md) - 7 deterministic scores + 3 LLM judges, audit invariant, judge runner
 
 **Phase 5 design docs (../):**

@@ -759,9 +759,6 @@ export function route(input: SkillRouterAPIInput): SkillRouterAPIOutput {
     const pattern = (current_pattern as OrchestrationPattern) ||
         recommendPattern(task, context, skills, complexity.total);
 
-    // Suggest Ralph for greenfield
-    const suggestRalph = greenfield > 0.4;
-
     return {
         skills,
         agents,
@@ -769,7 +766,6 @@ export function route(input: SkillRouterAPIInput): SkillRouterAPIOutput {
         recommended_pattern: pattern,
         llm_assisted: false,
         greenfield_score: Math.round(greenfield * 1000) / 1000,
-        suggest_ralph: suggestRalph,
     };
 }
 

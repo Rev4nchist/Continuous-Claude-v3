@@ -5,69 +5,16 @@
  * Invalid state is logged and treated as absent (fail open).
  *
  * Usage:
- *   import { validateRalphState, validateMaestroState } from './shared/state-schema.js';
+ *   import { validateMaestroState } from './shared/state-schema.js';
  *   const state = JSON.parse(content);
- *   const valid = validateRalphState(state);
+ *   const valid = validateMaestroState(state);
  *   if (!valid) return null; // treat as no state
  */
 
-import { existsSync, readFileSync } from 'fs';
-import { join } from 'path';
 import { createLogger } from './logger.js';
 // Legacy getStatePathWithMigration import removed — unified state only
 
 const log = createLogger('state-schema');
-
-// ─── Ralph State ─────────────────────────────────────────
-
-export interface RalphState {
-  active: boolean;
-  storyId: string;
-  activatedAt: number;
-  lastActivity?: number;
-  sessionId?: string;
-}
-
-/**
- * Validate a parsed object as RalphState.
- * Returns the typed state if valid, null if invalid.
- */
-export function validateRalphState(obj: unknown, sessionId?: string): RalphState | null {
-  if (!obj || typeof obj !== 'object') {
-    log.warn('Ralph state is not an object', { received: typeof obj, sessionId });
-    return null;
-  }
-
-  const s = obj as Record<string, unknown>;
-
-  if (typeof s.active !== 'boolean') {
-    log.warn('Ralph state missing or invalid "active" field', { value: s.active, sessionId });
-    return null;
-  }
-
-  if (typeof s.storyId !== 'string' || s.storyId.length === 0) {
-    log.warn('Ralph state missing or invalid "storyId" field', { value: s.storyId, sessionId });
-    return null;
-  }
-
-  if (typeof s.activatedAt !== 'number' || s.activatedAt <= 0) {
-    log.warn('Ralph state missing or invalid "activatedAt" field', { value: s.activatedAt, sessionId });
-    return null;
-  }
-
-  // Optional fields — validate type if present
-  if (s.lastActivity !== undefined && typeof s.lastActivity !== 'number') {
-    log.warn('Ralph state invalid "lastActivity" field', { value: s.lastActivity, sessionId });
-    return null;
-  }
-
-  if (s.sessionId !== undefined && typeof s.sessionId !== 'string') {
-    log.warn('Ralph state invalid "sessionId" field', { value: s.sessionId, sessionId });
-    return null;
-  }
-
-  return obj as RalphState;
-}
 
 // ─── Maestro State ───────────────────────────────────────
 
@@ -130,65 +77,4 @@ export function validateMaestroState(obj: unknown, sessionId?: string): MaestroS
   }
 
   return obj as MaestroState;
-}
-
-// ─── Ralph Unified State (v2) ────────────────────────────
-
-export interface RalphSessionState {
-  active: boolean;
-  story_id: string;
-  activated_at: number | string;
-  last_activity?: number;  // epoch ms from Python
-}
-
-export interface RalphUnifiedState {
-  version: string;
-  story_id: string;
-  stage?: string;
-  iteration?: number;
-  max_iterations?: number;
-  session: RalphSessionState;
-  tasks: Array<{ id: string; status: string; name?: string; agent?: string; [key: string]: unknown }>;
-  retry_queue: unknown[];
-  checkpoints: unknown[];
-}
-
-/**
- * Read the unified Ralph state from .ralph/state.json.
- * Returns null if file doesn't exist or is invalid.
- */
-export function readRalphUnifiedState(projectDir?: string): RalphUnifiedState | null {
-  const dir = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  const statePath = join(dir, '.ralph', 'state.json');
-
-  if (!existsSync(statePath)) return null;
-
-  try {
-    const content = readFileSync(statePath, 'utf-8');
-    const state = JSON.parse(content);
-    if (!state.version || !state.version.startsWith('2.')) {
-      log.warn('Ralph unified state version mismatch (expected 2.x) — returning null', {
-        version: state.version,
-        statePath: join(dir, '.ralph', 'state.json')
-      });
-      return null;
-    }
-    return state as RalphUnifiedState;
-  } catch (err) {
-    log.warn('Failed to read Ralph unified state', { error: String(err) });
-    return null;
-  }
-}
-
-/**
- * Check if Ralph is active via unified .ralph/state.json.
- * Returns { active, storyId, source }.
- */
-export function isRalphActive(projectDir?: string): { active: boolean; storyId: string; source: string } {
-  const unified = readRalphUnifiedState(projectDir);
-  if (unified?.session?.active) {
-    return { active: true, storyId: unified.story_id, source: 'unified' };
-  }
-
-  return { active: false, storyId: '', source: 'none' };
 }

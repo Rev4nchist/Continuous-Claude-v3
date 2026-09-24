@@ -10,8 +10,8 @@
  *      from `process.env`, which never carries them -- fixed by making that
  *      module load `~/.claude/.env` the way the Python hook always has.
  *
- *   2. THIS one. `hook-health-monitor`, `ralph-task-monitor` and
- *      `telemetry-tracker` each resolved their span from
+ *   2. THIS one. `hook-health-monitor` and `telemetry-tracker` each
+ *      resolved their span from
  *      `process.env.BRAINTRUST_SESSION_ID` -- a variable set NOWHERE. Not the
  *      process environment, not `~/.claude/.env`, not the `settings.json` env
  *      block (all three checked). So `spanId` was always empty and

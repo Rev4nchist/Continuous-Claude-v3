@@ -120,7 +120,7 @@ Do not rely on spark's self-reported `Audit: PASS` alone — spark may have run 
 
 This is the missing exit ramp — without it, the orchestrator can loop on the same regression by re-prompting the same spark.
 
-## Multi-Agent Orchestration (kraken/Ralph waves)
+## Multi-Agent Orchestration (kraken waves)
 
 Hard-won from the PR #14 build (a registry + 6-pipeline feature built by ~8 sequential kraken waves, 2026-07-06):
 
@@ -133,9 +133,9 @@ When multiple agents (kraken/spark) both **edit and commit to the same repo**, r
 
 Batch related work into one agent when files overlap (e.g. the `#5 NTN_EXE` de-dup touched a file the Phase-3 agent also edited → gate the second wave behind the first).
 
-### Externally verify every agent — NEVER trust `ralph_status` alone [C:9]
+### Externally verify every agent — NEVER trust its self-reported status alone [C:9]
 
-After an agent reports `{"ralph_status": {"status": "complete"}}`, the orchestrator **independently re-checks against REAL state** before marking done:
+After an agent reports `{"status": "complete"}`, the orchestrator **independently re-checks against REAL state** before marking done:
 - **`git show <commit> --stat`** — the claimed files/commit actually landed.
 - **Re-run the test suite yourself** — agents can run the audit *before* their last edit, or over-report ("5 passed" when the summary line said `tests 1`). Use the exact reporter (`--test-reporter=spec` when the top-line count looks wrong).
 - **Query the real external system** — the actual Notion DB row count, the live page, the DB state — not the agent's narration. (Kraken correctly *declined* a live mutating smoke per the confirm-first rule; the orchestrator ran it + cleaned up.)
