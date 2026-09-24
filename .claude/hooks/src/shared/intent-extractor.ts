@@ -84,8 +84,10 @@ export function extractIntent(prompt: string): string {
 // ---------------------------------------------------------------------------
 
 // Known Claude Code synthetic-prompt wrapper tags + any *-hook wrapper.
+// agent-message / teammate-message: subagent hand-backs and peer messages arrive as a
+// UserPromptSubmit turn too; one was stored as a "User confirmed" memory (2026-09-23 eval, P29).
 const SYNTHETIC_TAG =
-  /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+  /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
 
 const MAX_HUMAN_PROMPT_LEN = 8000;
 

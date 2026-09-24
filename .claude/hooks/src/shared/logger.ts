@@ -12,7 +12,7 @@
  */
 
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from 'fs';
-import { join } from 'path';
+import { dirname, join } from 'path';
 import { homedir } from 'os';
 
 export type LogLevel = 'debug' | 'info' | 'warn' | 'error';
@@ -33,8 +33,11 @@ export interface Logger {
   error(msg: string, data?: Record<string, unknown>): void;
 }
 
-const LOG_DIR = join(homedir(), '.claude', 'logs');
-const LOG_FILE = join(LOG_DIR, 'hooks.log');
+// CLAUDE_HOOK_LOG_FILE redirects the log. vitest.config.ts sets it to a temp file, so test
+// runs (and the hook subprocesses they spawn, which inherit the env) stop writing fixture
+// rows into the live ~/.claude/logs/hooks.log. Those rows were 38% of its session rows.
+const LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), '.claude', 'logs', 'hooks.log');
+const LOG_DIR = dirname(LOG_FILE);
 const MAX_LOG_SIZE = 5 * 1024 * 1024; // 5MB before rotation
 const MIN_LEVEL: LogLevel = (process.env.CLAUDE_HOOK_LOG_LEVEL as LogLevel) || 'info';
 

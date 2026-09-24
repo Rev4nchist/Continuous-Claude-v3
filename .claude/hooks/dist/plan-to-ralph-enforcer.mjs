@@ -64,10 +64,10 @@ import {
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync as existsSync2, mkdirSync, statSync as statSync2, renameSync } from "fs";
-import { join as join2 } from "path";
+import { dirname, join as join2 } from "path";
 import { homedir } from "os";
-var LOG_DIR = join2(homedir(), ".claude", "logs");
-var LOG_FILE = join2(LOG_DIR, "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {

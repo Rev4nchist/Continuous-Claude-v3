@@ -43,6 +43,17 @@ describe('isMachineGeneratedPrompt', () => {
       expect(isMachineGeneratedPrompt('<something-hook>payload</something-hook>')).toBe(true);
     });
 
+    it('flags a subagent hand-back (<agent-message from=...>) that says "yes, done"', () => {
+      // The exact shape that was stored as a "User confirmed" memory (P29).
+      expect(
+        isMachineGeneratedPrompt('<agent-message from="a2cee616b50556208"> [Subagent hand-back] yes, that works, done </agent-message>'),
+      ).toBe(true);
+    });
+
+    it('flags a peer <teammate-message> wrapper', () => {
+      expect(isMachineGeneratedPrompt('<teammate-message teammate_id="x">looks good</teammate-message>')).toBe(true);
+    });
+
     it('flags a string CONTAINING <task-notification not at the very start', () => {
       expect(isMachineGeneratedPrompt('here is a blob: <task-notification>foo</task-notification>')).toBe(true);
     });
