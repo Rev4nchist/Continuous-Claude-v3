@@ -28,11 +28,9 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 |------|-------------|
 | heartbeat | Session keepalive heartbeat to PostgreSQL |
 | maestro-state-manager | Manage Maestro workflow phase state |
-| guardrail-enforcer | Enforce operational guardrails on user prompts |
 | ~~skill-activation-prompt~~ | ARCHIVED/DEREGISTERED 2026-08-31 (was: detect skill trigger keywords in user input) |
 | memory-awareness | Inject relevant memories from semantic search |
 | pageindex-navigator | Route to PageIndex for document queries (disabled 2026-06-01; on-demand only) |
-| maestro-detector | Detect /maestro workflow activation |
 | user-confirmation-detector | Detect user confirmations for gated operations |
 | braintrust_hooks user_prompt_submit | Braintrust prompt-level tracing |
 

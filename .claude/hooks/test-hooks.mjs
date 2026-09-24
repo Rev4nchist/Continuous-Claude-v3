@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 /**
  * Hook Unit Tests
- * Tests maestro-detector, maestro-state-manager, maestro-enforcer, ralph-delegation-enforcer, memory-awareness
+ * Tests maestro-state-manager, maestro-enforcer, ralph-delegation-enforcer, memory-awareness
  */
 
 import { spawn } from 'child_process';
@@ -97,35 +97,6 @@ function assert(condition, msg) {
 function isContinue(output) {
   return output === '{}' || output === '{"result":"continue"}';
 }
-
-// ============ MAESTRO DETECTOR TESTS ============
-
-const detectorTests = [
-  test('Detector: Complex request triggers suggestion', async () => {
-    const { stdout } = await runHook('maestro-detector', {
-      prompt: 'Build an authentication system with JWT tokens and add comprehensive tests, then deploy to staging'
-    });
-    assert(stdout.includes('MAESTRO ORCHESTRATION SUGGESTED'), 'Should suggest maestro');
-    assert(stdout.includes('confidence'), 'Should show confidence');
-  }),
-
-  test('Detector: Simple request does not trigger', async () => {
-    const { stdout } = await runHook('maestro-detector', { prompt: 'Fix the typo in README.md' });
-    assert(isContinue(stdout), 'Should output continue (no suggestion)');
-  }),
-
-  test('Detector: Already invoking maestro skips detection', async () => {
-    const { stdout } = await runHook('maestro-detector', {
-      prompt: 'Use maestro to build the authentication system'
-    });
-    assert(isContinue(stdout), 'Should skip when already mentioning maestro');
-  }),
-
-  test('Detector: Short prompts skip', async () => {
-    const { stdout } = await runHook('maestro-detector', { prompt: 'Hello' });
-    assert(isContinue(stdout), 'Should skip short prompts');
-  }),
-];
 
 // ============ MAESTRO STATE MANAGER TESTS ============
 
@@ -370,9 +341,6 @@ async function runAll() {
   console.log('\n========================================');
   console.log('      HOOK UNIT TESTS');
   console.log('========================================\n');
-
-  console.log('--- MAESTRO DETECTOR ---');
-  for (const t of detectorTests) await t();
 
   console.log('\n--- MAESTRO STATE MANAGER ---');
   for (const t of stateManagerTests) await t();

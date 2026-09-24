@@ -1,7 +1,6 @@
 # CLAUDE.md — Global Configuration
 
 @RULES.md
-@docs/architecture/INDEX.md
 
 ## Philosophy
 
@@ -294,7 +293,7 @@ ROADMAP hooks include a cross-project contamination guard that checks plan conte
 
 ## System Capabilities
 
-Inventory lives in `docs/architecture/INDEX.md` (included above): memory (PostgreSQL + pgvector,
+Inventory lives in `~/.claude/docs/architecture/INDEX.md` (not imported; read it when you need the map): memory (PostgreSQL + pgvector,
 `recall_learnings.py` / `store_learning.py`), 30+ agents, TLDR CLI, OpenCLI, Notion Bridge, PageIndex,
 cross-session coordination. Each has a rule or a skill that loads on trigger; this file does not
 repeat them. Read CONTEXT.md at the repo root for the terms we use.

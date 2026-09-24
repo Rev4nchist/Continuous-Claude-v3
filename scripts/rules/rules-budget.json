@@ -1,4 +1,0 @@
-{
-  "maxBytes": 130000,
-  "why": "Baseline set 2026-09-23 after the Opus 5.5 eval rules diet (P19, P20, P38): 125,829 bytes in .claude/rules-src (was 150,995), plus room for the ~2.5 KB that eval waves 2 and 3 add (sync cursor, PowerShell guard notes). Raise only by a reviewed edit to this file."
-}

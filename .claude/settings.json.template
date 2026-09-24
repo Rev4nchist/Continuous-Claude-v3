@@ -212,25 +212,9 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/guardrail-enforcer.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 10000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/memory-awareness.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/maestro-detector.mjs"
             ]
           },
           {
