@@ -14,7 +14,7 @@ That premise was false and unsafe:
 - The named "pre-authorized redirects" (Task->Agentica, Grep->AST-grep) are **dead** — they were
   registered under the `'Agent'` matcher while the live tool emits `'Task'`, so no hook emits the
   cited `Routing to ...` pattern anymore.
-- The live denier whose messages this rule actually auto-executed is `smart-search-router`, whose
+- The hook whose messages this rule used to auto-execute was `smart-search-router` (today it is a silent context producer for `tldr-read-enforcer`, not a denier), whose
   suggestions have included a **banned Explore spawn** and a **Windows-broken `rg` fallback**.
 - Auto-running text from a deny reason is a prompt-injection / privilege-escalation surface: a
   buggy or attacker-influenced reason becomes an unprompted command.
