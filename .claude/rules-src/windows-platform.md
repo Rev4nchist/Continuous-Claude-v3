@@ -144,7 +144,7 @@ Remove any such link before `git worktree remove --force` on a worktree that hol
   rewrite; `scripts/github/gh-shim.ps1` in the PowerShell profiles). Scripts that call `gh` directly use `gh-for.ps1`.
 - **Do not suggest `gh auth refresh`**: it cannot fix an env-var token. "Repository not found" on a repo you own
   means the wrong account answered. Check with `pwsh -File scripts/github/verify-github-accounts.ps1`.
-- `--web` login stores the account the BROWSER holds. Verify with `GH_CONFIG_DIR=<dir> gh api user --jq .login`.
+- `--web` login stores the account the BROWSER holds. Verify with the same script; it clears `GH_TOKEN`/`GITHUB_TOKEN` first.
 
 History, the corrections of 2026-08-05/11, rollback, and re-authenticating after a revoked OAuth grant:
 `docs/github/auth-routing.md`.

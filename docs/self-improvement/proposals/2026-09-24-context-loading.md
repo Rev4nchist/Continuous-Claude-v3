@@ -46,7 +46,7 @@ file conventions behind `paths:`. Put procedures in skills.
 |---|---|---|
 | codex-worker-safety (12.1k), codex-adversarial (4.6k), harness-update (2.8k) | 2 + enforce existing gates | Bash/PowerShell `codex `; Agent `codex-*`; `/harness-update` |
 | grok-worker-safety (1.7k) | 2 | `grok ` |
-| cma-safety (3.0k) | 2 + ask on billable calls | `ant `, api.anthropic.com `/v1/(agents|sessions|deployments)` |
+| cma-safety (3.0k) | 2 + ask on billable calls | `ant `, api.anthropic.com `/v1/(agents\|sessions\|deployments)` |
 | notion-cli-safety (4.1k), railway (1.4k), neonctl (0.8k), kusto (0.8k), sentry (0.5k), linear (0.4k) | 2 | the CLI name at a command position |
 | git-merge-workflow (6.2k) | 2 | `gh api .../merge`, `git merge`, `land-pr.ps1` |
 | pr-and-commit-style (2.1k) | 2 | `git commit`, `git-safe.ps1 ... commit`, `gh pr create`, `pulls -X POST` |

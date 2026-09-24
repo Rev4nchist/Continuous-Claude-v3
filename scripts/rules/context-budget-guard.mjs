@@ -2,23 +2,27 @@
 /**
  * context-budget-guard.mjs — ratchet on the instruction text EVERY session loads.
  *
- * Claude Code warns when its always-loaded instruction files pass 150,000 characters. That set is:
- * CLAUDE.md, every file it @-imports (recursively), and every rule in rules/ WITHOUT `paths:`
- * frontmatter (a path-scoped rule loads only when matching files are in play). The old
- * rules-budget-guard counted only the bytes of .claude/rules-src, so on 2026-09-24 the real set
- * reached 42 files / 153,689 chars while that guard still passed.
+ * Claude Code warns when its always-loaded instruction files pass 150,000 characters. That set is,
+ * for the user scope (~/.claude) and for the project a session runs in: CLAUDE.md, every file it
+ * @-imports (recursively), and every rule in rules/ WITHOUT `paths:` frontmatter (a path-scoped
+ * rule loads only when matching files are in play). The old rules-budget-guard counted only the
+ * bytes of .claude/rules-src, so on 2026-09-24 the real set reached 42 files / 153,689 chars while
+ * that guard still passed.
  *
  * Modes:
- *   (default)        the active set under ~/.claude — the number Claude Code itself reports.
- *   --repo           the repo sources that sync or are copied there: .claude/templates/CLAUDE.md.template,
- *                    RULES.md.template, .claude/<imported path>, .claude/rules-src/*.md.
- *   --repo --staged  the same, read from the git index (pre-commit).
+ *   (default)          the active user set under ~/.claude — the number Claude Code reports in a
+ *                      project with no instruction files. Add --project <dir> to include a project.
+ *   --repo             the repo sources: .claude/templates/CLAUDE.md.template, RULES.md.template,
+ *                      .claude/<imported path>, .claude/rules-src/*.md, PLUS this repo's own
+ *                      CLAUDE.md chain, because sessions that work on the harness load both.
+ *   --repo --staged    the same, read from the git index (pre-commit).
  * Fails (exit 1) when the total passes maxChars in scripts/rules/context-budget.json.
  * Exit 0 with a note on any internal error (fail-open). Add --json for machine output.
  * Lowering maxChars after a cut is how the ratchet tightens; raising it is a reviewed edit.
  */
 import { readFileSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
-import { join, dirname, resolve, relative } from 'node:path';
+import { join, dirname, resolve } from 'node:path';
+import { posix } from 'node:path';
 import { homedir } from 'node:os';
 import { fileURLToPath } from 'node:url';
 import { execFileSync } from 'node:child_process';
@@ -28,44 +32,74 @@ const repo = resolve(here, '..', '..');
 const args = process.argv.slice(2);
 const REPO = args.includes('--repo');
 const STAGED = args.includes('--staged');
-const homeArg = args.indexOf('--home');
-const HOME = homeArg >= 0 ? resolve(args[homeArg + 1]) : join(homedir(), '.claude');
+const argValue = (name) => (args.indexOf(name) >= 0 ? resolve(args[args.indexOf(name) + 1]) : null);
+const HOME = argValue('--home') ?? join(homedir(), '.claude');
+const PROJECT = REPO ? repo : argValue('--project');
 const MAX_IMPORT_DEPTH = 5; // Claude Code's documented import depth
+const PROJECT_ROOTS = ['CLAUDE.md', '.claude/CLAUDE.md', 'CLAUDE.local.md'];
 
-/** A source: `key` is the path as Claude Code sees it (relative to ~/.claude); `read` returns text or null. */
+function readFileOrNull(abs) {
+  return existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs, 'utf8') : null;
+}
+
+/**
+ * A source reads keys of the form `user/<path>` (relative to ~/.claude) and `project/<path>`
+ * (relative to the project root), and lists each scope's rule files.
+ */
 function makeSource() {
   if (!REPO) {
     return {
-      read: (key) => (existsSync(join(HOME, key)) && statSync(join(HOME, key)).isFile() ? readFileSync(join(HOME, key), 'utf8') : null),
-      rules: () => listDir(join(HOME, 'rules')).map((f) => `rules/${f}`),
+      read: (key) => {
+        const [scope, rest] = splitKey(key);
+        if (scope === 'user') return readFileOrNull(join(HOME, rest));
+        return PROJECT ? readFileOrNull(join(PROJECT, rest)) : null;
+      },
+      rules: () => [
+        ...listDir(join(HOME, 'rules')).map((f) => `user/rules/${f}`),
+        ...(PROJECT ? listDir(join(PROJECT, '.claude/rules')).map((f) => `project/.claude/rules/${f}`) : []),
+      ],
     };
   }
-  const repoPath = (key) => {
-    if (key === 'CLAUDE.md') return '.claude/templates/CLAUDE.md.template';
-    if (key === 'RULES.md') return '.claude/templates/RULES.md.template';
-    if (key.startsWith('rules/')) return `.claude/rules-src/${key.slice(6)}`;
-    return `.claude/${key}`;
+  // Repo mode: the user scope comes from the files that sync or are copied to ~/.claude.
+  const userPath = (rest) => {
+    if (rest === 'CLAUDE.md') return '.claude/templates/CLAUDE.md.template';
+    if (rest === 'RULES.md') return '.claude/templates/RULES.md.template';
+    if (rest.startsWith('rules/')) return `.claude/rules-src/${rest.slice(6)}`;
+    return `.claude/${rest}`;
   };
+  const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
   const readRepo = (p) => {
-    const abs = join(repo, p);
-    const onDisk = existsSync(abs) && statSync(abs).isFile() ? readFileSync(abs, 'utf8') : null;
+    const onDisk = readFileOrNull(join(repo, p));
     if (!STAGED) return onDisk;
     // Claude Code counts \r, and sync copies the working-tree file. So when the staged blob equals
     // the file on disk apart from line endings, count the file on disk. Otherwise count the blob in
     // checkout form (--filters applies the CRLF conversion a checkout would).
-    const git = (...a) => execFileSync('git', ['-C', repo, ...a], { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] });
     let blob;
     try { blob = git('show', `:${p}`); } catch { return null; }
     const lf = (s) => s.replace(/\r\n/g, '\n');
     if (onDisk != null && lf(onDisk) === lf(blob)) return onDisk;
     return git('cat-file', '--filters', `:${p}`);
   };
-  const rulesSrc = () => {
-    if (!STAGED) return listDir(join(repo, '.claude/rules-src'));
-    const out = execFileSync('git', ['-C', repo, 'ls-files', '--', '.claude/rules-src/*.md'], { encoding: 'utf8' });
-    return out.split('\n').filter(Boolean).map((p) => p.slice('.claude/rules-src/'.length));
+  const listRepo = (dir) => {
+    if (!STAGED) return listDir(join(repo, dir));
+    return git('ls-files', '--', `${dir}/*.md`).split('\n').filter(Boolean).map((p) => p.slice(dir.length + 1));
   };
-  return { read: (key) => readRepo(repoPath(key)), rules: () => rulesSrc().map((f) => `rules/${f}`) };
+  return {
+    read: (key) => {
+      const [scope, rest] = splitKey(key);
+      return readRepo(scope === 'user' ? userPath(rest) : rest);
+    },
+    rules: () => [
+      ...listRepo('.claude/rules-src').map((f) => `user/rules/${f}`),
+      // Never created in this repo (every-surface rule), but count it if it ever appears.
+      ...listRepo('.claude/rules').map((f) => `project/.claude/rules/${f}`),
+    ],
+  };
+}
+
+function splitKey(key) {
+  const i = key.indexOf('/');
+  return [key.slice(0, i), key.slice(i + 1)];
 }
 
 function listDir(dir) {
@@ -84,29 +118,40 @@ export function isPathScoped(text) {
   return Boolean(m && /^paths\s*:/m.test(m[1]));
 }
 
-/** @-imports outside fenced blocks and inline code, as keys relative to the importing file's folder. */
+/**
+ * @-imports outside fenced blocks and inline code, as scoped keys. A relative import resolves
+ * against the importing file's folder and stays in its scope; `@~/.claude/x` is `user/x`. Other
+ * home paths, and any path that climbs out of its scope, are outside this set and skipped.
+ */
 export function findImports(text, fromKey) {
   const stripped = text.replace(/```[\s\S]*?```/g, '').replace(/`[^`\n]*`/g, '');
+  const [scope, rest] = splitKey(fromKey);
   const keys = [];
   for (const m of stripped.matchAll(/(?:^|\s)@((?:~\/)?[\w.\-/]+[\w\-/])/g)) {
     const raw = m[1];
-    if (raw.startsWith('~/')) continue; // outside ~/.claude; not part of this set
-    const base = dirname(fromKey) === '.' ? '' : dirname(fromKey);
-    keys.push(relative('.', join(base, raw)).replace(/\\/g, '/'));
+    let target;
+    if (raw.startsWith('~/.claude/')) target = ['user', posix.normalize(raw.slice('~/.claude/'.length))];
+    else if (raw.startsWith('~/')) continue;
+    else target = [scope, posix.normalize(posix.join(posix.dirname(rest), raw))];
+    if (target[1].startsWith('..')) continue;
+    keys.push(`${target[0]}/${target[1]}`);
   }
   return keys;
 }
 
-function collect(src) {
+export function collect(src) {
   const files = new Map();
+  const depthSeen = new Map(); // key -> shallowest depth reached, so a shorter path can reach deeper imports
   const visit = (key, depth) => {
-    if (files.has(key) || depth > MAX_IMPORT_DEPTH) return;
+    if (depth > MAX_IMPORT_DEPTH || (depthSeen.has(key) && depthSeen.get(key) <= depth)) return;
     const text = src.read(key);
     if (text == null) return; // an @token that is not a file (e.g. @playwright/mcp) is ignored
+    depthSeen.set(key, depth);
     files.set(key, text.length);
     for (const k of findImports(text, key)) visit(k, depth + 1);
   };
-  visit('CLAUDE.md', 0);
+  visit('user/CLAUDE.md', 0);
+  if (PROJECT) for (const root of PROJECT_ROOTS) visit(`project/${root}`, 0);
   for (const key of src.rules()) {
     const text = src.read(key);
     if (text == null || isPathScoped(text)) continue;
@@ -120,27 +165,27 @@ const isDirectRun = Boolean(process.argv[1]) && realpathSync(process.argv[1]) ==
 if (isDirectRun) main();
 
 function main() {
-try {
-  const budgetText = STAGED
-    ? execFileSync('git', ['-C', repo, 'show', ':scripts/rules/context-budget.json'], { encoding: 'utf8' })
-    : readFileSync(join(here, 'context-budget.json'), 'utf8');
-  const budget = JSON.parse(budgetText);
-  const rows = collect(makeSource());
-  const total = rows.reduce((n, r) => n + r.chars, 0);
-  const over = total > budget.maxChars;
-  const where = REPO ? (STAGED ? 'repo (staged)' : 'repo') : HOME;
-  if (args.includes('--json')) {
-    console.log(JSON.stringify({ where, files: rows.length, total, maxChars: budget.maxChars, limitChars: budget.limitChars, over, largest: rows.slice(0, 8) }));
-  } else {
-    console.log(`always-loaded: ${rows.length} files, ${total} chars (budget ${budget.maxChars}, Claude Code limit ${budget.limitChars}) [${where}]${over ? '  OVER BUDGET' : ''}`);
-    if (over || args.includes('--verbose')) {
-      for (const r of rows.slice(0, over ? 8 : rows.length)) console.log(`  ${String(r.chars).padStart(7)}  ${r.file}`);
+  try {
+    const budgetText = STAGED
+      ? execFileSync('git', ['-C', repo, 'show', ':scripts/rules/context-budget.json'], { encoding: 'utf8' })
+      : readFileSync(join(here, 'context-budget.json'), 'utf8');
+    const budget = JSON.parse(budgetText);
+    const rows = collect(makeSource());
+    const total = rows.reduce((n, r) => n + r.chars, 0);
+    const over = total > budget.maxChars;
+    const where = REPO ? (STAGED ? 'repo (staged)' : 'repo') : HOME + (PROJECT ? ` + ${PROJECT}` : '');
+    if (args.includes('--json')) {
+      console.log(JSON.stringify({ where, files: rows.length, total, maxChars: budget.maxChars, limitChars: budget.limitChars, over, largest: rows.slice(0, 8) }));
+    } else {
+      console.log(`always-loaded: ${rows.length} files, ${total} chars (budget ${budget.maxChars}, Claude Code limit ${budget.limitChars}) [${where}]${over ? '  OVER BUDGET' : ''}`);
+      if (over || args.includes('--verbose')) {
+        for (const r of rows.slice(0, over ? 8 : rows.length)) console.log(`  ${String(r.chars).padStart(7)}  ${r.file}`);
+      }
+      if (over) console.log('  Move text behind a trigger (a hook, `paths:` frontmatter, or a skill), or raise maxChars in scripts/rules/context-budget.json deliberately.');
     }
-    if (over) console.log('  Move text behind a trigger (a hook, `paths:` frontmatter, or a skill), or raise maxChars in scripts/rules/context-budget.json deliberately.');
+    process.exit(over ? 1 : 0);
+  } catch (err) {
+    console.log(`context-budget-guard: skipped (${err.message.split('\n')[0]})`);
+    process.exit(0);
   }
-  process.exit(over ? 1 : 0);
-} catch (err) {
-  console.log(`context-budget-guard: skipped (${err.message.split('\n')[0]})`);
-  process.exit(0);
-}
 }
