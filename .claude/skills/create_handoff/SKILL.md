@@ -1,15 +1,86 @@
 ---
 name: create-handoff
-description: Write a YAML handoff doc to resume work in a new session. Use when user says "/create_handoff", "create a handoff", "hand this off", "wrap up the session".
+description: Write a session handoff as a row in the Claude Bridge Handoffs database (canonical) plus a local YAML copy, to resume work in a new session. Use when user says "/create_handoff", "create a handoff", "give me a handoff", "put the handoff in notion", "hand this off", "wrap up the session".
 ---
 
 # Create Handoff
 
 You are tasked with writing a handoff document to hand off your work to another agent in a new session. You will create a handoff document that is thorough, but also **concise**. The goal is to compact and summarize your context without losing any of the key details of what you're working on.
 
+## Where a handoff lives (decided 2026-09-24, P36)
+
+- **The Notion row is the handoff.** It is a row in the 📬 Handoffs database on Claude Bridge HQ
+  (data source `13b919c8-b7af-4609-b4c6-87e5504809f0`) with **To = Next session**. It shows in the
+  🔁 Next session view. Dave reads it, other tools read it, and `/resume_handoff` reads it. Never put
+  handoffs in Dave's Scratchpad: that page is for research he has not introduced to his AI surfaces yet.
+- **The local YAML is a generated copy**, written in the same step from the same content. It exists
+  only because the statusline (`goal:` / `now:`), recall indexing and session-start continuity read
+  YAML. It carries `notion_url:` and is never edited by hand.
+- **Notion wins.** If the two differ, regenerate the YAML from the Notion page. Never copy YAML
+  edits back into Notion.
+- **Notion unreachable** (headless run, connector down): write the YAML with `notion: pending` plus
+  the row's exact metadata, `notion_title:`, `repo:` (absolute path), `branch:` and `priority:`, so a
+  later push records the original provenance, not the pushing session's. Tell Dave in one line.
+  Step "Push pending first" below (run by every `/create_handoff` and `/resume_handoff`) creates the
+  row from it.
 
 ## Process
-### 1. Filepath & Metadata
+### Push pending first (every run)
+
+Before anything else, find local YAML with `notion: pending`:
+`grep -l "^notion: pending" thoughts/shared/handoffs/*/*.yaml`. For each, create its Notion row (step
+0) from the YAML itself: title from `notion_title:`, `Repo` from `repo:`, branch from `branch:`,
+`Priority` from `priority:`, the date from `date:`, and the body from its fields. Never substitute the
+current session's repo or branch. Then replace `notion: pending` with `notion_url: <row URL>`. If
+Notion is still unreachable, leave the files as they are and say how many are pending.
+
+### 0. Create the Notion row
+
+Use the claude.ai Notion MCP `notion-create-pages` with parent
+`{"type": "data_source_id", "data_source_id": "13b919c8-b7af-4609-b4c6-87e5504809f0"}` and these
+properties:
+
+| Property | Value |
+|---|---|
+| `Handoff` (title) | `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD` |
+| `From` / `To` | `Code` / `Next session` |
+| `Status` | `Pending` |
+| `Priority` | `High`, `Mid` or `Low` |
+| `date:Date:start` | today, `YYYY-MM-DD` |
+| `Repo` | absolute repo path |
+| `Outcome` | `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED` |
+| `Summary` | one sentence: what the next session does first |
+| `Resume phrase` | `Resume the handoff in Notion: "<exact title>"` |
+
+Page body, in this order (plain Markdown, no tables):
+
+```markdown
+**Repo:** <absolute path> | **Branch:** <branch> | **Outcome:** <SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED>
+**Goal:** <what this session accomplished>
+**Now:** <what the next session does first>
+**Test:** <command that verifies this work>
+
+## Done this session
+- <task> (<files>)
+## Decisions
+- <decision>: <why>
+## Findings
+- <finding>
+## Worked / Failed
+- Worked: <approach> | Failed: <approach and why>
+## Blockers and open questions
+- <item>
+## Next
+1. <first step>
+2. <second step>
+## Start the next session with
+Resume the handoff in Notion: "<exact title>"
+```
+
+Keep the row URL; the YAML copy and the completion message need it. Put it in `notion_url:` of the
+YAML below. Do not create a separate Tracker or HQ one-liner: the 🔁 Next session view is the queue.
+
+### 1. Filepath & Metadata (local YAML copy)
 Use the following information to understand how to create your document:
 
 **First, determine the session name from existing handoffs:**
@@ -43,6 +114,14 @@ session: {session-name from ledger}
 date: YYYY-MM-DD
 status: complete|partial|blocked
 outcome: SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED
+notion_url: {URL of the Notion row from step 0}
+# If Notion was unreachable, replace notion_url with ALL of these (used by "Push pending first"):
+# notion: pending
+# notion_title: "[Code→Next session] <topic> (<repo>) — YYYY-MM-DD"
+# repo: <absolute repo path>
+# branch: <branch>
+# priority: High|Mid|Low
+# Generated copy of the Notion page. Edit the Notion page, not this file.
 ---
 
 goal: {What this session accomplished - shown in statusline}
@@ -193,7 +272,7 @@ Options:
   - FAILED: Task abandoned or blocked
 ```
 
-**The outcome lives in the YAML frontmatter** (`outcome:` field, written in step 2 — it is REQUIRED there). After the user responds, make sure that frontmatter value matches their choice (edit the handoff file if it differs).
+**The outcome lives in the Notion row's `Outcome` property (and its page header) and the YAML frontmatter** (`outcome:`, REQUIRED in both). After the user responds, update the Notion row first, then the YAML copy, if either differs from their choice.
 
 Then index the handoff you just created into `archival_memory` so recall can surface it — with its outcome — in future sessions:
 
@@ -217,11 +296,14 @@ recall entries tagged with `source=handoff` and `outcome=<your outcome>`, so a f
 After marking the outcome, respond to the user:
 
 ```
-Handoff created! Outcome marked as [OUTCOME].
+Handoff created in Notion: <page URL>. Outcome marked as [OUTCOME].
 
-Resume in a new session with:
-/resume_handoff path/to/handoff.yaml
+Start the next session with:
+Resume the handoff in Notion: "<exact page title>"
 ```
+
+If Notion was unreachable, say so instead and give the YAML path; it is pushed to Notion on the
+next create or resume.
 
 If step 3 refreshed an artifact, name it and give the URL — the user's bookmark is unchanged, so
 say what moved on the page rather than re-pasting the link as if it were new.

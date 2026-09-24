@@ -1,15 +1,41 @@
 ---
 name: resume-handoff
-description: Resumes work from a handoff document with context analysis. Use when user says "resume this handoff", "continue from ENG-XXXX", "pick up where we left off".
+description: Resumes work from a handoff (Claude Bridge Handoffs database row or local YAML) with context analysis. Use when user says "resume the handoff in Notion", "resume this handoff", "picking up from a previous session", "read HANDOFF.md", "continue from ENG-XXXX", "pick up where we left off".
 ---
 
 # Resume work from a handoff document
 
 You are tasked with resuming work from a handoff document through an interactive process. These handoffs contain critical context, learnings, and next steps from previous work sessions that need to be understood and continued.
 
+**Handoffs live in Notion** (decided 2026-09-24, P36): rows of the 📬 Handoffs database on Claude
+Bridge HQ (data source `collection://13b919c8-b7af-4609-b4c6-87e5504809f0`). Session handoffs have
+**To = Next session**; work from Eve or Donna has **To = Code**. The local YAML in
+`thoughts/shared/handoffs/` is a generated copy for the statusline and recall; when it has a
+`notion_url:`, read the Notion row, not the YAML. Notion wins when they differ.
+
 ## Initial Response
 
-When this command is invoked:
+When this command is invoked, **first push pending YAML** on every route: run create_handoff's
+"Push pending first" step, so an offline handoff joins the Notion queue before anything is listed or
+resumed.
+
+**Any local YAML that carries `notion_url:`** (reached by path in route 1 or by ticket in route 2):
+`notion-fetch` that row and resume from the row, not the file, and apply the row's status lifecycle
+(route 0). Read the YAML only when the row cannot be fetched, and say so.
+
+0. **If a Notion URL or a handoff title was given** (the usual case):
+   - A request with no URL and no title words (for example just "resume the handoff in Notion")
+     has nothing to match: use route 3's open-row list instead.
+   - Find the row: a Notion URL is used directly. Otherwise `notion-search` with
+     `data_source_url: collection://13b919c8-b7af-4609-b4c6-87e5504809f0` and the title words as
+     `query`. Take the exact title match. If several match, list them with dates and ask.
+   - If its `Status` is Done, Read or Superseded, the work is closed. Say so in one line and ask
+     before resuming.
+   - `notion-fetch` the row and read its page FULLY. Set `Status` to `In progress`. Then continue
+     with Step 1 below, treating the page as the handoff document. Set `Status` to `Done` when the
+     handoff's Next steps are finished.
+   - Not found: say which query and data source you searched, then check `thoughts/shared/handoffs/`
+     for a YAML copy with the same topic.
 
 1. **If the path to a handoff document was provided**:
    - If a handoff document path was provided as a parameter, skip the default message
@@ -29,7 +55,11 @@ When this command is invoked:
    - Begin the analysis process by ingesting relevant context from the handoff document, reading additional files it mentions
    - Then propose a course of action to the user and confirm, or ask for clarification on direction.
 
-3. **If no parameters provided**, respond with:
+3. **If no parameters provided, or no row identifier** (after the pending push above): query the
+   Handoffs data source for open rows addressed to Code (`notion-query-data-sources`, SQL:
+   `"To" IN ('Next session','Code') AND "Status" IN ('Pending','In progress')`, newest
+   `date:Date:start` first). List them with dates and ask which one; then continue with route 0 for
+   the chosen row. If Notion is unreachable, fall back to the message below.
 ```
 I'll help you resume work from a handoff document. Let me find the available handoffs.
 
