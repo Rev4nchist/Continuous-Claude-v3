@@ -2,7 +2,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/rule-router.ts
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from "fs";
+import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join, dirname } from "path";
 
@@ -61,15 +61,17 @@ function matchRules(input, manifest) {
     return test(r.tools, tool);
   });
 }
-function statePath(input) {
+function stateDir(input) {
   const key = `${input.session_id || "no-session"}-${input.agent_id || process.env.CLAUDE_AGENT_ID || "main"}`;
-  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, "_")}.json`);
+  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`);
 }
-function readSeen(path) {
+function claim(dir, id) {
   try {
-    return existsSync(path) ? JSON.parse(readFileSync(path, "utf8")).seen ?? [] : [];
+    mkdirSync(dir, { recursive: true });
+    closeSync(openSync(join(dir, id), "wx"));
+    return true;
   } catch {
-    return [];
+    return false;
   }
 }
 function ruleText(entry, dir) {
@@ -99,7 +101,8 @@ function logFire(input, d) {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), ".claude", "logs", "rule-router.jsonl");
     mkdirSync(dirname(path), { recursive: true });
     const ti = input.tool_input || {};
-    const what = String(ti.command ?? ti.subagent_type ?? ti.skill ?? "").slice(0, 120);
+    const tool = input.tool_name || "";
+    const what = COMMAND_TOOLS.has(tool) ? (commandSegments(String(ti.command ?? ""), tool)[0] || "").split(/\s+/).slice(0, 2).join(" ") : String(ti.subagent_type ?? ti.skill ?? "").slice(0, 60);
     appendFileSync(path, JSON.stringify({
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       session: (input.session_id || "").slice(0, 8),
@@ -127,14 +130,24 @@ function run(raw) {
     outputContinue();
     return;
   }
-  const state = statePath(input);
-  const seen = readSeen(state);
-  const d = decide(matched, seen, dir);
+  const state = stateDir(input);
+  const won = matched.filter((r) => claim(state, r.id));
+  let d;
+  try {
+    d = decide(won, [], dir);
+  } catch (err) {
+    for (const r of won) {
+      try {
+        unlinkSync(join(state, r.id));
+      } catch {
+      }
+    }
+    throw err;
+  }
   if (d.kind === "none") {
     outputContinue();
     return;
   }
-  writeFileSync(state, JSON.stringify({ seen: [...seen, ...d.ids] }));
   logFire(input, d);
   if (d.kind === "deny") {
     outputDeny(d.text, "deny");

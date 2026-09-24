@@ -9,8 +9,8 @@
  *
  * Usage: node scripts/rules/rule-router-probe.mjs [--json]    exit 1 on any failed case
  */
-import { execFileSync } from 'node:child_process';
-import { mkdtempSync, readFileSync, existsSync } from 'node:fs';
+import { execFileSync, spawn } from 'node:child_process';
+import { mkdtempSync, readFileSync, existsSync, copyFileSync } from 'node:fs';
 import { tmpdir } from 'node:os';
 import { join, dirname, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -21,18 +21,34 @@ const RULES = join(repo, '.claude/rules-ondemand');
 const state = mkdtempSync(join(tmpdir(), 'rule-router-probe-'));
 const log = join(state, 'fires.jsonl');
 
-function fire(payload, rulesDir = RULES) {
-  const out = execFileSync('node', [HOOK], {
-    input: JSON.stringify(payload),
-    encoding: 'utf8',
-    env: { ...process.env, CLAUDE_RULES_ONDEMAND_DIR: rulesDir, CLAUDE_RULE_ROUTER_STATE_DIR: state, CLAUDE_RULE_ROUTER_LOG: log, CLAUDE_AGENT_ID: '' },
-  }).trim();
-  const j = JSON.parse(out || '{}');
+const hookEnv = (rulesDir) => ({ ...process.env, CLAUDE_RULES_ONDEMAND_DIR: rulesDir, CLAUDE_RULE_ROUTER_STATE_DIR: state, CLAUDE_RULE_ROUTER_LOG: log, CLAUDE_AGENT_ID: '' });
+
+function parse(out) {
+  const j = JSON.parse(out.trim() || '{}');
   const h = j.hookSpecificOutput || {};
   if (h.permissionDecision === 'deny') return { kind: 'deny', text: h.permissionDecisionReason };
   if (h.additionalContext) return { kind: 'inject', text: h.additionalContext };
   return { kind: 'none', text: '' };
 }
+
+function fire(payload, rulesDir = RULES) {
+  return parse(execFileSync('node', [HOOK], { input: JSON.stringify(payload), encoding: 'utf8', env: hookEnv(rulesDir) }));
+}
+
+/** The same call from N processes at once, as parallel tool calls do. Resolves to their decisions. */
+function fireParallel(payload, n) {
+  return Promise.all(Array.from({ length: n }, () => new Promise((res) => {
+    const c = spawn('node', [HOOK], { env: hookEnv(RULES) });
+    let out = '';
+    c.stdout.on('data', (d) => { out += d; });
+    c.on('close', () => res(parse(out)));
+    c.stdin.end(JSON.stringify(payload));
+  })));
+}
+
+// A rules dir whose manifest names files that are missing, to prove a failed read releases the claim.
+const brokenDir = mkdtempSync(join(tmpdir(), 'rule-router-broken-'));
+copyFileSync(join(RULES, 'manifest.json'), join(brokenDir, 'manifest.json'));
 
 const bash = (session, command, extra = {}) => ({ session_id: session, tool_name: 'Bash', tool_input: { command }, ...extra });
 const ps = (session, command) => ({ session_id: session, tool_name: 'PowerShell', tool_input: { command } });
@@ -59,6 +75,9 @@ const CASES = [
   ['psql via docker exec injects the DB rule', bash('s13', 'docker exec continuous-claude-postgres psql -U claude -d continuous_claude -c "SELECT 1"'), 'inject', ['cross-terminal-db'], []],
   ['headless claude -p injects', bash('s14', 'claude -p "hi" --output-format json'), 'inject', ['headless-claude'], []],
   ['CMA API URL blocks', bash('s15', 'curl -s https://api.anthropic.com/v1/sessions -H "x"'), 'deny', ['cma'], []],
+  ['CMA call with a key in its header blocks (log checked below)', bash('s15b', 'curl -s -H x-api-key:SECRET-PROBE-123 https://api.anthropic.com/v1/sessions'), 'deny', ['cma'], []],
+  ['a rule file that cannot be read: fail open', bash('s18', 'codex exec -'), 'none', [], [], brokenDir],
+  ['...and the claim is released, so the rule still shows later', bash('s18', 'codex exec -'), 'deny', ['codex'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];
@@ -70,6 +89,14 @@ const results = CASES.map(([name, payload, kind, must, mustNot, dir]) => {
   const ok = got.kind === kind && must.every((id) => idsLine.split(', ').includes(id)) && mustNot.every((id) => !idsLine.split(', ').includes(id));
   return { name, ok, expected: kind, got: got.kind, ids: idsLine };
 });
+
+// Parallel tool calls: 6 processes race for the same unseen rule; exactly one may emit it.
+const race = await fireParallel(bash('race', 'codex exec -'), 6);
+const raceDenies = race.filter((r) => r.kind === 'deny').length;
+results.push({ name: '6 parallel calls for one unseen rule: exactly 1 deny', ok: raceDenies === 1, expected: '1 deny', got: `${raceDenies} deny`, ids: '' });
+// The fire log must never hold the raw command (it can carry a credential).
+const logText = existsSync(log) ? readFileSync(log, 'utf8') : '';
+results.push({ name: 'fire log never contains command arguments', ok: logText.length > 0 && !logText.includes('SECRET-PROBE-123'), expected: 'no secret', got: logText.includes('SECRET-PROBE-123') ? 'secret logged' : 'clean', ids: '' });
 
 const fires = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').length : 0;
 const failed = results.filter((r) => !r.ok);

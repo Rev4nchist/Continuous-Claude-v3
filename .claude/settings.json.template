@@ -190,7 +190,7 @@
         ]
       },
       {
-        "matcher": "Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__sentry__.*",
+        "matcher": "Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*",
         "hooks": [
           {
             "type": "command",

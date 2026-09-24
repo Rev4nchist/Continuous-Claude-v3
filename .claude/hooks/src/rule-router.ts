@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__sentry__.*).
+ * rule-router -- PreToolUse hook (matcher: Bash|PowerShell|Task|Agent|Skill|mcp__Neon__.*|mcp__linear__.*|mcp__claude_ai_Linear__.*|mcp__sentry__.*).
  *
  * Loads a tool-specific rule at the moment it applies, instead of keeping it in every session's
  * always-loaded context (phase 2 of docs/self-improvement/proposals/2026-09-24-context-loading.md).
@@ -18,7 +18,7 @@
  * Fails open: any error emits "continue" and the call runs.
  */
 
-import { readFileSync, writeFileSync, appendFileSync, existsSync, mkdirSync } from 'fs';
+import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
@@ -93,13 +93,24 @@ export function matchRules(input: HookInput, manifest: Manifest): RuleEntry[] {
   });
 }
 
-function statePath(input: HookInput): string {
+/** One folder per session and agent; one marker file per rule already shown there. */
+function stateDir(input: HookInput): string {
   const key = `${input.session_id || 'no-session'}-${input.agent_id || process.env.CLAUDE_AGENT_ID || 'main'}`;
-  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, '_')}.json`);
+  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`);
 }
 
-function readSeen(path: string): string[] {
-  try { return existsSync(path) ? (JSON.parse(readFileSync(path, 'utf8')).seen ?? []) : []; } catch { return []; }
+/**
+ * Atomically claim a rule for this session: the 'wx' flag creates the marker only if it does not
+ * exist, so when parallel tool calls race, exactly one of them emits the rule.
+ */
+function claim(dir: string, id: string): boolean {
+  try {
+    mkdirSync(dir, { recursive: true });
+    closeSync(openSync(join(dir, id), 'wx'));
+    return true;
+  } catch {
+    return false;
+  }
 }
 
 function ruleText(entry: RuleEntry, dir: string): string {
@@ -134,7 +145,12 @@ function logFire(input: HookInput, d: Decision): void {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), '.claude', 'logs', 'rule-router.jsonl');
     mkdirSync(dirname(path), { recursive: true });
     const ti = input.tool_input || {};
-    const what = String(ti.command ?? ti.subagent_type ?? ti.skill ?? '').slice(0, 120);
+    // Never the raw command: its arguments can hold a credential. For a command, keep only the
+    // first two words of its first segment, with quoted strings removed.
+    const tool = input.tool_name || '';
+    const what = COMMAND_TOOLS.has(tool)
+      ? (commandSegments(String(ti.command ?? ''), tool)[0] || '').split(/\s+/).slice(0, 2).join(' ')
+      : String(ti.subagent_type ?? ti.skill ?? '').slice(0, 60);
     appendFileSync(path, JSON.stringify({
       ts: new Date().toISOString(), session: (input.session_id || '').slice(0, 8), agent: input.agent_id || null,
       tool: input.tool_name, rules: d.ids, kind: d.kind, what,
@@ -149,11 +165,17 @@ export function run(raw: string): void {
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest;
   const matched = matchRules(input, manifest);
   if (matched.length === 0) { outputContinue(); return; }
-  const state = statePath(input);
-  const seen = readSeen(state);
-  const d = decide(matched, seen, dir);
+  const state = stateDir(input);
+  const won = matched.filter((r) => claim(state, r.id));
+  let d: Decision;
+  try {
+    d = decide(won, [], dir);
+  } catch (err) {
+    // A rule file could not be read: release the claims so a later call can still show the rule.
+    for (const r of won) { try { unlinkSync(join(state, r.id)); } catch { /* already gone */ } }
+    throw err;
+  }
   if (d.kind === 'none') { outputContinue(); return; }
-  writeFileSync(state, JSON.stringify({ seen: [...seen, ...d.ids] }));
   logFire(input, d);
   if (d.kind === 'deny') {
     outputDeny(d.text, 'deny');
