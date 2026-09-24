@@ -4,6 +4,15 @@ Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence tra
 
 Grounding: verified 2026-07-11 against `codex-cli 0.144.1` and re-verified 2026-09-08 against `codex-cli 0.153.4`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
 
+## Scope: `codex exec` only, NOT the Codex Desktop app
+
+Everything below governs `codex exec` as run by `/codex`, `codex-worker` and `codex-adversary`.
+**The Codex Desktop app is outside it.** Its sandbox is whatever the app is set to. A 2026-09-23
+scan found 47 Desktop sessions with the live repo as the working directory, 21+ in full-access
+mode, on the tree that concurrent Claude sessions share. Nothing in CCv3 can see or gate those
+runs. When Dave uses Desktop on a CCv3 repo, point it at a separate worktree, not the live
+checkout. See `docs/security/authorization-matrix.md`.
+
 ## The one thing to internalize
 
 **`codex exec` has no approval dial, and no Claude Code hook can see inside Codex's sandboxed process.** The `codex exec …` command line itself passes `destructive-command-guard` like any Bash call, but everything Codex does *inside* its sandbox — every file write, every shell command — is invisible to Claude Code's hook layer. **The entire safety boundary is `--sandbox` + this rule's confirm-first preflight.** There is no second line of defense. Choose the sandbox deliberately and confirm write runs.

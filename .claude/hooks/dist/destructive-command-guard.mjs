@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
-// src/destructive-command-guard.ts
+// src/shared/destructive-classifier.ts
 var DESTRUCTIVE_PATTERNS = [
   // filesystem — recursive deletion only (single-file `rm -f x` is allowed).
   // Scans across SPLIT flag tokens so `rm -f -r x` / `rm --force --recursive x`
@@ -56,6 +56,11 @@ var DESTRUCTIVE_PATTERNS = [
   // in-progress rebase and must not be gated (round-2 FP fix).
   { name: "git rebase", re: /\bgit\s+rebase\b(?!\s+(--abort|--continue|--skip|--quit|--edit-todo|--show-current-patch)\b)/i },
   { name: "git stash clear/drop", re: /\bgit\s+stash\s+(clear|drop)\b/i },
+  // `git stash -u` / `--include-untracked` / `--all` sweeps UNTRACKED files out of the
+  // working tree; they come back only if someone finds and pops that stash. On 2026-09-17
+  // this emptied a pre-demo FourthBot artifacts folder (45 files), recovered only because the
+  // stash survived. Plain `git stash` (tracked changes) and pop/apply/list stay allowed.
+  { name: "git stash -u (sweeps untracked files)", re: /\bgit\s+stash\b(?!\s+(?:list|show|pop|apply|branch|drop|clear|create|store)\b)[^&|;]*\s(?:-u|--include-untracked|-a|--all)\b/i },
   { name: "git update-ref -d", re: /\bgit\s+update-ref\s+-d\b/i },
   { name: "git reflog expire", re: /\bgit\s+reflog\s+expire\b/i },
   { name: "git gc --prune", re: /\bgit\s+gc\b[^&|;]*--prune/i },
@@ -64,6 +69,10 @@ var DESTRUCTIVE_PATTERNS = [
   { name: "docker prune", re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: "docker volume rm", re: /\bdocker\s+volume\s+rm\b/i },
   { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i }
+];
+var POWERSHELL_PATTERNS = [
+  { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
+  { name: "PowerShell recursive delete ([IO.Directory]::Delete $true)", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i }
 ];
 function stripQuotedStrings(command) {
   return command.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
@@ -271,10 +280,17 @@ function extractShellWrapperPayloads(command) {
     return [];
   }
 }
-function classifyDestructive(command, depth = 0) {
+function normalizeGitGlobalOptions(scan) {
+  return scan.replace(
+    /\bgit((?:\s+(?:-C\s+\S+|-c\s+\S+|--git-dir(?:=\S+|\s+\S+)|--work-tree(?:=\S+|\s+\S+)|--namespace(?:=\S+|\s+\S+)|--no-pager|--no-replace-objects|--bare|-P))+)(?=\s)/gi,
+    "git"
+  );
+}
+function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
-  const scan = stripQuotedStrings(command);
-  for (const p of DESTRUCTIVE_PATTERNS) {
+  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command));
+  const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
+  for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
   if (depth < 4) {
@@ -282,7 +298,7 @@ function classifyDestructive(command, depth = 0) {
       const { segments, substitutions } = parseExecutable(command);
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
-        const inner = classifyDestructive(payload, depth + 1);
+        const inner = classifyDestructive(payload, depth + 1, tool);
         if (inner) return inner;
       }
     } catch {
@@ -290,6 +306,9 @@ function classifyDestructive(command, depth = 0) {
   }
   return null;
 }
+
+// src/destructive-command-guard.ts
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 function isUnattended(input, env = process.env) {
   if (input.permission_mode === "bypassPermissions") return true;
   if (env.CLAUDE_AGENT_ID) return true;
@@ -297,10 +316,10 @@ function isUnattended(input, env = process.env) {
   return false;
 }
 function decide(command, input, env = process.env) {
-  if (env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)) {
+  if (env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command)) {
     return { decision: "allow" };
   }
-  const pattern = classifyDestructive(command);
+  const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || "Bash");
   if (!pattern) return { decision: "allow" };
   return { decision: isUnattended(input, env) ? "deny" : "ask", pattern };
 }
@@ -311,7 +330,7 @@ function reasonFor(decision, pattern, command) {
 Matched: ${pattern}
 Command: ${command.slice(0, 300)}
 
-${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. If you genuinely intend it here, re-run with SKIP_DESTRUCTIVE_GUARD=1 prefixed, or run it interactively.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/rules/destructive-commands.md.)`}`;
+${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. If you genuinely intend it here, re-run with SKIP_DESTRUCTIVE_GUARD=1 prefixed (PowerShell tool: start the command with $env:SKIP_DESTRUCTIVE_GUARD='1'; ), or run it interactively.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/rules/destructive-commands.md.)`}`;
 }
 async function main() {
   let input = {};
@@ -325,7 +344,7 @@ async function main() {
     return;
   }
   const tool = input.tool || input.tool_name;
-  if (tool !== "Bash") {
+  if (!tool || !COMMAND_TOOLS.has(tool)) {
     console.log("{}");
     return;
   }
@@ -358,6 +377,7 @@ export {
   decide,
   extractShellWrapperPayloads,
   isUnattended,
+  normalizeGitGlobalOptions,
   parseExecutable,
   stripQuotedStrings
 };

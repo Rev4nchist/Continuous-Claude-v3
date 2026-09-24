@@ -372,3 +372,91 @@ describe('Round-2: documented ACCEPTED limitations (backstop, not a sandbox)', (
     });
   }
 });
+
+
+// 2026-09-23 Opus 5.5 eval, P42: the FourthBot demo folder (45 files) was swept by
+// `git stash -u` and a later `reset --hard`, and destructive ops run through the
+// PowerShell tool were never gated at all.
+describe('P42: git stash -u and the PowerShell tool', () => {
+  const stashSweeps = [
+    'git stash -u',
+    'git stash push -u -m "wip before refresh"',
+    'git stash --include-untracked',
+    'git stash push --all',
+    'git stash save -u wip',
+  ];
+  for (const cmd of stashSweeps) {
+    it(`catches untracked-sweeping stash: ${cmd}`, () => {
+      expect(classifyDestructive(cmd)).toBe('git stash -u (sweeps untracked files)');
+    });
+  }
+  const stashRoutine = ['git stash', 'git stash push -m "wip"', 'git stash pop', 'git stash apply stash@{1}', 'git stash list --all', 'git stash show -p'];
+  for (const cmd of stashRoutine) {
+    it(`does not flag routine stash: ${cmd}`, () => {
+      expect(classifyDestructive(cmd)).toBeNull();
+    });
+  }
+
+  const psRecursive = [
+    'Remove-Item -Recurse -Force C:\\temp\\build',
+    'Remove-Item "C:\\temp\\build" -Recurse',
+    'ri .\\dist -r',
+    'Get-Item x | ForEach-Object { Remove-Item $_ -Recurse -Force }',
+    '[System.IO.Directory]::Delete("C:\\temp\\x", $true)',
+  ];
+  for (const cmd of psRecursive) {
+    it(`PowerShell tool: catches ${cmd.slice(0, 40)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).not.toBeNull();
+    });
+  }
+  const psRoutine = [
+    'Remove-Item .\\out.txt',
+    'Remove-Item -Force C:\\temp\\one.log',
+    '[System.IO.Directory]::Delete($junction, $false)',
+    'Get-ChildItem -Recurse -Filter *.md | Select-Object -First 5',
+    'git -C C:\\repo status --porcelain',
+  ];
+  for (const cmd of psRoutine) {
+    it(`PowerShell tool: allows ${cmd.slice(0, 40)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).toBeNull();
+    });
+  }
+
+  it('PowerShell patterns do not apply to the Bash tool (Remove-Item there is quoted payload)', () => {
+    expect(classifyDestructive('Remove-Item -Recurse -Force build', 0, 'Bash')).toBeNull();
+  });
+
+  it('decide() gates PowerShell-tool git ops: ask interactive, deny unattended', () => {
+    const cmd = 'git -C C:\\Users\\x\\FourthBot reset --hard origin/main';
+    expect(decide(cmd, { tool_name: 'PowerShell', permission_mode: 'default' }, {}).decision).toBe('ask');
+    expect(decide(cmd, { tool_name: 'PowerShell', permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
+    expect(decide('Remove-Item -Recurse x', { tool_name: 'PowerShell', permission_mode: 'default' }, {}).decision).toBe('ask');
+  });
+});
+
+
+describe('P42: git global options no longer hide the subcommand', () => {
+  const hidden = [
+    ['git -C C:/repo reset --hard origin/main', 'git reset --hard'],
+    ['git -C "C:/My Repo" push --force fork main', 'git push --force'],
+    ['git -c core.hooksPath=x clean -fdx', 'git clean -f'],
+    ['git --git-dir=/r/.git --work-tree=/r checkout -- .', 'git checkout discard'],
+    ['git --no-pager -C repo branch -D old', 'git branch -D'],
+    ['git -C repo stash -u', 'git stash -u (sweeps untracked files)'],
+  ];
+  for (const [cmd, name] of hidden) {
+    it(`catches ${cmd}`, () => {
+      expect(classifyDestructive(cmd)).toBe(name);
+    });
+  }
+  it('still allows routine git -C commands', () => {
+    for (const cmd of ['git -C repo status', 'git -C repo log --oneline -5', 'git -C repo push fork main', 'git -C repo branch -d merged']) {
+      expect(classifyDestructive(cmd)).toBeNull();
+    }
+  });
+  it('PowerShell override: a leading $env:SKIP_DESTRUCTIVE_GUARD=\'1\'; statement', () => {
+    const input = { tool_name: 'PowerShell', permission_mode: 'bypassPermissions' };
+    expect(decide("$env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", input, {}).decision).toBe('allow');
+    expect(decide("git status; $env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", input, {}).decision).toBe('deny');
+  });
+});

@@ -158,6 +158,19 @@
         ]
       },
       {
+        "matcher": "PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
+            ]
+          }
+        ]
+      },
+      {
         "matcher": "Edit|Write",
         "hooks": [
           {
