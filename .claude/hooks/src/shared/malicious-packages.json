@@ -14610,6 +14610,66 @@
       "reason": "Malicious code in noverojava (npm) (GHSA-g77m-jmph-gj8q)",
       "date": "2026-09-22",
       "advisory": "https://github.com/advisories/GHSA-g77m-jmph-gj8q"
+    },
+    "@baanx/domain": {
+      "blocked_all": true,
+      "reason": "Malware in @baanx/domain (GHSA-qhfc-6rp6-pwv6)",
+      "date": "2026-09-24",
+      "advisory": "https://github.com/advisories/GHSA-qhfc-6rp6-pwv6"
+    },
+    "@baanx/common": {
+      "blocked_all": true,
+      "reason": "Malware in @baanx/common (GHSA-27jh-hjhg-vg2p)",
+      "date": "2026-09-24",
+      "advisory": "https://github.com/advisories/GHSA-27jh-hjhg-vg2p"
+    },
+    "@rixxcodex/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @rixxcodex/baileys (npm) (GHSA-fjxf-mv8f-cp6x)",
+      "date": "2026-09-24",
+      "advisory": "https://github.com/advisories/GHSA-fjxf-mv8f-cp6x"
+    },
+    "pino-testkit": {
+      "blocked_all": true,
+      "reason": "Malicious code in pino-testkit (npm) (GHSA-q57p-68r4-fj72)",
+      "date": "2026-09-24",
+      "advisory": "https://github.com/advisories/GHSA-q57p-68r4-fj72"
+    },
+    "internallib_v463": {
+      "blocked_all": true,
+      "reason": "Malicious code in internallib_v463 (npm) (GHSA-gv94-v8fj-f45c)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-gv94-v8fj-f45c"
+    },
+    "internallib_v657": {
+      "blocked_all": true,
+      "reason": "Malicious code in internallib_v657 (npm) (GHSA-w2wx-86qr-g533)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-w2wx-86qr-g533"
+    },
+    "a-onesite": {
+      "blocked_all": true,
+      "reason": "Malicious code in a-onesite (npm) (GHSA-9j7m-m3w9-mgrc)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-9j7m-m3w9-mgrc"
+    },
+    "com.apple.unityplugin.storekit": {
+      "blocked_all": true,
+      "reason": "Malicious code in com.apple.unityplugin.storekit (npm) (GHSA-6r46-f382-x53p)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-6r46-f382-x53p"
+    },
+    "simplenewnpmpackage": {
+      "blocked_all": true,
+      "reason": "Malicious code in simplenewnpmpackage (npm) (GHSA-mr2p-c47m-85w8)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-mr2p-c47m-85w8"
+    },
+    "event-hunter": {
+      "blocked_all": true,
+      "reason": "Malicious code in event-hunter (npm) (GHSA-wwrq-gcqx-rx6p)",
+      "date": "2026-09-23",
+      "advisory": "https://github.com/advisories/GHSA-wwrq-gcqx-rx6p"
     }
   }
 }
