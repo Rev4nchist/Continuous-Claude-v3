@@ -50,10 +50,12 @@ $branch = $pull.head.ref; $head = $pull.head.sha
 if (-not $pull.merged -and -not $CleanupOnly) {
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"
-    node (Join-Path $PSScriptRoot 'coderabbit-status.mjs') $Pr --repo $Repo
+    $statusJson = node (Join-Path $PSScriptRoot 'coderabbit-status.mjs') $Pr --repo $Repo --json
     $ready = $LASTEXITCODE
-    if ($ready -eq 1) { Fail "PR #$Pr is not ready (reasons above). Re-run after the review lands, or pass -IgnoreReview deliberately." }
-    if ($ready -ne 0) { Fail "could not check PR #$Pr (coderabbit-status exit $ready). Nothing was merged." }
+    $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
+    if ($ready -eq 1 -and $st) { Write-Host "  not ready: $($st.reasons -join '; ')"; Fail "PR #$Pr is not ready. Re-run after the review lands, or pass -IgnoreReview deliberately." }
+    # Exit 0 alone is not proof: require the JSON to say ready for THIS head commit.
+    if ($ready -ne 0 -or -not $st -or $st.ready -ne $true -or $st.head -ne $head) { Fail "could not confirm PR #$Pr is ready (coderabbit-status exit $ready). Nothing was merged." }
   }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1

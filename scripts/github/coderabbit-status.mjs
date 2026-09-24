@@ -18,6 +18,8 @@
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
+import { realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
@@ -64,11 +66,18 @@ function main() {
   let result;
   try {
     const pull = gh([`repos/${owner}/${name}/pulls/${pr}`]);
-    const combined = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/status`]);
-    const checkRuns = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs`]).check_runs;
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){nodes{isResolved}}}}}';
+    // Page sizes are explicit, and a truncated page is "cannot determine", never READY:
+    // a failing check or open thread past the first page must not be dropped silently.
+    const combined = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/status?per_page=100`]);
+    if ((combined.total_count ?? 0) > (combined.statuses || []).length) throw new Error(`more than ${combined.statuses.length} commit statuses`);
+    const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
+    const checkRuns = runsDoc.check_runs;
+    if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
-    const threads = g.data.repository.pullRequest.reviewThreads.nodes;
+    const rt = g.data.repository.pullRequest.reviewThreads;
+    if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
+    const threads = rt.nodes;
     const reviews = gh([`repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]);
     result = evaluate({ pull, combined, checkRuns, threads, reviews });
   } catch (err) {
@@ -84,4 +93,12 @@ function main() {
   process.exit(result.ready ? 0 : 1);
 }
 
-if (process.argv[1] && path.resolve(process.argv[1]) === path.resolve(new URL(import.meta.url).pathname.replace(/^\/([A-Za-z]:)/, '$1'))) main();
+// Run main() when executed directly. Compare real paths (fileURLToPath decodes %20 and
+// non-ASCII; realpath follows junctions/symlinks) so a direct run can never silently skip
+// main() and exit 0 -- land-pr.ps1 treats exit 0 as READY.
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)); }
+}
+if (isDirectRun()) main();
