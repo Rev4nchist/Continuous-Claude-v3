@@ -17,7 +17,7 @@
 - [**Who Is This For?**](#who-is-this-for) — Marketing, sales, ops, product, engineering
 - [**Quick Start**](#quick-start) — Install in 5 minutes
 - [**What You Get**](#what-you-get) — Skills, agents, hooks, rules, browser automation
-- [**Common Use Cases**](#common-use-cases) — 7 real workflows from exploration to autonomous builds
+- [**Common Use Cases**](#common-use-cases) — 7 real workflows from exploration to E2E testing
 - [**Common Questions**](#common-questions) — API keys, privacy, uninstall, comparisons
 - [**For Developers**](#for-developers) — Architecture, memory system, hooks, Maestro internals
 
