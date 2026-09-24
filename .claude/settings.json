@@ -1,4 +1,5 @@
 {
+  "cleanupPeriodDays": 180,
   "env": {
     "CONTINUOUS_CLAUDE_COORDINATION": "true",
     "ENABLE_TOOL_SEARCH": "auto:5",
