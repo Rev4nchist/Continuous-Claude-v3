@@ -380,8 +380,17 @@ if ! $DRY_RUN; then
         # Leave a marker instead of dropping this commit: the lock holder re-checks
         # it before exiting and syncs whatever landed meanwhile (cursor..HEAD).
         : > "$PENDING_FILE" 2>/dev/null || true
-        $VERBOSE && echo "Another sync is already running (lock held); queued for it." || true
-        exit 0
+        # The holder may have released the lock (and made its final pending check) between our
+        # failed mkdir and the marker write. Then nobody would see the marker, so take the lock
+        # and do the sync ourselves (CodeRabbit #46).
+        if [[ ! -d "$LOCK_DIR" ]] && mkdir "$LOCK_DIR" 2>/dev/null; then
+            LOCK_HELD=true
+            trap release_lock EXIT
+            rm -f "$PENDING_FILE"
+        else
+            $VERBOSE && echo "Another sync is already running (lock held); queued for it." || true
+            exit 0
+        fi
     fi
 fi
 
