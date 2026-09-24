@@ -66,4 +66,6 @@ function main() {
     outputContinue();
   }
 }
-main();
+if ((process.argv[1] || "").includes("context-pct-warning")) {
+  main();
+}

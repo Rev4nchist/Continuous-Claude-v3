@@ -58,7 +58,7 @@ const SRC = join(REPO, '.claude', 'hooks', 'src');
 const TESTS = join(SRC, '__tests__');
 
 /** Minimum sources/tests we expect to find. Below this, the scan itself is broken. */
-const MIN_HOOK_SOURCES = 80;
+const MIN_HOOK_SOURCES = 70; // 77 after the Ralph removal (#51) and 74 after P39; was 80
 const MIN_TEST_FILES = 80;
 
 /** Replace a multi-line match with blank lines so line numbers stay truthful. */

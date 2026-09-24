@@ -70,4 +70,7 @@ function main(): void {
   }
 }
 
-main();
+// Entry only when run as the hook, so importing this module (tests) has no side effect.
+if ((process.argv[1] || '').includes('context-pct-warning')) {
+  main();
+}

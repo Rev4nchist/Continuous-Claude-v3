@@ -357,27 +357,6 @@ describe('PreToolUse:Task — pre-tool-knowledge', () => {
   );
 });
 
-describe('PreToolUse:Task — tldr-context-inject', () => {
-  const hookPath = resolveHook('tldr-context-inject');
-  // DEREGISTERED 2026-08-30 (TLDR remediation §4): the hook is removed from
-  // both settings.json copies — 63s/Task-call cost, zero real injections in a
-  // month. The harness never spawns it, so its spawn-latency contract is no
-  // longer load-bearing; the ~15s Python cold start also made this test flaky
-  // (measured 20,019ms vs the 20s budget). Skipped, not deleted: the source
-  // stays in tree until the Step-10 prune decides its fate, and a skipped test
-  // still counts toward the collected-count ratchet.
-  it.skip(
-    'exits 0 with valid output on Task event (slow: ~15s Python CLI cold start)',
-    () =>
-      assertFailOpen(
-        'tldr-context-inject [PreToolUse]',
-        runHook(hookPath!, PRE_TASK_EVENT, TLDR_LATENCY_BUDGET_MS),
-        TLDR_LATENCY_BUDGET_MS,
-      ),
-    IT_TIMEOUT_MS,
-  );
-});
-
 describe('PreToolUse:Task — agent-recall-injector', () => {
   const hookPath = resolveHook('agent-recall-injector');
   it.skipIf(!hookPath)(
