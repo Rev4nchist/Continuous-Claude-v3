@@ -17,12 +17,15 @@ Set-Location $R
 # Subscription auth for the headless judge: an API key in the environment would switch billing.
 Remove-Item Env:ANTHROPIC_API_KEY -ErrorAction SilentlyContinue
 
+$auditRc = 0
 if (-not (Test-Path $report)) {
   Write-Log 'no audit report for today yet: running the audit first'
   & $node scripts\rules\rule-router-audit.mjs --days 7 2>&1 | ForEach-Object { Write-Log "$_" }
+  $auditRc = $LASTEXITCODE   # keep it: the review below would overwrite $LASTEXITCODE
 }
 
 & $node scripts\rules\rule-router-false-fires.mjs review --days 7 --notion-parent $scratchpad 2>&1 | ForEach-Object { Write-Log "$_" }
-$rc = $LASTEXITCODE
-Write-Log "review finished, exit $rc"
+$reviewRc = $LASTEXITCODE
+$rc = if ($reviewRc -ne 0) { $reviewRc } else { $auditRc }
+Write-Log "review finished, audit exit $auditRc, review exit $reviewRc, task exit $rc"
 exit $rc

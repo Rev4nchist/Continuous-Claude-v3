@@ -108,7 +108,9 @@ function review(days, reportPath) {
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription auth; never API billing for a scheduled judge
   // claude is a real .exe here, so no shell: the prompt goes on stdin, untouched by shell quoting.
-  const run = spawnSync('claude', ['-p', '--model', 'sonnet', '--output-format', 'json'], {
+  // No tools at all: `--tools ""` removes the built-ins, `--strict-mcp-config` (with no config) loads
+  // no MCP servers. The judge only reads the prompt and answers.
+  const run = spawnSync('claude', ['-p', '--model', 'sonnet', '--output-format', 'json', '--tools', '', '--strict-mcp-config'], {
     input: prompt, encoding: 'utf8', env, timeout: 300000, maxBuffer: 16 * 1024 * 1024,
   });
   let verdicts;
@@ -122,21 +124,39 @@ function review(days, reportPath) {
     return { code: 1, judged: 0, found: [], error: `the judge call failed (exit ${run.status})` };
   }
   let falseFires = 0;
+  let newlyCaptured = 0;
   const found = [];
+  // One capture per (rule, words) per ISO week: a re-run in the same week must not count a fire twice.
+  const window = isoWeek(new Date());
+  const already = new Set(readJsonl(capturePath).filter((r) => r.source === 'review' && r.window === window)
+    .map((r) => `${r.rule}|${r.what}`));
   section.push('| Rule | Trigger words | Count | Verdict | Reason |', '|---|---|---|---|---|');
   items.forEach((p, i) => {
     const v = verdicts.find((x) => x.n === i + 1) || { verdict: 'unjudged', reason: 'missing from the judge reply' };
     if (v.verdict === 'false_fire') {
       falseFires++;
       found.push({ rule: p.rule, what: p.what, count: p.count, reason: v.reason, source: 'review' });
-      capture({ rule: p.rule, what: p.what, tool: p.tool, count: p.count, reason: v.reason, source: 'review' });
+      if (!already.has(`${p.rule}|${p.what}`)) {
+        capture({ rule: p.rule, what: p.what, tool: p.tool, count: p.count, reason: v.reason, source: 'review', window });
+        newlyCaptured++;
+      }
     }
     section.push(`| ${p.rule} | \`${p.what.replace(/\|/g, '\\|')}\` | ${p.count} | ${v.verdict === 'false_fire' ? '**false fire**' : v.verdict} | ${String(v.reason || '').replace(/\|/g, '/')} |`);
   });
   section.push('', `False fires this week: **${falseFires}**, added to \`${capturePath}\`. All time: \`node scripts/rules/rule-router-false-fires.mjs list\`.`);
   writeReport(reportPath, section);
-  console.log(`false-fire review: ${items.length} pairs judged, ${falseFires} false fires captured`);
+  console.log(`false-fire review: ${items.length} pairs judged, ${falseFires} false fires found, ${newlyCaptured} newly captured`);
   return { code: 0, judged: items.length, found };
+}
+
+/** ISO-8601 week id, e.g. 2026-W39: the review window a capture belongs to. */
+export function isoWeek(d) {
+  const t = new Date(Date.UTC(d.getUTCFullYear(), d.getUTCMonth(), d.getUTCDate()));
+  const day = t.getUTCDay() || 7;
+  t.setUTCDate(t.getUTCDate() + 4 - day);
+  const year = t.getUTCFullYear();
+  const week = Math.ceil(((t - Date.UTC(year, 0, 1)) / 86400000 + 1) / 7);
+  return `${year}-W${String(week).padStart(2, '0')}`;
 }
 
 function writeReport(reportPath, lines) {
