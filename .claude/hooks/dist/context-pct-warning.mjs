@@ -2,7 +2,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/context-pct-warning.ts
-import { readFileSync, existsSync } from "fs";
+import { readFileSync, existsSync, realpathSync } from "fs";
+import { fileURLToPath } from "url";
 import { join } from "path";
 import { tmpdir } from "os";
 
@@ -66,4 +67,13 @@ function main() {
     outputContinue();
   }
 }
-main();
+function isDirectRun() {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isDirectRun()) {
+  main();
+}

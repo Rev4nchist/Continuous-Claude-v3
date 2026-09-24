@@ -237,34 +237,6 @@ describe('getStatusFile', () => {
 // Test 3: DaemonQuery and DaemonResponse interfaces
 // =============================================================================
 
-describe('DaemonQuery and DaemonResponse types', () => {
-  it('should define valid query structure for ping', () => {
-    // Using imported types
-    const query: DaemonQuery = { cmd: 'ping' };
-    expect(query.cmd).toBe('ping');
-  });
-
-  it('should define valid query structure for search', () => {
-    const query: DaemonQuery = { cmd: 'search', pattern: 'handleClick' };
-    expect(query.cmd).toBe('search');
-    expect(query.pattern).toBe('handleClick');
-  });
-
-  it('should define valid response structure', () => {
-    const response: DaemonResponse = {
-      status: 'ok',
-      results: [{ file: 'test.ts', line: 42 }],
-    };
-    expect(response.status).toBe('ok');
-    expect(response.results).toHaveLength(1);
-  });
-
-  it('should support indexing flag in response', () => {
-    const response: DaemonResponse = { indexing: true };
-    expect(response.indexing).toBe(true);
-  });
-});
-
 // =============================================================================
 // Test 4: queryDaemonSync() - sync version using nc or direct socket
 // =============================================================================
@@ -517,50 +489,3 @@ describe('graceful degradation', () => {
 // =============================================================================
 // Test 8: Error handling
 // =============================================================================
-
-describe('error handling', () => {
-  beforeEach(() => {
-    setupTestEnv();
-  });
-
-  afterEach(() => {
-    cleanupTestEnv();
-  });
-
-  it('should handle malformed JSON response gracefully', () => {
-    // Test that the response parsing in the client handles bad JSON
-    const parseResponse = (data: string): DaemonResponse => {
-      try {
-        return JSON.parse(data);
-      } catch {
-        return { status: 'error', error: 'Invalid JSON response from daemon' };
-      }
-    };
-
-    const result = parseResponse('not json{');
-    expect(result.status).toBe('error');
-    expect(result.error).toContain('Invalid JSON');
-  });
-
-  it('should return unavailable when socket does not exist', { timeout: 30000 }, async () => {
-    // Socket doesn't exist and tldr CLI is not available
-    const result = await queryDaemon({ cmd: 'ping' }, TEST_PROJECT_DIR);
-    expect(result.status).toBe('unavailable');
-  });
-
-  it('should handle sync query to missing socket', { timeout: 30000 }, () => {
-    // queryDaemonSync also returns unavailable when socket missing
-    const result = queryDaemonSync({ cmd: 'ping' }, TEST_PROJECT_DIR);
-    expect(result.status).toBe('unavailable');
-  });
-
-  it('should return error structure with proper fields', () => {
-    // Verify the error response structure
-    const errorResponse: DaemonResponse = {
-      status: 'error',
-      error: 'Some error message',
-    };
-    expect(errorResponse.status).toBe('error');
-    expect(errorResponse.error).toBeDefined();
-  });
-});

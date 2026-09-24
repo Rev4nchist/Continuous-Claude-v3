@@ -13,7 +13,8 @@
  * archived at docs/harness-strategy/artifacts/2026-08-31-live-dist/. Behavior
  * is verified equivalent by stdin/stdout/exit-code diff against that bundle.
  */
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync, existsSync, realpathSync } from 'fs';
+import { fileURLToPath } from 'url';
 import { join } from 'path';
 import { tmpdir } from 'os';
 import { outputContinue, outputWithMessage } from './shared/output.js';
@@ -70,4 +71,16 @@ function main(): void {
   }
 }
 
-main();
+// Entry only when this file is the process entrypoint (compared by real path, not a substring), so
+// importing the module from a test or another script has no side effect.
+function isDirectRun(): boolean {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+
+if (isDirectRun()) {
+  main();
+}
