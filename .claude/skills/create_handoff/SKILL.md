@@ -18,11 +18,22 @@ You are tasked with writing a handoff document to hand off your work to another 
   YAML. It carries `notion_url:` and is never edited by hand.
 - **Notion wins.** If the two differ, regenerate the YAML from the Notion page. Never copy YAML
   edits back into Notion.
-- **Notion unreachable** (headless run, connector down): write the YAML with `notion: pending` and
-  tell Dave in one line. The next `/create_handoff` or `/resume_handoff` that can reach Notion
-  creates the page from it and sets `notion_url:`.
+- **Notion unreachable** (headless run, connector down): write the YAML with `notion: pending` plus
+  the row's exact metadata, `notion_title:`, `repo:` (absolute path), `branch:` and `priority:`, so a
+  later push records the original provenance, not the pushing session's. Tell Dave in one line.
+  Step "Push pending first" below (run by every `/create_handoff` and `/resume_handoff`) creates the
+  row from it.
 
 ## Process
+### Push pending first (every run)
+
+Before anything else, find local YAML with `notion: pending`:
+`grep -l "^notion: pending" thoughts/shared/handoffs/*/*.yaml`. For each, create its Notion row (step
+0) from the YAML itself: title from `notion_title:`, `Repo` from `repo:`, branch from `branch:`,
+`Priority` from `priority:`, the date from `date:`, and the body from its fields. Never substitute the
+current session's repo or branch. Then replace `notion: pending` with `notion_url: <row URL>`. If
+Notion is still unreachable, leave the files as they are and say how many are pending.
+
 ### 0. Create the Notion row
 
 Use the claude.ai Notion MCP `notion-create-pages` with parent
@@ -103,7 +114,13 @@ session: {session-name from ledger}
 date: YYYY-MM-DD
 status: complete|partial|blocked
 outcome: SUCCEEDED|PARTIAL_PLUS|PARTIAL_MINUS|FAILED
-notion_url: {URL of the Notion page from step 0, or omit and set notion: pending}
+notion_url: {URL of the Notion row from step 0}
+# If Notion was unreachable, replace notion_url with ALL of these (used by "Push pending first"):
+# notion: pending
+# notion_title: "[Code→Next session] <topic> (<repo>) — YYYY-MM-DD"
+# repo: <absolute repo path>
+# branch: <branch>
+# priority: High|Mid|Low
 # Generated copy of the Notion page. Edit the Notion page, not this file.
 ---
 

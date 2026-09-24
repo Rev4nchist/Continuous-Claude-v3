@@ -72,7 +72,7 @@ research he has not introduced to his AI surfaces yet.
 | Any row replaced by a newer one | | `Superseded` (say which one in `Summary`) |
 
 **Views** (tabs on the database, shown inline on HQ): 📥 For Code (To = Code, Pending or In
-progress) · 📤 For Eve (To = Eve, Unread) · 📤 For Donna (To = Donna, Unread) · 🔁 Next session ·
+progress) · 📤 For Eve (To = Eve: Unread write-backs plus Pending or In progress work from Donna) · 📤 For Donna (the same for To = Donna) · 🔁 Next session ·
 ✅ Closed. A closed row leaves the queue views by itself.
 
 **Ownership:** the sender writes the row and its page. The receiver changes `Status` only. Eve never
@@ -91,7 +91,7 @@ edits Donna's rows; Donna never edits Eve's rows. Dave may edit anything.
 ### Read your queue
 - **SQL** (`notion-query-data-sources`, data source URL above):
   - Code: `SELECT * FROM "collection://13b919c8-b7af-4609-b4c6-87e5504809f0" WHERE "To" = 'Code' AND "Status" IN ('Pending','In progress') ORDER BY "date:Date:start" DESC`
-  - Eve / Donna: `... WHERE "To" = 'Eve' AND "Status" = 'Unread'` (or `'Donna'`)
+  - Eve / Donna: `... WHERE "To" = 'Eve' AND "Status" IN ('Unread','Pending','In progress')` (or `'Donna'`). Unread rows are Code's write-backs; Pending / In progress rows are work from the other assistant.
 - **By title:** `notion-search` with `data_source_url` = the data source URL and the title words.
 - Then `notion-fetch` each row to read its page in full. SQL text drops links and mentions; read the page.
 

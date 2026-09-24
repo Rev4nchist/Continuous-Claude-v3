@@ -77,7 +77,7 @@ Knowledge page: Active Context, Key Decisions pointer, architecture notes, Sprin
 latest Implementation Log entries, and the protocol. The Handoffs database sits inline on it.
 
 ### Your Bridge Responsibilities
-1. **At the start of Bridge-relevant conversations:** open 📤 For Donna (rows with To = Donna, Status = Unread)
+1. **At the start of Bridge-relevant conversations:** open 📤 For Donna (To = Donna: Unread write-backs from Code, plus Pending or In progress work from Eve)
 2. **When Dave makes business decisions:** add them to the 📌 Key Decisions Log page, newest first
 3. **When passing work to Code:** create a row: From = Donna, To = Code, Status = Pending, Priority, Date, one-sentence Summary; write the brief in the row's page
 4. **When Code writes back:** surface the key points to Dave in plain words, then set that row's Status to Read

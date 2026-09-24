@@ -15,11 +15,17 @@ Bridge HQ (data source `collection://13b919c8-b7af-4609-b4c6-87e5504809f0`). Ses
 
 ## Initial Response
 
-When this command is invoked:
+When this command is invoked, **first push pending YAML** on every route: run create_handoff's
+"Push pending first" step, so an offline handoff joins the Notion queue before anything is listed or
+resumed.
 
-0. **If a handoff title, "in Notion", or a Notion URL was given** (the usual case):
-   - Push first: any local YAML with `notion: pending` gets its Notion row created now (see
-     create_handoff "Where a handoff lives").
+**Any local YAML that carries `notion_url:`** (reached by path in route 1 or by ticket in route 2):
+`notion-fetch` that row and resume from the row, not the file, and apply the row's status lifecycle
+(route 0). Read the YAML only when the row cannot be fetched, and say so.
+
+0. **If a Notion URL or a handoff title was given** (the usual case):
+   - A request with no URL and no title words (for example just "resume the handoff in Notion")
+     has nothing to match: use route 3's open-row list instead.
    - Find the row: a Notion URL is used directly. Otherwise `notion-search` with
      `data_source_url: collection://13b919c8-b7af-4609-b4c6-87e5504809f0` and the title words as
      `query`. Take the exact title match. If several match, list them with dates and ask.
@@ -49,10 +55,11 @@ When this command is invoked:
    - Begin the analysis process by ingesting relevant context from the handoff document, reading additional files it mentions
    - Then propose a course of action to the user and confirm, or ask for clarification on direction.
 
-3. **If no parameters provided**: query the Handoffs data source for open rows addressed to Code
-   (`notion-query-data-sources`, SQL: `"To" IN ('Next session','Code') AND "Status" IN
-   ('Pending','In progress')`, newest `date:Date:start` first), then any local YAML with
-   `notion: pending`. Ask which one. If Notion is unreachable, fall back to the message below.
+3. **If no parameters provided, or no row identifier** (after the pending push above): query the
+   Handoffs data source for open rows addressed to Code (`notion-query-data-sources`, SQL:
+   `"To" IN ('Next session','Code') AND "Status" IN ('Pending','In progress')`, newest
+   `date:Date:start` first). List them with dates and ask which one; then continue with route 0 for
+   the chosen row. If Notion is unreachable, fall back to the message below.
 ```
 I'll help you resume work from a handoff document. Let me find the available handoffs.
 
