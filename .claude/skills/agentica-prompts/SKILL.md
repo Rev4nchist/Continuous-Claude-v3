@@ -1,6 +1,6 @@
 ---
 name: agentica-prompts
-description: Write reliable prompts for Agentica/REPL agents that avoid LLM instruction ambiguity
+description: 'Use when writing prompts for Agentica or REPL agents, so the instructions are unambiguous and the agent does not misread them.'
 metadata:
   user-invocable: false
 ---

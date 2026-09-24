@@ -1,6 +1,6 @@
 ---
 name: braintrust-tracing
-description: Braintrust tracing for Claude Code - hook architecture, sub-agent correlation, debugging
+description: 'Use when Braintrust traces are missing or wrong, when correlating sub-agent spans, or when changing the tracing hooks. Explains the CCv3 Braintrust hook architecture and how to debug it.'
 metadata:
   user-invocable: false
 ---
