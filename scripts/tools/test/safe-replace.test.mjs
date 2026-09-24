@@ -54,3 +54,18 @@ test('CLI: exit 0 and the edit lands', () => {
 test('CLI: exit 2 on bad usage', () => {
   assert.equal(run(['only-a-file']).code, 2);
 });
+
+test('a mixed-ending file keeps the endings outside the replaced span', () => {
+  assert.equal(replaceExact('a\r\nb\nc\n', 'b', 'z').text, 'a\r\nz\nc\n');
+  assert.equal(replaceExact('a\r\nb\nc\r\nd\n', 'b\nc', 'x\ny').text, 'a\r\nx\ny\r\nd\n');
+});
+
+test('regex characters in the anchor are literal', () => {
+  assert.equal(replaceExact('f(x) + [1]', '(x) + [1]', 'y').text, 'fy');
+});
+
+test('CLI: an empty anchor is a usage error (exit 2)', () => {
+  const f = join(mkdtempSync(join(tmpdir(), 'safe-replace-')), 'f.md');
+  writeFileSync(f, 'x');
+  assert.equal(run([f, '--old', '', '--new', 'y']).code, 2);
+});

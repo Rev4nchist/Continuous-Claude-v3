@@ -78,12 +78,14 @@ archify and warns on the other two.
 
 | Skill | Source | Install location | Why it matters |
 |---|---|---|---|
-| `archify` | github.com/tt-a1i/archify (MIT), installed with the `skills` CLI (`npx skills add tt-a1i/archify`) | `~/.agents/skills/archify` | `design-work.md` routes diagrams to it |
+| `archify` | github.com/tt-a1i/archify (MIT), installed with the `skills` CLI (`npx skills add tt-a1i/archify -g`; `-g` installs at user level, the location below) | `~/.agents/skills/archify` | `design-work.md` routes diagrams to it |
 | `browser-automation` | seeded by the CodeGPT app | `~/.codegpt/skills/browser-automation` | `design-work.md` names it for console and network checks |
 | `game-development` | seeded by the CodeGPT app | `~/.codegpt/skills/game-development` | game run-and-look loop |
 
 Link each one after it is installed (PowerShell):
 `New-Item -ItemType Junction -Path "$HOME\.claude\skills\archify" -Target "$HOME\.agents\skills\archify"`
+`New-Item -ItemType Junction -Path "$HOME\.claude\skills\browser-automation" -Target "$HOME\.codegpt\skills\browser-automation"`
+`New-Item -ItemType Junction -Path "$HOME\.claude\skills\game-development" -Target "$HOME\.codegpt\skills\game-development"`
 
 GitHub identity is **not** covered by the wizard and is verified separately -- see
 [GitHub Identity](#github-identity):

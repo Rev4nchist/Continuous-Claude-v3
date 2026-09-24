@@ -700,6 +700,18 @@ def test_empty_registry_returns_retired_with_zero_posts_no_subprocess_calls(
     assert "P32" in result["retired"]
 
 
+def test_empty_registry_marks_out_of_sample_sessions_retired_too(sample_session_trace, monkeypatch):
+    """The batch ratchet keys on "retired"; an out-of-sample session must carry it as well."""
+    js = _import_judge_session()
+    assert js.JUDGE_REGISTRY == []
+    monkeypatch.setattr(js, "is_sampled", lambda _sid: False)
+
+    result = js.judge_session(sample_session_trace, dry_run=False)
+    assert result["sampled"] is False
+    assert result["posts"] == 0
+    assert "P32" in result["retired"]
+
+
 # ---------------------------------------------------------------------------
 # Batch + max-sessions cap (UNCHANGED)
 # ---------------------------------------------------------------------------

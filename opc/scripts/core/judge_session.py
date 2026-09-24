@@ -792,6 +792,14 @@ def judge_session(
         "skipped": {},
     }
 
+    # Mark retirement before the sampling return, so every session in a retired
+    # run carries the marker the batch ratchet looks for (CodeRabbit #52).
+    if not JUDGE_REGISTRY:
+        result["retired"] = (
+            "no judges registered (P32, 2026-09-24); new binary judges "
+            "arrive with P17"
+        )
+
     in_sample = is_sampled(session_id)
     if not in_sample and not force:
         return result
@@ -800,10 +808,6 @@ def judge_session(
         result["forced"] = True
 
     if not JUDGE_REGISTRY:
-        result["retired"] = (
-            "no judges registered (P32, 2026-09-24); new binary judges "
-            "arrive with P17"
-        )
         return result
 
     for spec in JUDGE_REGISTRY:

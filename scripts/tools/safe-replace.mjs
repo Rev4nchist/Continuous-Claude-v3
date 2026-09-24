@@ -12,17 +12,29 @@
 import { readFileSync, writeFileSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
-/** Replace every occurrence of `oldText` in `text`. Line endings in both are compared as LF. */
+/**
+ * Replace every occurrence of `oldText` in `text`. A newline in the anchor matches either ending.
+ * Only the matched spans change: untouched lines keep their own endings, even in a mixed file.
+ * The replacement uses the ending found inside the match, else the file's dominant ending.
+ */
 export function replaceExact(text, oldText, newText, { count = 1 } = {}) {
   if (!oldText) throw new Error('old text is empty');
-  const eol = text.includes('\r\n') ? '\r\n' : '\n';
   const lf = (s) => s.replace(/\r\n/g, '\n');
-  const body = lf(text);
-  const anchor = lf(oldText);
-  const found = body.split(anchor).length - 1;
-  if (found !== count) return { ok: false, found, text };
-  const out = body.split(anchor).join(lf(newText));
-  return { ok: true, found, text: eol === '\r\n' ? out.replace(/\n/g, '\r\n') : out };
+  const escape = (s) => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+  const pattern = new RegExp(lf(oldText).split('\n').map(escape).join('\\r?\\n'), 'g');
+  const matches = [...text.matchAll(pattern)];
+  if (matches.length !== count) return { ok: false, found: matches.length, text };
+  const crlf = (text.match(/\r\n/g) || []).length;
+  const lfOnly = (text.match(/(?<!\r)\n/g) || []).length;
+  const fileEol = crlf > lfOnly ? '\r\n' : '\n';
+  let out = '';
+  let last = 0;
+  for (const m of matches) {
+    const eol = m[0].includes('\r\n') ? '\r\n' : m[0].includes('\n') ? '\n' : fileEol;
+    out += text.slice(last, m.index) + lf(newText).replace(/\n/g, eol);
+    last = m.index + m[0].length;
+  }
+  return { ok: true, found: matches.length, text: out + text.slice(last) };
 }
 
 function parseArgs(argv) {
@@ -38,6 +50,7 @@ function parseArgs(argv) {
     else throw new Error(`unknown flag ${k}`);
   }
   if (!a.file || a.old === undefined || a.new === undefined) throw new Error('usage: <file> --old|--old-file ... --new|--new-file ... [--count N]');
+  if (a.old === '') throw new Error('the old text (anchor) is empty');
   if (!Number.isInteger(a.count) || a.count < 1) throw new Error('--count must be a positive integer');
   return a;
 }

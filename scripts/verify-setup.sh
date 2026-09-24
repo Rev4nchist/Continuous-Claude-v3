@@ -53,7 +53,7 @@ check "settings.json has no foreign paths" "! grep -qi 'david.hayes' $HOME/.clau
 check "CLAUDE.md exists" "test -f $HOME/.claude/CLAUDE.md"
 check "RULES.md exists" "test -f $HOME/.claude/RULES.md"
 # The skill router only sees descriptions within these limits; without them skills silently drop out (P24).
-check "settings.json sets skillListingMaxDescChars and skillListingBudgetFraction" "grep -q '\"skillListingMaxDescChars\"' $HOME/.claude/settings.json && grep -q '\"skillListingBudgetFraction\"' $HOME/.claude/settings.json"
+check "settings.json sets usable skillListingMaxDescChars (>= 1024) and skillListingBudgetFraction (> 0)" "node -e \"const s=require(process.argv[1]); process.exit(s.skillListingMaxDescChars >= 1024 && s.skillListingBudgetFraction > 0 ? 0 : 1)\" $HOME/.claude/settings.json"
 # Third-party skills installed outside this repo (see BOOTSTRAP.md "Third-party skills").
 check "archify skill installed (design-work.md routes diagrams to it)" "test -f $HOME/.claude/skills/archify/SKILL.md"
 warn_check "browser-automation skill installed (CodeGPT seed)" "test -f $HOME/.claude/skills/browser-automation/SKILL.md"
