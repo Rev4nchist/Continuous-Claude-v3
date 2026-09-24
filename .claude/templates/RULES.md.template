@@ -263,8 +263,9 @@ Proof comes from running the real thing, not from tests that restate the code (a
 4. **A test must fail when the behaviour it guards breaks.** If you cannot name the code change that
    would make it fail, do not write it.
 
-A project's E2E command and artifact path live in the "Testing" section of its AGENTS.md (CLAUDE.md
-imports it with `@AGENTS.md`) and in `project-registry.json` (`e2e`).
+A project's E2E command and artifact path live in the "Testing" section of its AGENTS.md and in
+`project-registry.json` (`e2e`). The project's CLAUDE.md must import it with `@AGENTS.md`; add that line
+if it is missing (the `/init-project` template includes it since 2026-09-24).
 
 ### Performance Rules
 

@@ -159,7 +159,7 @@ Run these checks before starting (see RULES.md "Preflight Enforcement" for sever
 - Minimal reviewable changes — don't expand scope
 - State: which files change, why, how to verify
 - If a major problem surfaces → pause → return to Plan mode
-- Adding a feature: list how it can fail, make the E2E check fail, implement, make it pass, keep the artifact, then deploy (Vercel projects with `.vercel/project.json`). Detail: RULES.md "Testing Standards".
+- Adding a feature: list how it can fail, make the E2E check fail (or, where no E2E check can reach it, the test for a listed failure), implement, make it pass, keep the artifact, then deploy (Vercel projects with `.vercel/project.json`). Detail: RULES.md "Testing Standards".
 
 ### Verification Before Done
 
