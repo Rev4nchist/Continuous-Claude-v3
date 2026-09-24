@@ -4,6 +4,10 @@
 
 set -e
 
+# Git exports GIT_DIR / GIT_INDEX_FILE / GIT_WORK_TREE into hooks. Every git call below
+# names its repo with -C, so inherited values could only point it at the wrong one.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_NAMESPACE
+
 SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_CLAUDE="$REPO_ROOT/.claude"
@@ -334,8 +338,29 @@ LOCK_HELD=false
 release_lock() {
     if $LOCK_HELD; then
         rmdir "$LOCK_DIR" 2>/dev/null || true
+        LOCK_HELD=false
     fi
     return 0
+}
+
+# End of every run. The cursor moves only when the clobber guard reported no failed
+# copy (a failed file would otherwise never be retried). Then the lock is released and,
+# if a commit queued itself (pending marker) while we held it, this script runs again
+# for it -- checked AFTER the release, so no commit can slip in between the last check
+# and the release and wait for some later, unrelated sync.
+finish_sync() {
+    local target="$1" guard_rc=0
+    save_manifest
+    print_guard_summary || guard_rc=$?
+    [[ $guard_rc -eq 0 ]] && write_cursor "$target"
+    release_lock
+    [[ $guard_rc -ne 0 ]] && exit 3
+    if ! $DRY_RUN && [[ -e "$PENDING_FILE" ]]; then
+        rm -f "$PENDING_FILE"
+        $VERBOSE && echo "A commit queued during this run; syncing it now." || true
+        exec bash "$SCRIPT_DIR/$(basename "$0")" --changed $( $VERBOSE && echo --verbose || true )
+    fi
+    exit 0
 }
 
 if ! $DRY_RUN; then
@@ -519,6 +544,7 @@ if $CHANGED; then
             sync_base="$sync_cursor"
         else
             echo "  Sync cursor $sync_cursor is not an ancestor of HEAD; running the full mirror instead."
+            echo "  The full mirror never deletes: files removed from main since that cursor may remain in ~/.claude. Run /sync-drift to find them."
             CHANGED=false
         fi
     else
@@ -581,12 +607,15 @@ if $CHANGED; then
         fi
     fi
 
-    save_manifest
-    write_cursor "$sync_target"
-    print_guard_summary || exit 3
     $VERBOSE && echo "Incremental sync complete: continuous-claude -> ~/.claude" || true
-    exit 0
+    finish_sync "$sync_target"
 fi
+
+# Full mirror: record the commit we START from. A commit that lands while the tree is
+# being copied queues itself (pending marker) and is synced by finish_sync's re-run;
+# recording HEAD at the END would mark that commit synced when some of its files
+# were visited before it landed.
+FULL_START="$(repo_head)"
 
 # Regenerate .json sidecars from .md frontmatter before copying agents.
 # This ensures any .md edits are reflected in the .json files that claude_spawn.py reads.
@@ -758,7 +787,5 @@ if ! $DRY_RUN; then
     fi
 fi
 
-save_manifest
-write_cursor "$(repo_head)"
-print_guard_summary || exit 3
 $VERBOSE && echo "Sync complete: continuous-claude -> ~/.claude" || true
+finish_sync "$FULL_START"

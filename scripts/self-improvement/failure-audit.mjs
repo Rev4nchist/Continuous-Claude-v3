@@ -44,11 +44,13 @@ const isHuman = (o) => {
   if (o.isSidechain) return false; // subagent-internal turns
   // Headless `claude -p` runs (scheduled pipelines) are prompts a script wrote, not Dave.
   if (o.entrypoint === 'sdk-cli') return false;
+  // Meta flags first: skill loads, /loop prompts and compact summaries are never Dave, even
+  // if a record also carries a human origin.
+  if (o.isMeta || o.isCompactSummary || o.isVisibleInTranscriptOnly) return false;
   // Authoritative when present: 'human' for typed/queued turns; 'task-notification', 'peer',
   // 'scheduled' and 'sdk' for everything the harness injects.
   if (o.origin && o.origin.kind) return o.origin.kind === 'human';
   if (o.turnOrigin) return o.turnOrigin === 'human';
-  if (o.isMeta || o.isCompactSummary || o.isVisibleInTranscriptOnly) return false; // skill loads, /loop prompts, compact summaries
   const c = o.message.content;
   if (typeof c === 'string') return c.length > 0 && !INJECTED_PREFIX.test(c.trimStart());
   if (Array.isArray(c)) {

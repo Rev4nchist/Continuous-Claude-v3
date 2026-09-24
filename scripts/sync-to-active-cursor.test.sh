@@ -7,6 +7,9 @@
 #
 # Usage (Git Bash, not WSL): bash scripts/sync-to-active-cursor.test.sh
 set -u
+# Never let an inherited GIT_DIR (e.g. when run from a git hook) point the fixture's
+# git calls at the caller's repository.
+unset GIT_DIR GIT_WORK_TREE GIT_INDEX_FILE GIT_OBJECT_DIRECTORY GIT_ALTERNATE_OBJECT_DIRECTORIES GIT_COMMON_DIR GIT_PREFIX GIT_NAMESPACE
 
 SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 REAL="$SCRIPT_DIR/sync-to-active.sh"
@@ -97,6 +100,23 @@ out="$(sync --changed)"
 chk "fallback message printed" "$(printf '%s' "$out" | grep -q 'running the full mirror' && echo 1 || echo 0)"
 chk "full mirror synced f.md" "$(has "$ACT/rules/f.md")"
 chk "cursor repaired to HEAD" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse HEAD)" ] && echo 1 || echo 0)"
+
+echo "=== T7: a pending marker left at the end triggers one more run, then clears ==="
+printf 'g\n' > "$REPO/.claude/rules-src/g.md"; commit g
+: > "$ACT/.sync.pending"
+sync --changed >/dev/null; rc=$?
+chk "exit 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+chk "g.md synced" "$(has "$ACT/rules/g.md")"
+chk "marker cleared by the re-run" "$(not "$ACT/.sync.pending")"
+chk "lock released" "$(not "$ACT/.sync.lock")"
+
+echo "=== T8: an inherited GIT_DIR (as in a git hook) does not redirect the checks ==="
+OTHER="$FIX/other"; mkdir -p "$OTHER"
+git -C "$OTHER" init -q -b feature-elsewhere >/dev/null 2>&1
+printf 'h\n' > "$REPO/.claude/rules-src/h.md"; commit h
+out="$(GIT_DIR="$OTHER/.git" HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.sh" --changed 2>&1)"
+chk "not skipped as 'feature-elsewhere'" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 0 || echo 1)"
+chk "h.md synced from the fixture repo" "$(has "$ACT/rules/h.md")"
 
 echo
 echo "passed=$pass failed=$fail"

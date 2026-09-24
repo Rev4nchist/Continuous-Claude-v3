@@ -92,6 +92,19 @@ const SYNTHETIC_TAG =
 const MAX_HUMAN_PROMPT_LEN = 8000;
 
 /**
+ * True only for an EXPLICIT harness wrapper (<task-notification>, <agent-message>,
+ * <system-reminder>, command output, *-hook). Unlike isMachineGeneratedPrompt it does NOT
+ * use the length or XML-density heuristics, so a long human prompt, or one that pastes
+ * some XML, is never mistaken for harness text. Use it where a false positive would drop
+ * a real human signal (user-confirmation-detector).
+ */
+export function isHarnessWrappedPrompt(prompt: string): boolean {
+  if (typeof prompt !== 'string') return false;
+  const t = prompt.trim();
+  return SYNTHETIC_TAG.test(t) || t.includes('<task-notification');
+}
+
+/**
  * True when a prompt is machine-generated content (Claude Code synthetic
  * wrappers, dense XML, or oversized blobs) rather than a real user intent.
  * Used UPSTREAM of recall/intent extraction to drop the 24.6% pollution.

@@ -171,20 +171,10 @@ function writeStateWithLock(filePath, content) {
 
 // src/shared/intent-extractor.ts
 var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
-var MAX_HUMAN_PROMPT_LEN = 8e3;
-function isMachineGeneratedPrompt(prompt) {
+function isHarnessWrappedPrompt(prompt) {
   if (typeof prompt !== "string") return false;
   const t = prompt.trim();
-  if (t.length === 0) return false;
-  if (SYNTHETIC_TAG.test(t)) return true;
-  if (t.includes("<task-notification")) return true;
-  if (t.length > MAX_HUMAN_PROMPT_LEN) return true;
-  const names = /* @__PURE__ */ new Set();
-  for (const m of t.matchAll(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi)) {
-    names.add(m[1].toLowerCase());
-    if (names.size >= 3) return true;
-  }
-  return false;
+  return SYNTHETIC_TAG.test(t) || t.includes("<task-notification");
 }
 
 // src/user-confirmation-detector.ts
@@ -347,7 +337,7 @@ async function main() {
     console.log(JSON.stringify({ continue: true }));
     return;
   }
-  if (isMachineGeneratedPrompt(prompt)) {
+  if (isHarnessWrappedPrompt(prompt)) {
     console.log(JSON.stringify({ continue: true }));
     return;
   }

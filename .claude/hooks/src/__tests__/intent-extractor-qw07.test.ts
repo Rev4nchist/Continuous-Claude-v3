@@ -15,7 +15,22 @@
  */
 
 import { describe, it, expect } from 'vitest';
-import { isMachineGeneratedPrompt, expandGitQuery } from '../shared/intent-extractor.js';
+import { isMachineGeneratedPrompt, isHarnessWrappedPrompt, expandGitQuery } from '../shared/intent-extractor.js';
+
+describe('isHarnessWrappedPrompt (explicit wrappers only)', () => {
+  it('flags task notifications and subagent hand-backs', () => {
+    expect(isHarnessWrappedPrompt('<task-notification><task-id>x</task-id> done </task-notification>')).toBe(true);
+    expect(isHarnessWrappedPrompt('<agent-message from="a1"> yes, works </agent-message>')).toBe(true);
+  });
+  it('does NOT flag a long human prompt or one that pastes XML (unlike isMachineGeneratedPrompt)', () => {
+    const long = 'yes that works, thanks. ' + 'x'.repeat(9000);
+    expect(isMachineGeneratedPrompt(long)).toBe(true);
+    expect(isHarnessWrappedPrompt(long)).toBe(false);
+    const xml = 'confirmed, it works: <a>1</a><b>2</b><c>3</c>';
+    expect(isMachineGeneratedPrompt(xml)).toBe(true);
+    expect(isHarnessWrappedPrompt(xml)).toBe(false);
+  });
+});
 
 describe('isMachineGeneratedPrompt', () => {
   describe('returns TRUE for machine-generated content', () => {
