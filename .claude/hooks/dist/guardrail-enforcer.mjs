@@ -21,21 +21,11 @@ function outputWithMessage(message, hookEventName) {
 }
 
 // src/shared/intent-extractor.ts
-var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
-var MAX_HUMAN_PROMPT_LEN = 8e3;
-function isMachineGeneratedPrompt(prompt) {
+var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+function isHarnessWrappedPrompt(prompt) {
   if (typeof prompt !== "string") return false;
   const t = prompt.trim();
-  if (t.length === 0) return false;
-  if (SYNTHETIC_TAG.test(t)) return true;
-  if (t.includes("<task-notification")) return true;
-  if (t.length > MAX_HUMAN_PROMPT_LEN) return true;
-  const names = /* @__PURE__ */ new Set();
-  for (const m of t.matchAll(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi)) {
-    names.add(m[1].toLowerCase());
-    if (names.size >= 3) return true;
-  }
-  return false;
+  return SYNTHETIC_TAG.test(t) || t.includes("<task-notification");
 }
 
 // src/guardrail-enforcer.ts
@@ -79,7 +69,8 @@ Do NOT write SQL without the database skill loaded.`
     skill: "code-review",
     // Bare `review` / `approve` / `merge` fired on "review this tweet" and "approve deletion"
     // (2026-09-23 eval, P22). Now: code or PR context only. "merge 43 and 44" still counts.
-    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
+    // A bare "#42" is not enough ("fix issue #42" is not a review); it needs PR/review/merge.
+    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|review\s+(?:pr\s*)?#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
     antiTriggers: /\b(no\s+review|skip\s+review|review\s+later)\b/i,
     message: `\u{1F6D1} GUARDRAIL: Code review methodology required
 
@@ -140,7 +131,7 @@ function readStdin() {
   return readFileSync(0, "utf-8");
 }
 function matchGuardrails(prompt) {
-  if (isMachineGeneratedPrompt(prompt)) return [];
+  if (isHarnessWrappedPrompt(prompt)) return [];
   const lowerPrompt = prompt.toLowerCase();
   return GUARDRAILS.filter((g) => g.triggers.test(lowerPrompt) && !(g.antiTriggers && g.antiTriggers.test(lowerPrompt))).map((g) => g.name);
 }

@@ -42,7 +42,12 @@ function worktreeSizes() {
 }
 
 try {
-  const budget = JSON.parse(readFileSync(join(here, 'rules-budget.json'), 'utf8'));
+  // In --staged mode read the STAGED budget too, so raising maxBytes only in the working tree
+  // cannot let an over-budget commit through.
+  const budgetText = args.includes('--staged')
+    ? execFileSync('git', ['-C', repo, 'show', ':scripts/rules/rules-budget.json'], { encoding: 'utf8' })
+    : readFileSync(join(here, 'rules-budget.json'), 'utf8');
+  const budget = JSON.parse(budgetText);
   const rows = (args.includes('--staged') ? stagedSizes() : worktreeSizes()).sort((a, b) => b.bytes - a.bytes);
   const total = rows.reduce((n, r) => n + r.bytes, 0);
   const over = total > budget.maxBytes;

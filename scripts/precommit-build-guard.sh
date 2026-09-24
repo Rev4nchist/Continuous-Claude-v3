@@ -54,21 +54,23 @@ staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" || exit
 # The agents and skills checks read the working tree; if it differs from what
 # is staged in those paths, the result is labelled as a working-tree check.
 # -----------------------------------------------------------------------------
-if [ -z "${SKIP_RATCHETS:-}" ] && command -v node >/dev/null 2>&1; then
+if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
   root="$(git rev-parse --show-toplevel 2>/dev/null)"
   ratchet_fail=0
   run_ratchet() {  # $1 = label, $2 = pathspec for the unstaged-diff note, rest = command
     label="$1"; spec="$2"; shift 2
-    if ! "$@" >/tmp/ccv3-ratchet.$$ 2>&1; then
+    # mktemp, not a predictable $$ path (a pre-created symlink could redirect the write).
+    out="$(mktemp 2>/dev/null)" || { "$@" >/dev/null 2>&1 || ratchet_fail=1; return; }
+    if ! "$@" >"$out" 2>&1; then
       echo "" >&2
       echo "BLOCKED by $label:" >&2
-      sed 's/^/    /' /tmp/ccv3-ratchet.$$ >&2
+      sed 's/^/    /' "$out" >&2
       if [ -n "$spec" ] && ! git diff --quiet -- "$spec" 2>/dev/null; then
         echo "    (checked the working tree; it has unstaged changes under $spec)" >&2
       fi
       ratchet_fail=1
     fi
-    rm -f /tmp/ccv3-ratchet.$$
+    rm -f "$out"
   }
   if printf '%s\n' "$staged" | grep -q '^\.claude/rules-src/'; then
     run_ratchet "rules-budget-guard" "" node "$root/scripts/rules/rules-budget-guard.mjs" --staged

@@ -259,7 +259,7 @@ function extractIntent(prompt) {
   }
   return intent;
 }
-var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
 var MAX_HUMAN_PROMPT_LEN = 8e3;
 function isMachineGeneratedPrompt(prompt) {
   if (typeof prompt !== "string") return false;

@@ -7,6 +7,12 @@ import { describe, it, expect } from 'vitest';
 import { matchGuardrails } from '../guardrail-enforcer.js';
 
 describe('matchGuardrails', () => {
+  it('still analyzes a long human prompt (length alone is not "machine-generated")', () => {
+    const long = 'please review this PR and merge #45 when green. ' + 'context '.repeat(1200);
+    expect(long.length).toBeGreaterThan(8000);
+    expect(matchGuardrails(long)).toContain('code-review');
+  });
+
   it('does not fire on harness turns', () => {
     expect(matchGuardrails('<task-notification><task-id>x</task-id> workflow failed with an error </task-notification>')).toEqual([]);
     expect(matchGuardrails('<system-reminder>fix the database query</system-reminder>')).toEqual([]);
@@ -16,7 +22,7 @@ describe('matchGuardrails', () => {
     for (const p of ['merge 43 and 44', 'review this PR', 'open a pull request', 'merge #40', 'can you code review the diff', 'review the changes on this branch']) {
       expect(matchGuardrails(p)).toContain('code-review');
     }
-    for (const p of ['I want you to review this tweet', 'approve deleting the quarantine folder', 'review the lane board', 'Order looks good']) {
+    for (const p of ['I want you to review this tweet', 'approve deleting the quarantine folder', 'review the lane board', 'Order looks good', 'fix issue #42']) {
       expect(matchGuardrails(p)).not.toContain('code-review');
     }
   });

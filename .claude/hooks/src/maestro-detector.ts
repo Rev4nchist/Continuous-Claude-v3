@@ -21,7 +21,7 @@
 import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { outputContinue } from './shared/output.js';
-import { isMachineGeneratedPrompt } from './shared/intent-extractor.js';
+import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
 
 interface ComplexitySignal {
   name: string;
@@ -191,7 +191,7 @@ async function main() {
 
     // Skip very short prompts, and harness turns (task notifications, system reminders):
     // it suggested Maestro for a background task-notification (2026-09-23 eval, P22).
-    if (prompt.length < 50 || isMachineGeneratedPrompt(prompt)) {
+    if (prompt.length < 50 || isHarnessWrappedPrompt(prompt)) {
       outputContinue();
       return;
     }

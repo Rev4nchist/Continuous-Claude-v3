@@ -7,7 +7,7 @@
  * based on pattern matching without reading actual file content.
  */
 
-import { existsSync, writeFileSync } from 'fs';
+import { writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 
@@ -60,11 +60,16 @@ async function main(): Promise<void> {
   const sid = (input.session_id || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
   if (sid) {
     const flag = join(tmpdir(), `claude-epistemic-reminder-${sid}.flag`);
-    if (existsSync(flag)) {
-      console.log('{}');
-      return;
+    try {
+      // 'wx' = create only if absent, atomically: two concurrent Greps cannot both win.
+      writeFileSync(flag, '', { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        console.log('{}');
+        return;
+      }
+      // Any other write error: show the reminder (the old behavior) rather than lose it.
     }
-    try { writeFileSync(flag, ''); } catch { /* reminder still shows; next Grep may repeat it */ }
   }
 
   const reminder = `

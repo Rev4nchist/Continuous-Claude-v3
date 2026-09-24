@@ -90,14 +90,16 @@ bash, so every commit can hit it.
   live peer-session shells (PIDs are reused; low CPU does not mean stuck). To look for stuck MSYS
   processes, census by path, read-only:
   ```powershell
-  $g='C:\Users\david.hayes\AppData\Local\Programs\Git'
+  $g=(Split-Path (Split-Path (Get-Command git).Source)).TrimEnd('\') + '\'   # the active Git root, with a trailing \
   Get-CimInstance Win32_Process | ? { $_.ExecutablePath -and $_.ExecutablePath.StartsWith($g,'OrdinalIgnoreCase') } |
     Select ProcessId,ParentProcessId,Name,CreationDate,CommandLine | Format-List
   ```
   Reclaim only a leaf orphan: no children, no live `claude`/`pwsh`/`node` ancestor, older than
   600 s, and two samples 60 s apart agree. Kill it by explicit PID.
-- **Measure a rate, not a count.** `msys-events.jsonl` logs every Bash and git-safe call (`ok:1`
-  rows included). On 2026-09-23 it showed 1 failure in 18,297 calls since 2026-08-19.
+- **Measure a rate, not a count.** `msys-events.jsonl` logs Bash-tool calls and git-safe runs
+  (`ok:1` rows included; an ordinary git error in git-safe is not logged). On 2026-09-23 it showed
+  1 failure in 18,297 logged calls since 2026-08-19. The file rotates (one previous generation
+  kept), so compute a rate only over an interval both files still cover.
 - `bash` on PATH is WSL, not MSYS. `pwsh -File scripts/msys/spawn-latency.ps1` measures Git bash
   cold starts; check that its `git bash:` line names a path under `Git\bin`.
 

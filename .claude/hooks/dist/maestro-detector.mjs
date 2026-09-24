@@ -11,21 +11,11 @@ function outputContinue() {
 }
 
 // src/shared/intent-extractor.ts
-var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
-var MAX_HUMAN_PROMPT_LEN = 8e3;
-function isMachineGeneratedPrompt(prompt) {
+var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+function isHarnessWrappedPrompt(prompt) {
   if (typeof prompt !== "string") return false;
   const t = prompt.trim();
-  if (t.length === 0) return false;
-  if (SYNTHETIC_TAG.test(t)) return true;
-  if (t.includes("<task-notification")) return true;
-  if (t.length > MAX_HUMAN_PROMPT_LEN) return true;
-  const names = /* @__PURE__ */ new Set();
-  for (const m of t.matchAll(/<\/?([a-z][a-z0-9-]*)\b[^>]*>/gi)) {
-    names.add(m[1].toLowerCase());
-    if (names.size >= 3) return true;
-  }
-  return false;
+  return SYNTHETIC_TAG.test(t) || t.includes("<task-notification");
 }
 
 // src/maestro-detector.ts
@@ -146,7 +136,7 @@ async function main() {
       return;
     }
     const prompt = input.prompt;
-    if (prompt.length < 50 || isMachineGeneratedPrompt(prompt)) {
+    if (prompt.length < 50 || isHarnessWrappedPrompt(prompt)) {
       outputContinue();
       return;
     }

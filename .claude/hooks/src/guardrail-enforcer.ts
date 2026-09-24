@@ -19,7 +19,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { outputContinue, outputWithMessage } from './shared/output.js';
-import { isMachineGeneratedPrompt } from './shared/intent-extractor.js';
+import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
 
 interface Guardrail {
   name: string;
@@ -69,7 +69,8 @@ Do NOT write SQL without the database skill loaded.`
     skill: 'code-review',
     // Bare `review` / `approve` / `merge` fired on "review this tweet" and "approve deletion"
     // (2026-09-23 eval, P22). Now: code or PR context only. "merge 43 and 44" still counts.
-    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
+    // A bare "#42" is not enough ("fix issue #42" is not a review); it needs PR/review/merge.
+    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|review\s+(?:pr\s*)?#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
     antiTriggers: /\b(no\s+review|skip\s+review|review\s+later)\b/i,
     message: `🛑 GUARDRAIL: Code review methodology required
 
@@ -160,7 +161,7 @@ function readStdin(): string {
  * they fired the debugging and database guardrails on background events (P22).
  */
 export function matchGuardrails(prompt: string): string[] {
-  if (isMachineGeneratedPrompt(prompt)) return [];
+  if (isHarnessWrappedPrompt(prompt)) return [];
   const lowerPrompt = prompt.toLowerCase();
   return GUARDRAILS
     .filter((g) => g.triggers.test(lowerPrompt) && !(g.antiTriggers && g.antiTriggers.test(lowerPrompt)))

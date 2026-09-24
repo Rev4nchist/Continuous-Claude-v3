@@ -254,7 +254,7 @@ with `.`). Control commands can mutate or destroy data irreversibly.
 
 ## The boundary [C:10]
 
-**Any command starting with `.` that is not `.show …` requires explicit user confirmation before it runs.**
+**Any command starting with `.` that is not `.show …` (or the `whatif=true` dry run listed as safe below) requires explicit user confirmation before it runs.**
 This is default-deny, not a lookup list — an unfamiliar `.`-command is CONFIRM, never assume-safe. The
 families below are guidance on blast radius, not the limit of what is gated.
 

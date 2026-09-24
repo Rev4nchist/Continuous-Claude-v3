@@ -1,7 +1,7 @@
 # Kusto.Cli Safety Rules
 
-**Any Kusto command starting with `.` that is not `.show …` needs Dave's explicit confirmation before
-it runs.** Default-deny: an unfamiliar `.`-command is confirm-first, never assumed safe. Pure KQL
+**Any Kusto command starting with `.` that is not `.show …` (or the `whatif=true` dry run below)
+needs explicit user confirmation before it runs.** Default-deny: an unfamiliar `.`-command is confirm-first, never assumed safe. Pure KQL
 queries, `.show …`, `#` client directives and `.execute database script with (whatif=true)` are safe.
 
 Before any control command: echo the target (`#dbcontext`, `.show cluster`), show what is about to
