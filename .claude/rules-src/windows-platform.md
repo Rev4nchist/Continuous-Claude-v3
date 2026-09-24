@@ -149,4 +149,4 @@ Remove any such link before `git worktree remove --force` on a worktree that hol
 History, the corrections of 2026-08-05/11, rollback, and re-authenticating after a revoked OAuth grant:
 `docs/github/auth-routing.md`.
 
-Full merge/branch-cleanup workflow using these: `.claude/rules/git-merge-workflow.md`.
+Full merge/branch-cleanup workflow using these: `.claude/rules-ondemand/git-merge-workflow.md`.

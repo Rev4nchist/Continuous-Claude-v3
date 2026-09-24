@@ -53,6 +53,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | package-install-guard | Bash | 4-layer supply-chain check on package installs (typosquat, blocklist, OSV.dev, age); blocks malicious installs |
 | file-claims | Edit\|Write | Distributed file locking across sessions |
 | test-before-done | TaskUpdate | Require test evidence before marking task complete |
+| rule-router | Bash\|PowerShell\|Agent\|Skill\|Neon/linear/sentry MCP | Load a tool-specific rule from `rules-ondemand/` at the first matching call; `deny-first` rules block once with the rule as the reason |
 
 ## PostToolUse
 
@@ -120,6 +121,7 @@ Key blockers:
 - **no-haiku-enforcer** -- blocks haiku model selection for agents
 - **test-before-done** -- blocks task completion without test evidence
 - **package-install-guard** -- blocks malicious/typosquatted package installs
+- **rule-router** -- blocks the first Codex/Grok/CMA call and the first commit or PR create per session, once, with the rule text as the reason
 
 ## File Locations
 

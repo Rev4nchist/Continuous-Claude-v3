@@ -5,7 +5,7 @@
 
 > Source: platform.claude.com/docs/en/managed-agents/* (read 2026-06-14). If a call fails on a field name, the **live docs win** — check, adapt, retry once.
 > Two equivalent surfaces: `ant` CLI and curl. The Python/TS SDKs mirror these exactly (`client.beta.<resource>.<verb>`).
-> **Windows (continuous-claude):** `ant` installs from the GitHub release binary (`C:\tools\ant\` on PATH), not `brew`. Use `python` (no `python3` on Windows); in PowerShell use `curl.exe` or run via the Bash tool. For headless/scheduled use prefer the Python SDK (`pip install anthropic`) — it sets the `managed-agents-2026-04-01` beta header and manages the SSE stream automatically. Before any billable call, apply `.claude/rules/cma-safety.md`.
+> **Windows (continuous-claude):** `ant` installs from the GitHub release binary (`C:\tools\ant\` on PATH), not `brew`. Use `python` (no `python3` on Windows); in PowerShell use `curl.exe` or run via the Bash tool. For headless/scheduled use prefer the Python SDK (`pip install anthropic`) — it sets the `managed-agents-2026-04-01` beta header and manages the SSE stream automatically. Before any billable call, apply `.claude/rules-ondemand/cma-safety.md`.
 
 ## Setup (every terminal)
 

@@ -4,7 +4,7 @@
 > prompt to `claude -p`. The Notion mirror is now the deterministic (ntn-only, NO MCP,
 > NO LLM) `scripts/report-registry/health-mirror.mjs` — the mirror is ~90% mechanical,
 > so the LLM round-trip added cost, non-determinism, and the headless-MCP permission-grant
-> footgun that silently froze this pipeline for 11 weeks (see `.claude/rules/headless-claude-mcp.md`).
+> footgun that silently froze this pipeline for 11 weeks (see `.claude/rules-ondemand/headless-claude-mcp.md`).
 > This file is retained for historical reference / as the spec of the section shapes the
 > deterministic renderer reproduces. Do not wire it back into the batch file.
 

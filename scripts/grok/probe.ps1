@@ -2,7 +2,7 @@
 # Usage:  pwsh -NoProfile -File scripts/grok/probe.ps1 [-TimeoutSec 60]
 # You should see either the model's reply (Grok inference is UP) or "HUNG >Ns" (still stalled).
 #
-# Discipline (see .claude/rules/grok-worker-safety.md + the 2026-07-12 grok-diagnosis handoff):
+# Discipline (see .claude/rules-ondemand/grok-worker-safety.md + the 2026-07-12 grok-diagnosis handoff):
 # - Bounded: Wait-Job caps the call; a raw `grok -p` can hang indefinitely (intermittent
 #   pre-first-token completion stall, observed 2026-07-12/13).
 # - Swept: Stop-Process kills the native grok.exe orphan (GNU timeout CANNOT — verified).

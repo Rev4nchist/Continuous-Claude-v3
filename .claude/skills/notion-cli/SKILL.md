@@ -85,7 +85,7 @@ Hosted TS runtime in Notion's sandbox: `ntn workers new/deploy/exec`, scheduled 
 
 ## Known workspace IDs (safety rule references these)
 
-Bridge HQ `30e76fd7ac8281e99fe1c0b257088b34` · Reports hub `38f76fd7ac8280478e50dd2956ba6e8a` · Bridge Archive `30e76fd7ac8281258cd9d281aa873298` — mutating any of these via `ntn` is confirm-first (see `.claude/rules/notion-cli-safety.md`).
+Bridge HQ `30e76fd7ac8281e99fe1c0b257088b34` · Reports hub `38f76fd7ac8280478e50dd2956ba6e8a` · Bridge Archive `30e76fd7ac8281258cd9d281aa873298` — mutating any of these via `ntn` is confirm-first (see `.claude/rules-ondemand/notion-cli-safety.md`).
 
 ## Report Runs registry — the report-history spine
 

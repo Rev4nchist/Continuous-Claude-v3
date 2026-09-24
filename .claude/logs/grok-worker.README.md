@@ -56,7 +56,7 @@ jq -c 'select(.usage_limited == true)' .claude/logs/grok-worker.jsonl
 
 ## Related
 
-- Safety contract: `.claude/rules/grok-worker-safety.md`
+- Safety contract: `.claude/rules-ondemand/grok-worker-safety.md`
 - Engine: `.claude/agents/grok-worker.md` · Skill: `.claude/skills/grok/SKILL.md`
 - Design + evidence: `docs/grok-integration/DESIGN-RESEARCH.md`
 - Sibling (Codex): `.claude/logs/codex-worker.README.md`

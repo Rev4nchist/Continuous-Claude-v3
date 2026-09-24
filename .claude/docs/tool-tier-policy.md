@@ -236,7 +236,7 @@ These rules already codify pieces of this policy. This document does not duplica
 - `.claude/rules/opencli-first.md` — OpenCLI for structured web data (44 platforms)
 - `.claude/rules/plan-to-ralph-enforcement.md` — gate-hook example with bypass-permissions interaction caveat
 - `.claude/rules/package-install-safety.md` — gate-hook example with 4-layer security check
-- `.claude/rules/sentry-safety.md`, `.claude/rules/linear-safety.md`, `.claude/rules/neonctl-safety.md`, `.claude/rules/railway-deploy.md` — destructive-CLI gating patterns (skill body + rule + agent quarantine)
+- `.claude/rules-ondemand/sentry-safety.md`, `.claude/rules-ondemand/linear-safety.md`, `.claude/rules-ondemand/neonctl-safety.md`, `.claude/rules-ondemand/railway-deploy.md` — destructive-CLI gating patterns (skill body + rule + agent quarantine)
 - `.claude/rules/browser-automation.md` — 5-tier browser tool decision tree
 - `.claude/rules/windows-platform.md` — Windows-specific quirks affecting hook + MCP config (`.claude.json` race window, `python3` alias, `npx` cmd /c wrapper)
 - `.claude/rules/agent-model-selection.md`, `.claude/rules/no-haiku.md` — model-selection gate hook context

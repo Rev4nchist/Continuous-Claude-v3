@@ -28,14 +28,14 @@ ROOTS=(
 
 # Canonical (user-level) paths - these are EXPECTED to exist, not shadows
 CANONICAL_AGENT="$HOME/.claude/agents/codex-adversary.md"
-CANONICAL_RULE="$HOME/.claude/rules/codex-adversarial.md"
+CANONICAL_RULE="$HOME/.claude/rules-ondemand/codex-adversarial.md"
 CANONICAL_REVIEW="$HOME/.claude/skills/review/SKILL.md"
 CANONICAL_PREMORTEM="$HOME/.claude/skills/premortem/SKILL.md"
 CANONICAL_HOOK="$HOME/.claude/hooks/dist/plan-exit-premortem-prompt.mjs"
 
 # Source-of-truth paths in the continuous-claude repo - also expected, not shadows
 SOURCE_AGENT="$HOME/continuous-claude/.claude/agents/codex-adversary.md"
-SOURCE_RULE="$HOME/continuous-claude/.claude/rules-src/codex-adversarial.md"
+SOURCE_RULE="$HOME/continuous-claude/.claude/rules-ondemand/codex-adversarial.md"
 SOURCE_REVIEW="$HOME/continuous-claude/.claude/skills/review/SKILL.md"
 SOURCE_PREMORTEM="$HOME/continuous-claude/.claude/skills/premortem/SKILL.md"
 SOURCE_HOOK="$HOME/continuous-claude/.claude/hooks/dist/plan-exit-premortem-prompt.mjs"

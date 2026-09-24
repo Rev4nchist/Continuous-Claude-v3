@@ -359,7 +359,8 @@ Specific operational rules are loaded automatically from `.claude/rules/` files.
 - Browser automation, claim verification, TLDR CLI usage
 - Hook auto-execution, sync workflows
 
-Do not duplicate their content here — they are always present in context.
+Tool-specific rules (Codex, Grok, CMA, the CLIs, merge, commit and PR style, DB) load on demand:
+see `rules/on-demand-rules.md`. Do not duplicate their content here.
 
 ---
 *Global config — constraints and enforcement live in RULES.md. Operational specifics live in .claude/rules/.*

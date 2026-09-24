@@ -4,7 +4,7 @@ description: Operator reference for scripting Claude Managed Agents (CMA) via an
 metadata:
   version: "1.0.0"
   authored: "2026-06-27 (continuous-claude harness)"
-  companions: ".claude/rules/cma-safety.md, .claude/skills/launch-your-agent/, .claude/agents/cma-operator.md"
+  companions: ".claude/rules-ondemand/cma-safety.md, .claude/skills/launch-your-agent/, .claude/agents/cma-operator.md"
 ---
 
 # CMA — operator reference
@@ -16,7 +16,7 @@ container server-side, persisting the event log. It reaches the world only throu
 wire to it — **never your local disk or local MCP servers**. Live docs (authoritative on drift):
 https://platform.claude.com/docs/en/managed-agents/overview
 
-**Before any billable call, apply `.claude/rules/cma-safety.md`.** Spend is on `ANTHROPIC_API_KEY`
+**Before any billable call, apply `.claude/rules-ondemand/cma-safety.md`.** Spend is on `ANTHROPIC_API_KEY`
 (consumption — SEPARATE from the Claude Code subscription): tokens + **$0.08/session-hour** + web search.
 
 ## API Contract (single source of truth — the drift firewall)
@@ -90,7 +90,7 @@ is the **`cma-operator`** agent (`.claude/agents/cma-operator.md`).
 ---
 
 <!-- archived-rule:cma-safety.md ref:014d2c6 -->
-## Reference: pre-split text of `rules/cma-safety.md` (archived 2026-07-29)
+## Reference: pre-split text of `rules-ondemand/cma-safety.md` (archived 2026-07-29)
 
 The rule now carries only what must be true *before* an agent decides to touch CMA at all —
 that it spends real money on a different account, that it is not ZDR-eligible, that every

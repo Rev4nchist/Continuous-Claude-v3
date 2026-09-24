@@ -78,22 +78,22 @@ Update every registered location with the verified allowlist + new version stamp
 | File | What lives there |
 |---|---|
 | `.claude/agents/codex-worker.md` | the `case` gate (Step 2b) — THE mechanical enforcement; prose in constraint #3, `## Model` input contract, effort note |
-| `.claude/rules-src/codex-worker-safety.md` | "Model allowlist" section + Grounding line + "Version drift" section |
+| `.claude/rules-ondemand/codex-worker-safety.md` | "Model allowlist" section + Grounding line + "Version drift" section |
 | `.claude/skills/codex/SKILL.md` | user-facing `--model`/`--effort` flags line |
 | `.claude/agents/codex-adversary.md` | `CODEX_ADVERSARY_MODEL` validation `case` + comment |
-| `.claude/rules-src/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
+| `.claude/rules-ondemand/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
 | `.claude/rules-src/cli-integration-strategy.md` | Codex inventory row |
-| `.claude/rules-src/harness-update.md` | Evidence-trail table version pin (Codex row) |
+| `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Codex row) |
 
 **Grok edit points:**
 | File | What lives there |
 |---|---|
 | `.claude/agents/grok-worker.md` | the model `case` gate + input contract; **research-role `--tools` allowlist** (workroom research runs — widened write-free egress; re-probe the read-only guard AND that this list stays write-free on every version change) |
-| `.claude/rules-src/grok-worker-safety.md` | allowlist + probe evidence + version drift + §Research role egress list |
+| `.claude/rules-ondemand/grok-worker-safety.md` | allowlist + probe evidence + version drift + §Research role egress list |
 | `.claude/skills/grok/SKILL.md` | `--model` flags line |
 | `.claude/agents/grok-adversary.md` | `GROK_ADVERSARY_MODEL` validation |
 | `.claude/rules-src/cli-integration-strategy.md` | Grok inventory row |
-| `.claude/rules-src/harness-update.md` | Evidence-trail table version pin (Grok row) |
+| `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Grok row) |
 
 **Workroom-coupled surfaces (both harnesses):** the four agents above also carry an optional `## Workroom` block (`.workroom/PROTOCOL.md` is the schema owner). A harness update does not normally touch these, but if worker prompt contracts change shape, keep the workroom blocks + `.claude/skills/workroom/SKILL.md` dispatch snippet consistent in the same pass.
 

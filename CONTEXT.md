@@ -18,6 +18,7 @@ a synonym for a term defined here. A glossary helps the agent talk to Dave in Da
   **Forward sync** copies repo to active (`scripts/sync-to-active.sh`, auto on commit). **Reverse sync**
   is manual only. **Drift**: repo and active differ.
 - **Rule**: a markdown file in `.claude/rules-src/` (repo) / `~/.claude/rules/` (active). Always loaded.
+  **On-demand rule**: one in `.claude/rules-ondemand/`; the **rule-router** hook loads it at the first matching tool call.
 - **Skill**: `SKILL.md` under `.claude/skills/<name>/`. Loaded on trigger. Its **description** is the
   trigger, not a summary. **User-invoked** skill: `disable-model-invocation: true`; only a slash command loads it.
 - **Hook**: a TypeScript program in `.claude/hooks/src/`, built to `dist/*.mjs`, registered in

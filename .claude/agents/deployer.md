@@ -202,7 +202,7 @@ If no LIN-XXX found in branch name, skip Linear steps.
 When the deployment touches a Neon Postgres database (signal: `DATABASE_URL` references `neon.tech`, or `neonctl` is used by the project):
 
 - Read the `neonctl` skill for CLI reference: `.claude/skills/neonctl/SKILL.md`
-- Destructive operations (`branches delete`, `databases delete`, `projects delete`) are gated by `.claude/rules/neonctl-safety.md` — confirm target with user before running
+- Destructive operations (`branches delete`, `databases delete`, `projects delete`) are gated by `.claude/rules-ondemand/neonctl-safety.md` — confirm target with user before running
 - For schema/migration work, defer to the `databases` skill — it owns query optimization and migration patterns
 - No new sub-agent: Neon ops are infrequent and well-served by the CLI + safety rule combination
 
