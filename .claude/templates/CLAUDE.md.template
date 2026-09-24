@@ -274,10 +274,10 @@ Human checkpoints at critical decision points.
 ### Handoffs
 
 When work spans sessions, create a handoff:
-- `/create_handoff` — a Notion page under Scratchpad (goal, done, next, blockers, decisions) plus a generated local YAML copy
+- `/create_handoff` — a row in the Claude Bridge 📬 Handoffs database, To = Next session (goal, done, next, blockers, decisions), plus a generated local YAML copy
 - `/resume_handoff` — recovers context for new session with verification
 - Outcome marking REQUIRED: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`
-- Location: Notion Scratchpad, `Handoff: <topic> (<repo>) - YYYY-MM-DD`. Notion wins; the YAML in `thoughts/shared/handoffs/` is a copy for the statusline and recall.
+- Location: Claude Bridge HQ → 📬 Handoffs (🔁 Next session view), title `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD`. Notion wins; the YAML in `thoughts/shared/handoffs/` is a copy for the statusline and recall. Never Dave's Scratchpad.
 
 ### Knowledge Tree
 

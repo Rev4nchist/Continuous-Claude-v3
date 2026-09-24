@@ -4,7 +4,7 @@ description: Read/write the Bridge HQ page and handoff queues between Eve, Donna
 ---
 
 # Notion Claude Bridge Skill
-## v1.6 | 2026-07-03 | ntn transport split + expanded toolset (was v1.5 Tracker auto-mirror)
+## v1.7 | 2026-09-24 | Handoffs database replaces child pages + HQ one-liners (was v1.6 ntn transport split)
 
 This skill governs all read/write operations on the Claude Bridge system — the shared knowledge and communication layer between Claude.ai (Eve), Claude.ai (Donna), and Claude Code. Always load `references/bridge-schema.md` before any write operation.
 
@@ -41,6 +41,9 @@ SPARK, RFP, etc.
 | **AI Enablement Weekly Work Tracker DB** | `3d7f2afd6c5046748408e4412a5552b2` |
 | **Tracker data_source_id (for creates)** | `6e8d9b17-f8ef-4d56-9f13-00344650ac03` |
 | **Default "AI Enablement (generic)" project** | `34b76fd7-ac82-8104-82ca-df3e801695c0` |
+| **📬 Handoffs DB (canonical handoffs)** | `ea95daf2b1a24ddabbe64f6d056c9346` |
+| **Handoffs data_source_id** | `13b919c8-b7af-4609-b4c6-87e5504809f0` |
+| **Implementation Log — Full History** | `3e576fd7ac8281889efdee0a5447c627` |
 
 ---
 
@@ -82,9 +85,41 @@ Rich Notion page at the URL above. This is where context, decisions, and impleme
 
 ---
 
-## Handoff Format v2: Child Pages + HQ One-Liners
+## Handoff Format v3: the 📬 Handoffs database (2026-09-24) — CANONICAL
 
-**This is the canonical handoff method. No exceptions.**
+**Supersedes v2 below.** Every handoff is ONE row in the 📬 Handoffs database on Bridge HQ. The row's
+page holds the full handoff (the v2 templates still describe the body). HQ queue sections are gone:
+each queue is a view of the database, so nothing is copied into HQ by hand. v2's double write (child
+page + HQ one-liner) left 14 Eve→Code handoffs with no queue line; v3 cannot drift that way.
+
+| Property | Values |
+|---|---|
+| `Handoff` (title) | `[From→To] Title — YYYY-MM-DD` |
+| `From` | Eve, Donna, Code, Dave |
+| `To` | Code, Eve, Donna, Next session |
+| `Status` | Pending, In progress (work) · Unread, Read (write-backs) · Done · Superseded |
+| `Priority` | High, Mid, Low |
+| `Date` | `date:Date:start` = YYYY-MM-DD |
+| `Summary` | one sentence |
+| `Project`, `Repo` | optional text |
+| `Outcome`, `Resume phrase` | session handoffs (To = Next session) only |
+
+Views (tabs on the database, shown inline on HQ): 📥 For Code (To = Code, Pending/In progress),
+📤 For Eve and 📤 For Donna (Unread), 🔁 Next session, ✅ Closed.
+
+**Create:** `notion-create-pages` with parent `{"type":"data_source_id","data_source_id":"13b919c8-b7af-4609-b4c6-87e5504809f0"}`,
+properties per the table, body from the matching template. **Read a queue:** `notion-query-data-sources`
+SQL on `collection://13b919c8-b7af-4609-b4c6-87e5504809f0` (e.g. `"To"='Code' AND "Status" IN ('Pending','In progress')`).
+**Find by title:** `notion-search` with that `data_source_url`. **Close:** `notion-update-page`
+`update_properties` → Status Done (work) or Read (write-back). Never edit HQ text to change a status.
+The Tracker auto-mirror for Code write-backs still applies. Session handoffs (`/create_handoff`) are
+rows with To = Next session; never put them in Dave's Scratchpad.
+
+---
+
+## Handoff Format v2: Child Pages + HQ One-Liners (SUPERSEDED 2026-09-24 by v3 above)
+
+*Kept for history and for the page-body templates. Do not write HQ one-liners or create HQ child pages for handoffs.*
 
 Every handoff is two things:
 
@@ -138,6 +173,8 @@ Templates live at `references/handoff-templates/`:
 ---
 
 ## Core Workflows
+
+> **v3 (2026-09-24):** where a workflow below says "create a child page under Bridge HQ" + "insert an HQ one-liner", do ONE thing instead: create a row in the 📬 Handoffs database (see "Handoff Format v3"). Where it says to read a queue section, query the database. Status changes are property updates, never HQ text edits.
 
 ### Eve Writing a Handoff to Claude Code
 ```

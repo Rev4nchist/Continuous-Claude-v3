@@ -1,4 +1,7 @@
 # Claude Bridge HQ — Section Schema & Selection Strings
+
+> **2026-09-24: handoffs moved to the 📬 Handoffs database** (data source `13b919c8-b7af-4609-b4c6-87e5504809f0`; see SKILL.md "Handoff Format v3"). The six HQ queue sections and their selection strings below are OBSOLETE: HQ now shows the database inline. The Implementation Log keeps its latest 3 entries on HQ; full history lives in its own child page. Sections for Active Context, Key Decisions, Sprint State and the Archive still apply.
+
 ## v1.5 | 2026-02-22
 
 ## Page URL
