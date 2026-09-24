@@ -1,5 +1,5 @@
 {
-  "$comment": "Read by hooks/dist/rule-router.mjs. Each entry loads its rule files the FIRST time a matching tool call happens in a session. mode 'deny-first' refuses that first call with the rule text as the reason (for rules that must change the decision); 'inject' adds the text as context and lets the call run. Matchers: command = regexes tested against each command segment with quoted strings removed and leading env/&/cmd /c prefixes dropped; raw = regexes tested against the whole command as typed; agent = subagent_type; skill = Skill name; tools = tool_name (MCP tools). Keep the always-loaded index rules-src/on-demand-rules.md in step with this file.",
+  "$comment": "Read by hooks/dist/rule-router.mjs. Each entry loads its rule files the FIRST time a matching tool call happens in a session. mode 'deny-first' refuses that first call with the rule text as the reason (for rules that must change the decision); 'inject' adds the text as context and lets the call run. Matchers: command = regexes tested against each command segment with quoted strings removed and leading env/&/cmd /c prefixes dropped; segment = regexes tested against each executed segment with quotes KEPT (for quoted script paths; anchor them with ^ so an echo of the text never claims the rule); agent = subagent_type; skill = Skill name; tools = tool_name (MCP tools). Keep the always-loaded index rules-src/on-demand-rules.md in step with this file.",
   "rules": [
     {
       "id": "codex",
@@ -57,8 +57,8 @@
       "command": [
         "^ant(\\.exe)?(\\s|$)"
       ],
-      "raw": [
-        "api\\.anthropic\\.com/v1/(agents|sessions|environments|deployments|vaults)"
+      "segment": [
+        "^(curl|wget|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)(\\.exe)?\\s.*api\\.anthropic\\.com/v1/(agents|sessions|environments|deployments|vaults)"
       ],
       "agent": [
         "^cma-operator$"
@@ -112,8 +112,8 @@
       "command": [
         "^kusto\\.cli(\\.exe)?(\\s|$)"
       ],
-      "raw": [
-        "[Kk]usto\\.[Cc]li"
+      "segment": [
+        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)"
       ],
       "skill": [
         "^kusto-cli$"
@@ -163,8 +163,8 @@
         "^gh\\s+pr\\s+merge\\b",
         "^gh\\s+api\\s+\\S*/pulls/\\d+/merge\\b"
       ],
-      "raw": [
-        "land-pr\\.ps1"
+      "segment": [
+        "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },
     {
@@ -190,9 +190,9 @@
         "^gh\\s+pr\\s+create\\b",
         "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
       ],
-      "raw": [
-        "coderabbit-status\\.mjs",
-        "land-pr\\.ps1"
+      "segment": [
+        "^node(\\.exe)?\\s.*coderabbit-status\\.mjs",
+        "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },
     {
@@ -204,8 +204,8 @@
       "command": [
         "^(psql|pg_dump|pg_restore)(\\.exe)?(\\s|$)"
       ],
-      "raw": [
-        "docker(\\.exe)?\"?\\s+exec\\b.*postgres"
+      "segment": [
+        "^([\"'][^\"']*|[^\\s\"']*)docker(\\.exe)?[\"']?\\s+exec\\b.*postgres"
       ]
     },
     {
@@ -234,8 +234,8 @@
         "design-work.md"
       ],
       "mode": "deny-first",
-      "raw": [
-        "kie\\.mjs[\"']?\\s+(still|shot)\\b"
+      "segment": [
+        "^node(\\.exe)?\\s+([\"'][^\"']*|[^\\s\"']*)kie\\.mjs[\"']?\\s+(still|shot)\\b"
       ]
     },
     {
@@ -260,8 +260,8 @@
       "command": [
         "^(npx\\s+)?playwright(\\s|$)"
       ],
-      "raw": [
-        "scripts[\\\\/]cdp\\.mjs"
+      "segment": [
+        "^node(\\.exe)?\\s+([\"'][^\"']*|[^\\s\"']*)cdp\\.mjs"
       ],
       "skill": [
         "^(browser-dev-cycle|qa-test)$"

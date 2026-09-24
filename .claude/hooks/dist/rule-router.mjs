@@ -34,17 +34,52 @@ var AGENT_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent"]);
 function rulesDir() {
   return process.env.CLAUDE_RULES_ONDEMAND_DIR || join(homedir(), ".claude", "rules-ondemand");
 }
+function splitUnquoted(command, tool) {
+  const escape = tool === "PowerShell" ? "`" : "\\";
+  const out = [];
+  let cur = "";
+  let quote = null;
+  for (let i = 0; i < command.length; i++) {
+    const c = command[i];
+    if (quote) {
+      cur += c;
+      if (c === escape && quote === '"' && i + 1 < command.length) cur += command[++i];
+      else if (c === quote) quote = null;
+      continue;
+    }
+    if (c === '"' || c === "'") {
+      quote = c;
+      cur += c;
+      continue;
+    }
+    if (c === escape && i + 1 < command.length) {
+      cur += c + command[++i];
+      continue;
+    }
+    if (c === ";" || c === "|" || c === "&" || c === "\n") {
+      out.push(cur);
+      cur = "";
+      continue;
+    }
+    cur += c;
+  }
+  out.push(cur);
+  return out;
+}
+function stripLeaders(segment) {
+  let s = segment.trim();
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(/^&\s*/, "").replace(/^cmd(\.exe)?\s+\/[cC]\s+/, "").replace(/^env(\s+-u\s+\S+|\s+-i)*\s+/, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "").replace(/^(sudo|time|npx(\s+-y)?)\s+/, "").trim();
+  } while (s !== prev);
+  return s;
+}
+function quotedSegments(command, tool) {
+  return splitUnquoted(command, tool).map(stripLeaders).filter(Boolean);
+}
 function commandSegments(command, tool) {
-  const stripped = stripQuotedStrings(command, tool);
-  return stripped.split(/\|\||&&|[;|\n]/).map((seg) => {
-    let s = seg.trim();
-    let prev;
-    do {
-      prev = s;
-      s = s.replace(/^&\s*/, "").replace(/^cmd(\.exe)?\s+\/[cC]\s+/, "").replace(/^env(\s+-u\s+\S+|\s+-i)*\s+/, "").replace(/^[A-Za-z_][A-Za-z0-9_]*=\S*\s+/, "").replace(/^(sudo|time|npx(\s+-y)?)\s+/, "").trim();
-    } while (s !== prev);
-    return s;
-  }).filter(Boolean);
+  return quotedSegments(command, tool).map((s) => stripLeaders(stripQuotedStrings(s, tool))).filter(Boolean);
 }
 var test = (patterns, value) => !!patterns && patterns.some((p) => new RegExp(p).test(value));
 function matchRules(input, manifest) {
@@ -54,7 +89,7 @@ function matchRules(input, manifest) {
     if (COMMAND_TOOLS.has(tool)) {
       const command = typeof ti.command === "string" ? ti.command : "";
       if (!command) return false;
-      return commandSegments(command, tool).some((seg) => test(r.command, seg)) || test(r.raw, command);
+      return commandSegments(command, tool).some((seg) => test(r.command, seg)) || quotedSegments(command, tool).some((seg) => test(r.segment, seg));
     }
     if (AGENT_TOOLS.has(tool)) return test(r.agent, String(ti.subagent_type || ""));
     if (tool === "Skill") return test(r.skill, String(ti.skill || ""));
@@ -169,6 +204,8 @@ export {
   commandSegments,
   decide,
   matchRules,
+  quotedSegments,
   rulesDir,
-  run
+  run,
+  splitUnquoted
 };
