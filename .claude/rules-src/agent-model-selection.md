@@ -1,6 +1,6 @@
 # Agent Model Selection
 
-Every predefined agent (`.claude/agents/*.md` **and** its `.json` mirror) carries an **explicit two-tier** `model:` — no omit, no inherit, never haiku.
+Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where one exists — 17 of 37 have one) carries an **explicit two-tier** `model:` — no omit, no inherit, never haiku.
 
 ## The two tiers
 
@@ -12,6 +12,18 @@ Tier by **judgment density**, not task size. Canonical map (37 agents, 12 Opus /
 ## Never omit/inherit for a predefined agent
 
 `inherit` (or an omitted `model:`) resolves to the **session model** (currently Opus) — silently reproducing Opus-on-everything, the exact anti-goal. Predefined agents MUST be explicit. Omitting is acceptable only for a genuinely ad-hoc, chat-level `Agent` call.
+
+## Workflow `agent()` calls and ad-hoc `Agent` calls choose too
+
+These inherit the session model unless they name one, so a wide fan-out silently runs the
+session's top model on mechanical work. Dave has asked for this more than once ("assign the
+correct model for subagent work"). Pick by the same judgment-density rule:
+- `model: 'sonnet'` for mechanical and execution stages: reading batches, inventories, file edits
+  from a precise spec, test runs, formatting.
+- `model: 'opus'` for judgment stages: checking findings against the code, adversarial review,
+  synthesis, ranking, design.
+- Fable (or any non-tier model) only when Dave asks for it.
+Omitting `model` stays acceptable for a single ad-hoc question where cost does not matter.
 
 ## Never use Haiku
 

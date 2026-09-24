@@ -30,6 +30,21 @@ Check CodeRabbit on the PR via the REST API. Use `GH_CONFIG_DIR` for the repo's 
 
 Never merge the PR. That is a separate, confirmed decision.
 
+## Before you call a PR ready, or land it
+
+Run `node scripts/github/coderabbit-status.mjs <N>`. Say "ready" only when it prints READY: CodeRabbit
+reviewed the CURRENT head commit, 0 threads unresolved, checks green, `mergeable_state` clean. A
+merge was once called safe 92 s before CodeRabbit found a real defect on the new head.
+
+A green `CodeRabbit` commit status is not a review. When CodeRabbit hits its review limit it still
+reports success and posts "Review limit reached". Wait for the limit to reset and comment
+`@coderabbitai review`. **Never click or request the paid on-demand review.**
+
+When Dave says merge, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
+through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, syncs
+`~/.claude`, and removes the worktree and branches. Every step is idempotent; re-run it after a
+partial failure.
+
 ## Thread state — verify, do not trust the bot's text
 
 Never mark a thread resolved from CodeRabbit's own comment text. On 2026-09-01, a bot message said

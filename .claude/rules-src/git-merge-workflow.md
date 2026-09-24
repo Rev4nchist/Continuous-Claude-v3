@@ -24,6 +24,10 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
    - Merging via the PR records the merge against the review, closes the PR, applies the strategy server-side, and needs **no clean local working tree**.
 5. **Clean up.** Delete the merged branch (remote + local), advance local `main`, verify `0 0` divergence.
 
+**For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
+It refuses unless `scripts/github/coderabbit-status.mjs` reports READY for the current head, merges
+with `sha=<head>`, fast-forwards `main`, syncs `~/.claude`, and removes the worktree and branches.
+
 ## Gotchas (all real, all hit 2026-07-06)
 
 - **A timed-out command (exit 143) is NOT necessarily a failure.** VERIFY state before concluding — `gh pr merge` timed out yet the merge had already succeeded (`gh api …/pulls/<N>` → `merged=true`). Same for pushes/deletes.
