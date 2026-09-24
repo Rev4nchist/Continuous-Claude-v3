@@ -345,13 +345,20 @@ ${body}`
 
 ${body}` };
 }
-function logFire(input, d) {
+function triggerWords(input, fired) {
+  const tool = input.tool_name || "";
+  const ti = input.tool_input || {};
+  if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
+  const segs = quotedSegments(String(ti.command ?? ""), tool);
+  const plain = (seg) => stripLeaders(stripQuotedStrings(seg, tool));
+  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
+  return plain(hit ?? segs[0] ?? "").split(/\s+/).slice(0, 2).join(" ");
+}
+function logFire(input, d, fired) {
   try {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), ".claude", "logs", "rule-router.jsonl");
     mkdirSync(dirname(path), { recursive: true });
-    const ti = input.tool_input || {};
-    const tool = input.tool_name || "";
-    const what = COMMAND_TOOLS.has(tool) ? (commandSegments(String(ti.command ?? ""), tool)[0] || "").split(/\s+/).slice(0, 2).join(" ") : String(ti.subagent_type ?? ti.skill ?? "").slice(0, 60);
+    const what = triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       session: (input.session_id || "").slice(0, 8),
@@ -397,7 +404,7 @@ function run(raw) {
     outputContinue();
     return;
   }
-  logFire(input, d);
+  logFire(input, d, won);
   if (d.kind === "deny") {
     outputDeny(d.text, "deny");
   } else {
@@ -421,5 +428,6 @@ export {
   quotedSegments,
   rulesDir,
   run,
-  splitUnquoted
+  splitUnquoted,
+  triggerWords
 };

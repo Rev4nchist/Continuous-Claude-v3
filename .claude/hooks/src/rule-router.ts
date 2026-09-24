@@ -194,17 +194,26 @@ export function decide(matched: RuleEntry[], seen: string[], dir: string): Decis
   return { kind: 'inject', ids, text: `[rule-router] On-demand rule for this call (${ids.join(', ')}):\n\n${body}` };
 }
 
-function logFire(input: HookInput, d: Decision): void {
+/**
+ * The words that fired: for a command, the first two words of the segment that matched one of the
+ * fired rules (quoted strings removed), so an audit can judge each fire. Never the raw command,
+ * whose arguments can hold a credential. For other tools: the agent type, skill or tool name.
+ */
+export function triggerWords(input: HookInput, fired: RuleEntry[]): string {
+  const tool = input.tool_name || '';
+  const ti = input.tool_input || {};
+  if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
+  const segs = quotedSegments(String(ti.command ?? ''), tool);
+  const plain = (seg: string) => stripLeaders(stripQuotedStrings(seg, tool));
+  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
+  return plain(hit ?? segs[0] ?? '').split(/\s+/).slice(0, 2).join(' ');
+}
+
+function logFire(input: HookInput, d: Decision, fired: RuleEntry[]): void {
   try {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), '.claude', 'logs', 'rule-router.jsonl');
     mkdirSync(dirname(path), { recursive: true });
-    const ti = input.tool_input || {};
-    // Never the raw command: its arguments can hold a credential. For a command, keep only the
-    // first two words of its first segment, with quoted strings removed.
-    const tool = input.tool_name || '';
-    const what = COMMAND_TOOLS.has(tool)
-      ? (commandSegments(String(ti.command ?? ''), tool)[0] || '').split(/\s+/).slice(0, 2).join(' ')
-      : String(ti.subagent_type ?? ti.skill ?? '').slice(0, 60);
+    const what = triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
       ts: new Date().toISOString(), session: (input.session_id || '').slice(0, 8), agent: input.agent_id || null,
       tool: input.tool_name, rules: d.ids, kind: d.kind, what,
@@ -230,7 +239,7 @@ export function run(raw: string): void {
     throw err;
   }
   if (d.kind === 'none') { outputContinue(); return; }
-  logFire(input, d);
+  logFire(input, d, won);
   if (d.kind === 'deny') {
     outputDeny(d.text, 'deny');
   } else {

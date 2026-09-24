@@ -93,6 +93,7 @@ const CASES = [
   ['a paid run inside bash -c blocks', bash('s32', 'bash -c "node scripts/kie.mjs still --prompt hero"'), 'deny', ['kie-spend'], []],
   ['PowerShell $(...) subexpression blocks', ps('s33', '$r = $(node scripts/kie.mjs still --prompt hero)'), 'deny', ['kie-spend'], []],
   ['single-quoted $(...) is literal text: nothing', bash('s34', "echo '$(node scripts/kie.mjs still)'"), 'none', [], []],
+  ['a trigger in the second segment fires (log checked below)', ps('s35', "$R='C:\\r'; pwsh -File scripts/github/land-pr.ps1 -Pr 1"), 'inject', ['git-merge'], []],
   ['free kie.ai probe does not block', bash('s21', 'node scripts/kie.mjs probe'), 'none', [], []],
   ['a claude-in-chrome tool blocks (deprecated)', { session_id: 's22', tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, 'deny', ['browser-deprecated'], ['browser']],
   ['Playwright MCP injects the browser rule', { session_id: 's23', tool_name: 'mcp__playwright__browser_navigate', tool_input: {} }, 'inject', ['browser'], []],
@@ -116,6 +117,10 @@ results.push({ name: '6 parallel calls for one unseen rule: exactly 1 deny', ok:
 // The fire log must never hold the raw command (it can carry a credential).
 const logText = existsSync(log) ? readFileSync(log, 'utf8') : '';
 results.push({ name: 'fire log never contains command arguments', ok: logText.length > 0 && !logText.includes('SECRET-PROBE-123'), expected: 'no secret', got: logText.includes('SECRET-PROBE-123') ? 'secret logged' : 'clean', ids: '' });
+
+// The log must name the segment that fired, not the first segment (`$R=...` told an audit nothing).
+const s35 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's35');
+results.push({ name: 'fire log names the segment that fired', ok: s35?.what === 'pwsh -File', expected: 'pwsh -File', got: String(s35?.what), ids: '' });
 
 const fires = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').length : 0;
 const failed = results.filter((r) => !r.ok);
