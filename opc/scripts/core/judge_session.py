@@ -108,7 +108,7 @@ import re
 import shutil
 import subprocess
 import sys
-from datetime import datetime
+from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
@@ -995,7 +995,7 @@ def list_sessions_since(scan_since: str) -> list[dict[str, Any]]:
             undated += 1
             continue
         if cutoff is None or started >= cutoff:
-            sessions.append({"session_id": path.stem, "started": data.get("started"), "_started": started})
+            sessions.append({"session_id": path.stem, "started": data.get("started"), "_started": _utc_sort_key(str(data.get("started")))})
     if undated:
         print(f"[judge-batch] skipped {undated} cached session(s) with no 'started' date", file=sys.stderr)
     # Newest first, so the max_sessions cap keeps the most recent sessions rather than the
@@ -1004,6 +1004,23 @@ def list_sessions_since(scan_since: str) -> list[dict[str, Any]]:
     for s in sessions:
         s.pop("_started", None)
     return sessions
+
+
+def _utc_sort_key(value: str) -> float:
+    """Seconds since the epoch in UTC, for ordering only.
+
+    _parse_iso converts to naive LOCAL time, which can reorder sessions across a
+    daylight-saving fall-back hour; sorting on UTC avoids that. Naive inputs are
+    treated as UTC. Unparseable values sort last.
+    """
+    v = value[:-1] + "+00:00" if value.endswith("Z") else value
+    try:
+        dt = datetime.fromisoformat(v)
+    except Exception:
+        return float("-inf")
+    if dt.tzinfo is None:
+        dt = dt.replace(tzinfo=timezone.utc)
+    return dt.timestamp()
 
 
 def _parse_iso(value: str) -> datetime | None:

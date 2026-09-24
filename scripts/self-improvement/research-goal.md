@@ -38,11 +38,15 @@ understand WHAT the system is meant to do and HOW we execute it via this harness
 4. RECOMMENDATION: For each promising idea, give a verdict — ADOPT (do it), WATCH (track, not yet), or
    SKIP (not worth it / not for us) — with rationale.
    PRIOR VERDICTS FIRST (added 2026-09-23, Opus 5.5 eval P09): read `docs/self-improvement/INDEX.md`
-   and the earlier proposals for this component. For its most recent ADOPT, check with `git log` whether
-   the named change shipped (a commit touching the files it named, after that proposal's date). If the
-   last ADOPT did NOT ship, a new ADOPT must say in one sentence what is different now; otherwise make
-   it WATCH with the note "ratify or drop the previous ADOPT first". Past runs issued ADOPT after ADOPT
-   that never shipped ("0 of 6 ADOPTs"), which turns the loop into noise.
+   and the earlier proposals for this component. For its most recent ADOPT, decide whether the named
+   change shipped: find commits after that proposal's date that touch the files it named, then read
+   their diffs. "Shipped" means a diff actually implements the proposed change; a commit that merely
+   touches the same file does not count. Then:
+   - If it shipped (or there was no earlier ADOPT): evaluate this proposal normally.
+   - If it did NOT ship: a new ADOPT is allowed only when it states in one sentence what is different
+     now. Without that sentence, use WATCH with the note "ratify or drop the previous ADOPT first".
+   Past runs issued ADOPT after ADOPT that never shipped ("0 of 6 ADOPTs"), which turns the loop into
+   noise.
 5. INTEGRATION: For anything you would ADOPT, sketch HOW it integrates into CCv3 — which files/subsystems,
    how it ties to existing `docs/system-update/BACKLOG.md` arcs (reference item IDs like ST-01, ST-02,
    SG-04 where relevant), rough effort, risk, and what could go wrong.
