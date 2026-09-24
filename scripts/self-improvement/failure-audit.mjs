@@ -35,12 +35,27 @@ const CLASSES = [
   ['generic_no', 'bare negation: "no," / "wrong" / "stop"', /^(no[,.!\s]|nope|wrong[,.!\s]|that'?s wrong|incorrect|not right|stop[,.!\s])/],
 ];
 
+// Text that the harness injects as a "user" turn. Only needed for transcripts older than the
+// origin metadata below; newer ones say who wrote the turn.
+const INJECTED_PREFIX = /^(<local-command|<system-reminder|<command-name>|<task-notification|Base directory for this skill|This session is being continued|Caveat: The messages below)/;
+
 const isHuman = (o) => {
   if (o.type !== 'user' || !o.message || o.message.role !== 'user') return false;
   if (o.isSidechain) return false; // subagent-internal turns
+  // Headless `claude -p` runs (scheduled pipelines) are prompts a script wrote, not Dave.
+  if (o.entrypoint === 'sdk-cli') return false;
+  // Authoritative when present: 'human' for typed/queued turns; 'task-notification', 'peer',
+  // 'scheduled' and 'sdk' for everything the harness injects.
+  if (o.origin && o.origin.kind) return o.origin.kind === 'human';
+  if (o.turnOrigin) return o.turnOrigin === 'human';
+  if (o.isMeta || o.isCompactSummary || o.isVisibleInTranscriptOnly) return false; // skill loads, /loop prompts, compact summaries
   const c = o.message.content;
-  if (typeof c === 'string') return c.length > 0 && !c.startsWith('<local-command') && !c.startsWith('<system-reminder') && !c.startsWith('<command-name>');
-  if (Array.isArray(c)) return c.some((b) => b.type === 'text') && !c.some((b) => b.type === 'tool_result');
+  if (typeof c === 'string') return c.length > 0 && !INJECTED_PREFIX.test(c.trimStart());
+  if (Array.isArray(c)) {
+    if (c.some((b) => b.type === 'tool_result')) return false;
+    const t = c.filter((b) => b.type === 'text').map((b) => b.text).join('\n');
+    return t.length > 0 && !INJECTED_PREFIX.test(t.trimStart());
+  }
   return false;
 };
 const textOf = (o) => {
@@ -104,7 +119,7 @@ for (const [, m] of rows) for (const [c, n] of Object.entries(m.byClass)) classT
 let md = `# Failure-mode audit, last ${DAYS} days\n\n`;
 md += `Generated ${new Date().toISOString()} by \`scripts/self-improvement/failure-audit.mjs\`. Read-only over \`~/.claude/projects/**/*.jsonl\`.\n`;
 md += `Files ${files.length}. Sessions with human turns ${sessions}. Human messages ${humanMsgs}. Corrections ${incidents.length}.\n\n`;
-md += `**Method.** A "correction" is a human message that matches one of ${CLASSES.length} regex classes (first match wins). This is a heuristic, not ground truth. Expect false positives (a "no" that answers a question) and misses (polite corrections). A class with **2 or more independent sessions** is a rule candidate. A singleton is provisional.\n\n`;
+md += `**Method.** Human turns exclude headless (sdk-cli) prompts, task notifications, skill loads and other injected text, using the transcript's origin metadata where present. A "correction" is a human message that matches one of ${CLASSES.length} regex classes (first match wins). The classes are a candidate pre-filter for human labeling, not a classifier: they were brainstormed, not observed, and they miss polite corrections. This is a heuristic, not ground truth. Expect false positives (a "no" that answers a question) and misses (polite corrections). A class with **2 or more independent sessions** is a rule candidate. A singleton is provisional.\n\n`;
 md += `## Corrections per 100 human messages, by model\n\n| Model | Human msgs | Corrections | per 100 |\n|---|---|---|---|\n`;
 for (const [k, m] of rows) md += `| ${k} | ${m.userMsgs} | ${m.corrections} | ${per100(m)} |\n`;
 md += `\n## By class\n\n| Class | Meaning | Total | Sessions | Rule candidate? |\n|---|---|---|---|---|\n`;
