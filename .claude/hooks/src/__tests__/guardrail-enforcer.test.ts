@@ -18,6 +18,10 @@ describe('matchGuardrails', () => {
     expect(matchGuardrails('<system-reminder>fix the database query</system-reminder>')).toEqual([]);
   });
 
+  it('still analyzes a human prompt that pastes a harness tag mid-text', () => {
+    expect(matchGuardrails('review this PR, it logs <task-notification> blobs')).toContain('code-review');
+  });
+
   it('code-review: fires on PR / code-review asks only', () => {
     for (const p of ['merge 43 and 44', 'review this PR', 'open a pull request', 'merge #40', 'can you code review the diff', 'review the changes on this branch']) {
       expect(matchGuardrails(p)).toContain('code-review');
