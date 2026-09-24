@@ -206,10 +206,14 @@ export function triggerWords(input: HookInput, fired: RuleEntry[]): string {
   const segs = quotedSegments(String(ti.command ?? ''), tool);
   const plain = (seg: string) => stripLeaders(stripQuotedStrings(seg, tool));
   const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
-  const [cmd = '', arg] = plain(hit ?? segs[0] ?? '').split(/\s+/);
+  const seg = hit ?? segs[0] ?? '';
+  const [cmd = '', arg] = plain(seg).split(/\s+/);
   // The second word stays only when it is a plain word or flag (`commit`, `-File`, `exec`). A URL,
   // a path or anything with `:`, `@` or `=` can carry a credential (psql postgresql://user:pass@...).
-  return arg === undefined ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : '<arg>'}`;
+  const words = arg === undefined ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : '<arg>'}`;
+  // The script's file name, never its folder: `pwsh -File land-pr.ps1` says what ran, `pwsh -File` does not.
+  const script = /(?:^|[\s"'\\/])([\w.-]+\.(?:ps1|mjs|cjs|js|py|sh|bat))(?=["'\s]|$)/i.exec(seg)?.[1];
+  return script && !words.includes(script) ? `${words} ${script}` : words;
 }
 
 function logFire(input: HookInput, d: Decision, fired: RuleEntry[]): void {

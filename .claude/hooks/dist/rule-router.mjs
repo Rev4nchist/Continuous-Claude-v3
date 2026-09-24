@@ -350,10 +350,13 @@ function triggerWords(input, fired) {
   const ti = input.tool_input || {};
   if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
   const segs = quotedSegments(String(ti.command ?? ""), tool);
-  const plain = (seg) => stripLeaders(stripQuotedStrings(seg, tool));
-  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
-  const [cmd = "", arg] = plain(hit ?? segs[0] ?? "").split(/\s+/);
-  return arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
+  const plain = (seg2) => stripLeaders(stripQuotedStrings(seg2, tool));
+  const hit = segs.find((seg2) => fired.some((r) => test(r.command, plain(seg2)) || test(r.segment, seg2)));
+  const seg = hit ?? segs[0] ?? "";
+  const [cmd = "", arg] = plain(seg).split(/\s+/);
+  const words = arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
+  const script = /(?:^|[\s"'\\/])([\w.-]+\.(?:ps1|mjs|cjs|js|py|sh|bat))(?=["'\s]|$)/i.exec(seg)?.[1];
+  return script && !words.includes(script) ? `${words} ${script}` : words;
 }
 function logFire(input, d, fired) {
   try {

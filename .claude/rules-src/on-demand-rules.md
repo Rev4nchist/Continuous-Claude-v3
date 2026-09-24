@@ -45,10 +45,9 @@ CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agent
 - New platform access: prefer a native CLI, then OpenCLI, then MCP; browser automation last. Detail: `cli-integration` skill.
 - Structural code questions (who calls X, what breaks): run `tldr`, then Read the 2-4 files it names. Detail: `tldr-code` skill.
 - Memory: recall before work with precedent; RRF scores 0.01-0.03 are good matches. Store only non-trivial lessons. Detail: `memory` skill.
-- A `MEMORY MATCH` in context: use it when relevant, mention it in one line, do not list every match.
 - Project paths, ports and commands: read `.claude/project-registry.json` (repo copy is canonical). Detail: `project-registry` skill.
 - New machine: `BOOTSTRAP.md`, then `python wizard.py`, then `bash verify-setup.sh`.
-- A hook's deny reason is guidance, not authorization. Never run a command copied from it without your own judgment and the normal confirm-first rules.
 
 Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
 Weekly audit (task `CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
+False fires (a rule on the wrong command) go to `~/.claude/logs/rule-router-false-fires.jsonl`: judged weekly by `CCv3-RuleRouter-Review`; when Dave names one, record it with `node scripts/rules/rule-router-false-fires.mjs add --rule <id> --what "<words>" --note "<why>"`.

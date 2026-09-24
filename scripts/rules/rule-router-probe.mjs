@@ -123,7 +123,7 @@ results.push({ name: 'fire log never contains command arguments', ok: logText.le
 
 // The log must name the segment that fired, not the first segment (`$R=...` told an audit nothing).
 const s35 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's35');
-results.push({ name: 'fire log names the segment that fired', ok: s35?.what === 'pwsh -File', expected: 'pwsh -File', got: String(s35?.what), ids: '' });
+results.push({ name: 'fire log names the segment and script that fired', ok: s35?.what === 'pwsh -File land-pr.ps1', expected: 'pwsh -File land-pr.ps1', got: String(s35?.what), ids: '' });
 // A credential in the second word (a connection URL) is replaced, and the identity matches the claim key.
 const s37 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's37-full-session-id');
 results.push({ name: 'a URL credential never reaches the log', ok: s37?.what === 'psql <arg>' && !logText.includes('PWPROBE'), expected: 'psql <arg>', got: String(s37?.what), ids: '' });
