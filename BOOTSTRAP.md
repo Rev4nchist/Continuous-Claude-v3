@@ -223,7 +223,7 @@ for that account (steps 1-2), then step 7. Full detail:
 - **Persistent memory** -- PostgreSQL + pgvector semantic search across sessions
 - **95+ hook source files** -- auto-inject context, enforce patterns, track state
 - **40+ specialized agents** -- scout, kraken, architect, debug-agent, oracle, etc.
-- **150+ skills** -- /build, /fix, /explore, /ralph, /maestro workflows
+- **150+ skills** -- /build, /fix, /explore, /maestro workflows
 - **Cross-session continuity** -- handoffs, knowledge trees, ROADMAP tracking
 - **Auto-sync** -- git commits in the repo auto-deploy to ~/.claude/
 

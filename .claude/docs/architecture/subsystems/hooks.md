@@ -15,7 +15,6 @@ UserPromptSubmit ──→ Runs when user sends a message
 
 PreToolUse ────────→ Runs BEFORE each tool execution
                      • file-claims (distributed locking) [CAN BLOCK]
-                     • plan-to-ralph-enforcer (block code edits) [CAN BLOCK]
                      • package-install-guard:Bash (supply-chain) [CAN BLOCK]
                      • task-router (suggest better agent)
                      • explore-to-scout (redirect Explore→scout)
@@ -28,8 +27,7 @@ PostToolUse ───────→ Runs AFTER each tool execution
                      • prd-roadmap-sync (sync PRD files to ROADMAP)
                      • telemetry-tracker:Skill|Task [BT: tool_call_success,
                        skill_trigger_accuracy]
-                     • ralph-task-monitor:Task [BT: agent_task_success]
-                     • plan-exit-tracker / plan-exit-premortem-prompt:ExitPlanMode
+                     • plan-exit-premortem-prompt:ExitPlanMode
 
 [BT: …] = Braintrust deterministic emit site (see Braintrust Emit Hooks below)
 ```
@@ -87,7 +85,6 @@ the [Braintrust observability subsystem](braintrust.md).
 |------|-----------------|----------------------|
 | `memory-awareness` | UserPromptSubmit | `memory_recall_relevance`, `memory_recall_hit` |
 | `telemetry-tracker` | PostToolUse:Skill\|Task | `tool_call_success`, `skill_trigger_accuracy` |
-| `ralph-task-monitor` | PostToolUse:Task | `agent_task_success` |
 | `hook-health-monitor` | SessionStart | `hook_health_ratio` |
 
 (A fifth dimension, `memory_store_quality`, is emitted by the Python
@@ -96,14 +93,14 @@ the [Braintrust observability subsystem](braintrust.md).
 ### The audit invariant
 
 `scripts/audit-braintrust-emits.sh` greps `hooks/src/` for
-`await emitBraintrustScore(` and asserts exactly `INVARIANT_4=4` awaited emit
+`await emitBraintrustScore(` and asserts an exact count of awaited emit
 sites. **Run it after ANY TypeScript hook edit.**
 
 - The emit MUST be `await` (not `void`) on a single line. A `void` call is
   fire-and-forget — SessionStart-class hooks exit before the HTTPS POST
   lands, dropping the score. The grep matches `await` only, so a `void`
   revert or a line-split trips the check.
-- Never lower `INVARIANT_4` to silence a failure — fix the code it points at.
+- Never lower the invariant to silence a failure — fix the code it points at.
   (The emit sites regressed ~8 times in May 2026; root cause was a rogue
   Ralph loop plus an asymmetric reverse-sync, both since fixed — see the
   Braintrust subsystem doc for the corrected history.)

@@ -24,7 +24,7 @@ flowchart LR
     subgraph SessionN1["Session N+1 (Recovery)"]
         FS --> R1[Load continuity ledger<br/>session-start-continuity]
         DB --> R2[Recall relevant memories<br/>memory-awareness hook]
-        FS --> R3[Resume Ralph state<br/>session-start-recovery]
+        FS --> R3[Resume Maestro state<br/>session-start-recovery]
         FS --> R4[Load knowledge tree<br/>session-start-init-check]
         FS --> R5[Load ROADMAP context<br/>roadmap-reconcile hook]
         R1 --> READY[Session ready<br/>with full context]
@@ -44,7 +44,6 @@ flowchart LR
 | Memory Learnings | PostgreSQL `archival_memory` table | 3 extraction layers + manual | memory-awareness hook |
 | ROADMAP | `ROADMAP.md` | 4 auto-sync hooks | roadmap-reconcile hook |
 | Knowledge Tree | `.claude/knowledge-tree.json` | knowledge_tree.py + hooks | session-start-init-check |
-| Ralph State | `.ralph/state.json` | Ralph workflow | session-start-recovery |
 
 ## ROADMAP Auto-Sync (4 Hooks)
 

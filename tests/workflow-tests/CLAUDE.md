@@ -6,7 +6,7 @@ Run after adding CLI tools, changing skills/rules, deploying new integrations, o
 ## Purpose
 
 This folder is **exclusively** for testing new CCv3 capabilities -- CLI integrations, skills, agents,
-rules, and workflows. It validates that everything works reliably when Ralph/Maestro agents reach
+rules, and workflows. It validates that everything works reliably when Maestro agents reach
 for a CLI tool mid-workflow, when a new platform needs onboarding, or when adapters need generating on the fly.
 
 ## Quick Start
@@ -96,7 +96,7 @@ Update if:
 
 - After adding a new CLI tool, skill, or agent
 - After editing cli-integration-strategy.md, deployer.md, or skill-rules.json
-- Before /ralph workflows that depend on CLI tools
+- Before /maestro workflows that depend on CLI tools
 - As part of /release or /post-ship-audit
 - After any session that modifies browser-dev-cycle, rules, or MCP configs
 

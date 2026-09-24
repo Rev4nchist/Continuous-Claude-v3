@@ -23,7 +23,6 @@ import { writeFile, readFile, mkdir, rm } from 'node:fs/promises';
 import { existsSync } from 'node:fs';
 import { tmpdir, hostname, homedir } from 'node:os';
 import { join, resolve } from 'node:path';
-import { createHash } from 'node:crypto';
 
 import {
   createFreshProject,
@@ -553,60 +552,6 @@ async function probe6_file_claims_cross_project() {
  * via the legacy session-only path -> deny.
  * Post-fix behavior: B sees no state, returns allow.
  */
-async function probe7_hook_state_collision() {
-  const session = 'stress-test-collision';
-
-  // Set up two synthetic project dirs
-  const projA = join(tmpdir(), 'ccv3-stress-projA');
-  const projB = join(tmpdir(), 'ccv3-stress-projB');
-  await mkdir(projA, { recursive: true });
-  await mkdir(projB, { recursive: true });
-
-  // Compute project A's projectId the same way getProjectId() does:
-  //   sha256(path.resolve(absPath)).hex.slice(0, 16)
-  const projAId = createHash('sha256').update(resolve(projA)).digest('hex').slice(0, 16);
-  const safeSid = session.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 32);
-  const stateFile = join(tmpdir(), `claude-plan-approved-${projAId}-${safeSid}.json`);
-  await writeFile(
-    stateFile,
-    JSON.stringify({ approved: true, timestamp: Date.now(), sessionId: session })
-  );
-
-  const input = {
-    session_id: session,
-    tool_name: 'Edit',
-    tool_input: { file_path: join(projB, 'file.ts'), content: 'x' },
-    hook_event_name: 'PreToolUse',
-  };
-
-  // Fire enforcer pretending to be in project B
-  const env = { ...process.env, CLAUDE_PROJECT_DIR: projB };
-  const r = runHook('plan-to-ralph-enforcer', input, { env, cwd: projB, timeout: 15_000 });
-
-  // Parse decision from stdout
-  let decision = 'unknown';
-  try {
-    const parsed = JSON.parse(r.stdout.trim());
-    decision = parsed?.hookSpecificOutput?.permissionDecision || 'allow';
-  } catch {
-    decision = 'parse-fail';
-  }
-
-  // Pass = enforcer recognizes the cross-project mismatch (does NOT deny
-  // based on stale state from project A).
-  const passed = decision !== 'deny';
-
-  return probeResult(
-    'probe7_hook_state_collision',
-    'enforcer rejects state-mismatch (or state is project-keyed)',
-    `enforcer decision=${decision} despite state being from a different project`,
-    'SOFT-by-convention',
-    'MEDIUM',
-    passed,
-    { stateFile, projA, projB, hookExit: r.code, stdoutPreview: r.stdout.slice(0, 200) }
-  );
-}
-
 function probeResult(probe, expected, observed, classification, severity, pass, extra = {}) {
   return { probe, expected, observed, classification, severity, pass, ...extra };
 }
@@ -622,7 +567,6 @@ async function runIsolationProbes() {
   probes.push(await probe4_dotclaude_skip());
   probes.push(await probe5_hasCodeFiles_negative());
   probes.push(await probe6_file_claims_cross_project());
-  probes.push(await probe7_hook_state_collision());
 
   return { name: 'isolation', canaryPrefix, probes };
 }
@@ -641,16 +585,6 @@ async function cleanup({ keepSeeds = false } = {}) {
     dockerPsql(
       `DELETE FROM file_claims WHERE file_path LIKE '/tmp/stress-shared%' OR project IN ('stress-A','stress-B');`
     );
-    // Probe 7 cleanup -- project-scoped state file from probe7_hook_state_collision
-    try {
-      const projA = join(tmpdir(), 'ccv3-stress-projA');
-      const projAId = createHash('sha256').update(resolve(projA)).digest('hex').slice(0, 16);
-      const safeSid = 'stress-test-collision'.replace(/[^a-zA-Z0-9-_]/g, '_').slice(0, 32);
-      await rm(
-        join(tmpdir(), `claude-plan-approved-${projAId}-${safeSid}.json`),
-        { force: true }
-      );
-    } catch {}
   }
 
   // Always remove synthetic temp dirs (steps 3 + 5 of cleanup contract)
@@ -815,9 +749,6 @@ async function synthesize(state, outPath) {
             break;
           case 'probe6_file_claims_cross_project':
             filesToFix.push('opc/docker/init-schema.sql:22-28 -- file_claims composite PK by design but coordination queries should always WHERE project = ...');
-            break;
-          case 'probe7_hook_state_collision':
-            filesToFix.push('.claude/hooks/src/plan-to-ralph-enforcer.ts:146 -- state path is session-only; add project_id to state key or validate project at read time');
             break;
         }
       }

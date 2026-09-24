@@ -13,19 +13,17 @@
  *     3.  no-haiku-enforcer.mjs
  *     4.  navigator-validate.mjs
  *     5.  task-router.mjs
- *     6.  ralph-template-inject.mjs
- *     7.  maestro-enforcer.mjs
- *     8.  pre-tool-knowledge.mjs
- *     9.  tldr-context-inject.mjs
- *     10. agent-recall-injector.mjs
+ *     6.  maestro-enforcer.mjs
+ *     7.  pre-tool-knowledge.mjs
+ *     8.  tldr-context-inject.mjs
+ *     9.  agent-recall-injector.mjs
  *
  *   PostToolUse hooks (matcher: "Task")
- *     11. agent-error-capture.mjs
- *     12. agent-verification.mjs
- *     13. ralph-task-monitor.mjs
+ *     10. agent-error-capture.mjs
+ *     11. agent-verification.mjs
  *
  *   PostToolUse hooks (matcher: "Skill|Task")
- *     14. telemetry-tracker.mjs
+ *     12. telemetry-tracker.mjs
  *
  * For each hook we assert:
  *   - exit code 0  (fail-open contract — hooks must never block Task on crash)
@@ -341,19 +339,6 @@ describe('PreToolUse:Task — task-router', () => {
   );
 });
 
-describe('PreToolUse:Task — ralph-template-inject', () => {
-  const hookPath = resolveHook('ralph-template-inject');
-  it.skipIf(!hookPath)(
-    'exits 0 with valid output on Task event (no .ralph/state.json)',
-    () =>
-      assertFailOpen(
-        'ralph-template-inject [PreToolUse]',
-        runHook(hookPath!, PRE_TASK_EVENT),
-      ),
-    IT_TIMEOUT_MS,
-  );
-});
-
 describe('PreToolUse:Task — maestro-enforcer', () => {
   const hookPath = resolveHook('maestro-enforcer');
   it.skipIf(!hookPath)(
@@ -446,27 +431,6 @@ describe('PostToolUse:Task — agent-verification', () => {
     () =>
       assertFailOpen(
         'agent-verification [PostToolUse/err]',
-        runHook(hookPath!, POST_TASK_ERR),
-      ),
-    IT_TIMEOUT_MS,
-  );
-});
-
-describe('PostToolUse:Task — ralph-task-monitor', () => {
-  const hookPath = resolveHook('ralph-task-monitor');
-
-  it.skipIf(!hookPath)(
-    'exits 0 on successful agent output',
-    () =>
-      assertFailOpen('ralph-task-monitor [PostToolUse/ok]', runHook(hookPath!, POST_TASK_OK)),
-    IT_TIMEOUT_MS,
-  );
-
-  it.skipIf(!hookPath)(
-    'exits 0 on error-ish agent output (TypeError + stack trace)',
-    () =>
-      assertFailOpen(
-        'ralph-task-monitor [PostToolUse/err]',
         runHook(hookPath!, POST_TASK_ERR),
       ),
     IT_TIMEOUT_MS,

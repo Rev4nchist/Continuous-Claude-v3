@@ -17,7 +17,7 @@
  *   * Per hook-dev-lifecycle.md: PostToolUse output is
  *     `{ hookSpecificOutput: { hookEventName, additionalContext } }`.
  *   * Per Ralph Linter Revert lesson: this hook does NOT emit a Braintrust
- *     score, so the audit invariant stays at 4.
+ *     score, so it is not part of the audit invariant count.
  */
 
 import { spawn, spawnSync } from 'node:child_process';

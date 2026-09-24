@@ -892,7 +892,7 @@ def check_critical_hook_load() -> CheckResult:
         return _skip("hook-node-load-test", "hooks",
                      "no dist dir")
     critical = [
-        "plan-to-ralph-enforcer.mjs",
+        "destructive-command-guard.mjs",
         "no-haiku-enforcer.mjs",
         "package-install-guard.mjs",
         "memory-awareness.mjs",

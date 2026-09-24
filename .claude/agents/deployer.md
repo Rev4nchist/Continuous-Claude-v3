@@ -206,13 +206,13 @@ When the deployment touches a Neon Postgres database (signal: `DATABASE_URL` ref
 - For schema/migration work, defer to the `databases` skill — it owns query optimization and migration patterns
 - No new sub-agent: Neon ops are infrequent and well-served by the CLI + safety rule combination
 
-## Ralph Integration
+## Deploy Verification Output
 
-When delegated by Ralph for deploy verification:
+When asked to verify a deployment (e.g. by an orchestrator delegating deploy verification):
 - Detect platform (Vercel or Railway) first
 - Check if the latest deployment matches the task's commit hash
 - Verify build succeeded (no errors in build logs)
-- Return structured output for ralph-task-monitor:
+- Return a structured result:
   ```json
   {"deploy_status": "preview_success", "url": "https://...", "service": "backend", "platform": "railway"}
   ```

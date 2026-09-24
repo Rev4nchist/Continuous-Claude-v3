@@ -1,7 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { parseTranscript, generateAutoHandoff } from './transcript-parser.js';
-import { readRalphUnifiedState } from './shared/state-schema.js';
 
 interface PreCompactInput {
   trigger: 'manual' | 'auto';
@@ -13,60 +12,6 @@ interface PreCompactInput {
 interface HookOutput {
   continue?: boolean;
   systemMessage?: string;
-}
-
-/**
- * Generate Ralph state YAML snippet for inclusion in auto-handoff.
- * Returns null if no active Ralph session.
- */
-function getRalphStateYaml(projectDir: string): string | null {
-  try {
-    const state = readRalphUnifiedState(projectDir);
-    if (!state) return null;
-
-    const hasActive = state.session?.active === true;
-    const inProgress = (state.tasks || []).filter(t => t.status === 'in_progress' || t.status === 'in-progress');
-    const completed = (state.tasks || []).filter(t => t.status === 'complete' || t.status === 'completed');
-    const problemTasks = (state.tasks || []).filter(t =>
-      ['failed', 'blocked', 'paused', 'cancelled'].includes(t.status)
-    );
-    const total = (state.tasks || []).length;
-
-    if (!hasActive && inProgress.length === 0 && problemTasks.length === 0) return null;
-
-    const currentTaskName = inProgress.length > 0
-      ? (inProgress[0].name || inProgress[0].id || 'current task').replace(/"/g, '\\"')
-      : 'orchestration complete';
-
-    const lines: string[] = [];
-    lines.push(`ralph_state:`);
-    lines.push(`  story_id: "${state.story_id || 'unknown'}"`);
-    lines.push(`  stage: "${state.stage || 'unknown'}"`);
-    lines.push(`  iteration: ${state.iteration || 0}`);
-    lines.push(`  max_iterations: ${state.max_iterations || 30}`);
-    lines.push(`  progress: "${completed.length}/${total} tasks complete"`);
-    lines.push(`  retry_queue_size: ${(state.retry_queue || []).length}`);
-
-    if (inProgress.length > 0) {
-      lines.push(`  active_task:`);
-      lines.push(`    id: "${inProgress[0].id}"`);
-      lines.push(`    name: "${(inProgress[0].name || '').replace(/"/g, '\\"')}"`);
-      lines.push(`    agent: "${inProgress[0].agent || 'unassigned'}"`);
-    }
-
-    const pending = (state.tasks || []).filter(t => t.status === 'pending');
-    if (pending.length > 0) {
-      lines.push(`  pending_tasks: [${pending.slice(0, 10).map(t => `"${t.id}"`).join(', ')}]`);
-    }
-
-    if (problemTasks.length > 0) {
-      lines.push(`  problem_tasks: [${problemTasks.slice(0, 10).map(t => `"${t.id}(${t.status})"`).join(', ')}]`);
-    }
-
-    return lines.join('\n');
-  } catch {
-    return null;
-  }
 }
 
 async function main() {
@@ -111,12 +56,7 @@ async function main() {
         handoffFile = `auto-handoff-${timestamp}.yaml`;
         const handoffPath = path.join(handoffDir, handoffFile);
 
-        // Append Ralph state to handoff if active
-        const ralphYaml = getRalphStateYaml(projectDir);
-        const finalContent = ralphYaml
-          ? handoffContent + '\n\n' + ralphYaml + '\n'
-          : handoffContent;
-        fs.writeFileSync(handoffPath, finalContent);
+        fs.writeFileSync(handoffPath, handoffContent);
 
         // Also append brief summary to ledger for visibility
         const briefSummary = generateAutoSummary(projectDir, input.session_id);
@@ -137,35 +77,6 @@ async function main() {
     } else {
       // Manual compact with ledger
       ledgerMessage = `[PreCompact] Consider updating ledger before compacting: /continuity_ledger\nLedger: ${mostRecent}`;
-    }
-  }
-
-  // ALWAYS attempt Ralph state preservation (independent of ledger existence)
-  const ralphYaml = getRalphStateYaml(projectDir);
-
-  if (ralphYaml) {
-    if (handoffFile) {
-      // Ralph state already included in the ledger-based handoff above
-      ledgerMessage += ' (Ralph state preserved)';
-    } else {
-      // No ledger handoff was created, but Ralph is active — write standalone Ralph handoff
-      const handoffDir = path.join(projectDir, 'thoughts', 'shared', 'handoffs', 'ralph-auto');
-      fs.mkdirSync(handoffDir, { recursive: true });
-      const timestamp = new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19);
-      const ralphHandoffFile = `ralph-handoff-${timestamp}.yaml`;
-      const storyId = ralphYaml.match(/story_id:\s*"([^"]+)"/)?.[1] || '';
-      const currentTask = ralphYaml.match(/name:\s*"([^"]+)"/)?.[1] || 'orchestration';
-      // When story_id is unknown, describe the goal by the current task rather than
-      // a fixed "story unknown" placeholder — the fixed string was being extracted into
-      // archival_memory as identical WORKING_SOLUTION rows (curated out 2026-07-16).
-      const goal = storyId
-        ? `Ralph orchestration for story ${storyId}`
-        : `Ralph orchestration: ${currentTask}`;
-      fs.writeFileSync(
-        path.join(handoffDir, ralphHandoffFile),
-        `---\ntype: auto-handoff\nsession: ralph-auto\ndate: ${new Date().toISOString().split('T')[0]}\n---\n\ngoal: "${goal}"\nnow: "${currentTask}"\n\n${ralphYaml}\n`
-      );
-      ledgerMessage = `[PreCompact] Ralph state preserved to thoughts/shared/handoffs/ralph-auto/${ralphHandoffFile}`;
     }
   }
 

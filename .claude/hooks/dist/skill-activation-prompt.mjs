@@ -714,15 +714,13 @@ function route(input) {
   const skills = matchSkills(task, context, rules);
   const agents = matchAgents(task, context, rules, exclude_agents);
   const pattern = current_pattern || recommendPattern(task, context, skills, complexity.total);
-  const suggestRalph = greenfield > 0.4;
   return {
     skills,
     agents,
     complexity_score: Math.round(complexity.total * 1e3) / 1e3,
     recommended_pattern: pattern,
     llm_assisted: false,
-    greenfield_score: Math.round(greenfield * 1e3) / 1e3,
-    suggest_ralph: suggestRalph
+    greenfield_score: Math.round(greenfield * 1e3) / 1e3
   };
 }
 async function main() {
@@ -785,12 +783,6 @@ var WORKFLOW_TRIGGERS = [
     pattern: /\b(explore|understand|navigate|analyze)\s+(the\s+)?(codebase|project|repository|code\s+structure)/i,
     confidence: 0.9,
     description: "Codebase exploration and understanding"
-  },
-  {
-    skill: "ralph",
-    pattern: /\b(start|run|launch|use)\s+ralph/i,
-    confidence: 0.99,
-    description: "Ralph autonomous development workflow"
   },
   {
     skill: "refactor",

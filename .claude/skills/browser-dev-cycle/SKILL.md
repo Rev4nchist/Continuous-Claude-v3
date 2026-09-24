@@ -203,7 +203,7 @@ Full Playwright test runner for formal E2E test suites, interactive codegen, and
 | `npm run test:e2e:codegen` | Record interactions interactively |
 | `npm run test:e2e:report` | Open HTML test report |
 
-**Full reference:** See `references/tier4-cli-testing.md` for codegen workflow, Ralph integration, and when to use CLI vs MCP.
+**Full reference:** See `references/tier4-cli-testing.md` for codegen workflow, agent roles, and when to use CLI vs MCP.
 
 ---
 
@@ -278,7 +278,7 @@ The legacy `agent-browser` skill at `.claude/skills/agent-browser/SKILL.md` is p
 | `references/tier1-playwright-mcp.md` | Full tool tables, all parameters, modes, best practices |
 | `references/tier2-devtools.md` | Full tool tables, combined workflow, CWV targets |
 | `references/tier3-scripting.md` | Setup, code patterns, pre-built scripts |
-| `references/tier4-cli-testing.md` | Playwright CLI testing, codegen, Ralph integration |
+| `references/tier4-cli-testing.md` | Playwright CLI testing, codegen, agent roles |
 | `references/workflow-recipes.md` | Step-by-step recipes for common workflows |
 | `references/workbook-patterns.md` | Workbook SPA patterns, breakpoints, known issues |
 | `references/tool-comparison.md` | Capability matrix across all tools |

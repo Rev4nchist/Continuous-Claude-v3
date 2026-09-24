@@ -278,7 +278,7 @@ CCv3 initialized for [Project Name]:
 Next steps:
   - Start working: just tell me what to build
   - Deep analysis: /onboard (for existing codebases)
-  - Set up workflows: /build, /fix, /ralph
+  - Set up workflows: /build, /fix, /maestro
 ```
 
 ---

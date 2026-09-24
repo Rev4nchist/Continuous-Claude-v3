@@ -113,7 +113,7 @@ Add these to `package.json` for project-standard commands:
 
 ---
 
-## Ralph Integration
+## Agent Roles for E2E / Browser QA
 
 | Role | Responsibility |
 |------|---------------|
@@ -122,19 +122,16 @@ Add these to `package.json` for project-standard commands:
 | sentinel | Live browser QA -- auth-aware, multi-role, graded reports (A-F) |
 | kraken | Writes new `.spec.ts` files for complex, multi-step flows |
 | spark | Adds assertions to existing tests or writes single-scenario specs |
-| ralph | Creates `e2e_test` + `browser_qa` task types; delegates accordingly |
 
-### Task type: `e2e_test`
+### E2E test flow
 
-Ralph tasks with `type: e2e_test` follow this flow:
 1. spark/kraken writes the `.spec.ts` file
 2. arbiter runs `npx playwright test tests/<file>.spec.ts`
 3. arbiter reports: pass count, fail count, and path to trace on failure
 4. kraken fixes failures (max 3 attempts per RULES.md self-healing limit)
 
-### Task type: `browser_qa`
+### Browser QA flow
 
-Ralph tasks with `type: browser_qa` follow this flow:
 1. sentinel logs in as each required role (credentials from project CLAUDE.md)
 2. sentinel navigates key user flows from the PRD
 3. sentinel captures failures with screenshots + console errors

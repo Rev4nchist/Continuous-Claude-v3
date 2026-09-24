@@ -120,14 +120,11 @@ describe('settings.json.template', () => {
       // tldr-context-inject removed from the contract 2026-08-31: deregistered
       // everywhere by the TLDR remediation (63s/Task-call, zero real injections)
       // and archived by the Step-10 prune.
-      ['plan-to-ralph-enforcer', 'PreToolUse::Edit|Write'],
       ['memory-awareness', 'UserPromptSubmit::'],
       ['post-edit-diagnostics', 'PostToolUse::Edit|Write'],
       ['agent-error-capture', 'PostToolUse::Task'],
       ['agent-verification', 'PostToolUse::Task'],
-      ['ralph-task-monitor', 'PostToolUse::Task'],
       ['telemetry-tracker', 'PostToolUse::Skill|Task'],
-      ['plan-exit-tracker', 'PostToolUse::ExitPlanMode'],
       ['epistemic-reminder', 'PostToolUse::Grep|Read'],
     ];
     for (const [name, expected] of contract) {

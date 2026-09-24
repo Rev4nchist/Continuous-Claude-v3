@@ -36,8 +36,6 @@
  *                                                 attachment that Claude
  *                                                 Code writes to the
  *                                                 transcript JSONL)
- *   - Ralph is active in this project          -> allow (mid-loop plan
- *                                                 exits flow through)
  *   - Effective permissionMode = bypassPermissions
  *                                              -> deny (ask is swallowed
  *                                                 in bypass mode, so the
@@ -55,7 +53,6 @@
 import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { homedir } from 'os';
-import { isRalphActive } from './shared/state-schema.js';
 import { createLogger } from './shared/logger.js';
 import { logHook } from './shared/session-activity.js';
 
@@ -77,7 +74,6 @@ interface HookInput {
 export interface GateDecisionInput {
   toolName?: string;
   bypassEnv: boolean;
-  ralphActive: boolean;
   goalActive: boolean;
   // The EFFECTIVE underlying permission mode. main() is responsible for
   // resolving the layered 'plan' case via detectUnderlyingPermissionMode
@@ -93,11 +89,10 @@ export type GateDecision =
 export function decideGate(params: GateDecisionInput): GateDecision {
   if (params.toolName !== 'ExitPlanMode') return { action: 'allow' };
   // Explicit overrides take priority over bypass-mode deny so that the
-  // operator-set BYPASS_PLAN_GATE env var and the autonomous /goal and
-  // /ralph flows can still exit plan mode in a bypass session.
+  // operator-set BYPASS_PLAN_GATE env var and the autonomous /goal flow
+  // can still exit plan mode in a bypass session.
   if (params.bypassEnv) return { action: 'allow' };
   if (params.goalActive) return { action: 'allow' };
-  if (params.ralphActive) return { action: 'allow' };
   if (params.permissionMode === 'bypassPermissions') {
     return {
       action: 'deny',
@@ -108,8 +103,8 @@ export function decideGate(params: GateDecisionInput): GateDecision {
         'ask. To proceed: (a) use AskUserQuestion to get explicit user ' +
         'approval, then set BYPASS_PLAN_GATE=1 in the environment and ' +
         'retry ExitPlanMode; (b) restart Claude Code without ' +
-        '--dangerously-skip-permissions; or (c) run inside /goal or ' +
-        '/ralph for autonomous flows.',
+        '--dangerously-skip-permissions; or (c) run inside /goal for ' +
+        'autonomous flows.',
     };
   }
   return {
@@ -117,7 +112,7 @@ export function decideGate(params: GateDecisionInput): GateDecision {
     reason:
       'Plan-mode approval gate: confirm before exiting plan mode and ' +
       'executing the proposed plan. Set BYPASS_PLAN_GATE=1 to skip this ' +
-      'gate, or run /goal / /ralph to auto-bypass for autonomous flows.',
+      'gate, or run /goal to auto-bypass for autonomous flows.',
   };
 }
 
@@ -351,13 +346,6 @@ function main(): void {
     const bypassEnv = process.env.BYPASS_PLAN_GATE === '1';
     const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
 
-    let ralphActive = false;
-    try {
-      ralphActive = isRalphActive(projectDir).active;
-    } catch {
-      ralphActive = false;
-    }
-
     let goalActive = false;
     try {
       goalActive = isGoalModeActive(projectDir, sessionId);
@@ -390,7 +378,6 @@ function main(): void {
     const decision = decideGate({
       toolName: input.tool_name,
       bypassEnv,
-      ralphActive,
       goalActive,
       permissionMode,
     });
@@ -420,7 +407,6 @@ function main(): void {
         sessionId,
         bypassEnv,
         goalActive,
-        ralphActive,
         rawPermissionMode,
         permissionMode,
       });

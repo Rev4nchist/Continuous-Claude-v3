@@ -34,9 +34,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | pageindex-navigator | Route to PageIndex for document queries (disabled 2026-06-01; on-demand only) |
 | maestro-detector | Detect /maestro workflow activation |
 | user-confirmation-detector | Detect user confirmations for gated operations |
-| ralph-watchdog | Monitor Ralph iteration limits and escalation |
-| ralph-progress-inject | Inject Ralph progress state into context |
-| ralph-retry-reminder | Remind about failed Ralph agent retries |
 | braintrust_hooks user_prompt_submit | Braintrust prompt-level tracing |
 
 ## PreToolUse
@@ -49,16 +46,13 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | no-haiku-enforcer | Agent | Block haiku model selection for agents |
 | navigator-validate | Agent | Validate navigator agent configuration |
 | task-router | Agent | Suggest better agent for task type |
-| ralph-template-inject | Agent | Inject Ralph templates into agent prompts |
 | maestro-enforcer | Agent | Enforce Maestro phase gating (block skipping) |
 | pre-tool-knowledge | Agent | Inject knowledge tree context for agents |
 | ~~tldr-context-inject~~ | Agent | ARCHIVED/DEREGISTERED 2026-08-31 (was: inject TLDR analysis context for agents) |
 | smart-search-router | Grep | Route to AST-grep or TLDR for structured searches |
 | tldr-read-enforcer | Read | Suggest TLDR structure before reading large files |
-| ralph-delegation-enforcer | Edit\|Write\|Bash | Block direct code edits when Ralph is active |
 | navigator-safety | Bash | Safety checks for bash commands |
 | package-install-guard | Bash | 4-layer supply-chain check on package installs (typosquat, blocklist, OSV.dev, age); blocks malicious installs |
-| plan-to-ralph-enforcer | Edit\|Write | Block code edits after plan approval (use Ralph) |
 | file-claims | Edit\|Write | Distributed file locking across sessions |
 | test-before-done | TaskUpdate | Require test evidence before marking task complete |
 
@@ -69,14 +63,11 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | braintrust_hooks post_tool_use | * | Braintrust tool-use tracing |
 | agent-error-capture | Agent | Capture and log agent errors |
 | agent-verification | Agent | Verify agent output claims |
-| ralph-task-monitor | Agent | Track Ralph delegated task completion |
 | epistemic-reminder | Grep\|Read | Warn about unverified grep/read claims |
 | post-plan-roadmap | ExitPlanMode | Sync plan to ROADMAP.md after approval |
-| plan-exit-tracker | ExitPlanMode | Track plan approval state for enforcement |
 | plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (codex-adversary cross-model pass) after plan approval |
 | roadmap-completion | TaskUpdate\|Bash | Track roadmap task completions |
 | git-commit-roadmap | Bash | Update ROADMAP.md after git commits |
-| ralph-monitor | Bash | Monitor Ralph bash command output |
 | test-run-tracker | Bash | Track test execution results |
 | smarter-everyday | Edit\|Write\|Bash\|TaskUpdate | Extract learnings from tool use patterns (L0) |
 | prd-roadmap-sync | Write\|Edit | Sync PRD changes to ROADMAP.md |
@@ -127,8 +118,6 @@ Only PreToolUse hooks can block tool execution via `permissionDecision: "deny"`.
 
 Key blockers:
 - **file-claims** -- prevents concurrent edits to same file across sessions
-- **ralph-delegation-enforcer** -- blocks direct code edits when Ralph is active
-- **plan-to-ralph-enforcer** -- blocks code edits after plan approval
 - **maestro-enforcer** -- blocks phase-skipping in Maestro workflows
 - **no-haiku-enforcer** -- blocks haiku model selection for agents
 - **test-before-done** -- blocks task completion without test evidence
@@ -153,7 +142,6 @@ The **4 deterministic Braintrust score emitters are TypeScript hooks** in
 |-----------------------|--------------------|
 | `memory-awareness` | `memory_recall_relevance`, `memory_recall_hit` |
 | `telemetry-tracker` | `tool_call_success`, `skill_trigger_accuracy` |
-| `ralph-task-monitor` | `agent_task_success` |
 | `hook-health-monitor` | `hook_health_ratio` |
 
 (`memory_store_quality` is emitted from the Python `store_learning.py`, not a hook.)

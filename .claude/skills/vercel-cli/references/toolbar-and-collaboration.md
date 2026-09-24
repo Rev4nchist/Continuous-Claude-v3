@@ -32,7 +32,7 @@ mcp__claude_ai_Vercel__change_toolbar_thread_resolve_status  # resolve
 ## Use Cases
 
 - **Code review follow-up**: After deploying a preview, check if reviewers left visual feedback
-- **Ralph integration**: Pull toolbar comments as follow-up tasks for the deployer agent
+- **Follow-up delegation**: Pull toolbar comments as follow-up tasks for the deployer agent
 - **Bug reports**: Team members can annotate visual bugs on preview deploys; agents can read and triage them
 - **Design feedback**: Designers leave pixel-level feedback on preview URLs; agents can read and implement changes
 

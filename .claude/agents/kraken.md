@@ -113,7 +113,7 @@ $CLAUDE_PROJECT_DIR/.claude/cache/agents/kraken/output-{timestamp}.md
 ## Return Contract (final message — 07-02 R2)
 
 Your cache-file report is for humans; your FINAL MESSAGE is for the orchestrator.
-End it with exactly one fenced JSON block matching (extends the existing ralph_status convention — keep ralph_status when running under Ralph):
+End it with exactly one fenced JSON block matching:
 
 ```json
 {

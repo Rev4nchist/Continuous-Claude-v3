@@ -499,7 +499,7 @@ Hooks can import from `./shared/` modules in the hooks/src/ directory:
 | `output.js` | `outputContinue()`, `outputWithMessage()`, `outputBlock()` | Standard JSON output helpers |
 | `session-id.js` | `getSessionId()` | Get or derive session ID |
 | `db-utils-pg.js` | `registerSession()` | PostgreSQL session coordination |
-| `state-schema.js` | `readRalphUnifiedState()` | Ralph state reading |
+| `state-schema.js` | `validateMaestroState()` | Maestro state validation |
 | `resource-reader.js` | `readResourceState()` | Phase 4 resource management |
 
 Import with `.js` extension (esbuild resolves `.ts` -> `.js` at bundle time):

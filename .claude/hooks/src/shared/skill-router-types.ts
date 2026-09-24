@@ -97,7 +97,6 @@ export interface SkillRouterAPIOutput {
   recommended_pattern: OrchestrationPattern | null;
   llm_assisted: boolean;
   greenfield_score: number;
-  suggest_ralph: boolean;
 }
 
 /** A matched skill from prompt/file analysis */

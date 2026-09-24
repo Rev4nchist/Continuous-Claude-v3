@@ -232,8 +232,8 @@ async function main() {
         // Draining the response body was tried first and did NOT fix it -- the
         // exit call itself is the problem.
         //
-        // memory-awareness, hook-health-monitor and ralph-task-monitor all emit
-        // scores and none of them crash; none of them call process.exit either.
+        // memory-awareness and hook-health-monitor both emit scores and
+        // neither crashes; neither calls process.exit either.
         // Letting the loop drain naturally is the shape that works. The emit is
         // bounded by a 2s AbortSignal timeout, so this cannot hang on the POST.
     } catch {

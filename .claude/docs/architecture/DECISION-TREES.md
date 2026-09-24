@@ -71,9 +71,6 @@ IMPLEMENTATION
     ├── Need design/planning?
     │   └── YES → architect → kraken
     │
-    ├── Full feature with PRD?
-    │   └── YES → /ralph workflow
-    │
     └── Multi-step orchestration?
         └── YES → /maestro workflow
 ```
@@ -84,7 +81,6 @@ IMPLEMENTATION
 | Trivial | spark | <50 lines, obvious fix |
 | Standard | kraken | New feature with tests |
 | Complex | architect → kraken | Needs design first |
-| Full product | /ralph | PRD → Design → Build |
 
 ---
 
@@ -196,7 +192,6 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
 | Explore codebase | `/explore` | scout with depth control |
 | Fix a bug | `/fix` | debug → implement → test |
 | Build feature | `/build` | plan → implement → review |
-| Full product | `/ralph` | PRD → design → architecture |
 | Orchestrate many | `/maestro` | Coordinate specialists |
 | Security audit | `/security` | aegis + verification |
 | Release prep | `/release` | audit → test → changelog |
