@@ -15183,7 +15183,9 @@ function publishDateFromRegistryJson(json, ecosystem, requestedVersion) {
   if (!doc) return null;
   if (ecosystem === "pypi") {
     const exact2 = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
-    const version2 = exact2 && doc.releases?.[exact2] ? exact2 : doc.info?.version;
+    const norm = (v) => v.toLowerCase().replace(/^v/, "").replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.replace(/(\.0+)+$/, ""));
+    const releaseKey = exact2 ? doc.releases?.[exact2] ? exact2 : Object.keys(doc.releases ?? {}).find((k) => norm(k) === norm(exact2)) : void 0;
+    const version2 = releaseKey ?? doc.info?.version;
     let newest = null;
     for (const file of doc.releases?.[version2] ?? []) {
       const d = file?.upload_time_iso_8601 ? new Date(file.upload_time_iso_8601) : null;

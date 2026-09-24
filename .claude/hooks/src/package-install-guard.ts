@@ -453,7 +453,14 @@ export function publishDateFromRegistryJson(
     const exact = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion)
       ? requestedVersion.replace(/^v/, '')
       : undefined;
-    const version = exact && doc.releases?.[exact] ? exact : doc.info?.version;
+    // PEP 440 treats trailing zero release segments as equal (1.8 == 1.8.0), but PyPI keys the
+    // release dict by the published string. Match on the normalized form so a shortened pin
+    // does not fall back to info.version and age-check the wrong release.
+    const norm = (v: string) => v.toLowerCase().replace(/^v/, '').replace(/^(\d+(?:\.\d+)*)/, (rel) => rel.replace(/(\.0+)+$/, ''));
+    const releaseKey = exact
+      ? (doc.releases?.[exact] ? exact : Object.keys(doc.releases ?? {}).find((k) => norm(k) === norm(exact)))
+      : undefined;
+    const version = releaseKey ?? doc.info?.version;
     // A release is several files uploaded separately, and pip may pick a wheel added long after
     // the sdist. Age-check the NEWEST upload, or a fresh wheel on an old release passes.
     let newest: Date | null = null;

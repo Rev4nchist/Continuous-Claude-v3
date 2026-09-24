@@ -575,7 +575,18 @@ describe('package-install-guard', () => {
         },
       };
       expect(publishDateFromRegistryJson(doc, 'pypi', '1.9.0rc1')?.toISOString()).toBe('2026-09-23T10:00:00.000Z');
+    });
+    it('pypi: a shortened pin (1.8) resolves to its PEP 440 equal release (1.8.0), not the fallback', () => {
+      const doc = {
+        info: { version: '2.0.0' }, // the fallback, with a DIFFERENT date, so the test can tell them apart
+        releases: {
+          '1.8.0': [{ upload_time_iso_8601: '2026-01-01T00:00:00.000Z' }],
+          '2.0.0': [{ upload_time_iso_8601: '2026-09-23T10:00:00.000Z' }],
+        },
+      };
       expect(publishDateFromRegistryJson(doc, 'pypi', '1.8')?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+      expect(publishDateFromRegistryJson(doc, 'pypi', '1.8.0.0')?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+      expect(publishDateFromRegistryJson(doc, 'pypi', '1.9')?.toISOString()).toBe('2026-09-23T10:00:00.000Z'); // unknown -> fallback
     });
     it('pypi: ages a release by its NEWEST file (a new wheel on an old release)', () => {
       const doc = {

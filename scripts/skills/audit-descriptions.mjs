@@ -30,7 +30,9 @@ function plainScalarError(v) {
   if (!v || /^[>|]/.test(v)) return null;
   // A quoted scalar must close on the same line, followed only by a comment or nothing.
   // (A value that spans lines is not used by any SKILL.md here, so it is reported too.)
-  if (v[0] === '"') return /^"(?:[^"\\]|\\.)*"\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
+  // Double-quoted escapes must be ones YAML defines (\n, \t, \", \\, \xXX, \uXXXX, ...);
+  // an unknown one such as \q is a parse error.
+  if (v[0] === '"') return /^"(?:[^"\\]|\\(?:[0abtnvfre "\/\\N_LP\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}))*"\s*(#.*)?$/.test(v) ? null : 'yaml-bad-double-quoted-scalar';
   if (v[0] === "'") return /^'(?:[^']|'')*'\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
   if (/:\s/.test(v)) return 'yaml-colon-in-plain-scalar';
   if (/\s#/.test(v)) return 'yaml-comment-in-plain-scalar';
