@@ -418,7 +418,7 @@
       "port": 3006,
       "url": "http://localhost:3006",
       "devCommand": "npm run tauri dev",
-      "status": "planning",
+      "status": "active",
       "sentryProject": "",
       "linearTeam": ""
     }

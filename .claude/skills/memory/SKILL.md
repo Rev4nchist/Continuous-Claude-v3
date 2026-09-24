@@ -7,7 +7,7 @@ metadata:
 
 # Memory System
 
-Unified interface for storing and retrieving learnings across sessions. This skill is the canonical source — the former `memory-rules.md` rule was folded in on 2026-09-24; one line of it lives in `rules/on-demand-rules.md`.
+Unified interface for storing and retrieving learnings across sessions. This skill is the canonical source — the former `memory-rules.md` rule was folded in on 2026-09-24; one line of it lives in `~/.claude/rules/on-demand-rules.md` (repo source: `.claude/rules-src/on-demand-rules.md`).
 
 ## When to Use
 
