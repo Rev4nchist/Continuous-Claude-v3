@@ -345,17 +345,26 @@ ${body}`
 
 ${body}` };
 }
-function logFire(input, d) {
+function triggerWords(input, fired) {
+  const tool = input.tool_name || "";
+  const ti = input.tool_input || {};
+  if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
+  const segs = quotedSegments(String(ti.command ?? ""), tool);
+  const plain = (seg) => stripLeaders(stripQuotedStrings(seg, tool));
+  const hit = segs.find((seg) => fired.some((r) => test(r.command, plain(seg)) || test(r.segment, seg)));
+  const [cmd = "", arg] = plain(hit ?? segs[0] ?? "").split(/\s+/);
+  return arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
+}
+function logFire(input, d, fired) {
   try {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), ".claude", "logs", "rule-router.jsonl");
     mkdirSync(dirname(path), { recursive: true });
-    const ti = input.tool_input || {};
-    const tool = input.tool_name || "";
-    const what = COMMAND_TOOLS.has(tool) ? (commandSegments(String(ti.command ?? ""), tool)[0] || "").split(/\s+/).slice(0, 2).join(" ") : String(ti.subagent_type ?? ti.skill ?? "").slice(0, 60);
+    const what = triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
+      // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
       ts: (/* @__PURE__ */ new Date()).toISOString(),
-      session: (input.session_id || "").slice(0, 8),
-      agent: input.agent_id || null,
+      session: input.session_id || "no-session",
+      agent: input.agent_id || process.env.CLAUDE_AGENT_ID || "main",
       tool: input.tool_name,
       rules: d.ids,
       kind: d.kind,
@@ -397,7 +406,7 @@ function run(raw) {
     outputContinue();
     return;
   }
-  logFire(input, d);
+  logFire(input, d, won);
   if (d.kind === "deny") {
     outputDeny(d.text, "deny");
   } else {
@@ -421,5 +430,6 @@ export {
   quotedSegments,
   rulesDir,
   run,
-  splitUnquoted
+  splitUnquoted,
+  triggerWords
 };
