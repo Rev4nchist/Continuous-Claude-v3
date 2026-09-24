@@ -109,7 +109,15 @@ export const POWERSHELL_PATTERNS: DPattern[] = [
  * match too — while quoted MESSAGE text (not at a command position, or in single
  * quotes) still does not false-trigger.
  */
-export function stripQuotedStrings(command: string): string {
+export function stripQuotedStrings(command: string, tool: string = 'Bash'): string {
+  if (tool === 'PowerShell') {
+    // PowerShell quoting: backslash is NOT an escape (`"C:\repo\"` is a complete string);
+    // the escape character is the backtick, and '' is a literal quote inside '...'.
+    // Using bash rules here let `"C:\repo\" reset --hard` swallow the rest of the command.
+    return command
+      .replace(/"(?:[^"`]|`.)*"/g, '""')
+      .replace(/'(?:[^']|'')*'/g, "''");
+  }
   return command
     .replace(/"(?:[^"\\]|\\.)*"/g, '""')
     .replace(/'(?:[^'\\]|\\.)*'/g, "''");
@@ -284,14 +292,18 @@ export function normalizeGitGlobalOptions(scan: string): string {
 
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
-  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command));
+  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
   const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
   if (depth < 4) {
     try {
-      const { segments, substitutions } = parseExecutable(command);
+      // parseExecutable follows bash rules, where a backtick starts a command substitution.
+      // In PowerShell the backtick is only the escape character, so drop `x escapes first,
+      // or an escaped quote in a message ("say `"git reset --hard`"") parses as a command.
+      const parseInput = tool === 'PowerShell' ? command.replace(/`./g, '') : command;
+      const { segments, substitutions } = parseExecutable(parseInput);
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
         const inner = classifyDestructive(payload, depth + 1, tool);

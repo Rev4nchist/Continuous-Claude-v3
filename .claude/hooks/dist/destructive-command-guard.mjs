@@ -74,7 +74,10 @@ var POWERSHELL_PATTERNS = [
   { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
   { name: "PowerShell recursive delete ([IO.Directory]::Delete $true)", re: /\[(?:System\.)?IO\.Directory\]::Delete\([^)]*,\s*\$true\s*\)/i }
 ];
-function stripQuotedStrings(command) {
+function stripQuotedStrings(command, tool = "Bash") {
+  if (tool === "PowerShell") {
+    return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");
+  }
   return command.replace(/"(?:[^"\\]|\\.)*"/g, '""').replace(/'(?:[^'\\]|\\.)*'/g, "''");
 }
 function parseExecutable(command) {
@@ -288,14 +291,15 @@ function normalizeGitGlobalOptions(scan) {
 }
 function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
-  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command));
+  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
   const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
   if (depth < 4) {
     try {
-      const { segments, substitutions } = parseExecutable(command);
+      const parseInput = tool === "PowerShell" ? command.replace(/`./g, "") : command;
+      const { segments, substitutions } = parseExecutable(parseInput);
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
         const inner = classifyDestructive(payload, depth + 1, tool);

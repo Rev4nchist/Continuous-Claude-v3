@@ -460,3 +460,18 @@ describe('P42: git global options no longer hide the subcommand', () => {
     expect(decide("git status; $env:SKIP_DESTRUCTIVE_GUARD='1'; git -C r reset --hard x", input, {}).decision).toBe('deny');
   });
 });
+
+
+describe('P42 (CodeRabbit #47): PowerShell quoting rules', () => {
+  it('a path ending in a backslash does not hide the git subcommand on the PowerShell tool', () => {
+    expect(classifyDestructive('git -C "C:\\repo\\" reset --hard origin/main', 0, 'PowerShell')).toBe('git reset --hard');
+    expect(classifyDestructive("Remove-Item 'C:\\x\\' -Recurse", 0, 'PowerShell')).not.toBeNull();
+  });
+  it('PowerShell escapes (backtick, doubled single quote) stay inside the string', () => {
+    expect(classifyDestructive('Write-Host "say `"git reset --hard`" please"', 0, 'PowerShell')).toBeNull();
+    expect(classifyDestructive("Write-Host 'it''s git reset --hard in a message'", 0, 'PowerShell')).toBeNull();
+  });
+  it('bash rules are unchanged for the Bash tool', () => {
+    expect(classifyDestructive('echo "to undo: git reset --hard HEAD~1"')).toBeNull();
+  });
+});
