@@ -54,6 +54,48 @@ while [[ $# -gt 0 ]]; do
     esac
 done
 
+# -----------------------------------------------------------------------------
+# Branch guard: only `main` in the primary checkout syncs to ~/.claude.
+# The post-commit hook runs this script from whatever checkout made the commit,
+# so a commit on a feature branch -- or in a linked worktree -- used to push that
+# branch's hooks and rules live before anyone reviewed them (found by the
+# 2026-09-23 Opus 5.5 eval). Now those runs are skipped; merge to main, then
+# sync. The cursor below makes that first sync on main pick up everything the
+# merge brought in. Override for a deliberate branch sync: SYNC_ALLOW_BRANCH=1.
+# A REPO_ROOT that is not a git checkout (a fixture, an unpacked copy) passes.
+# -----------------------------------------------------------------------------
+SYNC_ON_MAIN=true
+if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
+    sync_branch="$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null || echo '')"
+    sync_gitdir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null || echo '')"
+    sync_common="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
+    [[ "$sync_branch" == "main" && "$sync_gitdir" == "$sync_common" ]] || SYNC_ON_MAIN=false
+fi
+if ! $SYNC_ON_MAIN && [[ "${SYNC_ALLOW_BRANCH:-0}" != "1" ]] && ! $DRY_RUN; then
+    echo "Sync skipped: '$sync_branch' is not main in the primary checkout. Merge to main, then run scripts/sync-to-active.sh --changed (override: SYNC_ALLOW_BRANCH=1)."
+    exit 0
+fi
+
+# Last commit this script synced successfully. --changed diffs from here to HEAD,
+# so commits that a skipped or locked-out run missed are caught up next time.
+CURSOR_FILE="$ACTIVE_CLAUDE/state/sync-cursor"
+PENDING_FILE="$ACTIVE_CLAUDE/.sync.pending"
+
+repo_head() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true; }
+
+# Written only after a run finishes copying, so a killed run leaves the old cursor
+# and the next run simply redoes the range (copies are idempotent). Only a run on
+# main moves it: an override sync from a branch must not, or the later sync of the
+# merge would diff from the branch commit and skip what the branch brought in.
+write_cursor() {
+    local sha="$1"
+    [[ -z "$sha" ]] && return 0
+    $DRY_RUN && return 0
+    $SYNC_ON_MAIN || return 0
+    mkdir -p "$(dirname "$CURSOR_FILE")" 2>/dev/null || true
+    printf '%s\n' "$sha" > "$CURSOR_FILE.tmp" && mv -f "$CURSOR_FILE.tmp" "$CURSOR_FILE"
+}
+
 $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 
 # hooks/src excluded: dist/*.mjs is what runs; copying src stomps mtimes and breaks hook-dist-freshness.
@@ -310,7 +352,10 @@ if ! $DRY_RUN; then
         LOCK_HELD=true
         trap release_lock EXIT
     else
-        $VERBOSE && echo "Another sync is already running (lock held); exiting." || true
+        # Leave a marker instead of dropping this commit: the lock holder re-checks
+        # it before exiting and syncs whatever landed meanwhile (cursor..HEAD).
+        : > "$PENDING_FILE" 2>/dev/null || true
+        $VERBOSE && echo "Another sync is already running (lock held); queued for it." || true
         exit 0
     fi
 fi
@@ -403,6 +448,9 @@ if $CHANGED; then
         guarded_copy "$1" "$2"
     }
 
+    # Sync every path that changed between two commits ($1 = base, $2 = target).
+    changed_sync_range() {
+    local range_base="$1" range_target="$2"
     while IFS=$'\t' read -r status path _rest; do
         [[ -z "$status" || -z "$path" ]] && continue
         st="${status:0:1}"
@@ -432,6 +480,13 @@ if $CHANGED; then
                             rm -f "$dst"
                             manifest_unset "${dst#$ACTIVE_CLAUDE/}"
                             $VERBOSE && echo "Deleted: ${dst#$ACTIVE_CLAUDE/}" || true
+                            # Remove parent dirs the delete left empty (a deleted skill
+                            # used to leave an empty skills/<name>/ behind). Stops below
+                            # the top-level subtree, so ~/.claude/skills itself is kept.
+                            prune_dir="$(dirname "$dst")"
+                            while [[ "$prune_dir" == "$ACTIVE_CLAUDE"/*/* ]] && rmdir "$prune_dir" 2>/dev/null; do
+                                prune_dir="$(dirname "$prune_dir")"
+                            done
                         fi
                     fi
                     ;;
@@ -448,8 +503,42 @@ if $CHANGED; then
     # (merge 2f5c761: 32 paths vs 10 from the first parent). Two explicit trees
     # give exactly what the commit or merge brought in; for an ordinary commit
     # this equals the old form. A root commit has no HEAD^1 and syncs nothing,
-    # as before.
-    done < <(git -C "$REPO_ROOT" diff-tree --no-commit-id --name-status -r HEAD^1 HEAD 2>/dev/null)
+    # as before. The base is now the sync cursor when it is valid (see below).
+    done < <(git -C "$REPO_ROOT" diff-tree --no-commit-id --name-status -r "$range_base" "$range_target" 2>/dev/null)
+    }
+
+    # Base: the cursor when it is an ancestor of HEAD, else HEAD^1 (first run, or
+    # the cursor file is missing). A cursor that is NOT an ancestor (main was reset
+    # or rewritten) means the diff cannot be trusted, so fall back to the full
+    # mirror below instead of guessing.
+    sync_target="$(repo_head)"
+    sync_base=""
+    if [[ -s "$CURSOR_FILE" ]]; then
+        sync_cursor="$(tr -d '\r\n ' < "$CURSOR_FILE")"
+        if git -C "$REPO_ROOT" merge-base --is-ancestor "$sync_cursor" HEAD 2>/dev/null; then
+            sync_base="$sync_cursor"
+        else
+            echo "  Sync cursor $sync_cursor is not an ancestor of HEAD; running the full mirror instead."
+            CHANGED=false
+        fi
+    else
+        sync_base="HEAD^1"
+    fi
+fi
+
+if $CHANGED; then
+    changed_sync_range "$sync_base" "$sync_target"
+
+    # Commits that landed while we held the lock left a pending marker. Sync them
+    # now rather than dropping them (the old lock-contention loss).
+    while [[ -e "$PENDING_FILE" ]] && ! $DRY_RUN; do
+        rm -f "$PENDING_FILE"
+        next_target="$(repo_head)"
+        [[ -z "$next_target" || "$next_target" == "$sync_target" ]] && break
+        $VERBOSE && echo "Catching up queued commits: ${sync_target:0:7}..${next_target:0:7}" || true
+        changed_sync_range "$sync_target" "$next_target"
+        sync_target="$next_target"
+    done
 
     # Conditional agent .json sidecar regen -- only when an agent .md changed
     # (full mode runs it unconditionally). The regen writes .json into the repo
@@ -493,6 +582,7 @@ if $CHANGED; then
     fi
 
     save_manifest
+    write_cursor "$sync_target"
     print_guard_summary || exit 3
     $VERBOSE && echo "Incremental sync complete: continuous-claude -> ~/.claude" || true
     exit 0
@@ -669,5 +759,6 @@ if ! $DRY_RUN; then
 fi
 
 save_manifest
+write_cursor "$(repo_head)"
 print_guard_summary || exit 3
 $VERBOSE && echo "Sync complete: continuous-claude -> ~/.claude" || true
