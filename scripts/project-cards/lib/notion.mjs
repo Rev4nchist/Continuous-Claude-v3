@@ -1,7 +1,7 @@
 // notion.mjs — thin, deterministic wrapper over the Notion CLI (`ntn`).
 // ESM, no external deps. Honors the ntn non-interactive contract on every call:
 //   absolute exe, empty/closed stdin (input), hard timeout, windowsHide, fail-loud.
-// See docs/notion-platform-spike-report.md and .claude/rules/notion-cli-safety.md.
+// See docs/notion-platform-spike-report.md and .claude/rules-ondemand/notion-cli-safety.md.
 import { spawnSync } from 'node:child_process';
 import {
   NTN_EXE, NTN_TIMEOUT_MS, PROJECTS_DS as PROJECTS_DS_ID,

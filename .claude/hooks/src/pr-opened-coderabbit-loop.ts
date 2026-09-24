@@ -4,7 +4,7 @@
  * Detects a PR being opened (`gh pr create` or `gh api ... /pulls -X POST`)
  * and, when the tool response looks like a genuine success (a PR URL or a
  * "number" field), injects additionalContext telling the model to start the
- * CodeRabbit review loop (see rules/pr-coderabbit-loop.md) in the same turn.
+ * CodeRabbit review loop (see rules-ondemand/pr-coderabbit-loop.md) in the same turn.
  *
  * Fires at most once per PR URL per session: a small state file under
  * os.tmpdir(), keyed by session_id + url, suppresses repeats.
@@ -112,7 +112,7 @@ function markFired(sessionId: string, url: string): void {
 
 export function buildContext(info: PrInfo): string {
   return (
-    `PR OPENED: ${info.url}. Per ~/.claude/rules/pr-coderabbit-loop.md, START THE CODERABBIT ` +
+    `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, START THE CODERABBIT ` +
     `LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR ` +
     `#${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss ` +
     `false positives; verify thread isResolved via GraphQL; never merge). This applies to every ` +

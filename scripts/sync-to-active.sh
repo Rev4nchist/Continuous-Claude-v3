@@ -120,7 +120,9 @@ $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 # to drift, which is the exact failure the rules-src rename above was fixing.
 # Safe to add: repo and active were verified hash-identical (58/58) when the backup
 # landed, so the first forward sync copies nothing.
-SYNC_DIRS="agents skills scripts docs commands"
+# rules-ondemand (2026-09-24): tool-specific rules the rule-router hook loads at the action.
+# Same name in repo and active, and deliberately NOT under rules/, so nothing auto-loads them.
+SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
 
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
@@ -440,7 +442,7 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*)
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;

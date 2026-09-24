@@ -66,7 +66,7 @@ reads these on the next run so a published, unchanged card becomes a true no-op.
 ## ntn contract (already enforced by the engine)
 
 Absolute exe path, closed stdin, 30 s timeout, `windowsHide`, fail-loud,
-`ntn --version` logged per run. See `.claude/rules/notion-cli-safety.md` and
+`ntn --version` logged per run. See `.claude/rules-ondemand/notion-cli-safety.md` and
 `scripts/project-cards/README.md`.
 
 ## Reporting discipline

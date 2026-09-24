@@ -62,7 +62,7 @@ jq -s '[.[] | .tokens.output // 0] | add' .claude/logs/codex-worker.jsonl
 
 ## Related
 
-- Safety contract: `.claude/rules/codex-worker-safety.md`
+- Safety contract: `.claude/rules-ondemand/codex-worker-safety.md`
 - Engine: `.claude/agents/codex-worker.md` · Skill: `.claude/skills/codex/SKILL.md`
 - Design + evidence: `docs/codex-integration/DESIGN-RESEARCH.md`
 - Review-lift sibling: `.claude/logs/codex-lift.README.md`

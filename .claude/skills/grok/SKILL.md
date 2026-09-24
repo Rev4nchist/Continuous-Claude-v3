@@ -9,7 +9,7 @@ Hands an arbitrary request to xAI Grok on Dave's **X Premium+ subscription** (ne
 
 **Roster position (Game Plan):** Grok is the **default milestone builder and researcher** — `/grok --implement` is the first choice for building workroom milestones, and the `research` role (live web/X, widened write-free allowlist per `grok-worker-safety.md`) feeds `research/` in the room. **Codex is the rostered reviewer/fixer** — Grok never grades its own build; the review booth is Codex + Claude critics. Doctrine: `.workroom/PROTOCOL.md`.
 
-**Safety contract:** `.claude/rules/grok-worker-safety.md` (confirm-first, `--tools`-is-the-boundary, worktree isolation, review-gate, data-egress gate). **Engine:** the `grok-worker` agent.
+**Safety contract:** `.claude/rules-ondemand/grok-worker-safety.md` (confirm-first, `--tools`-is-the-boundary, worktree isolation, review-gate, data-egress gate). **Engine:** the `grok-worker` agent.
 
 ## When to Use
 
@@ -80,7 +80,7 @@ Task(
 ```
 `/grok --review` is a convenience alias so users have one mental entry point (`/grok`) — it reuses `grok-adversary`'s carefully-tuned `--tools` guard, it does NOT reimplement review.
 
-## Guardrails (summary — full text in `.claude/rules/grok-worker-safety.md`)
+## Guardrails (summary — full text in `.claude/rules-ondemand/grok-worker-safety.md`)
 
 - **Subscription only.** The worker asserts `grok models` shows "logged in" AND that `~/.grok/auth.json` `.email` equals `dkhayes44@gmail.com` (wrong-account guard), and strips `XAI_API_KEY` from Grok's env. Fails loud, never silently uses an API key or the wrong account.
 - **`--tools` is the ONLY working read-only boundary.** `--sandbox` is decorative on this CLI build (accepts any string, blocks nothing — live-probed) and `--permission-mode plan` does not block writes headless either. Ask mode always passes `--tools "read_file,list_dir,grep"`.
@@ -118,7 +118,7 @@ One row per run → `.claude/logs/grok-worker.jsonl` (schema: `.claude/logs/grok
 ---
 
 <!-- archived-rule:grok-worker-safety.md ref:b800899 -->
-## Reference: pre-split text of `rules/grok-worker-safety.md` (archived 2026-07-29)
+## Reference: pre-split text of `rules-ondemand/grok-worker-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
@@ -127,7 +127,7 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ````markdown
 # Grok Worker Safety Rules
 
-Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules/codex-worker-safety.md` (same discipline, different verified surface) — the `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules-ondemand/codex-worker-safety.md` (same discipline, different verified surface) — the `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
 Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x.ai (oidc). See `docs/grok-integration/DESIGN-RESEARCH.md` for the full evidence trail (all facts below are live-probed, not doc-sourced).
 
@@ -246,7 +246,7 @@ Subscription-gated (X Premium+); no per-token invoice observed in this pass. No 
 ## Safety
 
 <!-- current text of rules-src/grok-worker-safety.md, moved here on 2026-09-23 (Opus 5.5 eval, P20); the rule keeps a short summary. Supersedes the 2026-07-29 pre-split reference above. -->
-Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules/codex-worker-safety.md`. `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. Evidence trail: `docs/grok-integration/DESIGN-RESEARCH.md`.
+Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules-ondemand/codex-worker-safety.md`. `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. Evidence trail: `docs/grok-integration/DESIGN-RESEARCH.md`.
 
 ## The one thing to internalize
 

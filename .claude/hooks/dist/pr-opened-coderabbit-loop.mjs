@@ -75,7 +75,7 @@ function markFired(sessionId, url) {
   }
 }
 function buildContext(info) {
-  return `PR OPENED: ${info.url}. Per ~/.claude/rules/pr-coderabbit-loop.md, START THE CODERABBIT LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR #${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss false positives; verify thread isResolved via GraphQL; never merge). This applies to every PR in every session.`;
+  return `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, START THE CODERABBIT LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR #${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss false positives; verify thread isResolved via GraphQL; never merge). This applies to every PR in every session.`;
 }
 function main() {
   const raw = readFileSync(0, "utf8");

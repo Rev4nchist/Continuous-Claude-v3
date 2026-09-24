@@ -223,7 +223,7 @@ Same training family = same blind spots. After Claude's verified tigers/elephant
 
 **Reviewer selection.** The post-ExitPlanMode hook (or the user directly) picks: **Codex** (default), **Grok**, **Both**, or **Skip**. `--no-codex` skips the Codex pass (back-compat); `--grok` uses Grok instead; `--reviewers both` runs both. When Both is selected, spawn the two adversary Tasks **in parallel** (single message, two tool calls).
 
-**Skip if** the user chose Skip OR the target is a trivial doc-only change OR the relevant subscription quota is exhausted this session. See `.claude/rules/codex-adversarial.md` and `.claude/rules/grok-worker-safety.md`.
+**Skip if** the user chose Skip OR the target is a trivial doc-only change OR the relevant subscription quota is exhausted this session. See `.claude/rules-ondemand/codex-adversarial.md` and `.claude/rules-ondemand/grok-worker-safety.md`.
 
 **Reviewer agent type unavailable?** Agents merged mid-session don't register until the next session start (hit 2026-07-11: `grok-adversary` absent from the Agent registry hours after merge). Do NOT silently downgrade to a Claude-family reviewer — that forfeits the cross-model value the user chose. Fallback: execute the adversary's own contract inline — read its `.claude/agents/<name>.md`, run the documented CLI invocation yourself (same read-only tool guard, same identity pin, same output paths), and parse findings from its clean-output file.
 

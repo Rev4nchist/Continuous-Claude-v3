@@ -1,6 +1,6 @@
 # Codex Worker Safety Rules
 
-Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence trail: probe archaeology, benchmarks, flag history, the resolved hooks-collision spike) and the `codex-worker` agent. Write-capable sibling of `.claude/rules/codex-adversarial.md` (read-only review). `/codex` hands a task to the OpenAI Codex harness (`gpt-5.6-luna @ max` by default) on Dave's **ChatGPT subscription** to actually execute — it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/codex/SKILL.md` (which now carries the evidence trail: probe archaeology, benchmarks, flag history, the resolved hooks-collision spike) and the `codex-worker` agent. Write-capable sibling of `.claude/rules-ondemand/codex-adversarial.md` (read-only review). `/codex` hands a task to the OpenAI Codex harness (`gpt-5.6-luna @ max` by default) on Dave's **ChatGPT subscription** to actually execute — it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
 Grounding: verified 2026-07-11 against `codex-cli 0.144.1` and re-verified 2026-09-08 against `codex-cli 0.153.4`, `Logged in using ChatGPT`. Full evidence: `docs/codex-integration/DESIGN-RESEARCH.md`.
 

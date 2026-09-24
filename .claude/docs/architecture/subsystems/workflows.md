@@ -120,7 +120,7 @@ Comprehensive code review via parallel specialists.
 plan-reviewer. Because Codex is a different model family, it catches blind spots
 the Claude-family reviewers share. Findings flagged by BOTH are high-confidence;
 `[Codex]`-only findings are the cross-model lift. Skip with `--no-codex` for
-doc-only or trivial diffs. See `.claude/rules/codex-adversarial.md`.
+doc-only or trivial diffs. See `.claude/rules-ondemand/codex-adversarial.md`.
 
 ## /release Workflow
 

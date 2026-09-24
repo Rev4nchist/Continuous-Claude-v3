@@ -9,7 +9,7 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 
 **Roster position (Game Plan):** Codex's primary roles are **reviewer and fixer** — deep review via `codex-adversary`, fix patches via `--implement` scoped to booth findings. For milestone *building*, **Grok is the default builder** (`/grok --implement`); Codex builds only as **failover** (Grok dead/quota-capped/hung) or when the human explicitly overrides with `--builder codex` for a specialized milestone. A failover-built milestone is then graded by Claude critics, never by Codex itself. Doctrine: `.workroom/PROTOCOL.md`.
 
-**Safety contract:** `.claude/rules/codex-worker-safety.md` (confirm-first, sandbox-is-the-boundary, worktree isolation, review-gate). **Engine:** the `codex-worker` agent. **Cross-model review convention:** `.claude/rules/codex-adversarial.md`.
+**Safety contract:** `.claude/rules-ondemand/codex-worker-safety.md` (confirm-first, sandbox-is-the-boundary, worktree isolation, review-gate). **Engine:** the `codex-worker` agent. **Cross-model review convention:** `.claude/rules-ondemand/codex-adversarial.md`.
 
 ## When to Use
 
@@ -86,7 +86,7 @@ Task(
 ```
 `/codex --review` is a convenience alias so users have one mental entry point (`/codex`) — it reuses `codex-adversary`'s carefully-tuned read-only flags, it does NOT reimplement review.
 
-## Guardrails (summary — full text in `.claude/rules/codex-worker-safety.md`)
+## Guardrails (summary — full text in `.claude/rules-ondemand/codex-worker-safety.md`)
 
 - **Subscription only.** The worker asserts `codex login status` = "Logged in using ChatGPT" and strips `OPENAI_API_KEY`/`CODEX_API_KEY` from Codex's env. Fails loud, never silently uses an API key.
 - **Confirm-first for `implement`/`resume`** (the only approval gate — `codex exec` has none). `--yes` skips only the interactive pause.
@@ -130,7 +130,7 @@ One row per run → `.claude/logs/codex-worker.jsonl` (schema: `.claude/logs/cod
 ---
 
 <!-- archived-rule:codex-worker-safety.md ref:b800899 -->
-## Reference: pre-split text of `rules/codex-worker-safety.md` (archived 2026-07-29)
+## Reference: pre-split text of `rules-ondemand/codex-worker-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
@@ -139,7 +139,7 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ```markdown
 # Codex Worker Safety Rules
 
-Companion to `.claude/skills/codex/SKILL.md` and the `codex-worker` agent. This is the **write-capable** sibling of `.claude/rules/codex-adversarial.md` (which stays read-only, review-only). Different safety posture → separate rule. The `/codex` skill hands a task to the OpenAI Codex harness (`gpt-5.5`) on Dave's **ChatGPT subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/codex/SKILL.md` and the `codex-worker` agent. This is the **write-capable** sibling of `.claude/rules-ondemand/codex-adversarial.md` (which stays read-only, review-only). Different safety posture → separate rule. The `/codex` skill hands a task to the OpenAI Codex harness (`gpt-5.5`) on Dave's **ChatGPT subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
 Grounding: verified 2026-07-06 against `codex-cli 0.131.0`, `Logged in using ChatGPT`; **re-verified 2026-07-11 against `codex-cli 0.144.1`** (upgrade + full §3 re-run: flags, workspace-write fixture, hooks-collision, resume/thread_id — all hold; rollback pin `npm i -g @openai/codex@0.131.0`). See `docs/codex-integration/DESIGN-RESEARCH.md` for the full evidence trail.
 
@@ -195,7 +195,7 @@ The **`ask`** mode passes **`--ignore-user-config`** to skip loading Dave's inte
 
 ## Windows / CLI hygiene
 
-- **Always feed the prompt from a file** via `- < "$PROMPT_FILE"`, never an inherited TTY (hang bug openai/codex#20919). Same universal rule as `ntn` (`.claude/rules/notion-cli-safety.md`).
+- **Always feed the prompt from a file** via `- < "$PROMPT_FILE"`, never an inherited TTY (hang bug openai/codex#20919). Same universal rule as `ntn` (`.claude/rules-ondemand/notion-cli-safety.md`).
 - **Rely on an external timeout** (the Bash-tool timeout or `timeout` wrapper), not Codex's own — documented Windows stall bugs (#18983, #20200) mean Codex doesn't reliably self-terminate a stuck run.
 - **`-o <file>` is the mandatory clean-output contract** — it strips the ~100+ lines of startup noise (skill-YAML load errors, MCP auth failures, hook lines). Parse findings/answers from the `-o` file, fall back to the full log's post-`codex`-sentinel text only if `-o` is empty.
 - **`workspace-write` sandbox blocks subprocess launches on Windows** (`CreateProcessAsUserW failed: 5`, verified 2026-07-07 dogfood). Codex can create/edit files but CANNOT run `git`/`node`/tests inside its own sandbox — it writes code BLIND and self-reports done without executing it. The orchestrator's out-of-sandbox verification is the ONLY verification, and it must actually **run** changed runnable code, not just `node --check` (syntax-check missed a real `spawnSync`-ENOENT bug in dogfooding). **`--sandbox read-only` blocks subprocess spawns too** (verified 2026-07-19): a codex-adversary review under read-only had EVERY spawn (`git`, `Get-Content`) denied the same way — not just writes. So a read-only reviewer must receive all needed context INLINE in the prompt and be told NOT to spawn tools, or it burns its whole budget on denied spawns and can fork-storm (see `.claude/agents/codex-adversary.md` Step 4 directive).
@@ -233,7 +233,7 @@ There is no per-call dollar price — the cost is ChatGPT-subscription quota (tw
 ---
 
 <!-- archived-rule:codex-adversarial.md ref:b800899 -->
-## Reference: pre-split text of `rules/codex-adversarial.md` (archived 2026-07-29)
+## Reference: pre-split text of `rules-ondemand/codex-adversarial.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
@@ -247,7 +247,7 @@ OpenAI Codex (default `gpt-5.6-luna @ max` since 2026-09-03; override via `CODEX
 - `codex-adversary` agent (used by `/review` and `/premortem`)
 - `plan-exit-premortem-prompt` hook (auto-offers `/premortem` after every approved plan)
 
-**This rule governs read-only REVIEW only.** For write-capable task *execution* via Codex (`/codex` — ask/implement/resume, `workspace-write` in an isolated worktree), see the sibling rule `.claude/rules/codex-worker-safety.md` and the `codex-worker` agent. `/codex --review` delegates back to the `codex-adversary` agent covered here.
+**This rule governs read-only REVIEW only.** For write-capable task *execution* via Codex (`/codex` — ask/implement/resume, `workspace-write` in an isolated worktree), see the sibling rule `.claude/rules-ondemand/codex-worker-safety.md` and the `codex-worker` agent. `/codex --review` delegates back to the `codex-adversary` agent covered here.
 
 ## When Codex Review Fires (default behavior)
 

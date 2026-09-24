@@ -5,7 +5,7 @@ description: Runs a multi-perspective code and plan review with a cross-model Co
 
 # /review - Code Review Workflow
 
-Multi-perspective code review with parallel specialists, including a cross-model adversarial pass via OpenAI Codex. Same-family reviewers share blind spots — Codex (different training family) provides cross-model triangulation. See `.claude/rules/codex-adversarial.md` for the full convention.
+Multi-perspective code review with parallel specialists, including a cross-model adversarial pass via OpenAI Codex. Same-family reviewers share blind spots — Codex (different training family) provides cross-model triangulation. See `.claude/rules-ondemand/codex-adversarial.md` for the full convention.
 
 ## When to Use
 
@@ -58,7 +58,7 @@ Multi-perspective code review with parallel specialists, including a cross-model
 - **critic**: Is this good code? (Style, patterns, readability)
 - **plan-reviewer**: Does this match the design? (Architecture, plan)
 - **plan-reviewer**: Is this change safe? (Risk, impact, regressions)
-- **codex-adversary**: What would a different model family catch? (Cross-model triangulation — see `.claude/rules/codex-adversarial.md`)
+- **codex-adversary**: What would a different model family catch? (Cross-model triangulation — see `.claude/rules-ondemand/codex-adversarial.md`)
 - **review-agent**: Overall assessment and recommendations
 
 ## Execution
@@ -120,7 +120,7 @@ Task(
 )
 
 # Cross-model adversarial review (skip if --no-codex flag passed)
-# See .claude/rules/codex-adversarial.md for cost/quota guidance.
+# See .claude/rules-ondemand/codex-adversarial.md for cost/quota guidance.
 Task(
   subagent_type="codex-adversary",
   prompt="""
@@ -215,7 +215,7 @@ User: /review --quick
 ```
 User: /review --no-codex
 → Skip codex-adversary (saves a Codex turn). Use for trivial diffs, doc-only changes,
-  or when ChatGPT subscription quota is constrained. See .claude/rules/codex-adversarial.md.
+  or when ChatGPT subscription quota is constrained. See .claude/rules-ondemand/codex-adversarial.md.
 ```
 
 ### Security Focus

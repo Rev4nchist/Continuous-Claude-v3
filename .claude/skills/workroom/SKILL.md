@@ -69,7 +69,7 @@ Rules (enforce, don't just narrate):
 
 - **Only forward moves along the machine** (or → blocked/abandoned). No skipping gates.
 - **preflight → intake** requires: both CLIs authed on subscription, live `--version`
-  equal to the verified pins in `.claude/rules/harness-update.md` (mismatch = STOP, run
+  equal to the verified pins in `.claude/rules-ondemand/harness-update.md` (mismatch = STOP, run
   `/harness-update <harness>` first — this is the mechanical version gate closing
   harness-update rule 7), git status clean-enough note in THREAD. Cheapest path: run the
   relevant checks from `scripts/tri-model/tri-model-suite.sh`. Record results in

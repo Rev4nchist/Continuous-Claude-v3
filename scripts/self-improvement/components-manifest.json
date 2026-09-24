@@ -76,7 +76,7 @@
       "id": "coordination",
       "name": "Cross-Session Coordination",
       "summary": "Multi-session awareness: Postgres sessions + file_claims locking, heartbeats, session identity. Gated on session-id consolidation.",
-      "currentImpl": [".claude/hooks/src/shared/session-id.ts", ".claude/hooks/src/file-claims.ts", ".claude/rules/cross-terminal-db.md"],
+      "currentImpl": [".claude/hooks/src/shared/session-id.ts", ".claude/hooks/src/file-claims.ts", ".claude/rules-ondemand/cross-terminal-db.md"],
       "frontierHints": ["multi-agent file locking", "distributed agent coordination", "optimistic vs pessimistic concurrency", "agent identity/provenance", "intra-session fan-out conflict detection"]
     },
     {

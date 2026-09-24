@@ -51,8 +51,8 @@ const FILES = [
   '.claude/agents/codex-worker.md',
   '.claude/agents/codex-adversary.md',
   '.claude/skills/codex/SKILL.md',
-  '.claude/rules-src/codex-worker-safety.md',
-  '.claude/rules-src/codex-adversarial.md',
+  '.claude/rules-ondemand/codex-worker-safety.md',
+  '.claude/rules-ondemand/codex-adversarial.md',
 ];
 
 // KNOWN LIMIT, stated rather than papered over: `docs/codex-integration/**` is

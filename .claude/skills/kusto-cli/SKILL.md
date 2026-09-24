@@ -116,7 +116,7 @@ Kusto.Cli.exe "<conn>" -transcript:"run-$(Get-Date -Format yyyyMMdd-HHmmss).log"
 
 ## Safety
 
-See [.claude/rules/kusto-cli-safety.md](../../rules/kusto-cli-safety.md) for the dangerous-command list (`.drop`, `.drop extents`, `.delete`, `.purge`, `.clear`, `.execute database script`, `.alter ... policy`, `.ingest into`, `.set-or-append`, `.set-or-replace`, function/principal mutations, `.cancel`). Pure read queries, `.show` commands, and `#save` are safe.
+See [.claude/rules-ondemand/kusto-cli-safety.md](../../rules-ondemand/kusto-cli-safety.md) for the dangerous-command list (`.drop`, `.drop extents`, `.delete`, `.purge`, `.clear`, `.execute database script`, `.alter ... policy`, `.ingest into`, `.set-or-append`, `.set-or-replace`, function/principal mutations, `.cancel`). Pure read queries, `.show` commands, and `#save` are safe.
 
 ## Related Skills
 
@@ -130,7 +130,7 @@ Trigger keywords: `kusto`, `Kusto.Cli`, `KQL`, `kql query`, `Azure Data Explorer
 ---
 
 <!-- archived-rule:kusto-cli-safety.md ref:b800899 -->
-## Reference: pre-split text of `rules/kusto-cli-safety.md` (archived 2026-07-29)
+## Reference: pre-split text of `rules-ondemand/kusto-cli-safety.md` (archived 2026-07-29)
 
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and

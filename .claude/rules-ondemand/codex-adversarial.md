@@ -1,6 +1,6 @@
 # Codex Adversarial Review Rules
 
-**Scope: read-only REVIEW only.** For write-capable Codex *execution* (`/codex` ask/implement/resume, `workspace-write`, worktree isolation) the governing rule is the sibling `.claude/rules/codex-worker-safety.md`. `/codex --review` delegates back to the `codex-adversary` agent covered here.
+**Scope: read-only REVIEW only.** For write-capable Codex *execution* (`/codex` ask/implement/resume, `workspace-write`, worktree isolation) the governing rule is the sibling `.claude/rules-ondemand/codex-worker-safety.md`. `/codex --review` delegates back to the `codex-adversary` agent covered here.
 
 Codex is wired in as a **cross-model adversarial reviewer**: the `codex-adversary` agent (used by `/review` and `/premortem`), the `codex-plugin-cc` slash commands (`/codex:*`), and the `plan-exit-premortem-prompt` hook (it only OFFERS `/premortem` after an approved plan — never auto-runs it).
 

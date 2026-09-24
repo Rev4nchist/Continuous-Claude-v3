@@ -12,7 +12,7 @@ metadata:
 <!-- Copyright 2026 Anthropic PBC -->
 <!-- SPDX-License-Identifier: Apache-2.0 -->
 
-> **Platform note — continuous-claude harness (Windows).** Vendored from `anthropics/launch-your-agent@05e9627` (G8-audited 2026-06-27). Use `python` (no `python3` on Windows); `curl.exe` or the Bash tool in PowerShell; `Start-Process <file>` instead of `open`. This skill is read-only/reporting (refreshes CMA state, regenerates the overview HTML) — no billable creates; see `.claude/rules/cma-safety.md` for the spend boundary.
+> **Platform note — continuous-claude harness (Windows).** Vendored from `anthropics/launch-your-agent@05e9627` (G8-audited 2026-06-27). Use `python` (no `python3` on Windows); `curl.exe` or the Bash tool in PowerShell; `Start-Process <file>` instead of `open`. This skill is read-only/reporting (refreshes CMA state, regenerates the overview HTML) — no billable creates; see `.claude/rules-ondemand/cma-safety.md` for the spend boundary.
 
 # Wrap-up — celebrate it, show what they built, point at what's next
 
