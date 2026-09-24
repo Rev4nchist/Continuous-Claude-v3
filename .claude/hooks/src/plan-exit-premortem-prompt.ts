@@ -88,7 +88,7 @@ export function buildDirective(planPath: string | null): string {
     '  Header: "Premortem"',
     '  Options:',
     '    - "Codex (Recommended)" (description: "GPT-family adversarial pass on the plan (ChatGPT subscription). The proven default.")',
-    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Codex AND Claude.")',
+    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Codex AND Claude. PARKED on this machine since 2026-07-13: corp egress stalls completions.")',
     '    - "Both -- Codex + Grok in parallel" (description: "Maximum cross-model coverage; two parallel passes, findings merged with [Codex]/[Grok] source tags. Double quota burn.")',
     '    - "Skip -- proceed to implementation" (description: "Move directly to implementation without an explicit risk pass. Use when the plan is trivial or already heavily vetted.")',
     '',
@@ -105,10 +105,13 @@ export function buildDirective(planPath: string | null): string {
  * that injects the AskUserQuestion directive. Returns an empty object
  * for any other tool, or on any error (fail-open).
  */
-export function handlePlanExitPrompt(input: any): HookResponse {
+export function handlePlanExitPrompt(input: any, env: NodeJS.ProcessEnv = process.env): HookResponse {
   try {
     if (!input || typeof input !== 'object') return {};
     if (input.tool_name !== 'ExitPlanMode') return {};
+    // No human to answer an AskUserQuestion in a subagent or CI run; the directive only
+    // stalls it (2026-09-23 eval, P22).
+    if (env.CLAUDE_AGENT_ID || env.CI === 'true' || env.CI === '1') return {};
 
     const planPath = extractPlanPath(input.tool_input);
     const additionalContext = buildDirective(planPath);

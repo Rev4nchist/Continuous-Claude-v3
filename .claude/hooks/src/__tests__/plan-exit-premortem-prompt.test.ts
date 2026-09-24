@@ -271,6 +271,13 @@ describe('handlePlanExitPrompt -- ExitPlanMode with no plan path', () => {
 });
 
 describe('handlePlanExitPrompt -- fail-open on malformed input', () => {
+  it('stays silent in a subagent or CI run (no human to answer; P22)', () => {
+    const input = { tool_name: 'ExitPlanMode', tool_input: { planPath: 'plans/x.md' } };
+    expect(handlePlanExitPrompt(input, { CLAUDE_AGENT_ID: 'a1' })).toEqual({});
+    expect(handlePlanExitPrompt(input, { CI: 'true' })).toEqual({});
+    expect(handlePlanExitPrompt(input, {}).hookSpecificOutput).toBeDefined();
+  });
+
   it('returns empty object for null input', () => {
     expect(handlePlanExitPrompt(null)).toEqual({});
   });

@@ -564,7 +564,7 @@
         ]
       },
       {
-        "matcher": "Grep|Read",
+        "matcher": "Grep",
         "hooks": [
           {
             "type": "command",

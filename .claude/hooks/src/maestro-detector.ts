@@ -21,6 +21,7 @@
 import { readFileSync, statSync } from 'fs';
 import { join } from 'path';
 import { outputContinue } from './shared/output.js';
+import { isMachineGeneratedPrompt } from './shared/intent-extractor.js';
 
 interface ComplexitySignal {
   name: string;
@@ -136,7 +137,8 @@ function formatSignals(signals: DetectedSignal[]): string {
 }
 
 function makeSuggestionOutput(score: number, signals: DetectedSignal[], phases: number): void {
-  const confidencePct = Math.round(score * 100);
+  // The score is capped at 1.5, so this printed "165% confidence" (2026-09-23 eval, P22).
+  const confidencePct = Math.min(100, Math.round(score * 100));
 
   const message = [
     '--- MAESTRO ORCHESTRATION SUGGESTED ---',
@@ -187,8 +189,9 @@ async function main() {
 
     const prompt = input.prompt;
 
-    // Skip very short prompts
-    if (prompt.length < 50) {
+    // Skip very short prompts, and harness turns (task notifications, system reminders):
+    // it suggested Maestro for a background task-notification (2026-09-23 eval, P22).
+    if (prompt.length < 50 || isMachineGeneratedPrompt(prompt)) {
       outputContinue();
       return;
     }
