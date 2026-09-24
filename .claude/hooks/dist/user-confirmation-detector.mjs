@@ -174,7 +174,7 @@ var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:
 function isHarnessWrappedPrompt(prompt) {
   if (typeof prompt !== "string") return false;
   const t = prompt.trim();
-  return SYNTHETIC_TAG.test(t) || t.includes("<task-notification");
+  return SYNTHETIC_TAG.test(t);
 }
 
 // src/user-confirmation-detector.ts

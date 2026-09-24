@@ -43,6 +43,51 @@ fi
 # Staged, present files (Added/Copied/Modified/Renamed). Fail-open on git error.
 staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" || exit 0
 
+# -----------------------------------------------------------------------------
+# Ratchets that already existed but that nothing ran (2026-09-23 Opus 5.5 eval,
+# P21). Each runs only when its paths are staged, and only if node is on PATH
+# (fail-open otherwise). Escape hatch: SKIP_RATCHETS=1 git commit ...
+#   - rules-src   -> scripts/rules/rules-budget-guard.mjs --staged (sizes the
+#                    STAGED blobs, not the working tree)
+#   - agents      -> scripts/check-agent-model-drift.mjs (two-tier model policy)
+#   - skills      -> scripts/skills/audit-descriptions.mjs (trigger + YAML)
+# The agents and skills checks read the working tree; if it differs from what
+# is staged in those paths, the result is labelled as a working-tree check.
+# -----------------------------------------------------------------------------
+if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
+  root="$(git rev-parse --show-toplevel 2>/dev/null)"
+  ratchet_fail=0
+  run_ratchet() {  # $1 = label, $2 = pathspec for the unstaged-diff note, rest = command
+    label="$1"; spec="$2"; shift 2
+    # mktemp, not a predictable $$ path (a pre-created symlink could redirect the write).
+    out="$(mktemp 2>/dev/null)" || { "$@" >/dev/null 2>&1 || ratchet_fail=1; return; }
+    if ! "$@" >"$out" 2>&1; then
+      echo "" >&2
+      echo "BLOCKED by $label:" >&2
+      sed 's/^/    /' "$out" >&2
+      if [ -n "$spec" ] && ! git diff --quiet -- "$spec" 2>/dev/null; then
+        echo "    (checked the working tree; it has unstaged changes under $spec)" >&2
+      fi
+      ratchet_fail=1
+    fi
+    rm -f "$out"
+  }
+  if printf '%s\n' "$staged" | grep -q '^\.claude/rules-src/'; then
+    run_ratchet "rules-budget-guard" "" node "$root/scripts/rules/rules-budget-guard.mjs" --staged
+  fi
+  if printf '%s\n' "$staged" | grep -q '^\.claude/agents/'; then
+    run_ratchet "check-agent-model-drift" ".claude/agents" node "$root/scripts/check-agent-model-drift.mjs" "$root"
+  fi
+  if printf '%s\n' "$staged" | grep -q '^\.claude/skills/.*SKILL\.md$'; then
+    run_ratchet "audit-descriptions" ".claude/skills" node "$root/scripts/skills/audit-descriptions.mjs" --quiet
+  fi
+  if [ "$ratchet_fail" -ne 0 ]; then
+    echo "" >&2
+    echo "  Fix the above, or bypass deliberately: SKIP_RATCHETS=1 git commit ..." >&2
+    exit 1
+  fi
+fi
+
 # Staged hook SOURCE .ts, excluding test files and type declarations.
 src_ts="$(printf '%s\n' "$staged" \
   | grep -E '^\.claude/hooks/src/.*\.ts$' \

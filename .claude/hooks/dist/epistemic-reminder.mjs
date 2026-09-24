@@ -2,6 +2,9 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/epistemic-reminder.ts
+import { writeFileSync } from "fs";
+import { tmpdir } from "os";
+import { join } from "path";
 async function main() {
   let input = {};
   const chunks = [];
@@ -21,6 +24,18 @@ async function main() {
   if (tool !== "Grep") {
     console.log("{}");
     return;
+  }
+  const sid = (input.session_id || "").replace(/[^A-Za-z0-9_-]/g, "").slice(0, 64);
+  if (sid) {
+    const flag = join(tmpdir(), `claude-epistemic-reminder-${sid}.flag`);
+    try {
+      writeFileSync(flag, "", { flag: "wx" });
+    } catch (err) {
+      if (err?.code === "EEXIST") {
+        console.log("{}");
+        return;
+      }
+    }
   }
   const reminder = `
 \u26A0\uFE0F EPISTEMIC REMINDER: Grep results show pattern matches, NOT verified facts.

@@ -267,7 +267,7 @@ See: `references/workflow-recipes.md`
 | **Claude-in-Chrome MCP** | 6+ Windows 11 bugs. Extension approach is fragile. | Tier 1: @playwright/mcp |
 | **Puppeteer MCP** | Deprecated upstream. ESM import errors. | Tier 1: @playwright/mcp |
 
-The legacy `agent-browser` skill at `.claude/skills/agent-browser/SKILL.md` is preserved for historical reference only.
+The legacy `agent-browser` skill was removed on 2026-09-23 (Opus 5.5 eval, P23); it is in git history.
 
 ---
 

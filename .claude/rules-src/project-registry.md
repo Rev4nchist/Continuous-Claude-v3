@@ -4,7 +4,7 @@ A centralized project registry exists at `.claude/project-registry.json` in the 
 
 ## Quick Reference
 
-**Read the JSON — do not rely on a table here.** A hardcoded quick-reference table previously rotted 8 projects behind reality and was removed 2026-07-15. Illustrative examples of the entry shape (see the project-registry skill for the full schema): NorthStar Transformation → port 3002, https://northstar.localhost/; gong-mcp → port 8000 (mcp-server, non-web).
+**Read the JSON — do not rely on a table here.** A hardcoded quick-reference table previously rotted 8 projects behind reality and was removed 2026-07-15. Illustrative examples of the entry shape (see the project-registry skill for the full schema): FourthBot → port 3002; gong-mcp → port 8000 (mcp-server, non-web). Always confirm against the JSON.
 
 ## Usage
 
@@ -15,4 +15,3 @@ A centralized project registry exists at `.claude/project-registry.json` in the 
 ## Keeping in Sync
 
 - The mirror syncs automatically on commit (post-commit `--changed` sync) or via `bash scripts/sync-to-active.sh`
-- `northstar-local-dev.md` carries a NorthStar-specific URL reference — check it if that project's URL changes

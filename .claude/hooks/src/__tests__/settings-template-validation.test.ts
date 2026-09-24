@@ -128,7 +128,8 @@ describe('settings.json.template', () => {
       ['ralph-task-monitor', 'PostToolUse::Task'],
       ['telemetry-tracker', 'PostToolUse::Skill|Task'],
       ['plan-exit-tracker', 'PostToolUse::ExitPlanMode'],
-      ['epistemic-reminder', 'PostToolUse::Grep|Read'],
+      // Grep only since 2026-09-23 (P22): the hook's code handles Grep alone.
+      ['epistemic-reminder', 'PostToolUse::Grep'],
     ];
     for (const [name, expected] of contract) {
       const got = reg.get(name);

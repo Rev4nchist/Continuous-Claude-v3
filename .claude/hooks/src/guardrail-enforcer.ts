@@ -19,6 +19,7 @@ import { readFileSync, writeFileSync, existsSync } from 'fs';
 import { tmpdir } from 'os';
 import { join } from 'path';
 import { outputContinue, outputWithMessage } from './shared/output.js';
+import { isHarnessWrappedPrompt } from './shared/intent-extractor.js';
 
 interface Guardrail {
   name: string;
@@ -48,7 +49,9 @@ Do NOT attempt fixes without understanding the root cause first.`
   {
     name: 'databases',
     skill: 'databases',
-    triggers: /\b(database|sql|query|postgres|mysql|migration|schema|table|column|index)\b/i,
+    // Bare `table` / `column` / `index` fired on markdown tables, INDEX.md and prose (2026-09-23
+    // eval, P22); they now count only in SQL-shaped phrases.
+    triggers: /\b(database|sql|postgres|postgresql|mysql|sqlite|psql|migration|schema|(?:create|alter|drop|truncate)\s+(?:table|index|column)|select\s+\S+\s+from)\b/i,
     antiTriggers: /\b(no\s+database|without\s+database|skip\s+database)\b/i,
     message: `🛑 GUARDRAIL: Database skill required
 
@@ -64,7 +67,10 @@ Do NOT write SQL without the database skill loaded.`
   {
     name: 'code-review',
     skill: 'code-review',
-    triggers: /\b(pr|pull\s*request|review|merge|approve|code\s*review)\b/i,
+    // Bare `review` / `approve` / `merge` fired on "review this tweet" and "approve deletion"
+    // (2026-09-23 eval, P22). Now: code or PR context only. "merge 43 and 44" still counts.
+    // A bare "#42" is not enough ("fix issue #42" is not a review); it needs PR/review/merge.
+    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|review\s+(?:pr\s*)?#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
     antiTriggers: /\b(no\s+review|skip\s+review|review\s+later)\b/i,
     message: `🛑 GUARDRAIL: Code review methodology required
 
@@ -149,21 +155,24 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
-function checkGuardrails(prompt: string): Guardrail | null {
+/**
+ * Which guardrails a prompt triggers, ignoring session state. Pure; unit tested.
+ * Harness turns (task notifications, system reminders, command output) never trigger:
+ * they fired the debugging and database guardrails on background events (P22).
+ */
+export function matchGuardrails(prompt: string): string[] {
+  if (isHarnessWrappedPrompt(prompt)) return [];
   const lowerPrompt = prompt.toLowerCase();
+  return GUARDRAILS
+    .filter((g) => g.triggers.test(lowerPrompt) && !(g.antiTriggers && g.antiTriggers.test(lowerPrompt)))
+    .map((g) => g.name);
+}
 
-  for (const guardrail of GUARDRAILS) {
-    if (guardrail.triggers.test(lowerPrompt)) {
-      if (guardrail.antiTriggers && guardrail.antiTriggers.test(lowerPrompt)) {
-        continue;
-      }
-      if (isGuardrailAcknowledged(guardrail.name)) {
-        continue;
-      }
-      return guardrail;
-    }
+function checkGuardrails(prompt: string): Guardrail | null {
+  for (const name of matchGuardrails(prompt)) {
+    if (isGuardrailAcknowledged(name)) continue;
+    return GUARDRAILS.find((g) => g.name === name) ?? null;
   }
-
   return null;
 }
 

@@ -7,7 +7,12 @@
  * based on pattern matching without reading actual file content.
  */
 
+import { writeFileSync } from 'fs';
+import { tmpdir } from 'os';
+import { join } from 'path';
+
 interface HookInput {
+  session_id?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
   tool_result?: {
@@ -47,6 +52,24 @@ async function main(): Promise<void> {
   if (tool !== 'Grep') {
     console.log('{}');
     return;
+  }
+
+  // Once per session. It used to repeat the same ~500 characters after EVERY Grep (dozens
+  // of times in a long session) while the rule it points to is already loaded
+  // (2026-09-23 eval, P22). Without a session id, keep the old behavior.
+  const sid = (input.session_id || '').replace(/[^A-Za-z0-9_-]/g, '').slice(0, 64);
+  if (sid) {
+    const flag = join(tmpdir(), `claude-epistemic-reminder-${sid}.flag`);
+    try {
+      // 'wx' = create only if absent, atomically: two concurrent Greps cannot both win.
+      writeFileSync(flag, '', { flag: 'wx' });
+    } catch (err) {
+      if ((err as NodeJS.ErrnoException)?.code === 'EEXIST') {
+        console.log('{}');
+        return;
+      }
+      // Any other write error: show the reminder (the old behavior) rather than lose it.
+    }
   }
 
   const reminder = `

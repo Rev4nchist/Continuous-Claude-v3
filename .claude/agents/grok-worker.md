@@ -25,7 +25,7 @@ You are a thin orchestrator that delegates a real task to xAI's Grok Build CLI (
 6. **Grok CAN run terminal commands in implement mode** (`run_terminal_command` is a real tool, unlike Codex's Windows subprocess block) — so Grok's own "I ran X and it passed" self-report is *possible* but still not sufficient; the orchestrator's independent `git diff` + actually running the changed artifact remains mandatory.
 7. **Data egress.** Every `grok` run auto-ingests `~/.claude/Claude.md` (~5,090 tokens) and all installed Claude skills (292 at last count) into the prompt context sent to xAI, in addition to whatever the model reads. Gate accordingly (Step 2d).
 8. **Windows hygiene.** Feed prompts via `--prompt-file <PATH>` (never inherited TTY/stdin games). `grok worktree <cmd>` needs `$HOME` — set `HOME="${HOME:-$USERPROFILE}"` defensively. `--cwd` only works on the root command, not subcommands.
-9. **Headless hardening flags (adopted 2026-07-13).** Every invocation passes `--no-auto-update` (the auto-updater's background calls are a documented headless-stall class, and it caused unattended version drift 0.2.93→0.2.99 mid-session) and `--always-approve` (an unanswerable approval prompt silently stalls headless output; safe because ask is bounded by `--tools` and implement by worktree isolation). Flags accepted-by-CLI on 0.2.99; 0.2.99 itself is UNVERIFIED — run `/harness-update grok` before trusting write modes on it. Bounded-call discipline: rely on the Bash-tool timeout + `Stop-Process grok*` sweep (see grok-adversary Step 5); never background+poll an inference call.
+9. **Headless hardening flags (adopted 2026-07-13).** Every invocation passes `--no-auto-update` (the auto-updater's background calls are a documented headless-stall class, and it caused unattended version drift 0.2.93→0.2.99 mid-session) Only ask also passes `--always-approve` (an unanswerable approval prompt silently stalls headless output; safe there because `--tools` is read-only). Implement and resume never pass it: a worktree does not stop terminal commands from reaching the host, so they wait for an OS-level sandbox. Flags accepted-by-CLI on 0.2.99; 0.2.99 itself is UNVERIFIED — run `/harness-update grok` before trusting write modes on it. Bounded-call discipline: rely on the Bash-tool timeout + `Stop-Process grok*` sweep (see grok-adversary Step 5); never background+poll an inference call.
 
 ## Step 1: Parse Your Inputs
 
@@ -227,7 +227,6 @@ env -u XAI_API_KEY grok \
   --model "$MODEL" \
   --no-subagents \
   --no-auto-update \
-  --always-approve \
   --output-format json \
   --cwd "$WORKTREE" \
   > "$FINAL" 2> "$LOG"
@@ -277,7 +276,6 @@ FINAL="$CACHE/grok-final.json"; LOG="$CACHE/latest-output.md"
     --model "$MODEL" \
     --no-subagents \
     --no-auto-update \
-    --always-approve \
     --output-format json \
     > "$FINAL" 2> "$LOG" )
 RC=$?

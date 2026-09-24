@@ -20,6 +20,14 @@ function outputWithMessage(message, hookEventName) {
   }));
 }
 
+// src/shared/intent-extractor.ts
+var SYNTHETIC_TAG = /^<\/?(?:task-notification|system-reminder|local-command-(?:stdout|stderr)|command-(?:name|message|args)|bash-(?:input|stdout|stderr)|agent-message|teammate-message|user-prompt-submit-hook|[a-z][a-z0-9-]*-hook)\b/i;
+function isHarnessWrappedPrompt(prompt) {
+  if (typeof prompt !== "string") return false;
+  const t = prompt.trim();
+  return SYNTHETIC_TAG.test(t);
+}
+
 // src/guardrail-enforcer.ts
 var GUARDRAILS = [
   {
@@ -41,7 +49,9 @@ Do NOT attempt fixes without understanding the root cause first.`
   {
     name: "databases",
     skill: "databases",
-    triggers: /\b(database|sql|query|postgres|mysql|migration|schema|table|column|index)\b/i,
+    // Bare `table` / `column` / `index` fired on markdown tables, INDEX.md and prose (2026-09-23
+    // eval, P22); they now count only in SQL-shaped phrases.
+    triggers: /\b(database|sql|postgres|postgresql|mysql|sqlite|psql|migration|schema|(?:create|alter|drop|truncate)\s+(?:table|index|column)|select\s+\S+\s+from)\b/i,
     antiTriggers: /\b(no\s+database|without\s+database|skip\s+database)\b/i,
     message: `\u{1F6D1} GUARDRAIL: Database skill required
 
@@ -57,7 +67,10 @@ Do NOT write SQL without the database skill loaded.`
   {
     name: "code-review",
     skill: "code-review",
-    triggers: /\b(pr|pull\s*request|review|merge|approve|code\s*review)\b/i,
+    // Bare `review` / `approve` / `merge` fired on "review this tweet" and "approve deletion"
+    // (2026-09-23 eval, P22). Now: code or PR context only. "merge 43 and 44" still counts.
+    // A bare "#42" is not enough ("fix issue #42" is not a review); it needs PR/review/merge.
+    triggers: /\b(pull\s*requests?|code\s*review|prs?\s*#?\d+|review\s+(?:pr\s*)?#\d+|review\s+(?:the\s+|this\s+|my\s+|a\s+)?(?:pr|diff|code|changes|commit|patch|branch)|merge\s+(?:pr\s*)?#?\d+|merge\s+(?:the\s+|this\s+)?(?:pr|branch|pull))\b/i,
     antiTriggers: /\b(no\s+review|skip\s+review|review\s+later)\b/i,
     message: `\u{1F6D1} GUARDRAIL: Code review methodology required
 
@@ -117,18 +130,15 @@ function isGuardrailAcknowledged(guardrailName) {
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
-function checkGuardrails(prompt) {
+function matchGuardrails(prompt) {
+  if (isHarnessWrappedPrompt(prompt)) return [];
   const lowerPrompt = prompt.toLowerCase();
-  for (const guardrail of GUARDRAILS) {
-    if (guardrail.triggers.test(lowerPrompt)) {
-      if (guardrail.antiTriggers && guardrail.antiTriggers.test(lowerPrompt)) {
-        continue;
-      }
-      if (isGuardrailAcknowledged(guardrail.name)) {
-        continue;
-      }
-      return guardrail;
-    }
+  return GUARDRAILS.filter((g) => g.triggers.test(lowerPrompt) && !(g.antiTriggers && g.antiTriggers.test(lowerPrompt))).map((g) => g.name);
+}
+function checkGuardrails(prompt) {
+  for (const name of matchGuardrails(prompt)) {
+    if (isGuardrailAcknowledged(name)) continue;
+    return GUARDRAILS.find((g) => g.name === name) ?? null;
   }
   return null;
 }
@@ -168,3 +178,6 @@ async function main() {
 if ((process.argv[1] || "").includes("guardrail-enforcer")) {
   main();
 }
+export {
+  matchGuardrails
+};

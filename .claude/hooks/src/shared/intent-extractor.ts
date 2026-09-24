@@ -101,7 +101,8 @@ const MAX_HUMAN_PROMPT_LEN = 8000;
 export function isHarnessWrappedPrompt(prompt: string): boolean {
   if (typeof prompt !== 'string') return false;
   const t = prompt.trim();
-  return SYNTHETIC_TAG.test(t) || t.includes('<task-notification');
+  // Anchored only: a human prompt that pastes a <task-notification> mid-text is still human.
+  return SYNTHETIC_TAG.test(t);
 }
 
 /**
