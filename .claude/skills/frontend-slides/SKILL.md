@@ -201,6 +201,9 @@ Convert extracted content into chosen style, preserving all text, images (refere
 
 ## Phase 5: Delivery
 
+0. **Plain-language pass** (design-work.md, "Before the first delivery"): name the audience, have
+   a fresh subagent read only the slide text as that audience, and fix every title and term it
+   flags.
 1. **Clean up** — Delete `.claude-design/slide-previews/` if it exists
 2. **Open** — `open [filename].html` to launch in browser
 3. **Provide summary:**

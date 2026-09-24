@@ -50,9 +50,16 @@ $branch = $pull.head.ref; $head = $pull.head.sha
 if (-not $pull.merged -and -not $CleanupOnly) {
   if (-not $IgnoreReview) {
     Step "ready check for #$Pr at $($head.Substring(0,7))"
-    $statusJson = node (Join-Path $PSScriptRoot 'coderabbit-status.mjs') $Pr --repo $Repo --json
-    $ready = $LASTEXITCODE
-    $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
+    # GitHub reports mergeable_state "unknown" for a while after the base branch moves (every PR
+    # after the first in a landing run). Re-ask for up to ~90s before treating it as not ready.
+    for ($try = 1; $try -le 7; $try++) {
+      $statusJson = node (Join-Path $PSScriptRoot 'coderabbit-status.mjs') $Pr --repo $Repo --json
+      $ready = $LASTEXITCODE
+      $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
+      if (-not $st -or $st.mergeable_state -ne 'unknown') { break }
+      Write-Host "  mergeable_state is unknown; GitHub is still computing it (try $try of 7)"
+      Start-Sleep -Seconds 15
+    }
     if ($ready -eq 1 -and $st) { Write-Host "  not ready: $($st.reasons -join '; ')"; Fail "PR #$Pr is not ready. Re-run after the review lands, or pass -IgnoreReview deliberately." }
     # Exit 0 alone is not proof: require the JSON to say ready for THIS head commit.
     if ($ready -ne 0 -or -not $st -or $st.ready -ne $true -or $st.head -ne $head) { Fail "could not confirm PR #$Pr is ready (coderabbit-status exit $ready). Nothing was merged." }

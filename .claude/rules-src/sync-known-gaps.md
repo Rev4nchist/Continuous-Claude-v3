@@ -33,9 +33,9 @@ hook only in the active file). Two classes of divergence are EXPECTED and never 
 
 **Machine-local top-level keys** (active-only, UI/prefs — do not add to repo or template):
 `agentPushNotifEnabled`, `autoCompactEnabled`, `extraKnownMarketplaces`, `model`, `modelSettings`,
-`remoteControlAtStartup`, `skillListingBudgetFraction`, `skillListingMaxDescChars`,
-`skipAutoPermissionPrompt`, `skipWorkflowUsageWarning`, `switchModelsOnFlag`, `theme`, `tui`,
-`voiceEnabled`.
+`remoteControlAtStartup`, `skipAutoPermissionPrompt`, `skipWorkflowUsageWarning`,
+`switchModelsOnFlag`, `theme`, `tui`, `voiceEnabled`. The two `skillListing*` keys are NOT local:
+they decide which skills the router sees, so they live in the template (P24).
 
 **Machine-local hook registrations** (active-only by design; the capture script hard-excludes them):
 - `permission-auto-allow.mjs` (PermissionRequest) — **SECURITY**: a permission-bypass policy. Must be

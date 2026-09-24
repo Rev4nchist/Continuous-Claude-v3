@@ -128,6 +128,16 @@
       "commitAccount": "work"
     },
     {
+      "prefix": "C:/Users/david.hayes/Projects/customer-ui",
+      "commitAccount": "work",
+      "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
+    },
+    {
+      "prefix": "C:/Users/david.hayes/Projects/agent-poc",
+      "commitAccount": "work",
+      "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
+    },
+    {
       "prefix": "C:/Users/david.hayes",
       "commitAccount": "personal"
     }

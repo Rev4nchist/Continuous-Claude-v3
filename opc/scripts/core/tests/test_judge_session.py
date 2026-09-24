@@ -1,30 +1,34 @@
-"""Tests for Gate C: Phase 3b judge runner (subscription-OAuth REWORK).
+"""Tests for Gate C: Phase 3b judge runner (subscription-OAuth, REGISTRY rework).
 
 These tests stub out ``subprocess.run`` (the two judge backends) and the
 feedback HTTP POST, so no real LLM calls and no real Braintrust traffic
 occurs.
 
-Backend map under test:
-    plan_rubric -> codex   (codex exec --sandbox read-only "<prompt>")
-    factuality  -> claude  (claude -p "<prompt>" --output-format json --model sonnet)
-    closedqa    -> claude  (claude -p ... --model sonnet)
+2026-09-24 (P32): the three original hard-coded judges (factuality,
+closedqa, plan_rubric) were retired -- none produced a usable score in
+production. ``judge_session.py`` now carries an empty ``JUDGE_REGISTRY`` and
+the RUNNER mechanism (sampling, feedback POST, idempotency, per-judge skip,
+routing) is exercised here against FAKE registered judges, not the retired
+rubrics. Coverage:
 
-Coverage (from rework spec):
-- Preflight fails fast when a REQUIRED CLI is unavailable (codex login status != 0)
-- Preflight passes when both CLIs are ready
+- Preflight fails fast when a REQUIRED CLI (of a REGISTERED judge) is
+  unavailable; passes when both CLIs are ready; requires NOTHING when the
+  registry is empty
 - Deterministic sampling (same session_id -> same in/out)
 - ~35% sample rate across random IDs (statistical tolerance)
-- Exactly 3 feedback POSTs per fully-equipped sampled session
-- 0 POSTs when session is out of sample
+- A fake claude-backed + fake codex-backed judge each POST once for an
+  in-sample session; 0 POSTs when out of sample
 - --max-sessions caps batch size
 - --dry-run produces 0 subprocess calls and 0 feedback POSTs
 - Idempotency: re-run produces same deterministic feedback IDs
-- Backend routing: plan_rubric -> codex args; factuality/closedqa -> claude
-  args (incl. --model sonnet)
+- Backend routing: a codex-backed judge spec calls the codex backend; a
+  claude-backed judge spec calls the claude backend (incl. --model sonnet)
 - Claude envelope -> .result -> judge-JSON DOUBLE parse
 - Codex stdout with preamble/noise -> first {...} judge JSON parsed
-- Per-judge skip: codex non-zero exit -> plan_rubric skipped (codex_unavailable), other 2 still POST
-- ClosedQA skip with reason 'nested_subagent_no_correlation' for nested Task spans
+- Per-judge skip: one registered judge's backend failure skips only that
+  judge; the other registered judge still POSTs
+- The SHIPPED registry is empty: judge_session() returns "retired" with 0
+  posts and no subprocess calls
 - Orphan exit: no session_id and no BRAINTRUST_SESSION_ID
 """
 
@@ -129,33 +133,6 @@ def sample_session_trace():
     }
 
 
-@pytest.fixture
-def nested_task_session_trace():
-    """A session trace where Task span is nested inside another Task."""
-    return {
-        "session_id": "sess-nested-002",
-        "user_prompt": "Tell me about the codebase.",
-        "top_recall_chunk": "Some recall result.",
-        "task_spans": [
-            {
-                "span_id": "task-outer",
-                "parent_span_id": "root-1",
-                "tool_name": "Task",
-                "task_request": "Outer task: explore repo.",
-                "agent_output": "Repo has 47 hooks.",
-            },
-            {
-                "span_id": "task-inner",
-                "parent_span_id": "task-outer",  # nested!
-                "tool_name": "Task",
-                "task_request": "Inner task: list hook names.",
-                "agent_output": "memory-awareness.ts, ...",
-            },
-        ],
-        "plan_body": "Step 1. Do stuff.",
-    }
-
-
 # ---------------------------------------------------------------------------
 # Helper to import the module fresh
 # ---------------------------------------------------------------------------
@@ -178,14 +155,60 @@ def _set_post_env(monkeypatch) -> None:
     monkeypatch.setenv("TRACE_TO_BRAINTRUST", "true")
 
 
+def _register_fake_judges(js, monkeypatch):
+    """Register one claude-backed and one codex-backed FAKE judge.
+
+    Mirrors what a real P17 binary judge registration will look like: a
+    ``JudgeSpec`` with a ``build(trace)`` callable returning ``(prompt,
+    metadata)`` or a skip-reason string.
+    """
+
+    def build_claude_judge(trace):
+        prompt = trace.get("user_prompt") or ""
+        if not prompt:
+            return "missing_input_or_output"
+        return (
+            f"grade: {prompt}",
+            {"judge": "fake_claude_judge", "session_id": trace.get("session_id")},
+        )
+
+    def build_codex_judge(trace):
+        plan = trace.get("plan_body") or ""
+        if not plan:
+            return "missing_input_or_output"
+        return (
+            f"grade plan: {plan}",
+            {"judge": "fake_codex_judge", "session_id": trace.get("session_id")},
+        )
+
+    registry = [
+        js.JudgeSpec(name="fake_claude_judge", backend="claude", build=build_claude_judge),
+        js.JudgeSpec(name="fake_codex_judge", backend="codex", build=build_codex_judge),
+    ]
+    monkeypatch.setattr(js, "JUDGE_REGISTRY", registry)
+    return registry
+
+
 # ---------------------------------------------------------------------------
-# Preflight (REPLACES old OPENAI_API_KEY check)
+# Preflight (requires only the CLIs of REGISTERED judges)
 # ---------------------------------------------------------------------------
+
+
+def test_preflight_requires_nothing_when_registry_empty(monkeypatch):
+    js = _import_judge_session()
+    assert js.JUDGE_REGISTRY == []
+
+    def boom(cmd, **kwargs):
+        raise AssertionError("empty registry must not probe any CLI")
+
+    monkeypatch.setattr(js.subprocess, "run", boom)
+    js.check_cli_preflight()  # should not raise, should not probe
 
 
 def test_preflight_fails_fast_when_codex_cli_unavailable(monkeypatch):
-    """`codex login status` != 0 -> SystemExit (non-zero)."""
+    """`codex login status` != 0 -> SystemExit (non-zero), for a codex-backed judge."""
     js = _import_judge_session()
+    _register_fake_judges(js, monkeypatch)
 
     def fake_run(cmd, **kwargs):
         # codex login status fails; claude --version succeeds
@@ -202,6 +225,7 @@ def test_preflight_fails_fast_when_codex_cli_unavailable(monkeypatch):
 
 def test_preflight_names_codex_and_fix_command(monkeypatch, capsys):
     js = _import_judge_session()
+    _register_fake_judges(js, monkeypatch)
 
     def fake_run(cmd, **kwargs):
         if "login" in cmd:
@@ -219,6 +243,7 @@ def test_preflight_names_codex_and_fix_command(monkeypatch, capsys):
 def test_preflight_fails_fast_when_claude_cli_unavailable(monkeypatch, capsys):
     """`claude --version` != 0 -> SystemExit naming claude + fix command."""
     js = _import_judge_session()
+    _register_fake_judges(js, monkeypatch)
 
     def fake_run(cmd, **kwargs):
         if "login" in cmd:  # codex login status
@@ -235,6 +260,7 @@ def test_preflight_fails_fast_when_claude_cli_unavailable(monkeypatch, capsys):
 
 def test_preflight_passes_when_both_clis_ready(monkeypatch):
     js = _import_judge_session()
+    _register_fake_judges(js, monkeypatch)
 
     def fake_run(cmd, **kwargs):
         return _make_completed("ok", returncode=0)
@@ -244,7 +270,7 @@ def test_preflight_passes_when_both_clis_ready(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Deterministic sampling (UNCHANGED from 708912b)
+# Deterministic sampling (UNCHANGED)
 # ---------------------------------------------------------------------------
 
 
@@ -277,17 +303,17 @@ def test_sampling_rate_approximates_35_percent():
 def test_feedback_id_is_deterministic_sha256():
     js = _import_judge_session()
     sid = "fixed-session-x"
-    judge = "factuality"
+    judge = "fake_claude_judge"
     fid1 = js.make_feedback_id(sid, judge)
     fid2 = js.make_feedback_id(sid, judge)
     assert fid1 == fid2
     expected = hashlib.sha256(f"{sid}:{judge}".encode()).hexdigest()[:16]
     assert fid1 == expected
-    assert js.make_feedback_id(sid, "closedqa") != fid1
+    assert js.make_feedback_id(sid, "fake_codex_judge") != fid1
 
 
 # ---------------------------------------------------------------------------
-# Score parsing: codex stdout + claude envelope double-parse
+# Score parsing: codex stdout + claude envelope double-parse (UNCHANGED)
 # ---------------------------------------------------------------------------
 
 
@@ -407,14 +433,15 @@ def test_judge_via_claude_skips_on_envelope_is_error(monkeypatch):
 
 
 # ---------------------------------------------------------------------------
-# Backend routing through judge_session
+# Registry mechanism: routing, sampling gate, dry-run, idempotency, skip
 # ---------------------------------------------------------------------------
 
 
 def _setup_run_mocks(monkeypatch, js, force_in_sample: bool = True):
-    """Common mock setup: env, both backends, and the HTTP POST."""
+    """Common mock setup: env, two fake registered judges, both backends, POST."""
     _set_post_env(monkeypatch)
     monkeypatch.setattr(js, "is_sampled", lambda _sid: force_in_sample)
+    _register_fake_judges(js, monkeypatch)
 
     calls = {"codex": [], "claude": []}
 
@@ -441,38 +468,34 @@ def _setup_run_mocks(monkeypatch, js, force_in_sample: bool = True):
     return posts, calls
 
 
-def test_sampled_session_produces_exactly_three_posts(monkeypatch, sample_session_trace):
+def test_sampled_session_posts_once_per_registered_judge(monkeypatch, sample_session_trace):
     js = _import_judge_session()
     posts, calls = _setup_run_mocks(monkeypatch, js, force_in_sample=True)
 
     result = js.judge_session(sample_session_trace, dry_run=False)
 
-    assert len(posts) == 3, f"Expected 3 feedback POSTs, got {len(posts)}"
+    assert len(posts) == 2, f"Expected 2 feedback POSTs (2 registered judges), got {len(posts)}"
     for p in posts:
         assert "/v1/project_logs/" in p["url"]
         assert p["url"].endswith("/feedback")
     fids = [p["json"]["feedback"][0]["id"] for p in posts]
-    assert len(set(fids)) == 3, "Each judge gets its own feedback id"
+    assert len(set(fids)) == 2, "Each judge gets its own feedback id"
     assert result["sampled"] is True
-    assert result["posts"] == 3
+    assert result["posts"] == 2
+    assert "retired" not in result
 
 
-def test_backend_routing_plan_rubric_codex_others_claude(monkeypatch, sample_session_trace):
-    """plan_rubric -> codex backend; factuality + closedqa -> claude backend."""
+def test_backend_routing_follows_judge_spec(monkeypatch, sample_session_trace):
+    """Each JudgeSpec's declared backend is the one actually invoked."""
     js = _import_judge_session()
     posts, calls = _setup_run_mocks(monkeypatch, js, force_in_sample=True)
 
     js.judge_session(sample_session_trace, dry_run=False)
 
-    # codex called exactly once (plan_rubric)
+    # fake_codex_judge -> codex backend, called exactly once
     assert len(calls["codex"]) == 1
-    # claude called exactly twice (factuality + closedqa)
-    assert len(calls["claude"]) == 2
-
-    # The judge_name -> backend mapping is also exposed as a constant.
-    assert js.JUDGE_BACKENDS["plan_rubric"] == "codex"
-    assert js.JUDGE_BACKENDS["factuality"] == "claude"
-    assert js.JUDGE_BACKENDS["closedqa"] == "claude"
+    # fake_claude_judge -> claude backend, called exactly once
+    assert len(calls["claude"]) == 1
 
 
 def test_out_of_sample_session_produces_zero_posts(monkeypatch, sample_session_trace):
@@ -496,6 +519,7 @@ def test_dry_run_makes_no_subprocess_calls_and_no_posts(monkeypatch, sample_sess
     js = _import_judge_session()
     _set_post_env(monkeypatch)
     monkeypatch.setattr(js, "is_sampled", lambda _sid: True)
+    _register_fake_judges(js, monkeypatch)
 
     def boom(*a, **k):
         raise AssertionError("Dry run must not invoke a judge backend")
@@ -520,7 +544,7 @@ def test_dry_run_makes_no_subprocess_calls_and_no_posts(monkeypatch, sample_sess
     result = js.judge_session(sample_session_trace, dry_run=True)
     assert posts == []
     assert result["sampled"] is True
-    assert result["would_post"] == 3
+    assert result["would_post"] == 2
 
 
 # ---------------------------------------------------------------------------
@@ -542,14 +566,16 @@ def test_idempotent_rerun_produces_same_feedback_ids(monkeypatch, sample_session
 
 
 # ---------------------------------------------------------------------------
-# Per-judge skip: codex non-zero exit -> plan_rubric skipped, others still POST
+# Per-judge skip: one registered judge's backend failure skips only that
+# judge; the other registered judge still POSTs
 # ---------------------------------------------------------------------------
 
 
-def test_codex_failure_skips_only_plan_rubric(monkeypatch, sample_session_trace):
+def test_codex_backend_failure_skips_only_that_judge(monkeypatch, sample_session_trace):
     js = _import_judge_session()
     _set_post_env(monkeypatch)
     monkeypatch.setattr(js, "is_sampled", lambda _sid: True)
+    _register_fake_judges(js, monkeypatch)
 
     def codex_fails(prompt):
         raise js.JudgeBackendError("codex_unavailable")
@@ -572,18 +598,19 @@ def test_codex_failure_skips_only_plan_rubric(monkeypatch, sample_session_trace)
 
     result = js.judge_session(sample_session_trace, dry_run=False)
 
-    assert "plan_rubric" in result["skipped"]
-    assert result["skipped"]["plan_rubric"] == "codex_unavailable"
-    # factuality + closedqa still posted
-    assert result["posts"] == 2
+    assert "fake_codex_judge" in result["skipped"]
+    assert result["skipped"]["fake_codex_judge"] == "codex_unavailable"
+    # fake_claude_judge still posted
+    assert result["posts"] == 1
     posted_judges = {list(p["json"]["feedback"][0]["scores"].keys())[0] for p in posts}
-    assert posted_judges == {"factuality", "closedqa"}
+    assert posted_judges == {"fake_claude_judge"}
 
 
-def test_claude_timeout_skips_those_judges_codex_still_posts(monkeypatch, sample_session_trace):
+def test_claude_backend_timeout_skips_only_that_judge(monkeypatch, sample_session_trace):
     js = _import_judge_session()
     _set_post_env(monkeypatch)
     monkeypatch.setattr(js, "is_sampled", lambda _sid: True)
+    _register_fake_judges(js, monkeypatch)
 
     def claude_times_out(prompt):
         raise js.JudgeBackendError("claude_timeout")
@@ -605,39 +632,84 @@ def test_claude_timeout_skips_those_judges_codex_still_posts(monkeypatch, sample
     monkeypatch.setattr(js.requests, "post", fake_post)
 
     result = js.judge_session(sample_session_trace, dry_run=False)
-    assert result["skipped"]["factuality"] == "claude_timeout"
-    assert result["skipped"]["closedqa"] == "claude_timeout"
-    assert result["posts"] == 1  # plan_rubric (codex) only
+    assert result["skipped"]["fake_claude_judge"] == "claude_timeout"
+    assert result["posts"] == 1  # fake_codex_judge only
 
 
 # ---------------------------------------------------------------------------
-# Nested sub-agent ClosedQA skip (UNCHANGED behavior)
+# A judge's build() can itself return a skip reason (missing trace fields)
 # ---------------------------------------------------------------------------
 
 
-def test_nested_subagent_task_skips_closedqa_with_reason(
-    monkeypatch, nested_task_session_trace
+def test_judge_build_skip_reason_is_recorded_without_running_backend(
+    monkeypatch, sample_session_trace
 ):
-    """When a Task span has parent_span_id pointing to another Task, ClosedQA
-    is skipped with the documented reason. Factuality + plan_rubric still run."""
     js = _import_judge_session()
-    posts, calls = _setup_run_mocks(monkeypatch, js, force_in_sample=True)
+    _set_post_env(monkeypatch)
+    monkeypatch.setattr(js, "is_sampled", lambda _sid: True)
+    _register_fake_judges(js, monkeypatch)
 
-    nested = nested_task_session_trace
-    # Keep only the inner nested span to force the skip
-    nested = {
-        **nested,
-        "task_spans": [s for s in nested["task_spans"] if s["span_id"] == "task-inner"],
-    }
-    result = js.judge_session(nested, dry_run=False)
+    trace = {**sample_session_trace, "plan_body": ""}  # fake_codex_judge needs plan_body
 
-    skipped = result.get("skipped", {})
-    assert "closedqa" in skipped
-    assert skipped["closedqa"] == "nested_subagent_no_correlation"
-    assert result["posts"] == 2  # factuality + plan_rubric only
-    # closedqa never reached the claude backend; factuality did (1 claude call)
-    assert len(calls["claude"]) == 1
-    assert len(calls["codex"]) == 1
+    def boom(*a, **k):
+        raise AssertionError("a judge that returned a skip reason must not call a backend")
+
+    monkeypatch.setattr(js, "_judge_via_codex", boom)
+    monkeypatch.setattr(js, "_judge_via_claude_headless", lambda p: {"score": 0.9, "rationale": "ok"})
+    monkeypatch.setattr(js.requests, "post", lambda *a, **k: mock.MagicMock(status_code=200))
+
+    result = js.judge_session(trace, dry_run=False)
+    assert result["skipped"]["fake_codex_judge"] == "missing_input_or_output"
+    assert result["posts"] == 1
+
+
+# ---------------------------------------------------------------------------
+# The SHIPPED registry is empty: retirement contract
+# ---------------------------------------------------------------------------
+
+
+def test_shipped_registry_is_empty():
+    js = _import_judge_session()
+    assert js.JUDGE_REGISTRY == []
+
+
+def test_empty_registry_returns_retired_with_zero_posts_no_subprocess_calls(
+    monkeypatch, sample_session_trace
+):
+    js = _import_judge_session()
+    assert js.JUDGE_REGISTRY == []  # the actual shipped state, not a fake
+    _set_post_env(monkeypatch)
+    monkeypatch.setattr(js, "is_sampled", lambda _sid: True)
+
+    def boom_run(*a, **k):
+        raise AssertionError("empty registry must not call subprocess.run")
+
+    monkeypatch.setattr(js.subprocess, "run", boom_run)
+
+    def boom_post(*a, **k):
+        raise AssertionError("empty registry must not POST")
+
+    monkeypatch.setattr(js.requests, "post", boom_post)
+
+    result = js.judge_session(sample_session_trace, dry_run=False)
+    assert result["sampled"] is True
+    assert result["posts"] == 0
+    assert result["would_post"] == 0
+    assert result["skipped"] == {}
+    assert "retired" in result
+    assert "P32" in result["retired"]
+
+
+def test_empty_registry_marks_out_of_sample_sessions_retired_too(sample_session_trace, monkeypatch):
+    """The batch ratchet keys on "retired"; an out-of-sample session must carry it as well."""
+    js = _import_judge_session()
+    assert js.JUDGE_REGISTRY == []
+    monkeypatch.setattr(js, "is_sampled", lambda _sid: False)
+
+    result = js.judge_session(sample_session_trace, dry_run=False)
+    assert result["sampled"] is False
+    assert result["posts"] == 0
+    assert "P32" in result["retired"]
 
 
 # ---------------------------------------------------------------------------
@@ -697,8 +769,8 @@ def test_force_judges_out_of_sample_session(monkeypatch, sample_session_trace):
 
     assert result["forced"] is True
     assert result["sampled"] is False  # true hash status preserved for transparency
-    assert result["posts"] == 3
-    assert len(posts) == 3
+    assert result["posts"] == 2
+    assert len(posts) == 2
 
 
 def test_force_false_leaves_out_of_sample_session_unjudged(monkeypatch, sample_session_trace):

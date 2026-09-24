@@ -29,6 +29,17 @@ claude.ai account copies (`anthropic-skills:<name>`) exist for claude.ai on the 
 off here with `skillOverrides`. Never load an `anthropic-skills:` copy of one of these four in Claude
 Code. Refresh the web copy from the repo when the repo skill changes.
 
+## Before the first delivery (P06, P07)
+
+- **Plain-language pass** on any deck, explainer or page for someone other than Dave. Name the
+  audience. Give only the deliverable's text to a fresh subagent told "you are <audience>". It
+  lists every title it cannot follow without opening the item and every term it does not know.
+  Fix each one, then deliver. A "no jargon" checklist line alone failed in 3 sessions.
+- **From-scratch UI:** in the first reply, name the product it will mirror in one line, so Dave
+  can correct it before the build.
+- **Team-facing artifact:** before the first publish, name its audience and the account that must
+  own it. Say so when that is not the account this session publishes under.
+
 ## Verify every web build
 
 Before calling a design done, look at it in a browser. A green build is not a working page.

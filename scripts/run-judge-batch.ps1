@@ -47,10 +47,18 @@ $out | ForEach-Object { Add-Content -Path $logFile -Value $_ }
 # Zero-post ratchet (2026-09-23 Opus 5.5 eval, P32). Across 102 runs the judges posted 22 scores
 # and exited 0 every day, so the scheduler showed green while the eval layer measured nothing.
 # If sessions were sampled but nothing was posted, exit 3 so the registry and dashboard show it.
+#
+# 2026-09-24 (P32): the three judges were retired and JUDGE_REGISTRY ships empty, so every
+# sampled session now legitimately posts 0 -- judge_session.py marks that with a "retired" key
+# in its JSON output. Retired-and-zero is expected and must NOT trip the ratchet; judges that
+# ARE registered and still post 0 must still trip it.
 $text    = ($out | Out-String)
+$retired = $text -match '"retired":'
 $sampled = ([regex]::Matches($text, '"sampled":\s*true')).Count
 $posted  = ([regex]::Matches($text, '"posts":\s*[1-9]')).Count
-if ($code -eq 0 -and $sampled -gt 0 -and $posted -eq 0) {
+if ($retired) {
+    Write-Log "RETIRED: judges retired (P32, 2026-09-24), nothing to post"
+} elseif ($code -eq 0 -and $sampled -gt 0 -and $posted -eq 0) {
     Write-Log "ZERO-POST: $sampled session(s) sampled, 0 judge scores posted -- the judges measured nothing"
     $code = 3
 }
