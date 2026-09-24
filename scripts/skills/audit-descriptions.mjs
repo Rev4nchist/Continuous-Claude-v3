@@ -27,7 +27,11 @@ const TRIGGER_RE = /\b(use when|use this (skill )?when|triggers? on|when the use
 // parse error, the second silently cuts it at a comment. Claude Code then drops the description
 // and lists the skill under its first body heading, so the skill never triggers.
 function plainScalarError(v) {
-  if (!v || /^["'>|]/.test(v)) return null;
+  if (!v || /^[>|]/.test(v)) return null;
+  // A quoted scalar must close on the same line, followed only by a comment or nothing.
+  // (A value that spans lines is not used by any SKILL.md here, so it is reported too.)
+  if (v[0] === '"') return /^"(?:[^"\\]|\\.)*"\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
+  if (v[0] === "'") return /^'(?:[^']|'')*'\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
   if (/:\s/.test(v)) return 'yaml-colon-in-plain-scalar';
   if (/\s#/.test(v)) return 'yaml-comment-in-plain-scalar';
   return null;

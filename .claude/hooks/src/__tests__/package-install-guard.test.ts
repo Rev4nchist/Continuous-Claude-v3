@@ -566,9 +566,36 @@ describe('package-install-guard', () => {
       expect(publishDateFromRegistryJson(pypiDoc, 'pypi', '1.9.0')?.toISOString()).toBe('2026-05-01T00:00:00.000Z');
       expect(publishDateFromRegistryJson(pypiDoc, 'pypi')?.toISOString()).toBe('2026-09-01T13:00:00.000Z');
     });
+    it('pypi: a PEP 440 pre-release pin uses its own date, not the older stable release', () => {
+      const doc = {
+        info: { version: '1.8.0' },
+        releases: {
+          '1.8.0': [{ upload_time_iso_8601: '2026-01-01T00:00:00.000Z' }],
+          '1.9.0rc1': [{ upload_time_iso_8601: '2026-09-23T10:00:00.000Z' }],
+        },
+      };
+      expect(publishDateFromRegistryJson(doc, 'pypi', '1.9.0rc1')?.toISOString()).toBe('2026-09-23T10:00:00.000Z');
+      expect(publishDateFromRegistryJson(doc, 'pypi', '1.8')?.toISOString()).toBe('2026-01-01T00:00:00.000Z');
+    });
+    it('pypi: ages a release by its NEWEST file (a new wheel on an old release)', () => {
+      const doc = {
+        info: { version: '2.0.0' },
+        releases: {
+          '2.0.0': [
+            { upload_time_iso_8601: '2025-01-01T00:00:00.000Z' }, // sdist
+            { upload_time_iso_8601: '2026-09-23T09:00:00.000Z' }, // wheel added later
+            { upload_time_iso_8601: 'not-a-date' },
+          ],
+        },
+      };
+      expect(publishDateFromRegistryJson(doc, 'pypi', '2.0.0')?.toISOString()).toBe('2026-09-23T09:00:00.000Z');
+    });
     it('returns null on malformed documents', () => {
       expect(publishDateFromRegistryJson(null, 'npm')).toBeNull();
       expect(publishDateFromRegistryJson({}, 'pypi')).toBeNull();
+    });
+    it('extractPackageNames carries a pip == pre-release pin through', () => {
+      expect(extractPackageNames('pip install example==1.9.0rc1')).toEqual([{ name: 'example', version: '1.9.0rc1' }]);
     });
     it('extractPackageNames carries the pinned version through to the age check input', () => {
       const pkgs = extractPackageNames('pnpm add -Dw @types/node@24.13.3');

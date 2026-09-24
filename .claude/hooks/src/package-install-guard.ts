@@ -445,19 +445,28 @@ export function publishDateFromRegistryJson(
 ): Date | null {
   const doc = json as Record<string, any> | null;
   if (!doc) return null;
+
+  if (ecosystem === 'pypi') {
+    // PEP 440 public versions, which npm's semver pattern rejects: 1.9.0rc1, 2.0, 1.0.post1,
+    // 3.1.dev4. A rejected pin fell back to info.version, so a brand-new pre-release could be
+    // aged by an older stable release's date and pass.
+    const exact = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion)
+      ? requestedVersion.replace(/^v/, '')
+      : undefined;
+    const version = exact && doc.releases?.[exact] ? exact : doc.info?.version;
+    // A release is several files uploaded separately, and pip may pick a wheel added long after
+    // the sdist. Age-check the NEWEST upload, or a fresh wheel on an old release passes.
+    let newest: Date | null = null;
+    for (const file of doc.releases?.[version] ?? []) {
+      const d = file?.upload_time_iso_8601 ? new Date(file.upload_time_iso_8601) : null;
+      if (d && !Number.isNaN(d.getTime()) && (!newest || d > newest)) newest = d;
+    }
+    return newest;
+  }
+
   const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion)
     ? requestedVersion.replace(/^v/, '')
     : undefined;
-
-  if (ecosystem === 'pypi') {
-    const version = exact && doc.releases?.[exact] ? exact : doc.info?.version;
-    const releases = doc.releases?.[version];
-    if (releases && releases.length > 0 && releases[0].upload_time_iso_8601) {
-      return new Date(releases[0].upload_time_iso_8601);
-    }
-    return null;
-  }
-
   const version = exact && doc.time?.[exact] ? exact : doc['dist-tags']?.latest;
   const timeEntry = doc.time?.[version];
   return timeEntry ? new Date(timeEntry) : null;

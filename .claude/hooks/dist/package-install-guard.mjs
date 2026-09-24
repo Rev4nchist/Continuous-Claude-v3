@@ -15181,15 +15181,17 @@ async function checkPackageAge(name, ecosystem, requestedVersion) {
 function publishDateFromRegistryJson(json, ecosystem, requestedVersion) {
   const doc = json;
   if (!doc) return null;
-  const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
   if (ecosystem === "pypi") {
-    const version2 = exact && doc.releases?.[exact] ? exact : doc.info?.version;
-    const releases = doc.releases?.[version2];
-    if (releases && releases.length > 0 && releases[0].upload_time_iso_8601) {
-      return new Date(releases[0].upload_time_iso_8601);
+    const exact2 = requestedVersion && /^v?\d+(\.\d+)*((a|b|rc)\d+)?(\.post\d+)?(\.dev\d+)?$/i.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
+    const version2 = exact2 && doc.releases?.[exact2] ? exact2 : doc.info?.version;
+    let newest = null;
+    for (const file of doc.releases?.[version2] ?? []) {
+      const d = file?.upload_time_iso_8601 ? new Date(file.upload_time_iso_8601) : null;
+      if (d && !Number.isNaN(d.getTime()) && (!newest || d > newest)) newest = d;
     }
-    return null;
+    return newest;
   }
+  const exact = requestedVersion && /^v?\d+\.\d+\.\d+([-+][0-9A-Za-z.-]+)?$/.test(requestedVersion) ? requestedVersion.replace(/^v/, "") : void 0;
   const version = exact && doc.time?.[exact] ? exact : doc["dist-tags"]?.latest;
   const timeEntry = doc.time?.[version];
   return timeEntry ? new Date(timeEntry) : null;
