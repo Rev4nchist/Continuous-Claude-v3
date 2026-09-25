@@ -46,7 +46,7 @@ test('a lookalike account whose login contains "coderabbit" is not trusted (Code
   const body = summary(BASE, HEAD) + '\n' + marker(HEAD);
   for (const user of [{ login: 'coderabbit-helper', type: 'User' }, { login: 'coderabbitai', type: 'User' }, { login: 'coderabbitai[bot]', type: 'User' }]) {
     assert.equal(evaluate(input({ comments: [{ user, body }] })).reviewedHead, false, user.login + '/' + user.type);
-    assert.equal(evaluate(input({ reviews: [{ user, commit_id: HEAD }] })).reviewedHead, false, 'review by ' + user.login);
+    assert.equal(evaluate(input({ reviews: [{ user, commit_id: HEAD, body: '**Actionable comments posted: 1**' }] })).reviewedHead, false, 'review by ' + user.login);
   }
 });
 
