@@ -7,7 +7,7 @@ import { evaluate } from './coderabbit-status.mjs';
 const HEAD = '4342fb403723f904fb6f3205a5a2019422f68c8c';
 const BASE = 'fdb03edb040ff49a77ad759508ae7b9c401ae549';
 const OLD = '7e8b0058c204b4f453eaf0009f16908b9405a924';
-const BOT = { login: 'coderabbitai[bot]' };
+const BOT = { login: 'coderabbitai[bot]', type: 'Bot' };
 
 function input({ reviews = [], comments = [] } = {}) {
   return {
@@ -40,6 +40,14 @@ test('a summary whose range ends at an older commit does not cover a new push', 
 test('a range to the head written by someone other than CodeRabbit does not count', () => {
   const r = evaluate(input({ comments: [{ user: { login: 'Rev4nchist' }, body: summary(BASE, HEAD) }] }));
   assert.equal(r.reviewedHead, false);
+});
+
+test('a lookalike account whose login contains "coderabbit" is not trusted (CodeRabbit #65)', () => {
+  const body = summary(BASE, HEAD) + '\n' + marker(HEAD);
+  for (const user of [{ login: 'coderabbit-helper', type: 'User' }, { login: 'coderabbitai', type: 'User' }, { login: 'coderabbitai[bot]', type: 'User' }]) {
+    assert.equal(evaluate(input({ comments: [{ user, body }] })).reviewedHead, false, user.login + '/' + user.type);
+    assert.equal(evaluate(input({ reviews: [{ user, commit_id: HEAD }] })).reviewedHead, false, 'review by ' + user.login);
+  }
 });
 
 test('a "Review limit reached" comment with no reviewed range does not count', () => {

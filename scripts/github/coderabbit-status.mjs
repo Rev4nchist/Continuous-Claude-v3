@@ -32,7 +32,11 @@ function gh(apiArgs) {
   return JSON.parse(execFileSync('gh', ['api', ...apiArgs], { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 }));
 }
 
-const isCodeRabbit = (u) => /coderabbit/i.test(u?.login || '');
+// The CodeRabbit GitHub App, exactly. A substring match would trust a lookalike account such as
+// "coderabbit-helper" that posts a head-matching range (CodeRabbit #65). App logins end in "[bot]",
+// which a user account cannot register.
+const CODERABBIT_LOGIN = 'coderabbitai[bot]';
+const isCodeRabbit = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
 
 // Proof from CodeRabbit's summary comment that the head commit was reviewed. A clean review
 // posts no review object, only this edited comment (PR #64, 2026-09-24). Two head-bound forms:
