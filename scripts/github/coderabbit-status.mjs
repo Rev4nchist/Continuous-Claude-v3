@@ -32,13 +32,42 @@ function gh(apiArgs) {
   return JSON.parse(execFileSync('gh', ['api', ...apiArgs], { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 }));
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, reviews = [] }) {
+// The CodeRabbit GitHub App, exactly. A substring match would trust a lookalike account such as
+// "coderabbit-helper" that posts a head-matching range (CodeRabbit #65). App logins end in "[bot]",
+// which a user account cannot register.
+const CODERABBIT_LOGIN = 'coderabbitai[bot]';
+const isCodeRabbit = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
+
+// Proof from CodeRabbit's summary comment that the head commit was reviewed. A clean review
+// posts no review object, only this edited comment (PR #64, 2026-09-24). Two head-bound forms:
+//   - "Reviewing files that changed ... between <base> and <head>" (updated on each incremental review)
+//   - <!-- final_review_risk_coverage:{..."coveredCommitId":"<head>","kind":"reviewed"} -->
+// A later push that CodeRabbit has not reviewed leaves both pointing at an older SHA.
+// Exception (PR #65, 2026-09-25): when the review limit is reached, the summary still shows a range
+// ending at the unreviewed head, inside the "Review limit reached" warning. So the range counts only
+// when no limit warning is present. The marker is not moved by a skipped review, so it still counts.
+const LIMIT_WARNING = /Review limit reached/i;
+export function summaryCoversHead(body, head) {
+  const text = String(body);
+  if (!LIMIT_WARNING.test(text)) {
+    for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
+  }
+  for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
+    try { const c = JSON.parse(m[1]); if (c.coveredCommitId === head && c.kind === 'reviewed') return true; } catch { /* not a marker */ }
+  }
+  return false;
+}
+
+export function evaluate({ pull, combined, checkRuns, threads, reviews = [], comments = [] }) {
   const head = pull.head.sha;
   const cr = (combined.statuses || []).find((s) => /coderabbit/i.test(s.context));
   // A green "CodeRabbit" status is NOT proof of review: when CodeRabbit hits its review limit
   // it still reports success and posts "Review limit reached" (seen on PR #48, 2026-09-23).
-  // Proof is a CodeRabbit review object whose commit_id is the head SHA.
-  const reviewedHead = reviews.some((r) => /coderabbit/i.test(r.user?.login || '') && r.commit_id === head);
+  // Proof is a CodeRabbit review object on the head SHA, or its summary comment naming the head.
+  // A review object counts only when it carries review content: CodeRabbit's reply to a thread also
+  // creates a "review" on the current head, with an empty body (PR #65, 2026-09-25).
+  const reviewedHead = reviews.some((r) => isCodeRabbit(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''))
+    || comments.some((c) => isCodeRabbit(c.user) && summaryCoversHead(c.body, head));
   const otherStatuses = (combined.statuses || []).filter((s) => !/coderabbit/i.test(s.context));
   const badStatuses = otherStatuses.filter((s) => s.state !== 'success');
   const badRuns = (checkRuns || []).filter((c) => c.status !== 'completed' || !['success', 'neutral', 'skipped'].includes(c.conclusion));
@@ -80,7 +109,8 @@ function main() {
     const threads = rt.nodes;
     // Reviews come oldest first, so the head review can sit past page one: read every page.
     const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
-    result = evaluate({ pull, combined, checkRuns, threads, reviews });
+    const comments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+    result = evaluate({ pull, combined, checkRuns, threads, reviews, comments });
   } catch (err) {
     console.error(`coderabbit-status: could not determine (${String(err.message).split('\n')[0]})`);
     process.exit(2);
