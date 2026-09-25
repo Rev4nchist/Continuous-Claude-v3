@@ -43,9 +43,16 @@ const isCodeRabbit = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
 //   - "Reviewing files that changed ... between <base> and <head>" (updated on each incremental review)
 //   - <!-- final_review_risk_coverage:{..."coveredCommitId":"<head>","kind":"reviewed"} -->
 // A later push that CodeRabbit has not reviewed leaves both pointing at an older SHA.
+// Exception (PR #65, 2026-09-25): when the review limit is reached, the summary still shows a range
+// ending at the unreviewed head, inside the "Review limit reached" warning. So the range counts only
+// when no limit warning is present. The marker is not moved by a skipped review, so it still counts.
+const LIMIT_WARNING = /Review limit reached/i;
 export function summaryCoversHead(body, head) {
-  for (const m of String(body).matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
-  for (const m of String(body).matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
+  const text = String(body);
+  if (!LIMIT_WARNING.test(text)) {
+    for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
+  }
+  for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
     try { const c = JSON.parse(m[1]); if (c.coveredCommitId === head && c.kind === 'reviewed') return true; } catch { /* not a marker */ }
   }
   return false;
@@ -57,7 +64,9 @@ export function evaluate({ pull, combined, checkRuns, threads, reviews = [], com
   // A green "CodeRabbit" status is NOT proof of review: when CodeRabbit hits its review limit
   // it still reports success and posts "Review limit reached" (seen on PR #48, 2026-09-23).
   // Proof is a CodeRabbit review object on the head SHA, or its summary comment naming the head.
-  const reviewedHead = reviews.some((r) => isCodeRabbit(r.user) && r.commit_id === head)
+  // A review object counts only when it carries review content: CodeRabbit's reply to a thread also
+  // creates a "review" on the current head, with an empty body (PR #65, 2026-09-25).
+  const reviewedHead = reviews.some((r) => isCodeRabbit(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''))
     || comments.some((c) => isCodeRabbit(c.user) && summaryCoversHead(c.body, head));
   const otherStatuses = (combined.statuses || []).filter((s) => !/coderabbit/i.test(s.context));
   const badStatuses = otherStatuses.filter((s) => s.state !== 'success');

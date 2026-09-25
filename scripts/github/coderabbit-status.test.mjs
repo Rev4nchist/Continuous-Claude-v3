@@ -62,7 +62,31 @@ test('the coverage marker counts only when it covers the head and its kind is "r
 });
 
 test('a formal CodeRabbit review on the head still counts', () => {
-  const r = evaluate(input({ reviews: [{ user: BOT, commit_id: HEAD }] }));
+  const r = evaluate(input({ reviews: [{ user: BOT, commit_id: HEAD, body: '**Actionable comments posted: 1**\n\n---' }] }));
+  assert.equal(r.reviewedHead, true);
+});
+
+// PR #65, head a328101 (2026-09-25): the limit was reached, so the head was NOT reviewed. Yet the
+// summary kept a range ending at the head inside the limit warning, and CodeRabbit's reply to a
+// thread created an empty-bodied "review" on the head. Neither may count.
+const limitWarning = (from, to) => `> [!WARNING]
+> ## Review limit reached
+> - [ ]  **Run on-demand review**
+> Reviewing files that changed from the base of the PR and between ${from} and ${to}.`;
+
+test('PR #65 shape: a range to the head inside a "Review limit reached" warning does not count', () => {
+  const r = evaluate(input({ comments: [{ user: BOT, body: limitWarning(OLD, HEAD) + '\n' + marker(OLD) }] }));
+  assert.equal(r.reviewedHead, false);
+  assert.equal(r.ready, false);
+});
+
+test('PR #65 shape: an empty-bodied CodeRabbit "review" on the head (a thread reply) does not count', () => {
+  const r = evaluate(input({ reviews: [{ user: BOT, commit_id: HEAD, body: '' }] }));
+  assert.equal(r.reviewedHead, false);
+});
+
+test('the coverage marker still counts when a later limit notice sits in the same comment', () => {
+  const r = evaluate(input({ comments: [{ user: BOT, body: limitWarning(BASE, HEAD) + '\n' + marker(HEAD) }] }));
   assert.equal(r.reviewedHead, true);
 });
 
