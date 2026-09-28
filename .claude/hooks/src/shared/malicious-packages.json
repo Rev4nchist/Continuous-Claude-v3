@@ -14862,6 +14862,120 @@
       "reason": "Malicious code in @airbnb-extended/typescript-config (npm) (GHSA-jc5g-qvp3-6hrx)",
       "date": "2026-09-25",
       "advisory": "https://github.com/advisories/GHSA-jc5g-qvp3-6hrx"
+    },
+    "@wbnr/design-kit": {
+      "blocked_all": true,
+      "reason": "Malware in @wbnr/design-kit (GHSA-865f-pwj5-p2c5)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-865f-pwj5-p2c5"
+    },
+    "@wbnr/lottiefiles-loader": {
+      "blocked_all": true,
+      "reason": "Malware in @wbnr/lottiefiles-loader (GHSA-94r6-cxjq-fq4r)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-94r6-cxjq-fq4r"
+    },
+    "wbnr-probe-visible-check": {
+      "blocked_all": true,
+      "reason": "Malware in wbnr-probe-visible-check (GHSA-65gf-jmp3-4wrc)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-65gf-jmp3-4wrc"
+    },
+    "kalasnik-npm-simple-test": {
+      "blocked_all": true,
+      "reason": "Malware in kalasnik-npm-simple-test (GHSA-pm4h-xrhq-vh62)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-pm4h-xrhq-vh62"
+    },
+    "kjj81": {
+      "blocked_all": true,
+      "reason": "Malware in kjj81 (GHSA-9f7c-6fp7-9g6x)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-9f7c-6fp7-9g6x"
+    },
+    "o0o9": {
+      "blocked_all": true,
+      "reason": "Malware in o0o9 (GHSA-5f5h-pg84-39h4)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-5f5h-pg84-39h4"
+    },
+    "uuid-date": {
+      "blocked_all": true,
+      "reason": "Malware in uuid-date (GHSA-pqvc-prrc-mv45)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-pqvc-prrc-mv45"
+    },
+    "@bb1ptest23/test-paket": {
+      "blocked_all": true,
+      "reason": "Malicious code in @bb1ptest23/test-paket (npm) (GHSA-mh6f-77j8-pfrp)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-mh6f-77j8-pfrp"
+    },
+    "capacitor-plugin-service-worker": {
+      "blocked_all": true,
+      "reason": "Malware in capacitor-plugin-service-worker (GHSA-qg5c-9jmq-fpmf)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-qg5c-9jmq-fpmf"
+    },
+    "swiper_angular": {
+      "blocked_all": true,
+      "reason": "Malware in swiper_angular (GHSA-r6m9-x8fm-wq5c)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-r6m9-x8fm-wq5c"
+    },
+    "riot-private": {
+      "blocked_all": true,
+      "reason": "Malware in riot-private (GHSA-qgpm-ggcf-4fqm)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-qgpm-ggcf-4fqm"
+    },
+    "seek-pass": {
+      "blocked_all": true,
+      "reason": "Malware in seek-pass (GHSA-q39g-5xh5-89h3)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-q39g-5xh5-89h3"
+    },
+    "api-typings": {
+      "blocked_all": true,
+      "reason": "Malware in api-typings (GHSA-gjx9-hrcc-f6qj)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-gjx9-hrcc-f6qj"
+    },
+    "discord-mfa-solver": {
+      "blocked_all": true,
+      "reason": "Malware in discord-mfa-solver (GHSA-vf4w-775x-ccfh)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-vf4w-775x-ccfh"
+    },
+    "vinzzsync-wacli": {
+      "blocked_all": true,
+      "reason": "Malware in vinzzsync-wacli (GHSA-rmcq-f7vh-v86v)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-rmcq-f7vh-v86v"
+    },
+    "tanksync": {
+      "blocked_all": true,
+      "reason": "Malware in tanksync (GHSA-47j4-w95p-wjp7)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-47j4-w95p-wjp7"
+    },
+    "@consts/links": {
+      "blocked_all": true,
+      "reason": "Malware in @consts/links (GHSA-5rp9-7r4x-3fqp)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-5rp9-7r4x-3fqp"
+    },
+    "spotify-url-resolvers": {
+      "blocked_all": true,
+      "reason": "Malware in spotify-url-resolvers (GHSA-w77g-6g5j-wr2r)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-w77g-6g5j-wr2r"
+    },
+    "@digi-kernel/digi-kernel-constrains": {
+      "blocked_all": true,
+      "reason": "Malware in @digi-kernel/digi-kernel-constrains (GHSA-h37m-2c3q-82j8)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-h37m-2c3q-82j8"
     }
   }
 }
