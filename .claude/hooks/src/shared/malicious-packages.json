@@ -14826,6 +14826,42 @@
       "reason": "Malicious code in analytics-widget (npm) (GHSA-xpv4-prm5-w6gr)",
       "date": "2026-09-24",
       "advisory": "https://github.com/advisories/GHSA-xpv4-prm5-w6gr"
+    },
+    "cma-self-hosted-sandbox-cf": {
+      "blocked_all": true,
+      "reason": "Malicious code in cma-self-hosted-sandbox-cf (npm) (GHSA-wjmh-pc3x-575f)",
+      "date": "2026-09-26",
+      "advisory": "https://github.com/advisories/GHSA-wjmh-pc3x-575f"
+    },
+    "chai-as-relay": {
+      "blocked_all": true,
+      "reason": "Malicious code in chai-as-relay (npm) (GHSA-mq79-xj84-m775)",
+      "date": "2026-09-26",
+      "advisory": "https://github.com/advisories/GHSA-mq79-xj84-m775"
+    },
+    "@digift/cli": {
+      "blocked_all": true,
+      "reason": "Malicious code in @digift/cli (npm) (GHSA-2394-2grm-2336)",
+      "date": "2026-09-25",
+      "advisory": "https://github.com/advisories/GHSA-2394-2grm-2336"
+    },
+    "@nubjs/types": {
+      "blocked_all": true,
+      "reason": "Malware in @nubjs/types (GHSA-7qx8-98q7-66p4)",
+      "date": "2026-09-25",
+      "advisory": "https://github.com/advisories/GHSA-7qx8-98q7-66p4"
+    },
+    "shoplist-app": {
+      "blocked_all": true,
+      "reason": "Malicious code in shoplist-app (npm) (GHSA-9gqc-gwvw-4228)",
+      "date": "2026-09-25",
+      "advisory": "https://github.com/advisories/GHSA-9gqc-gwvw-4228"
+    },
+    "@airbnb-extended/typescript-config": {
+      "blocked_all": true,
+      "reason": "Malicious code in @airbnb-extended/typescript-config (npm) (GHSA-jc5g-qvp3-6hrx)",
+      "date": "2026-09-25",
+      "advisory": "https://github.com/advisories/GHSA-jc5g-qvp3-6hrx"
     }
   }
 }
