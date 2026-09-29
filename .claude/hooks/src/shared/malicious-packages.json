@@ -14976,6 +14976,168 @@
       "reason": "Malware in @digi-kernel/digi-kernel-constrains (GHSA-h37m-2c3q-82j8)",
       "date": "2026-09-28",
       "advisory": "https://github.com/advisories/GHSA-h37m-2c3q-82j8"
+    },
+    "rai6jaisahthaghee5ou-loader-package": {
+      "blocked_all": true,
+      "reason": "Malicious code in rai6jaisahthaghee5ou-loader-package (npm) (GHSA-hhf7-grh4-575w)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-hhf7-grh4-575w"
+    },
+    "native-env": {
+      "blocked_all": true,
+      "reason": "Malicious code in native-env (npm) (GHSA-9p6x-527c-vh8p)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-9p6x-527c-vh8p"
+    },
+    "hardhat-lock": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-lock (npm) (GHSA-crqg-xv46-qmmw)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-crqg-xv46-qmmw"
+    },
+    "mini-hardhat": {
+      "blocked_all": true,
+      "reason": "Malicious code in mini-hardhat (npm) (GHSA-wxx2-jv4c-38wh)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-wxx2-jv4c-38wh"
+    },
+    "test-agency-assignment": {
+      "blocked_all": true,
+      "reason": "Malicious code in test-agency-assignment (npm) (GHSA-7x83-rfhr-656r)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-7x83-rfhr-656r"
+    },
+    "items-validator": {
+      "blocked_all": true,
+      "reason": "Malicious code in items-validator (npm) (GHSA-hvv9-35pw-8qvf)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-hvv9-35pw-8qvf"
+    },
+    "hardhat-zet": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-zet (npm) (GHSA-qqvr-prmw-6pq2)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-qqvr-prmw-6pq2"
+    },
+    "fabric-native-loader": {
+      "blocked_all": true,
+      "reason": "Malicious code in fabric-native-loader (npm) (GHSA-h76r-hhqx-cjq3)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-h76r-hhqx-cjq3"
+    },
+    "dotenv-native": {
+      "blocked_all": true,
+      "reason": "Malicious code in dotenv-native (npm) (GHSA-438j-7xq6-grfr)",
+      "date": "2026-09-29",
+      "advisory": "https://github.com/advisories/GHSA-438j-7xq6-grfr"
+    },
+    "llm-nebula": {
+      "blocked_all": true,
+      "reason": "Malicious code in llm-nebula (npm) (GHSA-8g48-f52v-xggv)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-8g48-f52v-xggv"
+    },
+    "nebulaai-sdk": {
+      "blocked_all": true,
+      "reason": "Malicious code in nebulaai-sdk (npm) (GHSA-57f4-h93r-jvh6)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-57f4-h93r-jvh6"
+    },
+    "simple-date-formatter-new-12": {
+      "blocked_all": true,
+      "reason": "Malicious code in simple-date-formatter-new-12 (npm) (GHSA-v6p6-9wrj-f56p)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-v6p6-9wrj-f56p"
+    },
+    "nebula-llm": {
+      "blocked_all": true,
+      "reason": "Malicious code in nebula-llm (npm) (GHSA-5ph8-m4r7-g739)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-5ph8-m4r7-g739"
+    },
+    "figlet-chalk-render": {
+      "blocked_all": true,
+      "reason": "Malicious code in figlet-chalk-render (npm) (GHSA-frpq-rj8q-hpr4)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-frpq-rj8q-hpr4"
+    },
+    "fabric-render-bridge": {
+      "blocked_all": true,
+      "reason": "Malicious code in fabric-render-bridge (npm) (GHSA-r54m-4q33-rjvr)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-r54m-4q33-rjvr"
+    },
+    "fabric-asset-pipeline": {
+      "blocked_all": true,
+      "reason": "Malicious code in fabric-asset-pipeline (npm) (GHSA-2h5p-2j55-g9r4)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-2h5p-2j55-g9r4"
+    },
+    "chalk-figlet": {
+      "blocked_all": true,
+      "reason": "Malicious code in chalk-figlet (npm) (GHSA-85m5-qg46-qg28)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-85m5-qg46-qg28"
+    },
+    "img-to-native": {
+      "blocked_all": true,
+      "reason": "Malware in img-to-native (GHSA-pv7p-ghgv-268x)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-pv7p-ghgv-268x"
+    },
+    "native-runner": {
+      "blocked_all": true,
+      "reason": "Malware in native-runner (GHSA-jxw5-69p3-hpm4)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-jxw5-69p3-hpm4"
+    },
+    "nebulajs-api": {
+      "blocked_all": true,
+      "reason": "Malware in nebulajs-api (GHSA-2gr6-gxvx-3594)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-2gr6-gxvx-3594"
+    },
+    "nebula-sdk": {
+      "blocked_all": true,
+      "reason": "Malware in nebula-sdk (GHSA-fm5g-6rr8-p9vq)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-fm5g-6rr8-p9vq"
+    },
+    "vite-plugin-crypto": {
+      "blocked_all": true,
+      "reason": "Malware in vite-plugin-crypto (GHSA-mh9w-qr45-6wrq)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-mh9w-qr45-6wrq"
+    },
+    "tailwindcss-form-kit": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-form-kit (GHSA-cxrh-669r-w2g9)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-cxrh-669r-w2g9"
+    },
+    "my-skibidi": {
+      "blocked_all": true,
+      "reason": "Malware in my-skibidi (GHSA-w4g6-rgx4-2wjf)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-w4g6-rgx4-2wjf"
+    },
+    "chaikit": {
+      "blocked_all": true,
+      "reason": "Malware in chaikit (GHSA-6c2m-985r-wrwm)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-6c2m-985r-wrwm"
+    },
+    "git-en-boite-logging": {
+      "blocked_all": true,
+      "reason": "Malicious code in git-en-boite-logging (npm) (GHSA-33v8-h584-r8xc)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-33v8-h584-r8xc"
+    },
+    "eslint-plugin-skywagon-web": {
+      "blocked_all": true,
+      "reason": "Malicious code in eslint-plugin-skywagon-web (npm) (GHSA-pfgw-q545-ch2m)",
+      "date": "2026-09-28",
+      "advisory": "https://github.com/advisories/GHSA-pfgw-q545-ch2m"
     }
   }
 }
