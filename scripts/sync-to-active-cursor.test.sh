@@ -164,15 +164,55 @@ chk "feat10-only.md (feature branch) NOT live" "$(not "$ACT/rules/feat10-only.md
 chk "cursor = main (the worktree run moves it)" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse main)" ] && echo 1 || echo 0)"
 chk "no quarantine dir" "$(not "$ACT/.sync-quarantine")"
 chk "primary checkout still on feat10" "$( [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = "feat10" ] && echo 1 || echo 0)"
-# Guard still holds: without the flag, or with a detached HEAD that is not main's commit, it skips.
-printf 'l\n' > "$REPO/.claude/rules-src/l.md"; g checkout -q main; commit l; g checkout -q feat10
+# Guard, part 1: no flag. The worktree is detached EXACTLY at main, so only the missing
+# SYNC_MAIN_DETACHED flag can cause the skip (HEAD == main would otherwise pass the guard). The
+# cursor is parked one commit behind so a wrongly passing run would visibly move it.
+git -C "$WT10" checkout -q --detach main >/dev/null 2>&1
+chk "fixture: worktree is exactly at main" "$( [ "$(git -C "$WT10" rev-parse HEAD)" = "$(git -C "$REPO" rev-parse main)" ] && echo 1 || echo 0)"
+git -C "$REPO" rev-parse 'main~1' > "$ACT/state/sync-cursor"
 out="$( cd "$WT10" && HOME="$HOMEDIR" bash "$WT10/scripts/sync-to-active.sh" --changed 2>&1 )"
-chk "no flag: a detached worktree is skipped" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 1 || echo 0)"
+chk "no flag: a detached worktree AT main is skipped" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 1 || echo 0)"
+chk "no flag: cursor did not move" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse 'main~1')" ] && echo 1 || echo 0)"
+git -C "$REPO" rev-parse main > "$ACT/state/sync-cursor"
+# Guard, part 2: with the flag, a detached HEAD that is not main's commit is skipped.
+printf 'l\n' > "$REPO/.claude/rules-src/l.md"; g checkout -q main; commit l; g checkout -q feat10
 git -C "$WT10" checkout -q --detach feat10 >/dev/null 2>&1
 out2="$(wt_sync)"
 chk "detached at a non-main commit is skipped even with the flag" "$(printf '%s' "$out2" | grep -q 'Sync skipped' && echo 1 || echo 0)"
 chk "feat10-only.md still NOT live" "$(not "$ACT/rules/feat10-only.md")"
 chk "cursor did not move to the feature commit" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" != "$(git -C "$REPO" rev-parse feat10)" ] && echo 1 || echo 0)"
+
+# X4: a queued .sync.pending must survive a detached-worktree run when main moved past the worktree.
+# The worktree sits at main (commit l). A sha256sum shim moves main to commit m and queues the marker
+# after the guard passed, the way a second land-pr run would mid-sync.
+g checkout -q -b side10 main; printf 'm\n' > "$REPO/.claude/rules-src/m.md"; commit m; g checkout -q feat10
+git -C "$WT10" checkout -q --detach main >/dev/null 2>&1
+SHIM="$FIX/shim"; mkdir -p "$SHIM"
+SHIM_REAL_SHA="$(command -v sha256sum)"; SHIM_MSHA="$FIX/shim-msha"; SHIM_DONE="$FIX/shim-done"
+git -C "$REPO" rev-parse side10 > "$SHIM_MSHA"
+cat > "$SHIM/sha256sum" <<'SHIMEOF'
+#!/usr/bin/env bash
+if [ ! -e "$SHIM_DONE" ]; then
+    : > "$SHIM_DONE"
+    git -C "$SHIM_REPO" update-ref refs/heads/main "$(cat "$SHIM_MSHA")"
+    : > "$SHIM_ACT/.sync.pending"
+fi
+exec "$SHIM_REAL_SHA" "$@"
+SHIMEOF
+chmod +x "$SHIM/sha256sum"
+git -C "$REPO" rev-parse 'main~1' > "$ACT/state/sync-cursor"
+out="$( cd "$WT10" && PATH="$SHIM:$PATH" SHIM_REPO="$REPO" SHIM_ACT="$ACT" SHIM_MSHA="$SHIM_MSHA" SHIM_DONE="$SHIM_DONE" SHIM_REAL_SHA="$SHIM_REAL_SHA" \
+    HOME="$HOMEDIR" SYNC_MAIN_DETACHED=1 bash "$WT10/scripts/sync-to-active.sh" --changed 2>&1 )"
+chk "X4 fixture: the shim moved main to m" "$( [ "$(git -C "$REPO" rev-parse main)" = "$(cat "$SHIM_MSHA")" ] && echo 1 || echo 0)"
+chk "X4: run synced the worktree's own commit (l.md)" "$(has "$ACT/rules/l.md")"
+chk "X4: queued marker kept (main moved past the worktree)" "$(has "$ACT/.sync.pending")"
+chk "X4: m.md not claimed synced" "$(not "$ACT/rules/m.md")"
+chk "X4: cursor stays at the worktree's commit, behind main" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" != "$(git -C "$REPO" rev-parse main)" ] && echo 1 || echo 0)"
+# Control: worktree exactly at main and a marker present: consumed as before.
+git -C "$WT10" checkout -q --detach main >/dev/null 2>&1
+out="$(wt_sync)"
+chk "X4 control: HEAD == main consumes the marker" "$(not "$ACT/.sync.pending")"
+chk "X4 control: m.md now synced, cursor = main" "$( [ -e "$ACT/rules/m.md" ] && [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse main)" ] && echo 1 || echo 0)"
 g worktree remove --force "$WT10"
 g checkout -q main
 

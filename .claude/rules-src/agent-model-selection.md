@@ -28,7 +28,8 @@ pinned `high` too, so review and planning quality does not depend on the main se
   Sonnet main sessions.
 - A workflow `agent()` on Sonnet passes `effort: 'high'`. For Sonnet work through the Agent tool, use a
   predefined Sonnet agent (it carries the pin) rather than an ad-hoc `model: sonnet` call.
-- Gate: `node scripts/check-agent-model-drift.mjs` fails when any agent lacks `effort: high`.
+- Gate: `node scripts/check-agent-model-drift.mjs` fails when any agent lacks `effort: high`. The pin covers
+  Agent-tool spawns (read from the `.md`). It does not cover `opc/scripts/claude_spawn.py`: it passes no `--effort`.
 
 Tier by **judgment density**, not task size. Canonical map (37 agents, 12 Opus / 25 Sonnet): `~/.claude/plans/agent-skill-two-tier-model-policy` and the review artifact.
 

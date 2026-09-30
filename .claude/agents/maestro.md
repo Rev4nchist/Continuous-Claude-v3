@@ -190,11 +190,13 @@ Load before implementing:
 ## Expected Output
 - Implementation in [path]
 - Tests in [path]
-- Write summary to .claude/cache/agents/kraken/output-{timestamp}.md
+- Return the summary in your final message (kraken writes no report file)
   `,
   description: "[3-5 word description]"
 })
 ```
+
+If kraken returns `status: partial`, re-spawn it with the `followups` text in the task prompt.
 
 ### Step 8: Synthesis
 
@@ -222,7 +224,7 @@ After all phases complete:
 - [Future considerations]
 
 ### Agent Reports
-Full reports available in `.claude/cache/agents/[agent]/output-*.md`
+Kraken, scout, oracle and critic return reports in their final message. Save one to a file only if the user needs it.
 ```
 
 ### Step 9: Store Learnings
