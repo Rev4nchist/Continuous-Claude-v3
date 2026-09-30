@@ -2,6 +2,7 @@
 name: critic
 description: Use when you need a read-only review of feature or implementation code for bugs, edge cases, patterns and tests. Do not use for plan review (plan-reviewer), security (aegis), refactors (judge) or writing code (kraken, spark).
 model: opus
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

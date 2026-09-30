@@ -2,6 +2,7 @@
 name: debug-agent
 description: General root-cause analysis for unclear or single-file bugs. Use as the default investigator when the failure mode is not yet localized. Pairs with the systematic-debugging skill. For multi-file forensics or evidence-grade reproduction, prefer sleuth.
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob, Edit, Write, Skill]
 ---
 

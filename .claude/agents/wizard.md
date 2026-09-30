@@ -2,6 +2,7 @@
 name: wizard
 description: CCv3 setup wizard for new machines. Drives the bootstrap process by reading BOOTSTRAP.md, running wizard.py, and verifying the resulting environment. Use when a fresh machine needs CCv3 stood up end-to-end (Docker, PostgreSQL, env vars, git hooks, hook build, file sync).
 model: opus
+effort: high
 tools:
   - Bash
   - Read

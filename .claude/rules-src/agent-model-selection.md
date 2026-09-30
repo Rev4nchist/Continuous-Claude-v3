@@ -11,25 +11,24 @@ Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where 
 
 ## The two tiers
 
-- **`model: opus`** = Opus (inherits the session effort; `~/.claude/settings.json` `modelSettings` pins Opus at high). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
+- **`model: opus`** = Opus, pinned `effort: high` like Sonnet (see below). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
 - **`model: sonnet`** = Sonnet. The **default** for execution: implementation (kraken, spark), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
 
-## Sonnet always runs at effort high
+## Agents always run at effort high
 
-Dave's rule (2026-09-30): Sonnet effort is `high`. Never `medium`, `low` or `xhigh`.
-- Every Sonnet agent carries `effort: high` in its frontmatter. Without it, the agent gets the
+Dave's rules (2026-09-30): Sonnet effort is `high`, never `medium`, `low` or `xhigh`. Opus agents are
+pinned `high` too, so review and planning quality does not depend on the main session's model.
+- Every agent (Opus and Sonnet) carries `effort: high` in its frontmatter. Without it, an agent gets the
   effort of the spawning session (`--effort`, else `modelSettings`). It does not read the settings
   `effortLevel`. Probe 2026-09-30: parent `--effort high` with user `effortLevel: medium` gave high;
   parent `--effort low` gave low.
 - Baseline before the pin: 46 of 99 Sonnet subagent runs medium, 5 low.
 - Proof: read `"effort":"<level>"` in the subagent transcript (`~/.claude/projects/<slug>/<session>/subagents/`).
-- Opus agents have no pin. They copy the parent, so they run high under an Opus or Sonnet parent at high
-  and lower under a parent at lower effort (probed: `--effort low`; [Speculation] a Fable session, `modelSettings` medium). A pin is Dave's decision.
 - `~/.claude/settings.json` `modelSettings` pins `claude-sonnet-5` and `claude-sonnet-5-5` at high for
   Sonnet main sessions.
 - A workflow `agent()` on Sonnet passes `effort: 'high'`. For Sonnet work through the Agent tool, use a
   predefined Sonnet agent (it carries the pin) rather than an ad-hoc `model: sonnet` call.
-- Gate: `node scripts/check-agent-model-drift.mjs` fails when a Sonnet agent lacks `effort: high`.
+- Gate: `node scripts/check-agent-model-drift.mjs` fails when any agent lacks `effort: high`.
 
 Tier by **judgment density**, not task size. Canonical map (37 agents, 12 Opus / 25 Sonnet): `~/.claude/plans/agent-skill-two-tier-model-policy` and the review artifact.
 

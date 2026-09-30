@@ -2,6 +2,7 @@
 name: architect
 description: Feature planning, design documentation, AND integration planning
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 

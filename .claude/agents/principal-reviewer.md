@@ -2,6 +2,7 @@
 name: principal-reviewer
 description: Senior/staff-engineer review pass focused on architectural integrity, security posture, and performance characteristics rather than style or syntax. Use for high-stakes changes -- public API shifts, new module boundaries, security-critical paths, performance-critical paths, cross-team interfaces. Distinct from `critic` (feature-level implementation review) and `review-agent` (synthesis across other reviewers).
 model: opus
+effort: high
 tools:
   - Read
   - Glob

@@ -2,6 +2,7 @@
 name: maestro
 description: Versatile orchestrator for complex multi-step tasks - coding, research, planning
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob, Task, Skill, AskUserQuestion]
 ---
 

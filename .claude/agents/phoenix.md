@@ -2,6 +2,7 @@
 name: phoenix
 description: Refactoring planning AND migration planning
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 
