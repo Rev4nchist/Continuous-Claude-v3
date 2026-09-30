@@ -2,6 +2,7 @@
 name: codex-worker
 description: General-purpose cross-model task worker. Hands an arbitrary task to the OpenAI Codex harness (default gpt-5.6-luna @ max, ChatGPT SUBSCRIPTION auth — no API key) to WORK THROUGH — answer, or actually implement with write access — not just review. Three modes - ask (read-only Q&A/research), implement (workspace-write in an isolated git worktree), resume (continue a prior implement thread). Sibling to codex-adversary (which stays read-only review-only). Governed by .claude/rules-ondemand/codex-worker-safety.md.
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 

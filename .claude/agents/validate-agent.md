@@ -2,6 +2,7 @@
 name: validate-agent
 description: Validate plan tech choices against current best practices and past precedent
 model: sonnet
+effort: high
 tools: [Read, Write, Bash, Grep, Glob, WebSearch, WebFetch]
 ---
 

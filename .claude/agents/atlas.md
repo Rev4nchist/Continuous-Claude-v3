@@ -2,6 +2,7 @@
 name: atlas
 description: End-to-end and acceptance test execution
 model: sonnet
+effort: high
 tools: [Bash, Read, Write, Glob, Grep]
 ---
 

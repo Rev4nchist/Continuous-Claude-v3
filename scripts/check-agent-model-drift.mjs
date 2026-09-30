@@ -4,7 +4,8 @@
  *
  * Treats each agent's `.md` frontmatter `model:` as CANONICAL and verifies:
  *   1. every agent .md has an EXPLICIT model in {opus, sonnet} — never omitted/inherit/haiku
- *   2. every .json sidecar's `model` matches its `.md` twin
+ *   2. every sonnet agent pins `effort: high` (Dave's rule: Sonnet is never medium or xhigh)
+ *   3. every .json sidecar's `model` matches its `.md` twin
  *      (the .json `model` is read at spawn by opc/scripts/claude_spawn.py and is NOT
  *       auto-synced from the .md, so it can silently drift)
  *
@@ -27,7 +28,8 @@ function frontmatterModel(mdText) {
   const block = mdText.slice(3, end);
   const m = block.match(/^model:\s*(.+)$/m);
   if (!m) return { model: undefined, reason: 'no-model-field' };
-  return { model: m[1].trim() };
+  const e = block.match(/^effort:\s*(.+)$/m);
+  return { model: m[1].trim(), effort: e ? e[1].trim() : undefined };
 }
 
 const errors = [];
@@ -37,12 +39,15 @@ const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
 for (const md of files) {
   const name = md.slice(0, -3);
   mdCount++;
-  const { model, reason } = frontmatterModel(readFileSync(join(agentsDir, md), 'utf8'));
+  const { model, effort, reason } = frontmatterModel(readFileSync(join(agentsDir, md), 'utf8'));
   if (model === undefined) { errors.push(`${name}.md: missing explicit model (${reason})`); continue; }
   if (model === 'haiku') { errors.push(`${name}.md: model=haiku is banned`); continue; }
   if (model === 'inherit') { errors.push(`${name}.md: model=inherit resolves to session model (Opus-on-everything) — pin a tier`); continue; }
   if (!ALLOWED.has(model)) { errors.push(`${name}.md: model="${model}" not in {opus, sonnet}`); continue; }
   if (model === 'opus') opus++; else sonnet++;
+  // Dave's rule (2026-09-30): Sonnet always runs at effort high. Without the pin a Sonnet agent
+  // inherits the spawning session's effort, which can be medium.
+  if (model === 'sonnet' && effort !== 'high') errors.push(`${name}.md: model=sonnet needs "effort: high" (found ${effort ?? 'none'})`);
 
   // .json sidecar parity (only the legacy CMA-mirror agents have one — check whichever exist)
   const jsonPath = join(agentsDir, `${name}.json`);

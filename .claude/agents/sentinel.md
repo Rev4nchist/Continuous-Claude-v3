@@ -2,6 +2,7 @@
 name: sentinel
 description: Browser-based QA and user acceptance testing agent. Drives a live browser to verify user flows end-to-end with auth-aware multi-role scenarios. Handles login as admin/editor/viewer, RBAC verification, console error capture, screenshot on failure, and accessibility audits. Use after implementing features to verify the UI works correctly.
 model: sonnet
+effort: high
 tools:
   - Bash
   - Read

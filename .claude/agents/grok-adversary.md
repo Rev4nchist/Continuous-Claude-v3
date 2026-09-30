@@ -2,6 +2,7 @@
 name: grok-adversary
 description: Cross-model adversarial reviewer. Invokes xAI Grok (default grok-4.5, override via GROK_ADVERSARY_MODEL env var) via the Grok Build CLI to challenge Claude's work from a third training family (distinct from both Claude and GPT-5.5/Codex). Use as a parallel agent in /review Phase 1, or as the adversarial step in /premortem. Two modes - code (default, reviews a git diff) and plan (reviews a markdown plan file). Read-only, review-only — never writes.
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 

@@ -940,5 +940,13 @@
     "anthropic-skills:skill-forge": "off"
   },
   "skillListingMaxDescChars": 2048,
-  "skillListingBudgetFraction": 0.05
+  "skillListingBudgetFraction": 0.05,
+  "modelSettings": {
+    "claude-sonnet-5": {
+      "effortLevel": "high"
+    },
+    "claude-sonnet-5-5": {
+      "effortLevel": "high"
+    }
+  }
 }

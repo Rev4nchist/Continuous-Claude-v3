@@ -2,6 +2,7 @@
 name: surveyor
 description: Migration and upgrade review
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

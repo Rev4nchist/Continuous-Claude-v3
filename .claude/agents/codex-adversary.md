@@ -2,6 +2,7 @@
 name: codex-adversary
 description: Cross-model adversarial reviewer. Invokes OpenAI Codex (default gpt-5.6-luna @ max, override via CODEX_ADVERSARY_MODEL env var) via the Codex CLI to challenge Claude's work from a different training family. Use as a parallel agent in /review Phase 1, or as the adversarial step in /premortem. Two modes - code (default, reviews a git diff) and plan (reviews a markdown plan file).
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 
