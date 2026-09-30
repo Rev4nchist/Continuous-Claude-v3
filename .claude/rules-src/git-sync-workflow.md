@@ -36,6 +36,10 @@ or in a linked worktree prints `Sync skipped` and changes nothing in `~/.claude`
 and rules are not live before review. After a PR merges and local `main` advances (a fast-forward
 fires no commit hook), run `bash scripts/sync-to-active.sh --changed` from `main`.
 
+The post-commit hook prints "Sync skipped" off `main` and logs the background sync to
+`~/.claude/logs/post-commit-sync.log`. After a commit on `main`, confirm `~/.claude/state/sync-cursor`
+equals `git rev-parse main`.
+
 `--changed` diffs from a cursor (`~/.claude/state/sync-cursor`, the last commit synced from main)
 to `HEAD`, so one run picks up every merged commit. A run that finds the lock held leaves
 `~/.claude/.sync.pending`, and the lock holder syncs those commits before it exits. A cursor that
@@ -59,20 +63,13 @@ bash ~/continuous-claude/scripts/sync-claude.sh --to-repo
 
 **Defense in depth:** `sync-claude.sh --to-repo` now **aborts if the repo has uncommitted changes** in the synced dirs (`rules/agents/skills/scripts/docs/hooks`) — so even a re-introduced or accidental reverse-sync can't clobber fresh repo work. Commit or stash repo edits before reverse-syncing.
 
-## Quick Workflow
+## Workflow
 
-```bash
-# 1. Make changes in continuous-claude
-cd ~/continuous-claude
-# edit files...
-
-# 2. Commit (auto-syncs to ~/.claude)
-git add .claude/
-git commit -m "feat: description"
-
-# 3. Push to remote
-git push
-```
+1. Branch off `main`: `git checkout -b feature/name`. No feature work on `main`.
+2. Commit on the branch. The hook prints "Sync skipped".
+3. Push to `fork` and open a PR.
+4. After Dave says merge, run `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
+5. Confirm the sync: `~/.claude/state/sync-cursor` equals `git rev-parse main`.
 
 ## Pull from Team
 
@@ -82,36 +79,11 @@ cd ~/continuous-claude && git pull
 bash ~/continuous-claude/scripts/sync-to-active.sh
 ```
 
-## Quick Fixes in ~/.claude
+## Edits in ~/.claude
 
-For urgent fixes made directly in ~/.claude:
-
-```bash
-# 1. Fix is auto-committed by git-auto-commit hook
-
-# 2. Sync back to repo when ready
-bash ~/continuous-claude/scripts/sync-claude.sh --to-repo
-
-# 3. Commit in repo
-cd ~/continuous-claude && git add .claude/ && git commit -m "fix: description"
-```
-
-## Branching in continuous-claude
-
-| Scenario | Branch? |
-|----------|---------|
-| Quick fix, simple rule | No |
-| New hook development | Yes |
-| Major refactor | Yes |
-| Experimental feature | Yes |
-
-```bash
-cd ~/continuous-claude
-git checkout -b feature/name
-# develop...
-git checkout main && git merge feature/name
-git branch -d feature/name
-```
+The next sync quarantines a direct edit or a hand copy in `~/.claude`, even when it is identical to
+the repo. Edit the repo instead. To keep an urgent active edit, run the reverse sync (above), then
+commit it on a branch.
 
 ## Key Commands
 
@@ -119,5 +91,5 @@ git branch -d feature/name
 |------|---------|
 | Manual forward sync | `bash ~/continuous-claude/scripts/sync-to-active.sh` |
 | Manual reverse sync | `bash ~/continuous-claude/scripts/sync-claude.sh --to-repo` |
-| Rebuild hooks | `cd ~/.claude/hooks && npm run build` |
+| Rebuild hooks | `cd ~/continuous-claude/.claude/hooks && npm run build` (never in `~/.claude/hooks`: stale `src`) |
 | Check repo status | `cd ~/continuous-claude && git status` |

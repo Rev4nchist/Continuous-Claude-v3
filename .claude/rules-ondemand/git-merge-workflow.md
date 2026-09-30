@@ -26,7 +26,11 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
 
 **For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
 It refuses unless `scripts/github/coderabbit-status.mjs` reports READY for the current head, merges
-with `sha=<head>`, fast-forwards `main`, syncs `~/.claude`, and removes the worktree and branches.
+with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. It syncs `~/.claude`
+only when the primary checkout is on `main`; otherwise it prints that it skipped. Then switch the
+primary checkout to `main` and run `scripts/sync-to-active.sh --changed` with Git Bash
+(`C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe`; `bash` on PATH is WSL). Never
+hand-copy a synced file into `~/.claude`: the next sync quarantines it.
 
 ## Gotchas (all real, all hit 2026-07-06)
 

@@ -17,6 +17,8 @@ Check CodeRabbit on the PR via the REST API. Use `GH_CONFIG_DIR` for the repo's 
 - A CodeRabbit review or walkthrough comment exists. Stop, then act (below).
 - 60 minutes pass with none. Stop. Report: "no CodeRabbit activity; check the app is installed on
   the repo."
+- A rate-limit notice ("Review rate limited", "Review limit reached") is not a review. Stop.
+  Report: "CodeRabbit rate limited, head not reviewed".
 
 ## When the review lands
 
@@ -37,13 +39,21 @@ reviewed the CURRENT head commit, 0 threads unresolved, checks green, `mergeable
 merge was once called safe 92 s before CodeRabbit found a real defect on the new head.
 
 A green `CodeRabbit` commit status is not a review. When CodeRabbit hits its review limit it still
-reports success and posts "Review limit reached". Wait for the limit to reset and comment
-`@coderabbitai review`. **Never click or request the paid on-demand review.**
+reports success and posts "Review limit reached" or "Review rate limited".
 
-When Dave says merge, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
-through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, syncs
-`~/.claude`, and removes the worktree and branches. Every step is idempotent; re-run it after a
-partial failure.
+After that notice, CodeRabbit refuses `@coderabbitai review`. The command works only when automatic
+reviews are paused. It failed twice on PR #67 (16:35 and 16:59 UTC, 2026-09-30). Do not post it.
+Report "CodeRabbit rate limited, head not reviewed" to Dave. With his merge yes, post the reason on
+the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #67 precedent). **Never click or request
+the paid on-demand review.** Do not claim a new push re-triggers review: this is unverified.
+
+When Dave says merge for a reviewed PR, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
+through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, and
+removes the worktree and branches. It syncs `~/.claude` only when the primary checkout is on `main`.
+Otherwise it prints that it skipped the sync. Then switch the primary checkout to `main`. Run
+`scripts/sync-to-active.sh --changed` with Git Bash (`C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe`;
+`bash` on PATH is WSL). Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
+Every step is idempotent; re-run after a partial failure.
 
 ## Thread state — verify, do not trust the bot's text
 

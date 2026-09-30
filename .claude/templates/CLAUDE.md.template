@@ -151,7 +151,7 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
   principal-reviewer). Main context coordinates; agents do the reading. The full delegation rule loads at the first Agent spawn.
 - **Models**: predefined agents carry an explicit tier: `opus` for judgment (planning, review,
   orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
-  **Never haiku.** Never set `CLAUDE_CODE_SUBAGENT_MODEL`. Use `scout`, never `Explore`.
+  **Never haiku.** Sonnet effort is always `high`. Never set `CLAUDE_CODE_SUBAGENT_MODEL`. Use `scout`, never `Explore`.
 - **Parallel agents that commit to one repo run one after another** (they race on
   `.git/index.lock`), unless each has its own worktree. State file ownership up front.
 - **The same edit in N files: N parallel sparks**, one file each, not one spark for N files.

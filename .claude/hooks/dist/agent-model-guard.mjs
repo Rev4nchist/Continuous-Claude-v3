@@ -2,17 +2,18 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/agent-model-guard.ts
-import { readFileSync, existsSync, readdirSync } from "fs";
-import { join } from "path";
+import { readFileSync, readdirSync, statSync, realpathSync } from "fs";
+import { join, isAbsolute } from "path";
 import { homedir } from "os";
-var AGENTS_DIR = join(homedir(), ".claude", "agents");
+import { fileURLToPath } from "url";
 var BUILTIN_AGENTS = /* @__PURE__ */ new Set([
   "Bash",
   "general-purpose",
   "Explore",
   "Plan",
   "statusline-setup",
-  "claude-code-guide"
+  "claude-code-guide",
+  "claude"
 ]);
 function readStdin() {
   return readFileSync(0, "utf-8");
@@ -36,10 +37,33 @@ function outputBlock(reason) {
   };
   console.log(JSON.stringify(output));
 }
-function getAvailableAgents() {
+function agentDirs(cwd, env) {
+  const roots = [typeof cwd === "string" ? cwd : void 0, env.projectDir];
+  const dirs = [];
+  for (const root of roots) {
+    if (root && isAbsolute(root)) dirs.push(join(root, ".claude", "agents"));
+  }
+  dirs.push(join(env.home, ".claude", "agents"));
+  const seen = /* @__PURE__ */ new Set();
+  return dirs.filter((d) => {
+    const key = d.replace(/\\/g, "/");
+    if (seen.has(key)) return false;
+    seen.add(key);
+    return true;
+  });
+}
+function fileExists(path) {
   try {
-    if (!existsSync(AGENTS_DIR)) return [];
-    return readdirSync(AGENTS_DIR).filter((f) => f.endsWith(".md")).map((f) => f.replace(".md", ""));
+    return statSync(path).isFile();
+  } catch (e) {
+    const code = e.code;
+    if (code === "ENOENT" || code === "ENOTDIR") return false;
+    throw e;
+  }
+}
+function listAgents(dir) {
+  try {
+    return readdirSync(dir).filter((f) => f.endsWith(".md")).map((f) => f.slice(0, -3));
   } catch {
     return [];
   }
@@ -76,7 +100,34 @@ function levenshteinDistance(a, b) {
   }
   return matrix[b.length][a.length];
 }
-async function main() {
+function decide(input, env) {
+  if (input?.tool_name !== "Agent" && input?.tool_name !== "Task") return { allow: true };
+  const agentType = input.tool_input?.subagent_type;
+  if (typeof agentType !== "string" || !agentType) return { allow: true };
+  if (BUILTIN_AGENTS.has(agentType) || agentType.includes(":")) return { allow: true };
+  try {
+    const dirs = agentDirs(input.cwd, env);
+    const safeName = !/[\\/]|\.\./.test(agentType);
+    if (safeName) {
+      for (const dir of dirs) {
+        if (fileExists(join(dir, `${agentType}.md`))) return { allow: true };
+      }
+    }
+    const available = [...new Set(dirs.flatMap(listAgents))];
+    const similar = findSimilarAgents(agentType, available);
+    let message = `Agent "${agentType}" not found in ${dirs.join(" or ")}`;
+    if (similar.length > 0) message += `
+
+Did you mean: ${similar.join(", ")}?`;
+    message += `
+
+Available custom agents: ${available.slice(0, 10).join(", ")}${available.length > 10 ? "..." : ""}`;
+    return { allow: false, reason: message };
+  } catch {
+    return { allow: true };
+  }
+}
+function main() {
   let input;
   try {
     input = JSON.parse(readStdin());
@@ -84,37 +135,26 @@ async function main() {
     outputContinue();
     return;
   }
-  if (input.tool_name !== "Agent" && input.tool_name !== "Task") {
-    outputContinue();
-    return;
-  }
-  const agentType = input.tool_input?.subagent_type;
-  if (!agentType) {
-    outputContinue();
-    return;
-  }
-  if (BUILTIN_AGENTS.has(agentType)) {
-    outputContinue();
-    return;
-  }
-  const agentFile = join(AGENTS_DIR, `${agentType}.md`);
-  if (existsSync(agentFile)) {
-    outputContinue();
-    return;
-  }
-  const available = getAvailableAgents();
-  const similar = findSimilarAgents(agentType, available);
-  let message = `Agent "${agentType}" not found at ${agentFile}`;
-  if (similar.length > 0) {
-    message += `
-
-Did you mean: ${similar.join(", ")}?`;
-  }
-  message += `
-
-Available custom agents: ${available.slice(0, 10).join(", ")}${available.length > 10 ? "..." : ""}`;
-  outputBlock(message);
+  const decision = decide(input, { home: homedir(), projectDir: process.env.CLAUDE_PROJECT_DIR });
+  if (decision.allow) outputContinue();
+  else outputBlock(decision.reason);
 }
-main().catch(() => {
-  outputContinue();
-});
+function isDirectRun() {
+  try {
+    return !!process.argv[1] && realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url));
+  } catch {
+    return false;
+  }
+}
+if (isDirectRun()) {
+  try {
+    main();
+  } catch {
+    outputContinue();
+  }
+}
+export {
+  BUILTIN_AGENTS,
+  agentDirs,
+  decide
+};
