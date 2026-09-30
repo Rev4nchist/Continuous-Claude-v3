@@ -1,6 +1,6 @@
 # Session Dashboard
 
-Live observability panel for Continuous Claude. Monitors the 7 pillars of the system in real time with WebSocket updates, detail panels, and keyboard navigation.
+Live observability panel for Continuous Claude. Monitors the 9 pillars of the system in real time with WebSocket updates, detail panels, and keyboard navigation.
 
 ## Quick Start
 
@@ -50,7 +50,7 @@ Browser (React + shadcn/ui)
     |-- WebSocket (real-time)
     |
 FastAPI (port 3434)
-    |-- 9 routers (API endpoints)
+    |-- 14 routers (API endpoints)
     |-- 9 services (pillar health checks)
     |-- WebSocket manager (pub/sub by project)
     |-- Health monitor (background task)
@@ -88,7 +88,7 @@ All endpoints return JSON. No authentication required (localhost only).
 
 | Method | Path | Description |
 |--------|------|-------------|
-| GET | `/api/health` | Health status of all 7 pillars |
+| GET | `/api/health` | Health status of all 9 pillars |
 | GET | `/api/health/{pillar}` | Detailed health + stats for one pillar |
 | GET | `/api/pillars/memory/learnings` | List learnings (paginated, searchable, filterable by type) |
 | GET | `/api/pillars/memory/learnings/{id}` | Single learning by UUID |
@@ -153,7 +153,7 @@ Press a key anywhere (outside text inputs) to open the corresponding detail pane
 | `App` | `frontend/src/App.tsx` | Root: routing, shortcuts, WebSocket, polling |
 | `Header` | `components/layout/Header.tsx` | Top bar: connection status, refresh, guide link |
 | `ThemeToggle` | `components/layout/ThemeToggle.tsx` | Dark/light mode switch |
-| `PillarGrid` | `components/pillars/PillarGrid.tsx` | 7-card grid layout |
+| `PillarGrid` | `components/pillars/PillarGrid.tsx` | 9-card grid layout |
 | `PillarCard` | `components/pillars/PillarCard.tsx` | Individual pillar status card |
 | `MemoryDetail` | `components/pillars/MemoryDetail.tsx` | Learning browser with search and filters |
 | `KnowledgeDetail` | `components/pillars/KnowledgeDetail.tsx` | Knowledge tree viewer |
@@ -179,7 +179,7 @@ dashboard/
 ├── main.py              # FastAPI app, CLI, lifespan
 ├── config.py            # Settings (env vars, logging)
 ├── models.py            # Pydantic models
-├── routers/             # 9 API route modules
+├── routers/             # 14 API route modules
 │   ├── health.py        # /api/health
 │   ├── memory.py        # /api/pillars/memory/*
 │   ├── knowledge.py     # /api/pillars/knowledge/*
@@ -189,7 +189,7 @@ dashboard/
 │   ├── ralph.py         # /api/pillars/ralph/*
 │   ├── system_health.py # /api/system-health/*
 │   └── sessions.py      # /api/sessions/*
-├── services/            # 8 pillar service implementations
+├── services/            # 9 pillar service implementations
 │   ├── base.py          # BasePillarService ABC
 │   ├── memory.py
 │   ├── knowledge.py

@@ -88,11 +88,10 @@ $CLAUDE_PROJECT_DIR/.claude/cache/agents/spark/output-{timestamp}.md
 
 ## Step 5: Pre-Completion Verification
 
-If you edited any file matching `.claude/hooks/src/*.ts`, you MUST run the hook tests and the build before declaring completion. Run both in `.claude/hooks`:
+If you edited any file matching `.claude/hooks/src/*.ts`, you MUST run the hook tests and the build before declaring completion. Run both from the repo root:
 
 ```bash
-npx vitest run
-npm run build
+cd .claude/hooks && npx vitest run && npm run build
 ```
 
 Interpret the result by exit code:

@@ -58,7 +58,7 @@ flowchart TB
     rules -->|"rule text at the first matching call"| hooks
     memory -->|"recalled learnings, file claims"| hooks
     hooks -->|"added context"| loop
-    hooks -->|"spans, outcomes, fire logs"| traces
+    hooks -->|"outcomes, fire logs"| traces
     loop -->|"spawn"| agents
     agents -->|"adversarial review"| codex
 ```
@@ -66,7 +66,7 @@ flowchart TB
 The model proposes and the harness decides. Each tool call goes through the hook layer before it
 runs. A hook can allow the call, ask the operator, or deny it with a reason. Hooks also add
 context: a rule at the first call that needs it, or a stored learning that matches the prompt.
-After the call, hooks record spans, outcomes and log lines. The model sees only the context the
+After the call, hooks record outcomes and log lines. The model sees only the context the
 task needs, and every decision leaves a record.
 
 ## The layers
