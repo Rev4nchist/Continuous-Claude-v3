@@ -14,24 +14,35 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ALLOWED = new Set(['opus', 'sonnet']);
-const repoRoot = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
-const agentsDir = join(repoRoot, '.claude', 'agents');
 
-function frontmatterModel(mdText) {
+export function frontmatterModel(mdText) {
   // frontmatter must start at byte 0 with ---
   if (!mdText.startsWith('---')) return { model: undefined, reason: 'no-frontmatter' };
   const end = mdText.indexOf('\n---', 3);
   if (end === -1) return { model: undefined, reason: 'unterminated-frontmatter' };
   const block = mdText.slice(3, end);
-  const m = block.match(/^model:\s*(.+)$/m);
-  if (!m) return { model: undefined, reason: 'no-model-field' };
-  const e = block.match(/^effort:\s*(.+)$/m);
-  return { model: m[1].trim(), effort: e ? e[1].trim() : undefined };
+  const model = scalar(block, 'model');
+  if (model === undefined) return { model: undefined, reason: 'no-model-field' };
+  return { model, effort: scalar(block, 'effort') };
 }
 
+// One-line YAML scalar without a YAML dependency: drops a trailing `# comment` and one pair of
+// matching quotes, so `effort: "high"` and `effort: high  # why` both read as `high`.
+function scalar(block, key) {
+  const m = block.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
+  if (!m) return undefined;
+  const v = m[1].trim();
+  const q = v.match(/^(["'])(.*?)\1/);
+  if (q) return q[2].trim();
+  return v.replace(/\s+#.*$/, '').trim();
+}
+
+function main() {
+const repoRoot = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
+const agentsDir = join(repoRoot, '.claude', 'agents');
 const errors = [];
 let mdCount = 0, opus = 0, sonnet = 0;
 const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
@@ -65,3 +76,6 @@ if (errors.length) {
   process.exit(1);
 }
 console.log('OK — every agent explicit, no haiku/inherit, all .json sidecars in parity.');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();
