@@ -45,15 +45,15 @@ Identify all technical decisions from the plan:
 - APIs or external services used
 - Implementation approaches
 
-## Step 4: Check Past Precedent (RAG-Judge)
+## Step 4: Check Past Precedent
 
-Query the Artifact Index for relevant past work:
+Search memory for relevant past work:
 
 ```bash
-uv run python scripts/braintrust_analyze.py --rag-judge --plan-file <plan-path>
+cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "<plan topic>" --k 3 --text-only
 ```
 
-Note: If the script doesn't exist or fails, skip this step and note it in your handoff.
+Note: If the script fails, skip this step and note it in your handoff.
 
 ## Step 5: Research Each Choice
 
@@ -93,7 +93,7 @@ Generated: [timestamp]
 
 ## Precedent Check
 **Verdict:** [PASS | FAIL | SKIPPED]
-[Findings from RAG-Judge or note if skipped]
+[Findings from memory recall or note if skipped]
 
 ## Tech Choices Validated
 

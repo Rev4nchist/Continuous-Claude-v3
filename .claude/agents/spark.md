@@ -68,7 +68,7 @@ npx tsc --noEmit path/to/file.ts
 
 CRITICAL — Read this before editing any TypeScript hook in `.claude/hooks/src/`.
 
-1. **Use minimal-diff Edit, never whole-file regeneration.** The `void emitBraintrustScore(...)` block in `memory-awareness.ts` has been silently dropped 5 times by sparks that used Write (whole-file regeneration) instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
+1. **Use minimal-diff Edit, never whole-file regeneration.** Sparks that used Write (whole-file regeneration) have silently dropped earlier additions from hook files instead of targeted Edit with exact `old_string` matching. If the change feels like it needs a full rewrite, STOP and escalate to Kraken.
 
 2. **Verify every TS hook edit at write time.** After every Edit on a file under `.claude/hooks/src/`, run:
    ```bash
@@ -89,17 +89,15 @@ $CLAUDE_PROJECT_DIR/.claude/cache/agents/spark/output-{timestamp}.md
 
 ## Step 5: Pre-Completion Verification
 
-If you edited any file matching `.claude/hooks/src/*.ts`, you MUST run the emit-invariant guard before declaring completion:
+If you edited any file matching `.claude/hooks/src/*.ts`, you MUST run the hook tests and the build before declaring completion. Run both from the repo root:
 
 ```bash
-bash scripts/audit-braintrust-emits.sh
+cd .claude/hooks && npx vitest run && npm run build
 ```
 
-Interpret the output by exit code AND first line:
-- Exit 0 + `OK: Emit count matches invariant` → include `Audit: PASS` in your output.
-- Exit 0 + `WARN:` → include `Audit: WARN (more emits than invariant — flag to orchestrator)` in your output. Do not treat as a blocker, but explain in your Notes that you may have added a new dimension that needs the invariant raised. **Do not raise the invariant yourself** — that is a deliberate orchestrator decision.
-- Exit 1 + `FAIL: Regression detected` → STOP. You have silently dropped an `emitBraintrustScore(...)` call. Report the failure to the orchestrator with the file and line number of your edits. Do NOT modify the audit script. Do NOT pass `--accept-new-invariant` or any other flag. Do NOT re-run the script after editing more code in an attempt to "fix" the count. Recovery is the orchestrator's job, not yours.
-- Any other exit code → include `Audit: ERROR (script crashed unexpectedly)` and report the full stdout+stderr to the orchestrator.
+Interpret the result by exit code:
+- Both exit 0 → include `Hook check: PASS` in your output.
+- Either exits non-zero → STOP. Report the failing command and its last output lines to the orchestrator. Do NOT edit tests to make them pass. Do NOT re-run after more edits to "fix" the result. Recovery is the orchestrator's job, not yours.
 
 ## Return Contract (final message — 07-02 R2)
 
@@ -111,12 +109,12 @@ End it with exactly one fenced JSON block matching:
   "agent": "spark",
   "status": "complete | partial | blocked",
   "files_changed": ["<path>"],
-  "verification": {"check": "<what was run: syntax/test/audit>", "result": "PASS | FAIL", "evidence": "<the actual output line>"},
+  "verification": {"check": "<what was run: syntax/test/build>", "result": "PASS | FAIL", "evidence": "<the actual output line>"},
   "followups": []
 }
 ```
 
-`verification.evidence` is the runner's real output — never a paraphrase. If the emit-audit failed, status is `blocked`, never `complete`.
+`verification.evidence` is the runner's real output — never a paraphrase. If the hook tests or the build failed, status is `blocked`, never `complete`.
 
 ## Output Format
 
@@ -132,7 +130,7 @@ Generated: [timestamp]
 ## Verification
 - Syntax check: PASS/FAIL
 - Pattern followed: [Which pattern]
-- Audit script result: PASS/WARN/FAIL/ERROR/N/A (N/A if no .claude/hooks/src/*.ts files touched)
+- Hook check (vitest + build): PASS/FAIL/N/A (N/A if no .claude/hooks/src/*.ts files touched)
 
 ## Files Modified
 1. `path/to/file.ext` - [brief description]
@@ -149,5 +147,5 @@ Generated: [timestamp]
 4. **Be fast** - minimize tool calls
 5. **Know limits** - escalate to Kraken if change grows in scope
 6. **Write to output file** - don't just return text
-7. **Never modify guard or audit scripts.** If `scripts/audit-braintrust-emits.sh` (or any script named `audit-*`, `verify-*`, `guard-*`) reports an error, fix the underlying code, NOT the script. Do not lower invariants, raise thresholds, or suppress warnings. If the guard truly needs updating (e.g., legitimate new score dimension), STOP and escalate to the orchestrator.
+7. **Never modify guard or audit scripts.** If a guard script (any script named `audit-*`, `verify-*`, `guard-*`) reports an error, fix the underlying code, NOT the script. Do not lower invariants, raise thresholds, or suppress warnings. If the guard truly needs updating (e.g., legitimate new score dimension), STOP and escalate to the orchestrator.
 8. **Never edit a file outside the explicit Files list in your prompt.** If you find yourself "verifying" or "checking" a sibling file with Edit/Write, STOP — Read is fine, mutations are not.

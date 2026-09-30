@@ -1,6 +1,6 @@
 ---
 name: mot
-description: "System health check for skills, agents, hooks, memory, and Braintrust. Use when the user says \"run mot\", \"health check\", \"/mot\" or asks to audit the system."
+description: "System health check for skills, agents, hooks, and memory. Use when the user says \"run mot\", \"health check\", \"/mot\" or asks to audit the system."
 disable-model-invocation: true
 allowed-tools: [Read, Bash, Glob, Grep]
 metadata:
@@ -14,15 +14,14 @@ Run comprehensive health checks on all Claude Code components.
 ## Usage
 
 ```
-/mot              # Full audit (all 8 phases)
+/mot              # Full audit (all 7 phases)
 /mot skills       # Just skills
 /mot agents       # Just agents
 /mot hooks        # Just hooks
 /mot memory       # Just memory system
-/mot state        # Just state management (phases 4,6,7,8)
+/mot state        # Just state management (phases 4,6,7)
 /mot roadmap      # Just ROADMAP
 /mot tree         # Just knowledge tree
-/mot braintrust   # Just Braintrust tracing
 /mot --fix        # Auto-fix simple issues
 /mot --quick      # P0 checks only (fast)
 ```
@@ -69,11 +68,6 @@ Full bash scripts for each phase: `references/audit-scripts.md`
 - Age <= 24h (WARN if older)
 - Schema validation passes
 
-### Phase 8: Braintrust Tracing Health
-- If `TRACE_TO_BRAINTRUST=true`: `BRAINTRUST_API_KEY` must also be set
-- Session trace file count <= 100 (WARN if more — cleanup needed)
-- Hook log error count <= 10
-
 ## Auto-Fix (--fix flag)
 
 Automatically remediates:
@@ -81,7 +75,6 @@ Automatically remediates:
 2. `cd .claude/hooks && npm run build` — rebuild if TS newer than dist
 3. `mkdir -p .claude/cache/agents/{scout,kraken,oracle,spark} .claude/cache/mot` — missing dirs
 4. Regenerate knowledge tree if stale or missing
-5. `chmod +x .claude/plugins/braintrust-tracing/hooks/*.sh` — Braintrust wrappers
 
 Full auto-fix scripts: `references/audit-scripts.md`
 
@@ -103,7 +96,6 @@ Generated: {timestamp}
 | X-Refs     | 0    | 0    | 2    |
 | ROADMAP    | 2    | 0    | 1    |
 | Tree       | 3    | 0    | 0    |
-| Braintrust | 1    | 0    | 1    |
 
 ## Issues Found
 
@@ -119,7 +111,6 @@ Generated: {timestamp}
 
 ### P3 - Low
 - [INFO] VOYAGE_API_KEY not set (using local BGE)
-- [INFO] Braintrust tracing disabled
 ```
 
 ## Exit Codes

@@ -81,7 +81,7 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 | Pattern | Tools |
 |---------|-------|
 | Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, codex, grok, ntn (Notion) |
-| Python harness via uv run | ast-grep, morph, braintrust, github-search |
+| Python harness via uv run | ast-grep, morph, github-search |
 | MCP server | Playwright MCP, Notion, Paper, Exa, Neon, Vercel Cloud, Linear, Sentry |
 | Claude Code plugin | codex-plugin-cc (slash commands `/codex:*`) |
 | Agent delegation | deployer (Vercel + Railway + Sentry + Linear), arbiter/atlas (tests), codex-adversary (cross-model review via Codex CLI) |

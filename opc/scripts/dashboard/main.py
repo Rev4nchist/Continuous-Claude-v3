@@ -27,7 +27,6 @@ from dashboard.routers.knowledge import router as knowledge_router
 from dashboard.routers.memory import router as memory_router
 from dashboard.routers.pageindex import router as pageindex_router
 from dashboard.routers.ralph import router as ralph_router
-from dashboard.routers.braintrust import router as braintrust_router
 from dashboard.routers.roadmap import router as roadmap_router
 from dashboard.routers.skills import router as skills_router
 from dashboard.routers.hook_events import router as hook_events_router
@@ -97,7 +96,6 @@ app.include_router(knowledge_router)
 app.include_router(memory_router)
 app.include_router(pageindex_router)
 app.include_router(ralph_router)
-app.include_router(braintrust_router)
 app.include_router(roadmap_router)
 app.include_router(system_health_router)
 app.include_router(sessions_router)

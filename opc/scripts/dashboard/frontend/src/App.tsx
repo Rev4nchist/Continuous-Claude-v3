@@ -19,7 +19,6 @@ const PageIndexDetail = lazy(() => import('@/components/pillars/PageIndexDetail'
 const RoadmapDetail = lazy(() => import('@/components/pillars/RoadmapDetail').then(m => ({ default: m.RoadmapDetail })))
 const HandoffsDetail = lazy(() => import('@/components/pillars/HandoffsDetail').then(m => ({ default: m.HandoffsDetail })))
 const RalphDetail = lazy(() => import('@/components/pillars/RalphDetail').then(m => ({ default: m.RalphDetail })))
-const BraintrustDetail = lazy(() => import('@/components/pillars/BraintrustDetail').then(m => ({ default: m.BraintrustDetail })))
 const SkillsDetail = lazy(() => import('@/components/pillars/SkillsDetail'))
 const SystemHealthDetail = lazy(() => import('@/components/pillars/SystemHealthDetail').then(m => ({ default: m.SystemHealthDetail })))
 const SessionsDetail = lazy(() => import('@/components/pillars/SessionsDetail').then(m => ({ default: m.SessionsDetail })))
@@ -194,7 +193,7 @@ function App() {
 
       const keyMap: Record<string, string> = {
         m: 'memory', k: 'knowledge', p: 'pageindex',
-        r: 'roadmap', h: 'handoffs', a: 'ralph', b: 'braintrust',
+        r: 'roadmap', h: 'handoffs', a: 'ralph',
         i: 'skills', x: 'system-health', s: 'sessions', g: 'agents',
         c: 'mcp-servers',
       }
@@ -370,29 +369,6 @@ function App() {
             </button>
 
             <button
-              onClick={() => setActiveDetail('braintrust')}
-              className="group flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
-            >
-              <div className="flex h-10 w-10 items-center justify-center rounded-lg bg-violet-500/10 text-violet-500">
-                <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                  <path
-                    strokeLinecap="round"
-                    strokeLinejoin="round"
-                    strokeWidth={1.5}
-                    d="M3 13h2v8H3zm6-4h2v12H9zm6-3h2v15h-2zm6-3h2v18h-2z"
-                  />
-                </svg>
-              </div>
-              <div className="flex-1">
-                <p className="font-medium">Braintrust Evals</p>
-                <p className="text-xs text-muted-foreground">Session analytics</p>
-              </div>
-              <svg className="h-4 w-4 text-muted-foreground transition-transform group-hover:translate-x-1" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M9 5l7 7-7 7" />
-              </svg>
-            </button>
-
-            <button
               onClick={() => setActiveDetail('system-health')}
               className="group flex items-center gap-3 rounded-lg border border-border bg-card p-4 transition-colors hover:bg-muted/50 focus-visible:outline-none focus-visible:ring-2 focus-visible:ring-ring focus-visible:ring-offset-2 focus-visible:ring-offset-background"
             >
@@ -525,10 +501,6 @@ function App() {
         />
         <RalphDetail
           open={activeDetail === 'ralph'}
-          onOpenChange={(open) => !open && setActiveDetail(null)}
-        />
-        <BraintrustDetail
-          open={activeDetail === 'braintrust'}
           onOpenChange={(open) => !open && setActiveDetail(null)}
         />
         <SkillsDetail

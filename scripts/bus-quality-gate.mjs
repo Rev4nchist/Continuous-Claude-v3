@@ -59,7 +59,6 @@ const CASES = [
   { intent: 'redact secrets in telemetry before they reach disk', focus: ['intel-bus', 'redactSecretsDeep', 'appendIntelBus'] },
   { intent: 'bias memory recall with the session working set', focus: ['bus-focus', 'extractBusFocus', 'memory-awareness'] },
   { intent: 'agent recall injector should read the context bus', focus: ['agent-recall-injector', 'handleAgentTask', 'readBus'] },
-  { intent: 'emit braintrust score reachability invariant', focus: ['memory-awareness', 'emitBraintrustScore'] },
   { intent: 'knowledge tree regeneration unicode crash on windows', focus: ['knowledge_tree', 'tree_schema'] },
   { intent: 'ralph state checkpoint and scheduler', focus: ['ralph-state', 'ralph-checkpoint', 'ralph-scheduler'] },
   { intent: 'codex adversary cross model review setup', focus: ['codex-adversary', 'review'] },
@@ -73,7 +72,7 @@ const CASES = [
 // these reference existing content by topic (provenance: this project's own MEMORY.md learnings).
 const STRONG_CASES = [
   { intent: 'Nia MCP config priority mcp.json overrides claude mcp.json', focus: ['nia-mcp', 'mcp.json'] },
-  { intent: 'hook source regression dual cause ralph loop sync asymmetry', focus: ['memory-awareness', 'sync-claude', 'emitBraintrustScore'] },
+  { intent: 'hook source regression dual cause ralph loop sync asymmetry', focus: ['memory-awareness', 'sync-claude'] },
   { intent: 'knowledge tree unicode crash windows cp1252 ascii only', focus: ['knowledge_tree', 'PYTHONUTF8'] },
   { intent: 'never use haiku model for agents inherit opus', focus: ['no-haiku', 'agent-model-selection'] },
   { intent: 'paste ready deliverables no blockquote markdown for slack', focus: ['paste-ready-deliverables'] },

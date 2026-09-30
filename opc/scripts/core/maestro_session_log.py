@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Maestro Session Logger - Log orchestration sessions to Braintrust.
+"""Maestro Session Logger - Log orchestration sessions locally.
 
 Creates session-level logs for Maestro orchestrations including:
 - Original prompt and complexity score
@@ -39,35 +39,22 @@ USAGE:
         --session-id <id> \
         --outcome success
 
-ENVIRONMENT:
-    BRAINTRUST_API_KEY - API key for Braintrust
-    BRAINTRUST_CC_PROJECT - Project name (default: claude-code)
+Sessions are stored under ~/.claude/state/maestro_sessions/. No remote upload.
 """
 
 from __future__ import annotations
 
 import argparse
 import json
-import os
 import sys
 import uuid
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import Any
 
-try:
-    import httpx
-    HTTPX_AVAILABLE = True
-except ImportError:
-    HTTPX_AVAILABLE = False
-
 # Config
 STATE_DIR = Path.home() / ".claude" / "state" / "maestro_sessions"
 LOG_FILE = Path.home() / ".claude" / "state" / "maestro_session.log"
-
-API_KEY = os.environ.get("BRAINTRUST_API_KEY", "")
-PROJECT = os.environ.get("BRAINTRUST_CC_PROJECT", "claude-code")
-API_URL = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
 
 
 def ensure_dirs():
@@ -108,38 +95,6 @@ def save_session(session_id: str, data: dict[str, Any]):
     ensure_dirs()
     state_file = STATE_DIR / f"{session_id}.json"
     state_file.write_text(json.dumps(data, indent=2))
-
-
-def send_to_braintrust(data: dict[str, Any]) -> bool:
-    """Send session data to Braintrust."""
-    if not API_KEY:
-        log("INFO", "No BRAINTRUST_API_KEY, skipping upload")
-        return False
-
-    if not HTTPX_AVAILABLE:
-        log("INFO", "httpx not available, skipping upload")
-        return False
-
-    try:
-        headers = {
-            "Authorization": f"Bearer {API_KEY}",
-            "Content-Type": "application/json",
-        }
-        response = httpx.post(
-            f"{API_URL}/v1/project/{PROJECT}/logs",
-            headers=headers,
-            json=data,
-            timeout=10.0,
-        )
-        if response.status_code == 200:
-            log("INFO", f"Logged to Braintrust: {data.get('session_id', 'unknown')}")
-            return True
-        else:
-            log("ERROR", f"Braintrust API error: {response.status_code}")
-            return False
-    except Exception as e:
-        log("ERROR", f"Braintrust upload failed: {e}")
-        return False
 
 
 def cmd_start(args):
@@ -226,7 +181,7 @@ def cmd_override(args):
 
 
 def cmd_end(args):
-    """End session and optionally upload to Braintrust."""
+    """End session and save the outcome locally."""
     session = load_session(args.session_id)
     if not session:
         print(json.dumps({"error": "Session not found"}))
@@ -237,11 +192,6 @@ def cmd_end(args):
     session["learnings_stored"] = args.learnings_stored
 
     save_session(args.session_id, session)
-
-    # Upload to Braintrust
-    if args.upload:
-        success = send_to_braintrust(session)
-        session["uploaded_to_braintrust"] = success
 
     log("INFO", f"Ended session: {args.session_id} ({args.outcome})")
 
@@ -301,7 +251,7 @@ def main():
     end_parser.add_argument("--session-id", required=True, help="Session ID")
     end_parser.add_argument("--outcome", choices=["success", "failure", "partial"], required=True)
     end_parser.add_argument("--learnings-stored", action="store_true", help="Whether learnings were stored")
-    end_parser.add_argument("--upload", action="store_true", help="Upload to Braintrust")
+    end_parser.add_argument("--upload", action="store_true", help="Deprecated, ignored (remote upload removed)")
 
     # show
     show_parser = subparsers.add_parser("show", help="Show session details")

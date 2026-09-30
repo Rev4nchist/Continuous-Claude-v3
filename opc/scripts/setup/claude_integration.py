@@ -383,7 +383,6 @@ def generate_migration_guidance(
 # Root scripts used by skills/hooks - shared between copy and symlink install
 ROOT_SCRIPTS = [
     "ast_grep_find.py",          # /ast-grep-find skill
-    "braintrust_analyze.py",     # session-end-cleanup hook
     "qlty_check.py",             # /qlty-check skill
     "research_implement_pipeline.py",  # /mcp-chaining skill
     "test_research_pipeline.py", # /mcp-chaining skill
@@ -514,7 +513,7 @@ def install_opc_integration(
             shutil.copytree(opc_servers, target_servers)
             result["installed_servers"] = len(list(target_servers.glob("*")))
 
-        # Copy plugins (e.g., braintrust-tracing)
+        # Copy plugins (if any)
         opc_plugins = opc_source / "plugins"
         target_plugins = target_dir / "plugins"
         if opc_plugins.exists():

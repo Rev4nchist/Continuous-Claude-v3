@@ -246,41 +246,6 @@ else
 fi
 ```
 
-## Phase 8: Braintrust Tracing Health
-
-```bash
-echo "=== BRAINTRUST TRACING ==="
-[ "$TRACE_TO_BRAINTRUST" = "true" ] && echo "PASS: TRACE_TO_BRAINTRUST=true" \
-                                     || echo "INFO: Tracing disabled (TRACE_TO_BRAINTRUST != true)"
-
-if [ -n "$BRAINTRUST_API_KEY" ]; then
-  echo "PASS: BRAINTRUST_API_KEY is set"
-else
-  [ "$TRACE_TO_BRAINTRUST" = "true" ] && \
-    echo "FAIL: BRAINTRUST_API_KEY not set but tracing enabled" || \
-    echo "INFO: BRAINTRUST_API_KEY not set (tracing disabled, OK)"
-fi
-
-BT_DIR="$HOME/.claude/state/braintrust_sessions"
-if [ -d "$BT_DIR" ]; then
-  SESSION_COUNT=$(ls "$BT_DIR"/*.json 2>/dev/null | wc -l | xargs)
-  echo "INFO: $SESSION_COUNT session trace files"
-  [ "$SESSION_COUNT" -gt 100 ] && echo "WARN: $SESSION_COUNT trace files -- consider cleanup"
-else
-  echo "INFO: No Braintrust session state directory"
-fi
-
-BT_LOG="$HOME/.claude/state/braintrust_hook.log"
-if [ -f "$BT_LOG" ]; then
-  ERRORS=$(grep -ci "error\|fail" "$BT_LOG" 2>/dev/null || echo 0)
-  LINES=$(wc -l < "$BT_LOG" | xargs)
-  echo "INFO: Hook log: $LINES lines, $ERRORS error mentions"
-  [ "$ERRORS" -gt 10 ] && echo "WARN: $ERRORS errors in Braintrust hook log"
-else
-  echo "INFO: No Braintrust hook log found"
-fi
-```
-
 ## Auto-Fix Scripts (--fix flag)
 
 ```bash
@@ -300,11 +265,5 @@ if [ ! -s "$TREE" ] || grep -q '"_stale":\s*true' "$TREE" 2>/dev/null; then
   echo "FIX: Regenerating knowledge tree..."
   cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/knowledge_tree.py \
     --project "$CLAUDE_PROJECT_DIR" --verbose
-fi
-
-# 5. Make Braintrust hook shell wrappers executable
-if ls .claude/plugins/braintrust-tracing/hooks/*.sh 2>/dev/null; then
-  chmod +x .claude/plugins/braintrust-tracing/hooks/*.sh
-  echo "FIX: Made Braintrust hook wrappers executable"
 fi
 ```

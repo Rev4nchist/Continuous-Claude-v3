@@ -38,13 +38,6 @@
       "frontierHints": ["SCIP/LSIF code graphs", "LSP-backed agents", "semantic code search", "repo-level reasoning", "incremental index freshness", "symbol-precise retrieval"]
     },
     {
-      "id": "observability",
-      "name": "Braintrust Observability",
-      "summary": "Observability: 4 deterministic emitBraintrustScore() signals + LLM judges, audit-enforced emit invariant, session scoring.",
-      "currentImpl": [".claude/hooks/src/shared/braintrust-client.ts", "scripts/audit-braintrust-emits.sh", "docs/architecture/subsystems/braintrust.md"],
-      "frontierHints": ["LLM eval / online eval", "trace-based evaluation", "OpenTelemetry GenAI semconv", "agent observability", "LLM-as-judge calibration", "eval-driven development"]
-    },
-    {
       "id": "doc-rag",
       "name": "Doc-RAG (PageIndex)",
       "summary": "Tree-based RAG for long documents using LLM reasoning over a hierarchical index; on-demand (per-prompt hook disabled).",

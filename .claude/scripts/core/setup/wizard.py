@@ -345,19 +345,17 @@ async def prompt_api_keys() -> dict[str, str]:
     """Prompt user for optional API keys.
 
     Returns:
-        dict with keys: perplexity, nia, braintrust
+        dict with keys: perplexity, nia
     """
     console.print("\n[bold]API Keys (optional)[/bold]")
     console.print("Press Enter to skip any key you don't have.\n")
 
     perplexity = Prompt.ask("Perplexity API key (web search)", default="")
     nia = Prompt.ask("Nia API key (documentation search)", default="")
-    braintrust = Prompt.ask("Braintrust API key (observability)", default="")
 
     return {
         "perplexity": perplexity,
         "nia": nia,
-        "braintrust": braintrust,
     }
 
 
@@ -412,8 +410,6 @@ def generate_env_file(config: dict[str, Any], env_path: Path) -> None:
                 lines.append(f"PERPLEXITY_API_KEY={api_keys['perplexity']}")
             if api_keys.get("nia"):
                 lines.append(f"NIA_API_KEY={api_keys['nia']}")
-            if api_keys.get("braintrust"):
-                lines.append(f"BRAINTRUST_API_KEY={api_keys['braintrust']}")
             lines.append("")
 
     # Write file
@@ -498,7 +494,7 @@ async def run_setup_wizard() -> None:
     if Confirm.ask("Configure API keys?", default=False):
         api_keys = await prompt_api_keys()
     else:
-        api_keys = {"perplexity": "", "nia": "", "braintrust": ""}
+        api_keys = {"perplexity": "", "nia": ""}
 
     # Step 4: Generate .env
     console.print("\n[bold]Step 4/12: Generating configuration...[/bold]")

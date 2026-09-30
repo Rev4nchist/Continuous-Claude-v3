@@ -94,16 +94,6 @@ const PILLAR_ICONS: Record<string, ReactNode> = {
       />
     </svg>
   ),
-  braintrust: (
-    <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-      <path
-        strokeLinecap="round"
-        strokeLinejoin="round"
-        strokeWidth={1.5}
-        d="M3 3v18h18M7 16l4-8 4 4 4-8"
-      />
-    </svg>
-  ),
   skills: (
     <svg className="h-5 w-5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
       <path
@@ -145,7 +135,6 @@ function formatPillarName(name: string): string {
     roadmap: 'Roadmap',
     handoffs: 'Handoffs',
     ralph: 'Ralph',
-    braintrust: 'Braintrust',
     skills: 'Skills',
     agents: 'Agents',
     'mcp-servers': 'MCP Servers',
@@ -218,7 +207,6 @@ export function PillarCard({ health, onViewDetails }: PillarCardProps) {
               {health.name === 'roadmap' && '% complete'}
               {health.name === 'handoffs' && 'documents'}
               {health.name === 'ralph' && 'tasks'}
-              {health.name === 'braintrust' && 'sessions'}
               {health.name === 'skills' && 'registered'}
               {health.name === 'agents' && 'spawned'}
               {health.name === 'mcp-servers' && 'servers'}

@@ -95,7 +95,7 @@ Keep in main context when:
 - Isolated tasks with no session-thread collision risk
 
 **Spark struggles with:**
-- Multi-file iteration loops on TypeScript hook files (whole-file rewrite tempting → drops sibling emits)
+- Multi-file iteration loops on TypeScript hook files (whole-file rewrite tempting → drops sibling code)
 - Session-thread carryover (a prior spark's edits become part of the next spark's "context" via re-read)
 - Tasks where the same one-line change needs to be applied to N>1 files
 
@@ -103,13 +103,13 @@ Keep in main context when:
 
 ## Post-Spark Verification (Hook Edits)
 
-When spark completes work touching `.claude/hooks/src/*.ts`, the orchestrator MUST independently re-run the emit-invariant guard before trusting completion:
+When spark completes work touching `.claude/hooks/src/*.ts`, the orchestrator MUST independently re-run the hook test suite and build before trusting completion:
 
 ```bash
-bash scripts/audit-braintrust-emits.sh
+cd .claude/hooks && npx vitest run && npm run build
 ```
 
-Do not rely on spark's self-reported `Audit: PASS` alone — spark may have run the audit before its last edit. A second run from the orchestrator after spark exits catches late regressions.
+Do not rely on spark's self-reported pass alone — spark may have run the tests before its last edit. A second run from the orchestrator after spark exits catches late regressions.
 
 **If the orchestrator's re-run FAILS after spark reported complete:**
 

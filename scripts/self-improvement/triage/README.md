@@ -54,13 +54,13 @@ proposal id, so it persists across rebuilds).
     {
       "rank": 1,
       "bucket": "now",                 // now | next
-      "id": "2026-07-18-observability",
-      "component": "observability",
-      "component_name": "Braintrust Observability",
+      "id": "2026-07-18-skills",
+      "component": "skills",
+      "component_name": "Skills System",
       "verdict": "adopt",
       "headline": "…",
       "sources": 9,
-      "proposalPath": "docs/self-improvement/proposals/2026-07-18-observability.md",
+      "proposalPath": "docs/self-improvement/proposals/2026-07-18-skills.md",
       "note": "<your note>"
     }
   ],

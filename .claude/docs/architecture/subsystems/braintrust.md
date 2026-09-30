@@ -1,3 +1,5 @@
+> RETIRED 2026-09-30. Tracing is off and the hooks are removed. See archive/braintrust-2026-10/.
+
 # Braintrust Observability Subsystem
 
 Braintrust is the observability pillar: it scores how well the CCv3 system

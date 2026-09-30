@@ -46,7 +46,7 @@ flowchart TB
         rules["Rules: small core, tool rules loaded on demand"]
         agents["Subagents, skills and workflows"]
         memory[("Memory and coordination: PostgreSQL + pgvector")]
-        traces[("Traces and logs: Braintrust spans, local spool, fire logs")]
+        traces[("Logs: rule-router fire logs and hook logs")]
     end
 
     tools["Tools: shell, files, git, MCP servers"]
@@ -58,7 +58,7 @@ flowchart TB
     rules -->|"rule text at the first matching call"| hooks
     memory -->|"recalled learnings, file claims"| hooks
     hooks -->|"added context"| loop
-    hooks -->|"spans, outcomes, fire logs"| traces
+    hooks -->|"outcomes, fire logs"| traces
     loop -->|"spawn"| agents
     agents -->|"adversarial review"| codex
 ```
@@ -66,7 +66,7 @@ flowchart TB
 The model proposes and the harness decides. Each tool call goes through the hook layer before it
 runs. A hook can allow the call, ask the operator, or deny it with a reason. Hooks also add
 context: a rule at the first call that needs it, or a stored learning that matches the prompt.
-After the call, hooks record spans, outcomes and log lines. The model sees only the context the
+After the call, hooks record outcomes and log lines. The model sees only the context the
 task needs, and every decision leaves a record.
 
 ## The layers
@@ -187,8 +187,8 @@ violations before the fix and 0 after.
 
 Observability records what each session did and makes failures visible.
 
-- `.claude/hooks/braintrust_hooks.py` sends each turn as spans to Braintrust. A failed send goes
-  to a local spool file first. A detached process drains the spool later.
+- Braintrust tracing was retired on 2026-09-30. Sessions keep their local transcripts under
+  `~/.claude/projects/`. The old tracing code is in `archive/braintrust-2026-10/`.
 - `rule-router` logs each fire. A weekly scheduled audit
   (`scripts/scheduled-rule-router-audit.bat`) checks rule precision.
 - The `/health-check` skill runs `opc/scripts/health_check.py`. It exercises the real code path
@@ -197,9 +197,8 @@ Observability records what each session did and makes failures visible.
 - Scheduled jobs write a `Failed` row before their long step and update it after. A killed run
   leaves a record, not a gap (commits `f43755e` and `4f5f38b`).
 
-Measured result: the session-end trace flush was a blocking HTTPS call. It took 30.97 s against
-a 10 s budget, so Claude Code cancelled it and lost the batch. Commit `5abcb64` added the durable
-spool and cut the flush to 0.45 s. Before the fix, 82 of 720 turns in 30 days never finalized.
+Past result (Braintrust tracing, now retired): the session-end trace flush was a blocking HTTPS
+call. It took 30.97 s against a 10 s budget, so Claude Code cancelled it and lost the batch.
 
 A second result: `/health-check` reported "PASS: 0 hook registrations all resolve" while 85 hooks
 were live. Its parser read only one of two registration shapes. Commit `ee29181` fixed the parser.
@@ -287,7 +286,7 @@ before it overwrites it.
 
 | Path | What it holds |
 |---|---|
-| `.claude/hooks/` | Hook sources (`src/`), bundles (`dist/`), tests (`src/__tests__/`) and the Braintrust tracing hook |
+| `.claude/hooks/` | Hook sources (`src/`), bundles (`dist/`), tests (`src/__tests__/`) |
 | `.claude/rules-src/` | Path-scoped rules and the always-loaded index of on-demand rules |
 | `.claude/rules-ondemand/` | 20 tool rules and the `manifest.json` that routes them |
 | `.claude/templates/` | The core `CLAUDE.md` template and other install templates |

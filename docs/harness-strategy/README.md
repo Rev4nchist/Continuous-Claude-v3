@@ -18,10 +18,8 @@ nothing):
 | Gate | Command | Result |
 |---|---|---|
 | Hook registration + output contract + timers | `node scripts/hooks/hook-contract-guard.mjs` | PASS — 86 live entries / 80 names, 80 sources scanned, 55 speak the contract, **0** discarded-output, **9/9** timers safe. ⚠️ these counts predate the `Stop` registration added 2026-08-11 (`ccdd14b`, §4.1) — re-run |
-| Braintrust scoring layer can emit | `node scripts/hooks/braintrust-emit-guard.mjs` | PASS — 114 sources, 4 emit sites / 4 hooks, config reachable, 0 dead span sources |
 | Suite cannot silently shrink | `node scripts/hooks/suite-count-ratchet.mjs` | PASS — baseline 2164 passed / 2171 collected |
 | No module-scope `main()`, no `node:test` | `node scripts/hooks/suite-shape-guard.mjs` | PASS — 114 sources, 109 test files, 0 and 0 |
-| Emit-count invariant | `bash scripts/audit-braintrust-emits.sh` | PASS — Found 4, invariant 4 |
 | Coordination liveness predicate | `node scripts/coordination/liveness-predicate-guard.mjs` | PASS — 6/6 files, 23 correct predicates, 0 bare-heartbeat tests |
 | Hook build actually current | `cd .claude/hooks && npm run build` then `git status --porcelain .claude/hooks/dist` | clean — rebuild changes zero bytes |
 | Repo ↔ `~/.claude` drift | see §6 | rules 46/46, agents 66/66, dist 261/261 |
@@ -170,7 +168,7 @@ Two answers inside it that close off whole branches of investigation:
 | 4 | RATCHET C: timer census | **DONE** — guard reports 9/9 |
 | 5 | Fix 7 dangling-timer hooks | **DONE** — covered by the 9/9 above |
 | 6 | Re-measure hook latency with real payloads | **DONE** — ~1s per tool call, concentrated in 2 processes |
-| 7 | Decide on Braintrust tracing | **MEASURED, DECISION OPEN** — see §4.1. ⚠️ the off switch it assumed did not work until `688228f` |
+| 7 | Decide on Braintrust tracing | **RETIRED 2026-09-30** — tracing is off and the hooks are removed. See §4.1 and `archive/braintrust-2026-10/`. |
 | 8 | Context lever | **DONE** — 145.6k → 67.4k memory-file tokens/session |
 | 9 | Fleet-wide `paths:` frontmatter | **DONE with a finding (2026-08-30)** — 4 of 46 rules scoped, both directions live-probed (headless `claude -p`: scoped rule absent in a neutral dir, present after reading a matching file). The finding that caps it at 4: `paths:` rules load **when Claude reads a matching file** (code.claude.com/docs/en/memory.md), so command-triggered rules — every CLI-safety rule, git workflow, windows-platform — would be DISARMED by scoping, not economized. Scoped: hook-dev-lifecycle, prefer-drizzle-orm, dev-server-cleanup, knowledge-tree-health (~9KB out of non-matching sessions). Candidates pending a Skill-tool-read probe: codex/grok worker safety (~24KB) scoped to their skill dirs |
 | 10 | Re-derive prune list, then prune | **DONE (2026-08-31)** — approved by Dave with archive semantics: 31 hooks (+3 tests) moved to `.claude/hooks/archive/2026-08-31-step10-prune/`, dist removed, stale template/repo registrations reconciled, both ratchet baselines updated in-commit. Qualification record: 114 src files, 81 registered names, 35 unregistered. Libraries (keep): daemon-client (11 importers), transcript-parser, skill-router/skill-validation-prompt (chain hangs off skill-activation-prompt, which is repo-registered but retired from ACTIVE 2026-08-19 — reconcile). 33 candidates swept: every reference is docs/audits/backups/archives; zero live consumers in scripts/, package.json, or either settings.json; zero telemetry rows (intel-bus + hook_activity; `diagnostics`' 350 rows are post-edit-diagnostics, a different hook). Deletion blocked on explicit approval per plan |
@@ -183,7 +181,10 @@ wrong path makes it look missing.)
 
 ## 4. Open decisions that are yours, not ours
 
-### 4.1 Braintrust tracing — a measured trade, awaiting a call
+### 4.1 Braintrust tracing — RETIRED 2026-09-30
+
+> Dave decided on 2026-09-30 to retire Braintrust. Tracing is off, the hooks are removed, and the
+> API key is revoked. The rest of this section is the history that led to the decision.
 
 A/B on real turns, 12 per arm: tracing ON p50 **955 ms**, OFF **317 ms**, so
 **~640–690 ms per tool call**, on *every* PostToolUse. Disabling leaves a ~264 ms
@@ -260,7 +261,7 @@ Against that: tracing is the only telemetry the harness has that isn't dead
 All four are closed. Recorded because each was a standing item, not because the
 work was interesting:
 
-- **Braintrust tracing: STAYS ON.** ~690 ms/tool call is accepted for now — it is
+- **Braintrust tracing: STAYED ON at the time (retired 2026-09-30).** ~690 ms/tool call was accepted then — it is
   the only live telemetry, and killing it mid-refinement removes the instrument
   you'd judge Steps 9–10 with. Revisit after the suite is green and the prune is
   done. The measurement is in the plan, Step 7; nothing to re-derive.
@@ -679,10 +680,9 @@ Every one of these cost real time already.
 | Strategy + measurement docs (this dir) | `docs/harness-strategy/` |
 | Self-improvement proposals + verdict index | `docs/self-improvement/INDEX.md` |
 | Hook concurrency plan | `docs/hook-dispatcher-consolidation-plan.md` |
-| Braintrust turn-span finalization (`Stop` scope) | `docs/hooks/braintrust-stop-event-scope.md` |
 | Session handoffs (YAML, newest last) | `thoughts/shared/handoffs/<lane>/` |
 | Architecture entry point | `docs/architecture/INDEX.md` |
-| Mechanised guards | `scripts/hooks/`, `scripts/coordination/`, `scripts/audit-braintrust-emits.sh` |
+| Mechanised guards | `scripts/hooks/`, `scripts/coordination/` |
 | Live hook telemetry | `.claude/logs/intel-bus.jsonl` |
 | Coordination lane board | `node scripts/coordination/lane.mjs board` |
 
