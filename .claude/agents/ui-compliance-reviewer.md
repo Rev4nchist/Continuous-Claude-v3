@@ -2,6 +2,7 @@
 name: ui-compliance-reviewer
 description: UI compliance and accessibility code reviewer
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

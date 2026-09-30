@@ -2,6 +2,7 @@
 name: arbiter
 description: Unit and integration test execution and validation
 model: sonnet
+effort: high
 tools: [Bash, Read, Write, Glob, Grep]
 ---
 

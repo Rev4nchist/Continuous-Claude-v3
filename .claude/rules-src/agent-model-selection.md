@@ -11,8 +11,19 @@ Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where 
 
 ## The two tiers
 
-- **`model: opus`** = Opus 4.8 (high effort is its shipped default; effort is a **global** `~/.claude/settings.json` `effortLevel`, not a per-agent field). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
-- **`model: sonnet`** = Sonnet 5. The **default** for execution: implementation (kraken, spark), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
+- **`model: opus`** = Opus (inherits the session effort; `~/.claude/settings.json` `modelSettings` pins Opus at high). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
+- **`model: sonnet`** = Sonnet. The **default** for execution: implementation (kraken, spark), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
+
+## Sonnet always runs at effort high
+
+Dave's rule (2026-09-30): Sonnet effort is `high`. Never `medium`, `low` or `xhigh`.
+- Every Sonnet agent carries `effort: high` in its frontmatter. Without it, the agent inherits the
+  spawning session's effort. In the 14 days before the pin, 46 Sonnet subagents ran at medium and 5 at low.
+- `~/.claude/settings.json` `modelSettings` pins `claude-sonnet-5` and `claude-sonnet-5-5` at high for
+  Sonnet main sessions.
+- A workflow `agent()` on Sonnet passes `effort: 'high'`. For Sonnet work through the Agent tool, use a
+  predefined Sonnet agent (it carries the pin) rather than an ad-hoc `model: sonnet` call.
+- Gate: `node scripts/check-agent-model-drift.mjs` fails when a Sonnet agent lacks `effort: high`.
 
 Tier by **judgment density**, not task size. Canonical map (37 agents, 12 Opus / 25 Sonnet): `~/.claude/plans/agent-skill-two-tier-model-policy` and the review artifact.
 

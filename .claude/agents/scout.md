@@ -2,6 +2,7 @@
 name: scout
 description: Codebase exploration and pattern finding
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 

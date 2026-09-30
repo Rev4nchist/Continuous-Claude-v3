@@ -2,6 +2,7 @@
 name: research-codebase
 description: Document the codebase comprehensively
 model: sonnet
+effort: high
 tools: Read, Grep, Glob, Bash, Write
 ---
 

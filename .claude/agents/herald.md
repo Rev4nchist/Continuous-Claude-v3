@@ -2,6 +2,7 @@
 name: herald
 description: Release prep, version bumps, changelog generation
 model: sonnet
+effort: high
 tools: [Read, Write, Edit, Bash, Grep, Glob]
 ---
 

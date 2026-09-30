@@ -2,6 +2,7 @@
 name: scribe
 description: Documentation, handoffs, session summaries, and ledger management
 model: sonnet
+effort: high
 tools: [Read, Write, Glob, Grep]
 ---
 

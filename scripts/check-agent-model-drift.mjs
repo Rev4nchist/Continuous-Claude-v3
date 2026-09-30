@@ -4,7 +4,8 @@
  *
  * Treats each agent's `.md` frontmatter `model:` as CANONICAL and verifies:
  *   1. every agent .md has an EXPLICIT model in {opus, sonnet} — never omitted/inherit/haiku
- *   2. every .json sidecar's `model` matches its `.md` twin
+ *   2. every sonnet agent pins `effort: high` (Dave's rule: Sonnet is never medium or xhigh)
+ *   3. every .json sidecar's `model` matches its `.md` twin
  *      (the .json `model` is read at spawn by opc/scripts/claude_spawn.py and is NOT
  *       auto-synced from the .md, so it can silently drift)
  *
@@ -13,23 +14,35 @@
  */
 import { readFileSync, readdirSync } from 'node:fs';
 import { join, dirname } from 'node:path';
-import { fileURLToPath } from 'node:url';
+import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const ALLOWED = new Set(['opus', 'sonnet']);
-const repoRoot = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
-const agentsDir = join(repoRoot, '.claude', 'agents');
 
-function frontmatterModel(mdText) {
+export function frontmatterModel(mdText) {
   // frontmatter must start at byte 0 with ---
   if (!mdText.startsWith('---')) return { model: undefined, reason: 'no-frontmatter' };
   const end = mdText.indexOf('\n---', 3);
   if (end === -1) return { model: undefined, reason: 'unterminated-frontmatter' };
   const block = mdText.slice(3, end);
-  const m = block.match(/^model:\s*(.+)$/m);
-  if (!m) return { model: undefined, reason: 'no-model-field' };
-  return { model: m[1].trim() };
+  const model = scalar(block, 'model');
+  if (model === undefined) return { model: undefined, reason: 'no-model-field' };
+  return { model, effort: scalar(block, 'effort') };
 }
 
+// One-line YAML scalar without a YAML dependency: drops a trailing `# comment` and one pair of
+// matching quotes, so `effort: "high"` and `effort: high  # why` both read as `high`.
+function scalar(block, key) {
+  const m = block.match(new RegExp(`^${key}:[ \\t]*(.*)$`, 'm'));
+  if (!m) return undefined;
+  const v = m[1].trim();
+  const q = v.match(/^(["'])(.*?)\1/);
+  if (q) return q[2].trim();
+  return v.replace(/\s+#.*$/, '').trim();
+}
+
+function main() {
+const repoRoot = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
+const agentsDir = join(repoRoot, '.claude', 'agents');
 const errors = [];
 let mdCount = 0, opus = 0, sonnet = 0;
 const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
@@ -37,12 +50,15 @@ const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));
 for (const md of files) {
   const name = md.slice(0, -3);
   mdCount++;
-  const { model, reason } = frontmatterModel(readFileSync(join(agentsDir, md), 'utf8'));
+  const { model, effort, reason } = frontmatterModel(readFileSync(join(agentsDir, md), 'utf8'));
   if (model === undefined) { errors.push(`${name}.md: missing explicit model (${reason})`); continue; }
   if (model === 'haiku') { errors.push(`${name}.md: model=haiku is banned`); continue; }
   if (model === 'inherit') { errors.push(`${name}.md: model=inherit resolves to session model (Opus-on-everything) — pin a tier`); continue; }
   if (!ALLOWED.has(model)) { errors.push(`${name}.md: model="${model}" not in {opus, sonnet}`); continue; }
   if (model === 'opus') opus++; else sonnet++;
+  // Dave's rule (2026-09-30): Sonnet always runs at effort high. Without the pin a Sonnet agent
+  // inherits the spawning session's effort, which can be medium.
+  if (model === 'sonnet' && effort !== 'high') errors.push(`${name}.md: model=sonnet needs "effort: high" (found ${effort ?? 'none'})`);
 
   // .json sidecar parity (only the legacy CMA-mirror agents have one — check whichever exist)
   const jsonPath = join(agentsDir, `${name}.json`);
@@ -60,3 +76,6 @@ if (errors.length) {
   process.exit(1);
 }
 console.log('OK — every agent explicit, no haiku/inherit, all .json sidecars in parity.');
+}
+
+if (process.argv[1] && import.meta.url === pathToFileURL(process.argv[1]).href) main();

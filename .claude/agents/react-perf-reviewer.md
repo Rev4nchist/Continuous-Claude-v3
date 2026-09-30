@@ -2,6 +2,7 @@
 name: react-perf-reviewer
 description: React/Next.js performance code reviewer
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

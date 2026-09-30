@@ -2,6 +2,7 @@
 name: profiler
 description: Performance profiling, race conditions, memory issues
 model: sonnet
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 

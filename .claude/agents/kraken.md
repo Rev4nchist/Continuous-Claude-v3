@@ -2,6 +2,7 @@
 name: kraken
 description: Implementation and refactoring agent that lists failure modes and proves changes end to end first
 model: sonnet
+effort: high
 tools: [Read, Edit, Write, Bash, Grep, Glob]
 ---
 

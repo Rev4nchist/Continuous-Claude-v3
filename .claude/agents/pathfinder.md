@@ -2,6 +2,7 @@
 name: pathfinder
 description: External repository research and analysis
 model: sonnet
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 

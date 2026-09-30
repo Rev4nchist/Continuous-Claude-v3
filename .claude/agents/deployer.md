@@ -2,6 +2,7 @@
 name: deployer
 description: Deployment management for Vercel and Railway with Sentry release tracking and Linear issue updates -- deploy, monitor, verify, and debug using CLI tools and Cloud MCP
 model: sonnet
+effort: high
 tools:
   - Bash
   - Read

@@ -2,6 +2,7 @@
 name: spark
 description: Lightweight fixes and quick tweaks
 model: sonnet
+effort: high
 tools: [Read, Edit, Write, Bash, Grep, Glob]
 ---
 

@@ -2,6 +2,7 @@
 name: judge
 description: Refactoring and code transformation review
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

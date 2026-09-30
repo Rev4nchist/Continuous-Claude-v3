@@ -2,6 +2,7 @@
 name: cma-operator
 description: Headless operator for Claude Managed Agents (CMA). Assembles context, shells out to the anthropic Python SDK (fallback ant/curl), runs a single CMA cloud session to completion, and captures clean output. Use for scheduled/headless CMA invocation from claude_spawn.py / Task Scheduler. NOT for interactive exploration (use /launch-your-agent for building or the cma skill for ad-hoc ops).
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 

@@ -2,6 +2,7 @@
 name: oracle
 description: External research - web, docs, APIs via 7-tool research stack
 model: sonnet
+effort: high
 tools: [Read, Bash, WebSearch]
 ---
 

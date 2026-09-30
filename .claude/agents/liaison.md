@@ -2,6 +2,7 @@
 name: liaison
 description: Integration and API review
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

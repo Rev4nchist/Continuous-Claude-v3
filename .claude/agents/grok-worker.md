@@ -2,6 +2,7 @@
 name: grok-worker
 description: General-purpose cross-model task worker. Hands an arbitrary task to the xAI Grok Build CLI (default grok-4.5, X Premium+ SUBSCRIPTION auth — no API key) to WORK THROUGH — answer it, or actually implement it with write access — not just review. Three modes - ask (read-only Q&A/research), implement (workspace-write in an isolated git worktree), resume (continue a prior implement session). Sibling to grok-adversary (which stays read-only review-only). Governed by .claude/rules-ondemand/grok-worker-safety.md.
 model: sonnet
+effort: high
 tools: [Read, Grep, Glob, Bash]
 ---
 
