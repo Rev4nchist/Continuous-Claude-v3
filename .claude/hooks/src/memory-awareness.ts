@@ -32,7 +32,6 @@
 
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import * as path from 'path';
-import * as os from 'os';
 import { spawnSync } from 'child_process';
 import { getOpcDir } from './shared/opc-path.js';
 import { outputContinue } from './shared/output.js';
@@ -40,7 +39,6 @@ import { logHook } from './shared/session-activity.js';
 import { extractIntent, extractKeywords, expandGitQuery, isMachineGeneratedPrompt } from './shared/intent-extractor.js';
 import { probeDaemon, recallViaDaemon, ensureDaemonRunning } from './shared/embedding-client.js';
 import { getFreeRamBytes, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
-import { emitBraintrustScore } from './shared/braintrust-score.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 import { readBus } from './shared/context-bus.js';
 import { appendIntelBus } from './shared/intel-bus.js';
@@ -397,73 +395,6 @@ function logRecallFire(entry: RecallLogEntry, projectDir: string): void {
   }
 }
 
-// ---------------------------------------------------------------------------
-// Braintrust span-id resolution (Phase 2.1, story braintrust-scoring)
-//
-// The Python `braintrust_hooks.py user_prompt_submit` handler stores per-
-// session span state at ~/.claude/state/braintrust_sessions/<session_id>.json.
-// Each turn it bumps `current_turn_span_id` to a fresh uuid (the span that
-// owns this turn's tool calls). The root span persists in `root_span_id`.
-//
-// We prefer the turn span when attaching `memory_recall_relevance` because
-// the score is logically a per-turn signal -- the user just submitted a
-// prompt and we measured how well memory recall served that specific turn.
-// If for some reason the turn span isn't recorded yet (race with the Python
-// handler, sampled-out session, missing state file), we fall back to the
-// root span so the score still lands somewhere visible in Braintrust.
-//
-// Returns null when no span id is available -- the helper is fail-open so
-// the score emit will skip silently.
-// ---------------------------------------------------------------------------
-
-interface BraintrustSessionState {
-  root_span_id?: string;
-  current_turn_span_id?: string;
-  project_id?: string;
-  sampled_out?: boolean;
-}
-
-interface ResolvedSpan {
-  spanId: string;
-  attachedTo: 'turn' | 'root';
-}
-
-function readBraintrustSessionState(sessionId: string): BraintrustSessionState | null {
-  if (!sessionId) return null;
-  try {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
-    if (!homeDir) return null;
-    const statePath = path.join(
-      homeDir,
-      '.claude',
-      'state',
-      'braintrust_sessions',
-      `${sessionId}.json`,
-    );
-    if (!existsSync(statePath)) return null;
-    const raw = readFileSync(statePath, 'utf-8');
-    return JSON.parse(raw) as BraintrustSessionState;
-  } catch {
-    // Fail-open: any I/O or parse error means we just skip the score.
-    return null;
-  }
-}
-
-function resolveBraintrustSpan(sessionId: string): ResolvedSpan | null {
-  const state = readBraintrustSessionState(sessionId);
-  if (!state) return null;
-  // Sampled-out sessions have no spans to attach to.
-  if (state.sampled_out) return null;
-
-  if (state.current_turn_span_id && state.current_turn_span_id.length > 0) {
-    return { spanId: state.current_turn_span_id, attachedTo: 'turn' };
-  }
-  if (state.root_span_id && state.root_span_id.length > 0) {
-    return { spanId: state.root_span_id, attachedTo: 'root' };
-  }
-  return null;
-}
-
 async function main() {
   const t0 = Date.now();
   const input: UserPromptSubmitInput = JSON.parse(readStdin());
@@ -508,8 +439,7 @@ async function main() {
 
   // WS-2 Phase B.3b: read the context bus (read-only, fail-open) to bias recall
   // with the session's non-stale working set. Inserted HERE -- after intent is
-  // established, FAR from the braintrust emit (~L600) and the inject (~L630) so the
-  // delicate emit surface is untouched. readBus is fail-open + kill-switch-aware;
+  // established, FAR from the inject (~L630). readBus is fail-open + kill-switch-aware;
   // the try/catch is belt-and-suspenders. Shared logic: shared/bus-focus.ts.
   let busFocus: { terms: string[]; staleSymbolsCount: number };
   let busId = 'unknown';
@@ -671,8 +601,7 @@ async function main() {
   logRecallFire(logEntry, projectDir);
 
   // WS-2 Phase B.3b: bus-read telemetry (fail-open, intel-bus sink). Records the
-  // bias/inject decision for the quality gate. This is a DIFFERENT sink from the
-  // braintrust emit below and does NOT touch the emit invariant.
+  // bias/inject decision for the quality gate.
   try {
     appendIntelBus({
       bus_id: busId,
@@ -695,45 +624,6 @@ async function main() {
     });
   } catch {
     /* fail-open: telemetry never breaks the hook */
-  }
-
-  // Phase 2.1 (story braintrust-scoring): emit memory_recall_relevance score
-  // to Braintrust. Await is required so the in-flight POST completes before
-  // the subprocess exits — see Gate 0.6/0.7/0.8 for the same fix applied to
-  // sibling hooks. 2s max latency (BRAINTRUST_FEEDBACK_TIMEOUT_MS).
-  //
-  // Span-id resolution: this hook runs BEFORE the Python braintrust_hooks.py
-  // user_prompt_submit handler, so the NEW turn span doesn't exist yet at
-  // emit time. We attach to root_span_id (which DOES persist across turns)
-  // and tag the score with metadata.attached_to so downstream queries can
-  // tell session-summary scores from turn-attached ones. When/if a future
-  // refactor reorders the Python handler before us, prefer the turn span.
-  try {
-    const span = resolveBraintrustSpan(input.session_id || '');
-    if (span) {
-      await emitBraintrustScore({ // eslint-disable-line @typescript-eslint/no-floating-promises
-        spanId: span.spanId,
-        scores: {
-          memory_recall_relevance: topScoreRaw,
-          memory_recall_hit:
-            match && match.results.length > 0 ? 1.0 : 0.0,
-        },
-        metadata: {
-          attached_to: span.attachedTo,
-          results_count: logEntry.results_count,
-          kept_after_floor: logEntry.kept_after_floor,
-          mode: logEntry.mode,
-          daemon_ready: logEntry.daemon_ready,
-          recall_ready: logEntry.recall_ready,
-          recall_via: logEntry.recall_via,
-          total_elapsed_ms: logEntry.total_elapsed_ms,
-          intent: logEntry.intent,
-          floor_applied: logEntry.floor_applied,
-        },
-      });
-    }
-  } catch {
-    /* fail-open: never let score emission break the hook */
   }
 
   if (match) {

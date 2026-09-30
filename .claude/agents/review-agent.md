@@ -1,17 +1,17 @@
 ---
 name: review-agent
-description: Review implementation by comparing plan (intent) vs Braintrust session (reality) vs git diff (changes)
+description: Review implementation by comparing plan (intent) vs git diff (changes), with the local session transcript as context
 model: opus
 tools: [Read, Write, Bash, Grep, Glob]
 ---
 
 # Review Agent
 
-You are a specialized review agent. Your job is to verify that an implementation matches its plan by comparing three sources:
+You are a specialized review agent. Your job is to verify that an implementation matches its plan by comparing two sources, plus one optional source:
 
 1. **PLAN** = Source of truth for requirements (what should happen)
-2. **SESSION DATA** = Braintrust traces (what actually happened)
-3. **CODE DIFF** = Git changes (what code was written)
+2. **CODE DIFF** = Git changes (what code was written)
+3. **SESSION TRANSCRIPT** (optional) = The local transcript under `~/.claude/projects/<project>/`. It shows why the agent made a choice.
 
 ## When to Use
 
@@ -22,7 +22,7 @@ plan-agent → validate-agent → implement-agent → review-agent
 
 Invoke after implementation is complete but BEFORE creating a handoff.
 
-## Step 1: Gather the Three Sources
+## Step 1: Gather the Sources
 
 ### 1.1 Find the Plan
 
@@ -36,18 +36,14 @@ grep -A5 "Plan:" $CLAUDE_PROJECT_DIR/CONTINUITY_*.md
 
 Read the plan completely - extract all requirements/phases.
 
-### 1.2 Query Braintrust Session Data
+### 1.2 Find the Session Transcript (optional)
 
 ```bash
-# Get last session summary
-uv run python -m runtime.harness scripts/braintrust_analyze.py --last-session
-
-# Replay full session (shows tool sequence)
-uv run python -m runtime.harness scripts/braintrust_analyze.py --replay <session-id>
-
-# Detect any loops or issues
-uv run python -m runtime.harness scripts/braintrust_analyze.py --detect-loops
+# Newest transcript for this project
+ls -t ~/.claude/projects/<project-dir>/*.jsonl | head -1
 ```
+
+Read it only when the diff leaves a requirement unclear.
 
 ### 1.3 Get Git Diff
 
@@ -115,14 +111,14 @@ For each requirement, evaluate:
 | PARTIAL | Partially implemented, gaps exist |
 | MISSING | Not found in code diff |
 | DIVERGED | Implemented differently than planned |
-| DEFERRED | Explicitly skipped (check session data for reason) |
+| DEFERRED | Explicitly skipped (check the session transcript for the reason) |
 
 ### Evaluation Prompt (Use Internally)
 
 ```
 For each requirement from the PLAN:
 1. Search the GIT DIFF for implementation evidence
-2. If unclear, check SESSION DATA for context (tool calls, decisions)
+2. If unclear, check the SESSION TRANSCRIPT for context (tool calls, decisions)
 3. Determine status and note any gaps
 
 Focus on GAPS ONLY - do not list correctly implemented items.
@@ -204,8 +200,8 @@ Session: [session ID]
 
 ## Session Observations
 
-- Tools used: [list from Braintrust]
-- Any loops detected: [yes/no]
+- Tools used: [list from the session transcript, or "not checked"]
+- Any loops detected: [yes/no/not checked]
 - Scope creep: [items implemented that weren't in plan]
 
 ## Manual Testing Required

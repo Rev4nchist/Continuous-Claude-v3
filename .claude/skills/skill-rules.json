@@ -759,41 +759,6 @@
       "evalTier": "verified",
       "evalDate": "2026-03-07"
     },
-    "braintrust-analyze": {
-      "type": "domain",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Analyze Claude Code sessions via Braintrust - session replay, agent stats, loop detection",
-      "promptTriggers": {
-        "keywords": [
-          "braintrust",
-          "analyze session",
-          "session analysis",
-          "session review",
-          "what agents",
-          "what skills",
-          "agent stats",
-          "skill stats",
-          "detect loops",
-          "token usage",
-          "session replay",
-          "last session",
-          "weekly summary"
-        ],
-        "intentPatterns": [
-          "analyze.*(session|braintrust|logs)",
-          "session.*(analysis|review|summary)",
-          "(what|which).*(agents?|skills?).*(use|run|activate)",
-          "(detect|find|check).*(loops|repeated)",
-          "(show|get|see).*?(last|recent|my).*?session",
-          "(token|usage).*(trends?|stats?|analysis)",
-          "weekly.*(summary|report|review)"
-        ]
-      },
-      "evalScore": 100,
-      "evalTier": "verified",
-      "evalDate": "2026-03-07"
-    },
     "onboard": {
       "type": "domain",
       "enforcement": "suggest",
@@ -1148,31 +1113,6 @@
           "test.*?(feature|everything|suite|this)",
           "(verify|check).*?(everything|all).*?works",
           "full.*?test.*?suite"
-        ]
-      },
-      "evalScore": 100,
-      "evalTier": "verified",
-      "evalDate": "2026-03-07"
-    },
-    "braintrust-tracing": {
-      "type": "domain",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Braintrust tracing for Claude Code - hook architecture, sub-agent correlation, debugging.",
-      "promptTriggers": {
-        "keywords": [
-          "braintrust tracing",
-          "trace hooks",
-          "hook tracing",
-          "agent correlation",
-          "sub-agent tracing",
-          "debug tracing",
-          "trace spans"
-        ],
-        "intentPatterns": [
-          "(braintrust|trace).*?(hook|agent|span)",
-          "(debug|trace).*?(sub-agent|correlation)",
-          "hook.*?(architecture|tracing)"
         ]
       },
       "evalScore": 100,

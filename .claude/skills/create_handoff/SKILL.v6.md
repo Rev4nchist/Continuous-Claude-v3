@@ -15,7 +15,6 @@ skip: [task_just_started, no_work_completed]
 |--------|--------|----------------|
 | session_name | ledger/handoff | active work stream |
 | git_state | git metadata | commit/branch context |
-| braintrust_ids | state files | trace linking |
 | completed_work | session memory | task status |
 
 ## U (Action Space)
@@ -42,15 +41,11 @@ ls -d thoughts/shared/handoffs/*/ 2>/dev/null | head -1 | xargs basename
 
 # Git metadata via spec_metadata.sh
 ~/.claude/scripts/spec_metadata.sh
-
-# Braintrust IDs (if available)
-cat ~/.claude/state/braintrust_sessions/*.json | jq -s 'sort_by(.started) | last'
 ```
 
 | action | Q | why |
 |--------|---|-----|
 | read_ledger_state | HIGH | Populate Ledger section accurately |
-| get_braintrust_ids | MED | Enable artifact index linking |
 | fallback_general | MED | Don't block if no ledger |
 
 ### P2: Write Handoff

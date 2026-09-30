@@ -8,7 +8,7 @@ interface PillarGridProps {
   onViewDetails?: (pillar: string) => void
 }
 
-const PILLAR_ORDER = ['memory', 'knowledge', 'pageindex', 'roadmap', 'handoffs', 'ralph', 'braintrust', 'skills', 'agents', 'mcp-servers']
+const PILLAR_ORDER = ['memory', 'knowledge', 'pageindex', 'roadmap', 'handoffs', 'ralph', 'skills', 'agents', 'mcp-servers']
 
 function PillarSkeleton() {
   return (

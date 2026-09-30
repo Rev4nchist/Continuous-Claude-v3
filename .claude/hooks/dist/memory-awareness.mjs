@@ -1,9 +1,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/memory-awareness.ts
-import { readFileSync as readFileSync6, existsSync as existsSync6, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
+import { readFileSync as readFileSync5, mkdirSync as mkdirSync6, appendFileSync as appendFileSync3 } from "fs";
 import * as path from "path";
-import * as os from "os";
 import { spawnSync } from "child_process";
 
 // src/shared/opc-path.ts
@@ -795,144 +794,6 @@ function isHostMemoryPressured(freeRamBytes = getFreeRamBytes(), floor = getHost
   return freeRamBytes < floor;
 }
 
-// src/shared/braintrust-score.ts
-import { readFileSync as readFileSync3 } from "fs";
-import { homedir as homedir2 } from "os";
-import { join as join4 } from "path";
-var BRAINTRUST_FEEDBACK_TIMEOUT_MS = 2e3;
-var DEFAULT_API_URL = "https://api.braintrust.dev";
-var DEFAULT_PROJECT_NAME = "claude-code";
-var projectIdCache = {};
-var dotenvLoaded = false;
-var envTraceOverride;
-function loadClaudeDotEnv() {
-  if (dotenvLoaded) return;
-  dotenvLoaded = true;
-  envTraceOverride = process.env.TRACE_TO_BRAINTRUST;
-  try {
-    const envPath = process.env.BRAINTRUST_DOTENV_PATH || join4(homedir2(), ".claude", ".env");
-    for (const line of readFileSync3(envPath, "utf-8").split("\n")) {
-      const trimmed = line.trim();
-      if (!trimmed || trimmed.startsWith("#") || !trimmed.includes("=")) continue;
-      const idx = trimmed.indexOf("=");
-      const key = trimmed.slice(0, idx).trim();
-      const value = trimmed.slice(idx + 1).trim();
-      if (key) process.env[key] = value;
-    }
-  } catch {
-  }
-}
-function getApiUrl() {
-  loadClaudeDotEnv();
-  return process.env.BRAINTRUST_API_URL || DEFAULT_API_URL;
-}
-function getApiKey() {
-  loadClaudeDotEnv();
-  const key = process.env.BRAINTRUST_API_KEY;
-  return key && key.length > 0 ? key : null;
-}
-function isTraceEnabled() {
-  loadClaudeDotEnv();
-  const effective = envTraceOverride !== void 0 ? envTraceOverride : process.env.TRACE_TO_BRAINTRUST || "";
-  return effective.toLowerCase() === "true";
-}
-async function consumeBody(resp) {
-  try {
-    await resp.arrayBuffer();
-  } catch {
-  }
-}
-function logErr(msg) {
-  try {
-    process.stderr.write(`[braintrust-score] ${msg}
-`);
-  } catch {
-  }
-}
-async function resolveProjectId(apiKey) {
-  loadClaudeDotEnv();
-  const directId = process.env.BRAINTRUST_CC_PROJECT_ID;
-  if (directId && directId.length > 0) {
-    return directId;
-  }
-  const projectName = process.env.BRAINTRUST_CC_PROJECT || DEFAULT_PROJECT_NAME;
-  const cached = projectIdCache[projectName];
-  if (cached) return cached;
-  try {
-    const url = getApiUrl() + "/v1/project?project_name=" + encodeURIComponent(projectName);
-    const resp = await fetch(url, {
-      method: "GET",
-      headers: {
-        Authorization: `Bearer ${apiKey}`,
-        "Content-Type": "application/json"
-      },
-      signal: AbortSignal.timeout(BRAINTRUST_FEEDBACK_TIMEOUT_MS)
-    });
-    if (!resp.ok) {
-      logErr(`project lookup ${projectName}: HTTP ${resp.status}`);
-      await consumeBody(resp);
-      return null;
-    }
-    const data = await resp.json();
-    const objects = data?.objects;
-    if (!objects || objects.length === 0) {
-      logErr(`project lookup ${projectName}: no objects`);
-      return null;
-    }
-    const id = objects[0]?.id;
-    if (!id) {
-      logErr(`project lookup ${projectName}: object missing id`);
-      return null;
-    }
-    projectIdCache[projectName] = id;
-    return id;
-  } catch (e) {
-    logErr(`project lookup ${projectName} failed: ${e.message}`);
-    return null;
-  }
-}
-async function emitBraintrustScore(opts) {
-  try {
-    if (!isTraceEnabled()) return;
-    const apiKey = getApiKey();
-    if (!apiKey) return;
-    if (!opts.spanId || opts.spanId.length === 0) return;
-    if (!opts.scores || Object.keys(opts.scores).length === 0) return;
-    const projectId = await resolveProjectId(apiKey);
-    if (!projectId) return;
-    const entry = {
-      id: opts.spanId,
-      scores: opts.scores
-    };
-    if (opts.metadata !== void 0) {
-      entry.metadata = opts.metadata;
-    }
-    if (opts.comment !== void 0) {
-      entry.comment = opts.comment;
-    }
-    const url = `${getApiUrl()}/v1/project_logs/${projectId}/feedback`;
-    try {
-      const resp = await fetch(url, {
-        method: "POST",
-        headers: {
-          Authorization: `Bearer ${apiKey}`,
-          "Content-Type": "application/json"
-        },
-        body: JSON.stringify({ feedback: [entry] }),
-        signal: AbortSignal.timeout(BRAINTRUST_FEEDBACK_TIMEOUT_MS)
-      });
-      if (!resp.ok) {
-        logErr(`feedback POST ${opts.spanId}: HTTP ${resp.status}`);
-      }
-      await consumeBody(resp);
-    } catch (e) {
-      logErr(`feedback POST ${opts.spanId} failed: ${e.message}`);
-    }
-  } catch (e) {
-    logErr(`unexpected error: ${e.message}`);
-  }
-}
-
 // src/shared/memory-sanitize.ts
 function sanitizeMemoryContent(content, cap = 500) {
   if (typeof content !== "string" || content.length === 0) {
@@ -952,27 +813,27 @@ ${body}
 }
 
 // src/shared/context-bus.ts
-import { readFileSync as readFileSync5 } from "node:fs";
-import { dirname as dirname3, join as join8, resolve as resolve2, sep } from "node:path";
+import { readFileSync as readFileSync4 } from "node:fs";
+import { dirname as dirname3, join as join7, resolve as resolve2, sep } from "node:path";
 
 // src/shared/session-bus-id.ts
 import { createHash } from "node:crypto";
 import { realpathSync } from "node:fs";
 
 // src/shared/session-id.ts
-import { mkdirSync as mkdirSync3, readFileSync as readFileSync4, writeFileSync as writeFileSync2 } from "fs";
-import { homedir as homedir3 } from "os";
-import { join as join5 } from "path";
+import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { join as join4 } from "path";
 var SESSION_ID_FILENAME = ".coordination-session-id";
 function getSessionIdFile(options = {}) {
-  const claudeDir = join5(process.env.HOME || process.env.USERPROFILE || homedir3(), ".claude");
+  const claudeDir = join4(process.env.HOME || process.env.USERPROFILE || homedir2(), ".claude");
   if (options.createDir) {
     try {
       mkdirSync3(claudeDir, { recursive: true, mode: 448 });
     } catch {
     }
   }
-  return join5(claudeDir, SESSION_ID_FILENAME);
+  return join4(claudeDir, SESSION_ID_FILENAME);
 }
 function generateSessionId() {
   const spanId = process.env.BRAINTRUST_SPAN_ID;
@@ -984,7 +845,7 @@ function generateSessionId() {
 function readSessionId() {
   try {
     const sessionFile = getSessionIdFile();
-    const id = readFileSync4(sessionFile, "utf-8").trim();
+    const id = readFileSync3(sessionFile, "utf-8").trim();
     return id || null;
   } catch {
     return null;
@@ -1035,9 +896,9 @@ function getBusId(opts = {}) {
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, statSync as statSync2, renameSync } from "fs";
-import { dirname, join as join6 } from "path";
-import { homedir as homedir4 } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join6(homedir4(), ".claude", "logs", "hooks.log");
+import { dirname, join as join5 } from "path";
+import { homedir as homedir3 } from "os";
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join5(homedir3(), ".claude", "logs", "hooks.log");
 var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
@@ -1109,13 +970,13 @@ var log = createLogger("atomic-write");
 
 // src/shared/intel-bus.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname2, join as join7 } from "node:path";
+import { dirname as dirname2, join as join6 } from "node:path";
 var MAX_LINE_BYTES = 4096;
 var MAX_INTEL_BUS_BYTES = 2e6;
 var DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 function intelBusPath(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join7(root, ".claude", "logs", "intel-bus.jsonl");
+  return join6(root, ".claude", "logs", "intel-bus.jsonl");
 }
 function stripNewlinesDeep(value) {
   if (typeof value === "string") {
@@ -1274,12 +1135,12 @@ function assertSafeBusId(busId) {
 }
 function sessionCacheRoot(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join8(root, ".claude", "cache", "session");
+  return join7(root, ".claude", "cache", "session");
 }
 function busPath(busId, projectDir) {
   assertSafeBusId(busId);
   const sessionRoot = sessionCacheRoot(projectDir);
-  const full = join8(sessionRoot, busId, "context.json");
+  const full = join7(sessionRoot, busId, "context.json");
   const resolvedRoot = resolve2(sessionRoot);
   const resolvedFull = resolve2(full);
   const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
@@ -1336,7 +1197,7 @@ function coerceFilesInPlay(value) {
 }
 function defaultRead(path2) {
   try {
-    return readFileSync5(path2, "utf-8");
+    return readFileSync4(path2, "utf-8");
   } catch {
     return null;
   }
@@ -1446,7 +1307,7 @@ function buildFocusBlock(terms) {
 var TEXT_ONLY_FLOOR = 0.05;
 var HYBRID_FLOOR = 0.01;
 function readStdin() {
-  return readFileSync6(0, "utf-8");
+  return readFileSync5(0, "utf-8");
 }
 function cleanSearchTerm(intent) {
   return intent.replace(/[_\/]/g, " ").replace(/\b\w{1,2}\b/g, "").replace(/\s+/g, " ").trim();
@@ -1584,37 +1445,6 @@ function logRecallFire(entry, projectDir) {
     appendFileSync3(getRecallLogPath(projectDir), JSON.stringify(entry) + "\n");
   } catch {
   }
-}
-function readBraintrustSessionState(sessionId) {
-  if (!sessionId) return null;
-  try {
-    const homeDir = process.env.HOME || process.env.USERPROFILE || os.homedir();
-    if (!homeDir) return null;
-    const statePath = path.join(
-      homeDir,
-      ".claude",
-      "state",
-      "braintrust_sessions",
-      `${sessionId}.json`
-    );
-    if (!existsSync6(statePath)) return null;
-    const raw = readFileSync6(statePath, "utf-8");
-    return JSON.parse(raw);
-  } catch {
-    return null;
-  }
-}
-function resolveBraintrustSpan(sessionId) {
-  const state = readBraintrustSessionState(sessionId);
-  if (!state) return null;
-  if (state.sampled_out) return null;
-  if (state.current_turn_span_id && state.current_turn_span_id.length > 0) {
-    return { spanId: state.current_turn_span_id, attachedTo: "turn" };
-  }
-  if (state.root_span_id && state.root_span_id.length > 0) {
-    return { spanId: state.root_span_id, attachedTo: "root" };
-  }
-  return null;
 }
 async function main() {
   const t0 = Date.now();
@@ -1759,32 +1589,6 @@ async function main() {
       current_turn: busTurn,
       result_count: match ? match.results.length : 0
     });
-  } catch {
-  }
-  try {
-    const span = resolveBraintrustSpan(input.session_id || "");
-    if (span) {
-      await emitBraintrustScore({
-        // eslint-disable-line @typescript-eslint/no-floating-promises
-        spanId: span.spanId,
-        scores: {
-          memory_recall_relevance: topScoreRaw,
-          memory_recall_hit: match && match.results.length > 0 ? 1 : 0
-        },
-        metadata: {
-          attached_to: span.attachedTo,
-          results_count: logEntry.results_count,
-          kept_after_floor: logEntry.kept_after_floor,
-          mode: logEntry.mode,
-          daemon_ready: logEntry.daemon_ready,
-          recall_ready: logEntry.recall_ready,
-          recall_via: logEntry.recall_via,
-          total_elapsed_ms: logEntry.total_elapsed_ms,
-          intent: logEntry.intent,
-          floor_applied: logEntry.floor_applied
-        }
-      });
-    }
   } catch {
   }
   if (match) {

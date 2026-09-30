@@ -50,7 +50,7 @@ Browser (React + shadcn/ui)
     |-- WebSocket (real-time)
     |
 FastAPI (port 3434)
-    |-- 10 routers (API endpoints)
+    |-- 9 routers (API endpoints)
     |-- 9 services (pillar health checks)
     |-- WebSocket manager (pub/sub by project)
     |-- Health monitor (background task)
@@ -79,7 +79,6 @@ PostgreSQL (continuous_claude)
 | Roadmap | `services/roadmap.py` | Goal completion status parsed from `ROADMAP.md` |
 | Handoffs | `services/handoffs.py` | Session handoff documents (DB + `HANDOFF-*.md` files) |
 | Ralph | `services/ralph.py` | Autonomous build state, tasks, iterations from `.ralph/state.json` |
-| Braintrust | `services/braintrust.py` | Session analytics, agent/skill usage from Braintrust API |
 
 Each service extends `BasePillarService` (in `services/base.py`) and implements `check_health()` and `get_details()`.
 
@@ -102,10 +101,6 @@ All endpoints return JSON. No authentication required (localhost only).
 | GET | `/api/pillars/handoffs/{id}` | Single handoff by UUID or `file:filename` |
 | GET | `/api/pillars/ralph/tasks` | Ralph tasks grouped by status |
 | GET | `/api/pillars/ralph/state` | Ralph session state (stage, iteration, progress) |
-| GET | `/api/pillars/braintrust/weekly-summary` | Daily session/tool counts for last 7 days |
-| GET | `/api/pillars/braintrust/agent-stats` | Agent usage stats (last 7 days) |
-| GET | `/api/pillars/braintrust/skill-stats` | Skill usage stats (last 7 days) |
-| GET | `/api/pillars/braintrust/sessions` | Recent sessions (limit 1-50, default 10) |
 | GET | `/api/system-health/report` | Full diagnostic across all subsystems |
 | GET | `/api/sessions` | All sessions with file claims and agent summaries |
 | GET | `/api/sessions/{session_id}` | Detailed info for one session |
@@ -147,7 +142,6 @@ Press a key anywhere (outside text inputs) to open the corresponding detail pane
 | `r` | Roadmap |
 | `h` | Handoffs |
 | `a` | Ralph |
-| `b` | Braintrust |
 | `x` | System Health |
 | `s` | Sessions |
 | `Escape` | Close active panel |
@@ -167,7 +161,6 @@ Press a key anywhere (outside text inputs) to open the corresponding detail pane
 | `RoadmapDetail` | `components/pillars/RoadmapDetail.tsx` | Goal completion tracker |
 | `HandoffsDetail` | `components/pillars/HandoffsDetail.tsx` | Handoff document viewer |
 | `RalphDetail` | `components/pillars/RalphDetail.tsx` | Ralph task/state monitor |
-| `BraintrustDetail` | `components/pillars/BraintrustDetail.tsx` | Session analytics charts |
 | `SystemHealthDetail` | `components/pillars/SystemHealthDetail.tsx` | Full system diagnostic |
 | `SessionsDetail` | `components/pillars/SessionsDetail.tsx` | Active terminal sessions |
 | `ActivityFeed` | `components/activity/ActivityFeed.tsx` | Real-time activity timeline |
@@ -186,7 +179,7 @@ dashboard/
 ├── main.py              # FastAPI app, CLI, lifespan
 ├── config.py            # Settings (env vars, logging)
 ├── models.py            # Pydantic models
-├── routers/             # 10 API route modules
+├── routers/             # 9 API route modules
 │   ├── health.py        # /api/health
 │   ├── memory.py        # /api/pillars/memory/*
 │   ├── knowledge.py     # /api/pillars/knowledge/*
@@ -194,10 +187,9 @@ dashboard/
 │   ├── roadmap.py       # /api/pillars/roadmap/*
 │   ├── handoffs.py      # /api/pillars/handoffs/*
 │   ├── ralph.py         # /api/pillars/ralph/*
-│   ├── braintrust.py    # /api/pillars/braintrust/*
 │   ├── system_health.py # /api/system-health/*
 │   └── sessions.py      # /api/sessions/*
-├── services/            # 9 pillar service implementations
+├── services/            # 8 pillar service implementations
 │   ├── base.py          # BasePillarService ABC
 │   ├── memory.py
 │   ├── knowledge.py
@@ -205,7 +197,6 @@ dashboard/
 │   ├── roadmap.py
 │   ├── handoffs.py
 │   ├── ralph.py
-│   ├── braintrust.py
 │   ├── system_health.py
 │   └── sessions.py
 ├── websocket/
@@ -259,6 +250,5 @@ cd opc/scripts && uv run pytest dashboard/
 | `DATABASE_URL` | (see below) | PostgreSQL connection string |
 | `OPC_POSTGRES_URL` | - | Override for DATABASE_URL (highest priority) |
 | `AGENTICA_POSTGRES_URL` | - | Fallback PostgreSQL URL |
-| `BRAINTRUST_API_KEY` | - | Braintrust API key for session analytics |
 
 DATABASE_URL resolution order: `OPC_POSTGRES_URL` > `AGENTICA_POSTGRES_URL` > `DATABASE_URL` > dev default (`postgresql://claude:claude_dev@localhost:5434/continuous_claude`).

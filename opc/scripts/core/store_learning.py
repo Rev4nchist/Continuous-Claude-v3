@@ -192,113 +192,6 @@ QUALITY_SIGNALS = [
 ]
 
 
-def _emit_store_quality_score(
-    passes: bool,
-    reason: str | None,
-    learning_type: str | None,
-    content_len: int,
-    session_id: str | None,
-) -> None:
-    """Phase 2.2 (story braintrust-scoring): emit memory_store_quality to Braintrust.
-
-    Fail-open by design. Skips silently when:
-      * TRACE_TO_BRAINTRUST is not "true"
-      * BRAINTRUST_API_KEY is unset
-      * BRAINTRUST_SESSION_ID is unset (no parent span to attach to)
-      * BRAINTRUST_CC_PROJECT_ID or BRAINTRUST_CC_PROJECT is unset (project lookup)
-      * Any network/parse failure
-
-    Span-id contract: we attach to the per-session root span, identified by
-    the BRAINTRUST_SESSION_ID env var. Per the Phase 2 design note, we
-    deliberately do NOT emit orphaned scores when no session context is in
-    env -- those scores would have no usable parent in the Braintrust UI.
-    Callers that need store-scores in a one-off script should set
-    BRAINTRUST_SESSION_ID before invoking.
-
-    The reason this matters: store_learning.py is invoked both from inside
-    a Claude Code session (where the Python hook chain DOES set the session
-    state) and from ad-hoc CLI runs (which don't). We only emit in the
-    former case.
-    """
-    # Cheap guard ordering: env checks first, then network.
-    if os.environ.get("TRACE_TO_BRAINTRUST", "false").lower() != "true":
-        return
-    api_key = os.environ.get("BRAINTRUST_API_KEY", "")
-    if not api_key:
-        return
-    span_id = os.environ.get("BRAINTRUST_SESSION_ID", "").strip()
-    if not span_id:
-        # No parent span -- skip rather than emit orphan score.
-        return
-
-    # Resolve project id. Prefer the direct id env var (no HTTP lookup).
-    project_id = os.environ.get("BRAINTRUST_CC_PROJECT_ID", "").strip()
-    if not project_id:
-        # Could do a /v1/project lookup here, but that doubles latency and
-        # the TS helper handles the lookup path. From Python we keep it
-        # cheap: require BRAINTRUST_CC_PROJECT_ID for store-score emission.
-        # Setting it is a one-time bootstrap step (see plan: Phase 2 ops).
-        return
-
-    api_url = os.environ.get("BRAINTRUST_API_URL", "https://api.braintrust.dev")
-
-    payload = {
-        "feedback": [
-            {
-                "id": span_id,
-                "scores": {
-                    "memory_store_quality": 1.0 if passes else 0.0,
-                    "memory_store_passes": 1.0 if passes else 0.0,
-                },
-                "metadata": {
-                    "reason": reason or ("passed" if passes else "unknown"),
-                    "learning_type": learning_type or "UNKNOWN",
-                    "content_len": content_len,
-                    "session_id": session_id or "unknown",
-                    "source": "store_learning.validate_learning_quality",
-                },
-            }
-        ]
-    }
-
-    try:
-        # Use requests if available, fall back to urllib so we don't add a
-        # hard dep. requests is already in the opc venv; urllib is stdlib.
-        try:
-            import requests  # type: ignore
-            requests.post(
-                f"{api_url}/v1/project_logs/{project_id}/feedback",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=2.0,
-            )
-        except ImportError:
-            import urllib.request
-            import urllib.error
-            req = urllib.request.Request(
-                f"{api_url}/v1/project_logs/{project_id}/feedback",
-                data=json.dumps(payload).encode("utf-8"),
-                headers={
-                    "Authorization": f"Bearer {api_key}",
-                    "Content-Type": "application/json",
-                },
-                method="POST",
-            )
-            try:
-                urllib.request.urlopen(req, timeout=2.0).read()
-            except urllib.error.URLError:
-                pass
-    except Exception:
-        # Truly fail-open: never break the store flow on score emit.
-        # We deliberately swallow without logging because store_learning
-        # runs at hot paths (every stop-learnings hook fire) and a noisy
-        # stderr would clutter the Claude Code session log.
-        pass
-
-
 def validate_learning_quality(
     content: str,
     learning_type: str | None = None,
@@ -321,9 +214,8 @@ def validate_learning_quality(
             ``store_learning_v2`` when it has already inferred a type, or
             the legacy v1 entrypoint). External CLI / hook callers MUST
             leave this False so the NULL-type guard fires.
-        session_id: Optional session identifier passed through to the
-            Braintrust score emit (Phase 2.2, story braintrust-scoring).
-            Not used in gate logic. Defaults to None.
+        session_id: Optional session identifier. Kept for caller
+            compatibility. Not used in gate logic. Defaults to None.
 
     Returns:
         {"passes": True} or {"passes": False, "reason": "..."}
@@ -337,7 +229,6 @@ def validate_learning_quality(
     for prefix in NOISE_PREFIXES:
         if stripped.startswith(prefix):
             reason = f"noise_prefix: {prefix}"
-            _emit_store_quality_score(False, reason, learning_type, content_len, session_id)
             return {"passes": False, "reason": reason}
 
     # 2. Reject NULL learning_type for external callers (G14 follow-up).
@@ -345,21 +236,18 @@ def validate_learning_quality(
     # inferred type (which sets _internal_caller=True before re-validating).
     if learning_type is None and not _internal_caller:
         reason = "missing_type (external caller must provide learning_type)"
-        _emit_store_quality_score(False, reason, learning_type, content_len, session_id)
         return {"passes": False, "reason": reason}
 
     # 3. Minimum length by type.
     min_len = MIN_CONTENT_LENGTH.get(learning_type, MIN_CONTENT_LENGTH[None])
     if len(stripped) < min_len:
         reason = f"too_short ({len(stripped)}<{min_len})"
-        _emit_store_quality_score(False, reason, learning_type, content_len, session_id)
         return {"passes": False, "reason": reason}
 
     # 4. Reject if high newline ratio (code/log dumps)
     newline_ratio = stripped.count("\n") / max(len(stripped), 1)
     if newline_ratio > 0.15 and len(stripped) > 500:
         reason = "high_newline_ratio (likely code dump)"
-        _emit_store_quality_score(False, reason, learning_type, content_len, session_id)
         return {"passes": False, "reason": reason}
 
     # 4b. Reject verbatim repetition (e.g., "this is important data. " × N).
@@ -372,7 +260,6 @@ def validate_learning_quality(
             uniqueness_ratio = len(set(w.lower() for w in words)) / len(words)
             if uniqueness_ratio < 0.25:
                 reason = "repetition"
-                _emit_store_quality_score(False, reason, learning_type, content_len, session_id)
                 return {
                     "passes": False,
                     "reason": reason,
@@ -383,11 +270,9 @@ def validate_learning_quality(
     content_lower = stripped.lower()
     signal_count = sum(1 for s in QUALITY_SIGNALS if s in content_lower)
     if signal_count >= 2:
-        _emit_store_quality_score(True, "boost", learning_type, content_len, session_id)
         return {"passes": True, "boost": True, "signals": signal_count}
 
     # 6. Default: pass (don't over-filter)
-    _emit_store_quality_score(True, "default_pass", learning_type, content_len, session_id)
     return {"passes": True}
 
 
@@ -482,8 +367,6 @@ async def store_learning_v2(
     # We pass _internal_caller=True because we just inferred a type above;
     # the NULL-type guard would otherwise fire spuriously if the heuristic
     # somehow returns None in the future.
-    # session_id is forwarded so Phase 2.2 score emit can record it as
-    # metadata alongside the score.
     quality = validate_learning_quality(
         content, learning_type, _internal_caller=True, session_id=session_id
     )

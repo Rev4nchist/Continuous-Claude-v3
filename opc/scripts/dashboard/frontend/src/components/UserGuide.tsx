@@ -58,13 +58,6 @@ const PILLAR_DOCS = [
     status: 'Count = active tasks',
   },
   {
-    name: 'Braintrust',
-    key: 'braintrust',
-    description: 'Session analytics via BTQL API. Tracks Claude Code sessions, agent usage, skill invocations, and token costs.',
-    detail: 'Weekly activity bars, agent/skill usage breakdown, and session list with drill-down.',
-    status: 'Count = recent sessions',
-  },
-  {
     name: 'Skills',
     key: 'skills',
     description: 'Skill activation monitoring across sessions. Tracks which skills are invoked, hook health tied to skill execution, and the skill dependency graph.',
@@ -101,7 +94,6 @@ const KEYBOARD_SHORTCUTS = [
   { key: 'r', opens: 'Roadmap' },
   { key: 'h', opens: 'Handoffs' },
   { key: 'a', opens: 'Ralph' },
-  { key: 'b', opens: 'Braintrust' },
   { key: 'i', opens: 'Skills' },
   { key: 's', opens: 'Sessions' },
   { key: 'x', opens: 'System Health' },

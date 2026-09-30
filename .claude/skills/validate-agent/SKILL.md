@@ -34,21 +34,16 @@ Tech Choices to Validate:
 3. [API Z] for [purpose]
 ```
 
-### Step 2: Check Past Precedent (RAG-Judge)
+### Step 2: Check Past Precedent
 
 Before web research, check if we've done similar work before:
 
 ```bash
-# Query Artifact Index for relevant past work
-uv run python scripts/braintrust_analyze.py --rag-judge --plan-file <plan-path>
+cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "<plan topic>" --k 3 --text-only
 ```
 
-This returns:
-- **Succeeded handoffs** - Past work that worked (patterns to follow)
-- **Failed handoffs** - Past work that failed (patterns to avoid)
-- **Gaps identified** - Issues the plan may be missing
-
-If RAG-judge finds critical gaps (verdict: FAIL), note these for the final report.
+Note past work that succeeded (patterns to follow) and past work that failed (patterns to avoid).
+If memory shows a critical gap in the plan, note it for the final report.
 
 ### Step 3: Research Each Choice (WebSearch)
 
@@ -93,7 +88,7 @@ plan_file: [path to plan]
 
 ## Overall Status: [VALIDATED | NEEDS REVIEW]
 
-## Precedent Check (RAG-Judge)
+## Precedent Check
 
 **Verdict:** [PASS | FAIL]
 
@@ -102,10 +97,10 @@ plan_file: [path to plan]
 - [Session/handoff that failed - pattern to avoid]
 
 ### Gaps Identified:
-- [Gap 1 from RAG-judge, if any]
-- [Gap 2 from RAG-judge, if any]
+- [Gap 1 from memory recall, if any]
+- [Gap 2 from memory recall, if any]
 
-(If no relevant precedent: "No similar past work found in Artifact Index")
+(If no relevant precedent: "No similar past work found in memory")
 
 ## Tech Choices Validated
 

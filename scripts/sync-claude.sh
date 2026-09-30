@@ -39,25 +39,14 @@ fi
 
 $VERBOSE && echo "Syncing: $SRC -> $DST" || true
 
-# Pre-flight: refuse reverse-sync if repo audit invariant violated.
-# Reverse-sync used to propagate fossilized ~/.claude/hooks/src/ back to repo,
-# silently undoing every emit-site fix. Audit gate stops that propagation.
+# Pre-flight: refuse reverse-sync if the repo has uncommitted changes in the
+# synced dirs. (The former emit-audit pre-flight, scripts/audit-braintrust-emits.sh,
+# was archived with Braintrust on 2026-09-30.)
 if [[ "$DIRECTION" == "to-repo" ]]; then
-    AUDIT_SCRIPT="$REPO_ROOT/scripts/audit-braintrust-emits.sh"
-    if [ -f "$AUDIT_SCRIPT" ]; then
-        if ! bash "$AUDIT_SCRIPT" > /tmp/sync-claude-audit.log 2>&1; then
-            echo "ABORT: reverse-sync refused -- repo audit invariant violated." >&2
-            echo "       Reverse-sync would propagate corruption to ~/.claude/." >&2
-            cat /tmp/sync-claude-audit.log >&2
-            exit 1
-        fi
-    fi
-
-    # Pre-flight 2 (2026-06-01): refuse reverse-sync if the REPO has uncommitted
+    # (2026-06-01): refuse reverse-sync if the REPO has uncommitted
     # changes in the synced dirs. Reverse-sync (active -> repo) would overwrite
     # fresh repo edits with the active copy -- the exact clobber that reverted
-    # rules/codex-adversarial.md twice on 2026-06-01 (the emit-only gate above
-    # does not protect non-emit docs). The repo is the source of truth: commit
+    # rules/codex-adversarial.md twice on 2026-06-01. The repo is the source of truth: commit
     # or stash repo edits first, or let the forward-sync handle repo -> active.
     # This makes an accidental or re-introduced automatic reverse-sync safe.
     if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then

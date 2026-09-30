@@ -4,7 +4,6 @@ Enforces:
 - Docker sandbox (refuses "local" -- its exec() keeps __import__/open unrestricted)
 - max_depth=1 (Wang reproduction: depth>=2 degrades)
 - Budget + iteration + timeout caps
-- Braintrust trajectory emission
 - Graceful vanilla-Claude fallback on any RLM failure
 - Threshold gate: below min_context_chars, skip RLM entirely
 - Dual backend: "claude_cli" (default, routes through Max subscription)
@@ -86,7 +85,7 @@ def rlm_complete(
       model: Anthropic model ID.
       api_key: falls back to env ANTHROPIC_API_KEY.
       on_trajectory: callback per iteration for live observability
-                     (wire to Braintrust in rlm_braintrust.py).
+                     (e.g. write to a local log).
       trajectory_dir: where to persist JSONL trajectory.
 
     Returns:

@@ -37,19 +37,15 @@ else:
            'fill': '#', 'empty': '-', 'check': '[x]', 'cross': '[ ]',
            'pipe': '|', 'spark': ' ........#'}
 
-from datetime import datetime, timedelta
+from datetime import datetime
 from pathlib import Path
 from collections import defaultdict
 import re
-
-import requests
 
 CLAUDE_DIR = Path.home() / ".claude"
 STATS_CACHE = CLAUDE_DIR / "stats-cache.json"
 DEBUG_DIR = CLAUDE_DIR / "debug"
 TSC_CACHE = CLAUDE_DIR / "tsc-cache"
-
-BRAINTRUST_API = "https://api.braintrust.dev"
 
 COSTS_PER_1M = {
     "opus": {"input": 15.0, "output": 75.0},
@@ -58,113 +54,6 @@ COSTS_PER_1M = {
 }
 
 MODEL_EMOJI = {"opus": "\U0001F3AD", "sonnet": "\U0001F3B5", "haiku": "\U0001F343"}
-
-
-def load_braintrust_key() -> str | None:
-    """Load Braintrust API key from .env files."""
-    for path in [CLAUDE_DIR, Path.cwd()]:
-        env_file = path / ".env"
-        if env_file.exists():
-            try:
-                for line in env_file.read_text().splitlines():
-                    if line.startswith("BRAINTRUST_API_KEY="):
-                        return line.split("=", 1)[1].strip("\"'")
-            except Exception:
-                pass
-    return os.environ.get("BRAINTRUST_API_KEY")
-
-
-def _run_with_timeout(func, timeout_sec=5):
-    """Run a function with a hard timeout using threads."""
-    import threading
-    result = [None]
-    exception = [None]
-
-    def target():
-        try:
-            result[0] = func()
-        except Exception as e:
-            exception[0] = e
-
-    thread = threading.Thread(target=target)
-    thread.daemon = True
-    thread.start()
-    thread.join(timeout_sec)
-
-    if thread.is_alive():
-        return None  # Timed out
-    if exception[0]:
-        return None
-    return result[0]
-
-
-def get_braintrust_token_stats(api_key: str, hours: int = 24) -> dict | None:
-    """Fetch actual token usage from Braintrust for today's sessions."""
-    headers = {"Authorization": f"Bearer {api_key}", "Content-Type": "application/json"}
-
-    # Get project ID for claude-code or similar - with hard timeout
-    def fetch_projects():
-        return requests.get(f"{BRAINTRUST_API}/v1/project", headers=headers, timeout=5)
-
-    try:
-        resp = _run_with_timeout(fetch_projects, timeout_sec=8)
-        if resp is None:
-            return None
-        if resp.status_code != 200:
-            return None
-        projects = resp.json().get("objects", [])
-        if not projects:
-            return None
-
-        # Find claude-code project or use first one
-        project_id = None
-        for p in projects:
-            name = p.get("name", "").lower()
-            if "claude" in name or "code" in name:
-                project_id = p["id"]
-                break
-        if not project_id:
-            project_id = projects[0]["id"]
-
-        # Query for token usage in last N hours - with hard timeout
-        since = (datetime.now() - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
-        query = f"""
-            SELECT
-                SUM(metrics.tokens) as total_tokens,
-                SUM(metrics.prompt_tokens) as input_tokens,
-                SUM(metrics.completion_tokens) as output_tokens,
-                COUNT(*) as span_count
-            FROM project_logs('{project_id}')
-            WHERE created >= '{since}'
-        """
-
-        def fetch_stats():
-            return requests.post(
-                f"{BRAINTRUST_API}/btql",
-                headers=headers,
-                json={"query": query, "fmt": "json"},
-                timeout=10
-            )
-
-        resp = _run_with_timeout(fetch_stats, timeout_sec=12)
-        if resp is None:
-            return None
-
-        if resp.status_code == 200:
-            data = resp.json().get("data", [])
-            if data and data[0]:
-                row = data[0]
-                return {
-                    "input": int(row.get("input_tokens") or 0),
-                    "output": int(row.get("output_tokens") or 0),
-                    "total": int(row.get("total_tokens") or 0),
-                    "spans": int(row.get("span_count") or 0),
-                    "source": "braintrust"
-                }
-    except Exception as e:
-        pass  # Fall back to estimates
-
-    return None
 
 
 def format_tokens(n: int) -> str:
@@ -322,25 +211,10 @@ def print_dashboard():
     tool_count = today.get("toolCallCount", 0)
     session_count = today.get("sessionCount", 0)
 
-    # Try to get real token data from Braintrust
-    bt_key = load_braintrust_key()
-    bt_stats = None
-    data_source = "estimate"
-
-    if bt_key:
-        bt_stats = get_braintrust_token_stats(bt_key)
-        if bt_stats and bt_stats.get("total", 0) > 0:
-            data_source = "braintrust"
-            input_tokens = bt_stats["input"]
-            output_tokens = bt_stats["output"]
-        else:
-            tokens = estimate_tokens_from_messages(msg_count, tool_count)
-            input_tokens = tokens["input"]
-            output_tokens = tokens["output"]
-    else:
-        tokens = estimate_tokens_from_messages(msg_count, tool_count)
-        input_tokens = tokens["input"]
-        output_tokens = tokens["output"]
+    # Token usage is an estimate from local message and tool counts.
+    tokens = estimate_tokens_from_messages(msg_count, tool_count)
+    input_tokens = tokens["input"]
+    output_tokens = tokens["output"]
 
     model = "opus"
     cost = (input_tokens / 1_000_000 * COSTS_PER_1M[model]["input"] +
@@ -357,8 +231,7 @@ def print_dashboard():
     savings_history = [50 + (hash(d.get("date", "")) % 30) for d in recent]
 
     print(BOX['tl'] + BOX['h'] * 62 + BOX['tr'])
-    source_label = "[Live]" if data_source == "braintrust" else "[Est.]"
-    print(f"{BOX['v']}  {source_label} TLDR Stats Dashboard" + " " * 37 + BOX['v'])
+    print(f"{BOX['v']}  [Est.] TLDR Stats Dashboard" + " " * 37 + BOX['v'])
     print(BOX['bl'] + BOX['h'] * 62 + BOX['br'])
     print()
 

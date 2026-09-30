@@ -10,10 +10,6 @@ import type {
   PageIndexResponse,
   RalphTasksResponse,
   RalphStateResponse,
-  BraintrustDailyActivity,
-  BraintrustAgentStat,
-  BraintrustSkillStat,
-  BraintrustSession,
   SessionsResponse,
   SessionActivity,
   SystemHealthReport,
@@ -134,23 +130,6 @@ export async function fetchRalphTasks(): Promise<RalphTasksResponse> {
 
 export async function fetchRalphState(): Promise<RalphStateResponse> {
   return fetchJson<RalphStateResponse>('/pillars/ralph/state')
-}
-
-// Braintrust
-export async function fetchBraintrustWeekly(): Promise<{ daily: BraintrustDailyActivity[] }> {
-  return fetchJson('/pillars/braintrust/weekly-summary')
-}
-
-export async function fetchBraintrustAgents(): Promise<{ agents: BraintrustAgentStat[] }> {
-  return fetchJson('/pillars/braintrust/agent-stats')
-}
-
-export async function fetchBraintrustSkills(): Promise<{ skills: BraintrustSkillStat[] }> {
-  return fetchJson('/pillars/braintrust/skill-stats')
-}
-
-export async function fetchBraintrustSessions(limit = 10): Promise<{ sessions: BraintrustSession[] }> {
-  return fetchJson(`/pillars/braintrust/sessions?limit=${limit}`)
 }
 
 // Sessions

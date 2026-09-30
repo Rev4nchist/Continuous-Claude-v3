@@ -39,7 +39,7 @@ paths:
 | Sync gap | Changed in repo, not in ~/.claude | `bash scripts/sync-to-active.sh` |
 | Windows encoding crash | Unicode/emoji in Python hooks | Use ASCII only |
 | SessionEnd "Hook cancelled" | Blocking spawnSync exceeds timeout | Use fire-and-forget spawn (detached, unref'd) for long operations; bump timeout to 30-60s in settings.json |
-| Prior-phase emit silently missing | Later agent regenerated whole file from context, lost the addition (NOT a linter — confirmed no formatter exists). Three known instances. | After any TS hook edit, run `bash scripts/audit-braintrust-emits.sh` and confirm baseline count survives |
+| Prior-phase code silently missing | Later agent regenerated whole file from context, lost the addition (NOT a linter — confirmed no formatter exists). Known instances. | After any TS hook edit, run `npx vitest run` and `npm run build` in `.claude/hooks`, and review `git diff` for deleted lines |
 
 ## Key Architecture Notes
 

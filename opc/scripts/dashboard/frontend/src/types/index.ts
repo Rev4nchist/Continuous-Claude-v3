@@ -169,32 +169,6 @@ export interface RalphStateResponse {
   retry_queue: Array<{ task_id: string; attempt: number; error: string }>
 }
 
-// Braintrust types
-export interface BraintrustDailyActivity {
-  day: string
-  sessions: number
-  tool_calls: number
-}
-
-export interface BraintrustAgentStat {
-  agent: string
-  runs: number
-  sessions: number
-}
-
-export interface BraintrustSkillStat {
-  skill: string
-  activations: number
-  sessions: number
-}
-
-export interface BraintrustSession {
-  session_id: string
-  started: string
-  ended: string
-  span_count: number
-}
-
 // Sessions types
 export type SessionStatus = 'active' | 'idle' | 'stale'
 
