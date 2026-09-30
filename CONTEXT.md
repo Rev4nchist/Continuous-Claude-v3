@@ -1,8 +1,7 @@
 # CONTEXT.md: the words we use
 
 Read this before work in this repo. Use these exact terms in code, commits, and replies. Do not invent
-a synonym for a term defined here. A glossary helps the agent talk to Dave in Dave's words
-(Theo, [vid:e1snsuY4lTI @25:03]).
+a synonym for a term defined here.
 
 ## People and roles
 
@@ -15,8 +14,10 @@ a synonym for a term defined here. A glossary helps the agent talk to Dave in Da
 
 - **CCv3 / the harness**: this repo plus its live copy. It configures every Claude Code session.
 - **Repo**: `~/continuous-claude`. Canonical source. **Active**: `~/.claude`. What Claude Code reads.
-  **Forward sync** copies repo to active (`scripts/sync-to-active.sh`, auto on commit). **Reverse sync**
-  is manual only. **Drift**: repo and active differ.
+  **Forward sync** copies repo to active (`scripts/sync-to-active.sh`, on commit to `main` in the primary
+  checkout only). **Reverse sync** is manual only. **Drift**: repo and active differ.
+  **Sync cursor**: `~/.claude/state/sync-cursor`, the last `main` commit synced. **Clobber-guard quarantine**:
+  the next sync saves a file edited or hand-copied in `~/.claude` to `.sync-quarantine/<ts>/`, then overwrites it.
 - **Rule**: a markdown file in `.claude/rules-src/` (repo) / `~/.claude/rules/` (active). Always loaded.
   **On-demand rule**: one in `.claude/rules-ondemand/`; the **rule-router** hook loads it at the first matching tool call.
 - **Skill**: `SKILL.md` under `.claude/skills/<name>/`. Loaded on trigger. Its **description** is the

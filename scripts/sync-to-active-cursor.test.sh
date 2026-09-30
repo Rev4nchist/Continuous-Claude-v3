@@ -118,6 +118,34 @@ out="$(GIT_DIR="$OTHER/.git" HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.
 chk "not skipped as 'feature-elsewhere'" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 0 || echo 1)"
 chk "h.md synced from the fixture repo" "$(has "$ACT/rules/h.md")"
 
+echo "=== T9: the post-commit hook shows a skip off main and logs the detached sync on main ==="
+# The REAL scripts/post-commit-hook.sh, installed in the fixture repo, fired by real commits.
+cp "$SCRIPT_DIR/post-commit-hook.sh" "$REPO/.git/hooks/post-commit"; chmod +x "$REPO/.git/hooks/post-commit"
+LOG="$HOMEDIR/.claude/logs/post-commit-sync.log"
+hook_commit() {  # hook_commit <message>: real commit, HOME in the fixture, hook output returned
+    git -C "$REPO" add -A >/dev/null 2>&1
+    HOME="$HOMEDIR" git -C "$REPO" -c user.name=fixture -c user.email=fixture@example.invalid commit -q -m "$1" 2>&1
+}
+g checkout -q -b feat9
+printf 'i\n' > "$REPO/.claude/rules-src/i.md"
+out="$(hook_commit i)"
+chk "feature-branch commit prints 'Sync skipped' from the hook" "$(printf '%s' "$out" | grep -q 'Sync skipped: feat9 is not main' && echo 1 || echo 0)"
+sleep 2
+chk "feature-branch commit writes no sync log" "$(not "$LOG")"
+chk "i.md NOT live" "$(not "$ACT/rules/i.md")"
+g checkout -q main
+printf 'j\n' > "$REPO/.claude/rules-src/j.md"
+out="$(hook_commit j)"
+chk "main commit does not print 'Sync skipped'" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 0 || echo 1)"
+for _ in $(seq 1 50); do
+    [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor" 2>/dev/null)" = "$(git -C "$REPO" rev-parse HEAD)" ] && break
+    sleep 0.2
+done
+chk "main commit appends a timestamped header to the log" "$(grep -qE '^=== [0-9]{4}-[0-9]{2}-[0-9]{2}T[0-9:]+.* post-commit sync \(main' "$LOG" 2>/dev/null && echo 1 || echo 0)"
+chk "detached sync ran and moved the cursor to HEAD" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse HEAD)" ] && echo 1 || echo 0)"
+chk "j.md synced by the hook" "$(has "$ACT/rules/j.md")"
+rm -f "$REPO/.git/hooks/post-commit"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

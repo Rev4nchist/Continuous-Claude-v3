@@ -51,6 +51,9 @@ hook only in the active file). Two classes of divergence are EXPECTED and never 
 `remoteControlAtStartup`, `skipAutoPermissionPrompt`, `skipWorkflowUsageWarning`,
 `switchModelsOnFlag`, `theme`, `tui`, `voiceEnabled`. The two `skillListing*` keys are NOT local:
 they decide which skills the router sees, so they live in the template (P24).
+Exception: the `modelSettings` entries for `claude-sonnet-5` and `claude-sonnet-5-5`
+(`effortLevel: high`) are policy, not preference, and live in the template (Dave, 2026-09-30:
+Sonnet always runs at high). Other `modelSettings` entries stay machine-local.
 
 **Machine-local hook registrations** (active-only by design; the capture script hard-excludes them):
 - `permission-auto-allow.mjs` (PermissionRequest) — **SECURITY**: a permission-bypass policy. Must be
