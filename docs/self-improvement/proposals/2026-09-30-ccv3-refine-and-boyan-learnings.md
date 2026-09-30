@@ -2,6 +2,10 @@
 
 # CCv3 refinement proposal: today's work and the Boyan learnings (2026-09-30)
 
+> **Outcome (2026-09-30):** rows 1-5 shipped in PR #68. A3.1-A3.3, A3.5-A3.7 and B2 landed; the
+> measured always-loaded set is 25,648 of 26,000 chars (`context-budget-guard.mjs --repo`), which
+> replaces the estimates in A3 below. A3.8 and A3.9 are not done.
+
 ## 1. Summary
 
 - **Part A** lists 57 edits on 6 surfaces, and 18 are "must". Most come from 3 root causes:

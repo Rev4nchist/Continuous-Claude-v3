@@ -90,7 +90,9 @@ export function agentDirs(cwd: unknown, env: DecideEnv): string[] {
   dirs.push(join(env.home, '.claude', 'agents'));
   const seen = new Set<string>();
   return dirs.filter(d => {
-    const key = d.toLowerCase().replace(/\\/g, '/');
+    // Keep case: on a case-sensitive filesystem /work/app and /work/App are different dirs.
+    // On Windows a case-only duplicate costs one extra existsSync, nothing more.
+    const key = d.replace(/\\/g, '/');
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

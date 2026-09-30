@@ -19,7 +19,7 @@ import * as fs from 'fs';
 import * as os from 'os';
 import * as path from 'path';
 
-import { decide, BUILTIN_AGENTS } from '../agent-model-guard.js';
+import { decide, agentDirs, BUILTIN_AGENTS } from '../agent-model-guard.js';
 
 let root: string;
 let home: string;
@@ -125,5 +125,15 @@ describe('agent-model-guard decide()', () => {
   it('allows non-Agent tools and empty subagent_type', () => {
     expect(decide({ tool_name: 'Bash', tool_input: {} } as never, { home }).allow).toBe(true);
     expect(decide({ tool_name: 'Agent', tool_input: {} } as never, { home }).allow).toBe(true);
+  });
+});
+
+describe('agent-model-guard agentDirs()', () => {
+  it('keeps two dirs that differ only by case (case-sensitive filesystems; CodeRabbit PR #68)', () => {
+    const cwd = path.join(path.sep, 'work', 'app');
+    const projectDir = path.join(path.sep, 'work', 'App');
+    const dirs = agentDirs(cwd, { home: path.join(path.sep, 'home', 'u'), projectDir });
+    expect(dirs).toContain(path.join(cwd, '.claude', 'agents'));
+    expect(dirs).toContain(path.join(projectDir, '.claude', 'agents'));
   });
 });

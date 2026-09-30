@@ -47,7 +47,7 @@ Report "CodeRabbit rate limited, head not reviewed" to Dave. With his merge yes,
 the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #67 precedent). **Never click or request
 the paid on-demand review.** Do not claim a new push re-triggers review: this is unverified.
 
-When Dave says merge, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
+When Dave says merge for a reviewed PR, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
 through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, and
 removes the worktree and branches. It syncs `~/.claude` only when the primary checkout is on `main`.
 Otherwise it prints that it skipped the sync. Then switch the primary checkout to `main`. Run

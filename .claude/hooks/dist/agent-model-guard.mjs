@@ -46,7 +46,7 @@ function agentDirs(cwd, env) {
   dirs.push(join(env.home, ".claude", "agents"));
   const seen = /* @__PURE__ */ new Set();
   return dirs.filter((d) => {
-    const key = d.toLowerCase().replace(/\\/g, "/");
+    const key = d.replace(/\\/g, "/");
     if (seen.has(key)) return false;
     seen.add(key);
     return true;

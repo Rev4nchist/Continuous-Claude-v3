@@ -55,9 +55,10 @@ export function parseTools(text) {
   if (i === -1) return null;
   let rest = lines[i].replace(/^tools:/, '').replace(/\s+#.*$/, '').trim();
   if (rest) {
+    // An explicit list, even an empty one (`tools: []`), grants only what it names: never null.
     if (rest.startsWith('[')) rest = rest.replace(/^\[/, '').replace(/\].*$/, '');
-    const tools = rest.split(',').map(unquote).filter(Boolean);
-    return tools.length ? tools : null;
+    else rest = unquote(rest); // `tools: "Read, Bash"` is one quoted scalar: unquote it before splitting
+    return rest.split(',').map(unquote).filter(Boolean);
   }
   const tools = [];
   for (const l of lines.slice(i + 1)) {

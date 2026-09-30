@@ -12,6 +12,16 @@ test('tools as an inline YAML list are parsed', () => {
   assert.deepEqual(parseTools(agent('tools: [Read, "Grep", Glob]', '')), ['Read', 'Grep', 'Glob']);
 });
 
+test('a quoted comma-string scalar is unquoted before splitting (CodeRabbit PR #68)', () => {
+  assert.deepEqual(parseTools(agent('tools: "Read, Bash"', '')), ['Read', 'Bash']);
+  assert.deepEqual(toolConflicts(agent('tools: "Read, Bash"', BASH_BLOCK)), []);
+});
+
+test('an explicit empty list grants nothing, so a bash block is a conflict (CodeRabbit PR #68)', () => {
+  assert.deepEqual(parseTools(agent('tools: []', '')), []);
+  assert.ok(toolConflicts(agent('tools: []', BASH_BLOCK)).length > 0);
+});
+
 test('tools as a block YAML list are parsed', () => {
   assert.deepEqual(parseTools(agent('tools:\n  - Read\n  - Bash  # shell', '')), ['Read', 'Bash']);
 });

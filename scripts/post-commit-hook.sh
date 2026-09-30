@@ -32,6 +32,12 @@ fi
 
 echo "Syncing to ~/.claude (background; log: $LOG_FILE)..."
 mkdir -p "$(dirname "$LOG_FILE")" 2>/dev/null || true
+# An unwritable log must not stop the sync: the `>> "$LOG_FILE"` redirect below would fail
+# before nohup starts. Fall back to /dev/null and say so.
+if ! { : >> "$LOG_FILE"; } 2>/dev/null; then
+    echo "WARNING: cannot write $LOG_FILE; syncing without a log" >&2
+    LOG_FILE=/dev/null
+fi
 printf '=== %s post-commit sync (%s @ %s) ===\n' "$(date '+%Y-%m-%dT%H:%M:%S%z')" "$branch" "$REPO_ROOT" >> "$LOG_FILE" 2>/dev/null || true
 # Fire-and-forget: fully detach so the sync can't linger attached to the commit shell /
 # terminal. The output redirect (to the log file, not the shell's pipe) is the real fix for a
