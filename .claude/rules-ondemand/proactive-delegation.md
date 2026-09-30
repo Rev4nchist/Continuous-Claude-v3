@@ -35,7 +35,7 @@ Claude: "I detect a /fix workflow with 2 tasks:
 **Delegate to agents:**
 - Reading 3+ files → scout
 - External research → oracle
-- Implementation → kraken/spark
+- Implementation → kraken/spark. If kraken returns `status: partial`, re-spawn it with its `followups` text in the task prompt.
 - Running tests → validator/arbiter
 - Debugging → debug-agent/sleuth
 
@@ -44,6 +44,12 @@ Claude: "I detect a /fix workflow with 2 tasks:
 - Workflow selection
 - Agent coordination
 - Presenting summaries
+
+## Model and effort at spawn
+
+- Sonnet work: use a predefined Sonnet agent. It carries `effort: high`. An unpinned agent copies the parent's effort.
+- An ad-hoc `Agent` call names `model`. A workflow `agent()` on Sonnet passes `effort: 'high'`.
+- Never haiku.
 
 ## Parallel Detection
 

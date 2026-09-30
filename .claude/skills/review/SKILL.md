@@ -79,7 +79,7 @@ Task(
   - Error handling
   - Test coverage
 
-  Output: List of issues with severity (critical/major/minor)
+  Output: List of issues with severity (critical/high/medium/low)
   """,
   run_in_background=true
 )
@@ -246,8 +246,8 @@ Phase 1: Running parallel reviews...
 └────────────────────────────────────────────┘
 
 critic: Found 2 issues
-- [minor] Inconsistent error messages in auth.ts
-- [major] Missing input validation in login()
+- [low] Inconsistent error messages in auth.ts
+- [high] Missing input validation in login()
 
 plan-reviewer: ✅ Matches authentication plan
 
@@ -285,6 +285,6 @@ Phase 2: Synthesizing...
 
 ## Verdicts
 
-- **APPROVE**: Ready to merge, all issues are minor
+- **APPROVE**: Ready to merge, all issues are low or medium
 - **REQUEST_CHANGES**: Blocking issues must be fixed
 - **NEEDS_DISCUSSION**: Architectural decisions need input

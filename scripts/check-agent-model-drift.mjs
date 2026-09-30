@@ -4,7 +4,7 @@
  *
  * Treats each agent's `.md` frontmatter `model:` as CANONICAL and verifies:
  *   1. every agent .md has an EXPLICIT model in {opus, sonnet} — never omitted/inherit/haiku
- *   2. every sonnet agent pins `effort: high` (Dave's rule: Sonnet is never medium or xhigh)
+ *   2. every agent (opus and sonnet) pins `effort: high` (Dave's rule: never medium, low or xhigh)
  *   3. every .json sidecar's `model` matches its `.md` twin
  *      (the .json `model` is read at spawn by opc/scripts/claude_spawn.py and is NOT
  *       auto-synced from the .md, so it can silently drift)
@@ -56,9 +56,9 @@ for (const md of files) {
   if (model === 'inherit') { errors.push(`${name}.md: model=inherit resolves to session model (Opus-on-everything) — pin a tier`); continue; }
   if (!ALLOWED.has(model)) { errors.push(`${name}.md: model="${model}" not in {opus, sonnet}`); continue; }
   if (model === 'opus') opus++; else sonnet++;
-  // Dave's rule (2026-09-30): Sonnet always runs at effort high. Without the pin a Sonnet agent
-  // inherits the spawning session's effort, which can be medium.
-  if (model === 'sonnet' && effort !== 'high') errors.push(`${name}.md: model=sonnet needs "effort: high" (found ${effort ?? 'none'})`);
+  // Dave's rules (2026-09-30): Sonnet and Opus agents always run at effort high. Without the pin an
+  // agent copies the spawning session's effort (probe: .claude/cache/e2e/2026-09-30-effort-probe.md).
+  if (effort !== 'high') errors.push(`${name}.md: model=${model} needs "effort: high" (found ${effort ?? 'none'})`);
 
   // .json sidecar parity (only the legacy CMA-mirror agents have one — check whichever exist)
   const jsonPath = join(agentsDir, `${name}.json`);

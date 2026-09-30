@@ -98,3 +98,56 @@ test('a review proof never overrides open threads or a non-success CodeRabbit st
   pending.combined.statuses = [{ context: 'CodeRabbit', state: 'pending' }];
   assert.equal(evaluate(pending).ready, false);
 });
+
+// Rate limit cause (proposal A6.5). PR #67 head 4eaac1b and PR #68 head a8d94bf: the commit status
+// was success with description "Review rate limited", and the script only said "pending, or skipped".
+const withStatus = (state, description) => {
+  const i = input();
+  i.combined.statuses = [{ context: 'CodeRabbit', state, ...(description === undefined ? {} : { description }) }];
+  return i;
+};
+const RATE = /CodeRabbit rate limited: head not reviewed\. Do not post @coderabbitai review.*-IgnoreReview/;
+
+test('PR #67/#68 shape: status success + "Review rate limited" names the rate limit and sets rateLimited', () => {
+  const r = evaluate(withStatus('success', 'Review rate limited'));
+  assert.equal(r.rateLimited, true);
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => RATE.test(x)), r.reasons.join('; '));
+  assert.equal(r.coderabbitDescription, 'Review rate limited');
+});
+
+test('the other wording "Review limit reached" is also named as a rate limit', () => {
+  const r = evaluate(withStatus('success', 'Review limit reached'));
+  assert.equal(r.rateLimited, true);
+  assert.ok(r.reasons.some((x) => RATE.test(x)));
+});
+
+test('a pending status carrying the limit text still names the rate limit and keeps the pending reason', () => {
+  const r = evaluate(withStatus('pending', 'Review rate limited'));
+  assert.equal(r.rateLimited, true);
+  assert.ok(r.reasons.some((x) => RATE.test(x)));
+  assert.ok(r.reasons.some((x) => /is "pending"/.test(x)));
+});
+
+test('a missing description keeps the generic reason and rateLimited false', () => {
+  const r = evaluate(withStatus('success'));
+  assert.equal(r.rateLimited, false);
+  assert.equal(r.coderabbitDescription, null);
+  assert.ok(r.reasons.some((x) => /no CodeRabbit review of the head commit/.test(x)));
+  assert.ok(!r.reasons.some((x) => RATE.test(x)));
+});
+
+test('a normal review in progress is not called a rate limit', () => {
+  const r = evaluate(withStatus('pending', 'Review in progress'));
+  assert.equal(r.rateLimited, false);
+  assert.ok(!r.reasons.some((x) => RATE.test(x)));
+  assert.ok(r.reasons.some((x) => /no CodeRabbit review of the head commit/.test(x)));
+});
+
+test('a reviewed head is never flagged rate limited, even if the status text is stale', () => {
+  const i = withStatus('success', 'Review rate limited');
+  i.comments = [{ user: BOT, body: summary(BASE, HEAD) }];
+  const r = evaluate(i);
+  assert.equal(r.rateLimited, false);
+  assert.equal(r.reviewedHead, true);
+});

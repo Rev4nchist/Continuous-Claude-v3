@@ -2,6 +2,7 @@
 name: plan-reviewer
 description: Reviews feature plans (from architect) and change plans (from phoenix)
 model: opus
+effort: high
 tools: [Read, Grep, Glob]
 ---
 

@@ -20,7 +20,7 @@ Task(subagent_type="...", run_in_background=true, prompt="... Output to: /path/t
 Task(subagent_type="...", run_in_background=false)
 ```
 
-Background agents with `run_in_background=true` isolate their context. Have them write results to files in `.claude/cache/agents/<agent-type>/`.
+Background agents with `run_in_background=true` isolate their context. Have them write results to files in `.claude/cache/agents/<agent-type>/`. Exception: oracle, scout, kraken and critic write no files. They return results in the final message.
 
 ### 2. Never Use TaskOutput to Retrieve Results
 ```
@@ -59,7 +59,7 @@ After agent work:
 
 ### 5. File-Based Agent Pipeline Pattern
 ```
-Research agent → .claude/cache/agents/oracle/output.md
+Research agent (oracle) → final message; the orchestrator saves it to a file if needed
                           ↓
 Plan agent → .claude/cache/agents/plan-agent/output.md (reads research)
                           ↓

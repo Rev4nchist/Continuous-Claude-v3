@@ -2,6 +2,7 @@
 name: aegis
 description: Security vulnerability analysis and testing
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 

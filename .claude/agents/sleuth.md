@@ -2,6 +2,7 @@
 name: sleuth
 description: Deep bug forensics with file-level reproduction. Use when the bug is multi-file, intermittent, or needs evidence-grade root cause analysis with traced code paths. Pairs with the systematic-debugging skill. For unclear or single-file bugs, prefer debug-agent.
 model: opus
+effort: high
 tools: [Read, Bash, Grep, Glob]
 ---
 

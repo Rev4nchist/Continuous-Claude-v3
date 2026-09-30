@@ -58,6 +58,9 @@ export function summaryCoversHead(body, head) {
   return false;
 }
 
+const RATE_LIMIT_TEXT = /rate limit|limit reached/i;
+const RATE_LIMIT_REASON = 'CodeRabbit rate limited: head not reviewed. Do not post @coderabbitai review; report to Dave (land-pr -IgnoreReview on his yes)';
+
 export function evaluate({ pull, combined, checkRuns, threads, reviews = [], comments = [] }) {
   const head = pull.head.sha;
   const cr = (combined.statuses || []).find((s) => /coderabbit/i.test(s.context));
@@ -77,14 +80,18 @@ export function evaluate({ pull, combined, checkRuns, threads, reviews = [], com
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
   if (!cr) reasons.push('no CodeRabbit status on the head commit (not reviewed yet, or the app is not installed)');
   else if (cr.state !== 'success') reasons.push(`CodeRabbit status on the head commit is "${cr.state}" (review pending for the latest push)`);
-  if (!reviewedHead) reasons.push('no CodeRabbit review of the head commit (pending, or skipped by the review limit; never buy the on-demand review)');
+  // The commit status description names the cause: "Review rate limited" (PR #67 head 4eaac1b,
+  // PR #68 head a8d94bf), while the state still reads success. Only an unreviewed head is flagged.
+  const rateLimited = !reviewedHead && RATE_LIMIT_TEXT.test(cr?.description || '');
+  if (rateLimited) reasons.push(RATE_LIMIT_REASON);
+  else if (!reviewedHead) reasons.push('no CodeRabbit review of the head commit (pending, or skipped by the review limit; never buy the on-demand review)');
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref,
-    reviewed: Boolean(cr && cr.state === 'success' && reviewedHead), coderabbit: cr ? cr.state : 'absent', reviewedHead,
+    reviewed: Boolean(cr && cr.state === 'success' && reviewedHead), coderabbit: cr ? cr.state : 'absent', coderabbitDescription: cr?.description ?? null, rateLimited, reviewedHead,
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state,
     ready: reasons.length === 0, reasons,
   };
@@ -118,7 +125,7 @@ function main() {
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else {
     console.log(`PR #${result.pr} head ${result.headShort} (${result.branch}): ${result.ready ? 'READY' : 'NOT READY'}`);
-    console.log(`  CodeRabbit status: ${result.coderabbit} | review of head: ${result.reviewedHead ? 'yes' : 'NO'} | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
+    console.log(`  CodeRabbit status: ${result.coderabbit} | review of head: ${result.reviewedHead ? 'yes' : 'NO'}${result.coderabbitDescription ? ` ("${result.coderabbitDescription}")` : ''} | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
     for (const r of result.reasons) console.log(`  - ${r}`);
   }
   process.exit(result.ready ? 0 : 1);

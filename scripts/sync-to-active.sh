@@ -74,6 +74,16 @@ if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     sync_gitdir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null || echo '')"
     sync_common="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
     [[ "$sync_branch" == "main" && "$sync_gitdir" == "$sync_common" ]] || SYNC_ON_MAIN=false
+    # SYNC_MAIN_DETACHED=1 (set by land-pr.ps1): a detached linked worktree checked out AT the
+    # commit main points to counts as main, so it syncs AND moves the cursor. land-pr uses one
+    # when the primary checkout sits on a feature branch. A named branch, or a detached HEAD at any
+    # other commit, is still skipped. Unlike SYNC_ALLOW_BRANCH this is safe to advance the cursor:
+    # the content is exactly main's.
+    if ! $SYNC_ON_MAIN && [[ "${SYNC_MAIN_DETACHED:-0}" == "1" && "$sync_branch" == "HEAD" ]]; then
+        sync_head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
+        sync_main_sha="$(git -C "$REPO_ROOT" rev-parse refs/heads/main 2>/dev/null || echo 'none')"
+        [[ -n "$sync_head_sha" && "$sync_head_sha" == "$sync_main_sha" ]] && SYNC_ON_MAIN=true
+    fi
 fi
 if ! $SYNC_ON_MAIN && [[ "${SYNC_ALLOW_BRANCH:-0}" != "1" ]] && ! $DRY_RUN; then
     echo "Sync skipped: '$sync_branch' is not main in the primary checkout. Merge to main, then run scripts/sync-to-active.sh --changed (override: SYNC_ALLOW_BRANCH=1)."
@@ -86,6 +96,17 @@ CURSOR_FILE="$ACTIVE_CLAUDE/state/sync-cursor"
 PENDING_FILE="$ACTIVE_CLAUDE/.sync.pending"
 
 repo_head() { git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || true; }
+
+# May this run consume a .sync.pending marker? A detached temp worktree (SYNC_MAIN_DETACHED=1,
+# land-pr.ps1) has a fixed HEAD, so "HEAD did not move" says nothing about main. If main moved past
+# HEAD, the marker stands for commits this worktree cannot copy (its files are the OLD main).
+# Deleting it would drop them silently, so leave it; the next run from main (or land-pr's cursor
+# check) picks them up. Every other run keeps the old behaviour.
+pending_consumable() {
+    [[ "${SYNC_MAIN_DETACHED:-0}" == "1" ]] || return 0
+    [[ "$(git -C "$REPO_ROOT" rev-parse --abbrev-ref HEAD 2>/dev/null)" == "HEAD" ]] || return 0
+    [[ "$(repo_head)" == "$(git -C "$REPO_ROOT" rev-parse refs/heads/main 2>/dev/null)" ]]
+}
 
 # Written only after a run finishes copying, so a killed run leaves the old cursor
 # and the next run simply redoes the range (copies are idempotent). Only a run on
@@ -357,7 +378,7 @@ finish_sync() {
     [[ $guard_rc -eq 0 ]] && write_cursor "$target"
     release_lock
     [[ $guard_rc -ne 0 ]] && exit 3
-    if ! $DRY_RUN && [[ -e "$PENDING_FILE" ]]; then
+    if ! $DRY_RUN && [[ -e "$PENDING_FILE" ]] && pending_consumable; then
         rm -f "$PENDING_FILE"
         $VERBOSE && echo "A commit queued during this run; syncing it now." || true
         exec bash "$SCRIPT_DIR/$(basename "$0")" --changed $( $VERBOSE && echo --verbose || true )
@@ -568,7 +589,7 @@ if $CHANGED; then
 
     # Commits that landed while we held the lock left a pending marker. Sync them
     # now rather than dropping them (the old lock-contention loss).
-    while [[ -e "$PENDING_FILE" ]] && ! $DRY_RUN; do
+    while [[ -e "$PENDING_FILE" ]] && ! $DRY_RUN && pending_consumable; do
         rm -f "$PENDING_FILE"
         next_target="$(repo_head)"
         [[ -z "$next_target" || "$next_target" == "$sync_target" ]] && break

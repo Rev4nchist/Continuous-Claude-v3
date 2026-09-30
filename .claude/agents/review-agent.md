@@ -2,6 +2,7 @@
 name: review-agent
 description: Review implementation by comparing plan (intent) vs git diff (changes), with the local session transcript as context
 model: opus
+effort: high
 tools: [Read, Write, Bash, Grep, Glob]
 ---
 
