@@ -37,6 +37,8 @@ $CLAUDE_PROJECT_DIR = /path/to/project
 
 ## Step 2: Performance Analysis
 
+Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
+
 ### Profiling (Python)
 ```bash
 # CPU profiling
@@ -63,37 +65,37 @@ node --inspect app.js
 ### Concurrency Analysis
 ```bash
 # Find async patterns
-rp-cli -e 'search "async|await|Promise|Thread|Lock|Mutex"'
+rg -n "async|await|Promise|Thread|Lock|Mutex"
 
 # Find potential race conditions
-rp-cli -e 'search "global|shared|static.*mut"'
+rg -n "global|shared|static.*mut"
 
 # Check for blocking operations
-rp-cli -e 'search "sleep|time.sleep|setTimeout|setInterval"'
+rg -n "sleep|time.sleep|setTimeout|setInterval"
 ```
 
 ### Memory Patterns
 ```bash
 # Find potential memory leaks
-rp-cli -e 'search "addEventListener|setInterval|cache|Map\(\)|Set\(\)"'
+rg -n "addEventListener|setInterval|cache|Map\(\)|Set\(\)"
 
 # Check for cleanup
-rp-cli -e 'search "removeEventListener|clearInterval|dispose|cleanup|close"'
+rg -n "removeEventListener|clearInterval|dispose|cleanup|close"
 
 # Large data structures
-rp-cli -e 'search "Array|List|Dict|Map" --context-lines 2'
+rg -n -C 2 "Array|List|Dict|Map"
 ```
 
 ### Database/IO Analysis
 ```bash
 # Find N+1 query patterns
-rp-cli -e 'search "for.*query|for.*fetch|for.*select"'
+rg -n "for.*query|for.*fetch|for.*select"
 
 # Check for batching
-rp-cli -e 'search "batch|bulk|many|all"'
+rg -n "batch|bulk|many|all"
 
 # Find synchronous IO
-rp-cli -e 'search "readFileSync|writeFileSync|execSync"'
+rg -n "readFileSync|writeFileSync|execSync"
 ```
 
 ## Step 3: Benchmark Critical Paths

@@ -70,6 +70,8 @@ for (const md of files) {
 }
 
 console.log(`agents: ${mdCount}  |  opus: ${opus}  sonnet: ${sonnet}`);
+// A gate that compared nothing must not pass: 0 agents means a wrong path, not a clean repo.
+if (mdCount === 0) errors.push(`0 agents found in ${agentsDir} (vacuous gate)`);
 if (errors.length) {
   console.error(`\nMODEL DRIFT — ${errors.length} issue(s):`);
   for (const e of errors) console.error(`  - ${e}`);

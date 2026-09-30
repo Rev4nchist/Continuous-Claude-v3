@@ -37,12 +37,12 @@ $CLAUDE_PROJECT_DIR = /path/to/project
 
 ## Step 2: Security Checklist
 
-Assess each category:
+Assess each category. Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
 
 ### Authentication/Authorization
 ```bash
 # Find auth patterns
-rp-cli -e 'search "authenticate|authorize|isAdmin|hasRole"'
+rg -n "authenticate|authorize|isAdmin|hasRole"
 
 # Check for hardcoded credentials
 grep -rE "(password|secret|key|token)\s*=\s*['\"]" src/ --include="*.ts" --include="*.py"
@@ -51,13 +51,13 @@ grep -rE "(password|secret|key|token)\s*=\s*['\"]" src/ --include="*.ts" --inclu
 ### Injection Vulnerabilities
 ```bash
 # SQL injection risks
-rp-cli -e 'search "execute|raw_query|cursor.execute"'
+rg -n "execute|raw_query|cursor.execute"
 
 # Command injection risks
-rp-cli -e 'search "exec|spawn|system|popen"'
+rg -n "exec|spawn|system|popen"
 
 # Template injection
-rp-cli -e 'search "render|template|eval"'
+rg -n "render|template|eval"
 ```
 
 ### Secrets & Configuration
@@ -69,7 +69,7 @@ grep -rE "(API_KEY|SECRET|PASSWORD|PRIVATE)" . --include="*.ts" --include="*.py"
 cat .gitignore | grep -E "env|secret|key|credential"
 
 # Check environment handling
-rp-cli -e 'search "process.env|os.environ"'
+rg -n "process.env|os.environ"
 ```
 
 ### Dependencies
@@ -86,18 +86,18 @@ pip list --outdated 2>/dev/null
 ### Input Validation
 ```bash
 # Find input handling
-rp-cli -e 'search "req.body|request.json|request.form"'
+rg -n "req.body|request.json|request.form"
 
 # Check for validation
-rp-cli -e 'search "validate|sanitize|escape"'
+rg -n "validate|sanitize|escape"
 ```
 
 ## Step 3: CVE Lookup (if applicable)
 
 ```bash
 # Search for known CVEs in dependencies
-uv run python -m runtime.harness scripts/perplexity_ask.py \
-    --query "CVE vulnerabilities in [package-name] version [version]"
+cd $CLAUDE_OPC_DIR && uv run python scripts/mcp/perplexity_search.py \
+    --ask "CVE vulnerabilities in [package-name] version [version]"
 ```
 
 ## Step 4: Write Output

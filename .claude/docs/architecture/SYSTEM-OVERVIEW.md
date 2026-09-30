@@ -8,7 +8,7 @@ User Prompt
     ▼
 ┌─────────────────────────────────────┐
 │      UserPromptSubmit Hooks         │
-│  heartbeat │ memory-awareness │ ... │
+│  heartbeat │ memory-awareness │ ...                          │
 └─────────────────────────────────────┘
     │
     ▼
@@ -73,10 +73,10 @@ PageIndex Layer:
 │                                                              │
 │  SessionStart ─────→ session-start-docker                    │
 │                      session-start-parallel                  │
-│                      hook-health-monitor [BT: hook_health]   │
+│                      hook-health-monitor                     │
 │                                                              │
 │  UserPromptSubmit ─→ heartbeat                               │
-│                      memory-awareness [BT: memory_recall]    │
+│                      memory-awareness                        │
 │                      skill-activation-prompt                 │
 │                                                              │
 │  PreToolUse ───────→ file-claims (can BLOCK)                 │
@@ -91,52 +91,19 @@ PageIndex Layer:
 │                      smarter-everyday                        │
 │                      git-commit-roadmap                      │
 │                      telemetry-tracker:Skill|Task            │
-│                          [BT: tool_call_success,             │
-│                               skill_trigger_accuracy]        │
 │                      plan-exit-premortem-prompt:ExitPlanMode │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 
-[BT: …] marks a Braintrust deterministic emit site. See the
-Braintrust Observability section below.
+The Braintrust emit sites are RETIRED 2026-09-30 (see
+`archive/braintrust-2026-10/`).
 ```
 
-## Braintrust Observability
+## Braintrust Observability (RETIRED 2026-09-30)
 
-```
-┌──────────────────────────────────────────────────────────────┐
-│                  BRAINTRUST (two layers)                     │
-├──────────────────────────────────────────────────────────────┤
-│                                                              │
-│  LAYER 1 — DETERMINISTIC (live, in hook path)                │
-│    3 TS hooks → await emitBraintrustScore()                  │
-│    helper: hooks/src/shared/braintrust-score.ts             │
-│                                                              │
-│    memory-awareness ───→ memory_recall_relevance / _hit      │
-│    store_learning.py ──→ memory_store_quality  (Python)      │
-│    telemetry-tracker ──→ tool_call_success                   │
-│                          skill_trigger_accuracy              │
-│    hook-health-monitor → hook_health_ratio                   │
-│                                                              │
-│    GUARD: scripts/audit-braintrust-emits.sh                  │
-│           run after ANY TS hook edit; await-only grep        │
-│                                                              │
-│  LAYER 2 — LLM JUDGES (offline, sampled, scheduled)          │
-│    opc/scripts/core/judge_session.py                        │
-│      factuality + closedqa → claude -p --model sonnet        │
-│      plan_rubric           → codex exec --sandbox read-only  │
-│    NO API keys — subscription OAuth · 35% sampler · --force  │
-│    cross-project recall via ~/.claude/project-registry.json  │
-│    scheduled: Task Scheduler "CCv3-Judge-Batch" (06:15 local)│
-│                                                              │
-└──────────────────────────────────────────────────────────────┘
-            │                                  │
-            ▼                                  ▼
-   /v1/project_logs/{project_id}/feedback   Braintrust UI
-```
-
-Full detail: [Braintrust Subsystem](subsystems/braintrust.md). Ops runbook:
-`docs/braintrust-online-scoring-recipe.md`.
+RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Tracing is off. The
+hooks are deregistered, the code is archived, and the API key is revoked.
+History only: [Braintrust Subsystem](subsystems/braintrust.md).
 
 ## Agent Orchestration
 

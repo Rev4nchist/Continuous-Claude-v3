@@ -19,15 +19,14 @@
 // dead daemon yields 'unavailable' (fail open) instead of a blocking spawn.
 process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
 
-import { readFileSync, existsSync, statSync, unlinkSync } from 'fs';
-import { basename, extname } from 'path';
+import { readFileSync, existsSync, statSync, unlinkSync, appendFileSync, mkdirSync, writeFileSync } from 'fs';
+import { basename, extname, join } from 'path';
 import {
   extractDaemon,
   contextDaemon,
   cfgDaemon,
   dfgDaemon,
   sliceDaemon,
-  trackHookActivityFast,
   probeDaemonFast,
   isDaemonUnreachableCached,
   cacheDaemonUnreachable,
@@ -428,9 +427,138 @@ async function getTldrContext(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Read-outcome log (plan 2026-09-30, T2). Every Read the hook sees is recorded
+// in {project}/.tldr/stats/hook_activity.jsonl, the file the TLDR daemon's
+// HookStatsStore writes and reads. Rows keep that format (hook_name,
+// invocations, successes, failures, metrics, timestamp) and add top-level
+// `outcome`, `reason`, `duration_ms`, `count`; the daemon ignores unknown
+// top-level keys and sums `metrics`, so old aggregates keep working.
+//
+// Why the hook writes the file itself: the daemon is the only other writer,
+// and a fail_open event happens exactly when the daemon is down. A daemon
+// `track` call could never log it (and cost a socket round trip per deny).
+//
+// Log volume: deny and fail_open are rare and carry the net-saving inputs, so
+// each gets its own row. `allow` (prefilter: non-code, allowlisted or
+// offset/limit reads) and `below_threshold` are the bulk of all Reads, so they
+// are COUNTED: a small counter file keeps n and summed ms per outcome, and one
+// aggregate row is appended per BATCH_FLUSH_AT events. Concurrent hook
+// processes can lose an increment (read-modify-write, no lock); the counts are
+// approximate by design. A project with no `.tldr` dir gets no logging and no
+// new directory. duration_ms is measured inside the hook (process start-up is
+// not included).
+// ---------------------------------------------------------------------------
+
+export type ReadOutcome = 'allow' | 'deny' | 'fail_open' | 'below_threshold';
+
+export interface ReadLogEvent {
+  outcome: ReadOutcome;
+  reason: string;
+  duration_ms: number;
+  bytes_raw?: number;
+  bytes_injected?: number;
+  layers_returned?: number;
+}
+
+export const BATCH_FLUSH_AT = 25;
+const HOOK_NAME = 'tldr-read-enforcer';
+const COUNTER_FILE = 'tldr-read-enforcer.counts.json';
+
+type CounterState = Record<string, { n: number; ms: number }>;
+
+const cleanMs = (ms: number): number =>
+  Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
+
+/** One hook_activity.jsonl row. `count` > 1 means a batched aggregate. */
+export function buildLogRow(ev: ReadLogEvent, count = 1, now: Date = new Date()): Record<string, unknown> {
+  const ms = cleanMs(ev.duration_ms);
+  const isError = ev.outcome === 'fail_open' && ev.reason === 'error';
+  const metrics: Record<string, number> = {
+    reads_seen: count,
+    [`outcome_${ev.outcome}`]: count,
+    duration_ms: ms,
+  };
+  if (ev.outcome === 'deny') {
+    // Same metrics the pre-T2 daemon `track` call carried (net-savings inputs).
+    metrics.reads_intercepted = 1;
+    metrics.layers_returned = ev.layers_returned ?? 0;
+    metrics.bytes_raw = ev.bytes_raw ?? 0;
+    metrics.bytes_injected = ev.bytes_injected ?? 0;
+  }
+  return {
+    hook_name: HOOK_NAME,
+    invocations: count,
+    successes: isError ? 0 : count,
+    failures: isError ? count : 0,
+    metrics,
+    outcome: ev.outcome,
+    reason: ev.reason,
+    duration_ms: ms,
+    count,
+    timestamp: now.toISOString(),
+  };
+}
+
+/** Pure counter step. A corrupt `state` is treated as empty. */
+export function bumpCounter(
+  state: CounterState | null | undefined,
+  key: string,
+  ms: number,
+  flushAt: number = BATCH_FLUSH_AT,
+): { state: CounterState; flush: { key: string; n: number; ms: number } | null } {
+  const next: CounterState = {};
+  if (state && typeof state === 'object' && !Array.isArray(state)) {
+    for (const [k, v] of Object.entries(state)) {
+      if (v && typeof v.n === 'number' && typeof v.ms === 'number') next[k] = { n: v.n, ms: v.ms };
+    }
+  }
+  const cur = next[key] || { n: 0, ms: 0 };
+  const n = cur.n + 1;
+  const total = Math.round((cur.ms + cleanMs(ms)) * 10) / 10;
+  if (n >= flushAt) {
+    delete next[key];
+    return { state: next, flush: { key, n, ms: total } };
+  }
+  next[key] = { n, ms: total };
+  return { state: next, flush: null };
+}
+
+/** Best-effort: never throws, never creates `.tldr`. */
+export function recordRead(projectDir: string, ev: ReadLogEvent): void {
+  try {
+    const tldrDir = join(projectDir, '.tldr');
+    if (!existsSync(tldrDir)) return;
+    const statsDir = join(tldrDir, 'stats');
+    mkdirSync(statsDir, { recursive: true });
+    const logFile = join(statsDir, 'hook_activity.jsonl');
+
+    if (ev.outcome === 'deny' || ev.outcome === 'fail_open') {
+      appendFileSync(logFile, JSON.stringify(buildLogRow(ev)) + '\n');
+      return;
+    }
+
+    const counterFile = join(statsDir, COUNTER_FILE);
+    let state: CounterState = {};
+    try { state = JSON.parse(readFileSync(counterFile, 'utf-8')); } catch { /* missing or corrupt: start over */ }
+    const key = `${ev.outcome}|${ev.reason}`;
+    const { state: next, flush } = bumpCounter(state, key, ev.duration_ms);
+    writeFileSync(counterFile, JSON.stringify(next));
+    if (flush) {
+      const [outcome, reason] = flush.key.split('|');
+      const row = buildLogRow({ outcome: outcome as ReadOutcome, reason, duration_ms: flush.ms }, flush.n);
+      appendFileSync(logFile, JSON.stringify(row) + '\n');
+    }
+  } catch {
+    // Logging must never change what the hook returns.
+  }
+}
+
 function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
+
+const START = performance.now();
 
 async function main() {
   const input: HookInput = JSON.parse(readStdin());
@@ -440,24 +568,26 @@ async function main() {
     return;
   }
 
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  // Log the outcome, then print. Exactly one stdout write per path, unchanged.
+  const finish = (stdout: string, ev: Omit<ReadLogEvent, 'duration_ms'>): void => {
+    recordRead(projectDir, { ...ev, duration_ms: performance.now() - START });
+    console.log(stdout);
+  };
+  const allow = (outcome: ReadOutcome, reason: string): void => finish('{}', { outcome, reason });
+
   const filePath = input.tool_input.file_path || '';
 
   // Allow non-code files
-  if (!isCodeFile(filePath)) {
-    console.log('{}');
-    return;
-  }
+  if (!isCodeFile(filePath)) return allow('allow', 'prefilter');
 
   // Allow explicitly permitted files
-  if (isAllowedFile(filePath)) {
-    console.log('{}');
-    return;
-  }
+  if (isAllowedFile(filePath)) return allow('allow', 'prefilter');
 
   // If requesting specific lines (offset/limit), allow - they know what they want
   if (input.tool_input.offset || (input.tool_input.limit && input.tool_input.limit < 100)) {
-    console.log('{}');
-    return;
+    return allow('allow', 'prefilter');
   }
 
   // Small files: TLDR overhead not worth it, just read directly (see the
@@ -466,28 +596,19 @@ async function main() {
   try {
     const stats = statSync(filePath);
     rawBytes = stats.size;
-    if (stats.size < MIN_INTERCEPT_BYTES) {
-      console.log('{}');
-      return;
-    }
+    if (stats.size < MIN_INTERCEPT_BYTES) return allow('below_threshold', 'below_threshold');
   } catch {
     // File doesn't exist or can't stat, let Read handle the error
-    console.log('{}');
-    return;
+    return allow('allow', 'stat_error');
   }
 
   // FAIL-OPEN GATE (remediation §1): if the daemon is unreachable, allow the
   // read immediately. Never attempt TLDR work, never start a daemon.
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (isDaemonUnreachableCached(projectDir)) {
-    console.log('{}');
-    return;
-  }
+  if (isDaemonUnreachableCached(projectDir)) return allow('fail_open', 'daemon_unreachable_cached');
   const reachable = await probeDaemonFast(projectDir);
   if (!reachable) {
     cacheDaemonUnreachable(projectDir);
-    console.log('{}');
-    return;
+    return allow('fail_open', 'daemon_unreachable');
   }
 
   // Get TLDR context instead of raw file
@@ -514,14 +635,8 @@ async function main() {
   // Content-sufficiency floor (remediation §1): deny only on a summary that is
   // plausibly better than the raw file. Require a minimum injected size AND —
   // when a search target exists — that the summary actually contains it.
-  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) {
-    console.log('{}');
-    return;
-  }
-  if (target && !tldrContext.includes(target)) {
-    console.log('{}');
-    return;
-  }
+  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) return allow('fail_open', 'summary_insufficient');
+  if (target && !tldrContext.includes(target)) return allow('fail_open', 'target_not_in_summary');
 
   // Format layer names for display
   const layerNames = layers.map(l => {
@@ -568,14 +683,6 @@ ${tldrContext}${crossFileSection}
 To read the code itself, re-issue the Read with offset/limit (e.g. offset=1 limit=200).
 Test files and .claude/hooks|skills paths bypass this hook entirely.`;
 
-  // Track hook activity (P8) with net-savings inputs (remediation §7)
-  await trackHookActivityFast('tldr-read-enforcer', projectDir, true, {
-    reads_intercepted: 1,
-    layers_returned: layers.length,
-    bytes_raw: rawBytes,
-    bytes_injected: reasonText.length,
-  });
-
   const output: HookOutput = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -584,12 +691,27 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
     }
   };
 
-  console.log(JSON.stringify(output));
+  // Net-savings inputs (remediation §7) ride on the deny row.
+  finish(JSON.stringify(output), {
+    outcome: 'deny',
+    reason: 'summary_injected',
+    layers_returned: layers.length,
+    bytes_raw: rawBytes,
+    bytes_injected: reasonText.length,
+  });
 }
 
 // Async exit discipline: exactly one stdout JSON write per path; any throw
-// allows the read; no un-awaited work remains when main settles.
-main().catch((err) => {
-  console.error(`TLDR enforcer error: ${err.message}`);
-  console.log('{}');
-});
+// allows the read; no un-awaited work remains when main settles. Run only when
+// this file is the hook entry point, so tests can import the log helpers.
+if (process.argv[1] && process.argv[1].includes('tldr-read-enforcer')) {
+  main().catch((err) => {
+    console.error(`TLDR enforcer error: ${err.message}`);
+    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+      outcome: 'fail_open',
+      reason: 'error',
+      duration_ms: performance.now() - START,
+    });
+    console.log('{}');
+  });
+}

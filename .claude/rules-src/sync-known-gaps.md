@@ -23,7 +23,7 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 | `hooks/dist/*.mjs` | Yes | Sync script (the compiled artifact that actually runs) | `bash scripts/sync-to-active.sh` |
 | `rules/*.md` | Yes | Post-commit hook copies | N/A |
 | `skills/*/` | Yes | Post-commit hook copies | N/A |
-| `agents/*.yml` | Yes | Post-commit hook copies | N/A |
+| `agents/*.md` + `*.json` | Yes | Forward sync copies both. The `.json` sidecar is regenerated from the `.md` frontmatter first (`sync-agent-json.py`). | N/A |
 | `docs/**/*.md` | Yes (NEW) | Added to SYNC_DIRS | `bash scripts/sync-to-active.sh` |
 | `project-registry.json` | Yes (2026-07-15) | Repo copy is canonical; JSON-validated copy in BOTH full and `--changed` modes; active mirror never auto-deleted | `bash scripts/sync-to-active.sh` |
 | `settings.json` | NO | Intentional — local config | Manual copy (risky) |
@@ -35,6 +35,7 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 
 ## Notes
 
+- Forward sync runs from `main` only: in the primary checkout, or in a temp detached worktree at main's commit (`land-pr.ps1` sets `SYNC_MAIN_DETACHED=1`). A commit on a feature branch or in another worktree prints `Sync skipped`.
 - The enhanced sync script (Task 2.0) closed the `dist/` and `scripts/ralph/` gaps
 - `settings.json` remains intentionally local because hook registrations may differ between machines
 - Use `/sync-drift` skill to detect unexpected drift
@@ -61,10 +62,25 @@ Sonnet always runs at high). Other `modelSettings` entries stay machine-local.
 - `linear-branch-context.mjs`, `sentry-deploy-release.mjs`, `vercel-deploy-context.mjs`,
   `sentry-error-context.mjs` — vendor integrations tied to this machine's accounts.
 
-## Clobber guard + quarantine (2026-08-31)
+## Clobber guard + quarantine (2026-08-31, narrowed 2026-09-30)
 
 `sync-to-active.sh` keeps a manifest (`~/.claude/state/sync-manifest.txt`) of the sha256 each
-destination had when the sync last wrote it. A destination that diverged from the manifest (edited
-directly in `~/.claude` since the last sync) is preserved to `~/.claude/.sync-quarantine/<ts>/`
-before the repo copy lands, and reported loudly. The quarantine dir is the only copy of a clobbered
-edit — review and delete it yourself; it is NEVER auto-purged. The script refuses to run under WSL.
+destination had when the sync last wrote it. The guard compares the destination with the incoming
+source first, then with the manifest. Per file:
+
+- Destination equals the source: nothing to copy, nothing to quarantine. A hand copy of the repo
+  file lands here. The manifest entry is refreshed to the destination hash, so the next repo change
+  does not quarantine it. Before 2026-09-30 the stale entry did, and 26 identical files were
+  quarantined.
+- Destination differs from the source only in line endings (CRLF vs LF, text files only): not an
+  edit. The repo bytes are copied, nothing is quarantined. The EOL normalisation is for the
+  comparison only. A text file with a real change plus CRLF is still an edit.
+- Destination equals the manifest entry: active is merely stale. Normal forward copy.
+- Anything else (differs from the source AND from the manifest, or has no manifest entry): the
+  destination is a real edit. It is preserved to `~/.claude/.sync-quarantine/<ts>/` before the repo
+  copy lands, and reported loudly.
+
+The quarantine dir is the only copy of a clobbered edit. It is NEVER auto-purged. Diff the quarantine
+against the repo before you delete it (`diff -r ~/.claude/.sync-quarantine/<ts> ~/continuous-claude/.claude`,
+mind the `rules-src` to `rules` name change). Salvage real edits into the repo on a branch. The
+script refuses to run under WSL.

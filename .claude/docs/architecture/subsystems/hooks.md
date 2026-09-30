@@ -6,11 +6,11 @@
 SessionStart ──────→ Runs once when Claude session begins
                      • session-start-docker (ensure services)
                      • session-start-parallel (setup tasks)
-                     • hook-health-monitor [BT: hook_health_ratio]
+                     • hook-health-monitor
 
 UserPromptSubmit ──→ Runs when user sends a message
                      • heartbeat (session keepalive)
-                     • memory-awareness (inject memories) [BT: memory_recall_*]
+                     • memory-awareness (inject memories)
                      • skill-activation (detect skill triggers)
 
 PreToolUse ────────→ Runs BEFORE each tool execution
@@ -25,11 +25,8 @@ PostToolUse ───────→ Runs AFTER each tool execution
                      • git-commit-roadmap (log commits to ROADMAP)
                      • post-plan-roadmap (update ROADMAP on plan exit)
                      • prd-roadmap-sync (sync PRD files to ROADMAP)
-                     • telemetry-tracker:Skill|Task [BT: tool_call_success,
-                       skill_trigger_accuracy]
+                     • telemetry-tracker:Skill|Task
                      • plan-exit-premortem-prompt:ExitPlanMode
-
-[BT: …] = Braintrust deterministic emit site (see Braintrust Emit Hooks below)
 ```
 
 ## Hook Response Schema
@@ -74,36 +71,12 @@ interface PostToolUseOutput {
 | heartbeat | UserPromptSubmit | No | Session keepalive |
 | epistemic-reminder | PostToolUse:Grep | No | Verify before claiming |
 
-## Braintrust Emit Hooks
+## Braintrust Emit Hooks (RETIRED 2026-09-30)
 
-Four TypeScript hooks emit Braintrust deterministic scores by calling
-`await emitBraintrustScore(...)` from the shared helper
-`hooks/src/shared/braintrust-score.ts`. These are the live, in-path half of
-the [Braintrust observability subsystem](braintrust.md).
-
-| Hook | Lifecycle event | Dimension(s) emitted |
-|------|-----------------|----------------------|
-| `memory-awareness` | UserPromptSubmit | `memory_recall_relevance`, `memory_recall_hit` |
-| `telemetry-tracker` | PostToolUse:Skill\|Task | `tool_call_success`, `skill_trigger_accuracy` |
-| `hook-health-monitor` | SessionStart | `hook_health_ratio` |
-
-(A fifth dimension, `memory_store_quality`, is emitted by the Python
-`store_learning.py`, not a hook.)
-
-### The audit invariant
-
-`scripts/audit-braintrust-emits.sh` greps `hooks/src/` for
-`await emitBraintrustScore(` and asserts an exact count of awaited emit
-sites. **Run it after ANY TypeScript hook edit.**
-
-- The emit MUST be `await` (not `void`) on a single line. A `void` call is
-  fire-and-forget — SessionStart-class hooks exit before the HTTPS POST
-  lands, dropping the score. The grep matches `await` only, so a `void`
-  revert or a line-split trips the check.
-- Never lower the invariant to silence a failure — fix the code it points at.
-  (The emit sites regressed ~8 times in May 2026; root cause was a rogue
-  Ralph loop plus an asymmetric reverse-sync, both since fixed — see the
-  Braintrust subsystem doc for the corrected history.)
+RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). The hooks no longer
+emit Braintrust scores. The `await emitBraintrustScore()` helper and the
+`audit-braintrust-emits.sh` guard are archived. After a hook edit, run
+`npm run build` and `npm test` in `.claude/hooks`.
 
 ### Sync exclusion for `hooks/src/`
 

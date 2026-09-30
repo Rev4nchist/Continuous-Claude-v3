@@ -15,7 +15,7 @@ Generated: 2026-04-27 | Branch: feature/system-coherence | Phase 5c step 10 refr
 
 ## Agents
 
-Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-analyst.md` file remains at the repo root as a deprecated stub — its canonical copy lives at `_archived/2026-04-26-duplicates/session-analyst.md`. `braintrust-analyst` is the canonical retro-analysis agent.
+Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-analyst.md` file remains at the repo root as a deprecated stub — its canonical copy lives at `_archived/2026-04-26-duplicates/session-analyst.md`. `braintrust-analyst` is RETIRED 2026-09-30 (moved to `.claude/agents-archive/`; see `archive/braintrust-2026-10/`).
 
 | Name | Model | Purpose | Key Tools | Companion Skill | Surfaced By |
 |------|-------|---------|-----------|-----------------|-------------|
@@ -25,7 +25,7 @@ Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-ana
 | arbiter | (inherit) | Test execution and validation | Bash, Read, Glob, Grep | — | fix, build, refactor, release, tdd |
 | architect | (inherit) | System design and planning | Read, Glob, Grep, Write, Bash | — | build, refactor, migrate, maestro |
 | atlas | (inherit) | Full E2E and test-suite runner | Bash, Read, Glob, Grep | — | release |
-| braintrust-analyst | opus | Braintrust session log retro-analysis (canonical) | Bash, Read | `braintrust-analyze/SKILL.md` | — |
+| braintrust-analyst | opus | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Braintrust session log retro-analysis | Bash, Read | `braintrust-analyze/SKILL.md` | — |
 | critic | (inherit) | Feature/implementation code review | Read, Glob, Grep | — | review |
 | debug-agent | (inherit) | General root-cause analysis for unclear or single-file bugs (R1) | Bash, Read, Glob, Grep | `systematic-debugging/SKILL.md` | fix, maestro |
 | deployer | sonnet | Vercel/Railway/Sentry/Linear/Neon deployments | Bash, Read, Glob, Grep, WebFetch | `vercel-cli`, `railway-cli`, `sentry-cli`, `neonctl` (R8 conditional) | release, build |
@@ -48,7 +48,7 @@ Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-ana
 | scout | (inherit) | Codebase exploration and pattern finding | Read, Grep, Glob, Bash | — | build, fix, explore, migrate, maestro |
 | scribe | (inherit) | Documentation, handoffs, session summaries | Read, Write, Glob, Grep | `create_handoff/SKILL.md`, `continuity_ledger/SKILL.md` | release, maestro |
 | sentinel | sonnet | Browser QA — multi-role E2E and UAT | Bash, Read, Write, Glob, Grep | `browser-dev-cycle/SKILL.md` (bidirectional, R4) | browser-dev-cycle |
-| session-analyst | opus | DEPRECATED — use braintrust-analyst | Bash, Read | `braintrust-analyze/SKILL.md` (duplicate) | — |
+| session-analyst | opus | DEPRECATED. Its replacement braintrust-analyst is RETIRED 2026-09-30 | Bash, Read | `braintrust-analyze/SKILL.md` (duplicate) | — |
 | sleuth | opus | Deep bug forensics — multi-file, evidence-grade reproduction (R1) | Read, Bash, Grep, Glob | `systematic-debugging/SKILL.md` | fix |
 | spark | (inherit) | Lightweight fixes and quick tweaks | Read, Edit, Write, Bash, Grep, Glob | — | fix, build |
 | surveyor | (inherit) | Migration and upgrade review | Read, Grep, Glob | — | migrate |
@@ -138,7 +138,7 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | opencli | oracle |
 | github-search | oracle |
 | exa | oracle |
-| braintrust-tracing | braintrust-analyst |
+| braintrust-tracing (RETIRED 2026-09-30) | braintrust-analyst (RETIRED 2026-09-30) |
 
 ### Frontend / UI (6)
 
@@ -203,7 +203,7 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | Agent | Skill |
 |-------|-------|
 | agentica-agent | `agentica-sdk/SKILL.md` |
-| braintrust-analyst | `braintrust-analyze/SKILL.md` |
+| braintrust-analyst (RETIRED 2026-09-30) | `braintrust-analyze/SKILL.md` (RETIRED) |
 | debug-agent | `systematic-debugging/SKILL.md` |
 | deployer | `vercel-cli`, `railway-cli`, `sentry-cli`, `neonctl` (conditional, R8) |
 | maestro | `maestro/SKILL.md` |
@@ -270,7 +270,7 @@ Agents reachable only by explicit name (no UserPromptSubmit hook routing):
 - wizard (Phase 5c new — entry is documentation-driven via BOOTSTRAP.md)
 - agent-factory (Phase 5c new — invoked by user when scaffolding)
 - validate-agent
-- braintrust-analyst (companion skill exists; no UserPromptSubmit routing)
+- braintrust-analyst (RETIRED 2026-09-30, see archive/braintrust-2026-10/)
 - memory-extractor
 - pathfinder
 - liaison (optional companion in release skill body only)

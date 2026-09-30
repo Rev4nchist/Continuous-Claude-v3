@@ -54,7 +54,7 @@ Two scheduled tasks currently run in this system:
 | Task | Schedule | Runs | Reference |
 |------|----------|------|-----------|
 | `CCv3-Blocklist-Update` | daily 9:00am | Package-install blocklist refresh | `package-install-safety.md` |
-| `CCv3-Judge-Batch` | daily 6:15am | Braintrust judge pipeline (`opc/scripts/core/judge_session.py` via `scripts/run-judge-batch.ps1`) | `docs/braintrust-online-scoring-recipe.md` |
+| `CCv3-Judge-Batch` | DISABLED | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Braintrust judge pipeline. | none |
 
 ## Hooks
 
@@ -192,8 +192,7 @@ $env:DATABASE_URL
 
 # Required in ~/.claude/.env
 DATABASE_URL=postgresql://claude:claude_dev@localhost:5432/continuous_claude
-BRAINTRUST_API_KEY=sk-...
-TRACE_TO_BRAINTRUST=true
+# BRAINTRUST_* keys: RETIRED 2026-09-30 (see archive/braintrust-2026-10/). Do not set them.
 ```
 
 ## Troubleshooting
@@ -311,4 +310,4 @@ cd $CLAUDE_OPC_DIR && uv run python scripts/pageindex/cli/pageindex_cli.py list
 **When to use:** Large structured docs (ROADMAP, ARCHITECTURE). 98.7% accuracy vs ~50% vector similarity.
 
 ---
-*Updated: 2026-02-03 | + PageIndex System, Five Pillars | 2026-05-26: + Braintrust observability (Six Pillars), CCv3-Judge-Batch*
+*Updated: 2026-02-03 | + PageIndex System, Five Pillars | 2026-05-26: + Braintrust observability (Six Pillars), CCv3-Judge-Batch | 2026-09-30: Braintrust RETIRED (see archive/braintrust-2026-10/)*

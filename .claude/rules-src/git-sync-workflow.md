@@ -82,8 +82,8 @@ bash ~/continuous-claude/scripts/sync-to-active.sh
 
 ## Edits in ~/.claude
 
-The next sync quarantines a direct edit or a hand copy in `~/.claude`, even when it is identical to
-the repo. Edit the repo instead. To keep an urgent active edit, run the reverse sync (above), then
+The next sync quarantines a direct edit in `~/.claude` that differs from the repo. A hand copy that is
+identical to the repo, or differs only in line endings, is not quarantined. Edit the repo instead. To keep an urgent active edit, run the reverse sync (above), then
 commit it on a branch.
 
 ## Key Commands

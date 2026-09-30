@@ -1,8 +1,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/tldr-read-enforcer.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2 } from "fs";
-import { basename, extname } from "path";
+import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2, appendFileSync, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "fs";
+import { basename, extname, join as join3 } from "path";
 
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
@@ -382,17 +382,6 @@ function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
     }
   });
 }
-async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
-  try {
-    if (isDaemonUnreachableCached(projectDir)) return;
-    if (!await probeDaemonFast(projectDir)) {
-      cacheDaemonUnreachable(projectDir);
-      return;
-    }
-    await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
-  } catch {
-  }
-}
 
 // src/shared/search-context-path.ts
 import * as os from "os";
@@ -652,50 +641,117 @@ async function getTldrContext(filePath, language, layers = ["ast", "call_graph"]
     return null;
   }
 }
+var BATCH_FLUSH_AT = 25;
+var HOOK_NAME = "tldr-read-enforcer";
+var COUNTER_FILE = "tldr-read-enforcer.counts.json";
+var cleanMs = (ms) => Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
+function buildLogRow(ev, count = 1, now = /* @__PURE__ */ new Date()) {
+  const ms = cleanMs(ev.duration_ms);
+  const isError = ev.outcome === "fail_open" && ev.reason === "error";
+  const metrics = {
+    reads_seen: count,
+    [`outcome_${ev.outcome}`]: count,
+    duration_ms: ms
+  };
+  if (ev.outcome === "deny") {
+    metrics.reads_intercepted = 1;
+    metrics.layers_returned = ev.layers_returned ?? 0;
+    metrics.bytes_raw = ev.bytes_raw ?? 0;
+    metrics.bytes_injected = ev.bytes_injected ?? 0;
+  }
+  return {
+    hook_name: HOOK_NAME,
+    invocations: count,
+    successes: isError ? 0 : count,
+    failures: isError ? count : 0,
+    metrics,
+    outcome: ev.outcome,
+    reason: ev.reason,
+    duration_ms: ms,
+    count,
+    timestamp: now.toISOString()
+  };
+}
+function bumpCounter(state, key, ms, flushAt = BATCH_FLUSH_AT) {
+  const next = {};
+  if (state && typeof state === "object" && !Array.isArray(state)) {
+    for (const [k, v] of Object.entries(state)) {
+      if (v && typeof v.n === "number" && typeof v.ms === "number") next[k] = { n: v.n, ms: v.ms };
+    }
+  }
+  const cur = next[key] || { n: 0, ms: 0 };
+  const n = cur.n + 1;
+  const total = Math.round((cur.ms + cleanMs(ms)) * 10) / 10;
+  if (n >= flushAt) {
+    delete next[key];
+    return { state: next, flush: { key, n, ms: total } };
+  }
+  next[key] = { n, ms: total };
+  return { state: next, flush: null };
+}
+function recordRead(projectDir, ev) {
+  try {
+    const tldrDir = join3(projectDir, ".tldr");
+    if (!existsSync2(tldrDir)) return;
+    const statsDir = join3(tldrDir, "stats");
+    mkdirSync2(statsDir, { recursive: true });
+    const logFile = join3(statsDir, "hook_activity.jsonl");
+    if (ev.outcome === "deny" || ev.outcome === "fail_open") {
+      appendFileSync(logFile, JSON.stringify(buildLogRow(ev)) + "\n");
+      return;
+    }
+    const counterFile = join3(statsDir, COUNTER_FILE);
+    let state = {};
+    try {
+      state = JSON.parse(readFileSync2(counterFile, "utf-8"));
+    } catch {
+    }
+    const key = `${ev.outcome}|${ev.reason}`;
+    const { state: next, flush } = bumpCounter(state, key, ev.duration_ms);
+    writeFileSync2(counterFile, JSON.stringify(next));
+    if (flush) {
+      const [outcome, reason] = flush.key.split("|");
+      const row = buildLogRow({ outcome, reason, duration_ms: flush.ms }, flush.n);
+      appendFileSync(logFile, JSON.stringify(row) + "\n");
+    }
+  } catch {
+  }
+}
 function readStdin() {
   return readFileSync2(0, "utf-8");
 }
+var START = performance.now();
 async function main() {
   const input = JSON.parse(readStdin());
   if (input.tool_name !== "Read") {
     console.log("{}");
     return;
   }
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const finish = (stdout, ev) => {
+    recordRead(projectDir, { ...ev, duration_ms: performance.now() - START });
+    console.log(stdout);
+  };
+  const allow = (outcome, reason) => finish("{}", { outcome, reason });
   const filePath = input.tool_input.file_path || "";
-  if (!isCodeFile(filePath)) {
-    console.log("{}");
-    return;
-  }
-  if (isAllowedFile(filePath)) {
-    console.log("{}");
-    return;
-  }
+  if (!isCodeFile(filePath)) return allow("allow", "prefilter");
+  if (isAllowedFile(filePath)) return allow("allow", "prefilter");
   if (input.tool_input.offset || input.tool_input.limit && input.tool_input.limit < 100) {
-    console.log("{}");
-    return;
+    return allow("allow", "prefilter");
   }
   let rawBytes = 0;
   try {
     const stats = statSync(filePath);
     rawBytes = stats.size;
-    if (stats.size < MIN_INTERCEPT_BYTES) {
-      console.log("{}");
-      return;
-    }
+    if (stats.size < MIN_INTERCEPT_BYTES) return allow("below_threshold", "below_threshold");
   } catch {
-    console.log("{}");
-    return;
+    return allow("allow", "stat_error");
   }
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (isDaemonUnreachableCached(projectDir)) {
-    console.log("{}");
-    return;
-  }
+  if (isDaemonUnreachableCached(projectDir)) return allow("fail_open", "daemon_unreachable_cached");
   const reachable = await probeDaemonFast(projectDir);
   if (!reachable) {
     cacheDaemonUnreachable(projectDir);
-    console.log("{}");
-    return;
+    return allow("fail_open", "daemon_unreachable");
   }
   const language = detectLanguage(filePath);
   let layers = ["ast", "call_graph"];
@@ -708,14 +764,8 @@ async function main() {
     contextSource = `${searchContext.targetType}: ${searchContext.target}`;
   }
   const tldrContext = await getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
-  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) {
-    console.log("{}");
-    return;
-  }
-  if (target && !tldrContext.includes(target)) {
-    console.log("{}");
-    return;
-  }
+  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) return allow("fail_open", "summary_insufficient");
+  if (target && !tldrContext.includes(target)) return allow("fail_open", "target_not_in_summary");
   const layerNames = layers.map((l) => {
     switch (l) {
       case "ast":
@@ -759,12 +809,6 @@ ${tldrContext}${crossFileSection}
 ---
 To read the code itself, re-issue the Read with offset/limit (e.g. offset=1 limit=200).
 Test files and .claude/hooks|skills paths bypass this hook entirely.`;
-  await trackHookActivityFast("tldr-read-enforcer", projectDir, true, {
-    reads_intercepted: 1,
-    layers_returned: layers.length,
-    bytes_raw: rawBytes,
-    bytes_injected: reasonText.length
-  });
   const output = {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -772,12 +816,29 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
       permissionDecisionReason: reasonText
     }
   };
-  console.log(JSON.stringify(output));
+  finish(JSON.stringify(output), {
+    outcome: "deny",
+    reason: "summary_injected",
+    layers_returned: layers.length,
+    bytes_raw: rawBytes,
+    bytes_injected: reasonText.length
+  });
 }
-main().catch((err) => {
-  console.error(`TLDR enforcer error: ${err.message}`);
-  console.log("{}");
-});
+if (process.argv[1] && process.argv[1].includes("tldr-read-enforcer")) {
+  main().catch((err) => {
+    console.error(`TLDR enforcer error: ${err.message}`);
+    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+      outcome: "fail_open",
+      reason: "error",
+      duration_ms: performance.now() - START
+    });
+    console.log("{}");
+  });
+}
 export {
-  contextMatchesFile
+  BATCH_FLUSH_AT,
+  buildLogRow,
+  bumpCounter,
+  contextMatchesFile,
+  recordRead
 };

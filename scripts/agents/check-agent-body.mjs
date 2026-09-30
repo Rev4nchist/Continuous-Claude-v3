@@ -187,6 +187,13 @@ export function analyse(agentsDir, roots) {
   return { agents: files.length, counts, offenders: agents };
 }
 
+/** A gate that compared nothing must not pass: 0 agents means a wrong path, not a clean repo. */
+export function vacuousReason(agentsDir, agentCount) {
+  if (!existsSync(agentsDir)) return `agents dir not found: ${agentsDir}`;
+  if (agentCount === 0) return `0 agents analysed in ${agentsDir} (vacuous gate)`;
+  return null;
+}
+
 /** Ratchet verdict: the keys whose count is higher than baseline. */
 export function regressions(counts, baselineCounts) {
   return Object.keys(counts).filter((k) => counts[k] > (baselineCounts?.[k] ?? 0));
@@ -196,7 +203,11 @@ function main() {
   const args = process.argv.slice(2);
   const repoRoot = resolve(args.find((a) => !a.startsWith('--')) || realRepo);
   const agentsDir = join(repoRoot, '.claude', 'agents');
+  const missing = vacuousReason(agentsDir, -1);
+  if (missing) { console.error(`FAIL: ${missing}`); process.exit(1); }
   const result = analyse(agentsDir, resolveRoots(repoRoot));
+  const empty = vacuousReason(agentsDir, result.agents);
+  if (empty) { console.error(`FAIL: ${empty}`); process.exit(1); }
   const { counts } = result;
 
   if (args.includes('--update-baseline')) {

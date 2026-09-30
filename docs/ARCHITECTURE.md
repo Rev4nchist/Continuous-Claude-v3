@@ -29,7 +29,7 @@ The system has five pillars: **Memory** (persistent learnings), **Hooks** (autom
 |  +-------------+    +---------------+    +--------------+    +----------------+   |
 |  | SessionStart|    | UserPrompt    |    | PreToolUse   |    | PostToolUse    |   |
 |  | - Continuity|    | - Skill inject|    | - Search rtr |    | - Compiler     |   |
-|  | - Indexing  |    | - Braintrust  |    | - TLDR inject|    | - Handoff idx  |   |
+|  | - Indexing  |    | - (RETIRED)   |    | - TLDR inject|    | - Handoff idx  |   |
 |  +-------------+    +---------------+    +--------------+    +----------------+   |
 |                                                                                    |
 |  +-------------+    +----------------+                                            |
@@ -355,7 +355,7 @@ Built by `opc/scripts/tldr/build_symbol_index.py` on SessionStart.
 | `recall_learnings.py` | `opc/scripts/core/recall_learnings.py` | Semantic search of archival memory |
 | `store_learning.py` | `opc/scripts/core/store_learning.py` | Store a new learning |
 | `observe_agents.py` | `opc/scripts/observe_agents.py` | Query running agent state |
-| `braintrust_analyze.py` | `opc/scripts/braintrust_analyze.py` | Analyze session logs |
+| `braintrust_analyze.py` | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`) | Analyzed session logs |
 | `artifact_query.py` | `opc/scripts/core/artifact_query.py` | Search artifact index |
 
 ### Background Services
@@ -598,7 +598,7 @@ memory_service_pg.py
   → postgres_pool.py:get_connection (38 callers total)
   → embedding_service.py:embed
 
-braintrust_hooks.py
+braintrust_hooks.py (RETIRED 2026-09-30, see archive/braintrust-2026-10/)
   → session_start → get_project_id
   → session_start → get_session_value
   → log → ensure_dirs
@@ -619,7 +619,7 @@ Functions with elevated cyclomatic complexity:
 
 | Function | File | Complexity | Blocks | Reason |
 |----------|------|------------|--------|--------|
-| `session_start` | `braintrust_hooks.py` | 5 | 13 | Multiple early returns |
+| `session_start` | `braintrust_hooks.py` (RETIRED 2026-09-30) | 5 | 13 | Multiple early returns |
 | `search_hybrid` | `memory_service_pg.py` | 3 | 6 | Date filter branches |
 | `infer_pattern` | `pattern_inference.py` | 12+ | - | Pattern matching logic |
 | `main` | `compiler-in-the-loop.ts` | 8+ | - | Lean4 + Loogle integration |
@@ -629,7 +629,7 @@ Functions with elevated cyclomatic complexity:
 
 1. **`skill-activation-prompt.ts:main`** - Extract skill matchers to separate functions
 2. **`pattern_inference.py:infer_pattern`** - Use strategy pattern
-3. **`braintrust_hooks.py`** - Split session vs span logic
+3. **`braintrust_hooks.py`** - RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`); no longer a candidate
 
 ### 10.4 Data Flow Analysis (L4: DFG)
 
@@ -694,7 +694,7 @@ Output: list[MemoryRecord]
 **Functions removed:**
 | File | Function | Reason |
 |------|----------|--------|
-| `braintrust_analyze.py` | `format_duration` | Never called, no tests |
+| `braintrust_analyze.py` (RETIRED 2026-09-30) | `format_duration` | Never called, no tests |
 | `secrets_filter.py` | `mask_secret` | Never called, not exported |
 
 #### Archive Directory (490+ functions)

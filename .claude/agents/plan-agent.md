@@ -46,26 +46,17 @@ Parse this carefully - it's the input for your plan.
 
 Use these for gathering information:
 
+For codebase exploration, use Grep and Glob first. Then `tldr` through Bash. Then `rg`.
+
 ```bash
 # Best practices & documentation (Nia)
-uv run python -m runtime.harness scripts/nia_docs.py --query "best practices for [topic]"
+cd $CLAUDE_OPC_DIR && uv run python scripts/mcp/nia_docs.py search universal "best practices for [topic]"
 
 # Latest approaches (Perplexity)
-uv run python -m runtime.harness scripts/perplexity_search.py --query "modern approach to [topic] 2024"
+cd $CLAUDE_OPC_DIR && uv run python scripts/mcp/perplexity_search.py --search "modern approach to [topic]"
 
-# Codebase exploration (RepoPrompt) - understand existing patterns
-rp-cli -e 'workspace list'  # Check workspace
-rp-cli -e 'structure src/'  # See architecture
-rp-cli -e 'search "pattern" --max-results 20'  # Find related code
-
-# Fast code search (Morph/WarpGrep)
-uv run python -m runtime.harness scripts/morph_search.py --query "existing implementation" --path "."
-
-# Fast code edits (Morph/Apply) - for implementation agents
-uv run python -m runtime.harness scripts/morph_apply.py \
-    --file "path/to/file.py" \
-    --instruction "Description of change" \
-    --code_edit "// ... existing code ...\nnew_code\n// ... existing code ..."
+# Code structure: understand existing patterns
+tldr structure src/
 ```
 
 ## Step 4: Write Output

@@ -3,7 +3,17 @@
 // the real repo and against a fixture agents dir (see .claude/cache/e2e/2026-09-30-agent-body-ratchet.txt).
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { parseTools, toolConflicts, mentionsRpCli, deadScripts, regressions } from './check-agent-body.mjs';
+import { parseTools, toolConflicts, mentionsRpCli, deadScripts, regressions, vacuousReason } from './check-agent-body.mjs';
+import { mkdtempSync } from 'node:fs';
+import { tmpdir } from 'node:os';
+import { join as pjoin } from 'node:path';
+
+test('a missing agents dir or zero agents fails instead of passing (debug-agent finding, PR #70)', () => {
+  const empty = mkdtempSync(pjoin(tmpdir(), 'agent-body-empty-'));
+  assert.match(vacuousReason(pjoin(empty, 'nope'), -1), /not found/);
+  assert.match(vacuousReason(empty, 0), /vacuous/);
+  assert.equal(vacuousReason(empty, 3), null);
+});
 
 const agent = (tools, body) => `---\nname: t\n${tools === null ? '' : tools + '\n'}---\n${body}`;
 const BASH_BLOCK = '# Step\n\n```bash\nls -la\n```\n';
