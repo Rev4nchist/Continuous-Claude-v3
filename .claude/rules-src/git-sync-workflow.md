@@ -44,7 +44,8 @@ equals `git rev-parse main`.
 to `HEAD`, so one run picks up every merged commit. A run that finds the lock held leaves
 `~/.claude/.sync.pending`, and the lock holder syncs those commits before it exits. A cursor that
 is not an ancestor of `HEAD` falls back to the full mirror. Override for a deliberate branch sync:
-`SYNC_ALLOW_BRANCH=1` (it never moves the cursor). Test: `bash scripts/sync-to-active-cursor.test.sh`.
+`SYNC_ALLOW_BRANCH=1` (it never moves the cursor). `SYNC_MAIN_DETACHED=1` accepts a detached HEAD at
+exactly `main`'s commit and does move the cursor; `land-pr.ps1` uses it from a temp worktree. Test: `bash scripts/sync-to-active-cursor.test.sh`.
 
 ## Reverse Sync is MANUAL-ONLY (root-cause fix, 2026-06-01)
 

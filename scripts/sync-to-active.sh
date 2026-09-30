@@ -74,6 +74,16 @@ if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then
     sync_gitdir="$(git -C "$REPO_ROOT" rev-parse --git-dir 2>/dev/null || echo '')"
     sync_common="$(git -C "$REPO_ROOT" rev-parse --git-common-dir 2>/dev/null || echo '')"
     [[ "$sync_branch" == "main" && "$sync_gitdir" == "$sync_common" ]] || SYNC_ON_MAIN=false
+    # SYNC_MAIN_DETACHED=1 (set by land-pr.ps1): a detached linked worktree checked out AT the
+    # commit main points to counts as main, so it syncs AND moves the cursor. land-pr uses one
+    # when the primary checkout sits on a feature branch. A named branch, or a detached HEAD at any
+    # other commit, is still skipped. Unlike SYNC_ALLOW_BRANCH this is safe to advance the cursor:
+    # the content is exactly main's.
+    if ! $SYNC_ON_MAIN && [[ "${SYNC_MAIN_DETACHED:-0}" == "1" && "$sync_branch" == "HEAD" ]]; then
+        sync_head_sha="$(git -C "$REPO_ROOT" rev-parse HEAD 2>/dev/null || echo '')"
+        sync_main_sha="$(git -C "$REPO_ROOT" rev-parse refs/heads/main 2>/dev/null || echo 'none')"
+        [[ -n "$sync_head_sha" && "$sync_head_sha" == "$sync_main_sha" ]] && SYNC_ON_MAIN=true
+    fi
 fi
 if ! $SYNC_ON_MAIN && [[ "${SYNC_ALLOW_BRANCH:-0}" != "1" ]] && ! $DRY_RUN; then
     echo "Sync skipped: '$sync_branch' is not main in the primary checkout. Merge to main, then run scripts/sync-to-active.sh --changed (override: SYNC_ALLOW_BRANCH=1)."

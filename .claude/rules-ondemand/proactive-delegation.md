@@ -45,6 +45,12 @@ Claude: "I detect a /fix workflow with 2 tasks:
 - Agent coordination
 - Presenting summaries
 
+## Model and effort at spawn
+
+- Sonnet work: use a predefined Sonnet agent. It carries `effort: high`. An unpinned agent copies the parent's effort.
+- An ad-hoc `Agent` call names `model`. A workflow `agent()` on Sonnet passes `effort: 'high'`.
+- Never haiku.
+
 ## Parallel Detection
 
 When tasks are independent, spawn agents in parallel:

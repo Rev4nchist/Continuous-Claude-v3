@@ -17,8 +17,14 @@ Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where 
 ## Sonnet always runs at effort high
 
 Dave's rule (2026-09-30): Sonnet effort is `high`. Never `medium`, `low` or `xhigh`.
-- Every Sonnet agent carries `effort: high` in its frontmatter. Without it, the agent inherits the
-  spawning session's effort. In the 14 days before the pin, 46 Sonnet subagents ran at medium and 5 at low.
+- Every Sonnet agent carries `effort: high` in its frontmatter. Without it, the agent gets the
+  effort of the spawning session (`--effort`, else `modelSettings`). It does not read the settings
+  `effortLevel`. Probe 2026-09-30: parent `--effort high` with user `effortLevel: medium` gave high;
+  parent `--effort low` gave low.
+- Baseline before the pin: 46 of 99 Sonnet subagent runs medium, 5 low.
+- Proof: read `"effort":"<level>"` in the subagent transcript (`~/.claude/projects/<slug>/<session>/subagents/`).
+- Opus agents have no pin. They copy the parent, so they run high under an Opus or Sonnet parent at high
+  and lower under a parent at lower effort (probed: `--effort low`; [Speculation] a Fable session, `modelSettings` medium). A pin is Dave's decision.
 - `~/.claude/settings.json` `modelSettings` pins `claude-sonnet-5` and `claude-sonnet-5-5` at high for
   Sonnet main sessions.
 - A workflow `agent()` on Sonnet passes `effort: 'high'`. For Sonnet work through the Agent tool, use a
@@ -53,4 +59,4 @@ The env var overrides every agent's frontmatter and **flattens the whole tier ma
 
 ## Expression mechanics
 
-Use the bare aliases `model: opus` / `model: sonnet` — they resolve to Opus 4.8 / Sonnet 5 on this build (no `ANTHROPIC_DEFAULT_*_MODEL` pins). The `.json` mirror's `model` field is read at spawn by `opc/scripts/claude_spawn.py` and is **not** auto-synced from the `.md` (`sync-agent-json.py` preserves it) — edit both in lockstep.
+Use the bare aliases `model: opus` / `model: sonnet` — they resolve to `claude-opus-5-5` / `claude-sonnet-5-5` on this build (no `ANTHROPIC_DEFAULT_*_MODEL` pins). The `.json` mirror's `model` field is read at spawn by `opc/scripts/claude_spawn.py` and is **not** auto-synced from the `.md` (`sync-agent-json.py` preserves it) — edit both in lockstep. The mirror has no `effort`, and `claude_spawn.py` passes no `--effort`, so `effort:` lives only in the `.md`.

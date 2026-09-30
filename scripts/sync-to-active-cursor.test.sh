@@ -146,6 +146,36 @@ chk "detached sync ran and moved the cursor to HEAD" "$( [ "$(tr -d '\r\n' < "$A
 chk "j.md synced by the hook" "$(has "$ACT/rules/j.md")"
 rm -f "$REPO/.git/hooks/post-commit"
 
+echo "=== T10: a detached worktree at main syncs from a feature-branch checkout (land-pr.ps1 path) ==="
+# The primary checkout sits on a feature branch; main moved on (a PR merged). land-pr.ps1 adds a
+# detached worktree of main and runs the sync there with SYNC_MAIN_DETACHED=1.
+g checkout -q -b feat10
+printf 'only-on-feat10\n' > "$REPO/.claude/rules-src/feat10-only.md"; commit feat10
+g checkout -q main
+printf 'k\n' > "$REPO/.claude/rules-src/k.md"; commit k
+g checkout -q feat10
+WT10="$FIX/land-pr-sync"
+g worktree add --detach "$WT10" main
+wt_sync() { ( cd "$WT10" && HOME="$HOMEDIR" SYNC_MAIN_DETACHED=1 bash "$WT10/scripts/sync-to-active.sh" --changed 2>&1 ); }
+out="$(wt_sync)"
+chk "run not skipped" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 0 || echo 1)"
+chk "k.md (new on main) synced" "$(has "$ACT/rules/k.md")"
+chk "feat10-only.md (feature branch) NOT live" "$(not "$ACT/rules/feat10-only.md")"
+chk "cursor = main (the worktree run moves it)" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse main)" ] && echo 1 || echo 0)"
+chk "no quarantine dir" "$(not "$ACT/.sync-quarantine")"
+chk "primary checkout still on feat10" "$( [ "$(git -C "$REPO" rev-parse --abbrev-ref HEAD)" = "feat10" ] && echo 1 || echo 0)"
+# Guard still holds: without the flag, or with a detached HEAD that is not main's commit, it skips.
+printf 'l\n' > "$REPO/.claude/rules-src/l.md"; g checkout -q main; commit l; g checkout -q feat10
+out="$( cd "$WT10" && HOME="$HOMEDIR" bash "$WT10/scripts/sync-to-active.sh" --changed 2>&1 )"
+chk "no flag: a detached worktree is skipped" "$(printf '%s' "$out" | grep -q 'Sync skipped' && echo 1 || echo 0)"
+git -C "$WT10" checkout -q --detach feat10 >/dev/null 2>&1
+out2="$(wt_sync)"
+chk "detached at a non-main commit is skipped even with the flag" "$(printf '%s' "$out2" | grep -q 'Sync skipped' && echo 1 || echo 0)"
+chk "feat10-only.md still NOT live" "$(not "$ACT/rules/feat10-only.md")"
+chk "cursor did not move to the feature commit" "$( [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" != "$(git -C "$REPO" rev-parse feat10)" ] && echo 1 || echo 0)"
+g worktree remove --force "$WT10"
+g checkout -q main
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

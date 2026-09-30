@@ -13,7 +13,9 @@
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (Codex, P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
-  4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash).
+  4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash). If the primary
+     checkout is on another branch, it syncs from a temporary detached worktree of main and removes
+     that worktree afterwards; the primary checkout is never switched.
   5. Clean up: remove the PR's worktree (clean worktrees only; a node_modules junction is unlinked
      first), delete the local branch with -d (merged-only), delete the remote branch on fork.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
@@ -93,7 +95,7 @@ if ($current -eq 'main') {
 }
 $done.Add("main at $((git -C $RepoPath rev-parse --short main))")
 
-# 4. Sync ~/.claude (only from main in the primary checkout; the script refuses otherwise)
+# 4. Sync ~/.claude (from the primary checkout when it is on main, else from a temp worktree of main)
 if (-not $NoSync) {
   if ($current -eq 'main') {
     Step "sync ~/.claude"
@@ -101,7 +103,39 @@ if (-not $NoSync) {
     try { & $gitBash scripts/sync-to-active.sh --changed | Out-Host; if ($LASTEXITCODE -eq 0) { $done.Add('synced') } else { Write-Host "  sync exited $LASTEXITCODE; run it by hand" } }
     finally { Pop-Location }
   } else {
-    Write-Host "  skipped sync: $RepoPath is on '$current', not main. Sync after checking out main."
+    # The primary checkout is on another branch. Sync from a throwaway detached worktree of main
+    # instead of switching the checkout. SYNC_MAIN_DETACHED=1 lets the script accept a detached HEAD
+    # that sits exactly at main's commit; it then moves the sync cursor like a run on main.
+    $syncWt = Join-Path ([System.IO.Path]::GetTempPath()) "land-pr-sync-$Pr"
+    Step "sync ~/.claude through a temp worktree of main ($RepoPath stays on '$current')"
+    $wtOk = $false
+    try {
+      if (Test-Path $syncWt) { git -C $RepoPath worktree remove --force $syncWt 2>&1 | Out-Null }   # leftover from a killed run
+      git -C $RepoPath worktree prune 2>&1 | Out-Null
+      git -C $RepoPath worktree add --detach $syncWt main 2>&1 | Out-Host
+      if ($LASTEXITCODE) { Write-Host "  could not create the temp worktree; sync from main by hand" }
+      else {
+        $wtOk = $true
+        Push-Location $syncWt
+        try {
+          $env:SYNC_MAIN_DETACHED = '1'
+          $syncOut = & $gitBash scripts/sync-to-active.sh --changed
+          $syncOut | Out-Host
+          # main's own copy of the script decides. One that predates SYNC_MAIN_DETACHED exits 0 after
+          # printing "Sync skipped"; do not report that as a sync.
+          if ($LASTEXITCODE -ne 0) { Write-Host "  sync exited $LASTEXITCODE; run it by hand" }
+          elseif ($syncOut -match 'Sync skipped') { Write-Host "  main's sync script skipped the temp worktree (it predates SYNC_MAIN_DETACHED); check out main and run scripts/sync-to-active.sh --changed" }
+          else { $done.Add('synced via temp worktree') }
+        }
+        finally { Remove-Item Env:\SYNC_MAIN_DETACHED -ErrorAction SilentlyContinue; Pop-Location }
+      }
+    }
+    finally {
+      if ($wtOk -or (Test-Path $syncWt)) {
+        git -C $RepoPath worktree remove --force $syncWt 2>&1 | Out-Null
+        if ($LASTEXITCODE -or (Test-Path $syncWt)) { Write-Host "  could not remove temp worktree $syncWt; run: git -C $RepoPath worktree remove --force $syncWt" }
+      }
+    }
   }
 }
 

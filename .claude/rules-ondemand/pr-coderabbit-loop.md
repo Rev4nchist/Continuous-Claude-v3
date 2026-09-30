@@ -49,10 +49,11 @@ the paid on-demand review.** Do not claim a new push re-triggers review: this is
 
 When Dave says merge for a reviewed PR, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
 through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, and
-removes the worktree and branches. It syncs `~/.claude` only when the primary checkout is on `main`.
-Otherwise it prints that it skipped the sync. Then switch the primary checkout to `main`. Run
-`scripts/sync-to-active.sh --changed` with Git Bash (`C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe`;
-`bash` on PATH is WSL). Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
+removes the worktree and branches. It syncs `~/.claude` itself: from the primary checkout on `main`,
+else from a temporary detached worktree of `main` (the primary checkout stays on its branch). If it
+prints "skipped", check out `main` and run `scripts/sync-to-active.sh --changed` with Git Bash
+(`C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe`; `bash` on PATH is WSL).
+Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
 Every step is idempotent; re-run after a partial failure.
 
 ## Thread state — verify, do not trust the bot's text
