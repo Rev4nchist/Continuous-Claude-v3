@@ -394,7 +394,7 @@ Static gates:
 | Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 25774 chars (budget 26000, Claude Code limit 150000) [repo]` |
 | Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 80 live entries / 71 names ... 0 discarded-output, 8/8 timers safe` |
 | Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 37 \| opus: 12 sonnet: 25 \| OK` |
-| Skill descriptions | `node scripts/skills/audit-descriptions.mjs` | Ratchet on skill trigger text |
+| Skills | `node scripts/skills/audit-skills.mjs` | Gate and ratchet for every SKILL.md (rules G01-G32) |
 | Test suite size | `node scripts/hooks/suite-count-ratchet.mjs` | Fails if passed or collected tests drop below the baseline |
 
 The `--repo` budget counts more files than a normal session loads. It adds this repo's own

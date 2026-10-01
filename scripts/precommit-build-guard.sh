@@ -51,9 +51,10 @@ staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" || exit
 #                    scripts/rules/context-budget-guard.mjs --repo --staged (counts the
 #                    chars of the always-loaded set in the STAGED blobs)
 #   - agents      -> scripts/check-agent-model-drift.mjs (two-tier model policy)
-#   - skills      -> scripts/skills/audit-descriptions.mjs (trigger + YAML)
-# The agents and skills checks read the working tree; if it differs from what
-# is staged in those paths, the result is labelled as a working-tree check.
+#   - skills      -> scripts/skills/audit-skills.mjs --staged (rules G01-G32, audits the INDEX)
+# The agents check reads the working tree; if it differs from what is staged in
+# those paths, the result is labelled as a working-tree check. The skills check
+# exports the index, so an unstaged edit can neither block nor excuse a commit.
 # -----------------------------------------------------------------------------
 if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
   root="$(git rev-parse --show-toplevel 2>/dev/null)"
@@ -79,8 +80,11 @@ if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
   if printf '%s\n' "$staged" | grep -q '^\.claude/agents/'; then
     run_ratchet "check-agent-model-drift" ".claude/agents" node "$root/scripts/check-agent-model-drift.mjs" "$root"
   fi
-  if printf '%s\n' "$staged" | grep -q '^\.claude/skills/.*SKILL\.md$'; then
-    run_ratchet "audit-descriptions" ".claude/skills" node "$root/scripts/skills/audit-descriptions.mjs" --quiet
+  if printf '%s\n' "$staged" | grep -qE '^\.claude/skills/|^scripts/skills/|^\.claude/settings\.json\.template$|^\.claude/agents/|^\.mcp\.json$'; then
+    # --staged audits the git index (exported to a temp dir), not the working tree. The trigger
+    # list must match STAGED_PATHS in scripts/skills/audit-skills.mjs: every input the gate reads
+    # (G17 reads .claude/agents, G28 reads .mcp.json and the settings template).
+    run_ratchet "audit-skills" "" node "$root/scripts/skills/audit-skills.mjs" --staged --quiet
   fi
   if [ "$ratchet_fail" -ne 0 ]; then
     echo "" >&2

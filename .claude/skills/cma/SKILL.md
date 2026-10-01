@@ -17,7 +17,7 @@ wire to it — **never your local disk or local MCP servers**. Live docs (author
 https://platform.claude.com/docs/en/managed-agents/overview
 
 **Before any billable call, apply `.claude/rules-ondemand/cma-safety.md`.** Spend is on `ANTHROPIC_API_KEY`
-(consumption — SEPARATE from the Claude Code subscription): tokens + **$0.08/session-hour** + web search.
+(consumption — SEPARATE from the Claude Code subscription): tokens + **\$0.08/session-hour** + web search.
 
 ## API Contract (single source of truth — the drift firewall)
 
@@ -31,7 +31,7 @@ Everything else references these constants; if a call fails on one, the live doc
 - Deployments use the query param `?beta=true` (not the header) on create/run/pause.
 - Models: `claude-opus-4-8` (default) / Sonnet for speed-or-cost. `system.message` mid-session is Opus-4.8 only.
 
-## Auth quick check (read-only, $0)
+## Auth quick check (read-only, \$0)
 
 ```bash
 curl -sS -o /dev/null -w "%{http_code}\n" https://api.anthropic.com/v1/models \
@@ -105,7 +105,7 @@ Companion to `.claude/skills/cma/SKILL.md` and the `/launch-your-agent` + `/wrap
 CMA is Anthropic's **cloud-hosted** agent harness (REST API at `api.anthropic.com/v1`, beta header
 `managed-agents-2026-04-01`). Every create/send call runs in Anthropic's cloud and **bills consumption
 on the `ANTHROPIC_API_KEY` — SEPARATE from Dave's Claude Code subscription** (standard tokens +
-**$0.08/session-hour**, idle free, ms-metered + web search $10/1k). CMA is **NOT** ZDR/HIPAA-eligible.
+**\$0.08/session-hour**, idle free, ms-metered + web search \$10/1k). CMA is **NOT** ZDR/HIPAA-eligible.
 
 ## Auth prerequisite (verify FIRST)
 
@@ -148,11 +148,11 @@ These spend money, mutate cloud state, or are irreversible:
 3. **Data-residency gate** — CMA is NOT ZDR/HIPAA-eligible and ships data to Anthropic's cloud. **Never route
    regulated/ZDR-required data, secrets, or sensitive private content into a CMA session.** For repo digests,
    scope to repos whose contents are acceptable to process in the cloud.
-4. **Cost estimate** — state "this spends on Dave's API key, workspace = X, est = ~tokens + $0.08×<hrs>, max_iterations = 3" BEFORE the billable call (heads-up-early / hand-over-late).
+4. **Cost estimate** — state "this spends on Dave's API key, workspace = X, est = ~tokens + \$0.08×<hrs>, max_iterations = 3" BEFORE the billable call (heads-up-early / hand-over-late).
 
 ## Cost Guard
 
-- Pricing: standard tokens + **$0.08/session-hour** (idle free, ms-metered) + web search $10/1k. Idle is free,
+- Pricing: standard tokens + **\$0.08/session-hour** (idle free, ms-metered) + web search \$10/1k. Idle is free,
   but a `running` outcome loop and an un-ended session are not — always end/archive sessions you're done with.
 - Keep `max_iterations: 3` (max 20). Never raise without an explicit confirm + cost note.
 - **Spend ledger:** append one row per billable create/send to `.claude/logs/cma-spend.jsonl`

@@ -1,9 +1,6 @@
 ---
 name: opencli
-description: Universal CLI hub for web data via opencli browser bridge. Use when the
-  user wants to search Twitter, check HackerNews, browse Reddit, fetch YouTube data,
-  pull social media content, create new site adapters, or mentions opencli, open-cli,
-  web CLI, or browser CLI.
+description: Universal CLI hub for web data via opencli browser bridge. Use when the user wants to search Twitter, check HackerNews, browse Reddit, fetch YouTube data, pull social media content, create new site adapters, or mentions opencli, open-cli, web CLI, or browser CLI.
 ---
 
 # OpenCLI -- Web Data CLI Hub

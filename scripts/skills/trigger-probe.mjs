@@ -1,91 +1,144 @@
 #!/usr/bin/env node
-// Skill trigger probe: measures HIT rate and FALSE-FIRE rate for skill routing across BOTH
-// trigger channels, so description rewrites can be compared before/after (premortem tigers
-// #2-#4: baseline, negatives, runtime not static).
+// Skill trigger probe: measures HIT rate and FALSE-FIRE rate of Claude Code's own
+// description-based skill routing, so description rewrites can be compared before and after.
 //
-//   channel "hook"   = our own UserPromptSubmit hook skill-activation-prompt (skill-rules.json)
-//   channel "native" = Claude Code's own description-based router, asked via one `claude -p`
-//                      call to name the skill it would invoke for each prompt (no tools).
+// For each case it runs ONE fresh headless session, `claude -p --output-format stream-json
+// --verbose`, with only the Skill tool available, and reads which Skill tool_use the model
+// emitted. It does not ask the model to name a skill: the tool call is the real routing event.
+// ANTHROPIC_API_KEY is removed from the child env so the run bills the subscription.
 //
 // Usage: node scripts/skills/trigger-probe.mjs [--cases scripts/skills/trigger-cases.json]
-//            [--out docs/self-improvement/audits/<date>-skill-trigger-<label>.json] [--skip-native]
-// Read-only. Spawns the hook dist and (optionally) one headless claude -p on the subscription.
+//            [--limit N] [--out docs/self-improvement/audits/<date>-skill-trigger-<label>.json]
+//            [--model <model>] [--dry-run]
+// --dry-run prints the commands and spends nothing. A live run spends one subscription turn
+// per case; use --limit for a smoke test.
 
 import fs from 'node:fs';
-import path from 'node:path';
 import os from 'node:os';
+import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const repo = path.resolve(here, '..', '..');
-const args = process.argv.slice(2);
-const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
-const CASES = path.resolve(opt('--cases', path.join(here, 'trigger-cases.json')));
-const OUT = opt('--out', null);
-const SKIP_NATIVE = args.includes('--skip-native');
-const HOOK = path.join(os.homedir(), '.claude', 'hooks', 'dist', 'skill-activation-prompt.mjs');
 
-const { cases } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
-
-function hookChannel(prompt) {
-  const input = JSON.stringify({ session_id: 'trigger-probe', transcript_path: '', cwd: repo, permission_mode: 'default', prompt });
-  const r = spawnSync('node', [HOOK], { input, encoding: 'utf8', timeout: 30000 });
-  const out = (r.stdout || '') + (r.stderr || '');
-  const fired = new Set();
-  // Lines like "  → skill-name" under RECOMMENDED SKILLS; also "Skill: name" variants.
-  // "→ name" = recommended; "• name" = ambiguous match (still surfaced to the model, so counted).
-  for (const m of out.matchAll(/(?:→|->|•)\s*([a-z0-9][a-z0-9_:-]*)\s*(?:\\n|$)/gim)) if (m[1] !== 'Skip') fired.add(m[1]);
-  return [...fired];
+// The Skill tool only: the probe must never run a case's real work (a prompt such as
+// "commit what we have so far" would otherwise commit).
+// An empty strict MCP config keeps case prompts from calling any MCP tool.
+export function emptyMcpConfigPath() {
+  const p = path.join(os.tmpdir(), 'trigger-probe-empty-mcp.json');
+  fs.writeFileSync(p, JSON.stringify({ mcpServers: {} }));
+  return p;
 }
 
-function nativeChannel(prompts) {
-  const list = prompts.map((p, i) => `${i + 1}. ${p}`).join('\n');
-  const ask = `You have a list of available skills in your context. For EACH numbered user prompt below, name the ONE skill you would invoke (exact skill name as listed), or "none" if you would not invoke a skill. Do not call any tools. Do not explain. Reply with ONLY a JSON array like [{"i":1,"skill":"commit"}, ...].\n\n${list}`;
+// A UserPromptSubmit hook can inject skill guidance, which would make the hit rate hook-assisted
+// and not native routing. This settings file turns every hook off for the probe run.
+export function noHooksSettingsPath() {
+  const p = path.join(os.tmpdir(), 'trigger-probe-no-hooks.json');
+  fs.writeFileSync(p, JSON.stringify({ disableAllHooks: true }));
+  return p;
+}
+
+// The claude executable, found on PATH. It is spawned WITHOUT a shell, so a path with spaces
+// in an argument stays one argument. A .cmd or .bat shim needs a shell, so it is refused.
+export function resolveClaude(env = process.env) {
+  const names = process.platform === 'win32' ? ['claude.exe'] : ['claude'];
+  for (const dir of String(env.PATH || env.Path || '').split(path.delimiter)) {
+    for (const n of names) {
+      const p = path.join(dir, n);
+      try { if (fs.statSync(p).isFile()) return p; } catch { /* next */ }
+    }
+  }
+  throw new Error('claude executable not found on PATH (a .cmd shim is not supported: it needs a shell)');
+}
+
+const fwd = (p) => p.replace(/\\/g, '/');
+
+export function buildCommand(model, mcpConfig = emptyMcpConfigPath(), settings = noHooksSettingsPath()) {
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Skill', '--max-turns', '2',
+    '--strict-mcp-config', '--mcp-config', fwd(mcpConfig), '--settings', fwd(settings), '--no-session-persistence'];
+  if (model) args.push('--model', model);
+  return { cmd: resolveClaude(), args };
+}
+
+// Number of hook_started events in a stream. Non-zero means hooks ran, so the result is not pure
+// native routing and the probe says so.
+export function hooksRan(streamText) {
+  return streamText.split(/\r?\n/).filter((l) => l.startsWith('{') && /"subtype":"hook_started"/.test(l)).length;
+}
+
+// Skill names, in order, from the stream-json lines of one run.
+export function skillsFired(streamText) {
+  const fired = [];
+  for (const line of streamText.split(/\r?\n/)) {
+    if (!line.startsWith('{')) continue;
+    let ev; try { ev = JSON.parse(line); } catch { continue; }
+    if (ev.type !== 'assistant') continue;
+    for (const b of ev.message?.content ?? []) {
+      if (b.type === 'tool_use' && b.name === 'Skill') {
+        const s = String(b.input?.skill ?? b.input?.command ?? '').replace(/^\/+/, '');
+        if (s) fired.push(s);
+      }
+    }
+  }
+  return fired;
+}
+
+function runCase(prompt, model) {
+  const { cmd, args } = buildCommand(model);
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
-  const r = spawnSync('claude', ['-p', '--output-format', 'json', '--max-turns', '1'], { input: ask, encoding: 'utf8', timeout: 300000, env, shell: true, cwd: repo });
-  const raw = r.stdout || '';
-  let text = raw;
-  try { const j = JSON.parse(raw); text = j.result ?? j.content ?? raw; } catch {}
-  const m = String(text).match(/\[[\s\S]*\]/);
-  if (!m) return { error: 'no-json', raw: String(text).slice(0, 500) };
-  try { return { answers: JSON.parse(m[0]) }; } catch (e) { return { error: String(e), raw: m[0].slice(0, 500) }; }
+  const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd: repo, maxBuffer: 64 * 1024 * 1024 });
+  // A run that failed (non-zero exit, spawn error, timeout) says nothing about routing: it is an
+  // error, not a miss.
+  const error = r.error ? r.error.message : (r.status !== 0 ? `exit ${r.status}` : null);
+  return { fired: skillsFired(r.stdout || ''), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
 }
 
-const results = [];
-let hookHits = 0, hookFalse = 0;
-for (const c of cases) {
-  const fired = hookChannel(c.prompt);
-  const hit = fired.some((s) => c.expect.includes(s));
-  const falseFires = fired.filter((s) => !c.expect.includes(s));
-  if (hit) hookHits++; if (falseFires.length) hookFalse++;
-  results.push({ prompt: c.prompt, expect: c.expect, hook: { fired, hit, falseFires } });
-}
+function main(argv) {
+  const opt = (k, d) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : d; };
+  const CASES = path.resolve(opt('--cases', path.join(here, 'trigger-cases.json')));
+  const OUT = opt('--out', null);
+  const LIMIT = Number(opt('--limit', 0)) || Infinity;
+  const MODEL = opt('--model', null);
+  const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
+  const cases = all.slice(0, LIMIT);
 
-let native = null;
-if (!SKIP_NATIVE) {
-  native = nativeChannel(cases.map((c) => c.prompt));
-  if (native.answers) {
-    for (const a of native.answers) {
-      const r = results[a.i - 1]; if (!r) continue;
-      const s = String(a.skill || 'none').replace(/^\/+/, '');
-      r.native = { fired: s, hit: r.expect.includes(s), falseFire: s !== 'none' && !r.expect.includes(s) };
-    }
+  if (argv.includes('--dry-run')) {
+    const { cmd, args } = buildCommand(MODEL);
+    console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin)`);
+    console.log(`argv: ${JSON.stringify(args)}`);
+    for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # expect ${c.expect.join('|')}`);
+    console.log(`dry-run: ${cases.length} cases, 0 turns spent`);
+    return 0;
   }
+
+  const results = cases.map((c) => {
+    const r = runCase(c.prompt, MODEL);
+    const hit = !r.error && r.fired.some((s) => c.expect.includes(s));
+    const falseFires = r.error ? [] : r.fired.filter((s) => !c.expect.includes(s));
+    return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, hooksRan: r.hooksRan, status: r.status, error: r.error, stderr: r.stderr };
+  });
+  const ok = results.filter((r) => !r.error);
+  const hookCases = results.filter((r) => r.hooksRan > 0).length;
+  const errors = results.length - ok.length;
+  const hits = ok.filter((r) => r.hit).length;
+  const summary = {
+    cases: results.length, answered: ok.length, errors, hits, hitRate: ok.length ? +(hits / ok.length).toFixed(2) : null,
+    promptsWithFalseFire: ok.filter((r) => r.falseFires.length).length,
+    noSkillFired: ok.filter((r) => !r.fired.length).length,
+    casesWithHooks: hookCases,
+    routing: hookCases ? 'NOT PURE NATIVE: hooks ran despite disableAllHooks, so a hook may have injected skill guidance' : 'native (all hooks disabled)',
+    ts: new Date().toISOString(),
+  };
+  console.log(JSON.stringify(summary, null, 1));
+  for (const r of results) {
+    const tag = r.error ? `ERR (${r.error})` : (r.hit ? 'HIT ' : 'miss');
+    console.log(`${tag} fired[${r.fired.join(',') || '-'}] <= ${r.prompt}  (expect ${r.expect.join('|')})`);
+  }
+  if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, results }, null, 1));
+  return errors ? 1 : 0;
 }
-const nat = results.filter((r) => r.native);
-const summary = {
-  cases: cases.length,
-  hook: { hits: hookHits, hitRate: +(hookHits / cases.length).toFixed(2), promptsWithFalseFire: hookFalse },
-  native: nat.length ? { answered: nat.length, hits: nat.filter((r) => r.native.hit).length, hitRate: +(nat.filter((r) => r.native.hit).length / nat.length).toFixed(2), falseFires: nat.filter((r) => r.native.falseFire).length } : (native?.error || 'skipped'),
-  ts: new Date().toISOString(),
-};
-console.log(JSON.stringify(summary, null, 1));
-for (const r of results) {
-  const h = r.hook.hit ? 'HIT ' : 'miss';
-  const n = r.native ? (r.native.hit ? 'HIT ' : `miss(${r.native.fired})`) : '-';
-  console.log(`${h} hook[${r.hook.fired.join(',') || '-'}]  native:${n}  <= ${r.prompt}  (expect ${r.expect.join('|')})`);
-}
-if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, results, nativeRaw: native?.raw }, null, 1));
+
+if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));

@@ -22,10 +22,23 @@ except ImportError:
     HAS_YAML = False
 
 
-# Anthropic spec: only these top-level keys are allowed in frontmatter
-ALLOWED_PROPERTIES = {
+# --target upload: claude.ai upload, the Skills API and package_skill.py accept only these six
+# top-level keys and hard-fail on any other.
+UPLOAD_PROPERTIES = {
     "name", "description", "license", "allowed-tools", "metadata", "compatibility"
 }
+
+# --target claude-code (default): the keys Claude Code reads (code.claude.com/docs/en/skills).
+# Claude Code ignores a key it does not know, so an unknown key is reported but never silently
+# accepted. Keep this list in step with KNOWN_KEYS in scripts/skills/lib/skill-rules.mjs.
+CLAUDE_CODE_PROPERTIES = UPLOAD_PROPERTIES | {
+    "when_to_use", "argument-hint", "arguments", "disable-model-invocation", "user-invocable",
+    "disallowed-tools", "model", "effort", "context", "agent", "background", "hooks", "paths",
+    "shell",
+}
+
+TARGETS = {"claude-code": CLAUDE_CODE_PROPERTIES, "upload": UPLOAD_PROPERTIES}
+DEFAULT_TARGET = "claude-code"
 
 
 @dataclass
@@ -78,8 +91,8 @@ def validate_basic_structure(skill_path: Path) -> List[ValidationResult]:
     return results
 
 
-def validate_frontmatter(content: str) -> List[ValidationResult]:
-    """Validate YAML frontmatter"""
+def validate_frontmatter(content: str, target: str = DEFAULT_TARGET) -> List[ValidationResult]:
+    """Validate YAML frontmatter against the key set of the chosen target"""
     results = []
 
     if not content.startswith('---'):
@@ -100,13 +113,14 @@ def validate_frontmatter(content: str) -> List[ValidationResult]:
 
     fm = _parse_frontmatter(content)
 
-    # -- Allowed properties check (from Anthropic) --
-    unexpected = set(fm.keys()) - ALLOWED_PROPERTIES
+    # -- Allowed properties check (per target) --
+    allowed = TARGETS[target]
+    unexpected = set(fm.keys()) - allowed
     if unexpected:
         results.append(ValidationResult(
             severity="error", category="metadata",
             message=f"Unexpected frontmatter keys: {', '.join(sorted(unexpected))}. "
-                    f"Allowed: {', '.join(sorted(ALLOWED_PROPERTIES))}",
+                    f"Allowed for --target {target}: {', '.join(sorted(allowed))}",
             passed=False
         ))
 
@@ -234,7 +248,8 @@ def validate_frontmatter(content: str) -> List[ValidationResult]:
 def check_todo_markers(content: str) -> List[ValidationResult]:
     """Check for remaining TODO markers"""
     results = []
-    todos = re.findall(r'\[?TODO:?.*?\]?', content, re.IGNORECASE)
+    # Whole word, case-sensitive: TodoWrite and "todos" are not markers.
+    todos = re.findall(r'\bTODO\b', content)
     if todos:
         results.append(ValidationResult(
             severity="error", category="content",
@@ -354,7 +369,7 @@ def check_examples_present(content: str) -> List[ValidationResult]:
     return results
 
 
-def validate_skill(skill_path) -> Tuple[bool, str]:
+def validate_skill(skill_path, target: str = DEFAULT_TARGET) -> Tuple[bool, str]:
     """
     Comprehensive validation of a skill.
 
@@ -372,7 +387,7 @@ def validate_skill(skill_path) -> Tuple[bool, str]:
 
     content = skill_md.read_text(encoding='utf-8', errors='replace')
 
-    all_results.extend(validate_frontmatter(content))
+    all_results.extend(validate_frontmatter(content, target))
     all_results.extend(check_todo_markers(content))
     all_results.extend(check_word_count(content))
     all_results.extend(validate_file_paths(skill_path, content))
@@ -407,15 +422,38 @@ def validate_skill(skill_path) -> Tuple[bool, str]:
         return False, "Skill has validation errors" + report
 
 
+def _parse_args(argv):
+    """Return (skill_directory, target) or None when the arguments are wrong."""
+    target = DEFAULT_TARGET
+    rest = []
+    i = 0
+    while i < len(argv):
+        if argv[i] == "--target" and i + 1 < len(argv):
+            target = argv[i + 1]
+            i += 2
+        elif argv[i].startswith("--target="):
+            target = argv[i].split("=", 1)[1]
+            i += 1
+        else:
+            rest.append(argv[i])
+            i += 1
+    if len(rest) != 1 or target not in TARGETS:
+        return None
+    return rest[0], target
+
+
 if __name__ == "__main__":
-    if len(sys.argv) != 2:
-        print("Usage: python quick_validate.py <skill_directory>")
+    parsed = _parse_args(sys.argv[1:])
+    if parsed is None:
+        print("Usage: python quick_validate.py [--target claude-code|upload] <skill_directory>")
+        print("  --target claude-code  (default) the frontmatter keys Claude Code reads")
+        print("  --target upload       the six keys claude.ai upload and the Skills API accept")
         print("\nValidates skill against quality checklist:")
         print("  - Metadata (name, description, allowed properties)")
         print("  - Content (TODO markers, word count, examples)")
         print("  - Resources (file paths, script validation)")
         sys.exit(1)
 
-    valid, message = validate_skill(sys.argv[1])
+    valid, message = validate_skill(parsed[0], parsed[1])
     print(message)
     sys.exit(0 if valid else 1)

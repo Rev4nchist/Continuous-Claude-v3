@@ -5,7 +5,7 @@ description: Vet external skills installed from skills.sh through structural val
 
 # Vet Skill Pipeline
 
-Validates and registers external skills from skills.sh into the local skill-rules.json routing table. The pipeline ensures that only skills with acceptable trigger accuracy get registered, and assigns trust tiers based on evaluation scores.
+Validates and registers external skills from skills.sh into the local skill-rules.json registry. The registry records trust tiers; it does not route prompts, because Claude Code picks a skill from its description alone. The pipeline ensures that only skills with acceptable trigger accuracy get registered, and assigns trust tiers based on evaluation scores.
 
 ## When to Use
 
@@ -34,7 +34,7 @@ If the file does not exist, report an error and stop. Extract the frontmatter (n
 RUN the structural validator:
 
 ```bash
-python ~/.claude/skills/skill-forge/scripts/quick_validate.py --skill-path ~/.claude/skills/<skill-name>/SKILL.md
+python ~/.claude/skills/skill-forge/scripts/quick_validate.py ~/.claude/skills/<skill-name>
 ```
 
 - If validation **FAILS**: report the specific errors to the user and **STOP**. Do NOT proceed to registration. The skill must be fixed first.
@@ -132,7 +132,7 @@ After optimization, re-score:
 - accuracy >= 70%: tier = `"vetted"`, priority = `"medium"`
 - accuracy < 70%: tier = `"provisional"`, priority = `"low"` -- warn the user that this skill has poor trigger accuracy and may fire incorrectly
 
-### Step 8: Generate skill-rules.json Entry
+### Step 8: Generate skill-rules.json Entry (trust-tier record; promptTriggers are read only by the unwired opc/scripts/core/skill_router.py and do not route prompts, native description routing does)
 
 Build the registration entry using this schema:
 
