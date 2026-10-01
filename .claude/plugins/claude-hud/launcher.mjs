@@ -43,18 +43,29 @@ const SPELL_MAP = {
   'mcp__playwright': 'Locomotor',
 };
 
+// One pass over whole tool names, longest first, so 'NotebookEdit' is not read as
+// 'Notebook' + 'Edit' and words inside other names stay as they are. An mcp__ key is a
+// prefix: it also matches 'mcp__nia__search'.
+const escapeRe = s => s.replace(/[.*+?^${}()|[\]\\]/g, '\\$&');
+const SPELL_RE = new RegExp(
+  '(?<![\\w])(' +
+    Object.keys(SPELL_MAP)
+      .sort((a, b) => b.length - a.length)
+      .map(k => escapeRe(k) + (k.startsWith('mcp__') ? '(?=__|(?![\\w]))' : '(?![\\w])'))
+      .join('|') +
+    ')',
+  'g',
+);
+
 function applySpells(output) {
-  let result = output;
-  for (const [tool, spell] of Object.entries(SPELL_MAP)) {
-    result = result.replaceAll(tool, spell);
-  }
-  return result;
+  return output.replace(SPELL_RE, tool => SPELL_MAP[tool] ?? tool);
 }
 
 // ============================================================
 // Original launcher logic
 // ============================================================
-const pluginDir = join(homedir(), '.claude', 'plugins', 'cache', 'claude-hud', 'claude-hud');
+const claudeDir = process.env.CLAUDE_CONFIG_DIR || join(homedir(), '.claude');
+const pluginDir = join(claudeDir, 'plugins', 'cache', 'claude-hud', 'claude-hud');
 
 // Find latest version by sorting dotted numeric dirs. The cache dir is absent until
 // Claude Code reinstalls the plugin (e.g. after ~/.claude/plugins was wiped).
