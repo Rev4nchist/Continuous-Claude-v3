@@ -56,8 +56,10 @@ Exception: the `modelSettings` entries for `claude-sonnet-5` and `claude-sonnet-
 (`effortLevel: high`) are policy, not preference, and live in the template (Dave, 2026-09-30:
 Sonnet always runs at high). Other `modelSettings` entries stay machine-local.
 Exception: a GitHub-sourced `extraKnownMarketplaces` entry that backs a plugin in the template's
-`enabledPlugins` lives in the template (`typesafe-ai`, 2026-10-01). Without it a new machine cannot
-resolve the plugin. A `directory` marketplace (a local path) stays machine-local.
+`enabledPlugins` lives in the template (`typesafe-ai`, `claude-hud`, 2026-10-01). Without it a new
+machine cannot resolve the plugin. A `directory` marketplace (a local path) stays machine-local.
+`enabledPlugins` does not download a plugin: the wizard runs `install_enabled_plugins()`
+(`opc/scripts/setup/claude_integration.py`) after it writes `settings.json`.
 
 **Machine-local hook registrations** (active-only by design; the capture script hard-excludes them):
 - `permission-auto-allow.mjs` (PermissionRequest) — **SECURITY**: a permission-bypass policy. Must be

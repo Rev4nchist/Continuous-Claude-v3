@@ -845,6 +845,12 @@
         "source": "github",
         "repo": "typesafe-ai/skills"
       }
+    },
+    "claude-hud": {
+      "source": {
+        "source": "github",
+        "repo": "jarrodwatts/claude-hud"
+      }
     }
   }
 }

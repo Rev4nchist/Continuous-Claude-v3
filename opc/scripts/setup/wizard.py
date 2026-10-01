@@ -748,6 +748,15 @@ def install_behavioral_config(
     return result
 
 
+def _install_plugins(settings_path: Path) -> None:
+    """Download the plugins settings.json enables and print one line per step."""
+    from scripts.setup.claude_integration import install_enabled_plugins
+
+    console.print("  Installing enabled plugins...")
+    for step, ok, message in install_enabled_plugins(settings_path):
+        tag = "[green]OK[/green]" if ok else "[yellow]WARN[/yellow]"
+        console.print(f"  {tag} {step}: {message}")
+
 async def run_setup_wizard() -> None:
     """Run the interactive setup wizard.
 
@@ -1004,6 +1013,9 @@ async def run_setup_wizard() -> None:
                 else:
                     console.print(f"  [yellow]WARN[/yellow] {build_msg}")
                     console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+
+                # enabledPlugins only turns plugins on; download them too
+                _install_plugins(claude_dir / "settings.json")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
         elif choice == "3":
@@ -1025,6 +1037,9 @@ async def run_setup_wizard() -> None:
                 else:
                     console.print(f"  [yellow]WARN[/yellow] {build_msg}")
                     console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+
+                # enabledPlugins only turns plugins on; download them too
+                _install_plugins(claude_dir / "settings.json")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
         else:
@@ -1062,6 +1077,9 @@ async def run_setup_wizard() -> None:
                 else:
                     console.print(f"  [yellow]WARN[/yellow] {build_msg}")
                     console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+
+                # enabledPlugins only turns plugins on; download them too
+                _install_plugins(claude_dir / "settings.json")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
         elif choice == "2":
@@ -1081,6 +1099,9 @@ async def run_setup_wizard() -> None:
                 else:
                     console.print(f"  [yellow]WARN[/yellow] {build_msg}")
                     console.print("  [dim]You can build manually: cd ~/.claude/hooks && npm install && npm run build[/dim]")
+
+                # enabledPlugins only turns plugins on; download them too
+                _install_plugins(claude_dir / "settings.json")
             else:
                 console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
         else:
