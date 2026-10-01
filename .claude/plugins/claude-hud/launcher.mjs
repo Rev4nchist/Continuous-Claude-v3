@@ -56,8 +56,15 @@ function applySpells(output) {
 // ============================================================
 const pluginDir = join(homedir(), '.claude', 'plugins', 'cache', 'claude-hud', 'claude-hud');
 
-// Find latest version by sorting dotted numeric dirs
-const versions = readdirSync(pluginDir, { withFileTypes: true })
+// Find latest version by sorting dotted numeric dirs. The cache dir is absent until
+// Claude Code reinstalls the plugin (e.g. after ~/.claude/plugins was wiped).
+let entries = [];
+try {
+  entries = readdirSync(pluginDir, { withFileTypes: true });
+} catch {
+  // fall through to "No installed version found"
+}
+const versions = entries
   .filter(d => d.isDirectory() && /^\d+(\.\d+)+$/.test(d.name))
   .map(d => d.name)
   .sort((a, b) => {

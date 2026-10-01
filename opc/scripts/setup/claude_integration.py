@@ -396,9 +396,16 @@ def _merge_plugins(src: Path, dst: Path) -> None:
 
     The target holds Claude Code's own plugin state (cache/, marketplaces/,
     installed_plugins.json). Replacing the folder would uninstall every plugin.
+    An existing config.json is kept: a plugin's configure command writes it.
     """
+
+    def copy_unless_config(s: str, d: str) -> str:
+        if Path(d).name == "config.json" and Path(d).exists():
+            return d
+        return shutil.copy2(s, d)
+
     if src.exists():
-        shutil.copytree(src, dst, dirs_exist_ok=True)
+        shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=copy_unless_config)
 
 
 def _copy_scripts(opc_source: Path, target_dir: Path) -> int:

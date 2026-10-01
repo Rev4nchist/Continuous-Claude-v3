@@ -322,8 +322,19 @@ chk "--changed: launcher.mjs reaches ~/.claude/plugins/claude-hud" "$( [ "$(cat 
 printf 'v2\n' > "$REPO/.claude/plugins/claude-hud/launcher.mjs"; commit t12-v2
 sync >/dev/null
 chk "full mirror: launcher.mjs updated" "$( [ "$(cat "$ACT/plugins/claude-hud/launcher.mjs" 2>/dev/null)" = "v2" ] && echo 1 || echo 0)"
+# The only code that deletes is the --changed delete branch: a repo delete must remove
+# just that file. HUD's own files and Claude Code's plugin state stay.
+printf 'hud state\n' > "$ACT/plugins/claude-hud/.usage-cache.json"
+printf 'x\n' > "$REPO/.claude/plugins/claude-hud/other.mjs"; commit t12-other
+sync --changed >/dev/null
+g rm -q .claude/plugins/claude-hud/launcher.mjs; g commit -q -m t12-delete
+sync --changed >/dev/null
+chk "--changed delete removes launcher.mjs" "$(not "$ACT/plugins/claude-hud/launcher.mjs")"
+chk "HUD's own .usage-cache.json kept" "$(has "$ACT/plugins/claude-hud/.usage-cache.json")"
 chk "installed_plugins.json kept" "$(has "$ACT/plugins/installed_plugins.json")"
 chk "plugins/cache kept" "$(has "$ACT/plugins/cache/claude-hud")"
+out="$(sync)"
+chk "full sync verify: plugins/claude-hud OK, no MISMATCH" "$(printf '%s' "$out" | grep -q 'plugins/claude-hud: OK' && ! printf '%s' "$out" | grep -q 'MISMATCH' && echo 1 || echo 0)"
 
 echo
 echo "passed=$pass failed=$fail"
