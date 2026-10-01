@@ -14,6 +14,7 @@
 // per case; use --limit for a smoke test.
 
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
@@ -23,8 +24,16 @@ const repo = path.resolve(here, '..', '..');
 
 // The Skill tool only: the probe must never run a case's real work (a prompt such as
 // "commit what we have so far" would otherwise commit).
-export function buildCommand(model) {
-  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Skill', '--no-session-persistence'];
+// An empty strict MCP config keeps case prompts from calling any MCP tool.
+export function emptyMcpConfigPath() {
+  const p = path.join(os.tmpdir(), 'trigger-probe-empty-mcp.json');
+  fs.writeFileSync(p, JSON.stringify({ mcpServers: {} }));
+  return p;
+}
+
+export function buildCommand(model, mcpConfig = emptyMcpConfigPath()) {
+  const args = ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Skill', '--max-turns', '2',
+    '--strict-mcp-config', '--mcp-config', mcpConfig.replace(/\\/g, '/'), '--no-session-persistence'];
   if (model) args.push('--model', model);
   return { cmd: 'claude', args };
 }
@@ -52,7 +61,10 @@ function runCase(prompt, model) {
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
   const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: true, cwd: repo, maxBuffer: 64 * 1024 * 1024 });
-  return { fired: skillsFired(r.stdout || ''), status: r.status, stderr: (r.stderr || '').slice(0, 300) };
+  // A run that failed (non-zero exit, spawn error, timeout) says nothing about routing: it is an
+  // error, not a miss.
+  const error = r.error ? r.error.message : (r.status !== 0 ? `exit ${r.status}` : null);
+  return { fired: skillsFired(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
 }
 
 function main(argv) {
@@ -73,21 +85,26 @@ function main(argv) {
 
   const results = cases.map((c) => {
     const r = runCase(c.prompt, MODEL);
-    const hit = r.fired.some((s) => c.expect.includes(s));
-    const falseFires = r.fired.filter((s) => !c.expect.includes(s));
-    return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, status: r.status, stderr: r.stderr };
+    const hit = !r.error && r.fired.some((s) => c.expect.includes(s));
+    const falseFires = r.error ? [] : r.fired.filter((s) => !c.expect.includes(s));
+    return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, status: r.status, error: r.error, stderr: r.stderr };
   });
-  const hits = results.filter((r) => r.hit).length;
+  const ok = results.filter((r) => !r.error);
+  const errors = results.length - ok.length;
+  const hits = ok.filter((r) => r.hit).length;
   const summary = {
-    cases: results.length, hits, hitRate: +(hits / results.length).toFixed(2),
-    promptsWithFalseFire: results.filter((r) => r.falseFires.length).length,
-    noSkillFired: results.filter((r) => !r.fired.length).length,
+    cases: results.length, answered: ok.length, errors, hits, hitRate: ok.length ? +(hits / ok.length).toFixed(2) : null,
+    promptsWithFalseFire: ok.filter((r) => r.falseFires.length).length,
+    noSkillFired: ok.filter((r) => !r.fired.length).length,
     ts: new Date().toISOString(),
   };
   console.log(JSON.stringify(summary, null, 1));
-  for (const r of results) console.log(`${r.hit ? 'HIT ' : 'miss'} fired[${r.fired.join(',') || '-'}] <= ${r.prompt}  (expect ${r.expect.join('|')})`);
+  for (const r of results) {
+    const tag = r.error ? `ERR (${r.error})` : (r.hit ? 'HIT ' : 'miss');
+    console.log(`${tag} fired[${r.fired.join(',') || '-'}] <= ${r.prompt}  (expect ${r.expect.join('|')})`);
+  }
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, results }, null, 1));
-  return 0;
+  return errors ? 1 : 0;
 }
 
 if (process.argv[1] && path.resolve(process.argv[1]) === fileURLToPath(import.meta.url)) process.exit(main(process.argv.slice(2)));

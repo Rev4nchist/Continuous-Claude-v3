@@ -98,7 +98,9 @@ export function plainScalarError(v) {
   if (v[0] === '"') return /^"(?:[^"\\]|\\(?:[0abtnvfre "\/\\N_LP\t]|x[0-9A-Fa-f]{2}|u[0-9A-Fa-f]{4}|U[0-9A-Fa-f]{8}))*"\s*(#.*)?$/.test(v) ? null : 'yaml-bad-double-quoted-scalar';
   if (v[0] === "'") return /^'(?:[^']|'')*'\s*(#.*)?$/.test(v) ? null : 'yaml-unterminated-or-trailing-quoted-scalar';
   if (v[0] === '[' || v[0] === '{') return null; // flow collections are checked by shape, not by colon
-  if (/:\s/.test(v)) return 'yaml-colon-in-plain-scalar';
+  // A plain scalar cannot start with these YAML indicators (@ and ` are reserved).
+  if (/^[`@*&!%]/.test(v)) return 'yaml-reserved-indicator-at-start-of-plain-scalar';
+  if (/:(\s|$)/.test(v)) return 'yaml-colon-in-plain-scalar';
   if (/\s#/.test(v)) return 'yaml-comment-in-plain-scalar';
   return null;
 }
@@ -251,13 +253,21 @@ function bodyInfo(parts) {
 // ----------------------------------------------------------------- rules
 // Each check returns [{rule, line?, msg}]. `ctx` carries repo facts (see audit-skills.mjs).
 
-const f = (rule, msg, line) => ({ rule, msg, ...(line ? { line } : {}) });
+const f = (rule, msg, line, warn) => ({ rule, msg, ...(line ? { line } : {}), ...(warn ? { warn: true } : {}) });
 
 export function stripQuoted(s) {
   return s
     .replace(/`[^`]*`/g, ' ')
     .replace(/"[^"]*"/g, ' ')
     .replace(/(^|[\s(\[])'[^']*'(?=[\s).,;:\]]|$)/g, '$1 ');
+}
+
+// First or second person. "I" counts only as a pronoun ("I do", "I'm"); I/O and roman numerals
+// such as "Phase I" do not.
+const ROMAN_LABEL_RE = /\b(?:Phase|Part|Type|Step|Level|Tier|Class|Stage|Appendix|Section|Chapter|Vitamin)\s+I+V?\b/g;
+export function firstPerson(text) {
+  const t = text.replace(ROMAN_LABEL_RE, ' ');
+  return /\bI(?=\s+[a-z])|\bI'(?:m|ve|ll|d)\b/.test(t) || /\b(?:my|you|your)\b/i.test(t);
 }
 
 export function descriptionPhrases(desc) {
@@ -305,7 +315,7 @@ export function checkFrontmatter(s, ctx) {
   if (dEntry && dEntry.multiline) r.push(f('G10', 'description is a block scalar or spans lines'));
   if (/<[A-Za-z/][^>]*>/.test(d)) r.push(f('G11', 'description contains an XML-like tag'));
   const plain = stripQuoted(d);
-  if (/\b(?:I|I'm|I've)\b/.test(plain) || /\b(?:my|you|your)\b/i.test(plain)) r.push(f('G12', 'description is not third person'));
+  if (firstPerson(plain)) r.push(f('G12', 'description is not third person'));
   if (/^\s*use when\b/i.test(d)) r.push(f('G13', 'description starts with "Use when" and never says what the skill does'));
   if (s.modelVisible && !TRIGGER_RE.test(d)) r.push(f('G14', 'description has no "Use when ..." trigger'));
 
@@ -391,7 +401,8 @@ function checkMcp(s, ctx) {
     if (!ctx.mcpServers.has(server)) r.push(f('G28', `mcp__${server}__ names a server absent from settings.json.template and .mcp.json`));
   }
   for (const server of ctx.mcpServers) {
-    const re = new RegExp(`(?<![\\w_/-])${server.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:[a-z][a-z0-9_-]+`, 'g');
+    // No `g` flag: a global RegExp keeps lastIndex between .test() calls and skips the next line.
+    const re = new RegExp(`(?<![\\w_/-])${server.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:[a-z][a-z0-9_-]+`);
     for (const l of s.body) if (!l.isFence && re.test(l.text) && !/https?:\/\//.test(l.text)) r.push(f('G28', `bare "${server}:tool" form; use mcp__${server}__tool`, l.n));
   }
   return r;
@@ -439,7 +450,9 @@ function isDirSafe(p) { try { return fs.statSync(p).isDirectory(); } catch { ret
 function resolveRef(p, skillDir, ctx) {
   if (p.startsWith('~/')) return [path.join(ctx.home, p.slice(2))];
   if (path.isAbsolute(p) || /^[A-Za-z]:/.test(p)) return [p];
-  return [path.join(skillDir, p), path.join(ctx.repoRoot, p), path.join(ctx.home, '.claude', p), path.join(ctx.repoRoot, '.claude', p)];
+  // Order matters: ~/.claude comes last, so a hit there means the repo does not own the file.
+  const roots = [ctx.repoRoot, ctx.fallbackRoot].filter(Boolean);
+  return [path.join(skillDir, p), ...roots.flatMap((r) => [path.join(r, p), path.join(r, '.claude', p)]), path.join(ctx.home, '.claude', p)];
 }
 
 export const REF_ALLOW = {
@@ -491,6 +504,8 @@ export function checkRefs(s, ctx) {
         if (!src.isSkill) cands.push(...resolveRef(p, s.dir, ctx).slice(0, 1));
         const hit = cands.find((x) => fs.existsSync(x));
         if (src.isSkill && hit && /\.md$/i.test(hit) && inside(hit)) direct.add(path.resolve(hit));
+        // Found only under ~/.claude: it passes, but the repo does not own the file (sync gap).
+        if (hit && !p.startsWith('~/') && !path.isAbsolute(p) && hit.startsWith(path.join(ctx.home, '.claude') + path.sep) && !fenced) r.push(f('G22', `reference ${p} resolves only under ~/.claude, not in the repo`, i + 1, true));
         if (!hit && !allow.some((a) => p.includes(a)) && !fenced) r.push(f('G22', `unresolved reference ${p} in ${path.relative(s.dir, src.file) || 'SKILL.md'}`, i + 1));
         if (!src.isSkill && hit && /\.md$/i.test(hit) && inside(hit)) src.links = [...(src.links || []), path.resolve(hit)];
       }

@@ -30,6 +30,12 @@ const PLACEHOLDER_RULES = new Set(['G09', 'G11', 'G12', 'G13', 'G14']); // scaff
 function isDir(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 function isFile(p) { try { return fs.statSync(p).isFile(); } catch { return false; } }
 
+// A junction or symlink whose target is gone: lstat sees the link, stat fails.
+function isBrokenLink(p) {
+  try { if (!fs.lstatSync(p).isSymbolicLink()) return false; } catch { return false; }
+  try { fs.statSync(p); return false; } catch { return true; }
+}
+
 // stat() follows junctions and symlinks; Dirent.isDirectory() does not.
 export function listSkillDirs(root) {
   const skills = []; const noSkillMd = [];
@@ -37,9 +43,12 @@ export function listSkillDirs(root) {
   for (const name of fs.readdirSync(root).sort()) {
     if (name.startsWith('_') || name.startsWith('.')) continue;
     const dir = path.join(root, name);
-    if (!isDir(dir)) continue;
+    if (!isDir(dir)) {
+      if (isBrokenLink(dir)) noSkillMd.push({ name, broken: true });
+      continue;
+    }
     if (isFile(path.join(dir, 'SKILL.md'))) skills.push({ dir, name });
-    else noSkillMd.push(name);
+    else noSkillMd.push({ name });
   }
   return { skills, noSkillMd, expected: skills.length };
 }
@@ -52,7 +61,7 @@ function repoFacts(o) {
   const mcpServers = new Set([...Object.keys(tpl.mcpServers || {}), ...Object.keys(mcpJson.mcpServers || mcpJson)]);
   let agentNames = new Set();
   try { agentNames = new Set(fs.readdirSync(o.agentsDir).filter((n) => /\.md$/.test(n)).map((n) => n.replace(/\.md$/, ''))); } catch { /* no agents dir */ }
-  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, home: o.home, repoRoot: o.repoRoot };
+  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, home: o.home, repoRoot: o.repoRoot, fallbackRoot: o.fallbackRoot };
 }
 
 export function resolveOptions(opts = {}) {
@@ -72,6 +81,7 @@ export function resolveOptions(opts = {}) {
     skillDir: opts.skillDir ? path.resolve(opts.skillDir) : null,
     rules: opts.rules ? new Set(opts.rules) : null,
     runScaffold: opts.runScaffold,
+    fallbackRoot: opts.fallbackRoot ? path.resolve(opts.fallbackRoot) : null,
   };
 }
 
@@ -120,15 +130,20 @@ export function listingChars(skills, maxDescChars) {
     .reduce((n, s) => n + s.name.length + Math.min((s.desc + s.when).length, maxDescChars) + 4, 0);
 }
 
+// G32: audit a fresh init_skill.py scaffold. Returns null when there is no init_skill.py (nothing
+// to check). When it exists but does not run, that is itself a finding, never a pass.
 function scaffoldFindings(o, ctx) {
   if (!isFile(o.initSkill)) return null;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-scaffold-'));
+  const notRun = (why) => [{ rule: '(scaffold)', msg: `scaffold did not run: ${why}`, notRun: true }];
   try {
     const r = spawnSync('python', [o.initSkill, 'scaffold-probe', '--path', tmp], { encoding: 'utf8', timeout: 30000 });
+    if (r.error) return notRun(r.error.code === 'ENOENT' ? 'python is not on PATH' : r.error.message);
     const dir = path.join(tmp, 'scaffold-probe');
-    if (r.status !== 0 || !isFile(path.join(dir, 'SKILL.md'))) return null;
+    if (r.status !== 0) return notRun(`init_skill.py exited ${r.status}: ${(r.stderr || r.stdout || '').trim().split('\n').pop().slice(0, 120)}`);
+    if (!isFile(path.join(dir, 'SKILL.md'))) return notRun('init_skill.py wrote no SKILL.md');
     const s = loadSkill(dir);
-    return checkSkillAll(s, ctx).filter((x) => !PLACEHOLDER_RULES.has(x.rule));
+    return checkSkillAll(s, ctx).filter((x) => !PLACEHOLDER_RULES.has(x.rule) && !x.warn);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
@@ -147,13 +162,13 @@ export function auditSkills(rawOpts = {}) {
   } else {
     const repo = listSkillDirs(o.skillsRoot);
     dirs = repo.skills.map((d) => ({ ...d, source: 'repo' }));
-    expected = repo.expected; noSkillMd = repo.noSkillMd.map((n) => ({ n, src: 'repo' }));
+    expected = repo.expected; noSkillMd = repo.noSkillMd.map((e) => ({ ...e, src: 'repo' }));
     if (o.includeActive) {
       const have = new Set(dirs.map((d) => d.name));
       const active = listSkillDirs(o.activeRoot);
       const only = active.skills.filter((d) => !have.has(d.name)).map((d) => ({ ...d, source: 'active' }));
       dirs.push(...only); expected += only.length;
-      noSkillMd.push(...active.noSkillMd.map((n) => ({ n, src: 'active' })));
+      noSkillMd.push(...active.noSkillMd.map((e) => ({ ...e, src: 'active' })));
     }
   }
 
@@ -163,14 +178,19 @@ export function auditSkills(rawOpts = {}) {
     if (!s) continue;
     s.source = d.source || 'repo';
     skills.push(s);
-    for (const x of checkSkillAll(s, ctx)) add(x.rule, s.dirName, x.msg, x.line, s.source);
+    for (const x of checkSkillAll(s, ctx)) {
+      if (x.warn) warnings.push(`${x.rule} ${s.dirName}${x.line ? `:${x.line}` : ''}: ${x.msg}`);
+      else add(x.rule, s.dirName, x.msg, x.line, s.source);
+    }
     if (/grok/i.test(s.src) && !/\b(never|parked|retired|deprecated)\b/i.test(s.src)) warnings.push(`G27 ${s.dirName}: mentions grok (parked)`);
     if (s.parts.bodyLines.join('\n').length > 20000) warnings.push(`G20 ${s.dirName}: body over 20,000 chars (compaction re-attach limit)`);
   }
 
   if (!o.skillDir) {
     crossSkillFindings(skills, o, (r, sk, m) => add(r, sk, m));
-    for (const { n, src } of noSkillMd) add('G29', n, `directory ${src}:${n} has no SKILL.md (prefix _ or . to park it)`);
+    for (const { name, src, broken } of noSkillMd) {
+      add('G29', name, broken ? `${src}:${name} is a broken junction or symlink` : `directory ${src}:${name} has no SKILL.md (prefix _ or . to park it)`);
+    }
   } else {
     // Single-skill mode: still check collisions against the repo set.
     const repo = listSkillDirs(o.skillsRoot).skills.map((d) => safeLoad(d.dir)).filter(Boolean);
@@ -193,7 +213,7 @@ export function auditSkills(rawOpts = {}) {
   const listing = { chars: listingChars(skills, ctx.maxDescChars), visible: skills.filter((s) => s.modelVisible).length, maxDescChars: ctx.maxDescChars };
   if (!o.skillDir && (!o.rules || o.rules.has('G32')) && o.runScaffold !== false) {
     const sc = scaffoldFindings(o, ctx);
-    if (sc) for (const x of sc) add('G32', x.rule, `fresh init_skill.py scaffold fails ${x.rule}: ${x.msg}`);
+    if (sc) for (const x of sc) add('G32', x.rule, x.notRun ? x.msg : `fresh init_skill.py scaffold fails ${x.rule}: ${x.msg}`);
   }
   return buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, expected });
 }
@@ -217,8 +237,9 @@ function buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, 
         entry.findings = [{ rule: 'G31', skill: '(listing)', msg: `listing is ${listing.chars} chars, baseline ${b.chars} (+2% allowed)` }];
       } else if (!o.skillDir && !b) { entry.status = 'REGRESSION'; regressions.push(r.id); entry.findings = [{ rule: 'G31', skill: '(listing)', msg: 'no listing baseline; run --update-baseline' }]; }
     } else {
-      const baseSkills = new Set(base ? base.skills : []);
-      entry.newSkills = names.filter((n) => !baseSkills.has(n));
+      // Per-skill counts: a swap (skill A down 2, skill B up 2) keeps the total but is a regression.
+      const baseCounts = base && !Array.isArray(base.skills) ? base.skills : {};
+      entry.newSkills = names.filter((n) => fs_.filter((x) => x.skill === n).length > (baseCounts[n] || 0));
       const rose = !o.skillDir && fs_.length > (base ? base.count : 0);
       if (rose || entry.newSkills.length) { entry.status = 'REGRESSION'; regressions.push(r.id); }
     }
@@ -234,11 +255,18 @@ function buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, 
 export function writeBaseline(report, o) {
   const cur = readJson(o.baselinePath) || { version: 1, scopes: {} };
   cur.version = 1;
+  cur._doc = 'Per-rule ratchet baseline for audit-skills.mjs. rules.<id>.skills maps skill -> finding count; a rule regresses when any skill count rises or a new skill appears. Rewrite with --update-baseline.';
+  cur._notes = {
+    G32: 'Ratchet only until Phase 2 fixes init_skill.py (its scaffold fails G22 and G26 today). A scaffold that does not run is reported as "(scaffold)" and counts as a regression.',
+    G06: 'Ratchet: Dave decides the renames of skills that share a bundled name.',
+  };
   cur.scopes = cur.scopes || {};
   const scope = cur.scopes[report.scope] || { rules: {} };
   for (const r of Object.values(report.rules)) {
     if (r.mode !== 'ratchet' || r.id === 'G31') continue;
-    scope.rules[r.id] = { count: r.count, skills: r.skills };
+    const perSkill = {};
+    for (const n of r.skills) perSkill[n] = r.findings.filter((x) => x.skill === n).length;
+    scope.rules[r.id] = { count: r.count, skills: perSkill };
   }
   if (report.rules.G31) scope.listing = { chars: report.listing.chars, visibleSkills: report.listing.visible, maxDescChars: report.listing.maxDescChars };
   const ordered = {};
@@ -263,19 +291,41 @@ export function formatReport(report, { verbose = false, quiet = false } = {}) {
   for (const r of Object.values(report.rules)) {
     if (r.status === 'FAIL') for (const x of r.findings) lines.push(`FAIL ${r.id} ${x.skill}${x.line ? `:${x.line}` : ''} ${x.msg}`);
     if (r.status === 'REGRESSION') {
-      if (r.newSkills.length) lines.push(`REGRESSION ${r.id}: new offenders ${r.newSkills.join(', ')}`);
+      if (r.newSkills.length) lines.push(`REGRESSION ${r.id}: more findings than baseline in ${r.newSkills.join(', ')}`);
       else lines.push(`REGRESSION ${r.id}: count ${r.count} is above baseline ${r.baseline ?? 0}`);
       for (const x of r.findings.filter((y) => !r.newSkills.length || r.newSkills.includes(y.skill))) lines.push(`  ${x.skill}${x.line ? `:${x.line}` : ''} ${x.msg}`);
     } else if (verbose && r.mode === 'ratchet') {
       for (const x of r.findings) lines.push(`  baseline ${r.id} ${x.skill}${x.line ? `:${x.line}` : ''} ${x.msg}`);
     }
   }
-  if (verbose) for (const w of report.warnings) lines.push(`WARN ${w}`);
+  // Warnings are visible unless --quiet (G22 sync-gap warnings always show); the noisy G20 size
+  // notes show only with --verbose.
+  const show = (w) => verbose || (!w.startsWith('G20') && (!quiet || w.startsWith('G22')));
+  for (const w of report.warnings) if (show(w)) lines.push(`WARN ${w}`);
   lines.push(report.summary);
   return lines.join('\n');
 }
 
 // ------------------------------------------------------------------- CLI
+
+// --staged: audit what is in the git index, not the working tree (pre-commit). Exports the files
+// the gate reads to a temp dir. Files outside that set (for example a script a skill points at)
+// resolve against the real working tree.
+const STAGED_PATHS = ['.claude/skills', 'scripts/skills', '.claude/settings.json.template', '.claude/agents', '.mcp.json'];
+
+export function exportStaged(cwd) {
+  const git = (args, input) => spawnSync('git', args, { cwd, input, maxBuffer: 256 * 1024 * 1024 });
+  const top = git(['rev-parse', '--show-toplevel']);
+  if (top.status !== 0) throw new Error('not inside a git work tree');
+  const root = top.stdout.toString().trim();
+  const ls = spawnSync('git', ['ls-files', '-z', '--', ...STAGED_PATHS], { cwd: root, maxBuffer: 256 * 1024 * 1024 });
+  if (ls.status !== 0) throw new Error('git ls-files failed');
+  const files = ls.stdout.toString().split('\0').filter((p) => p && !p.startsWith('.claude/skills/_') && !p.startsWith('.claude/skills/.'));
+  const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-skills-staged-'));
+  const co = spawnSync('git', ['checkout-index', '-z', '--stdin', `--prefix=${tmp.replace(/\\/g, '/')}/`], { cwd: root, input: files.join('\0') + '\0', maxBuffer: 256 * 1024 * 1024 });
+  if (co.status !== 0) { fs.rmSync(tmp, { recursive: true, force: true }); throw new Error(`git checkout-index failed: ${co.stderr.toString().trim()}`); }
+  return { root, tmp };
+}
 
 export function main(argv) {
   const has = (k) => argv.includes(k);
@@ -289,6 +339,19 @@ export function main(argv) {
     baselinePath: val('--baseline'),
   };
   if (has('--update-baseline') && opts.skillDir) { console.error('--update-baseline cannot run with --skill'); return 2; }
+  if (has('--staged')) {
+    if (has('--update-baseline')) { console.error('--update-baseline cannot run with --staged'); return 2; }
+    let staged;
+    try { staged = exportStaged(process.cwd()); } catch (e) { console.error(`audit-skills --staged: cannot read the index: ${e.message}`); return 2; }
+    try {
+      opts.repoRoot = staged.tmp;
+      opts.fallbackRoot = staged.root;
+      opts.baselinePath = opts.baselinePath || path.join(staged.tmp, 'scripts', 'skills', 'audit-skills.baseline.json');
+      const report = auditSkills(opts);
+      console.log(has('--json') ? JSON.stringify(report, null, 1) : formatReport(report, { verbose: has('--verbose'), quiet: has('--quiet') }));
+      return report.failed ? 1 : 0;
+    } finally { fs.rmSync(staged.tmp, { recursive: true, force: true }); }
+  }
   let report = auditSkills(opts);
   const o = resolveOptions(opts);
   if (has('--update-baseline')) {

@@ -466,7 +466,171 @@ test('audit-descriptions.mjs runs the description subset through the same implem
   const ok = spawnSync('node', [DESC_CLI, '--repo-root', clean, '--baseline', path.join(clean, 'baseline.json')], { encoding: 'utf8' });
   assert.equal(ok.status, 0, ok.stdout + ok.stderr);
   assert.match(ok.stdout, /audit-skills: 1 skills, 0 hard failures/);
+  // The baseline exists (including G31), so a failure here can only come from the G14 rule itself.
   const bad = fixture({ a: skillText('a', { fm: { description: 'Does X for the team.' } }) });
+  cli(bad, ['--update-baseline']);
   const r = spawnSync('node', [DESC_CLI, '--repo-root', bad, '--baseline', path.join(bad, 'baseline.json')], { encoding: 'utf8' });
   assert.equal(r.status, 1);
+  assert.match(r.stdout, /FAIL G14 a /);
+  assert.doesNotMatch(r.stdout, /REGRESSION/);
+});
+
+// ------------------------------------------------------------ review round 2
+
+test('ratchet: a swap between skills fails even when the total and the offender set are unchanged', () => {
+  // Baseline: a=3 findings, b=1. After: a=1, b=3. Same total (4), same offenders (a, b).
+  const root = fixture({ a: skillText('a', { fm: { 'allowed-tools': '[Bash, Write, Edit]' } }), b: skillText('b', { fm: { 'allowed-tools': 'Bash' } }) });
+  writeBaseline(run(root), resolveOptions(opts(root)));
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), skillText('a', { fm: { 'allowed-tools': 'Bash' } }));
+  write(path.join(root, '.claude', 'skills', 'b', 'SKILL.md'), skillText('b', { fm: { 'allowed-tools': '[Bash, Write, Edit]' } }));
+  const rep = run(root);
+  assert.equal(rep.rules.G19.count, 4);
+  assert.deepEqual(rep.rules.G19.newSkills, ['b']);
+  assert.equal(rep.rules.G19.status, 'REGRESSION');
+});
+
+test('G28 reports every consecutive bare "server:tool" line, not every other one', () => {
+  const root = fixture({ bare: skillText('bare', { body: 'Call git:status first.\nThen call git:diff next.\n' }) });
+  const bare = run(root).rules.G28.findings.filter((x) => x.skill === 'bare' && /bare/.test(x.msg));
+  assert.equal(bare.length, 2);
+});
+
+test('G02 fails on a plain scalar that ends with a colon', () => {
+  const root = fixture({ bad: skillText('bad', { fm: { description: 'Does X. Use when the user says:' } }) });
+  assert.ok(hit(run(root), 'G02', 'bad'));
+});
+
+test('G02 fails on a plain scalar that starts with a reserved YAML indicator', () => {
+  const starts = { at: '@mention handler. Use when Y.', tick: '`code` runner. Use when Y.', star: '*Bold* helper. Use when Y.' };
+  const root = fixture(Object.fromEntries(Object.entries(starts).map(([k, d]) => [k, skillText(k, { fm: { description: d } })])));
+  const rep = run(root);
+  for (const k of Object.keys(starts)) assert.ok(hit(rep, 'G02', k), `${k} should fail G02`);
+});
+
+test('G12 does not flag I/O or a roman numeral label, but still flags "I do"', () => {
+  const root = fixture({
+    io: skillText('io', { fm: { description: 'Handles I/O and Phase I work. Use when Y.' } }),
+    me: skillText('me', { fm: { description: 'I do X. Use when Y.' } }),
+  });
+  const rep = run(root);
+  assert.ok(!hit(rep, 'G12', 'io'));
+  assert.ok(hit(rep, 'G12', 'me'));
+});
+
+test('G29 flags a broken junction or symlink under the skills root', () => {
+  const root = fixture({ good: skillText('good') });
+  const target = path.join(root, 'gone');
+  fs.mkdirSync(target);
+  fs.symlinkSync(target, path.join(root, '.claude', 'skills', 'dangling'), 'junction');
+  fs.rmSync(target, { recursive: true });
+  const rep = run(root);
+  assert.ok(rep.rules.G29.findings.some((x) => x.skill === 'dangling' && /broken/.test(x.msg)));
+});
+
+test('G22 reports a reference found only under ~/.claude as a visible warning, not a silent pass', () => {
+  const root = fixture({ s: skillText('s', { body: 'See [rule](rules/only-home.md).\n' }) });
+  write(path.join(root, 'home', '.claude', 'rules', 'only-home.md'), '# rule\n');
+  const rep = run(root);
+  assert.equal(rep.rules.G22.count, 0);
+  assert.ok(rep.warnings.some((w) => /^G22 s:\d+: .*only-home\.md.*only under ~\/\.claude/.test(w)), JSON.stringify(rep.warnings));
+});
+
+test('G32 reports a scaffold that did not run instead of passing', () => {
+  const root = fixture({ a: skillText('a') });
+  write(path.join(root, '.claude', 'skills', 'skill-forge', 'scripts', 'init_skill.py'), 'import sys\nsys.exit(3)\n');
+  const rep = run(root, { runScaffold: true });
+  assert.ok(rep.rules.G32.findings.some((x) => /scaffold did not run/.test(x.msg)), JSON.stringify(rep.rules.G32.findings));
+});
+
+// ---------------------------------------------------- --staged and the pre-commit guard
+
+function vcs(root, ...args) { return spawnSync('git', args, { cwd: root, encoding: 'utf8' }); }
+
+// A repo whose index holds clean skills and a baseline. Returns the repo root.
+function stagedFixture(skills) {
+  const root = fixture(skills);
+  const baseline = path.join(root, 'scripts', 'skills', 'audit-skills.baseline.json');
+  fs.mkdirSync(path.dirname(baseline), { recursive: true });
+  spawnSync('node', [CLI, '--repo-root', root, '--baseline', baseline, '--update-baseline', '--quiet'], { encoding: 'utf8' });
+  assert.equal(vcs(root, 'init', '-q').status, 0);
+  assert.equal(vcs(root, 'add', '-A').status, 0);
+  return root;
+}
+const stagedCli = (root) => spawnSync('node', [CLI, '--staged', '--quiet'], { cwd: root, encoding: 'utf8' });
+const BROKEN = skillText('a', { fm: { description: 'Does X for the team.' } }); // no "Use when": G14
+
+test('--staged ignores an unstaged break in a tracked skill', () => {
+  const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN); // working tree only
+  const r = stagedCli(root);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /audit-skills: 2 skills, 0 hard failures, 0 ratchet regressions/);
+});
+
+test('--staged fails on a staged break', () => {
+  const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
+  vcs(root, 'add', '.claude/skills/a/SKILL.md');
+  const r = stagedCli(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL G14 a /);
+});
+
+test('--staged does not excuse a staged break that the working tree has already fixed', () => {
+  const root = stagedFixture({ a: skillText('a') });
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
+  vcs(root, 'add', '.claude/skills/a/SKILL.md');
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), skillText('a')); // fixed, unstaged
+  assert.equal(stagedCli(root).status, 1);
+});
+
+const GUARD = path.join(here, '..', 'precommit-build-guard.sh');
+const bashOk = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0;
+
+// A fixture repo that holds the real gate scripts, so the real guard can run in it.
+function guardFixture() {
+  const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
+  for (const f of ['audit-skills.mjs', 'audit-descriptions.mjs', 'lib/skill-rules.mjs']) {
+    fs.mkdirSync(path.dirname(path.join(root, 'scripts', 'skills', f)), { recursive: true });
+    fs.copyFileSync(path.join(here, f), path.join(root, 'scripts', 'skills', f));
+  }
+  fs.copyFileSync(GUARD, path.join(root, 'scripts', 'precommit-build-guard.sh'));
+  vcs(root, 'rm', '-r', '-q', '-f', '.claude/agents'); // the guard has its own agents check; keep this fixture to skills
+  vcs(root, 'add', '-A');
+  // Commit the clean base so that "staged" means only what each test stages next.
+  assert.equal(vcs(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'base', '--no-verify').status, 0);
+  return root;
+}
+const runGuard = (root) => spawnSync('bash', ['scripts/precommit-build-guard.sh'], { cwd: root, encoding: 'utf8' });
+
+test('pre-commit guard: an unstaged broken skill does NOT block a commit', { skip: !bashOk && 'bash not available' }, (t) => {
+  const root = guardFixture();
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN); // unstaged
+  write(path.join(root, '.claude', 'skills', 'b', 'SKILL.md'), skillText('b', { body: '# Title\n\nA harmless staged edit.\n' }));
+  vcs(root, 'add', '.claude/skills/b/SKILL.md'); // this staged path triggers the audit
+  const r = runGuard(root);
+  t.diagnostic(`guard exit=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('pre-commit guard: a staged broken skill DOES block a commit', { skip: !bashOk && 'bash not available' }, (t) => {
+  const root = guardFixture();
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
+  vcs(root, 'add', '.claude/skills/a/SKILL.md');
+  const r = runGuard(root);
+  t.diagnostic(`guard exit=${r.status} stdout=${JSON.stringify(r.stdout)} stderr=${JSON.stringify(r.stderr)}`);
+  assert.equal(r.status, 1);
+  assert.match(r.stderr, /BLOCKED by audit-skills/);
+  assert.match(r.stderr, /FAIL G14 a /);
+});
+
+test('pre-commit guard: a staged change under scripts/skills triggers the audit', { skip: !bashOk && 'bash not available' }, () => {
+  const root = guardFixture();
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
+  vcs(root, 'add', '.claude/skills/a/SKILL.md');
+  vcs(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'base', '--no-verify');
+  // Nothing staged now. Stage only a scripts/skills edit; the index still holds the broken skill.
+  fs.appendFileSync(path.join(root, 'scripts', 'skills', 'lib', 'skill-rules.mjs'), '\n// touch\n');
+  vcs(root, 'add', 'scripts/skills/lib/skill-rules.mjs');
+  assert.equal(runGuard(root).status, 1);
 });
