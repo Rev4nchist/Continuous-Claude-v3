@@ -1,0 +1,575 @@
+{
+ "version": 1,
+ "scopes": {
+  "repo": {
+   "rules": {
+    "G04": {
+     "count": 16,
+     "skills": [
+      "build",
+      "discovery-interview",
+      "hook-scaffold",
+      "hooks",
+      "init-project",
+      "maestro",
+      "memory",
+      "memory-stats",
+      "mot",
+      "qa-test",
+      "react-perf",
+      "research",
+      "ui-audit"
+     ]
+    },
+    "G05": {
+     "count": 8,
+     "skills": [
+      "continuity_ledger",
+      "create_handoff",
+      "resume_handoff",
+      "system_overview"
+     ]
+    },
+    "G06": {
+     "count": 6,
+     "skills": [
+      "code-review",
+      "debug",
+      "help",
+      "hooks",
+      "memory",
+      "review"
+     ]
+    },
+    "G09": {
+     "count": 0,
+     "skills": []
+    },
+    "G12": {
+     "count": 4,
+     "skills": [
+      "cma",
+      "memory-stats",
+      "notion-cli",
+      "tour"
+     ]
+    },
+    "G13": {
+     "count": 3,
+     "skills": [
+      "hooks",
+      "notion-bridge",
+      "research"
+     ]
+    },
+    "G15": {
+     "count": 9,
+     "skills": [
+      "code-review",
+      "continuity_ledger",
+      "create_handoff",
+      "debug",
+      "fix",
+      "landing-page-score",
+      "memory",
+      "recall",
+      "review"
+     ]
+    },
+    "G19": {
+     "count": 25,
+     "skills": [
+      "explore",
+      "fix",
+      "help",
+      "init-project",
+      "knowledge-tree",
+      "mot",
+      "premortem",
+      "project-registry",
+      "react-perf",
+      "scroll-craft",
+      "shadcn-create",
+      "sync-drift",
+      "tdd-migrate",
+      "tldr-code",
+      "ui-audit"
+     ]
+    },
+    "G21": {
+     "count": 3,
+     "skills": [
+      "fourth-presentation-suite",
+      "test"
+     ]
+    },
+    "G23": {
+     "count": 24,
+     "skills": [
+      "impeccable",
+      "neonctl",
+      "notion-bridge",
+      "railway-cli",
+      "scroll-craft",
+      "tdd"
+     ]
+    },
+    "G24": {
+     "count": 118,
+     "skills": [
+      "browser-dev-cycle",
+      "build",
+      "create_handoff",
+      "discovery-interview",
+      "explore",
+      "fix",
+      "fourth-presentation-suite",
+      "frontend-slides",
+      "hook-audit",
+      "hook-scaffold",
+      "impeccable",
+      "init-project",
+      "launch-your-agent",
+      "linear",
+      "mot",
+      "next-best-practices",
+      "notion-bridge",
+      "opencli",
+      "plan-agent",
+      "premortem",
+      "scroll-craft",
+      "sentry-cli",
+      "shadcn-create",
+      "skill-forge",
+      "sync-drift",
+      "tdd",
+      "tldr-code",
+      "ui-audit",
+      "vercel-cli"
+     ]
+    },
+    "G25": {
+     "count": 6,
+     "skills": [
+      "cli-integration",
+      "cma",
+      "fourthos-weekly",
+      "kusto-cli",
+      "launch-your-agent",
+      "notion-cli"
+     ]
+    },
+    "G26": {
+     "count": 121,
+     "skills": [
+      "browser-dev-cycle",
+      "cli-integration",
+      "cma",
+      "codex",
+      "create_handoff",
+      "failure-audit",
+      "fourthos-weekly",
+      "game-plan",
+      "grok",
+      "harness-update",
+      "knowledge-tree",
+      "kusto-cli",
+      "launch-your-agent",
+      "linear",
+      "log-work",
+      "memory",
+      "memory-stats",
+      "notion-bridge",
+      "notion-cli",
+      "notion-dashboard",
+      "premortem",
+      "reporting",
+      "research",
+      "resume_handoff",
+      "review",
+      "roadmap",
+      "scroll-craft",
+      "sentry-cli",
+      "systematic-debugging",
+      "tldr-code",
+      "wrap-up"
+     ]
+    },
+    "G27": {
+     "count": 14,
+     "skills": [
+      "browser-dev-cycle",
+      "explore",
+      "help",
+      "hook-scaffold",
+      "mcp-guidance",
+      "mot",
+      "shadcn-create",
+      "validate-agent"
+     ]
+    },
+    "G28": {
+     "count": 7,
+     "skills": [
+      "databases",
+      "iq360-event-audit",
+      "neonctl",
+      "shadcn-create",
+      "weekly-report"
+     ]
+    },
+    "G29": {
+     "count": 1,
+     "skills": [
+      "archive"
+     ]
+    },
+    "G32": {
+     "count": 3,
+     "skills": [
+      "G22",
+      "G26"
+     ]
+    }
+   },
+   "listing": {
+    "chars": 14879,
+    "visibleSkills": 68,
+    "maxDescChars": 2048
+   }
+  },
+  "repo+active": {
+   "rules": {
+    "G04": {
+     "count": 34,
+     "skills": [
+      "agent-context-isolation",
+      "agentica-prompts",
+      "agentica-spawn",
+      "build",
+      "discovery-interview",
+      "exa-code-search",
+      "full-test-suite",
+      "hook-scaffold",
+      "hooks",
+      "implement_plan",
+      "implement_plan_micro",
+      "implement_task",
+      "init-project",
+      "maestro",
+      "memory",
+      "memory-stats",
+      "mot",
+      "nia-docs",
+      "onboard",
+      "parallel-agents",
+      "qa-suite",
+      "qa-test",
+      "react-perf",
+      "recall-reasoning",
+      "research",
+      "research-external",
+      "search-router",
+      "skill-development",
+      "sub-agents",
+      "supersede",
+      "ui-audit"
+     ]
+    },
+    "G05": {
+     "count": 17,
+     "skills": [
+      "continuity_ledger",
+      "create_handoff",
+      "describe_pr",
+      "full-test-suite",
+      "implement_plan",
+      "implement_plan_micro",
+      "implement_task",
+      "resume_handoff",
+      "system_overview"
+     ]
+    },
+    "G06": {
+     "count": 6,
+     "skills": [
+      "code-review",
+      "debug",
+      "help",
+      "hooks",
+      "memory",
+      "review"
+     ]
+    },
+    "G09": {
+     "count": 3,
+     "skills": [
+      "archify",
+      "workos",
+      "workos-widgets"
+     ]
+    },
+    "G12": {
+     "count": 6,
+     "skills": [
+      "browser-automation",
+      "cma",
+      "game-development",
+      "memory-stats",
+      "notion-cli",
+      "tour"
+     ]
+    },
+    "G13": {
+     "count": 16,
+     "skills": [
+      "agent-context-isolation",
+      "agentica-prompts",
+      "agentica-spawn",
+      "hooks",
+      "implement_plan",
+      "implement_plan_micro",
+      "implement_task",
+      "notion-bridge",
+      "parallel-agents",
+      "recall-reasoning",
+      "research",
+      "search-router",
+      "skill-development",
+      "sub-agents",
+      "workos",
+      "workos-widgets"
+     ]
+    },
+    "G15": {
+     "count": 17,
+     "skills": [
+      "code-review",
+      "continuity_ledger",
+      "create_handoff",
+      "debug",
+      "explore",
+      "fix",
+      "landing-page-score",
+      "memory",
+      "plan-agent",
+      "plan-mode",
+      "qa-suite",
+      "recall",
+      "remember",
+      "repoprompt",
+      "review",
+      "test"
+     ]
+    },
+    "G19": {
+     "count": 55,
+     "skills": [
+      "agentica-sdk",
+      "ast-grep-find",
+      "azure-deployment",
+      "dead-code",
+      "debug-hooks",
+      "explore",
+      "firecrawl-scrape",
+      "fix",
+      "github-search",
+      "help",
+      "init-project",
+      "knowledge-tree",
+      "memory-curate",
+      "morph-apply",
+      "morph-search",
+      "mot",
+      "nia-docs",
+      "perplexity-search",
+      "plan-mode",
+      "post-ship-audit",
+      "premortem",
+      "project-registry",
+      "qlty-check",
+      "react-perf",
+      "repoprompt",
+      "research-external",
+      "scroll-craft",
+      "shadcn-create",
+      "skill-developer",
+      "skill-upgrader",
+      "stale-scan",
+      "sub-agents",
+      "sync-drift",
+      "tdd-migrate",
+      "tldr-code",
+      "ui-audit"
+     ]
+    },
+    "G21": {
+     "count": 8,
+     "skills": [
+      "fourth-presentation-suite",
+      "research-external",
+      "test",
+      "tldr-stats"
+     ]
+    },
+    "G23": {
+     "count": 24,
+     "skills": [
+      "impeccable",
+      "neonctl",
+      "notion-bridge",
+      "railway-cli",
+      "scroll-craft",
+      "tdd"
+     ]
+    },
+    "G24": {
+     "count": 158,
+     "skills": [
+      "agentica-sdk",
+      "archify",
+      "browser-dev-cycle",
+      "build",
+      "create_handoff",
+      "date-logic-management",
+      "discovery-interview",
+      "explore",
+      "fix",
+      "fourth-presentation-builder",
+      "fourth-presentation-suite",
+      "frontend-slides",
+      "game-development",
+      "hook-audit",
+      "hook-developer",
+      "hook-scaffold",
+      "impeccable",
+      "init-project",
+      "launch-your-agent",
+      "linear",
+      "memory-curate",
+      "mot",
+      "next-best-practices",
+      "notion-bridge",
+      "opencli",
+      "plan-agent",
+      "post-ship-audit",
+      "premortem",
+      "research-external",
+      "scroll-craft",
+      "sentry-cli",
+      "shadcn-create",
+      "skill-forge",
+      "sync-drift",
+      "tdd",
+      "tldr-code",
+      "ui-audit",
+      "vercel-cli",
+      "win-preflight",
+      "workos",
+      "workos-widgets"
+     ]
+    },
+    "G25": {
+     "count": 9,
+     "skills": [
+      "cli-integration",
+      "cma",
+      "fourthos-weekly",
+      "health-check",
+      "kusto-cli",
+      "launch-your-agent",
+      "notion-cli",
+      "session-score",
+      "win-preflight"
+     ]
+    },
+    "G26": {
+     "count": 124,
+     "skills": [
+      "agent-context-isolation",
+      "browser-dev-cycle",
+      "cli-integration",
+      "cma",
+      "codex",
+      "create_handoff",
+      "failure-audit",
+      "fourthos-weekly",
+      "game-plan",
+      "grok",
+      "harness-update",
+      "knowledge-tree",
+      "kusto-cli",
+      "launch-your-agent",
+      "linear",
+      "log-work",
+      "memory",
+      "memory-curate",
+      "memory-stats",
+      "notion-bridge",
+      "notion-cli",
+      "notion-dashboard",
+      "premortem",
+      "reporting",
+      "research",
+      "resume_handoff",
+      "review",
+      "roadmap",
+      "scroll-craft",
+      "sentry-cli",
+      "systematic-debugging",
+      "tldr-code",
+      "wrap-up"
+     ]
+    },
+    "G27": {
+     "count": 26,
+     "skills": [
+      "agent-development",
+      "browser-dev-cycle",
+      "cli-reference",
+      "explore",
+      "health-check",
+      "help",
+      "hook-scaffold",
+      "mcp-guidance",
+      "mot",
+      "shadcn-create",
+      "sub-agents",
+      "tldr-stats",
+      "validate-agent"
+     ]
+    },
+    "G28": {
+     "count": 7,
+     "skills": [
+      "databases",
+      "iq360-event-audit",
+      "neonctl",
+      "shadcn-create",
+      "weekly-report"
+     ]
+    },
+    "G29": {
+     "count": 4,
+     "skills": [
+      "archive",
+      "create-better-skills.bak",
+      "synced"
+     ]
+    },
+    "G32": {
+     "count": 3,
+     "skills": [
+      "G22",
+      "G26"
+     ]
+    }
+   },
+   "listing": {
+    "chars": 28172,
+    "visibleSkills": 130,
+    "maxDescChars": 2048
+   }
+  }
+ }
+}

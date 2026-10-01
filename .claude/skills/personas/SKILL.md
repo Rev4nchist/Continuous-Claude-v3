@@ -1,6 +1,6 @@
 ---
 name: personas
-description: Auto-select specialized personas (architect, frontend, security, etc) by context. Use when the user says "/persona:<name>", "act as a...", "optimize this", "secure this", "refactor this".
+description: Auto-select specialized personas (architect, frontend, security, etc) by context. Use when the user says "/persona:NAME", "act as a...", "optimize this", "secure this", "refactor this".
 ---
 
 # Personas Skill

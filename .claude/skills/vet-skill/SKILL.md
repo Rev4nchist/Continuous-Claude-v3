@@ -34,7 +34,7 @@ If the file does not exist, report an error and stop. Extract the frontmatter (n
 RUN the structural validator:
 
 ```bash
-python ~/.claude/skills/skill-forge/scripts/quick_validate.py --skill-path ~/.claude/skills/<skill-name>/SKILL.md
+python ~/.claude/skills/skill-forge/scripts/quick_validate.py ~/.claude/skills/<skill-name>
 ```
 
 - If validation **FAILS**: report the specific errors to the user and **STOP**. Do NOT proceed to registration. The skill must be fixed first.

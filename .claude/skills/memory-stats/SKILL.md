@@ -91,7 +91,7 @@ jq -r 'select(.kept_after_floor == 0) | .intent' .claude/logs/memory-recall.json
 ```bash
 # Bucket top_score into 0.01-wide bins
 jq -r 'select(.top_score > 0) | .top_score' .claude/logs/memory-recall.jsonl \
-  | awk '{ bucket = int($1 * 100) / 100; print bucket }' \
+  | awk '{ bucket = int(\$1 * 100) / 100; print bucket }' \
   | sort | uniq -c | sort -k2 -n
 ```
 
@@ -122,7 +122,7 @@ jq -c 'select(.source == "merged" and .results_count > 1)' .claude/logs/memory-r
 
 ```bash
 jq -r '"\(.session_id) \(.kept_after_floor)"' .claude/logs/memory-recall.jsonl \
-  | awk '{ s[$1]++; if($2>0) h[$1]++ } END { for(k in s) printf("%s fires=%d hits=%d\n", k, s[k], h[k]+0) }' \
+  | awk '{ s[\$1]++; if(\$2>0) h[\$1]++ } END { for(k in s) printf("%s fires=%d hits=%d\n", k, s[k], h[k]+0) }' \
   | sort
 ```
 
@@ -130,7 +130,7 @@ jq -r '"\(.session_id) \(.kept_after_floor)"' .claude/logs/memory-recall.jsonl \
 
 ```bash
 jq -r 'select(.kept_after_floor > 0) | .top_score' .claude/logs/memory-recall.jsonl \
-  | awk '{ sum+=$1; n++ } END { if(n>0) printf("avg top_score on hits: %.4f (n=%d)\n", sum/n, n) }'
+  | awk '{ sum+=\$1; n++ } END { if(n>0) printf("avg top_score on hits: %.4f (n=%d)\n", sum/n, n) }'
 ```
 
 ### 10. Floor-trim audit (entries that just barely missed)

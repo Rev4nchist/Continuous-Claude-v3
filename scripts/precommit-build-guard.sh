@@ -51,7 +51,7 @@ staged="$(git diff --cached --name-only --diff-filter=ACMR 2>/dev/null)" || exit
 #                    scripts/rules/context-budget-guard.mjs --repo --staged (counts the
 #                    chars of the always-loaded set in the STAGED blobs)
 #   - agents      -> scripts/check-agent-model-drift.mjs (two-tier model policy)
-#   - skills      -> scripts/skills/audit-descriptions.mjs (trigger + YAML)
+#   - skills      -> scripts/skills/audit-skills.mjs (rules G01-G32)
 # The agents and skills checks read the working tree; if it differs from what
 # is staged in those paths, the result is labelled as a working-tree check.
 # -----------------------------------------------------------------------------
@@ -80,7 +80,7 @@ if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
     run_ratchet "check-agent-model-drift" ".claude/agents" node "$root/scripts/check-agent-model-drift.mjs" "$root"
   fi
   if printf '%s\n' "$staged" | grep -q '^\.claude/skills/.*SKILL\.md$'; then
-    run_ratchet "audit-descriptions" ".claude/skills" node "$root/scripts/skills/audit-descriptions.mjs" --quiet
+    run_ratchet "audit-skills" ".claude/skills" node "$root/scripts/skills/audit-skills.mjs" --quiet
   fi
   if [ "$ratchet_fail" -ne 0 ]; then
     echo "" >&2
