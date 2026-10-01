@@ -719,7 +719,10 @@
     "frontend-design@claude-plugins-official": true,
     "claude-hud@claude-hud": true,
     "braintrust@braintrust-claude-plugin": false,
-    "trace-claude-code@braintrust-claude-plugin": false
+    "trace-claude-code@braintrust-claude-plugin": false,
+    "microsoft-docs@claude-plugins-official": true,
+    "plugin-dev@claude-plugins-official": true,
+    "typesafe@typesafe-ai": true
   },
   "alwaysThinkingEnabled": true,
   "skipDangerousModePermissionPrompt": true,
@@ -835,5 +838,13 @@
     "anthropic-skills:skill-forge": "off"
   },
   "skillListingMaxDescChars": 2048,
-  "skillListingBudgetFraction": 0.05
+  "skillListingBudgetFraction": 0.05,
+  "extraKnownMarketplaces": {
+    "typesafe-ai": {
+      "source": {
+        "source": "github",
+        "repo": "typesafe-ai/skills"
+      }
+    }
+  }
 }

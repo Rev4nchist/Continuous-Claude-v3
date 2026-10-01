@@ -754,7 +754,10 @@
     "frontend-design@claude-plugins-official": true,
     "claude-hud@claude-hud": true,
     "braintrust@braintrust-claude-plugin": false,
-    "trace-claude-code@braintrust-claude-plugin": false
+    "trace-claude-code@braintrust-claude-plugin": false,
+    "microsoft-docs@claude-plugins-official": true,
+    "plugin-dev@claude-plugins-official": true,
+    "typesafe@typesafe-ai": true
   },
   "alwaysThinkingEnabled": true,
   "skipDangerousModePermissionPrompt": true,
@@ -887,6 +890,14 @@
     },
     "claude-sonnet-5-5": {
       "effortLevel": "high"
+    }
+  },
+  "extraKnownMarketplaces": {
+    "typesafe-ai": {
+      "source": {
+        "source": "github",
+        "repo": "typesafe-ai/skills"
+      }
     }
   }
 }
