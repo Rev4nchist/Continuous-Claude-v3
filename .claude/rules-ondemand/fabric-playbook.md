@@ -7,8 +7,11 @@ FourthCompanyBrain (`L-NN` ids below). A project without that file: keep the rul
 - Run the project's preflight first (FourthCompanyBrain: `python docs/playground/deploy.py preflight`). It checks
   the az account, four tokens without interaction, the capacity state, running jobs, cost items and untriaged
   incidents. MFA expires tokens per resource without warning (L-06).
-- A pipeline that fails in its first stage within a minute with `AADSTS` needs the owner to sign in to the
-  Fabric portal with MFA. `az login` does not fix it (L-20).
+- Unattended Fabric jobs (pipelines, notebook jobs) fail with `AADSTS50076` when they run as an admin user whom
+  security defaults force through MFA. `az login` and a portal sign-in do not fix it. Run them as a service
+  principal, or by hand in the portal (L-20).
+- "Failed to create session" can be an auth failure, not throttling. Read the job's full `failureReason` before
+  you classify or stop a run (L-21).
 - Never pause, resume or resize a capacity from a script. That is the owner's step.
 - Invented data only in a playground tenant. Never a customer account, customer data or customer system.
 
