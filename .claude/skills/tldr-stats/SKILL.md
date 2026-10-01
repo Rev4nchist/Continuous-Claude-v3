@@ -5,6 +5,8 @@ description: Show session token usage, cost, and TLDR savings. Use when user say
 
 # TLDR Stats Skill
 
+Real token totals come from `node scripts/usage/token-report.mjs --days 7`. The numbers in this skill are estimates.
+
 Show a beautiful dashboard with token usage, actual API costs, TLDR savings, and hook activity.
 
 ## When to Use
