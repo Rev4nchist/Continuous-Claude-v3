@@ -585,7 +585,20 @@ test('--staged does not excuse a staged break that the working tree has already 
 });
 
 const GUARD = path.join(here, '..', 'precommit-build-guard.sh');
-const bashOk = spawnSync('bash', ['--version'], { encoding: 'utf8' }).status === 0;
+// On Windows, `bash` on PATH can be WSL, which has no node: the guard then skips its ratchets
+// (fail-open by design) and these tests fail for the wrong reason. Git runs hooks with Git Bash, so use it.
+function findBash() {
+  if (process.platform !== 'win32') return 'bash';
+  const execPath = spawnSync('git', ['--exec-path'], { encoding: 'utf8' }).stdout?.trim();
+  if (!execPath) return null;
+  for (const rel of ['../../../bin/bash.exe', '../../bin/bash.exe']) {
+    const p = path.resolve(execPath, rel);
+    if (fs.existsSync(p)) return p;
+  }
+  return null;
+}
+const BASH = findBash();
+const bashOk = !!BASH && spawnSync(BASH, ['-c', 'command -v node'], { encoding: 'utf8' }).status === 0;
 
 // A fixture repo that holds the real gate scripts, so the real guard can run in it.
 function guardFixture() {
@@ -601,9 +614,9 @@ function guardFixture() {
   assert.equal(vcs(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'base', '--no-verify').status, 0);
   return root;
 }
-const runGuard = (root) => spawnSync('bash', ['scripts/precommit-build-guard.sh'], { cwd: root, encoding: 'utf8' });
+const runGuard = (root) => spawnSync(BASH, ['scripts/precommit-build-guard.sh'], { cwd: root, encoding: 'utf8' });
 
-test('pre-commit guard: an unstaged broken skill does NOT block a commit', { skip: !bashOk && 'bash not available' }, (t) => {
+test('pre-commit guard: an unstaged broken skill does NOT block a commit', { skip: !bashOk && 'Git Bash with node not available' }, (t) => {
   const root = guardFixture();
   write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN); // unstaged
   write(path.join(root, '.claude', 'skills', 'b', 'SKILL.md'), skillText('b', { body: '# Title\n\nA harmless staged edit.\n' }));
@@ -613,7 +626,7 @@ test('pre-commit guard: an unstaged broken skill does NOT block a commit', { ski
   assert.equal(r.status, 0, r.stdout + r.stderr);
 });
 
-test('pre-commit guard: a staged broken skill DOES block a commit', { skip: !bashOk && 'bash not available' }, (t) => {
+test('pre-commit guard: a staged broken skill DOES block a commit', { skip: !bashOk && 'Git Bash with node not available' }, (t) => {
   const root = guardFixture();
   write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
   vcs(root, 'add', '.claude/skills/a/SKILL.md');
@@ -624,7 +637,7 @@ test('pre-commit guard: a staged broken skill DOES block a commit', { skip: !bas
   assert.match(r.stderr, /FAIL G14 a /);
 });
 
-test('pre-commit guard: a staged change under scripts/skills triggers the audit', { skip: !bashOk && 'bash not available' }, () => {
+test('pre-commit guard: a staged change under scripts/skills triggers the audit', { skip: !bashOk && 'Git Bash with node not available' }, () => {
   const root = guardFixture();
   write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
   vcs(root, 'add', '.claude/skills/a/SKILL.md');
