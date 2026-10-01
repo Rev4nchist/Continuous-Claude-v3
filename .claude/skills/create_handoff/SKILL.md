@@ -80,6 +80,13 @@ Resume the handoff in Notion: "<exact title>"
 Keep the row URL; the YAML copy and the completion message need it. Put it in `notion_url:` of the
 YAML below. Do not create a separate Tracker or HQ one-liner: the 🔁 Next session view is the queue.
 
+### 0b. Triage the project's lessons log (when the repo has one)
+
+If the repo has a lessons log with an incident command (FourthCompanyBrain: `python docs/playground/deploy.py incidents`,
+log `docs/playground/FABRIC-LESSONS.md`), run it before you write the handoff. Mark each untriaged incident with the
+lesson it matches, or add a new lesson row and mark it. Promote a lesson to its on-demand rule when it cost money,
+cost more than 30 minutes, or happened twice. Name the new lessons under Findings in the handoff.
+
 ### 1. Filepath & Metadata (local YAML copy)
 Use the following information to understand how to create your document:
 

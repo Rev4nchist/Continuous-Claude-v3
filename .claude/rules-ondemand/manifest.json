@@ -289,6 +289,23 @@
       "agent": [
         "^"
       ]
+    },
+    {
+      "id": "fabric",
+      "files": [
+        "fabric-playbook.md"
+      ],
+      "mode": "inject",
+      "command": [
+        "^fab(\\.exe)?(\\s|$)",
+        "^python(\\.exe)?\\s+\\S*playground[\\\\/]\\S*(deploy|iq|access)\\.py(\\s|$)"
+      ],
+      "segment": [
+        "^python(\\.exe)?\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access)\\.py",
+        "^az(\\.cmd)?\\s+rest\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com)",
+        "^curl(\\.exe)?\\s.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)",
+        "^Invoke-(RestMethod|WebRequest)\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)"
+      ]
     }
   ]
 }
