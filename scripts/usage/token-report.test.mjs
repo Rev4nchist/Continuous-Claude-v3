@@ -251,6 +251,16 @@ test('CLI: --root, --format json and --out write a report; bad --days exits 2', 
   assert.equal(bad.status, 2);
 });
 
+test('CLI: non-finite or out-of-range --days exits 2, not a RangeError (CodeRabbit PR #71)', () => {
+  // Fails if: the Number.isFinite / upper-bound check on --days is removed.
+  const root = mkRoot();
+  for (const d of ['Infinity', '1e400', '1e10', '0', '-3']) {
+    const r = spawnSync(process.execPath, [CLI, '--root', root, '--days', d], { encoding: 'utf8' });
+    assert.equal(r.status, 2, `--days ${d}: ${r.stderr}`);
+    assert.doesNotMatch(r.stderr, /RangeError/);
+  }
+});
+
 test('markdown renders an empty root without NaN', async () => {
   // Fails if: ratios divide by zero without a guard.
   const md = renderMarkdown(await report(mkRoot()));

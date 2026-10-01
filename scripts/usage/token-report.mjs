@@ -281,7 +281,8 @@ export function parseCli(argv) {
     days: { type: 'string', default: '7' }, format: { type: 'string', default: 'md' },
     out: { type: 'string' }, root: { type: 'string', default: path.join(os.homedir(), '.claude', 'projects') } } });
   const days = Number(values.days);
-  if (!(days > 0)) throw new Error(`--days must be a positive number, got "${values.days}"`);
+  // Finite and bounded so the cutoff stays a valid Date (Infinity or 1e10 would throw a RangeError later).
+  if (!Number.isFinite(days) || days <= 0 || days > 36500) throw new Error(`--days must be a positive number up to 36500, got "${values.days}"`);
   if (values.format !== 'md' && values.format !== 'json') throw new Error(`--format must be md or json, got "${values.format}"`);
   return { days, format: values.format, out: values.out, root: values.root };
 }
