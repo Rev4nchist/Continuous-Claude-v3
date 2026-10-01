@@ -80,8 +80,10 @@ if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
   if printf '%s\n' "$staged" | grep -q '^\.claude/agents/'; then
     run_ratchet "check-agent-model-drift" ".claude/agents" node "$root/scripts/check-agent-model-drift.mjs" "$root"
   fi
-  if printf '%s\n' "$staged" | grep -qE '^\.claude/skills/|^scripts/skills/|^\.claude/settings\.json\.template$'; then
-    # --staged audits the git index (exported to a temp dir), not the working tree.
+  if printf '%s\n' "$staged" | grep -qE '^\.claude/skills/|^scripts/skills/|^\.claude/settings\.json\.template$|^\.claude/agents/|^\.mcp\.json$'; then
+    # --staged audits the git index (exported to a temp dir), not the working tree. The trigger
+    # list must match STAGED_PATHS in scripts/skills/audit-skills.mjs: every input the gate reads
+    # (G17 reads .claude/agents, G28 reads .mcp.json and the settings template).
     run_ratchet "audit-skills" "" node "$root/scripts/skills/audit-skills.mjs" --staged --quiet
   fi
   if [ "$ratchet_fail" -ne 0 ]; then

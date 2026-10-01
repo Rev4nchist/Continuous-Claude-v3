@@ -55,13 +55,28 @@ export function listSkillDirs(root) {
 
 function readJson(p) { try { return JSON.parse(fs.readFileSync(p, 'utf8')); } catch { return null; } }
 
+// Does a path exist? In --staged mode a path under the real working tree exists only when the
+// index holds it (or a directory above it), so a file staged for deletion but still on disk
+// does not satisfy a reference.
+function existsFn(o) {
+  if (!o.indexFiles || !o.fallbackRoot) return (p) => fs.existsSync(p);
+  const dirs = new Set();
+  for (const f of o.indexFiles) for (let i = f.indexOf('/'); i !== -1; i = f.indexOf('/', i + 1)) dirs.add(f.slice(0, i));
+  const rootN = o.fallbackRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  return (p) => {
+    const n = String(p).replace(/\\/g, '/');
+    if (n.startsWith(rootN + '/')) { const rel = n.slice(rootN.length + 1); return o.indexFiles.has(rel) || dirs.has(rel); }
+    return fs.existsSync(p);
+  };
+}
+
 function repoFacts(o) {
   const tpl = readJson(o.settingsTemplate) || {};
   const mcpJson = readJson(o.mcpJson) || {};
   const mcpServers = new Set([...Object.keys(tpl.mcpServers || {}), ...Object.keys(mcpJson.mcpServers || mcpJson)]);
   let agentNames = new Set();
   try { agentNames = new Set(fs.readdirSync(o.agentsDir).filter((n) => /\.md$/.test(n)).map((n) => n.replace(/\.md$/, ''))); } catch { /* no agents dir */ }
-  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, home: o.home, repoRoot: o.repoRoot, fallbackRoot: o.fallbackRoot };
+  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, home: o.home, repoRoot: o.repoRoot, fallbackRoot: o.fallbackRoot, exists: existsFn(o) };
 }
 
 export function resolveOptions(opts = {}) {
@@ -82,6 +97,7 @@ export function resolveOptions(opts = {}) {
     rules: opts.rules ? new Set(opts.rules) : null,
     runScaffold: opts.runScaffold,
     fallbackRoot: opts.fallbackRoot ? path.resolve(opts.fallbackRoot) : null,
+    indexFiles: opts.indexFiles || null,
   };
 }
 
@@ -310,7 +326,10 @@ export function formatReport(report, { verbose = false, quiet = false } = {}) {
 
 // --staged: audit what is in the git index, not the working tree (pre-commit). Exports the files
 // the gate reads to a temp dir. Files outside that set (for example a script a skill points at)
-// resolve against the real working tree.
+// resolve against the index too (see indexFiles), never the working tree.
+// KEEP IN STEP with the trigger regex in scripts/precommit-build-guard.sh:
+//   ^\.claude/skills/|^scripts/skills/|^\.claude/settings\.json\.template$|^\.claude/agents/|^\.mcp\.json$
+// Every path the gate reads must be both exported here and a trigger there.
 const STAGED_PATHS = ['.claude/skills', 'scripts/skills', '.claude/settings.json.template', '.claude/agents', '.mcp.json'];
 
 export function exportStaged(cwd) {
@@ -324,7 +343,11 @@ export function exportStaged(cwd) {
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-skills-staged-'));
   const co = spawnSync('git', ['checkout-index', '-z', '--stdin', `--prefix=${tmp.replace(/\\/g, '/')}/`], { cwd: root, input: files.join('\0') + '\0', maxBuffer: 256 * 1024 * 1024 });
   if (co.status !== 0) { fs.rmSync(tmp, { recursive: true, force: true }); throw new Error(`git checkout-index failed: ${co.stderr.toString().trim()}`); }
-  return { root, tmp };
+  // Every file in the index, for ref resolution outside the exported set.
+  const all = spawnSync('git', ['ls-files', '--cached', '-z'], { cwd: root, maxBuffer: 512 * 1024 * 1024 });
+  if (all.status !== 0) { fs.rmSync(tmp, { recursive: true, force: true }); throw new Error('git ls-files --cached failed'); }
+  const indexFiles = new Set(all.stdout.toString().split('\0').filter(Boolean));
+  return { root, tmp, indexFiles };
 }
 
 export function main(argv) {
@@ -346,6 +369,7 @@ export function main(argv) {
     try {
       opts.repoRoot = staged.tmp;
       opts.fallbackRoot = staged.root;
+      opts.indexFiles = staged.indexFiles;
       opts.baselinePath = opts.baselinePath || path.join(staged.tmp, 'scripts', 'skills', 'audit-skills.baseline.json');
       const report = auditSkills(opts);
       console.log(has('--json') ? JSON.stringify(report, null, 1) : formatReport(report, { verbose: has('--verbose'), quiet: has('--quiet') }));

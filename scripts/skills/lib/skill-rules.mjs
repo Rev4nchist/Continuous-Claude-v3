@@ -502,7 +502,7 @@ export function checkRefs(s, ctx) {
         if (!p) continue;
         const cands = resolveRef(p, base, ctx);
         if (!src.isSkill) cands.push(...resolveRef(p, s.dir, ctx).slice(0, 1));
-        const hit = cands.find((x) => fs.existsSync(x));
+        const hit = cands.find((x) => (ctx.exists ? ctx.exists(x) : fs.existsSync(x)));
         if (src.isSkill && hit && /\.md$/i.test(hit) && inside(hit)) direct.add(path.resolve(hit));
         // Found only under ~/.claude: it passes, but the repo does not own the file (sync gap).
         if (hit && !p.startsWith('~/') && !path.isAbsolute(p) && hit.startsWith(path.join(ctx.home, '.claude') + path.sep) && !fenced) r.push(f('G22', `reference ${p} resolves only under ~/.claude, not in the repo`, i + 1, true));

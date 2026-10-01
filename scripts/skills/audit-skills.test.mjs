@@ -647,3 +647,50 @@ test('pre-commit guard: a staged change under scripts/skills triggers the audit'
   vcs(root, 'add', 'scripts/skills/lib/skill-rules.mjs');
   assert.equal(runGuard(root).status, 1);
 });
+
+// ------------------------------------------------------------ review round 3
+
+test('--staged fails a reference whose target is staged for deletion but still on disk', () => {
+  const root = stagedFixture({ s: skillText('s', { body: 'See [guide](docs/guide.md).\n' }) });
+  write(path.join(root, 'docs', 'guide.md'), '# guide\n');
+  vcs(root, 'add', 'docs/guide.md');
+  assert.equal(stagedCli(root).status, 0, 'a tracked target satisfies the reference');
+  vcs(root, 'rm', '--cached', '-q', 'docs/guide.md'); // staged deletion; the file stays on disk
+  assert.ok(fs.existsSync(path.join(root, 'docs', 'guide.md')));
+  const r = stagedCli(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL G22 s:\d+ unresolved reference docs\/guide\.md/);
+});
+
+// Commit a broken skill, then stage ONLY one audit input and check that the guard still runs the audit.
+function guardTriggeredBy(relPath, text) {
+  const root = guardFixture();
+  write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN);
+  vcs(root, 'add', '.claude/skills/a/SKILL.md');
+  vcs(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'broken base', '--no-verify');
+  write(path.join(root, relPath), text);
+  vcs(root, 'add', relPath);
+  return runGuard(root);
+}
+
+test('pre-commit guard: staging only .mcp.json triggers the audit', { skip: !bashOk && 'Git Bash with node not available' }, () => {
+  assert.equal(guardTriggeredBy('.mcp.json', '{"mcpServers":{}}\n').status, 1);
+});
+
+test('pre-commit guard: staging only a .claude/agents file triggers the audit', { skip: !bashOk && 'Git Bash with node not available' }, () => {
+  assert.equal(guardTriggeredBy('.claude/agents/new-agent.md', 'agent\n').status, 1);
+});
+
+// ------------------------------------------------------------- trigger-probe
+
+test('trigger-probe: the run turns every hook off, so the hit rate is native routing', async () => {
+  const { noHooksSettingsPath } = await import('./trigger-probe.mjs');
+  assert.deepEqual(JSON.parse(fs.readFileSync(noHooksSettingsPath(), 'utf8')), { disableAllHooks: true });
+});
+
+test('trigger-probe: hooksRan counts hook_started events and ignores other lines', async () => {
+  const { hooksRan } = await import('./trigger-probe.mjs');
+  const stream = ['{"type":"system","subtype":"hook_started"}', '{"type":"system","subtype":"hook_response"}', '{"type":"system","subtype":"hook_started"}', 'not json'].join('\n');
+  assert.equal(hooksRan(stream), 2);
+  assert.equal(hooksRan('{"type":"system","subtype":"init"}'), 0);
+});

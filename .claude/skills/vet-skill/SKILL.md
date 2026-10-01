@@ -132,7 +132,7 @@ After optimization, re-score:
 - accuracy >= 70%: tier = `"vetted"`, priority = `"medium"`
 - accuracy < 70%: tier = `"provisional"`, priority = `"low"` -- warn the user that this skill has poor trigger accuracy and may fire incorrectly
 
-### Step 8: Generate skill-rules.json Entry (trust-tier record, not routing)
+### Step 8: Generate skill-rules.json Entry (trust-tier record; promptTriggers are read only by the unwired opc/scripts/core/skill_router.py and do not route prompts, native description routing does)
 
 Build the registration entry using this schema:
 
