@@ -143,7 +143,10 @@ $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 # landed, so the first forward sync copies nothing.
 # rules-ondemand (2026-09-24): tool-specific rules the rule-router hook loads at the action.
 # Same name in repo and active, and deliberately NOT under rules/, so nothing auto-loads them.
-SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
+# plugins (2026-10-01): only .claude/plugins/claude-hud/ is tracked (the status line launcher and
+# its config). copy_dir copies repo files and never deletes, so the plugin caches in
+# ~/.claude/plugins are untouched.
+SYNC_DIRS="agents skills scripts docs commands rules-ondemand plugins"
 
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
@@ -528,7 +531,7 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*)
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*|.claude/plugins/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;

@@ -313,6 +313,18 @@ qfile="$(find "$QROOT" -name t11e.bin.md -type f 2>/dev/null | head -n 1)"
 chk "(e) quarantine dir holds the CRLF binary" "$( [ -n "$qfile" ] && grep -q $'\r' "$qfile" && echo 1 || echo 0)"
 rm -rf "$QROOT"
 
+echo "=== T12: plugins/ syncs repo files and leaves Claude Code's plugin state alone ==="
+mkdir -p "$ACT/plugins/cache/claude-hud" "$REPO/.claude/plugins/claude-hud"
+printf '{}\n' > "$ACT/plugins/installed_plugins.json"
+printf 'v1\n' > "$REPO/.claude/plugins/claude-hud/launcher.mjs"; commit t12-v1
+sync --changed >/dev/null
+chk "--changed: launcher.mjs reaches ~/.claude/plugins/claude-hud" "$( [ "$(cat "$ACT/plugins/claude-hud/launcher.mjs" 2>/dev/null)" = "v1" ] && echo 1 || echo 0)"
+printf 'v2\n' > "$REPO/.claude/plugins/claude-hud/launcher.mjs"; commit t12-v2
+sync >/dev/null
+chk "full mirror: launcher.mjs updated" "$( [ "$(cat "$ACT/plugins/claude-hud/launcher.mjs" 2>/dev/null)" = "v2" ] && echo 1 || echo 0)"
+chk "installed_plugins.json kept" "$(has "$ACT/plugins/installed_plugins.json")"
+chk "plugins/cache kept" "$(has "$ACT/plugins/cache/claude-hud")"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

@@ -104,8 +104,9 @@ archive/
 cache/
 image-cache/
 plans/
-# Ignore local plugins (braintrust-tracing, the one tracked exception, retired 2026-09-30)
+# Ignore local plugins, except the claude-hud status line launcher and its config (2026-10-01)
 .claude/plugins/*
+!.claude/plugins/claude-hud/
 session-env/
 telemetry/
 tldr/
