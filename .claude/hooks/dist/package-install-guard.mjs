@@ -16010,6 +16010,108 @@ var malicious_packages_default = {
       reason: "Malware in @redman89405/my-module (GHSA-vc53-jhh2-pwf3)",
       date: "2026-09-30",
       advisory: "https://github.com/advisories/GHSA-vc53-jhh2-pwf3"
+    },
+    "future-scripts": {
+      blocked_all: true,
+      reason: "Malicious code in future-scripts (npm) (GHSA-c9xw-xmvx-ffm7)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-c9xw-xmvx-ffm7"
+    },
+    "pulse-pwn-9f3a2": {
+      blocked_all: true,
+      reason: "Malware in pulse-pwn-9f3a2 (GHSA-fwr5-cj49-cq4h)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-fwr5-cj49-cq4h"
+    },
+    "set-egs-backend": {
+      blocked_all: true,
+      reason: "Malicious code in set-egs-backend (npm) (GHSA-whwx-38wq-2f27)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-whwx-38wq-2f27"
+    },
+    "player-support-tools-ui": {
+      blocked_all: true,
+      reason: "Malicious code in player-support-tools-ui (npm) (GHSA-2p95-xv34-387r)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-2p95-xv34-387r"
+    },
+    "ssp-config-management-tool": {
+      blocked_all: true,
+      reason: "Malicious code in ssp-config-management-tool (npm) (GHSA-68gm-434m-pfmj)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-68gm-434m-pfmj"
+    },
+    "mms-ref-dedserver": {
+      blocked_all: true,
+      reason: "Malicious code in mms-ref-dedserver (npm) (GHSA-v7g9-2fm9-gf3r)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-v7g9-2fm9-gf3r"
+    },
+    "mms-ref-client": {
+      blocked_all: true,
+      reason: "Malicious code in mms-ref-client (npm) (GHSA-p4x2-g83h-x323)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-p4x2-g83h-x323"
+    },
+    "generator-epic-react": {
+      blocked_all: true,
+      reason: "Malicious code in generator-epic-react (npm) (GHSA-g46p-chgx-c83v)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-g46p-chgx-c83v"
+    },
+    "store-service-worker": {
+      blocked_all: true,
+      reason: "Malicious code in store-service-worker (npm) (GHSA-pp63-g67g-4hxq)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-pp63-g67g-4hxq"
+    },
+    "mod-manager": {
+      blocked_all: true,
+      reason: "Malicious code in mod-manager (npm) (GHSA-c34f-w6mj-2346)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-c34f-w6mj-2346"
+    },
+    "qa-egs-rollback": {
+      blocked_all: true,
+      reason: "Malicious code in qa-egs-rollback (npm) (GHSA-p4fw-q7gp-3mq3)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-p4fw-q7gp-3mq3"
+    },
+    "mms-simulation": {
+      blocked_all: true,
+      reason: "Malicious code in mms-simulation (npm) (GHSA-v994-mfhw-f42p)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-v994-mfhw-f42p"
+    },
+    "mms-tools": {
+      blocked_all: true,
+      reason: "Malicious code in mms-tools (npm) (GHSA-gvwj-w5p8-h682)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-gvwj-w5p8-h682"
+    },
+    "mms-thin-client": {
+      blocked_all: true,
+      reason: "Malicious code in mms-thin-client (npm) (GHSA-557c-973f-xg6r)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-557c-973f-xg6r"
+    },
+    "mms-service": {
+      blocked_all: true,
+      reason: "Malicious code in mms-service (npm) (GHSA-pjxq-g48x-h4jh)",
+      date: "2026-10-01",
+      advisory: "https://github.com/advisories/GHSA-pjxq-g48x-h4jh"
+    },
+    "ddok-modal": {
+      blocked_all: true,
+      reason: "Malware in ddok-modal (GHSA-5xvp-j6m9-rwr6)",
+      date: "2026-09-30",
+      advisory: "https://github.com/advisories/GHSA-5xvp-j6m9-rwr6"
+    },
+    "com.epi.e2e_test": {
+      blocked_all: true,
+      reason: "Malicious code in com.epi.e2e_test (npm) (GHSA-76w7-xhq5-w327)",
+      date: "2026-09-30",
+      advisory: "https://github.com/advisories/GHSA-76w7-xhq5-w327"
     }
   }
 };
