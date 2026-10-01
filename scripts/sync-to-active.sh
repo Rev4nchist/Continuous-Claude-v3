@@ -145,6 +145,11 @@ $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 # Same name in repo and active, and deliberately NOT under rules/, so nothing auto-loads them.
 SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
 
+# Nested dirs synced on their own (2026-10-01). plugins/claude-hud holds the status line launcher
+# and its config. The rest of ~/.claude/plugins is Claude Code's own state (cache, marketplaces,
+# installed_plugins.json): never sync or count the whole plugins/ dir.
+SYNC_SUBDIRS="plugins/claude-hud"
+
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
 RULES_DST_DIR="rules"
@@ -528,7 +533,7 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*)
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
@@ -729,7 +734,7 @@ if [[ -f "$SYNC_AGENT_JSON" ]]; then
     fi
 fi
 
-for dir in $SYNC_DIRS; do
+for dir in $SYNC_DIRS $SYNC_SUBDIRS; do
     copy_dir "$dir"
 done
 
@@ -874,6 +879,21 @@ if ! $DRY_RUN; then
 
     for dir in $SYNC_DIRS; do
         verify_dir "$dir" "$REPO_CLAUDE/$dir" "$ACTIVE_CLAUDE/$dir"
+    done
+    # A SYNC_SUBDIRS target also holds files the tool writes itself, so a count cannot match:
+    # check that every repo file is present instead.
+    for dir in $SYNC_SUBDIRS; do
+        [[ -d "$REPO_CLAUDE/$dir" ]] || continue
+        missing=0
+        while IFS= read -r src_file; do
+            [[ -f "$ACTIVE_CLAUDE/$dir/${src_file#$REPO_CLAUDE/$dir/}" ]] || missing=$((missing+1))
+        done < <(find "$REPO_CLAUDE/$dir" -type f 2>/dev/null)
+        if [[ "$missing" -eq 0 ]]; then
+            echo "  $dir: OK (every repo file present)"
+        else
+            echo "  $dir: MISMATCH ($missing repo file(s) missing in target)"
+            VERIFY_FAIL=1
+        fi
     done
     verify_dir "hooks/dist (*.mjs)" "$REPO_CLAUDE/hooks/dist" "$ACTIVE_CLAUDE/hooks/dist" "*.mjs"
     verify_dir "scripts/ralph (*.py)" "$REPO_CLAUDE/scripts/ralph" "$ACTIVE_CLAUDE/scripts/ralph" "*.py"

@@ -391,6 +391,23 @@ ROOT_SCRIPTS = [
 ]
 
 
+def _merge_plugins(src: Path, dst: Path) -> None:
+    """Copy the repo's plugin files into ~/.claude/plugins without deleting anything.
+
+    The target holds Claude Code's own plugin state (cache/, marketplaces/,
+    installed_plugins.json). Replacing the folder would uninstall every plugin.
+    An existing config.json is kept: a plugin's configure command writes it.
+    """
+
+    def copy_unless_config(s: str, d: str) -> str:
+        if Path(d).name == "config.json" and Path(d).exists():
+            return d
+        return shutil.copy2(s, d)
+
+    if src.exists():
+        shutil.copytree(src, dst, dirs_exist_ok=True, copy_function=copy_unless_config)
+
+
 def _copy_scripts(opc_source: Path, target_dir: Path) -> int:
     """Copy script directories and root scripts to target.
 
@@ -514,12 +531,7 @@ def install_opc_integration(
             result["installed_servers"] = len(list(target_servers.glob("*")))
 
         # Copy plugins (if any)
-        opc_plugins = opc_source / "plugins"
-        target_plugins = target_dir / "plugins"
-        if opc_plugins.exists():
-            if target_plugins.exists():
-                shutil.rmtree(target_plugins)
-            shutil.copytree(opc_plugins, target_plugins)
+        _merge_plugins(opc_source / "plugins", target_dir / "plugins")
 
         # Copy runtime (MCP harness for servers)
         opc_runtime = opc_source / "runtime"
@@ -712,13 +724,14 @@ def install_opc_integration_symlink(
 
         # Copy servers, runtime, plugins, scripts (these are less likely to be edited)
         # Users can manually symlink these if needed
-        for copy_dir in ["servers", "runtime", "plugins"]:
+        for copy_dir in ["servers", "runtime"]:
             src = opc_source / copy_dir
             dst = target_dir / copy_dir
             if src.exists():
                 if dst.exists():
                     shutil.rmtree(dst)
                 shutil.copytree(src, dst)
+        _merge_plugins(opc_source / "plugins", target_dir / "plugins")
 
         # Copy scripts (core, math, tldr directories + root scripts)
         _copy_scripts(opc_source, target_dir)

@@ -26,6 +26,7 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 | `agents/*.md` + `*.json` | Yes | Forward sync copies both. The `.json` sidecar is regenerated from the `.md` frontmatter first (`sync-agent-json.py`). | N/A |
 | `docs/**/*.md` | Yes (NEW) | Added to SYNC_DIRS | `bash scripts/sync-to-active.sh` |
 | `project-registry.json` | Yes (2026-07-15) | Repo copy is canonical; JSON-validated copy in BOTH full and `--changed` modes; active mirror never auto-deleted | `bash scripts/sync-to-active.sh` |
+| `plugins/claude-hud/` (`launcher.mjs`, `config.json`) | Yes (2026-10-01) | The status line runs `launcher.mjs`. Only this subdir syncs; the rest of `plugins/` is Claude Code state. `--changed` deletes a file only when the repo deleted it. Edit `config.json` in the repo: a `/claude-hud:configure` edit is quarantined at the next repo change to it | `bash scripts/sync-to-active.sh` |
 | `settings.json` | NO | Intentional — local config | Manual copy (risky) |
 | `settings.local.json` | NO | Intentional — machine-specific | Never sync |
 | `CLAUDE.md` | NO | Intentional — may differ per machine | Manual review |
