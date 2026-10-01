@@ -216,6 +216,103 @@ chk "X4 control: m.md now synced, cursor = main" "$( [ -e "$ACT/rules/m.md" ] &&
 g worktree remove --force "$WT10"
 g checkout -q main
 
+echo "=== T11: clobber guard quarantines real edits, not hand copies or EOL-only differences ==="
+MAN="$ACT/state/sync-manifest.txt"
+QROOT="$ACT/.sync-quarantine"
+man_hash() { awk -F'\t' -v p="$1" '$2 == p { print $1 }' "$MAN"; }
+sha() { sha256sum "$1" | cut -d' ' -f1; }
+chk "T11 fixture: no quarantine dir before the scenarios" "$(not "$QROOT")"
+
+# (a) hand copy: active already holds the repo's new content before the sync runs.
+printf 'v1\n' > "$REPO/.claude/rules-src/t11a.md"; commit t11a-v1
+sync --changed >/dev/null
+printf 'v2\n' > "$REPO/.claude/rules-src/t11a.md"; commit t11a-v2
+cp "$REPO/.claude/rules-src/t11a.md" "$ACT/rules/t11a.md"          # the hand copy
+out="$(sync --changed)"
+chk "(a) hand copy equal to the repo: no quarantine dir" "$(not "$QROOT")"
+chk "(a) no CLOBBER-GUARD line printed" "$(printf '%s' "$out" | grep -q 'CLOBBER-GUARD' && echo 0 || echo 1)"
+chk "(a) manifest entry refreshed to the hand copy's hash" "$( [ "$(man_hash rules/t11a.md)" = "$(sha "$ACT/rules/t11a.md")" ] && echo 1 || echo 0)"
+# The stale entry used to bite on the NEXT repo change: the old hand copy matched nothing.
+printf 'v3\n' > "$REPO/.claude/rules-src/t11a.md"; commit t11a-v3
+sync --changed >/dev/null
+chk "(a) next repo update: no quarantine dir" "$(not "$QROOT")"
+chk "(a) next repo update lands" "$( [ "$(cat "$ACT/rules/t11a.md")" = "v3" ] && echo 1 || echo 0)"
+
+# (c) EOL-only: active holds the repo's new text with CRLF endings.
+printf 'one\ntwo\n' > "$REPO/.claude/rules-src/t11c.md"; commit t11c-v1
+sync --changed >/dev/null
+printf 'one\ntwo\nthree\n' > "$REPO/.claude/rules-src/t11c.md"; commit t11c-v2
+printf 'one\r\ntwo\r\nthree\r\n' > "$ACT/rules/t11c.md"            # CRLF copy of the new text
+out="$(sync --changed)"
+chk "(c) CRLF-only difference: no quarantine dir" "$(not "$QROOT")"
+chk "(c) active converges to the repo bytes (LF)" "$(cmp -s "$REPO/.claude/rules-src/t11c.md" "$ACT/rules/t11c.md" && echo 1 || echo 0)"
+chk "(c) manifest entry = repo hash" "$( [ "$(man_hash rules/t11c.md)" = "$(sha "$REPO/.claude/rules-src/t11c.md")" ] && echo 1 || echo 0)"
+# A CRLF file that also differs in text is a real edit.
+printf 'one\ntwo\nthree\nfour\n' > "$REPO/.claude/rules-src/t11c.md"; commit t11c-v3
+printf 'one\r\ntwo\r\nEDITED\r\nfour\r\n' > "$ACT/rules/t11c.md"
+out="$(sync --changed)"
+chk "(c) CRLF plus a text edit: quarantined" "$(printf '%s' "$out" | grep -q 'CLOBBER-GUARD: active copy of rules/t11c.md' && echo 1 || echo 0)"
+rm -rf "$QROOT"
+
+# (b) real divergent edit: must still be quarantined, with its content kept.
+printf 'b1\n' > "$REPO/.claude/rules-src/t11b.md"; commit t11b-v1
+sync --changed >/dev/null
+printf 'hand edit in active\n' > "$ACT/rules/t11b.md"
+printf 'b2\n' > "$REPO/.claude/rules-src/t11b.md"; commit t11b-v2
+out="$(sync --changed)"
+chk "(b) real edit: CLOBBER-GUARD line printed" "$(printf '%s' "$out" | grep -q 'CLOBBER-GUARD: active copy of rules/t11b.md' && echo 1 || echo 0)"
+qfile="$(find "$QROOT" -name t11b.md -type f 2>/dev/null | head -n 1)"
+chk "(b) quarantine dir holds the hand edit" "$( [ -n "$qfile" ] && [ "$(cat "$qfile")" = "hand edit in active" ] && echo 1 || echo 0)"
+chk "(b) repo version landed" "$( [ "$(cat "$ACT/rules/t11b.md")" = "b2" ] && echo 1 || echo 0)"
+chk "(b) manifest = repo hash" "$( [ "$(man_hash rules/t11b.md)" = "$(sha "$ACT/rules/t11b.md")" ] && echo 1 || echo 0)"
+rm -rf "$QROOT"
+
+# (d) race: an active edit lands AFTER the identical-compare but BEFORE the manifest is saved.
+# A sha256sum shim edits the active file when the batched refresh runs (the only call that
+# passes `--`). The manifest must hold the repo hash, never the edited file's hash, so the NEXT
+# sync sees the edit as divergent and quarantines it instead of overwriting it silently.
+printf 'd1\n' > "$REPO/.claude/rules-src/t11d.md"; commit t11d-v1
+sync --changed >/dev/null
+printf 'd2\n' > "$REPO/.claude/rules-src/t11d.md"; commit t11d-v2
+cp "$REPO/.claude/rules-src/t11d.md" "$ACT/rules/t11d.md"          # hand copy: cmp -s will pass
+RSHIM="$FIX/race-shim"; mkdir -p "$RSHIM"
+cat > "$RSHIM/sha256sum" <<'SHIMEOF'
+#!/usr/bin/env bash
+if [ "${1:-}" = "--" ] && [ ! -e "$SHIM_DONE" ]; then
+    : > "$SHIM_DONE"
+    printf 'late edit after compare\n' > "$SHIM_ACT/rules/t11d.md"
+fi
+exec "$SHIM_REAL_SHA" "$@"
+SHIMEOF
+chmod +x "$RSHIM/sha256sum"
+rm -f "$FIX/race-done"
+PATH="$RSHIM:$PATH" SHIM_ACT="$ACT" SHIM_DONE="$FIX/race-done" SHIM_REAL_SHA="$SHIM_REAL_SHA" sync --changed >/dev/null
+chk "(d) fixture: the shim edited the active file mid-sync" "$( [ "$(cat "$ACT/rules/t11d.md")" = "late edit after compare" ] && echo 1 || echo 0)"
+chk "(d) manifest holds the repo hash, not the late edit's hash" "$( [ "$(man_hash rules/t11d.md)" = "$(sha "$REPO/.claude/rules-src/t11d.md")" ] && echo 1 || echo 0)"
+printf 'd3\n' > "$REPO/.claude/rules-src/t11d.md"; commit t11d-v3
+out="$(sync --changed)"
+chk "(d) next sync prints CLOBBER-GUARD for the late edit" "$(printf '%s' "$out" | grep -q 'CLOBBER-GUARD: active copy of rules/t11d.md' && echo 1 || echo 0)"
+qfile="$(find "$QROOT" -name t11d.md -type f 2>/dev/null | head -n 1)"
+chk "(d) quarantine dir holds the late edit" "$( [ -n "$qfile" ] && [ "$(cat "$qfile")" = "late edit after compare" ] && echo 1 || echo 0)"
+rm -rf "$QROOT"
+
+# (e) binary guard: a NUL byte far past the start of the file (grep -I only looks at the start)
+# makes it binary. A CRLF-vs-LF difference there is NOT an EOL-only difference: quarantine.
+mkbin() { # <path> <eol: lf|crlf>: ~150 KB of text lines, then a NUL byte, then more text
+    local nl=$'\n'; [ "$2" = "crlf" ] && nl=$'\r\n'
+    { printf 'head%s' "$nl"; for _ in $(seq 1 3000); do printf 'line of ordinary text to pad the file out%s' "$nl"; done
+      printf 'tail\000bytes%s' "$nl"; } > "$1"
+}
+mkbin "$REPO/.claude/rules-src/t11e.bin.md" lf; commit t11e-v1
+sync --changed >/dev/null
+mkbin "$REPO/.claude/rules-src/t11e.bin.md" lf; printf 'more\n' >> "$REPO/.claude/rules-src/t11e.bin.md"; commit t11e-v2
+mkbin "$ACT/rules/t11e.bin.md" crlf; printf 'more\r\n' >> "$ACT/rules/t11e.bin.md"   # CRLF twin of the new bytes
+out="$(sync --changed)"
+chk "(e) binary file differing only by CRLF: CLOBBER-GUARD printed" "$(printf '%s' "$out" | grep -q 'CLOBBER-GUARD: active copy of rules/t11e.bin.md' && echo 1 || echo 0)"
+qfile="$(find "$QROOT" -name t11e.bin.md -type f 2>/dev/null | head -n 1)"
+chk "(e) quarantine dir holds the CRLF binary" "$( [ -n "$qfile" ] && grep -q $'\r' "$qfile" && echo 1 || echo 0)"
+rm -rf "$QROOT"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

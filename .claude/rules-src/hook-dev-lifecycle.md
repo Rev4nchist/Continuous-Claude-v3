@@ -68,4 +68,4 @@ fs.writeFileSync(p, JSON.stringify(s, null, 2) + '\n');
 - Hook health check: `/hook-audit` skill
 - Hook scaffold: `/hook-scaffold` skill
 - Sync drift check: `/sync-drift` skill
-- Full hook catalog: `docs/architecture/quick-ref/hook-catalog.md`
+- Full hook catalog: `.claude/docs/architecture/quick-ref/hook-catalog.md`

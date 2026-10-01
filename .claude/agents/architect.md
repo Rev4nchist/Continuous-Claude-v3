@@ -38,17 +38,17 @@ $CLAUDE_PROJECT_DIR = /path/to/project
 
 ## Step 2: Codebase Analysis
 
-Understand existing patterns before designing:
+Understand existing patterns before designing. Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
 
 ```bash
 # Understand structure
-rp-cli -e 'structure src/'
+tldr structure src/
 
 # Find similar features
-rp-cli -e 'search "similar_feature"'
+rg -n "similar_feature"
 
 # Check existing interfaces
-rp-cli -e 'search "interface|type.*="'
+rg -n "interface|type.*="
 
 # Find dependencies
 cat package.json pyproject.toml 2>/dev/null | head -50
@@ -227,14 +227,14 @@ Your task prompt may include:
 
 ```bash
 # Check if integration exists
-rp-cli -e 'search "ExternalServiceName|api.external.com"'
+rg -n "ExternalServiceName|api.external.com"
 
 # Find existing integration patterns
-rp-cli -e 'search "fetch|axios|HttpClient"'
+rg -n "fetch|axios|HttpClient"
 
 # Check for API client patterns
-rp-cli -e 'structure src/clients/'
-rp-cli -e 'structure src/integrations/'
+tldr structure src/clients/
+tldr structure src/integrations/
 ```
 
 ### API Client Design Patterns

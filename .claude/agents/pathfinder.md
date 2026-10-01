@@ -22,11 +22,10 @@ Before researching, frame E(X,Q):
 ```bash
 # Clone to temp directory
 git clone <repo_url> /tmp/pathfinder-<repo_name>
-cd /tmp/pathfinder-<repo_name>
 
-# Structure analysis
-rp-cli -e 'tree'
-rp-cli -e 'structure .'
+# Structure analysis: Glob and Grep first, then tldr, then rg
+tldr tree /tmp/pathfinder-<repo_name>
+tldr structure /tmp/pathfinder-<repo_name>
 ```
 
 ## Step 2: Analyze

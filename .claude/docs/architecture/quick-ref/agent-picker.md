@@ -61,7 +61,7 @@ Need to deploy? ──→ deployer
 
 ## Model Rules
 
-- **Never use haiku** - always omit model (inherits) or use sonnet/opus
+- **Never use haiku** - set `model:` explicitly (sonnet or opus); every agent also sets `effort: high`
 - **Research agents** - need accuracy, use sonnet minimum
 - **Planning/debug** - need judgment, prefer opus
 

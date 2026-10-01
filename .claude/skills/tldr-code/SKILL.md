@@ -8,11 +8,11 @@ metadata:
 
 # TLDR-Code
 
-Token-efficient code analysis. **95% savings** vs raw file reads.
+Token-efficient code analysis. Measured, 30 days to 2026-09-30: the Read hook replaced 2.58 MB of raw reads with 0.16 MB of summaries (168 intercepts). Net saving after re-reads: pending T1-T4 (`docs/self-improvement/audits/`). The old "95%" figure was a marketing number, not a measurement.
 
 Advanced features (daemon, semantic search, Python API, language table): `references/advanced-features.md`
 
-> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 8 hooks — see `tldr-context-inject`, `tldr-read-enforcer`, `smart-search-router`, `impact-refactor`, `arch-context-inject`, `edit-context-inject`, `post-edit-diagnostics`, `signature-helper`. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
+> **Canonical entry point.** This is the single skill for TLDR usage. Routine analysis (call graph injection, AST-summarized reads, post-edit diagnostics) is handled automatically by 3 live hooks: `tldr-read-enforcer` (denies code Reads over 8 KB and returns an AST summary; fails open), `smart-search-router`, `post-edit-diagnostics`. `tldr-context-inject`, `impact-refactor`, `arch-context-inject`, `edit-context-inject` and `signature-helper` are not registered; do not expect them to fire. Don't add new `tldr-*` sub-skills; extend this one or extend a hook.
 
 ## Quick Reference
 
@@ -45,7 +45,7 @@ Layer 3: CFG         +110 tokens   Complexity, branches, loops
 Layer 4: DFG         +130 tokens   Variable definitions/uses
 Layer 5: PDG         +150 tokens   Dependencies, slicing
 ───────────────────────────────────────────────────────────────
-Total:              ~1,200 tokens  vs 23,000 raw = 95% savings
+Total:              ~1,200 tokens  vs 23,000 raw (one sample file; not a measured average)
 ```
 
 ---

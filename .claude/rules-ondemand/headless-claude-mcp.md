@@ -13,6 +13,7 @@ Key-unset alone is NOT sufficient. The connector loading + OAuth session are rel
 
 ## Wrapper conventions (all now enforced in the live wrappers)
 
+- **Set `--effort` explicitly** (high) on a headless probe. Without the flag, the probe takes its effort from settings.
 - **Capture stdout/stderr** to a dated log (`~/.claude/logs/<pipeline>/<YYYY-MM-DD>.log`) — never discard `claude -p` output in a scheduled wrapper.
 - **Never derive a registry OK from exit code alone** — exit 0 covers SKIP and silent no-ops. Verify artifact truth (see `scripts/fourthos-weekly/verify-run.mjs` as the reference classifier) or read back the write.
 - **Distinguish permission-denied from mcp-unavailable** in guard prose — the former is a fixable FAILURE, never a benign SKIP.

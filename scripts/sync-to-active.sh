@@ -158,8 +158,14 @@ NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.json
 # e56c343): every copy site blindly overwrote the active file, so an edit made
 # directly in ~/.claude was silently lost on the next sync. The guard keeps a
 # manifest of the sha256 each destination had the last time THIS script wrote it.
-# On the next sync, three cases per file:
-#   dst == src                      -> identical, record hash, no copy
+# On the next sync, four cases per file:
+#   dst == src                      -> identical, no copy. The manifest entry is
+#                                      refreshed to src's hash (a hand copy leaves a
+#                                      stale entry that would quarantine the copy
+#                                      at the NEXT repo change; 2026-09-30, 26 files)
+#   dst == src except CRLF vs LF    -> not an edit. Text files only. Normal forward
+#                                      copy (active converges to the repo bytes),
+#                                      no quarantine
 #   dst == manifest entry           -> active is merely stale; normal forward copy
 #   dst != src AND != manifest (or  -> ACTIVE WAS EDITED SINCE LAST SYNC:
 #     no entry; fail-safe)             quarantine the active copy, THEN copy,
@@ -178,6 +184,13 @@ QUARANTINED=0
 GUARD_ERRORS=0
 declare -A MANIFEST
 declare -A SEEN
+# Identical files that already have a manifest entry. Their entry may be stale (hand copy),
+# so refresh_identical_entries re-hashes them in batches just before the manifest is saved.
+# It hashes the repo SOURCE, never the active file: an active edit made after the cmp -s
+# would otherwise become the baseline and the next repo change would overwrite it silently.
+# IDENTICAL_PENDING holds source paths; IDENTICAL_REL maps each to its active-relative path.
+IDENTICAL_PENDING=()
+declare -A IDENTICAL_REL
 
 file_hash() {
     sha256sum "$1" | cut -d' ' -f1
@@ -201,8 +214,51 @@ manifest_unset() {
     unset "MANIFEST[$1]" 2>/dev/null || true
 }
 
+# True when the whole file contains a NUL byte. grep -I only inspects the start of a file, so
+# a NUL past the first buffer would pass as text; this reads every byte. A read error counts
+# as binary (fail-safe: never EOL-normalise a file we could not check).
+has_nul() {
+    local clean
+    clean=$(tr -d '\0' < "$1" | wc -c) || return 0
+    [[ "$clean" == "$(wc -c < "$1")" ]] && return 1
+    return 0
+}
+
+# True when src and dst differ only in line endings (CRLF vs LF). Text files only: a binary
+# file (any NUL byte anywhere) can carry CR bytes that matter, so it never qualifies. The
+# comparison normalises EOL in a pipe; neither file is modified.
+eol_only_diff() {
+    has_nul "$1" && return 1
+    has_nul "$2" && return 1
+    cmp -s <(sed 's/\x0d$//' "$1") <(sed 's/\x0d$//' "$2")
+}
+
+# Re-hash the identical files in batches (one sha256sum spawn per 200 files, not one per
+# file: per-file spawns made the full mirror take >10 min on this box). The SOURCE is hashed,
+# and that hash replaces the entry: a file edited in active after the compare then no longer
+# matches the manifest, so the next sync quarantines it. A file that cannot be hashed keeps
+# its entry, which fails safe (a later divergence quarantines).
+refresh_identical_entries() {
+    local n=${#IDENTICAL_PENDING[@]} i=0 line h p rel
+    [[ $n -eq 0 ]] && return 0
+    local -a batch
+    while [[ $i -lt $n ]]; do
+        batch=("${IDENTICAL_PENDING[@]:$i:200}")
+        i=$((i + 200))
+        while IFS= read -r line; do
+            [[ "${line:0:1}" == "\\" ]] && continue   # escaped name (backslash or newline in path)
+            h="${line%% *}"; p="${line#* }"; p="${p:1}"   # "hash  path" (text) or "hash *path" (binary mode)
+            rel="${IDENTICAL_REL[$p]-}"
+            [[ -n "$h" && -n "$rel" && -n "${MANIFEST[$rel]-}" ]] && MANIFEST["$rel"]="$h"
+        done < <(sha256sum -- "${batch[@]}" 2>/dev/null)
+    done
+    IDENTICAL_PENDING=()
+    IDENTICAL_REL=()
+}
+
 save_manifest() {
     $DRY_RUN && return 0
+    refresh_identical_entries
     mkdir -p "$(dirname "$MANIFEST_FILE")"
     local tmp="$MANIFEST_FILE.tmp.$$" r
     {
@@ -235,13 +291,14 @@ guarded_copy() {
         return 0
     fi
     if cmp -s "$src" "$dst"; then
-        # Identical: keep the existing manifest entry instead of rehashing --
-        # a sha256sum spawn per file made the full mirror take >10 min on this
-        # box (spawn latency, see windows-platform.md). A stale entry is
-        # harmless in the fail-safe direction: a later divergence that doesn't
-        # match it quarantines rather than clobbers.
+        # Identical: no copy and no quarantine. A hand copy leaves the manifest entry
+        # stale, and the next repo change would then quarantine a file that holds no
+        # edit. So queue the entry for a batched re-hash (refresh_identical_entries)
+        # instead of one sha256sum spawn per file (>10 min on this box).
         if [[ -n "${MANIFEST[$rel]-}" ]]; then
             SEEN["$rel"]=1
+            IDENTICAL_PENDING+=("$src")
+            IDENTICAL_REL["$src"]="$rel"
         else
             manifest_set "$rel" "$(file_hash "$src")"
         fi
@@ -257,6 +314,14 @@ guarded_copy() {
         mv -f "$dst.sync-tmp" "$dst"
         manifest_set "$rel" "$src_hash"
         $VERBOSE && echo "Copied: $rel" || true
+        return 0
+    fi
+    if eol_only_diff "$src" "$dst"; then
+        # Same text, different line endings: nothing to preserve. Forward copy as usual.
+        cp "$src" "$dst.sync-tmp"
+        mv -f "$dst.sync-tmp" "$dst"
+        manifest_set "$rel" "$src_hash"
+        $VERBOSE && echo "Copied (EOL-only difference): $rel" || true
         return 0
     fi
     # CLOBBER RISK: active file was edited since last sync (or is unknown to the

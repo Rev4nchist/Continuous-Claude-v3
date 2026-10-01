@@ -16,41 +16,21 @@ You are an onboarding agent that analyzes existing codebases and creates initial
 
 ```bash
 # Verify thoughts/ structure exists
-ls thoughts/ledgers/ 2>/dev/null || echo "ERROR: Run ~/.claude/scripts/init-project.sh first"
+ls thoughts/ledgers/ 2>/dev/null || echo "ERROR: thoughts/ledgers/ is missing"
 ```
 
-If thoughts/ doesn't exist, tell the user to run `init-project.sh` and stop.
+If thoughts/ doesn't exist, tell the user that the thoughts/ structure is missing, and stop.
 
 ### Step 2: Codebase Analysis
 
-**Try RepoPrompt first (preferred):**
-
-```bash
-# 1. Check if rp-cli is available
-which rp-cli
-
-# 2. List workspaces - check if this project exists
-rp-cli -e 'workspace list'
-
-# 3. If workspace doesn't exist, create it and add folder:
-rp-cli -e 'workspace create --name "project-name"'
-rp-cli -e 'call manage_workspaces {"action": "add_folder", "workspace": "project-name", "folder_path": "/full/path/to/project"}'
-
-# 4. Switch to the workspace (by name)
-rp-cli -e 'workspace switch "project-name"'
-
-# 5. Explore the codebase
-rp-cli -e 'tree'
-rp-cli -e 'structure .'
-rp-cli -e 'builder "understand the codebase architecture"'
-```
-
-**Important:** `workspace switch` takes a NAME or UUID, not a path.
-
-**Fallback (no RepoPrompt):**
+Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
 
 ```bash
 # Project structure
+tldr tree .
+tldr structure .
+
+# Manifest files
 find . -maxdepth 3 -type f \( -name "*.md" -o -name "package.json" -o -name "pyproject.toml" -o -name "Cargo.toml" -o -name "go.mod" \) 2>/dev/null | head -20
 
 # Key directories
@@ -157,4 +137,4 @@ Return to main conversation with:
 - This agent is for BROWNFIELD projects (existing code)
 - For greenfield, recommend using `/create_plan` instead
 - Ledger can be updated anytime with `/continuity_ledger`
-- Uses rp-cli for exploration (falls back to bash if unavailable)
+- Uses Grep, Glob, `tldr` and `rg` for exploration

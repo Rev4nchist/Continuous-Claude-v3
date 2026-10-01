@@ -42,16 +42,14 @@ Before diving in, list 2-3 possible causes based on the symptom. This guides inv
 ## Step 3: Investigate with MCP Tools
 
 ### Codebase Exploration
+Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
 ```bash
 # Find error origin
-rp-cli -e 'search "exact error message" --context-lines 5'
+rg -n -C 5 "exact error message"
 
 # Trace code flow
-rp-cli -e 'structure src/'
-rp-cli -e 'search "functionName(" --max-results 20'
-
-# Fast pattern search
-uv run python -m runtime.harness scripts/morph_search.py --query "function_name" --path "."
+tldr structure src/
+rg -nF "functionName(" | head -20
 ```
 
 ### Git History

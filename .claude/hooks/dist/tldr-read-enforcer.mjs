@@ -1,8 +1,8 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/tldr-read-enforcer.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2 } from "fs";
-import { basename, extname } from "path";
+import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2, appendFileSync, mkdirSync as mkdirSync2, renameSync } from "fs";
+import { basename, extname, join as join3 } from "path";
 
 // src/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
@@ -382,17 +382,6 @@ function probeDaemonFast(projectDir, timeoutMs = FAST_PROBE_TIMEOUT_MS) {
     }
   });
 }
-async function trackHookActivityFast(hookName, projectDir, success = true, metrics = {}) {
-  try {
-    if (isDaemonUnreachableCached(projectDir)) return;
-    if (!await probeDaemonFast(projectDir)) {
-      cacheDaemonUnreachable(projectDir);
-      return;
-    }
-    await queryDaemon({ cmd: "track", hook: hookName, success, metrics }, projectDir);
-  } catch {
-  }
-}
 
 // src/shared/search-context-path.ts
 import * as os from "os";
@@ -652,50 +641,133 @@ async function getTldrContext(filePath, language, layers = ["ast", "call_graph"]
     return null;
   }
 }
+var JOURNAL_ROLLUP_BYTES = 1024;
+var LOG_MAX_BYTES = 5 * 1024 * 1024;
+var HOOK_NAME = "tldr-read-enforcer";
+var JOURNAL_FILE = "tldr-read-enforcer.events.jnl";
+var OUTCOMES = /* @__PURE__ */ new Set(["allow", "deny", "fail_open", "below_threshold"]);
+var BATCHED_FAIL_OPEN = /* @__PURE__ */ new Set(["daemon_unreachable", "daemon_unreachable_cached"]);
+var cleanMs = (ms) => Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
+var isBatched = (ev) => ev.outcome === "allow" || ev.outcome === "below_threshold" || ev.outcome === "fail_open" && BATCHED_FAIL_OPEN.has(ev.reason);
+function buildLogRow(ev, count = 1, now = /* @__PURE__ */ new Date()) {
+  const ms = cleanMs(ev.duration_ms);
+  const isFailOpen = ev.outcome === "fail_open";
+  const isError = isFailOpen && ev.reason === "error";
+  const metrics = {
+    reads_seen: count,
+    [`outcome_${ev.outcome}`]: count,
+    duration_ms: ms
+  };
+  if (ev.outcome === "deny") {
+    metrics.reads_intercepted = 1;
+    metrics.layers_returned = ev.layers_returned ?? 0;
+    metrics.bytes_raw = ev.bytes_raw ?? 0;
+    metrics.bytes_injected = ev.bytes_injected ?? 0;
+  }
+  return {
+    hook_name: HOOK_NAME,
+    invocations: count,
+    // A fail_open is never a success; its count lives in `count` / `invocations`.
+    successes: isFailOpen ? 0 : count,
+    failures: isError ? count : 0,
+    metrics,
+    outcome: ev.outcome,
+    reason: ev.reason,
+    duration_ms: ms,
+    count,
+    timestamp: now.toISOString()
+  };
+}
+function aggregateJournal(text) {
+  const sums = /* @__PURE__ */ new Map();
+  for (const line of text.split("\n")) {
+    const parts = line.split("|");
+    if (parts.length !== 3) continue;
+    const [outcome, reason, msText] = parts;
+    const ms = Number(msText);
+    if (!OUTCOMES.has(outcome) || !/^[a-z_]+$/.test(reason) || msText === "" || !Number.isFinite(ms)) continue;
+    const key = `${outcome}|${reason}`;
+    const cur = sums.get(key) || { n: 0, ms: 0 };
+    sums.set(key, { n: cur.n + 1, ms: cur.ms + cleanMs(ms) });
+  }
+  return [...sums].map(([key, v]) => ({ key, n: v.n, ms: Math.round(v.ms * 10) / 10 }));
+}
+function appendLogRows(logFile, rowObjs, maxBytes = LOG_MAX_BYTES) {
+  try {
+    if (statSync(logFile).size >= maxBytes) renameSync(logFile, logFile + ".1");
+  } catch {
+  }
+  appendFileSync(logFile, rowObjs.map((r) => JSON.stringify(r) + "\n").join(""));
+}
+function rollupJournal(statsDir, logFile) {
+  const journal = join3(statsDir, JOURNAL_FILE);
+  const rolling = `${journal}.${process.pid}.rolling`;
+  try {
+    renameSync(journal, rolling);
+  } catch {
+    return;
+  }
+  const text = readFileSync2(rolling, "utf-8");
+  const rowObjs = aggregateJournal(text).map(({ key, n, ms }) => {
+    const [outcome, reason] = key.split("|");
+    return buildLogRow({ outcome, reason, duration_ms: ms }, n);
+  });
+  if (rowObjs.length) appendLogRows(logFile, rowObjs);
+  unlinkSync2(rolling);
+}
+function recordRead(projectDir, ev) {
+  try {
+    const tldrDir = join3(projectDir, ".tldr");
+    if (!existsSync2(tldrDir)) return;
+    const statsDir = join3(tldrDir, "stats");
+    mkdirSync2(statsDir, { recursive: true });
+    const logFile = join3(statsDir, "hook_activity.jsonl");
+    if (!isBatched(ev)) {
+      appendLogRows(logFile, [buildLogRow(ev)]);
+      return;
+    }
+    const journal = join3(statsDir, JOURNAL_FILE);
+    appendFileSync(journal, `${ev.outcome}|${ev.reason}|${cleanMs(ev.duration_ms)}
+`);
+    if (statSync(journal).size >= JOURNAL_ROLLUP_BYTES) rollupJournal(statsDir, logFile);
+  } catch {
+  }
+}
 function readStdin() {
   return readFileSync2(0, "utf-8");
 }
+var START = performance.now();
 async function main() {
   const input = JSON.parse(readStdin());
   if (input.tool_name !== "Read") {
     console.log("{}");
     return;
   }
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+  const finish = (stdout, ev) => {
+    recordRead(projectDir, { ...ev, duration_ms: performance.now() - START });
+    console.log(stdout);
+  };
+  const allow = (outcome, reason) => finish("{}", { outcome, reason });
   const filePath = input.tool_input.file_path || "";
-  if (!isCodeFile(filePath)) {
-    console.log("{}");
-    return;
-  }
-  if (isAllowedFile(filePath)) {
-    console.log("{}");
-    return;
-  }
+  if (!isCodeFile(filePath)) return allow("allow", "prefilter");
+  if (isAllowedFile(filePath)) return allow("allow", "prefilter");
   if (input.tool_input.offset || input.tool_input.limit && input.tool_input.limit < 100) {
-    console.log("{}");
-    return;
+    return allow("allow", "prefilter");
   }
   let rawBytes = 0;
   try {
     const stats = statSync(filePath);
     rawBytes = stats.size;
-    if (stats.size < MIN_INTERCEPT_BYTES) {
-      console.log("{}");
-      return;
-    }
+    if (stats.size < MIN_INTERCEPT_BYTES) return allow("below_threshold", "below_threshold");
   } catch {
-    console.log("{}");
-    return;
+    return allow("allow", "stat_error");
   }
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (isDaemonUnreachableCached(projectDir)) {
-    console.log("{}");
-    return;
-  }
+  if (isDaemonUnreachableCached(projectDir)) return allow("fail_open", "daemon_unreachable_cached");
   const reachable = await probeDaemonFast(projectDir);
   if (!reachable) {
     cacheDaemonUnreachable(projectDir);
-    console.log("{}");
-    return;
+    return allow("fail_open", "daemon_unreachable");
   }
   const language = detectLanguage(filePath);
   let layers = ["ast", "call_graph"];
@@ -708,14 +780,8 @@ async function main() {
     contextSource = `${searchContext.targetType}: ${searchContext.target}`;
   }
   const tldrContext = await getTldrContext(filePath, language, layers, target, input.session_id, contextSource);
-  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) {
-    console.log("{}");
-    return;
-  }
-  if (target && !tldrContext.includes(target)) {
-    console.log("{}");
-    return;
-  }
+  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) return allow("fail_open", "summary_insufficient");
+  if (target && !tldrContext.includes(target)) return allow("fail_open", "target_not_in_summary");
   const layerNames = layers.map((l) => {
     switch (l) {
       case "ast":
@@ -759,12 +825,6 @@ ${tldrContext}${crossFileSection}
 ---
 To read the code itself, re-issue the Read with offset/limit (e.g. offset=1 limit=200).
 Test files and .claude/hooks|skills paths bypass this hook entirely.`;
-  await trackHookActivityFast("tldr-read-enforcer", projectDir, true, {
-    reads_intercepted: 1,
-    layers_returned: layers.length,
-    bytes_raw: rawBytes,
-    bytes_injected: reasonText.length
-  });
   const output = {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -772,12 +832,32 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
       permissionDecisionReason: reasonText
     }
   };
-  console.log(JSON.stringify(output));
+  finish(JSON.stringify(output), {
+    outcome: "deny",
+    reason: "summary_injected",
+    layers_returned: layers.length,
+    bytes_raw: rawBytes,
+    bytes_injected: reasonText.length
+  });
 }
-main().catch((err) => {
-  console.error(`TLDR enforcer error: ${err.message}`);
-  console.log("{}");
-});
+if (process.argv[1] && process.argv[1].includes("tldr-read-enforcer")) {
+  main().catch((err) => {
+    console.error(`TLDR enforcer error: ${err.message}`);
+    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+      outcome: "fail_open",
+      reason: "error",
+      duration_ms: performance.now() - START
+    });
+    console.log("{}");
+  });
+}
 export {
-  contextMatchesFile
+  JOURNAL_ROLLUP_BYTES,
+  LOG_MAX_BYTES,
+  aggregateJournal,
+  appendLogRows,
+  buildLogRow,
+  contextMatchesFile,
+  recordRead,
+  rollupJournal
 };

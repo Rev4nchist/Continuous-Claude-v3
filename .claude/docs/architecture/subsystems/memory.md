@@ -126,24 +126,14 @@ recall data is fragmented across project directories.
 Diagnostics fields (`mode`, `daemon_ready`, `total_elapsed_ms`,
 `floor_applied`) are also written so `/memory-stats` can verify daemon
 routing and which floor was applied. This log is read by the `/memory-stats`
-skill and is the cross-project join source for the Braintrust `factuality`
-judge (see below).
+skill and was the cross-project join source for the Braintrust `factuality`
+judge (RETIRED 2026-09-30).
 
-### Braintrust scoring tie-in
+### Braintrust scoring tie-in (RETIRED 2026-09-30)
 
-`memory-awareness.ts` is a **Braintrust deterministic emit site**. After
-injecting, it calls `await emitBraintrustScore(...)` (helper
-`hooks/src/shared/braintrust-score.ts`) to emit:
-
-- `memory_recall_relevance` — how relevant the injected memories were.
-- `memory_recall_hit` (companion) — whether anything survived the floor.
-
-These are 2 of the 7 deterministic dimensions tracked by the
-[Braintrust subsystem](braintrust.md). The emit MUST stay `await` (not
-`void`) — a fire-and-forget call dies before the HTTPS POST lands — and is
-covered by the `scripts/audit-braintrust-emits.sh` invariant (4 awaited emit
-sites). Separately, `store_learning.py` emits `memory_store_quality` at
-store-time.
+RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). `memory-awareness.ts`
+no longer emits Braintrust scores, and `store_learning.py` no longer emits
+`memory_store_quality`.
 
 ## DATABASE_URL Priority
 

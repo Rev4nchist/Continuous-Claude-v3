@@ -261,7 +261,7 @@ To manually resume: `/skill:resume_handoff`
 └─────────────────┴─────────────────┴─────────────────┴─────────────────┴─────────────┘
 ```
 
-> **Note:** This diagram shows the **user-facing capabilities** that auto-start each session — not the architectural pillars. For the canonical system-architecture slicing (Memory / Hooks / Agents / PageIndex / Workflows / Braintrust Observability), see [INDEX.md → Six Pillars](INDEX.md#six-pillars).
+> **Note:** This diagram shows the **user-facing capabilities** that auto-start each session — not the architectural pillars. For the canonical system-architecture slicing (Memory / Hooks / Agents / PageIndex / Workflows; the Braintrust pillar is RETIRED 2026-09-30, see archive/braintrust-2026-10/), see [INDEX.md → Six Pillars](INDEX.md#six-pillars).
 
 ---
 
@@ -352,7 +352,7 @@ The post-plan-roadmap hook checks plans in 3 locations (in order):
 
 | Path | Purpose |
 |------|---------|
-| `~/.claude/.env` | DATABASE_URL (port 5432), Braintrust keys |
+| `~/.claude/.env` | DATABASE_URL (port 5432). Braintrust keys: RETIRED 2026-09-30 (see archive/braintrust-2026-10/) |
 | `~/.claude/docker/.env` | PostgreSQL port configuration |
 | `~/.claude/projects/` | Session JSONL files |
 | `~/.claude/thoughts/shared/handoffs/` | Handoff documents |

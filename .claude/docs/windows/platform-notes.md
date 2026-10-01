@@ -126,6 +126,11 @@ The `destructive-command-guard` gates the PowerShell tool as well (since 2026-09
 
 `cmd /c rmdir <junction>` is **blocked by Claude Code itself**, not by a CCv3 hook. The PowerShell tool's built-in path guard (the message is compiled into `claude.exe`) reads it as `Remove-Item` on the system path `/c` and refuses the whole command: `Remove-Item on system path '/c' is blocked`. Verified 2026-09-22. It also fires when that text only appears inside a quoted string, such as a commit message built inline, so write such messages to a file with the Write tool. Nothing in `.claude/hooks` can change this, so do not look for the hook.
 
+**The same guard blocks regex text.** The guard is part of Claude Code. It is in `claude.exe`, it is not a CCv3 hook, and its `decisionReason.type` is `safetyCheck`. It reads a regex token in a command, such as `\w+` or `\s*=`, as a `Remove-Item` target path. For example, it reads `\w+` as `/w+` under the drive root. It then blocks the WHOLE command, not only the `Remove-Item` part. Two workarounds:
+
+- Run `Remove-Item` as its own call, with no regex in that command.
+- Put regex-heavy code in a `.ps1` file. Run it with `pwsh -File <script>.ps1`.
+
 To remove only the link, never its target:
 
 ```powershell

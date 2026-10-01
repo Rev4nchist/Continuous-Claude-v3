@@ -19,15 +19,14 @@
 // dead daemon yields 'unavailable' (fail open) instead of a blocking spawn.
 process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
 
-import { readFileSync, existsSync, statSync, unlinkSync } from 'fs';
-import { basename, extname } from 'path';
+import { readFileSync, existsSync, statSync, unlinkSync, appendFileSync, mkdirSync, renameSync } from 'fs';
+import { basename, extname, join } from 'path';
 import {
   extractDaemon,
   contextDaemon,
   cfgDaemon,
   dfgDaemon,
   sliceDaemon,
-  trackHookActivityFast,
   probeDaemonFast,
   isDaemonUnreachableCached,
   cacheDaemonUnreachable,
@@ -428,9 +427,168 @@ async function getTldrContext(
   }
 }
 
+// ---------------------------------------------------------------------------
+// Read-outcome log (plan 2026-09-30, T2). Every Read the hook sees is recorded
+// in {project}/.tldr/stats/hook_activity.jsonl, the file the TLDR daemon's
+// HookStatsStore writes and reads. Rows keep that format (hook_name,
+// invocations, successes, failures, metrics, timestamp) and add top-level
+// `outcome`, `reason`, `duration_ms`, `count`; the daemon ignores unknown
+// top-level keys and sums `metrics`, so old aggregates keep working.
+//
+// Why the hook writes the file itself: the daemon is the only other writer,
+// and a fail_open event happens exactly when the daemon is down. A daemon
+// `track` call could never log it (and cost a socket round trip per deny).
+//
+// Log volume: deny, `error` fail_open and the other rare fail_open reasons each
+// get their own row (they carry the net-saving inputs). The bulk events are
+// JOURNALED: `allow` (prefilter, stat_error), `below_threshold`, and the
+// daemon-down fail_open reasons (one per Read for as long as the daemon is
+// down). Each is one compact line appended to a journal file with
+// appendFileSync. A small O_APPEND write is atomic, so concurrent hook
+// processes never overwrite each other (the previous read-modify-write counter
+// file lost 58% of events at concurrency 8). When the journal passes
+// JOURNAL_ROLLUP_BYTES, the process that notices renames it (only one rename
+// can win) and appends one aggregate row per outcome|reason to the log. A
+// process that loses the rename race does nothing. Residual loss: an event
+// appended to the journal in the microseconds between a roller's read and its
+// delete, or a crash mid-rollup. Both are tiny and the counts stay approximate
+// by design. hook_activity.jsonl rotates to `.1` at LOG_MAX_BYTES (one
+// generation) because the daemon's HookStatsStore reads the whole file. A
+// project with no `.tldr` dir gets no logging and no new directory.
+// duration_ms is measured inside the hook (process start-up is not included).
+// ---------------------------------------------------------------------------
+
+export type ReadOutcome = 'allow' | 'deny' | 'fail_open' | 'below_threshold';
+
+export interface ReadLogEvent {
+  outcome: ReadOutcome;
+  reason: string;
+  duration_ms: number;
+  bytes_raw?: number;
+  bytes_injected?: number;
+  layers_returned?: number;
+}
+
+export const JOURNAL_ROLLUP_BYTES = 1024;
+export const LOG_MAX_BYTES = 5 * 1024 * 1024;
+const HOOK_NAME = 'tldr-read-enforcer';
+const JOURNAL_FILE = 'tldr-read-enforcer.events.jnl';
+const OUTCOMES: ReadonlySet<string> = new Set(['allow', 'deny', 'fail_open', 'below_threshold']);
+const BATCHED_FAIL_OPEN: ReadonlySet<string> = new Set(['daemon_unreachable', 'daemon_unreachable_cached']);
+
+const cleanMs = (ms: number): number =>
+  Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
+
+/** Journaled events: allow, below_threshold and the daemon-down fail_open reasons. */
+const isBatched = (ev: ReadLogEvent): boolean =>
+  ev.outcome === 'allow' ||
+  ev.outcome === 'below_threshold' ||
+  (ev.outcome === 'fail_open' && BATCHED_FAIL_OPEN.has(ev.reason));
+
+/** One hook_activity.jsonl row. `count` > 1 means a batched aggregate. */
+export function buildLogRow(ev: ReadLogEvent, count = 1, now: Date = new Date()): Record<string, unknown> {
+  const ms = cleanMs(ev.duration_ms);
+  const isFailOpen = ev.outcome === 'fail_open';
+  const isError = isFailOpen && ev.reason === 'error';
+  const metrics: Record<string, number> = {
+    reads_seen: count,
+    [`outcome_${ev.outcome}`]: count,
+    duration_ms: ms,
+  };
+  if (ev.outcome === 'deny') {
+    // Same metrics the pre-T2 daemon `track` call carried (net-savings inputs).
+    metrics.reads_intercepted = 1;
+    metrics.layers_returned = ev.layers_returned ?? 0;
+    metrics.bytes_raw = ev.bytes_raw ?? 0;
+    metrics.bytes_injected = ev.bytes_injected ?? 0;
+  }
+  return {
+    hook_name: HOOK_NAME,
+    invocations: count,
+    // A fail_open is never a success; its count lives in `count` / `invocations`.
+    successes: isFailOpen ? 0 : count,
+    failures: isError ? count : 0,
+    metrics,
+    outcome: ev.outcome,
+    reason: ev.reason,
+    duration_ms: ms,
+    count,
+    timestamp: now.toISOString(),
+  };
+}
+
+/**
+ * Pure rollup step: journal text -> one {key, n, ms} per "outcome|reason".
+ * A corrupt or half-written line is skipped; it never affects other lines.
+ */
+export function aggregateJournal(text: string): Array<{ key: string; n: number; ms: number }> {
+  const sums = new Map<string, { n: number; ms: number }>();
+  for (const line of text.split('\n')) {
+    const parts = line.split('|');
+    if (parts.length !== 3) continue;
+    const [outcome, reason, msText] = parts;
+    const ms = Number(msText);
+    if (!OUTCOMES.has(outcome) || !/^[a-z_]+$/.test(reason) || msText === '' || !Number.isFinite(ms)) continue;
+    const key = `${outcome}|${reason}`;
+    const cur = sums.get(key) || { n: 0, ms: 0 };
+    sums.set(key, { n: cur.n + 1, ms: cur.ms + cleanMs(ms) });
+  }
+  return [...sums].map(([key, v]) => ({ key, n: v.n, ms: Math.round(v.ms * 10) / 10 }));
+}
+
+/** Append rows to the log. Rotates to `.1` first when the log is at the cap. May throw. */
+export function appendLogRows(logFile: string, rowObjs: unknown[], maxBytes: number = LOG_MAX_BYTES): void {
+  try {
+    if (statSync(logFile).size >= maxBytes) renameSync(logFile, logFile + '.1');
+  } catch { /* no file yet, or another process rotated first */ }
+  appendFileSync(logFile, rowObjs.map((r) => JSON.stringify(r) + '\n').join(''));
+}
+
+/**
+ * Roll the journal up into aggregate log rows. Renames the journal first so
+ * concurrent writers start a fresh one; the process that loses the rename race
+ * returns without writing. May throw on log write failure (caller swallows).
+ */
+export function rollupJournal(statsDir: string, logFile: string): void {
+  const journal = join(statsDir, JOURNAL_FILE);
+  const rolling = `${journal}.${process.pid}.rolling`;
+  try { renameSync(journal, rolling); } catch { return; } // lost the race, or already rolled
+  const text = readFileSync(rolling, 'utf-8');
+  const rowObjs = aggregateJournal(text).map(({ key, n, ms }) => {
+    const [outcome, reason] = key.split('|');
+    return buildLogRow({ outcome: outcome as ReadOutcome, reason, duration_ms: ms }, n);
+  });
+  if (rowObjs.length) appendLogRows(logFile, rowObjs);
+  unlinkSync(rolling);
+}
+
+/** Best-effort: never throws, never creates `.tldr`. */
+export function recordRead(projectDir: string, ev: ReadLogEvent): void {
+  try {
+    const tldrDir = join(projectDir, '.tldr');
+    if (!existsSync(tldrDir)) return;
+    const statsDir = join(tldrDir, 'stats');
+    mkdirSync(statsDir, { recursive: true });
+    const logFile = join(statsDir, 'hook_activity.jsonl');
+
+    if (!isBatched(ev)) {
+      appendLogRows(logFile, [buildLogRow(ev)]);
+      return;
+    }
+
+    const journal = join(statsDir, JOURNAL_FILE);
+    appendFileSync(journal, `${ev.outcome}|${ev.reason}|${cleanMs(ev.duration_ms)}\n`);
+    if (statSync(journal).size >= JOURNAL_ROLLUP_BYTES) rollupJournal(statsDir, logFile);
+  } catch {
+    // Logging must never change what the hook returns.
+  }
+}
+
 function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
+
+const START = performance.now();
 
 async function main() {
   const input: HookInput = JSON.parse(readStdin());
@@ -440,24 +598,26 @@ async function main() {
     return;
   }
 
+  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
+
+  // Log the outcome, then print. Exactly one stdout write per path, unchanged.
+  const finish = (stdout: string, ev: Omit<ReadLogEvent, 'duration_ms'>): void => {
+    recordRead(projectDir, { ...ev, duration_ms: performance.now() - START });
+    console.log(stdout);
+  };
+  const allow = (outcome: ReadOutcome, reason: string): void => finish('{}', { outcome, reason });
+
   const filePath = input.tool_input.file_path || '';
 
   // Allow non-code files
-  if (!isCodeFile(filePath)) {
-    console.log('{}');
-    return;
-  }
+  if (!isCodeFile(filePath)) return allow('allow', 'prefilter');
 
   // Allow explicitly permitted files
-  if (isAllowedFile(filePath)) {
-    console.log('{}');
-    return;
-  }
+  if (isAllowedFile(filePath)) return allow('allow', 'prefilter');
 
   // If requesting specific lines (offset/limit), allow - they know what they want
   if (input.tool_input.offset || (input.tool_input.limit && input.tool_input.limit < 100)) {
-    console.log('{}');
-    return;
+    return allow('allow', 'prefilter');
   }
 
   // Small files: TLDR overhead not worth it, just read directly (see the
@@ -466,28 +626,19 @@ async function main() {
   try {
     const stats = statSync(filePath);
     rawBytes = stats.size;
-    if (stats.size < MIN_INTERCEPT_BYTES) {
-      console.log('{}');
-      return;
-    }
+    if (stats.size < MIN_INTERCEPT_BYTES) return allow('below_threshold', 'below_threshold');
   } catch {
     // File doesn't exist or can't stat, let Read handle the error
-    console.log('{}');
-    return;
+    return allow('allow', 'stat_error');
   }
 
   // FAIL-OPEN GATE (remediation §1): if the daemon is unreachable, allow the
   // read immediately. Never attempt TLDR work, never start a daemon.
-  const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  if (isDaemonUnreachableCached(projectDir)) {
-    console.log('{}');
-    return;
-  }
+  if (isDaemonUnreachableCached(projectDir)) return allow('fail_open', 'daemon_unreachable_cached');
   const reachable = await probeDaemonFast(projectDir);
   if (!reachable) {
     cacheDaemonUnreachable(projectDir);
-    console.log('{}');
-    return;
+    return allow('fail_open', 'daemon_unreachable');
   }
 
   // Get TLDR context instead of raw file
@@ -514,14 +665,8 @@ async function main() {
   // Content-sufficiency floor (remediation §1): deny only on a summary that is
   // plausibly better than the raw file. Require a minimum injected size AND —
   // when a search target exists — that the summary actually contains it.
-  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) {
-    console.log('{}');
-    return;
-  }
-  if (target && !tldrContext.includes(target)) {
-    console.log('{}');
-    return;
-  }
+  if (!tldrContext || tldrContext.length < MIN_INJECTED_CHARS) return allow('fail_open', 'summary_insufficient');
+  if (target && !tldrContext.includes(target)) return allow('fail_open', 'target_not_in_summary');
 
   // Format layer names for display
   const layerNames = layers.map(l => {
@@ -568,14 +713,6 @@ ${tldrContext}${crossFileSection}
 To read the code itself, re-issue the Read with offset/limit (e.g. offset=1 limit=200).
 Test files and .claude/hooks|skills paths bypass this hook entirely.`;
 
-  // Track hook activity (P8) with net-savings inputs (remediation §7)
-  await trackHookActivityFast('tldr-read-enforcer', projectDir, true, {
-    reads_intercepted: 1,
-    layers_returned: layers.length,
-    bytes_raw: rawBytes,
-    bytes_injected: reasonText.length,
-  });
-
   const output: HookOutput = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -584,12 +721,27 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
     }
   };
 
-  console.log(JSON.stringify(output));
+  // Net-savings inputs (remediation §7) ride on the deny row.
+  finish(JSON.stringify(output), {
+    outcome: 'deny',
+    reason: 'summary_injected',
+    layers_returned: layers.length,
+    bytes_raw: rawBytes,
+    bytes_injected: reasonText.length,
+  });
 }
 
 // Async exit discipline: exactly one stdout JSON write per path; any throw
-// allows the read; no un-awaited work remains when main settles.
-main().catch((err) => {
-  console.error(`TLDR enforcer error: ${err.message}`);
-  console.log('{}');
-});
+// allows the read; no un-awaited work remains when main settles. Run only when
+// this file is the hook entry point, so tests can import the log helpers.
+if (process.argv[1] && process.argv[1].includes('tldr-read-enforcer')) {
+  main().catch((err) => {
+    console.error(`TLDR enforcer error: ${err.message}`);
+    recordRead(process.env.CLAUDE_PROJECT_DIR || process.cwd(), {
+      outcome: 'fail_open',
+      reason: 'error',
+      duration_ms: performance.now() - START,
+    });
+    console.log('{}');
+  });
+}

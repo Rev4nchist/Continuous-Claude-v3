@@ -11,7 +11,6 @@
 | Manage goals | [ROADMAP Subsystem](subsystems/roadmap.md) |
 | Use agents | [Agent Picker](quick-ref/agent-picker.md) |
 | Find a hook | [Hook Catalog](quick-ref/hook-catalog.md) |
-| Score/observe the system | [Braintrust Subsystem](subsystems/braintrust.md) |
 
 ## System at a Glance
 
@@ -22,10 +21,10 @@
 | Agents | Specialized task delegation | Task tool |
 | PageIndex | Document navigation & search | `pageindex_cli.py` |
 | Workflows | Multi-step orchestration | `/maestro` |
-| Braintrust | Observability — score system performance | `emitBraintrustScore()`, `judge_session.py` |
+| Braintrust | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Tracing is off. | none |
 | RLM | Analyze inputs that overflow the context window — the large-context escape hatch (dormant; Docker-gated) | `/rlm-analyze`, `rlm_client.py` |
 
-## Six Pillars
+## Six Pillars (Braintrust pillar RETIRED 2026-09-30)
 
 ```
 ┌─────────────────────────────────────────────────────────────────────────────┐
@@ -35,9 +34,9 @@
         │           │           │           │           │           │
         ▼           ▼           ▼           ▼           ▼           ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
-│  MEMORY  │ │  HOOKS   │ │  AGENTS  │ │ PAGEINDEX│ │ WORKFLOWS│ │BRAINTRUST│
-│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Maestro   │ │7 scores +│
-│+pgvector │ │ → dist   │ │ delegate │ │LLM reason│ │          │ │3 judges  │
+│  MEMORY  │ │  HOOKS   │ │  AGENTS  │ │ PAGEINDEX│ │ WORKFLOWS│ │ RETIRED  │
+│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Maestro   │ │ archive/ │
+│+pgvector │ │ → dist   │ │ delegate │ │LLM reason│ │          │ │braintrust│
 └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
 
@@ -59,7 +58,7 @@ For current inventory: see [agent-skill-map.md](../agent-skill-map.md), [hook-ca
 - [Hook System](subsystems/hooks.md) - Lifecycle, blocking, patterns
 - [Agent Orchestration](subsystems/agents.md) - When to use which agent
 - [Workflows](subsystems/workflows.md) - Maestro, compound workflows
-- [Braintrust Observability](subsystems/braintrust.md) - 7 deterministic scores + 3 LLM judges, audit invariant, judge runner
+- [Braintrust Observability](subsystems/braintrust.md) - RETIRED 2026-09-30. History only. Code is in `archive/braintrust-2026-10/`.
 
 **Phase 5 design docs (../):**
 - [Agent x Skill Map](../agent-skill-map.md) - Cross-reference of agents and skills with routing coverage gaps

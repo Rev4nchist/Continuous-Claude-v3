@@ -386,7 +386,7 @@ critic:
   - Safe transformation practices
   - Test coverage maintained
   - Rollback feasibility
-- **Output:** `.claude/cache/agents/judge/latest-output.md`
+- **Output:** final message (read-only agent, writes no file)
 
 #### surveyor
 - **Model:** Sonnet
@@ -400,7 +400,7 @@ critic:
   - Breaking changes handled
   - Test results
   - Rollback readiness
-- **Output:** `.claude/cache/agents/surveyor/latest-output.md`
+- **Output:** final message (read-only agent, writes no file)
 
 #### liaison
 - **Model:** Sonnet
@@ -414,7 +414,7 @@ critic:
   - Timeouts
   - TLS enforcement
   - Data transformation quality
-- **Output:** `.claude/cache/agents/liaison/latest-output.md`
+- **Output:** final message (read-only agent, writes no file)
 
 #### plan-reviewer
 - **Model:** Opus

@@ -63,8 +63,8 @@ cross-model agreement is visible at a glance.
 ```
 
 **Important:**
-- Never use `model: haiku` - always omit or use sonnet/opus
-- Agents inherit parent model by default
+- Never use `model: haiku` - set `model:` explicitly (sonnet or opus)
+- Every agent also sets `effort: high`
 - Use parallel spawning for independent tasks
 
 ## Spark Hardening (Hook-Source Edits)
@@ -76,17 +76,19 @@ cross-model agreement is visible at a glance.
   `old_string`→`new_string`); never regenerate a whole hook file from
   context (that is how prior-phase emits got silently dropped). No linter
   exists on hook source, so a rewrite is not auto-reformatted back.
-- **Step 5: Pre-Completion Verification** — spark runs
-  `scripts/audit-braintrust-emits.sh` and reports `Audit: PASS/FAIL`.
+- **Step 5: Pre-Completion Verification** — RETIRED 2026-09-30. Spark no
+  longer runs `audit-braintrust-emits.sh`. The script is in
+  `archive/braintrust-2026-10/`. Run `npm run build` and `npm test` in
+  `.claude/hooks` instead.
 - **Rules 7/8** — never modify the guard/audit scripts; never edit files
   outside the explicit Files list.
 
-**Orchestrator post-spark audit re-run:** Per
-`.claude/rules-ondemand/proactive-delegation.md`, after spark touches
-`.claude/hooks/src/*.ts` the orchestrator MUST independently re-run
-`bash scripts/audit-braintrust-emits.sh` — do not trust spark's self-report
-alone, since spark may have run the audit before its last edit. If the
-re-run FAILs, restore from HEAD and escalate (do not re-spawn the same spark).
+**Orchestrator post-spark check:** After spark touches
+`.claude/hooks/src/*.ts`, the orchestrator runs `npm run build` and
+`npm test` in `.claude/hooks`. Do not trust spark's self-report alone. If the
+check fails, restore from HEAD and escalate (do not re-spawn the same spark).
+The old `audit-braintrust-emits.sh` step is RETIRED 2026-09-30 (see
+`archive/braintrust-2026-10/`).
 
 ## Agent Communication
 

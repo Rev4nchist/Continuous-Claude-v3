@@ -37,18 +37,20 @@ $CLAUDE_PROJECT_DIR = /path/to/project
 
 ## Step 2: Analyze Current State
 
+Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
+
 ```bash
 # Understand the code to refactor
-rp-cli -e 'read path/to/file.ts'
+cat path/to/file.ts
 
 # Find all usages
-rp-cli -e 'search "FunctionToRefactor" --max-results 50'
+rg -n "FunctionToRefactor" | head -50
 
 # Check dependencies
-rp-cli -e 'search "import.*from.*target-module"'
+rg -n "import.*from.*target-module"
 
 # Find tests
-rp-cli -e 'search "describe.*TargetClass|test.*TargetFunction"'
+rg -n "describe.*TargetClass|test.*TargetFunction"
 ```
 
 ## Step 3: Identify Code Smells
@@ -67,10 +69,10 @@ Look for:
 wc -l src/**/*.ts | sort -n -r | head -10
 
 # Find complex functions
-rp-cli -e 'search "function.*{" --context-lines 50' | grep -c "}"
+rg -n -C 50 "function.*\{" | grep -c "}"
 
 # Find duplicated patterns
-rp-cli -e 'search "pattern-to-check"'
+rg -n "pattern-to-check"
 ```
 
 ## Step 4: Design Safe Transformations
@@ -255,10 +257,10 @@ cat package.json | jq '.dependencies' 2>/dev/null
 pip freeze 2>/dev/null
 
 # Find deprecated/changed APIs
-rp-cli -e 'search "deprecatedFunction|oldPattern"'
+rg -n "deprecatedFunction|oldPattern"
 
 # Check compatibility markers
-rp-cli -e 'search "@deprecated|TODO.*upgrade|FIXME.*version"'
+rg -n "@deprecated|TODO.*upgrade|FIXME.*version"
 ```
 
 ### Breaking Changes Analysis
