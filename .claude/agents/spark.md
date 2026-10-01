@@ -39,7 +39,7 @@ Resolve every open question in the prompt before you edit. If a question stays o
 
 ## Budget
 
-- Use at most 15 tool calls.
+- Use at most 25 tool calls.
 - At the limit, stop. Return status `partial`. Name what is done and what is left in `followups`.
 
 ## Steps

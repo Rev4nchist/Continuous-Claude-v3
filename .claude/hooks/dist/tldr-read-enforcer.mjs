@@ -1,7 +1,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/tldr-read-enforcer.ts
-import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2, appendFileSync, mkdirSync as mkdirSync2, writeFileSync as writeFileSync2 } from "fs";
+import { readFileSync as readFileSync2, existsSync as existsSync2, statSync, unlinkSync as unlinkSync2, appendFileSync, mkdirSync as mkdirSync2, renameSync } from "fs";
 import { basename, extname, join as join3 } from "path";
 
 // src/daemon-client.ts
@@ -641,13 +641,18 @@ async function getTldrContext(filePath, language, layers = ["ast", "call_graph"]
     return null;
   }
 }
-var BATCH_FLUSH_AT = 25;
+var JOURNAL_ROLLUP_BYTES = 1024;
+var LOG_MAX_BYTES = 5 * 1024 * 1024;
 var HOOK_NAME = "tldr-read-enforcer";
-var COUNTER_FILE = "tldr-read-enforcer.counts.json";
+var JOURNAL_FILE = "tldr-read-enforcer.events.jnl";
+var OUTCOMES = /* @__PURE__ */ new Set(["allow", "deny", "fail_open", "below_threshold"]);
+var BATCHED_FAIL_OPEN = /* @__PURE__ */ new Set(["daemon_unreachable", "daemon_unreachable_cached"]);
 var cleanMs = (ms) => Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
+var isBatched = (ev) => ev.outcome === "allow" || ev.outcome === "below_threshold" || ev.outcome === "fail_open" && BATCHED_FAIL_OPEN.has(ev.reason);
 function buildLogRow(ev, count = 1, now = /* @__PURE__ */ new Date()) {
   const ms = cleanMs(ev.duration_ms);
-  const isError = ev.outcome === "fail_open" && ev.reason === "error";
+  const isFailOpen = ev.outcome === "fail_open";
+  const isError = isFailOpen && ev.reason === "error";
   const metrics = {
     reads_seen: count,
     [`outcome_${ev.outcome}`]: count,
@@ -662,7 +667,8 @@ function buildLogRow(ev, count = 1, now = /* @__PURE__ */ new Date()) {
   return {
     hook_name: HOOK_NAME,
     invocations: count,
-    successes: isError ? 0 : count,
+    // A fail_open is never a success; its count lives in `count` / `invocations`.
+    successes: isFailOpen ? 0 : count,
     failures: isError ? count : 0,
     metrics,
     outcome: ev.outcome,
@@ -672,22 +678,42 @@ function buildLogRow(ev, count = 1, now = /* @__PURE__ */ new Date()) {
     timestamp: now.toISOString()
   };
 }
-function bumpCounter(state, key, ms, flushAt = BATCH_FLUSH_AT) {
-  const next = {};
-  if (state && typeof state === "object" && !Array.isArray(state)) {
-    for (const [k, v] of Object.entries(state)) {
-      if (v && typeof v.n === "number" && typeof v.ms === "number") next[k] = { n: v.n, ms: v.ms };
-    }
+function aggregateJournal(text) {
+  const sums = /* @__PURE__ */ new Map();
+  for (const line of text.split("\n")) {
+    const parts = line.split("|");
+    if (parts.length !== 3) continue;
+    const [outcome, reason, msText] = parts;
+    const ms = Number(msText);
+    if (!OUTCOMES.has(outcome) || !/^[a-z_]+$/.test(reason) || msText === "" || !Number.isFinite(ms)) continue;
+    const key = `${outcome}|${reason}`;
+    const cur = sums.get(key) || { n: 0, ms: 0 };
+    sums.set(key, { n: cur.n + 1, ms: cur.ms + cleanMs(ms) });
   }
-  const cur = next[key] || { n: 0, ms: 0 };
-  const n = cur.n + 1;
-  const total = Math.round((cur.ms + cleanMs(ms)) * 10) / 10;
-  if (n >= flushAt) {
-    delete next[key];
-    return { state: next, flush: { key, n, ms: total } };
+  return [...sums].map(([key, v]) => ({ key, n: v.n, ms: Math.round(v.ms * 10) / 10 }));
+}
+function appendLogRows(logFile, rowObjs, maxBytes = LOG_MAX_BYTES) {
+  try {
+    if (statSync(logFile).size >= maxBytes) renameSync(logFile, logFile + ".1");
+  } catch {
   }
-  next[key] = { n, ms: total };
-  return { state: next, flush: null };
+  appendFileSync(logFile, rowObjs.map((r) => JSON.stringify(r) + "\n").join(""));
+}
+function rollupJournal(statsDir, logFile) {
+  const journal = join3(statsDir, JOURNAL_FILE);
+  const rolling = `${journal}.${process.pid}.rolling`;
+  try {
+    renameSync(journal, rolling);
+  } catch {
+    return;
+  }
+  const text = readFileSync2(rolling, "utf-8");
+  const rowObjs = aggregateJournal(text).map(({ key, n, ms }) => {
+    const [outcome, reason] = key.split("|");
+    return buildLogRow({ outcome, reason, duration_ms: ms }, n);
+  });
+  if (rowObjs.length) appendLogRows(logFile, rowObjs);
+  unlinkSync2(rolling);
 }
 function recordRead(projectDir, ev) {
   try {
@@ -696,24 +722,14 @@ function recordRead(projectDir, ev) {
     const statsDir = join3(tldrDir, "stats");
     mkdirSync2(statsDir, { recursive: true });
     const logFile = join3(statsDir, "hook_activity.jsonl");
-    if (ev.outcome === "deny" || ev.outcome === "fail_open") {
-      appendFileSync(logFile, JSON.stringify(buildLogRow(ev)) + "\n");
+    if (!isBatched(ev)) {
+      appendLogRows(logFile, [buildLogRow(ev)]);
       return;
     }
-    const counterFile = join3(statsDir, COUNTER_FILE);
-    let state = {};
-    try {
-      state = JSON.parse(readFileSync2(counterFile, "utf-8"));
-    } catch {
-    }
-    const key = `${ev.outcome}|${ev.reason}`;
-    const { state: next, flush } = bumpCounter(state, key, ev.duration_ms);
-    writeFileSync2(counterFile, JSON.stringify(next));
-    if (flush) {
-      const [outcome, reason] = flush.key.split("|");
-      const row = buildLogRow({ outcome, reason, duration_ms: flush.ms }, flush.n);
-      appendFileSync(logFile, JSON.stringify(row) + "\n");
-    }
+    const journal = join3(statsDir, JOURNAL_FILE);
+    appendFileSync(journal, `${ev.outcome}|${ev.reason}|${cleanMs(ev.duration_ms)}
+`);
+    if (statSync(journal).size >= JOURNAL_ROLLUP_BYTES) rollupJournal(statsDir, logFile);
   } catch {
   }
 }
@@ -836,9 +852,12 @@ if (process.argv[1] && process.argv[1].includes("tldr-read-enforcer")) {
   });
 }
 export {
-  BATCH_FLUSH_AT,
+  JOURNAL_ROLLUP_BYTES,
+  LOG_MAX_BYTES,
+  aggregateJournal,
+  appendLogRows,
   buildLogRow,
-  bumpCounter,
   contextMatchesFile,
-  recordRead
+  recordRead,
+  rollupJournal
 };

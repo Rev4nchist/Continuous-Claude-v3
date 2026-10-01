@@ -12,7 +12,7 @@
  * Exit 0 = clean, exit 1 = drift found (prints the offenders). Windows-safe, zero deps.
  * Usage: node scripts/check-agent-model-drift.mjs [repoRoot]
  */
-import { readFileSync, readdirSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync } from 'node:fs';
 import { join, dirname } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
@@ -43,6 +43,10 @@ function scalar(block, key) {
 function main() {
 const repoRoot = process.argv[2] || join(dirname(fileURLToPath(import.meta.url)), '..');
 const agentsDir = join(repoRoot, '.claude', 'agents');
+if (!existsSync(agentsDir)) {
+  console.error(`FAIL: agents dir not found: ${agentsDir}`);
+  process.exit(1);
+}
 const errors = [];
 let mdCount = 0, opus = 0, sonnet = 0;
 const files = readdirSync(agentsDir).filter((f) => f.endsWith('.md'));

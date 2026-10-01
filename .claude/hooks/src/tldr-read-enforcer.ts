@@ -19,7 +19,7 @@
 // dead daemon yields 'unavailable' (fail open) instead of a blocking spawn.
 process.env.CCV3_DAEMON_NO_AUTOSTART = '1';
 
-import { readFileSync, existsSync, statSync, unlinkSync, appendFileSync, mkdirSync, writeFileSync } from 'fs';
+import { readFileSync, existsSync, statSync, unlinkSync, appendFileSync, mkdirSync, renameSync } from 'fs';
 import { basename, extname, join } from 'path';
 import {
   extractDaemon,
@@ -439,15 +439,23 @@ async function getTldrContext(
 // and a fail_open event happens exactly when the daemon is down. A daemon
 // `track` call could never log it (and cost a socket round trip per deny).
 //
-// Log volume: deny and fail_open are rare and carry the net-saving inputs, so
-// each gets its own row. `allow` (prefilter: non-code, allowlisted or
-// offset/limit reads) and `below_threshold` are the bulk of all Reads, so they
-// are COUNTED: a small counter file keeps n and summed ms per outcome, and one
-// aggregate row is appended per BATCH_FLUSH_AT events. Concurrent hook
-// processes can lose an increment (read-modify-write, no lock); the counts are
-// approximate by design. A project with no `.tldr` dir gets no logging and no
-// new directory. duration_ms is measured inside the hook (process start-up is
-// not included).
+// Log volume: deny, `error` fail_open and the other rare fail_open reasons each
+// get their own row (they carry the net-saving inputs). The bulk events are
+// JOURNALED: `allow` (prefilter, stat_error), `below_threshold`, and the
+// daemon-down fail_open reasons (one per Read for as long as the daemon is
+// down). Each is one compact line appended to a journal file with
+// appendFileSync. A small O_APPEND write is atomic, so concurrent hook
+// processes never overwrite each other (the previous read-modify-write counter
+// file lost 58% of events at concurrency 8). When the journal passes
+// JOURNAL_ROLLUP_BYTES, the process that notices renames it (only one rename
+// can win) and appends one aggregate row per outcome|reason to the log. A
+// process that loses the rename race does nothing. Residual loss: an event
+// appended to the journal in the microseconds between a roller's read and its
+// delete, or a crash mid-rollup. Both are tiny and the counts stay approximate
+// by design. hook_activity.jsonl rotates to `.1` at LOG_MAX_BYTES (one
+// generation) because the daemon's HookStatsStore reads the whole file. A
+// project with no `.tldr` dir gets no logging and no new directory.
+// duration_ms is measured inside the hook (process start-up is not included).
 // ---------------------------------------------------------------------------
 
 export type ReadOutcome = 'allow' | 'deny' | 'fail_open' | 'below_threshold';
@@ -461,19 +469,27 @@ export interface ReadLogEvent {
   layers_returned?: number;
 }
 
-export const BATCH_FLUSH_AT = 25;
+export const JOURNAL_ROLLUP_BYTES = 1024;
+export const LOG_MAX_BYTES = 5 * 1024 * 1024;
 const HOOK_NAME = 'tldr-read-enforcer';
-const COUNTER_FILE = 'tldr-read-enforcer.counts.json';
-
-type CounterState = Record<string, { n: number; ms: number }>;
+const JOURNAL_FILE = 'tldr-read-enforcer.events.jnl';
+const OUTCOMES: ReadonlySet<string> = new Set(['allow', 'deny', 'fail_open', 'below_threshold']);
+const BATCHED_FAIL_OPEN: ReadonlySet<string> = new Set(['daemon_unreachable', 'daemon_unreachable_cached']);
 
 const cleanMs = (ms: number): number =>
   Number.isFinite(ms) && ms > 0 ? Math.round(ms * 10) / 10 : 0;
 
+/** Journaled events: allow, below_threshold and the daemon-down fail_open reasons. */
+const isBatched = (ev: ReadLogEvent): boolean =>
+  ev.outcome === 'allow' ||
+  ev.outcome === 'below_threshold' ||
+  (ev.outcome === 'fail_open' && BATCHED_FAIL_OPEN.has(ev.reason));
+
 /** One hook_activity.jsonl row. `count` > 1 means a batched aggregate. */
 export function buildLogRow(ev: ReadLogEvent, count = 1, now: Date = new Date()): Record<string, unknown> {
   const ms = cleanMs(ev.duration_ms);
-  const isError = ev.outcome === 'fail_open' && ev.reason === 'error';
+  const isFailOpen = ev.outcome === 'fail_open';
+  const isError = isFailOpen && ev.reason === 'error';
   const metrics: Record<string, number> = {
     reads_seen: count,
     [`outcome_${ev.outcome}`]: count,
@@ -489,7 +505,8 @@ export function buildLogRow(ev: ReadLogEvent, count = 1, now: Date = new Date())
   return {
     hook_name: HOOK_NAME,
     invocations: count,
-    successes: isError ? 0 : count,
+    // A fail_open is never a success; its count lives in `count` / `invocations`.
+    successes: isFailOpen ? 0 : count,
     failures: isError ? count : 0,
     metrics,
     outcome: ev.outcome,
@@ -500,28 +517,49 @@ export function buildLogRow(ev: ReadLogEvent, count = 1, now: Date = new Date())
   };
 }
 
-/** Pure counter step. A corrupt `state` is treated as empty. */
-export function bumpCounter(
-  state: CounterState | null | undefined,
-  key: string,
-  ms: number,
-  flushAt: number = BATCH_FLUSH_AT,
-): { state: CounterState; flush: { key: string; n: number; ms: number } | null } {
-  const next: CounterState = {};
-  if (state && typeof state === 'object' && !Array.isArray(state)) {
-    for (const [k, v] of Object.entries(state)) {
-      if (v && typeof v.n === 'number' && typeof v.ms === 'number') next[k] = { n: v.n, ms: v.ms };
-    }
+/**
+ * Pure rollup step: journal text -> one {key, n, ms} per "outcome|reason".
+ * A corrupt or half-written line is skipped; it never affects other lines.
+ */
+export function aggregateJournal(text: string): Array<{ key: string; n: number; ms: number }> {
+  const sums = new Map<string, { n: number; ms: number }>();
+  for (const line of text.split('\n')) {
+    const parts = line.split('|');
+    if (parts.length !== 3) continue;
+    const [outcome, reason, msText] = parts;
+    const ms = Number(msText);
+    if (!OUTCOMES.has(outcome) || !/^[a-z_]+$/.test(reason) || msText === '' || !Number.isFinite(ms)) continue;
+    const key = `${outcome}|${reason}`;
+    const cur = sums.get(key) || { n: 0, ms: 0 };
+    sums.set(key, { n: cur.n + 1, ms: cur.ms + cleanMs(ms) });
   }
-  const cur = next[key] || { n: 0, ms: 0 };
-  const n = cur.n + 1;
-  const total = Math.round((cur.ms + cleanMs(ms)) * 10) / 10;
-  if (n >= flushAt) {
-    delete next[key];
-    return { state: next, flush: { key, n, ms: total } };
-  }
-  next[key] = { n, ms: total };
-  return { state: next, flush: null };
+  return [...sums].map(([key, v]) => ({ key, n: v.n, ms: Math.round(v.ms * 10) / 10 }));
+}
+
+/** Append rows to the log. Rotates to `.1` first when the log is at the cap. May throw. */
+export function appendLogRows(logFile: string, rowObjs: unknown[], maxBytes: number = LOG_MAX_BYTES): void {
+  try {
+    if (statSync(logFile).size >= maxBytes) renameSync(logFile, logFile + '.1');
+  } catch { /* no file yet, or another process rotated first */ }
+  appendFileSync(logFile, rowObjs.map((r) => JSON.stringify(r) + '\n').join(''));
+}
+
+/**
+ * Roll the journal up into aggregate log rows. Renames the journal first so
+ * concurrent writers start a fresh one; the process that loses the rename race
+ * returns without writing. May throw on log write failure (caller swallows).
+ */
+export function rollupJournal(statsDir: string, logFile: string): void {
+  const journal = join(statsDir, JOURNAL_FILE);
+  const rolling = `${journal}.${process.pid}.rolling`;
+  try { renameSync(journal, rolling); } catch { return; } // lost the race, or already rolled
+  const text = readFileSync(rolling, 'utf-8');
+  const rowObjs = aggregateJournal(text).map(({ key, n, ms }) => {
+    const [outcome, reason] = key.split('|');
+    return buildLogRow({ outcome: outcome as ReadOutcome, reason, duration_ms: ms }, n);
+  });
+  if (rowObjs.length) appendLogRows(logFile, rowObjs);
+  unlinkSync(rolling);
 }
 
 /** Best-effort: never throws, never creates `.tldr`. */
@@ -533,22 +571,14 @@ export function recordRead(projectDir: string, ev: ReadLogEvent): void {
     mkdirSync(statsDir, { recursive: true });
     const logFile = join(statsDir, 'hook_activity.jsonl');
 
-    if (ev.outcome === 'deny' || ev.outcome === 'fail_open') {
-      appendFileSync(logFile, JSON.stringify(buildLogRow(ev)) + '\n');
+    if (!isBatched(ev)) {
+      appendLogRows(logFile, [buildLogRow(ev)]);
       return;
     }
 
-    const counterFile = join(statsDir, COUNTER_FILE);
-    let state: CounterState = {};
-    try { state = JSON.parse(readFileSync(counterFile, 'utf-8')); } catch { /* missing or corrupt: start over */ }
-    const key = `${ev.outcome}|${ev.reason}`;
-    const { state: next, flush } = bumpCounter(state, key, ev.duration_ms);
-    writeFileSync(counterFile, JSON.stringify(next));
-    if (flush) {
-      const [outcome, reason] = flush.key.split('|');
-      const row = buildLogRow({ outcome: outcome as ReadOutcome, reason, duration_ms: flush.ms }, flush.n);
-      appendFileSync(logFile, JSON.stringify(row) + '\n');
-    }
+    const journal = join(statsDir, JOURNAL_FILE);
+    appendFileSync(journal, `${ev.outcome}|${ev.reason}|${cleanMs(ev.duration_ms)}\n`);
+    if (statSync(journal).size >= JOURNAL_ROLLUP_BYTES) rollupJournal(statsDir, logFile);
   } catch {
     // Logging must never change what the hook returns.
   }

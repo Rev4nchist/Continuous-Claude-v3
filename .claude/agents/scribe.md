@@ -32,12 +32,14 @@ At the limit, stop. Return status "partial" with the files you wrote and the fil
 
 ## Output paths
 
-Write only in these directories:
+Write only to these paths:
 
 - Handoff: `$CLAUDE_PROJECT_DIR/thoughts/shared/handoffs/{session-name}/current.md`
 - Ledger: `$CLAUDE_PROJECT_DIR/thoughts/ledgers/CONTINUITY_CLAUDE-{session-name}.md`
 - Plans: `$CLAUDE_PROJECT_DIR/thoughts/shared/plans/`
 - Docs: `$CLAUDE_PROJECT_DIR/docs/`
+- Release notes: `$CLAUDE_PROJECT_DIR/RELEASE.md`
+- Changelog: `$CLAUDE_PROJECT_DIR/CHANGELOG.md`
 - Session summary: `$CLAUDE_PROJECT_DIR/.claude/cache/scribe/latest-summary.md`
 
 ## Handoff format
