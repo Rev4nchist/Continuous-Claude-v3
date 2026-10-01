@@ -811,6 +811,65 @@ def generate_project_registry(
     target_path.write_text(content, encoding="utf-8")
 
 
+OFFICIAL_MARKETPLACE_REPO = "anthropics/claude-plugins-official"
+
+
+def install_enabled_plugins(
+    settings_path: Path,
+    claude_cmd: str | None = None,
+    run: Any = None,
+) -> list[tuple[str, bool, str]]:
+    """Download every plugin that settings.json enables.
+
+    `enabledPlugins` only turns a plugin on; it does not download it. This adds
+    the official marketplace and each GitHub marketplace in
+    `extraKnownMarketplaces`, then runs `claude plugin install <id> --scope user`
+    for each enabled plugin. Both commands are idempotent.
+
+    Returns one (step, ok, message) per command. A failed step does not stop the rest.
+    """
+    import subprocess
+
+    run = run or subprocess.run
+    claude = claude_cmd or shutil.which("claude") or shutil.which("claude.cmd")
+    if not claude:
+        return [("claude CLI", False, "not on PATH; run `claude plugin install <id>` later")]
+
+    settings = json.loads(settings_path.read_text(encoding="utf-8"))
+    repos = [OFFICIAL_MARKETPLACE_REPO]
+    for marketplace in (settings.get("extraKnownMarketplaces") or {}).values():
+        source = marketplace.get("source") or {}
+        if source.get("source") == "github" and source.get("repo"):
+            repos.append(source["repo"])
+
+    steps = [
+        (f"marketplace {repo}", ["plugin", "marketplace", "add", repo])
+        for repo in dict.fromkeys(repos)
+    ]
+    for plugin_id, enabled in (settings.get("enabledPlugins") or {}).items():
+        if enabled is True:
+            steps.append((plugin_id, ["plugin", "install", plugin_id, "--scope", "user"]))
+
+    # A new machine may have no GitHub SSH key, and the SSH probe can pick SSH anyway.
+    # The official marketplace clone takes over the 120 s default timeout.
+    env = {
+        **os.environ,
+        "CLAUDE_CODE_PLUGIN_PREFER_HTTPS": "1",
+        "CLAUDE_CODE_PLUGIN_GIT_TIMEOUT_MS": "600000",
+    }
+    results = []
+    for label, args in steps:
+        try:
+            proc = run([claude, *args], capture_output=True, text=True, timeout=900, env=env)
+            lines = f"{proc.stdout or ''}\n{proc.stderr or ''}".strip().splitlines()
+            marked = [line.strip() for line in lines if "×" in line or "√" in line]
+            message = marked[0] if marked else (lines[-1] if lines else "")
+            results.append((label, proc.returncode == 0, message))
+        except (OSError, subprocess.TimeoutExpired) as exc:
+            results.append((label, False, str(exc)))
+    return results
+
+
 def strip_tldr_hooks_from_settings(settings_path: Path) -> bool:
     """Remove TLDR hooks from settings.json file.
 
