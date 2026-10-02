@@ -7,7 +7,7 @@ ROOT_EXCLUDE_DIRS) and create-better-skills (size reporting, file listing,
 >10MB warning).
 
 Usage:
-    python -m scripts.package_skill <path/to/skill-folder> [output-directory]
+    python scripts/package_skill.py <path/to/skill-folder> [output-directory]
 """
 
 import fnmatch
@@ -15,7 +15,8 @@ import sys
 import zipfile
 from pathlib import Path
 
-from scripts.quick_validate import validate_skill
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` imports work from any cwd
+from scripts.quick_validate import validate_skill  # noqa: E402
 
 
 # Patterns to exclude when packaging skills
@@ -26,7 +27,7 @@ EXCLUDE_GLOBS = {"*.pyc", "*.pyo", "*.py[cod]", "*.swp", "*~", "*.log",
 EXCLUDE_FILES = {".DS_Store", "Thumbs.db", "desktop.ini", ".gitignore",
                  ".gitattributes", ".coverage", ".env", ".env.local"}
 # Directories excluded only at the skill root (not when nested deeper)
-ROOT_EXCLUDE_DIRS = {"evals"}
+ROOT_EXCLUDE_DIRS = {"evals", "tests"}
 
 
 def should_exclude(rel_path: Path) -> bool:
@@ -151,10 +152,10 @@ def package_skill(skill_path, output_dir=None):
 
 def main():
     if len(sys.argv) < 2:
-        print("Usage: python -m scripts.package_skill <path/to/skill-folder> [output-directory]")
+        print("Usage: python scripts/package_skill.py <path/to/skill-folder> [output-directory]")
         print("\nExample:")
-        print("  python -m scripts.package_skill skills/public/my-skill")
-        print("  python -m scripts.package_skill skills/public/my-skill ./dist")
+        print("  python scripts/package_skill.py skills/public/my-skill")
+        print("  python scripts/package_skill.py skills/public/my-skill ./dist")
         sys.exit(1)
 
     skill_path = sys.argv[1]

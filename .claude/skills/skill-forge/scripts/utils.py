@@ -1,7 +1,9 @@
-"""Shared utilities for skill-creator scripts."""
+"""Shared utilities for the skill-forge scripts."""
 
 from pathlib import Path
 
+# The description init_skill.py writes. quick_validate.py fails until it is edited.
+PLACEHOLDER_DESCRIPTION = "Does X. Use when Y."
 
 
 def parse_skill_md(skill_path: Path) -> tuple[str, str, str]:

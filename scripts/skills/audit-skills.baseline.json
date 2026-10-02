@@ -222,13 +222,6 @@
      "skills": {
       "archive": 1
      }
-    },
-    "G32": {
-     "count": 3,
-     "skills": {
-      "G22": 2,
-      "G26": 1
-     }
     }
    },
    "listing": {
@@ -466,13 +459,6 @@
       "create-better-skills.bak": 1,
       "synced": 1
      }
-    },
-    "G32": {
-     "count": 3,
-     "skills": {
-      "G22": 2,
-      "G26": 1
-     }
     }
    },
    "listing": {
@@ -484,7 +470,7 @@
  },
  "_doc": "Per-rule ratchet baseline for audit-skills.mjs. rules.<id>.skills maps skill -> finding count; a rule regresses when any skill count rises or a new skill appears. Rewrite with --update-baseline.",
  "_notes": {
-  "G32": "Ratchet only until Phase 2 fixes init_skill.py (its scaffold fails G22 and G26 today). A scaffold that does not run is reported as \"(scaffold)\" and counts as a regression.",
+  "G32": "Hard: a fresh init_skill.py scaffold must pass every rule. A scaffold that does not run is reported as \"(scaffold)\" and fails the gate.",
   "G06": "Ratchet: Dave decides the renames of skills that share a bundled name."
  }
 }

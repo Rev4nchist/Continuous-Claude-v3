@@ -82,7 +82,7 @@ export const RULES = [
   ['G29', 'skill-dir-hygiene', 'ratchet'],
   ['G30', 'non-vacuous', 'hard'],
   ['G31', 'listing-size-ratchet', 'ratchet'],
-  ['G32', 'skill-forge-template-passes', 'ratchet'],
+  ['G32', 'skill-forge-template-passes', 'hard'],
 ].map(([id, name, mode]) => ({ id, name, mode }));
 
 // Rules that read only the description. audit-descriptions.mjs runs this subset.
@@ -279,6 +279,28 @@ export function descriptionPhrases(desc) {
   return out;
 }
 
+// G05 and G06 on a bare name. init_skill.py asks the gate for this verdict (audit-skills.mjs
+// --check-name), so a scaffold and the gate cannot disagree about what a valid name is.
+export const NAME_RE = /^[a-z0-9]+(-[a-z0-9]+)*$/;
+export const NAME_MAX = 64;
+
+function nameFormatFindings(label, n) {
+  const r = [];
+  if (!NAME_RE.test(n)) r.push(f('G05', `${label} "${n}" is not lowercase-hyphen`));
+  if (n.length > NAME_MAX) r.push(f('G05', `${label} "${n}" is longer than ${NAME_MAX}`));
+  if (/anthropic|claude/.test(n)) r.push(f('G05', `${label} "${n}" contains a reserved word`));
+  return r;
+}
+
+function reservedNameFindings(n) {
+  if (RESERVED_ALLOW[n]) return [];
+  return RESERVED_NAMES.has(n) || n.startsWith('anthropic-skills') ? [f('G06', `"${n}" is a reserved or bundled name`)] : [];
+}
+
+export function checkNameOnly(n) {
+  return [...nameFormatFindings('name', n), ...reservedNameFindings(n)];
+}
+
 export function checkFrontmatter(s, ctx) {
   const r = [];
   if (!s.parts.ok) { r.push(f('G01', 'no frontmatter: line 1 must be --- and a closing --- must follow', 1)); return r; }
@@ -292,18 +314,9 @@ export function checkFrontmatter(s, ctx) {
   }
 
   const nameVal = s.val('name');
-  for (const [label, n] of [['dir', s.dirName], ['name', nameVal]]) {
-    if (n === undefined) continue;
-    if (!/^[a-z0-9]+(-[a-z0-9]+)*$/.test(n)) r.push(f('G05', `${label} "${n}" is not lowercase-hyphen`));
-    if (n.length > 64) r.push(f('G05', `${label} "${n}" is longer than 64`));
-    if (/anthropic|claude/.test(n)) r.push(f('G05', `${label} "${n}" contains a reserved word`));
-  }
+  for (const [label, n] of [['dir', s.dirName], ['name', nameVal]]) if (n !== undefined) r.push(...nameFormatFindings(label, n));
   if (nameVal !== undefined && nameVal !== s.dirName) r.push(f('G05', `name "${nameVal}" differs from dir "${s.dirName}"`));
-
-  for (const n of new Set([s.dirName, s.name])) {
-    if (RESERVED_ALLOW[n]) continue;
-    if (RESERVED_NAMES.has(n) || n.startsWith('anthropic-skills')) r.push(f('G06', `"${n}" is a reserved or bundled name`));
-  }
+  for (const n of new Set([s.dirName, s.name])) r.push(...reservedNameFindings(n));
 
   const d = s.desc;
   const dEntry = s.get('description');
