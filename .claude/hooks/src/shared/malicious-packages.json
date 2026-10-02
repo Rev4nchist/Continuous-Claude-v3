@@ -15810,6 +15810,192 @@
       "reason": "Malicious code in com.epi.e2e_test (npm) (GHSA-76w7-xhq5-w327)",
       "date": "2026-09-30",
       "advisory": "https://github.com/advisories/GHSA-76w7-xhq5-w327"
+    },
+    "niksinnkatalapp": {
+      "blocked_all": true,
+      "reason": "Malicious code in niksinnkatalapp (npm) (GHSA-g37r-cvvp-rj75)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-g37r-cvvp-rj75"
+    },
+    "@bluewin/utils": {
+      "blocked_all": true,
+      "reason": "Malicious code in @bluewin/utils (npm) (GHSA-9ggj-2v34-hwv8)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-9ggj-2v34-hwv8"
+    },
+    "ai-workshop-radio-app": {
+      "blocked_all": true,
+      "reason": "Malicious code in ai-workshop-radio-app (npm) (GHSA-rxfj-38w3-hw2x)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-rxfj-38w3-hw2x"
+    },
+    "live-detection-dashboard": {
+      "blocked_all": true,
+      "reason": "Malicious code in live-detection-dashboard (npm) (GHSA-h4cx-hwvc-8mgj)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-h4cx-hwvc-8mgj"
+    },
+    "brioche-apl-dev-env": {
+      "blocked_all": true,
+      "reason": "Malicious code in brioche-apl-dev-env (npm) (GHSA-8r2r-7gc9-8vq8)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-8r2r-7gc9-8vq8"
+    },
+    "ai-workshop-radio-lambda": {
+      "blocked_all": true,
+      "reason": "Malicious code in ai-workshop-radio-lambda (npm) (GHSA-427x-rv7c-m3f9)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-427x-rv7c-m3f9"
+    },
+    "alexa-cybertron-team-code-review-agent": {
+      "blocked_all": true,
+      "reason": "Malicious code in alexa-cybertron-team-code-review-agent (npm) (GHSA-g7c3-m79h-9cqq)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-g7c3-m79h-9cqq"
+    },
+    "danz-bails": {
+      "blocked_all": true,
+      "reason": "Malicious code in danz-bails (npm) (GHSA-83xg-jvg8-96qw)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-83xg-jvg8-96qw"
+    },
+    "apl-rive-renderer": {
+      "blocked_all": true,
+      "reason": "Malicious code in apl-rive-renderer (npm) (GHSA-66jg-9x42-xwh9)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-66jg-9x42-xwh9"
+    },
+    "xcvrenzcompany": {
+      "blocked_all": true,
+      "reason": "Malicious code in xcvrenzcompany (npm) (GHSA-474r-6338-73gj)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-474r-6338-73gj"
+    },
+    "okra-cloud-cdk": {
+      "blocked_all": true,
+      "reason": "Malicious code in okra-cloud-cdk (npm) (GHSA-7rq8-hfxr-pxhw)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-7rq8-hfxr-pxhw"
+    },
+    "prastzy": {
+      "blocked_all": true,
+      "reason": "Malicious code in prastzy (npm) (GHSA-phvc-2p87-8jf3)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-phvc-2p87-8jf3"
+    },
+    "@zanta/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @zanta/baileys (npm) (GHSA-44wf-ggpw-qq53)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-44wf-ggpw-qq53"
+    },
+    "wailib": {
+      "blocked_all": true,
+      "reason": "Malicious code in wailib (npm) (GHSA-w72m-vjx4-9m36)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-w72m-vjx4-9m36"
+    },
+    "figma-to-apl": {
+      "blocked_all": true,
+      "reason": "Malicious code in figma-to-apl (npm) (GHSA-fmw8-mrp6-mj68)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-fmw8-mrp6-mj68"
+    },
+    "ai-workshop-maa15-radio": {
+      "blocked_all": true,
+      "reason": "Malicious code in ai-workshop-maa15-radio (npm) (GHSA-5m79-v4p8-r597)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-5m79-v4p8-r597"
+    },
+    "mikuhostt-baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in mikuhostt-baileys (npm) (GHSA-p4xf-x6j2-mq3f)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-p4xf-x6j2-mq3f"
+    },
+    "luoxy-baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in luoxy-baileys (npm) (GHSA-rhcf-fwmc-3cm3)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-rhcf-fwmc-3cm3"
+    },
+    "prastzyy": {
+      "blocked_all": true,
+      "reason": "Malicious code in prastzyy (npm) (GHSA-23mj-w7jj-h63m)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-23mj-w7jj-h63m"
+    },
+    "rubbydev-crash-baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in rubbydev-crash-baileys (npm) (GHSA-2cr6-p8h2-g7pv)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-2cr6-p8h2-g7pv"
+    },
+    "@fazzcodestudio/wa-web": {
+      "blocked_all": true,
+      "reason": "Malicious code in @fazzcodestudio/wa-web (npm) (GHSA-6c6x-j4h9-g6mh)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-6c6x-j4h9-g6mh"
+    },
+    "@smart-dev-wa/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @smart-dev-wa/baileys (npm) (GHSA-x69h-gm3h-2w4q)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-x69h-gm3h-2w4q"
+    },
+    "ichigo-baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in ichigo-baileys (npm) (GHSA-jmwp-25hp-85hw)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-jmwp-25hp-85hw"
+    },
+    "@erlanzz/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @erlanzz/baileys (npm) (GHSA-pwrr-vrh9-c7gf)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-pwrr-vrh9-c7gf"
+    },
+    "@developmentyora/baileyss": {
+      "blocked_all": true,
+      "reason": "Malicious code in @developmentyora/baileyss (npm) (GHSA-hr4v-9q47-37m3)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-hr4v-9q47-37m3"
+    },
+    "@celestial-community/baileys": {
+      "blocked_all": true,
+      "reason": "Malicious code in @celestial-community/baileys (npm) (GHSA-vcwh-7gr6-f894)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-vcwh-7gr6-f894"
+    },
+    "kartykgithub-ph-f": {
+      "blocked_all": true,
+      "reason": "Malware in kartykgithub-ph-f (GHSA-x2m2-w3gv-m5wg)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-x2m2-w3gv-m5wg"
+    },
+    "kartykgithub-ph-e": {
+      "blocked_all": true,
+      "reason": "Malware in kartykgithub-ph-e (GHSA-7hq7-x7ww-7cxr)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-7hq7-x7ww-7cxr"
+    },
+    "kartykgithub-ph-b": {
+      "blocked_all": true,
+      "reason": "Malware in kartykgithub-ph-b (GHSA-27m4-jjxc-69wf)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-27m4-jjxc-69wf"
+    },
+    "illusion-datalab": {
+      "blocked_all": true,
+      "reason": "Malware in illusion-datalab (GHSA-834w-x8gq-8rmx)",
+      "date": "2026-10-01",
+      "advisory": "https://github.com/advisories/GHSA-834w-x8gq-8rmx"
+    },
+    "online-header": {
+      "blocked_all": true,
+      "reason": "Malicious code in online-header (npm) (GHSA-hg4r-6gv8-6hmj)",
+      "date": "2026-10-01",
+      "advisory": "https://github.com/advisories/GHSA-hg4r-6gv8-6hmj"
     }
   }
 }
