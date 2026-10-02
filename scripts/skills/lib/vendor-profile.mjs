@@ -124,6 +124,24 @@ function buildVendorReport({ sources, vendored, expected, findings }) {
   };
 }
 
+// One FAIL line per hard finding. A conflict hit (X01) is one finding per line of vendored text, and an
+// overlay-less source has hundreds, so the text view groups them by topic and file. --json keeps each hit.
+function hardLines(hard) {
+  const lines = []; const groups = new Map();
+  for (const f of hard) {
+    const m = f.rule === CONFLICT_RULE && f.msg.match(/^uncovered conflict \[([^\]]+)\] (.+?):(\d+): /);
+    if (!m) { lines.push(`FAIL ${f.rule} ${f.skill}${f.line ? `:${f.line}` : ''} ${f.msg}`); continue; }
+    const key = `${f.skill}\0${m[1]}\0${m[2]}`;
+    if (!groups.has(key)) groups.set(key, { skill: f.skill, topic: m[1], file: m[2], lines: [] });
+    groups.get(key).lines.push(m[3]);
+  }
+  for (const g of groups.values()) {
+    const shown = g.lines.slice(0, 8).join(',');
+    lines.push(`FAIL ${CONFLICT_RULE} ${g.skill} uncovered [${g.topic}] ${g.file}: ${g.lines.length} hit(s) at line ${shown}${g.lines.length > 8 ? ',...' : ''}`);
+  }
+  return lines;
+}
+
 export function formatVendorReport(rep, { verbose = false, quiet = false } = {}) {
   const lines = [];
   if (!quiet) {
@@ -135,7 +153,7 @@ export function formatVendorReport(rep, { verbose = false, quiet = false } = {})
     const byRule = Object.entries(rep.advisoryByRule).sort().map(([r, c]) => `${r}=${c}`).join(' ');
     lines.push(`advisory by rule: ${byRule || 'none'}`);
   }
-  for (const f of rep.findings.filter((x) => x.class === 'hard')) lines.push(`FAIL ${f.rule} ${f.skill}${f.line ? `:${f.line}` : ''} ${f.msg}`);
+  lines.push(...hardLines(rep.findings.filter((x) => x.class === 'hard')));
   if (verbose) for (const f of rep.findings.filter((x) => x.class === 'advisory')) lines.push(`  advisory ${f.rule} ${f.skill}${f.line ? `:${f.line}` : ''} ${f.msg}`);
   lines.push(rep.summary);
   return lines.join('\n');
