@@ -1,0 +1,52 @@
+diff --git a/src/http/retry.ts b/src/http/retry.ts
+index 1a2b3c4..5d6e7f8 100644
+--- a/src/http/retry.ts
++++ b/src/http/retry.ts
+@@ -1,18 +1,44 @@
+ export interface RetryOptions {
+   attempts: number;
++  baseDelayMs?: number;
++  maxDelayMs?: number;
+ }
+
+ export async function retry<T>(fn: () => Promise<T>, opts: RetryOptions): Promise<T> {
+   let last: unknown;
+   for (let i = 0; i < opts.attempts; i++) {
+     try {
+       return await fn();
+     } catch (err) {
+       last = err;
+     }
+   }
+   throw last;
+ }
++
++/**
++ * Retry with exponential backoff and full jitter.
++ * Delay before attempt n (n >= 1) is a random value in [0, min(maxDelayMs, baseDelayMs * 2^n)].
++ */
++export async function withBackoff<T>(fn: () => Promise<T>, opts: RetryOptions): Promise<T> {
++  const base = opts.baseDelayMs ?? 100;
++  const cap = opts.maxDelayMs ?? 10_000;
++  let last: unknown;
++  for (let i = 0; i < opts.attempts; i++) {
++    if (i > 0) {
++      const ceiling = Math.min(cap, base * 2 ** i);
++      await new Promise((r) => setTimeout(r, Math.random() * ceiling));
++    }
++    try {
++      return await fn();
++    } catch (err) {
++      last = err;
++    }
++  }
++  throw last;
++}
+diff --git a/src/http/client.ts b/src/http/client.ts
+index 9a8b7c6..0f1e2d3 100644
+--- a/src/http/client.ts
++++ b/src/http/client.ts
+@@ -12,7 +12,7 @@ export async function getJson(url: string): Promise<unknown> {
+-  return retry(() => fetchJson(url), { attempts: 3 });
++  return withBackoff(() => fetchJson(url), { attempts: 3 });
+ }

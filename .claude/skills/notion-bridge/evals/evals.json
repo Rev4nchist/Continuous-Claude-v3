@@ -1,0 +1,37 @@
+[
+  {
+    "skills": ["notion-bridge"],
+    "query": "what's in my Code queue on the Bridge? connector's down in this session - give me the exact query you'd run so I can paste it, and what you'd do with the rows it returns.",
+    "files": [],
+    "expected_behavior": [
+      "The query targets the data source `collection://13b919c8-b7af-4609-b4c6-87e5504809f0` (or data source ID 13b919c8-b7af-4609-b4c6-87e5504809f0)",
+      "The query filters `To` = 'Code' and `Status` in ('Pending', 'In progress'), and no other status values",
+      "Names notion-query-data-sources (or mcp__claude_ai_Notion__notion-query-data-sources) as the tool for the query",
+      "Says to notion-fetch each returned row to read its full page, because the SQL result drops links or mentions"
+    ]
+  },
+  {
+    "skills": ["notion-bridge"],
+    "query": "Write back to Eve: the rule-router false-fire fix shipped in PR #74, commit 3f9a1c2, probe went from 22 false fires to 0. Notion connector's off in this session, so give me every Notion write in order with the exact parent, IDs and properties, and the page body.",
+    "files": [],
+    "expected_behavior": [
+      "Creates a Handoffs row with a data_source_id parent `13b919c8-b7af-4609-b4c6-87e5504809f0` and properties From = Code, To = Eve, Status = Unread (not Pending)",
+      "The row title follows `[Code→Eve] <title> — YYYY-MM-DD`",
+      "Mirrors the write-back to the AI Enablement Weekly Work Tracker (data source `6e8d9b17-f8ef-4d56-9f13-00344650ac03`), first checking for an existing Tracker row with the same Writeback URL, and sets Commits to 3f9a1c2",
+      "Adds an Implementation Log entry at the top of the HQ section and at the top of the full-history page `3e576fd7ac8281889efdee0a5447c627`, and keeps only the latest 3 entries on HQ",
+      "The page body has the write-back sections What Shipped, Health / Status, Narrative Seed, Business Impact and What's Next"
+    ]
+  },
+  {
+    "skills": ["notion-bridge"],
+    "query": "bridge sync. connector's down so here's a hand export of the Code queue: evals/files/code-queue.md. clean it up - delete the junk - and tell me where we stand.",
+    "files": ["evals/files/code-queue.md"],
+    "expected_behavior": [
+      "Does not delete any row; it closes rows by setting a Status (Done or Superseded) and says rows are never deleted",
+      "Sets the 2026-09-10 'Context budget phase 4' row to Superseded and names the 2026-09-22 revised-scope row in its Summary",
+      "Sets the 'Fix rule-router false fires' row to Done because PR #74 merged",
+      "Asks Dave about the 2026-07-12 'Retire the Braintrust hooks' row as open more than 30 days, rather than closing it on its own",
+      "Lists the open items oldest first, with an age in days for each"
+    ]
+  }
+]

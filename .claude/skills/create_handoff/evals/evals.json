@@ -1,0 +1,51 @@
+[
+  {
+    "skills": [
+      "create_handoff"
+    ],
+    "query": "/create_handoff. Session notes are in evals/files/session-notes.md. The Notion connector isn't loaded in this session and you can't write files here, so paste the full local YAML copy exactly as you'd save it, plus the path you'd save it to, so the next create can push it to Notion.",
+    "files": [
+      "evals/files/session-notes.md"
+    ],
+    "expected_behavior": [
+      "The YAML marks the Notion push as pending with the line `notion: pending` (not a notion_url) and carries all four provenance fields `notion_title:`, `repo:`, `branch:` and `priority:`",
+      "The `repo:` value is the absolute path C:\\Users\\david.hayes\\continuous-claude (or the same path with forward slashes) and `branch:` is chore/skills-phase3-evals",
+      "The `notion_title:` value follows the pattern `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD`",
+      "The YAML uses the top-level keys `goal:` and `now:` (not session_goal, objective, focus or current) and an `outcome:` that is exactly one of SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS or FAILED",
+      "The save path is under thoughts/shared/handoffs/skills-review/ and the file name has the form YYYY-MM-DD_HH-MM_<kebab-case-description>.yaml"
+    ]
+  },
+  {
+    "skills": [
+      "create_handoff"
+    ],
+    "query": "context is nearly full. dump where we are into my Notion scratchpad so tomorrow's session can pick it up. notes: evals/files/session-notes.md. connector's off in this run, so just show me the Notion page exactly as you'd create it - parent, properties, body.",
+    "files": [
+      "evals/files/session-notes.md"
+    ],
+    "expected_behavior": [
+      "Declines to put the handoff in the Scratchpad and puts it as a row in the Claude Bridge Handoffs database instead",
+      "The parent is the data source `13b919c8-b7af-4609-b4c6-87e5504809f0` given as a data_source_id parent",
+      "The properties set From = Code, To = Next session, Status = Pending, an absolute `Repo` path, and a `Resume phrase` in the exact form `Resume the handoff in Notion: \"<exact title>\"`",
+      "The page body opens with a `**Repo:** ... | **Branch:** ... | **Outcome:** ...` line followed by `**Goal:**`, `**Now:**` and `**Test:**` lines, before the Done this session heading",
+      "Says it also writes a local YAML copy under thoughts/shared/handoffs/skills-review/, marked `notion: pending` because the connector is off"
+    ]
+  },
+  {
+    "skills": [
+      "create_handoff"
+    ],
+    "query": "give me a handoff. notes in evals/files/session-notes.md - I moved a few lanes on the board this session. the artifact registry copy is evals/files/artifacts.json. no Notion, no Artifact tool and no writes in this run, so just tell me step by step what you'd do about the registered pages, and what you'd skip.",
+    "files": [
+      "evals/files/session-notes.md",
+      "evals/files/artifacts.json"
+    ],
+    "expected_behavior": [
+      "Treats the lane board entry as in scope because its `session` is \"*\", and skips the reporting-pipeline-status entry because its session does not match this handoff's session",
+      "For the lane board, runs the render command `node scripts/coordination/render-board.mjs` and publishes `lane-board.html`, and says not to hand the generator file render-board.mjs to the Artifact tool",
+      "Reads or fetches the live published lane board before republishing it",
+      "Republishes with the recorded url https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a so the link stays the same, not as a new artifact",
+      "Verifies the publish by reading the result back (and checking the artifact list) before it updates `last_published` in artifacts.json"
+    ]
+  }
+]

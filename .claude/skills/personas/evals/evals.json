@@ -1,0 +1,38 @@
+[
+  {
+    "skills": ["personas"],
+    "query": "Design review on evals/files/export-plan.md before we build it. Run it past each persona that should see a design review, in the right order. One section per persona, then the combined verdict.",
+    "files": ["evals/files/export-plan.md"],
+    "expected_behavior": [
+      "The persona sections appear in exactly this order: architect, then security, then performance, then qa",
+      "Does not add a frontend, backend, mentor, analyzer or refactorer section to the design review",
+      "Each persona section states that persona's primary question: architect \"How will this scale & evolve?\", security \"What could go wrong?\", performance \"Where is the bottleneck?\", qa \"How could this break?\"",
+      "The security section flags that any logged-in user can export any account because accountId comes from the query string with no ownership check",
+      "Ends with one combined verdict that carries forward the findings of the earlier personas (cumulative handoff), not four separate unconnected lists"
+    ]
+  },
+  {
+    "skills": ["personas"],
+    "query": "Act as the analyzer. /orders throws intermittent 500s, log is evals/files/api-500s.log. Ops says the DB is flaky. Find the root cause, then tell me who picks it up next.",
+    "files": ["evals/files/api-500s.log"],
+    "expected_behavior": [
+      "Lists at least two competing hypotheses, including the 'DB is flaky' one, and marks each as tested and eliminated or confirmed (hypothesize, test, eliminate)",
+      "Names the evidence that contradicts the obvious 'DB is flaky' answer: api-1 uses the same db-1 with no errors, and db-1 shows low load (cpu 11%, 14/200 connections, 0 slow queries)",
+      "States the root cause as api-2's pool idleTimeoutMillis=600000 (600s) being longer than db-1 wait_timeout=300s, so api-2 reuses connections the server already closed",
+      "Cites specific log lines as evidence (for example the ECONNRESET lines with idle 454s, 1276s or 3990s)",
+      "Names the refactorer as the next persona to pick it up (analysis chain analyzer, then refactorer, then performance, then qa)"
+    ]
+  },
+  {
+    "skills": ["personas"],
+    "query": "Act as an architect: does the split in evals/files/billing-split.md hold up? Blunt verdict.",
+    "files": ["evals/files/billing-split.md"],
+    "expected_behavior": [
+      "Flags that three services writing the same Postgres tables keeps them coupled through the shared database (a distributed monolith)",
+      "Includes a diagram (ASCII, Mermaid or similar) of the proposed services and their dependencies",
+      "Describes at least two concrete future scenarios (for example 10x invoice volume, a tax-svc outage, a schema change on invoices) and how the split behaves in each",
+      "Judges the design against long-term survival, using a horizon of 5 or more years without a major refactor",
+      "States explicitly that long-term maintainability outweighs the short-term gain of faster deploys"
+    ]
+  }
+]

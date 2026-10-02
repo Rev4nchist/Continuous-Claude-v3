@@ -1,0 +1,37 @@
+[
+  {
+    "skills": ["mcp-guidance"],
+    "query": "Need current docs for the Next.js cache API before I touch revalidateTag. Don't call anything. Give me the exact tool calls in order, and what you do if the lookup says library not found or the docs come back thin.",
+    "files": [],
+    "expected_behavior": [
+      "Uses Context7 as the docs source before any web search",
+      "Calls resolve-library-id first and only then the Context7 docs call",
+      "Scopes the docs call to a topic (caching, revalidateTag or similar) instead of pulling all of the Next.js docs",
+      "On 'library not found', retries resolve-library-id with broader terms (for example \"next.js\" or \"nextjs\") before giving up",
+      "Uses WebSearch only as the fallback when the Context7 docs are incomplete, not as a parallel first step"
+    ]
+  },
+  {
+    "skills": ["mcp-guidance"],
+    "query": "Check mcp-guidance. Context is at ~60%. Still need: TanStack Query v5 docs for useSuspenseQuery, status of 3 GitHub issues in our repo, and a shadcn dialog added. Plan the cheapest route.",
+    "files": [],
+    "expected_behavior": [
+      "States the rule that above 50% context it stops MCP calls and uses a native fallback, and applies it because context is at 60%",
+      "Gives the token cost tiers: native 0 tokens, light MCP 100-500 tokens, medium MCP 500-2K tokens, heavy MCP 2K+ tokens (or classifies Context7 as light at 100-500 tokens)",
+      "Batches the three GitHub issue lookups into one call or one batch instead of three separate calls",
+      "Says to cache results within the session so no doc or issue is fetched twice",
+      "Orders the steps from least expensive to most expensive option"
+    ]
+  },
+  {
+    "skills": ["mcp-guidance"],
+    "query": "gh pr create just died with an auth error, and the code search before it got rate limited. Also: does renaming a function in one file and committing locally need any MCP? Short answer.",
+    "files": [],
+    "expected_behavior": [
+      "For the auth error, says to check GITHUB_TOKEN",
+      "For the rate limit, says to wait or reduce the number of calls, and does not suggest an immediate retry loop",
+      "Says the one-file rename and the local commit use native tools (Edit and local git) with no MCP",
+      "Keeps PR creation on the GitHub CLI (gh pr create or gh api), not manual git plus the web UI"
+    ]
+  }
+]

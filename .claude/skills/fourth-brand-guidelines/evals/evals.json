@@ -1,0 +1,38 @@
+[
+  {
+    "skills": ["fourth-brand-guidelines"],
+    "query": "Brand review evals/files/blog-draft.md before it goes to the web team. List every issue with the fix. Copy and the design note both.",
+    "files": ["evals/files/blog-draft.md"],
+    "expected_behavior": [
+      "Flags \"Fourth IQ\" as wrong and gives the correct form \"iQ\" (lowercase i, uppercase Q)",
+      "Flags \"uses iQ\" and replaces it with the tagline \"Powered by iQ\"",
+      "Flags the #00B69F teal body copy as failing contrast for body text (teal is for accents or CTAs only) and names Dark Gray #373e42 or Midnight Navy #002747 as the body-text color",
+      "Flags the British spellings (at least two of Labour, optimised, utilise, colour) and asks for American English",
+      "Replaces \"Learn more\" with a 2-5 word action CTA such as \"Request a demo\""
+    ]
+  },
+  {
+    "skills": ["fourth-brand-guidelines"],
+    "query": "Draft a LinkedIn post for Fourth: iQ forecasting now predicts covers 14 days out, per site. ~120 words, ready to paste. Audience is ops directors at UK and US restaurant groups.",
+    "files": [],
+    "expected_behavior": [
+      "Writes iQ with lowercase i and uppercase Q every time, and never writes \"IQ\"",
+      "Does not use the phrase \"artificial intelligence\" (uses \"AI-powered\" or \"iQ\" instead)",
+      "Uses American spelling throughout (for example \"labor\", \"optimize\"), with no British forms such as \"labour\" or \"optimise\"",
+      "Contains at most one exclamation point",
+      "Ends with a 2-5 word CTA that starts with an action verb, and does not use \"Learn more\" or \"Click here\""
+    ]
+  },
+  {
+    "skills": ["fourth-brand-guidelines"],
+    "query": "Building a Fourth product landing page. What hex, font, size and line height for body text? And can I set the inline links in body copy in the teal?",
+    "files": [],
+    "expected_behavior": [
+      "Recommends Dark Gray #373e42 (or Midnight Navy #002747) as the body-text color",
+      "Says teal #00B69F fails body-text contrast on white (states a ratio between 2.4:1 and 2.6:1) and is for accents or CTAs only",
+      "States the WCAG 2.1 minimum of 4.5:1 for body text",
+      "Specifies Poppins Regular at 16pt with 1.5x line height",
+      "States a 14pt minimum for body text"
+    ]
+  }
+]

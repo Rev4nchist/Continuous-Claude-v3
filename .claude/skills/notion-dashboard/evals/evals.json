@@ -1,0 +1,38 @@
+[
+  {
+    "skills": ["notion-dashboard"],
+    "query": "refresh mobile cockpit. No Bash in this session, so give me the exact command to run. I also jotted two lines under Capture this morning: \"b: Toast API down @cma !p1\" and \"later: revisit CMA pricing\". What happens to each on this refresh, and where do I check if the embed did not update?",
+    "files": [],
+    "expected_behavior": [
+      "Gives the command `node scripts/project-cards/sweep.mjs --target mobile-cockpit`",
+      "Says capture triage runs first in the sweep, before the cockpit publish",
+      "Says the `b:` line is a blocker that surfaces immediately, and the `later:` line resurfaces only after PM_NOTES_AGE_DAYS (default 3 days)",
+      "Points to `logs/sweep.jsonl` and the `mobileCockpit` entry's `embedStatus` (or `digestStatus`) field to check the embed",
+      "Says the AI digest is written independently of the embed bind, so the digest can update even when the embed bind fails"
+    ]
+  },
+  {
+    "skills": ["notion-dashboard"],
+    "query": "I updated the CMA status page with `ntn pages edit` to push new markdown and the HTML embed plus the linked DB view are gone. Why, and what is the correct way to update that page next time without losing them?",
+    "files": [],
+    "expected_behavior": [
+      "Says a full-page replace (`ntn pages edit`) destroys embeds and DB views because they do not round-trip",
+      "Says to update text with a block-level splice (`ntn api` PATCH or `replaceSectionBlocks`) that replaces from a heading to the next same-or-higher heading",
+      "Says the embed must be re-bound through Notion MCP: `notion-create-attachment` then `notion-update-page` with `<embed src=\"file-upload://<id>\">`",
+      "States at least one bind constraint: attach within 1 hour of upload, upload and bind in one MCP prompt, or a 200 KiB file limit",
+      "Says to read the page back and confirm the embed exists under its heading before trusting the bind"
+    ]
+  },
+  {
+    "skills": ["notion-dashboard"],
+    "query": "Plan a new auto-refreshed Notion dashboard page for the CMA project, same pattern as the FourthOS cockpit: machine sections plus a human notes section. Steps only, do not build.",
+    "files": [],
+    "expected_behavior": [
+      "Creates the page with `ntn pages create --parent page:<id>` and warns that the first `#` line becomes the page title, not a block",
+      "Includes a check that `public_url` is null after creation",
+      "Creates DB views through headless Notion MCP with `--allowedTools \"mcp__claude_ai_Notion__*\"` and warns that relation filters may need a manual in-app fix",
+      "Adds a `--target` step in `sweep.mjs` modeled on `publishMobileCockpit()`, with a hash gate and a size assert under 150 KiB",
+      "Says never to feed page content into the MCP prompt and to instruct the bind by heading string only"
+    ]
+  }
+]

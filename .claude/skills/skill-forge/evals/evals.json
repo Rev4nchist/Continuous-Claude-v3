@@ -1,0 +1,38 @@
+[
+  {
+    "skills": ["skill-forge"],
+    "query": "kusto-cli never fires when I say \"query Eventhouse\". Its current frontmatter is in evals/files/kusto-cli-SKILL.md. Give me the replacement description line and how you'd prove it fires now. Read-only, don't edit anything.",
+    "files": ["evals/files/kusto-cli-SKILL.md"],
+    "expected_behavior": [
+      "Gives one replacement description line that starts by saying what the skill does (not \"Use this skill...\"), then has a \"Use when ...\" clause that names Eventhouse",
+      "States a 400-character cap for the description (the 1,024 platform limit alone does not count)",
+      "Drops the pushy wording of the old line (\"whenever\", \"anything related\", \"Always use it\") and adds a \"Not for ...\" clause that names a near-miss case",
+      "Proves the trigger with a query set of about 20 queries: roughly 8-10 that should trigger and 8-10 near misses that should not",
+      "Names the run_loop.py script with --eval-set and --skill-path pointing at .claude/skills/kusto-cli"
+    ]
+  },
+  {
+    "skills": ["skill-forge"],
+    "query": "Run evals on the roadmap skill against a no-skill baseline. Sonnet only for now, and I want to see the plan before anything spends. Give me the exact command, then tell me what to check in the results before I trust the numbers.",
+    "files": [],
+    "expected_behavior": [
+      "The command runs run_eval.py in behavior mode with --skill-path .claude/skills/roadmap and --evals .claude/skills/roadmap/evals/evals.json",
+      "The first command adds --dry-run and --models sonnet",
+      "States that the roadmap evals file needs at least 3 evals before the run",
+      "Says to check run.json: with_skill runs show skill_listed and skill_fired both true, and without_skill runs show skill_listed false (proof the skill was off)",
+      "Says that a file listed in navigation.skill_files_unread is dead weight, to remove or link better"
+    ]
+  },
+  {
+    "skills": ["skill-forge"],
+    "query": "Turn evals/files/fabric-preflight-notes.md into a skill. Only I kick it off, never Claude on its own. It runs the preflight script, so I was going to put allowed-tools: Bash in the frontmatter so it can't touch anything else. Give me the frontmatter, where the folder goes, and what else you'd change. Don't write files.",
+    "files": ["evals/files/fabric-preflight-notes.md"],
+    "expected_behavior": [
+      "The frontmatter sets disable-model-invocation: true to make the skill user-only",
+      "Corrects the premise: allowed-tools only pre-approves tools and does not restrict others; restricting needs disallowed-tools or a permission deny rule",
+      "Replaces the bare Bash grant with a scoped grant that names the preflight command, for example Bash(python docs/playground/deploy.py preflight*)",
+      "Puts the skill folder in the repo's .claude/skills/<name>/, not in ~/.claude/skills, because the sync overwrites the active copy",
+      "Says the never-pause-or-resize-capacity rule (or stop-on-first-capacity-error) must be enforced by a hook, because a skill body is advice the model can skip"
+    ]
+  }
+]

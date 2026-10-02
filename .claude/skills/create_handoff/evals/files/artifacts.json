@@ -1,0 +1,30 @@
+{
+  "artifacts": [
+    {
+      "id": "agentic-os-lane-board",
+      "url": "https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a",
+      "source": "scripts/coordination/render-board.mjs",
+      "render": "node scripts/coordination/render-board.mjs",
+      "publish_from": "lane-board.html",
+      "title": "Agentic OS — Lane Board",
+      "favicon": "🛤️",
+      "description": "Live lane board generated from agentic_os.lane: who holds what right now.",
+      "session": "*",
+      "refresh": "at-handoff",
+      "content_model": "generated",
+      "last_published": "2026-09-20"
+    },
+    {
+      "id": "reporting-pipeline-status",
+      "url": "https://claude.ai/code/artifact/5c1d0e7a-2b44-4f0e-9a1e-7d3b6c2f8e10",
+      "source": "docs/reporting/pipeline-status.html",
+      "title": "Reporting Pipeline Status",
+      "favicon": "📈",
+      "description": "Hand-written status of the weekly reporting pipeline runs.",
+      "session": "reporting-pipeline",
+      "refresh": "at-handoff",
+      "content_model": "narrative-snapshot",
+      "last_published": "2026-09-02"
+    }
+  ]
+}

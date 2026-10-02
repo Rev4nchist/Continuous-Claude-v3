@@ -1,0 +1,52 @@
+diff --git a/tools/cache_gc.py b/tools/cache_gc.py
+index 3b1c2e0..9f4d7aa 100644
+--- a/tools/cache_gc.py
++++ b/tools/cache_gc.py
+@@ -1,24 +1,41 @@
+ """Delete build-cache entries that nobody has used for a while."""
+ import os
+ import shutil
+ import time
+
+ CACHE_ROOT = os.environ.get("BUILD_CACHE_ROOT", "/srv/build-cache")
+-MAX_AGE_SECONDS = 7 * 24 * 3600
++MAX_AGE_DAYS = 7
+
+
+-def stale_entries(root=CACHE_ROOT):
+-    now = time.time()
+-    for name in os.listdir(root):
+-        path = os.path.join(root, name)
+-        if now - os.path.getatime(path) > MAX_AGE_SECONDS:
+-            yield path
++def stale_entries(root=CACHE_ROOT, now=None):
++    now = now or time.time()
++    for name in sorted(os.listdir(root)):
++        path = os.path.join(root, name)
++        if not os.path.isdir(path):
++            continue
++        # atime is off on the cache volume (mounted noatime), so use mtime.
++        if now - os.path.getmtime(path) > MAX_AGE_DAYS:
++            yield name
++
++
++def remove_entry(root, name):
++    # Refuse names that would resolve to the root itself or outside it.
++    if not name or name in (".", "..") or os.sep in name:
++        raise ValueError(f"refusing to remove cache entry {name!r}")
++    shutil.rmtree(os.path.join(root, name))
+
+
+ def main():
+-    for path in stale_entries():
+-        print("stale:", path)
++    removed = 0
++    for name in stale_entries():
++        remove_entry(CACHE_ROOT, name)
++        removed += 1
++    print(f"removed {removed} stale cache entries")
+     return 0
+
+
+ if __name__ == "__main__":
+     raise SystemExit(main())
