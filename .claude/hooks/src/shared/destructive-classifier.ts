@@ -321,40 +321,85 @@ export function normalizeGitGlobalOptions(scan: string): string {
 }
 
 /**
- * Drop the body of a block that only WRITES TEXT, so a doc that quotes a Fabric call is not a call.
- * Bash: `cat|tee ... <<EOF` with nothing after the marker but an optional redirect (no pipe, `;` or `&`,
- * so `cat <<EOF | bash` and `bash <<EOF` keep their body: those lines run). PowerShell: `$x = @'` here-strings
- * (accepted gap: `iex $x` can still run one). Anything unterminated or unrecognised is left alone.
+ * The `$(...)` and (Bash) backtick substitutions of a text block that EXPANDS, i.e. an unquoted heredoc
+ * or a PowerShell `@"` here-string: the shell runs those. A backslash (Bash) or backtick (PowerShell)
+ * before the `$` makes it literal. Quotes inside the prose are plain text, so this scans by hand.
  */
-function stripTextBlocks(command: string, tool: string): string {
+function bodySubstitutions(body: string, tool: string): string[] {
+  const out: string[] = [];
+  const esc = tool === 'PowerShell' ? '`' : '\\';
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === esc) { i += 2; continue; }
+    if (c === '$' && body[i + 1] === '(') {
+      const { inner, end } = readBalanced(body, i + 2, '(', ')');
+      out.push(inner); i = end; continue;
+    }
+    if (c === '`' && tool !== 'PowerShell') {
+      const { inner, end } = readBacktick(body, i + 1);
+      out.push(inner); i = end; continue;
+    }
+    i++;
+  }
+  return out;
+}
+
+/**
+ * What the shell would EXECUTE, with text blocks reduced. A block that only WRITES TEXT is not a call,
+ * so a doc that quotes a Fabric command stays allowed. A literal block (`<<'EOF'`, `<<"EOF"`, `@'...'@`)
+ * is dropped. An expanding block (`<<EOF`, `@"..."@`) is replaced by its `$(...)` substitutions, which
+ * run. Bash: only `cat|tee ... <<EOF` with nothing after the marker but an optional redirect counts (no
+ * pipe, `;` or `&`, so `cat <<EOF | bash` and `bash <<EOF` keep their body: those lines run).
+ * PowerShell: `$x = @'` / `$x = @"` assignments (accepted gap: `iex $x` can still run one).
+ * An unterminated block ends at the end of the command. Anything unrecognised is left alone.
+ */
+function executableView(command: string, tool: string): string {
   const out: string[] = [];
   let end: RegExp | null = null;
+  let expands = false;
+  let body: string[] = [];
+  const flush = (): void => {
+    if (expands) for (const s of bodySubstitutions(body.join('\n'), tool)) out.push(`$(${s})`);
+    end = null; body = [];
+  };
   for (const line of command.split('\n')) {
-    if (end) { if (end.test(line)) end = null; continue; }
+    if (end) { if (end.test(line)) flush(); else body.push(line); continue; }
     if (tool === 'PowerShell') {
       // The opener (`$x = @'`) goes too: its lone quote would swallow the lines after the block.
       const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
-      if (h) { end = new RegExp(`^\\s*${h[1]}@`); continue; }
+      if (h) { end = new RegExp(`^\\s*${h[1]}@`); expands = h[1] === '"'; continue; }
       out.push(line);
       continue;
     }
     out.push(line);
     const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
-    if (m) end = new RegExp(`^\\s*${m[2]}\\s*$`);
+    if (m) { end = new RegExp(`^\\s*${m[2]}\\s*$`); expands = m[1] === ''; }
   }
+  if (end) flush();
   return out.join('\n');
 }
 
 /**
- * Test SEGMENT_PATTERNS against each top-level command segment (quotes kept). A PowerShell
- * backtick or bash backslash before a newline continues the line, so join those first;
- * otherwise a multi-line Invoke-RestMethod splits into segments that no pattern can see whole.
+ * Join line continuations and resolve escapes, so a pattern sees the command the shell sees.
+ * Bash: a backslash before a newline continues the line. PowerShell: a backtick does, and a backtick
+ * before a letter or digit is only an escape (`` del`ete `` runs as delete), so the character stays.
+ * Any other backtick pair (an escaped quote, `$`, space) is dropped whole: that keeps an escaped quote
+ * from opening a string. A backslash before a newline in PowerShell is a path, not a continuation:
+ * a space after it stops parseExecutable (bash rules) from swallowing the newline.
  */
-function classifySegments(command: string, tool: string): string | null {
+function normalizeEscapes(s: string, tool: string): string {
+  if (tool !== 'PowerShell') return s.replace(/\\\r?\n/g, ' ');
+  return s.replace(/`\r?\n/g, ' ').replace(/`([A-Za-z0-9])/g, '$1').replace(/`./g, '').replace(/\\(\r?\n)/g, '\\ $1');
+}
+
+/**
+ * Test SEGMENT_PATTERNS against each top-level command segment (quotes kept). Joining continuations
+ * first matters: otherwise a multi-line Invoke-RestMethod splits into segments no pattern can see whole.
+ */
+function classifySegments(view: string, tool: string): string | null {
   try {
-    const joined = stripTextBlocks(command, tool).replace(/(?:`|\\)\r?\n/g, ' ');
-    const parseInput = tool === 'PowerShell' ? joined.replace(/`./g, '') : joined;
-    for (const seg of parseExecutable(parseInput).segments) {
+    for (const seg of parseExecutable(normalizeEscapes(view, tool)).segments) {
       for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;
     }
   } catch {
@@ -365,20 +410,23 @@ function classifySegments(command: string, tool: string): string | null {
 
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
-  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
+  if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');
   const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
-  const segHit = classifySegments(command, tool);
+  const view = executableView(command, tool);
+  const segHit = classifySegments(view, tool);
   if (segHit) return segHit;
   if (depth < 4) {
     try {
       // parseExecutable follows bash rules, where a backtick starts a command substitution.
-      // In PowerShell the backtick is only the escape character, so drop `x escapes first,
-      // or an escaped quote in a message ("say `"git reset --hard`"") parses as a command.
-      const parseInput = tool === 'PowerShell' ? command.replace(/`./g, '') : command;
-      const { segments, substitutions } = parseExecutable(parseInput);
+      // In PowerShell the backtick is only the escape character, so resolve escapes first
+      // (normalizeEscapes), or an escaped quote in a message ("say `"git reset --hard`"")
+      // parses as a command.
+      const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
         const inner = classifyDestructive(payload, depth + 1, tool);

@@ -307,7 +307,7 @@
         "^python(\\.exe)?\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access)\\.py",
         "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*(?:az(?:\\.cmd)?\\s+rest|curl(?:\\.exe)?|[Ii]nvoke-(?:[Rr]est[Mm]ethod|[Ww]eb[Rr]equest|[Aa]z[Rr]est[Mm]ethod)|[Ii][Rr][Mm]|[Ii][Ww][Rr])\\b.*(?:api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|kusto\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com|Microsoft\\.Fabric)",
         "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*az(?:\\.cmd)?\\s+resource\\b.*Microsoft\\.Fabric",
-        "^sqlcmd(\\.exe)?\\s.*fabric\\.microsoft\\.com"
+        "^sqlcmd(\\.exe)?\\s(?:.*\\s)?(?:-S|--server)[\\s:=]*[\"']?[^\\s\"']*fabric\\.microsoft\\.com"
       ],
       "skill": [
         "^([\\w-]+:fabric|fabric|fabric-(data|ai|lakehouse)[\\w-]*|skills-for-fabric:[\\w-]+)$"

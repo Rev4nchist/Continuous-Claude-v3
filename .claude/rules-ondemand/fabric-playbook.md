@@ -13,8 +13,9 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 - "Failed to create session" can be an auth failure, not throttling. Read the job's full `failureReason` before
   you classify or stop a run (L-21).
 - Never pause, resume or resize a capacity from a script. That is the owner's step. The
-  `destructive-command-guard` hook asks (denies when unattended) on `az fabric capacity suspend|resume|update`
-  and on the matching REST calls.
+  `destructive-command-guard` hook ASKS in an interactive session and DENIES in an unattended run (CI, a
+  subagent, bypass mode) on `az fabric capacity suspend|resume|update` and on the matching REST calls. In an
+  unattended run nobody can approve it, so do not try.
 - Invented data only in a playground tenant. Never a customer account, customer data or customer system.
 
 ## Capacity and cost
@@ -38,7 +39,7 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 - T-SQL on this machine: `mssql-python`. There is no ODBC Driver 18 (L-05).
 - OneLake security role names: letters and digits only. Create roles one at a time. The bulk PUT to
   `.../dataAccessRoles` deletes every role missing from its body, `DefaultReader` too (L-10). The guard asks
-  before that PUT.
+  before that PUT in an interactive session and denies it in an unattended run (CI, a subagent, bypass mode).
 - Data agent: the Assistants endpoint retired 2026-08-26; use the agent's MCP endpoint. Require a references
   line in every answer and score by references in code, never by an LLM judge (L-14).
 

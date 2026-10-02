@@ -783,3 +783,113 @@ describe('Fabric guard round 2: lead-ins, host-less URLs, trailing slash, PowerS
     });
   });
 });
+
+// Round 3 (CodeRabbit on ce61984).
+describe('Fabric guard round 3: substitutions inside text blocks, PowerShell backtick escapes', () => {
+  const bash = (c: string) => classifyDestructive(c, 0, 'Bash');
+  const ps = (c: string) => classifyDestructive(c, 0, 'PowerShell');
+  const DEL = 'az fabric capacity delete --capacity-name cap1 --resource-group rg --yes';
+
+  describe('1. an unquoted heredoc / @" here-string EXECUTES $(...) and backticks in its body', () => {
+    it('Bash: cat > f <<EOF with $(az fabric capacity delete ...) is flagged', () => {
+      expect(bash(`cat > f <<EOF\nnotes\n$(${DEL})\nEOF`)).not.toBeNull();
+    });
+    it('Bash: cat <<EOF > f with a backtick substitution is flagged', () => {
+      expect(bash(`cat <<EOF > f\nnotes\n\`az fabric capacity suspend --capacity-name c\`\nEOF`)).not.toBeNull();
+    });
+    it('Bash: an inline substitution in a line of prose is flagged', () => {
+      expect(bash(`cat > f <<EOF\nRun it now: $(${DEL}) then wait.\nEOF`)).not.toBeNull();
+    });
+    it('Bash: a destructive substitution of any kind in an unquoted body is flagged', () => {
+      expect(bash('cat > f <<EOF\n$(rm -rf build)\nEOF')).not.toBeNull();
+    });
+    it('PowerShell: $doc = @" here-string with $(Remove-AzFabricCapacity ...) is flagged', () => {
+      expect(ps('$doc = @"\nnotes\n$(Remove-AzFabricCapacity -ResourceGroupName rg -Name cap1)\n"@\nSet-Content n.md $doc')).not.toBeNull();
+    });
+    it('PowerShell: $doc = @" with $(az fabric capacity delete ...) is flagged', () => {
+      expect(ps(`$doc = @"\n$(${DEL})\n"@`)).not.toBeNull();
+    });
+
+    // The same text in a LITERAL body is only text.
+    it("Bash: <<'EOF' (quoted delimiter) keeps $(...) literal: allowed", () => {
+      expect(bash(`cat > f <<'EOF'\n$(${DEL})\nEOF`)).toBeNull();
+    });
+    it('Bash: <<"EOF" keeps $(...) literal: allowed', () => {
+      expect(bash(`cat > f <<"EOF"\n$(${DEL})\n\`az fabric capacity suspend --capacity-name c\`\nEOF`)).toBeNull();
+    });
+    it('Bash: a backslash-escaped $( in an unquoted body is literal: allowed', () => {
+      expect(bash(`cat > f <<EOF\n\\$(${DEL})\nEOF`)).toBeNull();
+    });
+    it("PowerShell: @' here-string keeps $(...) literal: allowed", () => {
+      expect(ps(`$doc = @'\n$(Remove-AzFabricCapacity -Name cap1)\n'@`)).toBeNull();
+    });
+    it('PowerShell: a backtick-escaped $( in @" is literal: allowed', () => {
+      expect(ps('$doc = @"\n`$(Remove-AzFabricCapacity -Name cap1)\n"@')).toBeNull();
+    });
+
+    // A plain doc body, or a read-only substitution, stays allowed.
+    it('Bash: an unquoted body with no substitution is allowed', () => {
+      expect(bash(`cat > f <<EOF\ncurl -X PUT "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles"\nEOF`)).toBeNull();
+    });
+    it('Bash: an unquoted body with a read-only substitution is allowed', () => {
+      expect(bash('cat > f <<EOF\n$(az fabric capacity show --capacity-name c --resource-group rg)\nEOF')).toBeNull();
+    });
+    it('PowerShell: @" with no substitution is allowed', () => {
+      expect(ps('$doc = @"\nRemove-AzFabricCapacity is gated.\n"@')).toBeNull();
+    });
+    it('PowerShell: @" with a read-only substitution is allowed', () => {
+      expect(ps('$doc = @"\n$(Get-AzFabricCapacity -ResourceGroupName rg)\n"@')).toBeNull();
+    });
+    it('a body that holds the terminator inside text is still skipped to the real terminator, then checked after it', () => {
+      expect(bash(`cat > f <<EOF\n$(echo ok)\nEOF\n${DEL}`)).not.toBeNull();
+    });
+  });
+
+  describe('2. a PowerShell backtick keeps the escaped character', () => {
+    const blocked = [
+      'az fabric capacity del`ete --capacity-name cap1 --resource-group rg',
+      'Suspend-AzFabricCap`acity -ResourceGroupName rg -Name cap1',
+      'Remove-AzFabric`Capacity -ResourceGroupName rg -Name cap1',
+      'az fab`ric capacity suspend --capacity-name cap1',
+      'Invoke-RestMethod -Method P`ut -Uri "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles" -Headers $h',
+      'git res`et --hard origin/main',
+    ];
+    for (const cmd of blocked) {
+      it(`PowerShell: flags ${cmd.slice(0, 60)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    it('a backtick-newline continuation still joins the lines', () => {
+      expect(ps('az fabric capacity `\n  suspend --capacity-name cap1')).not.toBeNull();
+      expect(ps('Invoke-RestMethod `\n -Method Put `\n -Uri "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles"')).not.toBeNull();
+    });
+    it('a continuation and an escaped letter together', () => {
+      expect(ps('az fabric capacity `\n  del`ete --capacity-name cap1')).not.toBeNull();
+    });
+    it('escaped letters in a read-only command stay allowed', () => {
+      expect(ps('az fabric capacity sh`ow --capacity-name cap1')).toBeNull();
+      expect(ps('Get-AzFabric`Capacity -Name cap1')).toBeNull();
+    });
+    it('escaped quotes inside a string still stay inside the string', () => {
+      expect(ps('Write-Host "say `"az fabric capacity suspend`" please"')).toBeNull();
+    });
+    it('a trailing backslash in PowerShell is a path, not a continuation', () => {
+      expect(ps('cd C:\\work\\\naz fabric capacity suspend --capacity-name cap1')).not.toBeNull();
+    });
+  });
+
+  describe('text-block scanning stays linear', () => {
+    const blocks: Array<[string, string, 'Bash' | 'PowerShell']> = [
+      ['unterminated $( in an unquoted heredoc', 'cat > f <<EOF\n' + '$( '.repeat(3000), 'Bash'],
+      ['unmatched backticks in an unquoted heredoc', 'cat > f <<EOF\n' + 'a ` '.repeat(3000) + '\nEOF', 'Bash'],
+      ['many closed substitutions', 'cat > f <<EOF\n' + '$(echo a) '.repeat(3000) + '\nEOF', 'Bash'],
+      ['unterminated $( in @" here-string', '$d = @"\n' + '$( '.repeat(3000), 'PowerShell'],
+      ['many heredoc openers', 'cat > f <<EOF\nx\nEOF\n'.repeat(1500), 'Bash'],
+    ];
+    for (const [name, cmd, tool] of blocks) {
+      it(`${name}: under 2 s`, () => {
+        const t0 = Date.now();
+        classifyDestructive(cmd, 0, tool);
+        expect(Date.now() - t0).toBeLessThan(2000);
+      });
+    }
+  });
+});

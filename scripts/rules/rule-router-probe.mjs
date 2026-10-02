@@ -140,6 +140,10 @@ const CASES = [
   ['fabric-ai-* injects', { session_id: 's72', tool_name: 'Skill', tool_input: { skill: 'fabric-ai-functions' } }, 'inject', ['fabric'], []],
   ['any skills-for-fabric:* skill injects', { session_id: 's73', tool_name: 'Skill', tool_input: { skill: 'skills-for-fabric:spark-cli' } }, 'inject', ['fabric'], []],
   ['the fabric.js library skill is not Fabric (pins the decision)', { session_id: 's74', tool_name: 'Skill', tool_input: { skill: 'fabric-js' } }, 'none', [], []],
+  // Round 3 (CodeRabbit): only the sqlcmd SERVER argument names the Fabric host.
+  ['sqlcmd to local SQL Server with the host name only in the query text is not Fabric', bash('s76', 'sqlcmd -S localhost -d master -Q "select \'fabric.microsoft.com\'"'), 'none', [], []],
+  ['sqlcmd -S:<fabric host> injects', bash('s77', 'sqlcmd -S:abc123.datawarehouse.fabric.microsoft.com -d wh -G -Q "select 1"'), 'inject', ['fabric'], []],
+  ['sqlcmd --server "tcp:<fabric host>,1433" injects', bash('s78', 'sqlcmd --server "tcp:abc123.database.fabric.microsoft.com,1433" -d db -G -Q "select 1"'), 'inject', ['fabric'], []],
   ['fabric-of-the-app is not Fabric (pins the decision)', { session_id: 's75', tool_name: 'Skill', tool_input: { skill: 'fabric-of-the-app' } }, 'none', [], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],

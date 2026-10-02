@@ -304,18 +304,53 @@ function normalizeGitGlobalOptions(scan) {
     "git"
   );
 }
-function stripTextBlocks(command, tool) {
+function bodySubstitutions(body, tool) {
+  const out = [];
+  const esc = tool === "PowerShell" ? "`" : "\\";
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === esc) {
+      i += 2;
+      continue;
+    }
+    if (c === "$" && body[i + 1] === "(") {
+      const { inner, end } = readBalanced(body, i + 2, "(", ")");
+      out.push(inner);
+      i = end;
+      continue;
+    }
+    if (c === "`" && tool !== "PowerShell") {
+      const { inner, end } = readBacktick(body, i + 1);
+      out.push(inner);
+      i = end;
+      continue;
+    }
+    i++;
+  }
+  return out;
+}
+function executableView(command, tool) {
   const out = [];
   let end = null;
+  let expands = false;
+  let body = [];
+  const flush = () => {
+    if (expands) for (const s of bodySubstitutions(body.join("\n"), tool)) out.push(`$(${s})`);
+    end = null;
+    body = [];
+  };
   for (const line of command.split("\n")) {
     if (end) {
-      if (end.test(line)) end = null;
+      if (end.test(line)) flush();
+      else body.push(line);
       continue;
     }
     if (tool === "PowerShell") {
       const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
       if (h) {
         end = new RegExp(`^\\s*${h[1]}@`);
+        expands = h[1] === '"';
         continue;
       }
       out.push(line);
@@ -323,15 +358,21 @@ function stripTextBlocks(command, tool) {
     }
     out.push(line);
     const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
-    if (m) end = new RegExp(`^\\s*${m[2]}\\s*$`);
+    if (m) {
+      end = new RegExp(`^\\s*${m[2]}\\s*$`);
+      expands = m[1] === "";
+    }
   }
+  if (end) flush();
   return out.join("\n");
 }
-function classifySegments(command, tool) {
+function normalizeEscapes(s, tool) {
+  if (tool !== "PowerShell") return s.replace(/\\\r?\n/g, " ");
+  return s.replace(/`\r?\n/g, " ").replace(/`([A-Za-z0-9])/g, "$1").replace(/`./g, "").replace(/\\(\r?\n)/g, "\\ $1");
+}
+function classifySegments(view, tool) {
   try {
-    const joined = stripTextBlocks(command, tool).replace(/(?:`|\\)\r?\n/g, " ");
-    const parseInput = tool === "PowerShell" ? joined.replace(/`./g, "") : joined;
-    for (const seg2 of parseExecutable(parseInput).segments) {
+    for (const seg2 of parseExecutable(normalizeEscapes(view, tool)).segments) {
       for (const p of SEGMENT_PATTERNS) if (p.re.test(seg2)) return p.name;
     }
   } catch {
@@ -340,17 +381,18 @@ function classifySegments(command, tool) {
 }
 function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
-  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  if (tool === "PowerShell") scan = scan.replace(/`([A-Za-z0-9])/g, "$1");
   const patterns = tool === "PowerShell" ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
-  const segHit = classifySegments(command, tool);
+  const view = executableView(command, tool);
+  const segHit = classifySegments(view, tool);
   if (segHit) return segHit;
   if (depth < 4) {
     try {
-      const parseInput = tool === "PowerShell" ? command.replace(/`./g, "") : command;
-      const { segments, substitutions } = parseExecutable(parseInput);
+      const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
         const inner = classifyDestructive(payload, depth + 1, tool);
