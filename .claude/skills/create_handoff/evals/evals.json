@@ -3,7 +3,7 @@
     "skills": [
       "create_handoff"
     ],
-    "query": "/create_handoff. Session notes are in evals/files/session-notes.md. The Notion connector isn't loaded in this session and you can't write files here, so paste the full local YAML copy exactly as you'd save it, plus the path you'd save it to, so the next create can push it to Notion.",
+    "query": "create a handoff for this session. Session notes are in evals/files/session-notes.md. The Notion connector isn't loaded in this session and you can't write files here, so paste the full local YAML copy exactly as you'd save it, plus the path you'd save it to, so the next create can push it to Notion.",
     "files": [
       "evals/files/session-notes.md"
     ],

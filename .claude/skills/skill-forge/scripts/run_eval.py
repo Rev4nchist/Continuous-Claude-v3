@@ -216,9 +216,13 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     skill_listed = None if listed is None else matches(listed, targets)
     skill_fired = matches(info["skills_fired"], targets)
     real_fired = bool(spec.skill_alias) and matches(info["skills_fired"], real_names)
-    error = (run.error
-             or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
-             or headless.result_error(info))
+    # A stop at the turn cap is an answer that failed, not a broken run: excluding it would drop
+    # exactly the baselines that floundered without the skill. It is graded 0 without a grader call.
+    no_answer = (info.get("result") or {}).get("subtype") == "error_max_turns" and not info["skill_errors"]
+    error = None if no_answer else (
+        run.error
+        or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
+        or headless.result_error(info))
     excluded = exclusion_reason(spec.config, skill_listed, skill_fired, read_skill, error, real_fired)
 
     d = spec.run_dir
@@ -239,6 +243,8 @@ def execute(spec: RunSpec, timeout: int) -> dict:
         "final_text": info["final_text"], "metrics": m,
         # A fired skill whose load failed, or a run that did not end in success, is a broken run.
         "error": error,
+        # The run stopped at --max-turns without a final answer: it counts, and every assertion fails.
+        "no_answer": no_answer,
         # Why this run must not be graded or counted. None when it counts.
         "excluded": excluded,
         "stderr": run.stderr, "assertions": spec.eval["assertions"],
@@ -285,6 +291,14 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
         # A broken run is not graded. The grading file says why, and the benchmark skips it.
         grading = {"excluded": record["excluded"], "expectations": [],
                    "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
+        headless.write_json(run_dir / "grading.json", grading)
+        return grading
+    if record.get("no_answer"):
+        # Stopped at the turn cap with no final answer: nothing to grade, so every assertion fails.
+        exps = [{"text": a, "passed": False, "evidence": "the run stopped at the turn cap without a final answer"}
+                for a in record["assertions"]]
+        grading = {"expectations": exps, "no_answer": True,
+                   "summary": {"passed": 0, "failed": len(exps), "total": len(exps), "pass_rate": 0.0}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
     grader = (SKILL_DIR / "agents" / "grader.md").read_text(encoding="utf-8")

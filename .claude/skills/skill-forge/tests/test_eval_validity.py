@@ -169,7 +169,10 @@ CASES = [
     ("with-exit-1", "with_skill", lambda a: (stream(init([a]), result()), 1), "exit 1"),
     ("with-not-listed", "with_skill", lambda a: (stream(init(["x"]), result()), 0), "not listed"),
     ("no-result-event-exit-0", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a)), 0), "no result"),
-    ("max-turns-exit-0", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_max_turns")), 0), "error_max_turns"),
+    # A turn-cap stop is a failed answer, not a broken run: it counts (graded 0), in either config.
+    ("max-turns-with", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_max_turns")), 1), None),
+    ("max-turns-baseline", "without_skill", lambda a: (stream(init(["x"]), tool("Grep"), result("error_max_turns")), 1), None),
+    ("execution-error", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_during_execution")), 0), "error_during_execution"),
     ("skill-load-denied", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), tool_error(), result()), 0), "skill load failed"),
 ]
 
@@ -186,6 +189,20 @@ def test_a_run_that_cannot_count_is_excluded_with_its_reason(tmp_path, monkeypat
         assert rec["excluded"] is None, rec["excluded"]
     else:
         assert rec["excluded"] and want in rec["excluded"], rec["excluded"]
+
+
+def test_a_turn_cap_stop_is_graded_zero_without_calling_the_grader(tmp_path, monkeypatch):
+    _, _, _, b = plan(tmp_path)
+    out = stream(init(["x"]), tool("Grep"), result("error_max_turns"))
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out, 1))
+    rec = run_eval.execute(b, 10)
+    assert rec["no_answer"] is True and rec["excluded"] is None
+
+    def no_grader(*a, **k):
+        raise AssertionError("the grader must not run for a turn-cap stop")
+    patch_run(monkeypatch, no_grader)
+    g = run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])
+    assert g["summary"] == {"passed": 0, "failed": 1, "total": 1, "pass_rate": 0.0}
 
 
 def test_the_result_error_helper_reads_the_subtype():
