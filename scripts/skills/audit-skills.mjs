@@ -62,10 +62,14 @@ function existsFn(o) {
   if (!o.indexFiles || !o.fallbackRoot) return (p) => fs.existsSync(p);
   const dirs = new Set();
   for (const f of o.indexFiles) for (let i = f.indexOf('/'); i !== -1; i = f.indexOf('/', i + 1)) dirs.add(f.slice(0, i));
-  const rootN = o.fallbackRoot.replace(/\\/g, '/').replace(/\/$/, '');
+  // Both the real repo and the export folder map onto the index: a skill's ../ link resolves under
+  // the export folder, which holds only the exported paths, so the index is the source of truth.
+  const roots = [o.fallbackRoot, o.repoRoot].filter(Boolean).map((r) => path.resolve(r).replace(/\\/g, '/').replace(/\/$/, ''));
   return (p) => {
-    const n = String(p).replace(/\\/g, '/');
-    if (n.startsWith(rootN + '/')) { const rel = n.slice(rootN.length + 1); return o.indexFiles.has(rel) || dirs.has(rel); }
+    const n = path.resolve(String(p)).replace(/\\/g, '/');
+    for (const r of roots) {
+      if (n.startsWith(r + '/')) { const rel = n.slice(r.length + 1); return o.indexFiles.has(rel) || dirs.has(rel); }
+    }
     return fs.existsSync(p);
   };
 }
