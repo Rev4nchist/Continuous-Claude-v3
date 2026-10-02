@@ -138,11 +138,18 @@ def write_json(path: Path, data) -> Path:
     return path
 
 
-def write_settings(path: Path, skill_overrides: dict | None = None) -> Path:
-    """A --settings file: every hook off, plus skillOverrides when given."""
+def write_settings(path: Path, skill_overrides: dict | None = None, deny_reads: list[str] | None = None) -> Path:
+    """A --settings file: every hook off, plus skillOverrides and Read deny rules when given.
+
+    deny_reads blocks direct reads of the real skill's folders. With the skill off, a model that
+    knows the skill exists (CLAUDE.md names some skills) can still open its SKILL.md with Read,
+    which contaminates the baseline.
+    """
     data: dict = {"disableAllHooks": True}
     if skill_overrides:
         data["skillOverrides"] = dict(skill_overrides)
+    if deny_reads:
+        data["permissions"] = {"deny": [f"Read({p})" for p in deny_reads]}
     return write_json(path, data)
 
 
