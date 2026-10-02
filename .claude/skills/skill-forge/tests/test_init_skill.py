@@ -1,7 +1,6 @@
 """init_skill.py: the scaffold must pass the gate, refuse bad names, and fail loudly until edited."""
 
 import os
-from pathlib import Path
 
 import pytest
 
