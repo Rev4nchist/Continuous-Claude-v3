@@ -117,6 +117,8 @@ write_cursor() {
     [[ -z "$sha" ]] && return 0
     $DRY_RUN && return 0
     $SYNC_ON_MAIN || return 0
+    # state/ is a link (or the cursor file is): writing would land in another tool's tree.
+    ${STATE_BLOCKED:-false} && return 0
     mkdir -p "$(dirname "$CURSOR_FILE")" 2>/dev/null || true
     printf '%s\n' "$sha" > "$CURSOR_FILE.tmp" && mv -f "$CURSOR_FILE.tmp" "$CURSOR_FILE"
 }
@@ -263,6 +265,7 @@ refresh_identical_entries() {
 
 save_manifest() {
     $DRY_RUN && return 0
+    ${STATE_BLOCKED:-false} && return 0   # state/ is a link: never write the manifest through it
     refresh_identical_entries
     mkdir -p "$(dirname "$MANIFEST_FILE")"
     local tmp="$MANIFEST_FILE.tmp.$$" r
@@ -323,18 +326,64 @@ link_hit_for_dir() {
     return 0
 }
 
-# link_guard_blocks <active path> -- true (0) when the path must NOT be written or deleted
-# because it, or a parent directory below $ACTIVE_CLAUDE, is a link. Prints the LINK-GUARD line.
+# link_guard_blocks <active path> [label] -- true (0) when the path must NOT be written or
+# deleted because it, or a parent directory below $ACTIVE_CLAUDE, is a link. Prints the
+# LINK-GUARD line (label replaces the path in it when given).
+#
+# A DANGLING junction (target removed) still tests true with `-L` (probed 2026-10-01: test -L yes,
+# test -e no, readlink prints the old target). Without this check `mkdir -p` on it fails with
+# "File exists" and `set -e` aborts the whole mirror before the cursor moves.
 link_guard_blocks() {
-    local dst="$1" hit target
+    local dst="$1" label="${2:-}" hit target
     link_hit_for_dir "${dst%/*}"
     hit="$LINK_HIT"
     [[ -z "$hit" && -L "$dst" ]] && hit="$dst"
     [[ -z "$hit" ]] && return 1
     target="$(readlink "$hit" 2>/dev/null)" || target=""
-    echo "  LINK-GUARD: skipped ${dst#$ACTIVE_CLAUDE/}: ~/.claude/${hit#$ACTIVE_CLAUDE/} is a link to ${target:-<unreadable>} (owned by another tool)"
+    echo "  LINK-GUARD: skipped ${label:-${dst#$ACTIVE_CLAUDE/}}: ~/.claude/${hit#$ACTIVE_CLAUDE/} is a link to ${target:-<unreadable>} (owned by another tool)"
     LINK_SKIPPED=$((LINK_SKIPPED + 1))
     return 0
+}
+
+# sync_root_ok <dir> -- create a sync root unless a link blocks it. False = the caller skips the
+# whole block (one LINK-GUARD line instead of one per file). The guard runs BEFORE mkdir: a live
+# link would get a new directory created inside the other tool's tree, a dangling one would abort.
+sync_root_ok() {
+    local d="$1"
+    link_guard_blocks "$d" && return 1
+    if ! $DRY_RUN && ! mkdir -p "$d"; then
+        # Callers run this inside `||` / `&&`, where set -e is off: report, never skip silently.
+        echo "  CLOBBER-GUARD ERROR: cannot create ${d#$ACTIVE_CLAUDE/} -- block NOT synced"
+        GUARD_ERRORS=$((GUARD_ERRORS + 1))
+        return 1
+    fi
+    return 0
+}
+
+# state/ holds the manifest and the cursor; .sync-quarantine/ holds the only copy of a clobbered
+# edit. If either is (or sits under) a link, writing there would land in another tool's tree.
+# Each is checked once per run. A blocked state/ means no manifest and no cursor write; a blocked
+# quarantine means a diverged active file is left untouched and counted as a guard error.
+STATE_BLOCKED=false
+QUARANTINE_STATE=""   # "" = unchecked, then "ok" or "blocked"
+
+check_state_links() {
+    if link_guard_blocks "$ACTIVE_CLAUDE/state/." "state/ (manifest and cursor)" \
+        || link_guard_blocks "$MANIFEST_FILE" \
+        || link_guard_blocks "$CURSOR_FILE"; then
+        STATE_BLOCKED=true
+    fi
+}
+
+quarantine_blocked() {
+    if [[ -z "$QUARANTINE_STATE" ]]; then
+        if link_guard_blocks "$ACTIVE_CLAUDE/.sync-quarantine/." ".sync-quarantine/"; then
+            QUARANTINE_STATE=blocked
+        else
+            QUARANTINE_STATE=ok
+        fi
+    fi
+    [[ "$QUARANTINE_STATE" == blocked ]]
 }
 
 # guarded_copy <src> <dst> -- the ONLY way this script writes a destination file.
@@ -347,7 +396,7 @@ guarded_copy() {
         echo "[DRY RUN] Would copy: $src -> $dst"
         return 0
     fi
-    mkdir -p "$(dirname "$dst")"
+    mkdir -p "${dst%/*}"
     if [[ ! -f "$dst" ]]; then
         cp "$src" "$dst"
         manifest_set "$rel" "$(file_hash "$dst")"
@@ -390,6 +439,11 @@ guarded_copy() {
     fi
     # CLOBBER RISK: active file was edited since last sync (or is unknown to the
     # manifest -- fail-safe treats unknown as edited). Quarantine, then copy.
+    if quarantine_blocked; then
+        echo "  CLOBBER-GUARD ERROR: .sync-quarantine is a link, cannot preserve $rel -- active file left untouched, NOT synced"
+        GUARD_ERRORS=$((GUARD_ERRORS + 1))
+        return 0
+    fi
     cp "$src" "$dst.sync-tmp"
     mkdir -p "$QUARANTINE_ROOT/$(dirname "$rel")"
     cp "$dst" "$QUARANTINE_ROOT/$rel"
@@ -411,6 +465,8 @@ print_guard_summary() {
         echo "LINK-GUARD SUMMARY: $LINK_SKIPPED path(s) skipped: each sits in or under a link inside ~/.claude."
         echo "  The link target belongs to another tool, so the sync did not write or delete there."
         echo "  Remove the link (or the repo copy) to settle which copy wins."
+        echo "  The sync cursor moves past skipped paths, so a later --changed run will not retry them."
+        echo "  After removing the link, run a full mirror: bash scripts/sync-to-active.sh"
     fi
     if [[ "$QUARANTINED" -gt 0 || "$GUARD_ERRORS" -gt 0 ]]; then
         echo ""
@@ -433,6 +489,8 @@ copy_registry() {
     local src="$REPO_CLAUDE/project-registry.json"
     local dst="$ACTIVE_CLAUDE/project-registry.json"
     [[ -f "$src" ]] || return 0
+    # The guard decides first, so a dry run never claims a copy a real run would skip.
+    link_guard_blocks "$dst" && return 0
     if $DRY_RUN; then
         echo "[DRY RUN] Would copy: $src -> $dst"
         return 0
@@ -468,13 +526,14 @@ copy_dir() {
 
     [[ ! -d "$src_path" ]] && return 0
 
-    $DRY_RUN || mkdir -p "$dst_path"
+    # A link at (or above) the sync root skips the whole tree with one LINK-GUARD line.
+    sync_root_ok "$dst_path" || return 0
 
     while IFS= read -r src_file; do
         local rel="${src_file#$src_path/}"
         local dst_file="$dst_path/$rel"
 
-        local base=$(basename "$src_file")
+        local base="${src_file##*/}"
         local skip_file=false
         for skip in $NEVER_SYNC; do
             [[ "$base" == "$skip" ]] && skip_file=true && break
@@ -508,6 +567,7 @@ release_lock() {
 # and the release and wait for some later, unrelated sync.
 finish_sync() {
     local target="$1" guard_rc=0
+    check_state_links   # before the summary, so a blocked state/ is counted in it
     save_manifest
     print_guard_summary || guard_rc=$?
     [[ $guard_rc -eq 0 ]] && write_cursor "$target"
@@ -818,7 +878,7 @@ copy_registry
 $DRY_RUN || mkdir -p "$ACTIVE_CLAUDE"
 for src_file in "$REPO_CLAUDE"/*.md; do
     [[ ! -f "$src_file" ]] && continue
-    base=$(basename "$src_file")
+    base="${src_file##*/}"
     skip_file=false
     for skip in $NEVER_SYNC; do
         [[ "$base" == "$skip" ]] && skip_file=true && break
@@ -840,11 +900,10 @@ done
 # Sync hooks/dist/*.mjs (built hook bundles)
 DIST_SRC="$REPO_CLAUDE/hooks/dist"
 DIST_DST="$ACTIVE_CLAUDE/hooks/dist"
-if [[ -d "$DIST_SRC" ]]; then
-    $DRY_RUN || mkdir -p "$DIST_DST"
+if [[ -d "$DIST_SRC" ]] && sync_root_ok "$DIST_DST"; then
     for src_file in "$DIST_SRC"/*.mjs; do
         [[ ! -f "$src_file" ]] && continue
-        local_name=$(basename "$src_file")
+        local_name="${src_file##*/}"
         dst_file="$DIST_DST/$local_name"
         guarded_copy "$src_file" "$dst_file"
     done
@@ -853,11 +912,10 @@ fi
 # Sync templates/ralph/ (prompt templates for Ralph agents)
 TEMPLATES_SRC="$REPO_CLAUDE/templates/ralph"
 TEMPLATES_DST="$ACTIVE_CLAUDE/templates/ralph"
-if [[ -d "$TEMPLATES_SRC" ]]; then
-    $DRY_RUN || mkdir -p "$TEMPLATES_DST"
+if [[ -d "$TEMPLATES_SRC" ]] && sync_root_ok "$TEMPLATES_DST"; then
     for src_file in "$TEMPLATES_SRC"/*; do
         [[ ! -f "$src_file" ]] && continue
-        local_name=$(basename "$src_file")
+        local_name="${src_file##*/}"
         dst_file="$TEMPLATES_DST/$local_name"
         guarded_copy "$src_file" "$dst_file"
     done
@@ -871,11 +929,10 @@ guarded_copy "$CORE_SRC" "$CORE_DST"
 # Sync scripts/ralph/*.py (create target directory if needed for fresh installs)
 RALPH_SRC="$REPO_CLAUDE/scripts/ralph"
 RALPH_DST="$ACTIVE_CLAUDE/scripts/ralph"
-if [[ -d "$RALPH_SRC" ]]; then
-    $DRY_RUN || mkdir -p "$RALPH_DST"
+if [[ -d "$RALPH_SRC" ]] && sync_root_ok "$RALPH_DST"; then
     for src_file in "$RALPH_SRC"/*.py; do
         [[ ! -f "$src_file" ]] && continue
-        local_name=$(basename "$src_file")
+        local_name="${src_file##*/}"
         dst_file="$RALPH_DST/$local_name"
         guarded_copy "$src_file" "$dst_file"
     done
@@ -969,6 +1026,10 @@ if ! $DRY_RUN; then
 
     if [[ "$VERIFY_FAIL" -eq 1 ]]; then
         echo "  WARNING: Some directories have file count mismatches"
+        # find does not enter a link, so a linked subtree counts as absent in the target.
+        if [[ "$LINK_SKIPPED" -gt 0 ]]; then
+            echo "  NOTE: $LINK_SKIPPED path(s) were skipped by LINK-GUARD above; a count mismatch is expected for them, not a copy failure."
+        fi
     fi
 fi
 

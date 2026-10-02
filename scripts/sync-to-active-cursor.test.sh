@@ -346,7 +346,9 @@ echo "=== T13: the sync never writes or deletes through a link inside ~/.claude 
 # finding in sync-to-active.sh). Elsewhere a plain symlink.
 mklink_dir() {  # mklink_dir <link> <target>
     if command -v cygpath >/dev/null 2>&1; then
-        cmd //c "mklink /J $(cygpath -w "$1") $(cygpath -w "$2")" >/dev/null 2>&1
+        # MSYS2_ARG_CONV_EXCL keeps MSYS from rewriting /J and /c; separate quoted args let a
+        # temp path with a space work (probed: the one-string form breaks on a space).
+        MSYS2_ARG_CONV_EXCL='*' cmd /c mklink /J "$(cygpath -w "$1")" "$(cygpath -w "$2")" >/dev/null 2>&1
     else
         ln -s "$2" "$1"
     fi
@@ -377,7 +379,7 @@ chk "(d) a normal skill in the same run still syncs" "$( [ "$(cat "$ACT/skills/n
 chk "(e) nested: a link two directories above the file is caught (outside unchanged)" "$( [ "$(cat "$OUT13/nestparent/a/b/F.md")" = "outside-nested" ] && echo 1 || echo 0)"
 chk "(e) nested: LINK-GUARD names the link, not the file's own parent" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/nestparent/a/b/F.md: ~/.claude/skills/nestparent is a link' && echo 1 || echo 0)"
 chk "summary counts the skips" "$(printf '%s' "$out" | grep -q 'LINK-GUARD SUMMARY: 2 path(s) skipped' && echo 1 || echo 0)"
-chk "(f) no manifest entry for a skipped path" "$(grep -qE $'\tskills/(linked|nestparent)/' "$ACT/state/sync-manifest.txt" && echo 0 || echo 1)"
+chk "(f) no manifest entry for a skipped path" "$( [ -f "$ACT/state/sync-manifest.txt" ] && ! grep -qE $'\tskills/(linked|nestparent)/' "$ACT/state/sync-manifest.txt" && echo 1 || echo 0)"
 
 # (g) dry run reports the guard and no copy into the link.
 printf 'repo-v3\n' > "$REPO/.claude/skills/linked/SKILL.md"; commit t13-v3
@@ -405,6 +407,147 @@ chk "(c) full mirror: no new file appears in the link target" "$(not "$OUT13/lin
 chk "(c) full mirror: LINK-GUARD printed" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/linked/NEW.md' && echo 1 || echo 0)"
 chk "(d) full mirror: the normal skill still syncs" "$( [ "$(cat "$ACT/skills/normal/SKILL.md")" = "n3" ] && echo 1 || echo 0)"
 rm -f "$ACT/skills/linked" "$ACT/skills/nestparent"
+
+echo "=== T14: link guard edge cases (critic round 2) ==="
+# Failure modes: (A) the destination ITSELF is a link, so only the parent-chain check would miss it,
+# (B) a linked settings.json is replaced by the mcpServers merge, (C) a link at the top of a subtree
+# (~/.claude/rules) or a link above a sync root (templates/, hooks/) lets mkdir or a copy create
+# files in the other tool's tree, (D) a DANGLING link at a sync root makes mkdir fail and set -e
+# abort the run before the cursor moves, (E) state/ or .sync-quarantine/ is a link and the cursor,
+# manifest or quarantine copy lands in another tool's tree, (F) ~/.claude itself is a link and the
+# guard over-blocks, (G) a dry run claims a copy the real run would skip.
+OUT14="$FIX/outside14"
+mkdir -p "$OUT14"
+empty() { [ -z "$(ls -A "$1" 2>/dev/null)" ] && echo 1 || echo 0; }
+cursor_is_head() { [ "$(tr -d '\r\n' < "$ACT/state/sync-cursor")" = "$(git -C "$REPO" rev-parse HEAD)" ] && echo 1 || echo 0; }
+# Settle the fixture between cases: a plain full mirror with no links in the way.
+settle() { rm -f "$ACT/.sync.pending"; sync >/dev/null; }
+
+echo "--- A: the destination is itself a link"
+mkdir -p "$OUT14/solo-dir"
+mklink_dir "$ACT/skills/solo.md" "$OUT14/solo-dir"
+printf 'solo-v1\n' > "$REPO/.claude/skills/solo.md"; commit t14-solo
+out="$(sync --changed)"
+chk "(A) dst is a link to a dir: nothing copied into the target" "$(not "$OUT14/solo-dir/solo.md")"
+chk "(A) LINK-GUARD names the destination itself as the link" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/solo.md: ~/.claude/skills/solo.md is a link' && echo 1 || echo 0)"
+g rm -q .claude/skills/solo.md; g commit -q -m t14-solo-del
+out="$(sync --changed)"
+chk "(A) --changed delete: the link at dst survives" "$( [ -L "$ACT/skills/solo.md" ] && echo 1 || echo 0)"
+chk "(A) --changed delete: LINK-GUARD printed" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/solo.md' && echo 1 || echo 0)"
+rm -f "$ACT/skills/solo.md"
+
+# A file symlink needs a privilege on Windows; run these cases only where one can be made.
+printf 'outside-file\n' > "$OUT14/real.txt"
+printf '{"a":1}\n' > "$OUT14/settings-real.json"
+if MSYS=winsymlinks:nativestrict ln -s "$OUT14/real.txt" "$ACT/skills/fl.md" 2>/dev/null && [ -L "$ACT/skills/fl.md" ]; then
+    printf 'fl-v1\n' > "$REPO/.claude/skills/fl.md"; commit t14-fl
+    out="$(sync --changed)"
+    chk "(A2) dst is a file link: the outside file is unchanged" "$( [ "$(cat "$OUT14/real.txt")" = "outside-file" ] && echo 1 || echo 0)"
+    g rm -q .claude/skills/fl.md; g commit -q -m t14-fl-del
+    sync --changed >/dev/null
+    chk "(A2) delete: the outside file and the link survive" "$( [ -e "$OUT14/real.txt" ] && [ -L "$ACT/skills/fl.md" ] && echo 1 || echo 0)"
+    rm -f "$ACT/skills/fl.md"
+    if command -v jq >/dev/null 2>&1; then
+        MSYS=winsymlinks:nativestrict ln -s "$OUT14/settings-real.json" "$ACT/settings.json"
+        printf '{"mcpServers":{"x":1}}\n' > "$REPO/.claude/settings.json"; commit t14-settings
+        sync >/dev/null
+        chk "(B) full mirror: linked settings.json keeps its link and content" "$( [ -L "$ACT/settings.json" ] && [ "$(cat "$OUT14/settings-real.json")" = '{"a":1}' ] && echo 1 || echo 0)"
+        rm -f "$ACT/settings.json"
+    fi
+else
+    echo "  SKIP  (A2) and (B): this machine cannot create file symlinks (needs a privilege on Windows)"
+fi
+
+echo "--- G: a dry run lets the guard decide before it says 'Would copy'"
+mkdir -p "$OUT14/reg-dir"
+mklink_dir "$ACT/project-registry.json" "$OUT14/reg-dir"
+printf '{}\n' > "$REPO/.claude/project-registry.json"; commit t14-registry
+out="$(sync --dry-run)"
+chk "(G) dry run: LINK-GUARD printed for the linked registry" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped project-registry.json' && echo 1 || echo 0)"
+chk "(G) dry run: no 'Would copy' for the linked registry" "$(printf '%s' "$out" | grep -q 'Would copy:.*project-registry.json' && echo 0 || echo 1)"
+out="$(sync)"
+chk "(G) real run: nothing written into the registry link target" "$(empty "$OUT14/reg-dir")"
+rm -f "$ACT/project-registry.json"
+
+echo "--- C: a link at the top of a subtree, and a link above a sync root"
+mv "$ACT/rules" "$ACT/rules.keep"
+mkdir -p "$OUT14/rules-store"
+mklink_dir "$ACT/rules" "$OUT14/rules-store"
+printf 'c\n' > "$REPO/.claude/rules-src/t14c.md"; commit t14-rules
+out="$(sync --changed)"
+chk "(C) --changed: nothing lands in the linked rules/ target" "$(empty "$OUT14/rules-store")"
+chk "(C) --changed: LINK-GUARD names rules/t14c.md and the rules link" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped rules/t14c.md: ~/.claude/rules is a link' && echo 1 || echo 0)"
+mkdir -p "$REPO/.claude/templates/ralph" "$REPO/.claude/hooks/dist" "$REPO/.claude/docs"
+printf 't\n' > "$REPO/.claude/templates/ralph/t.md"
+printf 'h\n' > "$REPO/.claude/hooks/dist/x.mjs"
+printf 'd\n' > "$REPO/.claude/docs/d.md"
+commit t14-roots
+mkdir -p "$OUT14/tpl" "$OUT14/hooksdir" "$OUT14/docs-store"
+mklink_dir "$ACT/docs" "$OUT14/docs-store"   # docs is a verified dir: its count must mismatch
+mklink_dir "$ACT/templates" "$OUT14/tpl"
+mklink_dir "$ACT/hooks" "$OUT14/hooksdir"
+out="$(sync)"
+chk "(C) full mirror: the linked rules/ target stays empty" "$(empty "$OUT14/rules-store")"
+chk "(C) full mirror: one LINK-GUARD line for the rules root" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped rules: ~/.claude/rules is a link' && echo 1 || echo 0)"
+chk "(C) mkdir guard: no templates/ralph created inside the link target" "$(not "$OUT14/tpl/ralph")"
+chk "(C) mkdir guard: no hooks/dist created inside the link target" "$(not "$OUT14/hooksdir/dist")"
+chk "(C) summary tells how to recover (full mirror after removing the link)" "$(printf '%s' "$out" | grep -q 'run a full mirror: bash scripts/sync-to-active.sh' && echo 1 || echo 0)"
+chk "(C) verify notes that LINK-GUARD skips explain the count mismatch" "$(printf '%s' "$out" | grep -q 'skipped by LINK-GUARD above' && echo 1 || echo 0)"
+rm -f "$ACT/rules" "$ACT/templates" "$ACT/hooks" "$ACT/docs"; mv "$ACT/rules.keep" "$ACT/rules"
+
+echo "--- D: a dangling link at a sync root must not abort the run"
+mkdir -p "$OUT14/gone1" "$OUT14/gone2"
+mv "$ACT/plugins" "$ACT/plugins.keep"
+mklink_dir "$ACT/plugins" "$OUT14/gone1"
+mklink_dir "$ACT/hooks" "$OUT14/gone2"
+rmdir "$OUT14/gone1" "$OUT14/gone2"
+chk "D fixture: both links dangle (still links, targets gone)" "$( [ -L "$ACT/plugins" ] && [ ! -e "$ACT/plugins" ] && [ -L "$ACT/hooks" ] && [ ! -e "$ACT/hooks" ] && echo 1 || echo 0)"
+printf 'd\n' > "$REPO/.claude/rules-src/t14d.md"; commit t14-d   # a new HEAD, so the cursor must MOVE
+chk "D fixture: the cursor is behind HEAD before the run" "$( [ "$(cursor_is_head)" = "0" ] && echo 1 || echo 0)"
+out="$(sync)"; rc=$?
+chk "(D) full mirror exits 0 instead of aborting on mkdir" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+chk "(D) LINK-GUARD printed for the dangling plugins/ root" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped plugins/claude-hud' && echo 1 || echo 0)"
+chk "(D) LINK-GUARD printed for the dangling hooks/ root" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped hooks/dist' && echo 1 || echo 0)"
+chk "(D) the cursor was written (= HEAD)" "$(cursor_is_head)"
+out="$(sync --changed)"; rc=$?
+chk "(D) --changed with dangling parents also exits 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+rm -f "$ACT/plugins" "$ACT/hooks"; mv "$ACT/plugins.keep" "$ACT/plugins"
+
+echo "--- E: state/ and .sync-quarantine/ are links"
+mv "$ACT/state" "$ACT/state.keep"
+mkdir -p "$OUT14/st"
+mklink_dir "$ACT/state" "$OUT14/st"
+printf 'e\n' > "$REPO/.claude/rules-src/t14e.md"; commit t14-state
+out="$(sync --changed)"; rc=$?
+chk "(E) linked state/: no cursor or manifest written into the target" "$(empty "$OUT14/st")"
+chk "(E) linked state/: LINK-GUARD printed once for state/" "$( [ "$(printf '%s' "$out" | grep -c 'LINK-GUARD: skipped state/')" = "1" ] && echo 1 || echo 0)"
+chk "(E) linked state/: the sync itself still ran (t14e.md synced)" "$(has "$ACT/rules/t14e.md")"
+rm -f "$ACT/state"; mv "$ACT/state.keep" "$ACT/state"
+settle
+printf 'q1\n' > "$REPO/.claude/rules-src/t14q.md"; commit t14-q1
+sync --changed >/dev/null
+printf 'hand edit\n' > "$ACT/rules/t14q.md"
+printf 'q2\n' > "$REPO/.claude/rules-src/t14q.md"; commit t14-q2
+mkdir -p "$OUT14/q"
+mklink_dir "$ACT/.sync-quarantine" "$OUT14/q"
+out="$(sync --changed)"; rc=$?
+chk "(E) linked quarantine: the diverged active file is left untouched" "$( [ "$(cat "$ACT/rules/t14q.md")" = "hand edit" ] && echo 1 || echo 0)"
+chk "(E) linked quarantine: nothing copied into the link target" "$(empty "$OUT14/q")"
+chk "(E) linked quarantine: reported as a guard error (exit 3)" "$( [ "$rc" -eq 3 ] && printf '%s' "$out" | grep -q 'CLOBBER-GUARD ERROR: .sync-quarantine is a link' && echo 1 || echo 0)"
+rm -f "$ACT/.sync-quarantine"
+out="$(sync --changed)"
+chk "(E) after removing the link, the retry quarantines the edit and syncs" "$( [ "$(cat "$ACT/rules/t14q.md")" = "q2" ] && printf '%s' "$out" | grep -q 'CLOBBER-GUARD: active copy of rules/t14q.md' && echo 1 || echo 0)"
+rm -rf "$ACT/.sync-quarantine"
+
+echo "--- F: ~/.claude itself is a link: no over-block"
+HOME2="$FIX/home2"; REAL2="$FIX/realclaude"
+mkdir -p "$HOME2" "$REAL2"
+mklink_dir "$HOME2/.claude" "$REAL2"
+out="$(HOME="$HOME2" bash "$REPO/scripts/sync-to-active.sh" 2>&1)"; rc=$?
+chk "(F) exit 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+chk "(F) no LINK-GUARD line for a normal file" "$(printf '%s' "$out" | grep -q 'LINK-GUARD' && echo 0 || echo 1)"
+chk "(F) a normal rule synced through the ~/.claude link" "$(has "$REAL2/rules/seed.md")"
+rm -f "$HOME2/.claude"
 
 echo
 echo "passed=$pass failed=$fail"
