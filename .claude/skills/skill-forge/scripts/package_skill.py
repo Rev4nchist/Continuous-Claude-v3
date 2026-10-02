@@ -2,8 +2,8 @@
 """
 Skill Packager - Creates a distributable .skill file of a skill folder.
 
-Merged from Anthropic's skill-creator (.skill format, fnmatch exclusion,
-ROOT_EXCLUDE_DIRS) and create-better-skills (size reporting, file listing,
+Builds the .skill zip (fnmatch exclusion,
+ROOT_EXCLUDE_DIRS, size reporting, file listing,
 >10MB warning).
 
 Usage:

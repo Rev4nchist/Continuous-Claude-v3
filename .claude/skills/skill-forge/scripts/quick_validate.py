@@ -182,12 +182,16 @@ def _parse_args(argv):
         elif argv[i].startswith("--target="):
             target = argv[i].split("=", 1)[1]
             i += 1
+        elif argv[i] == "--skill-path" and i + 1 < len(argv):  # the form vet-skill documents
+            rest.append(argv[i + 1])
+            i += 2
         else:
             rest.append(argv[i])
             i += 1
     if len(rest) != 1 or target not in TARGETS:
         return None
-    return rest[0], target
+    path = Path(rest[0])
+    return str(path.parent if path.name == "SKILL.md" else path), target
 
 
 if __name__ == "__main__":

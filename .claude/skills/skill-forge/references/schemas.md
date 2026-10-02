@@ -1,12 +1,46 @@
 # JSON Schemas
 
-This document defines the JSON schemas used by skill-creator.
+This document defines the JSON schemas used by skill-forge.
+
+## Contents
+
+- [evals.json](#evalsjson)
+- [run.json](#runjson)
+- [history.json](#historyjson)
+- [grading.json](#gradingjson)
+- [metrics.json](#metricsjson)
+- [timing.json](#timingjson)
+- [benchmark.json](#benchmarkjson)
+- [comparison.json](#comparisonjson)
+- [analysis.json](#analysisjson)
 
 ---
 
 ## evals.json
 
-Defines the evals for a skill. Located at `evals/evals.json` within the skill directory.
+Defines the evals for a skill. Located at `evals/evals.json` within the skill directory. A skill needs at least 3 evals. `run_eval.py behavior` refuses a file with fewer.
+
+Two shapes load. Both normalise to `{id, name, prompt, files, skills, assertions}`.
+
+Guide shape (Anthropic best practices):
+
+```json
+[
+  {
+    "skills": ["example-skill"],
+    "query": "User's example prompt",
+    "files": ["evals/files/sample1.pdf"],
+    "expected_behavior": [
+      "The output includes X",
+      "The skill used script Y"
+    ]
+  }
+]
+```
+
+A top-level object with an `evals` list works too.
+
+Existing shape:
 
 ```json
 {
@@ -27,12 +61,60 @@ Defines the evals for a skill. Located at `evals/evals.json` within the skill di
 ```
 
 **Fields:**
-- `skill_name`: Name matching the skill's frontmatter
-- `evals[].id`: Unique integer identifier
-- `evals[].prompt`: The task to execute
-- `evals[].expected_output`: Human-readable description of success
-- `evals[].files`: Optional list of input file paths (relative to skill root)
-- `evals[].expectations`: List of verifiable statements
+- `skill_name`: Name matching the skill's frontmatter (existing shape only)
+- `id`: Unique identifier. Defaults to the position in the list.
+- `prompt` or `query`: The task to execute
+- `skills`: Names of other skills from the same folder that the run also needs
+- `files`: Optional input files, relative to the skill root. They are copied into the temp project.
+- `expected_behavior`, `expectations` or `assertions`: Verifiable statements. All three map to `assertions`. The first one present wins.
+- `expected_output`: Human-readable description of success. It becomes the single assertion when no list is given.
+
+An eval with nothing to grade is an error.
+
+---
+
+## run.json
+
+Output of `run_eval.py behavior` for one run. Located at `<out>/<model>/eval-<id>/<config>/run-1/run.json`. Next to it: `transcript.jsonl` (the raw stream), `transcript.md` (for the grader), `outputs/response.md` and `timing.json`.
+
+```json
+{
+  "eval_id": 1,
+  "eval_name": "eval-1",
+  "config": "with_skill",
+  "skill": "example-skill",
+  "model": "sonnet",
+  "model_id": "claude-sonnet-5-5",
+  "effort": "high",
+  "prompt": "User's example prompt",
+  "skill_listed": true,
+  "skill_fired": true,
+  "skills_fired": ["example-skill"],
+  "skill_errors": [],
+  "tool_counts": {"Skill": 1, "Read": 2},
+  "navigation": {
+    "skill_files_read": ["references/a.md"],
+    "skill_files_unread": ["references/b.md"],
+    "reads_outside_skill": []
+  },
+  "baseline_contaminated": false,
+  "final_text": "...",
+  "metrics": {"total_tokens": 5200, "cost_usd": 0.04, "turns": 3, "duration_seconds": 21.5, "is_error": false},
+  "error": null,
+  "assertions": ["The output includes X"]
+}
+```
+
+**Fields:**
+- `config`: `with_skill` or `without_skill`. The baseline has the skill set to `off` through `skillOverrides`. The viewer reads these exact strings.
+- `skill_listed`: True when the session's start event listed this skill. It is false for a `without_skill` run when the `off` override worked.
+- `skill_fired`: True when the run called the `Skill` tool with this skill. It should be true with the skill on and false with the skill off.
+- `navigation`: The files the run read (Read tool_use paths). `skill_files_unread` lists skill files that were never read. `SKILL.md` is not listed: the Skill tool injects it.
+- `baseline_contaminated`: True when a `without_skill` run read the skill's files anyway. Rerun it.
+- `skill_errors`: Skill tool calls that returned an error. A fired skill that failed to load is not a result.
+- `error`: Null, or the reason the run failed (exit code, timeout, `skill load failed`). A failed run says nothing about the skill.
+
+`summary.json` in the output folder holds the same fields for every run, without the prompt and the text.
 
 ---
 
@@ -157,6 +239,7 @@ Output from the grader agent. Located at `<run-dir>/grading.json`.
 - `claims`: Extracted and verified claims from the output
 - `user_notes_summary`: Issues flagged by the executor
 - `eval_feedback`: (optional) Improvement suggestions for the evals, only present when the grader identifies issues worth raising
+- `grader_model`: Added by `run_eval.py`. The model id that graded the run.
 
 ---
 
@@ -225,7 +308,7 @@ Output from Benchmark mode. Located at `benchmarks/<timestamp>/benchmark.json`.
   "metadata": {
     "skill_name": "pdf",
     "skill_path": "/path/to/pdf",
-    "executor_model": "claude-sonnet-4-20250514",
+    "executor_model": "claude-sonnet-5-5",
     "analyzer_model": "most-capable-model",
     "timestamp": "2026-01-15T10:30:00Z",
     "evals_run": [1, 2, 3],

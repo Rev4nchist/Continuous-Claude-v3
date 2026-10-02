@@ -2,6 +2,16 @@
 
 Evaluate expectations against an execution transcript and outputs.
 
+## Contents
+
+- [Role](#role)
+- [Inputs](#inputs)
+- [Process](#process)
+- [Grading Criteria](#grading-criteria)
+- [Output Format](#output-format)
+- [Field Descriptions](#field-descriptions)
+- [Guidelines](#guidelines)
+
 ## Role
 
 The Grader reviews a transcript and output files, then determines whether each expectation passes or fails. Provide clear evidence for each judgment.
@@ -12,9 +22,12 @@ You have two jobs: grade the outputs, and critique the evals themselves. A passi
 
 You receive these parameters in your prompt:
 
-- **expectations**: List of expectations to evaluate (strings)
+- **expectations**: List of expectations to evaluate (strings). They come from `expected_behavior`, `expectations` or `assertions` in the eval.
 - **transcript_path**: Path to the execution transcript (markdown file)
 - **outputs_dir**: Directory containing output files from execution
+- **run_record** (optional): `run.json` from `run_eval.py behavior`. It has `skill_fired` and the navigation: which skill files the run read.
+
+If the prompt says to print the grading, print the JSON object in a ```json fence and write no file. Otherwise save it as described in Step 7.
 
 ## Process
 
@@ -78,9 +91,17 @@ Suggestions worth raising:
 
 Keep the bar high. The goal is to flag things the eval author would say "good catch" about, not to nitpick every assertion.
 
-### Step 7: Write Grading Results
+### Step 7: Check skill use and navigation
 
-Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir).
+If `run_record` is given, use it as evidence:
+
+- With the skill on, `skill_fired` should be true. If it is false, say so in `eval_feedback.overall`: the description did not trigger.
+- Skill files that the run never read (`skill_files_unread`) may be dead weight. Skill files read in an odd order, or reads outside the skill, show that the skill left a gap. Mention a pattern in `eval_feedback` only when it is clear.
+- A `without_skill` run that read the skill's files is contaminated. Say so.
+
+### Step 8: Write Grading Results
+
+Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir), or print them when the prompt says so.
 
 ## Grading Criteria
 
@@ -98,7 +119,7 @@ Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir).
 
 **When uncertain**: The burden of proof to pass is on the expectation.
 
-### Step 8: Read Executor Metrics and Timing
+### Step 9: Read Executor Metrics and Timing
 
 1. If `{outputs_dir}/metrics.json` exists, read it and include in grading output
 2. If `{outputs_dir}/../timing.json` exists, read it and include timing data

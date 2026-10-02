@@ -30,6 +30,15 @@ def test_trigger_verdict_matches_the_gate(skills_root, description):
         assert "G14" in r.stdout
 
 
+def test_the_documented_vet_skill_call_forms_both_work(skills_root):
+    # vet-skill calls `quick_validate.py --skill-path <dir>/SKILL.md`; that call used to print usage and exit 1.
+    d = write_skill(skills_root, "probe-skill")
+    by_flag = run_py(VALIDATE, "--skill-path", str(d / "SKILL.md"))
+    by_dir = run_py(VALIDATE, "--skill-path", str(d))
+    assert by_flag.returncode == 0, by_flag.stdout + by_flag.stderr
+    assert by_dir.returncode == 0, by_dir.stdout + by_dir.stderr
+
+
 def test_there_is_no_50_to_150_word_band(skills_root):
     d = write_skill(skills_root, "probe-skill", description="Does X. Use when Y.")
     r = run_py(VALIDATE, str(d))
