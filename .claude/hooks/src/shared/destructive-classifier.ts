@@ -78,6 +78,25 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'docker prune', re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: 'docker volume rm', re: /\bdocker\s+volume\s+rm\b/i },
   { name: 'docker force rm', re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
+  // Fabric capacity: suspend/resume/resize/delete stops, bills or removes every workload on it.
+  // Anchored to a command position so `grep az fabric capacity suspend` stays allowed.
+  { name: 'Fabric capacity suspend/resume/resize/delete', re: /(?:^|[;&|(]|&&|\|\|)\s*(?:sudo\s+)?az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b/i },
+];
+
+// REST calls carry the URL in QUOTES, which stripQuotedStrings() blanks. These patterns run on the
+// raw command SEGMENTS instead (quotes kept) and must START with the HTTP client, so an echo, a
+// commit message or a grep that only mentions the URL never matches.
+const SEG_START = String.raw`^(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\w+\s*=\s*)?(?:sudo\s+)?`;
+const HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b`;
+const METHOD_PUT_PATCH = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?(?:patch|put)\b|\s-[Xm]\s*["']?(?:patch|put)\b))`;
+const METHOD_PUT = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?put\b|\s-[Xm]\s*["']?put\b))`;
+export const SEGMENT_PATTERNS: DPattern[] = [
+  { name: 'Fabric capacity suspend/resume via REST', re: new RegExp(SEG_START + HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?]+/(?:suspend|resume)\b`, 'i') },
+  // ARM PATCH (or PUT) on the capacity resource itself changes its SKU. GET and subpaths stay allowed.
+  { name: 'Fabric capacity SKU change via REST (PATCH/PUT)', re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT_PATCH + String.raw`.*management\.azure\.com\S*/capacities/[^/\s"'?]+(?:[?"'\s]|$)`, 'i') },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: 'OneLake bulk PUT dataAccessRoles (replaces ALL roles)', re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT + String.raw`.*/dataAccessRoles(?:[?"'\s]|$)`, 'i') },
 ];
 // PowerShell TOOL only. On the PowerShell tool a recursive delete is the command itself,
 // unquoted, so it can be gated without the false-positive problem described below (which is
@@ -290,6 +309,24 @@ export function normalizeGitGlobalOptions(scan: string): string {
   );
 }
 
+/**
+ * Test SEGMENT_PATTERNS against each top-level command segment (quotes kept). A PowerShell
+ * backtick or bash backslash before a newline continues the line, so join those first;
+ * otherwise a multi-line Invoke-RestMethod splits into segments that no pattern can see whole.
+ */
+function classifySegments(command: string, tool: string): string | null {
+  try {
+    const joined = command.replace(/(?:`|\\)\r?\n/g, ' ');
+    const parseInput = tool === 'PowerShell' ? joined.replace(/`./g, '') : joined;
+    for (const seg of parseExecutable(parseInput).segments) {
+      for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;
+    }
+  } catch {
+    // fail-open
+  }
+  return null;
+}
+
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
   const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
@@ -297,6 +334,8 @@ export function classifyDestructive(command: string, depth = 0, tool: string = '
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
+  const segHit = classifySegments(command, tool);
+  if (segHit) return segHit;
   if (depth < 4) {
     try {
       // parseExecutable follows bash rules, where a backtick starts a command substitution.

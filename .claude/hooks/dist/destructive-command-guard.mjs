@@ -68,7 +68,22 @@ var DESTRUCTIVE_PATTERNS = [
   // docker — volume/image/system destruction
   { name: "docker prune", re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: "docker volume rm", re: /\bdocker\s+volume\s+rm\b/i },
-  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i }
+  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
+  // Fabric capacity: suspend/resume/resize/delete stops, bills or removes every workload on it.
+  // Anchored to a command position so `grep az fabric capacity suspend` stays allowed.
+  { name: "Fabric capacity suspend/resume/resize/delete", re: /(?:^|[;&|(]|&&|\|\|)\s*(?:sudo\s+)?az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b/i }
+];
+var SEG_START = String.raw`^(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\w+\s*=\s*)?(?:sudo\s+)?`;
+var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b`;
+var METHOD_PUT_PATCH = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?(?:patch|put)\b|\s-[Xm]\s*["']?(?:patch|put)\b))`;
+var METHOD_PUT = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?put\b|\s-[Xm]\s*["']?put\b))`;
+var SEGMENT_PATTERNS = [
+  { name: "Fabric capacity suspend/resume via REST", re: new RegExp(SEG_START + HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?]+/(?:suspend|resume)\b`, "i") },
+  // ARM PATCH (or PUT) on the capacity resource itself changes its SKU. GET and subpaths stay allowed.
+  { name: "Fabric capacity SKU change via REST (PATCH/PUT)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT_PATCH + String.raw`.*management\.azure\.com\S*/capacities/[^/\s"'?]+(?:[?"'\s]|$)`, "i") },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT + String.raw`.*/dataAccessRoles(?:[?"'\s]|$)`, "i") }
 ];
 var POWERSHELL_PATTERNS = [
   { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
@@ -289,6 +304,17 @@ function normalizeGitGlobalOptions(scan) {
     "git"
   );
 }
+function classifySegments(command, tool) {
+  try {
+    const joined = command.replace(/(?:`|\\)\r?\n/g, " ");
+    const parseInput = tool === "PowerShell" ? joined.replace(/`./g, "") : joined;
+    for (const seg of parseExecutable(parseInput).segments) {
+      for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;
+    }
+  } catch {
+  }
+  return null;
+}
 function classifyDestructive(command, depth = 0, tool = "Bash") {
   if (!command || typeof command !== "string") return null;
   const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
@@ -296,6 +322,8 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
+  const segHit = classifySegments(command, tool);
+  if (segHit) return segHit;
   if (depth < 4) {
     try {
       const parseInput = tool === "PowerShell" ? command.replace(/`./g, "") : command;

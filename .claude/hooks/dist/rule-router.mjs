@@ -21,6 +21,18 @@ function outputDeny(reason, decision = "deny") {
 }
 
 // src/shared/destructive-classifier.ts
+var SEG_START = String.raw`^(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\w+\s*=\s*)?(?:sudo\s+)?`;
+var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b`;
+var METHOD_PUT_PATCH = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?(?:patch|put)\b|\s-[Xm]\s*["']?(?:patch|put)\b))`;
+var METHOD_PUT = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?put\b|\s-[Xm]\s*["']?put\b))`;
+var SEGMENT_PATTERNS = [
+  { name: "Fabric capacity suspend/resume via REST", re: new RegExp(SEG_START + HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?]+/(?:suspend|resume)\b`, "i") },
+  // ARM PATCH (or PUT) on the capacity resource itself changes its SKU. GET and subpaths stay allowed.
+  { name: "Fabric capacity SKU change via REST (PATCH/PUT)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT_PATCH + String.raw`.*management\.azure\.com\S*/capacities/[^/\s"'?]+(?:[?"'\s]|$)`, "i") },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT + String.raw`.*/dataAccessRoles(?:[?"'\s]|$)`, "i") }
+];
 function stripQuotedStrings(command, tool = "Bash") {
   if (tool === "PowerShell") {
     return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");

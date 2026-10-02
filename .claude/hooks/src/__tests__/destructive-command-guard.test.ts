@@ -475,3 +475,122 @@ describe('P42 (CodeRabbit #47): PowerShell quoting rules', () => {
     expect(classifyDestructive('echo "to undo: git reset --hard HEAD~1"')).toBeNull();
   });
 });
+
+
+// 2026-10-02 skill-intake-fabric Phase 1: two Fabric "never" items become hard guards.
+// (a) pausing, resuming or resizing a capacity stops or bills every workload on it;
+// (b) a bulk PUT to .../dataAccessRoles replaces ALL OneLake roles (DefaultReader too).
+describe('Fabric: capacity suspend/resume/resize and bulk dataAccessRoles PUT', () => {
+  const CAP = 'https://management.azure.com/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Fabric/capacities/cap1';
+  const ROLES = 'https://api.fabric.microsoft.com/v1/workspaces/w1/items/i1/dataAccessRoles';
+
+  const blockedBash = [
+    'az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    'az fabric capacity resume --capacity-name cap1 --resource-group rg',
+    'az fabric capacity update --capacity-name cap1 --resource-group rg --sku name=F4 tier=Fabric',
+    'az fabric capacity delete --capacity-name cap1 --resource-group rg --yes',
+    'az.cmd fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    'AZ FABRIC CAPACITY SUSPEND --capacity-name cap1',                      // casing
+    'cd infra && az fabric capacity resume --capacity-name cap1',           // compound
+    `az rest --method post --url "${CAP}/suspend?api-version=2023-11-01"`,  // double-quoted URL
+    `az rest --method post --url '${CAP}/resume?api-version=2023-11-01'`,   // single-quoted URL
+    `az rest --method post --url ${CAP}/suspend`,                           // unquoted URL
+    `az rest -m POST --url "${CAP}/RESUME?api-version=2023-11-01"`,         // casing
+    `curl -s -X POST -H "Authorization: Bearer $T" "${CAP}/suspend?api-version=2023-11-01"`,
+    `curl.exe -XPOST "${CAP}/resume?api-version=2023-11-01"`,
+    `az rest --method patch --url "${CAP}?api-version=2023-11-01" --body '{"sku":{"name":"F64","tier":"Fabric"}}'`,
+    `az rest -m PATCH --url "${CAP}?api-version=2023-11-01" --body @sku.json`,
+    `curl -X PATCH -H "Authorization: Bearer $T" "${CAP}?api-version=2023-11-01" -d @sku.json`,
+    `az rest --method put --url "${CAP}?api-version=2023-11-01" --body @cap.json`,
+    `az rest --method put --url "${ROLES}" --body @roles.json`,
+    `az rest -m PUT --url '${ROLES}' --body @roles.json`,
+    `curl -s -X PUT -H "Authorization: Bearer $T" -H "Content-Type: application/json" "${ROLES}" -d @roles.json`,
+    `curl --request PUT "${ROLES}?dryRun=false" -d @roles.json`,
+    `fab api -X put "workspaces/w1/items/i1/dataAccessRoles" -i roles.json`,
+    `bash -c "az rest --method post --url '${CAP}/suspend?api-version=2023-11-01'"`, // wrapper recursion
+    `X=$(az rest --method put --url "${ROLES}" --body @r.json)`,                      // substitution
+  ];
+  for (const cmd of blockedBash) {
+    it(`Bash: flags ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'Bash')).not.toBeNull();
+    });
+  }
+
+  const blockedPs = [
+    'az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    `Invoke-RestMethod -Method Post -Uri "${CAP}/suspend?api-version=2023-11-01" -Headers $h`,
+    `Invoke-RestMethod -Method POST -Uri '${CAP}/resume?api-version=2023-11-01' -Headers $h`,
+    `Invoke-WebRequest -Method Patch -Uri "${CAP}?api-version=2023-11-01" -Headers $h -Body $b`,
+    `irm -Method Patch -Uri "${CAP}?api-version=2023-11-01" -Headers $h -Body $b`,
+    `$r = Invoke-RestMethod -Method Put -Uri "${ROLES}" -Headers $h -Body $b`,
+    `$r = invoke-restmethod -method put -uri "${ROLES}" -headers $h -body $b`,       // casing
+    `Invoke-RestMethod \`\n  -Method Put \`\n  -Uri "${ROLES}" \`\n  -Headers $h`,    // backtick line continuation
+    `az rest --method put --url "${ROLES}" --body @roles.json`,
+  ];
+  for (const cmd of blockedPs) {
+    it(`PowerShell: flags ${cmd.slice(0, 60).replace(/\n/g, ' ')}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).not.toBeNull();
+    });
+  }
+
+  const allowedBash = [
+    'az fabric capacity show --capacity-name cap1 --resource-group rg',
+    'az fabric capacity list --resource-group rg',
+    'az fabric capacity list-skus --location westeurope',
+    `az rest --method get --url "${CAP}?api-version=2023-11-01"`,
+    `az rest --url "${CAP}/skus?api-version=2023-11-01"`,                  // default method is GET
+    `az rest --method get --url "${ROLES}"`,
+    `curl -s -H "Authorization: Bearer $T" "${ROLES}"`,                    // curl default is GET
+    `curl -s -X GET "${ROLES}"`,
+    `az rest --method put --url "${ROLES}/RoleA" --body @one.json`,        // one named role, not the bulk list
+    `az rest --method post --url "${ROLES}" --body @one.json`,             // POST creates one role
+    'az rest --method patch --url "https://api.fabric.microsoft.com/v1/workspaces/w1/lakehouses/l1" --body @b.json',
+    'az rest --method post --url "https://api.fabric.microsoft.com/v1/workspaces/w1/items/i1/jobs/instances?jobType=Pipeline"',
+    'fab api -X get "workspaces/w1/items/i1/dataAccessRoles"',
+    'echo "az fabric capacity suspend"',                                   // text, not a command
+    'git commit -m "docs: never run az fabric capacity resume from a script"',
+    `echo "az rest --method put --url ${ROLES}"`,
+    `grep -rn "capacities/cap1/suspend" docs/`,
+    `git commit -m "note: PUT ${ROLES} replaces all roles"`,
+  ];
+  for (const cmd of allowedBash) {
+    it(`Bash: allows ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'Bash')).toBeNull();
+    });
+  }
+
+  const allowedPs = [
+    `Invoke-RestMethod -Method Get -Uri "${ROLES}" -Headers $h`,
+    `Invoke-RestMethod -Uri "${ROLES}" -Headers $h`,
+    `Invoke-RestMethod -Method Get -Uri "${CAP}?api-version=2023-11-01" -Headers $h`,
+    `Invoke-RestMethod -Method Put -Uri "${ROLES}/RoleA" -Headers $h -Body $b`,
+    'az fabric capacity show --capacity-name cap1 --resource-group rg',
+    `Write-Host "az rest --method put --url ${ROLES}"`,
+  ];
+  for (const cmd of allowedPs) {
+    it(`PowerShell: allows ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).toBeNull();
+    });
+  }
+
+  it('names the pattern so the prompt tells the human what matched', () => {
+    expect(classifyDestructive('az fabric capacity suspend --capacity-name c', 0, 'Bash')).toBe('Fabric capacity suspend/resume/resize/delete');
+    expect(classifyDestructive(`az rest --method post --url "${CAP}/resume"`, 0, 'Bash')).toBe('Fabric capacity suspend/resume via REST');
+    expect(classifyDestructive(`az rest --method patch --url "${CAP}?api-version=1"`, 0, 'Bash')).toBe('Fabric capacity SKU change via REST (PATCH/PUT)');
+    expect(classifyDestructive(`az rest --method put --url "${ROLES}"`, 0, 'Bash')).toBe('OneLake bulk PUT dataAccessRoles (replaces ALL roles)');
+  });
+
+  it('decide(): ask interactive, deny unattended, on both tools', () => {
+    const cmd = `az rest --method put --url "${ROLES}" --body @r.json`;
+    expect(decide(cmd, { tool_name: 'Bash', permission_mode: 'default' }, {}).decision).toBe('ask');
+    expect(decide(cmd, { tool_name: 'Bash', permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
+    const ps = `Invoke-RestMethod -Method Post -Uri "${CAP}/suspend" -Headers $h`;
+    expect(decide(ps, { tool_name: 'PowerShell', permission_mode: 'default' }, {}).decision).toBe('ask');
+    expect(decide(ps, { tool_name: 'PowerShell' }, { CLAUDE_AGENT_ID: 'a' }).decision).toBe('deny');
+  });
+
+  it('SKIP_DESTRUCTIVE_GUARD override still works for a known-good capacity call', () => {
+    const cmd = 'SKIP_DESTRUCTIVE_GUARD=1 az fabric capacity resume --capacity-name c';
+    expect(decide(cmd, { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  });
+});

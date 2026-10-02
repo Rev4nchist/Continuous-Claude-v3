@@ -113,7 +113,8 @@
         "^kusto\\.cli(\\.exe)?(\\s|$)"
       ],
       "segment": [
-        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)"
+        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)",
+        "^(az(\\.cmd)?\\s+rest|curl(\\.exe)?|Invoke-(RestMethod|WebRequest)|irm|iwr)\\b.*(kusto\\.fabric\\.microsoft\\.com|/v1/rest/mgmt)"
       ],
       "skill": [
         "^kusto-cli$"
@@ -298,13 +299,18 @@
       "mode": "inject",
       "command": [
         "^fab(\\.exe)?(\\s|$)",
+        "^az(\\.cmd)?\\s+fabric(\\s|$)",
         "^python(\\.exe)?\\s+\\S*playground[\\\\/]\\S*(deploy|iq|access)\\.py(\\s|$)"
       ],
       "segment": [
         "^python(\\.exe)?\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access)\\.py",
-        "^az(\\.cmd)?\\s+rest\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com)",
-        "^curl(\\.exe)?\\s.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)",
-        "^Invoke-(RestMethod|WebRequest)\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)"
+        "^az(\\.cmd)?\\s+rest\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com|kusto\\.fabric\\.microsoft\\.com|management\\.azure\\.com\\S*Microsoft\\.Fabric)",
+        "^curl(\\.exe)?\\s.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|kusto\\.fabric\\.microsoft\\.com|management\\.azure\\.com\\S*Microsoft\\.Fabric)",
+        "^Invoke-(RestMethod|WebRequest)\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|kusto\\.fabric\\.microsoft\\.com|management\\.azure\\.com\\S*Microsoft\\.Fabric)",
+        "^sqlcmd(\\.exe)?\\s.*fabric\\.microsoft\\.com"
+      ],
+      "skill": [
+        "^([\\w-]+:)?fabric(-[\\w-]+)?$"
       ]
     }
   ]
