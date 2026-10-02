@@ -21,6 +21,26 @@ function outputDeny(reason, decision = "deny") {
 }
 
 // src/shared/destructive-classifier.ts
+var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
+var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
+var methodIs = (verbs) => String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
+var CAPACITY_RESOURCE = String.raw`.*(?:Microsoft\.(?:Fabric|PowerBIDedicated)/|management\.azure\.com\S*/)capacities/[^/\s"'?#]+/?(?:[?#"'\s]|$)`;
+var seg = (rest) => new RegExp(SEG_START + rest, "i");
+var SEGMENT_PATTERNS = [
+  { name: "Fabric capacity suspend/resume/resize/delete", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b`) },
+  { name: "Az.Fabric capacity cmdlet (suspend/resume/update/remove)", re: seg(String.raw`(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b`) },
+  // az resource on a capacity: delete, update (--set sku...), create (PUT), invoke-action suspend|resume.
+  { name: "az resource change of a Fabric capacity", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+resource\s+(?:delete|update|create|invoke-action)\b.*Microsoft\.(?:Fabric|PowerBIDedicated)/capacities`) },
+  // Fabric CLI verbs that act on a capacity path (.capacities/<name>.Capacity). Case-sensitive on purpose.
+  { name: "Fabric CLI capacity stop/start/set/rm/create", re: new RegExp(SEG_START + String.raw`fab(?:\.exe)?\s+(?:stop|start|set|rm|create)\b.*(?:\.capacities[\\/]|\.Capacity(?:["'\s]|$))`) },
+  { name: "Fabric capacity suspend/resume via REST", re: seg(HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?#]+/(?:suspend|resume)\b`) },
+  // ARM PATCH, PUT or DELETE on the capacity resource itself changes its SKU or removes it. GET and subpaths stay allowed.
+  { name: "Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)", re: seg(HTTP_CLIENT + methodIs("patch|put|delete") + CAPACITY_RESOURCE) },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
+];
 function stripQuotedStrings(command, tool = "Bash") {
   if (tool === "PowerShell") {
     return command.replace(/"(?:[^"`]|`.)*"/g, '""').replace(/'(?:[^']|'')*'/g, "''");
@@ -30,83 +50,83 @@ function stripQuotedStrings(command, tool = "Bash") {
 function parseExecutable(command) {
   const segments = [];
   const substitutions = [];
-  let seg = "";
+  let seg2 = "";
   let inSingle = false;
   let inDouble = false;
   const n = command.length;
   let i = 0;
   const pushSeg = () => {
-    const t = seg.trim();
+    const t = seg2.trim();
     if (t) segments.push(t);
-    seg = "";
+    seg2 = "";
   };
   while (i < n) {
     const c = command[i];
     const next = command[i + 1];
     if (inSingle) {
-      seg += c;
+      seg2 += c;
       if (c === "'") inSingle = false;
       i++;
       continue;
     }
     if (inDouble) {
       if (c === "\\" && next !== void 0) {
-        seg += c + next;
+        seg2 += c + next;
         i += 2;
         continue;
       }
       if (c === '"') {
         inDouble = false;
-        seg += c;
+        seg2 += c;
         i++;
         continue;
       }
       if (c === "$" && next === "(") {
         const { inner, end } = readBalanced(command, i + 2, "(", ")");
         substitutions.push(inner);
-        seg += command.slice(i, end);
+        seg2 += command.slice(i, end);
         i = end;
         continue;
       }
       if (c === "`") {
         const { inner, end } = readBacktick(command, i + 1);
         substitutions.push(inner);
-        seg += command.slice(i, end);
+        seg2 += command.slice(i, end);
         i = end;
         continue;
       }
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === "\\" && next !== void 0) {
-      seg += c + next;
+      seg2 += c + next;
       i += 2;
       continue;
     }
     if (c === "'") {
       inSingle = true;
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === '"') {
       inDouble = true;
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === "$" && next === "(") {
       const { inner, end } = readBalanced(command, i + 2, "(", ")");
       substitutions.push(inner);
-      seg += command.slice(i, end);
+      seg2 += command.slice(i, end);
       i = end;
       continue;
     }
     if (c === "`") {
       const { inner, end } = readBacktick(command, i + 1);
       substitutions.push(inner);
-      seg += command.slice(i, end);
+      seg2 += command.slice(i, end);
       i = end;
       continue;
     }
@@ -125,7 +145,7 @@ function parseExecutable(command) {
       i++;
       continue;
     }
-    seg += c;
+    seg2 += c;
     i++;
   }
   pushSeg();
@@ -212,9 +232,9 @@ function unwrapPayload(raw) {
 }
 function wrapperPayloadsFromSegments(segments) {
   const out = [];
-  for (const seg of segments) {
+  for (const seg2 of segments) {
     for (const re of WRAPPER_RES) {
-      const m = seg.match(re);
+      const m = seg2.match(re);
       if (m && m[1]) {
         out.push(unwrapPayload(m[1]));
         break;
@@ -303,7 +323,7 @@ function matchRules(input, manifest) {
     if (COMMAND_TOOLS.has(tool)) {
       const command = typeof ti.command === "string" ? ti.command : "";
       if (!command) return false;
-      return commandSegments(command, tool).some((seg) => test(r.command, seg)) || quotedSegments(command, tool).some((seg) => test(r.segment, seg));
+      return commandSegments(command, tool).some((seg2) => test(r.command, seg2)) || quotedSegments(command, tool).some((seg2) => test(r.segment, seg2));
     }
     if (AGENT_TOOLS.has(tool)) return test(r.agent, String(ti.subagent_type || ""));
     if (tool === "Skill") return test(r.skill, String(ti.skill || ""));
@@ -357,12 +377,12 @@ function triggerWords(input, fired) {
   const ti = input.tool_input || {};
   if (!COMMAND_TOOLS.has(tool)) return String(ti.subagent_type ?? ti.skill ?? tool).slice(0, 60);
   const segs = quotedSegments(String(ti.command ?? ""), tool);
-  const plain = (seg2) => stripLeaders(stripQuotedStrings(seg2, tool));
-  const hit = segs.find((seg2) => fired.some((r) => test(r.command, plain(seg2)) || test(r.segment, seg2)));
-  const seg = hit ?? segs[0] ?? "";
-  const [cmd = "", arg] = plain(seg).split(/\s+/);
+  const plain = (seg3) => stripLeaders(stripQuotedStrings(seg3, tool));
+  const hit = segs.find((seg3) => fired.some((r) => test(r.command, plain(seg3)) || test(r.segment, seg3)));
+  const seg2 = hit ?? segs[0] ?? "";
+  const [cmd = "", arg] = plain(seg2).split(/\s+/);
   const words = arg === void 0 ? cmd : `${cmd} ${/^[-\w.]+$/.test(arg) ? arg : "<arg>"}`;
-  const script = /(?:^|[\s"'\\/])([\w.-]+\.(?:ps1|mjs|cjs|js|py|sh|bat))(?=["'\s]|$)/i.exec(seg)?.[1];
+  const script = /(?:^|[\s"'\\/])([\w.-]+\.(?:ps1|mjs|cjs|js|py|sh|bat))(?=["'\s]|$)/i.exec(seg2)?.[1];
   return script && !words.includes(script) ? `${words} ${script}` : words;
 }
 function logFire(input, d, fired) {
