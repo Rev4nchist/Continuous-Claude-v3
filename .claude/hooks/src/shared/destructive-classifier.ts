@@ -78,25 +78,36 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'docker prune', re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: 'docker volume rm', re: /\bdocker\s+volume\s+rm\b/i },
   { name: 'docker force rm', re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
-  // Fabric capacity: suspend/resume/resize/delete stops, bills or removes every workload on it.
-  // Anchored to a command position so `grep az fabric capacity suspend` stays allowed.
-  { name: 'Fabric capacity suspend/resume/resize/delete', re: /(?:^|[;&|(]|&&|\|\|)\s*(?:sudo\s+)?az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b/i },
 ];
 
-// REST calls carry the URL in QUOTES, which stripQuotedStrings() blanks. These patterns run on the
-// raw command SEGMENTS instead (quotes kept) and must START with the HTTP client, so an echo, a
-// commit message or a grep that only mentions the URL never matches.
-const SEG_START = String.raw`^(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\w+\s*=\s*)?(?:sudo\s+)?`;
-const HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b`;
-const METHOD_PUT_PATCH = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?(?:patch|put)\b|\s-[Xm]\s*["']?(?:patch|put)\b))`;
-const METHOD_PUT = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?put\b|\s-[Xm]\s*["']?put\b))`;
+// Fabric guards (skill-intake-fabric Phase 1). Suspend, resume, resize or delete of a capacity stops,
+// bills or removes every workload on it; a bulk PUT to dataAccessRoles replaces ALL OneLake roles.
+// REST calls carry the URL in QUOTES, which stripQuotedStrings() blanks, so these patterns run on the
+// raw command SEGMENTS (quotes kept, split on ; & | and newlines). Each must START with the command, after
+// zero or more lead-ins, so an echo, a commit message or a grep that only names the URL never matches.
+// Lead-ins: VAR=x, `$x =`, `[void]`, `(`, `{`, `try {`, `if (...) {`, `ForEach-Object {`, `&`, sudo.
+const LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+const SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
+const HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
+// The HTTP method, any spelling: --method x, --request x, -X x, -m x, -Method x, -Method:x, -CustomMethod x, -Meth x.
+const methodIs = (verbs: string): string =>
+  String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
+// An ARM capacity resource itself (not a subpath such as /skus), with or without a host, trailing slash allowed.
+const CAPACITY_RESOURCE = String.raw`.*(?:Microsoft\.(?:Fabric|PowerBIDedicated)/|management\.azure\.com\S*/)capacities/[^/\s"'?#]+/?(?:[?#"'\s]|$)`;
+const seg = (rest: string): RegExp => new RegExp(SEG_START + rest, 'i');
 export const SEGMENT_PATTERNS: DPattern[] = [
-  { name: 'Fabric capacity suspend/resume via REST', re: new RegExp(SEG_START + HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?]+/(?:suspend|resume)\b`, 'i') },
-  // ARM PATCH (or PUT) on the capacity resource itself changes its SKU. GET and subpaths stay allowed.
-  { name: 'Fabric capacity SKU change via REST (PATCH/PUT)', re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT_PATCH + String.raw`.*management\.azure\.com\S*/capacities/[^/\s"'?]+(?:[?"'\s]|$)`, 'i') },
+  { name: 'Fabric capacity suspend/resume/resize/delete', re: seg(String.raw`az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b`) },
+  { name: 'Az.Fabric capacity cmdlet (suspend/resume/update/remove)', re: seg(String.raw`(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b`) },
+  // az resource on a capacity: delete, update (--set sku...), create (PUT), invoke-action suspend|resume.
+  { name: 'az resource change of a Fabric capacity', re: seg(String.raw`az(?:\.cmd|\.exe)?\s+resource\s+(?:delete|update|create|invoke-action)\b.*Microsoft\.(?:Fabric|PowerBIDedicated)/capacities`) },
+  // Fabric CLI verbs that act on a capacity path (.capacities/<name>.Capacity). Case-sensitive on purpose.
+  { name: 'Fabric CLI capacity stop/start/set/rm/create', re: new RegExp(SEG_START + String.raw`fab(?:\.exe)?\s+(?:stop|start|set|rm|create)\b.*(?:\.capacities[\\/]|\.Capacity(?:["'\s]|$))`) },
+  { name: 'Fabric capacity suspend/resume via REST', re: seg(HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?#]+/(?:suspend|resume)\b`) },
+  // ARM PATCH, PUT or DELETE on the capacity resource itself changes its SKU or removes it. GET and subpaths stay allowed.
+  { name: 'Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)', re: seg(HTTP_CLIENT + methodIs('patch|put|delete') + CAPACITY_RESOURCE) },
   // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
   // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
-  { name: 'OneLake bulk PUT dataAccessRoles (replaces ALL roles)', re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT + String.raw`.*/dataAccessRoles(?:[?"'\s]|$)`, 'i') },
+  { name: 'OneLake bulk PUT dataAccessRoles (replaces ALL roles)', re: seg(HTTP_CLIENT + methodIs('put') + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) },
 ];
 // PowerShell TOOL only. On the PowerShell tool a recursive delete is the command itself,
 // unquoted, so it can be gated without the false-positive problem described below (which is
@@ -310,13 +321,38 @@ export function normalizeGitGlobalOptions(scan: string): string {
 }
 
 /**
+ * Drop the body of a block that only WRITES TEXT, so a doc that quotes a Fabric call is not a call.
+ * Bash: `cat|tee ... <<EOF` with nothing after the marker but an optional redirect (no pipe, `;` or `&`,
+ * so `cat <<EOF | bash` and `bash <<EOF` keep their body: those lines run). PowerShell: `$x = @'` here-strings
+ * (accepted gap: `iex $x` can still run one). Anything unterminated or unrecognised is left alone.
+ */
+function stripTextBlocks(command: string, tool: string): string {
+  const out: string[] = [];
+  let end: RegExp | null = null;
+  for (const line of command.split('\n')) {
+    if (end) { if (end.test(line)) end = null; continue; }
+    if (tool === 'PowerShell') {
+      // The opener (`$x = @'`) goes too: its lone quote would swallow the lines after the block.
+      const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
+      if (h) { end = new RegExp(`^\\s*${h[1]}@`); continue; }
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+    const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
+    if (m) end = new RegExp(`^\\s*${m[2]}\\s*$`);
+  }
+  return out.join('\n');
+}
+
+/**
  * Test SEGMENT_PATTERNS against each top-level command segment (quotes kept). A PowerShell
  * backtick or bash backslash before a newline continues the line, so join those first;
  * otherwise a multi-line Invoke-RestMethod splits into segments that no pattern can see whole.
  */
 function classifySegments(command: string, tool: string): string | null {
   try {
-    const joined = command.replace(/(?:`|\\)\r?\n/g, ' ');
+    const joined = stripTextBlocks(command, tool).replace(/(?:`|\\)\r?\n/g, ' ');
     const parseInput = tool === 'PowerShell' ? joined.replace(/`./g, '') : joined;
     for (const seg of parseExecutable(parseInput).segments) {
       for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;

@@ -70,22 +70,27 @@ var DESTRUCTIVE_PATTERNS = [
   // docker — volume/image/system destruction
   { name: "docker prune", re: /\bdocker\s+(system|volume|network|container|image)\s+prune\b/i },
   { name: "docker volume rm", re: /\bdocker\s+volume\s+rm\b/i },
-  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
-  // Fabric capacity: suspend/resume/resize/delete stops, bills or removes every workload on it.
-  // Anchored to a command position so `grep az fabric capacity suspend` stays allowed.
-  { name: "Fabric capacity suspend/resume/resize/delete", re: /(?:^|[;&|(]|&&|\|\|)\s*(?:sudo\s+)?az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b/i }
+  { name: "docker force rm", re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i }
 ];
-var SEG_START = String.raw`^(?:[A-Za-z_]\w*=\S*\s+)*(?:\$\w+\s*=\s*)?(?:sudo\s+)?`;
-var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|irm|iwr)\b`;
-var METHOD_PUT_PATCH = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?(?:patch|put)\b|\s-[Xm]\s*["']?(?:patch|put)\b))`;
-var METHOD_PUT = String.raw`(?=.*(?:(?:--method|--request|-Method)[\s=]+["']?put\b|\s-[Xm]\s*["']?put\b))`;
+var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
+var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
+var methodIs = (verbs) => String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
+var CAPACITY_RESOURCE = String.raw`.*(?:Microsoft\.(?:Fabric|PowerBIDedicated)/|management\.azure\.com\S*/)capacities/[^/\s"'?#]+/?(?:[?#"'\s]|$)`;
+var seg = (rest) => new RegExp(SEG_START + rest, "i");
 var SEGMENT_PATTERNS = [
-  { name: "Fabric capacity suspend/resume via REST", re: new RegExp(SEG_START + HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?]+/(?:suspend|resume)\b`, "i") },
-  // ARM PATCH (or PUT) on the capacity resource itself changes its SKU. GET and subpaths stay allowed.
-  { name: "Fabric capacity SKU change via REST (PATCH/PUT)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT_PATCH + String.raw`.*management\.azure\.com\S*/capacities/[^/\s"'?]+(?:[?"'\s]|$)`, "i") },
+  { name: "Fabric capacity suspend/resume/resize/delete", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b`) },
+  { name: "Az.Fabric capacity cmdlet (suspend/resume/update/remove)", re: seg(String.raw`(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b`) },
+  // az resource on a capacity: delete, update (--set sku...), create (PUT), invoke-action suspend|resume.
+  { name: "az resource change of a Fabric capacity", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+resource\s+(?:delete|update|create|invoke-action)\b.*Microsoft\.(?:Fabric|PowerBIDedicated)/capacities`) },
+  // Fabric CLI verbs that act on a capacity path (.capacities/<name>.Capacity). Case-sensitive on purpose.
+  { name: "Fabric CLI capacity stop/start/set/rm/create", re: new RegExp(SEG_START + String.raw`fab(?:\.exe)?\s+(?:stop|start|set|rm|create)\b.*(?:\.capacities[\\/]|\.Capacity(?:["'\s]|$))`) },
+  { name: "Fabric capacity suspend/resume via REST", re: seg(HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?#]+/(?:suspend|resume)\b`) },
+  // ARM PATCH, PUT or DELETE on the capacity resource itself changes its SKU or removes it. GET and subpaths stay allowed.
+  { name: "Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)", re: seg(HTTP_CLIENT + methodIs("patch|put|delete") + CAPACITY_RESOURCE) },
   // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
   // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
-  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: new RegExp(SEG_START + HTTP_CLIENT + METHOD_PUT + String.raw`.*/dataAccessRoles(?:[?"'\s]|$)`, "i") }
+  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
 ];
 var POWERSHELL_PATTERNS = [
   { name: "PowerShell recursive delete (Remove-Item -Recurse)", re: /(?:^|[;|&({]|\s)(?:Remove-Item|ri|rm|rmdir|rd|del|erase)\b[^;|&\n]*\s-(?:r|rec|recurse)\w*\b/i },
@@ -100,83 +105,83 @@ function stripQuotedStrings(command, tool = "Bash") {
 function parseExecutable(command) {
   const segments = [];
   const substitutions = [];
-  let seg = "";
+  let seg2 = "";
   let inSingle = false;
   let inDouble = false;
   const n = command.length;
   let i = 0;
   const pushSeg = () => {
-    const t = seg.trim();
+    const t = seg2.trim();
     if (t) segments.push(t);
-    seg = "";
+    seg2 = "";
   };
   while (i < n) {
     const c = command[i];
     const next = command[i + 1];
     if (inSingle) {
-      seg += c;
+      seg2 += c;
       if (c === "'") inSingle = false;
       i++;
       continue;
     }
     if (inDouble) {
       if (c === "\\" && next !== void 0) {
-        seg += c + next;
+        seg2 += c + next;
         i += 2;
         continue;
       }
       if (c === '"') {
         inDouble = false;
-        seg += c;
+        seg2 += c;
         i++;
         continue;
       }
       if (c === "$" && next === "(") {
         const { inner, end } = readBalanced(command, i + 2, "(", ")");
         substitutions.push(inner);
-        seg += command.slice(i, end);
+        seg2 += command.slice(i, end);
         i = end;
         continue;
       }
       if (c === "`") {
         const { inner, end } = readBacktick(command, i + 1);
         substitutions.push(inner);
-        seg += command.slice(i, end);
+        seg2 += command.slice(i, end);
         i = end;
         continue;
       }
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === "\\" && next !== void 0) {
-      seg += c + next;
+      seg2 += c + next;
       i += 2;
       continue;
     }
     if (c === "'") {
       inSingle = true;
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === '"') {
       inDouble = true;
-      seg += c;
+      seg2 += c;
       i++;
       continue;
     }
     if (c === "$" && next === "(") {
       const { inner, end } = readBalanced(command, i + 2, "(", ")");
       substitutions.push(inner);
-      seg += command.slice(i, end);
+      seg2 += command.slice(i, end);
       i = end;
       continue;
     }
     if (c === "`") {
       const { inner, end } = readBacktick(command, i + 1);
       substitutions.push(inner);
-      seg += command.slice(i, end);
+      seg2 += command.slice(i, end);
       i = end;
       continue;
     }
@@ -195,7 +200,7 @@ function parseExecutable(command) {
       i++;
       continue;
     }
-    seg += c;
+    seg2 += c;
     i++;
   }
   pushSeg();
@@ -282,9 +287,9 @@ function unwrapPayload(raw) {
 }
 function wrapperPayloadsFromSegments(segments) {
   const out = [];
-  for (const seg of segments) {
+  for (const seg2 of segments) {
     for (const re of WRAPPER_RES) {
-      const m = seg.match(re);
+      const m = seg2.match(re);
       if (m && m[1]) {
         out.push(unwrapPayload(m[1]));
         break;
@@ -299,12 +304,35 @@ function normalizeGitGlobalOptions(scan) {
     "git"
   );
 }
+function stripTextBlocks(command, tool) {
+  const out = [];
+  let end = null;
+  for (const line of command.split("\n")) {
+    if (end) {
+      if (end.test(line)) end = null;
+      continue;
+    }
+    if (tool === "PowerShell") {
+      const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
+      if (h) {
+        end = new RegExp(`^\\s*${h[1]}@`);
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+    const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
+    if (m) end = new RegExp(`^\\s*${m[2]}\\s*$`);
+  }
+  return out.join("\n");
+}
 function classifySegments(command, tool) {
   try {
-    const joined = command.replace(/(?:`|\\)\r?\n/g, " ");
+    const joined = stripTextBlocks(command, tool).replace(/(?:`|\\)\r?\n/g, " ");
     const parseInput = tool === "PowerShell" ? joined.replace(/`./g, "") : joined;
-    for (const seg of parseExecutable(parseInput).segments) {
-      for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;
+    for (const seg2 of parseExecutable(parseInput).segments) {
+      for (const p of SEGMENT_PATTERNS) if (p.re.test(seg2)) return p.name;
     }
   } catch {
   }

@@ -23,7 +23,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the action,
 | `cross-terminal-db.md` | `psql`, `pg_dump`, `docker exec ... postgres` | inject |
 | `headless-claude-mcp.md` | `claude -p` / `--print` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP tools, or its skill | inject |
-| `fabric-playbook.md` | skill `fabric*`, Fabric/OneLake calls, `fab`, `az fabric`, `sqlcmd`, playground scripts | inject |
+| `fabric-playbook.md` | skill `fabric*`, Fabric/OneLake calls, `fab`, `az fabric`, `sqlcmd` to a Fabric host | inject |
 | `proactive-delegation.md` | the first Agent spawn (spark scope, post-spark checks, kraken waves) | inject |
 
 Decisions these rules shape before any tool call (keep them in mind without loading):

@@ -5,8 +5,8 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 
 ## Before you start
 - Run the preflight the project's CLAUDE.md names, before any Fabric call. A project without one: check the az
-  account, the tokens for each resource, the capacity state and running jobs by hand. MFA expires tokens per
-  resource without warning (L-06).
+  account, the tokens for each resource, the capacity state, running jobs, cost items (graph caches bill daily,
+  L-08) and untriaged incidents by hand. MFA expires tokens per resource without warning (L-06).
 - Unattended Fabric jobs (pipelines, notebook jobs) fail with `AADSTS50076` when they run as an admin user whom
   security defaults force through MFA. `az login` and a portal sign-in do not fix it. Run them as a service
   principal, or by hand in the portal (L-20).
@@ -22,7 +22,9 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
   queries, data agent, DAX), then background jobs ("capacity has exceeded its limits"). On the first capacity
   error: stop all load and report. Retries keep the throttling going (L-07).
 - Upstream conflict: Microsoft's `skills-for-fabric` `common/COMMON-CORE.md` tells agents to retry 429, 503 and
-  504 with backoff. Here a capacity error means STOP and report. Do not retry, and do not follow that advice.
+  504 with backoff. Here, on a CAPACITY error (429 or 430 with a capacity message, or "capacity has exceeded
+  its limits") STOP and report. Do not retry. A single 503 or 504 on a status poll may retry once with backoff
+  (L-02).
 - One Fabric job at a time on an F2. Time-box every Fabric agent and report at least every 60 minutes (L-19).
 - Graph compute bills at about 5 times the normal rate. Each graph item holds a cache billed about $0.82 a day.
   At most one graph; delete it once its evidence is saved. Never one graph per test case (L-08).
