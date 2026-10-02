@@ -111,7 +111,7 @@ Dynamic injection: a line with `!` and a backticked command, or a fenced block t
 
 ### The body stays for the session
 
-Claude Code loads the rendered body once when the skill fires. It does not read the file again. After compaction, it re-attaches only the first 5,000 tokens of each recent skill, up to 25,000 tokens in total. Therefore:
+Claude Code loads the rendered body once when the skill fires. It does not read the file again. When Claude invokes the skill again and the rendered content is identical to the copy already in context, Claude Code adds a short "already loaded" note, not a second copy. When the rendered content differs, because the arguments changed or a dynamic command produced new output, it appends the full rendered body again. After compaction, it re-attaches only the first 5,000 tokens of each recent skill, up to 25,000 tokens in total. Therefore:
 
 - Put the rules that must hold at the top.
 - Put long, optional detail in references.

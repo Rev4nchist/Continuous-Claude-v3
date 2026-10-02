@@ -64,7 +64,19 @@ def calculate_stats(values: list[float]) -> dict:
     }
 
 
-def load_run_results(benchmark_dir: Path) -> dict:
+def _excluded_reason(run_dir: Path) -> str | None:
+    """The reason run.json or grading.json gives for excluding a run, or None."""
+    for name in ("run.json", "grading.json"):
+        try:
+            data = json.loads((run_dir / name).read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            continue
+        if isinstance(data, dict) and data.get("excluded"):
+            return str(data["excluded"])
+    return None
+
+
+def load_run_results(benchmark_dir: Path, skipped: list | None = None) -> dict:
     """
     Load all run results from a benchmark directory.
 
@@ -111,6 +123,14 @@ def load_run_results(benchmark_dir: Path) -> dict:
             for run_dir in sorted(config_dir.glob("run-*")):
                 run_number = int(run_dir.name.split("-")[1])
                 grading_file = run_dir / "grading.json"
+
+                # run_eval.py marks a broken run (error, contaminated baseline, no success result)
+                # as excluded in run.json and grading.json. It is neither graded nor counted.
+                reason = _excluded_reason(run_dir)
+                if reason:
+                    if skipped is not None:
+                        skipped.append({"run": str(run_dir), "reason": reason})
+                    continue
 
                 if not grading_file.exists():
                     print(f"Warning: grading.json not found in {run_dir}")
@@ -228,7 +248,12 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
     """
     Generate complete benchmark.json from run results.
     """
-    results = load_run_results(benchmark_dir)
+    skipped: list = []
+    results = load_run_results(benchmark_dir, skipped)
+    if skipped:
+        print(f"Skipped {len(skipped)} excluded run(s):")
+        for s in skipped:
+            print(f"  {s['run']}: {s['reason']}")
     run_summary = aggregate_results(results)
 
     # Build runs array for benchmark.json
@@ -268,7 +293,8 @@ def generate_benchmark(benchmark_dir: Path, skill_name: str = "", skill_path: st
             "analyzer_model": "<model-name>",
             "timestamp": datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ"),
             "evals_run": eval_ids,
-            "runs_per_configuration": 3
+            "runs_per_configuration": 3,
+            "excluded_runs": len(skipped)
         },
         "runs": runs,
         "run_summary": run_summary,

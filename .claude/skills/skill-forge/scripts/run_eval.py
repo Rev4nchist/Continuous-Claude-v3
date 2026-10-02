@@ -6,18 +6,28 @@
   trigger   Run trigger queries against a candidate description. Report the trigger rate.
   grade     Grade the runs of an earlier `behavior` run.
 
-Baseline = the same prompt with the skill turned off through skillOverrides in a --settings file.
-Every run happens in a temp project. Nothing is written into the repo, and no command file is
-created. Headless rules (subscription billing, no hooks, no MCP, no shell): scripts/headless.py.
+What the two configs run:
+  with_skill     A renamed copy of the skill (<name>-eval<hex>) in a temp project, with the real name
+                 off. A personal ~/.claude/skills/<name> copy therefore cannot win over the copy
+                 under test.
+  without_skill  The same prompt in a temp project with NO copy of the skill, and the real name off.
+Both settings files carry the same user skillOverrides map and differ by nothing else.
+
+A run that errored, ended in a subtype other than success, lost its result event, or broke the
+baseline (the skill listed, fired or read) is EXCLUDED: run.json says why, grading.json is written
+as excluded, and aggregate_benchmark.py skips it. Nothing is written into the repo.
+
+Keep the output folder outside the repo. The default is <temp>/skill-eval/<name>-<time>. The grader
+runs in its own temp folder and never loads the repo's project config.
+Headless rules (subscription billing, no hooks, no MCP, no shell): scripts/headless.py.
 
 Examples:
-  python scripts/run_eval.py behavior --skill-path .claude/skills/premortem --evals evals.json --out OUT --grade
+  python scripts/run_eval.py behavior --skill-path .claude/skills/premortem --evals evals.json --grade
   python scripts/run_eval.py behavior --skill-path .claude/skills/premortem --evals evals.json --dry-run
   python scripts/run_eval.py trigger --skill-path .claude/skills/premortem --eval-set triggers.json
 """
 
 import argparse
-import hashlib
 import json
 import os
 import re
@@ -32,11 +42,16 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` imports work from any cwd
 from scripts import headless  # noqa: E402
-from scripts.evals import EvalError, MIN_EVALS, load_evals  # noqa: E402
+from scripts.evals import EvalError, MIN_EVALS, load_evals, load_trigger_set  # noqa: E402
 from scripts.utils import parse_skill_md  # noqa: E402
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
 CONFIGS = ("with_skill", "without_skill")  # the viewer and aggregate_benchmark read these exact strings
+MAX_ERROR_SHARE = 0.25  # more failed trigger runs than this stops the eval
+
+
+class TriggerRunError(RuntimeError):
+    """Too many trigger runs failed to trust the score."""
 
 
 # ------------------------------------------------------------------ planning
@@ -54,10 +69,13 @@ class RunSpec:
     mcp_path: Path
     command: list
     prompt: str
+    skill_alias: str | None = None   # the renamed copy a with_skill run uses; None for the baseline
+    source_dir: Path | None = None   # the skill folder that was passed in
+    personal_dir: Path | None = None  # ~/.claude/skills/<name>: reads there count as inside the skill
 
     @property
-    def skill_copy(self) -> Path:
-        return self.cwd / ".claude" / "skills" / self.skill_name
+    def copy_dir(self) -> Path | None:
+        return self.cwd / ".claude" / "skills" / self.skill_alias if self.skill_alias else None
 
 
 def skill_name_of(skill_path: Path) -> str:
@@ -72,11 +90,37 @@ def _exe() -> str:
         return "claude"  # a dry run still prints the plan; a live run fails with a clear spawn error
 
 
-def _build_project(cwd: Path, skill_path: Path, ev: dict) -> None:
-    """A temp project: the skill under test, any skills the eval names, and the eval's input files."""
+def _rename_copy(dest: Path, new_name: str, description: str | None = None) -> None:
+    """Rewrite the frontmatter name of a copied skill, and its description when one is given."""
+    text = (dest / "SKILL.md").read_text(encoding="utf-8").replace("\r\n", "\n")
+    m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
+    if not m:
+        raise EvalError(f"{dest / 'SKILL.md'} has no frontmatter")
+    kept, skipping = [], False
+    for line in m.group(1).split("\n"):
+        key = re.match(r"^(name|description):", line)
+        if key and (key.group(1) == "name" or description is not None):
+            skipping = key.group(1) == "description"
+            continue
+        if skipping and re.match(r"^[ \t]", line):
+            continue
+        skipping = False
+        kept.append(line)
+    head = [f"name: {new_name}"]
+    if description is not None:
+        head.append(f"description: {_yaml_scalar(description)}")
+    # without a new description the original description lines stay in `kept`
+    (dest / "SKILL.md").write_text("---\n" + "\n".join(head + kept) + "\n---\n" + text[m.end():], encoding="utf-8", newline="\n")
+
+
+def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool) -> str | None:
+    """A temp project: any other skills the eval names, the eval's input files, and, for with_skill,
+    a renamed copy of the skill under test. Return the copy's name, or None.
+
+    The baseline project holds no copy of the skill at all.
+    """
     skills_root = skill_path.parent
-    names = [skill_path.name] + [s for s in ev.get("skills", []) if s != skill_path.name]
-    for name in names:
+    for name in [s for s in ev.get("skills", []) if s != skill_path.name]:
         src = skills_root / name
         if not (src / "SKILL.md").is_file():
             raise EvalError(f"eval {ev['id']} names skill '{name}', but {src} has no SKILL.md")
@@ -87,13 +131,25 @@ def _build_project(cwd: Path, skill_path: Path, ev: dict) -> None:
             raise EvalError(f"eval {ev['id']} input file {rel} not found under {skill_path}")
         (cwd / rel).parent.mkdir(parents=True, exist_ok=True)
         shutil.copy2(src, cwd / rel)
+    if not install_target:
+        return None
+    alias = f"{skill_name_of(skill_path)}-eval{uuid.uuid4().hex[:6]}"
+    dest = headless.copy_skill(skill_path, cwd / ".claude" / "skills" / alias)
+    _rename_copy(dest, alias)
+    return alias
 
 
 def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAULT_TOOLS,
-              max_turns=headless.DEFAULT_MAX_TURNS, exe=None) -> list[RunSpec]:
-    """One RunSpec per model x eval x config. Writes the temp projects and settings files."""
+              max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None) -> list[RunSpec]:
+    """One RunSpec per model x eval x config. Writes the temp projects and settings files.
+
+    The real skill name is off in BOTH settings files, next to the user's own skillOverrides map.
+    """
     skill_path, out_dir, work_dir = Path(skill_path).resolve(), Path(out_dir), Path(work_dir)
+    home = Path(home) if home else Path.home()
     name = skill_name_of(skill_path)
+    personal = home / ".claude" / "skills" / name
+    overrides = {**headless.user_skill_overrides(home), name: "off"}
     exe = exe or _exe()
     specs = []
     for model in models:
@@ -102,26 +158,51 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
                 tag = f"{model.alias}-eval-{ev['id']}-{config}"
                 cwd = work_dir / tag / "project"
                 cwd.mkdir(parents=True)
-                _build_project(cwd, skill_path, ev)
-                overrides = {name: "off"} if config == "without_skill" else None
+                alias = _build_project(cwd, skill_path, ev, install_target=config == "with_skill")
                 settings = headless.write_settings(work_dir / tag / "settings.json", overrides)
                 mcp = headless.write_empty_mcp(work_dir / tag / "mcp.json")
                 command = headless.build_command(model, settings, mcp, tools, max_turns, exe=exe, allowed=tools)
                 run_dir = Path(out_dir) / model.alias / f"eval-{ev['id']}" / config / "run-1"
-                specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, ev["prompt"]))
+                specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, ev["prompt"],
+                                     skill_alias=alias, source_dir=skill_path, personal_dir=personal))
     return specs
 
 
 # ----------------------------------------------------------------- execution
 
+def exclusion_reason(config: str, listed, fired: bool, read_skill: bool, error: str | None) -> str | None:
+    """Why a run must not be graded or counted, or None. A broken run says nothing about the skill."""
+    if error:
+        return error
+    if config == "without_skill":
+        if listed:
+            return "the skill is listed in the without_skill run (the off override did not apply, for example to a plugin skill)"
+        if fired:
+            return "the skill fired in the without_skill run"
+        if read_skill:
+            return "the without_skill run read the skill's files: baseline contaminated"
+    elif listed is False:
+        return "the skill is not listed in the with_skill run: the copy did not load"
+    return None
+
+
 def execute(spec: RunSpec, timeout: int) -> dict:
     """Run one spec. Write transcript.jsonl, transcript.md, outputs/response.md, timing.json and run.json."""
     run = headless.run_claude(spec.command, spec.prompt, spec.cwd, timeout)
     info = headless.parse_stream(run.stdout)
-    nav = headless.navigation(info["files_read"], spec.skill_copy)
-    copy_root = str(spec.skill_copy).replace("\\", "/").lower()
-    read_skill = [f for f in info["files_read"] if f.replace("\\", "/").lower().startswith(copy_root + "/")]
+    # A read under the source folder, the renamed copy or the personal copy is a read of the skill.
+    roots = [r for r in (spec.copy_dir, spec.personal_dir) if r]
+    nav = headless.navigation(info["files_read"], spec.source_dir or spec.copy_dir, extra_roots=roots)
+    read_skill = bool(nav["skill_files_read"])
     m = headless.metrics(info["result"], run.seconds)
+    target = spec.skill_alias or spec.skill_name  # with_skill: the renamed copy; baseline: the real name
+    listed = info["listed_skills"]
+    skill_listed = None if listed is None else any(headless.name_matches(s, target) for s in listed)
+    skill_fired = any(headless.name_matches(s, target) for s in info["skills_fired"])
+    error = (run.error
+             or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
+             or headless.result_error(info))
+    excluded = exclusion_reason(spec.config, skill_listed, skill_fired, read_skill, error)
 
     d = spec.run_dir
     (d / "outputs").mkdir(parents=True, exist_ok=True)
@@ -133,16 +214,16 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     record = {
         "eval_id": spec.eval_id, "eval_name": spec.eval["name"], "config": spec.config, "skill": spec.skill_name,
         "model": spec.model.alias, "model_id": spec.model.id, "effort": spec.model.effort, "prompt": spec.prompt,
-        "skill_listed": None if info["listed_skills"] is None else spec.skill_name in info["listed_skills"],
-        "skill_fired": any(s == spec.skill_name or s.endswith(":" + spec.skill_name) for s in info["skills_fired"]),
+        "skill_alias": spec.skill_alias, "skill_listed": skill_listed, "skill_fired": skill_fired,
         "skills_fired": info["skills_fired"], "tool_counts": info["tool_counts"], "navigation": nav,
         # A baseline run that reads the skill's files found the skill without the Skill tool.
-        "baseline_contaminated": spec.config == "without_skill" and bool(read_skill),
+        "baseline_contaminated": spec.config == "without_skill" and read_skill,
         "skill_errors": info["skill_errors"],
         "final_text": info["final_text"], "metrics": m,
-        # A fired skill whose load failed is a broken run, not evidence about the skill.
-        "error": run.error or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
-        or ("result error" if m["is_error"] else None),
+        # A fired skill whose load failed, or a run that did not end in success, is a broken run.
+        "error": error,
+        # Why this run must not be graded or counted. None when it counts.
+        "excluded": excluded,
         "stderr": run.stderr, "assertions": spec.eval["assertions"],
     }
     headless.write_json(d / "run.json", record)
@@ -183,25 +264,41 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
     """Grade one run with agents/grader.md through `claude -p`. Write grading.json."""
     run_dir = Path(run_dir)
     record = json.loads((run_dir / "run.json").read_text(encoding="utf-8"))
+    if record.get("excluded"):
+        # A broken run is not graded. The grading file says why, and the benchmark skips it.
+        grading = {"excluded": record["excluded"], "expectations": [],
+                   "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
+        headless.write_json(run_dir / "grading.json", grading)
+        return grading
     grader = (SKILL_DIR / "agents" / "grader.md").read_text(encoding="utf-8")
     expectations = "\n".join(f"{i}. {a}" for i, a in enumerate(record["assertions"], 1))
+    # The grader is blind: it gets the transcript and the outputs, and nothing that names the
+    # configuration (no run.json, no skill_fired). skill_fired and navigation go to summary.json.
     prompt = (f"{grader}\n\n---\n\nGrade this run now.\n\n"
               "Output rule for this run: you have only the Read tool. Do not write grading.json. "
               "Print the grading object as ONE JSON object in a ```json fence, and nothing after it.\n\n"
               f"expectations:\n{expectations}\n\n"
-              "transcript_path: transcript.md\noutputs_dir: outputs\n"
-              f"run_record: run.json (skill_fired={record['skill_fired']}; see navigation for the files read)\n")
+              "transcript_path: transcript.md\noutputs_dir: outputs\n")
     tmp = headless.make_temp("skill-grade-")
     try:
+        sandbox = tmp / "run"
+        sandbox.mkdir()
+        shutil.copy2(run_dir / "transcript.md", sandbox / "transcript.md")
+        shutil.copytree(run_dir / "outputs", sandbox / "outputs")
         cmd = headless.build_command(grader_model, headless.write_settings(tmp / "s.json"), headless.write_empty_mcp(tmp / "m.json"),
                                      tools="Read", max_turns=8, exe=_exe())
-        run = headless.run_claude(cmd, prompt, run_dir, timeout)
+        run = headless.run_claude(cmd, prompt, sandbox, timeout)
     finally:
         shutil.rmtree(tmp, ignore_errors=True)
     info = headless.parse_stream(run.stdout)
     grading = _extract_json(info["final_text"] or "")
-    if not grading or not isinstance(grading.get("expectations"), list):
-        grading = {"expectations": [], "error": run.error or "grader returned no JSON", "raw": (info["final_text"] or "")[:1000]}
+    if not grading or not isinstance(grading.get("expectations"), list) or not grading["expectations"]:
+        # No usable grading is not a score of 0: exclude the run so the benchmark skips it.
+        reason = f"grading failed: {run.error or headless.result_error(info) or 'grader returned no expectations'}"
+        grading = {"excluded": reason, "expectations": [], "raw": (info["final_text"] or "")[:1000], "grader_model": grader_model.id,
+                   "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
+        headless.write_json(run_dir / "grading.json", grading)
+        return grading
     exps = grading["expectations"]
     passed = sum(1 for e in exps if e.get("passed"))
     grading["summary"] = {"passed": passed, "failed": len(exps) - passed, "total": len(exps),
@@ -217,7 +314,7 @@ def _yaml_scalar(s: str) -> str:
     return json.dumps(s, ensure_ascii=False) if (re.search(r":(\s|$)|\s#|^[\[\]{}>|*&!%@`\"'#-]", s) or s != s.strip()) else s
 
 
-def prepare_trigger_project(skill_path, description: str, work_dir):
+def prepare_trigger_project(skill_path, description: str, work_dir, home=None):
     """A temp project with a renamed copy of the skill that carries the candidate description.
 
     The real skill is switched off, so the model can only pick the candidate. Return
@@ -228,22 +325,9 @@ def prepare_trigger_project(skill_path, description: str, work_dir):
     candidate = f"{name}-cand{uuid.uuid4().hex[:6]}"
     project = work_dir / "project"
     dest = headless.copy_skill(skill_path, project / ".claude" / "skills" / candidate)
-    text = (dest / "SKILL.md").read_text(encoding="utf-8").replace("\r\n", "\n")
-    m = re.match(r"^---\n(.*?)\n---\n", text, re.DOTALL)
-    if not m:
-        raise EvalError(f"{skill_path / 'SKILL.md'} has no frontmatter")
-    kept, skipping = [], False
-    for line in m.group(1).split("\n"):
-        if re.match(r"^(name|description):", line):
-            skipping = line.startswith("description:")
-            continue
-        if skipping and re.match(r"^[ \t]", line):
-            continue
-        skipping = False
-        kept.append(line)
-    fm = [f"name: {candidate}", f"description: {_yaml_scalar(description)}", *kept]
-    (dest / "SKILL.md").write_text("---\n" + "\n".join(fm) + "\n---\n" + text[m.end():], encoding="utf-8", newline="\n")
-    settings = headless.write_settings(work_dir / "settings.json", {name: "off"})
+    _rename_copy(dest, candidate, description)
+    overrides = {**headless.user_skill_overrides(home), name: "off"}
+    settings = headless.write_settings(work_dir / "settings.json", overrides)
     return project, candidate, settings
 
 
@@ -266,8 +350,16 @@ def print_trigger_plan(eval_set, skill_path, description, models, runs_per_query
 
 
 def run_trigger_eval(eval_set, skill_path, description, models, workers, timeout, runs_per_query=3,
-                     trigger_threshold=0.5, exe=None) -> dict:
-    """Trigger rate per query for a candidate description, pooled over models and runs."""
+                     trigger_threshold=0.5, exe=None, max_error_share=MAX_ERROR_SHARE) -> dict:
+    """Trigger rate per query for a candidate description, pooled over models and runs.
+
+    A run counts when the stream shows the model's choice: it fired the candidate (even if the run
+    then hit --max-turns or exited non-zero), or it ended cleanly without firing. A run that failed
+    without firing is a failure, not a miss. More failures than `max_error_share` of all runs raise
+    TriggerRunError. A query whose runs all failed is listed under "unmeasured" and never scored 0/0.
+    """
+    if not eval_set:
+        raise EvalError("the trigger set is empty: it would score 0 of 0 and read as all passed")
     work = headless.make_temp("skill-trigger-")
     try:
         project, candidate, settings = prepare_trigger_project(skill_path, description, work)
@@ -281,13 +373,19 @@ def run_trigger_eval(eval_set, skill_path, description, models, workers, timeout
                     for _ in range(runs_per_query):
                         jobs.append((item, model, pool.submit(headless.run_claude, cmd, item["query"], project, timeout)))
             per_query: dict[str, dict] = {}
+            failed, total, first_error = 0, 0, None
             for item, model, fut in jobs:
                 run = fut.result()
+                total += 1
                 q = per_query.setdefault(item["query"], {"item": item, "fired": 0, "runs": 0, "errors": 0, "by_model": {}})
-                if run.error:
+                info = headless.parse_stream(run.stdout)
+                hit = any(headless.name_matches(s, candidate) for s in info["skills_fired"])
+                problem = run.error or headless.result_error(info)
+                if problem and not hit:
+                    failed += 1
                     q["errors"] += 1
+                    first_error = first_error or problem
                     continue
-                hit = headless.skill_fired(run.stdout, candidate)
                 q["runs"] += 1
                 q["fired"] += int(hit)
                 bm = q["by_model"].setdefault(model.alias, [0, 0])
@@ -296,17 +394,25 @@ def run_trigger_eval(eval_set, skill_path, description, models, workers, timeout
     finally:
         shutil.rmtree(work, ignore_errors=True)
 
-    results = []
+    if total and failed / total > max_error_share:
+        raise TriggerRunError(f"{failed} of {total} trigger runs failed (limit {max_error_share:.0%}); first error: {first_error}")
+    results, unmeasured = [], []
     for query, q in per_query.items():
         runs, should = q["runs"], q["item"]["should_trigger"]
-        rate = q["fired"] / runs if runs else None
-        ok = rate is not None and (rate >= trigger_threshold if should else rate < trigger_threshold)
+        if not runs:
+            unmeasured.append(query)
+            continue
+        rate = q["fired"] / runs
+        ok = rate >= trigger_threshold if should else rate < trigger_threshold
         results.append({"query": query, "should_trigger": should, "trigger_rate": rate, "triggers": q["fired"],
                         "runs": runs, "errors": q["errors"], "pass": ok,
                         "by_model": {k: f"{v[0]}/{v[1]}" for k, v in q["by_model"].items()}})
+    if not results:
+        raise TriggerRunError(f"no trigger query could be measured; first error: {first_error}")
     passed = sum(1 for r in results if r["pass"])
     return {"skill_name": skill_name_of(skill_path), "description": description, "models": [m.id for m in models],
-            "results": results, "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed}}
+            "results": results, "unmeasured": unmeasured, "failed_runs": failed,
+            "summary": {"total": len(results), "passed": passed, "failed": len(results) - passed}}
 
 
 # ----------------------------------------------------------------------- CLI
@@ -340,13 +446,14 @@ def _cmd_behavior(a) -> int:
     work = headless.make_temp("skill-eval-")
     try:
         specs = plan_runs(skill_path, evals, models, out, work, a.tools, a.max_turns)
-        warn = _active_copy_warning(skill_path, name)
+        warn = headless.api_key_helper_warning()
         if warn:
             print(f"Warning: {warn}", file=sys.stderr)
         if a.dry_run:
-            print(f"exe: {specs[0].command[0]}  (shell=False; the prompt goes on stdin; ANTHROPIC_API_KEY removed)")
+            print(f"exe: {specs[0].command[0]}  (shell=False; the prompt goes on stdin; API credentials removed from the child env)")
             for s in specs:
-                print(f"[{s.model.alias} eval-{s.eval_id} {s.config}] settings={json.dumps(json.loads(s.settings_path.read_text()))}")
+                print(f"[{s.model.alias} eval-{s.eval_id} {s.config}] skill copy={s.skill_alias or 'none'} "
+                      f"settings={json.dumps(json.loads(s.settings_path.read_text()))}")
                 print(f"  argv: {json.dumps(s.command[1:])}")
                 print(f"  stdin: {json.dumps(s.prompt)}")
             print(f"dry-run: {len(specs)} runs planned ({len(models)} models x {len(evals)} evals x 2 configs), 0 turns spent")
@@ -357,31 +464,21 @@ def _cmd_behavior(a) -> int:
             grader = _models_or_exit(a.grader_model)[0]
             for r in records:
                 run_dir = out / r["model"] / f"eval-{r['eval_id']}" / r["config"] / "run-1"
-                g = grade_run(run_dir, grader)
-                r["grading"] = g["summary"]
-        headless.write_json(out / "summary.json", {"skill": name, "warnings": [warn] if warn else [], "runs": [
+                r["grading"] = grade_run(run_dir, grader)["summary"]  # an excluded run is not sent to the grader
+        excluded = [{"model": r["model"], "eval_id": r["eval_id"], "config": r["config"], "reason": r["excluded"]}
+                    for r in records if r["excluded"]]
+        headless.write_json(out / "summary.json", {"skill": name, "warnings": [warn] if warn else [], "excluded": excluded, "runs": [
             {k: v for k, v in r.items() if k not in ("final_text", "prompt", "assertions")} for r in records]})
         for r in records:
             g = r.get("grading")
+            score = f"pass={g['passed']}/{g['total']} " if g and g["total"] else ""
             print(f"{r['model']:7} eval-{r['eval_id']} {r['config']:13} listed={str(r['skill_listed']):5} fired={str(r['skill_fired']):5} "
-                  f"read={r['navigation']['skill_files_read']} " + (f"pass={g['passed']}/{g['total']} " if g else "") +
-                  f"error={r['error']}")
+                  f"read={r['navigation']['skill_files_read']} {score}" + (f"EXCLUDED: {r['excluded']}" if r["excluded"] else ""))
+        print(f"excluded: {len(excluded)} of {len(records)} runs")
         print(f"summary: {out / 'summary.json'}")
-        return 1 if any(r["error"] for r in records) else 0
+        return 1 if excluded else 0
     finally:
         shutil.rmtree(work, ignore_errors=True)
-
-
-def _active_copy_warning(skill_path: Path, name: str):
-    """A personal skill of the same name wins over the project copy. Say so when the copies differ."""
-    active = Path.home() / ".claude" / "skills" / name / "SKILL.md"
-    mine = skill_path / "SKILL.md"
-    if active.is_file() and mine.is_file() and active.resolve() != mine.resolve():
-        h = lambda p: hashlib.sha256(p.read_bytes().replace(b"\r\n", b"\n")).hexdigest()  # noqa: E731
-        if h(active) != h(mine):
-            return (f"~/.claude/skills/{name}/SKILL.md differs from {mine}. A personal skill wins over the project copy, "
-                    "so with_skill runs use the active version. Sync first.")
-    return None
 
 
 def _cmd_trigger(a) -> int:
@@ -390,12 +487,23 @@ def _cmd_trigger(a) -> int:
     if not (skill_path / "SKILL.md").is_file():
         print(f"Error: no SKILL.md at {skill_path}", file=sys.stderr)
         return 1
-    eval_set = json.loads(Path(a.eval_set).read_text(encoding="utf-8"))
+    try:
+        eval_set = load_trigger_set(a.eval_set)
+    except EvalError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
+    warn = headless.api_key_helper_warning()
+    if warn:
+        print(f"Warning: {warn}", file=sys.stderr)
     description = a.description or parse_skill_md(skill_path)[1]
     if a.dry_run:
         print_trigger_plan(eval_set, skill_path, description, models, a.runs_per_query)
         return 0
-    out = run_trigger_eval(eval_set, skill_path, description, models, a.num_workers, a.timeout, a.runs_per_query, a.trigger_threshold)
+    try:
+        out = run_trigger_eval(eval_set, skill_path, description, models, a.num_workers, a.timeout, a.runs_per_query, a.trigger_threshold)
+    except (TriggerRunError, EvalError) as e:
+        print(f"Error: trigger runs failed: {e}", file=sys.stderr)
+        return 1
     if a.verbose:
         s = out["summary"]
         print(f"Results: {s['passed']}/{s['total']} passed", file=sys.stderr)
@@ -413,7 +521,7 @@ def _cmd_grade(a) -> int:
         return 1
     for r in runs:
         g = grade_run(r.parent, grader)
-        print(f"{r.parent}: {g['summary']['passed']}/{g['summary']['total']}")
+        print(f"{r.parent}: " + (f"EXCLUDED: {g['excluded']}" if g.get("excluded") else f"{g['summary']['passed']}/{g['summary']['total']}"))
     return 0
 
 
@@ -426,7 +534,7 @@ def main(argv=None) -> int:
     b.add_argument("--evals", required=True, help="evals JSON (guide shape or evals.json shape)")
     b.add_argument("--models", default=None, help="comma list of sonnet,opus,fable or claude-* ids (default: all three; never haiku)")
     b.add_argument("--eval-ids", default=None, help="run only these eval ids, for example 1 or 1,3")
-    b.add_argument("--out", default=None, help="output folder (default: a temp folder, never inside the repo)")
+    b.add_argument("--out", default=None, help="output folder. Keep it outside the repo (default: <temp>/skill-eval/<name>-<time>)")
     b.add_argument("--tools", default=headless.DEFAULT_TOOLS, help="built-in tools the run may use (default: read-only)")
     b.add_argument("--max-turns", type=int, default=headless.DEFAULT_MAX_TURNS)
     b.add_argument("--timeout", type=int, default=headless.DEFAULT_TIMEOUT)

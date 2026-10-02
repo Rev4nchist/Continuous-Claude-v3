@@ -57,9 +57,15 @@ def gate_path() -> Path:
     return root / GATE_REL
 
 
+GATE_TIMEOUT_SECONDS = 30  # the same limit G32 gives the scaffold run
+
+
 def run_gate(*args: str) -> subprocess.CompletedProcess:
     cmd = [find_node(), str(gate_path()), *args]
-    return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8")
+    try:
+        return subprocess.run(cmd, capture_output=True, text=True, encoding="utf-8", timeout=GATE_TIMEOUT_SECONDS)
+    except subprocess.TimeoutExpired:
+        raise GateError(f"the skills gate timed out after {GATE_TIMEOUT_SECONDS}s: node audit-skills.mjs {' '.join(args)}") from None
 
 
 def _json(proc: subprocess.CompletedProcess) -> dict:

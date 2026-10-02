@@ -9,6 +9,7 @@ accepted. The convention is one line, third person: "Does X. Use when Y."
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
@@ -67,9 +68,12 @@ def build_prompt(skill_name, skill_content, current_description, eval_results, h
 def _ask(prompt: str, model: headless.Model, timeout: int = 300) -> str:
     """One tool-less `claude -p` turn on the subscription. Return the reply text."""
     tmp = headless.make_temp("skill-improve-")
-    cmd = headless.build_command(model, headless.write_settings(tmp / "s.json"), headless.write_empty_mcp(tmp / "m.json"),
-                                 tools="", max_turns=1)
-    run = headless.run_claude(cmd, prompt, tmp, timeout)
+    try:
+        cmd = headless.build_command(model, headless.write_settings(tmp / "s.json"), headless.write_empty_mcp(tmp / "m.json"),
+                                     tools="", max_turns=1)
+        run = headless.run_claude(cmd, prompt, tmp, timeout)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
     info = headless.parse_stream(run.stdout)
     if not info["final_text"]:
         raise RuntimeError(f"claude -p returned no text ({run.error or run.stderr.strip() or 'empty'})")

@@ -21,7 +21,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` i
 from scripts import headless  # noqa: E402
 from scripts.generate_report import generate_html  # noqa: E402
 from scripts.improve_description import improve_description  # noqa: E402
-from scripts.run_eval import print_trigger_plan, run_trigger_eval  # noqa: E402
+from scripts.evals import EvalError, load_trigger_set  # noqa: E402
+from scripts.run_eval import TriggerRunError, print_trigger_plan, run_trigger_eval  # noqa: E402
 from scripts.utils import parse_skill_md  # noqa: E402
 
 
@@ -90,16 +91,25 @@ def run_loop(
         # Evaluate train + test together in one batch for parallelism
         all_queries = train_set + test_set
         t0 = time.time()
-        all_results = run_trigger_eval(
-            eval_set=all_queries,
-            skill_path=skill_path,
-            description=current_description,
-            models=models,
-            workers=num_workers,
-            timeout=timeout,
-            runs_per_query=runs_per_query,
-            trigger_threshold=trigger_threshold,
-        )
+        try:
+            all_results = run_trigger_eval(
+                eval_set=all_queries,
+                skill_path=skill_path,
+                description=current_description,
+                models=models,
+                workers=num_workers,
+                timeout=timeout,
+                runs_per_query=runs_per_query,
+                trigger_threshold=trigger_threshold,
+            )
+        except TriggerRunError as e:
+            # Too many failed runs: the score would be noise. Stop and say so; keep what was measured.
+            exit_reason = f"trigger_runs_failed (iteration {iteration}): {e}"
+            if not history:
+                raise
+            if verbose:
+                print(f"Stopping: {exit_reason}", file=sys.stderr)
+            break
         eval_elapsed = time.time() - t0
 
         # Split results back into train/test by matching queries
@@ -151,7 +161,7 @@ def run_loop(
                 "test_size": len(test_set),
                 "history": history,
             }
-            live_report_path.write_text(generate_html(partial_output, auto_refresh=True, skill_name=name))
+            live_report_path.write_text(generate_html(partial_output, auto_refresh=True, skill_name=name), encoding="utf-8")
 
         if verbose:
             def print_eval_stats(label, results, elapsed):
@@ -268,7 +278,6 @@ def main():
     parser.add_argument("--results-dir", default=None, help="Save all outputs (results.json, report.html, log.txt) to a timestamped subdirectory here")
     args = parser.parse_args()
 
-    eval_set = json.loads(Path(args.eval_set).read_text(encoding="utf-8"))
     skill_path = Path(args.skill_path)
     try:
         models = headless.resolve_models(args.models)
@@ -276,6 +285,14 @@ def main():
     except ValueError as e:
         print(f"Error: {e}", file=sys.stderr)
         sys.exit(2)
+    try:
+        eval_set = load_trigger_set(args.eval_set)
+    except EvalError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    warn = headless.api_key_helper_warning()
+    if warn:
+        print(f"Warning: {warn}", file=sys.stderr)
 
     if not (skill_path / "SKILL.md").exists():
         print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
@@ -297,7 +314,7 @@ def main():
         else:
             live_report_path = Path(args.report)
         # Open the report immediately so the user can watch
-        live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>")
+        live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>", encoding="utf-8")
         webbrowser.open(str(live_report_path))
     else:
         live_report_path = None
@@ -312,36 +329,40 @@ def main():
 
     log_dir = results_dir / "logs" if results_dir else None
 
-    output = run_loop(
-        eval_set=eval_set,
-        skill_path=skill_path,
-        description_override=args.description,
-        num_workers=args.num_workers,
-        timeout=args.timeout,
-        max_iterations=args.max_iterations,
-        runs_per_query=args.runs_per_query,
-        trigger_threshold=args.trigger_threshold,
-        holdout=args.holdout,
-        models=models,
-        improve_model=improve_model,
-        verbose=args.verbose,
-        live_report_path=live_report_path,
-        log_dir=log_dir,
-    )
+    try:
+        output = run_loop(
+            eval_set=eval_set,
+            skill_path=skill_path,
+            description_override=args.description,
+            num_workers=args.num_workers,
+            timeout=args.timeout,
+            max_iterations=args.max_iterations,
+            runs_per_query=args.runs_per_query,
+            trigger_threshold=args.trigger_threshold,
+            holdout=args.holdout,
+            models=models,
+            improve_model=improve_model,
+            verbose=args.verbose,
+            live_report_path=live_report_path,
+            log_dir=log_dir,
+        )
+    except TriggerRunError as e:
+        print(f"Error: trigger runs failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Save JSON output
     json_output = json.dumps(output, indent=2)
     print(json_output)
     if results_dir:
-        (results_dir / "results.json").write_text(json_output)
+        (results_dir / "results.json").write_text(json_output, encoding="utf-8")
 
     # Write final HTML report (without auto-refresh)
     if live_report_path:
-        live_report_path.write_text(generate_html(output, auto_refresh=False, skill_name=name))
+        live_report_path.write_text(generate_html(output, auto_refresh=False, skill_name=name), encoding="utf-8")
         print(f"\nReport: {live_report_path}", file=sys.stderr)
 
     if results_dir and live_report_path:
-        (results_dir / "report.html").write_text(generate_html(output, auto_refresh=False, skill_name=name))
+        (results_dir / "report.html").write_text(generate_html(output, auto_refresh=False, skill_name=name), encoding="utf-8")
 
     if results_dir:
         print(f"Results saved to: {results_dir}", file=sys.stderr)

@@ -66,7 +66,7 @@ Existing shape:
 - `prompt` or `query`: The task to execute
 - `skills`: Names of other skills from the same folder that the run also needs
 - `files`: Optional input files, relative to the skill root. They are copied into the temp project.
-- `expected_behavior`, `expectations` or `assertions`: Verifiable statements. All three map to `assertions`. The first one present wins.
+- `expected_behavior`, `expectations` or `assertions`: Verifiable statements. All three map to `assertions`. The first one present wins, in this order: `expected_behavior`, then `expectations`, then `assertions`.
 - `expected_output`: Human-readable description of success. It becomes the single assertion when no list is given.
 
 An eval with nothing to grade is an error.
@@ -87,9 +87,10 @@ Output of `run_eval.py behavior` for one run. Located at `<out>/<model>/eval-<id
   "model_id": "claude-sonnet-5-5",
   "effort": "high",
   "prompt": "User's example prompt",
+  "skill_alias": "example-skill-eval1a2b3c",
   "skill_listed": true,
   "skill_fired": true,
-  "skills_fired": ["example-skill"],
+  "skills_fired": ["example-skill-eval1a2b3c"],
   "skill_errors": [],
   "tool_counts": {"Skill": 1, "Read": 2},
   "navigation": {
@@ -101,20 +102,23 @@ Output of `run_eval.py behavior` for one run. Located at `<out>/<model>/eval-<id
   "final_text": "...",
   "metrics": {"total_tokens": 5200, "cost_usd": 0.04, "turns": 3, "duration_seconds": 21.5, "is_error": false},
   "error": null,
+  "excluded": null,
   "assertions": ["The output includes X"]
 }
 ```
 
 **Fields:**
-- `config`: `with_skill` or `without_skill`. The baseline has the skill set to `off` through `skillOverrides`. The viewer reads these exact strings.
-- `skill_listed`: True when the session's start event listed this skill. It is false for a `without_skill` run when the `off` override worked.
+- `config`: `with_skill` or `without_skill`. The viewer reads these exact strings. Both configs set the real skill name to `off` through `skillOverrides`, next to the user's own map. `with_skill` runs a renamed copy instead (`skill_alias`). `without_skill` has no copy.
+- `skill_alias`: The name of the renamed copy that `with_skill` ran. Null for the baseline.
+- `skill_listed`: True when the session's start event listed the skill (the alias for `with_skill`, any form of the real name for `without_skill`). It is false for a `without_skill` run when the `off` override worked.
 - `skill_fired`: True when the run called the `Skill` tool with this skill. It should be true with the skill on and false with the skill off.
-- `navigation`: The files the run read (Read tool_use paths). `skill_files_unread` lists skill files that were never read. `SKILL.md` is not listed: the Skill tool injects it.
-- `baseline_contaminated`: True when a `without_skill` run read the skill's files anyway. Rerun it.
+- `navigation`: The files the run read (Read tool_use paths). Reads under the source folder, the renamed copy or `~/.claude/skills/<name>` count as inside the skill. `skill_files_unread` lists skill files that were never read. `SKILL.md` is not listed: the Skill tool injects it.
+- `baseline_contaminated`: True when a `without_skill` run read the skill's files anyway.
 - `skill_errors`: Skill tool calls that returned an error. A fired skill that failed to load is not a result.
-- `error`: Null, or the reason the run failed (exit code, timeout, `skill load failed`). A failed run says nothing about the skill.
+- `error`: Null, or the reason the run failed: an exit code, a timeout, `skill load failed`, no result event, or a result subtype other than `success` (for example `error_max_turns`).
+- `excluded`: Null, or the reason the run does not count: any `error`, a `without_skill` run that listed, fired or read the skill, or a `with_skill` run whose copy was not listed. An excluded run is not graded. Its `grading.json` holds `"excluded": "<reason>"` and a summary with `total` 0. `aggregate_benchmark.py` skips it and prints the count.
 
-`summary.json` in the output folder holds the same fields for every run, without the prompt and the text.
+`summary.json` in the output folder holds the same fields for every run, without the prompt and the text, plus the list of excluded runs. The grader never sees these fields: it grades from `transcript.md` and `outputs/`.
 
 ---
 

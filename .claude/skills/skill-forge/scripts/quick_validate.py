@@ -6,7 +6,8 @@ names, tool scope) live in the CCv3 skills gate, scripts/skills/audit-skills.mjs
 the gate on the skill and adds only the checks the gate does not cover:
 
   - the upload key set (--target upload), for claude.ai upload and the Skills API
-  - unedited scaffold placeholders and TODO markers
+  - unedited scaffold placeholders and TODO markers in every text file of the skill
+    (tests/ and evals/ are skipped; a file with "todo-ok" in its first 10 lines is skipped)
   - script shebangs
   - the 500-char limit on compatibility
 
@@ -113,13 +114,34 @@ def metadata_results(content: str) -> List[ValidationResult]:
     return results
 
 
-def check_todo_markers(content: str) -> List[ValidationResult]:
-    # Whole word, case-sensitive: TodoWrite and "todos" are not markers. A backticked `TODO` is
-    # documentation about markers, not an unfinished one.
-    todos = re.findall(r"\bTODO\b", re.sub(r"`[^`\n]*`", " ", content))
-    if todos:
-        return [ValidationResult("error", "content", f"Found {len(todos)} TODO markers. Complete them before packaging.", False)]
-    return [ValidationResult("info", "content", "No TODO markers found", True)]
+TODO_SKIP_DIRS = {"tests", "evals", "__pycache__", "node_modules", ".git"}
+TODO_OK = "todo-ok"  # a file whose first 10 lines hold this token writes TODO markers on purpose (init_skill.py)
+
+
+def _text_files(skill_path: Path):
+    for p in sorted(skill_path.rglob("*")):
+        rel = p.relative_to(skill_path)
+        if not p.is_file() or rel.parts[0] in TODO_SKIP_DIRS or any(part in TODO_SKIP_DIRS for part in rel.parts):
+            continue
+        try:
+            if p.stat().st_size > 2_000_000:
+                continue
+            yield rel.as_posix(), p.read_text(encoding="utf-8").replace("\r\n", "\n")
+        except (UnicodeDecodeError, OSError):
+            continue  # a binary asset
+
+
+def check_todo_markers(skill_path: Path) -> List[ValidationResult]:
+    """Scan every text file of the skill. Whole word, case-sensitive: TodoWrite and "todos" are not
+    markers. A backticked `TODO` is documentation about markers, not an unfinished one."""
+    results = []
+    for rel, text in _text_files(skill_path):
+        if TODO_OK in "\n".join(text.split("\n")[:10]):
+            continue
+        n = len(re.findall(r"\bTODO\b", re.sub(r"`[^`\n]*`", " ", text)))
+        if n:
+            results.append(ValidationResult("error", "content", f"Found {n} TODO markers in {rel}. Complete them before packaging.", False))
+    return results or [ValidationResult("info", "content", "No TODO markers found", True)]
 
 
 def validate_scripts(skill_path: Path) -> List[ValidationResult]:
@@ -151,7 +173,7 @@ def validate_skill(skill_path, target: str = DEFAULT_TARGET) -> Tuple[bool, str]
     results += metadata_results(content)
     if target == "upload":
         results += upload_results(content)
-    results += check_todo_markers(content)
+    results += check_todo_markers(skill_path)
     results += validate_scripts(skill_path)
 
     errors = [r for r in results if r.severity == "error" and not r.passed]

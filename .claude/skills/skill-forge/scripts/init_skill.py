@@ -7,6 +7,8 @@ Usage:
 The default parent directory is the repo's .claude/skills. The repo is the source of every skill.
 Never scaffold into ~/.claude/skills: that is the active copy, and the next sync overwrites it.
 
+todo-ok: this file writes TODO markers into a new skill on purpose, so quick_validate.py skips it.
+
 The name rule comes from the gate (audit-skills.mjs --check-name), so this script and the gate
 cannot disagree. The description is the placeholder "Does X. Use when Y." It passes the gate and
 fails quick_validate.py until you replace it.

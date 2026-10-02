@@ -76,16 +76,17 @@ def _plan(tmp_path, evals=None):
     repo_skills = tmp_path / "repo" / ".claude" / "skills"
     skill = write_skill(repo_skills, "probe-skill", files={"references/a.md": "# A\n"})
     evals = evals or [{"id": 1, "name": "one", "prompt": "do it", "files": [], "skills": [], "assertions": ["it works"]}]
-    specs = plan_runs(skill, evals, resolve_models("sonnet"), tmp_path / "out", tmp_path / "work")
+    specs = plan_runs(skill, evals, resolve_models("sonnet"), tmp_path / "out", tmp_path / "work", home=tmp_path / "home")
     return skill, specs
 
 
-def test_baseline_settings_turn_the_skill_off_and_with_skill_does_not(tmp_path):
+def test_the_real_skill_is_off_in_both_configs_and_hooks_are_off(tmp_path):
+    # The real name is off in BOTH configs: a personal copy of the same name can never win. with_skill
+    # runs a renamed copy instead (see test_eval_validity.py).
     _, specs = _plan(tmp_path)
     by_cfg = {s.config: json.loads(s.settings_path.read_text()) for s in specs}
-    assert by_cfg["without_skill"]["skillOverrides"] == {"probe-skill": "off"}
-    assert "probe-skill" not in by_cfg["with_skill"].get("skillOverrides", {})
     for cfg in by_cfg.values():
+        assert cfg["skillOverrides"]["probe-skill"] == "off"
         assert cfg["disableAllHooks"] is True
 
 
@@ -95,7 +96,6 @@ def test_runs_happen_in_a_temp_project_and_the_repo_is_untouched(tmp_path):
     before = hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest()
     for s in specs:
         assert repo not in Path(s.cwd).parents and Path(s.cwd) != repo
-        assert (Path(s.cwd) / ".claude" / "skills" / "probe-skill" / "SKILL.md").is_file()
         assert not (Path(s.cwd) / ".claude" / "commands").exists()
     assert not (repo / ".claude" / "commands").exists()
     assert hashlib.sha256((skill / "SKILL.md").read_bytes()).hexdigest() == before
@@ -112,7 +112,7 @@ def test_trigger_project_renames_the_candidate_and_switches_the_real_skill_off(t
     from scripts.run_eval import prepare_trigger_project
     skill = write_skill(tmp_path / "repo" / ".claude" / "skills", "probe-skill")
     before = (skill / "SKILL.md").read_bytes()
-    project, candidate, settings = prepare_trigger_project(skill, "Does Z. Use when Q.", tmp_path / "work")
+    project, candidate, settings = prepare_trigger_project(skill, "Does Z. Use when Q.", tmp_path / "work", home=tmp_path / "home")
     assert candidate != "probe-skill" and candidate.startswith("probe-skill")
     md = (project / ".claude" / "skills" / candidate / "SKILL.md").read_text(encoding="utf-8")
     assert f"name: {candidate}" in md and "description: Does Z. Use when Q." in md

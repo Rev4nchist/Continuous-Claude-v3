@@ -108,31 +108,34 @@ Read the [authoring guide](references/authoring-guide.md) for the substitution r
 
 ```bash
 python "${CLAUDE_SKILL_DIR}/scripts/run_eval.py" behavior \
-  --skill-path .claude/skills/<name> --evals .claude/skills/<name>/evals/evals.json \
-  --out .claude/cache/skill-eval/<name>/iteration-1 --grade
+  --skill-path .claude/skills/<name> --evals .claude/skills/<name>/evals/evals.json --grade
 ```
 
-Keep the output outside `.claude/skills/`. A folder without `SKILL.md` there fails gate rule G29.
+The output goes to a temp folder (`<temp>/skill-eval/<name>-<time>`), and the script prints it. Keep any `--out` folder outside the repo. A folder without `SKILL.md` under `.claude/skills/` fails gate rule G29.
 
-For every model and eval, the script makes two runs in a temp project:
+For every model and eval, the script makes two runs, each in its own temp project:
 
-- `with_skill`: the skill is available.
-- `without_skill`: the same prompt, with `skillOverrides` set to `off` for this skill in a `--settings` file.
+- `with_skill`: a renamed copy of the skill (`<name>-eval<hex>`) from the folder you pass. The real name is off. A personal copy in `~/.claude/skills/<name>` therefore cannot win over the copy under test.
+- `without_skill`: the same prompt and no copy of the skill. The real name is off here too.
+
+Both settings files carry your own `skillOverrides` map and differ in nothing else.
 
 Every run is `claude -p --output-format stream-json --verbose` with hooks off, an empty strict MCP config, read-only tools and a turn cap. The default models are Sonnet at high effort, Opus and Fable. Use `--models sonnet,opus` for a subset, `--eval-ids 1` for one eval and `--dry-run` to print the plan and spend nothing. The run sees only the read-only tools `Skill`, `Read`, `Glob` and `Grep`, and they are pre-approved. Pass `--tools` for an eval that needs more. Every tool you name there is pre-approved too.
 
-Each run folder holds `transcript.jsonl`, `transcript.md`, `outputs/response.md`, `run.json` and `grading.json`. `run.json` records `skill_fired` and the navigation (see step 6).
+Each run folder holds `transcript.jsonl`, `transcript.md`, `outputs/response.md`, `run.json` and `grading.json`. `run.json` records `skill_fired` and the navigation (see step 6). Reads under the personal copy count as reads of the skill.
 
-A personal skill with the same name wins over the project copy. The script warns when `~/.claude/skills/<name>` differs. Sync first.
+A run is excluded when it errored, did not end with a `success` result, lost its result event, or broke the baseline (the skill was listed, fired or read in `without_skill`). An excluded run is not graded. Its `grading.json` says why, and `aggregate_benchmark.py` skips it and prints the count.
 
 ### 6. Grade and read the navigation
 
 `--grade` runs `agents/grader.md` through `claude -p` for each run. To grade later, run `run_eval.py grade --out <folder>`.
 
-Read `run.json` for each run. Check three things:
+The grader is blind: it sees `transcript.md` and `outputs/` only. Skill use and navigation are in `run.json` and `summary.json`.
 
-- `skill_listed` and `skill_fired`: with the skill on, both must be true. With the skill off, `skill_listed` must be false, which proves the override worked. If `baseline_contaminated` is true, the baseline read the skill files by itself. Rerun it.
-- `error`: a run whose Skill tool call failed reports `skill load failed`. Fix the cause and rerun. Do not read that run as a result.
+Read `run.json` for each run. Check four things:
+
+- `skill_listed` and `skill_fired`: with the skill on, both must be true. With the skill off, `skill_listed` must be false, which proves the override worked.
+- `excluded` and `error`: a run with a reason there does not count. A failed Skill tool call reports `skill load failed`. Fix the cause and rerun.
 - `navigation.skill_files_read` and `skill_files_unread`: a file that is never read is dead weight. Remove it or point to it better. A file read in an odd order, or a section read every time, belongs in `SKILL.md`.
 - `navigation.reads_outside_skill`: the run looked elsewhere for something the skill should have said.
 
@@ -163,7 +166,7 @@ python "${CLAUDE_SKILL_DIR}/scripts/run_loop.py" --eval-set <eval_set.json> \
   --skill-path .claude/skills/<name> --models sonnet --max-iterations 5 --verbose
 ```
 
-Add `--dry-run` to print the plan and spend nothing. The loop scores each description with fresh headless runs and reads the `Skill` tool call. A copy of the skill carries the candidate description, and the real skill is switched off. Proposals come from `claude -p`. Each one stays under 400 characters and passes the gate's description rules.
+Add `--dry-run` to print the plan and spend nothing. An empty query set is an error. If more than a quarter of the trigger runs fail, the loop stops with an error. A query whose runs all failed is listed as `unmeasured` and is never scored as a failure. The loop scores each description with fresh headless runs and reads the `Skill` tool call. A copy of the skill carries the candidate description, and the real skill is switched off. Proposals come from `claude -p`. Each one stays under 400 characters and passes the gate's description rules.
 
 Apply `best_description` to the frontmatter yourself. Show the user the before and after, and the scores.
 

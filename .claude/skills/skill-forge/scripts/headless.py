@@ -66,13 +66,47 @@ def resolve_models(spec: str | None) -> list[Model]:
     return out
 
 
+# Credentials that would bill the API instead of the subscription.
+BILLING_ENV = ("ANTHROPIC_API_KEY", "ANTHROPIC_AUTH_TOKEN")
+
+
 def child_env(base: dict | None = None) -> dict:
-    """The environment of a headless child: the parent env without the API key."""
+    """The environment of a headless child: the parent env without the API credentials."""
     env = dict(os.environ if base is None else base)
     for key in list(env):
-        if key.upper() == "ANTHROPIC_API_KEY":
+        if key.upper() in BILLING_ENV:
             del env[key]
     return env
+
+
+def user_settings(home: Path | None = None) -> dict:
+    """The user's ~/.claude/settings.json, or {} when it is missing or unreadable."""
+    path = Path(home or Path.home()) / ".claude" / "settings.json"
+    try:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, ValueError):
+        return {}
+    return data if isinstance(data, dict) else {}
+
+
+def user_skill_overrides(home: Path | None = None) -> dict:
+    """The user's skillOverrides map. A --settings file may replace it, so both configs of an eval
+    carry the same map and differ only by the skill under test."""
+    overrides = user_settings(home).get("skillOverrides")
+    return dict(overrides) if isinstance(overrides, dict) else {}
+
+
+def api_key_helper_warning(home: Path | None = None) -> str | None:
+    """apiKeyHelper in the user settings can supply an API key that env removal does not stop."""
+    if user_settings(home).get("apiKeyHelper"):
+        return ("apiKeyHelper is set in ~/.claude/settings.json. Removing ANTHROPIC_API_KEY from the child env "
+                "does not stop a helper from supplying a key, so a run may bill the API. Check before a large run.")
+    return None
+
+
+def name_matches(candidate: str, name: str) -> bool:
+    """A skill name, or a plugin-qualified form of it (plugin:name). skillOverrides does not reach plugin skills."""
+    return candidate == name or candidate.endswith(":" + name)
 
 
 def find_claude(env: dict | None = None) -> str:
@@ -213,14 +247,32 @@ def parse_stream(text: str) -> dict:
                             skill_calls[block["id"]] = s
                 elif name == "Read" and inp.get("file_path"):
                     reads.append(str(inp["file_path"]))
-    final = (result or {}).get("result") if isinstance((result or {}).get("result"), str) else None
-    return {"listed_skills": listed, "skills_fired": skills, "skill_errors": skill_errors, "files_read": reads, "tool_counts": counts, "tool_calls": tool_calls,
-            "final_text": final if final is not None else (texts[-1] if texts else ""), "result": result}
+    # The answer is the result event's text, and only from a successful run. The last narration of a
+    # run that ended in error_max_turns or lost its result event is not an answer.
+    ok = result is not None and result.get("subtype") == "success" and isinstance(result.get("result"), str)
+    return {"listed_skills": listed, "skills_fired": skills, "skill_errors": skill_errors, "files_read": reads,
+            "tool_counts": counts, "tool_calls": tool_calls, "final_text": result["result"] if ok else "", "result": result,
+            "last_text": texts[-1] if texts else ""}
+
+
+def result_error(info: dict) -> str | None:
+    """Why a parsed run is not a success: no result event, or a subtype other than success
+    (error_max_turns, error_during_execution, ...). None when the run succeeded."""
+    result = info.get("result")
+    if result is None:
+        return "no result event in the stream"
+    subtype = result.get("subtype")
+    if subtype != "success":
+        detail = "; ".join(str(e) for e in (result.get("errors") or []))[:200]
+        return f"run ended with {subtype}" + (f" ({detail})" if detail else "")
+    if result.get("is_error"):
+        return "result is_error is true"
+    return None
 
 
 def skill_fired(text: str, name: str) -> bool:
     """True when the run called the Skill tool with exactly this skill name."""
-    return any(s == name or s.endswith(":" + name) for s in parse_stream(text)["skills_fired"])
+    return any(name_matches(s, name) for s in parse_stream(text)["skills_fired"])
 
 
 def _norm(p) -> str:
@@ -240,22 +292,28 @@ def skill_files(skill_dir: Path) -> list[str]:
     return out
 
 
-def navigation(files_read: list[str], skill_dir: Path) -> dict:
-    """Which files a run read: inside the skill (in read order), outside it, and the skill files never read."""
-    root = _norm(skill_dir)
+def navigation(files_read: list[str], skill_dir: Path, extra_roots=()) -> dict:
+    """Which files a run read: inside the skill (in read order), outside it, and the skill files never read.
+
+    `skill_dir` lists the skill's files. A read under `skill_dir` or under any of `extra_roots` (the
+    renamed project copy, the personal copy in ~/.claude/skills) counts as inside the skill.
+    """
+    roots = [_norm(r) for r in (skill_dir, *extra_roots)]
+    listing = skill_files(skill_dir)
     inside, outside = [], []
     for f in files_read:
         n = _norm(f)
-        if n.startswith(root + os.sep):
+        root = next((r for r in roots if n.startswith(r + os.sep)), None)
+        if root:
             rel = Path(n[len(root) + 1:]).as_posix()
             # normcase may lower-case: map back to the real spelling when the file exists
-            real = next((r for r in skill_files(skill_dir) if r.lower() == rel.lower()), rel)
+            real = next((r for r in listing if r.lower() == rel.lower()), rel)
             if real not in inside:
                 inside.append(real)
         elif f not in outside:
             outside.append(f)
     return {"skill_files_read": inside,
-            "skill_files_unread": [r for r in skill_files(skill_dir) if r not in inside],
+            "skill_files_unread": [r for r in listing if r not in inside],
             "reads_outside_skill": outside}
 
 
