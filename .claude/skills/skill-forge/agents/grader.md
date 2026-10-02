@@ -2,6 +2,16 @@
 
 Evaluate expectations against an execution transcript and outputs.
 
+## Contents
+
+- [Role](#role)
+- [Inputs](#inputs)
+- [Process](#process)
+- [Grading Criteria](#grading-criteria)
+- [Output Format](#output-format)
+- [Field Descriptions](#field-descriptions)
+- [Guidelines](#guidelines)
+
 ## Role
 
 The Grader reviews a transcript and output files, then determines whether each expectation passes or fails. Provide clear evidence for each judgment.
@@ -12,9 +22,13 @@ You have two jobs: grade the outputs, and critique the evals themselves. A passi
 
 You receive these parameters in your prompt:
 
-- **expectations**: List of expectations to evaluate (strings)
+- **expectations**: List of expectations to evaluate (strings). They come from `expected_behavior`, `expectations` or `assertions` in the eval.
 - **transcript_path**: Path to the execution transcript (markdown file)
 - **outputs_dir**: Directory containing output files from execution
+
+You grade blind: the transcript and the outputs are all you get. Do not guess which configuration produced them, and do not let a guess change a verdict. `run_eval.py` reports skill use and navigation separately, in `summary.json`.
+
+If the prompt says to print the grading, print the JSON object in a ```json fence and write no file. Otherwise save it as described in Step 7.
 
 ## Process
 
@@ -80,7 +94,7 @@ Keep the bar high. The goal is to flag things the eval author would say "good ca
 
 ### Step 7: Write Grading Results
 
-Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir).
+Save results to `{outputs_dir}/../grading.json` (sibling to outputs_dir), or print them when the prompt says so.
 
 ## Grading Criteria
 

@@ -22,20 +22,18 @@
      }
     },
     "G05": {
-     "count": 8,
+     "count": 6,
      "skills": {
       "continuity_ledger": 2,
       "create_handoff": 2,
-      "resume_handoff": 2,
-      "system_overview": 2
+      "resume_handoff": 2
      }
     },
     "G06": {
-     "count": 6,
+     "count": 5,
      "skills": {
       "code-review": 1,
       "debug": 1,
-      "help": 1,
       "hooks": 1,
       "memory": 1,
       "review": 1
@@ -46,11 +44,10 @@
      "skills": {}
     },
     "G12": {
-     "count": 3,
+     "count": 2,
      "skills": {
       "cma": 1,
-      "memory-stats": 1,
-      "tour": 1
+      "memory-stats": 1
      }
     },
     "G13": {
@@ -76,11 +73,10 @@
      }
     },
     "G19": {
-     "count": 25,
+     "count": 22,
      "skills": {
       "explore": 2,
       "fix": 3,
-      "help": 1,
       "init-project": 3,
       "knowledge-tree": 1,
       "mot": 1,
@@ -90,7 +86,6 @@
       "scroll-craft": 2,
       "shadcn-create": 3,
       "sync-drift": 1,
-      "tdd-migrate": 2,
       "tldr-code": 1,
       "ui-audit": 1
      }
@@ -114,7 +109,7 @@
      }
     },
     "G24": {
-     "count": 118,
+     "count": 113,
      "skills": {
       "browser-dev-cycle": 6,
       "build": 1,
@@ -139,7 +134,6 @@
       "scroll-craft": 10,
       "sentry-cli": 2,
       "shadcn-create": 9,
-      "skill-forge": 5,
       "sync-drift": 1,
       "tdd": 5,
       "tldr-code": 1,
@@ -195,11 +189,10 @@
      }
     },
     "G27": {
-     "count": 14,
+     "count": 12,
      "skills": {
       "browser-dev-cycle": 1,
       "explore": 1,
-      "help": 2,
       "hook-scaffold": 1,
       "mcp-guidance": 3,
       "mot": 1,
@@ -208,10 +201,9 @@
      }
     },
     "G28": {
-     "count": 7,
+     "count": 5,
      "skills": {
       "databases": 1,
-      "iq360-event-audit": 2,
       "neonctl": 1,
       "shadcn-create": 2,
       "weekly-report": 1
@@ -222,17 +214,10 @@
      "skills": {
       "archive": 1
      }
-    },
-    "G32": {
-     "count": 3,
-     "skills": {
-      "G22": 2,
-      "G26": 1
-     }
     }
    },
    "listing": {
-    "chars": 14879,
+    "chars": 14876,
     "visibleSkills": 68,
     "maxDescChars": 2048
    }
@@ -466,13 +451,6 @@
       "create-better-skills.bak": 1,
       "synced": 1
      }
-    },
-    "G32": {
-     "count": 3,
-     "skills": {
-      "G22": 2,
-      "G26": 1
-     }
     }
    },
    "listing": {
@@ -484,7 +462,7 @@
  },
  "_doc": "Per-rule ratchet baseline for audit-skills.mjs. rules.<id>.skills maps skill -> finding count; a rule regresses when any skill count rises or a new skill appears. Rewrite with --update-baseline.",
  "_notes": {
-  "G32": "Ratchet only until Phase 2 fixes init_skill.py (its scaffold fails G22 and G26 today). A scaffold that does not run is reported as \"(scaffold)\" and counts as a regression.",
+  "G32": "Hard: a fresh init_skill.py scaffold must pass every rule. A scaffold that does not run is reported as \"(scaffold)\" and fails the gate.",
   "G06": "Ratchet: Dave decides the renames of skills that share a bundled name."
  }
 }

@@ -1,9 +1,11 @@
 #!/usr/bin/env python3
-"""Run the eval + improve loop until all pass or max iterations reached.
+"""Run the trigger-eval + improve loop until all pass or max iterations reached.
 
-Combines run_eval.py and improve_description.py in a loop, tracking history
-and returning the best description found. Supports train/test split to prevent
-overfitting.
+Combines run_eval.py (trigger mode) and improve_description.py, tracking history and returning the
+best description found. Supports a train/test split to prevent overfitting. Everything runs through
+`claude -p` on the subscription: no Anthropic API and no API key. Proposals stay under 400 chars
+and pass the gate's description rules. Trigger runs use --models (default: sonnet) and pool the
+results; never Haiku.
 """
 
 import argparse
@@ -15,12 +17,13 @@ import time
 import webbrowser
 from pathlib import Path
 
-import anthropic
-
-from scripts.generate_report import generate_html
-from scripts.improve_description import improve_description
-from scripts.run_eval import find_project_root, run_eval
-from scripts.utils import parse_skill_md
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` imports work from any cwd
+from scripts import headless  # noqa: E402
+from scripts.generate_report import generate_html  # noqa: E402
+from scripts.improve_description import improve_description  # noqa: E402
+from scripts.evals import EvalError, load_trigger_set  # noqa: E402
+from scripts.run_eval import TriggerRunError, print_trigger_plan, run_trigger_eval  # noqa: E402
+from scripts.utils import parse_skill_md  # noqa: E402
 
 
 def split_eval_set(eval_set: list[dict], holdout: float, seed: int = 42) -> tuple[list[dict], list[dict]]:
@@ -56,13 +59,13 @@ def run_loop(
     runs_per_query: int,
     trigger_threshold: float,
     holdout: float,
-    model: str,
+    models: list,
+    improve_model,
     verbose: bool,
     live_report_path: Path | None = None,
     log_dir: Path | None = None,
 ) -> dict:
     """Run the eval + improvement loop."""
-    project_root = find_project_root()
     name, original_description, content = parse_skill_md(skill_path)
     current_description = description_override or original_description
 
@@ -75,7 +78,6 @@ def run_loop(
         train_set = eval_set
         test_set = []
 
-    client = anthropic.Anthropic()
     history = []
     exit_reason = "unknown"
 
@@ -89,17 +91,25 @@ def run_loop(
         # Evaluate train + test together in one batch for parallelism
         all_queries = train_set + test_set
         t0 = time.time()
-        all_results = run_eval(
-            eval_set=all_queries,
-            skill_name=name,
-            description=current_description,
-            num_workers=num_workers,
-            timeout=timeout,
-            project_root=project_root,
-            runs_per_query=runs_per_query,
-            trigger_threshold=trigger_threshold,
-            model=model,
-        )
+        try:
+            all_results = run_trigger_eval(
+                eval_set=all_queries,
+                skill_path=skill_path,
+                description=current_description,
+                models=models,
+                workers=num_workers,
+                timeout=timeout,
+                runs_per_query=runs_per_query,
+                trigger_threshold=trigger_threshold,
+            )
+        except TriggerRunError as e:
+            # Too many failed runs: the score would be noise. Stop and say so; keep what was measured.
+            exit_reason = f"trigger_runs_failed (iteration {iteration}): {e}"
+            if not history:
+                raise
+            if verbose:
+                print(f"Stopping: {exit_reason}", file=sys.stderr)
+            break
         eval_elapsed = time.time() - t0
 
         # Split results back into train/test by matching queries
@@ -151,7 +161,7 @@ def run_loop(
                 "test_size": len(test_set),
                 "history": history,
             }
-            live_report_path.write_text(generate_html(partial_output, auto_refresh=True, skill_name=name))
+            live_report_path.write_text(generate_html(partial_output, auto_refresh=True, skill_name=name), encoding="utf-8")
 
         if verbose:
             def print_eval_stats(label, results, elapsed):
@@ -200,17 +210,21 @@ def run_loop(
             for h in history
         ]
         new_description = improve_description(
-            client=client,
             skill_name=name,
             skill_content=content,
             current_description=current_description,
             eval_results=train_results,
             history=blinded_history,
-            model=model,
+            model=improve_model,
             log_dir=log_dir,
             iteration=iteration,
         )
         improve_elapsed = time.time() - t0
+        if new_description is None:
+            exit_reason = f"no_valid_proposal (iteration {iteration})"
+            if verbose:
+                print("No proposal passed the 400-char cap and the gate's description rules. Stopping.", file=sys.stderr)
+            break
 
         if verbose:
             print(f"Proposed ({improve_elapsed:.1f}s): {new_description}", file=sys.stderr)
@@ -250,26 +264,47 @@ def main():
     parser.add_argument("--eval-set", required=True, help="Path to eval set JSON file")
     parser.add_argument("--skill-path", required=True, help="Path to skill directory")
     parser.add_argument("--description", default=None, help="Override starting description")
-    parser.add_argument("--num-workers", type=int, default=10, help="Number of parallel workers")
-    parser.add_argument("--timeout", type=int, default=30, help="Timeout per query in seconds")
+    parser.add_argument("--num-workers", type=int, default=5, help="Number of parallel workers")
+    parser.add_argument("--timeout", type=int, default=120, help="Timeout per query in seconds")
     parser.add_argument("--max-iterations", type=int, default=5, help="Max improvement iterations")
     parser.add_argument("--runs-per-query", type=int, default=3, help="Number of runs per query")
     parser.add_argument("--trigger-threshold", type=float, default=0.5, help="Trigger rate threshold")
     parser.add_argument("--holdout", type=float, default=0.4, help="Fraction of eval set to hold out for testing (0 to disable)")
-    parser.add_argument("--model", required=True, help="Model for improvement")
+    parser.add_argument("--models", default="sonnet", help="Models for the trigger runs: comma list of sonnet,opus,fable (default: sonnet). Never haiku.")
+    parser.add_argument("--improve-model", default="sonnet", help="Model that writes the proposals (default: sonnet)")
     parser.add_argument("--verbose", action="store_true", help="Print progress to stderr")
+    parser.add_argument("--dry-run", action="store_true", help="Print the plan and spend nothing")
     parser.add_argument("--report", default="auto", help="Generate HTML report at this path (default: 'auto' for temp file, 'none' to disable)")
     parser.add_argument("--results-dir", default=None, help="Save all outputs (results.json, report.html, log.txt) to a timestamped subdirectory here")
     args = parser.parse_args()
 
-    eval_set = json.loads(Path(args.eval_set).read_text())
     skill_path = Path(args.skill_path)
+    try:
+        models = headless.resolve_models(args.models)
+        improve_model = headless.resolve_models(args.improve_model)[0]
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    try:
+        eval_set = load_trigger_set(args.eval_set)
+    except EvalError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(1)
+    warn = headless.api_key_helper_warning()
+    if warn:
+        print(f"Warning: {warn}", file=sys.stderr)
 
     if not (skill_path / "SKILL.md").exists():
         print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
         sys.exit(1)
 
-    name, _, _ = parse_skill_md(skill_path)
+    name, current, _ = parse_skill_md(skill_path)
+
+    if args.dry_run:
+        print_trigger_plan(eval_set, skill_path, args.description or current, models, args.runs_per_query)
+        print(f"proposals: claude -p on the subscription, model {improve_model.id}, at most {args.max_iterations - 1} "
+              "per run, each under 400 chars and checked by the gate's description rules")
+        return
 
     # Set up live report path
     if args.report != "none":
@@ -279,7 +314,7 @@ def main():
         else:
             live_report_path = Path(args.report)
         # Open the report immediately so the user can watch
-        live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>")
+        live_report_path.write_text("<html><body><h1>Starting optimization loop...</h1><meta http-equiv='refresh' content='5'></body></html>", encoding="utf-8")
         webbrowser.open(str(live_report_path))
     else:
         live_report_path = None
@@ -294,35 +329,40 @@ def main():
 
     log_dir = results_dir / "logs" if results_dir else None
 
-    output = run_loop(
-        eval_set=eval_set,
-        skill_path=skill_path,
-        description_override=args.description,
-        num_workers=args.num_workers,
-        timeout=args.timeout,
-        max_iterations=args.max_iterations,
-        runs_per_query=args.runs_per_query,
-        trigger_threshold=args.trigger_threshold,
-        holdout=args.holdout,
-        model=args.model,
-        verbose=args.verbose,
-        live_report_path=live_report_path,
-        log_dir=log_dir,
-    )
+    try:
+        output = run_loop(
+            eval_set=eval_set,
+            skill_path=skill_path,
+            description_override=args.description,
+            num_workers=args.num_workers,
+            timeout=args.timeout,
+            max_iterations=args.max_iterations,
+            runs_per_query=args.runs_per_query,
+            trigger_threshold=args.trigger_threshold,
+            holdout=args.holdout,
+            models=models,
+            improve_model=improve_model,
+            verbose=args.verbose,
+            live_report_path=live_report_path,
+            log_dir=log_dir,
+        )
+    except TriggerRunError as e:
+        print(f"Error: trigger runs failed: {e}", file=sys.stderr)
+        sys.exit(1)
 
     # Save JSON output
     json_output = json.dumps(output, indent=2)
     print(json_output)
     if results_dir:
-        (results_dir / "results.json").write_text(json_output)
+        (results_dir / "results.json").write_text(json_output, encoding="utf-8")
 
     # Write final HTML report (without auto-refresh)
     if live_report_path:
-        live_report_path.write_text(generate_html(output, auto_refresh=False, skill_name=name))
+        live_report_path.write_text(generate_html(output, auto_refresh=False, skill_name=name), encoding="utf-8")
         print(f"\nReport: {live_report_path}", file=sys.stderr)
 
     if results_dir and live_report_path:
-        (results_dir / "report.html").write_text(generate_html(output, auto_refresh=False, skill_name=name))
+        (results_dir / "report.html").write_text(generate_html(output, auto_refresh=False, skill_name=name), encoding="utf-8")
 
     if results_dir:
         print(f"Results saved to: {results_dir}", file=sys.stderr)

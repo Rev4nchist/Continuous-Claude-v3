@@ -694,3 +694,63 @@ test('trigger-probe: hooksRan counts hook_started events and ignores other lines
   assert.equal(hooksRan(stream), 2);
   assert.equal(hooksRan('{"type":"system","subtype":"init"}'), 0);
 });
+
+// ------------------------------------------------ Phase 2: G32 is hard, --check-name
+
+// A stand-in init_skill.py that writes one SKILL.md. `md` is the file text.
+function fakeScaffold(root, md) {
+  const script = `import sys, pathlib\nd = pathlib.Path(sys.argv[sys.argv.index('--path') + 1]) / sys.argv[1]\nd.mkdir(parents=True)\n(d / 'SKILL.md').write_text(${JSON.stringify(md)}, encoding='utf-8')\n`;
+  write(path.join(root, '.claude', 'skills', 'skill-forge', 'scripts', 'init_skill.py'), script);
+}
+const GOOD_SCAFFOLD = '---\nname: scaffold-probe\ndescription: Does X. Use when Y.\n---\n# Scaffold Probe\n\nBody.\n';
+
+test('G32 passes when the scaffold is clean', () => {
+  const root = fixture({ a: skillText('a') });
+  fakeScaffold(root, GOOD_SCAFFOLD);
+  const rep = run(root, { runScaffold: true });
+  assert.equal(rep.rules.G32.count, 0, JSON.stringify(rep.rules.G32.findings));
+  assert.equal(rep.hardFailures, 0);
+});
+
+test('G32 is a hard rule: a baseline entry cannot absorb a scaffold finding', () => {
+  const root = fixture({ a: skillText('a') });
+  fakeScaffold(root, GOOD_SCAFFOLD.replace('# Scaffold Probe', '# Scaffold Probe\n\nSee [guide](references/missing.md).'));
+  const first = run(root, { runScaffold: true });
+  writeBaseline(first, resolveOptions(opts(root)));
+  const again = run(root, { runScaffold: true });
+  assert.equal(again.rules.G32.status, 'FAIL', JSON.stringify(again.rules.G32));
+  assert.ok(again.hardFailures > 0);
+});
+
+test('G32 no longer excuses a scaffold description that fails the description rules', () => {
+  const root = fixture({ a: skillText('a') });
+  fakeScaffold(root, GOOD_SCAFFOLD.replace('description: Does X. Use when Y.', 'description: Handles things.'));
+  const rep = run(root, { runScaffold: true });
+  assert.ok(rep.rules.G32.findings.some((x) => /G14/.test(x.msg)), JSON.stringify(rep.rules.G32.findings));
+});
+
+test('--update-baseline drops a stale entry for a rule that is now hard', () => {
+  const root = fixture({ a: skillText('a') });
+  const o = resolveOptions(opts(root));
+  write(o.baselinePath, JSON.stringify({ version: 1, scopes: { repo: { rules: { G32: { count: 3, skills: { G22: 3 } }, G05: { count: 0, skills: {} } } } } }));
+  writeBaseline(run(root), o);
+  const b = JSON.parse(fs.readFileSync(o.baselinePath, 'utf8'));
+  assert.equal(b.scopes.repo.rules.G32, undefined, 'a hard rule must not keep a baseline entry');
+  assert.ok(b.scopes.repo.rules.G05, 'ratchet rules stay');
+});
+
+test('CLI: --check-name accepts a good name and exits 0', () => {
+  const r = spawnSync('node', [CLI, '--check-name', 'my-good-skill', '--json'], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.equal(JSON.parse(r.stdout).ok, true);
+});
+
+for (const [name, rule] of [['Bad_Name', 'G05'], ['has_underscore', 'G05'], ['claude-helper', 'G05'], ['a'.repeat(65), 'G05'], ['review', 'G06'], ['-lead', 'G05']]) {
+  test(`CLI: --check-name rejects "${name.slice(0, 20)}" with ${rule}`, () => {
+    const r = spawnSync('node', [CLI, '--check-name', name, '--json'], { encoding: 'utf8' });
+    assert.equal(r.status, 1, r.stdout + r.stderr);
+    const out = JSON.parse(r.stdout);
+    assert.equal(out.ok, false);
+    assert.ok(out.findings.some((x) => x.rule === rule), r.stdout);
+  });
+}

@@ -1,12 +1,28 @@
-"""Shared utilities for skill-creator scripts."""
+"""Shared utilities for the skill-forge scripts."""
 
+import json
 from pathlib import Path
 
+# The description init_skill.py writes. quick_validate.py fails until it is edited.
+PLACEHOLDER_DESCRIPTION = "Does X. Use when Y."
+
+
+def _unquote(value: str) -> str:
+    """A YAML scalar without its quotes. A double-quoted value resolves its escapes (JSON rules
+    match YAML's for the common ones); a single-quoted value turns '' into '."""
+    if len(value) >= 2 and value[0] == '"' and value[-1] == '"':
+        try:
+            return json.loads(value)
+        except ValueError:
+            return value[1:-1]
+    if len(value) >= 2 and value[0] == "'" and value[-1] == "'":
+        return value[1:-1].replace("''", "'")
+    return value
 
 
 def parse_skill_md(skill_path: Path) -> tuple[str, str, str]:
     """Parse a SKILL.md file, returning (name, description, full_content)."""
-    content = (skill_path / "SKILL.md").read_text()
+    content = (skill_path / "SKILL.md").read_text(encoding="utf-8").replace("\r\n", "\n")
     lines = content.split("\n")
 
     if lines[0].strip() != "---":
@@ -28,7 +44,7 @@ def parse_skill_md(skill_path: Path) -> tuple[str, str, str]:
     while i < len(frontmatter_lines):
         line = frontmatter_lines[i]
         if line.startswith("name:"):
-            name = line[len("name:"):].strip().strip('"').strip("'")
+            name = _unquote(line[len("name:"):].strip())
         elif line.startswith("description:"):
             value = line[len("description:"):].strip()
             # Handle YAML multiline indicators (>, |, >-, |-)
@@ -41,7 +57,7 @@ def parse_skill_md(skill_path: Path) -> tuple[str, str, str]:
                 description = " ".join(continuation_lines)
                 continue
             else:
-                description = value.strip('"').strip("'")
+                description = _unquote(value)
         i += 1
 
     return name, description, content

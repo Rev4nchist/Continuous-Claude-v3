@@ -6,6 +6,7 @@
 // fail only when a count rises or a new skill appears in the rule's offender list.
 //
 // Usage: node scripts/skills/audit-skills.mjs [--include-active] [--skill <dir>] [--json]
+//          [--check-name <name>]   (G05/G06 verdict for one name; exit 1 on a finding)
 //          [--update-baseline] [--rules G08,G14] [--verbose] [--quiet]
 //          [--root <skills dir>] [--repo-root <dir>] [--baseline <file>]
 // Exit 1 on any hard failure or ratchet regression. Last line is the summary.
@@ -16,14 +17,13 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import {
-  RULES, loadSkill, checkSkillAll, descriptionPhrases, DESCRIPTION_RULES,
+  RULES, loadSkill, checkSkillAll, descriptionPhrases, DESCRIPTION_RULES, checkNameOnly,
 } from './lib/skill-rules.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO = path.resolve(here, '..', '..');
 const DEFAULT_BASELINE = path.join(here, 'audit-skills.baseline.json');
 const LISTING_SLACK = 1.02;
-const PLACEHOLDER_RULES = new Set(['G09', 'G11', 'G12', 'G13', 'G14']); // scaffold description is a [TODO] placeholder
 
 // ------------------------------------------------------------- discovery
 
@@ -146,8 +146,9 @@ export function listingChars(skills, maxDescChars) {
     .reduce((n, s) => n + s.name.length + Math.min((s.desc + s.when).length, maxDescChars) + 4, 0);
 }
 
-// G32: audit a fresh init_skill.py scaffold. Returns null when there is no init_skill.py (nothing
-// to check). When it exists but does not run, that is itself a finding, never a pass.
+// G32 (hard): audit a fresh init_skill.py scaffold against every rule. The scaffold carries a valid
+// "Does X. Use when Y." description, so no rule is excused. Returns null when there is no
+// init_skill.py (nothing to check). When it exists but does not run, that is itself a finding.
 function scaffoldFindings(o, ctx) {
   if (!isFile(o.initSkill)) return null;
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'skill-scaffold-'));
@@ -159,7 +160,7 @@ function scaffoldFindings(o, ctx) {
     if (r.status !== 0) return notRun(`init_skill.py exited ${r.status}: ${(r.stderr || r.stdout || '').trim().split('\n').pop().slice(0, 120)}`);
     if (!isFile(path.join(dir, 'SKILL.md'))) return notRun('init_skill.py wrote no SKILL.md');
     const s = loadSkill(dir);
-    return checkSkillAll(s, ctx).filter((x) => !PLACEHOLDER_RULES.has(x.rule) && !x.warn);
+    return checkSkillAll(s, ctx).filter((x) => !x.warn);
   } finally { fs.rmSync(tmp, { recursive: true, force: true }); }
 }
 
@@ -273,13 +274,14 @@ export function writeBaseline(report, o) {
   cur.version = 1;
   cur._doc = 'Per-rule ratchet baseline for audit-skills.mjs. rules.<id>.skills maps skill -> finding count; a rule regresses when any skill count rises or a new skill appears. Rewrite with --update-baseline.';
   cur._notes = {
-    G32: 'Ratchet only until Phase 2 fixes init_skill.py (its scaffold fails G22 and G26 today). A scaffold that does not run is reported as "(scaffold)" and counts as a regression.',
+    G32: 'Hard: a fresh init_skill.py scaffold must pass every rule. A scaffold that does not run is reported as "(scaffold)" and fails the gate.',
     G06: 'Ratchet: Dave decides the renames of skills that share a bundled name.',
   };
   cur.scopes = cur.scopes || {};
   const scope = cur.scopes[report.scope] || { rules: {} };
   for (const r of Object.values(report.rules)) {
-    if (r.mode !== 'ratchet' || r.id === 'G31') continue;
+    if (r.mode !== 'ratchet') { delete scope.rules[r.id]; continue; } // a hard rule keeps no baseline
+    if (r.id === 'G31') continue;
     const perSkill = {};
     for (const n of r.skills) perSkill[n] = r.findings.filter((x) => x.skill === n).length;
     scope.rules[r.id] = { count: r.count, skills: perSkill };
@@ -350,9 +352,19 @@ export function exportStaged(cwd) {
   return { root, tmp, indexFiles };
 }
 
+// --check-name <name>: the G05/G06 verdict for a bare name, used by init_skill.py before it writes anything.
+function checkNameCli(name, asJson) {
+  const findings = name === undefined ? [{ rule: 'G05', msg: '--check-name needs a name' }] : checkNameOnly(name);
+  const ok = findings.length === 0;
+  const text = ok ? `name "${name}" ok` : findings.map((x) => `${x.rule} ${x.msg}`).join('\n');
+  console.log(asJson ? JSON.stringify({ name, ok, findings }) : text);
+  return ok ? 0 : 1;
+}
+
 export function main(argv) {
   const has = (k) => argv.includes(k);
   const val = (k) => { const i = argv.indexOf(k); return i >= 0 ? argv[i + 1] : undefined; };
+  if (has('--check-name')) return checkNameCli(val('--check-name'), has('--json'));
   const opts = {
     includeActive: has('--include-active'),
     skillDir: val('--skill'),

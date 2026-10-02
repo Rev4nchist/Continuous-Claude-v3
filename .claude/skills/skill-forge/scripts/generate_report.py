@@ -238,7 +238,7 @@ def generate_html(data: dict, auto_refresh: bool = False, skill_name: str = "") 
             return correct, total
 
         train_correct, train_runs = aggregate_runs(train_results)
-        test_correct, test_runs = aggregate_runs(test_results)
+        test_correct, test_runs = aggregate_runs(test_results or [])  # no holdout: test_results is None
 
         # Determine score classes
         def score_class(correct: int, total: int) -> str:

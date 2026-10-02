@@ -1,247 +1,138 @@
 #!/usr/bin/env python3
-"""Improve a skill description based on eval results.
+"""Improve a skill description from trigger-eval results.
 
-Takes eval results (from run_eval.py) and generates an improved description
-using Claude with extended thinking.
+The proposal comes from `claude -p` on the subscription (no Anthropic API, no API key). Every
+proposal is checked against the 400-char cap and the gate's description rules before it is
+accepted. The convention is one line, third person: "Does X. Use when Y."
 """
 
 import argparse
 import json
 import re
+import shutil
 import sys
 from pathlib import Path
 
-import anthropic
+sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` imports work from any cwd
+from scripts import gate, headless  # noqa: E402
+from scripts.utils import parse_skill_md  # noqa: E402
 
-from scripts.utils import parse_skill_md
+MAX_ATTEMPTS = 3
 
 
-def improve_description(
-    client: anthropic.Anthropic,
-    skill_name: str,
-    skill_content: str,
-    current_description: str,
-    eval_results: dict,
-    history: list[dict],
-    model: str,
-    test_results: dict | None = None,
-    log_dir: Path | None = None,
-    iteration: int | None = None,
-) -> str:
-    """Call Claude to improve the description based on eval results."""
-    failed_triggers = [
-        r for r in eval_results["results"]
-        if r["should_trigger"] and not r["pass"]
-    ]
-    false_triggers = [
-        r for r in eval_results["results"]
-        if not r["should_trigger"] and not r["pass"]
-    ]
+def validate_proposal(name: str, description: str) -> list[str]:
+    """Problems with a proposed description. An empty list means it is acceptable."""
+    return gate.check_description(name, description)
 
-    # Build scores summary
-    train_score = f"{eval_results['summary']['passed']}/{eval_results['summary']['total']}"
-    if test_results:
-        test_score = f"{test_results['summary']['passed']}/{test_results['summary']['total']}"
-        scores_summary = f"Train: {train_score}, Test: {test_score}"
-    else:
-        scores_summary = f"Train: {train_score}"
 
-    prompt = f"""You are optimizing a skill description for a Claude Code skill called "{skill_name}". A "skill" is sort of like a prompt, but with progressive disclosure -- there's a title and description that Claude sees when deciding whether to use the skill, and then if it does use the skill, it reads the .md file which has lots more details and potentially links to other resources in the skill folder like helper files and scripts and additional documentation or examples.
-
-The description appears in Claude's "available_skills" list. When a user sends a query, Claude decides whether to invoke the skill based solely on the title and on this description. Your goal is to write a description that triggers for relevant queries, and doesn't trigger for irrelevant ones.
-
-Here's the current description:
-<current_description>
-"{current_description}"
-</current_description>
-
-Current scores ({scores_summary}):
-<scores_summary>
-"""
-    if failed_triggers:
-        prompt += "FAILED TO TRIGGER (should have triggered but didn't):\n"
-        for r in failed_triggers:
-            prompt += f'  - "{r["query"]}" (triggered {r["triggers"]}/{r["runs"]} times)\n'
-        prompt += "\n"
-
-    if false_triggers:
-        prompt += "FALSE TRIGGERS (triggered but shouldn't have):\n"
-        for r in false_triggers:
-            prompt += f'  - "{r["query"]}" (triggered {r["triggers"]}/{r["runs"]} times)\n'
-        prompt += "\n"
-
-    if history:
-        prompt += "PREVIOUS ATTEMPTS (do NOT repeat these — try something structurally different):\n\n"
-        for h in history:
-            train_s = f"{h.get('train_passed', h.get('passed', 0))}/{h.get('train_total', h.get('total', 0))}"
-            test_s = f"{h.get('test_passed', '?')}/{h.get('test_total', '?')}" if h.get('test_passed') is not None else None
-            score_str = f"train={train_s}" + (f", test={test_s}" if test_s else "")
-            prompt += f'<attempt {score_str}>\n'
-            prompt += f'Description: "{h["description"]}"\n'
-            if "results" in h:
-                prompt += "Train results:\n"
-                for r in h["results"]:
-                    status = "PASS" if r["pass"] else "FAIL"
-                    prompt += f'  [{status}] "{r["query"][:80]}" (triggered {r["triggers"]}/{r["runs"]})\n'
-            if h.get("note"):
-                prompt += f'Note: {h["note"]}\n'
-            prompt += "</attempt>\n\n"
-
-    prompt += f"""</scores_summary>
-
-Skill content (for context on what the skill does):
-<skill_content>
-{skill_content}
-</skill_content>
-
-Based on the failures, write a new and improved description that is more likely to trigger correctly. When I say "based on the failures", it's a bit of a tricky line to walk because we don't want to overfit to the specific cases you're seeing. So what I DON'T want you to do is produce an ever-expanding list of specific queries that this skill should or shouldn't trigger for. Instead, try to generalize from the failures to broader categories of user intent and situations where this skill would be useful or not useful. The reason for this is twofold:
-
-1. Avoid overfitting
-2. The list might get loooong and it's injected into ALL queries and there might be a lot of skills, so we don't want to blow too much space on any given description.
-
-Concretely, your description should not be more than about 100-200 words, even if that comes at the cost of accuracy.
-
-Here are some tips that we've found to work well in writing these descriptions:
-- The skill should be phrased in the imperative -- "Use this skill for" rather than "this skill does"
-- The skill description should focus on the user's intent, what they are trying to achieve, vs. the implementation details of how the skill works.
-- The description competes with other skills for Claude's attention — make it distinctive and immediately recognizable.
-- If you're getting lots of failures after repeated attempts, change things up. Try different sentence structures or wordings.
-
-I'd encourage you to be creative and mix up the style in different iterations since you'll have multiple opportunities to try different approaches and we'll just grab the highest-scoring one at the end. 
-
-Please respond with only the new description text in <new_description> tags, nothing else."""
-
-    response = client.messages.create(
-        model=model,
-        max_tokens=16000,
-        thinking={
-            "type": "enabled",
-            "budget_tokens": 10000,
-        },
-        messages=[{"role": "user", "content": prompt}],
-    )
-
-    # Extract thinking and text from response
-    thinking_text = ""
-    text = ""
-    for block in response.content:
-        if block.type == "thinking":
-            thinking_text = block.thinking
-        elif block.type == "text":
-            text = block.text
-
-    # Parse out the <new_description> tags
+def _clean(text: str) -> str:
     match = re.search(r"<new_description>(.*?)</new_description>", text, re.DOTALL)
-    description = match.group(1).strip().strip('"') if match else text.strip().strip('"')
+    raw = match.group(1) if match else text
+    return " ".join(raw.strip().strip('"').split())
 
-    # Log the transcript
-    transcript: dict = {
-        "iteration": iteration,
-        "prompt": prompt,
-        "thinking": thinking_text,
-        "response": text,
-        "parsed_description": description,
-        "char_count": len(description),
-        "over_limit": len(description) > 1024,
-    }
 
-    # If over 1024 chars, ask the model to shorten it
-    if len(description) > 1024:
-        shorten_prompt = f"Your description is {len(description)} characters, which exceeds the hard 1024 character limit. Please rewrite it to be under 1024 characters while preserving the most important trigger words and intent coverage. Respond with only the new description in <new_description> tags."
-        shorten_response = client.messages.create(
-            model=model,
-            max_tokens=16000,
-            thinking={
-                "type": "enabled",
-                "budget_tokens": 10000,
-            },
-            messages=[
-                {"role": "user", "content": prompt},
-                {"role": "assistant", "content": text},
-                {"role": "user", "content": shorten_prompt},
-            ],
-        )
+def build_prompt(skill_name, skill_content, current_description, eval_results, history, test_results=None) -> str:
+    failed = [r for r in eval_results["results"] if r["should_trigger"] and not r["pass"]]
+    false = [r for r in eval_results["results"] if not r["should_trigger"] and not r["pass"]]
+    scores = f"Train: {eval_results['summary']['passed']}/{eval_results['summary']['total']}"
+    if test_results:
+        scores += f", Test: {test_results['summary']['passed']}/{test_results['summary']['total']}"
 
-        shorten_thinking = ""
-        shorten_text = ""
-        for block in shorten_response.content:
-            if block.type == "thinking":
-                shorten_thinking = block.thinking
-            elif block.type == "text":
-                shorten_text = block.text
+    p = [f'You are tuning the description of a Claude Code skill named "{skill_name}". Claude sees only the name and this '
+         "description when it chooses a skill. The body loads after the choice.\n",
+         f"Current description:\n<current_description>\n{current_description}\n</current_description>\n",
+         f"Scores: {scores}\n"]
+    if failed:
+        p.append("FAILED TO TRIGGER (should have):")
+        p += [f'  - "{r["query"]}" ({r["triggers"]}/{r["runs"]} runs fired)' for r in failed]
+    if false:
+        p.append("FALSE TRIGGERS (should not have):")
+        p += [f'  - "{r["query"]}" ({r["triggers"]}/{r["runs"]} runs fired)' for r in false]
+    if history:
+        p.append("\nPREVIOUS ATTEMPTS (do not repeat them):")
+        for h in history:
+            p.append(f'  - train={h.get("train_passed", h.get("passed", 0))}/{h.get("train_total", h.get("total", 0))}: "{h["description"]}"')
+    p.append(f"\nSkill body, for context:\n<skill_content>\n{skill_content}\n</skill_content>\n")
+    p.append(
+        "Write one new description. Rules:\n"
+        '- One line, third person, in the form "Does X. Use when Y." Never "I" or "you".\n'
+        f"- At most {gate.DESCRIPTION_MAX_CHARS} characters. Shorter is better: every description is paid for on every turn.\n"
+        "- Name the specific terms and situations that should trigger it. Add \"Not for Z\" when a near miss needs it. "
+        "Do not push: no \"always use this\", no lists of every query.\n"
+        "- Generalise from the failures to the user's intent. Do not copy the failing queries.\n"
+        '- Avoid ": " and " #" inside the text (they break plain YAML), and no angle brackets.\n\n'
+        "Reply with only the description inside <new_description> tags.")
+    return "\n".join(p)
 
-        match = re.search(r"<new_description>(.*?)</new_description>", shorten_text, re.DOTALL)
-        shortened = match.group(1).strip().strip('"') if match else shorten_text.strip().strip('"')
 
-        transcript["rewrite_prompt"] = shorten_prompt
-        transcript["rewrite_thinking"] = shorten_thinking
-        transcript["rewrite_response"] = shorten_text
-        transcript["rewrite_description"] = shortened
-        transcript["rewrite_char_count"] = len(shortened)
-        description = shortened
+def _ask(prompt: str, model: headless.Model, timeout: int = 300) -> str:
+    """One tool-less `claude -p` turn on the subscription. Return the reply text."""
+    tmp = headless.make_temp("skill-improve-")
+    try:
+        cmd = headless.build_command(model, headless.write_settings(tmp / "s.json"), headless.write_empty_mcp(tmp / "m.json"),
+                                     tools="", max_turns=1)
+        run = headless.run_claude(cmd, prompt, tmp, timeout)
+    finally:
+        shutil.rmtree(tmp, ignore_errors=True)
+    info = headless.parse_stream(run.stdout)
+    if not info["final_text"]:
+        raise RuntimeError(f"claude -p returned no text ({run.error or run.stderr.strip() or 'empty'})")
+    return info["final_text"]
 
-    transcript["final_description"] = description
 
+def improve_description(skill_name, skill_content, current_description, eval_results, history, model,
+                        test_results=None, log_dir=None, iteration=None, ask=_ask):
+    """Return a valid new description, or None when no attempt passes the checks."""
+    if isinstance(model, str):
+        model = headless.resolve_models(model)[0]
+    prompt = build_prompt(skill_name, skill_content, current_description, eval_results, history, test_results)
+    attempts, description, problems = [], None, []
+    for n in range(1, MAX_ATTEMPTS + 1):
+        ask_prompt = prompt if not problems else (
+            f"{prompt}\n\nYour previous proposal was rejected:\n  {description}\nProblems:\n  - " + "\n  - ".join(problems) +
+            "\nWrite a new description that fixes every problem.")
+        description = _clean(ask(ask_prompt, model))
+        problems = validate_proposal(skill_name, description)
+        attempts.append({"attempt": n, "description": description, "chars": len(description), "problems": problems})
+        if not problems:
+            break
     if log_dir:
-        log_dir.mkdir(parents=True, exist_ok=True)
-        log_file = log_dir / f"improve_iter_{iteration or 'unknown'}.json"
-        log_file.write_text(json.dumps(transcript, indent=2))
-
-    return description
+        Path(log_dir).mkdir(parents=True, exist_ok=True)
+        (Path(log_dir) / f"improve_iter_{iteration or 'unknown'}.json").write_text(
+            json.dumps({"iteration": iteration, "prompt": prompt, "attempts": attempts}, indent=2), encoding="utf-8")
+    return None if problems else description
 
 
 def main():
-    parser = argparse.ArgumentParser(description="Improve a skill description based on eval results")
-    parser.add_argument("--eval-results", required=True, help="Path to eval results JSON (from run_eval.py)")
-    parser.add_argument("--skill-path", required=True, help="Path to skill directory")
-    parser.add_argument("--history", default=None, help="Path to history JSON (previous attempts)")
-    parser.add_argument("--model", required=True, help="Model for improvement")
-    parser.add_argument("--verbose", action="store_true", help="Print thinking to stderr")
-    args = parser.parse_args()
+    ap = argparse.ArgumentParser(description="Improve a skill description based on eval results")
+    ap.add_argument("--eval-results", required=True, help="eval results JSON (from run_eval.py trigger)")
+    ap.add_argument("--skill-path", required=True)
+    ap.add_argument("--history", default=None)
+    ap.add_argument("--model", default="sonnet", help="sonnet, opus, fable or a claude-* id (never haiku)")
+    ap.add_argument("--verbose", action="store_true")
+    args = ap.parse_args()
 
     skill_path = Path(args.skill_path)
     if not (skill_path / "SKILL.md").exists():
         print(f"Error: No SKILL.md found at {skill_path}", file=sys.stderr)
         sys.exit(1)
-
-    eval_results = json.loads(Path(args.eval_results).read_text())
-    history = []
-    if args.history:
-        history = json.loads(Path(args.history).read_text())
-
+    try:
+        model = headless.resolve_models(args.model)[0]
+    except ValueError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        sys.exit(2)
+    eval_results = json.loads(Path(args.eval_results).read_text(encoding="utf-8"))
+    history = json.loads(Path(args.history).read_text(encoding="utf-8")) if args.history else []
     name, _, content = parse_skill_md(skill_path)
-    current_description = eval_results["description"]
+    current = eval_results["description"]
 
+    new = improve_description(name, content, current, eval_results, history, model)
     if args.verbose:
-        print(f"Current: {current_description}", file=sys.stderr)
-        print(f"Score: {eval_results['summary']['passed']}/{eval_results['summary']['total']}", file=sys.stderr)
-
-    client = anthropic.Anthropic()
-    new_description = improve_description(
-        client=client,
-        skill_name=name,
-        skill_content=content,
-        current_description=current_description,
-        eval_results=eval_results,
-        history=history,
-        model=args.model,
-    )
-
-    if args.verbose:
-        print(f"Improved: {new_description}", file=sys.stderr)
-
-    # Output as JSON with both the new description and updated history
-    output = {
-        "description": new_description,
-        "history": history + [{
-            "description": current_description,
-            "passed": eval_results["summary"]["passed"],
-            "failed": eval_results["summary"]["failed"],
-            "total": eval_results["summary"]["total"],
-            "results": eval_results["results"],
-        }],
-    }
-    print(json.dumps(output, indent=2))
+        print(f"Improved: {new}", file=sys.stderr)
+    print(json.dumps({"description": new, "history": history + [{
+        "description": current, "passed": eval_results["summary"]["passed"], "failed": eval_results["summary"]["failed"],
+        "total": eval_results["summary"]["total"], "results": eval_results["results"]}]}, indent=2))
+    sys.exit(0 if new else 1)
 
 
 if __name__ == "__main__":
