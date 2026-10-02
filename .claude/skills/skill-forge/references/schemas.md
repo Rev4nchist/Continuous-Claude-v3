@@ -68,8 +68,21 @@ Existing shape:
 - `files`: Optional input files, relative to the skill root. They are copied into the temp project.
 - `expected_behavior`, `expectations` or `assertions`: Verifiable statements. All three map to `assertions`. The first one present wins, in this order: `expected_behavior`, then `expectations`, then `assertions`.
 - `expected_output`: Human-readable description of success. It becomes the single assertion when no list is given.
+- `checks`: Optional deterministic checks on the final answer. `run_eval.py` grades them without the LLM grader, next to any assertions.
 
-An eval with nothing to grade is an error.
+```json
+"checks": [
+  {"type": "not_regex", "pattern": "retry.{0,40}(backoff|429)", "flags": "i"},
+  {"type": "regex", "pattern": "stop (all )?load"}
+]
+```
+
+  - `type`: `regex` passes when the pattern matches the answer. `not_regex` passes when it does not.
+  - `pattern`: A Python regex. An invalid one is an error when the file loads.
+  - `flags`: Optional. Any of `i` (ignore case), `m` (multiline), `s` (dot matches newline).
+  - A run that stopped at the turn cap has no answer. Every check of that run fails, `not_regex` too.
+
+An eval with no assertion and no check is an error. An eval with only checks makes no grader call.
 
 ---
 
@@ -96,9 +109,13 @@ Output of `run_eval.py behavior` for one run. Located at `<out>/<model>/eval-<id
   "navigation": {
     "skill_files_read": ["references/a.md"],
     "skill_files_unread": ["references/b.md"],
-    "reads_outside_skill": []
+    "reads_outside_skill": [],
+    "companion_files_read": []
   },
   "baseline_contaminated": false,
+  "companion": null,
+  "inject": null,
+  "checks": [],
   "final_text": "...",
   "metrics": {"total_tokens": 5200, "cost_usd": 0.04, "turns": 3, "duration_seconds": 21.5, "is_error": false},
   "error": null,
@@ -113,7 +130,10 @@ Output of `run_eval.py behavior` for one run. Located at `<out>/<model>/eval-<id
 - `skill_listed`: True when the session's start event listed the skill (the alias for `with_skill`, any form of the real name for `without_skill`). It is false for a `without_skill` run when the `off` override worked.
 - `skill_fired`: True when the run called the `Skill` tool with this skill. It should be true with the skill on and false with the skill off.
 - `navigation`: The files the run read (Read tool_use paths). Reads under the source folder, the renamed copy or `~/.claude/skills/<name>` count as inside the skill. `skill_files_unread` lists skill files that were never read. `SKILL.md` is not listed: the Skill tool injects it.
-- `baseline_contaminated`: True when a `without_skill` run read the skill's files anyway.
+- `baseline_contaminated`: True when a `without_skill` run read the skill's files anyway, or any file of the companion folder.
+- `companion`: Null, or the folder name passed to `--companion` (for example `_vendor`). The folder is copied next to the eval copy in `with_skill` projects only, with its layout kept, so a hub skill's `../_vendor/...` links resolve. Both configs deny `Read(~/.claude/skills/<folder>/**)`. `navigation.companion_files_read` lists the companion files a run read, named from the folder (`_vendor/src/skills/x/SKILL.md`). A `without_skill` run that reads any of them is contaminated and excluded.
+- `inject`: Null, or `{"file": ..., "chars": ...}` for `--inject <file>`. The file's text starts the prompt in BOTH configs. It simulates a rule the rule-router would inject, which hooks-off eval runs never get. `prompt` is the text that was sent, injection included.
+- `checks`: The eval's deterministic checks (see evals.json). The grader never sees them.
 - `skill_errors`: Skill tool calls that returned an error. A fired skill that failed to load is not a result.
 - `error`: Null, or the reason the run failed: an exit code, a timeout, `skill load failed`, no result event, or a result subtype other than `success` (for example `error_max_turns`).
 - `excluded`: Null, or the reason the run does not count: any `error`, a `without_skill` run that listed, fired or read the skill, or a `with_skill` run whose copy was not listed. An excluded run is not graded. Its `grading.json` holds `"excluded": "<reason>"` and a summary with `total` 0. `aggregate_benchmark.py` skips it and prints the count.
@@ -236,8 +256,8 @@ Output from the grader agent. Located at `<run-dir>/grading.json`.
 ```
 
 **Fields:**
-- `expectations[]`: Graded expectations with evidence
-- `summary`: Aggregate pass/fail counts
+- `expectations[]`: Graded expectations with evidence. An entry from a deterministic check carries `"check": true`, and `text` reads `check not_regex /<pattern>/`.
+- `summary`: Aggregate pass/fail counts, assertions and checks together
 - `execution_metrics`: Tool usage and output size (from executor's metrics.json)
 - `timing`: Wall clock timing (from timing.json)
 - `claims`: Extracted and verified claims from the output

@@ -13,6 +13,14 @@ What the two configs run:
   without_skill  The same prompt in a temp project with NO copy of the skill, and the real name off.
 Both settings files carry the same user skillOverrides map and differ by nothing else.
 
+An imported skill tree (a hub skill that links a vendored folder) adds two options:
+  --companion <dir>  Copy <dir> (for example .claude/skills/_vendor) next to the eval copy, keeping its
+                     layout, so ../_vendor/... links resolve. Only with_skill gets it. Both arms deny Read
+                     of ~/.claude/skills/<dir name>/**, so a run reads only its own temp copy.
+  --inject <file>    Prepend the file's text to the prompt in BOTH arms. It simulates the rule-router
+                     injecting a rule, which a hooks-off eval never does. run.json records it.
+An eval may carry "checks" (regex or not_regex on the final answer). They are graded without the LLM.
+
 A run that errored, ended in a subtype other than success, lost its result event, or broke the
 baseline (the skill listed, fired or read) is EXCLUDED: run.json says why, grading.json is written
 as excluded, and aggregate_benchmark.py skips it. Nothing is written into the repo.
@@ -42,7 +50,7 @@ from pathlib import Path
 
 sys.path.insert(0, str(Path(__file__).resolve().parent.parent))  # `scripts.*` imports work from any cwd
 from scripts import headless  # noqa: E402
-from scripts.evals import EvalError, MIN_EVALS, load_evals, load_trigger_set  # noqa: E402
+from scripts.evals import EvalError, MIN_EVALS, apply_checks, load_evals, load_trigger_set  # noqa: E402
 from scripts.utils import parse_skill_md  # noqa: E402
 
 SKILL_DIR = Path(__file__).resolve().parent.parent
@@ -73,6 +81,8 @@ class RunSpec:
     source_dir: Path | None = None   # the skill folder that was passed in
     personal_dir: Path | None = None  # ~/.claude/skills/<name>: reads there count as inside the skill
     real_names: tuple = ()  # the frontmatter name and the folder name: both are off in every run
+    companion: Path | None = None  # the folder copied next to the eval copy (with_skill only)
+    inject: dict | None = None  # {"file", "chars"} of the text prepended to the prompt, or None
 
     @property
     def copy_dir(self) -> Path | None:
@@ -114,11 +124,32 @@ def _rename_copy(dest: Path, new_name: str, description: str | None = None) -> N
     (dest / "SKILL.md").write_text("---\n" + "\n".join(head + kept) + "\n---\n" + text[m.end():], encoding="utf-8", newline="\n")
 
 
-def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool) -> str | None:
-    """A temp project: any other skills the eval names, the eval's input files, and, for with_skill,
-    a renamed copy of the skill under test. Return the copy's name, or None.
+def load_inject(path) -> dict:
+    """Read the text --inject prepends to every prompt. Raise EvalError when it is missing or empty."""
+    try:
+        text = Path(path).read_text(encoding="utf-8")
+    except OSError as e:
+        raise EvalError(f"cannot read the inject file {path}: {e}") from None
+    if not text.strip():
+        raise EvalError(f"the inject file {path} is empty")
+    return {"file": str(Path(path)), "text": text, "chars": len(text)}
 
-    The baseline project holds no copy of the skill at all.
+
+def project_layout(cwd: Path) -> str:
+    """One line for the dry run: what sits under .claude/skills in a temp project, with file counts."""
+    skills = Path(cwd) / ".claude" / "skills"
+    if not skills.is_dir():
+        return "(no .claude/skills)"
+    parts = [f"{d.name} ({sum(1 for f in d.rglob('*') if f.is_file())} files)" for d in sorted(skills.iterdir()) if d.is_dir()]
+    return ", ".join(parts) or "(empty)"
+
+
+def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool, companion: Path | None = None) -> str | None:
+    """A temp project: any other skills the eval names, the eval's input files, and, for with_skill,
+    a renamed copy of the skill under test plus the companion folder next to it. Return the copy's
+    name, or None.
+
+    The baseline project holds no copy of the skill and no companion at all.
     """
     skills_root = skill_path.parent
     for name in [s for s in ev.get("skills", []) if s != skill_path.name]:
@@ -137,14 +168,24 @@ def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool) 
     alias = f"{skill_name_of(skill_path)}-eval{uuid.uuid4().hex[:6]}"
     dest = headless.copy_skill(skill_path, cwd / ".claude" / "skills" / alias)
     _rename_copy(dest, alias)
+    if companion:
+        try:
+            headless.copy_companion(companion, cwd / ".claude" / "skills" / companion.name)
+        except (shutil.Error, OSError) as e:
+            # shutil.Error holds a list of (src, dest, reason): show the first reason, not the list.
+            first = e.args[0][0][2] if isinstance(e, shutil.Error) and e.args and e.args[0] else str(e)
+            raise EvalError(f"cannot copy the companion {companion}: {first}. On Windows a path over 260 characters "
+                            "fails: pass only the folders the hub links (skills/<allowlist> and common/).") from None
     return alias
 
 
 def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAULT_TOOLS,
-              max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None) -> list[RunSpec]:
+              max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None, companion=None, inject=None) -> list[RunSpec]:
     """One RunSpec per model x eval x config. Writes the temp projects and settings files.
 
     The real skill name is off in BOTH settings files, next to the user's own skillOverrides map.
+    `companion` is a folder copied next to the eval copy in with_skill projects; both arms deny Read of
+    its real twin under ~/.claude/skills. `inject` is load_inject()'s dict: its text starts every prompt.
     """
     skill_path, out_dir, work_dir = Path(skill_path).resolve(), Path(out_dir), Path(work_dir)
     home = Path(home) if home else Path.home()
@@ -154,7 +195,8 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
     real_names = list(dict.fromkeys([name, skill_path.name]))
     personal = home / ".claude" / "skills" / name
     overrides = {**headless.user_skill_overrides(home), **{n: "off" for n in real_names}}
-    deny_reads = [f"~/.claude/skills/{n}/**" for n in real_names]
+    companion = Path(companion).resolve() if companion else None
+    deny_reads = [f"~/.claude/skills/{n}/**" for n in [*real_names, *([companion.name] if companion else [])]]
     exe = exe or _exe()
     specs = []
     for model in models:
@@ -163,14 +205,16 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
                 tag = f"{model.alias}-eval-{ev['id']}-{config}"
                 cwd = work_dir / tag / "project"
                 cwd.mkdir(parents=True)
-                alias = _build_project(cwd, skill_path, ev, install_target=config == "with_skill")
+                alias = _build_project(cwd, skill_path, ev, install_target=config == "with_skill", companion=companion)
                 settings = headless.write_settings(work_dir / tag / "settings.json", overrides, deny_reads)
                 mcp = headless.write_empty_mcp(work_dir / tag / "mcp.json")
                 command = headless.build_command(model, settings, mcp, tools, max_turns, exe=exe, allowed=tools)
                 run_dir = Path(out_dir) / model.alias / f"eval-{ev['id']}" / config / "run-1"
-                specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, ev["prompt"],
+                prompt = f"{inject['text'].rstrip()}\n\n---\n\n{ev['prompt']}" if inject else ev["prompt"]
+                specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, prompt,
                                      skill_alias=alias, source_dir=skill_path, personal_dir=personal,
-                                     real_names=tuple(real_names)))
+                                     real_names=tuple(real_names), companion=companion,
+                                     inject={"file": inject["file"], "chars": inject["chars"]} if inject else None))
     return specs
 
 
@@ -203,8 +247,14 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     real_names = spec.real_names or (spec.skill_name,)
     personal_roots = [spec.personal_dir.parent / n for n in real_names] if spec.personal_dir else []
     roots = [r for r in (spec.copy_dir, *personal_roots) if r]
-    nav = headless.navigation(info["files_read"], spec.source_dir or spec.copy_dir, extra_roots=roots)
-    read_skill = bool(nav["skill_files_read"])
+    # A read under the companion (the temp copy or its real twin in ~/.claude/skills) is a read of the skill too.
+    comp_roots = []
+    if spec.companion:
+        comp_roots = [spec.cwd / ".claude" / "skills" / spec.companion.name]
+        if spec.personal_dir:
+            comp_roots.append(spec.personal_dir.parent / spec.companion.name)
+    nav = headless.navigation(info["files_read"], spec.source_dir or spec.copy_dir, extra_roots=roots, companion_roots=comp_roots)
+    read_skill = bool(nav["skill_files_read"] or nav["companion_files_read"])
     m = headless.metrics(info["result"], run.seconds)
     listed = info["listed_skills"]
 
@@ -240,6 +290,8 @@ def execute(spec: RunSpec, timeout: int) -> dict:
         # A baseline run that reads the skill's files found the skill without the Skill tool.
         "baseline_contaminated": spec.config == "without_skill" and read_skill,
         "skill_errors": info["skill_errors"],
+        "companion": spec.companion.name if spec.companion else None,
+        "inject": spec.inject,
         "final_text": info["final_text"], "metrics": m,
         # A fired skill whose load failed, or a run that did not end in success, is a broken run.
         "error": error,
@@ -247,7 +299,7 @@ def execute(spec: RunSpec, timeout: int) -> dict:
         "no_answer": no_answer,
         # Why this run must not be graded or counted. None when it counts.
         "excluded": excluded,
-        "stderr": run.stderr, "assertions": spec.eval["assertions"],
+        "stderr": run.stderr, "assertions": spec.eval["assertions"], "checks": spec.eval.get("checks") or [],
     }
     headless.write_json(d / "run.json", record)
     return record
@@ -293,12 +345,23 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
                    "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
+    checks = record.get("checks") or []
     if record.get("no_answer"):
-        # Stopped at the turn cap with no final answer: nothing to grade, so every assertion fails.
-        exps = [{"text": a, "passed": False, "evidence": "the run stopped at the turn cap without a final answer"}
-                for a in record["assertions"]]
+        # Stopped at the turn cap with no final answer: nothing to grade, so every assertion and every
+        # check fails. A not_regex check must not pass on the empty text.
+        why = "the run stopped at the turn cap without a final answer"
+        exps = [{"text": a, "passed": False, "evidence": why} for a in record["assertions"]]
+        exps += [{**e, "passed": False, "evidence": why} for e in apply_checks(checks, "")]
         grading = {"expectations": exps, "no_answer": True,
                    "summary": {"passed": 0, "failed": len(exps), "total": len(exps), "pass_rate": 0.0}}
+        headless.write_json(run_dir / "grading.json", grading)
+        return grading
+    det = apply_checks(checks, record.get("final_text") or "")
+    if not record["assertions"]:
+        # Only deterministic checks: no LLM grader call.
+        passed = sum(1 for e in det if e["passed"])
+        grading = {"expectations": det, "summary": {"passed": passed, "failed": len(det) - passed, "total": len(det),
+                                                    "pass_rate": round(passed / len(det), 2) if det else 0.0}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
     grader = (SKILL_DIR / "agents" / "grader.md").read_text(encoding="utf-8")
@@ -330,6 +393,7 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
                    "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
+    grading["expectations"] = grading["expectations"] + det
     exps = grading["expectations"]
     passed = sum(1 for e in exps if e.get("passed"))
     grading["summary"] = {"passed": passed, "failed": len(exps) - passed, "total": len(exps),
@@ -472,11 +536,26 @@ def _cmd_behavior(a) -> int:
     except EvalError as e:
         print(f"Error: {e}", file=sys.stderr)
         return 1
+    companion, inject = None, None
+    try:
+        if a.companion:
+            companion = Path(a.companion).resolve()
+            if not companion.is_dir():
+                raise EvalError(f"--companion {a.companion} is not a folder")
+        if a.inject:
+            inject = load_inject(a.inject)
+    except EvalError as e:
+        print(f"Error: {e}", file=sys.stderr)
+        return 1
     name = skill_name_of(skill_path)
     out = Path(a.out) if a.out else Path(os.path.realpath(tempfile.gettempdir())) / "skill-eval" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
     work = headless.make_temp("skill-eval-")
     try:
-        specs = plan_runs(skill_path, evals, models, out, work, a.tools, a.max_turns)
+        try:
+            specs = plan_runs(skill_path, evals, models, out, work, a.tools, a.max_turns, companion=companion, inject=inject)
+        except EvalError as e:
+            print(f"Error: {e}", file=sys.stderr)
+            return 1
         warn = headless.api_key_helper_warning()
         if warn:
             print(f"Warning: {warn}", file=sys.stderr)
@@ -485,6 +564,9 @@ def _cmd_behavior(a) -> int:
             for s in specs:
                 print(f"[{s.model.alias} eval-{s.eval_id} {s.config}] skill copy={s.skill_alias or 'none'} "
                       f"settings={json.dumps(json.loads(s.settings_path.read_text()))}")
+                print(f"  project: {s.config} | .claude/skills: {project_layout(s.cwd)}")
+                if s.inject:
+                    print(f"  inject: {s.inject['file']} ({s.inject['chars']} chars) prepended to the prompt")
                 print(f"  argv: {json.dumps(s.command[1:])}")
                 print(f"  stdin: {json.dumps(s.prompt)}")
             print(f"dry-run: {len(specs)} runs planned ({len(models)} models x {len(evals)} evals x 2 configs), 0 turns spent")
@@ -571,6 +653,10 @@ def main(argv=None) -> int:
     b.add_argument("--timeout", type=int, default=headless.DEFAULT_TIMEOUT)
     b.add_argument("--workers", type=int, default=3)
     b.add_argument("--min-evals", type=int, default=MIN_EVALS)
+    b.add_argument("--companion", default=None, help="folder copied next to the eval copy in with_skill runs (for example "
+                   ".claude/skills/_vendor), keeping its layout. Both arms deny Read of ~/.claude/skills/<folder>/**")
+    b.add_argument("--inject", default=None, help="file whose text is prepended to the prompt in BOTH arms "
+                   "(simulates the rule-router injecting a rule; recorded in run.json)")
     b.add_argument("--grade", action="store_true", help="grade every run with agents/grader.md")
     b.add_argument("--grader-model", default="sonnet")
     b.add_argument("--dry-run", action="store_true", help="print the plan and spend nothing")

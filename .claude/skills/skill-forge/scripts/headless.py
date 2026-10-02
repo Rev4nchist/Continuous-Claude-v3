@@ -299,17 +299,27 @@ def skill_files(skill_dir: Path) -> list[str]:
     return out
 
 
-def navigation(files_read: list[str], skill_dir: Path, extra_roots=()) -> dict:
+def navigation(files_read: list[str], skill_dir: Path, extra_roots=(), companion_roots=()) -> dict:
     """Which files a run read: inside the skill (in read order), outside it, and the skill files never read.
 
     `skill_dir` lists the skill's files. A read under `skill_dir` or under any of `extra_roots` (the
     renamed project copy, the personal copy in ~/.claude/skills) counts as inside the skill.
+    A read under a companion root (the vendored tree a hub skill links) goes to `companion_files_read`,
+    named from the companion folder, for example `_vendor/src/skills/x/SKILL.md`.
     """
     roots = [_norm(r) for r in (skill_dir, *extra_roots)]
+    comp_roots = [(_norm(r), Path(r).name) for r in companion_roots]
+    # normcase lower-cases on Windows: take the spelling of the relative part from the path as read.
     listing = skill_files(skill_dir)
-    inside, outside = [], []
+    inside, outside, companion = [], [], []
     for f in files_read:
         n = _norm(f)
+        comp = next(((r, label) for r, label in comp_roots if n.startswith(r + os.sep)), None)
+        if comp:
+            rel = f"{comp[1]}/{Path(os.path.abspath(str(f))[len(comp[0]) + 1:]).as_posix()}"
+            if rel not in companion:
+                companion.append(rel)
+            continue
         root = next((r for r in roots if n.startswith(r + os.sep)), None)
         if root:
             rel = Path(n[len(root) + 1:]).as_posix()
@@ -321,7 +331,8 @@ def navigation(files_read: list[str], skill_dir: Path, extra_roots=()) -> dict:
             outside.append(f)
     return {"skill_files_read": inside,
             "skill_files_unread": [r for r in listing if r not in inside],
-            "reads_outside_skill": outside}
+            "reads_outside_skill": outside,
+            "companion_files_read": companion}
 
 
 def render_transcript(text: str, prompt: str, limit: int = 1500) -> str:
@@ -364,4 +375,11 @@ def metrics(result: dict | None, seconds: float) -> dict:
 def copy_skill(src: Path, dest: Path) -> Path:
     """Copy a skill folder for a run. Eval files, tests and caches stay behind."""
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns("evals", "tests", "__pycache__", "*.pyc", "node_modules", ".git"))
+    return dest
+
+
+def copy_companion(src: Path, dest: Path) -> Path:
+    """Copy a companion folder (a vendored tree) for a run. It keeps its layout: a hub skill's
+    ../_vendor/... links work only when the folder lands next to the skill copy."""
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules", ".git"))
     return dest
