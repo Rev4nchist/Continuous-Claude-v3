@@ -618,7 +618,8 @@ const bashOk = !!BASH && spawnSync(BASH, ['-c', 'command -v node'], { encoding: 
 // A fixture repo that holds the real gate scripts, so the real guard can run in it.
 function guardFixture() {
   const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
-  for (const f of ['audit-skills.mjs', 'audit-descriptions.mjs', 'lib/skill-rules.mjs']) {
+  const libs = fs.readdirSync(path.join(here, 'lib')).filter((n) => n.endsWith('.mjs')).map((n) => `lib/${n}`);
+  for (const f of ['audit-skills.mjs', 'audit-descriptions.mjs', ...libs]) {
     fs.mkdirSync(path.dirname(path.join(root, 'scripts', 'skills', f)), { recursive: true });
     fs.copyFileSync(path.join(here, f), path.join(root, 'scripts', 'skills', f));
   }
@@ -769,3 +770,354 @@ for (const [name, rule] of [['Bad_Name', 'G05'], ['has_underscore', 'G05'], ['cl
     assert.ok(out.findings.some((x) => x.rule === rule), r.stdout);
   });
 }
+
+// ------------------------------------------------------------ vendor profile (skill intake)
+// Vendored skills live in .claude/skills/_vendor/<source>/skills/<name>/SKILL.md with a shared
+// <source>/common/ folder. The default scan skips every _ folder, so the vendor profile audits them.
+
+const SRC = 'skills-for-fabric';
+const vroot = (root) => path.join(root, '.claude', 'skills', '_vendor', SRC);
+function addVendored(root, skills = {}, { common = {}, overlay } = {}) {
+  for (const [name, spec] of Object.entries(skills)) {
+    const md = typeof spec === 'string' ? spec : spec.md;
+    write(path.join(vroot(root), 'skills', name, 'SKILL.md'), md);
+    for (const [rel, text] of Object.entries(spec.files || {})) write(path.join(vroot(root), 'skills', name, rel), text);
+  }
+  for (const [rel, text] of Object.entries(common)) write(path.join(vroot(root), 'common', rel), text);
+  if (overlay) write(path.join(vroot(root), 'overlay.json'), JSON.stringify(overlay));
+  return root;
+}
+const vrun = (root, extra) => run(root, { profile: 'vendor', ...extra });
+const vhit = (rep, id, skill) => rep.findings.some((x) => x.rule === id && (!skill || x.skill === `${SRC}/${skill}`));
+const OVERLAY_429 = { topic: 'retry-on-429', pattern: '429', files: 'common/**', ccv3_rule: 'stop on capacity error', resolution: 'the hub says stop' };
+
+test('vendor profile audits _vendor/<source>/skills/* and counts each skill', () => {
+  const root = addVendored(fixture({ own: skillText('own') }), { one: skillText('one'), two: skillText('two') });
+  const rep = vrun(root);
+  assert.equal(rep.skillCount, 2);
+  assert.equal(rep.failed, false, JSON.stringify(rep.findings));
+  assert.match(rep.summary, /audit-skills vendor: 2 skills, 0 hard failures, 0 advisory findings/);
+});
+
+test('vendor profile: a hard rule break fails (G03 unknown key, G11 xml tag, G25 windows path, G27 retired name)', () => {
+  const root = addVendored(fixture(), {
+    g03: skillText('g03', { fm: { version: '1.0' } }),
+    g11: skillText('g11', { fm: { description: 'Does <b>X</b>. Use when Y.' } }),
+    g25: skillText('g25', { body: 'Open C:\\Users\\me\\x.txt now.\n' }),
+    g27: skillText('g27', { body: 'Use braintrust for traces.\n' }),
+  });
+  const rep = vrun(root);
+  assert.equal(rep.failed, true);
+  for (const id of ['G03', 'G11', 'G25', 'G27']) assert.ok(vhit(rep, id, id.toLowerCase()), `${id} not reported hard: ${JSON.stringify(rep.findings)}`);
+  assert.ok(rep.findings.filter((x) => ['G03', 'G11', 'G25', 'G27'].includes(x.rule)).every((x) => x.class === 'hard'));
+});
+
+test('vendor profile: a G01 and a G08 break fail, a G22 dead link fails', () => {
+  const root = addVendored(fixture(), {
+    g01: '# no frontmatter\n',
+    g08: skillText('g08', { fm: { description: '""' } }),
+    g22: skillText('g22', { body: 'See [x](references/none.md).\n' }),
+  });
+  const rep = vrun(root);
+  for (const id of ['G01', 'G08', 'G22']) assert.ok(vhit(rep, id, id.toLowerCase()), id);
+  assert.equal(rep.failed, true);
+});
+
+test('vendor profile: advisory rules are reported and never fail (G14 G09 G12 G21 G26)', () => {
+  const root = addVendored(fixture(), {
+    adv: skillText('adv', {
+      fm: { description: `Manages your thing ${'y'.repeat(420)}` },
+      body: 'Run costs $1 as of March 2026 and was set 2026-03-04.\n',
+    }),
+  });
+  const rep = vrun(root);
+  assert.equal(rep.failed, false, JSON.stringify(rep.findings.filter((x) => x.class === 'hard')));
+  assert.equal(rep.hardFailures, 0);
+  for (const id of ['G09', 'G12', 'G14', 'G21', 'G26']) assert.ok(vhit(rep, id, 'adv'), `${id} missing`);
+  assert.ok(rep.advisoryCount >= 5);
+  assert.ok(rep.findings.every((x) => x.class === 'advisory'));
+});
+
+test('vendor profile: ../../common/x.md resolves against the vendor root, a missing one is G22', () => {
+  const root = addVendored(fixture(), {
+    ok: skillText('ok', { body: 'Read [core](../../common/CORE.md) first.\n' }),
+    bad: skillText('bad', { body: 'Read [core](../../common/GONE.md) first.\n' }),
+  }, { common: { 'CORE.md': '# core\n' } });
+  const rep = vrun(root);
+  assert.ok(!vhit(rep, 'G22', 'ok'), JSON.stringify(rep.findings));
+  assert.ok(vhit(rep, 'G22', 'bad'));
+});
+
+test('vendor profile: a link written from the source root (common/x.md) resolves; the default scan has no such root', () => {
+  const root = addVendored(fixture(), { rootrel: skillText('rootrel', { body: 'Read [core](common/CORE.md) first.\n' }) }, { common: { 'CORE.md': '# core\n' } });
+  assert.ok(!vhit(vrun(root), 'G22', 'rootrel'), JSON.stringify(vrun(root).findings));
+});
+
+test('vendor profile: a vendored name that collides with a CCv3 skill of different content is G07', () => {
+  const root = addVendored(fixture({ shared: skillText('shared', { body: 'ours\n' }) }), { shared: skillText('shared', { body: 'theirs\n' }) });
+  assert.ok(vhit(vrun(root), 'G07', 'shared'));
+});
+
+test('vendor profile: a vendored name that is a bundled name is G06', () => {
+  const root = addVendored(fixture(), { debug: skillText('debug') });
+  assert.ok(vhit(vrun(root), 'G06', 'debug'));
+});
+
+test('vendor profile is not vacuous: no _vendor folder, or a source without skills, fails G30', () => {
+  const none = vrun(fixture({ own: skillText('own') }));
+  assert.equal(none.failed, true);
+  assert.ok(none.findings.some((x) => x.rule === 'G30'), JSON.stringify(none.findings));
+  const empty = fixture();
+  write(path.join(vroot(empty), 'common', 'x.md'), '# x\n');
+  assert.ok(vrun(empty).findings.some((x) => x.rule === 'G30'));
+});
+
+test('vendor profile: a skill folder without SKILL.md fails G30 (fewer audited than exist)', () => {
+  const root = addVendored(fixture(), { good: skillText('good') });
+  write(path.join(vroot(root), 'skills', 'orphan', 'notes.md'), 'x\n');
+  const rep = vrun(root);
+  assert.ok(rep.findings.some((x) => x.rule === 'G30' && /1 of 2/.test(x.msg)), JSON.stringify(rep.findings));
+});
+
+test('the default run also runs the vendor profile when _vendor exists', () => {
+  const root = addVendored(fixture({ own: skillText('own') }), { bad: skillText('bad', { fm: { version: '1' } }) });
+  const rep = run(root);
+  assert.ok(rep.vendor, 'default run has no vendor report');
+  assert.equal(rep.vendor.skillCount, 1);
+  assert.equal(rep.vendor.failed, true);
+  assert.equal(rep.failed, true);
+  assert.equal(rep.hardFailures, 0, 'vendor findings must not mix into the repo hard count');
+});
+
+test('the default run has no vendor report and is unchanged when _vendor is absent', () => {
+  const rep = run(fixture({ own: skillText('own') }));
+  assert.equal(rep.vendor, undefined);
+  assert.equal(rep.hardFailures, 0);
+});
+
+test('the default run leaves _archive and dot folders out; only _vendor is audited', () => {
+  const root = fixture({ own: skillText('own') });
+  write(path.join(root, '.claude', 'skills', '_archive', 'old', 'SKILL.md'), '# broken\n');
+  const rep = run(root);
+  assert.equal(rep.hardFailures, 0);
+  assert.equal(rep.vendor, undefined);
+  assert.equal(rep.skillCount, 1);
+});
+
+test('CLI: --profile vendor prints per-skill hard and advisory counts and exits 1 on a hard break', () => {
+  const root = addVendored(fixture(), { good: skillText('good', { fm: { description: 'Manages X.' } }), bad: skillText('bad', { fm: { version: '1' } }) });
+  const r = cli(root, ['--profile', 'vendor']);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, new RegExp(`${SRC}/good\\s+0\\s+1`));
+  assert.match(r.stdout, new RegExp(`${SRC}/bad\\s+1\\s+0`));
+  assert.match(r.stdout, /FAIL G03 skills-for-fabric\/bad/);
+  assert.match(r.stdout.trim().split('\n').pop(), /^audit-skills vendor: 2 skills, 1 hard failures, 1 advisory findings/);
+});
+
+test('CLI: --profile vendor on advisory-only findings exits 0', () => {
+  const root = addVendored(fixture(), { good: skillText('good', { fm: { description: 'Manages X.' } }) });
+  const r = cli(root, ['--profile', 'vendor']);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('CLI: --root points the vendor profile at a skills folder holding _vendor', () => {
+  const home = fixture();
+  const other = fixture();
+  addVendored(other, { good: skillText('good') });
+  const r = spawnSync('node', [CLI, '--profile', 'vendor', '--repo-root', home, '--root', path.join(other, '.claude', 'skills')], { encoding: 'utf8' });
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  assert.match(r.stdout, /audit-skills vendor: 1 skills/);
+});
+
+// -------------------------------------------------- G26 and G12 fixes found on the upstream run
+
+test('G26 does not flag an api-version pin or a /versions/ path segment, but still flags a real date', () => {
+  const root = fixture({
+    pin: skillText('pin', { body: 'Call `?api-version=2023-01-01-preview` and POST /livyApi/versions/2023-12-01/sessions.\nSet api-version=2025-03-01 too.\n' }),
+    dated: skillText('dated', { body: 'This changed on 2026-03-04 in the portal.\n' }),
+  });
+  const rep = run(root);
+  assert.ok(!hit(rep, 'G26', 'pin'), JSON.stringify(rep.rules.G26.findings));
+  assert.ok(hit(rep, 'G26', 'dated'));
+});
+
+test('G26 flags a date that sits on the same line as an api-version pin', () => {
+  const root = fixture({ both: skillText('both', { body: 'Use api-version=2025-03-01 as of 2026-03-04.\n' }) });
+  assert.ok(hit(run(root), 'G26', 'both'));
+});
+
+test('G12 does not read "Pay-As-You-Go" as second person, but still flags a real "you"', () => {
+  const root = fixture({
+    payg: skillText('payg', { fm: { description: 'Compares Reserved, Pay-As-You-Go and Autoscale billing. Use when sizing capacity.' } }),
+    you: skillText('you', { fm: { description: 'Helps you size capacity. Use when sizing.' } }),
+  });
+  const rep = run(root);
+  assert.ok(!hit(rep, 'G12', 'payg'), JSON.stringify(rep.rules.G12.findings));
+  assert.ok(hit(rep, 'G12', 'you'));
+});
+
+// ------------------------------------------------------------------------- conflict scan
+
+const CORE_429 = '# core\n\nOn 429 or 503 retry with exponential backoff.\n';
+const scanOnly = (root, extra) => vrun(root, extra).findings.filter((x) => x.rule === 'X01');
+
+test('conflict scan: an uncovered retry-on-429 hit fails the vendor profile with file and line', () => {
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 } });
+  const rep = vrun(root);
+  assert.equal(rep.failed, true);
+  const x = scanOnly(root);
+  assert.ok(x.length >= 1 && x.every((f) => f.class === 'hard'));
+  assert.match(x[0].msg, /retry-on-429/);
+  assert.match(x[0].msg, /common\/COMMON-CORE\.md:3/);
+});
+
+test('conflict scan: an overlay entry for the topic, file and regex covers the hit', () => {
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 }, overlay: [OVERLAY_429] });
+  const rep = vrun(root);
+  assert.equal(scanOnly(root).length, 0, JSON.stringify(rep.findings));
+  assert.equal(rep.failed, false);
+});
+
+test('conflict scan: coverage is keyed by topic and regex, so inserting lines above the hit keeps it covered', () => {
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 }, overlay: [OVERLAY_429] });
+  assert.equal(vrun(root).failed, false);
+  write(path.join(vroot(root), 'common', 'COMMON-CORE.md'), `# core\n\nNew intro line.\nAnother.\n\nOn 429 or 503 retry with exponential backoff.\n`);
+  assert.equal(vrun(root).failed, false);
+});
+
+test('conflict scan: an overlay entry for another topic, another file glob or another regex does not cover the hit', () => {
+  const cases = [
+    { ...OVERLAY_429, topic: 'python3' },
+    { ...OVERLAY_429, files: 'skills/**' },
+    { ...OVERLAY_429, pattern: 'Retry-After' },
+  ];
+  for (const entry of cases) {
+    const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 }, overlay: [entry] });
+    assert.equal(vrun(root).failed, true, `entry ${JSON.stringify(entry)} must not cover`);
+  }
+});
+
+test('conflict scan: a malformed overlay (bad regex, unknown topic, missing field) fails the profile', () => {
+  const cases = [
+    [{ ...OVERLAY_429, pattern: '(' }, /valid regex/],
+    [{ ...OVERLAY_429, topic: 'made-up' }, /unknown topic/],
+    [{ topic: 'retry-on-429', pattern: '429', files: 'x' }, /missing/],
+  ];
+  for (const [entry, re] of cases) {
+    const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 }, overlay: [entry] });
+    const rep = vrun(root);
+    assert.equal(rep.failed, true);
+    assert.ok(rep.findings.some((x) => x.rule === 'X01' && re.test(x.msg)), JSON.stringify(rep.findings));
+  }
+});
+
+test('conflict scan: each seed topic fires on its own text', () => {
+  const seeds = {
+    'retry-on-429': 'Honor Retry-After on a 429.',
+    'capacity-pause-resume-resize': 'Resume the capacity before the run.',
+    'bulk-put-dataAccessRoles': 'PUT /workspaces/{id}/items/{id}/dataAccessRoles replaces all roles.',
+    python3: 'Run python3 script.py.',
+    'system-package-install': 'sudo apt-get install jq',
+    'npm-global-install': 'npm install -g @azure/cli',
+    'unpinned-pip-install': 'pip install requests',
+    'odbc-driver-18': 'Driver={ODBC Driver 18 for SQL Server}',
+    FabricOpenAI: 'client = FabricOpenAI(model="x")',
+  };
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'seeds.md': Object.values(seeds).join('\n') + '\n' } });
+  const topics = new Set(scanOnly(root).map((x) => x.msg.match(/\[([^\]]+)\]/)[1]));
+  for (const t of Object.keys(seeds)) assert.ok(topics.has(t), `seed ${t} did not fire; got ${[...topics]}`);
+});
+
+test('conflict scan: a pinned pip install and plain prose do not fire', () => {
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'ok.md': 'pip install requests==2.32.0\nUse python for scripts.\nAn ordinary sentence.\n' } });
+  assert.equal(scanOnly(root).length, 0, JSON.stringify(scanOnly(root)));
+});
+
+test('vendor-conflict-scan CLI: prints the hit list, exits 1 on an uncovered hit and 0 once covered', () => {
+  const SCAN = path.join(here, 'vendor-conflict-scan.mjs');
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'COMMON-CORE.md': CORE_429 } });
+  const r1 = spawnSync('node', [SCAN, '--source', vroot(root)], { encoding: 'utf8' });
+  assert.equal(r1.status, 1, r1.stdout + r1.stderr);
+  assert.match(r1.stdout, /UNCOVERED \[retry-on-429\] common\/COMMON-CORE\.md:3:/);
+  write(path.join(vroot(root), 'overlay.json'), JSON.stringify([OVERLAY_429]));
+  const r2 = spawnSync('node', [SCAN, '--source', vroot(root)], { encoding: 'utf8' });
+  assert.equal(r2.status, 0, r2.stdout + r2.stderr);
+  assert.match(r2.stdout, /^covered +\[retry-on-429\] common\/COMMON-CORE\.md:3:/);
+  const j = spawnSync('node', [SCAN, '--source', vroot(root), '--json'], { encoding: 'utf8' });
+  assert.ok(JSON.parse(j.stdout).hits.length >= 1);
+});
+
+test('vendor-conflict-scan CLI: a source with no scannable files fails instead of passing vacuously', () => {
+  const SCAN = path.join(here, 'vendor-conflict-scan.mjs');
+  const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'conflict-empty-'));
+  const r = spawnSync('node', [SCAN, '--source', empty], { encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /scanned 0 files/);
+});
+
+// ------------------------------------------- vendor files are covered by --staged and the guard
+
+const VENDORED = (n) => `.claude/skills/_vendor/${SRC}/skills/${n}/SKILL.md`;
+
+test('--staged exports _vendor: a staged hard break in a vendored file fails', () => {
+  const root = stagedFixture({ a: skillText('a') }, { [VENDORED('v')]: skillText('v') });
+  assert.equal(stagedCli(root).status, 0, stagedCli(root).stdout);
+  write(path.join(root, VENDORED('v')), skillText('v', { fm: { version: '1' } }));
+  vcs(root, 'add', VENDORED('v'));
+  const r = stagedCli(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL G03 skills-for-fabric\/v/);
+});
+
+test('--staged: an advisory-only finding in a vendored file does not fail', () => {
+  const root = stagedFixture({ a: skillText('a') }, { [VENDORED('v')]: skillText('v') });
+  write(path.join(root, VENDORED('v')), skillText('v', { fm: { description: 'Manages X.' } })); // G14 only
+  vcs(root, 'add', VENDORED('v'));
+  const r = stagedCli(root);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('--staged: an unstaged break in a vendored file is ignored', () => {
+  const root = stagedFixture({ a: skillText('a') }, { [VENDORED('v')]: skillText('v') });
+  write(path.join(root, VENDORED('v')), skillText('v', { fm: { version: '1' } })); // working tree only
+  assert.equal(stagedCli(root).status, 0);
+});
+
+test('--staged: a staged vendored common/ file with an uncovered 429 retry fails the conflict scan', () => {
+  const root = stagedFixture({ a: skillText('a') }, { [VENDORED('v')]: skillText('v') });
+  write(path.join(root, `.claude/skills/_vendor/${SRC}/common/COMMON-CORE.md`), CORE_429);
+  vcs(root, 'add', '-A');
+  const r = stagedCli(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /FAIL X01 skills-for-fabric.*retry-on-429/);
+});
+
+test('pre-commit guard: a staged vendored file with a hard break DOES block the commit', { skip: !bashOk && 'Git Bash with node not available' }, () => {
+  const root = guardFixture();
+  write(path.join(root, VENDORED('v')), skillText('v', { fm: { version: '1' } }));
+  vcs(root, 'add', VENDORED('v'));
+  const r = runGuard(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /BLOCKED by audit-skills/);
+  assert.match(r.stderr, /FAIL G03 skills-for-fabric\/v/);
+});
+
+test('pre-commit guard: a staged vendored file with only an advisory finding does NOT block', { skip: !bashOk && 'Git Bash with node not available' }, () => {
+  const root = guardFixture();
+  write(path.join(root, VENDORED('v')), skillText('v', { fm: { description: 'Manages X.' } }));
+  vcs(root, 'add', VENDORED('v'));
+  const r = runGuard(root);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+});
+
+test('pre-commit guard: staging only a vendored common/ file triggers the audit', { skip: !bashOk && 'Git Bash with node not available' }, () => {
+  const root = guardFixture();
+  write(path.join(root, VENDORED('v')), skillText('v'));
+  vcs(root, 'add', '-A');
+  vcs(root, '-c', 'user.name=t', '-c', 'user.email=t@t', 'commit', '-q', '-m', 'vendor base', '--no-verify');
+  write(path.join(root, `.claude/skills/_vendor/${SRC}/common/COMMON-CORE.md`), CORE_429);
+  vcs(root, 'add', '-A');
+  const r = runGuard(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stderr, /X01/);
+});

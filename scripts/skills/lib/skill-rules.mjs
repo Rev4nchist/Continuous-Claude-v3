@@ -46,7 +46,11 @@ const MONTHS = 'Jan(?:uary)?|Feb(?:ruary)?|Mar(?:ch)?|Apr(?:il)?|May|Jun(?:e)?|J
 const DATE_ISO_RE = /\b20\d\d-\d\d-\d\d\b/;
 const DATE_REL_RE = new RegExp(`\\b(?:as of|before|after)\\s+(?:(?:${MONTHS})\\b|20\\d\\d\\b)`, 'i');
 
-const SHELL_FENCE_RE = /^(powershell|pwsh|ps1|cmd|bat|batch|dos)$/i;
+// An API version pin (api-version=2023-01-01-preview, "apiVersion": "2024-05-01") or a /versions/<date>
+// path segment is a protocol identifier, not dated prose. A date elsewhere on the line still counts.
+const VERSION_PIN_RE = /api-?version["']?\s*[=:]\s*["']?20\d\d-\d\d-\d\d(?:-[a-z]+)?|\/versions?\/20\d\d-\d\d-\d\d/gi;
+
+const SHELL_FENCE_RE =/^(powershell|pwsh|ps1|cmd|bat|batch|dos)$/i;
 
 // Rule table. mode: 'hard' = any finding fails; 'ratchet' = fails only when the count rises or a
 // new skill appears in the rule's offender list (baseline in audit-skills.baseline.json).
@@ -263,11 +267,11 @@ export function stripQuoted(s) {
 }
 
 // First or second person. "I" counts only as a pronoun ("I do", "I'm"); I/O and roman numerals
-// such as "Phase I" do not.
+// such as "Phase I" do not. A hyphenated compound such as "Pay-As-You-Go" is not a pronoun.
 const ROMAN_LABEL_RE = /\b(?:Phase|Part|Type|Step|Level|Tier|Class|Stage|Appendix|Section|Chapter|Vitamin)\s+I+V?\b/g;
 export function firstPerson(text) {
   const t = text.replace(ROMAN_LABEL_RE, ' ');
-  return /\bI(?=\s+[a-z])|\bI'(?:m|ve|ll|d)\b/.test(t) || /\b(?:my|you|your)\b/i.test(t);
+  return /\bI(?=\s+[a-z])|\bI'(?:m|ve|ll|d)\b/.test(t) || /(?<![\w-])(?:my|you|your)(?![\w-])/i.test(t);
 }
 
 export function descriptionPhrases(desc) {
@@ -383,7 +387,8 @@ export function checkBody(s, ctx) {
     if (!declaresArgs && /(^|[^\\])\$[0-9]/.test(l.text)) r.push(f('G21', `unescaped $<digit> (Claude Code argument substitution): ${l.text.trim().slice(0, 60)}`, l.n));
     if (!l.old) {
       if (!SHELL_FENCE_RE.test(l.fence || '') && (/(?<!\w)[A-Za-z]:\\/.test(l.text) || /\w\\\w+\.\w+/.test(l.text))) r.push(f('G25', `Windows path: ${l.text.trim().slice(0, 60)}`, l.n));
-      if (DATE_ISO_RE.test(l.text) || DATE_REL_RE.test(l.text)) r.push(f('G26', `dated text: ${l.text.trim().slice(0, 60)}`, l.n));
+      const noPins = l.text.replace(VERSION_PIN_RE, ' ');
+      if (DATE_ISO_RE.test(noPins) || DATE_REL_RE.test(noPins)) r.push(f('G26', `dated text: ${l.text.trim().slice(0, 60)}`, l.n));
     }
   }
   r.push(...checkRetired(s));
@@ -465,7 +470,9 @@ function resolveRef(p, skillDir, ctx) {
   if (path.isAbsolute(p) || /^[A-Za-z]:/.test(p)) return [p];
   // Order matters: ~/.claude comes last, so a hit there means the repo does not own the file.
   const roots = [ctx.repoRoot, ctx.fallbackRoot].filter(Boolean);
-  return [path.join(skillDir, p), ...roots.flatMap((r) => [path.join(r, p), path.join(r, '.claude', p)]), path.join(ctx.home, '.claude', p)];
+  // A vendored skill may name a shared file from its source root (common/x.md): see vendor-profile.mjs.
+  const vendor = ctx.vendorRoot ? [path.join(ctx.vendorRoot, p)] : [];
+  return [path.join(skillDir, p), ...vendor, ...roots.flatMap((r) => [path.join(r, p), path.join(r, '.claude', p)]), path.join(ctx.home, '.claude', p)];
 }
 
 export const REF_ALLOW = {
