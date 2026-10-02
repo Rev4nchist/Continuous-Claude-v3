@@ -279,11 +279,70 @@ save_manifest() {
     mv -f "$tmp" "$MANIFEST_FILE"
 }
 
+# -----------------------------------------------------------------------------
+# Link guard (2026-10-01, PR #75 incident).
+#
+# A symlink or Windows junction inside ~/.claude points at a directory another tool owns
+# (~/.agents/skills is the `npx skills` CLI store and the Codex mirror; ~/.codegpt/skills).
+# cp, mv and rm follow links, so the sync used to write and delete INSIDE those directories:
+# archiving .claude/skills/find-skills deleted SKILL.md from ~/.agents/skills. Now no write or
+# delete happens when the destination, or any parent directory of it below ~/.claude, is a link.
+# Each skipped path prints one LINK-GUARD line and is counted in the summary. A skipped path
+# never gets a manifest entry (callers return before manifest_set).
+#
+# MSYS finding (Git Bash 3.5.7, probed 2026-10-01): a junction made with `cmd //c mklink /J`
+# reports as a symlink to bash. `test -L` is true, `readlink` prints the target, `stat -c %F`
+# says "symbolic link" and `find -type l` matches. So `[[ -L path ]]` is a reliable builtin
+# check (no fork) for BOTH junctions and real symlinks. A plain `ln -s` under MSYS (default
+# winsymlinks) makes a COPY, not a link, and nativestrict needs a privilege, so only
+# junctions and genuine symlinks are links here.
+#
+# Speed: LINK_CACHE maps a directory to its first link at or above it ("" = none), so a full
+# sync tests each directory once. No subshells: link_hit_for_dir sets LINK_HIT instead of echoing.
+# -----------------------------------------------------------------------------
+LINK_SKIPPED=0
+declare -A LINK_CACHE
+LINK_HIT=""
+
+# link_hit_for_dir <dir> -- LINK_HIT = the link nearest <dir>, at or above it and below
+# $ACTIVE_CLAUDE, or "" when the chain is clean.
+link_hit_for_dir() {
+    local d="$1"
+    LINK_HIT=""
+    [[ "$d" == "$ACTIVE_CLAUDE"/* ]] || return 0
+    if [[ -n "${LINK_CACHE[$d]+set}" ]]; then
+        LINK_HIT="${LINK_CACHE[$d]}"
+        return 0
+    fi
+    if [[ -L "$d" ]]; then
+        LINK_HIT="$d"
+    else
+        link_hit_for_dir "${d%/*}"
+    fi
+    LINK_CACHE["$d"]="$LINK_HIT"
+    return 0
+}
+
+# link_guard_blocks <active path> -- true (0) when the path must NOT be written or deleted
+# because it, or a parent directory below $ACTIVE_CLAUDE, is a link. Prints the LINK-GUARD line.
+link_guard_blocks() {
+    local dst="$1" hit target
+    link_hit_for_dir "${dst%/*}"
+    hit="$LINK_HIT"
+    [[ -z "$hit" && -L "$dst" ]] && hit="$dst"
+    [[ -z "$hit" ]] && return 1
+    target="$(readlink "$hit" 2>/dev/null)" || target=""
+    echo "  LINK-GUARD: skipped ${dst#$ACTIVE_CLAUDE/}: ~/.claude/${hit#$ACTIVE_CLAUDE/} is a link to ${target:-<unreadable>} (owned by another tool)"
+    LINK_SKIPPED=$((LINK_SKIPPED + 1))
+    return 0
+}
+
 # guarded_copy <src> <dst> -- the ONLY way this script writes a destination file.
 guarded_copy() {
     local src="$1" dst="$2"
     [[ -f "$src" ]] || return 0
     local rel="${dst#$ACTIVE_CLAUDE/}"
+    link_guard_blocks "$dst" && return 0
     if $DRY_RUN; then
         echo "[DRY RUN] Would copy: $src -> $dst"
         return 0
@@ -347,6 +406,12 @@ guarded_copy() {
 }
 
 print_guard_summary() {
+    if [[ "$LINK_SKIPPED" -gt 0 ]]; then
+        echo ""
+        echo "LINK-GUARD SUMMARY: $LINK_SKIPPED path(s) skipped: each sits in or under a link inside ~/.claude."
+        echo "  The link target belongs to another tool, so the sync did not write or delete there."
+        echo "  Remove the link (or the repo copy) to settle which copy wins."
+    fi
     if [[ "$QUARANTINED" -gt 0 || "$GUARD_ERRORS" -gt 0 ]]; then
         echo ""
         echo "CLOBBER-GUARD SUMMARY: $QUARANTINED file(s) had diverged active edits, preserved under:"
@@ -600,8 +665,10 @@ if $CHANGED; then
             # (Full mode never deletes; this is a strict, scoped improvement.)
             case "$dst" in
                 "$ACTIVE_CLAUDE"/*)
-                    if [[ -e "$dst" ]]; then
-                        if $DRY_RUN; then
+                    if [[ -e "$dst" || -L "$dst" ]]; then
+                        if link_guard_blocks "$dst"; then
+                            :   # a link at or above dst: never delete through it
+                        elif $DRY_RUN; then
                             echo "[DRY RUN] Would delete: $dst"
                         else
                             rm -f "$dst"
@@ -611,7 +678,8 @@ if $CHANGED; then
                             # used to leave an empty skills/<name>/ behind). Stops below
                             # the top-level subtree, so ~/.claude/skills itself is kept.
                             prune_dir="$(dirname "$dst")"
-                            while [[ "$prune_dir" == "$ACTIVE_CLAUDE"/*/* ]] && rmdir "$prune_dir" 2>/dev/null; do
+                            # Every parent was link-checked above, so none of them is a link here.
+                            while [[ "$prune_dir" == "$ACTIVE_CLAUDE"/*/* && ! -L "$prune_dir" ]] && rmdir "$prune_dir" 2>/dev/null; do
                                 prune_dir="$(dirname "$prune_dir")"
                             done
                         fi
@@ -694,7 +762,7 @@ if $CHANGED; then
     if $SETTINGS_CHANGED && ! $DRY_RUN && command -v jq &> /dev/null; then
         REPO_SETTINGS="$REPO_CLAUDE/settings.json"
         ACTIVE_SETTINGS="$ACTIVE_CLAUDE/settings.json"
-        if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]]; then
+        if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]] && ! link_guard_blocks "$ACTIVE_SETTINGS"; then
             MCP_SERVERS=$(jq '.mcpServers // empty' "$REPO_SETTINGS" 2>/dev/null) || MCP_SERVERS=""
             if [[ -n "$MCP_SERVERS" && "$MCP_SERVERS" != "null" ]]; then
                 TEMP_SETTINGS=$(mktemp)
@@ -821,7 +889,7 @@ if ! $DRY_RUN && command -v jq &> /dev/null; then
     REPO_SETTINGS="$REPO_CLAUDE/settings.json"
     ACTIVE_SETTINGS="$ACTIVE_CLAUDE/settings.json"
 
-    if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]]; then
+    if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]] && ! link_guard_blocks "$ACTIVE_SETTINGS"; then
         # Extract mcpServers from repo and merge into active.
         # Both jq calls run under `set -e`, so a malformed JSON file would
         # abort the entire sync before reaching the cleanup paths below.

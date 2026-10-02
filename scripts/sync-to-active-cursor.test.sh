@@ -336,6 +336,76 @@ chk "plugins/cache kept" "$(has "$ACT/plugins/cache/claude-hud")"
 out="$(sync)"
 chk "full sync verify: plugins/claude-hud OK, no MISMATCH" "$(printf '%s' "$out" | grep -q 'plugins/claude-hud: OK' && ! printf '%s' "$out" | grep -q 'MISMATCH' && echo 1 || echo 0)"
 
+echo "=== T13: the sync never writes or deletes through a link inside ~/.claude ==="
+# Failure modes: (a) a --changed edit writes into the link target, (b) a --changed delete removes the
+# target's file (the PR #75 find-skills incident) or the link itself, (c) a full mirror writes into
+# the link, (d) the guard over-blocks and a normal skill stops syncing, (e) only the direct parent is
+# checked, so a link two directories up is missed, (f) a skipped path gets a manifest hash,
+# (g) --dry-run reports a copy it would not make.
+# On Windows a junction is the real case (cmd //c mklink /J); bash sees it as a symlink (see the
+# finding in sync-to-active.sh). Elsewhere a plain symlink.
+mklink_dir() {  # mklink_dir <link> <target>
+    if command -v cygpath >/dev/null 2>&1; then
+        cmd //c "mklink /J $(cygpath -w "$1") $(cygpath -w "$2")" >/dev/null 2>&1
+    else
+        ln -s "$2" "$1"
+    fi
+}
+OUT13="$FIX/outside13"
+mkdir -p "$OUT13/linked" "$OUT13/nestparent/a/b" "$ACT/skills"
+printf 'outside-original\n' > "$OUT13/linked/SKILL.md"
+printf 'outside-nested\n' > "$OUT13/nestparent/a/b/F.md"
+mklink_dir "$ACT/skills/linked" "$OUT13/linked"
+mklink_dir "$ACT/skills/nestparent" "$OUT13/nestparent"
+chk "T13 fixture: both active dirs are links" "$( [ -L "$ACT/skills/linked" ] && [ -L "$ACT/skills/nestparent" ] && echo 1 || echo 0)"
+mkdir -p "$REPO/.claude/skills/linked" "$REPO/.claude/skills/normal" "$REPO/.claude/skills/nestparent/a/b"
+printf 'repo-v1\n' > "$REPO/.claude/skills/linked/SKILL.md"
+printf 'n1\n' > "$REPO/.claude/skills/normal/SKILL.md"
+printf 'repo-nested-v1\n' > "$REPO/.claude/skills/nestparent/a/b/F.md"
+commit t13-add
+sync --changed >/dev/null
+
+# (a) + (d) + (e): a repo edit lands everywhere except through the links.
+printf 'repo-v2\n' > "$REPO/.claude/skills/linked/SKILL.md"
+printf 'n2\n' > "$REPO/.claude/skills/normal/SKILL.md"
+printf 'repo-nested-v2\n' > "$REPO/.claude/skills/nestparent/a/b/F.md"
+commit t13-edit
+out="$(sync --changed)"
+chk "(a) --changed edit: the outside file is unchanged" "$( [ "$(cat "$OUT13/linked/SKILL.md")" = "outside-original" ] && echo 1 || echo 0)"
+chk "(a) LINK-GUARD line names the skipped path and the link" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/linked/SKILL.md: ~/.claude/skills/linked is a link to' && echo 1 || echo 0)"
+chk "(d) a normal skill in the same run still syncs" "$( [ "$(cat "$ACT/skills/normal/SKILL.md")" = "n2" ] && echo 1 || echo 0)"
+chk "(e) nested: a link two directories above the file is caught (outside unchanged)" "$( [ "$(cat "$OUT13/nestparent/a/b/F.md")" = "outside-nested" ] && echo 1 || echo 0)"
+chk "(e) nested: LINK-GUARD names the link, not the file's own parent" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/nestparent/a/b/F.md: ~/.claude/skills/nestparent is a link' && echo 1 || echo 0)"
+chk "summary counts the skips" "$(printf '%s' "$out" | grep -q 'LINK-GUARD SUMMARY: 2 path(s) skipped' && echo 1 || echo 0)"
+chk "(f) no manifest entry for a skipped path" "$(grep -qE $'\tskills/(linked|nestparent)/' "$ACT/state/sync-manifest.txt" && echo 0 || echo 1)"
+
+# (g) dry run reports the guard and no copy into the link.
+printf 'repo-v3\n' > "$REPO/.claude/skills/linked/SKILL.md"; commit t13-v3
+out="$(sync --changed --dry-run)"
+chk "(g) --dry-run prints LINK-GUARD for the linked file" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/linked/SKILL.md' && echo 1 || echo 0)"
+chk "(g) --dry-run does not claim it would copy into the link" "$(printf '%s' "$out" | grep -q 'Would copy:.*skills/linked/SKILL.md' && echo 0 || echo 1)"
+
+# (b) a repo delete leaves the target's file and the link in place (nested too).
+g rm -q .claude/skills/linked/SKILL.md .claude/skills/nestparent/a/b/F.md; g commit -q -m t13-delete
+out="$(sync --changed)"
+chk "(b) --changed delete: the outside SKILL.md survives" "$(has "$OUT13/linked/SKILL.md")"
+chk "(b) the link itself survives" "$( [ -L "$ACT/skills/linked" ] && echo 1 || echo 0)"
+chk "(b) LINK-GUARD printed for the delete" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/linked/SKILL.md' && echo 1 || echo 0)"
+chk "(b) nested: outside F.md survives, link and its dirs survive" "$( [ -e "$OUT13/nestparent/a/b/F.md" ] && [ -L "$ACT/skills/nestparent" ] && echo 1 || echo 0)"
+
+# (c) the full mirror skips the links too, including a file that does not exist there yet.
+mkdir -p "$REPO/.claude/skills/linked"   # git rm removed the emptied dir
+printf 'repo-v4\n' > "$REPO/.claude/skills/linked/SKILL.md"
+printf 'new\n' > "$REPO/.claude/skills/linked/NEW.md"
+printf 'n3\n' > "$REPO/.claude/skills/normal/SKILL.md"
+commit t13-full
+out="$(sync)"
+chk "(c) full mirror: the outside SKILL.md is unchanged" "$( [ "$(cat "$OUT13/linked/SKILL.md")" = "outside-original" ] && echo 1 || echo 0)"
+chk "(c) full mirror: no new file appears in the link target" "$(not "$OUT13/linked/NEW.md")"
+chk "(c) full mirror: LINK-GUARD printed" "$(printf '%s' "$out" | grep -q 'LINK-GUARD: skipped skills/linked/NEW.md' && echo 1 || echo 0)"
+chk "(d) full mirror: the normal skill still syncs" "$( [ "$(cat "$ACT/skills/normal/SKILL.md")" = "n3" ] && echo 1 || echo 0)"
+rm -f "$ACT/skills/linked" "$ACT/skills/nestparent"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]
