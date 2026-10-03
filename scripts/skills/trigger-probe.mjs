@@ -112,7 +112,9 @@ function main(argv) {
   const OUT = opt('--out', null);
   const LIMIT = Number(opt('--limit', 0)) || Infinity;
   const MODEL = opt('--model', null);
-  const CWD = path.resolve(opt('--cwd', repo));
+  const cwdArg = opt('--cwd', repo);
+  if (!cwdArg || cwdArg.startsWith('--')) { console.error('--cwd needs a folder'); return 2; }
+  const CWD = path.resolve(cwdArg);
   if (!fs.existsSync(CWD) || !fs.statSync(CWD).isDirectory()) { console.error(`--cwd ${CWD} is not a folder`); return 2; }
   const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
   const cases = all.slice(0, LIMIT);

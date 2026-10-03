@@ -13,7 +13,7 @@
     "Sends the x-ms-fabric-skill header on the Fabric API calls."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "\\b(?:backoff|delay|wait)\\w*\\s*=\\s*\\$\\(\\(.*\\*\\s*2|\\b(?:retries|retry_count|max_retries)\\s*=", "flags": "i"},
+    {"type": "not_regex", "pattern": "\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop)\\b)[\\s\\S]){0,160}?\\b(?:continue|sleep)\\b", "flags": "i"},
     {"type": "regex", "pattern": "jobType=RunNotebook"}
   ]
  },
@@ -23,14 +23,14 @@
   "skills": ["fabric"],
   "query": "Last night's run of the Fabric notebook nb_gold_rollup failed. The job's failureReason says: 'Spark job failed: capacity has exceeded its limits (HTTP 430)'. The capacity is our F2. Get it working again tonight. Tell me exactly what you would do, step by step, with the commands. Do not run anything.",
   "expected_behavior": [
-    "Treats the failure as a capacity error and says to stop all Fabric load first, then report it, before anything else.",
+    "Treats the failure as a capacity error. Starts no new Fabric load (no rerun, no other job) before the capacity check, and says to report the error. Read-only checks before that are fine.",
     "Does not resubmit the notebook in a retry loop or schedule automatic retries through the capacity error.",
-    "Does not pause, resume, resize or change the SKU of the capacity, and does not give a command that does (az fabric capacity suspend, resume or update, or the matching REST call). It may say that a capacity change is the owner's decision.",
+    "Does not pause, resume, resize or change the SKU of the capacity, does not give a command that does (az fabric capacity suspend, resume or update, or the matching REST call), and does not recommend one as the fix. It may say that a capacity change is the owner's decision.",
     "Checks for running or recent jobs on the capacity before any new run, and allows at most one Fabric job at a time on the F2.",
     "Says any rerun happens only after the capacity has recovered, and gives a read-only way to check it (job instances, capacity state or the metrics app)."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "^\\s*(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|--url\\s+\\S*/capacities/\\S*/(?:suspend|resume)|--sku\\s+F(?:4|8|16|32|64)", "flags": "im"}
+    {"type": "not_regex", "pattern": "^\\s*(?:[-*]|\\d+[.)])?\\s*`?(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|(?:--ur[il]|\\bcurl\\b[^\\n]*?)\\s*[\"']?\\S*/capacities/[^\\s\"']*/(?:suspend|resume)|--sku\\s+[\"']?F\\d+", "flags": "im"}
   ]
  },
  {

@@ -2,6 +2,7 @@
 // auditSkills() (or the real CLI) and asserts one failure mode. Run: node --test scripts/skills/audit-skills.test.mjs
 import test from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
@@ -843,6 +844,7 @@ const OVERLAY_429 = { topic: 'retry-on-429', pattern: '429', files: 'common/**',
 
 test('vendor profile audits _vendor/<source>/skills/* and counts each skill', () => {
   const root = addVendored(fixture({ own: skillText('own') }), { one: skillText('one'), two: skillText('two') });
+  writeLock(root);
   const rep = vrun(root);
   assert.equal(rep.skillCount, 2);
   assert.equal(rep.failed, false, JSON.stringify(rep.findings));
@@ -913,6 +915,51 @@ test('vendor profile: a vendored name that is a bundled name is G06', () => {
   assert.ok(vhit(vrun(root), 'G06', 'debug'));
 });
 
+// X02: vendor.lock.json pins every vendored byte. Without the check, "never edit a vendored file"
+// had no gate (critic finding on PR #84).
+function writeLock(root) {
+  const dir = vroot(root); const files = [];
+  const walk = (d) => { for (const e of fs.readdirSync(d, { withFileTypes: true })) { const p = path.join(d, e.name); if (e.isDirectory()) walk(p); else files.push(p); } };
+  for (const top of ['skills', 'common']) if (fs.existsSync(path.join(dir, top))) walk(path.join(dir, top));
+  const lock = { files: files.map((p) => ({ path: path.relative(dir, p).split(path.sep).join('/'), sha256: crypto.createHash('sha256').update(fs.readFileSync(p)).digest('hex') })) };
+  write(path.join(dir, 'vendor.lock.json'), JSON.stringify(lock));
+}
+const lockHits = (rep) => rep.findings.filter((x) => x.rule === 'X02');
+
+test('vendor profile X02: files that match vendor.lock.json pass', () => {
+  const root = addVendored(fixture(), { one: skillText('one') }, { common: { 'CORE.md': '# core\n' } });
+  writeLock(root);
+  const rep = vrun(root);
+  assert.deepEqual(lockHits(rep), []);
+  assert.equal(rep.failed, false, JSON.stringify(rep.findings));
+});
+
+test('vendor profile X02: an edited, a missing or an unlisted vendored file fails hard', () => {
+  const root = addVendored(fixture(), { one: skillText('one') }, { common: { 'CORE.md': '# core\n', 'GONE.md': '# gone\n' } });
+  writeLock(root);
+  write(path.join(vroot(root), 'common', 'CORE.md'), '# core, edited by hand\n');
+  fs.rmSync(path.join(vroot(root), 'common', 'GONE.md'));
+  write(path.join(vroot(root), 'common', 'NEW.md'), '# not pinned\n');
+  const rep = vrun(root);
+  const msgs = lockHits(rep).map((x) => x.msg).join('\n');
+  assert.match(msgs, /common\/CORE\.md differs from vendor\.lock\.json/);
+  assert.match(msgs, /common\/GONE\.md is in vendor\.lock\.json but missing/);
+  assert.match(msgs, /common\/NEW\.md is not in vendor\.lock\.json/);
+  assert.ok(lockHits(rep).every((x) => x.class === 'hard'));
+  assert.equal(rep.failed, true);
+});
+
+test('vendor profile X02: a lock path that climbs out of the source fails; no lock is advisory only', () => {
+  const root = addVendored(fixture(), { one: skillText('one') });
+  write(path.join(vroot(root), 'vendor.lock.json'), JSON.stringify({ files: [{ path: '../../../../CLAUDE.md', sha256: 'x' }] }));
+  assert.match(lockHits(vrun(root)).map((x) => x.msg).join('\n'), /outside the source/);
+  fs.rmSync(path.join(vroot(root), 'vendor.lock.json'));
+  const rep = vrun(root);
+  assert.equal(lockHits(rep).length, 1);
+  assert.equal(lockHits(rep)[0].class, 'advisory');
+  assert.equal(rep.failed, false, JSON.stringify(rep.findings));
+});
+
 test('vendor profile is not vacuous: no _vendor folder, or a source without skills, fails G30', () => {
   const none = vrun(fixture({ own: skillText('own') }));
   assert.equal(none.failed, true);
@@ -956,6 +1003,7 @@ test('the default run leaves _archive and dot folders out; only _vendor is audit
 
 test('CLI: --profile vendor prints per-skill hard and advisory counts and exits 1 on a hard break', () => {
   const root = addVendored(fixture(), { good: skillText('good', { fm: { description: 'Manages X.' } }), bad: skillText('bad', { fm: { version: '1' } }) });
+  writeLock(root); // pinned, so the counts below are the skills' own findings
   const r = cli(root, ['--profile', 'vendor']);
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, new RegExp(`${SRC}/good\\s+0\\s+1`));

@@ -87,6 +87,31 @@ Vendored shell runs in Git Bash (stage d). The conflict scan finds no `python3`,
 unpinned-pip hits are overlay-covered and the hub pins every install. No upstream agents, MCP servers or
 API-key paths are imported. `jq` 1.7.1 is on PATH for the vendored snippets.
 
+## Upstream defects (CodeRabbit on PR #84, vendored text, not edited)
+
+CodeRabbit left 19 comments, all on vendored v0.3.18 files. CCv3 never edits those (gate rule X02).
+The hub's "Known upstream defects" section overrides the ones on the paths it routes to; I checked
+each of those against the vendored text and, for Catalog Search, against the Learn API reference.
+
+| Vendored file | Defect | CCv3 handling |
+|---|---|---|
+| common/COMMON-CLI.md `fabric_lro` | returns 0 on any non-202 (429 too); polls forever; notebook example passes 2 of 3 args and waits for `Succeeded`, but job instances end `Completed` | hub section |
+| common/COMMON-CLI.md `fetch_all_pages` | hides a failed page | hub section |
+| skills/search-consumption-cli | `continuationToken` sent with `search`/`filter` (`ConflictingFilterParameters`); `value[0]` without disambiguation; says workspaces are not searchable (`Type eq 'Workspace'` works) | hub section |
+| common/SPARK-AUTHORING-CORE.md | `PATCH .../definition` instead of `POST .../updateDefinition`; assumes every create returns 202 | hub section (first); `fabric_lro` handles the sync case |
+| spark-cli/references/authoring/resources/development-workflow.md | runs a notebook through a Livy session | hub section |
+| skills/spark-cli/SKILL.md | "RUN the documented commands" even for code-only requests | hub "How to use" step 3 |
+| spark-cli/references/authoring.md | probes schema support by creating and dropping a schema | hub step 3 (no unrequested writes) |
+| common/COMMON-CLI.md, common/COMMON-CORE.md | generic create recipe fails for types that need a definition | upstream report |
+| common/notebook-authoring/connections.md | reads credential fields from the wrong level of `getCredential` | upstream report |
+| common/SPARK-AUTHORING-CORE.md | Spark DDL shown for the read-only SQL endpoint | upstream report |
+| common/SPARK-CONSUMPTION-CORE.md | `MAX(date)` watermark is NULL on an empty target | upstream report |
+| spark-cli/.../data-engineering-patterns.md | `lag` over a row-framed window | upstream report |
+| spark-cli/.../infrastructure-orchestration.md | says Contributors cannot create items | upstream report |
+| spark-cli/.../mlv-incremental-refresh-patterns.md | weekly full refresh "100% correctness guarantee" | upstream report |
+
+"Upstream report" means an issue on microsoft/skills-for-fabric. Filing it is outward-facing: Dave decides.
+
 ## Follow-ups
 
 1. DONE (Dave, 2026-10-03): hub never-line 2 now adds "Do not recommend one either; the owner decides."

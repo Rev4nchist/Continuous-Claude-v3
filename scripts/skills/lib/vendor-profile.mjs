@@ -13,14 +13,19 @@
 //
 // Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md section 3(a).
 
+import crypto from 'node:crypto';
 import fs from 'node:fs';
 import path from 'node:path';
-import { loadSkill, checkSkillAll } from './skill-rules.mjs';
+import { loadSkill, checkSkillAll, insideDir } from './skill-rules.mjs';
 import { scanSource } from './conflict-scan.mjs';
 
 export const CONFLICT_RULE = 'X01';
-// G30 (vacuous profile) and X01 (uncovered conflict) are profile rules, not per-skill rules.
-export const VENDOR_HARD = new Set(['G01', 'G02', 'G03', 'G06', 'G07', 'G08', 'G11', 'G22', 'G25', 'G27', 'G28', 'G30', CONFLICT_RULE]);
+// X02: <source>/vendor.lock.json pins the sha256 of every vendored file. With a lock, an edited, a
+// missing or an unlisted file under a locked folder is hard. Without a lock it is advisory only.
+export const LOCK_RULE = 'X02';
+export const LOCKED_DIRS = ['skills', 'common', 'mcp-setup'];
+// G30 (vacuous profile), X01 (uncovered conflict) and X02 (lock) are profile rules, not per-skill rules.
+export const VENDOR_HARD = new Set(['G01', 'G02', 'G03', 'G06', 'G07', 'G08', 'G11', 'G22', 'G25', 'G27', 'G28', 'G30', CONFLICT_RULE, LOCK_RULE]);
 // Documented for readers. Any per-skill rule not in VENDOR_HARD is advisory, including the rules
 // the proposal does not name (G04 G05 G16 G17 G18 G19): they police how a skill loads, and a
 // vendored skill is only ever read by the hub, never loaded by Claude Code.
@@ -80,6 +85,7 @@ export function auditVendor(skillsRoot, ctx, { repoSkills = [], required = false
       for (const x of checkSkillAll(s, sctx)) add(x.rule, label, x.msg, x.line, x.warn);
     }
     overlay[source] = addConflictFindings(dir, source, add);
+    addLockFindings(dir, source, add);
   }
   if (!sources.length) add('G30', '(gate)', `no vendor source under ${vendorDir(skillsRoot)}: the vendor profile audited 0 skills`);
 
@@ -104,6 +110,44 @@ function addConflictFindings(dir, source, add) {
     add('X01', source, `uncovered conflict [${h.topic}] ${h.file}:${h.line}: ${h.text} (CCv3 rule: ${h.ccv3_rule})`);
   }
   return scan.entryStats;
+}
+
+// Files under the locked folders, as forward-slash paths relative to the source.
+function lockedFiles(dir) {
+  const out = [];
+  const walk = (d) => {
+    let ents = [];
+    try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
+    for (const e of ents) {
+      const p = path.join(d, e.name);
+      if (e.isDirectory()) walk(p);
+      else out.push(path.relative(dir, p).split(path.sep).join('/'));
+    }
+  };
+  for (const top of LOCKED_DIRS) walk(path.join(dir, top));
+  return out.sort();
+}
+
+function addLockFindings(dir, source, add) {
+  let lock;
+  try { lock = JSON.parse(fs.readFileSync(path.join(dir, 'vendor.lock.json'), 'utf8')); } catch (e) {
+    if (e.code === 'ENOENT') return add(LOCK_RULE, source, 'no vendor.lock.json: the vendored bytes are not pinned', undefined, true);
+    return add(LOCK_RULE, source, `vendor.lock.json is not valid JSON: ${e.message}`);
+  }
+  const files = Array.isArray(lock?.files) ? lock.files : [];
+  if (!files.length) return add(LOCK_RULE, source, 'vendor.lock.json lists no files');
+  const listed = new Set();
+  for (const f of files) {
+    const rel = String(f?.path || '').replace(/\\/g, '/');
+    const abs = path.join(dir, rel);
+    if (!rel || !insideDir(dir, abs)) { add(LOCK_RULE, source, `vendor.lock.json path "${rel}" is outside the source`); continue; }
+    listed.add(rel);
+    let buf;
+    try { buf = fs.readFileSync(abs); } catch { add(LOCK_RULE, source, `${rel} is in vendor.lock.json but missing`); continue; }
+    const sha = crypto.createHash('sha256').update(buf).digest('hex');
+    if (sha !== f.sha256) add(LOCK_RULE, source, `${rel} differs from vendor.lock.json (sha256 ${sha.slice(0, 12)}, lock ${String(f.sha256).slice(0, 12)}): a vendored file was edited`);
+  }
+  for (const rel of lockedFiles(dir)) if (!listed.has(rel)) add(LOCK_RULE, source, `${rel} is not in vendor.lock.json: an unpinned vendored file`);
 }
 
 function buildVendorReport({ sources, vendored, expected, findings, overlay }) {

@@ -10,7 +10,9 @@
 ## Rules for this folder
 
 - Never edit a vendored file. Bytes stay identical to upstream: `.gitattributes` sets
-  `.claude/skills/_vendor/** -text`. Check them against `vendor.lock.json`.
+  `.claude/skills/_vendor/** -text`. The skills gate (vendor profile rule X02, also in pre-commit) fails
+  when a file under `skills/`, `common/` or `mcp-setup/` differs from `vendor.lock.json`, is missing,
+  or is not listed in it.
 - CCv3 owns three files here: `PROVENANCE.md`, `vendor.lock.json`, `overlay.json`.
 - `overlay.json` records each line that conflicts with a CCv3 "never" rule and how it is resolved.
   `node scripts/skills/vendor-conflict-scan.mjs --source .claude/skills/_vendor/skills-for-fabric` must

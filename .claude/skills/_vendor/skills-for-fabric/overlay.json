@@ -8,14 +8,15 @@
  },
  {
   "topic": "retry-on-429",
-  "pattern": "capacity throttling; retry|check capacity and config before retry|\\b429\\b",
+  "pattern": "capacity throttling; retry|check capacity and config before retry|API calls return 429|throttled \\(429 responses\\)",
   "files": [
    "skills/spark-cli/references/operations/job-diagnostics.md",
    "skills/spark-cli/references/operations/session-health.md",
    "skills/spark-cli/references/operations/performance-patterns.md"
   ],
   "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
-  "resolution": "REAL CONFLICT in job-diagnostics and session-health: they say retry after a capacity check. The hub line wins: when the check finds throttling or a capacity error, stop and report. performance-patterns only lists 429 as a throttling symptom, which agrees."
+  "resolution": "REAL CONFLICT in job-diagnostics and session-health: they say retry after a capacity check. The hub line wins: when the check finds throttling or a capacity error, stop and report. performance-patterns only lists 429 as a throttling symptom, which agrees.",
+  "max_hits": 4
  },
  {
   "topic": "retry-on-429",
@@ -74,21 +75,24 @@
    "common/COMMON-CLI.md"
   ],
   "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
-  "resolution": "Telemetry header text (Dave kept the x-ms-fabric-skill header, 2026-10-02). It names a retry only as a call that carries the header. It does not ask for a retry."
+  "resolution": "Telemetry header text (Dave kept the x-ms-fabric-skill header, 2026-10-02). It names a retry only as a call that carries the header. It does not ask for a retry.",
+  "max_hits": 3
  },
  {
   "topic": "capacity-pause-resume-resize",
   "pattern": "capacity is paused|Capacity paused",
   "files": ["skills/spark-cli/references/authoring.md", "skills/spark-cli/references/operations.md"],
   "ccv3_rule": "Never pause, resume or resize a Fabric capacity.",
-  "resolution": "Read-only: both lines say to check the capacity state. Neither pauses, resumes or resizes one. The destructive-command-guard asks or denies on the real call."
+  "resolution": "Read-only: both lines say to check the capacity state. Neither pauses, resumes or resizes one. The destructive-command-guard asks or denies on the real call.",
+  "max_hits": 2
  },
  {
   "topic": "unpinned-pip-install",
   "pattern": "pip install (?:pyspark|jupyter)",
   "files": "skills/spark-cli/references/authoring/resources/development-workflow.md",
   "ccv3_rule": "Pin every pip install to an exact version.",
-  "resolution": "REAL CONFLICT: a local install on this machine. The hub line wins: pin each package (pyspark to the Fabric runtime version) in a project venv. package-install-guard asks first."
+  "resolution": "REAL CONFLICT: a local install on this machine. The hub line wins: pin each package (pyspark to the Fabric runtime version) in a project venv. package-install-guard asks first.",
+  "max_hits": 2
  },
  {
   "topic": "unpinned-pip-install",
@@ -108,27 +112,31 @@
   "pattern": "^\\s*# pip install [\\w-]+$",
   "files": "common/notebook-authoring/connections.md",
   "ccv3_rule": "Pin every pip install to an exact version.",
-  "resolution": "A commented hint inside a Fabric notebook cell. Pin the version if the cell is used (hub line)."
+  "resolution": "A commented hint inside a Fabric notebook cell. Pin the version if the cell is used (hub line).",
+  "max_hits": 4
  },
  {
   "topic": "unpinned-pip-install",
   "pattern": "pip install failed|pip install <lib> --dry-run",
   "files": "skills/spark-cli/references/operations/job-diagnostics.md",
   "ccv3_rule": "Pin every pip install to an exact version.",
-  "resolution": "An error signature and a --dry-run conflict check. Neither installs anything. Allowed."
+  "resolution": "An error signature and a --dry-run conflict check. Neither installs anything. Allowed.",
+  "max_hits": 2
  },
  {
   "topic": "odbc-driver-18",
   "pattern": "ODBC Driver 18 for SQL Server",
   "files": "common/notebook-authoring/connections.md",
   "ccv3_rule": "T-SQL on this machine goes through mssql-python, not ODBC Driver 18.",
-  "resolution": "Runs in a Fabric notebook, whose runtime has the driver. On this machine T-SQL uses mssql-python (fabric-playbook L-05)."
+  "resolution": "Runs in a Fabric notebook, whose runtime has the driver. On this machine T-SQL uses mssql-python (fabric-playbook L-05).",
+  "max_hits": 1
  },
  {
   "topic": "system-package-install",
   "pattern": "brew install sqlcmd",
   "files": "common/COMMON-CLI.md",
   "ccv3_rule": "No apt-get or brew installs: Windows machine, package-install-guard.",
-  "resolution": "The same line gives winget for Windows; brew is the macOS option. On this machine use winget, and package-install-guard asks first."
+  "resolution": "The same line gives winget for Windows; brew is the macOS option. On this machine use winget, and package-install-guard asks first.",
+  "max_hits": 1
  }
 ]
