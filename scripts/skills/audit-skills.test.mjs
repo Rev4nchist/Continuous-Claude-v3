@@ -589,6 +589,26 @@ test('--staged checks a case-variant absolute link against the index', { skip: p
   assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference/);
 });
 
+// A link through a repo junction/symlink whose target lies outside the repo is judged by the index
+// (git tracks linkdir/r.md as a path), not by the target that stays on disk after a staged delete.
+test('--staged judges a link through a repo junction by the index, not the outside target', { skip: process.platform !== 'win32' && 'uses a directory junction' }, () => {
+  const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'junction-target-'));
+  fs.writeFileSync(path.join(ext, 'r.md'), '# rule\n');
+  const s = skillText('s', { body: 'Read [the rule](../../../linkdir/r.md) first.\n' });
+  const root = fixture({ s });
+  assert.equal(spawnSync('cmd', ['/c', 'mklink', '/J', path.join(root, 'linkdir'), ext], { encoding: 'utf8' }).status, 0);
+  const baseline = path.join(root, 'scripts', 'skills', 'audit-skills.baseline.json');
+  fs.mkdirSync(path.dirname(baseline), { recursive: true });
+  spawnSync('node', [CLI, '--repo-root', root, '--baseline', baseline, '--update-baseline', '--quiet'], { encoding: 'utf8' });
+  vcs(root, 'init', '-q'); vcs(root, 'add', '-A');
+  assert.ok(vcs(root, 'ls-files', 'linkdir/r.md').stdout.includes('linkdir/r.md'));
+  assert.equal(stagedCli(root).status, 0);
+  vcs(root, 'rm', '-q', '--cached', 'linkdir/r.md'); // staged for deletion; the target stays on disk outside the repo
+  const gone = stagedCli(root);
+  assert.equal(gone.status, 1, gone.stdout + gone.stderr);
+  assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference/);
+});
+
 test('--staged ignores an unstaged break in a tracked skill', () => {
   const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
   write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN); // working tree only
