@@ -15,7 +15,7 @@ from pathlib import Path
 
 import pytest
 
-from conftest import SCRIPTS, run_py, write_skill
+from conftest import SCRIPTS, SKILL_DIR, run_py, write_skill
 from test_eval_validity import fake_run, init, patch_run, result, stream, tool
 
 from scripts import headless, run_eval  # noqa: E402  (conftest puts the skill dir on sys.path)
@@ -286,3 +286,173 @@ def test_the_dry_run_shows_the_project_layout_the_deny_rules_and_the_injection(t
     assert "_vendor" not in base_line
     assert "PLAYBOOK rule text" in r.stdout  # the stdin line shows the injected prompt
     assert "inject:" in r.stdout and "0 turns spent" in r.stdout
+
+
+# =========================================================== round 2: review findings
+
+def _assistant_text(text):
+    return {"type": "assistant", "message": {"content": [{"type": "text", "text": text}]}}
+
+
+def _make_link(link: Path, target: Path) -> bool:
+    """A directory symlink, or a junction on Windows. False when neither can be made."""
+    import os
+    import subprocess
+    try:
+        os.symlink(target, link, target_is_directory=True)
+        return True
+    except (OSError, NotImplementedError):
+        if os.name == "nt":
+            return subprocess.run(["cmd", "/c", "mklink", "/J", str(link), str(target)], capture_output=True).returncode == 0
+        return False
+
+
+# 3. a success run with an empty result is not an answer
+
+@pytest.mark.parametrize("text", ["", "  \n\t"])
+def test_a_success_run_with_an_empty_result_fails_every_check_and_assertion_without_the_grader(tmp_path, monkeypatch, text):
+    checks = [{"type": "not_regex", "pattern": "retry"}, {"type": "regex", "pattern": "stop"}]
+    g, calls = graded_run(tmp_path, monkeypatch, checks, text, assertions=["it works"])
+    assert calls == [], "an empty answer must not reach the grader"
+    assert g["no_answer"] is True
+    assert [e["passed"] for e in g["expectations"]] == [False, False, False]
+    assert g["summary"] == {"passed": 0, "failed": 3, "total": 3, "pass_rate": 0.0}
+    assert "empty" in g["expectations"][0]["evidence"]
+
+
+def test_an_old_run_json_with_an_empty_final_text_is_also_graded_as_no_answer(tmp_path, monkeypatch):
+    # run.json files written before this fix carry no empty-answer flag.
+    _, _, _, b = plan(tmp_path, ev={**EVAL, "assertions": [], "checks": [{"type": "not_regex", "pattern": "retry"}]})
+    patch_run(monkeypatch, lambda *a, **k: fake_run(stream(init(["x"]), result("success", "ok"))))
+    run_eval.execute(b, 10)
+    rec = json.loads((b.run_dir / "run.json").read_text(encoding="utf-8"))
+    rec.update(final_text="", no_answer=False)
+    (b.run_dir / "run.json").write_text(json.dumps(rec), encoding="utf-8")
+    g = run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])
+    assert [e["passed"] for e in g["expectations"]] == [False]
+
+
+# 4. the grader must not read the injected text
+
+def test_the_transcript_the_grader_reads_has_a_placeholder_instead_of_the_injected_text(tmp_path, monkeypatch):
+    playbook = tmp_path / "playbook.md"
+    playbook.write_text("PLAYBOOK: stop on the first capacity error.\n", encoding="utf-8")
+    _, _, _, b = plan(tmp_path, inject=run_eval.load_inject(playbook))
+    patch_run(monkeypatch, lambda *a, **k: fake_run(stream(init(["x"]), _assistant_text("done"), result())))
+    run_eval.execute(b, 10)
+    md = (b.run_dir / "transcript.md").read_text(encoding="utf-8")
+    assert "PLAYBOOK: stop" not in md
+    assert "do it" in md
+    assert f"[injected: playbook.md, {len('PLAYBOOK: stop on the first capacity error.' + chr(10))} chars, both arms]" in md
+
+
+# 5. runs must not see each other's projects
+
+def test_every_planned_run_has_its_own_temp_root(tmp_path):
+    import os
+    import tempfile
+    _, _, w, b = plan(tmp_path)
+    nearest = next(p for p in Path(w.cwd).parents if p in Path(b.cwd).parents)
+    assert nearest == Path(os.path.realpath(tempfile.gettempdir())), f"the runs share a plan folder: {nearest}"
+    assert Path(w.settings_path).parent != Path(b.settings_path).parent
+
+
+def test_a_baseline_denies_and_counts_reads_of_a_sibling_with_skill_project(tmp_path, monkeypatch):
+    _, _, w, b = plan(tmp_path)
+    deny = json.loads(b.settings_path.read_text())["permissions"]["deny"]
+    for rule in run_eval._absolute_deny(Path(w.cwd) / ".claude" / "skills"):
+        assert f"Read({rule})" in deny, (rule, deny)
+    sibling = Path(w.cwd) / ".claude" / "skills" / "_vendor" / "src" / "skills" / "x" / "SKILL.md"
+    out = stream(init(["x"]), tool("Read", file_path=str(sibling)), result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(b, 10)
+    assert rec["baseline_contaminated"] is True and "contaminated" in rec["excluded"]
+
+
+@pytest.mark.parametrize("via_link", [False, True])
+def test_a_baseline_read_of_the_companion_source_is_contaminated_under_any_spelling(tmp_path, monkeypatch, via_link):
+    _, comp, _, b = plan(tmp_path)
+    read = comp / "src" / "skills" / "x" / "SKILL.md"
+    if via_link:
+        link = tmp_path / "alias-link"
+        if not _make_link(link, comp):
+            pytest.skip("cannot make a symlink or junction here")
+        read = link / "src" / "skills" / "x" / "SKILL.md"
+    out = stream(init(["x"]), tool("Read", file_path=str(read)), result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(b, 10)
+    assert rec["baseline_contaminated"] is True, rec["navigation"]
+    assert "contaminated" in rec["excluded"]
+
+
+def test_cleanup_removes_every_run_root(tmp_path):
+    _, _, w, b = plan(tmp_path)
+    roots = {Path(s.cwd).parents[0] for s in (w, b)}
+    assert all(r.exists() for r in roots)
+    run_eval.cleanup_specs([w, b])
+    assert not any(r.exists() for r in roots)
+
+
+# 6. not_regex covers what the model did, not only what it finally said
+
+def test_not_regex_fails_on_a_forbidden_construct_in_an_earlier_message_or_a_tool_input(tmp_path, monkeypatch):
+    checks = [{"type": "not_regex", "pattern": r"time\.sleep\(.{0,40}Retry-After"}]
+    cases = [
+        stream(init(["x"]), _assistant_text("Try: time.sleep(int(r.headers['Retry-After']))"), result("success", "Stop and report.")),
+        stream(init(["x"]), tool("Grep", pattern="time.sleep(int(h['Retry-After']))"), result("success", "Stop and report.")),
+    ]
+    for n, out in enumerate(cases):
+        tmp = tmp_path / f"c{n}"
+        tmp.mkdir()
+        _, _, _, b = plan(tmp, ev={**EVAL, "assertions": [], "checks": checks})
+        patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+        run_eval.execute(b, 10)
+        g = run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])
+        assert [e["passed"] for e in g["expectations"]] == [False], out
+        assert "assistant" in g["expectations"][0]["evidence"] or "tool" in g["expectations"][0]["evidence"]
+
+
+def test_a_must_have_regex_still_reads_only_the_final_answer(tmp_path, monkeypatch):
+    checks = [{"type": "regex", "pattern": "stop all load"}]
+    out = stream(init(["x"]), _assistant_text("I will stop all load."), result("success", "Done."))
+    _, _, _, b = plan(tmp_path, ev={**EVAL, "assertions": [], "checks": checks})
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    run_eval.execute(b, 10)
+    g = run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])
+    assert [e["passed"] for e in g["expectations"]] == [False]
+
+
+def test_a_refusal_that_names_the_forbidden_words_passes_an_action_check(tmp_path, monkeypatch):
+    checks = [{"type": "not_regex", "pattern": r"time\.sleep\(.{0,40}Retry-After"}]
+    out = stream(init(["x"]), _assistant_text("Do not retry with backoff on a 429."), result("success", "Do not retry with backoff on a 429; stop."))
+    _, _, _, b = plan(tmp_path, ev={**EVAL, "assertions": [], "checks": checks})
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    run_eval.execute(b, 10)
+    assert run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])["summary"]["passed"] == 1
+
+
+# 7. the documented example must follow its own advice
+
+def test_the_not_regex_example_in_schemas_md_passes_a_correct_refusal_and_fails_a_retry_loop():
+    import re
+    from scripts.evals import apply_checks
+    text = (SKILL_DIR / "references" / "schemas.md").read_text(encoding="utf-8")
+    block = re.search(r'"checks": (\[.*?\n\])', text, re.DOTALL).group(1)
+    example = [c for c in json.loads(block) if c["type"] == "not_regex"]
+    assert example, "schemas.md must show a not_regex example"
+    ok = apply_checks(example, "Do not retry with backoff on a 429. Stop all load and report it.")
+    bad = apply_checks(example, "```python\nwhile True:\n    time.sleep(int(r.headers['Retry-After']))\n```")
+    assert [e["passed"] for e in ok] == [True] * len(example)
+    assert not all(e["passed"] for e in bad)
+
+
+# 12. the long-path hint must not break the layout
+
+def test_the_long_path_hint_keeps_the_vendor_layout(tmp_path, monkeypatch):
+    def boom(src, dest):
+        raise shutil.Error([(str(src), str(dest), "[WinError 3] The system cannot find the path specified")])
+    monkeypatch.setattr(headless, "copy_companion", boom)
+    with pytest.raises(EvalError) as e:
+        plan(tmp_path)
+    msg = str(e.value)
+    assert "same layout" in msg and "skills/<allowlist>" not in msg

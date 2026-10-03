@@ -68,16 +68,17 @@ Existing shape:
 - `files`: Optional input files, relative to the skill root. They are copied into the temp project.
 - `expected_behavior`, `expectations` or `assertions`: Verifiable statements. All three map to `assertions`. The first one present wins, in this order: `expected_behavior`, then `expectations`, then `assertions`.
 - `expected_output`: Human-readable description of success. It becomes the single assertion when no list is given.
-- `checks`: Optional deterministic checks on the final answer. `run_eval.py` grades them without the LLM grader, next to any assertions.
+- `checks`: Optional deterministic checks. `run_eval.py` grades them without the LLM grader, next to any assertions.
 
 ```json
 "checks": [
-  {"type": "not_regex", "pattern": "retry.{0,40}(backoff|429)", "flags": "i"},
-  {"type": "regex", "pattern": "stop (all )?load"}
+  {"type": "not_regex", "pattern": "(time\\.sleep|Start-Sleep).{0,80}Retry-After", "flags": "i"},
+  {"type": "regex", "pattern": "stop (all )?load", "flags": "i"}
 ]
 ```
 
-  - `type`: `regex` passes when the pattern matches the answer. `not_regex` passes when it does not.
+  - `type`: `regex` passes when the pattern matches the final answer. `not_regex` passes when it matches nothing the model wrote or did: the final answer, every assistant message and every tool call input. Tool results (file contents the model read) are not scanned.
+  - Target the forbidden action, not its words. A correct answer says "do not retry with backoff on a 429", so a pattern for those words fails it. Match the code or command the model would run, as the `Retry-After` sleep loop above does.
   - `pattern`: A Python regex. An invalid one is an error when the file loads.
   - `flags`: Optional. Any of `i` (ignore case), `m` (multiline), `s` (dot matches newline).
   - A run that stopped at the turn cap has no answer. Every check of that run fails, `not_regex` too.

@@ -65,7 +65,7 @@ export function auditVendor(skillsRoot, ctx, { repoSkills = [], required = false
   });
   if (!sources.length && !required) return null;
 
-  const vendored = []; let expected = 0;
+  const vendored = []; let expected = 0; const overlay = {};
   for (const { source, dir } of sources) {
     const { skills, dirs } = listSourceSkills(dir);
     expected += dirs;
@@ -79,7 +79,7 @@ export function auditVendor(skillsRoot, ctx, { repoSkills = [], required = false
       vendored.push({ s, label });
       for (const x of checkSkillAll(s, sctx)) add(x.rule, label, x.msg, x.line, x.warn);
     }
-    addConflictFindings(dir, source, add);
+    overlay[source] = addConflictFindings(dir, source, add);
   }
   if (!sources.length) add('G30', '(gate)', `no vendor source under ${vendorDir(skillsRoot)}: the vendor profile audited 0 skills`);
 
@@ -93,18 +93,20 @@ export function auditVendor(skillsRoot, ctx, { repoSkills = [], required = false
       add('G07', x.label, `name "${name}" resolves to ${list.length} skills with different content (${list.map((y) => y.label).join(', ')})`);
     }
   }
-  return buildVendorReport({ sources, vendored, expected, findings });
+  return buildVendorReport({ sources, vendored, expected, findings, overlay });
 }
 
 function addConflictFindings(dir, source, add) {
   const scan = scanSource(dir);
   for (const e of scan.overlayErrors) add('X01', source, e);
+  for (const v of scan.entryViolations) add('X01', source, v);
   for (const h of scan.uncovered) {
     add('X01', source, `uncovered conflict [${h.topic}] ${h.file}:${h.line}: ${h.text} (CCv3 rule: ${h.ccv3_rule})`);
   }
+  return scan.entryStats;
 }
 
-function buildVendorReport({ sources, vendored, expected, findings }) {
+function buildVendorReport({ sources, vendored, expected, findings, overlay }) {
   const hard = findings.filter((f) => f.class === 'hard');
   const advisory = findings.filter((f) => f.class === 'advisory');
   const perSkill = {};
@@ -118,7 +120,7 @@ function buildVendorReport({ sources, vendored, expected, findings }) {
   const skillCount = vendored.length;
   return {
     profile: 'vendor', sources: sources.map((s) => s.source), skillCount, expected,
-    findings, hardFailures: hard.length, advisoryCount: advisory.length, perSkill, advisoryByRule,
+    findings, hardFailures: hard.length, advisoryCount: advisory.length, perSkill, advisoryByRule, overlay,
     summary: `audit-skills vendor: ${skillCount} skills, ${hard.length} hard failures, ${advisory.length} advisory findings`,
     failed: hard.length > 0,
   };
@@ -152,6 +154,9 @@ export function formatVendorReport(rep, { verbose = false, quiet = false } = {})
     for (const n of names) lines.push(`${n.padEnd(width)}  ${String(rep.perSkill[n].hard).padStart(4)}  ${String(rep.perSkill[n].advisory).padStart(8)}`);
     const byRule = Object.entries(rep.advisoryByRule).sort().map(([r, c]) => `${r}=${c}`).join(' ');
     lines.push(`advisory by rule: ${byRule || 'none'}`);
+    for (const [source, entries] of Object.entries(rep.overlay || {})) {
+      for (const e of entries) lines.push(`overlay ${source} [${e.topic}] /${e.pattern}/: ${e.hits} hits in ${e.fileCount} files (cap ${e.max_hits})`);
+    }
   }
   lines.push(...hardLines(rep.findings.filter((x) => x.class === 'hard')));
   if (verbose) for (const f of rep.findings.filter((x) => x.class === 'advisory')) lines.push(`  advisory ${f.rule} ${f.skill}${f.line ? `:${f.line}` : ''} ${f.msg}`);

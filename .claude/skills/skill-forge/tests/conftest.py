@@ -56,3 +56,12 @@ def skills_root(tmp_path):
     root = tmp_path / "skills"
     root.mkdir()
     return root
+
+
+@pytest.fixture(autouse=True)
+def _private_system_tempdir(tmp_path_factory, monkeypatch):
+    """run_eval gives every planned run its own temp root under the system temp folder. Point that
+    folder at a pytest dir so a test run leaves nothing behind."""
+    import tempfile
+    d = tmp_path_factory.mktemp("systemp")
+    monkeypatch.setattr(tempfile, "tempdir", str(d))

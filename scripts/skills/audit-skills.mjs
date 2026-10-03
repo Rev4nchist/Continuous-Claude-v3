@@ -39,6 +39,15 @@ function isBrokenLink(p) {
   try { fs.statSync(p); return false; } catch { return true; }
 }
 
+// _ folders Claude Code never lists and the default scan skips on purpose. _vendor has its own profile.
+// Any other _ folder (a new _fabric, say) would get neither scan, so G29 reports it.
+export const UNDERSCORE_ALLOW = new Set(['_vendor', '_archive', '_archived', '_eval', '_sandbox', '_snapshots']);
+
+export function unlistedUnderscoreDirs(root) {
+  if (!isDir(root)) return [];
+  return fs.readdirSync(root).filter((n) => n.startsWith('_') && !UNDERSCORE_ALLOW.has(n) && isDir(path.join(root, n))).sort();
+}
+
 // stat() follows junctions and symlinks; Dirent.isDirectory() does not.
 export function listSkillDirs(root) {
   const skills = []; const noSkillMd = [];
@@ -212,6 +221,7 @@ export function auditSkills(rawOpts = {}) {
     const repo = listSkillDirs(o.skillsRoot);
     dirs = repo.skills.map((d) => ({ ...d, source: 'repo' }));
     expected = repo.expected; noSkillMd = repo.noSkillMd.map((e) => ({ ...e, src: 'repo' }));
+    for (const name of unlistedUnderscoreDirs(o.skillsRoot)) noSkillMd.push({ name, src: 'repo', unlisted: true });
     if (o.includeActive) {
       const have = new Set(dirs.map((d) => d.name));
       const active = listSkillDirs(o.activeRoot);
@@ -237,7 +247,8 @@ export function auditSkills(rawOpts = {}) {
 
   if (!o.skillDir) {
     crossSkillFindings(skills, o, (r, sk, m) => add(r, sk, m));
-    for (const { name, src, broken } of noSkillMd) {
+    for (const { name, src, broken, unlisted } of noSkillMd) {
+      if (unlisted) { add('G29', name, `folder ${src}:${name} is neither _vendor nor on the allow list (${[...UNDERSCORE_ALLOW].join(', ')}): Claude Code lists nothing under it and no gate profile audits it`); continue; }
       add('G29', name, broken ? `${src}:${name} is a broken junction or symlink` : `directory ${src}:${name} has no SKILL.md (prefix _ or . to park it)`);
     }
   } else {
@@ -267,7 +278,11 @@ export function auditSkills(rawOpts = {}) {
   const report = buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, expected });
   // Vendored skills sit under _vendor, which listSkillDirs skips: audit them with their own profile.
   const vendor = !o.skillDir && !o.rules ? auditVendor(o.skillsRoot, ctx, { repoSkills: skills }) : null;
-  if (vendor) { report.vendor = vendor; report.failed = report.failed || vendor.failed; }
+  if (vendor) {
+    report.vendor = vendor; report.failed = report.failed || vendor.failed;
+    // The summary line is the artifact AGENTS.md names: it must not say "0 hard failures" while the vendor profile fails.
+    report.summary += `, vendor: ${vendor.skillCount} skills, ${vendor.hardFailures} hard failures`;
+  }
   return report;
 }
 
@@ -380,7 +395,14 @@ export function exportStaged(cwd) {
   const ls = spawnSync('git', ['ls-files', '-z', '--', ...STAGED_PATHS], { cwd: root, maxBuffer: 256 * 1024 * 1024 });
   if (ls.status !== 0) throw new Error('git ls-files failed');
   // _vendor is audited by the vendor profile; every other _ or . folder stays out.
-  const keep = (p) => p && (p.startsWith('.claude/skills/_vendor/') || (!p.startsWith('.claude/skills/_') && !p.startsWith('.claude/skills/.')));
+  // A new unlisted _ folder is exported too, so G29 can see it (see UNDERSCORE_ALLOW).
+  const keep = (p) => {
+    if (!p) return false;
+    if (!p.startsWith('.claude/skills/')) return true;
+    const top = p.split('/')[2];
+    if (top.startsWith('.')) return false;
+    return !top.startsWith('_') || !UNDERSCORE_ALLOW.has(top) || top === '_vendor';
+  };
   const files = ls.stdout.toString().split('\0').filter(keep);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-skills-staged-'));
   const co = spawnSync('git', ['checkout-index', '-z', '--stdin', `--prefix=${tmp.replace(/\\/g, '/')}/`], { cwd: root, input: files.join('\0') + '\0', maxBuffer: 256 * 1024 * 1024 });

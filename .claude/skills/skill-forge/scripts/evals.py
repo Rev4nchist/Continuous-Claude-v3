@@ -69,22 +69,28 @@ def _flags(flags: str) -> int:
     return out
 
 
-def apply_checks(checks: list[dict], text: str) -> list[dict]:
-    """Grade the final answer against deterministic checks. One expectation per check, no LLM.
+def apply_checks(checks: list[dict], text: str, action_text: str = "") -> list[dict]:
+    """Grade a run against deterministic checks. One expectation per check, no LLM.
 
+    `regex` (a must-have) reads the final answer only. `not_regex` (a must-not) reads the final answer
+    and `action_text`: every assistant message and every tool call input of the run, so a forbidden
+    construct written in an earlier message or passed to a tool is caught too.
     The shape matches an LLM-graded expectation ({text, passed, evidence}) plus "check": true.
     """
     out = []
     for c in checks:
-        m = re.search(c["pattern"], text or "", _flags(c.get("flags", "")))
-        flags = f" flags={c['flags']}" if c.get("flags") else ""
-        label = f"check {c['type']} /{c['pattern']}/{flags}"
+        flags = _flags(c.get("flags", ""))
+        label = f"check {c['type']} /{c['pattern']}/" + (f" flags={c['flags']}" if c.get("flags") else "")
         if c["type"] == "regex":
+            m = re.search(c["pattern"], text or "", flags)
             passed = m is not None
-            evidence = f"matched: {m.group(0)[:120]!r}" if m else "no match in the final answer"
+            evidence = f"matched in the final answer: {m.group(0)[:120]!r}" if m else "no match in the final answer"
         else:
+            m, where = re.search(c["pattern"], text or "", flags), "the final answer"
+            if not m and action_text:
+                m, where = re.search(c["pattern"], action_text, flags), "an assistant message or a tool call input"
             passed = m is None
-            evidence = "no match in the final answer" if m is None else f"the answer matches: {m.group(0)[:120]!r}"
+            evidence = "no match in the final answer, the assistant messages or the tool call inputs" if m is None                 else f"{where} matches: {m.group(0)[:120]!r}"
         out.append({"text": label, "passed": passed, "evidence": evidence, "check": True})
     return out
 

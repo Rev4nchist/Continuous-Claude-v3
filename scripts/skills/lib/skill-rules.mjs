@@ -465,14 +465,21 @@ function localDirs(skillDir) {
 }
 function isDirSafe(p) { try { return fs.statSync(p).isDirectory(); } catch { return false; } }
 
+// Is `p` inside `root`? (Not equal to it, and not reached by climbing out of it.)
+export function insideDir(root, p) {
+  const rel = path.relative(path.resolve(root), path.resolve(p));
+  return rel !== '' && rel !== '..' && !rel.startsWith('..' + path.sep) && !path.isAbsolute(rel);
+}
+
 function resolveRef(p, skillDir, ctx) {
+  // A vendored file may link only into its own vendor tree: from its own folder, or from the source
+  // root. Never the repo root, ~/.claude or an outside path (checkRefs also drops a hit that escapes).
+  if (ctx.vendorRoot) return [path.join(skillDir, p), path.join(ctx.vendorRoot, p)];
   if (p.startsWith('~/')) return [path.join(ctx.home, p.slice(2))];
   if (path.isAbsolute(p) || /^[A-Za-z]:/.test(p)) return [p];
   // Order matters: ~/.claude comes last, so a hit there means the repo does not own the file.
   const roots = [ctx.repoRoot, ctx.fallbackRoot].filter(Boolean);
-  // A vendored skill may name a shared file from its source root (common/x.md): see vendor-profile.mjs.
-  const vendor = ctx.vendorRoot ? [path.join(ctx.vendorRoot, p)] : [];
-  return [path.join(skillDir, p), ...vendor, ...roots.flatMap((r) => [path.join(r, p), path.join(r, '.claude', p)]), path.join(ctx.home, '.claude', p)];
+  return [path.join(skillDir, p), ...roots.flatMap((r) => [path.join(r, p), path.join(r, '.claude', p)]), path.join(ctx.home, '.claude', p)];
 }
 
 export const REF_ALLOW = {
@@ -522,7 +529,8 @@ export function checkRefs(s, ctx) {
         if (!p) continue;
         const cands = resolveRef(p, base, ctx);
         if (!src.isSkill) cands.push(...resolveRef(p, s.dir, ctx).slice(0, 1));
-        const hit = cands.find((x) => (ctx.exists ? ctx.exists(x) : fs.existsSync(x)));
+        const usable = ctx.vendorRoot ? cands.filter((x) => insideDir(ctx.vendorRoot, x)) : cands;
+        const hit = usable.find((x) => (ctx.exists ? ctx.exists(x) : fs.existsSync(x)));
         if (src.isSkill && hit && /\.md$/i.test(hit) && inside(hit)) direct.add(path.resolve(hit));
         // Found only under ~/.claude: it passes, but the repo does not own the file (sync gap).
         if (hit && !p.startsWith('~/') && !path.isAbsolute(p) && hit.startsWith(path.join(ctx.home, '.claude') + path.sep) && !fenced) r.push(f('G22', `reference ${p} resolves only under ~/.claude, not in the repo`, i + 1, true));

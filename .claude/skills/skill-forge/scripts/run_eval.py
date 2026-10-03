@@ -82,6 +82,8 @@ class RunSpec:
     personal_dir: Path | None = None  # ~/.claude/skills/<name>: reads there count as inside the skill
     real_names: tuple = ()  # the frontmatter name and the folder name: both are off in every run
     companion: Path | None = None  # the folder copied next to the eval copy (with_skill only)
+    root: Path | None = None  # this run's own temp folder: project/, settings.json, mcp.json
+    sibling_roots: tuple = ()  # baseline only: the with_skill projects' skills folders. A read there is contamination.
     inject: dict | None = None  # {"file", "chars"} of the text prepended to the prompt, or None
 
     @property
@@ -174,8 +176,9 @@ def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool, 
         except (shutil.Error, OSError) as e:
             # shutil.Error holds a list of (src, dest, reason): show the first reason, not the list.
             first = e.args[0][0][2] if isinstance(e, shutil.Error) and e.args and e.args[0] else str(e)
-            raise EvalError(f"cannot copy the companion {companion}: {first}. On Windows a path over 260 characters "
-                            "fails: pass only the folders the hub links (skills/<allowlist> and common/).") from None
+            raise EvalError(f"cannot copy the companion {companion}: {first}. On Windows a path over 260 characters fails. "
+                            "Build a trimmed _vendor folder with the same layout (only the allow-listed skills, common/ and "
+                            "mcp-setup/) in a short path and pass that, or set TEMP to a shorter folder.") from None
     return alias
 
 
@@ -192,15 +195,18 @@ def _absolute_deny(skill_path: Path) -> list[str]:
     return rules
 
 
-def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAULT_TOOLS,
+def plan_runs(skill_path, evals, models, out_dir, work_dir=None, tools=headless.DEFAULT_TOOLS,
               max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None, companion=None, inject=None) -> list[RunSpec]:
     """One RunSpec per model x eval x config. Writes the temp projects and settings files.
 
+    Every run gets its own temp root (`spec.root`): no run sits beside another, so a baseline cannot
+    reach a with_skill project through a relative path. Call cleanup_specs() when the runs are done.
+    `work_dir` is kept for old callers and unused.
     The real skill name is off in BOTH settings files, next to the user's own skillOverrides map.
     `companion` is a folder copied next to the eval copy in with_skill projects; both arms deny Read of
     its real twin under ~/.claude/skills. `inject` is load_inject()'s dict: its text starts every prompt.
     """
-    skill_path, out_dir, work_dir = Path(skill_path).resolve(), Path(out_dir), Path(work_dir)
+    skill_path, out_dir = Path(skill_path).resolve(), Path(out_dir)
     home = Path(home) if home else Path.home()
     name = skill_name_of(skill_path)
     # Claude Code can register a skill under its folder name as well as its frontmatter name
@@ -214,24 +220,46 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
     deny_reads = ([f"~/.claude/skills/{n}/**" for n in [*real_names, *([companion.name] if companion else [])]]
                   + _absolute_deny(skill_path) + (_absolute_deny(companion) if companion else []))
     exe = exe or _exe()
+    built = []  # (model, ev, config, root, alias)
+    try:
+        for model in models:
+            for ev in evals:
+                for config in CONFIGS:
+                    root = headless.make_temp(f"se-{model.alias}-{ev['id']}-{'with' if config == 'with_skill' else 'base'}-")
+                    built.append((model, ev, config, root, None))
+                    (root / "project").mkdir()
+                    alias = _build_project(root / "project", skill_path, ev, install_target=config == "with_skill", companion=companion)
+                    built[-1] = (model, ev, config, root, alias)
+    except BaseException:
+        for *_, root, _alias in built:
+            shutil.rmtree(root, ignore_errors=True)
+        raise
+    # The skills folder of every with_skill project. Both arms deny Read of the others' folders; a
+    # baseline that reads one is contaminated.
+    with_dirs = [root / "project" / ".claude" / "skills" for _m, _e, config, root, _a in built if config == "with_skill"]
     specs = []
-    for model in models:
-        for ev in evals:
-            for config in CONFIGS:
-                tag = f"{model.alias}-eval-{ev['id']}-{config}"
-                cwd = work_dir / tag / "project"
-                cwd.mkdir(parents=True)
-                alias = _build_project(cwd, skill_path, ev, install_target=config == "with_skill", companion=companion)
-                settings = headless.write_settings(work_dir / tag / "settings.json", overrides, deny_reads)
-                mcp = headless.write_empty_mcp(work_dir / tag / "mcp.json")
-                command = headless.build_command(model, settings, mcp, tools, max_turns, exe=exe, allowed=tools)
-                run_dir = Path(out_dir) / model.alias / f"eval-{ev['id']}" / config / "run-1"
-                prompt = f"{inject['text'].rstrip()}\n\n---\n\n{ev['prompt']}" if inject else ev["prompt"]
-                specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, prompt,
-                                     skill_alias=alias, source_dir=skill_path, personal_dir=personal,
-                                     real_names=tuple(real_names), companion=companion,
-                                     inject={"file": inject["file"], "chars": inject["chars"]} if inject else None))
+    for model, ev, config, root, alias in built:
+        cwd = root / "project"
+        own = cwd / ".claude" / "skills"
+        denied = deny_reads + [r for d in with_dirs if d != own for r in _absolute_deny(d)]
+        settings = headless.write_settings(root / "settings.json", overrides, denied)
+        mcp = headless.write_empty_mcp(root / "mcp.json")
+        command = headless.build_command(model, settings, mcp, tools, max_turns, exe=exe, allowed=tools)
+        run_dir = Path(out_dir) / model.alias / f"eval-{ev['id']}" / config / "run-1"
+        prompt = f"{inject['text'].rstrip()}\n\n---\n\n{ev['prompt']}" if inject else ev["prompt"]
+        specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, prompt,
+                             skill_alias=alias, source_dir=skill_path, personal_dir=personal,
+                             real_names=tuple(real_names), companion=companion, root=root,
+                             sibling_roots=tuple(with_dirs) if config == "without_skill" else (),
+                             inject={"file": inject["file"], "chars": inject["chars"]} if inject else None))
     return specs
+
+
+def cleanup_specs(specs) -> None:
+    """Remove every run's temp root."""
+    for s in specs:
+        if s.root:
+            shutil.rmtree(s.root, ignore_errors=True)
 
 
 # ----------------------------------------------------------------- execution
@@ -264,11 +292,14 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     personal_roots = [spec.personal_dir.parent / n for n in real_names] if spec.personal_dir else []
     roots = [r for r in (spec.copy_dir, *personal_roots) if r]
     # A read under the companion (the temp copy or its real twin in ~/.claude/skills) is a read of the skill too.
+    # The repo source of the companion counts too: a baseline can find it under another spelling of its path.
     comp_roots = []
     if spec.companion:
-        comp_roots = [spec.cwd / ".claude" / "skills" / spec.companion.name]
+        comp_roots = [spec.cwd / ".claude" / "skills" / spec.companion.name, spec.companion]
         if spec.personal_dir:
             comp_roots.append(spec.personal_dir.parent / spec.companion.name)
+    # A baseline that reads another run's with_skill project found the skill without the Skill tool.
+    roots = [*roots, *spec.sibling_roots]
     nav = headless.navigation(info["files_read"], spec.source_dir or spec.copy_dir, extra_roots=roots, companion_roots=comp_roots)
     read_skill = bool(nav["skill_files_read"] or nav["companion_files_read"])
     m = headless.metrics(info["result"], run.seconds)
@@ -284,7 +315,13 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     real_fired = bool(spec.skill_alias) and matches(info["skills_fired"], real_names)
     # A stop at the turn cap is an answer that failed, not a broken run: excluding it would drop
     # exactly the baselines that floundered without the skill. It is graded 0 without a grader call.
-    no_answer = (info.get("result") or {}).get("subtype") == "error_max_turns" and not info["skill_errors"]
+    # A run that ends "success" with an empty result has no answer either: an empty text passes every not_regex.
+    subtype = (info.get("result") or {}).get("subtype")
+    capped = subtype == "error_max_turns" and not info["skill_errors"]
+    empty = subtype == "success" and not (info["final_text"] or "").strip() and not info["skill_errors"] and not run.error
+    no_answer = capped or empty
+    no_answer_reason = ("the run stopped at the turn cap without a final answer" if capped
+                        else "the run ended with an empty final answer" if empty else None)
     error = None if no_answer else (
         run.error
         or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
@@ -294,7 +331,11 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     d = spec.run_dir
     (d / "outputs").mkdir(parents=True, exist_ok=True)
     (d / "transcript.jsonl").write_text(run.stdout, encoding="utf-8", newline="\n")
-    (d / "transcript.md").write_text(headless.render_transcript(run.stdout, spec.prompt), encoding="utf-8", newline="\n")
+    # The grader reads transcript.md. It must not read the injected rule text, so it sees a placeholder instead.
+    shown = spec.eval["prompt"]
+    if spec.inject:
+        shown += f"\n\n[injected: {Path(spec.inject['file']).name}, {spec.inject['chars']} chars, both arms]"
+    (d / "transcript.md").write_text(headless.render_transcript(run.stdout, shown), encoding="utf-8", newline="\n")
     (d / "outputs" / "response.md").write_text(info["final_text"] or "", encoding="utf-8", newline="\n")
     headless.write_json(d / "timing.json", {"total_tokens": m["total_tokens"], "duration_ms": int(m["duration_seconds"] * 1000),
                                             "total_duration_seconds": m["duration_seconds"]})
@@ -312,7 +353,9 @@ def execute(spec: RunSpec, timeout: int) -> dict:
         # A fired skill whose load failed, or a run that did not end in success, is a broken run.
         "error": error,
         # The run stopped at --max-turns without a final answer: it counts, and every assertion fails.
-        "no_answer": no_answer,
+        "no_answer": no_answer, "no_answer_reason": no_answer_reason,
+        # Every assistant message and tool call input: what not_regex checks read next to the final answer.
+        "action_text": info["action_text"],
         # Why this run must not be graded or counted. None when it counts.
         "excluded": excluded,
         "stderr": run.stderr, "assertions": spec.eval["assertions"], "checks": spec.eval.get("checks") or [],
@@ -362,17 +405,19 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
         headless.write_json(run_dir / "grading.json", grading)
         return grading
     checks = record.get("checks") or []
-    if record.get("no_answer"):
-        # Stopped at the turn cap with no final answer: nothing to grade, so every assertion and every
+    empty = "final_text" in record and not (record.get("final_text") or "").strip()  # also an old run.json
+    if record.get("no_answer") or empty:
+        # No final answer (turn cap, or an empty result): nothing to grade, so every assertion and every
         # check fails. A not_regex check must not pass on the empty text.
-        why = "the run stopped at the turn cap without a final answer"
+        why = record.get("no_answer_reason") or (
+            "the run stopped at the turn cap without a final answer" if record.get("no_answer") else "the run ended with an empty final answer")
         exps = [{"text": a, "passed": False, "evidence": why} for a in record["assertions"]]
         exps += [{**e, "passed": False, "evidence": why} for e in apply_checks(checks, "")]
         grading = {"expectations": exps, "no_answer": True,
                    "summary": {"passed": 0, "failed": len(exps), "total": len(exps), "pass_rate": 0.0}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
-    det = apply_checks(checks, record.get("final_text") or "")
+    det = apply_checks(checks, record.get("final_text") or "", record.get("action_text") or "")
     if not record["assertions"]:
         # Only deterministic checks: no LLM grader call.
         passed = sum(1 for e in det if e["passed"])
@@ -565,10 +610,10 @@ def _cmd_behavior(a) -> int:
         return 1
     name = skill_name_of(skill_path)
     out = Path(a.out) if a.out else Path(os.path.realpath(tempfile.gettempdir())) / "skill-eval" / f"{name}-{time.strftime('%Y%m%d-%H%M%S')}"
-    work = headless.make_temp("skill-eval-")
+    specs = []
     try:
         try:
-            specs = plan_runs(skill_path, evals, models, out, work, a.tools, a.max_turns, companion=companion, inject=inject)
+            specs = plan_runs(skill_path, evals, models, out, None, a.tools, a.max_turns, companion=companion, inject=inject)
         except EvalError as e:
             print(f"Error: {e}", file=sys.stderr)
             return 1
@@ -597,7 +642,7 @@ def _cmd_behavior(a) -> int:
         excluded = [{"model": r["model"], "eval_id": r["eval_id"], "config": r["config"], "reason": r["excluded"]}
                     for r in records if r["excluded"]]
         headless.write_json(out / "summary.json", {"skill": name, "warnings": [warn] if warn else [], "excluded": excluded, "runs": [
-            {k: v for k, v in r.items() if k not in ("final_text", "prompt", "assertions")} for r in records]})
+            {k: v for k, v in r.items() if k not in ("final_text", "prompt", "assertions", "action_text")} for r in records]})
         for r in records:
             g = r.get("grading")
             score = f"pass={g['passed']}/{g['total']} " if g and g["total"] else ""
@@ -607,7 +652,7 @@ def _cmd_behavior(a) -> int:
         print(f"summary: {out / 'summary.json'}")
         return 1 if excluded else 0
     finally:
-        shutil.rmtree(work, ignore_errors=True)
+        cleanup_specs(specs)
 
 
 def _cmd_trigger(a) -> int:

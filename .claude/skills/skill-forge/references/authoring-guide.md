@@ -279,7 +279,7 @@ Every import passes five stages:
 
 `--profile vendor` audits `_vendor/*/skills/*/SKILL.md`. The default run and `--staged` also run it when `_vendor` exists, so the pre-commit guard covers vendored files.
 
-- Hard: G01-G03, G06-G08, G11, G22, G25, G27, G28. G22 resolves a link from the skill folder first, then from the source root, so a shared `common/` link works either way.
+- Hard: G01-G03, G06-G08, G11, G22, G25, G27, G28. G22 resolves a link only from the skill folder and the source root, and only inside the vendor tree. A link to the repo root, `~/.claude` or a path that climbs out fails.
 - Advisory (counted, never fails): G09, G10, G12-G14, G20, G21, G23, G24, G26. Vendored descriptions never reach the listing.
 - G30 fails when a source holds no skill. X01 fails when a conflict hit has no overlay entry.
 
@@ -294,13 +294,20 @@ Cover each hit in `<source>/overlay.json`. Key an entry by topic and regex, neve
   "ccv3_rule": "Stop on the first capacity error.", "resolution": "The hub says: do not use the retry loop."}]
 ```
 
-An entry covers a hit when the topic matches, the `files` glob matches the file and the `pattern` regex matches the line.
+An entry covers a hit when the topic matches, the `files` glob matches the file and the `pattern` regex matches the line. An entry is a reviewed exception, never a blanket pass. The gate rejects:
+
+- a catch-all pattern (it matches the empty string or unrelated text) and a nested quantifier such as `(a+)+`
+- a `files` glob that is only `*` or `**`
+- an entry that covers hits in more than one file, unless `files` is an array that names each file exactly
+- an entry that covers more than 5 hits, unless it sets `max_hits` to the number you reviewed. A later upstream pull that adds a hit then fails.
+
+The gate also reports (G29) any `_` folder under `.claude/skills` other than `_vendor` and the parked ones.
 
 ### Evals for a hub skill
 
 - `--companion <dir>` copies the vendored folder next to the eval copy, with the same layout. Only `with_skill` gets it. Both arms deny `Read` of `~/.claude/skills/<dir name>/**`. A baseline that reads it is excluded.
 - `--inject <file>` puts the file's text at the start of the prompt in both arms. Use it for a "never" case: eval runs turn hooks off, so the rule-router never injects the playbook.
-- An eval `checks` list grades the final answer with a regex and no LLM. Use `not_regex` for "must not". Field list: `references/schemas.md`.
+- An eval `checks` list grades the final answer with a regex and no LLM. Use `not_regex` for "must not": it reads the final answer, every assistant message and every tool call input. Target the forbidden action (a sleep loop, a command), not its words, or a correct refusal fails it. A run with an empty answer fails every check. Field list: `references/schemas.md`.
 
 ## Distribution outside Claude Code
 

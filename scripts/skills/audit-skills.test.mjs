@@ -326,13 +326,13 @@ test('G28 flags an mcp__ server missing from the configured servers', () => {
   assert.ok(!hit(rep, 'G28', 'ok'));
 });
 
-test('G29 flags a directory without SKILL.md but not one that starts with _', () => {
+test('G29 flags a directory without SKILL.md but not an allow-listed _ folder', () => {
   const root = fixture({ good: skillText('good') });
   fs.mkdirSync(path.join(root, '.claude', 'skills', 'orphan'));
-  fs.mkdirSync(path.join(root, '.claude', 'skills', '_parked'));
+  fs.mkdirSync(path.join(root, '.claude', 'skills', '_archive'));
   const rep = run(root);
   assert.ok(hit(rep, 'G29', 'orphan'));
-  assert.ok(!hit(rep, 'G29', '_parked'));
+  assert.ok(!hit(rep, 'G29', '_archive'));
 });
 
 // ----------------------------------------------------------------- gate integrity
@@ -1155,4 +1155,178 @@ test('pre-commit guard: staging only a vendored common/ file triggers the audit'
   const r = runGuard(root);
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stderr, /X01/);
+});
+
+// =========================================================== round 2: review findings
+
+const xmsgs = (root, extra) => vrun(root, extra).findings.filter((x) => x.rule === 'X01').map((x) => x.msg);
+const withOverlay = (overlay, common = { 'COMMON-CORE.md': CORE_429 }) => addVendored(fixture(), { v: skillText('v') }, { common, overlay });
+
+// 1. an overlay entry must not become a blanket pass
+
+test('overlay: a catch-all pattern (".", ".*", "\\S") is rejected at load and covers nothing', () => {
+  for (const pattern of ['.', '.*', '\\S', '[\\s\\S]*']) {
+    const root = withOverlay([{ ...OVERLAY_429, pattern }]);
+    const rep = vrun(root);
+    assert.equal(rep.failed, true, `pattern ${pattern} must not cover the 429 hit`);
+    assert.ok(xmsgs(root).some((m) => /catch-all|empty string/.test(m)), `${pattern}: ${JSON.stringify(xmsgs(root))}`);
+  }
+});
+
+test('overlay: a files glob that is only * or ** is rejected at load', () => {
+  for (const files of ['**', '*', '**/*', '*/**']) {
+    const root = withOverlay([{ ...OVERLAY_429, files }]);
+    assert.equal(vrun(root).failed, true, `files ${files} must not cover`);
+    assert.ok(xmsgs(root).some((m) => /files/.test(m) && /every file|only \*/.test(m)), `${files}: ${JSON.stringify(xmsgs(root))}`);
+  }
+});
+
+test('overlay: an entry that covers hits in more than one file fails unless "files" lists every file', () => {
+  const common = { 'A.md': 'On 429 wait.\n', 'B.md': 'On 429 wait too.\n' };
+  const broad = withOverlay([{ ...OVERLAY_429, files: 'common/*.md' }], common);
+  assert.equal(vrun(broad).failed, true);
+  assert.ok(xmsgs(broad).some((m) => /more than one file/.test(m) && /A\.md/.test(m)), JSON.stringify(xmsgs(broad)));
+  const explicit = withOverlay([{ ...OVERLAY_429, files: ['common/A.md', 'common/B.md'] }], common);
+  assert.equal(vrun(explicit).failed, false, JSON.stringify(xmsgs(explicit)));
+  // a file the list does not name is not covered by it
+  const partial = withOverlay([{ ...OVERLAY_429, files: ['common/A.md'] }], common);
+  assert.equal(vrun(partial).failed, true);
+});
+
+test('overlay: an entry may cover at most 5 hits unless it sets max_hits, and a later hit above max_hits fails', () => {
+  const lines = (n) => Array.from({ length: n }, (_, i) => `429 case ${i}\n`).join('');
+  const six = withOverlay([OVERLAY_429], { 'COMMON-CORE.md': lines(6) });
+  assert.equal(vrun(six).failed, true);
+  assert.ok(xmsgs(six).some((m) => /6 hits/.test(m) && /max_hits/.test(m)), JSON.stringify(xmsgs(six)));
+  const ok = withOverlay([{ ...OVERLAY_429, max_hits: 6 }], { 'COMMON-CORE.md': lines(6) });
+  assert.equal(vrun(ok).failed, false, JSON.stringify(xmsgs(ok)));
+  write(path.join(vroot(ok), 'common', 'COMMON-CORE.md'), lines(7)); // an upstream pull adds a hit
+  assert.equal(vrun(ok).failed, true);
+  const bad = withOverlay([{ ...OVERLAY_429, max_hits: 'many' }], { 'COMMON-CORE.md': lines(1) });
+  assert.ok(xmsgs(bad).some((m) => /max_hits/.test(m)));
+});
+
+test('the vendor report records hit and file counts for every overlay entry', () => {
+  const root = withOverlay([OVERLAY_429], { 'COMMON-CORE.md': '429 a\n429 b\n' });
+  const stats = vrun(root).overlay['skills-for-fabric'];
+  assert.equal(stats.length, 1);
+  assert.deepEqual({ topic: stats[0].topic, hits: stats[0].hits, files: stats[0].fileCount }, { topic: 'retry-on-429', hits: 2, files: 1 });
+});
+
+test('vendor-conflict-scan CLI: the overlay violations fail the exit code and print the entry counts', () => {
+  const SCAN = path.join(here, 'vendor-conflict-scan.mjs');
+  const root = withOverlay([{ ...OVERLAY_429, pattern: '.' }]);
+  const r = spawnSync('node', [SCAN, '--source', vroot(root)], { encoding: 'utf8' });
+  assert.equal(r.status, 1, r.stdout);
+  assert.match(r.stdout, /catch-all/);
+});
+
+// 9. overlay regexes are bounded
+
+test('overlay: a nested unbounded quantifier is rejected at load', () => {
+  for (const pattern of ['(a+)+$', '(.*)*x', '(\\w+\\s?)*$']) {
+    const root = withOverlay([{ ...OVERLAY_429, pattern }]);
+    assert.ok(xmsgs(root).some((m) => /nested/.test(m)), `${pattern}: ${JSON.stringify(xmsgs(root))}`);
+  }
+});
+
+test('overlay: a regex only sees the first 2000 characters of a line', () => {
+  const long = `On 429 retry. ${'x'.repeat(2500)} TAILMARK\n`;
+  const root = withOverlay([{ ...OVERLAY_429, pattern: 'TAILMARK' }], { 'COMMON-CORE.md': long });
+  assert.equal(vrun(root).failed, true, 'a pattern that matches only beyond column 2000 must not cover');
+  const head = withOverlay([{ ...OVERLAY_429, pattern: 'On 429' }], { 'COMMON-CORE.md': long });
+  assert.equal(vrun(head).failed, false, JSON.stringify(xmsgs(head)));
+});
+
+// 10. links inside a vendor tree
+
+function junction(target, link) {
+  try { fs.symlinkSync(target, link, 'junction'); return true; } catch { return false; }
+}
+
+test('conflict scan: a junction loop does not hang the scan and a link out of the tree is not followed', (t) => {
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'ok.md': 'plain\n' } });
+  const outside = fs.mkdtempSync(path.join(os.tmpdir(), 'conflict-outside-'));
+  write(path.join(outside, 'leak.md'), 'On 429 retry forever.\n');
+  const loop = junction(vroot(root), path.join(vroot(root), 'common', 'loop'));
+  const out = junction(outside, path.join(vroot(root), 'common', 'out'));
+  if (!loop || !out) { t.skip('cannot make a junction or symlink here'); return; }
+  const msgs = xmsgs(root);
+  assert.ok(!msgs.some((m) => /leak\.md/.test(m)), 'a file behind a link that leaves the tree was scanned');
+  assert.equal(vrun(root).failed, false, JSON.stringify(msgs));
+});
+
+// 2. G22 inside a vendor tree resolves only inside that tree
+
+test('vendor G22: a link that exists only at the repo root is unresolved', () => {
+  const root = addVendored(fixture(), { v: skillText('v', { body: 'See [guide](README.md).\n' }) });
+  write(path.join(root, 'README.md'), '# CCv3 readme\n');
+  assert.ok(vhit(vrun(root), 'G22', 'v'), JSON.stringify(vrun(root).findings));
+});
+
+test('vendor G22: a ../ link that leaves the vendor tree is unresolved even when the target exists', () => {
+  const root = addVendored(fixture(), {
+    v: skillText('v', { body: 'See [outside](../../../../other.md).\n' }),
+    w: skillText('w', { body: 'Ref.\n', }),
+  });
+  write(path.join(root, '.claude', 'skills', 'other.md'), '# a CCv3 file next to _vendor\n');
+  write(path.join(vroot(root), 'skills', 'w', 'references', 'r.md'), 'See [escape](../../../../../other.md).\n');
+  const rep = vrun(root);
+  assert.ok(vhit(rep, 'G22', 'v'), JSON.stringify(rep.findings));
+  assert.ok(vhit(rep, 'G22', 'w'), JSON.stringify(rep.findings));
+});
+
+test('vendor G22: a link that exists only under ~/.claude is a hard failure, not a warning', () => {
+  const root = addVendored(fixture(), { v: skillText('v', { body: 'See [r](rules/r.md).\n' }) });
+  write(path.join(root, 'home', '.claude', 'rules', 'r.md'), '# r\n');
+  const rep = vrun(root);
+  assert.ok(rep.findings.some((x) => x.rule === 'G22' && x.class === 'hard' && x.skill === `${SRC}/v`), JSON.stringify(rep.findings));
+});
+
+test('vendor G22: a link inside the skill folder and one to common/ still resolve', () => {
+  const root = addVendored(fixture(), { v: { md: skillText('v', { body: '[a](references/a.md) [c](../../common/C.md) [root](common/C.md)\n' }), files: { 'references/a.md': '# a\n' } } },
+    { common: { 'C.md': '# c\n' } });
+  assert.ok(!vhit(vrun(root), 'G22', 'v'), JSON.stringify(vrun(root).findings));
+});
+
+// 8. the summary line must not say "0 hard failures" while the gate fails
+
+test('the summary line carries the vendor result when the vendor profile ran', () => {
+  const root = addVendored(fixture({ own: skillText('own') }), { bad: skillText('bad', { fm: { version: '1' } }) });
+  const rep = run(root);
+  assert.match(rep.summary, /^audit-skills: 1 skills, 0 hard failures, \d+ ratchet regressions, baseline baseline\.json, vendor: 1 skills, 1 hard failures$/);
+  const r = cli(root, []);
+  assert.equal(r.status, 1);
+  assert.match(r.stdout.trim().split('\n').pop(), /, vendor: 1 skills, 1 hard failures$/);
+});
+
+test('the summary line has no vendor part when there is no _vendor folder', () => {
+  const rep = run(fixture({ own: skillText('own') }));
+  assert.doesNotMatch(rep.summary, /vendor/);
+});
+
+// 11. an unknown _ folder gets neither profile
+
+test('G29 flags a _ folder that is neither _vendor nor on the allow list', () => {
+  const root = fixture({ own: skillText('own') });
+  write(path.join(root, '.claude', 'skills', '_fabric', 'skills', 'x', 'SKILL.md'), skillText('x'));
+  const rep = run(root);
+  assert.ok(rep.rules.G29.findings.some((x) => x.skill === '_fabric' && /_fabric/.test(x.msg)), JSON.stringify(rep.rules.G29.findings));
+});
+
+test('G29 does not flag the _ folders the repo already holds, nor a _ file', () => {
+  const root = fixture({ own: skillText('own') });
+  for (const d of ['_archive', '_archived', '_eval', '_sandbox', '_snapshots']) write(path.join(root, '.claude', 'skills', d, 'x.md'), 'x\n');
+  write(path.join(root, '.claude', 'skills', '_eval-progress.json'), '{}\n');
+  assert.equal(run(root).rules.G29.count, 0);
+});
+
+test('--staged: a new unlisted _ folder is exported and flagged G29', () => {
+  const root = stagedFixture({ a: skillText('a') });
+  write(path.join(root, '.claude', 'skills', '_fabric', 'skills', 'x', 'SKILL.md'), skillText('x'));
+  vcs(root, 'add', '-A');
+  const r = stagedCli(root);
+  assert.equal(r.status, 1, r.stdout + r.stderr);
+  assert.match(r.stdout, /G29/);
+  assert.match(r.stdout, /_fabric/);
 });
