@@ -15,3 +15,7 @@
 # garbled execution rather than a clean error, in an unattended scheduled task.
 *.bat text eol=crlf
 *.cmd text eol=crlf
+
+# Vendored external skills stay byte-identical to upstream (core.autocrlf=true would rewrite them
+# and break the per-file sha256 in vendor.lock.json). Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md.
+.claude/skills/_vendor/** -text

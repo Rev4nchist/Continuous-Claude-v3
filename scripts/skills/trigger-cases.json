@@ -35,6 +35,18 @@
     { "prompt": "allow npm commands without prompting", "expect": ["update-config"] },
     { "prompt": "what model ids and prices does the claude api have right now", "expect": ["claude-api"] },
     { "prompt": "fix the failing vitest in skill-router-integration", "expect": ["fix", "systematic-debugging"] },
-    { "prompt": "add a feature flag to the agentic-os fleet grid", "expect": ["build"] }
+    { "prompt": "add a feature flag to the agentic-os fleet grid", "expect": ["build"] },
+    { "prompt": "write a PySpark cell for the Fabric notebook that dedups the bronze sales table into silver", "expect": ["fabric"] },
+    { "prompt": "my Fabric notebook run failed with an OOM, figure out why", "expect": ["fabric"] },
+    { "prompt": "start a Livy session on the playground lakehouse and count the rows in the orders table", "expect": ["fabric"] },
+    { "prompt": "create a materialized lake view over the silver customers table", "expect": ["fabric"] },
+    { "prompt": "the MLV refresh failed last night, check its run history", "expect": ["fabric"] },
+    { "prompt": "find the lakehouse called FourthBrain_Gold, I do not know which workspace it is in", "expect": ["fabric"] },
+    { "prompt": "list every notebook across all our Fabric workspaces", "expect": ["fabric"] },
+    { "prompt": "add a %%configure cell to the notebook so it uses 8 executors", "expect": ["fabric"] },
+    { "prompt": "why is this Fabric Spark job so slow, it used to take 5 minutes", "expect": ["fabric"] },
+    { "prompt": "read the delta table from OneLake in the notebook and show its schema", "expect": ["fabric"] },
+    { "prompt": "add an index to the users table in Postgres, the query is slow", "expect": ["databases"] },
+    { "prompt": "design the schema for a tickets table with comments and assignees", "expect": ["databases"] }
   ]
 }

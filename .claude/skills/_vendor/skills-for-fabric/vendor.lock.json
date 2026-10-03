@@ -1,0 +1,213 @@
+{
+ "source": "https://github.com/microsoft/skills-for-fabric",
+ "tag": "v0.3.18",
+ "commit": "6c11ad58c25992e5d1435ce7cd80d217d5598a31",
+ "allowlist": [
+  "spark-cli",
+  "search-consumption-cli"
+ ],
+ "common": "link closure of the allowlist",
+ "files": [
+  {
+   "path": "CHANGELOG.md",
+   "bytes": 65822,
+   "sha256": "7e3172805d6fd0578a3b0de4a69e14a6f1a68b70e96d1dffca70c10a5682be2a"
+  },
+  {
+   "path": "LICENSE",
+   "bytes": 1101,
+   "sha256": "fd3995263b0eb9466e6b53d4317375ae704c0795f5c0325f2d09b2937521e89c"
+  },
+  {
+   "path": "common/COMMON-CLI.md",
+   "bytes": 37323,
+   "sha256": "42c6e7aef095d154cf30e1891a2d9b4a057f60ffca8818796b56eb0cc00978b0"
+  },
+  {
+   "path": "common/COMMON-CORE.md",
+   "bytes": 20035,
+   "sha256": "663170235aed28bf4d82a3b5082fde0eb7be6465b8c3d2bcf112d5d067fe54e0"
+  },
+  {
+   "path": "common/ITEM-DEFINITIONS-CORE.md",
+   "bytes": 21583,
+   "sha256": "5c6bc5fc2de8fde3bd0e31ff81927ef206cf9d7eb0705d5e9aeaf02ffd2709b4"
+  },
+  {
+   "path": "common/SPARK-AUTHORING-CORE.md",
+   "bytes": 16266,
+   "sha256": "3d3ab9b3956191c29a5e9682fa4aa59709128b7c419ee45c4bdd350f30e1e18f"
+  },
+  {
+   "path": "common/SPARK-CONSUMPTION-CORE.md",
+   "bytes": 11851,
+   "sha256": "809ca0775f0c0c8b6d7bf9d7854d67cfaa0dee577e512770db584a9bacfd005b"
+  },
+  {
+   "path": "common/SPARK-MONITORING-CORE.md",
+   "bytes": 18245,
+   "sha256": "73ae8f112629381945fb6d1dcb365090e76e316344d96bb60e7cf2392e6cb08e"
+  },
+  {
+   "path": "common/SPARK-NOTEBOOK-AUTHORING-CORE.md",
+   "bytes": 20533,
+   "sha256": "fee26d758c8cde22696f8faf7ff3eba1cebe8b2f5773ee3509503bed8e49c834"
+  },
+  {
+   "path": "common/notebook-authoring/connections.md",
+   "bytes": 3831,
+   "sha256": "519cfc51f11aa225e06fe3a981c1cdeb4015fc2aca3ce0767b002f5dce44e96c"
+  },
+  {
+   "path": "common/notebook-authoring/context-and-params.md",
+   "bytes": 5626,
+   "sha256": "f2bcfdd946ef373a25b877729857ee013cd83252b0e446a91109ef6fc3085b75"
+  },
+  {
+   "path": "common/notebook-authoring/context-resolution.md",
+   "bytes": 6369,
+   "sha256": "554bb1fc44a94b0c2f75d9379cf13b492a13e62b994e565a87a3aa2463ba980e"
+  },
+  {
+   "path": "common/notebook-authoring/lakehouse-paths.md",
+   "bytes": 4661,
+   "sha256": "c7c0a41311d8a26a13ee1a8f98452bc5281ca9597c89757c59be82d3036f0466"
+  },
+  {
+   "path": "common/notebook-authoring/lakehouse-tables.md",
+   "bytes": 3655,
+   "sha256": "2978dfc141e01762a09f672f1e623148ffe547a05404e432148dcf5bccac65e8"
+  },
+  {
+   "path": "common/notebook-authoring/library-mgmt.md",
+   "bytes": 4017,
+   "sha256": "7f16ea121fa719d663d6dec42940d632fa6230a905587c895032e4eddfb8d8c3"
+  },
+  {
+   "path": "common/notebook-authoring/ml-workflow.md",
+   "bytes": 7976,
+   "sha256": "5f4a981391b20ddec191a3e0c963648dd75da4db4af2829c015d3375a6d7c71f"
+  },
+  {
+   "path": "common/notebook-authoring/notebook-resources.md",
+   "bytes": 3065,
+   "sha256": "8a376d2e8969cf9af2dd81c537049b82e9efa51e5cc6060c283030318819ba95"
+  },
+  {
+   "path": "common/notebook-authoring/troubleshooting.md",
+   "bytes": 2206,
+   "sha256": "9c49dc834fda7d848ea8c176027e1916b20b487a9fe44d3a129d615ca5d84da9"
+  },
+  {
+   "path": "skills/search-consumption-cli/SKILL.md",
+   "bytes": 8996,
+   "sha256": "31c6eada4f077a1d1d7a5045dee9cb01d44f2f140acb2aa9b56970c1f3df76ad"
+  },
+  {
+   "path": "skills/search-consumption-cli/apm.yml",
+   "bytes": 471,
+   "sha256": "14e5ef5f1352c1cd21d8f2bbbbb97012a7a7c883d742c696175503479b3bc112"
+  },
+  {
+   "path": "skills/spark-cli/SKILL.md",
+   "bytes": 10472,
+   "sha256": "05542007f98190802155bf1965c5593c432cdb81040bc14013da01d75f474533"
+  },
+  {
+   "path": "skills/spark-cli/apm.yml",
+   "bytes": 439,
+   "sha256": "7fe8e395be8a40674d3826a262f6889c837e239b4de41811ec3b332411c7b41c"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring.md",
+   "bytes": 34052,
+   "sha256": "04ea2b687d02bd0c77a6bf47bc143b72930c520b266d0d29f035a0cc1dfd8b70"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/data-engineering-patterns.md",
+   "bytes": 25404,
+   "sha256": "7bd13ca44fc0274c5d98cbf871749c003fa145390c99d7e6e579c4b4bec73fce"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/development-workflow.md",
+   "bytes": 7760,
+   "sha256": "0f796fd37f03d1a482a14734ffce9ab4d8b4c9eb224562235b9407ff276653f6"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/infrastructure-orchestration.md",
+   "bytes": 10913,
+   "sha256": "03ba0c397e87bcc330955bb40462293bcbf30b79f6e8768de43e495150d5f808"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/materialized-lake-view-patterns.md",
+   "bytes": 21009,
+   "sha256": "e560571b04f006ca1cc48c7d4a34ee2539b3f3a5ef5bc37d10c59376d1b69fc5"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/mlv-incremental-refresh-patterns.md",
+   "bytes": 11966,
+   "sha256": "dbb1922db314eec4c9f9fed3fef1c14097cc0e665fddbb56690c59df533108dc"
+  },
+  {
+   "path": "skills/spark-cli/references/authoring/resources/notebook-api-operations.md",
+   "bytes": 14758,
+   "sha256": "8112f52b5a1d16776717b2247a0b7f894ba75e2647ed462345517543f8163c3b"
+  },
+  {
+   "path": "skills/spark-cli/references/consumption.md",
+   "bytes": 12792,
+   "sha256": "a729ffc55f8848fca8da5b4e3f9680cf705ef4b438ffec8fd255036198ff0574"
+  },
+  {
+   "path": "skills/spark-cli/references/mlv.md",
+   "bytes": 34223,
+   "sha256": "c08ac590b8933bd277e81f3212b5029838f0bfb2fb4a833df4bcfe91d13576d2"
+  },
+  {
+   "path": "skills/spark-cli/references/operations.md",
+   "bytes": 21067,
+   "sha256": "55fb4fd68c2c77cdbcc3c281afeb79ce77764c3c44e736d03aea905c7b630151"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/automated-diagnostic-workflow.md",
+   "bytes": 13240,
+   "sha256": "f9e040258dddc2134b680a12af89ee927b2d86440e2d3ab319ed523814895874"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/diagnostic-workflow.md",
+   "bytes": 7621,
+   "sha256": "d9aa1a571d7e475b7e9a9a535dfa5e1953b23d37b83b6ff1e138a82b83f1b6f4"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/job-diagnostics.md",
+   "bytes": 18599,
+   "sha256": "368e43938263d02702a18fcc16f02dc1349ca099fd144a3ff5d22a3be02cef98"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/jobinsight-api.md",
+   "bytes": 7576,
+   "sha256": "d029a7edb14ce6b5de787387a183e0025e7649401ae98ce99a1ab2f92d9feb3f"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/performance-patterns.md",
+   "bytes": 18281,
+   "sha256": "5152bfe70f6b1520fc1ccd45a8f6655cb63cfa91f8e1355e9b868e1b5e4cb669"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/pipeline-diagnosis.md",
+   "bytes": 21638,
+   "sha256": "e5756f034381cc28f875c5bfe82f3775d48ae86e838ccde82c4501fd2417b243"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/session-health.md",
+   "bytes": 9093,
+   "sha256": "c7b97defc128a116062641da8c0f78342b92bf5e3a617396bb771678dc0ed13f"
+  },
+  {
+   "path": "skills/spark-cli/references/operations/spark-history-server.md",
+   "bytes": 6837,
+   "sha256": "fa257a93516f4cdb9bf8dad9a6bb6f3db1eb65ff02c0ee2bc62373299fc1d0b8"
+  }
+ ],
+ "date": "2026-09-24"
+}
