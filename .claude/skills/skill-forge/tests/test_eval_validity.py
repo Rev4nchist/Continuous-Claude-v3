@@ -137,6 +137,25 @@ def test_both_settings_files_deny_reads_of_the_real_skill_folders(tmp_path):
         assert "Read(~/.claude/skills/probe-skill/**)" in deny and "Read(~/.claude/skills/probe_skill/**)" in deny
 
 
+def test_both_settings_files_deny_reads_of_the_repo_source_folder(tmp_path):
+    w, b = _plan_mismatched(tmp_path)
+    src = (tmp_path / "repo" / ".claude" / "skills" / "probe_skill").resolve().as_posix()
+    for spec in (w, b):
+        deny = json.loads(spec.settings_path.read_text())["permissions"]["deny"]
+        assert any(src in r for r in deny), deny
+
+
+def test_a_denied_read_of_the_skill_is_not_contamination(tmp_path, monkeypatch):
+    _, home, _, b = plan(tmp_path)
+    personal = home / ".claude" / "skills" / "probe-skill"
+    denied = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+              "content": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"}]}}
+    out = stream(init(["x"]), tool("Read", file_path=str(personal / "SKILL.md")), denied, result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(b, 10)
+    assert rec["baseline_contaminated"] is False and rec["excluded"] is None, rec["excluded"]
+
+
 def test_a_with_skill_run_where_the_real_skill_fires_is_excluded(tmp_path, monkeypatch):
     w, _ = _plan_mismatched(tmp_path)
     out = stream(init(["x", w.skill_alias, "probe_skill"]), tool("Skill", skill="probe_skill"), result())

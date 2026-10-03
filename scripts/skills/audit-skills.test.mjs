@@ -574,6 +574,21 @@ test('--staged resolves a ../ link to a tracked file outside the exported skills
   assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference \.\.\/\.\.\/rules-ondemand\/r\.md/);
 });
 
+// On Windows a reference may spell the repo root in another case; it must still map onto the index,
+// so a target staged for deletion (but still on disk) fails.
+test('--staged checks a case-variant absolute link against the index', { skip: process.platform !== 'win32' && 'Windows paths only' }, () => {
+  const root = stagedFixture({ s: skillText('s') }, { '.claude/rules-ondemand/r.md': '# rule\n' });
+  const target = path.join(root, '.claude', 'rules-ondemand', 'r.md').replace(/\\/g, '/');
+  const variant = target.charAt(0) === target.charAt(0).toUpperCase() ? target.charAt(0).toLowerCase() + target.slice(1) : target.charAt(0).toUpperCase() + target.slice(1);
+  write(path.join(root, '.claude', 'skills', 's', 'SKILL.md'), skillText('s', { body: `Read [the rule](${variant}) first.\n` }));
+  vcs(root, 'add', '.claude/skills/s/SKILL.md');
+  assert.equal(stagedCli(root).status, 0);
+  vcs(root, 'rm', '-q', '--cached', '.claude/rules-ondemand/r.md'); // staged for deletion, still on disk
+  const gone = stagedCli(root);
+  assert.equal(gone.status, 1, gone.stdout + gone.stderr);
+  assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference/);
+});
+
 test('--staged ignores an unstaged break in a tracked skill', () => {
   const root = stagedFixture({ a: skillText('a'), b: skillText('b') });
   write(path.join(root, '.claude', 'skills', 'a', 'SKILL.md'), BROKEN); // working tree only

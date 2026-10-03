@@ -8,7 +8,8 @@ with fixes `de3463d` and `fa6f510`. Raw runs: `%TEMP%/skill-eval/phase3/<model>/
 ## Method
 
 - 11 Tier A skills x 3 evals x 2 arms (with the skill / skill off) x 3 models (Sonnet high effort, Opus,
-  Fable) = 198 runs, each graded by a blind grader against 4-5 checkable assertions. 1 run per eval per model.
+  Fable) = 198 runs, 1 per eval per model. 187 were graded by a blind grader against 4-5 checkable
+  assertions; 4 stopped at the turn cap and scored 0 with no grader call; 7 baselines were excluded.
 - With-skill runs use a renamed copy of the skill; baselines have no copy, the real skill off under both its
   names, and Read denied on `~/.claude/skills/<name>/**`. Hooks off, no MCP, tools Skill/Read/Glob/Grep.
 - Both arms load Dave's global `CLAUDE.md` and rules. So "Delta" measures what a skill adds ON TOP of the
@@ -55,7 +56,7 @@ per model, so a single eval can swing by up to 50 points by chance; read deltas 
 - **Triggering:** with-skill runs fired the skill 92 of 99 times. Misses: `mcp-guidance` 3, `create_handoff`,
   `skill-forge`, `personas`, `systematic-debugging` 1 each (mostly Sonnet).
 
-## Measurement notes (fix before the next eval round)
+## Measurement notes (1 and 2 fixed in PR #81 after scoring; 3 still open)
 
 1. **False contamination.** The runner counts a Read the permission rule DENIED as a read of the skill
    (`opus personas e2`: the Read returned "File is in a directory that is denied"). Count only successful
@@ -76,4 +77,4 @@ per model, so a single eval can swing by up to 50 points by chance; read deltas 
 | 4 | fourth-brand-guidelines, databases | Trim to the content strong models lack (brand values, exact pool numbers, migration "Always" steps); the rest is token cost. |
 | 5 | notion-bridge | Keep; its value is the sync/queue procedure (eval 3). Make that part prominent; trim the rest. |
 | 6 | all 11 | The Phase 1 gate findings still apply (descriptions, contents sections, dated text, allowed-tools scoping). |
-| 7 | runner | Fix measurement notes 1 and 2 in skill-forge `run_eval.py` before Phase 4 re-runs. |
+| 7 | runner | Done in PR #81: denied Reads no longer count, and the repo source folder is denied (verified live). |
