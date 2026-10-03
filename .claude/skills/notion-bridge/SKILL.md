@@ -59,7 +59,8 @@ research he has not introduced to his AI surfaces yet.
 | `Priority` | select | High, Mid, Low (never "Medium") |
 | `Date` | date | the day it was written (`date:Date:start` = `YYYY-MM-DD`) |
 | `Summary` | text | one sentence: what the receiver must know or do |
-| `Project`, `Repo` | text | optional; `Repo` is an absolute path |
+| `Project` | text | required on every row: a short project name, e.g. `CCv3`, `FourthBot`, `Minions`, `FourthCompanyBrain` |
+| `Repo` | text | optional; an absolute path |
 | `Outcome` | select | SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS, FAILED (session handoffs only) |
 | `Resume phrase` | text | session handoffs only: `Resume the handoff in Notion: "<exact title>"` |
 | `Created` | created time | automatic |
@@ -85,7 +86,7 @@ edits another assistant's rows (Eve, Donna, Grok, Code). Dave may edit anything.
 
 ### Hand work to someone (to Code, to Grok, or Eve ↔ Donna)
 1. `notion-create-pages` with parent `{"type":"data_source_id","data_source_id":"13b919c8-b7af-4609-b4c6-87e5504809f0"}`.
-2. Properties: `Handoff`, `From`, `To`, `Status` = `Pending`, `Priority`, `date:Date:start`, `Summary`.
+2. Properties: `Handoff`, `From`, `To`, `Status` = `Pending`, `Priority`, `date:Date:start`, `Summary`, `Project`.
 3. Content: the task-brief template (`references/handoff-templates/task-brief.md`).
 4. Tell Dave the row URL. Nothing is written on the HQ page.
 

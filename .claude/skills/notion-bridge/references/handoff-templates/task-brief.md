@@ -1,7 +1,7 @@
 # Task brief: page body for a work handoff
 
 Use for any work handoff: to Code, to Grok, or Eve ↔ Donna. The row's properties carry From, To, Status,
-Priority, Date and Summary, so do not repeat them in the body. Row title: `[From→To] Title — YYYY-MM-DD`.
+Priority, Date, Summary and Project, so do not repeat them in the body. Row title: `[From→To] Title — YYYY-MM-DD`.
 
 ---
 
