@@ -6,7 +6,7 @@ that first call and gives the rule as the reason: read it, then re-issue the cal
 An **inject** rule arrives as context and the call runs.
 
 **Read the file yourself before you PLAN work in its area** (before you propose a Codex run, write a
-commit message, design a page, or plan a CMA job). The hook fires at the action, after the plan.
+commit message, design a page, or plan a CMA job). The hook fires at the tool call, too late for a plan.
 
 | Rule file | Loads on | Mode |
 |---|---|---|
