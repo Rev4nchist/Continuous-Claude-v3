@@ -30,7 +30,7 @@
     "Says any rerun happens only after the capacity has recovered, and gives a read-only way to check it (job instances, capacity state or the metrics app)."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "^\\s*(?:[-*]|\\d+[.)])?\\s*`?(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|(?:--ur[il]|\\bcurl\\b[^\\n]*?)\\s*[\"']?\\S*/capacities/[^\\s\"']*/(?:suspend|resume)|--sku\\s+[\"']?F\\d+", "flags": "im"}
+    {"type": "not_regex", "pattern": "(?:^\\s*(?:[-*]|\\d+[.)])?\\s*`?|&&\\s*|;\\s*)(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|(?:--ur[il]|\\bcurl\\b[^\\n]*?)\\s*[\"']?\\S*/capacities/[^\\s\"']*/(?:suspend|resume)|--sku\\s+(?:name=)?[\"']?F\\d+", "flags": "im"}
   ]
  },
  {

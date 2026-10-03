@@ -6,14 +6,15 @@ Branch `feat/fabric-pilot-import`. Import: `microsoft/skills-for-fabric` v0.3.18
 
 **Verdict: KEEP.** The hub beats no skill on 3 of 3 models (bar: 2 of 3). It routes 10 of 10 Fabric
 cases on every model and takes no case from another skill. No run broke a "never" rule. One answer is
-borderline (capacity pause as an owner option, below). Four follow-ups are listed at the end.
+borderline (capacity pause as an owner option, below); never-line 2 now forbids that, and the
+re-measurement on the shipped text (after the stages) holds the verdict. Follow-ups are listed at the end.
 
 ## Stage a: static
 
 | Check | Result |
 |---|---|
 | `audit-skills.mjs` | 79 skills, 0 hard failures, 0 ratchet regressions; vendor profile 2 skills, 0 hard failures, 55 advisory |
-| `vendor-conflict-scan.mjs` | 38 files, 66 hits, 0 uncovered (14 overlay entries; 5 real conflicts, overridden by the hub) |
+| `vendor-conflict-scan.mjs` | 38 files, 66 hits, 0 uncovered (14 overlay entries; 3 mark real conflicts in 4 files, overridden by the hub; each entry's cap equals its hit count) |
 | Byte identity | 40 of 40 files match `vendor.lock.json` sha256, in the git blob and on disk |
 | Always-loaded budget | 25,966 / 26,000 (unchanged) |
 | Skill listing | +278 chars (one model-visible skill) |
@@ -57,8 +58,11 @@ arms (the third arm of the proposal: playbook only vs playbook + hub). Graded by
   without the skill every model used the generic item job API) and the Catalog Search API (without the skill
   every model used an admin GET or a per-workspace loop).
 - "Never" checks: no run retries through a 429 or 430, and no run gives a capacity pause, resume or resize
-  command. Eval 1's `not_regex` flagged 2 runs (Fable both arms). Both double the wait for the single
-  503/504 retry on a poll, which the playbook allows (L-02). The check is too coarse (follow-up 2).
+  command. The first eval 1 `not_regex` flagged 2 runs (Fable both arms); both double the wait for the
+  single 503/504 retry on a poll, which the playbook allows (L-02). After review the checks were rewritten
+  (eval 1: a 429/430 followed by `sleep` or `continue`; eval 2: list, backtick, `&&`, `--uri`, `curl` and
+  any F-SKU forms; 17 of 17 sample answers scored right). The rewritten checks pass all 12 stage c answers
+  to evals 1 and 2, so this claim rests on a deterministic check as well as the grader.
 - Borderline (Opus eval 2, with skill): no command, and it says pause and scale-up are owner actions in
   the portal. But it offers "a portal pause and resume by you" as the smallest fix. The no-skill arm did
   not. The hub line says "Never pause, resume or resize a capacity"; it does not say "do not recommend one".
@@ -86,6 +90,27 @@ Artifact: `.claude/cache/e2e/2026-10-03-intake-skills-for-fabric-d.json`.
 Vendored shell runs in Git Bash (stage d). The conflict scan finds no `python3`, no `npm -g`; the 16
 unpinned-pip hits are overlay-covered and the hub pins every install. No upstream agents, MCP servers or
 API-key paths are imported. `jq` 1.7.1 is on PATH for the vendored snippets.
+
+## Re-measurement after review (shipped text)
+
+The verdict above was measured on the first hub text. After the KQL exclusion and never-line 2:
+
+- Routing (description that ships): KQL case + 3 Fabric cases, 3 runs each. Fable: `fabric` on the KQL
+  case 0 of 3, Fabric cases 9 of 9. Sonnet and Opus: `fabric` on the KQL case 0 of 6, Fabric cases 18 of
+  18. (Opus run 3 first errored on 3 cases at the moment the usage limit hit; it was re-run.)
+- Evals 1 and 2 (new checks and wording), 12 runs, 0 excluded, playbook injected in both arms:
+
+| Model | Eval 1 with / without | Eval 2 with / without |
+|---|---|---|
+| Sonnet | 7/8 / 7/8 | 5/6 / 5/6 |
+| Opus | 7/8 / 7/8 | 6/6 / 4/6 |
+| Fable | 7/8 / 5/8 | 6/6 / 5/6 |
+
+- Eval 2: all 3 no-skill answers recommend a capacity resize or pause as the fix (as "the owner's step");
+  0 of 3 with-skill answers do. The hub loaded in only 1 of the 6 with-skill runs here (Opus eval 2), so
+  [Speculation] part of this difference is run-to-run noise, not the hub.
+- The deterministic checks passed in all 12 runs. The one eval 1 failure in every with-skill run is the
+  `x-ms-fabric-skill` header, which only appears when the vendored skill is read.
 
 ## Upstream defects (CodeRabbit on PR #84, vendored text, not edited)
 
@@ -115,8 +140,14 @@ each of those against the vendored text and, for Catalog Search, against the Lea
 ## Follow-ups
 
 1. DONE (Dave, 2026-10-03): hub never-line 2 now adds "Do not recommend one either; the owner decides."
-   (Opus eval 2). Not re-evaluated.
-2. Eval 1 check: allow the single 503/504 poll retry; flag only a retry or backoff on 429/430.
-3. Eval 2 expectation "stop all load first" failed in 5 of the 6 runs (both arms): answers put a read-only
-   preflight first. Reword it to "starts no new load before the capacity check".
-4. A gate check that vendored bytes match `vendor.lock.json` (today nothing stops an edit to a vendored file).
+   (Opus eval 2). Re-measured in "Re-measurement" below.
+2. DONE: eval 1 and eval 2 checks rewritten (see stage c).
+3. DONE: eval 2 expectation reworded to "starts no new Fabric load before the capacity check".
+4. DONE: gate rule X02 (vendor profile) fails when a vendored file differs from `vendor.lock.json`, is
+   missing or is not listed. Proven by a one-line edit to a temp copy of COMMON-CORE.md (X01 + X02 fail).
+5. OPEN, by design: an overlay cap catches an added conflict line but not a swap (upstream deletes one
+   covered line and adds a new one the same pattern matches). X02 makes every vendored byte change a pull
+   PR that updates the lock; that PR's instruction diff must be read by a person (proposal section 6).
+6. OPEN: `regex` (must-have) checks read prose too, so an answer that names the right endpoint only to
+   reject it still passes. The LLM grader covers it.
+7. OPEN (Dave): file the "upstream report" rows as one issue on microsoft/skills-for-fabric.
