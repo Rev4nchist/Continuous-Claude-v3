@@ -4,7 +4,8 @@
   "pattern": "backoff|429 Too Many Requests|retry 429",
   "files": ["common/COMMON-CORE.md"],
   "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
-  "resolution": "REAL CONFLICT. Upstream says retry 429/503/504 with backoff. The fabric hub's first never-line overrides it: on any 429 or 430, stop all load and report. Only a single 503 or 504 on a status poll may retry once (fabric-playbook L-02, L-07)."
+  "resolution": "REAL CONFLICT. Upstream says retry 429/503/504 with backoff. The fabric hub's first never-line overrides it: on any 429 or 430, stop all load and report. Only a single 503 or 504 on a status poll may retry once (fabric-playbook L-02, L-07).",
+  "max_hits": 5
  },
  {
   "topic": "retry-on-429",

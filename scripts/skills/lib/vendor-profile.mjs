@@ -20,10 +20,11 @@ import { loadSkill, checkSkillAll, insideDir } from './skill-rules.mjs';
 import { scanSource } from './conflict-scan.mjs';
 
 export const CONFLICT_RULE = 'X01';
-// X02: <source>/vendor.lock.json pins the sha256 of every vendored file. With a lock, an edited, a
-// missing or an unlisted file under a locked folder is hard. Without a lock it is advisory only.
+// X02: <source>/vendor.lock.json pins the sha256 of every vendored file. Every file in the source,
+// except the three CCv3 owns, must be a plain file listed in the lock with the same bytes. A missing
+// lock is hard too: otherwise one commit could edit a vendored file and delete the lock.
 export const LOCK_RULE = 'X02';
-export const LOCKED_DIRS = ['skills', 'common', 'mcp-setup'];
+export const CCV3_OWNED = new Set(['PROVENANCE.md', 'vendor.lock.json', 'overlay.json']);
 // G30 (vacuous profile), X01 (uncovered conflict) and X02 (lock) are profile rules, not per-skill rules.
 export const VENDOR_HARD = new Set(['G01', 'G02', 'G03', 'G06', 'G07', 'G08', 'G11', 'G22', 'G25', 'G27', 'G28', 'G30', CONFLICT_RULE, LOCK_RULE]);
 // Documented for readers. Any per-skill rule not in VENDOR_HARD is advisory, including the rules
@@ -112,8 +113,9 @@ function addConflictFindings(dir, source, add) {
   return scan.entryStats;
 }
 
-// Entries under the locked folders, as forward-slash paths relative to the source. A link (symlink or
-// junction) is listed but never followed: a link to a FIFO or a device could hang the audit.
+// Every entry in the source except the CCv3-owned root files, as forward-slash paths relative to the
+// source. The whole folder counts: a new root CLAUDE.md would be loaded by Claude Code. A link (symlink
+// or junction) is listed but never followed: a link to a FIFO or a device could hang the audit.
 function lockedFiles(dir) {
   const out = [];
   const walk = (d) => {
@@ -121,11 +123,13 @@ function lockedFiles(dir) {
     try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
       const p = path.join(d, e.name);
+      const rel = path.relative(dir, p).split(path.sep).join('/');
+      if (CCV3_OWNED.has(rel)) continue;
       if (e.isDirectory() && !e.isSymbolicLink()) walk(p);
-      else out.push(path.relative(dir, p).split(path.sep).join('/'));
+      else out.push(rel);
     }
   };
-  for (const top of LOCKED_DIRS) walk(path.join(dir, top));
+  walk(dir);
   return out.sort();
 }
 
@@ -135,7 +139,7 @@ function isRegularFile(p) { try { return fs.lstatSync(p).isFile(); } catch { ret
 function addLockFindings(dir, source, add) {
   let lock;
   try { lock = JSON.parse(fs.readFileSync(path.join(dir, 'vendor.lock.json'), 'utf8')); } catch (e) {
-    if (e.code === 'ENOENT') return add(LOCK_RULE, source, 'no vendor.lock.json: the vendored bytes are not pinned', undefined, true);
+    if (e.code === 'ENOENT') return add(LOCK_RULE, source, 'no vendor.lock.json: the vendored bytes are not pinned');
     return add(LOCK_RULE, source, `vendor.lock.json is not valid JSON: ${e.message}`);
   }
   const files = Array.isArray(lock?.files) ? lock.files : [];
@@ -156,7 +160,7 @@ function addLockFindings(dir, source, add) {
   }
   for (const rel of lockedFiles(dir)) {
     if (listed.has(rel)) continue;
-    const kind = isRegularFile(path.join(dir, rel)) ? 'an unpinned vendored file' : 'and is not a regular file';
+    const kind = isRegularFile(path.join(dir, rel)) ? 'an unpinned vendored file' : 'a link or special file, not a plain copy';
     add(LOCK_RULE, source, `${rel} is not in vendor.lock.json: ${kind}`);
   }
 }

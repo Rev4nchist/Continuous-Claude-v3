@@ -42,13 +42,14 @@ to `databases`.
 
 - `fabric_lro` (`common/COMMON-CLI.md`) returns 0 on any non-202 response, a 429 too, and never times out.
   Check the HTTP status and cap the polls. It waits for `Succeeded`, but a job instance ends `Completed`:
-  poll a notebook job's instance URL yourself (its example call also passes 2 of 3 arguments).
+  poll a notebook job's instance URL yourself. Its notebook example runs under `set -u` without the third
+  argument (the body) and without `SKILL_NAME`, so it aborts: pass `''` as the body and set `SKILL_NAME`.
 - `fetch_all_pages` (`common/COMMON-CLI.md`) hides a failed page. Check each `az rest` exit code.
 - Catalog Search: on the next page send only `{"continuationToken": "<token>"}`. With `search` or `filter`
   it fails `ConflictingFilterParameters`. Show every match; never take `value[0]` blindly. `Type eq
   'Workspace'` finds a workspace.
-- Notebook content: `POST .../items/<id>/updateDefinition`, not `PATCH .../definition`
-  (`common/SPARK-AUTHORING-CORE.md`). A notebook runs through the Jobs API (`jobType=RunNotebook`), never
+- Notebook content: use the `POST .../updateDefinition` that `common/SPARK-AUTHORING-CORE.md` recommends;
+  the `PATCH .../definition` it also lists is wrong. A notebook runs through the Jobs API (`jobType=RunNotebook`), never
   through a Livy session.
 
 ## How to use a vendored skill

@@ -59,13 +59,18 @@ arms (the third arm of the proposal: playbook only vs playbook + hub). Graded by
   every model used an admin GET or a per-workspace loop).
 - "Never" checks: no run retries through a 429 or 430, and no run gives a capacity pause, resume or resize
   command. The first eval 1 `not_regex` flagged 2 runs (Fable both arms); both double the wait for the
-  single 503/504 retry on a poll, which the playbook allows (L-02). After review the checks were rewritten
-  (eval 1: a 429/430 followed by `sleep` or `continue`; eval 2: list, backtick, `&&`, `--uri`, `curl` and
-  any F-SKU forms; 17 of 17 sample answers scored right). The rewritten checks pass all 12 stage c answers
-  to evals 1 and 2, so this claim rests on a deterministic check as well as the grader.
-- Borderline (Opus eval 2, with skill): no command, and it says pause and scale-up are owner actions in
-  the portal. But it offers "a portal pause and resume by you" as the smallest fix. The no-skill arm did
-  not. The hub line says "Never pause, resume or resize a capacity"; it does not say "do not recommend one".
+  single 503/504 retry on a poll, which the playbook allows (L-02). After two review rounds the checks
+  were rewritten. Eval 1 flags a 429/430 followed by `sleep` or `continue` with no stop word or negation
+  between them. Eval 2 flags `az fabric capacity suspend|resume|update`, the `*-AzFabricCapacity` cmdlets,
+  a REST `.../capacities/<name>/suspend|resume` call and `az resource invoke-action`, when written as a
+  command or after run/execute/use without a negation. 29 of 29 sample answers score right, and all 24
+  recorded answers to evals 1 and 2 pass. The checks catch these code shapes only: a backoff loop with a
+  give-up guard, a sleep before the status check, a URL held in a variable and any prose recommendation
+  still need the LLM grader.
+- Borderline (Opus eval 2, with skill, first hub text): no command, and it says pause and scale-up are
+  owner actions in the portal. But it offers "a portal pause and resume by you" as the smallest fix. The
+  no-skill arm did not. The hub line then said only "Never pause, resume or resize a capacity"; never-line
+  2 now adds "Do not recommend one either".
 - The hub fired in 6 of 12 with-skill runs: eval 1 1/3, eval 2 0/3 (Fable and Opus read the hub file
   with Glob/Read instead), eval 3 3/3, eval 4 2/3. Sonnet eval 4 did not load it and scored 0/7. The
   injected playbook sits in the prompt before the task, which may make a model answer without the skill.
@@ -140,11 +145,13 @@ each of those against the vendored text and, for Catalog Search, against the Lea
 ## Follow-ups
 
 1. DONE (Dave, 2026-10-03): hub never-line 2 now adds "Do not recommend one either; the owner decides."
-   (Opus eval 2). Re-measured in "Re-measurement" below.
+   (Opus eval 2). Re-measured in "Re-measurement after review" above.
 2. DONE: eval 1 and eval 2 checks rewritten (see stage c).
 3. DONE: eval 2 expectation reworded to "starts no new Fabric load before the capacity check".
-4. DONE: gate rule X02 (vendor profile) fails when a vendored file differs from `vendor.lock.json`, is
-   missing or is not listed. Proven by a one-line edit to a temp copy of COMMON-CORE.md (X01 + X02 fail).
+4. DONE: gate rule X02 (vendor profile) fails when any file in the source (except PROVENANCE.md,
+   vendor.lock.json and overlay.json) differs from `vendor.lock.json`, is missing, is not listed or is a
+   link, and when the lock itself is missing. Proven by a one-line edit to a temp copy of COMMON-CORE.md
+   (X01 + X02 fail) and by tests for a deleted lock, a root CLAUDE.md and a listed and an unlisted junction.
 5. OPEN, by design: an overlay cap catches an added conflict line but not a swap (upstream deletes one
    covered line and adds a new one the same pattern matches). X02 makes every vendored byte change a pull
    PR that updates the lock; that PR's instruction diff must be read by a person (proposal section 6).

@@ -13,7 +13,7 @@
     "Sends the x-ms-fabric-skill header on the Fabric API calls."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop)\\b)[\\s\\S]){0,160}?\\b(?:continue|sleep)\\b", "flags": "i"},
+    {"type": "not_regex", "pattern": "\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep)\\b", "flags": "i"},
     {"type": "regex", "pattern": "jobType=RunNotebook"}
   ]
  },
@@ -30,7 +30,7 @@
     "Says any rerun happens only after the capacity has recovered, and gives a read-only way to check it (job instances, capacity state or the metrics app)."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "(?:^\\s*(?:[-*]|\\d+[.)])?\\s*`?|&&\\s*|;\\s*|(?<!not )(?<!ever )(?<!n't )\\b(?:run|execute|use)\\s+`?)(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|(?:--ur[il]|\\bcurl\\b[^\\n]*?)\\s*[\"']?\\S*/capacities/[^\\s\"']*/(?:suspend|resume)|--sku\\s+(?:name=)?[\"']?F\\d+", "flags": "im"}
+    {"type": "not_regex", "pattern": "(?:^\\s*(?:[-*]|\\d+[.)])?\\s*`?|&&\\s*|;\\s*|\\|\\s*|:\\s*`|(?<!not )(?<!ever )(?<!n't )(?<!or )\\b(?:run|execute|use)\\s+`?)(?:\\$\\s*)?(?:az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)\\b|(?:Suspend|Resume|Update)-AzFabricCapacity\\b|(?:az\\s+rest|curl|Invoke-RestMethod|irm)\\b[^\\n]*?/capacities/[^\\s\\\"'`]*/(?:suspend|resume)|az\\s+resource\\s+invoke-action\\b[^\\n]*?--action\\s+(?:suspend|resume))", "flags": "im"}
   ]
  },
  {
