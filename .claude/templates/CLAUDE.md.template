@@ -168,9 +168,10 @@ change without a query-plan check.
 
 ## Sessions, handoffs, memory
 
-- **Handoffs**: `/create_handoff` writes a row in the Claude Bridge 📬 Handoffs database (To = Next
-  session), title `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD`, plus a local YAML copy.
-  Outcome is required: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`. Never my Scratchpad.
+- **Handoffs**: `/create_handoff` writes a row in the 📬 Handoffs database (To = Next
+  session), title `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD`, plus a YAML copy.
+  Outcome required: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`. Every row sets
+  `Project` (short name). Never my Scratchpad.
   `/resume_handoff` recovers the context.
 - **Work that cannot finish this session**: write what is done and what remains to a file, update
   the tasks, give exact resume steps, create a handoff. Never let work evaporate.
