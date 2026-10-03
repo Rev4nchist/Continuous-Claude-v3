@@ -746,6 +746,21 @@ test('trigger-probe: hooksRan counts hook_started events and ignores other lines
   assert.equal(hooksRan('{"type":"system","subtype":"init"}'), 0);
 });
 
+// Bug repro (2026-10-03): a hub skill loaded, the model then asked for one more tool, the 2-turn cap
+// stopped the run with exit 1, and the probe scored the routed case as an error, not a hit.
+test('trigger-probe: a turn-cap stop after a Skill call is routing, not an error', async () => {
+  const { runError } = await import('./trigger-probe.mjs');
+  const routed = ['{"type":"assistant","message":{"content":[{"type":"tool_use","name":"Skill","input":{"skill":"fabric"}}]}}',
+    '{"type":"result","subtype":"error_max_turns","is_error":true}'].join('\n');
+  assert.equal(runError({ status: 1, stdout: routed }), null);
+  // The same stop with no Skill call says nothing about routing: still an error.
+  assert.match(runError({ status: 1, stdout: '{"type":"result","subtype":"error_max_turns","is_error":true}' }), /exit 1/);
+  // Any other failure stays an error even when a skill fired.
+  assert.match(runError({ status: 1, stdout: routed.replace('error_max_turns', 'error_during_execution') }), /exit 1/);
+  assert.match(runError({ error: new Error('spawnSync claude.exe ETIMEDOUT'), status: null, stdout: '' }), /ETIMEDOUT/);
+  assert.equal(runError({ status: 0, stdout: '' }), null);
+});
+
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name
 
 // A stand-in init_skill.py that writes one SKILL.md. `md` is the file text.

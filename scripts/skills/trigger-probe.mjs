@@ -9,7 +9,9 @@
 //
 // Usage: node scripts/skills/trigger-probe.mjs [--cases scripts/skills/trigger-cases.json]
 //            [--limit N] [--out docs/self-improvement/audits/<date>-skill-trigger-<label>.json]
-//            [--model <model>] [--dry-run]
+//            [--model <model>] [--cwd <dir>] [--dry-run]
+// --cwd: the project folder the runs start in (default: this repo). Its .claude/skills are listed
+// as project skills, so a before/after comparison can run the same probe code against two checkouts.
 // --dry-run prints the commands and spends nothing. A live run spends one subscription turn
 // per case; use --limit for a smoke test.
 
@@ -84,15 +86,23 @@ export function skillsFired(streamText) {
   return fired;
 }
 
-function runCase(prompt, model) {
+// Why a run says nothing about routing, or null. A failed run (spawn error, timeout, non-zero exit) is
+// an error, not a miss. One exception: the turn cap stopped the run AFTER a Skill call. The routing
+// event already happened; a hub skill that asks for one more tool (Read) hits the 2-turn cap this way.
+export function runError({ error, status, stdout = '' }) {
+  if (error) return error.message;
+  if (status === 0) return null;
+  const capped = stdout.split(/\r?\n/).some((l) => l.startsWith('{') && /"type":"result"/.test(l) && /"subtype":"error_max_turns"/.test(l));
+  return capped && skillsFired(stdout).length ? null : `exit ${status}`;
+}
+
+function runCase(prompt, model, cwd = repo) {
   const { cmd, args } = buildCommand(model);
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
-  const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd: repo, maxBuffer: 64 * 1024 * 1024 });
-  // A run that failed (non-zero exit, spawn error, timeout) says nothing about routing: it is an
-  // error, not a miss.
-  const error = r.error ? r.error.message : (r.status !== 0 ? `exit ${r.status}` : null);
+  const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd, maxBuffer: 64 * 1024 * 1024 });
+  const error = runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
   return { fired: skillsFired(r.stdout || ''), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
 }
 
@@ -102,12 +112,14 @@ function main(argv) {
   const OUT = opt('--out', null);
   const LIMIT = Number(opt('--limit', 0)) || Infinity;
   const MODEL = opt('--model', null);
+  const CWD = path.resolve(opt('--cwd', repo));
+  if (!fs.existsSync(CWD) || !fs.statSync(CWD).isDirectory()) { console.error(`--cwd ${CWD} is not a folder`); return 2; }
   const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
   const cases = all.slice(0, LIMIT);
 
   if (argv.includes('--dry-run')) {
     const { cmd, args } = buildCommand(MODEL);
-    console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin)`);
+    console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin; cwd ${CWD})`);
     console.log(`argv: ${JSON.stringify(args)}`);
     for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # expect ${c.expect.join('|')}`);
     console.log(`dry-run: ${cases.length} cases, 0 turns spent`);
@@ -115,7 +127,7 @@ function main(argv) {
   }
 
   const results = cases.map((c) => {
-    const r = runCase(c.prompt, MODEL);
+    const r = runCase(c.prompt, MODEL, CWD);
     const hit = !r.error && r.fired.some((s) => c.expect.includes(s));
     const falseFires = r.error ? [] : r.fired.filter((s) => !c.expect.includes(s));
     return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, hooksRan: r.hooksRan, status: r.status, error: r.error, stderr: r.stderr };
@@ -130,7 +142,7 @@ function main(argv) {
     noSkillFired: ok.filter((r) => !r.fired.length).length,
     casesWithHooks: hookCases,
     routing: hookCases ? 'NOT PURE NATIVE: hooks ran despite disableAllHooks, so a hook may have injected skill guidance' : 'native (all hooks disabled)',
-    ts: new Date().toISOString(),
+    model: MODEL, cwd: CWD, ts: new Date().toISOString(),
   };
   console.log(JSON.stringify(summary, null, 1));
   for (const r of results) {
