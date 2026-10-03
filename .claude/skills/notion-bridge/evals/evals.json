@@ -27,9 +27,9 @@
     "query": "bridge sync. connector's down so here's a hand export of the Code queue: evals/files/code-queue.md. clean it up - delete the junk - and tell me where we stand.",
     "files": ["evals/files/code-queue.md"],
     "expected_behavior": [
-      "Does not delete any row; it closes rows by setting a Status (Done or Superseded) and says rows are never deleted",
-      "Sets the 2026-09-10 'Context budget phase 4' row to Superseded and names the 2026-09-22 revised-scope row in its Summary",
-      "Sets the 'Fix rule-router false fires' row to Done because PR #74 merged",
+      "Does not delete any row; it proposes closing rows by setting a Status (Done or Superseded), says rows are never deleted, and says no row changes until the connector is available again (it does not claim a write happened)",
+      "Proposes setting the 2026-09-10 'Context budget phase 4' row to Superseded, naming the 2026-09-22 revised-scope row in its Summary",
+      "Proposes setting the 'Fix rule-router false fires' row to Done because PR #74 merged",
       "Asks Dave about the 2026-07-12 'Retire the Braintrust hooks' row as open more than 30 days, rather than closing it on its own",
       "Lists the open items oldest first, with an age in days for each"
     ]

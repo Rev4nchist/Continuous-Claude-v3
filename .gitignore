@@ -321,3 +321,9 @@ fastmcp-*.png
 # Agents should write these to the session scratchpad instead.
 /.tmp_research*
 /*.png
+
+# Skill eval fixtures are test inputs, not runtime output: track them even when a
+# generic rule above (*.log, plans/) matches. Folders first: git cannot re-include a
+# file inside an excluded folder.
+!.claude/skills/**/evals/files/**/
+!.claude/skills/**/evals/files/**

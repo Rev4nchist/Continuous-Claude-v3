@@ -1,0 +1,12 @@
+> http-kit@1.8.0 test
+> vitest run
+
+ RUN  v3.2.4 /repo
+
+ ✓ src/http/retry.test.ts (6 tests) 9ms
+ ✓ src/http/client.test.ts (11 tests) 31ms
+ ✓ src/http/headers.test.ts (24 tests) 12ms
+
+ Test Files  3 passed (3)
+      Tests  41 passed (41)
+   Duration  640ms
