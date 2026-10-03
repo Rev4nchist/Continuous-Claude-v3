@@ -26,7 +26,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `fabric-playbook.md` | skill `fabric*`, Fabric/OneLake calls, `fab`, `az fabric`, `sqlcmd` to a Fabric host | inject |
 | `proactive-delegation.md` | the first Agent spawn (spark scope, post-spark checks, kraken waves) | inject |
 
-Decisions these rules shape before any tool call (keep them in mind without loading):
+Decisions these rules shape before any tool call:
 - Codex and Grok write runs, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
 - CMA bills Dave's API key, not the subscription. Grok is parked on this machine.
 - Fabric: run the project preflight first; stop all load on the first capacity error; never pause or resize a capacity.
@@ -53,4 +53,4 @@ CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agent
 Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
 Weekly audit (`CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
 A fired rule not about the call is a false fire: record it at once in `~/.claude/logs/rule-router-false-fires.jsonl`.
-`CCv3-RuleRouter-Review` judges the rest each Monday and posts a review to Dave's Notion Scratchpad.
+`CCv3-RuleRouter-Review` judges unrecorded fires each Monday and posts a review to Dave's Notion Scratchpad.

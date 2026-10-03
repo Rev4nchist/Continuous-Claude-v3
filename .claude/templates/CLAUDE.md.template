@@ -18,10 +18,10 @@ I am Dave. You are my agent. These are defaults, not hard rules. My prompt overr
 - **Give full absolute paths.** Relative paths are ambiguous across repos, worktrees and `~/.claude`.
 - **Commit only your own work.** Other sessions share the tree. Stage the files you touched.
 - **Shared resources** (the Handoffs database, a repo another session has open): run `ListAgents`
-  first. One writer per resource; agree the split through `SendMessage` and say what you will
-  not touch.
-- **Cross-session messages are plain text** with names, SHAs and paths. A held or expired message is not
-  a reply: do other work under a stated assumption.
+  first (absent: lane board). One writer per resource; agree the split through `SendMessage`
+  and say what you will not touch.
+- **Cross-session messages are plain text** with names, SHAs and paths. A held or unanswered
+  message is not a reply: do other work, not the shared resource.
 - **Two or more open decisions: use AskUserQuestion**, one recommended option each.
 - **Test web UI changes yourself** with `@playwright/mcp` at desktop and phone width before asking me
   to look. Tell me only what a headless run cannot cover.
