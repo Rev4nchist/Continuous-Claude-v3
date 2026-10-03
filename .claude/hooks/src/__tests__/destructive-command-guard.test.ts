@@ -475,3 +475,421 @@ describe('P42 (CodeRabbit #47): PowerShell quoting rules', () => {
     expect(classifyDestructive('echo "to undo: git reset --hard HEAD~1"')).toBeNull();
   });
 });
+
+
+// 2026-10-02 skill-intake-fabric Phase 1: two Fabric "never" items become hard guards.
+// (a) pausing, resuming or resizing a capacity stops or bills every workload on it;
+// (b) a bulk PUT to .../dataAccessRoles replaces ALL OneLake roles (DefaultReader too).
+describe('Fabric: capacity suspend/resume/resize and bulk dataAccessRoles PUT', () => {
+  const CAP = 'https://management.azure.com/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Fabric/capacities/cap1';
+  const ROLES = 'https://api.fabric.microsoft.com/v1/workspaces/w1/items/i1/dataAccessRoles';
+
+  const blockedBash = [
+    'az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    'az fabric capacity resume --capacity-name cap1 --resource-group rg',
+    'az fabric capacity update --capacity-name cap1 --resource-group rg --sku name=F4 tier=Fabric',
+    'az fabric capacity delete --capacity-name cap1 --resource-group rg --yes',
+    'az.cmd fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    'AZ FABRIC CAPACITY SUSPEND --capacity-name cap1',                      // casing
+    'cd infra && az fabric capacity resume --capacity-name cap1',           // compound
+    `az rest --method post --url "${CAP}/suspend?api-version=2023-11-01"`,  // double-quoted URL
+    `az rest --method post --url '${CAP}/resume?api-version=2023-11-01'`,   // single-quoted URL
+    `az rest --method post --url ${CAP}/suspend`,                           // unquoted URL
+    `az rest -m POST --url "${CAP}/RESUME?api-version=2023-11-01"`,         // casing
+    `curl -s -X POST -H "Authorization: Bearer $T" "${CAP}/suspend?api-version=2023-11-01"`,
+    `curl.exe -XPOST "${CAP}/resume?api-version=2023-11-01"`,
+    `az rest --method patch --url "${CAP}?api-version=2023-11-01" --body '{"sku":{"name":"F64","tier":"Fabric"}}'`,
+    `az rest -m PATCH --url "${CAP}?api-version=2023-11-01" --body @sku.json`,
+    `curl -X PATCH -H "Authorization: Bearer $T" "${CAP}?api-version=2023-11-01" -d @sku.json`,
+    `az rest --method put --url "${CAP}?api-version=2023-11-01" --body @cap.json`,
+    `az rest --method put --url "${ROLES}" --body @roles.json`,
+    `az rest -m PUT --url '${ROLES}' --body @roles.json`,
+    `curl -s -X PUT -H "Authorization: Bearer $T" -H "Content-Type: application/json" "${ROLES}" -d @roles.json`,
+    `curl --request PUT "${ROLES}?dryRun=false" -d @roles.json`,
+    `fab api -X put "workspaces/w1/items/i1/dataAccessRoles" -i roles.json`,
+    `bash -c "az rest --method post --url '${CAP}/suspend?api-version=2023-11-01'"`, // wrapper recursion
+    `X=$(az rest --method put --url "${ROLES}" --body @r.json)`,                      // substitution
+  ];
+  for (const cmd of blockedBash) {
+    it(`Bash: flags ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'Bash')).not.toBeNull();
+    });
+  }
+
+  const blockedPs = [
+    'az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+    `Invoke-RestMethod -Method Post -Uri "${CAP}/suspend?api-version=2023-11-01" -Headers $h`,
+    `Invoke-RestMethod -Method POST -Uri '${CAP}/resume?api-version=2023-11-01' -Headers $h`,
+    `Invoke-WebRequest -Method Patch -Uri "${CAP}?api-version=2023-11-01" -Headers $h -Body $b`,
+    `irm -Method Patch -Uri "${CAP}?api-version=2023-11-01" -Headers $h -Body $b`,
+    `$r = Invoke-RestMethod -Method Put -Uri "${ROLES}" -Headers $h -Body $b`,
+    `$r = invoke-restmethod -method put -uri "${ROLES}" -headers $h -body $b`,       // casing
+    `Invoke-RestMethod \`\n  -Method Put \`\n  -Uri "${ROLES}" \`\n  -Headers $h`,    // backtick line continuation
+    `az rest --method put --url "${ROLES}" --body @roles.json`,
+  ];
+  for (const cmd of blockedPs) {
+    it(`PowerShell: flags ${cmd.slice(0, 60).replace(/\n/g, ' ')}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).not.toBeNull();
+    });
+  }
+
+  const allowedBash = [
+    'az fabric capacity show --capacity-name cap1 --resource-group rg',
+    'az fabric capacity list --resource-group rg',
+    'az fabric capacity list-skus --location westeurope',
+    `az rest --method get --url "${CAP}?api-version=2023-11-01"`,
+    `az rest --url "${CAP}/skus?api-version=2023-11-01"`,                  // default method is GET
+    `az rest --method get --url "${ROLES}"`,
+    `curl -s -H "Authorization: Bearer $T" "${ROLES}"`,                    // curl default is GET
+    `curl -s -X GET "${ROLES}"`,
+    `az rest --method put --url "${ROLES}/RoleA" --body @one.json`,        // one named role, not the bulk list
+    `az rest --method post --url "${ROLES}" --body @one.json`,             // POST creates one role
+    'az rest --method patch --url "https://api.fabric.microsoft.com/v1/workspaces/w1/lakehouses/l1" --body @b.json',
+    'az rest --method post --url "https://api.fabric.microsoft.com/v1/workspaces/w1/items/i1/jobs/instances?jobType=Pipeline"',
+    'fab api -X get "workspaces/w1/items/i1/dataAccessRoles"',
+    'echo "az fabric capacity suspend"',                                   // text, not a command
+    'git commit -m "docs: never run az fabric capacity resume from a script"',
+    `echo "az rest --method put --url ${ROLES}"`,
+    `grep -rn "capacities/cap1/suspend" docs/`,
+    `git commit -m "note: PUT ${ROLES} replaces all roles"`,
+  ];
+  for (const cmd of allowedBash) {
+    it(`Bash: allows ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'Bash')).toBeNull();
+    });
+  }
+
+  const allowedPs = [
+    `Invoke-RestMethod -Method Get -Uri "${ROLES}" -Headers $h`,
+    `Invoke-RestMethod -Uri "${ROLES}" -Headers $h`,
+    `Invoke-RestMethod -Method Get -Uri "${CAP}?api-version=2023-11-01" -Headers $h`,
+    `Invoke-RestMethod -Method Put -Uri "${ROLES}/RoleA" -Headers $h -Body $b`,
+    'az fabric capacity show --capacity-name cap1 --resource-group rg',
+    `Write-Host "az rest --method put --url ${ROLES}"`,
+  ];
+  for (const cmd of allowedPs) {
+    it(`PowerShell: allows ${cmd.slice(0, 60)}`, () => {
+      expect(classifyDestructive(cmd, 0, 'PowerShell')).toBeNull();
+    });
+  }
+
+  it('names the pattern so the prompt tells the human what matched', () => {
+    expect(classifyDestructive('az fabric capacity suspend --capacity-name c', 0, 'Bash')).toBe('Fabric capacity suspend/resume/resize/delete');
+    expect(classifyDestructive(`az rest --method post --url "${CAP}/resume"`, 0, 'Bash')).toBe('Fabric capacity suspend/resume via REST');
+    expect(classifyDestructive(`az rest --method patch --url "${CAP}?api-version=1"`, 0, 'Bash')).toBe('Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)');
+    expect(classifyDestructive(`az rest --method put --url "${ROLES}"`, 0, 'Bash')).toBe('OneLake bulk PUT dataAccessRoles (replaces ALL roles)');
+  });
+
+  it('decide(): ask interactive, deny unattended, on both tools', () => {
+    const cmd = `az rest --method put --url "${ROLES}" --body @r.json`;
+    expect(decide(cmd, { tool_name: 'Bash', permission_mode: 'default' }, {}).decision).toBe('ask');
+    expect(decide(cmd, { tool_name: 'Bash', permission_mode: 'bypassPermissions' }, {}).decision).toBe('deny');
+    const ps = `Invoke-RestMethod -Method Post -Uri "${CAP}/suspend" -Headers $h`;
+    expect(decide(ps, { tool_name: 'PowerShell', permission_mode: 'default' }, {}).decision).toBe('ask');
+    expect(decide(ps, { tool_name: 'PowerShell' }, { CLAUDE_AGENT_ID: 'a' }).decision).toBe('deny');
+  });
+
+  it('SKIP_DESTRUCTIVE_GUARD override still works for a known-good capacity call', () => {
+    const cmd = 'SKIP_DESTRUCTIVE_GUARD=1 az fabric capacity resume --capacity-name c';
+    // The classifier must SEE the command (a VAR=1 prefix does not hide it), so the override is what allows it.
+    expect(classifyDestructive(cmd, 0, 'Bash')).not.toBeNull();
+    expect(decide(cmd, { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  });
+});
+
+// Round 2 (critic on PR #80): bypasses of the Fabric guard. Each case below passed with no prompt on 0fe2250.
+describe('Fabric guard round 2: lead-ins, host-less URLs, trailing slash, PowerShell method forms, more clients', () => {
+  const CAP = 'https://management.azure.com/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Fabric/capacities/cap1';
+  const CAP_PATH = '/subscriptions/s1/resourceGroups/rg/providers/Microsoft.Fabric/capacities/cap1';
+  const ROLES = 'https://api.fabric.microsoft.com/v1/workspaces/w1/items/i1/dataAccessRoles';
+  const bash = (c: string) => classifyDestructive(c, 0, 'Bash');
+  const ps = (c: string) => classifyDestructive(c, 0, 'PowerShell');
+
+  describe('1. the CLI form after a line break, an assignment, an env prefix or a block opener', () => {
+    const both = [
+      'cd infra\naz fabric capacity suspend --capacity-name cap1 --resource-group rg',
+      'AZURE_CORE_OUTPUT=json az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+      'FOO=1 az fabric capacity resume --capacity-name cap1 --resource-group rg',
+      '(az fabric capacity suspend --capacity-name cap1 --resource-group rg)',
+      '{ az fabric capacity suspend --capacity-name cap1 --resource-group rg; }',
+    ];
+    for (const cmd of both) {
+      it(`Bash: flags ${cmd.replace(/\n/g, '\\n').slice(0, 60)}`, () => expect(bash(cmd)).not.toBeNull());
+      it(`PowerShell: flags ${cmd.replace(/\n/g, '\\n').slice(0, 60)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    const psOnly = [
+      '$null = az fabric capacity suspend --capacity-name cap1 --resource-group rg',
+      '$out = az fabric capacity resume --capacity-name cap1 --resource-group rg',
+      'if ($go) { az fabric capacity resume --capacity-name cap1 --resource-group rg }',
+      'try { az fabric capacity update --capacity-name cap1 --sku name=F4 } catch { }',
+      'foreach ($c in $caps) { az fabric capacity suspend --capacity-name $c }',
+      '$caps | ForEach-Object { az fabric capacity suspend --capacity-name $_ }',
+      '[void](az fabric capacity suspend --capacity-name cap1)',
+    ];
+    for (const cmd of psOnly) {
+      it(`PowerShell: flags ${cmd.slice(0, 60)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    it('still allows the read-only twins after the same lead-ins', () => {
+      expect(bash('cd infra\naz fabric capacity show --capacity-name cap1 --resource-group rg')).toBeNull();
+      expect(bash('AZURE_CORE_OUTPUT=json az fabric capacity list --resource-group rg')).toBeNull();
+      expect(ps('$null = az fabric capacity show --capacity-name cap1 --resource-group rg')).toBeNull();
+      expect(ps('if ($go) { az fabric capacity list --resource-group rg }')).toBeNull();
+    });
+  });
+
+  describe('3. capacity DELETE through REST, az resource, and the Az.Fabric cmdlets', () => {
+    const blocked = [
+      `az rest --method delete --url "${CAP}?api-version=2023-11-01"`,
+      `curl -s -X DELETE -H "Authorization: Bearer $T" "${CAP}?api-version=2023-11-01"`,
+      `az resource delete --ids ${CAP_PATH}`,
+      `az resource delete -g rg -n cap1 --resource-type Microsoft.Fabric/capacities`,
+      `az resource invoke-action --action suspend --ids ${CAP_PATH}`,
+      `az resource invoke-action --action resume --ids "${CAP_PATH}"`,
+      `az resource update --ids ${CAP_PATH} --set sku.name=F4`,
+      `Suspend-AzFabricCapacity -ResourceGroupName rg -Name cap1`,
+      `Resume-AzFabricCapacity -ResourceGroupName rg -Name cap1`,
+      `Update-AzFabricCapacity -ResourceGroupName rg -Name cap1 -SkuName F4`,
+      `Remove-AzFabricCapacity -ResourceGroupName rg -Name cap1`,
+      `Get-AzFabricCapacity -ResourceGroupName rg | Suspend-AzFabricCapacity`,
+      `fab stop .capacities/cap1.Capacity -f`,
+      `fab start .capacities/cap1.Capacity`,
+      `fab set .capacities/cap1.Capacity -q sku.name -i F4 -f`,
+      `fab rm .capacities/cap1.Capacity -f`,
+    ];
+    for (const cmd of blocked) {
+      it(`Bash: flags ${cmd.slice(0, 64)}`, () => expect(bash(cmd)).not.toBeNull());
+    }
+    it('PowerShell: flags Invoke-RestMethod -Method Delete on a capacity', () => {
+      expect(ps(`Invoke-RestMethod -Method Delete -Uri "${CAP}?api-version=2023-11-01" -Headers $h`)).not.toBeNull();
+    });
+    const allowed = [
+      `az resource show --ids ${CAP_PATH}`,
+      `az resource list --resource-type Microsoft.Fabric/capacities`,
+      `az resource delete --ids /subscriptions/s1/resourceGroups/rg/providers/Microsoft.Web/sites/app1`,
+      `az rest --method delete --url "https://api.fabric.microsoft.com/v1/workspaces/w1/lakehouses/l1"`,
+      `Get-AzFabricCapacity -ResourceGroupName rg`,
+      `Get-AzFabricCapacitySku -Location westeurope`,
+      `fab get .capacities/cap1.Capacity`,
+      `fab ls .capacities`,
+      `fab set ws1.Workspace/nb1.Notebook -q displayName -i x`,
+      `fab stop ws1.Workspace/db1.MirroredDatabase`,
+    ];
+    for (const cmd of allowed) {
+      it(`Bash: allows ${cmd.slice(0, 64)}`, () => expect(bash(cmd)).toBeNull());
+    }
+  });
+
+  describe('4. host-less ARM URLs (az rest accepts a path with no host)', () => {
+    it('az rest PATCH on a host-less capacity path', () => {
+      expect(bash(`az rest --method patch --url "${CAP_PATH}?api-version=2023-11-01" --body @sku.json`)).not.toBeNull();
+    });
+    it('az rest DELETE on a host-less capacity path', () => {
+      expect(bash(`az rest --method delete --url "${CAP_PATH}?api-version=2023-11-01"`)).not.toBeNull();
+    });
+    it('az rest POST suspend on a host-less capacity path', () => {
+      expect(bash(`az rest --method post --url "${CAP_PATH}/suspend?api-version=2023-11-01"`)).not.toBeNull();
+    });
+    it('az rest GET on a host-less capacity path stays allowed', () => {
+      expect(bash(`az rest --method get --url "${CAP_PATH}?api-version=2023-11-01"`)).toBeNull();
+    });
+  });
+
+  describe('5. a trailing slash does not defeat the end check', () => {
+    it('PUT .../dataAccessRoles/', () => {
+      expect(bash(`az rest --method put --url "${ROLES}/" --body @r.json`)).not.toBeNull();
+    });
+    it('PUT .../dataAccessRoles/?api-version=1', () => {
+      expect(bash(`curl -X PUT "${ROLES}/?api-version=1" -d @r.json`)).not.toBeNull();
+    });
+    it('PUT .../dataAccessRoles#frag', () => {
+      expect(bash(`curl -X PUT "${ROLES}#x" -d @r.json`)).not.toBeNull();
+    });
+    it('PATCH .../capacities/cap1/?api-version=1', () => {
+      expect(bash(`az rest --method patch --url "${CAP}/?api-version=2023-11-01" --body @s.json`)).not.toBeNull();
+    });
+    it('a named role with a trailing slash stays allowed', () => {
+      expect(bash(`az rest --method put --url "${ROLES}/RoleA/" --body @one.json`)).toBeNull();
+    });
+  });
+
+  describe('6. PowerShell method spellings', () => {
+    const blocked = [
+      `Invoke-RestMethod -Method:Put -Uri "${ROLES}" -Headers $h -Body $b`,
+      `Invoke-RestMethod -CustomMethod PUT -Uri "${ROLES}" -Headers $h -Body $b`,
+      `Invoke-WebRequest -Meth Put -Uri "${ROLES}" -Headers $h -Body $b`,
+      `Invoke-RestMethod -Method:Patch -Uri "${CAP}?api-version=2023-11-01" -Headers $h -Body $b`,
+      `Invoke-RestMethod -Method:Post -Uri "${CAP}/suspend?api-version=2023-11-01" -Headers $h`,
+      `irm -method:delete -uri "${CAP}?api-version=2023-11-01" -headers $h`,
+    ];
+    for (const cmd of blocked) {
+      it(`PowerShell: flags ${cmd.slice(0, 64)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    it('PowerShell: -Method:Get stays allowed', () => {
+      expect(ps(`Invoke-RestMethod -Method:Get -Uri "${ROLES}" -Headers $h`)).toBeNull();
+      expect(ps(`Invoke-RestMethod -Meth Get -Uri "${CAP}?api-version=2023-11-01" -Headers $h`)).toBeNull();
+    });
+  });
+
+  describe('7. Invoke-AzRestMethod and lead-ins before a client', () => {
+    const blocked = [
+      `Invoke-AzRestMethod -Path "${CAP_PATH}/suspend?api-version=2023-11-01" -Method POST`,
+      `Invoke-AzRestMethod -Path "${CAP_PATH}?api-version=2023-11-01" -Method PATCH -Payload $b`,
+      `Invoke-AzRestMethod -Uri "${ROLES}" -Method PUT -Payload $b`,
+      `try { Invoke-RestMethod -Method Put -Uri "${ROLES}" -Headers $h -Body $b } catch { }`,
+      `[void](Invoke-RestMethod -Method Put -Uri "${ROLES}" -Headers $h -Body $b)`,
+      `$r = (Invoke-RestMethod -Method Put -Uri "${ROLES}" -Headers $h -Body $b)`,
+      `if ($go) { Invoke-RestMethod -Method Post -Uri "${CAP}/resume?api-version=2023-11-01" -Headers $h }`,
+    ];
+    for (const cmd of blocked) {
+      it(`PowerShell: flags ${cmd.slice(0, 64)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    it('Invoke-AzRestMethod GET stays allowed', () => {
+      expect(ps(`Invoke-AzRestMethod -Path "${CAP_PATH}?api-version=2023-11-01" -Method GET`)).toBeNull();
+    });
+  });
+
+  describe('lead-in regex stays linear (a hook that hangs bricks the tool call)', () => {
+    const shapes = ['if (x) { ', 'A=1 ', '$a = ', 'try { ', '(( ', 'if ('];
+    for (const s of shapes) {
+      it(`3000 x "${s}" classifies in under 2 s`, () => {
+        const t0 = Date.now();
+        expect(ps(s.repeat(3000) + 'echo hi')).toBeNull();
+        expect(Date.now() - t0).toBeLessThan(2000);
+      });
+    }
+  });
+
+  describe('12. heredoc bodies that only write a file are text, not commands', () => {
+    it('cat > file <<EOF with a curl PUT line is allowed', () => {
+      expect(bash(`cat > docs/note.md <<'EOF'\ncurl -X PUT "${ROLES}" -d @r.json\nEOF`)).toBeNull();
+    });
+    it('cat <<EOF > file with a capacity CLI line is allowed', () => {
+      expect(bash('cat <<EOF > docs/note.md\naz fabric capacity suspend --capacity-name c\nEOF')).toBeNull();
+    });
+    it('a command AFTER the heredoc terminator is still checked', () => {
+      expect(bash(`cat > f <<EOF\ntext\nEOF\naz fabric capacity suspend --capacity-name c`)).not.toBeNull();
+    });
+    it('PowerShell: a $x = @\' here-string that only holds text is allowed', () => {
+      expect(ps(`$doc = @'\nInvoke-RestMethod -Method Put -Uri "${ROLES}"\n'@\nSet-Content docs/n.md $doc`)).toBeNull();
+    });
+    it('PowerShell: a command after the here-string is still checked', () => {
+      expect(ps(`$doc = @'\ntext\n'@\naz fabric capacity suspend --capacity-name c`)).not.toBeNull();
+    });
+    it('a heredoc fed to a shell still runs its body: bash <<EOF', () => {
+      expect(bash('bash <<EOF\naz fabric capacity suspend --capacity-name c\nEOF')).not.toBeNull();
+    });
+    it('a heredoc piped to a shell still runs its body: cat <<EOF | bash', () => {
+      expect(bash('cat <<EOF | bash\naz fabric capacity suspend --capacity-name c\nEOF')).not.toBeNull();
+    });
+  });
+});
+
+// Round 3 (CodeRabbit on ce61984).
+describe('Fabric guard round 3: substitutions inside text blocks, PowerShell backtick escapes', () => {
+  const bash = (c: string) => classifyDestructive(c, 0, 'Bash');
+  const ps = (c: string) => classifyDestructive(c, 0, 'PowerShell');
+  const DEL = 'az fabric capacity delete --capacity-name cap1 --resource-group rg --yes';
+
+  describe('1. an unquoted heredoc / @" here-string EXECUTES $(...) and backticks in its body', () => {
+    it('Bash: cat > f <<EOF with $(az fabric capacity delete ...) is flagged', () => {
+      expect(bash(`cat > f <<EOF\nnotes\n$(${DEL})\nEOF`)).not.toBeNull();
+    });
+    it('Bash: cat <<EOF > f with a backtick substitution is flagged', () => {
+      expect(bash(`cat <<EOF > f\nnotes\n\`az fabric capacity suspend --capacity-name c\`\nEOF`)).not.toBeNull();
+    });
+    it('Bash: an inline substitution in a line of prose is flagged', () => {
+      expect(bash(`cat > f <<EOF\nRun it now: $(${DEL}) then wait.\nEOF`)).not.toBeNull();
+    });
+    it('Bash: a destructive substitution of any kind in an unquoted body is flagged', () => {
+      expect(bash('cat > f <<EOF\n$(rm -rf build)\nEOF')).not.toBeNull();
+    });
+    it('PowerShell: $doc = @" here-string with $(Remove-AzFabricCapacity ...) is flagged', () => {
+      expect(ps('$doc = @"\nnotes\n$(Remove-AzFabricCapacity -ResourceGroupName rg -Name cap1)\n"@\nSet-Content n.md $doc')).not.toBeNull();
+    });
+    it('PowerShell: $doc = @" with $(az fabric capacity delete ...) is flagged', () => {
+      expect(ps(`$doc = @"\n$(${DEL})\n"@`)).not.toBeNull();
+    });
+
+    // The same text in a LITERAL body is only text.
+    it("Bash: <<'EOF' (quoted delimiter) keeps $(...) literal: allowed", () => {
+      expect(bash(`cat > f <<'EOF'\n$(${DEL})\nEOF`)).toBeNull();
+    });
+    it('Bash: <<"EOF" keeps $(...) literal: allowed', () => {
+      expect(bash(`cat > f <<"EOF"\n$(${DEL})\n\`az fabric capacity suspend --capacity-name c\`\nEOF`)).toBeNull();
+    });
+    it('Bash: a backslash-escaped $( in an unquoted body is literal: allowed', () => {
+      expect(bash(`cat > f <<EOF\n\\$(${DEL})\nEOF`)).toBeNull();
+    });
+    it("PowerShell: @' here-string keeps $(...) literal: allowed", () => {
+      expect(ps(`$doc = @'\n$(Remove-AzFabricCapacity -Name cap1)\n'@`)).toBeNull();
+    });
+    it('PowerShell: a backtick-escaped $( in @" is literal: allowed', () => {
+      expect(ps('$doc = @"\n`$(Remove-AzFabricCapacity -Name cap1)\n"@')).toBeNull();
+    });
+
+    // A plain doc body, or a read-only substitution, stays allowed.
+    it('Bash: an unquoted body with no substitution is allowed', () => {
+      expect(bash(`cat > f <<EOF\ncurl -X PUT "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles"\nEOF`)).toBeNull();
+    });
+    it('Bash: an unquoted body with a read-only substitution is allowed', () => {
+      expect(bash('cat > f <<EOF\n$(az fabric capacity show --capacity-name c --resource-group rg)\nEOF')).toBeNull();
+    });
+    it('PowerShell: @" with no substitution is allowed', () => {
+      expect(ps('$doc = @"\nRemove-AzFabricCapacity is gated.\n"@')).toBeNull();
+    });
+    it('PowerShell: @" with a read-only substitution is allowed', () => {
+      expect(ps('$doc = @"\n$(Get-AzFabricCapacity -ResourceGroupName rg)\n"@')).toBeNull();
+    });
+    it('a body that holds the terminator inside text is still skipped to the real terminator, then checked after it', () => {
+      expect(bash(`cat > f <<EOF\n$(echo ok)\nEOF\n${DEL}`)).not.toBeNull();
+    });
+  });
+
+  describe('2. a PowerShell backtick keeps the escaped character', () => {
+    const blocked = [
+      'az fabric capacity del`ete --capacity-name cap1 --resource-group rg',
+      'Suspend-AzFabricCap`acity -ResourceGroupName rg -Name cap1',
+      'Remove-AzFabric`Capacity -ResourceGroupName rg -Name cap1',
+      'az fab`ric capacity suspend --capacity-name cap1',
+      'Invoke-RestMethod -Method P`ut -Uri "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles" -Headers $h',
+      'git res`et --hard origin/main',
+    ];
+    for (const cmd of blocked) {
+      it(`PowerShell: flags ${cmd.slice(0, 60)}`, () => expect(ps(cmd)).not.toBeNull());
+    }
+    it('a backtick-newline continuation still joins the lines', () => {
+      expect(ps('az fabric capacity `\n  suspend --capacity-name cap1')).not.toBeNull();
+      expect(ps('Invoke-RestMethod `\n -Method Put `\n -Uri "https://api.fabric.microsoft.com/v1/workspaces/w/items/i/dataAccessRoles"')).not.toBeNull();
+    });
+    it('a continuation and an escaped letter together', () => {
+      expect(ps('az fabric capacity `\n  del`ete --capacity-name cap1')).not.toBeNull();
+    });
+    it('escaped letters in a read-only command stay allowed', () => {
+      expect(ps('az fabric capacity sh`ow --capacity-name cap1')).toBeNull();
+      expect(ps('Get-AzFabric`Capacity -Name cap1')).toBeNull();
+    });
+    it('escaped quotes inside a string still stay inside the string', () => {
+      expect(ps('Write-Host "say `"az fabric capacity suspend`" please"')).toBeNull();
+    });
+    it('a trailing backslash in PowerShell is a path, not a continuation', () => {
+      expect(ps('cd C:\\work\\\naz fabric capacity suspend --capacity-name cap1')).not.toBeNull();
+    });
+  });
+
+  describe('text-block scanning stays linear', () => {
+    const blocks: Array<[string, string, 'Bash' | 'PowerShell']> = [
+      ['unterminated $( in an unquoted heredoc', 'cat > f <<EOF\n' + '$( '.repeat(3000), 'Bash'],
+      ['unmatched backticks in an unquoted heredoc', 'cat > f <<EOF\n' + 'a ` '.repeat(3000) + '\nEOF', 'Bash'],
+      ['many closed substitutions', 'cat > f <<EOF\n' + '$(echo a) '.repeat(3000) + '\nEOF', 'Bash'],
+      ['unterminated $( in @" here-string', '$d = @"\n' + '$( '.repeat(3000), 'PowerShell'],
+      ['many heredoc openers', 'cat > f <<EOF\nx\nEOF\n'.repeat(1500), 'Bash'],
+    ];
+    for (const [name, cmd, tool] of blocks) {
+      it(`${name}: under 2 s`, () => {
+        const t0 = Date.now();
+        classifyDestructive(cmd, 0, tool);
+        expect(Date.now() - t0).toBeLessThan(2000);
+      });
+    }
+  });
+});

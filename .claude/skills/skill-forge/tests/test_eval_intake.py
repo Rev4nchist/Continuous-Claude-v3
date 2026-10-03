@@ -77,6 +77,14 @@ def test_both_arms_deny_reads_of_the_real_vendor_tree(tmp_path):
         assert "Read(~/.claude/skills/hub-skill/**)" in deny  # the existing deny stays
 
 
+def test_both_arms_deny_reads_of_the_companion_repo_source(tmp_path):
+    _, comp, w, b = plan(tmp_path)
+    src = Path(comp).resolve().as_posix()
+    for spec in (w, b):
+        deny = json.loads(spec.settings_path.read_text())["permissions"]["deny"]
+        assert any(src in r for r in deny), deny
+
+
 def test_without_a_companion_nothing_changes(tmp_path):
     _, _, w, b = plan(tmp_path, companion=False)
     assert not (w.cwd / ".claude" / "skills" / "_vendor").exists()

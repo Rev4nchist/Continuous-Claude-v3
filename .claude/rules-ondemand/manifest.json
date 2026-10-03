@@ -113,7 +113,8 @@
         "^kusto\\.cli(\\.exe)?(\\s|$)"
       ],
       "segment": [
-        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)"
+        "^([\"'][^\"']*|[^\\s\"']*)[Kk]usto\\.[Cc]li(\\.exe)?[\"']?(\\s|$)",
+        "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*(?:az(?:\\.cmd)?\\s+rest|curl(?:\\.exe)?|[Ii]nvoke-(?:[Rr]est[Mm]ethod|[Ww]eb[Rr]equest|[Aa]z[Rr]est[Mm]ethod)|[Ii][Rr][Mm]|[Ii][Ww][Rr])\\b.*(?:kusto\\.fabric\\.microsoft\\.com|/v1/rest/mgmt)"
       ],
       "skill": [
         "^kusto-cli$"
@@ -298,14 +299,20 @@
       "mode": "inject",
       "command": [
         "^fab(\\.exe)?(\\s|$)",
+        "^az(\\.cmd)?\\s+fabric(\\s|$)",
+        "^\\w+-[Aa]z[Ff]abric\\w*(\\s|$)",
         "^python(\\.exe)?\\s+\\S*playground[\\\\/]\\S*(deploy|iq|access)\\.py(\\s|$)"
       ],
       "segment": [
         "^python(\\.exe)?\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access)\\.py",
-        "^az(\\.cmd)?\\s+rest\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com)",
-        "^curl(\\.exe)?\\s.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)",
-        "^Invoke-(RestMethod|WebRequest)\\b.*(api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com)"
-      ]
+        "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*(?:az(?:\\.cmd)?\\s+rest|curl(?:\\.exe)?|[Ii]nvoke-(?:[Rr]est[Mm]ethod|[Ww]eb[Rr]equest|[Aa]z[Rr]est[Mm]ethod)|[Ii][Rr][Mm]|[Ii][Ww][Rr])\\b.*(?:api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|kusto\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com|Microsoft\\.Fabric)",
+        "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*az(?:\\.cmd)?\\s+resource\\b.*Microsoft\\.Fabric",
+        "^sqlcmd(\\.exe)?\\s(?:.*\\s)?(?:-S|--server)[\\s:=]*[\"']?[^\\s\"']*fabric\\.microsoft\\.com"
+      ],
+      "skill": [
+        "^([\\w-]+:fabric|fabric|fabric-(data|ai|lakehouse)[\\w-]*|skills-for-fabric:[\\w-]+)$"
+      ],
+      "note": "The playground deploy/iq/access.py triggers are FourthCompanyBrain-specific. Kept: harmless in other repos. Router regexes have no flags, so cmdlet names use [Ii]-style classes."
     }
   ]
 }

@@ -179,6 +179,19 @@ def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool, 
     return alias
 
 
+def _absolute_deny(skill_path: Path) -> list[str]:
+    """Read-deny patterns for the skill's own source folder (the repo copy a baseline can still find).
+
+    Claude Code writes an absolute path in a permission rule with a leading // . On Windows both the
+    drive form (//C:/Users/...) and the POSIX drive form (//c/Users/...) are given.
+    """
+    posix = Path(skill_path).resolve().as_posix().rstrip("/")
+    rules = [f"/{posix}/**" if posix.startswith("/") else f"//{posix}/**"]
+    if len(posix) > 2 and posix[1] == ":":
+        rules.append(f"//{posix[0].lower()}{posix[2:]}/**")
+    return rules
+
+
 def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAULT_TOOLS,
               max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None, companion=None, inject=None) -> list[RunSpec]:
     """One RunSpec per model x eval x config. Writes the temp projects and settings files.
@@ -196,7 +209,10 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
     personal = home / ".claude" / "skills" / name
     overrides = {**headless.user_skill_overrides(home), **{n: "off" for n in real_names}}
     companion = Path(companion).resolve() if companion else None
-    deny_reads = [f"~/.claude/skills/{n}/**" for n in [*real_names, *([companion.name] if companion else [])]]
+    # Fence off every copy of the skill a baseline could read: the personal copies under both names,
+    # the repo source folder, and (for a hub) the companion tree and its repo source.
+    deny_reads = ([f"~/.claude/skills/{n}/**" for n in [*real_names, *([companion.name] if companion else [])]]
+                  + _absolute_deny(skill_path) + (_absolute_deny(companion) if companion else []))
     exe = exe or _exe()
     specs = []
     for model in models:

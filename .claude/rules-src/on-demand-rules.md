@@ -23,13 +23,13 @@ commit message, design a page, or plan a CMA job). The hook fires at the action,
 | `cross-terminal-db.md` | `psql`, `pg_dump`, `docker exec ... postgres` | inject |
 | `headless-claude-mcp.md` | `claude -p` / `--print` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP tools, or its skill | inject |
-| `fabric-playbook.md` | Fabric API or OneLake calls, `fab`, FourthCompanyBrain playground scripts | inject |
+| `fabric-playbook.md` | skill `fabric*`, Fabric/OneLake calls, `fab`, `az fabric`, `sqlcmd` to a Fabric host | inject |
 | `proactive-delegation.md` | the first Agent spawn (spark scope, post-spark checks, kraken waves) | inject |
 
 Decisions these rules shape before any tool call (keep them in mind without loading):
 - Codex and Grok write runs, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
 - CMA bills Dave's API key, not the subscription. Grok is parked on this machine.
-- Fabric: run preflight first; stop all load on the first capacity error; never pause or resize a capacity.
+- Fabric: run the project preflight first; stop all load on the first capacity error; never pause or resize a capacity.
 - Never merge a PR without Dave's explicit yes. Land CCv3 PRs with `scripts/github/land-pr.ps1`.
 - When a PR opens, start the CodeRabbit loop in the same turn. Never request the paid on-demand review.
 - Headless `claude -p` that needs a claude.ai connector: clear `ANTHROPIC_API_KEY` and pass `--allowedTools`.

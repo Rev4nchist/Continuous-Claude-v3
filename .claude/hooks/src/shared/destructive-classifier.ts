@@ -79,6 +79,36 @@ export const DESTRUCTIVE_PATTERNS: DPattern[] = [
   { name: 'docker volume rm', re: /\bdocker\s+volume\s+rm\b/i },
   { name: 'docker force rm', re: /\bdocker\s+(rm|rmi)\s+[^&|;]*(--force|-f\b|-\w*f\b)/i },
 ];
+
+// Fabric guards (skill-intake-fabric Phase 1). Suspend, resume, resize or delete of a capacity stops,
+// bills or removes every workload on it; a bulk PUT to dataAccessRoles replaces ALL OneLake roles.
+// REST calls carry the URL in QUOTES, which stripQuotedStrings() blanks, so these patterns run on the
+// raw command SEGMENTS (quotes kept, split on ; & | and newlines). Each must START with the command, after
+// zero or more lead-ins, so an echo, a commit message or a grep that only names the URL never matches.
+// Lead-ins: VAR=x, `$x =`, `[void]`, `(`, `{`, `try {`, `if (...) {`, `ForEach-Object {`, `&`, sudo.
+const LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+const SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
+const HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
+// The HTTP method, any spelling: --method x, --request x, -X x, -m x, -Method x, -Method:x, -CustomMethod x, -Meth x.
+const methodIs = (verbs: string): string =>
+  String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
+// An ARM capacity resource itself (not a subpath such as /skus), with or without a host, trailing slash allowed.
+const CAPACITY_RESOURCE = String.raw`.*(?:Microsoft\.(?:Fabric|PowerBIDedicated)/|management\.azure\.com\S*/)capacities/[^/\s"'?#]+/?(?:[?#"'\s]|$)`;
+const seg = (rest: string): RegExp => new RegExp(SEG_START + rest, 'i');
+export const SEGMENT_PATTERNS: DPattern[] = [
+  { name: 'Fabric capacity suspend/resume/resize/delete', re: seg(String.raw`az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b`) },
+  { name: 'Az.Fabric capacity cmdlet (suspend/resume/update/remove)', re: seg(String.raw`(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b`) },
+  // az resource on a capacity: delete, update (--set sku...), create (PUT), invoke-action suspend|resume.
+  { name: 'az resource change of a Fabric capacity', re: seg(String.raw`az(?:\.cmd|\.exe)?\s+resource\s+(?:delete|update|create|invoke-action)\b.*Microsoft\.(?:Fabric|PowerBIDedicated)/capacities`) },
+  // Fabric CLI verbs that act on a capacity path (.capacities/<name>.Capacity). Case-sensitive on purpose.
+  { name: 'Fabric CLI capacity stop/start/set/rm/create', re: new RegExp(SEG_START + String.raw`fab(?:\.exe)?\s+(?:stop|start|set|rm|create)\b.*(?:\.capacities[\\/]|\.Capacity(?:["'\s]|$))`) },
+  { name: 'Fabric capacity suspend/resume via REST', re: seg(HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?#]+/(?:suspend|resume)\b`) },
+  // ARM PATCH, PUT or DELETE on the capacity resource itself changes its SKU or removes it. GET and subpaths stay allowed.
+  { name: 'Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)', re: seg(HTTP_CLIENT + methodIs('patch|put|delete') + CAPACITY_RESOURCE) },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: 'OneLake bulk PUT dataAccessRoles (replaces ALL roles)', re: seg(HTTP_CLIENT + methodIs('put') + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) },
+];
 // PowerShell TOOL only. On the PowerShell tool a recursive delete is the command itself,
 // unquoted, so it can be gated without the false-positive problem described below (which is
 // about the Bash tool, where `Remove-Item` only ever appears inside a quoted payload). Aliases:
@@ -290,20 +320,113 @@ export function normalizeGitGlobalOptions(scan: string): string {
   );
 }
 
+/**
+ * The `$(...)` and (Bash) backtick substitutions of a text block that EXPANDS, i.e. an unquoted heredoc
+ * or a PowerShell `@"` here-string: the shell runs those. A backslash (Bash) or backtick (PowerShell)
+ * before the `$` makes it literal. Quotes inside the prose are plain text, so this scans by hand.
+ */
+function bodySubstitutions(body: string, tool: string): string[] {
+  const out: string[] = [];
+  const esc = tool === 'PowerShell' ? '`' : '\\';
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === esc) { i += 2; continue; }
+    if (c === '$' && body[i + 1] === '(') {
+      const { inner, end } = readBalanced(body, i + 2, '(', ')');
+      out.push(inner); i = end; continue;
+    }
+    if (c === '`' && tool !== 'PowerShell') {
+      const { inner, end } = readBacktick(body, i + 1);
+      out.push(inner); i = end; continue;
+    }
+    i++;
+  }
+  return out;
+}
+
+/**
+ * What the shell would EXECUTE, with text blocks reduced. A block that only WRITES TEXT is not a call,
+ * so a doc that quotes a Fabric command stays allowed. A literal block (`<<'EOF'`, `<<"EOF"`, `@'...'@`)
+ * is dropped. An expanding block (`<<EOF`, `@"..."@`) is replaced by its `$(...)` substitutions, which
+ * run. Bash: only `cat|tee ... <<EOF` with nothing after the marker but an optional redirect counts (no
+ * pipe, `;` or `&`, so `cat <<EOF | bash` and `bash <<EOF` keep their body: those lines run).
+ * PowerShell: `$x = @'` / `$x = @"` assignments (accepted gap: `iex $x` can still run one).
+ * An unterminated block ends at the end of the command. Anything unrecognised is left alone.
+ */
+function executableView(command: string, tool: string): string {
+  const out: string[] = [];
+  let end: RegExp | null = null;
+  let expands = false;
+  let body: string[] = [];
+  const flush = (): void => {
+    if (expands) for (const s of bodySubstitutions(body.join('\n'), tool)) out.push(`$(${s})`);
+    end = null; body = [];
+  };
+  for (const line of command.split('\n')) {
+    if (end) { if (end.test(line)) flush(); else body.push(line); continue; }
+    if (tool === 'PowerShell') {
+      // The opener (`$x = @'`) goes too: its lone quote would swallow the lines after the block.
+      const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
+      if (h) { end = new RegExp(`^\\s*${h[1]}@`); expands = h[1] === '"'; continue; }
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+    const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
+    if (m) { end = new RegExp(`^\\s*${m[2]}\\s*$`); expands = m[1] === ''; }
+  }
+  if (end) flush();
+  return out.join('\n');
+}
+
+/**
+ * Join line continuations and resolve escapes, so a pattern sees the command the shell sees.
+ * Bash: a backslash before a newline continues the line. PowerShell: a backtick does, and a backtick
+ * before a letter or digit is only an escape (`` del`ete `` runs as delete), so the character stays.
+ * Any other backtick pair (an escaped quote, `$`, space) is dropped whole: that keeps an escaped quote
+ * from opening a string. A backslash before a newline in PowerShell is a path, not a continuation:
+ * a space after it stops parseExecutable (bash rules) from swallowing the newline.
+ */
+function normalizeEscapes(s: string, tool: string): string {
+  if (tool !== 'PowerShell') return s.replace(/\\\r?\n/g, ' ');
+  return s.replace(/`\r?\n/g, ' ').replace(/`([A-Za-z0-9])/g, '$1').replace(/`./g, '').replace(/\\(\r?\n)/g, '\\ $1');
+}
+
+/**
+ * Test SEGMENT_PATTERNS against each top-level command segment (quotes kept). Joining continuations
+ * first matters: otherwise a multi-line Invoke-RestMethod splits into segments no pattern can see whole.
+ */
+function classifySegments(view: string, tool: string): string | null {
+  try {
+    for (const seg of parseExecutable(normalizeEscapes(view, tool)).segments) {
+      for (const p of SEGMENT_PATTERNS) if (p.re.test(seg)) return p.name;
+    }
+  } catch {
+    // fail-open
+  }
+  return null;
+}
+
 export function classifyDestructive(command: string, depth = 0, tool: string = 'Bash'): string | null {
   if (!command || typeof command !== 'string') return null;
-  const scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  let scan = normalizeGitGlobalOptions(stripQuotedStrings(command, tool));
+  // PowerShell: `` res`et `` runs as reset. Quotes are already stripped, so the escaped letter can go.
+  if (tool === 'PowerShell') scan = scan.replace(/`([A-Za-z0-9])/g, '$1');
   const patterns = tool === 'PowerShell' ? [...DESTRUCTIVE_PATTERNS, ...POWERSHELL_PATTERNS] : DESTRUCTIVE_PATTERNS;
   for (const p of patterns) {
     if (p.re.test(scan)) return p.name;
   }
+  const view = executableView(command, tool);
+  const segHit = classifySegments(view, tool);
+  if (segHit) return segHit;
   if (depth < 4) {
     try {
       // parseExecutable follows bash rules, where a backtick starts a command substitution.
-      // In PowerShell the backtick is only the escape character, so drop `x escapes first,
-      // or an escaped quote in a message ("say `"git reset --hard`"") parses as a command.
-      const parseInput = tool === 'PowerShell' ? command.replace(/`./g, '') : command;
-      const { segments, substitutions } = parseExecutable(parseInput);
+      // In PowerShell the backtick is only the escape character, so resolve escapes first
+      // (normalizeEscapes), or an escaped quote in a message ("say `"git reset --hard`"")
+      // parses as a command.
+      const { segments, substitutions } = parseExecutable(normalizeEscapes(view, tool));
       const payloads = [...wrapperPayloadsFromSegments(segments), ...substitutions];
       for (const payload of payloads) {
         const inner = classifyDestructive(payload, depth + 1, tool);

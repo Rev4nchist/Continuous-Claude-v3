@@ -67,11 +67,31 @@ function existsFn(o) {
   for (const f of o.indexFiles) for (let i = f.indexOf('/'); i !== -1; i = f.indexOf('/', i + 1)) dirs.add(f.slice(0, i));
   // Both the real repo and the export folder map onto the index: a skill's ../ link resolves under
   // the export folder, which holds only the exported paths, so the index is the source of truth.
-  const roots = [o.fallbackRoot, o.repoRoot].filter(Boolean).map((r) => path.resolve(r).replace(/\\/g, '/').replace(/\/$/, ''));
+  // A reference may spell the repo root another way: other case, an 8.3 short name (DAVID~1.HAY), or
+  // through a link. realpath canonicalises both sides, and path.relative is case-insensitive on
+  // Windows, so the reference still maps onto the index instead of falling back to the working tree.
+  // The target may not exist on disk (a ../ link into the export folder, or a deleted file), so
+  // canonicalise its nearest existing ancestor and re-append the rest.
+  const real = (x) => {
+    let head = x;
+    const tail = [];
+    for (;;) {
+      try { return path.join(fs.realpathSync.native(head), ...tail); } catch { /* walk up */ }
+      const up = path.dirname(head);
+      if (up === head) return x;
+      tail.unshift(path.basename(head));
+      head = up;
+    }
+  };
+  const roots = [o.fallbackRoot, o.repoRoot].filter(Boolean).map((r) => real(path.resolve(r)));
   return (p) => {
-    const n = path.resolve(String(p)).replace(/\\/g, '/');
+    const abs = real(path.resolve(String(p)));
     for (const r of roots) {
-      if (n.startsWith(r + '/')) { const rel = n.slice(r.length + 1); return o.indexFiles.has(rel) || dirs.has(rel); }
+      const rel = path.relative(r, abs);
+      if (rel && !rel.startsWith('..') && !path.isAbsolute(rel)) {
+        const key = rel.replace(/\\/g, '/');
+        return o.indexFiles.has(key) || dirs.has(key);
+      }
     }
     return fs.existsSync(p);
   };

@@ -10,6 +10,7 @@
     ],
     "expected_behavior": [
       "Flags as a HIGH tiger that both crontabs are active from Friday 18:00 to Monday 09:00, so send_digest.py runs twice per night and emails every subscriber twice, because send_digest.py has no check or lock against a second run for the same day.",
+      "Flags as a tiger or elephant that jobs/crontab.old runs a fourth job the plan never moves: expire_sessions.py every 15 minutes, so sessions stop expiring once app-vm-01 is retired",
       "Each tiger carries an explicit statement of the mitigation that was looked for and NOT found (a mitigation_checked field or an equivalent 'checked: no X, no Y' line), for example no unique constraint, no lock and no already-sent check for the digest.",
       "Classifies the hardcoded TEMPLATE_DIR path /var/app/digest/templates in send_digest.py as a paper tiger or false alarm, not a tiger, and cites the os.path.exists fallback to the templates folder next to the code.",
       "Classifies the 0007 migration on the ~40M-row digest_log table as a paper tiger or false alarm, not a tiger, because it uses CREATE INDEX CONCURRENTLY.",

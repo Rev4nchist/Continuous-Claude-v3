@@ -1,0 +1,22 @@
+> csv-tools@2.3.1 test
+> vitest run src/csv
+
+ RUN  v3.2.4 /repo
+
+ ✓ src/csv/splitLines.test.ts (9 tests) 14ms
+ ❯ src/csv/parseRow.test.ts (15 tests | 1 failed) 22ms
+   ✓ parseRow > splits plain fields
+   ✓ parseRow > keeps commas inside quotes
+   ✓ parseRow > unescapes doubled quotes
+   ✓ parseRow > handles trailing delimiter
+   × parseRow > handles empty quoted field followed by a field
+     → expected [ 'a', '' ] to deeply equal [ 'a', '', 'b' ]
+
+ FAIL  src/csv/parseRow.test.ts > parseRow > handles empty quoted field followed by a field
+AssertionError: expected [ 'a', '' ] to deeply equal [ 'a', '', 'b' ]
+ ❯ src/csv/parseRow.test.ts:88:31
+
+ Test Files  1 failed | 1 passed (2)
+      Tests  1 failed | 23 passed (24)
+   Start at  16:42:07
+   Duration  412ms
