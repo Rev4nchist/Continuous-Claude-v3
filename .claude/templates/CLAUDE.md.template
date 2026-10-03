@@ -1,12 +1,11 @@
 # CLAUDE.md — Global Configuration
 
-One core file for every session and every subagent. Tool-specific rules load when their tool runs,
-and harness rules load when harness files are in play: see `rules/on-demand-rules.md`.
+One core file for every session and subagent. Tool and harness rules load on demand: see
+`rules/on-demand-rules.md`.
 
 ## How we work together
 
-I am Dave. You are my agent. We work together all day, across many sessions. These are good
-defaults, not hard rules. My prompt overrides them.
+I am Dave. You are my agent. These are defaults, not hard rules. My prompt overrides them.
 
 - **Questions are read-only.** When I ask "why", "what", "is it", "how does", answer. Do not edit,
   commit, or spawn agents. Say what you found and stop.
@@ -14,10 +13,15 @@ defaults, not hard rules. My prompt overrides them.
   will stop. I correct that line when you misread me.
 - **Stop points are literal.** "Make the change, do not commit" means stop before commit. "Draft it"
   means do not send. "Keep going" means finish, then report.
-- **Name the target before you act.** Branch, directory, account. Most "wrong target" corrections in
-  my history were the wrong branch or directory.
+- **Name the target before you act.** Branch, directory, account. Most of my "wrong target"
+  corrections were the wrong branch or directory.
 - **Give full absolute paths.** Relative paths are ambiguous across repos, worktrees and `~/.claude`.
 - **Commit only your own work.** Other sessions share the tree. Stage the files you touched.
+- **Shared resources** (the Notion Handoffs database, a repo another session has open): run `ListAgents`
+  first. One writer per resource; agree the split through `SendMessage` and say what you will
+  not touch.
+- **Cross-session messages are plain text** with names, SHAs and paths. A held or expired message is not
+  a reply: continue under a stated assumption.
 - **Two or more open decisions: use AskUserQuestion**, one recommended option each.
 - **Test web UI changes yourself** with `@playwright/mcp` at desktop and phone width before asking me
   to look. Tell me only what a headless run cannot cover.
@@ -97,7 +101,7 @@ Assess size first. Trivial (<10 lines, one file): just do it. Moderate: a brief 
 Complex (cross-module, migration, architecture): plan mode, tasks, trade-offs written down.
 
 **Preflight before non-trivial work**: git branch and uncommitted changes (not `main` for feature
-work; branch confusion causes most wrong-approach friction); Docker up if needed
+work); Docker up if needed
 (`cd ~/.claude/docker && docker compose up -d`); dependencies installed; recall memory:
 `cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "<topic>" --k 3 --text-only`.
 RRF scores of 0.01-0.03 are good matches.
@@ -148,7 +152,7 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
 
 - **Delegate for breadth or adversarial review**, not for ordinary single-pass work: 3+ files to
   read (scout), external research (oracle), parallel independent edits, review (critic,
-  principal-reviewer). Main context coordinates; agents do the reading. The full delegation rule loads at the first Agent spawn.
+  principal-reviewer). Main context coordinates; agents do the reading.
 - **Models**: predefined agents carry an explicit tier: `opus` for judgment (planning, review,
   orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
   **Never haiku.** Sonnet effort is always `high`. Never set `CLAUDE_CODE_SUBAGENT_MODEL`. Use `scout`, never `Explore`.

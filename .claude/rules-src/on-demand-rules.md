@@ -1,12 +1,12 @@
 # On-demand rules
 
 These rules are NOT always loaded. They live in `~/.claude/rules-ondemand/`. The `rule-router` hook
-loads each one the first time a matching tool call happens in a session. A **block** rule refuses
+loads each one at the first matching tool call in a session. A **block** rule refuses
 that first call and gives the rule as the reason: read it, then re-issue the call or change course.
 An **inject** rule arrives as context and the call runs.
 
 **Read the file yourself before you PLAN work in its area** (before you propose a Codex run, write a
-commit message, design a page, or plan a CMA job). The hook fires at the action, which is after the plan.
+commit message, design a page, or plan a CMA job). The hook fires at the action, after the plan.
 
 | Rule file | Loads on | Mode |
 |---|---|---|
@@ -42,7 +42,7 @@ CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agent
 `settings.json`, the sync scripts). Before "done" on harness work, walk the every-surface checklist.
 `agent-model-selection.md` (tier mechanics, the `.json` mirror) loads when agent files are in play.
 
-## Folded into skills (one line each here)
+## Folded into skills
 
 - New platform access: prefer a native CLI, then OpenCLI, then MCP; browser automation last. Detail: `cli-integration` skill.
 - Structural code questions (who calls X, what breaks): run `tldr`, then Read the 2-4 files it names. Detail: `tldr-code` skill.
@@ -51,5 +51,6 @@ CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agent
 - New machine: `BOOTSTRAP.md`, then `python wizard.py`, then `bash verify-setup.sh`.
 
 Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
-Weekly audit (task `CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
-False fires (a rule on the wrong command) go to `~/.claude/logs/rule-router-false-fires.jsonl`. When a fired rule is not about the call, record it at once (the rule text shows the command); `CCv3-RuleRouter-Review` judges the rest each Monday and posts a review page to Dave's Notion Scratchpad.
+Weekly audit (`CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
+A fired rule not about the call is a false fire: record it at once in `~/.claude/logs/rule-router-false-fires.jsonl`.
+`CCv3-RuleRouter-Review` judges the rest each Monday and posts a review to Dave's Notion Scratchpad.
