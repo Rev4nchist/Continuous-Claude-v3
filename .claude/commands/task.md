@@ -96,7 +96,6 @@ Context:
 ## Integration
 - **Git**: Automatic branching & checkpoints
 - **TodoWrite**: Sync with current todo system
-- **Personas**: Task-specific persona activation
 - **MCP**: Context preservation across tools
 - **Commands**: Chain with other /user: commands
 
