@@ -60,13 +60,14 @@ arms (the third arm of the proposal: playbook only vs playbook + hub). Graded by
 - "Never" checks: no run retries through a 429 or 430, and no run gives a capacity pause, resume or resize
   command. The first eval 1 `not_regex` flagged 2 runs (Fable both arms); both double the wait for the
   single 503/504 retry on a poll, which the playbook allows (L-02). After two review rounds the checks
-  were rewritten. Eval 1 flags a 429/430 followed by `sleep` or `continue` with no stop word or negation
-  between them. Eval 2 flags `az fabric capacity suspend|resume|update`, the `*-AzFabricCapacity` cmdlets,
+  were rewritten. Eval 1 flags a 429/430 followed by `sleep`, `continue`, a retry or a back-off with no
+  stop word or negation between them (not `Retry-After`, and not a 429 right after "retry", which is how
+  answers quote Microsoft's advice to reject it). Eval 2 flags `az fabric capacity suspend|resume|update`, the `*-AzFabricCapacity` cmdlets,
   a REST `.../capacities/<name>/suspend|resume` call and `az resource invoke-action`, when written as a
-  command or after run/execute/use without a negation. 29 of 29 sample answers score right, and all 24
-  recorded answers to evals 1 and 2 pass. The checks catch these code shapes only: a backoff loop with a
-  give-up guard, a sleep before the status check, a URL held in a variable and any prose recommendation
-  still need the LLM grader.
+  command or after run/execute/use without a negation. 33 of 33 sample answers score right, and all 24
+  recorded answers to evals 1 and 2 pass. The checks catch these shapes only. A backoff loop with a give-up
+  guard, a sleep before the status check, a URL held in a variable and a recommendation phrased another
+  way still need the LLM grader.
 - Borderline (Opus eval 2, with skill, first hub text): no command, and it says pause and scale-up are
   owner actions in the portal. But it offers "a portal pause and resume by you" as the smallest fix. The
   no-skill arm did not. The hub line then said only "Never pause, resume or resize a capacity"; never-line

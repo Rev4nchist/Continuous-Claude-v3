@@ -13,7 +13,7 @@
     "Sends the x-ms-fabric-skill header on the Fabric API calls."
   ],
   "checks": [
-    {"type": "not_regex", "pattern": "\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep)\\b", "flags": "i"},
+    {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"},
     {"type": "regex", "pattern": "jobType=RunNotebook"}
   ]
  },
