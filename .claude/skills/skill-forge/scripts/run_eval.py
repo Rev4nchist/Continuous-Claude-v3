@@ -72,6 +72,7 @@ class RunSpec:
     skill_alias: str | None = None   # the renamed copy a with_skill run uses; None for the baseline
     source_dir: Path | None = None   # the skill folder that was passed in
     personal_dir: Path | None = None  # ~/.claude/skills/<name>: reads there count as inside the skill
+    real_names: tuple = ()  # the frontmatter name and the folder name: both are off in every run
 
     @property
     def copy_dir(self) -> Path | None:
@@ -139,6 +140,19 @@ def _build_project(cwd: Path, skill_path: Path, ev: dict, install_target: bool) 
     return alias
 
 
+def _absolute_deny(skill_path: Path) -> list[str]:
+    """Read-deny patterns for the skill's own source folder (the repo copy a baseline can still find).
+
+    Claude Code writes an absolute path in a permission rule with a leading // . On Windows both the
+    drive form (//C:/Users/...) and the POSIX drive form (//c/Users/...) are given.
+    """
+    posix = Path(skill_path).resolve().as_posix().rstrip("/")
+    rules = [f"/{posix}/**" if posix.startswith("/") else f"//{posix}/**"]
+    if len(posix) > 2 and posix[1] == ":":
+        rules.append(f"//{posix[0].lower()}{posix[2:]}/**")
+    return rules
+
+
 def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAULT_TOOLS,
               max_turns=headless.DEFAULT_MAX_TURNS, exe=None, home=None) -> list[RunSpec]:
     """One RunSpec per model x eval x config. Writes the temp projects and settings files.
@@ -148,8 +162,12 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
     skill_path, out_dir, work_dir = Path(skill_path).resolve(), Path(out_dir), Path(work_dir)
     home = Path(home) if home else Path.home()
     name = skill_name_of(skill_path)
+    # Claude Code can register a skill under its folder name as well as its frontmatter name
+    # (create_handoff's folder vs its name: create-handoff). Switch off and fence off both.
+    real_names = list(dict.fromkeys([name, skill_path.name]))
     personal = home / ".claude" / "skills" / name
-    overrides = {**headless.user_skill_overrides(home), name: "off"}
+    overrides = {**headless.user_skill_overrides(home), **{n: "off" for n in real_names}}
+    deny_reads = [f"~/.claude/skills/{n}/**" for n in real_names] + _absolute_deny(skill_path)
     exe = exe or _exe()
     specs = []
     for model in models:
@@ -159,21 +177,25 @@ def plan_runs(skill_path, evals, models, out_dir, work_dir, tools=headless.DEFAU
                 cwd = work_dir / tag / "project"
                 cwd.mkdir(parents=True)
                 alias = _build_project(cwd, skill_path, ev, install_target=config == "with_skill")
-                settings = headless.write_settings(work_dir / tag / "settings.json", overrides)
+                settings = headless.write_settings(work_dir / tag / "settings.json", overrides, deny_reads)
                 mcp = headless.write_empty_mcp(work_dir / tag / "mcp.json")
                 command = headless.build_command(model, settings, mcp, tools, max_turns, exe=exe, allowed=tools)
                 run_dir = Path(out_dir) / model.alias / f"eval-{ev['id']}" / config / "run-1"
                 specs.append(RunSpec(ev["id"], ev, model, config, name, run_dir, cwd, settings, mcp, command, ev["prompt"],
-                                     skill_alias=alias, source_dir=skill_path, personal_dir=personal))
+                                     skill_alias=alias, source_dir=skill_path, personal_dir=personal,
+                                     real_names=tuple(real_names)))
     return specs
 
 
 # ----------------------------------------------------------------- execution
 
-def exclusion_reason(config: str, listed, fired: bool, read_skill: bool, error: str | None) -> str | None:
+def exclusion_reason(config: str, listed, fired: bool, read_skill: bool, error: str | None,
+                     real_fired: bool = False) -> str | None:
     """Why a run must not be graded or counted, or None. A broken run says nothing about the skill."""
     if error:
         return error
+    if config == "with_skill" and real_fired:
+        return "the real skill fired instead of the eval copy (its off override did not apply)"
     if config == "without_skill":
         if listed:
             return "the skill is listed in the without_skill run (the off override did not apply, for example to a plugin skill)"
@@ -191,18 +213,30 @@ def execute(spec: RunSpec, timeout: int) -> dict:
     run = headless.run_claude(spec.command, spec.prompt, spec.cwd, timeout)
     info = headless.parse_stream(run.stdout)
     # A read under the source folder, the renamed copy or the personal copy is a read of the skill.
-    roots = [r for r in (spec.copy_dir, spec.personal_dir) if r]
+    real_names = spec.real_names or (spec.skill_name,)
+    personal_roots = [spec.personal_dir.parent / n for n in real_names] if spec.personal_dir else []
+    roots = [r for r in (spec.copy_dir, *personal_roots) if r]
     nav = headless.navigation(info["files_read"], spec.source_dir or spec.copy_dir, extra_roots=roots)
     read_skill = bool(nav["skill_files_read"])
     m = headless.metrics(info["result"], run.seconds)
-    target = spec.skill_alias or spec.skill_name  # with_skill: the renamed copy; baseline: the real name
     listed = info["listed_skills"]
-    skill_listed = None if listed is None else any(headless.name_matches(s, target) for s in listed)
-    skill_fired = any(headless.name_matches(s, target) for s in info["skills_fired"])
-    error = (run.error
-             or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
-             or headless.result_error(info))
-    excluded = exclusion_reason(spec.config, skill_listed, skill_fired, read_skill, error)
+
+    def matches(names, targets):
+        return any(headless.name_matches(s, t) for s in names for t in targets)
+
+    # with_skill: the renamed copy; baseline: any real name (frontmatter or folder).
+    targets = (spec.skill_alias,) if spec.skill_alias else real_names
+    skill_listed = None if listed is None else matches(listed, targets)
+    skill_fired = matches(info["skills_fired"], targets)
+    real_fired = bool(spec.skill_alias) and matches(info["skills_fired"], real_names)
+    # A stop at the turn cap is an answer that failed, not a broken run: excluding it would drop
+    # exactly the baselines that floundered without the skill. It is graded 0 without a grader call.
+    no_answer = (info.get("result") or {}).get("subtype") == "error_max_turns" and not info["skill_errors"]
+    error = None if no_answer else (
+        run.error
+        or (f"skill load failed: {info['skill_errors'][0]}" if info["skill_errors"] else None)
+        or headless.result_error(info))
+    excluded = exclusion_reason(spec.config, skill_listed, skill_fired, read_skill, error, real_fired)
 
     d = spec.run_dir
     (d / "outputs").mkdir(parents=True, exist_ok=True)
@@ -222,6 +256,8 @@ def execute(spec: RunSpec, timeout: int) -> dict:
         "final_text": info["final_text"], "metrics": m,
         # A fired skill whose load failed, or a run that did not end in success, is a broken run.
         "error": error,
+        # The run stopped at --max-turns without a final answer: it counts, and every assertion fails.
+        "no_answer": no_answer,
         # Why this run must not be graded or counted. None when it counts.
         "excluded": excluded,
         "stderr": run.stderr, "assertions": spec.eval["assertions"],
@@ -268,6 +304,14 @@ def grade_run(run_dir: Path, grader_model: headless.Model, timeout: int = 300) -
         # A broken run is not graded. The grading file says why, and the benchmark skips it.
         grading = {"excluded": record["excluded"], "expectations": [],
                    "summary": {"passed": 0, "failed": 0, "total": 0, "pass_rate": None}}
+        headless.write_json(run_dir / "grading.json", grading)
+        return grading
+    if record.get("no_answer"):
+        # Stopped at the turn cap with no final answer: nothing to grade, so every assertion fails.
+        exps = [{"text": a, "passed": False, "evidence": "the run stopped at the turn cap without a final answer"}
+                for a in record["assertions"]]
+        grading = {"expectations": exps, "no_answer": True,
+                   "summary": {"passed": 0, "failed": len(exps), "total": len(exps), "pass_rate": 0.0}}
         headless.write_json(run_dir / "grading.json", grading)
         return grading
     grader = (SKILL_DIR / "agents" / "grader.md").read_text(encoding="utf-8")

@@ -1,0 +1,49 @@
+[
+  {
+    "skills": ["premortem"],
+    "query": "deep premortem on evals/files/plans/2026-10-01-cron-host-move.md. Job code is in evals/files/jobs, migration in evals/files/migrations. I start Friday.",
+    "files": [
+      "evals/files/plans/2026-10-01-cron-host-move.md",
+      "evals/files/jobs/crontab.old",
+      "evals/files/jobs/send_digest.py",
+      "evals/files/migrations/0007_add_sent_index.sql"
+    ],
+    "expected_behavior": [
+      "Flags as a HIGH tiger that both crontabs are active from Friday 18:00 to Monday 09:00, so send_digest.py runs twice per night and emails every subscriber twice, because send_digest.py has no check or lock against a second run for the same day.",
+      "Flags as a tiger or elephant that jobs/crontab.old runs a fourth job the plan never moves: expire_sessions.py every 15 minutes, so sessions stop expiring once app-vm-01 is retired",
+      "Each tiger carries an explicit statement of the mitigation that was looked for and NOT found (a mitigation_checked field or an equivalent 'checked: no X, no Y' line), for example no unique constraint, no lock and no already-sent check for the digest.",
+      "Classifies the hardcoded TEMPLATE_DIR path /var/app/digest/templates in send_digest.py as a paper tiger or false alarm, not a tiger, and cites the os.path.exists fallback to the templates folder next to the code.",
+      "Classifies the 0007 migration on the ~40M-row digest_log table as a paper tiger or false alarm, not a tiger, because it uses CREATE INDEX CONCURRENTLY.",
+      "Ends by asking Dave to choose how to proceed with these options or close equivalents: accept the risks and proceed, add mitigations to the plan (marked as recommended), research mitigation options, or discuss specific risks."
+    ]
+  },
+  {
+    "skills": ["premortem"],
+    "query": "Before I build this, how does it blow up in prod? evals/files/token-cache/plan.md, client is evals/files/token-cache/token_client.ts",
+    "files": [
+      "evals/files/token-cache/plan.md",
+      "evals/files/token-cache/token_client.ts"
+    ],
+    "expected_behavior": [
+      "Sorts the risks into three named groups: tigers, paper tigers and elephants.",
+      "Flags as a tiger that the refresh token is stored under the same Redis key with TTL = expires_in, so when the key expires the refresh token is lost too and no worker can refresh.",
+      "Flags as a tiger that several workers can miss the cache at once and each call refreshToken with the same refresh token; because the partner rotates refresh tokens, all but one refresh fail or invalidate each other.",
+      "Treats a hung or slow token endpoint as a paper tiger or false alarm, not a tiger, and cites the existing 5 s AbortSignal.timeout with 2 retries and backoff in token_client.ts.",
+      "States that HIGH-severity tigers block the build: each must be mitigated in the plan or explicitly accepted by Dave before implementation starts."
+    ]
+  },
+  {
+    "skills": ["premortem"],
+    "query": "quick premortem on evals/files/changes.diff before I open the PR",
+    "files": [
+      "evals/files/changes.diff"
+    ],
+    "expected_behavior": [
+      "Labels the analysis as quick mode (a PR or diff scope), not deep.",
+      "Flags as a HIGH tiger that MAX_AGE_DAYS = 7 is compared against a difference in seconds (now - getmtime), so every cache entry older than 7 seconds is deleted, and gives the location in tools/cache_gc.py.",
+      "Classifies shutil.rmtree in remove_entry as a paper tiger or false alarm, not a tiger, and cites the guard that rejects an empty name, '.', '..' and names containing a path separator.",
+      "Each tiger carries an explicit statement of the mitigation that was looked for and NOT found (a mitigation_checked field or equivalent), for example no dry-run flag, no unit conversion and no test in the diff.",
+      "Lists at least one initial concern that verification dismissed, as a false alarm or a paper tiger with the reason, separate from the verified tigers (a two-pass result, not one flat list)."
+    ]
+  }
+]

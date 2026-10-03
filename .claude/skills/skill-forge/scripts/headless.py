@@ -138,11 +138,18 @@ def write_json(path: Path, data) -> Path:
     return path
 
 
-def write_settings(path: Path, skill_overrides: dict | None = None) -> Path:
-    """A --settings file: every hook off, plus skillOverrides when given."""
+def write_settings(path: Path, skill_overrides: dict | None = None, deny_reads: list[str] | None = None) -> Path:
+    """A --settings file: every hook off, plus skillOverrides and Read deny rules when given.
+
+    deny_reads blocks direct reads of the real skill's folders. With the skill off, a model that
+    knows the skill exists (CLAUDE.md names some skills) can still open its SKILL.md with Read,
+    which contaminates the baseline.
+    """
     data: dict = {"disableAllHooks": True}
     if skill_overrides:
         data["skillOverrides"] = dict(skill_overrides)
+    if deny_reads:
+        data["permissions"] = {"deny": [f"Read({p})" for p in deny_reads]}
     return write_json(path, data)
 
 
@@ -218,6 +225,8 @@ def parse_stream(text: str) -> dict:
     listed = None  # skills the session listed at start: proves a skillOverrides "off" took effect
     skill_calls: dict[str, str] = {}  # tool_use id -> skill name
     skill_errors: list[str] = []
+    read_calls: dict[str, str] = {}  # tool_use id -> path; a Read counts only when its result is not an error
+    failed_reads: set[str] = set()
     for ev in _events(text):
         if ev.get("type") == "result":
             result = ev
@@ -225,9 +234,13 @@ def parse_stream(text: str) -> dict:
             listed = [str(s) for s in ev["skills"]]
         if ev.get("type") == "user":
             for block in _content(ev):
-                if isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error") \
-                        and block.get("tool_use_id") in skill_calls:
+                if not (isinstance(block, dict) and block.get("type") == "tool_result" and block.get("is_error")):
+                    continue
+                if block.get("tool_use_id") in skill_calls:
                     skill_errors.append(f"{skill_calls[block['tool_use_id']]}: {str(block.get('content'))[:200]}")
+                if block.get("tool_use_id") in read_calls:
+                    # A denied or failed Read did not read the file: it is not contamination.
+                    failed_reads.add(block["tool_use_id"])
         if ev.get("type") != "assistant":
             continue
         for block in _content(ev):
@@ -246,7 +259,8 @@ def parse_stream(text: str) -> dict:
                         if block.get("id"):
                             skill_calls[block["id"]] = s
                 elif name == "Read" and inp.get("file_path"):
-                    reads.append(str(inp["file_path"]))
+                    read_calls[block.get("id") or f"_anon{len(read_calls)}"] = str(inp["file_path"])
+    reads = [p for tid, p in read_calls.items() if tid not in failed_reads]
     # The answer is the result event's text, and only from a successful run. The last narration of a
     # run that ended in error_max_turns or lost its result event is not an answer.
     ok = result is not None and result.get("subtype") == "success" and isinstance(result.get("result"), str)

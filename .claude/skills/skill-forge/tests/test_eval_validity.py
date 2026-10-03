@@ -110,6 +110,68 @@ def test_the_users_skill_overrides_are_in_both_settings_files(tmp_path):
         assert "apiKeyHelper" not in cfg  # only the override map is copied
 
 
+def _plan_mismatched(tmp_path):
+    """probe-skill's folder is probe_skill: Claude Code can register it under either name."""
+    skills = tmp_path / "repo" / ".claude" / "skills"
+    write_skill(skills, "probe-skill")
+    (skills / "probe-skill").rename(skills / "probe_skill")
+    home = tmp_path / "home"
+    (home / ".claude").mkdir(parents=True)
+    specs = run_eval.plan_runs(skills / "probe_skill", [EVAL], headless.resolve_models("sonnet"),
+                               tmp_path / "out", tmp_path / "work", home=home)
+    by = {s.config: s for s in specs}
+    return by["with_skill"], by["without_skill"]
+
+
+def test_a_folder_name_that_differs_from_the_frontmatter_name_is_also_off(tmp_path):
+    w, b = _plan_mismatched(tmp_path)
+    for spec in (w, b):
+        cfg = json.loads(spec.settings_path.read_text())
+        assert cfg["skillOverrides"]["probe-skill"] == "off" and cfg["skillOverrides"]["probe_skill"] == "off"
+
+
+def test_both_settings_files_deny_reads_of_the_real_skill_folders(tmp_path):
+    w, b = _plan_mismatched(tmp_path)
+    for spec in (w, b):
+        deny = json.loads(spec.settings_path.read_text())["permissions"]["deny"]
+        assert "Read(~/.claude/skills/probe-skill/**)" in deny and "Read(~/.claude/skills/probe_skill/**)" in deny
+
+
+def test_both_settings_files_deny_reads_of_the_repo_source_folder(tmp_path):
+    w, b = _plan_mismatched(tmp_path)
+    src = (tmp_path / "repo" / ".claude" / "skills" / "probe_skill").resolve().as_posix()
+    for spec in (w, b):
+        deny = json.loads(spec.settings_path.read_text())["permissions"]["deny"]
+        assert any(src in r for r in deny), deny
+
+
+def test_a_denied_read_of_the_skill_is_not_contamination(tmp_path, monkeypatch):
+    _, home, _, b = plan(tmp_path)
+    personal = home / ".claude" / "skills" / "probe-skill"
+    denied = {"type": "user", "message": {"content": [{"type": "tool_result", "tool_use_id": "t1", "is_error": True,
+              "content": "<tool_use_error>File is in a directory that is denied by your permission settings.</tool_use_error>"}]}}
+    out = stream(init(["x"]), tool("Read", file_path=str(personal / "SKILL.md")), denied, result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(b, 10)
+    assert rec["baseline_contaminated"] is False and rec["excluded"] is None, rec["excluded"]
+
+
+def test_a_with_skill_run_where_the_real_skill_fires_is_excluded(tmp_path, monkeypatch):
+    w, _ = _plan_mismatched(tmp_path)
+    out = stream(init(["x", w.skill_alias, "probe_skill"]), tool("Skill", skill="probe_skill"), result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(w, 10)
+    assert rec["excluded"] and "real skill fired" in rec["excluded"], rec["excluded"]
+
+
+def test_a_baseline_where_the_folder_name_fires_is_excluded(tmp_path, monkeypatch):
+    _, b = _plan_mismatched(tmp_path)
+    out = stream(init(["x"]), tool("Skill", skill="probe_skill"), result())
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out))
+    rec = run_eval.execute(b, 10)
+    assert rec["excluded"] and "fired" in rec["excluded"], rec["excluded"]
+
+
 # ----------------------------------------------- 2, 3, 5: runs that must not count
 
 def _case_ids(cases):
@@ -126,7 +188,10 @@ CASES = [
     ("with-exit-1", "with_skill", lambda a: (stream(init([a]), result()), 1), "exit 1"),
     ("with-not-listed", "with_skill", lambda a: (stream(init(["x"]), result()), 0), "not listed"),
     ("no-result-event-exit-0", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a)), 0), "no result"),
-    ("max-turns-exit-0", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_max_turns")), 0), "error_max_turns"),
+    # A turn-cap stop is a failed answer, not a broken run: it counts (graded 0), in either config.
+    ("max-turns-with", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_max_turns")), 1), None),
+    ("max-turns-baseline", "without_skill", lambda a: (stream(init(["x"]), tool("Grep"), result("error_max_turns")), 1), None),
+    ("execution-error", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), result("error_during_execution")), 0), "error_during_execution"),
     ("skill-load-denied", "with_skill", lambda a: (stream(init([a]), tool("Skill", skill=a), tool_error(), result()), 0), "skill load failed"),
 ]
 
@@ -143,6 +208,20 @@ def test_a_run_that_cannot_count_is_excluded_with_its_reason(tmp_path, monkeypat
         assert rec["excluded"] is None, rec["excluded"]
     else:
         assert rec["excluded"] and want in rec["excluded"], rec["excluded"]
+
+
+def test_a_turn_cap_stop_is_graded_zero_without_calling_the_grader(tmp_path, monkeypatch):
+    _, _, _, b = plan(tmp_path)
+    out = stream(init(["x"]), tool("Grep"), result("error_max_turns"))
+    patch_run(monkeypatch, lambda *a, **k: fake_run(out, 1))
+    rec = run_eval.execute(b, 10)
+    assert rec["no_answer"] is True and rec["excluded"] is None
+
+    def no_grader(*a, **k):
+        raise AssertionError("the grader must not run for a turn-cap stop")
+    patch_run(monkeypatch, no_grader)
+    g = run_eval.grade_run(b.run_dir, headless.resolve_models("sonnet")[0])
+    assert g["summary"] == {"passed": 0, "failed": 1, "total": 1, "pass_rate": 0.0}
 
 
 def test_the_result_error_helper_reads_the_subtype():

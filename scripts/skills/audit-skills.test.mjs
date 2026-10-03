@@ -547,8 +547,9 @@ test('G32 reports a scaffold that did not run instead of passing', () => {
 function vcs(root, ...args) { return spawnSync('git', args, { cwd: root, encoding: 'utf8' }); }
 
 // A repo whose index holds clean skills and a baseline. Returns the repo root.
-function stagedFixture(skills) {
+function stagedFixture(skills, extra = {}) {
   const root = fixture(skills);
+  for (const [rel, text] of Object.entries(extra)) write(path.join(root, rel), text);
   const baseline = path.join(root, 'scripts', 'skills', 'audit-skills.baseline.json');
   fs.mkdirSync(path.dirname(baseline), { recursive: true });
   spawnSync('node', [CLI, '--repo-root', root, '--baseline', baseline, '--update-baseline', '--quiet'], { encoding: 'utf8' });
@@ -558,6 +559,55 @@ function stagedFixture(skills) {
 }
 const stagedCli = (root) => spawnSync('node', [CLI, '--staged', '--quiet'], { cwd: root, encoding: 'utf8' });
 const BROKEN = skillText('a', { fm: { description: 'Does X for the team.' } }); // no "Use when": G14
+
+// A skill may link a tracked repo file outside .claude/skills (kusto-cli links
+// ../../rules-ondemand/kusto-cli-safety.md). --staged exports only the skills, so the link must be
+// checked against the index, not the export folder.
+test('--staged resolves a ../ link to a tracked file outside the exported skills', () => {
+  const s = skillText('s', { body: 'Read [the rule](../../rules-ondemand/r.md) first.\n' });
+  const root = stagedFixture({ s }, { '.claude/rules-ondemand/r.md': '# rule\n' });
+  const r = stagedCli(root);
+  assert.equal(r.status, 0, r.stdout + r.stderr);
+  vcs(root, 'rm', '-q', '--cached', '.claude/rules-ondemand/r.md'); // staged for deletion, still on disk
+  const gone = stagedCli(root);
+  assert.equal(gone.status, 1, gone.stdout + gone.stderr);
+  assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference \.\.\/\.\.\/rules-ondemand\/r\.md/);
+});
+
+// On Windows a reference may spell the repo root in another case; it must still map onto the index,
+// so a target staged for deletion (but still on disk) fails.
+test('--staged checks a case-variant absolute link against the index', { skip: process.platform !== 'win32' && 'Windows paths only' }, () => {
+  const root = stagedFixture({ s: skillText('s') }, { '.claude/rules-ondemand/r.md': '# rule\n' });
+  const target = path.join(root, '.claude', 'rules-ondemand', 'r.md').replace(/\\/g, '/');
+  const variant = target.charAt(0) === target.charAt(0).toUpperCase() ? target.charAt(0).toLowerCase() + target.slice(1) : target.charAt(0).toUpperCase() + target.slice(1);
+  write(path.join(root, '.claude', 'skills', 's', 'SKILL.md'), skillText('s', { body: `Read [the rule](${variant}) first.\n` }));
+  vcs(root, 'add', '.claude/skills/s/SKILL.md');
+  assert.equal(stagedCli(root).status, 0);
+  vcs(root, 'rm', '-q', '--cached', '.claude/rules-ondemand/r.md'); // staged for deletion, still on disk
+  const gone = stagedCli(root);
+  assert.equal(gone.status, 1, gone.stdout + gone.stderr);
+  assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference/);
+});
+
+// A link through a repo junction/symlink whose target lies outside the repo is judged by the index
+// (git tracks linkdir/r.md as a path), not by the target that stays on disk after a staged delete.
+test('--staged judges a link through a repo junction by the index, not the outside target', { skip: process.platform !== 'win32' && 'uses a directory junction' }, () => {
+  const ext = fs.mkdtempSync(path.join(os.tmpdir(), 'junction-target-'));
+  fs.writeFileSync(path.join(ext, 'r.md'), '# rule\n');
+  const s = skillText('s', { body: 'Read [the rule](../../../linkdir/r.md) first.\n' });
+  const root = fixture({ s });
+  assert.equal(spawnSync('cmd', ['/c', 'mklink', '/J', path.join(root, 'linkdir'), ext], { encoding: 'utf8' }).status, 0);
+  const baseline = path.join(root, 'scripts', 'skills', 'audit-skills.baseline.json');
+  fs.mkdirSync(path.dirname(baseline), { recursive: true });
+  spawnSync('node', [CLI, '--repo-root', root, '--baseline', baseline, '--update-baseline', '--quiet'], { encoding: 'utf8' });
+  vcs(root, 'init', '-q'); vcs(root, 'add', '-A');
+  assert.ok(vcs(root, 'ls-files', 'linkdir/r.md').stdout.includes('linkdir/r.md'));
+  assert.equal(stagedCli(root).status, 0);
+  vcs(root, 'rm', '-q', '--cached', 'linkdir/r.md'); // staged for deletion; the target stays on disk outside the repo
+  const gone = stagedCli(root);
+  assert.equal(gone.status, 1, gone.stdout + gone.stderr);
+  assert.match(gone.stdout, /FAIL G22 s:\d+ unresolved reference/);
+});
 
 test('--staged ignores an unstaged break in a tracked skill', () => {
   const root = stagedFixture({ a: skillText('a'), b: skillText('b') });

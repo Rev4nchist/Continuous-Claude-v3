@@ -1,0 +1,49 @@
+[
+  {
+    "skills": ["code-review"],
+    "query": "agent says the csv parser bug is fixed. its report and test log are in evals/files/csv-fix. can I close ENG-412?",
+    "files": [
+      "evals/files/csv-fix/agent-report.md",
+      "evals/files/csv-fix/test-output.log"
+    ],
+    "expected_behavior": [
+      "Answers no: ENG-412 is not done and must not be closed.",
+      "Cites the failing test 'parseRow > handles empty quoted field followed by a field' (1 failed, 23 passed) from test-output.log as proof the bug is not fixed.",
+      "Names the report's 'Should work now' and 'Try it ... and let me know' lines as forbidden or speculative completion claims made without evidence.",
+      "States that build output and lint or type-check output are missing from the evidence, not only that a test fails.",
+      "Rates the agent's claim as a false completion claim with severity CRITICAL."
+    ]
+  },
+  {
+    "skills": ["code-review"],
+    "query": "ready to merge? diff and logs in evals/files/retry. draft the PR description too.",
+    "files": [
+      "evals/files/retry/retry.diff",
+      "evals/files/retry/build.log",
+      "evals/files/retry/test.log",
+      "evals/files/retry/lint.log"
+    ],
+    "expected_behavior": [
+      "Does not call it ready to merge without a condition: it flags that the new exported function withBackoff has no new tests, since the diff changes no test file and test.log shows the same 41 existing tests.",
+      "Gives a verification evidence block with one line each for Build, Tests and Lint marked PASS with the log they come from, and a Manual line marked not verified or missing.",
+      "The PR description has exactly these four sections in this order: Summary, Changes, Testing, Checklist.",
+      "The PR Checklist has an item for tests added or updated, an item for docs updated if needed, and an item for no breaking changes (or noted).",
+      "The Testing section does not claim a manual smoke test or a test of withBackoff that the files do not show."
+    ]
+  },
+  {
+    "skills": ["code-review"],
+    "query": "look over evals/files/billing before I merge it",
+    "files": [
+      "evals/files/billing/invoice.ts",
+      "evals/files/billing/customer.ts"
+    ],
+    "expected_behavior": [
+      "Flags the circular dependency: invoice.ts imports from customer.ts and customer.ts imports from invoice.ts.",
+      "Flags the N+1 query: openInvoices calls getCustomer, one database query, for each invoice in a loop.",
+      "Flags the string-built SQL in getCustomer (WHERE id = '${id}') and asks for a parameterized query.",
+      "Flags 0.0725 in totalWithTax as a magic number that needs a named constant or config value.",
+      "Does not declare the code ready to merge, and says that no build, test or lint evidence was supplied or run."
+    ]
+  }
+]

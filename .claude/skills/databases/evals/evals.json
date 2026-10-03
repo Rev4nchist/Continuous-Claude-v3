@@ -1,0 +1,38 @@
+[
+  {
+    "skills": ["databases"],
+    "query": "api throws 'sorry, too many clients already' under load. pool + dashboard query are in evals/files/db.ts. box is 8 cores, one nvme. what do I change?",
+    "files": ["evals/files/db.ts"],
+    "expected_behavior": [
+      "Lowers the pool max from 100 to a value between 10 and 20 (for example 17, from cores x 2 + disk spindles).",
+      "Sets a pool idle timeout of 10000 ms (10 s) and a connection timeout of 5000 ms (5 s), as idleTimeoutMillis and connectionTimeoutMillis or equivalent.",
+      "Moves client.release() into a finally block (or switches to pool.query) so a query that throws cannot leak the connection.",
+      "Replaces the per-project sessions query inside the loop (N+1) with one JOIN or one batched query, for example project_id = ANY($1).",
+      "Replaces the string-concatenated owner_id with a $1 parameter AND replaces SELECT * with named columns."
+    ]
+  },
+  {
+    "skills": ["databases"],
+    "query": "need tenant_id on orders. NOT NULL, FK to tenants(id), indexed. ~2M rows, prod postgres, live traffic. write the migration.",
+    "files": [],
+    "expected_behavior": [
+      "Does not add tenant_id as NOT NULL without a default in a single ALTER TABLE; it adds the column nullable (or with a default) first and backfills before enforcing NOT NULL.",
+      "Builds the tenant_id index with CREATE INDEX CONCURRENTLY, not a plain CREATE INDEX.",
+      "Adds the foreign key (and/or a NOT NULL CHECK) with NOT VALID, then runs VALIDATE CONSTRAINT as a separate step.",
+      "Includes a rollback plan or a down migration.",
+      "Says to test the migration on a copy of prod data, run it in a low-traffic window, and monitor it while it runs (all three)."
+    ]
+  },
+  {
+    "skills": ["databases"],
+    "query": "dashboard's slow. schema, row counts and the 3 hot queries are in evals/files/schema.sql. what indexes do I add? DDL please.",
+    "files": ["evals/files/schema.sql"],
+    "expected_behavior": [
+      "Recommends no index on sessions.status and gives the small table (about 600 rows) or the low cardinality (3 values) as the reason.",
+      "Adds a B-tree index for the unindexed foreign key events.session_id, ideally composite (session_id, created_at DESC) to serve the ORDER BY ... LIMIT 50.",
+      "Uses a GIN index on events.payload for the @> containment query, not a B-tree.",
+      "Creates the events indexes with CREATE INDEX CONCURRENTLY because a plain CREATE INDEX blocks writes on the 40M-row table.",
+      "Says to run EXPLAIN ANALYZE before and after each index and to check for Seq Scan and for estimated versus actual row counts."
+    ]
+  }
+]

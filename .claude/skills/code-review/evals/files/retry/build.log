@@ -1,0 +1,4 @@
+> http-kit@1.8.0 build
+> tsc -p tsconfig.build.json
+
+(exit 0, no output)

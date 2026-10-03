@@ -1,0 +1,14 @@
+2026-09-30T07:00:02 export-users start page_size=500
+2026-09-30T07:00:09 export-users done rows_written=9962 file=users.csv
+2026-09-30T07:01:30 psql> SELECT count(*) FROM users WHERE deleted_at IS NULL;
+ count
+-------
+ 10000
+2026-09-30T07:02:14 psql> SELECT created_at, count(*) FROM users GROUP BY created_at HAVING count(*) > 1 ORDER BY 2 DESC LIMIT 3;
+         created_at          | count
+-----------------------------+-------
+ 2026-03-14 02:00:00+00      |   120
+ 2026-06-01 02:00:00+00      |    90
+ 2026-08-20 02:00:00+00      |    60
+2026-09-30T07:03:40 note: 2026-03-14, 06-01, 08-20 are the three bulk imports from the old CRM.
+2026-09-30T07:04:05 wc -l users.csv -> 9963 (header + 9962). No row contains an unbalanced quote.

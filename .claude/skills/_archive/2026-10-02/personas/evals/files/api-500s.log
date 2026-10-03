@@ -1,0 +1,19 @@
+2026-09-30T08:00:01Z api-1 INFO  boot pool config: max=20 idleTimeoutMillis=30000
+2026-09-30T08:00:02Z api-2 INFO  boot pool config: max=20 idleTimeoutMillis=600000
+2026-09-30T08:00:02Z db-1  INFO  server config: wait_timeout=300s (idle client connections closed after 300s)
+2026-09-30T08:02:10Z api-1 INFO  GET /orders 200 41ms
+2026-09-30T08:02:11Z api-2 INFO  GET /orders 200 39ms
+2026-09-30T08:09:44Z api-1 INFO  GET /orders 200 44ms
+2026-09-30T08:09:45Z api-2 ERROR GET /orders 500 3ms  err=ECONNRESET read on pooled connection (idle 454s)
+2026-09-30T08:09:46Z api-2 INFO  GET /orders 200 52ms
+2026-09-30T08:10:02Z api-2 INFO  GET /orders 200 40ms
+2026-09-30T08:31:17Z api-1 INFO  GET /orders 200 47ms
+2026-09-30T08:31:18Z api-2 ERROR GET /orders 500 2ms  err=ECONNRESET read on pooled connection (idle 1276s)
+2026-09-30T08:31:19Z api-2 INFO  GET /orders 200 49ms
+2026-09-30T08:31:40Z api-2 INFO  GET /orders 200 38ms
+2026-09-30T09:15:03Z db-1  INFO  cpu=11% connections=14/200 slow_queries=0
+2026-09-30T09:40:55Z api-1 INFO  GET /orders 200 45ms
+2026-09-30T09:40:56Z api-2 ERROR GET /orders 500 3ms  err=ECONNRESET read on pooled connection (idle 3990s)
+2026-09-30T09:40:57Z api-2 INFO  GET /orders 200 51ms
+2026-09-30T10:05:12Z api-2 INFO  GET /orders 200 37ms
+2026-09-30T10:05:30Z api-1 INFO  GET /orders 200 43ms

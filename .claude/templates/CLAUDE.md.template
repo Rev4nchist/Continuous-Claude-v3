@@ -161,8 +161,8 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
 ## Skills to load first [MANDATORY]
 
 Load the skill before the action: a bug or error → `systematic-debugging`; SQL or schema →
-`databases`; PR review or merge → `code-review`; MCP integration → `mcp-guidance`; a persona →
-`personas`; Notion Bridge, Eve, Donna or a handoff queue → `notion-bridge`.
+`databases`; PR review or merge → `code-review`; MCP integration → `mcp-guidance`; Notion Bridge,
+Eve, Donna or a handoff queue → `notion-bridge`.
 Iron laws: no fix without a root cause; no completion claim without fresh evidence; no database
 change without a query-plan check.
 
