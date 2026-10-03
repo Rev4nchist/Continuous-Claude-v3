@@ -549,6 +549,20 @@ chk "(F) no LINK-GUARD line for a normal file" "$(printf '%s' "$out" | grep -q '
 chk "(F) a normal rule synced through the ~/.claude link" "$(has "$REAL2/rules/seed.md")"
 rm -f "$HOME2/.claude"
 
+echo "=== T15: --changed syncs .claude/commands (add, edit, delete) ==="
+# Before 2026-10-02 --changed mapped no command path, so a command removed or edited through a PR
+# (land-pr syncs with --changed) stayed stale in ~/.claude/commands (ralph.md, persona.md, task.md).
+mkdir -p "$REPO/.claude/commands"
+printf 'v1\n' > "$REPO/.claude/commands/t15.md"; commit t15-add
+sync --changed >/dev/null
+chk "--changed adds a new command" "$( [ "$(cat "$ACT/commands/t15.md" 2>/dev/null)" = "v1" ] && echo 1 || echo 0)"
+printf 'v2\n' > "$REPO/.claude/commands/t15.md"; commit t15-edit
+sync --changed >/dev/null
+chk "--changed updates an edited command" "$( [ "$(cat "$ACT/commands/t15.md" 2>/dev/null)" = "v2" ] && echo 1 || echo 0)"
+g rm -q .claude/commands/t15.md; g commit -q -m t15-delete
+sync --changed >/dev/null
+chk "--changed removes a deleted command" "$(not "$ACT/commands/t15.md")"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

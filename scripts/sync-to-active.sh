@@ -658,7 +658,7 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*)
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/commands/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
