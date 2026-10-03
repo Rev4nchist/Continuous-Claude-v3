@@ -1,6 +1,6 @@
 ---
 name: fabric
-description: Routes Microsoft Fabric work (Spark notebooks, Livy sessions, Materialized Lake Views, failed Spark runs, finding items across workspaces) to vendored Microsoft skills. Use when a task touches Fabric, OneLake, a lakehouse or a Fabric notebook.
+description: Routes Microsoft Fabric work (Spark notebooks, Livy sessions, Materialized Lake Views, failed Spark runs, finding items across workspaces) to vendored Microsoft skills. Use when a task touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli).
 ---
 
 # Fabric hub
