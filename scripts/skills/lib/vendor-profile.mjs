@@ -112,7 +112,8 @@ function addConflictFindings(dir, source, add) {
   return scan.entryStats;
 }
 
-// Files under the locked folders, as forward-slash paths relative to the source.
+// Entries under the locked folders, as forward-slash paths relative to the source. A link (symlink or
+// junction) is listed but never followed: a link to a FIFO or a device could hang the audit.
 function lockedFiles(dir) {
   const out = [];
   const walk = (d) => {
@@ -120,13 +121,16 @@ function lockedFiles(dir) {
     try { ents = fs.readdirSync(d, { withFileTypes: true }); } catch { return; }
     for (const e of ents) {
       const p = path.join(d, e.name);
-      if (e.isDirectory()) walk(p);
+      if (e.isDirectory() && !e.isSymbolicLink()) walk(p);
       else out.push(path.relative(dir, p).split(path.sep).join('/'));
     }
   };
   for (const top of LOCKED_DIRS) walk(path.join(dir, top));
   return out.sort();
 }
+
+// A regular file, checked without following a link.
+function isRegularFile(p) { try { return fs.lstatSync(p).isFile(); } catch { return null; } }
 
 function addLockFindings(dir, source, add) {
   let lock;
@@ -142,12 +146,19 @@ function addLockFindings(dir, source, add) {
     const abs = path.join(dir, rel);
     if (!rel || !insideDir(dir, abs)) { add(LOCK_RULE, source, `vendor.lock.json path "${rel}" is outside the source`); continue; }
     listed.add(rel);
+    const regular = isRegularFile(abs);
+    if (regular === null) { add(LOCK_RULE, source, `${rel} is in vendor.lock.json but missing`); continue; }
+    if (!regular) { add(LOCK_RULE, source, `${rel} is not a regular file (a link, folder or device): vendored files must be plain copies`); continue; }
     let buf;
     try { buf = fs.readFileSync(abs); } catch { add(LOCK_RULE, source, `${rel} is in vendor.lock.json but missing`); continue; }
     const sha = crypto.createHash('sha256').update(buf).digest('hex');
     if (sha !== f.sha256) add(LOCK_RULE, source, `${rel} differs from vendor.lock.json (sha256 ${sha.slice(0, 12)}, lock ${String(f.sha256).slice(0, 12)}): a vendored file was edited`);
   }
-  for (const rel of lockedFiles(dir)) if (!listed.has(rel)) add(LOCK_RULE, source, `${rel} is not in vendor.lock.json: an unpinned vendored file`);
+  for (const rel of lockedFiles(dir)) {
+    if (listed.has(rel)) continue;
+    const kind = isRegularFile(path.join(dir, rel)) ? 'an unpinned vendored file' : 'and is not a regular file';
+    add(LOCK_RULE, source, `${rel} is not in vendor.lock.json: ${kind}`);
+  }
 }
 
 function buildVendorReport({ sources, vendored, expected, findings, overlay }) {

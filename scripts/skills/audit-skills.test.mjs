@@ -949,6 +949,24 @@ test('vendor profile X02: an edited, a missing or an unlisted vendored file fail
   assert.equal(rep.failed, true);
 });
 
+// CodeRabbit on PR #84: a symlink under a locked folder was read through, so a link to a FIFO or a
+// device could hang the audit. A link is never hashed and always fails.
+// A junction (Windows, no admin needed) or a dir symlink takes the same path as a file symlink.
+test('vendor profile X02: a link under a locked folder fails without being read or walked', () => {
+  const root = addVendored(fixture(), { one: skillText('one') }, { common: { 'CORE.md': '# core\n' } });
+  writeLock(root);
+  const outside = path.join(root, 'outside'); write(path.join(outside, 'SECRET.md'), '# outside the source\n');
+  fs.symlinkSync(outside, path.join(vroot(root), 'common', 'LINK'), 'junction');
+  const lock = JSON.parse(fs.readFileSync(path.join(vroot(root), 'vendor.lock.json'), 'utf8'));
+  lock.files.push({ path: 'common/LINK', sha256: 'x' });
+  write(path.join(vroot(root), 'vendor.lock.json'), JSON.stringify(lock));
+  const rep = vrun(root);
+  const msgs = lockHits(rep).map((x) => x.msg).join('\n');
+  assert.match(msgs, /common\/LINK is not a regular file/);
+  assert.doesNotMatch(msgs, /SECRET\.md/); // the link is not walked into
+  assert.equal(rep.failed, true);
+});
+
 test('vendor profile X02: a lock path that climbs out of the source fails; no lock is advisory only', () => {
   const root = addVendored(fixture(), { one: skillText('one') });
   write(path.join(vroot(root), 'vendor.lock.json'), JSON.stringify({ files: [{ path: '../../../../CLAUDE.md', sha256: 'x' }] }));
