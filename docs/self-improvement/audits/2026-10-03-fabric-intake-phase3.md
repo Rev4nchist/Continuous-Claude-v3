@@ -89,7 +89,8 @@ API-key paths are imported. `jq` 1.7.1 is on PATH for the vendored snippets.
 
 ## Follow-ups
 
-1. Decide whether hub never-line 2 adds "Do not recommend one either; the owner decides." (Opus eval 2).
+1. DONE (Dave, 2026-10-03): hub never-line 2 now adds "Do not recommend one either; the owner decides."
+   (Opus eval 2). Not re-evaluated.
 2. Eval 1 check: allow the single 503/504 poll retry; flag only a retry or backoff on 429/430.
 3. Eval 2 expectation "stop all load first" failed in 5 of the 6 runs (both arms): answers put a read-only
    preflight first. Reword it to "starts no new load before the capacity check".

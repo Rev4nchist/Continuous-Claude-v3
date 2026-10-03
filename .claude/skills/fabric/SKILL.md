@@ -14,7 +14,8 @@ Microsoft's `skills-for-fabric` v0.3.18 is vendored at `../_vendor/skills-for-fa
    even when `Retry-After` is set. This overrides `common/COMMON-CORE.md`. `Retry-After` on a 202 is only
    a poll interval. Cap every poll loop: `fabric_lro` in `common/COMMON-CLI.md` loops forever on a status
    it does not know.
-2. Never pause, resume or resize a capacity. Never bulk PUT `.../dataAccessRoles`: create roles one at a time.
+2. Never pause, resume or resize a capacity. Do not recommend one either; the owner decides. Never bulk PUT
+   `.../dataAccessRoles`: create roles one at a time.
 3. Run the preflight the project's CLAUDE.md names before the first live call. One Fabric job at a time on
    an F2. Before a POST that starts a job, read the job history. Never submit the same job twice.
 4. Pin every pip install: `pkg==x.y` in a project venv on this machine, `%pip install pkg==x.y` in a
