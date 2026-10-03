@@ -15996,6 +15996,36 @@
       "reason": "Malicious code in online-header (npm) (GHSA-hg4r-6gv8-6hmj)",
       "date": "2026-10-01",
       "advisory": "https://github.com/advisories/GHSA-hg4r-6gv8-6hmj"
+    },
+    "mfahelper": {
+      "blocked_all": true,
+      "reason": "Malware in mfahelper (GHSA-9f55-6cf9-3pgw)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-9f55-6cf9-3pgw"
+    },
+    "@smwebserver/static": {
+      "blocked_all": true,
+      "reason": "Malicious code in @smwebserver/static (npm) (GHSA-xh7x-r46x-g84q)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-xh7x-r46x-g84q"
+    },
+    "translate-base-font": {
+      "blocked_all": true,
+      "reason": "Malware in translate-base-font (GHSA-grv5-7wp6-vw6h)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-grv5-7wp6-vw6h"
+    },
+    "ui.dist.min.js": {
+      "blocked_all": true,
+      "reason": "Malware in ui.dist.min.js (GHSA-325f-rjxf-3gm9)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-325f-rjxf-3gm9"
+    },
+    "ui-base-colors": {
+      "blocked_all": true,
+      "reason": "Malware in ui-base-colors (GHSA-qgqx-3mhx-jwx3)",
+      "date": "2026-10-02",
+      "advisory": "https://github.com/advisories/GHSA-qgqx-3mhx-jwx3"
     }
   }
 }
