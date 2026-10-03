@@ -1,0 +1,134 @@
+[
+ {
+  "topic": "retry-on-429",
+  "pattern": "backoff|429 Too Many Requests|retry 429",
+  "files": ["common/COMMON-CORE.md"],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "REAL CONFLICT. Upstream says retry 429/503/504 with backoff. The fabric hub's first never-line overrides it: on any 429 or 430, stop all load and report. Only a single 503 or 504 on a status poll may retry once (fabric-playbook L-02, L-07)."
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "capacity throttling; retry|check capacity and config before retry|\\b429\\b",
+  "files": [
+   "skills/spark-cli/references/operations/job-diagnostics.md",
+   "skills/spark-cli/references/operations/session-health.md",
+   "skills/spark-cli/references/operations/performance-patterns.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "REAL CONFLICT in job-diagnostics and session-health: they say retry after a capacity check. The hub line wins: when the check finds throttling or a capacity error, stop and report. performance-patterns only lists 429 as a throttling symptom, which agrees."
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "Retry-After|\\$\\{?RETRY\\b",
+  "files": ["common/COMMON-CORE.md", "common/COMMON-CLI.md", "skills/spark-cli/references/mlv.md"],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "Retry-After on a 202 long-running operation is the poll interval, not a retry after an error. Allowed. The hub adds: cap every poll loop, because fabric_lro loops forever on a status it does not know (a 429 body has no status).",
+  "max_hits": 7
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "never retry|before retrying|Retrying POST|do not retry|instead of retrying|retry loop|repeatedly retry",
+  "files": [
+   "skills/spark-cli/references/authoring.md",
+   "common/SPARK-AUTHORING-CORE.md",
+   "skills/spark-cli/references/mlv.md",
+   "skills/spark-cli/references/authoring/resources/materialized-lake-view-patterns.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "Agrees with CCv3: never resubmit a job POST; read job history instead.",
+  "max_hits": 10
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "\"retry|retryPolicy|retry count|max_retry|Retry logic|retry and (?:error|throttling)|concurrency control, retry",
+  "files": [
+   "skills/spark-cli/references/authoring/resources/infrastructure-orchestration.md",
+   "skills/spark-cli/references/authoring/resources/data-engineering-patterns.md",
+   "common/ITEM-DEFINITIONS-CORE.md",
+   "common/notebook-authoring/context-and-params.md",
+   "common/SPARK-NOTEBOOK-AUTHORING-CORE.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "A Fabric item's own retry setting (pipeline activity policy, runMultiple, a notebook parameter), not an agent retry. Allowed. Activity retry on an F2 is a project choice; the project's CLAUDE.md decides.",
+  "max_hits": 9
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "retryAttempt|shuffle\\.?\\s?retry|name and retry|Retry with \\?type|New Session vs Retry",
+  "files": [
+   "skills/spark-cli/references/operations/pipeline-diagnosis.md",
+   "skills/spark-cli/references/operations/job-diagnostics.md",
+   "skills/spark-cli/references/operations/automated-diagnostic-workflow.md",
+   "skills/spark-cli/references/operations/session-health.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "Diagnostic reads (retryAttempt fields, Spark shuffle config) or a retry after a user typo. Not a retry through a capacity error. Allowed.",
+  "max_hits": 8
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "fabric_lro` and retry|never abort, retry, or fail",
+  "files": [
+   "skills/spark-cli/SKILL.md",
+   "skills/search-consumption-cli/SKILL.md",
+   "common/COMMON-CLI.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "Telemetry header text (Dave kept the x-ms-fabric-skill header, 2026-10-02). It names a retry only as a call that carries the header. It does not ask for a retry."
+ },
+ {
+  "topic": "capacity-pause-resume-resize",
+  "pattern": "capacity is paused|Capacity paused",
+  "files": ["skills/spark-cli/references/authoring.md", "skills/spark-cli/references/operations.md"],
+  "ccv3_rule": "Never pause, resume or resize a Fabric capacity.",
+  "resolution": "Read-only: both lines say to check the capacity state. Neither pauses, resumes or resizes one. The destructive-command-guard asks or denies on the real call."
+ },
+ {
+  "topic": "unpinned-pip-install",
+  "pattern": "pip install (?:pyspark|jupyter)",
+  "files": "skills/spark-cli/references/authoring/resources/development-workflow.md",
+  "ccv3_rule": "Pin every pip install to an exact version.",
+  "resolution": "REAL CONFLICT: a local install on this machine. The hub line wins: pin each package (pyspark to the Fabric runtime version) in a project venv. package-install-guard asks first."
+ },
+ {
+  "topic": "unpinned-pip-install",
+  "pattern": "%pip install",
+  "files": [
+   "common/notebook-authoring/library-mgmt.md",
+   "common/notebook-authoring/ml-workflow.md",
+   "common/SPARK-NOTEBOOK-AUTHORING-CORE.md",
+   "skills/spark-cli/references/operations/job-diagnostics.md"
+  ],
+  "ccv3_rule": "Pin every pip install to an exact version.",
+  "resolution": "Runs inside a Fabric notebook session, not on this machine. The hub line applies there too: %pip install pkg==x.y, and prefer an Environment artifact for anything that must last.",
+  "max_hits": 8
+ },
+ {
+  "topic": "unpinned-pip-install",
+  "pattern": "^\\s*# pip install [\\w-]+$",
+  "files": "common/notebook-authoring/connections.md",
+  "ccv3_rule": "Pin every pip install to an exact version.",
+  "resolution": "A commented hint inside a Fabric notebook cell. Pin the version if the cell is used (hub line)."
+ },
+ {
+  "topic": "unpinned-pip-install",
+  "pattern": "pip install failed|pip install <lib> --dry-run",
+  "files": "skills/spark-cli/references/operations/job-diagnostics.md",
+  "ccv3_rule": "Pin every pip install to an exact version.",
+  "resolution": "An error signature and a --dry-run conflict check. Neither installs anything. Allowed."
+ },
+ {
+  "topic": "odbc-driver-18",
+  "pattern": "ODBC Driver 18 for SQL Server",
+  "files": "common/notebook-authoring/connections.md",
+  "ccv3_rule": "T-SQL on this machine goes through mssql-python, not ODBC Driver 18.",
+  "resolution": "Runs in a Fabric notebook, whose runtime has the driver. On this machine T-SQL uses mssql-python (fabric-playbook L-05)."
+ },
+ {
+  "topic": "system-package-install",
+  "pattern": "brew install sqlcmd",
+  "files": "common/COMMON-CLI.md",
+  "ccv3_rule": "No apt-get or brew installs: Windows machine, package-install-guard.",
+  "resolution": "The same line gives winget for Windows; brew is the macOS option. On this machine use winget, and package-install-guard asks first."
+ }
+]

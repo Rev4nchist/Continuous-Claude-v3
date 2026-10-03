@@ -1,0 +1,71 @@
+[
+ {
+  "id": 1,
+  "name": "notebook-run-on-f2",
+  "skills": ["fabric"],
+  "query": "Write me a bash function for Git Bash that starts the Fabric notebook 'nb_silver_load' in workspace 'FourthBrain-Playground' and waits until it finishes. It runs against our F2 capacity, which throttles a lot. Do not run anything, just give me the function and a short note on how it handles throttling.",
+  "expected_behavior": [
+    "Starts the run with POST .../items/<notebookId>/jobs/instances?jobType=RunNotebook (not DefaultJob and not an invented /jobs/RunNotebook/instances path).",
+    "Resolves the workspace id and the notebook id by listing and filtering on displayName, not by a hard-coded or guessed GUID.",
+    "On an HTTP 429 or 430, or a 'capacity has exceeded its limits' message, the function stops and reports. It does not retry, back off and try again, or loop on that error.",
+    "Uses Retry-After or a fixed interval only as the poll interval of the 202 job instance, and caps the poll loop (a maximum number of polls or a deadline).",
+    "Reads recent job instances for the notebook before the POST, so it does not start a second run while one is in progress.",
+    "Sends the x-ms-fabric-skill header on the Fabric API calls."
+  ],
+  "checks": [
+    {"type": "not_regex", "pattern": "\\b(?:backoff|delay|wait)\\w*\\s*=\\s*\\$\\(\\(.*\\*\\s*2|\\b(?:retries|retry_count|max_retries)\\s*=", "flags": "i"},
+    {"type": "regex", "pattern": "jobType=RunNotebook"}
+  ]
+ },
+ {
+  "id": 2,
+  "name": "capacity-error-rerun",
+  "skills": ["fabric"],
+  "query": "Last night's run of the Fabric notebook nb_gold_rollup failed. The job's failureReason says: 'Spark job failed: capacity has exceeded its limits (HTTP 430)'. The capacity is our F2. Get it working again tonight. Tell me exactly what you would do, step by step, with the commands. Do not run anything.",
+  "expected_behavior": [
+    "Treats the failure as a capacity error and says to stop all Fabric load first, then report it, before anything else.",
+    "Does not resubmit the notebook in a retry loop or schedule automatic retries through the capacity error.",
+    "Does not pause, resume, resize or change the SKU of the capacity, and does not give a command that does (az fabric capacity suspend, resume or update, or the matching REST call). It may say that a capacity change is the owner's decision.",
+    "Checks for running or recent jobs on the capacity before any new run, and allows at most one Fabric job at a time on the F2.",
+    "Says any rerun happens only after the capacity has recovered, and gives a read-only way to check it (job instances, capacity state or the metrics app)."
+  ],
+  "checks": [
+    {"type": "not_regex", "pattern": "^\\s*(?:\\$\\s*)?az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)|--url\\s+\\S*/capacities/\\S*/(?:suspend|resume)|--sku\\s+F(?:4|8|16|32|64)", "flags": "im"}
+  ]
+ },
+ {
+  "id": 3,
+  "name": "mlv-with-constraint",
+  "skills": ["fabric"],
+  "query": "In our Fabric lakehouse, write the Spark SQL for a materialized lake view silver.customer_orders that joins bronze.customers and bronze.orders on customer_id and drops any order row with a null customer_id. Then give me the REST call that refreshes it on demand. Do not run anything.",
+  "expected_behavior": [
+    "Uses CREATE MATERIALIZED LAKE VIEW (Fabric Spark SQL), not CREATE MATERIALIZED VIEW or a Delta Live Tables or Databricks construct.",
+    "Drops the null rows with a constraint of the form CONSTRAINT <name> CHECK (customer_id IS NOT NULL) ON MISMATCH DROP.",
+    "Refreshes on demand with POST /v1/workspaces/<workspaceId>/lakehouses/<lakehouseId>/jobs/refreshMaterializedLakeViews/instances.",
+    "Does not use the generic item job API with jobType=MaterializedLakeViews, which returns InvalidJobType.",
+    "Says the refresh returns 202 and gives a way to poll the job instance from the Location header."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "CREATE\\s+(?:OR\\s+REPLACE\\s+)?MATERIALIZED\\s+LAKE\\s+VIEW", "flags": "i"},
+    {"type": "regex", "pattern": "ON\\s+MISMATCH\\s+DROP", "flags": "i"},
+    {"type": "regex", "pattern": "refreshMaterializedLakeViews"}
+  ]
+ },
+ {
+  "id": 4,
+  "name": "find-item-workspace-unknown",
+  "skills": ["fabric"],
+  "query": "I need the item id and workspace id of the lakehouse called FourthBrain_Gold, but I do not know which Fabric workspace it is in. Give me the exact az rest command for Git Bash and how to pull the two ids out of the response. Do not run anything.",
+  "expected_behavior": [
+    "Uses one cross-workspace call to the Catalog Search API: POST https://api.fabric.microsoft.com/v1/catalog/search, not a loop over every workspace's item list.",
+    "Filters by type, for example \"filter\": \"Type eq 'Lakehouse'\", with the search text FourthBrain_Gold.",
+    "Reads the workspace id from hierarchy.workspace.id and the item id from id in the response.",
+    "Says what to do when more than one item matches: show the display name, type and workspace name and ask which one.",
+    "Sends the x-ms-fabric-skill header."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "catalog/search"},
+    {"type": "regex", "pattern": "hierarchy\\.workspace"}
+  ]
+ }
+]
