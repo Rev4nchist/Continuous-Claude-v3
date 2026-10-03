@@ -42,7 +42,7 @@ Artifacts: `.claude/cache/e2e/<date>-intake-<source>-<stage>.*`.
   Pre-commit runs the vendor profile whenever a staged path is under `_vendor/`. Prove it with a deliberate
   failure.
 - Hard for vendored skills: G01-G03, G06-G08, G11, G22 (resolved against the vendor root), G25, G27, G28.
-  Advisory for vendored skills (their descriptions never reach the listing): G09-G10, G12-G14, G20-G24, G26.
+  Advisory for vendored skills (their descriptions never reach the listing): G09-G10, G12-G14, G20-G21, G23-G24, G26.
   Hard for CCv3-authored skills: everything.
 - Gate fixes found by the run: G26 must not flag `api-version=` pins; G12 must not read "Pay-As-You-Go" as
   first person.

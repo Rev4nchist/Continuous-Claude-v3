@@ -14,6 +14,7 @@ Reference for Claude Code skills. Read the section you need. `SKILL.md` has the 
 - [Scripts](#scripts)
 - [Worked example: a skill with a script](#worked-example-a-skill-with-a-script)
 - [Worked example: a skill with no script](#worked-example-a-skill-with-no-script)
+- [Importing external skills](#importing-external-skills)
 - [Distribution outside Claude Code](#distribution-outside-claude-code)
 - [Troubleshooting](#troubleshooting)
 
@@ -259,6 +260,54 @@ Sort the notes into these sections. Give every action item an owner and a due da
 ## Open questions
 - [question]
 ```
+
+## Importing external skills
+
+Vendor a pinned copy under `.claude/skills/_vendor/<source>/`. Keep the upstream layout: `skills/<name>/SKILL.md`, shared `common/`, and your `overlay.json`. Never edit vendored text. Claude Code does not list a nested `SKILL.md` under a `_` folder, so vendored skills stay out of the skill listing. One CCv3-owned hub skill links them. The plan is the skill-intake proposal in `docs/self-improvement/proposals/`.
+
+Every import passes five stages:
+
+| Stage | Check | Tool |
+|-------|-------|------|
+| a. Static | Vendored files pass the gate. Every conflict hit has an overlay entry. | `node scripts/skills/audit-skills.mjs --profile vendor`, `node scripts/skills/vendor-conflict-scan.mjs --source <dir>` |
+| b. Collision | Existing skills keep their prompts. The hub wins its own prompts. | `scripts/skills/trigger-probe.mjs`, each case 3 times |
+| c. Behaviour | The skill beats no skill on at least 2 of 3 models. | `run_eval.py behavior --companion --inject`, `checks` |
+| d. Live smoke | One read-only call per kept skill, with Dave present. Stop on the first capacity error. | by hand |
+| e. Harness fit | Git Bash, `python`, no global installs, no API key spend, no Haiku. | by hand |
+
+### Vendor profile
+
+`--profile vendor` audits `_vendor/*/skills/*/SKILL.md`. The default run and `--staged` also run it when `_vendor` exists, so the pre-commit guard covers vendored files.
+
+- Hard: G01-G03, G06-G08, G11, G22, G25, G27, G28. G22 resolves a link only from the skill folder and the source root, and only inside the vendor tree. A link to the repo root, `~/.claude` or a path that climbs out fails.
+- Advisory (counted, never fails): G09, G10, G12-G14, G20, G21, G23, G24, G26. Vendored descriptions never reach the listing.
+- G30 fails when a source holds no skill. X01 fails when a conflict hit has no overlay entry.
+
+### Conflict scan
+
+The scan greps `skills/`, `common/` and `mcp-setup/` for text that breaks a CCv3 "never" rule: retry on 429, capacity pause, resume or resize, bulk `PUT` of `dataAccessRoles`, `python3`, `apt-get` or `brew`, `npm install -g`, an unpinned `pip install`, `ODBC Driver 18`, `FabricOpenAI(`. Seeds live in `scripts/skills/lib/conflict-scan.mjs`.
+
+Cover each hit in `<source>/overlay.json`. Key an entry by topic and regex, never by line number:
+
+```json
+[{"topic": "retry-on-429", "pattern": "429", "files": "common/**",
+  "ccv3_rule": "Stop on the first capacity error.", "resolution": "The hub says: do not use the retry loop."}]
+```
+
+An entry covers a hit when the topic matches, the `files` glob matches the file and the `pattern` regex matches the line. An entry is a reviewed exception, never a blanket pass. The gate rejects:
+
+- a catch-all pattern (it matches the empty string or unrelated text) and a nested quantifier such as `(a+)+`
+- a `files` glob that is only `*` or `**`
+- an entry that covers hits in more than one file, unless `files` is an array that names each file exactly
+- an entry that covers more than 5 hits, unless it sets `max_hits` to the number you reviewed. A later upstream pull that adds a hit then fails.
+
+The gate also reports (G29) any `_` folder under `.claude/skills` other than `_vendor` and the parked ones.
+
+### Evals for a hub skill
+
+- `--companion <dir>` copies the vendored folder next to the eval copy, with the same layout. Only `with_skill` gets it. Both arms deny `Read` of `~/.claude/skills/<dir name>/**`. A baseline that reads it is excluded.
+- `--inject <file>` puts the file's text at the start of the prompt in both arms. Use it for a "never" case: eval runs turn hooks off, so the rule-router never injects the playbook.
+- An eval `checks` list grades the final answer with a regex and no LLM. Use `not_regex` for "must not": it reads the final answer, every assistant message and every tool call input. Target the forbidden action (a sleep loop, a command), not its words, or a correct refusal fails it. A run with an empty answer fails every check. Field list: `references/schemas.md`.
 
 ## Distribution outside Claude Code
 

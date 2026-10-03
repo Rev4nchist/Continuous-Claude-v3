@@ -221,6 +221,7 @@ def parse_stream(text: str) -> dict:
     reads: list[str] = []
     counts: dict[str, int] = {}
     texts: list[str] = []
+    tool_inputs: list[str] = []
     result = None
     listed = None  # skills the session listed at start: proves a skillOverrides "off" took effect
     skill_calls: dict[str, str] = {}  # tool_use id -> skill name
@@ -251,6 +252,7 @@ def parse_stream(text: str) -> dict:
             elif block.get("type") == "tool_use":
                 name, inp = block.get("name", ""), block.get("input") or {}
                 tool_calls.append({"name": name, "input": inp})
+                tool_inputs.append(json.dumps(inp, ensure_ascii=False))
                 counts[name] = counts.get(name, 0) + 1
                 if name == "Skill":
                     s = str(inp.get("skill") or inp.get("command") or "").lstrip("/")
@@ -266,7 +268,9 @@ def parse_stream(text: str) -> dict:
     ok = result is not None and result.get("subtype") == "success" and isinstance(result.get("result"), str)
     return {"listed_skills": listed, "skills_fired": skills, "skill_errors": skill_errors, "files_read": reads,
             "tool_counts": counts, "tool_calls": tool_calls, "final_text": result["result"] if ok else "", "result": result,
-            "last_text": texts[-1] if texts else ""}
+            "last_text": texts[-1] if texts else "",
+            # What the model did: every assistant message and every tool call input. not_regex checks read it.
+            "action_text": chr(10).join([*texts, *tool_inputs])}
 
 
 def result_error(info: dict) -> str | None:
@@ -289,8 +293,13 @@ def skill_fired(text: str, name: str) -> bool:
     return any(name_matches(s, name) for s in parse_stream(text)["skills_fired"])
 
 
+def _real(p) -> str:
+    """The real path: junctions, symlinks and 8.3 short names resolved, so two spellings of one folder compare equal."""
+    return os.path.realpath(os.path.abspath(str(p)))
+
+
 def _norm(p) -> str:
-    return os.path.normcase(os.path.abspath(str(p)))
+    return os.path.normcase(_real(p))
 
 
 def skill_files(skill_dir: Path) -> list[str]:
@@ -306,17 +315,27 @@ def skill_files(skill_dir: Path) -> list[str]:
     return out
 
 
-def navigation(files_read: list[str], skill_dir: Path, extra_roots=()) -> dict:
+def navigation(files_read: list[str], skill_dir: Path, extra_roots=(), companion_roots=()) -> dict:
     """Which files a run read: inside the skill (in read order), outside it, and the skill files never read.
 
     `skill_dir` lists the skill's files. A read under `skill_dir` or under any of `extra_roots` (the
     renamed project copy, the personal copy in ~/.claude/skills) counts as inside the skill.
+    A read under a companion root (the vendored tree a hub skill links) goes to `companion_files_read`,
+    named from the companion folder, for example `_vendor/src/skills/x/SKILL.md`.
     """
     roots = [_norm(r) for r in (skill_dir, *extra_roots)]
+    comp_roots = [(_norm(r), Path(r).name) for r in companion_roots]
+    # normcase lower-cases on Windows: take the spelling of the relative part from the path as read.
     listing = skill_files(skill_dir)
-    inside, outside = [], []
+    inside, outside, companion = [], [], []
     for f in files_read:
         n = _norm(f)
+        comp = next(((r, label) for r, label in comp_roots if n.startswith(r + os.sep)), None)
+        if comp:
+            rel = f"{comp[1]}/{Path(_real(f)[len(comp[0]) + 1:]).as_posix()}"
+            if rel not in companion:
+                companion.append(rel)
+            continue
         root = next((r for r in roots if n.startswith(r + os.sep)), None)
         if root:
             rel = Path(n[len(root) + 1:]).as_posix()
@@ -328,7 +347,8 @@ def navigation(files_read: list[str], skill_dir: Path, extra_roots=()) -> dict:
             outside.append(f)
     return {"skill_files_read": inside,
             "skill_files_unread": [r for r in listing if r not in inside],
-            "reads_outside_skill": outside}
+            "reads_outside_skill": outside,
+            "companion_files_read": companion}
 
 
 def render_transcript(text: str, prompt: str, limit: int = 1500) -> str:
@@ -371,4 +391,11 @@ def metrics(result: dict | None, seconds: float) -> dict:
 def copy_skill(src: Path, dest: Path) -> Path:
     """Copy a skill folder for a run. Eval files, tests and caches stay behind."""
     shutil.copytree(src, dest, ignore=shutil.ignore_patterns("evals", "tests", "__pycache__", "*.pyc", "node_modules", ".git"))
+    return dest
+
+
+def copy_companion(src: Path, dest: Path) -> Path:
+    """Copy a companion folder (a vendored tree) for a run. It keeps its layout: a hub skill's
+    ../_vendor/... links work only when the folder lands next to the skill copy."""
+    shutil.copytree(src, dest, ignore=shutil.ignore_patterns("__pycache__", "*.pyc", "node_modules", ".git"))
     return dest

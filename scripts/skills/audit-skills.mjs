@@ -9,6 +9,8 @@
 //          [--check-name <name>]   (G05/G06 verdict for one name; exit 1 on a finding)
 //          [--update-baseline] [--rules G08,G14] [--verbose] [--quiet]
 //          [--root <skills dir>] [--repo-root <dir>] [--baseline <file>]
+//          [--profile vendor]   (audit only <skills dir>/_vendor/*/skills/*: hard vs advisory rules)
+// The default run also runs the vendor profile when <skills dir>/_vendor exists.
 // Exit 1 on any hard failure or ratchet regression. Last line is the summary.
 
 import fs from 'node:fs';
@@ -19,6 +21,7 @@ import { fileURLToPath } from 'node:url';
 import {
   RULES, loadSkill, checkSkillAll, descriptionPhrases, DESCRIPTION_RULES, checkNameOnly,
 } from './lib/skill-rules.mjs';
+import { auditVendor, formatVendorReport } from './lib/vendor-profile.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const DEFAULT_REPO = path.resolve(here, '..', '..');
@@ -34,6 +37,15 @@ function isFile(p) { try { return fs.statSync(p).isFile(); } catch { return fals
 function isBrokenLink(p) {
   try { if (!fs.lstatSync(p).isSymbolicLink()) return false; } catch { return false; }
   try { fs.statSync(p); return false; } catch { return true; }
+}
+
+// _ folders Claude Code never lists and the default scan skips on purpose. _vendor has its own profile.
+// Any other _ folder (a new _fabric, say) would get neither scan, so G29 reports it.
+export const UNDERSCORE_ALLOW = new Set(['_vendor', '_archive', '_archived', '_eval', '_sandbox', '_snapshots']);
+
+export function unlistedUnderscoreDirs(root) {
+  if (!isDir(root)) return [];
+  return fs.readdirSync(root).filter((n) => n.startsWith('_') && !UNDERSCORE_ALLOW.has(n) && isDir(path.join(root, n))).sort();
 }
 
 // stat() follows junctions and symlinks; Dirent.isDirectory() does not.
@@ -118,6 +130,7 @@ export function resolveOptions(opts = {}) {
     baselinePath: opts.baselinePath || DEFAULT_BASELINE,
     includeActive: Boolean(opts.includeActive),
     skillDir: opts.skillDir ? path.resolve(opts.skillDir) : null,
+    profile: opts.profile || null,
     rules: opts.rules ? new Set(opts.rules) : null,
     runScaffold: opts.runScaffold,
     fallbackRoot: opts.fallbackRoot ? path.resolve(opts.fallbackRoot) : null,
@@ -193,6 +206,10 @@ function scaffoldFindings(o, ctx) {
 export function auditSkills(rawOpts = {}) {
   const o = resolveOptions(rawOpts);
   const ctx = repoFacts(o);
+  if (o.profile === 'vendor') {
+    const repoSkills = listSkillDirs(o.skillsRoot).skills.map((d) => safeLoad(d.dir)).filter(Boolean);
+    return auditVendor(o.skillsRoot, ctx, { repoSkills, required: true });
+  }
   const findings = []; const warnings = [];
   const add = (rule, skill, msg, line, source) => findings.push({ rule, skill, msg, ...(line ? { line } : {}), ...(source ? { source } : {}) });
 
@@ -204,6 +221,7 @@ export function auditSkills(rawOpts = {}) {
     const repo = listSkillDirs(o.skillsRoot);
     dirs = repo.skills.map((d) => ({ ...d, source: 'repo' }));
     expected = repo.expected; noSkillMd = repo.noSkillMd.map((e) => ({ ...e, src: 'repo' }));
+    for (const name of unlistedUnderscoreDirs(o.skillsRoot)) noSkillMd.push({ name, src: 'repo', unlisted: true });
     if (o.includeActive) {
       const have = new Set(dirs.map((d) => d.name));
       const active = listSkillDirs(o.activeRoot);
@@ -229,7 +247,8 @@ export function auditSkills(rawOpts = {}) {
 
   if (!o.skillDir) {
     crossSkillFindings(skills, o, (r, sk, m) => add(r, sk, m));
-    for (const { name, src, broken } of noSkillMd) {
+    for (const { name, src, broken, unlisted } of noSkillMd) {
+      if (unlisted) { add('G29', name, `folder ${src}:${name} is neither _vendor nor on the allow list (${[...UNDERSCORE_ALLOW].join(', ')}): Claude Code lists nothing under it and no gate profile audits it`); continue; }
       add('G29', name, broken ? `${src}:${name} is a broken junction or symlink` : `directory ${src}:${name} has no SKILL.md (prefix _ or . to park it)`);
     }
   } else {
@@ -256,7 +275,15 @@ export function auditSkills(rawOpts = {}) {
     const sc = scaffoldFindings(o, ctx);
     if (sc) for (const x of sc) add('G32', x.rule, x.notRun ? x.msg : `fresh init_skill.py scaffold fails ${x.rule}: ${x.msg}`);
   }
-  return buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, expected });
+  const report = buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, expected });
+  // Vendored skills sit under _vendor, which listSkillDirs skips: audit them with their own profile.
+  const vendor = !o.skillDir && !o.rules ? auditVendor(o.skillsRoot, ctx, { repoSkills: skills }) : null;
+  if (vendor) {
+    report.vendor = vendor; report.failed = report.failed || vendor.failed;
+    // The summary line is the artifact AGENTS.md names: it must not say "0 hard failures" while the vendor profile fails.
+    report.summary += `, vendor: ${vendor.skillCount} skills, ${vendor.hardFailures} hard failures`;
+  }
+  return report;
 }
 
 function buildReport({ o, skills, findings, warnings, scope, scopeKey, listing, expected }) {
@@ -321,6 +348,7 @@ export function writeBaseline(report, o) {
 // ---------------------------------------------------------------- output
 
 export function formatReport(report, { verbose = false, quiet = false } = {}) {
+  if (report.profile === 'vendor') return formatVendorReport(report, { verbose, quiet });
   const lines = [];
   if (!quiet) {
     lines.push('rule  name                              mode     count  baseline  status');
@@ -342,6 +370,7 @@ export function formatReport(report, { verbose = false, quiet = false } = {}) {
   }
   // Warnings are visible unless --quiet (G22 sync-gap warnings always show); the noisy G20 size
   // notes show only with --verbose.
+  if (report.vendor) lines.push(formatVendorReport(report.vendor, { verbose, quiet }));
   const show = (w) => verbose || (!w.startsWith('G20') && (!quiet || w.startsWith('G22')));
   for (const w of report.warnings) if (show(w)) lines.push(`WARN ${w}`);
   lines.push(report.summary);
@@ -365,7 +394,16 @@ export function exportStaged(cwd) {
   const root = top.stdout.toString().trim();
   const ls = spawnSync('git', ['ls-files', '-z', '--', ...STAGED_PATHS], { cwd: root, maxBuffer: 256 * 1024 * 1024 });
   if (ls.status !== 0) throw new Error('git ls-files failed');
-  const files = ls.stdout.toString().split('\0').filter((p) => p && !p.startsWith('.claude/skills/_') && !p.startsWith('.claude/skills/.'));
+  // _vendor is audited by the vendor profile; every other _ or . folder stays out.
+  // A new unlisted _ folder is exported too, so G29 can see it (see UNDERSCORE_ALLOW).
+  const keep = (p) => {
+    if (!p) return false;
+    if (!p.startsWith('.claude/skills/')) return true;
+    const top = p.split('/')[2];
+    if (top.startsWith('.')) return false;
+    return !top.startsWith('_') || !UNDERSCORE_ALLOW.has(top) || top === '_vendor';
+  };
+  const files = ls.stdout.toString().split('\0').filter(keep);
   const tmp = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-skills-staged-'));
   const co = spawnSync('git', ['checkout-index', '-z', '--stdin', `--prefix=${tmp.replace(/\\/g, '/')}/`], { cwd: root, input: files.join('\0') + '\0', maxBuffer: 256 * 1024 * 1024 });
   if (co.status !== 0) { fs.rmSync(tmp, { recursive: true, force: true }); throw new Error(`git checkout-index failed: ${co.stderr.toString().trim()}`); }
@@ -396,7 +434,10 @@ export function main(argv) {
     skillsRoot: val('--root'),
     repoRoot: val('--repo-root'),
     baselinePath: val('--baseline'),
+    profile: val('--profile'),
   };
+  if (opts.profile && opts.profile !== 'vendor') { console.error(`--profile must be "vendor", got "${opts.profile}"`); return 2; }
+  if (opts.profile && has('--update-baseline')) { console.error('--update-baseline cannot run with --profile (the vendor profile has no baseline)'); return 2; }
   if (has('--update-baseline') && opts.skillDir) { console.error('--update-baseline cannot run with --skill'); return 2; }
   if (has('--staged')) {
     if (has('--update-baseline')) { console.error('--update-baseline cannot run with --staged'); return 2; }
@@ -418,7 +459,8 @@ export function main(argv) {
     writeBaseline(report, o);
     report = auditSkills(opts);
   }
-  if (has('--json')) console.log(JSON.stringify({ ...report, rules: Object.fromEntries(Object.entries(report.rules).map(([k, v]) => [k, { ...v, findings: v.findings }])) }, null, 1));
+  if (has('--json') && report.profile === 'vendor') console.log(JSON.stringify(report, null, 1));
+  else if (has('--json')) console.log(JSON.stringify({ ...report, rules: Object.fromEntries(Object.entries(report.rules).map(([k, v]) => [k, { ...v, findings: v.findings }])) }, null, 1));
   else console.log(formatReport(report, { verbose: has('--verbose'), quiet: has('--quiet') }));
   return report.failed ? 1 : 0;
 }
