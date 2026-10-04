@@ -803,6 +803,22 @@ test('trigger-probe: a personal-skill fire under --alias is an alias leak error,
   assert.equal(frontmatterName('---\nname: fabric-p5\ndescription: x\n---\n# body'), 'fabric-p5');
   assert.equal(frontmatterName('---\r\nname: fabric\r\n---\r\n'), 'fabric');
   assert.equal(frontmatterName('# no frontmatter'), null);
+  assert.equal(frontmatterName('﻿---\nname: "fabric-p5"\n---\n'), 'fabric-p5');
+});
+
+// Review (2026-10-04): the main() guards stop a run that would silently measure the live copy. They run
+// before claude is resolved, so the test needs no claude on PATH.
+test('trigger-probe CLI: a bad --alias exits 2 before any run', () => {
+  const PROBE = path.join(here, 'trigger-probe.mjs');
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-alias-'));
+  write(path.join(proj, '.claude', 'skills', 'fabric-p5', 'SKILL.md'), '---\nname: fabric\ndescription: x\n---\n');
+  const run = (...a) => spawnSync('node', [PROBE, '--dry-run', '--cwd', proj, ...a], { encoding: 'utf8' });
+  assert.equal(run('--alias').status, 2);
+  assert.equal(run('--alias=fabric=fabric-p5').status, 2);
+  assert.equal(run('--alias', 'fabric=missing').status, 2);
+  const wrong = run('--alias', 'fabric=fabric-p5');
+  assert.equal(wrong.status, 2);
+  assert.match(wrong.stderr, /must be fabric-p5/);
 });
 
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name

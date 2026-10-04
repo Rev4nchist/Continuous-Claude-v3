@@ -28,7 +28,7 @@ const repo = path.resolve(here, '..', '..');
 // "commit what we have so far" would otherwise commit).
 // An empty strict MCP config keeps case prompts from calling any MCP tool.
 export function emptyMcpConfigPath() {
-  const p = path.join(os.tmpdir(), 'trigger-probe-empty-mcp.json');
+  const p = path.join(os.tmpdir(), `trigger-probe-empty-mcp-${process.pid}.json`); // per process: parallel probes
   fs.writeFileSync(p, JSON.stringify({ mcpServers: {} }));
   return p;
 }
@@ -69,9 +69,9 @@ export function aliasLeak(fired, alias) {
 
 // The copy's frontmatter name must be the alias, or the override and the scoring are ambiguous.
 export function frontmatterName(text) {
-  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
-  const n = m && /^name:[ \t]*(\S+)[ \t]*$/m.exec(m[1]);
-  return n ? n[1] : null;
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text).replace(/^﻿/, ''));
+  const n = m && /^name:[ \t]*(["']?)([^"'\s]+)\1[ \t]*$/m.exec(m[1]);
+  return n ? n[2] : null;
 }
 
 // The claude executable, found on PATH. It is spawned WITHOUT a shell, so a path with spaces
@@ -164,6 +164,7 @@ function main(argv) {
   const CWD = path.resolve(cwdArg);
   if (!fs.existsSync(CWD) || !fs.statSync(CWD).isDirectory()) { console.error(`--cwd ${CWD} is not a folder`); return 2; }
   let ALIAS;
+  if (argv.some((a) => a.startsWith('--alias='))) { console.error('--alias takes a separate value: --alias <name>=<copy>'); return 2; }
   if (argv.includes('--alias') && !opt('--alias', null)) { console.error('--alias needs <name>=<copy>'); return 2; }
   try { ALIAS = parseAlias(opt('--alias', null)); } catch (e) { console.error(e.message); return 2; }
   const copy = ALIAS && path.join(CWD, '.claude', 'skills', ALIAS.to, 'SKILL.md');

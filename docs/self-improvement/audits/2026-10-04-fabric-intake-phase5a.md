@@ -58,7 +58,7 @@ A scout read 15 Learn pages for 12 contested facts:
 | `vendor-conflict-scan` (vendored) | 68 hits, 0 uncovered (2 new resize lines covered by the new overlay entry) |
 | `context-budget-guard --repo` | 23,216 / 23,516, unchanged |
 | `ondemand-index-check` | OK |
-| Eval check samples | 72 of 72 good and bad lines score right (`p5_samples.py`) |
+| Eval check samples | 116 of 116 good and bad lines score right after both review rounds (`p5_samples.py`), multi-line answers included |
 
 ## Stage b: routing
 
@@ -86,10 +86,12 @@ Sonnet's one miss: the 429 prompt in r1 fired no skill (2 of 3 runs routed). Sco
 
 `run_eval.py behavior`, evals 101-111, with vs without the branch hub, graded, 0 excluded. Sonnet and Opus
 only (Dave). The first scoring found 4 with-skill never-line failures. All 4 were correct answers that
-the eval 6 `brain-runner` check, copied into 104 and 105 by review M7, could not tell apart:
-- a notebook job as brain-runner;
-- a model write as brain-runner;
-- a sentence that bans the bulk role PUT.
+over-broad checks failed: three from the eval 6 `brain-runner` check copied into 104 and 105 by review
+M7, and one from the eval 110 PUT check:
+- a notebook job as brain-runner (Opus 104);
+- a notebook job as brain-runner (Sonnet 104);
+- a model write as brain-runner (Opus 105);
+- a sentence that bans the bulk role PUT (Sonnet 110).
 
 The checks were narrowed (commit `9d5f2ac`) and re-applied to the same saved answers. The PR #96 review
 (critic + Codex) then reshaped the never-line checks once more; see "Review of PR #96". Final numbers,
@@ -183,6 +185,22 @@ regex findings and none in `--alias`, `conflict-scan` or the reference prose. Fi
     - Eval 109: a first run that ended Completed is not posted again.
     - `data-agent.md`: the service principal management ban is labelled CCv3 policy. The DataAgent REST
       pages list a service principal, but that path is untested here.
+- Critic round 2 (on `009861e`):
+  - High: the 103 and 105 prose retry checks start with `^` but lacked the `m` flag, so they read only the
+    first line of an answer. The one-line samples hid it. Fixed: `m` is on.
+  - The windows inside the retry check are negation-aware ("it does not back off and try again").
+  - 103 and 105 no longer fail a capped poll loop (`for attempt in ...`).
+  - The quer/MCP (6) and notebook (104) exemptions now cover the text before the verb too.
+  - An `az logout`/`az login` as the user resets the service principal code window (104, 105).
+  - Eval 109 treats only an upper-case `GET` or a bare `az rest` list call as a GET, so prose "get" no
+    longer disarms the re-POST check.
+  - `trigger-probe`:
+    - `--alias=x=y` is refused.
+    - The MCP config file carries the process id.
+    - The frontmatter name accepts a BOM and quotes.
+    - A spawn test covers the `main()` guards.
+  - 116 of 116 sample lines score right, multi-line answers included. Tests 152/152.
+  - Stage c re-applied: unchanged, Opus 86 vs 62, Sonnet 86 vs 59, 0 never-line failures.
 - Not changed: exact REST host and payload shapes (Codex 1, 4) stay with the LLM grader. The deterministic
   checks are smoke guards for never-lines, not a full grader.
 - The Phase 4 r1 and r2 eval folders are gone from `%LOCALAPPDATA%\Temp` (Windows cleanup). Only the 6 Phase 4

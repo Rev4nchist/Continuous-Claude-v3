@@ -46,7 +46,8 @@ not as a universal rule.
 6. Do not manage an agent as a service principal. Use a signed-in user. This is CCv3 policy until a test
    proves the REST management path for a service principal (see the lines below).
    This holds when the user asks for the service principal or an unattended job: give the interactive
-   signed-in-user path and cite the 401 below. An unattended job as a user also fails (L-20).
+   signed-in-user path and cite the 401 below. An unattended job also fails when it runs as an admin user
+   whom security defaults force through MFA (L-20).
    Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
    HTTP 401 from the SDK's `management/configuration` API (L-25). That test cannot separate identity
    type from ownership. Not tested: a non-owner user, or a service principal that owns the agent.
