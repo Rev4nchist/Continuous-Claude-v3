@@ -203,7 +203,8 @@ function tighten(budget, total) {
     console.error('  --tighten needs --repo, without --staged or --json; maxChars unchanged.');
     return;
   }
-  const target = total + (budget.reserveChars ?? 300);
+  const reserve = Number.isFinite(budget.reserveChars) ? budget.reserveChars : 300;
+  const target = total + reserve;
   if (target >= budget.maxChars) {
     console.log(`  tighten: maxChars stays ${budget.maxChars} (total + reserve = ${target}).`);
     return;
@@ -218,5 +219,5 @@ function tighten(budget, total) {
     try { unlinkSync(tmp); } catch { /* never created */ }
     throw err;
   }
-  console.log(`  tighten: maxChars ${budget.maxChars} -> ${target} (reserve ${budget.reserveChars ?? 300}).`);
+  console.log(`  tighten: maxChars ${budget.maxChars} -> ${target} (reserve ${reserve}).`);
 }

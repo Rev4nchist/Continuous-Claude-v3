@@ -392,7 +392,7 @@ Static gates:
 
 | Gate | Command | Output on 2026-09-24 |
 |---|---|---|
-| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23461 chars (budget 23761, Claude Code limit 150000) [repo]` |
+| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23768 chars (budget 24068, Claude Code limit 150000) [repo]` (2026-10-03) |
 | Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 80 live entries / 71 names ... 0 discarded-output, 8/8 timers safe` |
 | Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 37 \| opus: 12 sonnet: 25 \| OK` |
 | Skills | `node scripts/skills/audit-skills.mjs` | Gate and ratchet for every SKILL.md (rules G01-G32) |
