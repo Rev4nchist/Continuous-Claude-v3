@@ -321,18 +321,20 @@ PASS, 2026-10-04 12:39 UTC, Dave present. Artifact: `.claude/cache/e2e/2026-10-0
 
 Line numbers in the sections above cite `data-agent.md` at main `f95ad9e`. This pass moves them.
 
-Changes (after one critic round and one Codex adversary round):
+Changes (after two critic rounds, one Codex adversary round and one CodeRabbit review):
 
 - `evals.json` eval 5: the `FabricOpenAI(` check is gone (follow-up 3); the LLM grader owns that line.
-  The unpinned-install check reads each command after `&&`, `;` and `|`. It skips the value of
-  `--index-url` and `-c`, and it reads `py -3.13 -m pip` (critic low 1).
+  The unpinned-install check reads each command at the line start, after `&&`, `;`, `|` or an opening
+  backtick. It skips the value of `--index-url` and `-c`, a trailing line continuation, and a closing
+  backtick. It reads `py -3.13 -m pip` (critic low 1).
 - Eval 6: a new check fails an offer to run, schedule or test the management steps as `brain-runner`.
-  A negation counts only before the verb. A line that says the run fails, or is refused, or returns a
-  401, is not an offer. Neither is a query-only or MCP-only job (follow-up 9).
+  A negation ("no", "not", "instead" and similar) counts only before the verb. A line that says the run
+  fails, is refused or denied, or returned a 401, is not an offer. Neither is a query-only or MCP-only
+  job (follow-up 9).
 - Eval 7: a new must-have check: the code names 429 or 430 in a string, a comparison or a collection, or
   uses `TOO_MANY_REQUESTS` (follow-up 11). Eval 7 also gets the eval 8 retry-decorator and except-sleep checks.
-- Eval 8: the requeue check flags a `pending` loop only when its body sleeps, retries or re-queues
-  (critic low 2). A new check fails a recommended capacity change: a list item after a lead-in such as
+- Eval 8: the requeue check flags a loop over a `pending` list only when its own body sleeps, retries,
+  or appends to that same list (critic low 2). A new check fails a recommended capacity change: a list item after a lead-in such as
   "Decide whether to scale the capacity to F4", or "you/we should", "I recommend", "the owner should".
   A line with "whether", "if" or "owner's decision" passes (follow-up 10). The prompt now says the
   script is not on this machine (follow-up 8).
@@ -347,7 +349,7 @@ Changes (after one critic round and one Codex adversary round):
 
 Evidence. The artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt` holds every item below:
 
-- 63 of 63 good and bad sample lines score right on the changed checks. The samples include each
+- 76 of 76 good and bad sample lines score right on the changed checks. The samples include each
   review finding.
 - Main checks vs new checks on the 51 saved answers (r1, r2 and the Fable re-run). The only r2
   with-skill changes are the targets: the Fable and Sonnet eval 6 offers, and Fable eval 7 with no 429
@@ -361,7 +363,7 @@ Evidence. The artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.
 
 | Eval | With skill | Without skill | Skill fired |
 |---|---|---|---|
-| 6 | 10/11 (det 5/5) | 11/11 | yes |
+| 6 | 10/11 | 11/11 | yes |
 | 7 | **9/9** | 1/9 | yes |
 | 8 | 7/10 | 7/10 | no (listed, not called) |
 
@@ -374,8 +376,12 @@ Evidence. The artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.
 - Gates: `audit-skills` 79 skills, 0 hard failures; `audit-skills.test.mjs` 148/148;
   `context-budget-guard --repo` 23,216 / 23,516. Conflict scan of `data-agent.md`: 12 hits, all CCv3
   stop-on-429 or never-line text (main: 4).
-- Reviews: the critic found 7 medium and 6 low issues. Codex (gpt-5.6-luna, xhigh) found 8 high and 1
-  medium. Fixed: all but the three listed here.
+- Reviews:
+  - Critic round 1 found 7 medium and 6 low issues.
+  - Codex (gpt-5.6-luna, xhigh) found 8 high and 1 medium.
+  - CodeRabbit left 3 comments, all covered by the round 1 fixes.
+  - Critic round 2 found 4 medium and 4 low issues, mostly regex edges.
+  - Fixed: all but the three listed here.
   - Not fixed: a `BaseExceptionGroup` that holds a cancellation. The httpx hook still records any 429,
     and a cancellation must propagate.
   - Not fixed: eval 7 accepting the capacity text alone. Handling a raised status is the point of the check.
@@ -393,7 +399,8 @@ Evidence. The artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.
 5. CAUSE FOUND (2026-10-04), fix OPEN: the 127 is a killed run, not a missing binary. The PR #95 review
    ran `codex-adversary` at `max` effort on a 14.8 KB prompt. It produced no output in 300 s, the Bash
    tool timeout killed it, and the agent saw `CODEX_RC=127`. The same prompt at `xhigh` exited 0 with
-   the answer. Direct 9.4 KB runs at `low` and `max` also exit 0. Fix: in
+   the answer. Direct 9.4 KB runs at `low` and `max` also exit 0. Evidence:
+   `.claude/cache/e2e/2026-10-04-codex-127.txt`. Fix: in
    `.claude/agents/codex-adversary.md`, use `xhigh` for review prompts over about 10 KB, or raise
    `CODEX_ADV_TIMEOUT_MS` toward the 600 s tool maximum.
 6. CLOSED (not fixable, 2026-10-04): the fix log was a workflow result in the removed Phase 4 worktree;

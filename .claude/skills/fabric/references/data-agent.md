@@ -131,7 +131,7 @@ async def ask(url, question, timeout=120):
     except Exception as e:
         if seen or any(CAPACITY.search(str(x)) for x in leaves(e)):
             raise Throttled(f"capacity error (HTTP {seen}): stop all load") from e
-        raise  # a timeout is an McpError: a transport error, not a wrong answer
+        raise  # a timeout: an ExceptionGroup that holds an McpError. A transport error, not a wrong answer.
     text = "\n".join(b.text for b in result.content if b.type == "text")
     if seen or (result.isError and CAPACITY.search(text)):
         raise Throttled(f"capacity error (HTTP {seen}): stop all load")
