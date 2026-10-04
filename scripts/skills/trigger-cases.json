@@ -1,5 +1,5 @@
 {
-  "_doc": "Trigger probe cases. Each prompt EXPECTS exactly the listed skill(s). Any other skill firing on that prompt counts as a false fire. Keep prompts in Dave's voice. Add a case when a skill is rewritten. Cases that expected a skill archived on 2026-10-01 were removed; add one back when a live skill clearly owns the prompt.",
+  "_doc": "Trigger probe cases. Each prompt EXPECTS exactly the listed skill(s). Any other skill firing on that prompt counts as a false fire. Keep prompts in Dave's voice. Add a case when a skill is rewritten. Cases that expected a skill archived on 2026-10-01 were removed; add one back when a live skill clearly owns the prompt. A negative case has an empty expect list and a forbid list: it is a hit when no forbidden skill fires, and only a forbidden skill counts as a false fire.",
   "cases": [
     { "prompt": "commit what we have so far", "expect": ["commit"] },
     { "prompt": "write up a handoff so the next session can pick this up", "expect": ["create_handoff"] },
@@ -46,6 +46,12 @@
     { "prompt": "add a %%configure cell to the notebook so it uses 8 executors", "expect": ["fabric"] },
     { "prompt": "why is this Fabric Spark job so slow, it used to take 5 minutes", "expect": ["fabric"] },
     { "prompt": "read the delta table from OneLake in the notebook and show its schema", "expect": ["fabric"] },
+    { "prompt": "ask our published Fabric data agent which section covers rota templates, from a python script", "expect": ["fabric"] },
+    { "prompt": "create a Fabric data agent over the orders and customers tables in kb_lakehouse and publish it", "expect": ["fabric"] },
+    { "prompt": "the Fabric data agent setup notebook runs ds.select but no tables end up selected", "expect": ["fabric"] },
+    { "prompt": "score our Fabric data agent answers against the 40 golden questions", "expect": ["fabric"] },
+    { "prompt": "our old FabricOpenAI assistants code for the data agent stopped working, port it", "expect": ["fabric"] },
+    { "prompt": "build a Copilot Studio agent that answers HR policy questions from our SharePoint site", "expect": [], "forbid": ["fabric"] },
     { "prompt": "add an index to the users table in Postgres, the query is slow", "expect": ["databases"] },
     { "prompt": "design the schema for a tickets table with comments and assignees", "expect": ["databases"] }
   ]

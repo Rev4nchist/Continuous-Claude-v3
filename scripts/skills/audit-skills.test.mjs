@@ -765,6 +765,17 @@ test('trigger-probe: a turn-cap stop after a Skill call is routing, not an error
   assert.equal(runError({ status: 0, stdout: '' }), null);
 });
 
+// A negative case (empty expect) was always a miss and counted every fired skill as a false fire.
+test('trigger-probe: a forbid case fails only when a forbidden skill fires', async () => {
+  const { scoreCase } = await import('./trigger-probe.mjs');
+  const neg = { prompt: 'x', expect: [], forbid: ['fabric'] };
+  assert.deepEqual(scoreCase(neg, ['build']), { hit: true, falseFires: [] });
+  assert.deepEqual(scoreCase(neg, []), { hit: true, falseFires: [] });
+  assert.deepEqual(scoreCase(neg, ['build', 'fabric']), { hit: false, falseFires: ['fabric'] });
+  // A case without forbid keeps the expect rule.
+  assert.deepEqual(scoreCase({ prompt: 'y', expect: ['fabric'] }, ['fabric', 'fix']), { hit: true, falseFires: ['fix'] });
+});
+
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name
 
 // A stand-in init_skill.py that writes one SKILL.md. `md` is the file text.

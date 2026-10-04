@@ -96,6 +96,16 @@ export function runError({ error, status, stdout = '' }) {
   return capped && skillsFired(stdout).length ? null : `exit ${status}`;
 }
 
+// Hit and false fires of one case. A case with a `forbid` list is a negative case: it is a hit when no
+// forbidden skill fires, and only a forbidden skill is a false fire. Other skills may own its prompt.
+export function scoreCase(c, fired) {
+  if (Array.isArray(c.forbid) && c.forbid.length) {
+    const bad = fired.filter((s) => c.forbid.includes(s));
+    return { hit: !bad.length, falseFires: bad };
+  }
+  return { hit: fired.some((s) => c.expect.includes(s)), falseFires: fired.filter((s) => !c.expect.includes(s)) };
+}
+
 function runCase(prompt, model, cwd = repo) {
   const { cmd, args } = buildCommand(model);
   const env = { ...process.env };
@@ -130,8 +140,9 @@ function main(argv) {
 
   const results = cases.map((c) => {
     const r = runCase(c.prompt, MODEL, CWD);
-    const hit = !r.error && r.fired.some((s) => c.expect.includes(s));
-    const falseFires = r.error ? [] : r.fired.filter((s) => !c.expect.includes(s));
+    const s = scoreCase(c, r.fired);
+    const hit = !r.error && s.hit;
+    const falseFires = r.error ? [] : s.falseFires;
     return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, hooksRan: r.hooksRan, status: r.status, error: r.error, stderr: r.stderr };
   });
   const ok = results.filter((r) => !r.error);
