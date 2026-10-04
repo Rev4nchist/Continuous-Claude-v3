@@ -30,6 +30,8 @@ not as a universal rule.
    The vendor overlay does not cover this file, so this line carries the override.
    Over MCP the error is text: `McpError: Your organization's Fabric compute capacity has exceeded its limits`.
    Measured: from question 14 on, 27 of 40 answers were lost to it in one pass (proof:150).
+   The error can also arrive raised, as an HTTP status error with 429 or 430. Check the status and the text,
+   then stop. A broad `except Exception` that logs and goes to the next question keeps the load going.
 2. Never run `evaluate_data_agent`. By default it scores with a built-in critic prompt. Learn does not
    name the scorer. Its `critic_prompt` sample is an LLM prompt, and `critic_prompt` only replaces the
    built-in one. Inferred: each question is also an agent query, so a run uses capacity. The evaluate
@@ -75,31 +77,71 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-serv
   Pass 2 ran on it (proof:154). The project has no lock file.
 - Ask one question at a time on an F2. Bound each call with a timeout. Count a lost answer or a tool
   error result as a transport error, not as a wrong answer.
+- mcp 1.26.0 waits up to 300 s for an answer by default. The httpx `read` timeout bounds each wait for
+  data. `read_timeout_seconds` on `ClientSession` bounds each request, the handshake too.
+- Measured on mcp 1.26.0 against local test servers: a 429 and a timeout both arrive wrapped in an
+  `ExceptionGroup`. `str()` of the group does not contain "429". The transport also swallows a 429 on the
+  `notifications/initialized` POST. The sample records every 429 or 430 response with an httpx hook and
+  raises `Throttled`. Catch it and stop all load.
 
 ```python
-# python -m pip install mcp==1.26.0. Never print the token.
-import shutil, subprocess
+# python -m pip install mcp==1.26.0. Python 3.11+ (ExceptionGroup). Never print the token.
+import re, shutil, subprocess
+from datetime import timedelta
+import httpx
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+
+class Throttled(RuntimeError):
+    """HTTP 429 or 430, or the capacity text: stop all load. Never retry (never-line 1)."""
+
+CAPACITY = re.compile(r"\b(?:429|430)\b|exceeded its limits")
 
 def fabric_token():
     cmd = [shutil.which("az") or "az", "account", "get-access-token", "--resource",
            "https://api.fabric.microsoft.com", "--query", "accessToken", "-o", "tsv"]
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
 
+def leaves(err):
+    # The transport raises an ExceptionGroup. Check every error inside it.
+    if isinstance(err, BaseExceptionGroup):
+        for sub in err.exceptions:
+            yield from leaves(sub)
+    else:
+        yield err
+
 async def ask(url, question, timeout=120):
+    seen = []  # every 429 or 430 response, also one the transport swallows
+
+    async def on_response(resp):
+        if resp.status_code in (429, 430):
+            seen.append(resp.status_code)
+
     headers = {"Authorization": "Bearer " + fabric_token()}
-    async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tool = (await session.list_tools()).tools[0]
-            arg = next(iter(tool.inputSchema["properties"]))
-            result = await session.call_tool(tool.name, {arg: question})
-            text = "\n".join(b.text for b in result.content if b.type == "text")
-            if result.isError:
-                raise RuntimeError("agent tool error: " + text)
-            return text
+    http = httpx.AsyncClient(headers=headers, follow_redirects=True,
+                             timeout=httpx.Timeout(30, read=timeout),
+                             event_hooks={"response": [on_response]})
+    try:
+        async with http, streamable_http_client(url, http_client=http) as (read, write, _):
+            async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout)) as session:
+                await session.initialize()
+                tool = (await session.list_tools()).tools[0]
+                arg = next(iter(tool.inputSchema["properties"]))
+                result = await session.call_tool(tool.name, {arg: question})
+    except Exception as e:
+        if seen or any(CAPACITY.search(str(x)) for x in leaves(e)):
+            raise Throttled(f"capacity error (HTTP {seen}): stop all load") from e
+        raise  # a timeout: an ExceptionGroup that holds an McpError. A transport error, not a wrong answer.
+    text = "\n".join(b.text for b in result.content if b.type == "text")
+    if seen or (result.isError and CAPACITY.search(text)):
+        raise Throttled(f"capacity error (HTTP {seen}): stop all load")
+    if result.isError:
+        raise RuntimeError("agent tool error: " + text)
+    return text
 ```
+
+The caller catches `Throttled` first and ends the pass. The questions it did not reach are not run.
+Any other exception is a transport error for that question.
 
 ## Old Assistants code: the Responses client
 
@@ -173,8 +215,8 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
 
 - Token scope. The MCP page uses `https://api.fabric.microsoft.com/.default`. The service principal page
   uses `https://analysis.windows.net/powerbi/api/.default`. Measured in pass 2: a signed-in user token for
-  `https://api.fabric.microsoft.com` was accepted on all 40 calls, with 0 transport errors (proof:154).
-  Which scope a service principal needs is open. The CCv3 live smoke (2026-10-04) confirmed a signed-in user token for `https://api.fabric.microsoft.com`.
+  `https://api.fabric.microsoft.com` was accepted on all 40 calls, with 0 transport errors (proof:154),
+  and again in the CCv3 live smoke (2026-10-04). Which scope a service principal needs is open.
 - The Responses client stage value is not verified. The sample notebook comment says `sandbox` or
   `published`. Another source says `sandbox` or `production`.
 - Learn labels these preview: the SDK, service principal querying, and REST "Data Agent configuration

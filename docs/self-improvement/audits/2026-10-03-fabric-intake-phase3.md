@@ -158,4 +158,5 @@ each of those against the vendored text and, for Catalog Search, against the Lea
    PR that updates the lock; that PR's instruction diff must be read by a person (proposal section 6).
 6. OPEN: `regex` (must-have) checks read prose too, so an answer that names the right endpoint only to
    reject it still passes. The LLM grader covers it.
-7. OPEN (Dave): file the "upstream report" rows as one issue on microsoft/skills-for-fabric.
+7. CLOSED (2026-10-03): the "upstream report" rows are filed as one issue,
+   https://github.com/microsoft/skills-for-fabric/issues/102 (7 verified defects).
