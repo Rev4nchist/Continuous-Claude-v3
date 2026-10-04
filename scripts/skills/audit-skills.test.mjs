@@ -776,6 +776,22 @@ test('trigger-probe: a forbid case fails only when a forbidden skill fires', asy
   assert.deepEqual(scoreCase({ prompt: 'y', expect: ['fabric'] }, ['fabric', 'fix']), { hit: true, falseFires: ['fix'] });
 });
 
+// Measured 2026-10-04: a personal skill wins over a project skill of the same name, so a probe of a
+// changed description read the live copy. --alias turns the personal skill off and scores the copy.
+test('trigger-probe: --alias turns the personal skill off and scores the project copy as the real name', async () => {
+  const { parseAlias, unalias, noHooksSettingsPath, scoreCase } = await import('./trigger-probe.mjs');
+  const alias = parseAlias('fabric=fabric-p5');
+  assert.deepEqual(alias, { from: 'fabric', to: 'fabric-p5' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(noHooksSettingsPath(alias), 'utf8')),
+    { disableAllHooks: true, skillOverrides: { fabric: 'off' } });
+  assert.deepEqual(unalias(['fabric-p5', 'databases'], alias), ['fabric', 'databases']);
+  assert.deepEqual(scoreCase({ prompt: 'n', expect: [], forbid: ['fabric'] }, unalias(['fabric-p5'], alias)),
+    { hit: false, falseFires: ['fabric'] });
+  assert.equal(parseAlias(null), null);
+  assert.throws(() => parseAlias('fabric'), /<name>=<copy>/);
+  assert.throws(() => parseAlias('fabric=fabric'), /two different names/);
+});
+
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name
 
 // A stand-in init_skill.py that writes one SKILL.md. `md` is the file text.
