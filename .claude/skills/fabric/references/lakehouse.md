@@ -5,7 +5,7 @@ rule ids G-NN) and Microsoft Learn. Upstream skills-for-fabric has no lakehouse 
 lakehouse goes to the vendored `spark-cli` row of the hub.
 
 Each line names its source: "Learn" (a Learn page says it), "measured" (a live test on one tenant), or
-"unverified" (no live test yet; the LT-NN id names the planned test). Measured lines are in Known gaps.
+"unverified" (no live test yet; the LT-NN id names the planned test). A measured line names its date or tenant.
 
 ## Contents
 
@@ -107,7 +107,8 @@ Each line names its source: "Learn" (a Learn page says it), "measured" (a live t
 ## Known gaps
 
 - Measured 2026-10-04 (LT-01, intake stage d): the playground lakehouse `kb_lakehouse` has no schemas
-  (`properties.defaultSchema` is absent), so its tables are at `Tables/<table>`. A lakehouse GET reports
-  the schema state: `defaultSchema` is set only when schemas are on.
+  (`properties.defaultSchema` is absent), so its tables are at `Tables/<table>`. Unverified (LT-02, LT-10):
+  that a schema-enabled lakehouse reports `defaultSchema` in the same GET. Until then, check a lakehouse's
+  schema state with the OneLake table API schemas call.
 - Not measured yet: LT-02 (List Tables 400), LT-03 (OneLake table API), LT-04 (shortcut list).
 - The token audience for the OneLake table API: check the get-started page before the first call.

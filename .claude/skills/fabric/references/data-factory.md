@@ -1,9 +1,9 @@
 # Fabric copy jobs and Dataflow Gen2
 
 CCv3-authored from the Fabric course extraction (`docs/research/fabric/2026-10-04-fabric-course-extraction.md`,
-rule ids G-NN) and Microsoft Learn, checked 2026-10-04. Upstream skills-for-fabric has `dataflows-cli`, but
-CCv3 does not vendor it: it has 19 lines that conflict with CCv3 never-lines, authors data destinations
-through the definition API (Learn says you cannot), and waits for the wrong job status.
+rule ids G-NN) and Microsoft Learn, checked 2026-10-04. Upstream skills-for-fabric has `dataflows-cli`.
+CCv3 does not vendor it, because 19 of its lines conflict with CCv3 never-lines. It also authors data
+destinations through the definition API, which Learn says you cannot do, and it waits for the wrong job status.
 
 Each line names its source: "Learn", "measured" (a live test on one tenant) or "unverified" (the LT-NN id
 names the planned test). Nothing here is measured yet.
@@ -24,7 +24,8 @@ names the planned test). Nothing here is measured yet.
    time on an F2. Before a POST that starts a job, read the item's recent job instances.
 3. Never call a Dataflow Gen2 public API as a service principal. Learn: "Service principal authentication
    isn't supported" (G-28). Use a signed-in user, or a notebook job (below).
-4. Never wait for `Succeeded` on a job instance. A job instance ends `Completed`, `Failed` or `Cancelled`.
+4. Never wait for `Succeeded` on a job instance. A job instance ends `Completed`, `Failed`, `Cancelled` or
+   `Deduped`. `Deduped` means a job of the same type was already running, so this one was skipped (Learn).
    Cap every poll loop.
 
 ## Copy jobs
@@ -62,8 +63,10 @@ names the planned test). Nothing here is measured yet.
 - New table destinations default to Replace with managed mapping. Schema options apply only to Replace.
   A KQL database does not support Replace (G-31, Learn).
 - To fold lookup tables into a dimension, use a left outer merge: unmatched rows stay (G-32, Learn).
-- Take over Fabric items in the portal: there is no API. Take over a semantic model with
-  `POST .../datasets/<id>/Default.TakeOver`. Repair the connections after any take over (G-33, Learn).
+- A take over changes an item's owner: do it only with the owner's yes. Take over Fabric items in the
+  portal: there is no API. Take over a semantic model with the Power BI API
+  `POST https://api.powerbi.com/v1.0/myorg/groups/<groupId>/datasets/<datasetId>/Default.TakeOver`. Repair the
+  connections after any take over (G-33, Learn).
 - Upstream "ServicePrincipal credentials" for a refresh can only mean the data connection's credential,
   not the API caller (never-line 3).
 
@@ -74,7 +77,7 @@ names the planned test). Nothing here is measured yet.
   the POST, read the pipeline's recent job instances: never start a second run while one is in progress,
   and never resubmit a POST whose outcome you do not know. Find the job instance first (Learn; hub
   never-line 3).
-- Poll the `Location` job URL with a cap. A job instance ends `Completed`, `Failed` or `Cancelled`.
+- Poll the `Location` job URL with a cap. A job instance ends `Completed`, `Failed`, `Cancelled` or `Deduped`.
 - A failed run: read the job's full `failureReason` before you classify it. `AADSTS50076` is an auth
   failure, not throttling (playbook, L-21).
 - Run identity: the pipeline's activities get tokens on the caller's behalf. An admin user whom security

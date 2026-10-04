@@ -9,7 +9,8 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
   L-08) and untriaged incidents by hand. MFA expires tokens per resource without warning (L-06).
 - Unattended Fabric jobs (pipelines, notebook jobs) fail with `AADSTS50076` when they run as an admin user whom
   security defaults force through MFA. `az login` and a portal sign-in do not fix it. Run them as a service
-  principal, or by hand in the portal (L-20).
+  principal, or by hand in the portal (L-20). Not a Dataflow Gen2 refresh: its APIs refuse a service
+  principal. Use a notebook job for unattended ETL.
 - "Failed to create session" can be an auth failure, not throttling. Read the job's full `failureReason` before
   you classify or stop a run (L-21).
 - Never pause, resume or resize a capacity from a script, and do not recommend one either: not as a cause,

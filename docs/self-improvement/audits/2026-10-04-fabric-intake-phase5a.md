@@ -91,12 +91,17 @@ the eval 6 `brain-runner` check, copied into 104 and 105 by review M7, could not
 - a model write as brain-runner;
 - a sentence that bans the bulk role PUT.
 
-The checks were narrowed (commit `9d5f2ac`) and re-applied to the same saved answers:
+The checks were narrowed (commit `9d5f2ac`) and re-applied to the same saved answers. The PR #96 review
+(critic + Codex) then reshaped the never-line checks once more; see "Review of PR #96". Final numbers,
+with every check re-applied to the same saved answers:
 
 | Model | With skill | Without | With-skill never-line failures | Below baseline |
 |---|---|---|---|---|
-| Opus | **76** | 52 | 0 | none |
-| Sonnet | **76** | 50 | 0 | 105 (-1), 109 (-2), 111 (-2) |
+| Opus | **86** | 62 | 0 | none |
+| Sonnet | **86** | 59 | 0 | 105 (-1), 109 (-2), 111 (-2) |
+
+The table below shows the first scoring (with the `9d5f2ac` checks). The review round raised totals in
+both arms: the old 103/105 retry check had failed good baseline answers too.
 
 Per eval (with / without, all expectations):
 
@@ -145,6 +150,34 @@ Artifact: `.claude/cache/e2e/2026-10-04-intake-fabric-phase5-d.json`. Script:
 - Tooling: `python` only; every install is pinned; Git Bash for vendored snippets. No Haiku and no API-key
   spend.
 - Every reference line is tagged Learn, measured or unverified.
+
+## Review of PR #96
+
+The critic asked for changes (18 findings). Codex (gpt-5.6-luna, xhigh, exit 0, 14.2 KB prompt) found 11
+regex findings and none in `--alias`, `conflict-scan` or the reference prose. Fixed:
+
+- References:
+  - `data-factory.md`: the take over call names the Power BI host and needs the owner's yes. `Deduped`
+    is a terminal job status (checked on the Learn REST Job Scheduler page).
+  - `lakehouse.md`: the "defaultSchema when schemas are on" half is unverified, not measured.
+  - `data-agent.md`: the service principal ban applies to every tenant.
+  - Playbook: no Dataflow Gen2 refresh as a service principal.
+- `trigger-probe`:
+  - A personal-skill fire under `--alias` is an "alias leak" error, not a hit.
+  - The copy's frontmatter name must be the alias.
+  - The settings file name carries the process id, so parallel probes do not truncate each other's.
+  - `:` is refused in an alias name, and `--alias` with no value is an error.
+- Evals:
+  - Negation-aware service principal checks (6, 104, 105), plus code-form checks: a
+    `--service-principal` login before a refresh or DAX call.
+  - Retry checks: prose "retry after a 429" and an `if ... 429:` block that sleeps (103, 105).
+  - GET before POST, line continuations allowed (109). Only a command counts as a role PUT (110).
+  - A wider capacity-change guard (8, 111), and the list form of a composite key (107).
+  - 103 of 103 sample lines score right, every reviewer line included.
+- Not changed: exact REST host and payload shapes (Codex 1, 4) stay with the LLM grader. The deterministic
+  checks are smoke guards for never-lines, not a full grader.
+- The Phase 4 r1 and r2 eval folders are gone from `%LOCALAPPDATA%\Temp` (Windows cleanup). Only the 6 Phase 4
+  follow-up Fable runs were re-checked against the new eval 6 and 8 checks: no change.
 
 ## Follow-ups
 

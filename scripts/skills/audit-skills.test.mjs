@@ -790,6 +790,19 @@ test('trigger-probe: --alias turns the personal skill off and scores the project
   assert.equal(parseAlias(null), null);
   assert.throws(() => parseAlias('fabric'), /<name>=<copy>/);
   assert.throws(() => parseAlias('fabric=fabric'), /two different names/);
+  assert.throws(() => parseAlias('a:b=c'), /<name>=<copy>/); // ':' would open an NTFS stream in the tmp file name
+});
+
+// Review (2026-10-04): with the personal skill turned off, a fire of it means the run measured the live copy.
+test('trigger-probe: a personal-skill fire under --alias is an alias leak error, not a hit', async () => {
+  const { aliasLeak, frontmatterName, parseAlias } = await import('./trigger-probe.mjs');
+  const alias = parseAlias('fabric=fabric-p5');
+  assert.match(aliasLeak(['fabric'], alias), /alias leak/);
+  assert.equal(aliasLeak(['fabric-p5', 'databases'], alias), null);
+  assert.equal(aliasLeak(['fabric'], null), null);
+  assert.equal(frontmatterName('---\nname: fabric-p5\ndescription: x\n---\n# body'), 'fabric-p5');
+  assert.equal(frontmatterName('---\r\nname: fabric\r\n---\r\n'), 'fabric');
+  assert.equal(frontmatterName('# no frontmatter'), null);
 });
 
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name

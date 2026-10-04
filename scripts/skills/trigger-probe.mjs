@@ -36,8 +36,10 @@ export function emptyMcpConfigPath() {
 // A UserPromptSubmit hook can inject skill guidance, which would make the hit rate hook-assisted
 // and not native routing. This settings file turns every hook off for the probe run. With an alias it
 // also turns the personal skill off, so only the renamed project copy can answer for it.
+// The file name carries the process id: probes of several models run in parallel, and a rewrite by one
+// must never leave another's claude start reading a half-written file.
 export function noHooksSettingsPath(alias = null) {
-  const p = path.join(os.tmpdir(), alias ? `trigger-probe-no-hooks-${alias.from}.json` : 'trigger-probe-no-hooks.json');
+  const p = path.join(os.tmpdir(), `trigger-probe-no-hooks-${process.pid}${alias ? `-${alias.from}` : ''}.json`);
   const settings = { disableAllHooks: true };
   if (alias) settings.skillOverrides = { [alias.from]: 'off' };
   fs.writeFileSync(p, JSON.stringify(settings));
@@ -49,13 +51,27 @@ export function noHooksSettingsPath(alias = null) {
 // changed skill in the --cwd project as <copy>; the probe turns <name> off and scores <copy> as <name>.
 export function parseAlias(text) {
   if (!text) return null;
-  const m = /^([\w:.-]+)=([\w:.-]+)$/.exec(text);
+  // No ':' — the name becomes part of a file name, and on Windows a ':' opens an NTFS alternate data stream.
+  const m = /^([\w.-]+)=([\w.-]+)$/.exec(text);
   if (!m || m[1] === m[2]) throw new Error(`--alias wants <name>=<copy> with two different names, got "${text}"`);
   return { from: m[1], to: m[2] };
 }
 
 export function unalias(fired, alias) {
   return alias ? fired.map((s) => (s === alias.to ? alias.from : s)) : fired;
+}
+
+// With an alias the personal skill is turned off. If it fires anyway, the run measured the live copy, not
+// the branch copy: that is an error, never a hit.
+export function aliasLeak(fired, alias) {
+  return alias && fired.includes(alias.from) ? `alias leak: the personal skill ${alias.from} fired` : null;
+}
+
+// The copy's frontmatter name must be the alias, or the override and the scoring are ambiguous.
+export function frontmatterName(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(text);
+  const n = m && /^name:[ \t]*(\S+)[ \t]*$/m.exec(m[1]);
+  return n ? n[1] : null;
 }
 
 // The claude executable, found on PATH. It is spawned WITHOUT a shell, so a path with spaces
@@ -132,8 +148,9 @@ function runCase(prompt, model, cwd = repo, alias = null) {
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
   const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd, maxBuffer: 64 * 1024 * 1024 });
-  const error = runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
-  return { fired: unalias(skillsFired(r.stdout || ''), alias), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
+  const raw = skillsFired(r.stdout || '');
+  const error = aliasLeak(raw, alias) || runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
+  return { fired: unalias(raw, alias), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
 }
 
 function main(argv) {
@@ -147,9 +164,15 @@ function main(argv) {
   const CWD = path.resolve(cwdArg);
   if (!fs.existsSync(CWD) || !fs.statSync(CWD).isDirectory()) { console.error(`--cwd ${CWD} is not a folder`); return 2; }
   let ALIAS;
+  if (argv.includes('--alias') && !opt('--alias', null)) { console.error('--alias needs <name>=<copy>'); return 2; }
   try { ALIAS = parseAlias(opt('--alias', null)); } catch (e) { console.error(e.message); return 2; }
-  if (ALIAS && !fs.existsSync(path.join(CWD, '.claude', 'skills', ALIAS.to, 'SKILL.md'))) {
-    console.error(`--alias: ${path.join(CWD, '.claude', 'skills', ALIAS.to, 'SKILL.md')} does not exist`);
+  const copy = ALIAS && path.join(CWD, '.claude', 'skills', ALIAS.to, 'SKILL.md');
+  if (ALIAS && !fs.existsSync(copy)) {
+    console.error(`--alias: ${copy} does not exist`);
+    return 2;
+  }
+  if (ALIAS && frontmatterName(fs.readFileSync(copy, 'utf8')) !== ALIAS.to) {
+    console.error(`--alias: the name in ${copy} must be ${ALIAS.to}`);
     return 2;
   }
   const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));

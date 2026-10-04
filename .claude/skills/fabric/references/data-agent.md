@@ -43,7 +43,7 @@ not as a universal rule.
    Never name one as a cause, a fix or a next step, not even a past one.
 5. Pin the SDK: `%pip install fabric-data-agent-sdk==0.1.32a0`. Learn shows the install with no version or
    with `-U`. Do not copy those lines. Use `python`, never `python3`.
-6. Do not manage an agent as a service principal on the FourthCompanyBrain tenant. Use a signed-in user.
+6. Do not manage an agent as a service principal. Use a signed-in user.
    This holds when the user asks for the service principal or an unattended job: give the interactive
    signed-in-user path and cite the 401 below. An unattended job as a user also fails (L-20).
    Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
