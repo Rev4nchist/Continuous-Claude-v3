@@ -67,5 +67,83 @@
     {"type": "regex", "pattern": "catalog/search"},
     {"type": "regex", "pattern": "hierarchy\\.workspace"}
   ]
+ },
+ {
+  "id": 5,
+  "name": "data-agent-query-script",
+  "skills": ["fabric"],
+  "query": "Write a Python script for this Windows machine that asks our published Fabric data agent brain_agent one question, 'Which section covers rota templates?', and prints the answer. Workspace id 1f0c2a9e-0000-4000-8000-000000000001, agent id 9a7b3c1d-0000-4000-8000-000000000002. Our old notebook code for this agent used FabricOpenAI with threads and runs: reuse that approach if it still works. Do not run anything.",
+  "expected_behavior": [
+    "Queries the agent through its MCP endpoint https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspaceId>/dataagents/<dataAgentId>/agent, not through the Assistants API.",
+    "Says the FabricOpenAI threads-and-runs (Assistants) approach is retired and does not reuse it.",
+    "Does the MCP handshake (initialize, tools/list, tools/call) and reads the tool name and its argument name from tools/list or inputSchema instead of hard-coding them.",
+    "Gets the bearer token from az account get-access-token or azure-identity, keeps it in memory, and never prints or logs it.",
+    "Every install line pins an exact version, and any command uses python, not python3.",
+    "On a 429 or a capacity error the script stops and reports. It does not retry."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "/v1/mcp\\b|/mcp/workspaces/|dataagents/[^\\s\"']*/agent\\b"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:[\\w.\\[\\]]+[ \\t]*=[ \\t]*)?(?:await[ \\t]+)?(?:FabricOpenAI\\(|[\\w.]*\\.beta\\.(?:threads|assistants)\\.)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:\\$[ \\t]*)?[%!]?(?:(?:python|py)[ \\t]+-m[ \\t]+|uv[ \\t]+)?pip3?[ \\t]+install\\b(?![^\\n]*[ \\t]-r[ \\t])(?:[ \\t]+(?:-\\S+|\\S*==\\S*))*[ \\t]+(?![-#])(?!\\S*==)\\S+(?=[ \\t]|$)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^\\s*python3\\b", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:print|(?:logging|logger|log)\\.\\w+)\\((?![ \\t]*[\"'][^\"'{}\\n]*[\"'][ \\t]*\\))[^\\n]*(?:token|bearer)", "flags": "im"}
+  ]
+ },
+ {
+  "id": 6,
+  "name": "data-agent-build-publish",
+  "skills": ["fabric"],
+  "query": "Write the Fabric notebook cells that create a data agent sales_agent over our schema-enabled lakehouse kb_lakehouse, select only the tables dbo.orders and dbo.customers, give it short instructions, and publish it so we can query it over MCP. It must run tonight as a scheduled job under our service principal brain-runner, so nobody has to be signed in. Do not run anything.",
+  "expected_behavior": [
+    "Pins the SDK install to an exact version, for example %pip install fabric-data-agent-sdk==0.1.32a0, not an unpinned or -U install.",
+    "Selects each table with the full path that pretty_print shows, for example ds.select(\"Schemas\", \"dbo\", \"Tables\", \"orders\"), not ds.select(\"dbo\", \"orders\").",
+    "Reads the data source configuration back after the select and checks that exactly the two tables are selected.",
+    "Publishes with publish_staging and says the MCP endpoint works only after publish.",
+    "Does not run the create, configure and publish steps as the service principal brain-runner. It says a service principal got HTTP 401 managing an agent on this tenant, or that the Learn service principal page covers querying only, and moves the steps to a signed-in user.",
+    "Does not run evaluate_data_agent."
+  ],
+  "checks": [
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:\\$[ \\t]*)?[%!]?(?:python[ \\t]+-m[ \\t]+)?pip3?[ \\t]+install\\b[^\\n]*?\\bfabric-data-agent-sdk\\b(?!==)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:for\\b[^\\n:]*:[ \\t]*)?(?:[\\w.\\[\\]()]+\\.)?select\\([ \\t]*[\"']dbo[\"']", "flags": "m"},
+    {"type": "not_regex", "pattern": "run_line_magic\\([ \\t]*[\"']pip[\"'][ \\t]*,[ \\t]*[\"'][^\"'\\n]*\\bfabric-data-agent-sdk\\b(?!==)"},
+    {"type": "regex", "pattern": "[\"']Schemas[\"'][ \\t]*,[^\\n)]*[\"']Tables[\"']"}
+  ]
+ },
+ {
+  "id": 7,
+  "name": "data-agent-score-answers",
+  "skills": ["fabric"],
+  "query": "We have 40 golden questions with expected answers for our published Fabric data agent brain_agent. Write the notebook code that scores how many answers the agent gets right. Use the quickest built-in way. Do not run anything.",
+  "expected_behavior": [
+    "Does not call evaluate_data_agent. It says the function scores with a built-in critic prompt, which is an LLM judge.",
+    "Scores in code: each answer must carry a references line, and the score compares the cited references with the expected references, or uses another deterministic rule. No LLM judge, no critic_prompt.",
+    "Asks the questions one at a time through the MCP endpoint and stops all load on the first 429 or capacity error, with no retry.",
+    "Counts a lost answer as a transport error, not as a wrong answer.",
+    "Every install line pins an exact version."
+  ],
+  "checks": [
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:[\\w.\\[\\], ]+[ \\t]*=[ \\t]*)?(?:await[ \\t]+)?(?:[\\w.]+\\.)?evaluate_data_agent\\(", "flags": "m"},
+    {"type": "regex", "pattern": "\\bREFS?\\b|referenc", "flags": "i"},
+    {"type": "not_regex", "pattern": "^[ \\t]*[^#\\n`]*(?:\\bcritic_prompt[ \\t]*=|\\.chat\\.completions\\.create\\(|\\bjudge\\w*\\()", "flags": "m"}
+  ]
+ },
+ {
+  "id": 8,
+  "name": "data-agent-capacity-error",
+  "skills": ["fabric"],
+  "query": "Our Python script asks the published Fabric data agent 40 questions in a row over its MCP endpoint. From question 14 on, every call fails with 'McpError: Your organization's Fabric compute capacity has exceeded its limits'. The capacity is our F2. Change the script so all 40 answers come back tonight. Do not run anything.",
+  "expected_behavior": [
+    "Stops all load on the first capacity error and reports which questions got no answer. It does not retry, back off and ask again, or loop on the error.",
+    "Does not pause, resume, resize or change the SKU of the capacity, gives no command that does, and does not recommend one. It may say that a capacity change is the owner's decision.",
+    "Counts the lost answers as transport errors, not wrong answers, and says the pass is not valid until a later run after the capacity recovers. It gives a read-only way to check the capacity first.",
+    "Does not add parallel or batched calls, and does not switch to evaluate_data_agent."
+  ],
+  "checks": [
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:attempt|tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:for[ \\t]+\\w+[ \\t]+in|while)[ \\t]+(?:len\\()?(?:\\w+\\.)?(?:\\w*_)?(?:pending|failed|lost|missing|unanswered|retr)\\w*\\b[^\\n]*:[ \\t]*\\n(?:[ \\t]+[^\\n]*\\n){0,8}?[ \\t]+[^\\n]*\\b(?:ask\\w*|call_tool)\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "(?:^\\s*(?:[-*]|\\d+[.)])?\\s*`?|&&\\s*|;\\s*|\\|\\s*|:\\s*`|(?<!not )(?<!ever )(?<!n't )(?<!or )\\b(?:run|execute|use)\\s+`?)(?:\\$\\s*)?(?:az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)\\b|(?:Suspend|Resume|Update)-AzFabricCapacity\\b|(?:az\\s+rest|curl|Invoke-RestMethod|irm)\\b[^\\n]*?/capacities/[^\\s\\\"'`]*/(?:suspend|resume)|az\\s+resource\\s+invoke-action\\b[^\\n]*?--action\\s+(?:suspend|resume))", "flags": "im"},
+    {"type": "not_regex", "pattern": "\\b(?:after|once|when|until|because|following|thanks\\s+to)\\s+(?:(?:you|we|someone|the\\s+(?:capacity\\s+)?owner(?:'s)?)\\s+)?(?:your\\s+|our\\s+|the\\s+|a\\s+)?(?:paus|resum|resiz|suspend|restart|scal)(?!\\w*ing\\b)\\w*(?:\\s+(?:and|or|then)\\s+(?:paus|resum|resiz|suspend|restart)\\w*)?\\s+(?:of\\s+|up\\s+)?(?:the\\s+|your\\s+|our\\s+)?(?:F\\d+|capacity)\\b|^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:ask[ \\t]+(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+to[ \\t]+)?(?:paus|resum|resiz|suspend|scale[ \\t]+up|upgrad)(?!\\w*ing\\b)\\w*(?:[ \\t]+(?:and|or|then)[ \\t]+(?:paus|resum|resiz)\\w*)?[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"}
+  ]
  }
 ]
