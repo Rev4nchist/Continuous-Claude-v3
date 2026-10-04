@@ -9,7 +9,7 @@
 //
 // Usage: node scripts/skills/trigger-probe.mjs [--cases scripts/skills/trigger-cases.json]
 //            [--limit N] [--out docs/self-improvement/audits/<date>-skill-trigger-<label>.json]
-//            [--model <model>] [--cwd <dir>] [--dry-run]
+//            [--model <model>] [--cwd <dir>] [--alias <name>=<copy>] [--dry-run]
 // --cwd: the project folder the runs start in (default: this repo). Its .claude/skills are listed
 // as project skills, so a before/after comparison can run the same probe code against two checkouts.
 // --dry-run prints the commands and spends nothing. A live run spends one subscription turn
@@ -28,17 +28,50 @@ const repo = path.resolve(here, '..', '..');
 // "commit what we have so far" would otherwise commit).
 // An empty strict MCP config keeps case prompts from calling any MCP tool.
 export function emptyMcpConfigPath() {
-  const p = path.join(os.tmpdir(), 'trigger-probe-empty-mcp.json');
+  const p = path.join(os.tmpdir(), `trigger-probe-empty-mcp-${process.pid}.json`); // per process: parallel probes
   fs.writeFileSync(p, JSON.stringify({ mcpServers: {} }));
   return p;
 }
 
 // A UserPromptSubmit hook can inject skill guidance, which would make the hit rate hook-assisted
-// and not native routing. This settings file turns every hook off for the probe run.
-export function noHooksSettingsPath() {
-  const p = path.join(os.tmpdir(), 'trigger-probe-no-hooks.json');
-  fs.writeFileSync(p, JSON.stringify({ disableAllHooks: true }));
+// and not native routing. This settings file turns every hook off for the probe run. With an alias it
+// also turns the personal skill off, so only the renamed project copy can answer for it.
+// The file name carries the process id: probes of several models run in parallel, and a rewrite by one
+// must never leave another's claude start reading a half-written file.
+export function noHooksSettingsPath(alias = null) {
+  const p = path.join(os.tmpdir(), `trigger-probe-no-hooks-${process.pid}${alias ? `-${alias.from}` : ''}.json`);
+  const settings = { disableAllHooks: true };
+  if (alias) settings.skillOverrides = { [alias.from]: 'off' };
+  fs.writeFileSync(p, JSON.stringify(settings));
   return p;
+}
+
+// --alias <name>=<copy>: a personal skill wins over a project skill of the same name (measured
+// 2026-10-04), so a probe of a changed description in a checkout would read the live copy. Put the
+// changed skill in the --cwd project as <copy>; the probe turns <name> off and scores <copy> as <name>.
+export function parseAlias(text) {
+  if (!text) return null;
+  // No ':' — the name becomes part of a file name, and on Windows a ':' opens an NTFS alternate data stream.
+  const m = /^([\w.-]+)=([\w.-]+)$/.exec(text);
+  if (!m || m[1] === m[2]) throw new Error(`--alias wants <name>=<copy> with two different names, got "${text}"`);
+  return { from: m[1], to: m[2] };
+}
+
+export function unalias(fired, alias) {
+  return alias ? fired.map((s) => (s === alias.to ? alias.from : s)) : fired;
+}
+
+// With an alias the personal skill is turned off. If it fires anyway, the run measured the live copy, not
+// the branch copy: that is an error, never a hit.
+export function aliasLeak(fired, alias) {
+  return alias && fired.includes(alias.from) ? `alias leak: the personal skill ${alias.from} fired` : null;
+}
+
+// The copy's frontmatter name must be the alias, or the override and the scoring are ambiguous.
+export function frontmatterName(text) {
+  const m = /^---\r?\n([\s\S]*?)\r?\n---/.exec(String(text).replace(/^﻿/, ''));
+  const n = m && /^name:[ \t]*(["']?)([^"'\s]+)\1[ \t]*$/m.exec(m[1]);
+  return n ? n[2] : null;
 }
 
 // The claude executable, found on PATH. It is spawned WITHOUT a shell, so a path with spaces
@@ -109,14 +142,15 @@ export function scoreCase(c, fired) {
 // What a case asks for, for the dry-run and result lines: a negative case shows its forbid list.
 const wanted = (c) => (Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : `expect ${(c.expect || []).join('|')}`);
 
-function runCase(prompt, model, cwd = repo) {
-  const { cmd, args } = buildCommand(model);
+function runCase(prompt, model, cwd = repo, alias = null) {
+  const { cmd, args } = buildCommand(model, emptyMcpConfigPath(), noHooksSettingsPath(alias));
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
   const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd, maxBuffer: 64 * 1024 * 1024 });
-  const error = runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
-  return { fired: skillsFired(r.stdout || ''), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
+  const raw = skillsFired(r.stdout || '');
+  const error = aliasLeak(raw, alias) || runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
+  return { fired: unalias(raw, alias), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
 }
 
 function main(argv) {
@@ -129,11 +163,24 @@ function main(argv) {
   if (!cwdArg || cwdArg.startsWith('--')) { console.error('--cwd needs a folder'); return 2; }
   const CWD = path.resolve(cwdArg);
   if (!fs.existsSync(CWD) || !fs.statSync(CWD).isDirectory()) { console.error(`--cwd ${CWD} is not a folder`); return 2; }
+  let ALIAS;
+  if (argv.some((a) => a.startsWith('--alias='))) { console.error('--alias takes a separate value: --alias <name>=<copy>'); return 2; }
+  if (argv.includes('--alias') && !opt('--alias', null)) { console.error('--alias needs <name>=<copy>'); return 2; }
+  try { ALIAS = parseAlias(opt('--alias', null)); } catch (e) { console.error(e.message); return 2; }
+  const copy = ALIAS && path.join(CWD, '.claude', 'skills', ALIAS.to, 'SKILL.md');
+  if (ALIAS && !fs.existsSync(copy)) {
+    console.error(`--alias: ${copy} does not exist`);
+    return 2;
+  }
+  if (ALIAS && frontmatterName(fs.readFileSync(copy, 'utf8')) !== ALIAS.to) {
+    console.error(`--alias: the name in ${copy} must be ${ALIAS.to}`);
+    return 2;
+  }
   const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
   const cases = all.slice(0, LIMIT);
 
   if (argv.includes('--dry-run')) {
-    const { cmd, args } = buildCommand(MODEL);
+    const { cmd, args } = buildCommand(MODEL, emptyMcpConfigPath(), noHooksSettingsPath(ALIAS));
     console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin; cwd ${CWD})`);
     console.log(`argv: ${JSON.stringify(args)}`);
     for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # ${wanted(c)}`);
@@ -142,7 +189,7 @@ function main(argv) {
   }
 
   const results = cases.map((c) => {
-    const r = runCase(c.prompt, MODEL, CWD);
+    const r = runCase(c.prompt, MODEL, CWD, ALIAS);
     const s = scoreCase(c, r.fired);
     const hit = !r.error && s.hit;
     const falseFires = r.error ? [] : s.falseFires;
@@ -158,7 +205,7 @@ function main(argv) {
     noSkillFired: ok.filter((r) => !r.fired.length).length,
     casesWithHooks: hookCases,
     routing: hookCases ? 'NOT PURE NATIVE: hooks ran despite disableAllHooks, so a hook may have injected skill guidance' : 'native (all hooks disabled)',
-    model: MODEL, cwd: CWD, ts: new Date().toISOString(),
+    model: MODEL, cwd: CWD, alias: ALIAS ? `${ALIAS.from}=${ALIAS.to}` : null, ts: new Date().toISOString(),
   };
   console.log(JSON.stringify(summary, null, 1));
   for (const r of results) {

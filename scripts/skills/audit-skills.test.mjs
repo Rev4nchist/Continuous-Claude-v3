@@ -776,6 +776,51 @@ test('trigger-probe: a forbid case fails only when a forbidden skill fires', asy
   assert.deepEqual(scoreCase({ prompt: 'y', expect: ['fabric'] }, ['fabric', 'fix']), { hit: true, falseFires: ['fix'] });
 });
 
+// Measured 2026-10-04: a personal skill wins over a project skill of the same name, so a probe of a
+// changed description read the live copy. --alias turns the personal skill off and scores the copy.
+test('trigger-probe: --alias turns the personal skill off and scores the project copy as the real name', async () => {
+  const { parseAlias, unalias, noHooksSettingsPath, scoreCase } = await import('./trigger-probe.mjs');
+  const alias = parseAlias('fabric=fabric-p5');
+  assert.deepEqual(alias, { from: 'fabric', to: 'fabric-p5' });
+  assert.deepEqual(JSON.parse(fs.readFileSync(noHooksSettingsPath(alias), 'utf8')),
+    { disableAllHooks: true, skillOverrides: { fabric: 'off' } });
+  assert.deepEqual(unalias(['fabric-p5', 'databases'], alias), ['fabric', 'databases']);
+  assert.deepEqual(scoreCase({ prompt: 'n', expect: [], forbid: ['fabric'] }, unalias(['fabric-p5'], alias)),
+    { hit: false, falseFires: ['fabric'] });
+  assert.equal(parseAlias(null), null);
+  assert.throws(() => parseAlias('fabric'), /<name>=<copy>/);
+  assert.throws(() => parseAlias('fabric=fabric'), /two different names/);
+  assert.throws(() => parseAlias('a:b=c'), /<name>=<copy>/); // ':' would open an NTFS stream in the tmp file name
+});
+
+// Review (2026-10-04): with the personal skill turned off, a fire of it means the run measured the live copy.
+test('trigger-probe: a personal-skill fire under --alias is an alias leak error, not a hit', async () => {
+  const { aliasLeak, frontmatterName, parseAlias } = await import('./trigger-probe.mjs');
+  const alias = parseAlias('fabric=fabric-p5');
+  assert.match(aliasLeak(['fabric'], alias), /alias leak/);
+  assert.equal(aliasLeak(['fabric-p5', 'databases'], alias), null);
+  assert.equal(aliasLeak(['fabric'], null), null);
+  assert.equal(frontmatterName('---\nname: fabric-p5\ndescription: x\n---\n# body'), 'fabric-p5');
+  assert.equal(frontmatterName('---\r\nname: fabric\r\n---\r\n'), 'fabric');
+  assert.equal(frontmatterName('# no frontmatter'), null);
+  assert.equal(frontmatterName('﻿---\nname: "fabric-p5"\n---\n'), 'fabric-p5');
+});
+
+// Review (2026-10-04): the main() guards stop a run that would silently measure the live copy. They run
+// before claude is resolved, so the test needs no claude on PATH.
+test('trigger-probe CLI: a bad --alias exits 2 before any run', () => {
+  const PROBE = path.join(here, 'trigger-probe.mjs');
+  const proj = fs.mkdtempSync(path.join(os.tmpdir(), 'tp-alias-'));
+  write(path.join(proj, '.claude', 'skills', 'fabric-p5', 'SKILL.md'), '---\nname: fabric\ndescription: x\n---\n');
+  const run = (...a) => spawnSync('node', [PROBE, '--dry-run', '--cwd', proj, ...a], { encoding: 'utf8' });
+  assert.equal(run('--alias').status, 2);
+  assert.equal(run('--alias=fabric=fabric-p5').status, 2);
+  assert.equal(run('--alias', 'fabric=missing').status, 2);
+  const wrong = run('--alias', 'fabric=fabric-p5');
+  assert.equal(wrong.status, 2);
+  assert.match(wrong.stderr, /must be fabric-p5/);
+});
+
 // ------------------------------------------------ Phase 2: G32 is hard, --check-name
 
 // A stand-in init_skill.py that writes one SKILL.md. `md` is the file text.
@@ -1213,6 +1258,17 @@ test('vendor-conflict-scan CLI: prints the hit list, exits 1 on an uncovered hit
   assert.match(r2.stdout, /^covered +\[retry-on-429\] common\/COMMON-CORE\.md:3:/);
   const j = spawnSync('node', [SCAN, '--source', vroot(root), '--json'], { encoding: 'utf8' });
   assert.ok(JSON.parse(j.stdout).hits.length >= 1);
+});
+
+// Bug repro (review H3, 2026-10-04): vendored "wait or scale up" advice and a capacity sizing guide were not
+// flagged, because the capacity seed matched only suspend/resume/pause/resize near "capacity".
+test('conflict-scan: capacity resize advice is a hit, a read-only capacity check is not', async () => {
+  const { SEEDS } = await import('./lib/conflict-scan.mjs');
+  const re = new RegExp(SEEDS.find((s) => s.topic === 'capacity-pause-resume-resize').pattern, 'i');
+  for (const advice of ['| Capacity exhausted or throttled | Check capacity usage; wait or scale up |',
+    '### Capacity Sizing Guide', 'Upgrade the SKU to F4', 'move to a larger capacity']) assert.ok(re.test(advice), advice);
+  for (const fine of ['Check the capacity state in the Capacity Metrics app.', 'Spark pool autoscale settings'])
+    assert.ok(!re.test(fine), fine);
 });
 
 test('vendor-conflict-scan CLI: a source with no scannable files fails instead of passing vacuously', () => {

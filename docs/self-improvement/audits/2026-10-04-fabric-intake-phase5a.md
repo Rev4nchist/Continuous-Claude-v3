@@ -1,0 +1,222 @@
+# Fabric intake Phase 5a: course extraction to hub references (2026-10-04)
+
+Plan: `C:\Users\david.hayes\.claude\plans\rosy-munching-reef.md` (approved, Codex pre-mortem: 14 findings, 9
+mitigations adopted). Proposal: `docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md` section 3.
+Branch `feat/fabric-phase5-refs`. Source: the Fabric course extraction from session fourthcompanybrain-04
+(generic sections copied to `docs/research/fabric/2026-10-04-fabric-course-extraction.md`).
+
+**Verdict: KEEP.** Stages a, b, c (Sonnet + Opus), d and e pass. Fable stage c waits for the 7-day
+subscription window reset on 2026-10-10 (Dave's choice, the window was at 88%).
+
+## Scope
+
+Dave's decisions (2026-10-04): cover semantic model + DAX, ontology, lakehouse + shortcuts, and Data
+Factory. Author CCv3 references for lakehouse, ontology and Data Factory. Upstream `fabriciq-ontology-cli`
+authors the old ontology experience, which retires 2027-01-31. Upstream `dataflows-cli` has 19 never-line
+conflicts and wrong API details. Vendor `semantic-model-authoring` in Phase 5b.
+
+- `.claude/skills/fabric/references/`: `lakehouse.md`, `semantic-model.md`, `ontology.md`,
+  `data-factory.md` (new); `data-agent.md` (G-56, G-57, C-10, L-25 wording).
+- `.claude/skills/fabric/SKILL.md`: 4 route rows; the description names the new areas (399 chars).
+- `.claude/rules-ondemand/fabric-playbook.md`: no schedule without a yes; any 429 or 430 stops; ontology
+  graph count; single-role POST; token expiry (L-22); no capacity change recommended.
+- `.claude/skills/_vendor/skills-for-fabric/overlay.json` + `scripts/skills/lib/conflict-scan.mjs`: the
+  capacity seed now flags resize advice ("wait or scale up", "Capacity Sizing Guide").
+- `scripts/skills/trigger-probe.mjs`: `--alias <name>=<copy>` (see stage b).
+- Evals 101-111 and 31 routing cases.
+
+A FourthCompanyBrain review (`.claudedocs/2026-10-04-fabric-skill-review.md` in that repo) found 14
+continuous-claude gaps mid-phase. 12 are fixed here (H3-H7, M5-M8, L3-L5). H2 and M2 are hook and
+manifest changes: a separate harness PR after 5a (Dave).
+
+## Learn checks (2026-10-04)
+
+A scout read 15 Learn pages for 12 contested facts:
+- 8 are CONFIRMED.
+  - G-28: Dataflow Gen2 APIs refuse a service principal.
+  - G-29: data destinations are portal only.
+  - The Dataflow Run API "never succeeds" (no scope given).
+  - G-30: a refresh needs Member or higher.
+  - G-40: no service principal DAX on RLS or SSO models.
+  - G-01 and G-02.
+  - G-57: a trial has no data agents.
+  - G-56: Support group by in GQL.
+- 4 are PARTLY or NOT STATED.
+  - G-17: one workspace per layer is recommended, not required.
+  - G-15: CREATE TABLE is not named.
+  - C-10: the draft vs published version is inferred.
+  - G-46/G-51: no version flag; TMDL means new, JSON means old.
+- New fact: a data agent does not work with an ontology that binds through semantic models.
+
+## Stage a: static
+
+| Check | Result |
+|---|---|
+| `audit-skills.mjs` | 79 skills, 0 hard failures, 0 ratchet regressions; G31 listing 15,088 (ceiling 15,173); G09 description 399 (cap 400) |
+| `audit-skills.test.mjs` | 150 of 150 pass. New tests cover `--alias` and the capacity seed. |
+| Deliberate bad link | A bad link in a temp copy of `lakehouse.md` failed G22. The clean branch run then passed. |
+| `vendor-conflict-scan` (vendored) | 68 hits, 0 uncovered (2 new resize lines covered by the new overlay entry) |
+| `context-budget-guard --repo` | 23,216 / 23,516, unchanged |
+| `ondemand-index-check` | OK |
+| Eval check samples | 116 of 116 good and bad lines score right after both review rounds (`p5_samples.py`), multi-line answers included |
+
+## Stage b: routing
+
+**Isolation problem found and fixed.** A personal skill wins over a project skill of the same name. The
+measured case: a marker project copy of `fabric` never fired, and the live `~/.claude` copy did. So a
+probe run in a checkout read main's description, not the branch's.
+
+`trigger-probe --alias fabric=fabric-p5` turns the personal skill off with `skillOverrides` and scores
+the renamed branch copy as `fabric`. Proof: the marker fired and a Fabric prompt fired nothing.
+
+Run p5a3: 50 cases, 3 models × 3 runs, then a top-up (r4) of the cases left with fewer than 2 answered
+runs. 132 case-runs errored on the subscription rate limit. They are not counted as misses, because an
+error is no routing evidence.
+
+| Model | Answered case-runs | Hits | Negatives: `fabric` fires | 18 existing cases kept | 22 new cases routed |
+|---|---|---|---|---|---|
+| Sonnet | 150 | 149 | 0 (10 cases) | 18/18 | 22/22 |
+| Opus | 100 | 100 | 0 | 18/18 | 22/22 |
+| Fable | 100 | 100 | 0 | 18/18 | 22/22 |
+
+Sonnet's one miss: the 429 prompt in r1 fired no skill (2 of 3 runs routed). Scores:
+`.claude/cache/skills-intake/phase5/score-b-p5a3.txt`.
+
+## Stage c: behaviour
+
+`run_eval.py behavior`, evals 101-111, with vs without the branch hub, graded, 0 excluded. Sonnet and Opus
+only (Dave). The first scoring found 4 with-skill never-line failures. All 4 were correct answers that
+over-broad checks failed: three from the eval 6 `brain-runner` check copied into 104 and 105 by review
+M7, and one from the eval 110 PUT check:
+- a notebook job as brain-runner (Opus 104);
+- a notebook job as brain-runner (Sonnet 104);
+- a model write as brain-runner (Opus 105);
+- a sentence that bans the bulk role PUT (Sonnet 110).
+
+The checks were narrowed (commit `9d5f2ac`) and re-applied to the same saved answers. The PR #96 review
+(critic + Codex) then reshaped the never-line checks once more; see "Review of PR #96". Final numbers,
+with every check re-applied to the same saved answers:
+
+| Model | With skill | Without | With-skill never-line failures | Below baseline |
+|---|---|---|---|---|
+| Opus | **86** | 62 | 0 | none |
+| Sonnet | **86** | 59 | 0 | 105 (-1), 109 (-2), 111 (-2) |
+
+The table below shows the first scoring (with the `9d5f2ac` checks). The review round raised totals in
+both arms: the old 103/105 retry check had failed good baseline answers too.
+
+Per eval (with / without, all expectations):
+
+| Eval | Opus | Sonnet |
+|---|---|---|
+| 101 lakehouse schemas REST | 7/8 vs 7/8 | 7/8 vs 5/8 |
+| 102 OneLake shortcuts | 7/8 vs 7/8 | 7/8 vs 5/8 |
+| 103 copy job on F2 | 7/8 vs 5/8 | 8/8 vs 4/8 |
+| 104 Dataflow refresh as service principal | 5/8 vs 1/8 | 8/8 vs 1/8 |
+| 105 Direct Lake measure + DAX | 8/9 vs 7/9 | 7/9 vs 8/9 |
+| 106 ontology + agent on F2 | 9/9 vs 4/9 | 9/9 vs 5/9 |
+| 107 ontology single key | 8/9 vs 5/9 | 8/9 vs 3/9 |
+| 108 SQL endpoint leak + insert | 8/8 vs 3/8 | 8/8 vs 4/8 |
+| 109 job POST unknown outcome | 5/7 vs 5/7 | 3/7 vs 5/7 |
+| 110 single role upsert | 6/6 vs 2/6 | 6/6 vs 3/6 |
+| 111 auth vs capacity | 6/7 vs 6/7 | 5/7 vs 7/7 |
+
+Below baseline, explained:
+- **Sonnet 109 and 111:** the skill did not fire in the with-skill run (`skill_fired` false), so these
+  measure Sonnet without the reference. The 109 prompt never says "Fabric". Follow-up 2.
+- **Sonnet 105:** the answer read the reference but left out the `updateDefinition` path (one regex).
+
+Scores: `.claude/cache/skills-intake/phase5/score-c-p5a-recheck.txt`. Run folder:
+`%LOCALAPPDATA%\Temp\skill-eval\fabric-phase5-p5a`.
+
+## Stage d: live smoke
+
+PASS, 2026-10-04 23:04 UTC, Dave present.
+- `python docs/playground/deploy.py preflight` (FourthCompanyBrain): 8 of 8. Capacity Active F2, no
+  running job, GraphModel 0.
+- Calls, read-only and one at a time: 8 calls, statuses 200 ×7 and 202 ×1, no 429.
+
+| Test | Assertion | Result |
+|---|---|---|
+| LT-01 | each lakehouse GET returns 200 and reports its schema state | PASS: `kb_lakehouse`, no schemas (`defaultSchema` absent) |
+| LT-05 | getDefinition returns TMDL parts and the shared expression names the Direct Lake mode | PASS: `brain_access_model`, 202 then capped poll, `AzureStorage.DataLake` = Direct Lake on OneLake |
+| LT-07 | items list returns 200 with type counts | PASS: GraphModel 0, Ontology 0, DataAgent 1, Lakehouse 1, SemanticModel 2 |
+
+Artifact: `.claude/cache/e2e/2026-10-04-intake-fabric-phase5-d.json`. Script:
+`.claude/cache/skills-intake/phase5/stage-d-p5.py`. The token is never printed.
+
+## Stage e: harness fit
+
+- Conflict scan of the 5 authored references: 20 hits. All are the CCv3 stop-on-429 or never-line text
+  itself; none tells the reader to retry.
+- Tooling: `python` only; every install is pinned; Git Bash for vendored snippets. No Haiku and no API-key
+  spend.
+- Every reference line is tagged Learn, measured or unverified.
+
+## Review of PR #96
+
+The critic asked for changes (18 findings). Codex (gpt-5.6-luna, xhigh, exit 0, 14.2 KB prompt) found 11
+regex findings and none in `--alias`, `conflict-scan` or the reference prose. Fixed:
+
+- References:
+  - `data-factory.md`: the take over call names the Power BI host and needs the owner's yes. `Deduped`
+    is a terminal job status (checked on the Learn REST Job Scheduler page).
+  - `lakehouse.md`: the "defaultSchema when schemas are on" half is unverified, not measured.
+  - `data-agent.md`: the service principal ban applies to every tenant.
+  - Playbook: no Dataflow Gen2 refresh as a service principal.
+- `trigger-probe`:
+  - A personal-skill fire under `--alias` is an "alias leak" error, not a hit.
+  - The copy's frontmatter name must be the alias.
+  - The settings file name carries the process id, so parallel probes do not truncate each other's.
+  - `:` is refused in an alias name, and `--alias` with no value is an error.
+- Evals:
+  - Negation-aware service principal checks (6, 104, 105), plus code-form checks: a
+    `--service-principal` login before a refresh or DAX call.
+  - Retry checks: prose "retry after a 429" and an `if ... 429:` block that sleeps (103, 105).
+  - GET before POST, line continuations allowed (109). Only a command counts as a role PUT (110).
+  - A wider capacity-change guard (8, 111), and the list form of a composite key (107).
+  - 103 of 103 sample lines score right, every reviewer line included.
+- CodeRabbit (6 comments on `d702f9e`):
+  - 2 were already fixed in `009861e` (`Deduped`, a bare `--alias`).
+  - Fixed now:
+    - `lakehouse.md`: a delegated-mode SQL endpoint applies only SQL permissions, not OneLake roles
+      (Learn). This corrects G-12, and the research copy is annotated.
+    - `ontology.md`: the graph count follows `continuationUri`.
+    - Eval 109: a first run that ended Completed is not posted again.
+    - `data-agent.md`: the service principal management ban is labelled CCv3 policy. The DataAgent REST
+      pages list a service principal, but that path is untested here.
+- Critic round 2 (on `009861e`):
+  - High: the 103 and 105 prose retry checks start with `^` but lacked the `m` flag, so they read only the
+    first line of an answer. The one-line samples hid it. Fixed: `m` is on.
+  - The windows inside the retry check are negation-aware ("it does not back off and try again").
+  - 103 and 105 no longer fail a capped poll loop (`for attempt in ...`).
+  - The quer/MCP (6) and notebook (104) exemptions now cover the text before the verb too.
+  - An `az logout`/`az login` as the user resets the service principal code window (104, 105).
+  - Eval 109 treats only an upper-case `GET` or a bare `az rest` list call as a GET, so prose "get" no
+    longer disarms the re-POST check.
+  - `trigger-probe`:
+    - `--alias=x=y` is refused.
+    - The MCP config file carries the process id.
+    - The frontmatter name accepts a BOM and quotes.
+    - A spawn test covers the `main()` guards.
+  - 116 of 116 sample lines score right, multi-line answers included. Tests 152/152.
+  - Stage c re-applied: unchanged, Opus 86 vs 62, Sonnet 86 vs 59, 0 never-line failures.
+- Not changed: exact REST host and payload shapes (Codex 1, 4) stay with the LLM grader. The deterministic
+  checks are smoke guards for never-lines, not a full grader.
+- The Phase 4 r1 and r2 eval folders are gone from `%LOCALAPPDATA%\Temp` (Windows cleanup). Only the 6 Phase 4
+  follow-up Fable runs were re-checked against the new eval 6 and 8 checks: no change.
+
+## Follow-ups
+
+1. Fable stage c (evals 101-111) after the 7-day window resets on 2026-10-10 00:00.
+   Command: `run-stage-c.ps1 -Tag p5a -Models fable`.
+2. Sonnet did not call `fabric` on evals 109 and 111 in stage c. Add the word "Fabric" to the 109 prompt,
+   or accept it as a routing measure. Phase 4 follow-up 12 (Fable eval 8) is the same class.
+3. Phase 5b: vendor `semantic-model-authoring` + overlay (connection-binding 429 line, service principal
+   impersonation line, Tier 1 MCP not registered) and the route precedence row.
+4. Harness PR: H2 (package-install-guard on PowerShell, a pin check) and M2 (rule-router Fabric trigger
+   prefixes).
+5. Write tests LT-10 to LT-18 each need Dave's yes. C-13 (does an ontology create a managed graph?) stays
+   open until LT-16.
+6. `trigger-probe` keeps no stdout for errored runs. The rate-limit cause of the 132 errors is
+   inferred from a later `rate_limit_event` (88% of the 7-day window), not read from the errored runs.

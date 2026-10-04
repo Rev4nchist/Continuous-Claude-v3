@@ -43,20 +43,32 @@ not as a universal rule.
    Never name one as a cause, a fix or a next step, not even a past one.
 5. Pin the SDK: `%pip install fabric-data-agent-sdk==0.1.32a0`. Learn shows the install with no version or
    with `-U`. Do not copy those lines. Use `python`, never `python3`.
-6. Do not manage an agent as a service principal on the FourthCompanyBrain tenant. Use a signed-in user.
+6. Do not manage an agent as a service principal. Use a signed-in user. This is CCv3 policy until a test
+   proves the REST management path for a service principal (see the lines below).
    This holds when the user asks for the service principal or an unattended job: give the interactive
-   signed-in-user path and cite the 401 below. An unattended job as a user also fails (L-20).
+   signed-in-user path and cite the 401 below. An unattended job also fails when it runs as an admin user
+   whom security defaults force through MFA (L-20).
    Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
    HTTP 401 from the SDK's `management/configuration` API (L-25). That test cannot separate identity
    type from ownership. Not tested: a non-owner user, or a service principal that owns the agent.
-   Learn is not settled. The service principal page says its endpoint is for querying, not for
-   managing. The SDK and REST publish pages allow a service principal to manage items. See Known gaps.
+   The data agent service principal page is explicit: service principal support is a preview for
+   querying a published agent, "not for managing or configuring it" (L-25 quotes it). The DataAgent
+   create, update-definition and publish REST pages list a service principal as supported. That REST path
+   is untested here, and L-25 tested only the SDK as a non-owner, so the policy stays until a test shows
+   otherwise.
 
 ## Query a published agent over MCP
 
 Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-server
 
 - Publish the agent first. An agent with no published version has no working MCP endpoint.
+- An agent has a draft version and a published version. Edits, instructions too, change the draft
+  (Learn). Inferred, not stated by Learn: an MCP caller sees an instruction change only after the next
+  publish. Unverified (LT-17). The course said "refresh the agent"; Learn says the agent "applies the
+  instruction automatically", which describes the draft (C-10).
+  Learn: https://learn.microsoft.com/fabric/data-science/how-to-create-data-agent#publish-and-share-a-fabric-data-agent
+- An agent over an ontology: read `references/ontology.md` first. It needs the instruction
+  `Support group by in GQL` for aggregation questions (G-56, Learn).
 - URL: `https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspaceId>/dataagents/<dataAgentId>/agent`.
   The agent's Settings page shows it on the Model Context Protocol tab.
 - The transport is streamable HTTP. Send `initialize`, then `tools/list`, then `tools/call`. A plain REST
@@ -191,8 +203,10 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
 
 ## Permissions and capacity
 
-- The agent needs a paid F2 or higher, or a P1 or higher with Fabric on. Learn does not list a trial.
-  Learn: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent
+- The agent needs a paid F2 or higher, or a P1 or higher with Fabric on. A trial capacity does not
+  support data agents, AI functions or Copilot (G-57, Learn). Do not test an agent in a trial tenant.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent and
+  https://learn.microsoft.com/fabric/fundamentals/fabric-trial
 - The Capacity Metrics app shows agent usage as "AI Query". It is a background operation. The rate is
   100 CU-seconds per 1,000 input tokens and 400 per 1,000 output tokens. Cached input costs 10. The
   generated query bills separately, to the engine that runs it.
@@ -221,10 +235,10 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
   `published`. Another source says `sandbox` or `production`.
 - Learn labels these preview: the SDK, service principal querying, and REST "Data Agent configuration
   management". The MCP page shows no preview label. The agent is GA.
-- Learn pages disagree on management identities. The service principal page says its endpoint is for
-  querying, not for managing. The SDK page and the REST publish page allow a service principal. The REST
-  publish page also lists managed identity. The service principal page says managed identities are not
-  supported. L-25 measured a 401 for management.
+- Management identities. The data agent service principal page says querying only, "not for managing or
+  configuring it", and no managed identities. The generic SDK and REST publish pages list a service
+  principal, and the REST publish page lists a managed identity, for items in general. The data agent page
+  is the specific one, and L-25 measured a 401 for management: do not manage as a service principal.
 - No Learn page documents the throttling status codes for MCP queries. Stop on the measured MCP text too.
 - Measured: answers change between runs. The same agent got 5 of 13 right in one pass and 3 of 13 in
   the next (proof:175). One pass is a sample, not a score.

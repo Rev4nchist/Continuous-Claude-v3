@@ -88,6 +88,14 @@
   "max_hits": 2
  },
  {
+  "topic": "capacity-pause-resume-resize",
+  "pattern": "wait or scale up|Capacity Sizing Guide",
+  "files": ["skills/spark-cli/references/operations/session-health.md", "skills/spark-cli/references/operations/performance-patterns.md"],
+  "ccv3_rule": "Never pause, resume or resize a Fabric capacity, and never recommend one.",
+  "resolution": "REAL CONFLICT (review H3, 2026-10-04): a troubleshooting row says 'wait or scale up' and a sizing table invites a resize. Hub never-line 2 wins: report the capacity state and stop; a resize is the owner's decision, never a recommended next step.",
+  "max_hits": 2
+ },
+ {
   "topic": "unpinned-pip-install",
   "pattern": "pip install (?:pyspark|jupyter)",
   "files": "skills/spark-cli/references/authoring/resources/development-workflow.md",

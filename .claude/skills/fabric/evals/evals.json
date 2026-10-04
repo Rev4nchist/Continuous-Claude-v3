@@ -106,7 +106,7 @@
     {"type": "not_regex", "pattern": "^[ \\t]*(?:for\\b[^\\n:]*:[ \\t]*)?(?:[\\w.\\[\\]()]+\\.)?select\\([ \\t]*[\"']dbo[\"']", "flags": "m"},
     {"type": "not_regex", "pattern": "run_line_magic\\([ \\t]*[\"']pip[\"'][ \\t]*,[ \\t]*[\"'][^\"'\\n]*\\bfabric-data-agent-sdk\\b(?!==)"},
     {"type": "regex", "pattern": "[\"']Schemas[\"'][ \\t]*,[^\\n)]*[\"']Tables[\"']"},
-    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!quer|MCP)[^\\n]){0,40}?\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b|\\bquer|\\bMCP)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP|\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|unsupported|prohibited|forbidden|blocked|not[ \\t]+(?:supported|allowed|work\\w*)|won't|can't|cannot|doesn't|isn't|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -148,7 +148,213 @@
     {"type": "not_regex", "pattern": "^([ \\t]*)(?:for[ \\t]+\\w+[ \\t]+in|while)[ \\t]+(?:len\\()?((?:\\w+\\.)?\\w*pending\\w*)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,10}?\\1[ \\t]+[^\\n]*(?:\\bsleep\\(|\\b\\2\\.(?:append|insert)\\(|\\bretr\\w*)", "flags": "m"},
     {"type": "not_regex", "pattern": "(?:^\\s*(?:[-*]|\\d+[.)])?\\s*`?|&&\\s*|;\\s*|\\|\\s*|:\\s*`|(?<!not )(?<!ever )(?<!n't )(?<!or )\\b(?:run|execute|use)\\s+`?)(?:\\$\\s*)?(?:az\\s+fabric\\s+capacity\\s+(?:suspend|resume|update)\\b|(?:Suspend|Resume|Update)-AzFabricCapacity\\b|(?:az\\s+rest|curl|Invoke-RestMethod|irm)\\b[^\\n]*?/capacities/[^\\s\\\"'`]*/(?:suspend|resume)|az\\s+resource\\s+invoke-action\\b[^\\n]*?--action\\s+(?:suspend|resume))", "flags": "im"},
     {"type": "not_regex", "pattern": "\\b(?:after|once|when|until|because|following|thanks\\s+to)\\s+(?:(?:you|we|someone|the\\s+(?:capacity\\s+)?owner(?:'s)?)\\s+)?(?:your\\s+|our\\s+|the\\s+|a\\s+)?(?:paus|resum|resiz|suspend|restart|scal)(?!\\w*ing\\b)\\w*(?:\\s+(?:and|or|then)\\s+(?:paus|resum|resiz|suspend|restart)\\w*)?\\s+(?:of\\s+|up\\s+)?(?:the\\s+|your\\s+|our\\s+)?(?:F\\d+|capacity)\\b|^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:ask[ \\t]+(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+to[ \\t]+)?(?:paus|resum|resiz|suspend|scale[ \\t]+up|upgrad)(?!\\w*ing\\b)\\w*(?:[ \\t]+(?:and|or|then)[ \\t]+(?:paus|resum|resiz)\\w*)?[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"},
-    {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b|^(?![^\\n]*\\b(?:whether|if|owner's[ \\t]+decision)\\b)[^\\n]*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+)(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"}
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^(?![^\\n]*\\b(?:whether[ \\t]+to|if[ \\t]+to|owner's[ \\t]+(?:decision|call)|owner[ \\t]+decides)\\b)(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+|;[ \\t]*)(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^[ \\t]*(?:[-*][ \\t]+)?(?:if[ \\t]+not|otherwise|else|failing[ \\t]+that)[,:]?[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)", "flags": "im"}
+  ]
+ },
+ {
+  "id": 101,
+  "name": "lakehouse-schemas-rest",
+  "skills": ["fabric"],
+  "query": "Give me the az rest commands for Git Bash that create a lakehouse called wwi_lh with lakehouse schemas in workspace FourthBrain-Playground, then list every table in it per schema. Do not run anything.",
+  "expected_behavior": [
+    "Creates the lakehouse with POST https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/lakehouses and \"creationPayload\": {\"enableSchemas\": true}.",
+    "Says that the REST API does not enable schemas by default, unlike the portal.",
+    "Does not list tables with GET .../lakehouses/<id>/tables, because a schema-enabled lakehouse returns HTTP 400 UnsupportedOperationForSchemasEnabledLakehouse.",
+    "Lists schemas and tables with the OneLake table API at https://onelake.table.fabric.microsoft.com/delta (unity-catalog schemas and tables calls) or with T-SQL on the SQL analytics endpoint.",
+    "Resolves the workspace id by listing and filtering on displayName, not by a guessed GUID."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "\"?enableSchemas\"?\\s*:\\s*true"},
+    {"type": "regex", "pattern": "creationPayload"},
+    {"type": "regex", "pattern": "onelake\\.table\\.fabric\\.microsoft\\.com|UnsupportedOperationForSchemasEnabledLakehouse"}
+  ]
+ },
+ {
+  "id": 102,
+  "name": "onelake-table-shortcuts-passthrough",
+  "skills": ["fabric"],
+  "query": "In lakehouse wwi_lh (schemas on) I need table shortcuts in the bronze schema to six tables in lakehouse src_lh in the same tenant. Readers must only see what they can see in src_lh. Give me the REST call and tell me where the OneLake security roles go. Do not run anything.",
+  "expected_behavior": [
+    "Uses POST https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/items/<lakehouseId>/shortcuts, one call per table.",
+    "The body has name, a path under Tables for the bronze schema, and target.oneLake with workspaceId, itemId and path.",
+    "Keeps the default passthrough mode, so each reader needs access on src_lh, and does not set up a delegated connection identity.",
+    "Puts the OneLake security roles on src_lh (the target), not on the shortcut.",
+    "Says the caller needs Write on wwi_lh and Read on the target, and that a mode change means delete and recreate."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "/items/[^/\\s]+/shortcuts"},
+    {"type": "regex", "pattern": "\"?oneLake\"?\\s*:"},
+    {"type": "regex", "pattern": "Tables/bronze"}
+  ]
+ },
+ {
+  "id": 103,
+  "name": "copy-job-run-and-schedule-f2",
+  "skills": ["fabric"],
+  "query": "Write the Git Bash steps that start the Fabric copy job cj_wwi now, wait for it, and then give it a daily 06:00 schedule. It runs on our F2 that throttles a lot. Do not run anything.",
+  "expected_behavior": [
+    "Starts the run with POST .../workspaces/<workspaceId>/items/<copyJobId>/jobs/instances?jobType=Execute, not RunNotebook, DefaultJob or Refresh.",
+    "Creates the schedule with POST .../items/<copyJobId>/jobs/<jobType>/schedules and \"enabled\": true.",
+    "Reads recent job instances before the POST and runs at most one Fabric job at a time on the F2.",
+    "On an HTTP 429 or 430, or a 'capacity has exceeded its limits' message, stops and reports; it does not retry or back off.",
+    "Polls the job instance from the Location header with a capped poll loop."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "jobType=Execute"},
+    {"type": "regex", "pattern": "/jobs/[^/\\s]+/schedules"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\b(?:retry|retries|retrying|back[ -]?off|try[ \\t]+again)(?!-after)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\b(?:on|after|when|for)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,20}\\b(?:429|430)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,80}\\b(?:then|and)[ \\t]+(?:retry|try[ \\t]+again|back[ -]?off|sleep)\\b|\\b(?:429|430)\\b[,:]?[ \\t]+(?:back[ -]?off|retry(?!-after)|wait[ \\t]+and[ \\t]+retry)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\bwith\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,30}\\bback[ -]?off\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)(?:if|elif)\\b[^\\n]*\\b(?:429|430)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+(?![^\\n]*\\b(?:raise|break|return|exit|sys\\.exit)\\b)[^\\n]*\\n){0,3}?\\1[ \\t]+[^\\n]*\\bsleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"}
+  ]
+ },
+ {
+  "id": 104,
+  "name": "dataflow-gen2-refresh-service-principal",
+  "skills": ["fabric"],
+  "query": "Our brain-runner service principal should refresh the Dataflow Gen2 WWI_DF every night, and I want to add its lakehouse data destination through the definition API so it is all in code. Give me the calls. Do not run anything.",
+  "expected_behavior": [
+    "Says Dataflow Gen2 public APIs do not support service principal authentication, so brain-runner cannot do this.",
+    "Says a data destination cannot be authored through the definition API and must be added in the portal with Add data destination.",
+    "Shows the refresh as POST .../items/<dataflowId>/jobs/instances?jobType=Refresh with executionData (DataflowName, OwnerUserPrincipalName, OwnerUserObjectId).",
+    "Says the refresh caller needs Member or higher and access to every connection of the dataflow.",
+    "Offers a notebook job run through the Jobs API as the scriptable alternative for nightly ETL."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "jobType=Refresh"},
+    {"type": "regex", "pattern": "executionData"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b|\\bnotebook)[^\\n])*?\\b(?:refresh\\w*|dataflow\\w*|jobType=(?:Refresh|Publish)|updateDefinition|Dataflow[ \\t]+Gen2)\\b(?:(?!\\bnotebook|\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed|fail\\w*)\\b)[^\\n]){0,60}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|unsupported|prohibited|forbidden|blocked|not[ \\t]+(?:supported|allowed|work\\w*)|won't|can't|cannot|doesn't|isn't|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "--service-principal(?:(?!RunNotebook|\\baz[ \\t]+log(?:out|in)\\b(?![^\\n]*--service-principal)|signed-in)[\\s\\S]){0,600}?jobType=(?:Refresh|Publish)", "flags": "i"}
+  ]
+ },
+ {
+  "id": 105,
+  "name": "direct-lake-measure-and-dax",
+  "skills": ["fabric"],
+  "query": "Add a measure Total Sales = SUM('fact internet sales'[SalesAmount]) to our Direct Lake semantic model WWI_SM by REST, then run a DAX query from Claude Code to check it. The model is Direct Lake on OneLake and we would run as the brain-runner service principal. Do not run anything.",
+  "expected_behavior": [
+    "Reads the model with POST .../semanticModels/<id>/getDefinition and writes the changed TMDL with POST .../semanticModels/<id>/updateDefinition, polling the long running operation.",
+    "Runs DAX with POST https://api.powerbi.com/v1.0/myorg/groups/<groupId>/datasets/<datasetId>/executeQueries (or sempy evaluate_dax in a notebook).",
+    "Says the DAX check must run as a signed-in user with Read and Build, not brain-runner: executeQueries does not support a service principal on a model with RLS, and a service principal failed to run DAX on a Direct Lake on OneLake model on this tenant (L-13).",
+    "States executeQueries limits: one query per call, one table, at most 100,000 rows or 1,000,000 values.",
+    "On an HTTP 429 or 430 stops and reports; it does not retry or back off."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "/semanticModels/[^/\\s]+/updateDefinition"},
+    {"type": "regex", "pattern": "executeQueries|evaluate_dax"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?\\b(?:DAX|executeQueries|evaluate_dax)\\b(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed|fail\\w*)\\b)[^\\n]){0,60}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|unsupported|prohibited|forbidden|blocked|not[ \\t]+(?:supported|allowed|work\\w*)|won't|can't|cannot|doesn't|isn't|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "--service-principal(?:(?!\\bNOTE\\b|\\baz[ \\t]+log(?:out|in)\\b(?![^\\n]*--service-principal)|signed-in)[\\s\\S]){0,600}?(?:executeQueries|evaluate_dax)", "flags": "i"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\b(?:retry|retries|retrying|back[ -]?off|try[ \\t]+again)(?!-after)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\b(?:on|after|when|for)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,20}\\b(?:429|430)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,80}\\b(?:then|and)[ \\t]+(?:retry|try[ \\t]+again|back[ -]?off|sleep)\\b|\\b(?:429|430)\\b[,:]?[ \\t]+(?:back[ -]?off|retry(?!-after)|wait[ \\t]+and[ \\t]+retry)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\bwith\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,30}\\bback[ -]?off\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)(?:if|elif)\\b[^\\n]*\\b(?:429|430)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+(?![^\\n]*\\b(?:raise|break|return|exit|sys\\.exit)\\b)[^\\n]*\\n){0,3}?\\1[ \\t]+[^\\n]*\\bsleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"}
+  ]
+ },
+ {
+  "id": 106,
+  "name": "ontology-generate-on-f2-with-graph",
+  "skills": ["fabric"],
+  "query": "Generate an ontology from the semantic model WWI_SM and hook a new data agent to it so I can ask revenue by subcategory. We are on our F2 and brain_graph already exists in the workspace. List the steps. Do not run anything.",
+  "expected_behavior": [
+    "Counts graph items before the ontology step and says the ontology may add a managed graph, so the workspace could hold two graphs; it asks Dave or removes the old graph only after its evidence is saved.",
+    "Checks the tenant settings 'Users can create Ontology (preview) items' and 'Users can create Fabric items', and Read plus Build on WWI_SM.",
+    "Adds the agent instruction 'Support group by in GQL' for aggregation questions on an ontology source.",
+    "Checks how the ontology binds its data before it adds the agent: Learn says a data agent does not work with an ontology that binds through semantic models, so the entities must bind to lakehouse or warehouse tables.",
+    "Changes the data agent as a signed-in owner, not as a service principal.",
+    "Does not score the agent with an LLM judge or evaluate_data_agent; it compares answers with rule-based SQL."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "Support group by in GQL"},
+    {"type": "not_regex", "pattern": "evaluate_data_agent\\s*\\("},
+    {"type": "regex", "pattern": "GraphModel|graph items?\\b|count[^\\n]{0,40}\\bgraphs?\\b", "flags": "i"}
+  ]
+ },
+ {
+  "id": 107,
+  "name": "ontology-tmdl-single-key",
+  "skills": ["fabric"],
+  "query": "Write the new-experience ontology TMDL for an entity Sales backed by table fact_internet_sales whose key is SalesOrderNumber plus SalesOrderLineNumber, and a relationship 'purchased' from Sales to Product. Then give me the call that deploys it. Do not run anything.",
+  "expected_behavior": [
+    "Uses one keyProperty on the entity, not two key properties or a comma list.",
+    "Tells me to add one concatenated key column (for example SalesLineKey) in ETL, of type string or integer.",
+    "Backs the relationship with a TOM relationship, or with a junction table that is not also an entity's backingTable.",
+    "Deploys with POST .../workspaces/<workspaceId>/ontologies/<ontologyId>/updateDefinition (or POST .../ontologies to create) and polls the long running operation.",
+    "Says ontology is a preview feature."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "keyProperty"},
+    {"type": "regex", "pattern": "/ontologies"},
+    {"type": "not_regex", "pattern": "keyProperty\\s*:[^\\n]*\\n\\s*keyProperty\\s*:"},
+    {"type": "not_regex", "pattern": "keyProperty\\s*[:=]\\s*\\[?\\s*\\w+\\s*,\\s*\\w+"}
+  ]
+ },
+ {
+  "id": 108,
+  "name": "sql-endpoint-viewer-leak-and-insert",
+  "skills": ["fabric"],
+  "query": "Our Viewer test user reads every table through the lakehouse SQL analytics endpoint, even though OneLake security roles should hide some of them. I also want to INSERT correction rows through that same endpoint. Fix both. Do not run anything.",
+  "expected_behavior": [
+    "Says the endpoint is in delegated identity mode, which ignores OneLake security roles.",
+    "Fixes the leak by switching the endpoint to User's identity access mode in the portal Security tab, done by an Admin or Member.",
+    "Warns that the switch cancels all running and queued queries on every SQL endpoint in the workspace, so Dave picks the time.",
+    "Says the SQL analytics endpoint cannot INSERT, UPDATE or DELETE data, and offers Spark in a notebook or a Warehouse instead.",
+    "Tests the fix with a Viewer identity, not an Admin, Member or Contributor."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "user'?s identity", "flags": "i"},
+    {"type": "regex", "pattern": "\\b(?:warehouse|spark|notebook)\\b", "flags": "i"},
+    {"type": "regex", "flags": "i", "pattern": "\\b(?:admin|member)s?\\b[^\\n]{0,80}\\b(?:switch|change|access mode|identity mode)|\\b(?:switch|change)\\w*\\b[^\\n]{0,80}\\b(?:admin|member)s?\\b"}
+  ]
+ },
+ {
+  "id": 109,
+  "name": "job-post-unknown-outcome",
+  "skills": ["fabric"],
+  "query": "I started our notebook nb_parse with az rest POST .../jobs/instances?jobType=RunNotebook from Git Bash. The command timed out after 120 s and printed nothing. Give me the next commands to make sure the notebook runs tonight. Do not run anything.",
+  "expected_behavior": [
+    "Says a timed-out command is not a failure: the job may be running.",
+    "Lists the notebook's job instances first (GET .../items/<notebookId>/jobs/instances) and re-attaches to the newest instance by its id.",
+    "Sends a new RunNotebook POST only when no instance from the timed-out call exists, or the newest one ended Failed or Cancelled, never as the first step. A Completed or in-progress instance means the notebook ran or is running: it reports that and does not POST again.",
+    "Polls the job instance with a capped loop and waits for Completed, not Succeeded.",
+    "On an HTTP 429 or 430, or 'capacity has exceeded its limits', stops and reports."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "\\bCompleted\\b"},
+    {"type": "regex", "pattern": "(?:(?-i:\\bGET\\b)|(?:--method|-m|-X)[ \\t]+get\\b|\\baz[ \\t]+rest\\b(?!(?:[^\\n]|\\\\\\n|`\\n){0,300}?(?:--method|-m)[ \\t]+post\\b))(?:[^\\n]|\\\\\\n|`\\n){0,300}?jobs/instances(?!\\?jobType)", "flags": "i"},
+    {"type": "not_regex", "pattern": "\\A(?:(?!(?-i:\\bGET\\b)|(?:--method|-m|-X)[ \\t]+get\\b|\\baz[ \\t]+rest\\b(?!(?:[^\\n]|\\\\\\n|`\\n){0,300}?(?:--method|-m)[ \\t]+post\\b)(?:[^\\n]|\\\\\\n|`\\n){0,300}?jobs/instances(?!\\?jobType))[\\s\\S])*?(?:--method|-m|-X)[ \\t]*post\\b(?:[^\\n]|\\\\\\n|`\\n){0,300}?jobType=RunNotebook", "flags": "i"}
+  ]
+ },
+ {
+  "id": 110,
+  "name": "onelake-role-single-upsert",
+  "skills": ["fabric"],
+  "query": "Add a OneLake security role ReadGold to lakehouse wwi_lh so the Viewers group can read the gold schema. Keep every existing role, DefaultReader too. Give me the REST call for Git Bash. Do not run anything.",
+  "expected_behavior": [
+    "Creates the one role with POST .../items/<lakehouseId>/dataAccessRoles?dataAccessRoleConflictPolicy=Overwrite&preview=true.",
+    "Does not PUT .../dataAccessRoles: the bulk PUT replaces the full set and deletes every role missing from the body, DefaultReader too.",
+    "Keeps the role name to letters and digits.",
+    "Tests the role with a Viewer identity, because Admins, Members and Contributors bypass OneLake roles."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "dataAccessRoleConflictPolicy"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:\\$[ \\t]*)?(?:az[ \\t]+rest|curl|Invoke-RestMethod|irm)\\b(?:[^\\n]|\\\\\\n|`\\n){0,400}?(?:(?:-X|--method|-m|-Method)[ \\t]*PUT\\b(?:[^\\n]|\\\\\\n|`\\n){0,400}?dataAccessRoles|dataAccessRoles(?:[^\\n]|\\\\\\n|`\\n){0,400}?(?:-X|--method|-m|-Method)[ \\t]*PUT\\b)|^[ \\t]*(?:\\$[ \\t]*)?PUT[ \\t]+https?://\\S*dataAccessRoles", "flags": "im"}
+  ]
+ },
+ {
+  "id": 111,
+  "name": "auth-failure-not-capacity",
+  "skills": ["fabric"],
+  "query": "Our nightly Fabric notebook job failed after 6 s. failureReason: 'Failed to create session for executing notebook. ... Entra ID was unsuccessful ... AADSTS50076'. Our script treats 'Failed to create session' as capacity throttling and stops the loop for the night. Is that right, and what should change? Do not run anything.",
+  "expected_behavior": [
+    "Says AADSTS50076 is an authentication failure (MFA required), not capacity throttling.",
+    "Says to read the job's full failureReason and classify auth errors before capacity errors.",
+    "Says an unattended job as an admin user whom security defaults force through MFA fails; run it as a service principal or by hand in the portal, as the owner decides.",
+    "Does not recommend a capacity pause, resume, resize or SKU change."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "AADSTS50076"},
+    {"type": "regex", "flags": "i", "pattern": "\\b(?:MFA|multi-factor|authenticat\\w*)\\b"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^(?![^\\n]*\\b(?:whether[ \\t]+to|if[ \\t]+to|owner's[ \\t]+(?:decision|call)|owner[ \\t]+decides)\\b)(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+|;[ \\t]*)(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^[ \\t]*(?:[-*][ \\t]+)?(?:if[ \\t]+not|otherwise|else|failing[ \\t]+that)[,:]?[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)", "flags": "im"}
   ]
  }
 ]
