@@ -72,6 +72,10 @@ Each line names its source: "Learn" (a Learn page says it), "measured" (a live t
   shortcut. A delegated shortcut can carry its own roles (G-11, C-02, Learn).
 - Workspace Admins, Members and Contributors bypass OneLake security roles, also on shortcut data. Test
   a role with a Viewer identity (G-13, Learn).
+- Create one OneLake security role at a time:
+  `POST .../workspaces/<workspaceId>/items/<itemId>/dataAccessRoles?dataAccessRoleConflictPolicy=Overwrite&preview=true`
+  (HTTP 201 on create, measured on the FourthCompanyBrain tenant). Overwrite recreates the role, so its id
+  changes. Role names take letters and digits only. Never PUT the full role set: never-line 4 (L-10).
 
 ## SQL analytics endpoint
 

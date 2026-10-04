@@ -20,7 +20,8 @@ import path from 'node:path';
 export const SEEDS = [
   { topic: 'retry-on-429', pattern: String.raw`retry|backoff|Retry-After|\b429\b`,
     ccv3_rule: 'Fabric capacity error: stop all load on the first one; never retry through it.' },
-  { topic: 'capacity-pause-resume-resize', pattern: String.raw`\b(?:suspend|resume|pause|resize)\w*\b.{0,50}capacit|capacit.{0,50}\b(?:suspend|resume|pause|resize)`,
+  // A resize can be advice, not a command: "wait or scale up", a sizing guide, "upgrade the SKU" (review H3, 2026-10-04).
+  { topic: 'capacity-pause-resume-resize', pattern: String.raw`\b(?:suspend|resume|pause|resize)\w*\b.{0,50}capacit|capacit.{0,50}\b(?:suspend|resume|pause|resize)|\bscale\s+up\b|\bSizing Guide\b|\b(?:upgrade|larger|bigger)\b.{0,30}\b(?:capacity|SKU)\b`,
     ccv3_rule: 'Never pause, resume or resize a Fabric capacity.' },
   { topic: 'bulk-put-dataAccessRoles', pattern: String.raw`\bPUT\b.{0,120}dataAccessRoles|dataAccessRoles.{0,120}\bPUT\b`,
     ccv3_rule: 'Never bulk PUT dataAccessRoles: it replaces every role and deletes access.' },

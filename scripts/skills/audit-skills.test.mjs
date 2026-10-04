@@ -1231,6 +1231,17 @@ test('vendor-conflict-scan CLI: prints the hit list, exits 1 on an uncovered hit
   assert.ok(JSON.parse(j.stdout).hits.length >= 1);
 });
 
+// Bug repro (review H3, 2026-10-04): vendored "wait or scale up" advice and a capacity sizing guide were not
+// flagged, because the capacity seed matched only suspend/resume/pause/resize near "capacity".
+test('conflict-scan: capacity resize advice is a hit, a read-only capacity check is not', async () => {
+  const { SEEDS } = await import('./lib/conflict-scan.mjs');
+  const re = new RegExp(SEEDS.find((s) => s.topic === 'capacity-pause-resume-resize').pattern, 'i');
+  for (const advice of ['| Capacity exhausted or throttled | Check capacity usage; wait or scale up |',
+    '### Capacity Sizing Guide', 'Upgrade the SKU to F4', 'move to a larger capacity']) assert.ok(re.test(advice), advice);
+  for (const fine of ['Check the capacity state in the Capacity Metrics app.', 'Spark pool autoscale settings'])
+    assert.ok(!re.test(fine), fine);
+});
+
 test('vendor-conflict-scan CLI: a source with no scannable files fails instead of passing vacuously', () => {
   const SCAN = path.join(here, 'vendor-conflict-scan.mjs');
   const empty = fs.mkdtempSync(path.join(os.tmpdir(), 'conflict-empty-'));

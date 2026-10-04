@@ -49,8 +49,9 @@ not as a universal rule.
    Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
    HTTP 401 from the SDK's `management/configuration` API (L-25). That test cannot separate identity
    type from ownership. Not tested: a non-owner user, or a service principal that owns the agent.
-   Learn is not settled. The service principal page says its endpoint is for querying, not for
-   managing. The SDK and REST publish pages allow a service principal to manage items. See Known gaps.
+   The data agent service principal page is explicit: service principal support is a preview for
+   querying a published agent, "not for managing or configuring it" (L-25 quotes it). The SDK and REST
+   publish pages list a service principal for items in general. Follow the data agent page.
 
 ## Query a published agent over MCP
 
@@ -230,10 +231,10 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
   `published`. Another source says `sandbox` or `production`.
 - Learn labels these preview: the SDK, service principal querying, and REST "Data Agent configuration
   management". The MCP page shows no preview label. The agent is GA.
-- Learn pages disagree on management identities. The service principal page says its endpoint is for
-  querying, not for managing. The SDK page and the REST publish page allow a service principal. The REST
-  publish page also lists managed identity. The service principal page says managed identities are not
-  supported. L-25 measured a 401 for management.
+- Management identities. The data agent service principal page says querying only, "not for managing or
+  configuring it", and no managed identities. The generic SDK and REST publish pages list a service
+  principal, and the REST publish page lists a managed identity, for items in general. The data agent page
+  is the specific one, and L-25 measured a 401 for management: do not manage as a service principal.
 - No Learn page documents the throttling status codes for MCP queries. Stop on the measured MCP text too.
 - Measured: answers change between runs. The same agent got 5 of 13 right in one pass and 3 of 13 in
   the next (proof:175). One pass is a sample, not a score.

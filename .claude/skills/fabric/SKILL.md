@@ -1,6 +1,6 @@
 ---
 name: fabric
-description: Routes Microsoft Fabric work (Spark notebooks, Livy, Materialized Lake Views, lakehouse schemas and shortcuts, Direct Lake semantic models and DAX, ontology, data agents, copy jobs, Dataflow Gen2, finding items) to Microsoft and CCv3 guides. Use when a task touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli).
+description: Routes Microsoft Fabric work (Spark notebooks, Livy, Materialized Lake Views, lakehouses, shortcuts, OneLake security roles, SQL endpoints, Direct Lake models, DAX, ontology, graphs, GQL, data agents, pipelines, copy jobs, Dataflow Gen2, capacity throttling, item search) to Microsoft and CCv3 guides. Use when work touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli).
 ---
 
 # Fabric hub
@@ -31,10 +31,10 @@ Microsoft's `skills-for-fabric` v0.3.18 is vendored at `../_vendor/skills-for-fa
 | Notebook cell code (PySpark, `%%sql`, `%%configure`, notebookutils), notebook runs, Livy sessions, failed or slow Spark runs, Materialized Lake Views | [spark-cli](../_vendor/skills-for-fabric/skills/spark-cli/SKILL.md) |
 | Find an item when the workspace is unknown, or list one item type across all workspaces | [search-consumption-cli](../_vendor/skills-for-fabric/skills/search-consumption-cli/SKILL.md) |
 | Fabric data agent: ask a published agent a question, or create, configure and publish one with the SDK. CCv3-authored, not vendored | [data-agent](references/data-agent.md) |
-| Lakehouse create and schemas, listing tables (HTTP 400 on a schema-enabled lakehouse), OneLake shortcuts and their auth modes, the SQL analytics endpoint (read-only data, access mode), medallion layout. CCv3-authored | [lakehouse](references/lakehouse.md) |
+| Lakehouse create and schemas, listing tables (HTTP 400 on a schema-enabled lakehouse), OneLake shortcuts and their auth modes, OneLake security roles, the SQL analytics endpoint (read-only data, access mode), medallion layout. CCv3-authored | [lakehouse](references/lakehouse.md) |
 | Direct Lake semantic models and DAX: the Direct Lake mode, OneLake security, `executeQueries` limits, sempy in a notebook. CCv3-authored | [semantic-model](references/semantic-model.md) |
-| Fabric IQ ontology (new TMDL experience): generate, keys, relationships, graph cost, a data agent on an ontology. CCv3-authored | [ontology](references/ontology.md) |
-| Copy jobs and Dataflow Gen2: run, schedule, refresh, definitions, service principal limits. CCv3-authored | [data-factory](references/data-factory.md) |
+| Fabric IQ ontology (new TMDL experience) and GraphModel: generate, keys, relationships, graph refresh and GQL queries, graph cost, a data agent on an ontology. CCv3-authored | [ontology](references/ontology.md) |
+| Data pipelines, copy jobs and Dataflow Gen2: run, schedule, refresh, definitions, run identity, service principal limits. CCv3-authored | [data-factory](references/data-factory.md) |
 
 A CCv3-authored row is a single file: read it in full. The vendored-skill steps at the end of this page do
 not apply to it. Do not invent an `x-ms-fabric-skill` value for it.

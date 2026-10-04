@@ -84,6 +84,19 @@ Run these read-only checks before any authoring step. Stop and report if one fai
   off by default. Unverified (LT-07, then LT-16): count graph items before and after.
   Learn: https://learn.microsoft.com/fabric/iq/ontology/resources-glossary
 - Where a graph exists, a save re-ingests it and a refresh uses capacity (G-49, G-50, Learn).
+- Graph calls, measured on the FourthCompanyBrain tenant (`docs/playground/fabric/iq.py` in that repo):
+  - Create: `POST https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/graphModels` with the
+    definition. A new graph starts its own first refresh job: wait for it before you start another.
+  - Change: `POST .../graphModels/<graphId>/updateDefinition`.
+  - Refresh: `POST .../graphModels/<graphId>/jobs/refreshGraph/instances`. Poll the `Location` job URL
+    with a cap. Read the recent job instances first: one Fabric job at a time on an F2.
+  - Query: `POST .../graphModels/<graphId>/executeQuery?beta=true` with `{"query": "<GQL>"}`. `beta`
+    means it can change.
+  - At most one graph in a workspace: each graph holds a cache billed every day (playbook, L-08). Delete
+    it once its evidence is saved, as the owner decides.
+  - A capacity pause drops a graph's loaded data: queries return HTTP 500 until a refresh. A graph is not
+    a snapshot: a refresh reads the current tables (L-09).
+  - On HTTP 429 from `executeQuery`: stop and report (never-line 1). Do not wait and ask again.
 - GQL means Graph Query Language (ISO), not GraphQL (G-63, C-11, Learn).
   Learn: https://learn.microsoft.com/fabric/graph/gql-language-guide
 

@@ -20,10 +20,10 @@ Each line names its source: "Learn", "measured" (a live test on one tenant, with
 
 1. On HTTP 429 or 430, or "capacity has exceeded its limits": stop all load and report. Do not retry.
    Learn's DAX best-practices page says to wait for `Retry-After` and retry: CCv3 overrides it.
-2. Never run DAX as a service principal on a model with RLS. Learn: "Service Principals aren't supported
-   for datasets with RLS", whatever the tenant setting. `impersonatedUserName` does not change that (G-40).
-   Measured: a service principal could not run DAX on a Direct Lake on OneLake model or get Build (L-13).
-   Use a signed-in user with Read and Build.
+2. Never run DAX as a service principal on a model with RLS or SSO. Learn: "Service Principals aren't
+   supported for datasets with RLS", whatever the tenant setting, and SSO datasets are excluded too.
+   `impersonatedUserName` does not change that (G-40). Measured: a service principal could not run DAX
+   on a Direct Lake on OneLake model or get Build (L-13). Use a signed-in user with Read and Build.
 3. Never install semantic link (`sempy`) unpinned. It is preinstalled on Fabric Runtime 1.2 and later.
 4. Never turn on XMLA read-write yourself. It is a capacity admin setting: the owner's step (G-42, Learn).
 

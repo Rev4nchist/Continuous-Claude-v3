@@ -12,7 +12,8 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
   principal, or by hand in the portal (L-20).
 - "Failed to create session" can be an auth failure, not throttling. Read the job's full `failureReason` before
   you classify or stop a run (L-21).
-- Never pause, resume or resize a capacity from a script. That is the owner's step. The
+- Never pause, resume or resize a capacity from a script, and do not recommend one either: not as a cause,
+  a fix or a next step. That is the owner's step. The
   `destructive-command-guard` hook ASKS in an interactive session and DENIES in an unattended run (CI, a
   subagent, bypass mode) on `az fabric capacity suspend|resume|update` and on the matching REST calls. In an
   unattended run nobody can approve it, so do not try.
@@ -23,8 +24,8 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
   queries, data agent, DAX), then background jobs ("capacity has exceeded its limits"). On the first capacity
   error: stop all load and report. Retries keep the throttling going (L-07).
 - Upstream conflict: Microsoft's `skills-for-fabric` `common/COMMON-CORE.md` tells agents to retry 429, 503 and
-  504 with backoff. Here, on a CAPACITY error (429 or 430 with a capacity message, or "capacity has exceeded
-  its limits") STOP and report. Do not retry. A single 503 or 504 on a status poll may retry once with backoff
+  504 with backoff. Here, on any HTTP 429 or 430, or "capacity has exceeded its limits", STOP and report. Do
+  not retry, even when `Retry-After` is set. A single 503 or 504 on a status poll may retry once with backoff
   (L-02). Learn's DAX `executeQueries` best-practices page also says to retry on 429: same rule, stop.
 - One Fabric job at a time on an F2. Time-box every Fabric agent and report at least every 60 minutes (L-19).
 - Never schedule a copy job, dataflow, pipeline or notebook without the owner's yes. A schedule is load that
@@ -38,10 +39,15 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 
 ## API facts
 - Tokens come from `az account get-access-token` and stay in memory. Never print one.
+- A cached token expires inside a long loop. An HTTP call can renew it after a 401, but a T-SQL login cannot:
+  a login failure 50+ minutes into a loop is an expired token, not throttling. Renew a cached token after
+  about 40 minutes (L-22).
 - A dead poller never stops a Fabric job. Re-attach by job instance id. A timed-out command is not a failure (L-02).
 - Call the SQL endpoint `refreshMetadata` after every pipeline run, before any T-SQL (L-04).
 - T-SQL on this machine: `mssql-python`. There is no ODBC Driver 18 (L-05).
-- OneLake security role names: letters and digits only. Create roles one at a time. The bulk PUT to
+- OneLake security role names: letters and digits only. Create roles one at a time with the single-role upsert
+  `POST .../items/<itemId>/dataAccessRoles?dataAccessRoleConflictPolicy=Overwrite&preview=true` (HTTP 201 on
+  create; measured on the FourthCompanyBrain tenant). Overwrite recreates the role, so its id changes. The bulk PUT to
   `.../dataAccessRoles` deletes every role missing from its body, `DefaultReader` too (L-10). The guard asks
   before that PUT in an interactive session and denies it in an unattended run (CI, a subagent, bypass mode).
 - Data agent: the Assistants endpoint retired 2026-08-26; use the agent's MCP endpoint. Require a references

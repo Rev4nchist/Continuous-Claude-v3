@@ -13,6 +13,7 @@ names the planned test). Nothing here is measured yet.
 - [Never](#never-these-lines-win-over-learn-text-and-samples)
 - [Copy jobs](#copy-jobs)
 - [Dataflow Gen2](#dataflow-gen2)
+- [Data pipelines](#data-pipelines)
 - [Scripted ETL](#scripted-etl)
 - [Known gaps](#known-gaps)
 
@@ -65,6 +66,24 @@ names the planned test). Nothing here is measured yet.
   `POST .../datasets/<id>/Default.TakeOver`. Repair the connections after any take over (G-33, Learn).
 - Upstream "ServicePrincipal credentials" for a refresh can only mean the data connection's credential,
   not the API caller (never-line 3).
+
+## Data pipelines
+
+- Learn: https://learn.microsoft.com/fabric/data-factory/pipeline-rest-api-capabilities
+- Run once: `POST .../workspaces/<workspaceId>/items/<pipelineId>/jobs/instances?jobType=Pipeline`. Before
+  the POST, read the pipeline's recent job instances: never start a second run while one is in progress,
+  and never resubmit a POST whose outcome you do not know. Find the job instance first (Learn; hub
+  never-line 3).
+- Poll the `Location` job URL with a cap. A job instance ends `Completed`, `Failed` or `Cancelled`.
+- A failed run: read the job's full `failureReason` before you classify it. `AADSTS50076` is an auth
+  failure, not throttling (playbook, L-21).
+- Run identity: the pipeline's activities get tokens on the caller's behalf. An admin user whom security
+  defaults force through MFA fails unattended (`AADSTS50076`). Run as a service principal that the
+  pipeline's items allow, or by hand in the portal. The owner decides (playbook, L-20).
+- After a run that writes lakehouse tables, call the SQL analytics endpoint's `refreshMetadata` before
+  any T-SQL. The endpoint syncs Delta metadata late: a fresh table can return "Invalid object name"
+  (playbook, L-04).
+- No schedule without the owner's yes (never-line 2).
 
 ## Scripted ETL
 

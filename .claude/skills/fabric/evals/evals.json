@@ -106,7 +106,7 @@
     {"type": "not_regex", "pattern": "^[ \\t]*(?:for\\b[^\\n:]*:[ \\t]*)?(?:[\\w.\\[\\]()]+\\.)?select\\([ \\t]*[\"']dbo[\"']", "flags": "m"},
     {"type": "not_regex", "pattern": "run_line_magic\\([ \\t]*[\"']pip[\"'][ \\t]*,[ \\t]*[\"'][^\"'\\n]*\\bfabric-data-agent-sdk\\b(?!==)"},
     {"type": "regex", "pattern": "[\"']Schemas[\"'][ \\t]*,[^\\n)]*[\"']Tables[\"']"},
-    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!quer|MCP)[^\\n]){0,40}?\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -219,7 +219,8 @@
   ],
   "checks": [
     {"type": "regex", "pattern": "jobType=Refresh"},
-    {"type": "regex", "pattern": "executionData"}
+    {"type": "regex", "pattern": "executionData"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -237,7 +238,8 @@
   "checks": [
     {"type": "regex", "pattern": "/semanticModels/[^/\\s]+/updateDefinition"},
     {"type": "regex", "pattern": "executeQueries|evaluate_dax"},
-    {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"}
+    {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -255,7 +257,8 @@
   ],
   "checks": [
     {"type": "regex", "pattern": "Support group by in GQL"},
-    {"type": "not_regex", "pattern": "evaluate_data_agent\\s*\\("}
+    {"type": "not_regex", "pattern": "evaluate_data_agent\\s*\\("},
+    {"type": "regex", "pattern": "GraphModel|graph items?\\b|count[^\\n]{0,40}\\bgraphs?\\b", "flags": "i"}
   ]
  },
  {
@@ -291,7 +294,58 @@
   ],
   "checks": [
     {"type": "regex", "pattern": "user'?s identity", "flags": "i"},
-    {"type": "regex", "pattern": "\\b(?:warehouse|spark|notebook)\\b", "flags": "i"}
+    {"type": "regex", "pattern": "\\b(?:warehouse|spark|notebook)\\b", "flags": "i"},
+    {"type": "regex", "flags": "i", "pattern": "\\b(?:admin|member)s?\\b[^\\n]{0,80}\\b(?:switch|change|access mode|identity mode)|\\b(?:switch|change)\\w*\\b[^\\n]{0,80}\\b(?:admin|member)s?\\b"}
+  ]
+ },
+ {
+  "id": 109,
+  "name": "job-post-unknown-outcome",
+  "skills": ["fabric"],
+  "query": "I started our notebook nb_parse with az rest POST .../jobs/instances?jobType=RunNotebook from Git Bash. The command timed out after 120 s and printed nothing. Give me the next commands to make sure the notebook runs tonight. Do not run anything.",
+  "expected_behavior": [
+    "Says a timed-out command is not a failure: the job may be running.",
+    "Lists the notebook's job instances first (GET .../items/<notebookId>/jobs/instances) and re-attaches to the newest instance by its id.",
+    "Sends a new RunNotebook POST only after the job list shows no instance in progress or a failed one, never as the first step.",
+    "Polls the job instance with a capped loop and waits for Completed, not Succeeded.",
+    "On an HTTP 429 or 430, or 'capacity has exceeded its limits', stops and reports."
+  ],
+  "checks": [
+    {"type": "regex", "flags": "i", "pattern": "\\bGET\\b[^\\n]{0,120}jobs/instances|jobs/instances[^\\n]{0,80}(?:--method|-m)[ \\t]+get\\b|(?:--method|-m)[ \\t]+get\\b[^\\n]{0,160}jobs/instances"},
+    {"type": "regex", "pattern": "\\bCompleted\\b"}
+  ]
+ },
+ {
+  "id": 110,
+  "name": "onelake-role-single-upsert",
+  "skills": ["fabric"],
+  "query": "Add a OneLake security role ReadGold to lakehouse wwi_lh so the Viewers group can read the gold schema. Keep every existing role, DefaultReader too. Give me the REST call for Git Bash. Do not run anything.",
+  "expected_behavior": [
+    "Creates the one role with POST .../items/<lakehouseId>/dataAccessRoles?dataAccessRoleConflictPolicy=Overwrite&preview=true.",
+    "Does not PUT .../dataAccessRoles: the bulk PUT replaces the full set and deletes every role missing from the body, DefaultReader too.",
+    "Keeps the role name to letters and digits.",
+    "Tests the role with a Viewer identity, because Admins, Members and Contributors bypass OneLake roles."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "dataAccessRoleConflictPolicy"},
+    {"type": "not_regex", "flags": "i", "pattern": "(?:-X|--method|-m)[ \\t]*PUT\\b[^\\n]*dataAccessRoles|\\bPUT[ \\t]+\\S*dataAccessRoles|dataAccessRoles\\S*[^\\n]*(?:-X|--method|-m)[ \\t]*PUT\\b"}
+  ]
+ },
+ {
+  "id": 111,
+  "name": "auth-failure-not-capacity",
+  "skills": ["fabric"],
+  "query": "Our nightly Fabric notebook job failed after 6 s. failureReason: 'Failed to create session for executing notebook. ... Entra ID was unsuccessful ... AADSTS50076'. Our script treats 'Failed to create session' as capacity throttling and stops the loop for the night. Is that right, and what should change? Do not run anything.",
+  "expected_behavior": [
+    "Says AADSTS50076 is an authentication failure (MFA required), not capacity throttling.",
+    "Says to read the job's full failureReason and classify auth errors before capacity errors.",
+    "Says an unattended job as an admin user whom security defaults force through MFA fails; run it as a service principal or by hand in the portal, as the owner decides.",
+    "Does not recommend a capacity pause, resume, resize or SKU change."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "AADSTS50076"},
+    {"type": "regex", "flags": "i", "pattern": "\\b(?:MFA|multi-factor|authenticat\\w*)\\b"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b|^(?![^\\n]*\\b(?:whether|if|owner's[ \\t]+decision)\\b)[^\\n]*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+)(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"}
   ]
  }
 ]

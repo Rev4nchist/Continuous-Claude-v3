@@ -78,6 +78,12 @@
     { "prompt": "build a star schema diagram for a slide about Kimball modelling", "expect": [], "forbid": ["fabric"] },
     { "prompt": "set up row-level security on my Power BI Pro report with an imported CSV", "expect": [], "forbid": ["fabric"] },
     { "prompt": "our python script asks the Fabric data agent 40 questions over MCP and from question 14 every call fails with capacity has exceeded its limits, fix the script", "expect": ["fabric"] },
-    { "prompt": "write the TMDL for a calculated table and a measure in our Fabric Direct Lake semantic model and deploy it with updateDefinition", "expect": ["fabric"] }
+    { "prompt": "write the TMDL for a calculated table and a measure in our Fabric Direct Lake semantic model and deploy it with updateDefinition", "expect": ["fabric"] },
+    { "prompt": "run our WWI data pipeline in Fabric once and refresh the SQL endpoint metadata after it finishes", "expect": ["fabric"] },
+    { "prompt": "run a GQL query against our Fabric graph model brain_graph that counts the Rule nodes", "expect": ["fabric"] },
+    { "prompt": "add a OneLake security role so the Viewers group only sees the gold schema of wwi_lh", "expect": ["fabric"] },
+    { "prompt": "connect to the lakehouse SQL analytics endpoint from python and count the rows in dbo.orders", "expect": ["fabric"] },
+    { "prompt": "every Fabric call now returns 429 with capacity exceeded, what should the script do", "expect": ["fabric"] },
+    { "prompt": "can our brain-runner service principal run the Fabric notebook job every night unattended", "expect": ["fabric"] }
   ]
 }
