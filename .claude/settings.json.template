@@ -372,6 +372,19 @@
             "timeout": 5000
           }
         ]
+      },
+      {
+        "matcher": "compact|clear",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/rule-router.mjs"
+            ]
+          }
+        ]
       }
     ],
     "PreCompact": [

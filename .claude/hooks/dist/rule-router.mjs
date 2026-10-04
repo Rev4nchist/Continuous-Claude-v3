@@ -2,7 +2,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/rule-router.ts
-import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "fs";
+import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "fs";
 import { homedir, tmpdir } from "os";
 import { join, dirname } from "path";
 
@@ -252,6 +252,7 @@ function extractShellWrapperPayloads(command) {
 }
 
 // src/rule-router.ts
+var REARM_SOURCES = /* @__PURE__ */ new Set(["compact", "clear"]);
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var AGENT_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent"]);
 function rulesDir() {
@@ -385,11 +386,11 @@ function triggerWords(input, fired) {
   const script = /(?:^|[\s"'\\/])([\w.-]+\.(?:ps1|mjs|cjs|js|py|sh|bat))(?=["'\s]|$)/i.exec(seg2)?.[1];
   return script && !words.includes(script) ? `${words} ${script}` : words;
 }
-function logFire(input, d, fired) {
+function logFire(input, d, fired, extra = {}) {
   try {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), ".claude", "logs", "rule-router.jsonl");
     mkdirSync(dirname(path), { recursive: true });
-    const what = triggerWords(input, fired);
+    const what = d.kind === "rearm" ? `SessionStart ${input.source}` : triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
       // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
       ts: (/* @__PURE__ */ new Date()).toISOString(),
@@ -398,10 +399,36 @@ function logFire(input, d, fired) {
       tool: input.tool_name,
       rules: d.ids,
       kind: d.kind,
-      what
+      what,
+      ...extra
     }) + "\n");
   } catch {
   }
+}
+function rearm(input) {
+  const dir = stateDir({ session_id: input.session_id });
+  let ids;
+  try {
+    ids = readdirSync(dir);
+  } catch {
+    return 0;
+  }
+  let removed = 0;
+  for (const id of ids) {
+    try {
+      unlinkSync(join(dir, id));
+      removed++;
+    } catch {
+    }
+  }
+  return removed;
+}
+function onSessionStart(input) {
+  if (REARM_SOURCES.has(input.source || "")) {
+    const removed = rearm(input);
+    logFire(input, { kind: "rearm", ids: [], text: "" }, [], { source: input.source, removed });
+  }
+  console.log("{}");
 }
 function run(raw) {
   let input;
@@ -409,6 +436,10 @@ function run(raw) {
     input = JSON.parse(raw);
   } catch {
     outputContinue();
+    return;
+  }
+  if (input.hook_event_name === "SessionStart") {
+    onSessionStart(input);
     return;
   }
   const dir = rulesDir();
@@ -458,6 +489,7 @@ export {
   decide,
   matchRules,
   quotedSegments,
+  rearm,
   rulesDir,
   run,
   splitUnquoted,
