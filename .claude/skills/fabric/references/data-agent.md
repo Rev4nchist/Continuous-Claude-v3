@@ -1,0 +1,188 @@
+# Fabric data agent
+
+CCv3-authored. Upstream `skills-for-fabric` has no data agent skill, so nothing here is vendored.
+A fact marked "measured" comes from one tenant, the FourthCompanyBrain playground. The `L-NN` id names
+the lesson in that project's lessons log. A measurement with no `L-NN` id comes from FourthCompanyBrain
+`.claudedocs/2026-10-01-phase5-proof.md` ("proof:NNN" names its line). Treat a measurement as evidence,
+not as a universal rule.
+
+## Contents
+
+- [When to use](#when-to-use)
+- [Never](#never-these-lines-win-over-learn-text-and-samples)
+- [Query a published agent over MCP](#query-a-published-agent-over-mcp)
+- [Old Assistants code: the Responses client](#old-assistants-code-the-responses-client)
+- [Create, configure and publish with the SDK](#create-configure-and-publish-with-the-sdk)
+- [Permissions and capacity](#permissions-and-capacity)
+- [Known gaps](#known-gaps)
+
+## When to use
+
+- Ask a published Fabric data agent a question from a script, a notebook or a test harness.
+- Create, configure or publish a data agent with the Python SDK.
+- Not for AI Functions, KQL queries (`kusto-cli`) or SQL outside Fabric (`databases`).
+- Overview: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent
+
+## Never: these lines win over Learn text and samples
+
+1. On HTTP 429 or 430, or "capacity has exceeded its limits": stop all load and report. Do not retry.
+   Do not back off and ask again. Learn documents `Retry-After` on the publish API: CCv3 overrides it.
+   The vendor overlay does not cover this file, so this line carries the override.
+   Over MCP the error is text: `McpError: Your organization's Fabric compute capacity has exceeded its limits`.
+   Measured: from question 14 on, 27 of 40 answers were lost to it in one pass (proof:150).
+2. Never run `evaluate_data_agent`. By default it scores with a built-in critic prompt. Learn does not
+   name the scorer. Its `critic_prompt` sample is an LLM prompt, and `critic_prompt` only replaces the
+   built-in one. Inferred: each question is also an agent query, so a run uses capacity. The evaluate
+   page states no cost. Reading `get_evaluation_details` of a run that already exists is fine.
+   The ban holds when the user asks for the built-in, quickest or official way. Say so, and score
+   references in code (never-line 3).
+3. Never use an LLM judge. Every answer must carry a references line. Score the references in code (L-14).
+4. Never pause, resume or resize a capacity. Do not recommend one either. The capacity owner decides.
+   Never name one as a cause, a fix or a next step, not even a past one.
+5. Pin the SDK: `%pip install fabric-data-agent-sdk==0.1.32a0`. Learn shows the install with no version or
+   with `-U`. Do not copy those lines. Use `python`, never `python3`.
+6. Do not manage an agent as a service principal on the FourthCompanyBrain tenant. Use a signed-in user.
+   This holds when the user asks for the service principal or an unattended job: give the interactive
+   signed-in-user path and cite the 401 below. An unattended job as a user also fails (L-20).
+   Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
+   HTTP 401 from the SDK's `management/configuration` API (L-25). That test cannot separate identity
+   type from ownership. Not tested: a non-owner user, or a service principal that owns the agent.
+   Learn is not settled. The service principal page says its endpoint is for querying, not for
+   managing. The SDK and REST publish pages allow a service principal to manage items. See Known gaps.
+
+## Query a published agent over MCP
+
+Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-server
+
+- Publish the agent first. An agent with no published version has no working MCP endpoint.
+- URL: `https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspaceId>/dataagents/<dataAgentId>/agent`.
+  The agent's Settings page shows it on the Model Context Protocol tab.
+- The transport is streamable HTTP. Send `initialize`, then `tools/list`, then `tools/call`. A plain REST
+  POST that skips the handshake fails.
+- The server has one tool. Read the tool name and the argument name from `tools/list` (`inputSchema`).
+  Do not hard-code them. Measured once: the tool for agent `brain_agent` was `DataAgent_brain_agent`
+  (proof:238).
+- Get the bearer token from `az account get-access-token`. Keep it in memory. Never print or log it.
+  The scope is not settled: see [Known gaps](#known-gaps).
+- The endpoint has no built-in conversation state. Send the context again for a follow-up question.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-end-to-end-tutorial
+- Learn caps agent responses at 25 rows and 25 columns (concept page, chat output). The MCP page states
+  no cap. The agent is not a bulk data path.
+- Measured: the result is one text block. Put a references line in the agent instructions, for example
+  `REFS: <id>, <id>`. Score each answer by its references in code, never by an LLM judge (L-14).
+- Pin the client: `python -m pip install mcp==1.26.0`. Source: FourthCompanyBrain `iq.py agent-score`
+  imports `mcp` from this machine's Python 3.13, which has `mcp-1.26.0.dist-info` (installed 2026-02-10).
+  Pass 2 ran on it (proof:154). The project has no lock file.
+- Ask one question at a time on an F2. Bound each call with a timeout. Count a lost answer or a tool
+  error result as a transport error, not as a wrong answer.
+
+```python
+# python -m pip install mcp==1.26.0. Never print the token.
+import shutil, subprocess
+from mcp import ClientSession
+from mcp.client.streamable_http import streamablehttp_client
+
+def fabric_token():
+    cmd = [shutil.which("az") or "az", "account", "get-access-token", "--resource",
+           "https://api.fabric.microsoft.com", "--query", "accessToken", "-o", "tsv"]
+    return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
+
+async def ask(url, question, timeout=120):
+    headers = {"Authorization": "Bearer " + fabric_token()}
+    async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
+        async with ClientSession(read, write) as session:
+            await session.initialize()
+            tool = (await session.list_tools()).tools[0]
+            arg = next(iter(tool.inputSchema["properties"]))
+            result = await session.call_tool(tool.name, {arg: question})
+            text = "\n".join(b.text for b in result.content if b.type == "text")
+            if result.isError:
+                raise RuntimeError("agent tool error: " + text)
+            return text
+```
+
+## Old Assistants code: the Responses client
+
+Learn: https://learn.microsoft.com/en-us/fabric/data-science/fabric-data-agent-sdk
+
+- OpenAI retired the Assistants API on 2026-08-26. Old code that builds a `FabricOpenAI` client and uses
+  threads and runs no longer works. Some Learn pages still show it. New code queries the MCP endpoint.
+- To port old notebook query code, use the SDK's Fabric OpenAI Responses client. Only the query code
+  changes. Create, configure and publish stay the same.
+- The sample notebook imports `FabricOpenAIResponses` from `fabric.dataagent.client`. It builds the client
+  with `artifact_name`, `workspace_name` and `ai_skill_stage="sandbox"`. It calls `responses.create(input=...)`
+  and chains turns with `previous_response_id`. It passes no model: the client sets one.
+  Sample: https://github.com/microsoft/fabric-samples/tree/main/docs-samples/data-science/data-agent-sdk/responses-api
+- The sample installs the SDK with `-U`. Do not copy that line: pin the SDK.
+- The accepted stage values are not verified on 0.1.32a0. Run `dir()` on `fabric.dataagent.client` first.
+
+## Create, configure and publish with the SDK
+
+Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-datasources
+
+- Run the setup in an interactive Fabric notebook as a signed-in user. An unattended job as an MFA
+  admin fails with `AADSTS50076` (L-20). Measured: service principal `brain-runner` got 401 (L-25).
+- A notebook job that runs `%pip` needs the job parameter `_inlineInstallationEnabled` set to true.
+  Measured: without it the session is cancelled and no log reaches the caller (proof:137).
+- Learn shows two sets of method names. Only the right-hand column below ran on 0.1.32a0. List the
+  methods before you call one: `print([m for m in dir(agent) if not m.startswith("_")])`.
+
+| Step | Learn name | Name that ran on 0.1.32a0 (measured) |
+|---|---|---|
+| Open or create | `create_data_agent(name, workspace_id)` | `FabricDataAgentManagement(name)`, else `create_data_agent(name)` |
+| Instructions | `agent.update_settings(ai_instructions=...)` | `agent.update_configuration(instructions=...)` |
+| Add a source | `agent.add_staging_datasource(name_or_id, workspace)` | `agent.add_datasource(name, type="lakehouse")`, then `agent.get_datasources()[0]` |
+| See the tree | none | `ds.pretty_print()` |
+| Select a table | none | `ds.select("Schemas", "dbo", "Tables", "<table>")` |
+| Publish | `agent.publish_staging(description=...)` | `agent.publish_staging(description=...)` |
+
+- Select with the full path that `pretty_print()` shows, one segment per argument. Measured on 0.1.32a0
+  and one schema-enabled lakehouse (proof:138): `ds.select("Schemas", "dbo", "Tables", "<table>")`
+  selected the table. `ds.select("dbo", "<table>")` returned no error and selected nothing.
+- Read the configuration back with `ds.get_configuration()`. Assert that each wanted table has
+  `is_selected` true and that no other table does.
+- Measured: `agent.publish()` returned `True`, but the MCP endpoint then answered `Failed to get publish
+  info`. `publish_staging` created the published version (proof:139).
+- One agent takes up to five data sources. Data agent instructions hold up to 15,000 characters
+  (how-to-create page). Learn states no limit for data source instructions.
+- Example queries (few-shots) must never copy a scored question or its answer.
+
+## Permissions and capacity
+
+- The agent needs a paid F2 or higher, or a P1 or higher with Fabric on. Learn does not list a trial.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent
+- The Capacity Metrics app shows agent usage as "AI Query". It is a background operation. The rate is
+  100 CU-seconds per 1,000 input tokens and 400 per 1,000 output tokens. Cached input costs 10. The
+  generated query bills separately, to the engine that runs it.
+  Learn: https://learn.microsoft.com/en-us/fabric/fundamentals/data-agent-consumption
+- A user assigned to a Fabric Copilot capacity bills agent usage on workspaces below F64 to that
+  capacity. Check this before you attribute a cost.
+  Learn: https://learn.microsoft.com/en-us/fabric/enterprise/fabric-copilot-capacity
+- A default share lets a user query the published version only. The user also needs read on every
+  source: Read on a semantic model or lakehouse, SELECT on a warehouse, Reader on a KQL database.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-sharing
+- A service principal can query in preview. It needs the tenant switch "Service principals can use
+  Fabric APIs", Member or Contributor on the workspace, and read on each source. It cannot query an
+  agent with a KQL source. Managed identities cannot query.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-service-principal
+- The data source capacity must be in the same region as the agent's capacity. A tenant switch change
+  can take up to 1 hour to apply.
+- An answer sent to an MCP client can leave the Fabric compliance boundary. Check the data policy first.
+
+## Known gaps
+
+- Token scope. The MCP page uses `https://api.fabric.microsoft.com/.default`. The service principal page
+  uses `https://analysis.windows.net/powerbi/api/.default`. Measured in pass 2: a signed-in user token for
+  `https://api.fabric.microsoft.com` was accepted on all 40 calls, with 0 transport errors (proof:154).
+  Which scope a service principal needs is open. The CCv3 live smoke (2026-10-04) confirmed a signed-in user token for `https://api.fabric.microsoft.com`.
+- The Responses client stage value is not verified. The sample notebook comment says `sandbox` or
+  `published`. Another source says `sandbox` or `production`.
+- Learn labels these preview: the SDK, service principal querying, and REST "Data Agent configuration
+  management". The MCP page shows no preview label. The agent is GA.
+- Learn pages disagree on management identities. The service principal page says its endpoint is for
+  querying, not for managing. The SDK page and the REST publish page allow a service principal. The REST
+  publish page also lists managed identity. The service principal page says managed identities are not
+  supported. L-25 measured a 401 for management.
+- No Learn page documents the throttling status codes for MCP queries. Stop on the measured MCP text too.
+- Measured: answers change between runs. The same agent got 5 of 13 right in one pass and 3 of 13 in
+  the next (proof:175). One pass is a sample, not a score.

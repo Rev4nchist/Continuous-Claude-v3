@@ -30,9 +30,13 @@ Microsoft's `skills-for-fabric` v0.3.18 is vendored at `../_vendor/skills-for-fa
 |---|---|
 | Notebook cell code (PySpark, `%%sql`, `%%configure`, notebookutils), notebook runs, Livy sessions, failed or slow Spark runs, Materialized Lake Views | [spark-cli](../_vendor/skills-for-fabric/skills/spark-cli/SKILL.md) |
 | Find an item when the workspace is unknown, or list one item type across all workspaces | [search-consumption-cli](../_vendor/skills-for-fabric/skills/search-consumption-cli/SKILL.md) |
+| Fabric data agent: ask a published agent a question, or create, configure and publish one with the SDK. CCv3-authored, not vendored | [data-agent](references/data-agent.md) |
 
-Not vendored yet: Warehouse T-SQL (`sqldw-cli`), Eventhouse KQL authoring (`eventhouse-cli`), the Fabric
-data agent, AI Functions. Say so, then use the Microsoft Learn docs (microsoft-docs plugin) and the API
+The data-agent row is a single CCv3 file: read it in full. The vendored-skill steps at the end of this
+page do not apply to it. Do not invent an `x-ms-fabric-skill` value for it.
+
+Not vendored yet: Warehouse T-SQL (`sqldw-cli`), Eventhouse KQL authoring (`eventhouse-cli`), AI
+Functions. Say so, then use the Microsoft Learn docs (microsoft-docs plugin) and the API
 facts in the `fabric-playbook` rule. A vendored skill that routes to one of these: stop at that boundary.
 
 Other owners: Kusto.Cli queries and CSV export go to `kusto-cli`. SQL outside Fabric and schema design go
