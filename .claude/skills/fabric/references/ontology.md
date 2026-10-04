@@ -39,7 +39,8 @@ Run these read-only checks before any authoring step. Stop and report if one fai
   Learn: https://learn.microsoft.com/fabric/iq/ontology/overview-tenant-settings
 - The caller has Read and Build on each semantic model it generates from (G-47, Learn).
 - Count the workspace items by type: `GET https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/items`,
-  then count `GraphModel`, `Ontology` and `DataAgent`. Save the counts. Count again after the step.
+  then count `GraphModel`, `Ontology` and `DataAgent`. Follow `continuationUri` until it is absent: a
+  graph on a later page counts too. Save the counts. Count again after the step.
 - For an existing ontology, read its definition with `POST .../ontologies/<ontologyId>/getDefinition`.
   Learn has no version flag: the definition format is the only signal. TMDL parts (`.platform`,
   `database.tmdl`, `model.tmdl`, `namespaces/default.tmdl`) mean the new experience. JSON

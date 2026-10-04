@@ -174,6 +174,15 @@ regex findings and none in `--alias`, `conflict-scan` or the reference prose. Fi
   - GET before POST, line continuations allowed (109). Only a command counts as a role PUT (110).
   - A wider capacity-change guard (8, 111), and the list form of a composite key (107).
   - 103 of 103 sample lines score right, every reviewer line included.
+- CodeRabbit (6 comments on `d702f9e`):
+  - 2 were already fixed in `009861e` (`Deduped`, a bare `--alias`).
+  - Fixed now:
+    - `lakehouse.md`: a delegated-mode SQL endpoint applies only SQL permissions, not OneLake roles
+      (Learn). This corrects G-12, and the research copy is annotated.
+    - `ontology.md`: the graph count follows `continuationUri`.
+    - Eval 109: a first run that ended Completed is not posted again.
+    - `data-agent.md`: the service principal management ban is labelled CCv3 policy. The DataAgent REST
+      pages list a service principal, but that path is untested here.
 - Not changed: exact REST host and payload shapes (Codex 1, 4) stay with the LLM grader. The deterministic
   checks are smoke guards for never-lines, not a full grader.
 - The Phase 4 r1 and r2 eval folders are gone from `%LOCALAPPDATA%\Temp` (Windows cleanup). Only the 6 Phase 4

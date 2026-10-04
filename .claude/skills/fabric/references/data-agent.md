@@ -43,15 +43,18 @@ not as a universal rule.
    Never name one as a cause, a fix or a next step, not even a past one.
 5. Pin the SDK: `%pip install fabric-data-agent-sdk==0.1.32a0`. Learn shows the install with no version or
    with `-U`. Do not copy those lines. Use `python`, never `python3`.
-6. Do not manage an agent as a service principal. Use a signed-in user.
+6. Do not manage an agent as a service principal. Use a signed-in user. This is CCv3 policy until a test
+   proves the REST management path for a service principal (see the lines below).
    This holds when the user asks for the service principal or an unattended job: give the interactive
    signed-in-user path and cite the 401 below. An unattended job as a user also fails (L-20).
    Measured: service principal `brain-runner`, a workspace Contributor and not the agent's owner, got
    HTTP 401 from the SDK's `management/configuration` API (L-25). That test cannot separate identity
    type from ownership. Not tested: a non-owner user, or a service principal that owns the agent.
    The data agent service principal page is explicit: service principal support is a preview for
-   querying a published agent, "not for managing or configuring it" (L-25 quotes it). The SDK and REST
-   publish pages list a service principal for items in general. Follow the data agent page.
+   querying a published agent, "not for managing or configuring it" (L-25 quotes it). The DataAgent
+   create, update-definition and publish REST pages list a service principal as supported. That REST path
+   is untested here, and L-25 tested only the SDK as a non-owner, so the policy stays until a test shows
+   otherwise.
 
 ## Query a published agent over MCP
 

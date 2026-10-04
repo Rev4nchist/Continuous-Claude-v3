@@ -314,7 +314,7 @@
   "expected_behavior": [
     "Says a timed-out command is not a failure: the job may be running.",
     "Lists the notebook's job instances first (GET .../items/<notebookId>/jobs/instances) and re-attaches to the newest instance by its id.",
-    "Sends a new RunNotebook POST only after the job list shows no instance in progress or a failed one, never as the first step.",
+    "Sends a new RunNotebook POST only when the newest instance failed or no instance exists, never as the first step. If the newest instance is in progress or ended Completed, the notebook ran or is running: it reports that and does not POST again.",
     "Polls the job instance with a capped loop and waits for Completed, not Succeeded.",
     "On an HTTP 429 or 430, or 'capacity has exceeded its limits', stops and reports."
   ],

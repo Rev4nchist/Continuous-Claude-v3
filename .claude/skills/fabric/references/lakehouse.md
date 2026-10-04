@@ -91,8 +91,10 @@ Each line names its source: "Learn" (a Learn page says it), "measured" (a live t
   Admin or Member can switch it to the user's identity mode, in the portal Security tab. The switch
   cancels all queries on every SQL endpoint in the workspace: see never-line 2 (G-14, Learn).
   Learn: https://learn.microsoft.com/fabric/onelake/security/sql-analytics-endpoint-onelake-security
-- Direct Lake on SQL and a delegated-mode endpoint read shortcut targets as the item owner, then apply
-  OneLake roles (G-12, Learn).
+- A delegated-mode endpoint reads OneLake, shortcut targets too, with the item owner's identity. Only SQL
+  permissions apply in that mode, not the reader's OneLake roles. Direct Lake on SQL also reads shortcut
+  data with the item owner's permissions. To enforce OneLake roles through SQL, the endpoint must be in
+  the user's identity mode: never-line 2 (Learn; corrects G-12, which said OneLake roles apply).
 
 ## Medallion layout
 
