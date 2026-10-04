@@ -150,5 +150,148 @@
     {"type": "not_regex", "pattern": "\\b(?:after|once|when|until|because|following|thanks\\s+to)\\s+(?:(?:you|we|someone|the\\s+(?:capacity\\s+)?owner(?:'s)?)\\s+)?(?:your\\s+|our\\s+|the\\s+|a\\s+)?(?:paus|resum|resiz|suspend|restart|scal)(?!\\w*ing\\b)\\w*(?:\\s+(?:and|or|then)\\s+(?:paus|resum|resiz|suspend|restart)\\w*)?\\s+(?:of\\s+|up\\s+)?(?:the\\s+|your\\s+|our\\s+)?(?:F\\d+|capacity)\\b|^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:ask[ \\t]+(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+to[ \\t]+)?(?:paus|resum|resiz|suspend|scale[ \\t]+up|upgrad)(?!\\w*ing\\b)\\w*(?:[ \\t]+(?:and|or|then)[ \\t]+(?:paus|resum|resiz)\\w*)?[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"},
     {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b|^(?![^\\n]*\\b(?:whether|if|owner's[ \\t]+decision)\\b)[^\\n]*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+)(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:F\\d+|capacity)\\b", "flags": "im"}
   ]
+ },
+ {
+  "id": 101,
+  "name": "lakehouse-schemas-rest",
+  "skills": ["fabric"],
+  "query": "Give me the az rest commands for Git Bash that create a lakehouse called wwi_lh with lakehouse schemas in workspace FourthBrain-Playground, then list every table in it per schema. Do not run anything.",
+  "expected_behavior": [
+    "Creates the lakehouse with POST https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/lakehouses and \"creationPayload\": {\"enableSchemas\": true}.",
+    "Says that the REST API does not enable schemas by default, unlike the portal.",
+    "Does not list tables with GET .../lakehouses/<id>/tables, because a schema-enabled lakehouse returns HTTP 400 UnsupportedOperationForSchemasEnabledLakehouse.",
+    "Lists schemas and tables with the OneLake table API at https://onelake.table.fabric.microsoft.com/delta (unity-catalog schemas and tables calls) or with T-SQL on the SQL analytics endpoint.",
+    "Resolves the workspace id by listing and filtering on displayName, not by a guessed GUID."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "\"?enableSchemas\"?\\s*:\\s*true"},
+    {"type": "regex", "pattern": "creationPayload"},
+    {"type": "regex", "pattern": "onelake\\.table\\.fabric\\.microsoft\\.com|UnsupportedOperationForSchemasEnabledLakehouse"}
+  ]
+ },
+ {
+  "id": 102,
+  "name": "onelake-table-shortcuts-passthrough",
+  "skills": ["fabric"],
+  "query": "In lakehouse wwi_lh (schemas on) I need table shortcuts in the bronze schema to six tables in lakehouse src_lh in the same tenant. Readers must only see what they can see in src_lh. Give me the REST call and tell me where the OneLake security roles go. Do not run anything.",
+  "expected_behavior": [
+    "Uses POST https://api.fabric.microsoft.com/v1/workspaces/<workspaceId>/items/<lakehouseId>/shortcuts, one call per table.",
+    "The body has name, a path under Tables for the bronze schema, and target.oneLake with workspaceId, itemId and path.",
+    "Keeps the default passthrough mode, so each reader needs access on src_lh, and does not set up a delegated connection identity.",
+    "Puts the OneLake security roles on src_lh (the target), not on the shortcut.",
+    "Says the caller needs Write on wwi_lh and Read on the target, and that a mode change means delete and recreate."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "/items/[^/\\s]+/shortcuts"},
+    {"type": "regex", "pattern": "\"?oneLake\"?\\s*:"},
+    {"type": "regex", "pattern": "Tables/bronze"}
+  ]
+ },
+ {
+  "id": 103,
+  "name": "copy-job-run-and-schedule-f2",
+  "skills": ["fabric"],
+  "query": "Write the Git Bash steps that start the Fabric copy job cj_wwi now, wait for it, and then give it a daily 06:00 schedule. It runs on our F2 that throttles a lot. Do not run anything.",
+  "expected_behavior": [
+    "Starts the run with POST .../workspaces/<workspaceId>/items/<copyJobId>/jobs/instances?jobType=Execute, not RunNotebook, DefaultJob or Refresh.",
+    "Creates the schedule with POST .../items/<copyJobId>/jobs/<jobType>/schedules and \"enabled\": true.",
+    "Reads recent job instances before the POST and runs at most one Fabric job at a time on the F2.",
+    "On an HTTP 429 or 430, or a 'capacity has exceeded its limits' message, stops and reports; it does not retry or back off.",
+    "Polls the job instance from the Location header with a capped poll loop."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "jobType=Execute"},
+    {"type": "regex", "pattern": "/jobs/[^/\\s]+/schedules"},
+    {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"}
+  ]
+ },
+ {
+  "id": 104,
+  "name": "dataflow-gen2-refresh-service-principal",
+  "skills": ["fabric"],
+  "query": "Our brain-runner service principal should refresh the Dataflow Gen2 WWI_DF every night, and I want to add its lakehouse data destination through the definition API so it is all in code. Give me the calls. Do not run anything.",
+  "expected_behavior": [
+    "Says Dataflow Gen2 public APIs do not support service principal authentication, so brain-runner cannot do this.",
+    "Says a data destination cannot be authored through the definition API and must be added in the portal with Add data destination.",
+    "Shows the refresh as POST .../items/<dataflowId>/jobs/instances?jobType=Refresh with executionData (DataflowName, OwnerUserPrincipalName, OwnerUserObjectId).",
+    "Says the refresh caller needs Member or higher and access to every connection of the dataflow.",
+    "Offers a notebook job run through the Jobs API as the scriptable alternative for nightly ETL."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "jobType=Refresh"},
+    {"type": "regex", "pattern": "executionData"}
+  ]
+ },
+ {
+  "id": 105,
+  "name": "direct-lake-measure-and-dax",
+  "skills": ["fabric"],
+  "query": "Add a measure Total Sales = SUM('fact internet sales'[SalesAmount]) to our Direct Lake semantic model WWI_SM by REST, then run a DAX query from Claude Code to check it. The model is Direct Lake on OneLake and we would run as the brain-runner service principal. Do not run anything.",
+  "expected_behavior": [
+    "Reads the model with POST .../semanticModels/<id>/getDefinition and writes the changed TMDL with POST .../semanticModels/<id>/updateDefinition, polling the long running operation.",
+    "Runs DAX with POST https://api.powerbi.com/v1.0/myorg/groups/<groupId>/datasets/<datasetId>/executeQueries (or sempy evaluate_dax in a notebook).",
+    "Says the DAX check must run as a signed-in user with Read and Build, not brain-runner: executeQueries does not support a service principal on a model with RLS, and a service principal failed to run DAX on a Direct Lake on OneLake model on this tenant (L-13).",
+    "States executeQueries limits: one query per call, one table, at most 100,000 rows or 1,000,000 values.",
+    "On an HTTP 429 or 430 stops and reports; it does not retry or back off."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "/semanticModels/[^/\\s]+/updateDefinition"},
+    {"type": "regex", "pattern": "executeQueries|evaluate_dax"},
+    {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"}
+  ]
+ },
+ {
+  "id": 106,
+  "name": "ontology-generate-on-f2-with-graph",
+  "skills": ["fabric"],
+  "query": "Generate an ontology from the semantic model WWI_SM and hook a new data agent to it so I can ask revenue by subcategory. We are on our F2 and brain_graph already exists in the workspace. List the steps. Do not run anything.",
+  "expected_behavior": [
+    "Counts graph items before the ontology step and says the ontology may add a managed graph, so the workspace could hold two graphs; it asks Dave or removes the old graph only after its evidence is saved.",
+    "Checks the tenant settings 'Users can create Ontology (preview) items' and 'Users can create Fabric items', and Read plus Build on WWI_SM.",
+    "Adds the agent instruction 'Support group by in GQL' for aggregation questions on an ontology source.",
+    "Checks how the ontology binds its data before it adds the agent: Learn says a data agent does not work with an ontology that binds through semantic models, so the entities must bind to lakehouse or warehouse tables.",
+    "Changes the data agent as a signed-in owner, not as a service principal.",
+    "Does not score the agent with an LLM judge or evaluate_data_agent; it compares answers with rule-based SQL."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "Support group by in GQL"},
+    {"type": "not_regex", "pattern": "evaluate_data_agent\\s*\\("}
+  ]
+ },
+ {
+  "id": 107,
+  "name": "ontology-tmdl-single-key",
+  "skills": ["fabric"],
+  "query": "Write the new-experience ontology TMDL for an entity Sales backed by table fact_internet_sales whose key is SalesOrderNumber plus SalesOrderLineNumber, and a relationship 'purchased' from Sales to Product. Then give me the call that deploys it. Do not run anything.",
+  "expected_behavior": [
+    "Uses one keyProperty on the entity, not two key properties or a comma list.",
+    "Tells me to add one concatenated key column (for example SalesLineKey) in ETL, of type string or integer.",
+    "Backs the relationship with a TOM relationship, or with a junction table that is not also an entity's backingTable.",
+    "Deploys with POST .../workspaces/<workspaceId>/ontologies/<ontologyId>/updateDefinition (or POST .../ontologies to create) and polls the long running operation.",
+    "Says ontology is a preview feature."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "keyProperty"},
+    {"type": "regex", "pattern": "/ontologies"},
+    {"type": "not_regex", "pattern": "keyProperty\\s*:\\s*\\w+\\s*,\\s*\\w+"},
+    {"type": "not_regex", "pattern": "keyProperty\\s*:[^\\n]*\\n\\s*keyProperty\\s*:"}
+  ]
+ },
+ {
+  "id": 108,
+  "name": "sql-endpoint-viewer-leak-and-insert",
+  "skills": ["fabric"],
+  "query": "Our Viewer test user reads every table through the lakehouse SQL analytics endpoint, even though OneLake security roles should hide some of them. I also want to INSERT correction rows through that same endpoint. Fix both. Do not run anything.",
+  "expected_behavior": [
+    "Says the endpoint is in delegated identity mode, which ignores OneLake security roles.",
+    "Fixes the leak by switching the endpoint to User's identity access mode in the portal Security tab, done by an Admin or Member.",
+    "Warns that the switch cancels all running and queued queries on every SQL endpoint in the workspace, so Dave picks the time.",
+    "Says the SQL analytics endpoint cannot INSERT, UPDATE or DELETE data, and offers Spark in a notebook or a Warehouse instead.",
+    "Tests the fix with a Viewer identity, not an Admin, Member or Contributor."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "user'?s identity", "flags": "i"},
+    {"type": "regex", "pattern": "\\b(?:warehouse|spark|notebook)\\b", "flags": "i"}
+  ]
  }
 ]

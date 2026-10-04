@@ -25,10 +25,14 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 - Upstream conflict: Microsoft's `skills-for-fabric` `common/COMMON-CORE.md` tells agents to retry 429, 503 and
   504 with backoff. Here, on a CAPACITY error (429 or 430 with a capacity message, or "capacity has exceeded
   its limits") STOP and report. Do not retry. A single 503 or 504 on a status poll may retry once with backoff
-  (L-02).
+  (L-02). Learn's DAX `executeQueries` best-practices page also says to retry on 429: same rule, stop.
 - One Fabric job at a time on an F2. Time-box every Fabric agent and report at least every 60 minutes (L-19).
+- Never schedule a copy job, dataflow, pipeline or notebook without the owner's yes. A schedule is load that
+  runs while nobody watches the capacity.
 - Graph compute bills at about 5 times the normal rate. Each graph item holds a cache billed about $0.82 a day.
   At most one graph; delete it once its evidence is saved. Never one graph per test case (L-08).
+- An ontology may add a managed graph item (Learn pages disagree). Count `GraphModel` items before and after
+  any ontology step. Batch ontology schema changes into one save: each save re-ingests the bound data.
 - A graph is not a snapshot: a refresh reads the current tables. A pause drops a graph's loaded data; queries
   return HTTP 500 until a refresh (L-09).
 
@@ -53,7 +57,8 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
 
 ## Security model
 - The SQL endpoint's default (delegated) mode ignores OneLake roles: a Viewer reads every table. User identity
-  mode is a portal-only switch and cancels running queries (L-11).
+  mode is a portal-only switch by an Admin or Member. It cancels running and queued queries on every SQL
+  endpoint in the workspace: the owner picks the time (L-11).
 - Admins, Members and Contributors bypass OneLake security. Test tiers with Viewers only (L-12).
 - A service principal cannot run DAX on a Direct Lake on OneLake model or get Build. Power BI viewer checks need a
   real signed-in test user (L-13).

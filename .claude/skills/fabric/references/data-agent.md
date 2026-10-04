@@ -57,6 +57,13 @@ not as a universal rule.
 Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-server
 
 - Publish the agent first. An agent with no published version has no working MCP endpoint.
+- An agent has a draft version and a published version. Edits, instructions too, change the draft
+  (Learn). Inferred, not stated by Learn: an MCP caller sees an instruction change only after the next
+  publish. Unverified (LT-17). The course said "refresh the agent"; Learn says the agent "applies the
+  instruction automatically", which describes the draft (C-10).
+  Learn: https://learn.microsoft.com/fabric/data-science/how-to-create-data-agent#publish-and-share-a-fabric-data-agent
+- An agent over an ontology: read `references/ontology.md` first. It needs the instruction
+  `Support group by in GQL` for aggregation questions (G-56, Learn).
 - URL: `https://api.fabric.microsoft.com/v1/mcp/workspaces/<workspaceId>/dataagents/<dataAgentId>/agent`.
   The agent's Settings page shows it on the Model Context Protocol tab.
 - The transport is streamable HTTP. Send `initialize`, then `tools/list`, then `tools/call`. A plain REST
@@ -191,8 +198,10 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
 
 ## Permissions and capacity
 
-- The agent needs a paid F2 or higher, or a P1 or higher with Fabric on. Learn does not list a trial.
-  Learn: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent
+- The agent needs a paid F2 or higher, or a P1 or higher with Fabric on. A trial capacity does not
+  support data agents, AI functions or Copilot (G-57, Learn). Do not test an agent in a trial tenant.
+  Learn: https://learn.microsoft.com/en-us/fabric/data-science/concept-data-agent and
+  https://learn.microsoft.com/fabric/fundamentals/fabric-trial
 - The Capacity Metrics app shows agent usage as "AI Query". It is a background operation. The rate is
   100 CU-seconds per 1,000 input tokens and 400 per 1,000 output tokens. Cached input costs 10. The
   generated query bills separately, to the engine that runs it.
