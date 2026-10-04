@@ -317,25 +317,72 @@ PASS, 2026-10-04 12:39 UTC, Dave present. Artifact: `.claude/cache/e2e/2026-10-0
   carries the override itself.
 - No LLM judge (never-line 3). `evaluate_data_agent` is banned (never-line 2).
 
+## Follow-up pass (2026-10-04, branch `chore/fabric-phase4-followups`)
+
+Changes:
+
+- `evals.json` eval 5: the `FabricOpenAI(` check is gone (follow-up 3); the LLM grader owns that line.
+  The unpinned-install check stops at `;`, `&&` and `|`, so a chained pinned install passes (critic low 1).
+- Eval 6: a new check fails an offer to run, schedule or test the management steps as `brain-runner`.
+  A line about querying, MCP, a failure or a refusal is not an offer (follow-up 9).
+- Eval 7: a new must-have check: the code names 429 or 430 in a string literal or a comparison (follow-up 11).
+- Eval 8: the requeue check no longer reads `pending` (critic low 2). A new check fails a list item that
+  recommends a capacity change after a lead-in, for example "Decide whether to scale the capacity to F4",
+  and "you could/should <change> the capacity" (follow-up 10). The prompt now says the script is not on
+  this machine (follow-up 8).
+- `data-agent.md`: never-line 1 says a 429 can arrive raised and a broad `except Exception` keeps the
+  load going. The MCP sample bounds the read with `read_timeout_seconds` (critic low 3: in mcp 1.26.0
+  `timeout=` bounds only connect and write, `streamable_http.py:686-711`) and raises `Throttled` on a
+  capacity error. Measured with local test servers: a 429 and a timeout both arrive wrapped in an
+  `ExceptionGroup` whose `str()` has no "429".
+- `trigger-probe.mjs`: dry-run and result lines show `forbid` for a negative case (critic low 4).
+
+Evidence (artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt`):
+
+- 35 of 35 good and bad sample lines score right on the changed checks.
+- Old vs new checks on all 45 saved r1 and r2 answers: the only r2 with-skill changes are the targets
+  (Fable and Sonnet eval 6 offers, Fable eval 7 with no 429 handling). Opus eval 8 baseline now fails
+  the lead-in check.
+- MCP sample against a local FastMCP server: a normal answer returns; a 20 s tool with `timeout=3` raises
+  `McpError` after 3.3 s; capacity text in a tool result raises `Throttled`. Against a local HTTP 429
+  server it raises `Throttled`.
+- Fable re-run of evals 6-8 (`%LOCALAPPDATA%\Temp\skill-eval\fabric-p4fu-fable`, graded, 0 excluded):
+
+| Eval | With skill | Without skill | Skill fired |
+|---|---|---|---|
+| 6 | 10/11 (det 5/5) | 11/11 | yes |
+| 7 | **9/9** | 1/9 | yes |
+| 8 | 7/10 | 7/10 | no (listed, not called) |
+
+- Eval 8 finished in 154 s in both arms: no timeout. Fable did not call the skill, so eval 8 measures
+  Fable without the reference. Its answer has a capacity stop but also a one-retry path for other
+  errors, which the except-sleep check fails.
+- Eval 6 baseline scored 11/11 in this run (r2: 8/10). One Fable sample per arm is noisy.
+- Gates: `audit-skills` 79 skills, 0 hard failures; `audit-skills.test.mjs` 148/148;
+  `context-budget-guard --repo` 23,216 / 23,516. Conflict scan of `data-agent.md`: 9 hits, all CCv3
+  stop-on-429 or never-line text (main: 4).
+
 ## Follow-ups
 
 1. CLOSED (r2): never-line 2 now says the ban holds for the built-in, quickest or official way
    (`data-agent.md` line 37). The r2 re-run shows 0 `evaluate_data_agent(` calls in all with-skill runs
    (Sonnet, Opus and Fable eval 7: 3/3 deterministic each).
 2. CLOSED (2026-10-04): stage d live smoke passed with one MCP question (see Stage d).
-3. OPEN: the eval 5 `FabricOpenAI(` check fails a good answer that quotes the old code in a code line
-   (34 of 35 sample answers). Make the check skip quoted old code, or let the LLM grader own it.
+3. CLOSED (2026-10-04): the check is removed; the LLM grader owns the `FabricOpenAI` line.
 4. CLOSED (r2): `data-agent.md` pins `mcp==1.26.0` (lines 73 and 80) and names its source. All 3 r2
    with-skill eval 5 answers copy the pin and score 11/11.
-5. OPEN: Codex exits 127. It now also fails at a 10 KB prompt, after the UserPromptSubmit hook, so the
-   cause is not prompt size.
-6. OPEN: the fix log is one entry short of the 29 fixed review findings. Add the missing entry.
-7. OPEN: Phase 3 audit follow-up 7 should link microsoft/skills-for-fabric#102.
-8. OPEN: Fable eval 8 timed out in 3 of 4 runs across r1 and r2, so the capacity-pause fix is untested
-   on Fable. Raise the timeout, or tell the eval that the script is not on disk. Then re-run Fable eval 8.
-9. OPEN: residual service principal offers in eval 6 (Fable: "schedule under brain-runner and accept the
-   expected 401"; Sonnet: a brain-runner test job). Add an eval 6 check for service principal management.
-10. OPEN: the eval 8 second `not_regex` misses "Decide whether to scale the capacity to F4" (Opus eval 8
-    baseline). Widen it to catch a scale verb inside a list item.
-11. OPEN: eval 7 has no stop-on-429 check. Fable eval 7 with skill sends a raised 429 or 430 to a generic
-    `except Exception` and goes on. Add a check, and consider a line in never-line 1 for raised errors.
+5. OPEN (narrowed 2026-10-04): direct `codex exec` runs with the adversary's flags pass: a 9.4 KB prompt
+   at `low` and at `max` effort, in the worktree and in the main checkout, exit 0 with the answer. The
+   failed 2026-10-03 log ends after the UserPromptSubmit hooks with no model turn. The 127 is in the
+   agent's call path or the prompt content, not in Codex or prompt size.
+6. CLOSED (not fixable, 2026-10-04): the fix log was a workflow result in the removed Phase 4 worktree;
+   no copy exists. Of 30 findings, 29 are recorded as fixed; the disposition of 1 is unknown.
+7. CLOSED (2026-10-04): Phase 3 follow-up 7 links microsoft/skills-for-fabric#102.
+8. CLOSED (2026-10-04): with the new prompt, Fable eval 8 finished in 154 s in both arms. New gap: Fable
+   did not call the skill (follow-up 12).
+9. CLOSED (2026-10-04): the eval 6 check fails the r2 Fable and Sonnet offers; the Fable re-run passes it.
+10. CLOSED (2026-10-04): a separate lead-in check catches the Opus baseline line.
+11. CLOSED (2026-10-04): eval 7 checks for 429 handling in code, and never-line 1 names raised errors.
+    The Fable re-run with skill scores 9/9.
+12. OPEN: Fable did not call `fabric` on eval 8 (a capacity error in a Python MCP script). Add a stage b
+    trigger case for that prompt shape and check the hub description covers it.

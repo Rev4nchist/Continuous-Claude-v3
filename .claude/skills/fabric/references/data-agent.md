@@ -30,6 +30,8 @@ not as a universal rule.
    The vendor overlay does not cover this file, so this line carries the override.
    Over MCP the error is text: `McpError: Your organization's Fabric compute capacity has exceeded its limits`.
    Measured: from question 14 on, 27 of 40 answers were lost to it in one pass (proof:150).
+   The error can also arrive raised, as an HTTP status error with 429 or 430. Check the status and the text,
+   then stop. A broad `except Exception` that logs and goes to the next question keeps the load going.
 2. Never run `evaluate_data_agent`. By default it scores with a built-in critic prompt. Learn does not
    name the scorer. Its `critic_prompt` sample is an LLM prompt, and `critic_prompt` only replaces the
    built-in one. Inferred: each question is also an agent query, so a run uses capacity. The evaluate
@@ -75,31 +77,60 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-serv
   Pass 2 ran on it (proof:154). The project has no lock file.
 - Ask one question at a time on an F2. Bound each call with a timeout. Count a lost answer or a tool
   error result as a transport error, not as a wrong answer.
+- In mcp 1.26.0 the `timeout` argument of `streamablehttp_client` bounds only connect and write. The read
+  wait defaults to 300 s. Bound the answer with `read_timeout_seconds` on `call_tool`, as below.
+- Measured on mcp 1.26.0 against local test servers: a 429 and a timeout both arrive wrapped in an
+  `ExceptionGroup`. `str()` of the group does not contain "429". Unwrap it before you check the status.
+  The sample raises `Throttled` for a capacity error. Catch it and stop all load.
 
 ```python
 # python -m pip install mcp==1.26.0. Never print the token.
 import shutil, subprocess
+from datetime import timedelta
+import httpx
 from mcp import ClientSession
-from mcp.client.streamable_http import streamablehttp_client
+from mcp.client.streamable_http import streamable_http_client
+
+class Throttled(RuntimeError):
+    """HTTP 429 or 430, or the capacity text: stop all load. Never retry (never-line 1)."""
 
 def fabric_token():
     cmd = [shutil.which("az") or "az", "account", "get-access-token", "--resource",
            "https://api.fabric.microsoft.com", "--query", "accessToken", "-o", "tsv"]
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
 
+def unwrap(err):
+    # The transport raises an ExceptionGroup. Check the error inside it.
+    while isinstance(err, BaseExceptionGroup) and len(err.exceptions) == 1:
+        err = err.exceptions[0]
+    status = getattr(getattr(err, "response", None), "status_code", None)
+    if status in (429, 430) or "exceeded its limits" in str(err):
+        raise Throttled(f"capacity error (HTTP {status}): stop all load") from err
+    return err
+
 async def ask(url, question, timeout=120):
     headers = {"Authorization": "Bearer " + fabric_token()}
-    async with streamablehttp_client(url, headers=headers, timeout=timeout) as (read, write, _):
-        async with ClientSession(read, write) as session:
-            await session.initialize()
-            tool = (await session.list_tools()).tools[0]
-            arg = next(iter(tool.inputSchema["properties"]))
-            result = await session.call_tool(tool.name, {arg: question})
-            text = "\n".join(b.text for b in result.content if b.type == "text")
-            if result.isError:
-                raise RuntimeError("agent tool error: " + text)
-            return text
+    http = httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(30, read=timeout))
+    try:
+        async with http, streamable_http_client(url, http_client=http) as (read, write, _):
+            async with ClientSession(read, write) as session:
+                await session.initialize()
+                tool = (await session.list_tools()).tools[0]
+                arg = next(iter(tool.inputSchema["properties"]))
+                result = await session.call_tool(tool.name, {arg: question},
+                                                 read_timeout_seconds=timedelta(seconds=timeout))
+    except Exception as e:
+        # A timeout is an McpError: count it as a transport error, not a wrong answer.
+        raise unwrap(e) from e
+    text = "\n".join(b.text for b in result.content if b.type == "text")
+    if result.isError:
+        unwrap(RuntimeError(text))
+        raise RuntimeError("agent tool error: " + text)
+    return text
 ```
+
+The caller catches `Throttled` first and ends the pass. The questions it did not reach are not run.
+Any other exception is a transport error for that question.
 
 ## Old Assistants code: the Responses client
 

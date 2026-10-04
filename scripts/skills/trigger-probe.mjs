@@ -106,6 +106,9 @@ export function scoreCase(c, fired) {
   return { hit: fired.some((s) => c.expect.includes(s)), falseFires: fired.filter((s) => !c.expect.includes(s)) };
 }
 
+// What a case asks for, for the dry-run and result lines: a negative case shows its forbid list.
+const wanted = (c) => (Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : `expect ${(c.expect || []).join('|')}`);
+
 function runCase(prompt, model, cwd = repo) {
   const { cmd, args } = buildCommand(model);
   const env = { ...process.env };
@@ -133,7 +136,7 @@ function main(argv) {
     const { cmd, args } = buildCommand(MODEL);
     console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin; cwd ${CWD})`);
     console.log(`argv: ${JSON.stringify(args)}`);
-    for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # expect ${c.expect.join('|')}`);
+    for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # ${wanted(c)}`);
     console.log(`dry-run: ${cases.length} cases, 0 turns spent`);
     return 0;
   }
@@ -143,7 +146,7 @@ function main(argv) {
     const s = scoreCase(c, r.fired);
     const hit = !r.error && s.hit;
     const falseFires = r.error ? [] : s.falseFires;
-    return { prompt: c.prompt, expect: c.expect, fired: r.fired, hit, falseFires, hooksRan: r.hooksRan, status: r.status, error: r.error, stderr: r.stderr };
+    return { prompt: c.prompt, expect: c.expect, forbid: c.forbid, want: wanted(c), fired: r.fired, hit, falseFires, hooksRan: r.hooksRan, status: r.status, error: r.error, stderr: r.stderr };
   });
   const ok = results.filter((r) => !r.error);
   const hookCases = results.filter((r) => r.hooksRan > 0).length;
@@ -160,7 +163,7 @@ function main(argv) {
   console.log(JSON.stringify(summary, null, 1));
   for (const r of results) {
     const tag = r.error ? `ERR (${r.error})` : (r.hit ? 'HIT ' : 'miss');
-    console.log(`${tag} fired[${r.fired.join(',') || '-'}] <= ${r.prompt}  (expect ${r.expect.join('|')})`);
+    console.log(`${tag} fired[${r.fired.join(',') || '-'}] <= ${r.prompt}  (${r.want})`);
   }
   if (OUT) fs.writeFileSync(OUT, JSON.stringify({ summary, results }, null, 1));
   return errors ? 1 : 0;
