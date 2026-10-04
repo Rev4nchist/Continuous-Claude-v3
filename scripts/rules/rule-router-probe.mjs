@@ -97,6 +97,19 @@ const CASES = [
   ['single-quoted $(...) is literal text: nothing', bash('s34', "echo '$(node scripts/kie.mjs still)'"), 'none', [], []],
   ['a trigger in the second segment fires (log checked below)', ps('s35', "$R='C:\\r'; pwsh -File scripts/github/land-pr.ps1 -Pr 1"), 'inject', ['git-merge'], []],
   ['psql with a credential in its URL injects (log checked below)', bash('s37-full-session-id', 'psql postgresql://claude:PWPROBE@localhost:5432/db -c "select 1"'), 'inject', ['cross-terminal-db'], []],
+  // Re-arm (2026-10-03): /compact drops the rule texts from context, so SessionStart with source
+  // compact or clear must let the main agent's rules fire again. Subagents and other sessions keep theirs.
+  ['re-arm: codex blocks in session r1', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
+  ['re-arm: a subagent of r1 gets its own copy', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'deny', ['codex'], []],
+  ['re-arm: codex blocks in session r2', bash('r2', 'codex exec -'), 'deny', ['codex'], []],
+  ['re-arm: SessionStart startup emits nothing', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'startup' }, 'none', [], []],
+  ['...and does not re-arm', bash('r1', 'codex exec -'), 'none', [], []],
+  ['re-arm: SessionStart compact emits nothing', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'compact' }, 'none', [], []],
+  ['...then codex blocks again after /compact', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
+  ['...but the subagent of r1 keeps its markers', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'none', [], []],
+  ['...and session r2 keeps its markers', bash('r2', 'codex exec -'), 'none', [], []],
+  ['re-arm: SessionStart clear re-arms too', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'clear' }, 'none', [], []],
+  ['...then codex blocks again after /clear', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
   ['free kie.ai probe does not block', bash('s21', 'node scripts/kie.mjs probe'), 'none', [], []],
   ['a claude-in-chrome tool blocks (deprecated)', { session_id: 's22', tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, 'deny', ['browser-deprecated'], ['browser']],
   ['Playwright MCP injects the browser rule', { session_id: 's23', tool_name: 'mcp__playwright__browser_navigate', tool_input: {} }, 'inject', ['browser'], []],
@@ -171,6 +184,8 @@ results.push({ name: 'fire log names the segment and script that fired', ok: s35
 // A credential in the second word (a connection URL) is replaced, and the identity matches the claim key.
 const s37 = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 's37-full-session-id');
 results.push({ name: 'a URL credential never reaches the log', ok: s37?.what === 'psql <arg>' && !logText.includes('PWPROBE'), expected: 'psql <arg>', got: String(s37?.what), ids: '' });
+const rearmRow = logText.split('\n').filter(Boolean).map((l) => JSON.parse(l)).find((e) => e.session === 'r1' && e.kind === 'rearm' && e.source === 'compact');
+results.push({ name: 'a re-arm is logged with its source and marker count', ok: rearmRow?.removed === 1 && rearmRow?.what === 'SessionStart compact', expected: 'removed 1, SessionStart compact', got: rearmRow ? `removed ${rearmRow.removed}, ${rearmRow.what}` : 'missing', ids: '' });
 results.push({ name: 'the log keeps the full session id and the agent', ok: s37?.agent === 'main', expected: 'full id, agent main', got: s37 ? `${s37.session} / ${s37.agent}` : 'missing', ids: '' });
 
 // A session that sees a rule fire on the wrong call must be told how to record it.

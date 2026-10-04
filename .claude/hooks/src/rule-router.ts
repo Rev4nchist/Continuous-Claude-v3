@@ -14,11 +14,14 @@
  *     context injected at PreToolUse arrives after the command was already chosen.
  *   - mode 'inject': add the rule text as additionalContext and let the call run.
  *
+ * Also registered on SessionStart (matcher compact|clear): it removes the main agent's markers so
+ * every rule fires again once the summary has dropped its text (logged as kind 'rearm').
+ *
  * Every fire is appended to ~/.claude/logs/rule-router.jsonl, so false fires can be audited.
  * Fails open: any error emits "continue" and the call runs.
  */
 
-import { readFileSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
+import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from 'fs';
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
@@ -42,7 +45,12 @@ export interface HookInput {
   agent_id?: string;
   tool_name?: string;
   tool_input?: Record<string, unknown>;
+  hook_event_name?: string;
+  source?: string;
 }
+
+/** SessionStart sources after which the main context no longer holds the rule texts it was shown. */
+const REARM_SOURCES = new Set(['compact', 'clear']);
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const AGENT_TOOLS = new Set(['Task', 'Agent']);
@@ -173,7 +181,7 @@ function ruleText(entry: RuleEntry, dir: string): string {
     .join('\n\n');
 }
 
-export interface Decision { kind: 'none' | 'deny' | 'inject'; ids: string[]; text: string }
+export interface Decision { kind: 'none' | 'deny' | 'inject' | 'rearm'; ids: string[]; text: string }
 
 /**
  * The session that sees a rule fire is the best judge of whether it applies. When it does not,
@@ -227,23 +235,48 @@ export function triggerWords(input: HookInput, fired: RuleEntry[]): string {
   return script && !words.includes(script) ? `${words} ${script}` : words;
 }
 
-function logFire(input: HookInput, d: Decision, fired: RuleEntry[]): void {
+function logFire(input: HookInput, d: Decision, fired: RuleEntry[], extra: Record<string, unknown> = {}): void {
   try {
     const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), '.claude', 'logs', 'rule-router.jsonl');
     mkdirSync(dirname(path), { recursive: true });
-    const what = triggerWords(input, fired);
+    const what = d.kind === 'rearm' ? `SessionStart ${input.source}` : triggerWords(input, fired);
     appendFileSync(path, JSON.stringify({
       // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
       ts: new Date().toISOString(), session: input.session_id || 'no-session',
       agent: input.agent_id || process.env.CLAUDE_AGENT_ID || 'main',
-      tool: input.tool_name, rules: d.ids, kind: d.kind, what,
+      tool: input.tool_name, rules: d.ids, kind: d.kind, what, ...extra,
     }) + '\n');
   } catch { /* logging never blocks a tool call */ }
+}
+
+/**
+ * After /compact or /clear the summary no longer holds the rule texts, but the markers still say
+ * "shown", so the rules would never fire again this session. Remove the MAIN agent's markers only:
+ * a subagent's context is not compacted with the main one. Returns how many markers were removed.
+ */
+export function rearm(input: HookInput): number {
+  const dir = stateDir({ session_id: input.session_id });
+  let ids: string[];
+  try { ids = readdirSync(dir); } catch { return 0; }
+  let removed = 0;
+  for (const id of ids) {
+    try { unlinkSync(join(dir, id)); removed++; } catch { /* a racing re-claim keeps its marker */ }
+  }
+  return removed;
+}
+
+function onSessionStart(input: HookInput): void {
+  if (REARM_SOURCES.has(input.source || '')) {
+    const removed = rearm(input);
+    logFire(input, { kind: 'rearm', ids: [], text: '' }, [], { source: input.source, removed });
+  }
+  console.log('{}');
 }
 
 export function run(raw: string): void {
   let input: HookInput;
   try { input = JSON.parse(raw); } catch { outputContinue(); return; }
+  if (input.hook_event_name === 'SessionStart') { onSessionStart(input); return; }
   const dir = rulesDir();
   const manifest = JSON.parse(readFileSync(join(dir, 'manifest.json'), 'utf8')) as Manifest;
   const matched = matchRules(input, manifest);
