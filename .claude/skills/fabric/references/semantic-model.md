@@ -67,6 +67,9 @@ Each line names its source: "Learn", "measured" (a live test on one tenant, with
 
 ## Known gaps
 
-- LT-05 (read the brain model definition and its Direct Lake mode) is read-only and planned. LT-06 (one
-  DAX query as the L-13 test user) needs the test user. LT-15 (add a measure by updateDefinition) is a
-  write: it needs the owner's yes.
+- Measured 2026-10-04 (LT-05, intake stage d): `getDefinition` on `brain_access_model` returned HTTP 202,
+  then the parts after a capped poll of the `Location` URL and a GET of `.../result`. The parts were
+  TMDL (`definition/expressions.tmdl`, `model.tmdl`, `database.tmdl`, table files, `definition.pbism`,
+  `.platform`). The shared expression held `AzureStorage.DataLake`: Direct Lake on OneLake.
+- Not measured yet: LT-06 (one DAX query as the L-13 test user) needs the test user. LT-15 (add a measure
+  by updateDefinition) is a write: it needs the owner's yes.

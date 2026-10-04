@@ -6,7 +6,8 @@ authors the old experience, which retires on 2027-01-31. CCv3 does not vendor it
 `entityIdParts` JSON tree.
 
 Each line names its source: "Learn", "measured" (a live test on one tenant) or "unverified" (the LT-NN id
-names the planned test). Nothing here is measured yet. Ontology is a preview feature (G-46, Learn).
+names the planned test). The graph calls and the item counts are measured; the rest is Learn or
+unverified. Ontology is a preview feature (G-46, Learn).
 
 ## Contents
 
@@ -115,6 +116,8 @@ Run these read-only checks before any authoring step. Stop and report if one fai
 
 ## Known gaps
 
-- Nothing here is measured. Planned read-only tests: LT-07 (item counts), LT-08 (an existing ontology
-  definition). Write tests LT-16 and LT-17 each need the owner's yes.
+- Measured 2026-10-04 (LT-07, intake stage d): the playground workspace held GraphModel 0, Ontology 0,
+  DataAgent 1. This is the "before" count for any ontology step there. C-13 stays open until LT-16.
+- Not measured yet: LT-08 (an existing ontology definition: none exists). Write tests LT-16 and LT-17
+  each need the owner's yes.
 - Whether the new experience can generate an ontology from a model by REST is not documented.
