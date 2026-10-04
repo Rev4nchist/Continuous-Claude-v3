@@ -17,12 +17,12 @@ I am Dave. You are my agent. These are defaults, not hard rules. My prompt overr
   corrections were the wrong branch or directory.
 - **Give full absolute paths.** Relative paths are ambiguous across repos, worktrees and `~/.claude`.
 - **Commit only your own work.** Other sessions share the tree. Stage the files you touched.
-- **Shared resources** (a file, row or branch another session may hold): run `ListAgents`, then
-  claim a lane where a lane board exists. No `ListAgents` tool: use the lane board; subagents ask
-  the parent. One writer per resource; agree the split through `SendMessage` and say what you will
-  not touch. Adding your own new Handoffs row is not a shared write; editing an existing row is.
+- **Shared resources** (a branch, a repo another session has open, a Handoffs row you did not
+  create): run `ListAgents`, then claim a lane where a lane board exists. No `ListAgents` tool: use
+  the lane board; subagents ask the parent. One writer per resource; agree the split through
+  `SendMessage` and say what you will not touch.
 - **Cross-session messages are plain text** with names, SHAs and paths. A message held for approval
-  or unanswered is not a reply: do other work, not the shared resource. Still none after that: ask me.
+  or unanswered is not a reply: do other work, not the shared resource. No reply when that work is done: ask me.
 - **Two or more open decisions: use AskUserQuestion**, one recommended option each.
 - **Test web UI changes yourself** with `@playwright/mcp` at desktop and phone width before asking me
   to look. Tell me only what a headless run cannot cover.
@@ -103,7 +103,8 @@ Complex (cross-module, migration, architecture): plan mode, tasks, trade-offs wr
 
 **Preflight before non-trivial work**: git branch and uncommitted changes (not `main` for feature
 work); Docker up if needed (`cd ~/.claude/docker && docker compose up -d`); dependencies
-installed; recall memory (`/recall <topic>`; RRF scores of 0.01-0.03 are good matches).
+installed; recall memory (`/recall <topic>`, or `recall_learnings.py --k 3 --text-only`; RRF scores
+of 0.01-0.03 are good matches).
 
 **Plan mode**: objectives, constraints, current state. Read the code before proposing. 1-3 options
 with trade-offs, then "Unresolved Questions". If the work goes sideways, stop and re-plan.
@@ -154,9 +155,10 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
   principal-reviewer). Main context coordinates; agents do the reading.
 - **Models**: predefined agents carry an explicit tier: `opus` for judgment (planning, review,
   orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
-  **Never haiku.** Sonnet effort is always `high`.
-- Parallel agents that commit, the same edit in N files, `/build` `/fix` `/explore` `/maestro`:
-  `proactive-delegation.md` (loads at the first Agent spawn).
+  **Never haiku.** Sonnet effort is always `high`. Use `scout`, never `Explore`.
+- **Parallel agents that commit to one repo run one after another** (they race on
+  `.git/index.lock`), unless each has its own worktree. Name each agent's files first. N-file edits,
+  `/build` `/fix` `/explore` `/maestro`: `proactive-delegation.md` (loads at the first Agent spawn).
 
 ## Skills to load first [MANDATORY]
 
@@ -189,12 +191,12 @@ Prove the friction is gone before you claim the win.
 
 - `python`, never `python3`. `bash` on PATH is WSL, not Git Bash. Git Bash paths need the drive
   letter (`/c/Users/...`).
-- Never `taskkill /T`. Commit and PR steps: `pr-and-commit-style.md` (loads at the call).
+- Commit and push through `scripts/git-safe.ps1` (detail: `pr-and-commit-style.md`). Never `taskkill /T`.
 - When the Bash tool hangs on git or network, use the PowerShell tool with `git -C <repo>`.
 - Never edit `~/.claude.json` or `settings.json` with the Edit tool: use a Node read-modify-write.
 - Scripted exact-string edits: `node scripts/tools/safe-replace.mjs` (the tree mixes CRLF and LF).
   Write regex text with the Edit tool, not a Bash heredoc (heredocs have dropped backslashes).
-- MCP configs run `npx` through `cmd /c`.
+- MCP configs run `npx` through `cmd /c`. `gh pr merge`/`create` hang: use `gh api` (REST).
 - PowerShell double-quoted strings run `$(...)`: use single quotes for literal text.
 - Docker: `C:\Program Files\Docker\Docker\resources\bin\docker.exe`.
 - Detail and history (MSYS census, junctions, GitHub auth): `~/.claude/docs/windows/platform-notes.md`.

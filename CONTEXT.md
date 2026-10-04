@@ -14,7 +14,8 @@
   **Forward sync** copies repo to active (`scripts/sync-to-active.sh`, on commit to `main` in the primary
   checkout only). **Reverse sync** is manual only. **Drift**: repo and active differ.
   **Sync cursor**: `~/.claude/state/sync-cursor`, the last `main` commit synced. **Clobber-guard quarantine**:
-  `.sync-quarantine/<ts>/`, where the next sync saves a direct `~/.claude` edit before it overwrites it.
+  `.sync-quarantine/<ts>/`, where the next sync saves a direct `~/.claude` edit (one that differs from the repo
+  beyond line endings) before it overwrites it.
 - **Rule**: a markdown file in `.claude/rules-src/` (repo) / `~/.claude/rules/` (active). Always loaded unless it has `paths:`.
   **On-demand rule**: one in `.claude/rules-ondemand/`, loaded by the **rule-router** hook.
 - **Skill**: `SKILL.md` under `.claude/skills/<name>/`. Loaded on trigger. Its **description** is the
