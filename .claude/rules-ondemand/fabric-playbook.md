@@ -42,6 +42,14 @@ history. The project's CLAUDE.md names it. A project without a log: keep the rul
   before that PUT in an interactive session and denies it in an unattended run (CI, a subagent, bypass mode).
 - Data agent: the Assistants endpoint retired 2026-08-26; use the agent's MCP endpoint. Require a references
   line in every answer and score by references in code, never by an LLM judge (L-14).
+- Data agent SDK: pin `fabric-data-agent-sdk==0.1.32a0`. Learn shows two sets of method names: list them with `dir()`
+  first. Never run `evaluate_data_agent` (L-14). It scores with a built-in critic prompt. Its `critic_prompt` sample
+  is an LLM prompt. Each question also queries the agent, so a run uses capacity.
+- Measured on 0.1.32a0 and one schema-enabled lakehouse: `ds.select("Schemas", "dbo", "Tables", t)` selected the
+  table. `ds.select("dbo", t)` returned no error and selected nothing. Source: FourthCompanyBrain
+  `.claudedocs/2026-10-01-phase5-proof.md` line 138. Read it back with `get_configuration()`.
+- Measured: service principal `brain-runner` got HTTP 401 managing an agent on the FourthCompanyBrain tenant (L-25).
+  Manage an agent as a signed-in user.
 
 ## Security model
 - The SQL endpoint's default (delegated) mode ignores OneLake roles: a Viewer reads every table. User identity
