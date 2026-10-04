@@ -1,8 +1,5 @@
 # CONTEXT.md: the words we use
 
-Read this before work in this repo. Use these exact terms in code, commits, and replies. Do not invent
-a synonym for a term defined here.
-
 ## People and roles
 
 - **Dave**: the user, sole operator of this machine and these repos. "I"/"me" in CLAUDE.md.
@@ -17,16 +14,15 @@ a synonym for a term defined here.
   **Forward sync** copies repo to active (`scripts/sync-to-active.sh`, on commit to `main` in the primary
   checkout only). **Reverse sync** is manual only. **Drift**: repo and active differ.
   **Sync cursor**: `~/.claude/state/sync-cursor`, the last `main` commit synced. **Clobber-guard quarantine**:
-  the next sync saves a file edited in `~/.claude` (not identical to the repo) to `.sync-quarantine/<ts>/`, then overwrites it.
+  `.sync-quarantine/<ts>/`, where the next sync saves a direct `~/.claude` edit before it overwrites it.
 - **Rule**: a markdown file in `.claude/rules-src/` (repo) / `~/.claude/rules/` (active). Always loaded unless it has `paths:`.
-  **On-demand rule**: one in `.claude/rules-ondemand/`; the **rule-router** hook loads it at the first matching tool call.
+  **On-demand rule**: one in `.claude/rules-ondemand/`, loaded by the **rule-router** hook.
 - **Skill**: `SKILL.md` under `.claude/skills/<name>/`. Loaded on trigger. Its **description** is the
   trigger, not a summary. **User-invoked** skill: `disable-model-invocation: true`; only a slash command loads it.
 - **Hook**: a TypeScript program in `.claude/hooks/src/`, built to `dist/*.mjs`, registered in
   `settings.json`. **Matcher**: the `settings.json` tool filter. **Runtime gate**: the hook's own
   `tool_name` check. A hook has both; they must agree.
 - **Agent**: a subagent definition in `.claude/agents/<name>.md` (+ `.json` mirror). Spawned with the Agent tool.
-- **Two-tier model policy**: predefined agents are `opus` (judgment) or `sonnet` (execution). Never haiku.
 - **Gate**: a check that must pass before "done" (a test, a probe script, a count). **Ratchet**: a gate
   that records a baseline and fails if the number gets worse. **Vacuous gate**: passes on zero
   registrations; read the count before the verdict.
@@ -36,11 +32,11 @@ a synonym for a term defined here.
 
 - **Lane**: a unit of concurrent work claimed by one session (`scripts/coordination/lane.mjs`). The
   **lane board** lists lanes and holders. **Claim / release** a lane; **note** progress on it.
-- **Handoff**: a YAML document in `thoughts/shared/handoffs/` that lets a new session resume work.
+- **Handoff**: a row in the Notion 📬 Handoffs database (YAML copy in `thoughts/shared/handoffs/`) that lets a new session resume work.
   Outcome is one of `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS`, `FAILED`.
 - **Bridge / Notion Bridge**: the HQ page and queues Eve and Code exchange work through.
 - **Memory**: PostgreSQL + pgvector learnings; **recall** reads, **store** writes. **MEMORY MATCH**: the
-  hook found a relevant learning; run `/recall` for the full entry.
+  hook found a relevant learning.
 
 ## Work products
 
@@ -49,11 +45,9 @@ a synonym for a term defined here.
 - **Digest**: a cited research brief in `docs/research/youtube/_digests/`. **Corpus**: the transcripts it cites.
 - **Proposal**: a dated file in `docs/self-improvement/proposals/` with an ADOPT / WATCH / SKIP verdict.
 - **Audit**: a repo-local file in `docs/self-improvement/audits/` built from session history. Never published.
-- **Next steps block**: the numbered list that ends every reply to Dave.
 
 ## Git
 
 - **fork** = `Rev4nchist/...`, always push here. **origin** = `parcadei/...`, never push.
 - **git-safe**: `pwsh -File scripts/git-safe.ps1` wrapper that retries the **MSYS fork storm** crash.
-- **Surface**: one of the two copies of a thing (repo/active, src/dist, matcher/runtime). "Hit every
-  surface" = walk `.claude/rules-src/every-surface-checklist.md` before "done".
+- **Surface**: one of the two copies of a thing (repo/active, src/dist, matcher/runtime).

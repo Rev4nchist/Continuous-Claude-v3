@@ -19,8 +19,10 @@
  * Fails (exit 1) when the total passes maxChars in scripts/rules/context-budget.json.
  * Exit 0 with a note on any internal error (fail-open). Add --json for machine output.
  * Lowering maxChars after a cut is how the ratchet tightens; raising it is a reviewed edit.
+ * After a cut, run `--repo --tighten`: it sets maxChars to the total plus reserveChars (default
+ * 300), so a later small addition fits without trims and a large one is a deliberate decision.
  */
-import { readFileSync, readdirSync, existsSync, statSync, realpathSync } from 'node:fs';
+import { readFileSync, readdirSync, existsSync, statSync, realpathSync, writeFileSync } from 'node:fs';
 import { join, dirname, resolve } from 'node:path';
 import { posix } from 'node:path';
 import { homedir } from 'node:os';
@@ -183,9 +185,29 @@ function main() {
       }
       if (over) console.log('  Move text behind a trigger (a hook, `paths:` frontmatter, or a skill), or raise maxChars in scripts/rules/context-budget.json deliberately.');
     }
+    if (args.includes('--tighten')) tighten(budget, total);
     process.exit(over ? 1 : 0);
   } catch (err) {
     console.log(`context-budget-guard: skipped (${err.message.split('\n')[0]})`);
     process.exit(0);
   }
+}
+
+/**
+ * --repo --tighten: after a cut, lower maxChars to total + reserveChars. Never raises it. Only the
+ * repo set is the budgeted number; the live set is a subset, so tightening from it would be wrong.
+ */
+function tighten(budget, total) {
+  if (!REPO || STAGED) {
+    console.log('  --tighten needs --repo without --staged; maxChars unchanged.');
+    return;
+  }
+  const target = total + (budget.reserveChars ?? 300);
+  if (target >= budget.maxChars) {
+    console.log(`  tighten: maxChars stays ${budget.maxChars} (total + reserve = ${target}).`);
+    return;
+  }
+  const file = join(here, 'context-budget.json');
+  writeFileSync(file, JSON.stringify({ ...budget, maxChars: target }, null, 2) + '\n');
+  console.log(`  tighten: maxChars ${budget.maxChars} -> ${target} (reserve ${budget.reserveChars ?? 300}).`);
 }

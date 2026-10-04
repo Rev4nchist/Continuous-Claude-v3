@@ -112,7 +112,8 @@ the rest when it applies.
 - The router logs every fire to `~/.claude/logs/rule-router.jsonl`. It fails open: on an internal
   error, the call runs.
 - `scripts/rules/context-budget-guard.mjs` counts the same files Claude Code loads. It fails when
-  the total passes the budget in `scripts/rules/context-budget.json` (26,000 chars).
+  the total passes `maxChars` in `scripts/rules/context-budget.json`. After a cut, `--repo --tighten`
+  lowers `maxChars` to the total plus a 300-char reserve.
 
 Measured result: always-loaded text fell from 153,689 to 18,275 characters. The work landed in
 PRs #57 to #61 on 2026-09-24. Commit `ccfc2ef` replaced the old core files and 10 always-loaded
@@ -391,7 +392,7 @@ Static gates:
 
 | Gate | Command | Output on 2026-09-24 |
 |---|---|---|
-| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 25774 chars (budget 26000, Claude Code limit 150000) [repo]` |
+| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23461 chars (budget 23761, Claude Code limit 150000) [repo]` |
 | Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 80 live entries / 71 names ... 0 discarded-output, 8/8 timers safe` |
 | Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 37 \| opus: 12 sonnet: 25 \| OK` |
 | Skills | `node scripts/skills/audit-skills.mjs` | Gate and ratchet for every SKILL.md (rules G01-G32) |

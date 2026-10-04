@@ -13,6 +13,7 @@ When user message arrives, detect:
 | Implementation | "add", "implement", "create" | Route to /build workflow |
 | Bug/issue | "fix", "broken", "failing", "debug" | Route to /fix workflow |
 | Exploration | "understand", "explore", "how does X work" | Route to /explore |
+| Complex multi-step work | several phases, unclear scope | Route to /maestro (its interview phase is enforced by `maestro-enforcer`) |
 | Mechanical multi-file fix | Same edit pattern across N files | Spawn N parallel sparks (1 file each), NOT one spark for N files |
 
 ## Workflow Suggestions
@@ -136,6 +137,8 @@ When multiple agents (kraken/spark) both **edit and commit to the same repo**, r
 - work on **disjoint files AND don't commit** (orchestrator commits after), or
 - use **`isolation: "worktree"`** (each gets its own working tree + index), or
 - operate on **separate repos** (e.g. one on `continuous-claude`, one on the decks repo — safe to run concurrently).
+
+State file ownership up front: name which files each agent owns before any agent starts.
 
 Batch related work into one agent when files overlap (e.g. the `#5 NTN_EXE` de-dup touched a file the Phase-3 agent also edited → gate the second wave behind the first).
 
