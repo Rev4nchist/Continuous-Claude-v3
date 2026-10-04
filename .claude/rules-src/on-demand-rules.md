@@ -8,23 +8,23 @@ An **inject** rule arrives as context and the call runs.
 **Read the file yourself before you PLAN work in its area** (before you propose a Codex run, write a
 commit message, design a page, or plan a CMA job). The hook fires at the tool call, too late for a plan.
 
-| Rule file | Loads on | Mode |
+| Rule file | Area (exact triggers: `manifest.json`) | Mode |
 |---|---|---|
-| `codex-worker-safety.md`, `codex-adversarial.md` | `codex` command, `codex-*` agent, `codex` skill | block |
-| `grok-worker-safety.md` | `grok` command, `grok-*` agent, `grok` skill | block |
-| `cma-safety.md` | `ant` command, CMA API URL, `cma-operator` agent, `cma` / `launch-your-agent` / `wrap-up` skill | block |
-| `pr-and-commit-style.md` | `git commit`, a `commit` through `git-safe.ps1`, `gh pr create`, `POST .../pulls` | block |
-| `design-work.md` | a design skill (frontend-design, scroll-craft, landing-page-builder, impeccable, dataviz, artifact-design, the deck skills, ...); `kie.mjs still/shot` blocks (paid) | inject / block |
-| `browser-automation.md` | Playwright MCP, `playwright`, `cdp.mjs`, `browser-dev-cycle` / `qa-test`; any `claude-in-chrome` tool blocks (deprecated) | inject / block |
-| `opencli-first.md` | WebFetch, WebSearch, `opencli` | inject |
-| `harness-update.md` | `/harness-update`, a global Codex install, `grok update` | inject |
-| `git-merge-workflow.md` | `git merge`, `gh pr merge`, `gh api .../merge`, `land-pr.ps1` | inject |
-| `pr-coderabbit-loop.md` | PR create, `coderabbit-status.mjs`, `land-pr.ps1` | inject |
-| `cross-terminal-db.md` | `psql`, `pg_dump`, `docker exec ... postgres` | inject |
-| `headless-claude-mcp.md` | `claude -p` / `--print` | inject |
-| `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP tools, or its skill | inject |
-| `fabric-playbook.md` | skill `fabric*`, Fabric/OneLake calls, `fab`, `az fabric`, `sqlcmd` to a Fabric host | inject |
-| `proactive-delegation.md` | the first Agent spawn (spark scope, post-spark checks, kraken waves) | inject |
+| `codex-worker-safety.md`, `codex-adversarial.md` | Codex runs and reviews | block |
+| `grok-worker-safety.md` | Grok runs | block |
+| `cma-safety.md` | Claude Managed Agents (CMA, `ant`) | block |
+| `pr-and-commit-style.md` | commits and PR creation | block |
+| `design-work.md` | design, deck and chart skills; paid kie.ai images block | inject / block |
+| `browser-automation.md` | browser automation; claude-in-chrome blocks | inject / block |
+| `opencli-first.md` | web fetch and search | inject |
+| `harness-update.md` | Codex/Grok CLI or model updates | inject |
+| `git-merge-workflow.md` | merges and branch cleanup | inject |
+| `pr-coderabbit-loop.md` | opening PRs; CodeRabbit | inject |
+| `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
+| `headless-claude-mcp.md` | headless `claude -p` | inject |
+| `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP or its skill | inject |
+| `fabric-playbook.md` | Microsoft Fabric, OneLake, Power BI | inject |
+| `proactive-delegation.md` | delegating to agents | inject |
 
 Decisions these rules shape before any tool call:
 - Codex and Grok write runs, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
