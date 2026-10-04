@@ -32,6 +32,13 @@ two-copy surfaces. Before you say "done", walk this list and name which rows app
 | Registry | `.claude/project-registry.json` (repo) and `~/.claude/` mirror | Edit repo only; the active mirror is never auto-deleted. |
 | Reverse states | register / unregister, claim / release, start / stop, enable / disable | If you add one direction, test the other in the same change. |
 
+## Rule-router records
+
+Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
+False fires: `~/.claude/logs/rule-router-false-fires.jsonl`.
+Weekly audit (`CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
+`CCv3-RuleRouter-Review` judges unrecorded fires each Monday and posts a review to Dave's Notion Scratchpad.
+
 ## What does NOT sync (do not expect it to)
 
 `hooks/src/*.ts`, `settings.json`, `settings.local.json`, `CLAUDE.md`, `RULES.md`, `.env`,

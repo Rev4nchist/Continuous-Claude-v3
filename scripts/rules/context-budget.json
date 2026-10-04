@@ -1,4 +1,5 @@
 {
   "limitChars": 150000,
-  "maxChars": 26000
+  "maxChars": 24068,
+  "reserveChars": 300
 }

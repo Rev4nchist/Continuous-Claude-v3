@@ -31,26 +31,14 @@ Decisions these rules shape before any tool call:
 - CMA bills Dave's API key, not the subscription. Grok is parked on this machine.
 - Fabric: run the project preflight first; stop all load on the first capacity error; never pause or resize a capacity.
 - Never merge a PR without Dave's explicit yes. Land CCv3 PRs with `scripts/github/land-pr.ps1`.
-- When a PR opens, start the CodeRabbit loop in the same turn. Never request the paid on-demand review.
+- Never request the paid CodeRabbit on-demand review.
 - Headless `claude -p` that needs a claude.ai connector: clear `ANTHROPIC_API_KEY` and pass `--allowedTools`.
-- `claude-in-chrome` is deprecated: use `@playwright/mcp` for browser work.
-
-## Loaded only when harness files are in play (`paths:`)
-
-`every-surface-checklist.md`, `git-sync-workflow.md`, `sync-known-gaps.md` load when you read or edit
-CCv3 files (`.claude/rules-src/`, `rules-ondemand/`, `hooks/`, `skills/`, `agents/`, `templates/`,
-`settings.json`, the sync scripts). Before "done" on harness work, walk the every-surface checklist.
-`agent-model-selection.md` (tier mechanics, the `.json` mirror) loads when agent files are in play.
 
 ## Folded into skills
 
 - New platform access: prefer a native CLI, then OpenCLI, then MCP; browser automation last. Detail: `cli-integration` skill.
 - Structural code questions (who calls X, what breaks): run `tldr`, then Read the 2-4 files it names. Detail: `tldr-code` skill.
-- Memory: recall before work with precedent; RRF scores 0.01-0.03 are good matches. Store only non-trivial lessons. Detail: `memory` skill.
 - Project paths, ports and commands: read `.claude/project-registry.json` (repo copy is canonical). Detail: `project-registry` skill.
-- New machine: `BOOTSTRAP.md`, then `python wizard.py`, then `bash verify-setup.sh`.
 
-Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
-Weekly audit (`CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
 A fired rule not about the call is a false fire: record it at once in `~/.claude/logs/rule-router-false-fires.jsonl`.
-`CCv3-RuleRouter-Review` judges unrecorded fires each Monday and posts a review to Dave's Notion Scratchpad.
+Triggers, logs and the weekly audits: `every-surface-checklist.md` (loads with harness files).
