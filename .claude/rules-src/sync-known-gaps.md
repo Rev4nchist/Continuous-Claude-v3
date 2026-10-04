@@ -29,8 +29,8 @@ What auto-syncs (and what does not) between `continuous-claude/` (repo) and `~/.
 | `plugins/claude-hud/` (`launcher.mjs`, `config.json`) | Yes (2026-10-01) | The status line runs `launcher.mjs`. Only this subdir syncs; the rest of `plugins/` is Claude Code state. `--changed` deletes a file only when the repo deleted it. Edit `config.json` in the repo: a `/claude-hud:configure` edit is quarantined at the next repo change to it | `bash scripts/sync-to-active.sh` |
 | `settings.json` | NO | Intentional — local config | Manual copy (risky) |
 | `settings.local.json` | NO | Intentional — machine-specific | Never sync |
-| `CLAUDE.md` | NO | Intentional — may differ per machine | Manual review |
-| `RULES.md` | NO | Intentional — may differ per machine | Manual review |
+| `CLAUDE.md` | Yes (2026-10-03) | Installed from `.claude/templates/CLAUDE.md.template` through the clobber guard; a deleted template never deletes it | `bash scripts/sync-to-active.sh` |
+| `RULES.md` | Yes (2026-10-03) | Installed from `.claude/templates/RULES.md.template`, same as `CLAUDE.md` | `bash scripts/sync-to-active.sh` |
 | `knowledge-tree.json` | NO | Generated per-project | `knowledge_tree.py --project` |
 | `extraction-state.json` | NO | Runtime state | N/A (auto-managed) |
 

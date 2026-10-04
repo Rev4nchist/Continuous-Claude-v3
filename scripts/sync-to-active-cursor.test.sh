@@ -563,6 +563,35 @@ g rm -q .claude/commands/t15.md; g commit -q -m t15-delete
 sync --changed >/dev/null
 chk "--changed removes a deleted command" "$(not "$ACT/commands/t15.md")"
 
+echo "=== T16: the CLAUDE.md and RULES.md templates install as ~/.claude/CLAUDE.md and RULES.md ==="
+# Before 2026-10-03 both were NEVER_SYNC: every template PR needed a hand copy, and a live-only edit
+# (48fd2d4) drifted unseen. Now the template syncs through the clobber guard.
+rm -rf "$ACT/.sync-quarantine"
+mkdir -p "$REPO/.claude/templates"
+printf 'core v1\n' > "$REPO/.claude/templates/CLAUDE.md.template"
+printf 'rules v1\n' > "$REPO/.claude/templates/RULES.md.template"
+commit t16-add
+sync --changed >/dev/null
+chk "--changed installs the CLAUDE.md template as ~/.claude/CLAUDE.md" "$( [ "$(cat "$ACT/CLAUDE.md" 2>/dev/null)" = "core v1" ] && echo 1 || echo 0)"
+chk "--changed installs the RULES.md template as ~/.claude/RULES.md" "$( [ "$(cat "$ACT/RULES.md" 2>/dev/null)" = "rules v1" ] && echo 1 || echo 0)"
+printf 'live-only edit\n' > "$ACT/CLAUDE.md"                        # the 48fd2d4 shape
+printf 'core v2\n' > "$REPO/.claude/templates/CLAUDE.md.template"; commit t16-v2
+out="$(sync --changed)"
+chk "a live-only edit is quarantined before the template lands" "$(grep -rqx 'live-only edit' "$ACT/.sync-quarantine" 2>/dev/null && echo 1 || echo 0)"
+chk "...and the new template is live" "$( [ "$(cat "$ACT/CLAUDE.md")" = "core v2" ] && echo 1 || echo 0)"
+rm -rf "$ACT/.sync-quarantine"
+rm -f "$ACT/CLAUDE.md"
+sync >/dev/null
+chk "full mode installs the template too" "$( [ "$(cat "$ACT/CLAUDE.md" 2>/dev/null)" = "core v2" ] && echo 1 || echo 0)"
+mkdir -p "$REPO/.claude/skills/t16"
+printf 'skill-local\n' > "$REPO/.claude/skills/t16/CLAUDE.md"; commit t16-skill
+sync --changed >/dev/null; sync >/dev/null
+chk "any other CLAUDE.md stays out of the mirror" "$(not "$ACT/skills/t16/CLAUDE.md")"
+g rm -q .claude/templates/CLAUDE.md.template; g commit -q -m t16-delete
+out="$(sync --changed)"
+chk "deleting the template keeps the live CLAUDE.md" "$( [ "$(cat "$ACT/CLAUDE.md" 2>/dev/null)" = "core v2" ] && echo 1 || echo 0)"
+chk "...and says so" "$(printf '%s' "$out" | grep -q 'CLAUDE.md.template deleted in repo -- active CLAUDE.md kept' && echo 1 || echo 0)"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

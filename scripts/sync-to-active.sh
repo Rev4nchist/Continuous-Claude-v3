@@ -156,6 +156,8 @@ SYNC_SUBDIRS="plugins/claude-hud"
 RULES_SRC_DIR="rules-src"
 RULES_DST_DIR="rules"
 
+# CLAUDE.md / RULES.md here means any copy found while mirroring a dir; the two global ones install
+# from .claude/templates/ through copy_core_templates (2026-10-03).
 NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.jsonl knowledge-tree.json"
 
 # -----------------------------------------------------------------------------
@@ -516,6 +518,18 @@ copy_registry() {
     guarded_copy "$src" "$dst"
 }
 
+# The global CLAUDE.md and RULES.md install from .claude/templates/<name>.template (2026-10-03).
+# They used to be NEVER_SYNC: every template PR needed a hand copy, and a live-only edit (48fd2d4)
+# drifted unseen. guarded_copy quarantines a live edit before the template overwrites it.
+# NEVER_SYNC still keeps every other CLAUDE.md / RULES.md (e.g. under skills/) out of the mirror.
+CORE_TEMPLATES="CLAUDE.md RULES.md"
+copy_core_templates() {
+    local name
+    for name in $CORE_TEMPLATES; do
+        guarded_copy "$REPO_CLAUDE/templates/$name.template" "$ACTIVE_CLAUDE/$name"
+    done
+}
+
 copy_dir() {
     local dir="$1"
     # Optional 2nd arg: dest dir name when it differs from the source name
@@ -691,6 +705,10 @@ if $CHANGED; then
             .claude/project-registry.json)
                 printf '%s\n' "$ACTIVE_CLAUDE/project-registry.json"
                 ;;
+            .claude/templates/CLAUDE.md.template|.claude/templates/RULES.md.template)
+                rest="${p#.claude/templates/}"
+                printf '%s\n' "$ACTIVE_CLAUDE/${rest%.template}"
+                ;;
         esac
         return 0
     }
@@ -721,6 +739,14 @@ if $CHANGED; then
                 echo "  WARNING: project-registry.json deleted in repo -- active mirror kept"
                 continue
             fi
+            # Every session loads ~/.claude/CLAUDE.md: a deleted template never deletes it.
+            case "$path" in
+                .claude/templates/CLAUDE.md.template|.claude/templates/RULES.md.template)
+                    rest="${path#.claude/templates/}"
+                    echo "  WARNING: $rest deleted in repo -- active ${rest%.template} kept"
+                    continue
+                    ;;
+            esac
             # Conservative delete: only within the active subtree we just mapped.
             # (Full mode never deletes; this is a strict, scoped improvement.)
             case "$dst" in
@@ -871,6 +897,9 @@ copy_dir "$RULES_SRC_DIR" "$RULES_DST_DIR"
 
 # Sync the project registry (repo canonical -> active mirror, JSON-validated)
 copy_registry
+
+# Install the global CLAUDE.md and RULES.md from their templates (clobber-guarded)
+copy_core_templates
 
 # Sync top-level .claude/*.md files (canonical entry points / redirect stubs)
 # mkdir -p the target root first -- a fresh-install machine may not have ~/.claude/
