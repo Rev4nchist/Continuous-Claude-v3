@@ -99,6 +99,10 @@ function review(days, reportPath) {
   const items = [...pairs.values()];
   const section = [`\n## False-fire review (${today}, ${items.length} rule and command pairs)\n`];
   if (!items.length) {
+    if (rest.includes('--print-prompt')) { // prompt-only runs never write a report
+      console.log(`No fires to judge in the last ${days} day(s): the judge would not be called.`);
+      return { code: 0, judged: 0, found: [] };
+    }
     section.push('No fires to judge this week.');
     writeReport(reportPath, section);
     console.log('false-fire review: 0 pairs to judge');
