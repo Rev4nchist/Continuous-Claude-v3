@@ -319,34 +319,45 @@ PASS, 2026-10-04 12:39 UTC, Dave present. Artifact: `.claude/cache/e2e/2026-10-0
 
 ## Follow-up pass (2026-10-04, branch `chore/fabric-phase4-followups`)
 
-Changes:
+Line numbers in the sections above cite `data-agent.md` at main `f95ad9e`. This pass moves them.
+
+Changes (after one critic round and one Codex adversary round):
 
 - `evals.json` eval 5: the `FabricOpenAI(` check is gone (follow-up 3); the LLM grader owns that line.
-  The unpinned-install check stops at `;`, `&&` and `|`, so a chained pinned install passes (critic low 1).
+  The unpinned-install check reads each command after `&&`, `;` and `|`. It skips the value of
+  `--index-url` and `-c`, and it reads `py -3.13 -m pip` (critic low 1).
 - Eval 6: a new check fails an offer to run, schedule or test the management steps as `brain-runner`.
-  A line about querying, MCP, a failure or a refusal is not an offer (follow-up 9).
-- Eval 7: a new must-have check: the code names 429 or 430 in a string literal or a comparison (follow-up 11).
-- Eval 8: the requeue check no longer reads `pending` (critic low 2). A new check fails a list item that
-  recommends a capacity change after a lead-in, for example "Decide whether to scale the capacity to F4",
-  and "you could/should <change> the capacity" (follow-up 10). The prompt now says the script is not on
-  this machine (follow-up 8).
+  A negation counts only before the verb. A line that says the run fails, or is refused, or returns a
+  401, is not an offer. Neither is a query-only or MCP-only job (follow-up 9).
+- Eval 7: a new must-have check: the code names 429 or 430 in a string, a comparison or a collection, or
+  uses `TOO_MANY_REQUESTS` (follow-up 11). Eval 7 also gets the eval 8 retry-decorator and except-sleep checks.
+- Eval 8: the requeue check flags a `pending` loop only when its body sleeps, retries or re-queues
+  (critic low 2). A new check fails a recommended capacity change: a list item after a lead-in such as
+  "Decide whether to scale the capacity to F4", or "you/we should", "I recommend", "the owner should".
+  A line with "whether", "if" or "owner's decision" passes (follow-up 10). The prompt now says the
+  script is not on this machine (follow-up 8).
 - `data-agent.md`: never-line 1 says a 429 can arrive raised and a broad `except Exception` keeps the
-  load going. The MCP sample bounds the read with `read_timeout_seconds` (critic low 3: in mcp 1.26.0
-  `timeout=` bounds only connect and write, `streamable_http.py:686-711`) and raises `Throttled` on a
-  capacity error. Measured with local test servers: a 429 and a timeout both arrive wrapped in an
-  `ExceptionGroup` whose `str()` has no "429".
+  load going. The MCP sample (Python 3.11+):
+  - Bounds every request, the handshake too, with `read_timeout_seconds` on `ClientSession` (critic
+    low 3). In mcp 1.26.0, `timeout=` bounds only connect and write (`streamable_http.py:686-711`).
+  - Records each 429 or 430 response with an httpx event hook, because the transport swallows a 429 on
+    the `notifications/initialized` POST (`streamable_http.py:571-574`).
+  - Checks every error in the `ExceptionGroup` and raises `Throttled`.
 - `trigger-probe.mjs`: dry-run and result lines show `forbid` for a negative case (critic low 4).
 
-Evidence (artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt`):
+Evidence. The artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt` holds every item below:
 
-- 35 of 35 good and bad sample lines score right on the changed checks.
-- Old vs new checks on all 45 saved r1 and r2 answers: the only r2 with-skill changes are the targets
-  (Fable and Sonnet eval 6 offers, Fable eval 7 with no 429 handling). Opus eval 8 baseline now fails
-  the lead-in check.
-- MCP sample against a local FastMCP server: a normal answer returns; a 20 s tool with `timeout=3` raises
-  `McpError` after 3.3 s; capacity text in a tool result raises `Throttled`. Against a local HTTP 429
-  server it raises `Throttled`.
-- Fable re-run of evals 6-8 (`%LOCALAPPDATA%\Temp\skill-eval\fabric-p4fu-fable`, graded, 0 excluded):
+- 63 of 63 good and bad sample lines score right on the changed checks. The samples include each
+  review finding.
+- Main checks vs new checks on the 51 saved answers (r1, r2 and the Fable re-run). The only r2
+  with-skill changes are the targets: the Fable and Sonnet eval 6 offers, and Fable eval 7 with no 429
+  handling. The Opus eval 8 baseline now fails the lead-in check.
+- The published sample, run unchanged against local test servers only. No Fabric call was made. A
+  normal answer returns. A 20 s tool with `timeout=3` raises after 3.3 s. Capacity text in a tool
+  result raises `Throttled`. A 429 on `initialize` raises `Throttled`. So does a 430 on the
+  notifications POST.
+- Fable re-run of evals 6-8 with the commit `03a8d9b` checks (graded, 0 excluded). Run folder:
+  `%LOCALAPPDATA%\Temp\skill-eval\fabric-p4fu-fable`.
 
 | Eval | With skill | Without skill | Skill fired |
 |---|---|---|---|
@@ -358,9 +369,17 @@ Evidence (artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt`
   Fable without the reference. Its answer has a capacity stop but also a one-retry path for other
   errors, which the except-sleep check fails.
 - Eval 6 baseline scored 11/11 in this run (r2: 8/10). One Fable sample per arm is noisy.
+- Under the final checks the Fable eval 7 with-skill answer scores 6/6. The eval 8 answers keep their
+  one except-sleep failure.
 - Gates: `audit-skills` 79 skills, 0 hard failures; `audit-skills.test.mjs` 148/148;
-  `context-budget-guard --repo` 23,216 / 23,516. Conflict scan of `data-agent.md`: 9 hits, all CCv3
+  `context-budget-guard --repo` 23,216 / 23,516. Conflict scan of `data-agent.md`: 12 hits, all CCv3
   stop-on-429 or never-line text (main: 4).
+- Reviews: the critic found 7 medium and 6 low issues. Codex (gpt-5.6-luna, xhigh) found 8 high and 1
+  medium. Fixed: all but the three listed here.
+  - Not fixed: a `BaseExceptionGroup` that holds a cancellation. The httpx hook still records any 429,
+    and a cancellation must propagate.
+  - Not fixed: eval 7 accepting the capacity text alone. Handling a raised status is the point of the check.
+  - Not fixed: a 429 printed inside an `except: continue` loop. The LLM grader owns that case.
 
 ## Follow-ups
 
@@ -371,10 +390,12 @@ Evidence (artifact `.claude/cache/e2e/2026-10-04-p4fu-checks-and-mcp-sample.txt`
 3. CLOSED (2026-10-04): the check is removed; the LLM grader owns the `FabricOpenAI` line.
 4. CLOSED (r2): `data-agent.md` pins `mcp==1.26.0` (lines 73 and 80) and names its source. All 3 r2
    with-skill eval 5 answers copy the pin and score 11/11.
-5. OPEN (narrowed 2026-10-04): direct `codex exec` runs with the adversary's flags pass: a 9.4 KB prompt
-   at `low` and at `max` effort, in the worktree and in the main checkout, exit 0 with the answer. The
-   failed 2026-10-03 log ends after the UserPromptSubmit hooks with no model turn. The 127 is in the
-   agent's call path or the prompt content, not in Codex or prompt size.
+5. CAUSE FOUND (2026-10-04), fix OPEN: the 127 is a killed run, not a missing binary. The PR #95 review
+   ran `codex-adversary` at `max` effort on a 14.8 KB prompt. It produced no output in 300 s, the Bash
+   tool timeout killed it, and the agent saw `CODEX_RC=127`. The same prompt at `xhigh` exited 0 with
+   the answer. Direct 9.4 KB runs at `low` and `max` also exit 0. Fix: in
+   `.claude/agents/codex-adversary.md`, use `xhigh` for review prompts over about 10 KB, or raise
+   `CODEX_ADV_TIMEOUT_MS` toward the 600 s tool maximum.
 6. CLOSED (not fixable, 2026-10-04): the fix log was a workflow result in the removed Phase 4 worktree;
    no copy exists. Of 30 findings, 29 are recorded as fixed; the disposition of 1 is unknown.
 7. CLOSED (2026-10-04): Phase 3 follow-up 7 links microsoft/skills-for-fabric#102.

@@ -77,15 +77,16 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-mcp-serv
   Pass 2 ran on it (proof:154). The project has no lock file.
 - Ask one question at a time on an F2. Bound each call with a timeout. Count a lost answer or a tool
   error result as a transport error, not as a wrong answer.
-- In mcp 1.26.0 the `timeout` argument of `streamablehttp_client` bounds only connect and write. The read
-  wait defaults to 300 s. Bound the answer with `read_timeout_seconds` on `call_tool`, as below.
+- mcp 1.26.0 waits up to 300 s for an answer by default. The httpx `read` timeout bounds each wait for
+  data. `read_timeout_seconds` on `ClientSession` bounds each request, the handshake too.
 - Measured on mcp 1.26.0 against local test servers: a 429 and a timeout both arrive wrapped in an
-  `ExceptionGroup`. `str()` of the group does not contain "429". Unwrap it before you check the status.
-  The sample raises `Throttled` for a capacity error. Catch it and stop all load.
+  `ExceptionGroup`. `str()` of the group does not contain "429". The transport also swallows a 429 on the
+  `notifications/initialized` POST. The sample records every 429 or 430 response with an httpx hook and
+  raises `Throttled`. Catch it and stop all load.
 
 ```python
-# python -m pip install mcp==1.26.0. Never print the token.
-import shutil, subprocess
+# python -m pip install mcp==1.26.0. Python 3.11+ (ExceptionGroup). Never print the token.
+import re, shutil, subprocess
 from datetime import timedelta
 import httpx
 from mcp import ClientSession
@@ -94,37 +95,47 @@ from mcp.client.streamable_http import streamable_http_client
 class Throttled(RuntimeError):
     """HTTP 429 or 430, or the capacity text: stop all load. Never retry (never-line 1)."""
 
+CAPACITY = re.compile(r"\b(?:429|430)\b|exceeded its limits")
+
 def fabric_token():
     cmd = [shutil.which("az") or "az", "account", "get-access-token", "--resource",
            "https://api.fabric.microsoft.com", "--query", "accessToken", "-o", "tsv"]
     return subprocess.run(cmd, capture_output=True, text=True, check=True).stdout.strip()
 
-def unwrap(err):
-    # The transport raises an ExceptionGroup. Check the error inside it.
-    while isinstance(err, BaseExceptionGroup) and len(err.exceptions) == 1:
-        err = err.exceptions[0]
-    status = getattr(getattr(err, "response", None), "status_code", None)
-    if status in (429, 430) or "exceeded its limits" in str(err):
-        raise Throttled(f"capacity error (HTTP {status}): stop all load") from err
-    return err
+def leaves(err):
+    # The transport raises an ExceptionGroup. Check every error inside it.
+    if isinstance(err, BaseExceptionGroup):
+        for sub in err.exceptions:
+            yield from leaves(sub)
+    else:
+        yield err
 
 async def ask(url, question, timeout=120):
+    seen = []  # every 429 or 430 response, also one the transport swallows
+
+    async def on_response(resp):
+        if resp.status_code in (429, 430):
+            seen.append(resp.status_code)
+
     headers = {"Authorization": "Bearer " + fabric_token()}
-    http = httpx.AsyncClient(headers=headers, timeout=httpx.Timeout(30, read=timeout))
+    http = httpx.AsyncClient(headers=headers, follow_redirects=True,
+                             timeout=httpx.Timeout(30, read=timeout),
+                             event_hooks={"response": [on_response]})
     try:
         async with http, streamable_http_client(url, http_client=http) as (read, write, _):
-            async with ClientSession(read, write) as session:
+            async with ClientSession(read, write, read_timeout_seconds=timedelta(seconds=timeout)) as session:
                 await session.initialize()
                 tool = (await session.list_tools()).tools[0]
                 arg = next(iter(tool.inputSchema["properties"]))
-                result = await session.call_tool(tool.name, {arg: question},
-                                                 read_timeout_seconds=timedelta(seconds=timeout))
+                result = await session.call_tool(tool.name, {arg: question})
     except Exception as e:
-        # A timeout is an McpError: count it as a transport error, not a wrong answer.
-        raise unwrap(e) from e
+        if seen or any(CAPACITY.search(str(x)) for x in leaves(e)):
+            raise Throttled(f"capacity error (HTTP {seen}): stop all load") from e
+        raise  # a timeout is an McpError: a transport error, not a wrong answer
     text = "\n".join(b.text for b in result.content if b.type == "text")
+    if seen or (result.isError and CAPACITY.search(text)):
+        raise Throttled(f"capacity error (HTTP {seen}): stop all load")
     if result.isError:
-        unwrap(RuntimeError(text))
         raise RuntimeError("agent tool error: " + text)
     return text
 ```
@@ -204,8 +215,8 @@ Learn: https://learn.microsoft.com/en-us/fabric/data-science/data-agent-add-data
 
 - Token scope. The MCP page uses `https://api.fabric.microsoft.com/.default`. The service principal page
   uses `https://analysis.windows.net/powerbi/api/.default`. Measured in pass 2: a signed-in user token for
-  `https://api.fabric.microsoft.com` was accepted on all 40 calls, with 0 transport errors (proof:154).
-  Which scope a service principal needs is open. The CCv3 live smoke (2026-10-04) confirmed a signed-in user token for `https://api.fabric.microsoft.com`.
+  `https://api.fabric.microsoft.com` was accepted on all 40 calls, with 0 transport errors (proof:154),
+  and again in the CCv3 live smoke (2026-10-04). Which scope a service principal needs is open.
 - The Responses client stage value is not verified. The sample notebook comment says `sandbox` or
   `published`. Another source says `sandbox` or `production`.
 - Learn labels these preview: the SDK, service principal querying, and REST "Data Agent configuration
