@@ -22,7 +22,7 @@ two-copy surfaces. Before you say "done", walk this list and name which rows app
 | Surface | The two copies | Rule |
 |---|---|---|
 | Rules | `.claude/rules-src/*.md` (repo, canonical) and `~/.claude/rules/*.md` (active, auto-loaded) | Edit `rules-src` only. Never create `.claude/rules/` in the repo: Claude Code auto-loads it as project scope and every rule is paid for twice. |
-| On-demand rules | `.claude/rules-ondemand/*.md` + `manifest.json` (repo) and `~/.claude/rules-ondemand/` (active, NOT auto-loaded) | Loaded by the `rule-router` hook at the action. A new or renamed trigger updates the manifest AND the index `rules-src/on-demand-rules.md`; prove it with `node scripts/rules/rule-router-probe.mjs`. |
+| On-demand rules | `.claude/rules-ondemand/*.md` + `manifest.json` (repo) and `~/.claude/rules-ondemand/` (active, NOT auto-loaded) | Loaded by the `rule-router` hook at the action. A new or renamed trigger updates the manifest AND the index `rules-src/on-demand-rules.md`; prove it with `node scripts/rules/rule-router-probe.mjs`. Gate: `node scripts/rules/ondemand-index-check.mjs` (pre-commit). |
 | Hooks | `.claude/hooks/src/*.ts` (repo-only, never synced) and `hooks/dist/*.mjs` (built, synced) | `npm run build` in `.claude/hooks`, then sync. A src edit without a build changes nothing. |
 | Hook gates | `settings.json` matcher AND the hook's own `tool_name` check | Two gates. Widening one does nothing until the other matches. Guard: `hook-matcher-runtime-consistency.test.ts`. |
 | Settings | `~/.claude/settings.json` and the repo copy | Never synced. Edit both, via Node atomic RMW, never the Edit tool. |
