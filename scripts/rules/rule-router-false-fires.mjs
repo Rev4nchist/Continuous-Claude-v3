@@ -15,6 +15,7 @@
  * "false_fire" are appended to the capture log, and a verdict table is appended to the week's audit
  * report. Exit 1 when the judge call fails, so the scheduled task shows it.
  * Options for tests: --log <fires.jsonl> --capture <false-fires.jsonl> --manifest <manifest.json>
+ *   review --print-prompt   print the judge prompt (rule triggers come from the manifest) and stop
  */
 import { readFileSync, appendFileSync, existsSync, mkdirSync } from 'node:fs';
 import { homedir } from 'node:os';
@@ -57,23 +58,30 @@ function list(asJson) {
 }
 
 /**
- * One line per rule, so the judge knows what each rule is about and what is MEANT to fire it (the
- * "Loads on" column of the always-loaded index, rules/on-demand-rules.md).
+ * What is MEANT to fire a rule, from its manifest matchers: the patterns the router really tests.
+ * Until 2026-10-04 this came from the "Loads on" column of the always-loaded index, which is prose,
+ * could drift from the manifest, and cost always-loaded budget to keep precise.
  */
+function ruleTriggers(r) {
+  const kinds = [['command', 'a command matching'], ['segment', 'a command (quotes kept) matching'],
+    ['agent', 'an agent type matching'], ['skill', 'a skill matching'], ['tools', 'a tool name matching']];
+  return kinds.filter(([key]) => r[key]?.length)
+    .map(([key, label]) => `${label} ${r[key].map((p) => (p === '^' ? 'anything (every call)' : `/${p}/`)).join(' or ')}`)
+    .join('; ');
+}
+
+/** One line per rule, so the judge knows what each rule is about and what is MEANT to fire it. */
 function ruleSummaries() {
   const rules = JSON.parse(readFileSync(manifestPath, 'utf8')).rules;
   const dir = dirname(manifestPath);
-  let index = '';
-  try { index = readFileSync(opt('--index', join(homedir(), '.claude', 'rules', 'on-demand-rules.md')), 'utf8'); } catch { /* optional */ }
   return rules.map((r) => {
     let about = '';
     try {
       about = readFileSync(join(dir, r.files[0]), 'utf8').replace(/^---[\s\S]*?---\s*/, '')
         .split('\n').filter((l) => l.trim() && !l.startsWith('#')).slice(0, 3).join(' ').slice(0, 300);
     } catch { /* a missing rule file is judged on its id alone */ }
-    const row = index.split('\n').find((l) => l.startsWith('|') && l.includes(`\`${r.files[0]}\``));
-    const loadsOn = row ? row.split('|')[2]?.trim() : '';
-    return `- ${r.id} (${r.files.join(', ')})${loadsOn ? ` loads on: ${loadsOn}.` : ''} About: ${about}`;
+    const triggers = ruleTriggers(r);
+    return `- ${r.id} (${r.files.join(', ')})${triggers ? ` fires on: ${triggers}.` : ''} About: ${about}`;
   }).join('\n');
 }
 
@@ -91,6 +99,10 @@ function review(days, reportPath) {
   const items = [...pairs.values()];
   const section = [`\n## False-fire review (${today}, ${items.length} rule and command pairs)\n`];
   if (!items.length) {
+    if (rest.includes('--print-prompt')) { // prompt-only runs never write a report
+      console.log(`No fires to judge in the last ${days} day(s): the judge would not be called.`);
+      return { code: 0, judged: 0, found: [] };
+    }
     section.push('No fires to judge this week.');
     writeReport(reportPath, section);
     console.log('false-fire review: 0 pairs to judge');
@@ -105,6 +117,10 @@ function review(days, reportPath) {
     'Reply with ONLY a JSON array, one object per fire, in order:',
     '[{"n":1,"verdict":"fits"|"false_fire","reason":"<12 words max>"}]',
   ].join('\n');
+  if (rest.includes('--print-prompt')) { // shows exactly what the judge would see; no claude call, no report
+    console.log(prompt);
+    return { code: 0, judged: 0, found: [] };
+  }
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription auth; never API billing for a scheduled judge
   // claude is a real .exe here, so no shell: the prompt goes on stdin, untouched by shell quoting.
