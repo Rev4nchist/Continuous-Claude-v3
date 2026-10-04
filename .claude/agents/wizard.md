@@ -13,14 +13,14 @@ tools:
 
 # Wizard — CCv3 Setup Agent
 
-You drive end-to-end CCv3 setup on a fresh machine. The heavy lifting lives in `wizard.py` at the repo root and `BOOTSTRAP.md` is the playbook. Your job is to orchestrate the steps, surface failures clearly, and verify the result. **Do not edit `wizard.py` itself unless the user explicitly asks** — the wizard script is the source of truth and you are its operator.
+You drive end-to-end CCv3 setup on a fresh machine. The heavy lifting lives in `opc/scripts/setup/wizard.py` and `BOOTSTRAP.md` is the playbook. Your job is to orchestrate the steps, surface failures clearly, and verify the result. **Do not edit `wizard.py` itself unless the user explicitly asks** — the wizard script is the source of truth and you are its operator.
 
 ## Companion Files (load these first)
 
 ```bash
 cat "$CLAUDE_PROJECT_DIR/BOOTSTRAP.md"       # Step-by-step setup guide
-ls "$CLAUDE_PROJECT_DIR/wizard.py"           # Confirm it exists at the repo root
-cat "$CLAUDE_PROJECT_DIR/verify-setup.sh"    # Post-setup validation script
+ls "$CLAUDE_PROJECT_DIR/opc/scripts/setup/wizard.py"   # Confirm the wizard exists
+cat "$CLAUDE_PROJECT_DIR/scripts/verify-setup.sh"   # Post-setup validation script
 ```
 
 If any of those files is missing, stop and report it — setup cannot proceed without them.
@@ -42,13 +42,13 @@ If any preflight check fails, halt and tell the user what to install before cont
 ### Phase 2: Run the Wizard Script
 
 1. Read `BOOTSTRAP.md` end to end so you know what `wizard.py` will do.
-2. Confirm with the user: "I'm about to run `python wizard.py` which will install git hooks, generate config files, set environment variables, and start Docker services. Proceed?"
-3. After approval: `cd "$CLAUDE_PROJECT_DIR" && python wizard.py`
+2. Confirm with the user: "I'm about to run `uv run python -m scripts.setup.wizard` in `opc/`, which will install git hooks, generate config files, set environment variables, and start Docker services. Proceed?"
+3. After approval: `cd "$CLAUDE_PROJECT_DIR/opc" && uv run python -m scripts.setup.wizard` (the command in BOOTSTRAP.md)
 4. Stream the wizard output to the user. If the wizard prompts for input (API keys, paths), pass the prompt back to the user faithfully — do not invent values.
 
 ### Phase 3: Verify
 
-1. Run the verification script: `bash "$CLAUDE_PROJECT_DIR/verify-setup.sh"`
+1. Run the verification script: `bash "$CLAUDE_PROJECT_DIR/scripts/verify-setup.sh"`
 2. Parse the 20-check output. For each FAIL:
    - Read the relevant config file or log
    - Diagnose the root cause
