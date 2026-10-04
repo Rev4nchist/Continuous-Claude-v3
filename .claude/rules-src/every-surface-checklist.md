@@ -22,20 +22,27 @@ two-copy surfaces. Before you say "done", walk this list and name which rows app
 | Surface | The two copies | Rule |
 |---|---|---|
 | Rules | `.claude/rules-src/*.md` (repo, canonical) and `~/.claude/rules/*.md` (active, auto-loaded) | Edit `rules-src` only. Never create `.claude/rules/` in the repo: Claude Code auto-loads it as project scope and every rule is paid for twice. |
-| On-demand rules | `.claude/rules-ondemand/*.md` + `manifest.json` (repo) and `~/.claude/rules-ondemand/` (active, NOT auto-loaded) | Loaded by the `rule-router` hook at the action. A new or renamed trigger updates the manifest AND the index `rules-src/on-demand-rules.md`; prove it with `node scripts/rules/rule-router-probe.mjs`. |
+| On-demand rules | `.claude/rules-ondemand/*.md` + `manifest.json` (repo) and `~/.claude/rules-ondemand/` (active, NOT auto-loaded) | Loaded by the `rule-router` hook at the action. A new or renamed trigger updates the manifest AND the index `rules-src/on-demand-rules.md`; prove it with `node scripts/rules/rule-router-probe.mjs`. Gate: `node scripts/rules/ondemand-index-check.mjs` (pre-commit). |
 | Hooks | `.claude/hooks/src/*.ts` (repo-only, never synced) and `hooks/dist/*.mjs` (built, synced) | `npm run build` in `.claude/hooks`, then sync. A src edit without a build changes nothing. |
 | Hook gates | `settings.json` matcher AND the hook's own `tool_name` check | Two gates. Widening one does nothing until the other matches. Guard: `hook-matcher-runtime-consistency.test.ts`. |
 | Settings | `~/.claude/settings.json` and the repo copy | Never synced. Edit both, via Node atomic RMW, never the Edit tool. |
-| CLAUDE.md / RULES.md | `~/.claude/` (live, NEVER_SYNC) and `.claude/templates/*.template` (repo) | Edit live, copy to template in the same change. |
+| CLAUDE.md / RULES.md | `.claude/templates/*.template` (repo, canonical) and `~/.claude/` (live) | Edit the template only. Forward sync installs it; a live-only edit is quarantined, then overwritten. |
 | Agents | `.claude/agents/<name>.md` and `.json` mirror | `model:` lives in both; `sync-agent-json.py` does not copy it. `effort:` lives only in the `.md`; the `.json` has none. |
 | Skills | `.claude/skills/<name>/SKILL.md` (repo) and `~/.claude/skills/` (active) | Repo is the source. Description is the ONLY prompt-time trigger (the skill-activation-prompt hook was retired 2026-08-19: 0 hits beyond the native router, 22/45 false fires); one line: "Does X. Use when Y." Gate: `node scripts/skills/audit-skills.mjs`. `skill-rules.json` still feeds vet-skill, plan-mode-discovery, and session-start-init-check, not prompt routing. |
 | Registry | `.claude/project-registry.json` (repo) and `~/.claude/` mirror | Edit repo only; the active mirror is never auto-deleted. |
 | Reverse states | register / unregister, claim / release, start / stop, enable / disable | If you add one direction, test the other in the same change. |
 
+## Rule-router records
+
+Triggers: `~/.claude/rules-ondemand/manifest.json`. Fires: `~/.claude/logs/rule-router.jsonl`.
+False fires: `~/.claude/logs/rule-router-false-fires.jsonl`.
+Weekly audit (`CCv3-RuleRouter-Audit`, Mondays): `docs/self-improvement/audits/rule-router-<date>.md`.
+`CCv3-RuleRouter-Review` judges unrecorded fires each Monday and posts a review to Dave's Notion Scratchpad.
+
 ## What does NOT sync (do not expect it to)
 
-`hooks/src/*.ts`, `settings.json`, `settings.local.json`, `CLAUDE.md`, `RULES.md`, `.env`,
-`knowledge-tree.json`, `extraction-state.json`. Forward sync: `bash scripts/sync-to-active.sh`
+`hooks/src/*.ts`, `settings.json`, `settings.local.json`, `.env`, `knowledge-tree.json`,
+`extraction-state.json`, and any `CLAUDE.md` / `RULES.md` other than the two templates. Forward sync: `bash scripts/sync-to-active.sh`
 (auto on commit). Reverse sync is manual-only: `bash scripts/sync-claude.sh --to-repo`; it aborts
 if the repo has uncommitted changes in synced dirs. Drift check: `/sync-drift`.
 

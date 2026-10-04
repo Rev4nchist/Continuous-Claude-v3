@@ -30,7 +30,7 @@ const outPath = arg('--out', join(repo, 'docs', 'self-improvement', 'audits', `r
 const since = Date.now() - days * 86400000;
 const fires = existsSync(logPath)
   ? readFileSync(logPath, 'utf8').split('\n').filter(Boolean).flatMap((l) => { try { return [JSON.parse(l)]; } catch { return []; } })
-      .filter((f) => Date.parse(f.ts) >= since)
+      .filter((f) => Date.parse(f.ts) >= since && f.kind !== 'rearm') // a re-arm after /compact is not a fire
   : [];
 
 // One row per (fire, rule): a fire can carry several rules.

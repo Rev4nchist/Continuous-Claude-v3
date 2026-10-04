@@ -77,6 +77,9 @@ if [ "${SKIP_RATCHETS:-0}" != "1" ] && command -v node >/dev/null 2>&1; then
   if printf '%s\n' "$staged" | grep -qE '^(AGENTS|CLAUDE|CONTEXT|CLAUDE\.local)\.md$|^\.claude/(CLAUDE\.md$|rules/|rules-src/|templates/(CLAUDE|RULES)\.md\.template|docs/)|^scripts/rules/context-budget'; then
     run_ratchet "context-budget-guard" "" node "$root/scripts/rules/context-budget-guard.mjs" --repo --staged
   fi
+  if printf '%s\n' "$staged" | grep -qE '^\.claude/rules-ondemand/|^\.claude/rules-src/on-demand-rules\.md$|^scripts/rules/ondemand-index-check'; then
+    run_ratchet "ondemand-index-check" ".claude/rules-ondemand" node "$root/scripts/rules/ondemand-index-check.mjs"
+  fi
   if printf '%s\n' "$staged" | grep -q '^\.claude/agents/'; then
     run_ratchet "check-agent-model-drift" ".claude/agents" node "$root/scripts/check-agent-model-drift.mjs" "$root"
   fi

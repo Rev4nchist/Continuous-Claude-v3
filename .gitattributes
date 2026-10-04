@@ -19,3 +19,11 @@
 # Vendored external skills stay byte-identical to upstream (core.autocrlf=true would rewrite them
 # and break the per-file sha256 in vendor.lock.json). Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md.
 .claude/skills/_vendor/** -text
+
+# Always-loaded instruction files stay LF: the context budget counts every \r, so CRLF costs
+# ~377 chars (scripts/rules/context-budget-guard.mjs; 2026-10-03 trim pass).
+/.claude/templates/CLAUDE.md.template text eol=lf
+/.claude/rules-src/on-demand-rules.md text eol=lf
+/CLAUDE.md text eol=lf
+/CONTEXT.md text eol=lf
+/AGENTS.md text eol=lf
