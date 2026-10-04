@@ -220,7 +220,7 @@
   "checks": [
     {"type": "regex", "pattern": "jobType=Refresh"},
     {"type": "regex", "pattern": "executionData"},
-    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:refresh\\w*|dataflow\\w*|jobType=(?:Refresh|Publish)|updateDefinition|Dataflow[ \\t]+Gen2)\\b(?:(?!\\bnotebook|\\b(?:no|not|never|cannot|can't|won't|fail\\w*)\\b)[^\\n]){0,60}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|not supported|unsupported|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -239,7 +239,7 @@
     {"type": "regex", "pattern": "/semanticModels/[^/\\s]+/updateDefinition"},
     {"type": "regex", "pattern": "executeQueries|evaluate_dax"},
     {"type": "not_regex", "pattern": "(?<!retry )(?<!retries )\\b(?:429|430)\\b(?:(?!\\b(?:return|exit|break|stop|abort|die|fail|halt|report)\\w*|\\b(?:not|never|no|without)\\b|n't)[\\s\\S]){0,160}?\\b(?:continue|sleep|(?:retry|retries|retried|retrying)(?!-after\\b)|back[ -]?off)\\b", "flags": "i"},
-    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:schedul\\w*|run|test\\w*|trigger\\w*|start\\w*|creat\\w*)\\b(?:(?!\\bquer|\\bMCP)[^\\n]){0,40}?(?<!\\bnot )(?<!\\bnever )\\b(?:under|as)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|don't|won't|instead|avoid|rather|without)\\b)[^\\n])*?\\b(?:DAX|executeQueries|evaluate_dax)\\b(?:(?!\\b(?:no|not|never|cannot|can't|won't|fail\\w*)\\b)[^\\n]){0,60}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|not supported|unsupported|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"}
   ]
  },
  {
@@ -328,7 +328,7 @@
   ],
   "checks": [
     {"type": "regex", "pattern": "dataAccessRoleConflictPolicy"},
-    {"type": "not_regex", "flags": "i", "pattern": "(?:-X|--method|-m)[ \\t]*PUT\\b[^\\n]*dataAccessRoles|\\bPUT[ \\t]+\\S*dataAccessRoles|dataAccessRoles\\S*[^\\n]*(?:-X|--method|-m)[ \\t]*PUT\\b"}
+    {"type": "not_regex", "pattern": "(?:-X|--method|-m)[ \\t]*PUT\\b[^\\n]*dataAccessRoles|^[ \\t]*(?:\\$[ \\t]*)?PUT[ \\t]+https?://\\S*dataAccessRoles|dataAccessRoles\\S*[^\\n]*(?:-X|--method|-m)[ \\t]*PUT\\b", "flags": "im"}
   ]
  },
  {
