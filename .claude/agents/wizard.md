@@ -30,9 +30,9 @@ If any of those files is missing, stop and report it — setup cannot proceed wi
 ### Phase 1: Preflight
 
 1. Confirm Git is installed: `git --version`
-2. Confirm Python is installed and >= 3.11. The command name differs by platform: use `python --version` on Windows (where `python3` triggers the Microsoft Store alias and fails), and `python3 --version` on Linux/macOS (where `python` may be missing or pinned to 2.x).
+2. Confirm Python is installed and >= 3.12 (opc/pyproject.toml). The command name differs by platform: use `python --version` on Windows (where `python3` triggers the Microsoft Store alias and fails), and `python3 --version` on Linux/macOS (where `python` may be missing or pinned to 2.x).
 3. Confirm Docker is installed and running: `docker info`
-4. Confirm Node.js is installed: `node --version`
+4. Confirm Node.js is installed: `node --version`, and uv: `uv --version` (Phase 2 runs the wizard through uv)
 5. Confirm Bash is available: `bash --version` (Windows users: this requires Git Bash or WSL; downstream phases shell out to bash and will fail without it)
 6. Confirm the user is operating from the cloned repo: `git rev-parse --show-toplevel`
 7. Confirm this is a fresh installation: `~/.claude/CLAUDE.md` must NOT already exist. If it does, stop and ask the user before proceeding -- running the wizard on an already-configured machine can overwrite working config.
@@ -49,7 +49,7 @@ If any preflight check fails, halt and tell the user what to install before cont
 ### Phase 3: Verify
 
 1. Run the verification script: `bash "$CLAUDE_PROJECT_DIR/scripts/verify-setup.sh"`
-2. Parse the 20-check output. For each FAIL:
+2. Parse the check output. For each FAIL:
    - Read the relevant config file or log
    - Diagnose the root cause
    - Suggest a fix and ask before applying
@@ -59,7 +59,7 @@ If any preflight check fails, halt and tell the user what to install before cont
 
 After verification passes:
 
-The smoke tests below reference `$CLAUDE_OPC_DIR` and `$CLAUDE_PROJECT_DIR`. wizard.py exports those into the user's shell profile, but the *current* shell session won't see them until the profile is re-sourced. Before running these tests, either open a new terminal session, or source the profile (`. ~/.bashrc` / `. ~/.zshrc`) so the variables resolve. If they're still empty, fall back to absolute paths (`$HOME/continuous-claude` and `$HOME/continuous-claude/opc`) and tell the user to open a fresh shell next time.
+The smoke tests below reference `$CLAUDE_OPC_DIR` and `$CLAUDE_PROJECT_DIR`. Claude Code supplies `$CLAUDE_PROJECT_DIR`. wizard.py sets `$CLAUDE_OPC_DIR` (the shell profile on macOS/Linux, `setx` on Windows), and the *current* shell will not see it until it is reloaded. Before running these tests, either open a new terminal session, or source the profile (`. ~/.bashrc` / `. ~/.zshrc`) so the variables resolve. If they're still empty, fall back to absolute paths (`$HOME/continuous-claude` and `$HOME/continuous-claude/opc`) and tell the user to open a fresh shell next time.
 
 1. Test memory: `cd "$CLAUDE_OPC_DIR" && PYTHONPATH=. uv run python scripts/core/recall_learnings.py --query "test" --k 1 --text-only`
 2. Test hooks built: `ls "$CLAUDE_PROJECT_DIR/.claude/hooks/dist/"*.mjs | head -5`
