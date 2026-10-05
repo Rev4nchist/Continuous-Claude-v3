@@ -1235,6 +1235,8 @@ test('conflict scan: each seed topic fires on its own text', () => {
     'unpinned-pip-install': 'pip install requests',
     'odbc-driver-18': 'Driver={ODBC Driver 18 for SQL Server}',
     FabricOpenAI: 'client = FabricOpenAI(model="x")',
+    'sp-dax-rls': '"impersonatedUserName": "user@contoso.com",',
+    'delete-item-without-yes': 'list the semantic models, delete every duplicate with that name, then deploy once.',
   };
   const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'seeds.md': Object.values(seeds).join('\n') + '\n' } });
   const topics = new Set(scanOnly(root).map((x) => x.msg.match(/\[([^\]]+)\]/)[1]));
@@ -1269,6 +1271,18 @@ test('conflict-scan: capacity resize advice is a hit, a read-only capacity check
     '### Capacity Sizing Guide', 'Upgrade the SKU to F4', 'move to a larger capacity']) assert.ok(re.test(advice), advice);
   for (const fine of ['Check the capacity state in the Capacity Metrics app.', 'Spark pool autoscale settings'])
     assert.ok(!re.test(fine), fine);
+});
+
+// Phase 5b (2026-10-04): semantic-model-authoring runs DAX as a service principal under RLS by impersonation
+// (CCv3 never-line: G-40, L-13) and tells the agent to delete duplicate models (an item delete needs the owner's yes).
+test('conflict-scan: SP impersonation and an instructed item delete are hits; plain DAX and a delete endpoint list are not', async () => {
+  const { SEEDS } = await import('./lib/conflict-scan.mjs');
+  const re = (t) => new RegExp(SEEDS.find((s) => s.topic === t).pattern, 'i');
+  assert.ok(re('sp-dax-rls').test('# Execute under a specific user\'s RLS context (required for service principal callers when RLS is defined)'));
+  assert.ok(!re('sp-dax-rls').test('"query": "EVALUATE TOPN(10, \'Customer\')"'));
+  assert.ok(re('delete-item-without-yes').test('If deploying a model that may already exist, delete the existing same-named model(s) first.'));
+  for (const fine of ['DELETE /v1/workspaces/<workspaceId>/items/<itemId>/jobs/<jobType>/schedules/<scheduleId>',
+    'az rest --method delete \\', 'Cancel an in-progress refresh']) assert.ok(!re('delete-item-without-yes').test(fine), fine);
 });
 
 test('vendor-conflict-scan CLI: a source with no scannable files fails instead of passing vacuously', () => {
