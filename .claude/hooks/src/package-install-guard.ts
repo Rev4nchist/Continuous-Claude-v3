@@ -23,7 +23,9 @@ import { readFileSync } from 'fs';
 import https from 'https';
 import http from 'http';
 import { outputContinue, outputDeny } from './shared/output.js';
-import { parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
+import {
+  parseExecutable, executableView, normalizeEscapes, wrapperPayloadsFromSegments,
+} from './shared/destructive-classifier.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
@@ -73,10 +75,15 @@ interface InstallPattern {
   requirePin?: boolean;
 }
 
+// pip global options before `install` (-q, --disable-pip-version-check, --proxy URL).
+const PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+\S+|-[-\w]+(?:=\S+)?))*`;
+// Interpreter flags before `-m` (-I, -u, -X utf8, -W ignore) and the py launcher version (-3.12).
+const PY_OPTS = String.raw`(?:\s+(?:-[XW]\s*\S+|-[IuBEsSOqbdv]+|-\d(?:\.\d+)?))*`;
+
 const INSTALL_PATTERNS: InstallPattern[] = [
-  // Python
-  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?\s+install\b`), ecosystem: 'pypi', requirePin: true },
-  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?(?:\s+-\d(?:\.\d+)?)?\s+-m\s+pip\s+install\b`), ecosystem: 'pypi', requirePin: true },
+  // Python (Windows runs Python.exe and PIP the same as python and pip, so these ignore case)
+  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+install\b`, 'i'), ecosystem: 'pypi', requirePin: true },
+  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s+pip${PIP_OPTS}\s+install\b`, 'i'), ecosystem: 'pypi', requirePin: true },
   { regex: /^uv\s+pip\s+install\b/, ecosystem: 'pypi', requirePin: true },
   { regex: /^uv\s+add\b/, ecosystem: 'pypi' },
   { regex: /^poetry\s+add\b/, ecosystem: 'pypi' },
@@ -109,6 +116,12 @@ const FLAGS_WITH_VALUE = new Set([
   '-r', '--requirement', '-c', '--constraint', '-e', '--editable',
   '-t', '--target', '-f', '--find-links', '-i', '--index-url',
   '--extra-index-url', '--prefix', '--root', '--src',
+  // pip and uv pip (a value here is not a package; the pin check would deny it)
+  '--trusted-host', '--python', '-p', '--python-version', '--platform', '--abi', '--implementation',
+  '--timeout', '--retries', '--proxy', '--cert', '--client-cert', '--cache-dir', '--log',
+  '--upgrade-strategy', '--progress-bar', '--exists-action', '--report', '-C', '--config-settings',
+  '--index', '--default-index', '--index-strategy', '--resolution', '--prerelease',
+  '--keyring-provider', '--root-user-action',
   // npm/yarn
   '--registry',
 ]);
@@ -156,25 +169,36 @@ export function unpinnedPipPackages(command: string): string[] {
   const install = matchInstall(command);
   if (!install?.pattern.requirePin) return [];
   return packageTokens(install.args)
-    .filter((token) => parsePackageToken(token, 'pypi') !== null && !EXACT_PIN.test(token))
+    .filter((token) => parsePackageToken(token, 'pypi') !== null && !EXACT_PIN.test(pipSpec(token)))
     .map((token) => parsePackageToken(token, 'pypi')!.name);
 }
 
+/** A pip requirement without its PEP 508 marker and spaces: "requests >= 2; python_version>'3'" -> requests>=2. */
+function pipSpec(token: string): string {
+  return token.split(';')[0].replace(/\s+/g, '');
+}
+
+/** Drop what runs a command without being it: sudo, time, nohup, a brace or parenthesis. */
+function stripLeaders(segment: string): string {
+  return segment.trim().replace(/^(?:(?:sudo|time|nohup|command)\s+|[{(]\s*)+/, '').replace(/\s*[})]\s*$/, '');
+}
+
 /**
- * The executed segments of a Bash or PowerShell command that install packages. Also looks inside
- * $(...) and shell-wrapper payloads (bash -c "...", powershell -Command "..."). Fails open to the
- * whole command when the parser throws.
+ * The executed segments of a Bash or PowerShell command that install packages. Text blocks that
+ * only write text (a literal heredoc, a PowerShell here-string) are dropped and escapes resolved
+ * first, as the destructive guard does. Also splits $(...) and shell-wrapper payloads
+ * (bash -c "...", powershell -Command "..."). Fails open to the whole command on a parser error.
  */
-export function installSegments(command: string): string[] {
-  let segments: string[];
+export function installSegments(command: string, tool = 'Bash', depth = 0): string[] {
   try {
-    const { segments: top, substitutions } = parseExecutable(command);
-    const wrapped = extractShellWrapperPayloads(command).flatMap((p) => parseExecutable(p).segments);
-    segments = [...top, ...substitutions, ...wrapped];
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const found = segments.map(stripLeaders).filter(isPackageInstallCommand);
+    if (depth >= 3) return found;
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    return [...found, ...nested.flatMap((inner) => installSegments(inner, tool, depth + 1))];
   } catch {
-    segments = [command];
+    return isPackageInstallCommand(command) ? [command.trim()] : [];
   }
-  return segments.map((s) => s.trim()).filter(isPackageInstallCommand);
 }
 
 /** The first install pattern a command matches, and the text after the matched prefix. */
@@ -582,7 +606,7 @@ function parsePackageToken(
     // A local folder or archive (., .\pkg, dist\x.whl) is not a registry package.
     if (/^\.|\\|\.(?:whl|zip|tgz|tar\.gz)$/i.test(token)) return null;
     // pip: name==version, name>=version, name~=version, name[extras]==version
-    const match = token.match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
+    const match = pipSpec(token).match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
     if (match) {
       return { name: match[1], version: match[2] || undefined };
     }
@@ -724,7 +748,7 @@ async function main() {
   }
 
   // Fast path: no segment installs a package -> passthrough immediately
-  const installs = installSegments(command);
+  const installs = installSegments(command, input.tool_name);
   if (installs.length === 0 || checkOverride(command)) {
     outputContinue();
     return;

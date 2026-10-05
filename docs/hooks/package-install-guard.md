@@ -22,8 +22,13 @@ malicious-packages.json` (the blocklist), `scripts/update-blocklist.mjs` (the up
 - More pip forms: `python -m pip`, `py -3.12 -m pip`, `pip3.12`, and a launcher under a path
   (`.venv\Scripts\pip.exe`).
 - Pin check (deny): `pip install`, `uv pip install` and `python -m pip install` need an exact `==`
-  (or `===`) pin on every package. A range, a wildcard or a bare name is denied. Lockfile tools
-  (`uv add`, `poetry add`), `-r` files and local paths (`.`, `dist\x.whl`) are not checked.
+  (or `===`) pin on every package. A range, a wildcard or a bare name is denied. A PEP 508 marker
+  (`"x==1.0; python_version>='3.8'"`) is allowed. Not checked: lockfile tools (`uv add`,
+  `poetry add`), `-r` files, local paths (`.`, `dist\x.whl`), and URL or VCS installs
+  (`git+https://...`). A VCS ref without a commit hash is a known gap.
+- pip global options before `install` (`-q`, `--proxy URL`), interpreter flags before `-m`
+  (`-I`, `-X utf8`), any letter case (`Python`, `PIP`) and `sudo` / `time` leaders are matched.
+  A literal heredoc or here-string that only writes text is not an install.
 - Order: typosquat, blocklist, pin, then the network checks (OSV, age).
 
 ---

@@ -301,12 +301,12 @@
         "^fab(\\.exe)?(\\s|$)",
         "^az(\\.cmd)?\\s+fabric(\\s|$)",
         "^\\w+-[Aa]z[Ff]abric\\w*(\\s|$)",
-        "^(?:uv\\s+run\\s+(?:-\\S+\\s+)*)?(?:python(?:3(?:\\.\\d+)?)?(?:\\.exe)?|py(?:\\.exe)?(?:\\s+-\\d(?:\\.\\d+)?)?)\\s+\\S*playground[\\\\/]\\S*(deploy|iq|access|runner_sp)\\.py(\\s|$)",
-        "^(?:uv\\s+run\\s+(?:-\\S+\\s+)*)?(?:python(?:3(?:\\.\\d+)?)?(?:\\.exe)?|py(?:\\.exe)?(?:\\s+-\\d(?:\\.\\d+)?)?)\\s+(?:\\S*[\\\\/])?runner_sp\\.py(\\s|$)",
-        "^(?:uv\\s+run\\s+(?:-\\S+\\s+)*)?(?:python(?:3(?:\\.\\d+)?)?(?:\\.exe)?|py(?:\\.exe)?(?:\\s+-\\d(?:\\.\\d+)?)?)\\s+-m\\s+\\S*playground\\.\\S*(deploy|iq|access|runner_sp)(\\s|$)"
+        "^(?:uv\\s+run\\s+(?:-\\S+(?:\\s+[^-\\s]\\S*)?\\s+)*)?(?:[^\\s\"']*[\\\\/])?(?:[Pp]ython(?:3(?:\\.\\d+)?)?(?:\\.[Ee][Xx][Ee])?|[Pp]y(?:\\.[Ee][Xx][Ee])?)(?:\\s+-[A-Za-z]+|\\s+-\\d(?:\\.\\d+)?)*\\s+\\S*playground[\\\\/]\\S*(deploy|iq|access|runner_sp)\\.py(\\s|$)",
+        "^(?:uv\\s+run\\s+(?:-\\S+(?:\\s+[^-\\s]\\S*)?\\s+)*)?(?:[^\\s\"']*[\\\\/])?(?:[Pp]ython(?:3(?:\\.\\d+)?)?(?:\\.[Ee][Xx][Ee])?|[Pp]y(?:\\.[Ee][Xx][Ee])?)(?:\\s+-[A-Za-z]+|\\s+-\\d(?:\\.\\d+)?)*\\s+(?:\\S*[\\\\/])?runner_sp\\.py(\\s|$)",
+        "^(?:uv\\s+run\\s+(?:-\\S+(?:\\s+[^-\\s]\\S*)?\\s+)*)?(?:[^\\s\"']*[\\\\/])?(?:[Pp]ython(?:3(?:\\.\\d+)?)?(?:\\.[Ee][Xx][Ee])?|[Pp]y(?:\\.[Ee][Xx][Ee])?)(?:\\s+-[A-Za-z]+|\\s+-\\d(?:\\.\\d+)?)*\\s+-m\\s+\\S*playground\\.\\S*(deploy|iq|access|runner_sp)(\\s|$)"
       ],
       "segment": [
-        "^(?:uv\\s+run\\s+(?:-\\S+\\s+)*)?(?:python(?:3(?:\\.\\d+)?)?(?:\\.exe)?|py(?:\\.exe)?(?:\\s+-\\d(?:\\.\\d+)?)?)\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access|runner_sp)\\.py",
+        "^(?:uv\\s+run\\s+(?:-\\S+(?:\\s+[^-\\s]\\S*)?\\s+)*)?(?:\"[^\"]*[\\\\/]|'[^']*[\\\\/]|[^\\s\"']*[\\\\/])?(?:[Pp]ython(?:3(?:\\.\\d+)?)?(?:\\.[Ee][Xx][Ee])?|[Pp]y(?:\\.[Ee][Xx][Ee])?)[\"']?(?:\\s+-[A-Za-z]+|\\s+-\\d(?:\\.\\d+)?)*\\s+[\\\"']?[^\\\"'\\s]*playground[\\\\/][^\\\"'\\s]*(deploy|iq|access|runner_sp)\\.py",
         "^(?:cd|pushd|sl|[Ss]et-[Ll]ocation|[Pp]ush-[Ll]ocation)\\s+(?:-(?:[Ll]iteral)?[Pp]ath\\s+)?(?:\"[^\"]*|'[^']*|[^\\s\"']*)docs[\\\\/]playground([\\\\/\"'\\s]|$)",
         "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*(?:az(?:\\.cmd)?\\s+rest|curl(?:\\.exe)?|[Ii]nvoke-(?:[Rr]est[Mm]ethod|[Ww]eb[Rr]equest|[Aa]z[Rr]est[Mm]ethod)|[Ii][Rr][Mm]|[Ii][Ww][Rr])\\b.*(?:api\\.fabric\\.microsoft\\.com|onelake\\.dfs\\.fabric\\.microsoft\\.com|kusto\\.fabric\\.microsoft\\.com|api\\.powerbi\\.com|Microsoft\\.Fabric)",
         "^(?:\\$\\w+\\s*=\\s*|\\(|\\{\\s*|\\[void\\]|try\\s*\\{\\s*)*az(?:\\.cmd)?\\s+resource\\b.*Microsoft\\.Fabric",

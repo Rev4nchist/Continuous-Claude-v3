@@ -633,10 +633,38 @@ describe('package-install-guard', () => {
       expect(installSegments('cd /tmp/x && pip install requests')).toEqual(['pip install requests']);
     });
     it('finds an install after Set-Location in PowerShell', () => {
-      expect(installSegments('Set-Location C:\\x; python -m pip install requests')).toEqual(['python -m pip install requests']);
+      expect(installSegments('Set-Location C:\\x; python -m pip install requests', 'PowerShell')).toEqual(['python -m pip install requests']);
     });
     it('does not treat an echoed install as an install', () => {
       expect(installSegments('echo "pip install requests"')).toEqual([]);
+    });
+    // Critic round 1 on PR #97.
+    it('does not treat a literal heredoc line as an install', () => {
+      expect(installSegments("cat > README.md <<'EOF'\npip install requests\nEOF")).toEqual([]);
+    });
+    it('sees an install after a PowerShell backtick escape inside quotes', () => {
+      expect(installSegments('Write-Host "done`n"; pip install requests', 'PowerShell')).toEqual(['pip install requests']);
+    });
+    it('joins a PowerShell backtick line continuation', () => {
+      expect(isPackageInstallCommand(installSegments('python -m pip `\n  install requests', 'PowerShell')[0] ?? '')).toBe(true);
+    });
+    it('sees pip global options and interpreter flags before install', () => {
+      expect(isPackageInstallCommand('pip --disable-pip-version-check install requests')).toBe(true);
+      expect(isPackageInstallCommand('python -m pip -q install requests')).toBe(true);
+      expect(isPackageInstallCommand('pip --proxy http://p:8080 install requests')).toBe(true);
+      expect(isPackageInstallCommand('python -I -m pip install requests')).toBe(true);
+      expect(isPackageInstallCommand('python -X utf8 -m pip install requests')).toBe(true);
+    });
+    it('matches launchers in any letter case', () => {
+      expect(isPackageInstallCommand('Python -m pip install requests')).toBe(true);
+      expect(isPackageInstallCommand('PIP install requests')).toBe(true);
+    });
+    it('strips sudo, time and a brace before an install', () => {
+      expect(installSegments('sudo pip install requests')).toEqual(['pip install requests']);
+      expect(installSegments('{ pip install requests; }')).toEqual(['pip install requests']);
+    });
+    it('splits a command substitution into its segments', () => {
+      expect(installSegments('x=$(cd /tmp && pip install requests)')).toEqual(['pip install requests']);
     });
   });
 
@@ -663,6 +691,15 @@ describe('package-install-guard', () => {
     });
     it('leaves npm alone', () => {
       expect(unpinnedPipPackages('npm install express')).toEqual([]);
+    });
+    // Critic round 1 on PR #97: a flag value is not a package.
+    it('skips the value of --trusted-host and --python', () => {
+      expect(unpinnedPipPackages('pip install --trusted-host pypi.org requests==2.31.0')).toEqual([]);
+      expect(unpinnedPipPackages('uv pip install --python 3.12 httpx==0.27.0')).toEqual([]);
+    });
+    it('reads a quoted specifier with spaces and a PEP 508 marker', () => {
+      expect(unpinnedPipPackages('pip install "requests >= 2"')).toEqual(['requests']);
+      expect(unpinnedPipPackages('pip install "requests==2.31.0; python_version>=\'3.8\'"')).toEqual([]);
     });
   });
 

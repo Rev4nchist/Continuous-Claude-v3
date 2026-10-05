@@ -169,6 +169,12 @@ const CASES = [
   ['uv run python on another repo deploy.py is not Fabric', bash('s86', 'uv run python scripts/deploy.py --prod'), 'none', [], []],
   ['cd into a folder named playground outside docs is not Fabric', bash('s87', 'cd web/playground && npm test'), 'none', [], []],
   ['an echo of runner_sp.py is not Fabric', bash('s88', 'echo runner_sp.py'), 'none', [], []],
+  // Critic round 1 on PR #97: an interpreter by path, uv run flags with a value, interpreter flags, case.
+  ['a venv python.exe on deploy.py injects', ps('s89', '.venv\\Scripts\\python.exe docs\\playground\\deploy.py preflight'), 'inject', ['fabric'], []],
+  ['& "C:\\Python312\\python.exe" on iq.py injects', ps('s90', '& "C:\\Python312\\python.exe" docs\\playground\\fabric\\iq.py graph-check'), 'inject', ['fabric'], []],
+  ['uv run --with x python on deploy.py injects', bash('s91', 'uv run --with httpx python docs/playground/deploy.py status'), 'inject', ['fabric'], []],
+  ['python -u on deploy.py injects', bash('s92', 'python -u docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
+  ['Python in capitals on deploy.py injects', ps('s93', 'Python docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];

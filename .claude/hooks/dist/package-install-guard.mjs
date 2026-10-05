@@ -236,12 +236,71 @@ function wrapperPayloadsFromSegments(segments) {
   }
   return out;
 }
-function extractShellWrapperPayloads(command) {
-  try {
-    return wrapperPayloadsFromSegments(parseExecutable(command).segments);
-  } catch {
-    return [];
+function bodySubstitutions(body, tool) {
+  const out = [];
+  const esc = tool === "PowerShell" ? "`" : "\\";
+  let i = 0;
+  while (i < body.length) {
+    const c = body[i];
+    if (c === esc) {
+      i += 2;
+      continue;
+    }
+    if (c === "$" && body[i + 1] === "(") {
+      const { inner, end } = readBalanced(body, i + 2, "(", ")");
+      out.push(inner);
+      i = end;
+      continue;
+    }
+    if (c === "`" && tool !== "PowerShell") {
+      const { inner, end } = readBacktick(body, i + 1);
+      out.push(inner);
+      i = end;
+      continue;
+    }
+    i++;
   }
+  return out;
+}
+function executableView(command, tool) {
+  const out = [];
+  let end = null;
+  let expands = false;
+  let body = [];
+  const flush = () => {
+    if (expands) for (const s of bodySubstitutions(body.join("\n"), tool)) out.push(`$(${s})`);
+    end = null;
+    body = [];
+  };
+  for (const line of command.split("\n")) {
+    if (end) {
+      if (end.test(line)) flush();
+      else body.push(line);
+      continue;
+    }
+    if (tool === "PowerShell") {
+      const h = line.match(/^\s*\$\w+\s*=\s*@(['"])\s*$/);
+      if (h) {
+        end = new RegExp(`^\\s*${h[1]}@`);
+        expands = h[1] === '"';
+        continue;
+      }
+      out.push(line);
+      continue;
+    }
+    out.push(line);
+    const m = line.match(/^\s*(?:cat|tee)\b[^|;&<]*<<-?\s*(['"]?)([A-Za-z_]\w*)\1\s*(?:>>?\s*\S+)?\s*$/);
+    if (m) {
+      end = new RegExp(`^\\s*${m[2]}\\s*$`);
+      expands = m[1] === "";
+    }
+  }
+  if (end) flush();
+  return out.join("\n");
+}
+function normalizeEscapes(s, tool) {
+  if (tool !== "PowerShell") return s.replace(/\\\r?\n/g, " ");
+  return s.replace(/`\r?\n/g, " ").replace(/`([A-Za-z0-9])/g, "$1").replace(/`./g, "").replace(/\\(\r?\n)/g, "\\ $1");
 }
 
 // src/shared/typosquat-detect.ts
@@ -16561,10 +16620,12 @@ var malicious_packages_default = {
 
 // src/package-install-guard.ts
 var DIR = String.raw`(?:&\s*)?(?:"[^"]*[\\/]|'[^']*[\\/]|[^\s"']*[\\/])?`;
+var PIP_OPTS = String.raw`(?:\s+(?:--(?:proxy|log|cache-dir|timeout|retries|cert|client-cert|exists-action|trusted-host|python|use-feature|keyring-provider)\s+\S+|-[-\w]+(?:=\S+)?))*`;
+var PY_OPTS = String.raw`(?:\s+(?:-[XW]\s*\S+|-[IuBEsSOqbdv]+|-\d(?:\.\d+)?))*`;
 var INSTALL_PATTERNS = [
-  // Python
-  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?\s+install\b`), ecosystem: "pypi", requirePin: true },
-  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?(?:\s+-\d(?:\.\d+)?)?\s+-m\s+pip\s+install\b`), ecosystem: "pypi", requirePin: true },
+  // Python (Windows runs Python.exe and PIP the same as python and pip, so these ignore case)
+  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?${PIP_OPTS}\s+install\b`, "i"), ecosystem: "pypi", requirePin: true },
+  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?${PY_OPTS}\s+-m\s+pip${PIP_OPTS}\s+install\b`, "i"), ecosystem: "pypi", requirePin: true },
   { regex: /^uv\s+pip\s+install\b/, ecosystem: "pypi", requirePin: true },
   { regex: /^uv\s+add\b/, ecosystem: "pypi" },
   { regex: /^poetry\s+add\b/, ecosystem: "pypi" },
@@ -16601,6 +16662,34 @@ var FLAGS_WITH_VALUE = /* @__PURE__ */ new Set([
   "--prefix",
   "--root",
   "--src",
+  // pip and uv pip (a value here is not a package; the pin check would deny it)
+  "--trusted-host",
+  "--python",
+  "-p",
+  "--python-version",
+  "--platform",
+  "--abi",
+  "--implementation",
+  "--timeout",
+  "--retries",
+  "--proxy",
+  "--cert",
+  "--client-cert",
+  "--cache-dir",
+  "--log",
+  "--upgrade-strategy",
+  "--progress-bar",
+  "--exists-action",
+  "--report",
+  "-C",
+  "--config-settings",
+  "--index",
+  "--default-index",
+  "--index-strategy",
+  "--resolution",
+  "--prerelease",
+  "--keyring-provider",
+  "--root-user-action",
   // npm/yarn
   "--registry"
 ]);
@@ -16620,18 +16709,24 @@ function extractPackageNames(command) {
 function unpinnedPipPackages(command) {
   const install = matchInstall(command);
   if (!install?.pattern.requirePin) return [];
-  return packageTokens(install.args).filter((token) => parsePackageToken(token, "pypi") !== null && !EXACT_PIN.test(token)).map((token) => parsePackageToken(token, "pypi").name);
+  return packageTokens(install.args).filter((token) => parsePackageToken(token, "pypi") !== null && !EXACT_PIN.test(pipSpec(token))).map((token) => parsePackageToken(token, "pypi").name);
 }
-function installSegments(command) {
-  let segments;
+function pipSpec(token) {
+  return token.split(";")[0].replace(/\s+/g, "");
+}
+function stripLeaders(segment) {
+  return segment.trim().replace(/^(?:(?:sudo|time|nohup|command)\s+|[{(]\s*)+/, "").replace(/\s*[})]\s*$/, "");
+}
+function installSegments(command, tool = "Bash", depth = 0) {
   try {
-    const { segments: top, substitutions } = parseExecutable(command);
-    const wrapped = extractShellWrapperPayloads(command).flatMap((p) => parseExecutable(p).segments);
-    segments = [...top, ...substitutions, ...wrapped];
+    const { segments, substitutions } = parseExecutable(normalizeEscapes(executableView(command, tool), tool));
+    const found = segments.map(stripLeaders).filter(isPackageInstallCommand);
+    if (depth >= 3) return found;
+    const nested = [...substitutions, ...wrapperPayloadsFromSegments(segments)];
+    return [...found, ...nested.flatMap((inner) => installSegments(inner, tool, depth + 1))];
   } catch {
-    segments = [command];
+    return isPackageInstallCommand(command) ? [command.trim()] : [];
   }
-  return segments.map((s) => s.trim()).filter(isPackageInstallCommand);
 }
 function matchInstall(command) {
   const trimmed = stripEnvPrefix(command).trim();
@@ -16904,7 +16999,7 @@ function parsePackageToken(token, ecosystem) {
   }
   if (ecosystem === "pypi") {
     if (/^\.|\\|\.(?:whl|zip|tgz|tar\.gz)$/i.test(token)) return null;
-    const match = token.match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
+    const match = pipSpec(token).match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
     if (match) {
       return { name: match[1], version: match[2] || void 0 };
     }
@@ -17010,7 +17105,7 @@ async function main() {
     outputContinue();
     return;
   }
-  const installs = installSegments(command);
+  const installs = installSegments(command, input.tool_name);
   if (installs.length === 0 || checkOverride(command)) {
     outputContinue();
     return;
