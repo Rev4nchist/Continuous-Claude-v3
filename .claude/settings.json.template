@@ -147,6 +147,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 10000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
           }
         ]
       },

@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 /**
- * Package Install Security Guard (PreToolUse:Bash)
+ * Package Install Security Guard (PreToolUse:Bash|PowerShell)
  *
  * Intercepts package install commands and blocks dangerous installs.
  * Protects against supply-chain attacks like:
  * - Typosquatting (requets -> requests)
  * - Known malicious versions (litellm 1.82.7/1.82.8)
  * - Suspiciously new packages (<24h = block, <7d = warn)
+ * - Unpinned pip installs (pip, uv pip, python -m pip): every package needs an exact == pin
+ *
+ * Every executed segment is checked, so `cd x; pip install y` and `Set-Location x; ...` are seen.
  *
  * Output contract: ALWAYS exit 0. A block is the PreToolUse
  * {hookSpecificOutput:{permissionDecision:'deny'}} envelope from shared/output.ts.
@@ -20,6 +23,7 @@ import { readFileSync } from 'fs';
 import https from 'https';
 import http from 'http';
 import { outputContinue, outputDeny } from './shared/output.js';
+import { parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
@@ -52,43 +56,53 @@ interface MaliciousCheckResult {
 // ---------------------------------------------------------------------------
 // Install command patterns
 //
-// Each entry: [regex to match the command prefix, ecosystem, extractArgs fn key]
+// Each entry: regex for the command prefix, ecosystem, and whether pip pins apply.
+// Package arguments are the tokens after the matched prefix.
 //
 // For npm/yarn/pnpm/bun install: bare "install" (no package arg) is NOT
 // a targeted install. We require at least one package-looking argument.
 // ---------------------------------------------------------------------------
 
-const INSTALL_PATTERNS: Array<{
+// An optional folder before a launcher: .venv\Scripts\pip.exe, "C:\Program Files\Python312\python.exe".
+const DIR = String.raw`(?:&\s*)?(?:"[^"]*[\\/]|'[^']*[\\/]|[^\s"']*[\\/])?`;
+
+interface InstallPattern {
   regex: RegExp;
   ecosystem: Exclude<Ecosystem, null>;
-  /** Number of leading tokens to skip when extracting package names */
-  skipTokens: number;
-}> = [
+  /** pip forms: every package needs an exact == pin. Lockfile tools (uv add, poetry add) do not. */
+  requirePin?: boolean;
+}
+
+const INSTALL_PATTERNS: InstallPattern[] = [
   // Python
-  { regex: /^pip\s+install\b/, ecosystem: 'pypi', skipTokens: 2 },
-  { regex: /^uv\s+pip\s+install\b/, ecosystem: 'pypi', skipTokens: 3 },
-  { regex: /^uv\s+add\b/, ecosystem: 'pypi', skipTokens: 2 },
-  { regex: /^poetry\s+add\b/, ecosystem: 'pypi', skipTokens: 2 },
+  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?\s+install\b`), ecosystem: 'pypi', requirePin: true },
+  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?(?:\s+-\d(?:\.\d+)?)?\s+-m\s+pip\s+install\b`), ecosystem: 'pypi', requirePin: true },
+  { regex: /^uv\s+pip\s+install\b/, ecosystem: 'pypi', requirePin: true },
+  { regex: /^uv\s+add\b/, ecosystem: 'pypi' },
+  { regex: /^poetry\s+add\b/, ecosystem: 'pypi' },
 
   // JavaScript / Node
-  { regex: /^npm\s+install\b/, ecosystem: 'npm', skipTokens: 2 },
-  { regex: /^npm\s+i\b/, ecosystem: 'npm', skipTokens: 2 },
-  { regex: /^yarn\s+add\b/, ecosystem: 'npm', skipTokens: 2 },
-  { regex: /^pnpm\s+(add|install)\b/, ecosystem: 'npm', skipTokens: 2 },
-  { regex: /^bun\s+(add|install)\b/, ecosystem: 'npm', skipTokens: 2 },
+  { regex: /^npm\s+install\b/, ecosystem: 'npm' },
+  { regex: /^npm\s+i\b/, ecosystem: 'npm' },
+  { regex: /^yarn\s+add\b/, ecosystem: 'npm' },
+  { regex: /^pnpm\s+(add|install)\b/, ecosystem: 'npm' },
+  { regex: /^bun\s+(add|install)\b/, ecosystem: 'npm' },
 
   // Rust
-  { regex: /^cargo\s+(add|install)\b/, ecosystem: 'cargo', skipTokens: 2 },
+  { regex: /^cargo\s+(add|install)\b/, ecosystem: 'cargo' },
 
   // Go
-  { regex: /^go\s+get\b/, ecosystem: 'go', skipTokens: 2 },
+  { regex: /^go\s+get\b/, ecosystem: 'go' },
 
   // Ruby
-  { regex: /^gem\s+install\b/, ecosystem: 'gem', skipTokens: 2 },
+  { regex: /^gem\s+install\b/, ecosystem: 'gem' },
 
   // PHP
-  { regex: /^composer\s+require\b/, ecosystem: 'composer', skipTokens: 2 },
+  { regex: /^composer\s+require\b/, ecosystem: 'composer' },
 ];
+
+/** An exact pip pin: name==1.2.3 or name===1.2.3, extras allowed, no wildcard or second clause. */
+const EXACT_PIN = /^[A-Za-z0-9_.-]+(?:\[[^\]]*\])?===?[^=<>~!*,;\s]+$/;
 
 // Flags that take a value argument (the next token is NOT a package name)
 const FLAGS_WITH_VALUE = new Set([
@@ -112,86 +126,80 @@ const STANDALONE_FLAGS = /^-/;
  * requirements-file installs (pip install -r requirements.txt).
  */
 export function isPackageInstallCommand(command: string): boolean {
-  const trimmed = stripEnvPrefix(command).trim();
-
-  for (const { regex } of INSTALL_PATTERNS) {
-    if (regex.test(trimmed)) {
-      // Check that there is at least one package-looking argument
-      const pkgs = extractPackageNames(command);
-      return pkgs.length > 0;
-    }
-  }
-  return false;
+  return extractPackageNames(command).length > 0;
 }
 
 /**
  * Identify the package ecosystem from a command string.
  */
 export function parseEcosystem(command: string): Ecosystem {
-  const trimmed = stripEnvPrefix(command).trim();
-  for (const { regex, ecosystem } of INSTALL_PATTERNS) {
-    if (regex.test(trimmed)) {
-      return ecosystem;
-    }
-  }
-  return null;
+  return matchInstall(command)?.pattern.ecosystem ?? null;
 }
 
 /**
  * Extract package names (and optional versions) from an install command.
  */
 export function extractPackageNames(command: string): PackageInfo[] {
+  const install = matchInstall(command);
+  if (!install) return [];
+  const { ecosystem } = install.pattern;
+  return packageTokens(install.args)
+    .map((token) => parsePackageToken(token, ecosystem))
+    .filter((p): p is PackageInfo => p !== null);
+}
+
+/**
+ * The pip packages in an install command that lack an exact == pin. Empty for every other
+ * installer: uv add and poetry add write a lockfile, npm is out of scope.
+ */
+export function unpinnedPipPackages(command: string): string[] {
+  const install = matchInstall(command);
+  if (!install?.pattern.requirePin) return [];
+  return packageTokens(install.args)
+    .filter((token) => parsePackageToken(token, 'pypi') !== null && !EXACT_PIN.test(token))
+    .map((token) => parsePackageToken(token, 'pypi')!.name);
+}
+
+/**
+ * The executed segments of a Bash or PowerShell command that install packages. Also looks inside
+ * $(...) and shell-wrapper payloads (bash -c "...", powershell -Command "..."). Fails open to the
+ * whole command when the parser throws.
+ */
+export function installSegments(command: string): string[] {
+  let segments: string[];
+  try {
+    const { segments: top, substitutions } = parseExecutable(command);
+    const wrapped = extractShellWrapperPayloads(command).flatMap((p) => parseExecutable(p).segments);
+    segments = [...top, ...substitutions, ...wrapped];
+  } catch {
+    segments = [command];
+  }
+  return segments.map((s) => s.trim()).filter(isPackageInstallCommand);
+}
+
+/** The first install pattern a command matches, and the text after the matched prefix. */
+function matchInstall(command: string): { pattern: InstallPattern; args: string } | null {
   const trimmed = stripEnvPrefix(command).trim();
-  const ecosystem = parseEcosystem(command);
-  if (!ecosystem) return [];
-
-  // Find matching pattern to know how many leading tokens to skip
-  let skipTokens = 2;
   for (const pattern of INSTALL_PATTERNS) {
-    if (pattern.regex.test(trimmed)) {
-      skipTokens = pattern.skipTokens;
-      break;
-    }
+    const m = trimmed.match(pattern.regex);
+    if (m) return { pattern, args: trimmed.slice(m[0].length) };
   }
+  return null;
+}
 
-  const tokens = tokenize(trimmed);
-  const packages: PackageInfo[] = [];
-
-  let i = skipTokens;
+/** The argument tokens that are not flags or flag values. */
+function packageTokens(args: string): string[] {
+  const out: string[] = [];
   let skipNext = false;
-
-  while (i < tokens.length) {
-    const token = tokens[i];
-
-    if (skipNext) {
-      skipNext = false;
-      i++;
-      continue;
-    }
-
-    // If this is a flag that consumes the next token, skip both
-    if (FLAGS_WITH_VALUE.has(token)) {
-      skipNext = true;
-      i++;
-      continue;
-    }
-
-    // Skip standalone flags (--save-dev, --global, -U, etc.)
-    if (STANDALONE_FLAGS.test(token)) {
-      i++;
-      continue;
-    }
-
-    // This should be a package name
-    const parsed = parsePackageToken(token, ecosystem);
-    if (parsed) {
-      packages.push(parsed);
-    }
-
-    i++;
+  for (const token of tokenize(args)) {
+    if (skipNext) { skipNext = false; continue; }
+    // A flag that consumes the next token (-r file, --index-url url)
+    if (FLAGS_WITH_VALUE.has(token)) { skipNext = true; continue; }
+    // Standalone flags (--save-dev, --global, -U, etc.)
+    if (STANDALONE_FLAGS.test(token)) continue;
+    out.push(token);
   }
-
-  return packages;
+  return out;
 }
 
 /**
@@ -571,6 +579,8 @@ function parsePackageToken(
   }
 
   if (ecosystem === 'pypi') {
+    // A local folder or archive (., .\pkg, dist\x.whl) is not a registry package.
+    if (/^\.|\\|\.(?:whl|zip|tgz|tar\.gz)$/i.test(token)) return null;
     // pip: name==version, name>=version, name~=version, name[extras]==version
     const match = token.match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
     if (match) {
@@ -646,6 +656,52 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
+const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+const OVERRIDE = 'To override: prefix command with SKIP_PACKAGE_GUARD=1';
+
+/**
+ * Run every check on one install segment. The local checks (typosquat, blocklist, pin) run
+ * before the network checks (OSV, package age), so a deny on them costs no request.
+ */
+async function checkInstall(segment: string): Promise<{ deny?: string; advisories: string[] }> {
+  const ecosystem = parseEcosystem(segment);
+  const advisories: string[] = [];
+  if (ecosystem !== 'pypi' && ecosystem !== 'npm') return { advisories };
+  const packages = extractPackageNames(segment);
+
+  for (const pkg of packages) {
+    const typo = checkTyposquat(pkg.name, ecosystem);
+    if (typo.isTyposquat) {
+      return { advisories, deny: `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. ${OVERRIDE}` };
+    }
+    const malCheck = checkMaliciousPackage(pkg.name, pkg.version, ecosystem);
+    if (malCheck.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. ${OVERRIDE}` };
+    }
+    if (malCheck.warning) advisories.push(malCheck.warning);
+  }
+
+  const unpinned = unpinnedPipPackages(segment);
+  if (unpinned.length > 0) {
+    return { advisories, deny: `PACKAGE SECURITY: Unpinned pip install. Every pip install needs an exact == pin. Unpinned: ${unpinned.join(', ')}. Pin each one, for example ${unpinned[0]}==<version>, with a version at least 7 days old on PyPI.` };
+  }
+
+  for (const pkg of packages) {
+    const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
+    if (osvResult.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. ${OVERRIDE}` };
+    }
+    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+
+    const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
+    if (ageResult.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
+    }
+    if (ageResult.warning) advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
+  }
+  return { advisories };
+}
+
 async function main() {
   let input: PreToolUseInput;
   try {
@@ -655,8 +711,8 @@ async function main() {
     return;
   }
 
-  // Only process Bash tool calls
-  if (input.tool_name !== 'Bash') {
+  // Both shells run installs. The settings.json matcher must name the same tools (two gates).
+  if (!COMMAND_TOOLS.has(input.tool_name)) {
     outputContinue();
     return;
   }
@@ -667,85 +723,21 @@ async function main() {
     return;
   }
 
-  // Fast path: not a package install -> passthrough immediately
-  if (!isPackageInstallCommand(command)) {
-    outputContinue();
-    return;
-  }
-
-  // Check override
-  if (checkOverride(command)) {
-    outputContinue();
-    return;
-  }
-
-  const ecosystem = parseEcosystem(command);
-  if (!ecosystem) {
-    outputContinue();
-    return;
-  }
-
-  const packages = extractPackageNames(command);
-  if (packages.length === 0) {
+  // Fast path: no segment installs a package -> passthrough immediately
+  const installs = installSegments(command);
+  if (installs.length === 0 || checkOverride(command)) {
     outputContinue();
     return;
   }
 
   const advisories: string[] = [];
-
-  for (const pkg of packages) {
-    // 1. Typosquat check (only for pypi and npm)
-    if (ecosystem === 'pypi' || ecosystem === 'npm') {
-      const typo = checkTyposquat(pkg.name, ecosystem);
-      if (typo.isTyposquat) {
-        outputDeny(
-          `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
+  for (const segment of installs) {
+    const result = await checkInstall(segment);
+    if (result.deny) {
+      outputDeny(result.deny);
+      return;
     }
-
-    // 2. Malicious package blocklist check (pypi and npm)
-    if (ecosystem === 'pypi' || ecosystem === 'npm') {
-      const malCheck = checkMaliciousPackage(pkg.name, pkg.version, ecosystem);
-      if (malCheck.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (malCheck.warning) {
-        advisories.push(malCheck.warning);
-      }
-    }
-
-    // 3. OSV.dev real-time vulnerability check (pypi and npm)
-    if (ecosystem === 'pypi' || ecosystem === 'npm') {
-      const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
-      if (osvResult.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? '@' + pkg.version : ''}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (osvResult.warning) {
-        advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
-      }
-    }
-
-    // 4. Package age check (pypi and npm only)
-    if (ecosystem === 'pypi' || ecosystem === 'npm') {
-      const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
-      if (ageResult.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (ageResult.warning) {
-        advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
-      }
-    }
+    advisories.push(...result.advisories);
   }
 
   // All checks passed

@@ -28,6 +28,8 @@ import {
   checkMaliciousPackage,
   checkOsvAdvisory,
   publishDateFromRegistryJson,
+  installSegments,
+  unpinnedPipPackages,
 } from '../package-install-guard.js';
 
 import { checkTyposquat } from '../shared/typosquat-detect.js';
@@ -39,9 +41,9 @@ import maliciousPackages from '../shared/malicious-packages.json';
 // Helpers
 // ---------------------------------------------------------------------------
 
-function makePayload(command: string): string {
+function makePayload(command: string, tool = 'Bash'): string {
   return JSON.stringify({
-    tool_name: 'Bash',
+    tool_name: tool,
     tool_input: { command },
     session_id: 'test-session',
   });
@@ -523,6 +525,7 @@ describe('package-install-guard', () => {
       ['httpie', 'pypi'],
       ['hiredis', 'pypi'],
       ['torchx', 'pypi'],
+      ['mcp', 'pypi'],
     ] as const)('does not flag %s (%s) even though it is within 2 edits of a popular name', (name, eco) => {
       expect(checkTyposquat(name, eco).isTyposquat).toBe(false);
     });
@@ -614,7 +617,77 @@ describe('package-install-guard', () => {
     });
   });
 
+  // Review H2 (FourthCompanyBrain, 2026-10-04): PowerShell is the default shell here, and the
+  // "pin every install" rule was prose only.
+  describe('PowerShell forms and later segments', () => {
+    it('detects python -m pip install', () => {
+      expect(extractPackageNames('python -m pip install requests')).toEqual([{ name: 'requests', version: undefined }]);
+    });
+    it('detects py -3.12 -m pip install', () => {
+      expect(isPackageInstallCommand('py -3.12 -m pip install requests')).toBe(true);
+    });
+    it('detects a pip.exe under a Windows venv path', () => {
+      expect(isPackageInstallCommand('.venv\\Scripts\\pip.exe install requests')).toBe(true);
+    });
+    it('finds an install after cd in Bash', () => {
+      expect(installSegments('cd /tmp/x && pip install requests')).toEqual(['pip install requests']);
+    });
+    it('finds an install after Set-Location in PowerShell', () => {
+      expect(installSegments('Set-Location C:\\x; python -m pip install requests')).toEqual(['python -m pip install requests']);
+    });
+    it('does not treat an echoed install as an install', () => {
+      expect(installSegments('echo "pip install requests"')).toEqual([]);
+    });
+  });
+
+  describe('pip pin check', () => {
+    it('flags a bare name', () => {
+      expect(unpinnedPipPackages('pip install requests')).toEqual(['requests']);
+    });
+    it('flags a range and a wildcard', () => {
+      expect(unpinnedPipPackages('pip install "requests>=2" httpx==0.*')).toEqual(['requests', 'httpx']);
+    });
+    it('passes == and === pins, with extras and quotes', () => {
+      expect(unpinnedPipPackages('pip install "requests[socks]==2.32.3" mcp===1.26.0')).toEqual([]);
+    });
+    it('flags uv pip install and python -m pip install', () => {
+      expect(unpinnedPipPackages('uv pip install httpx')).toEqual(['httpx']);
+      expect(unpinnedPipPackages('python -m pip install -U pip')).toEqual(['pip']);
+    });
+    it('leaves lockfile tools, requirement files and local paths alone', () => {
+      expect(unpinnedPipPackages('uv add httpx')).toEqual([]);
+      expect(unpinnedPipPackages('pip install -r requirements.txt')).toEqual([]);
+      expect(unpinnedPipPackages('pip install -e .')).toEqual([]);
+      expect(unpinnedPipPackages('pip install .')).toEqual([]);
+      expect(unpinnedPipPackages('pip install dist\\pkg-1.0-py3-none-any.whl')).toEqual([]);
+    });
+    it('leaves npm alone', () => {
+      expect(unpinnedPipPackages('npm install express')).toEqual([]);
+    });
+  });
+
   describe('deny envelope (built hook, subprocess)', () => {
+    it('denies an unpinned pip install sent through the PowerShell tool', async () => {
+      const { spawnSync } = await import('node:child_process');
+      const { existsSync } = await import('node:fs');
+      const { fileURLToPath } = await import('node:url');
+      const dist = fileURLToPath(new URL('../../dist/package-install-guard.mjs', import.meta.url));
+      if (!existsSync(dist)) return;
+      const env = { ...process.env };
+      delete env.VITEST;
+      delete env.VITEST_WORKER_ID;
+      const res = spawnSync(process.execPath, [dist], {
+        input: makePayload('Set-Location C:\\x; python -m pip install requests', 'PowerShell'),
+        encoding: 'utf8',
+        timeout: 20_000,
+        env,
+      });
+      expect(res.status).toBe(0);
+      const out = JSON.parse(res.stdout.trim().split('\n').pop()!);
+      expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+      expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/requests==/);
+    });
+
     it('emits the PreToolUse hookSpecificOutput deny envelope on stdout and exits 0', async () => {
       const { spawnSync } = await import('node:child_process');
       const { existsSync } = await import('node:fs');

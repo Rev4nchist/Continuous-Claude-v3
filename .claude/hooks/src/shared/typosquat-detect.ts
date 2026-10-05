@@ -59,6 +59,7 @@ const LEGITIMATE_NEAR_MISSES_PYPI = new Set<string>([
   'hiredis',     // redis C parser binding; 2 from "redis"
   'torchx',      // Meta's TorchX; 1 from "torch"
   'sh',          // subprocess wrapper; 1 from "six"
+  'mcp',         // Model Context Protocol Python SDK (modelcontextprotocol/python-sdk); 2 from "pip"
 ]);
 
 // ---------------------------------------------------------------------------

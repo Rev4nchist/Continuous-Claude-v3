@@ -19,6 +19,231 @@ function outputDeny(reason, decision = "deny") {
   }));
 }
 
+// src/shared/destructive-classifier.ts
+var LEAD_ITEM = String.raw`(?:[A-Za-z_]\w*=\S*|\$\w+\s*=|\[\w+\]|\(|\{|\)|&|\.|sudo|time|nohup|call|(?:try|else|finally|do|ForEach-Object|ForEach|Where-Object|%)\s*\{|(?:if|elseif|foreach|while|switch)\s*\((?:[^()]|\([^()]*\))*\)\s*\{)`;
+var SEG_START = String.raw`^\s*(?:${LEAD_ITEM}\s*)*`;
+var HTTP_CLIENT = String.raw`(?:az(?:\.cmd|\.exe)?\s+rest|fab(?:\.exe)?\s+api|curl(?:\.exe)?|Invoke-RestMethod|Invoke-WebRequest|Invoke-AzRestMethod|irm|iwr)\b`;
+var methodIs = (verbs) => String.raw`(?=.*(?:(?:--method|--request|-(?:Custom)?Meth\w*)[\s=:]+["']?(?:${verbs})\b|\s-[Xm]\s*["']?(?:${verbs})\b))`;
+var CAPACITY_RESOURCE = String.raw`.*(?:Microsoft\.(?:Fabric|PowerBIDedicated)/|management\.azure\.com\S*/)capacities/[^/\s"'?#]+/?(?:[?#"'\s]|$)`;
+var seg = (rest) => new RegExp(SEG_START + rest, "i");
+var SEGMENT_PATTERNS = [
+  { name: "Fabric capacity suspend/resume/resize/delete", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+fabric\s+capacity\s+(?:suspend|resume|update|delete)\b`) },
+  { name: "Az.Fabric capacity cmdlet (suspend/resume/update/remove)", re: seg(String.raw`(?:Suspend|Resume|Update|Remove)-AzFabricCapacity\b`) },
+  // az resource on a capacity: delete, update (--set sku...), create (PUT), invoke-action suspend|resume.
+  { name: "az resource change of a Fabric capacity", re: seg(String.raw`az(?:\.cmd|\.exe)?\s+resource\s+(?:delete|update|create|invoke-action)\b.*Microsoft\.(?:Fabric|PowerBIDedicated)/capacities`) },
+  // Fabric CLI verbs that act on a capacity path (.capacities/<name>.Capacity). Case-sensitive on purpose.
+  { name: "Fabric CLI capacity stop/start/set/rm/create", re: new RegExp(SEG_START + String.raw`fab(?:\.exe)?\s+(?:stop|start|set|rm|create)\b.*(?:\.capacities[\\/]|\.Capacity(?:["'\s]|$))`) },
+  { name: "Fabric capacity suspend/resume via REST", re: seg(HTTP_CLIENT + String.raw`.*/capacities/[^/\s"'?#]+/(?:suspend|resume)\b`) },
+  // ARM PATCH, PUT or DELETE on the capacity resource itself changes its SKU or removes it. GET and subpaths stay allowed.
+  { name: "Fabric capacity SKU change or delete via REST (PATCH/PUT/DELETE)", re: seg(HTTP_CLIENT + methodIs("patch|put|delete") + CAPACITY_RESOURCE) },
+  // PUT .../dataAccessRoles replaces EVERY OneLake role (DefaultReader too). A named role
+  // (.../dataAccessRoles/<name>) and POST are not the bulk replace.
+  { name: "OneLake bulk PUT dataAccessRoles (replaces ALL roles)", re: seg(HTTP_CLIENT + methodIs("put") + String.raw`.*/dataAccessRoles/?(?:[?#"'\s]|$)`) }
+];
+function parseExecutable(command) {
+  const segments = [];
+  const substitutions = [];
+  let seg2 = "";
+  let inSingle = false;
+  let inDouble = false;
+  const n = command.length;
+  let i = 0;
+  const pushSeg = () => {
+    const t = seg2.trim();
+    if (t) segments.push(t);
+    seg2 = "";
+  };
+  while (i < n) {
+    const c = command[i];
+    const next = command[i + 1];
+    if (inSingle) {
+      seg2 += c;
+      if (c === "'") inSingle = false;
+      i++;
+      continue;
+    }
+    if (inDouble) {
+      if (c === "\\" && next !== void 0) {
+        seg2 += c + next;
+        i += 2;
+        continue;
+      }
+      if (c === '"') {
+        inDouble = false;
+        seg2 += c;
+        i++;
+        continue;
+      }
+      if (c === "$" && next === "(") {
+        const { inner, end } = readBalanced(command, i + 2, "(", ")");
+        substitutions.push(inner);
+        seg2 += command.slice(i, end);
+        i = end;
+        continue;
+      }
+      if (c === "`") {
+        const { inner, end } = readBacktick(command, i + 1);
+        substitutions.push(inner);
+        seg2 += command.slice(i, end);
+        i = end;
+        continue;
+      }
+      seg2 += c;
+      i++;
+      continue;
+    }
+    if (c === "\\" && next !== void 0) {
+      seg2 += c + next;
+      i += 2;
+      continue;
+    }
+    if (c === "'") {
+      inSingle = true;
+      seg2 += c;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inDouble = true;
+      seg2 += c;
+      i++;
+      continue;
+    }
+    if (c === "$" && next === "(") {
+      const { inner, end } = readBalanced(command, i + 2, "(", ")");
+      substitutions.push(inner);
+      seg2 += command.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === "`") {
+      const { inner, end } = readBacktick(command, i + 1);
+      substitutions.push(inner);
+      seg2 += command.slice(i, end);
+      i = end;
+      continue;
+    }
+    if (c === ";" || c === "\n") {
+      pushSeg();
+      i++;
+      continue;
+    }
+    if (c === "&" && next === "&" || c === "|" && next === "|") {
+      pushSeg();
+      i += 2;
+      continue;
+    }
+    if (c === "|" || c === "&") {
+      pushSeg();
+      i++;
+      continue;
+    }
+    seg2 += c;
+    i++;
+  }
+  pushSeg();
+  return { segments, substitutions };
+}
+function readBalanced(s, start, open, close) {
+  let depth = 1;
+  let i = start;
+  let inS = false;
+  let inD = false;
+  while (i < s.length) {
+    const c = s[i];
+    if (inS) {
+      if (c === "'") inS = false;
+      i++;
+      continue;
+    }
+    if (inD) {
+      if (c === "\\") {
+        i += 2;
+        continue;
+      }
+      if (c === '"') inD = false;
+      i++;
+      continue;
+    }
+    if (c === "'") {
+      inS = true;
+      i++;
+      continue;
+    }
+    if (c === '"') {
+      inD = true;
+      i++;
+      continue;
+    }
+    if (c === "$" && s[i + 1] === open) {
+      depth++;
+      i += 2;
+      continue;
+    }
+    if (c === open) {
+      depth++;
+      i++;
+      continue;
+    }
+    if (c === close) {
+      depth--;
+      if (depth === 0) return { inner: s.slice(start, i), end: i + 1 };
+      i++;
+      continue;
+    }
+    i++;
+  }
+  return { inner: s.slice(start), end: s.length };
+}
+function readBacktick(s, start) {
+  let i = start;
+  while (i < s.length) {
+    if (s[i] === "\\") {
+      i += 2;
+      continue;
+    }
+    if (s[i] === "`") return { inner: s.slice(start, i), end: i + 1 };
+    i++;
+  }
+  return { inner: s.slice(start), end: s.length };
+}
+var WRAPPER_RES = [
+  // POSIX shells: bash|sh|zsh|dash|ksh|ash ... -c|-...c "<payload>". The launcher
+  // prefix allows flags (env -i, sudo -E) before the interpreter (round-2 fix).
+  /^(?:(?:sudo|env|nohup|time)(?:\s+-\S+)*\s+|[^\s=]+=\S+\s+)*(?:bash|sh|zsh|dash|ksh|ash)\b[^'"]*?\s-[a-z]*c\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
+  // PowerShell: powershell|pwsh ... -c|-Command "<payload>"
+  /^(?:(?:sudo|env)\s+)?(?:powershell|pwsh)(?:\.exe)?\b[^'"]*?\s-c(?:ommand)?\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i,
+  // cmd: cmd[.exe] /c|/k "<payload>"
+  /^(?:(?:sudo|env)\s+)?cmd(?:\.exe)?\b[^'"]*?\s\/[ck]\b\s*("(?:[^"\\]|\\.)*"|'[^']*'|\S.*)$/i
+];
+function unwrapPayload(raw) {
+  let s = raw.trim();
+  if (s.startsWith('"') && s.endsWith('"') || s.startsWith("'") && s.endsWith("'")) {
+    s = s.slice(1, -1);
+  }
+  return s.replace(/\\(["'`$\\])/g, "$1");
+}
+function wrapperPayloadsFromSegments(segments) {
+  const out = [];
+  for (const seg2 of segments) {
+    for (const re of WRAPPER_RES) {
+      const m = seg2.match(re);
+      if (m && m[1]) {
+        out.push(unwrapPayload(m[1]));
+        break;
+      }
+    }
+  }
+  return out;
+}
+function extractShellWrapperPayloads(command) {
+  try {
+    return wrapperPayloadsFromSegments(parseExecutable(command).segments);
+  } catch {
+    return [];
+  }
+}
+
 // src/shared/typosquat-detect.ts
 var POPULAR_PYPI = [
   "requests",
@@ -111,8 +336,10 @@ var LEGITIMATE_NEAR_MISSES_PYPI = /* @__PURE__ */ new Set([
   // redis C parser binding; 2 from "redis"
   "torchx",
   // Meta's TorchX; 1 from "torch"
-  "sh"
+  "sh",
   // subprocess wrapper; 1 from "six"
+  "mcp"
+  // Model Context Protocol Python SDK (modelcontextprotocol/python-sdk); 2 from "pip"
 ]);
 var KNOWN_PYPI_TYPOSQUATS = {
   // requests variants
@@ -16333,27 +16560,30 @@ var malicious_packages_default = {
 };
 
 // src/package-install-guard.ts
+var DIR = String.raw`(?:&\s*)?(?:"[^"]*[\\/]|'[^']*[\\/]|[^\s"']*[\\/])?`;
 var INSTALL_PATTERNS = [
   // Python
-  { regex: /^pip\s+install\b/, ecosystem: "pypi", skipTokens: 2 },
-  { regex: /^uv\s+pip\s+install\b/, ecosystem: "pypi", skipTokens: 3 },
-  { regex: /^uv\s+add\b/, ecosystem: "pypi", skipTokens: 2 },
-  { regex: /^poetry\s+add\b/, ecosystem: "pypi", skipTokens: 2 },
+  { regex: new RegExp(String.raw`^${DIR}pip(?:3(?:\.\d+)?)?(?:\.exe)?["']?\s+install\b`), ecosystem: "pypi", requirePin: true },
+  { regex: new RegExp(String.raw`^${DIR}(?:python(?:3(?:\.\d+)?)?|py)(?:\.exe)?["']?(?:\s+-\d(?:\.\d+)?)?\s+-m\s+pip\s+install\b`), ecosystem: "pypi", requirePin: true },
+  { regex: /^uv\s+pip\s+install\b/, ecosystem: "pypi", requirePin: true },
+  { regex: /^uv\s+add\b/, ecosystem: "pypi" },
+  { regex: /^poetry\s+add\b/, ecosystem: "pypi" },
   // JavaScript / Node
-  { regex: /^npm\s+install\b/, ecosystem: "npm", skipTokens: 2 },
-  { regex: /^npm\s+i\b/, ecosystem: "npm", skipTokens: 2 },
-  { regex: /^yarn\s+add\b/, ecosystem: "npm", skipTokens: 2 },
-  { regex: /^pnpm\s+(add|install)\b/, ecosystem: "npm", skipTokens: 2 },
-  { regex: /^bun\s+(add|install)\b/, ecosystem: "npm", skipTokens: 2 },
+  { regex: /^npm\s+install\b/, ecosystem: "npm" },
+  { regex: /^npm\s+i\b/, ecosystem: "npm" },
+  { regex: /^yarn\s+add\b/, ecosystem: "npm" },
+  { regex: /^pnpm\s+(add|install)\b/, ecosystem: "npm" },
+  { regex: /^bun\s+(add|install)\b/, ecosystem: "npm" },
   // Rust
-  { regex: /^cargo\s+(add|install)\b/, ecosystem: "cargo", skipTokens: 2 },
+  { regex: /^cargo\s+(add|install)\b/, ecosystem: "cargo" },
   // Go
-  { regex: /^go\s+get\b/, ecosystem: "go", skipTokens: 2 },
+  { regex: /^go\s+get\b/, ecosystem: "go" },
   // Ruby
-  { regex: /^gem\s+install\b/, ecosystem: "gem", skipTokens: 2 },
+  { regex: /^gem\s+install\b/, ecosystem: "gem" },
   // PHP
-  { regex: /^composer\s+require\b/, ecosystem: "composer", skipTokens: 2 }
+  { regex: /^composer\s+require\b/, ecosystem: "composer" }
 ];
+var EXACT_PIN = /^[A-Za-z0-9_.-]+(?:\[[^\]]*\])?===?[^=<>~!*,;\s]+$/;
 var FLAGS_WITH_VALUE = /* @__PURE__ */ new Set([
   "-r",
   "--requirement",
@@ -16376,62 +16606,57 @@ var FLAGS_WITH_VALUE = /* @__PURE__ */ new Set([
 ]);
 var STANDALONE_FLAGS = /^-/;
 function isPackageInstallCommand(command) {
-  const trimmed = stripEnvPrefix(command).trim();
-  for (const { regex } of INSTALL_PATTERNS) {
-    if (regex.test(trimmed)) {
-      const pkgs = extractPackageNames(command);
-      return pkgs.length > 0;
-    }
-  }
-  return false;
+  return extractPackageNames(command).length > 0;
 }
 function parseEcosystem(command) {
+  return matchInstall(command)?.pattern.ecosystem ?? null;
+}
+function extractPackageNames(command) {
+  const install = matchInstall(command);
+  if (!install) return [];
+  const { ecosystem } = install.pattern;
+  return packageTokens(install.args).map((token) => parsePackageToken(token, ecosystem)).filter((p) => p !== null);
+}
+function unpinnedPipPackages(command) {
+  const install = matchInstall(command);
+  if (!install?.pattern.requirePin) return [];
+  return packageTokens(install.args).filter((token) => parsePackageToken(token, "pypi") !== null && !EXACT_PIN.test(token)).map((token) => parsePackageToken(token, "pypi").name);
+}
+function installSegments(command) {
+  let segments;
+  try {
+    const { segments: top, substitutions } = parseExecutable(command);
+    const wrapped = extractShellWrapperPayloads(command).flatMap((p) => parseExecutable(p).segments);
+    segments = [...top, ...substitutions, ...wrapped];
+  } catch {
+    segments = [command];
+  }
+  return segments.map((s) => s.trim()).filter(isPackageInstallCommand);
+}
+function matchInstall(command) {
   const trimmed = stripEnvPrefix(command).trim();
-  for (const { regex, ecosystem } of INSTALL_PATTERNS) {
-    if (regex.test(trimmed)) {
-      return ecosystem;
-    }
+  for (const pattern of INSTALL_PATTERNS) {
+    const m = trimmed.match(pattern.regex);
+    if (m) return { pattern, args: trimmed.slice(m[0].length) };
   }
   return null;
 }
-function extractPackageNames(command) {
-  const trimmed = stripEnvPrefix(command).trim();
-  const ecosystem = parseEcosystem(command);
-  if (!ecosystem) return [];
-  let skipTokens = 2;
-  for (const pattern of INSTALL_PATTERNS) {
-    if (pattern.regex.test(trimmed)) {
-      skipTokens = pattern.skipTokens;
-      break;
-    }
-  }
-  const tokens = tokenize(trimmed);
-  const packages = [];
-  let i = skipTokens;
+function packageTokens(args) {
+  const out = [];
   let skipNext = false;
-  while (i < tokens.length) {
-    const token = tokens[i];
+  for (const token of tokenize(args)) {
     if (skipNext) {
       skipNext = false;
-      i++;
       continue;
     }
     if (FLAGS_WITH_VALUE.has(token)) {
       skipNext = true;
-      i++;
       continue;
     }
-    if (STANDALONE_FLAGS.test(token)) {
-      i++;
-      continue;
-    }
-    const parsed = parsePackageToken(token, ecosystem);
-    if (parsed) {
-      packages.push(parsed);
-    }
-    i++;
+    if (STANDALONE_FLAGS.test(token)) continue;
+    out.push(token);
   }
-  return packages;
+  return out;
 }
 function checkOverride(command) {
   return /\bSKIP_PACKAGE_GUARD=1\b/.test(command);
@@ -16678,6 +16903,7 @@ function parsePackageToken(token, ecosystem) {
     return null;
   }
   if (ecosystem === "pypi") {
+    if (/^\.|\\|\.(?:whl|zip|tgz|tar\.gz)$/i.test(token)) return null;
     const match = token.match(/^([a-zA-Z0-9_.-]+)(?:\[.*?\])?(?:[=<>~!]+(.+))?$/);
     if (match) {
       return { name: match[1], version: match[2] || void 0 };
@@ -16731,6 +16957,42 @@ function outputAllowOk() {
 function readStdin() {
   return readFileSync(0, "utf-8");
 }
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var OVERRIDE = "To override: prefix command with SKIP_PACKAGE_GUARD=1";
+async function checkInstall(segment) {
+  const ecosystem = parseEcosystem(segment);
+  const advisories = [];
+  if (ecosystem !== "pypi" && ecosystem !== "npm") return { advisories };
+  const packages = extractPackageNames(segment);
+  for (const pkg of packages) {
+    const typo = checkTyposquat(pkg.name, ecosystem);
+    if (typo.isTyposquat) {
+      return { advisories, deny: `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. ${OVERRIDE}` };
+    }
+    const malCheck = checkMaliciousPackage(pkg.name, pkg.version, ecosystem);
+    if (malCheck.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
+    }
+    if (malCheck.warning) advisories.push(malCheck.warning);
+  }
+  const unpinned = unpinnedPipPackages(segment);
+  if (unpinned.length > 0) {
+    return { advisories, deny: `PACKAGE SECURITY: Unpinned pip install. Every pip install needs an exact == pin. Unpinned: ${unpinned.join(", ")}. Pin each one, for example ${unpinned[0]}==<version>, with a version at least 7 days old on PyPI.` };
+  }
+  for (const pkg of packages) {
+    const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
+    if (osvResult.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. ${OVERRIDE}` };
+    }
+    if (osvResult.warning) advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
+    const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
+    if (ageResult.blocked) {
+      return { advisories, deny: `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. ${OVERRIDE}` };
+    }
+    if (ageResult.warning) advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
+  }
+  return { advisories };
+}
 async function main() {
   let input;
   try {
@@ -16739,7 +17001,7 @@ async function main() {
     outputContinue();
     return;
   }
-  if (input.tool_name !== "Bash") {
+  if (!COMMAND_TOOLS.has(input.tool_name)) {
     outputContinue();
     return;
   }
@@ -16748,71 +17010,19 @@ async function main() {
     outputContinue();
     return;
   }
-  if (!isPackageInstallCommand(command)) {
-    outputContinue();
-    return;
-  }
-  if (checkOverride(command)) {
-    outputContinue();
-    return;
-  }
-  const ecosystem = parseEcosystem(command);
-  if (!ecosystem) {
-    outputContinue();
-    return;
-  }
-  const packages = extractPackageNames(command);
-  if (packages.length === 0) {
+  const installs = installSegments(command);
+  if (installs.length === 0 || checkOverride(command)) {
     outputContinue();
     return;
   }
   const advisories = [];
-  for (const pkg of packages) {
-    if (ecosystem === "pypi" || ecosystem === "npm") {
-      const typo = checkTyposquat(pkg.name, ecosystem);
-      if (typo.isTyposquat) {
-        outputDeny(
-          `PACKAGE SECURITY: Suspected typosquat. "${pkg.name}" looks like "${typo.similarTo}". ${typo.reason}. Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
+  for (const segment of installs) {
+    const result = await checkInstall(segment);
+    if (result.deny) {
+      outputDeny(result.deny);
+      return;
     }
-    if (ecosystem === "pypi" || ecosystem === "npm") {
-      const malCheck = checkMaliciousPackage(pkg.name, pkg.version, ecosystem);
-      if (malCheck.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: Known malicious package/version. ${malCheck.reason}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (malCheck.warning) {
-        advisories.push(malCheck.warning);
-      }
-    }
-    if (ecosystem === "pypi" || ecosystem === "npm") {
-      const osvResult = await checkOsvAdvisory(pkg.name, pkg.version, ecosystem);
-      if (osvResult.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: ${osvResult.warning} Advisory: ${osvResult.advisoryId}. Package: ${pkg.name}${pkg.version ? "@" + pkg.version : ""}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (osvResult.warning) {
-        advisories.push(`OSV ADVISORY: ${osvResult.warning}`);
-      }
-    }
-    if (ecosystem === "pypi" || ecosystem === "npm") {
-      const ageResult = await checkPackageAge(pkg.name, ecosystem, pkg.version);
-      if (ageResult.blocked) {
-        outputDeny(
-          `PACKAGE SECURITY: ${ageResult.warning} Package: ${pkg.name}. To override: prefix command with SKIP_PACKAGE_GUARD=1`
-        );
-        return;
-      }
-      if (ageResult.warning) {
-        advisories.push(`PACKAGE ADVISORY: ${ageResult.warning}`);
-      }
-    }
+    advisories.push(...result.advisories);
   }
   if (advisories.length > 0) {
     outputAllowWithAdvisory(advisories.join("\n"));
@@ -16831,7 +17041,9 @@ export {
   checkOverride,
   checkPackageAge,
   extractPackageNames,
+  installSegments,
   isPackageInstallCommand,
   parseEcosystem,
-  publishDateFromRegistryJson
+  publishDateFromRegistryJson,
+  unpinnedPipPackages
 };

@@ -172,6 +172,13 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/destructive-command-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/package-install-guard.mjs"
+            ]
           }
         ]
       },
