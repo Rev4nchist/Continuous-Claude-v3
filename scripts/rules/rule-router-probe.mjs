@@ -158,6 +158,17 @@ const CASES = [
   ['sqlcmd -S:<fabric host> injects', bash('s77', 'sqlcmd -S:abc123.datawarehouse.fabric.microsoft.com -d wh -G -Q "select 1"'), 'inject', ['fabric'], []],
   ['sqlcmd --server "tcp:<fabric host>,1433" injects', bash('s78', 'sqlcmd --server "tcp:abc123.database.fabric.microsoft.com,1433" -d db -G -Q "select 1"'), 'inject', ['fabric'], []],
   ['fabric-of-the-app is not Fabric (pins the decision)', { session_id: 's75', tool_name: 'Skill', tool_input: { skill: 'fabric-of-the-app' } }, 'none', [], []],
+  // Review M2 (FourthCompanyBrain, 2026-10-04): the other ways a session runs the playground scripts.
+  ['uv run python on deploy.py injects', bash('s79', 'uv run python docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
+  ['py -3.12 on iq.py injects', ps('s80', 'py -3.12 docs\\playground\\fabric\\iq.py graph-check'), 'inject', ['fabric'], []],
+  ['python -m on the playground package injects', bash('s81', 'python -m docs.playground.deploy status'), 'inject', ['fabric'], []],
+  ['cd into the playground, then python deploy.py, injects', ps('s82', 'cd docs/playground; python deploy.py preflight'), 'inject', ['fabric'], []],
+  ['Set-Location to a quoted playground path injects', ps('s83', 'Set-Location "C:\\Users\\x\\Projects\\FourthCompanyBrain\\docs\\playground"; python access.py list'), 'inject', ['fabric'], []],
+  ['runner_sp.py from any folder injects', ps('s84', 'python runner_sp.py --job nightly'), 'inject', ['fabric'], []],
+  ['python3 with a quoted path to access.py injects', bash('s85', 'python3 "docs/playground/access.py" show'), 'inject', ['fabric'], []],
+  ['uv run python on another repo deploy.py is not Fabric', bash('s86', 'uv run python scripts/deploy.py --prod'), 'none', [], []],
+  ['cd into a folder named playground outside docs is not Fabric', bash('s87', 'cd web/playground && npm test'), 'none', [], []],
+  ['an echo of runner_sp.py is not Fabric', bash('s88', 'echo runner_sp.py'), 'none', [], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];
