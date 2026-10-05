@@ -1278,11 +1278,18 @@ test('conflict-scan: capacity resize advice is a hit, a read-only capacity check
 test('conflict-scan: SP impersonation and an instructed item delete are hits; plain DAX and a delete endpoint list are not', async () => {
   const { SEEDS } = await import('./lib/conflict-scan.mjs');
   const re = (t) => new RegExp(SEEDS.find((s) => s.topic === t).pattern, 'i');
-  assert.ok(re('sp-dax-rls').test('# Execute under a specific user\'s RLS context (required for service principal callers when RLS is defined)'));
-  assert.ok(!re('sp-dax-rls').test('"query": "EVALUATE TOPN(10, \'Customer\')"'));
-  assert.ok(re('delete-item-without-yes').test('If deploying a model that may already exist, delete the existing same-named model(s) first.'));
+  for (const hit of ['# Execute under a specific user\'s RLS context (required for service principal callers when RLS is defined)',
+    'With RLS defined, the SPN caller must pass an effective identity.', 'Connect-PowerBIServiceAccount -ServicePrincipal, then query the RLS model.'])
+    assert.ok(re('sp-dax-rls').test(hit), hit);
+  // Near misses from the vendored tree: an identity list and an embed note name one half only.
+  for (const fine of ['Identities: User, Service Principal, Managed Identity', 'RLS requires effective identity in embed scenarios'])
+    assert.ok(!re('sp-dax-rls').test(fine), fine);
+  for (const hit of ['If deploying a model that may already exist, delete the existing same-named model(s) first.',
+    'Then remove the duplicate model and deploy again.', 'fab rm Marketing.Workspace/Sales_SM.SemanticModel'])
+    assert.ok(re('delete-item-without-yes').test(hit), hit);
   for (const fine of ['DELETE /v1/workspaces/<workspaceId>/items/<itemId>/jobs/<jobType>/schedules/<scheduleId>',
-    'az rest --method delete \\', 'Cancel an in-progress refresh']) assert.ok(!re('delete-item-without-yes').test(fine), fine);
+    'az rest --method delete \\', '| Delete | table_operations | Remove the field parameter table |'])
+    assert.ok(!re('delete-item-without-yes').test(fine), fine);
 });
 
 test('vendor-conflict-scan CLI: a source with no scannable files fails instead of passing vacuously', () => {

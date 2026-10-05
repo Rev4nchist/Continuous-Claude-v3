@@ -60,22 +60,32 @@ to `databases`.
   the `PATCH .../definition` it also lists is wrong. A notebook runs through the Jobs API (`jobType=RunNotebook`), never
   through a Livy session.
 - `semantic-model-authoring`:
+  - It has no mode table. Load the references its workflow names, then `references/semantic-model.md`.
   - Tier 1 `powerbi-modeling-mcp` is not registered here. For a model in a Fabric workspace use Tier 2:
-    `getDefinition`, edit the TMDL, `updateDefinition` with all parts, by `az rest`. Do not stop at its
-    "Fallback". A Desktop-only PBIX: ask the user to save it as PBIP. A DAX trace needs the MCP: say so.
-  - On "multiple datasets named", list the models with their ids and report. Delete no model without the
-    owner's yes. To change an existing model, `updateDefinition` it; do not delete and create.
-  - `connection-binding.md` says to honor `Retry-After` on a 429: never-line 1 wins, stop.
-  - `executeQueries` as a service principal with `impersonatedUserName` on an RLS model: never. Run DAX as a
-    signed-in user with Read and Build (`references/semantic-model.md` never-line 2).
-  - "Poll LRO to completion": cap the polls. A refresh is a job: one at a time on an F2, after the job
-    history check. A refresh schedule, a permission grant, a parameter update and a bind change the model:
-    run them only when the task asks, and a schedule only with the owner's yes.
+    `getDefinition`, edit the TMDL, `updateDefinition` with all parts, by `az rest`. Its "Fallback" applies
+    only to a Desktop-only PBIX: ask the user to save it as PBIP. A DAX trace needs the MCP: say so.
+  - On "multiple datasets named", list the models with their ids (`configuredBy` from the Power BI dataset
+    GET names who set each up) and report. Delete no model without the owner's yes. To change an existing
+    model, `updateDefinition` it; do not delete and create.
+  - Never create a Fabric connection: it is a shared item that holds credentials. If none matches, stop
+    and ask, as its Example 3 says. `connection-binding.md` says to honor `Retry-After` on a 429: never-line
+    1 wins, stop.
+  - Never run DAX as a service principal on an RLS or SSO model, with or without `impersonatedUserName`.
+    Run DAX as a signed-in user with Read and Build (`references/semantic-model.md` never-line 2).
+  - "Poll LRO to completion": cap the polls. A refresh is a job: one at a time on an F2. Its history is
+    `GET .../datasets/<id>/refreshes?$top=5`, not Fabric job instances. Status `Unknown` means running:
+    start nothing. Never POST a refresh again when the first outcome is unknown: read the history.
+  - A validation refresh is a job too: ask first, run one, and on failure report. Do not loop fix and
+    refresh. A refresh schedule and a permission grant need the owner's yes. A parameter update and a bind
+    run only when the task asks.
+  - DAX performance tests: at most 5 measured runs per variant, one at a time; stop on a 429. A recurring
+    `OPTIMIZE` is a scheduled job: the owner's yes.
   - `ask_user` means the AskUserQuestion tool.
 
 ## How to use a vendored skill
 
-1. Pick one row. Read that SKILL.md in full, then the one `references/<mode>.md` its mode table names.
+1. Pick one row. Read that SKILL.md in full, then the one `references/<mode>.md` its mode table names
+   (`semantic-model-authoring`: see its overrides above).
 2. Its links (`../../common/*.md`) resolve inside `../_vendor/skills-for-fabric/`.
 3. Read-only calls may run after the preflight. A call that starts a job or changes an item runs only when
    the task asks for it. Report the job instance id.

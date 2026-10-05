@@ -38,10 +38,10 @@ export const SEEDS = [
   { topic: 'FabricOpenAI', pattern: String.raw`FabricOpenAI\(`,
     ccv3_rule: 'Use the Responses API path in the playbook, not FabricOpenAI(.' },
   // Phase 5b (2026-10-04): semantic-model-authoring runs DAX as a service principal under RLS by impersonation.
-  { topic: 'sp-dax-rls', pattern: String.raw`impersonatedUserName|service principal.{0,60}\bRLS\b`,
+  { topic: 'sp-dax-rls', pattern: String.raw`impersonatedUserName|(?:service principal|\bSPN\b|-ServicePrincipal\b).{0,60}\bRLS\b|\bRLS\b.{0,60}(?:service principal|\bSPN\b|-ServicePrincipal\b)`,
     ccv3_rule: 'Never run DAX as a service principal on a model with RLS or SSO (G-40, L-13).' },
   // An instruction to delete items, not a DELETE endpoint in a reference list.
-  { topic: 'delete-item-without-yes', pattern: String.raw`\bdelete (?:every|all|the existing|each|any)\b.{0,40}\b(?:duplicate|model|item|lakehouse|workspace|notebook)s?\b`,
+  { topic: 'delete-item-without-yes', pattern: String.raw`\b(?:delete|remove|drop)[ \t]+(?:the|every|all|each|any|existing)\b.{0,40}?\b(?:duplicate|model|item|lakehouse|workspace|notebook)s?\b|\bfab[ \t]+rm\b`,
     ccv3_rule: 'Deleting a Fabric item needs the owner\'s yes.' },
 ];
 

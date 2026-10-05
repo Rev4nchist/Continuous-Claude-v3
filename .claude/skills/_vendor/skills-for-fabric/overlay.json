@@ -109,7 +109,7 @@
   "pattern": "delete every duplicate|delete the existing same-named model",
   "files": "skills/semantic-model-authoring/SKILL.md",
   "ccv3_rule": "Deleting a Fabric item needs the owner's yes.",
-  "resolution": "REAL CONFLICT (Phase 5b, 2026-10-04): on a 'multiple datasets named' error, and before a deploy over an existing model, upstream deletes same-named models. The hub row wins: list the models with their ids and owners, report, and delete nothing without the owner's yes. Prefer updateDefinition on the one existing model over delete-and-create.",
+  "resolution": "REAL CONFLICT (Phase 5b, 2026-10-04): on a 'multiple datasets named' error, and before a deploy over an existing model, upstream deletes same-named models. The hub row wins: list the models with their ids (configuredBy names who set each up), report, and delete nothing without the owner's yes. Prefer updateDefinition on the one existing model over delete-and-create.",
   "max_hits": 1
  },
  {
