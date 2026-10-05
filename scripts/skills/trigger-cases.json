@@ -84,6 +84,14 @@
     { "prompt": "add a OneLake security role so the Viewers group only sees the gold schema of wwi_lh", "expect": ["fabric"] },
     { "prompt": "connect to the lakehouse SQL analytics endpoint from python and count the rows in dbo.orders", "expect": ["fabric"] },
     { "prompt": "every Fabric call now returns 429 with capacity exceeded, what should the script do", "expect": ["fabric"] },
-    { "prompt": "can our brain-runner service principal run the Fabric notebook job every night unattended", "expect": ["fabric"] }
+    { "prompt": "can our brain-runner service principal run the Fabric notebook job every night unattended", "expect": ["fabric"] },
+    { "prompt": "bind the semantic model Sales_SM in our Fabric workspace to the sql-prod gateway connection", "expect": ["fabric"] },
+    { "prompt": "our semantic model deploy to the Fabric workspace failed with There are multiple datasets named 'Sales_SM', fix it", "expect": ["fabric"] },
+    { "prompt": "refresh the Import semantic model Finance_SM in our Fabric workspace and show the last 5 refreshes", "expect": ["fabric"] },
+    { "prompt": "make our Fabric semantic model ready for Copilot and data agents: descriptions, synonyms, hidden keys", "expect": ["fabric"] },
+    { "prompt": "this measure in our Fabric semantic model takes 40 seconds, optimize the DAX", "expect": ["fabric"] },
+    { "prompt": "Can a service principal run DAX against our RLS semantic model in Fabric if we pass impersonatedUserName? Answer in 3 lines.", "expect": ["fabric"] },
+    { "prompt": "write a DAX running total measure for my Excel Power Pivot data model", "expect": [], "forbid": ["fabric"] },
+    { "prompt": "in Power BI Desktop, add a field parameter that switches the chart between the Sales and Margin measures", "expect": [], "forbid": ["fabric"] }
   ]
 }

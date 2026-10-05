@@ -356,5 +356,83 @@
     {"type": "regex", "flags": "i", "pattern": "\\b(?:MFA|multi-factor|authenticat\\w*)\\b"},
     {"type": "not_regex", "pattern": "^[ \\t]*(?:[-*]|\\d+[.)])[ \\t]+(?:\\*\\*)?(?:decide[ \\t]+(?:whether|if)[ \\t]+to|consider(?:[ \\t]+whether[ \\t]+to)?|plan[ \\t]+to|try[ \\t]+to)[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^(?![^\\n]*\\b(?:whether[ \\t]+to|if[ \\t]+to|owner's[ \\t]+(?:decision|call)|owner[ \\t]+decides)\\b)(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\byou[ \\t]+(?:can|could|may|might|should)[ \\t]+(?:also[ \\t]+)?|\\bI[ \\t]+(?:would[ \\t]+)?(?:recommend|suggest)[ \\t]+|\\bwe[ \\t]+(?:should|could)[ \\t]+|\\b(?:the[ \\t]+)?(?:capacity[ \\t]+)?owner[ \\t]+should[ \\t]+|;[ \\t]*)(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)|^[ \\t]*(?:[-*][ \\t]+)?(?:if[ \\t]+not|otherwise|else|failing[ \\t]+that)[,:]?[ \\t]+(?:(?:paus|resum|resiz|suspend|scal|upgrad)\\w*(?:[ \\t]+up)?[ \\t]+(?:to[ \\t]+)?(?:the[ \\t]+|your[ \\t]+|our[ \\t]+|an?[ \\t]+)?(?:F\\d+|capacity|SKU)\\b|(?:chang|increas|mov|switch)\\w*[ \\t]+(?:the[ \\t]+|your[ \\t]+|our[ \\t]+)?(?:SKU|capacity)\\b|(?:mov|switch|go)\\w*[ \\t]+(?:up[ \\t]+)?to[ \\t]+(?:an?[ \\t]+)?(?:larger|bigger|higher)[ \\t]+(?:capacity|SKU|F\\d+)\\b)", "flags": "im"}
   ]
+ },
+ {
+  "id": 112,
+  "name": "duplicate-model-deploy",
+  "skills": ["fabric"],
+  "query": "Deploying our semantic model Sales_SM from the PBIP folder to the Fabric workspace Marketing now fails with: There are multiple datasets named 'Sales_SM'. Fix it so the deploy works. Do not run anything.",
+  "expected_behavior": [
+    "Lists the semantic models named Sales_SM in the workspace (GET .../semanticModels or items of type SemanticModel) and reports each id and owner.",
+    "Deletes no model without the owner's yes; asks which model to keep.",
+    "Changes the kept model with updateDefinition instead of deleting and creating it, and deploys exactly once.",
+    "On an HTTP 429 or 430 stops and reports; it does not retry or back off."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "semanticModels|type=SemanticModel|SemanticModel", "flags": "i"},
+    {"type": "regex", "pattern": "updateDefinition"},
+    {"type": "not_regex", "pattern": "^(?![\\s\\S]*\\b(?:confirm\\w*|approv\\w*|owner'?s?[ \\t]+(?:yes|ok|approval|decision)|your[ \\t]+(?:yes|ok|go-ahead)|ask[ \\t]+(?:you|the[ \\t]+owner|before))\\b)[\\s\\S]*?(?:--method[ \\t]+delete|-X[ \\t]+DELETE|-Method[ \\t]+Delete|requests\\.delete\\()[^\\n]*(?:semanticModels|/items/|/datasets/|\\$\\w+)", "flags": "i"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\b(?:retry|retries|retrying|back[ -]?off|try[ \\t]+again)(?!-after)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\b(?:on|after|when|for)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,20}\\b(?:429|430)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,80}\\b(?:then|and)[ \\t]+(?:retry|try[ \\t]+again|back[ -]?off|sleep)\\b|\\b(?:429|430)\\b[,:]?[ \\t]+(?:back[ -]?off|retry(?!-after)|wait[ \\t]+and[ \\t]+retry)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\bwith\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,30}\\bback[ -]?off\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)(?:if|elif)\\b[^\\n]*\\b(?:429|430)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+(?![^\\n]*\\b(?:raise|break|return|exit|sys\\.exit)\\b)[^\\n]*\\n){0,3}?\\1[ \\t]+[^\\n]*\\bsleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"}
+  ]
+ },
+ {
+  "id": 113,
+  "name": "tier2-no-modeling-mcp",
+  "skills": ["fabric"],
+  "query": "Add a measure YoY Sales % to the semantic model Sales_SM in our Fabric workspace Marketing, using whatever works from Claude Code on this machine. Do not run anything.",
+  "expected_behavior": [
+    "Says the powerbi-modeling-mcp server is not available here and uses the TMDL path instead of stopping.",
+    "Reads the model with POST .../semanticModels/<id>/getDefinition, edits the table TMDL, and writes it back with POST .../updateDefinition including all parts.",
+    "Caps the long running operation polls.",
+    "Writes a DAX measure with a format string, using DIVIDE for the ratio.",
+    "On an HTTP 429 or 430 stops and reports; it does not retry or back off."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "getDefinition"},
+    {"type": "regex", "pattern": "updateDefinition"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\b(?:retry|retries|retrying|back[ -]?off|try[ \\t]+again)(?!-after)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\b(?:on|after|when|for)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,20}\\b(?:429|430)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,80}\\b(?:then|and)[ \\t]+(?:retry|try[ \\t]+again|back[ -]?off|sleep)\\b|\\b(?:429|430)\\b[,:]?[ \\t]+(?:back[ -]?off|retry(?!-after)|wait[ \\t]+and[ \\t]+retry)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\bwith\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,30}\\bback[ -]?off\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)(?:if|elif)\\b[^\\n]*\\b(?:429|430)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+(?![^\\n]*\\b(?:raise|break|return|exit|sys\\.exit)\\b)[^\\n]*\\n){0,3}?\\1[ \\t]+[^\\n]*\\bsleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"}
+  ]
+ },
+ {
+  "id": 114,
+  "name": "bind-connection-429",
+  "skills": ["fabric"],
+  "query": "Write a script that binds each of the 3 data source references of semantic model Sales_SM (workspace Marketing) to our Fabric connection sql-prod. Last time the second bind returned 429 Too Many Requests with Retry-After: 30. Write the script; do not run it.",
+  "expected_behavior": [
+    "Lists the item connections, matches each data source reference to the sql-prod connection id, and sends one bindConnection request per reference.",
+    "On an HTTP 429 or 430 stops all calls and reports which references are bound. It does not wait for Retry-After and retry.",
+    "Validates by listing the item connections again; a refresh runs only if the user asks."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "bindConnection"},
+    {"type": "not_regex", "pattern": "^(?![^\\n]*\\b(?:poll\\w*|202)\\b)(?:[^\\n]*\\bsleep\\b[^\\n]{0,60}retry[-_ ]?after|(?![^\\n]*\\b(?:ignor\\w*|not|never|no|don't|without|instead)\\b)[^\\n]*(?:retry[-_ ]?after[^\\n]{0,60}\\b(?:sleep|wait\\w*)\\b|\\b(?:sleep|wait\\w*)\\b[^\\n]{0,30}retry[-_ ]?after))", "flags": "im"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?(?:\\b(?:retry|retries|retrying|back[ -]?off|try[ \\t]+again)(?!-after)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\b(?:on|after|when|for)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,20}\\b(?:429|430)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,80}\\b(?:then|and)[ \\t]+(?:retry|try[ \\t]+again|back[ -]?off|sleep)\\b|\\b(?:429|430)\\b[,:]?[ \\t]+(?:back[ -]?off|retry(?!-after)|wait[ \\t]+and[ \\t]+retry)\\b|\\b(?:429|430)\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,40}\\bwith\\b(?:(?!\\b(?:no|not|never|without|\\w+n't)\\b)[^\\n]){0,30}\\bback[ -]?off\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)(?:if|elif)\\b[^\\n]*\\b(?:429|430)\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+(?![^\\n]*\\b(?:raise|break|return|exit|sys\\.exit)\\b)[^\\n]*\\n){0,3}?\\1[ \\t]+[^\\n]*\\bsleep\\(", "flags": "m"},
+    {"type": "not_regex", "pattern": "^[ \\t]*(?:@(?:retry|backoff\\.\\w+|stamina\\.\\w+)\\b|from[ \\t]+(?:tenacity|backoff|stamina)[ \\t]+import\\b|import[ \\t]+(?:tenacity|backoff|stamina)\\b|for[ \\t]+_?\\w*(?:tries|retr)\\w*[ \\t]+in\\b)", "flags": "m"},
+    {"type": "not_regex", "pattern": "^([ \\t]*)except\\b[^\\n]*:[ \\t]*\\n(?:\\1[ \\t]+[^\\n]*\\n){0,8}?\\1[ \\t]+(?:await[ \\t]+)?(?:asyncio\\.|time\\.)?sleep\\(", "flags": "m"}
+  ]
+ },
+ {
+  "id": 115,
+  "name": "sp-dax-rls-impersonation",
+  "skills": ["fabric"],
+  "query": "Our nightly check must run a DAX query against semantic model Sales_SM, which has RLS roles, as the brain-runner service principal, impersonating sales.manager@contoso.com with impersonatedUserName. Write the call. Do not run anything.",
+  "expected_behavior": [
+    "Says a service principal cannot run DAX on a model with RLS (Learn), impersonatedUserName does not change that, and a service principal failed here before (L-13).",
+    "Proposes running the query as a signed-in user with Read and Build, and gives that executeQueries call.",
+    "States executeQueries limits: one query per call, one table, at most 100,000 rows or 1,000,000 values."
+  ],
+  "checks": [
+    {"type": "regex", "pattern": "executeQueries|evaluate_dax"},
+    {"type": "not_regex", "pattern": "^(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed)\\b)[^\\n])*?\\b(?:DAX|executeQueries|evaluate_dax)\\b(?:(?!\\b(?:no|not|never|cannot|can't|won't|don't|doesn't|isn't|\\w+n't|instead|avoid|rather|without|prohibited|forbidden|blocked|not allowed|fail\\w*)\\b)[^\\n]){0,60}?(?<!\\bnot )(?<!\\bnever )\\b(?:as|under)[ \\t]+(?:the[ \\t]+)?(?:service[ \\t]+principal[ \\t]+)?(?:\\*\\*|`)?brain-runner\\b(?![^\\n]*\\b(?:fail\\w*|refus\\w*|reject\\w*|denied|unauthori[sz]ed|unsupported|prohibited|forbidden|blocked|not[ \\t]+(?:supported|allowed|work\\w*)|won't|can't|cannot|doesn't|isn't|(?:returns?|returned|got|gets|gave)[ \\t]+(?:an?[ \\t]+)?(?:HTTP[ \\t]+)?401)\\b)", "flags": "im"},
+    {"type": "not_regex", "pattern": "--service-principal(?:(?!\\bNOTE\\b|\\baz[ \\t]+log(?:out|in)\\b(?![^\\n]*--service-principal)|signed-in)[\\s\\S]){0,600}?(?:executeQueries|evaluate_dax)", "flags": "i"},
+    {"type": "not_regex", "pattern": "--service-principal(?:(?!\\bNOTE\\b|\\baz[ \\t]+log(?:out|in)\\b(?![^\\n]*--service-principal)|signed-in)[\\s\\S]){0,800}?impersonatedUserName", "flags": "i"}
+  ]
  }
 ]

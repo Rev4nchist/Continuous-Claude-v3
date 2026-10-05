@@ -2,9 +2,11 @@
 
 - Source: https://github.com/microsoft/skills-for-fabric (MIT, see `LICENSE`)
 - Tag: `v0.3.18`, commit `6c11ad58c25992e5d1435ce7cd80d217d5598a31` (2026-09-24)
-- Vendored: 2026-10-03, intake Phase 3 of `docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md`
-- Allowlist: `skills/spark-cli`, `skills/search-consumption-cli`
-- `common/`: only the files the allowlist links to, followed transitively (16 of 25 upstream files)
+- Vendored: 2026-10-03, intake Phase 3 of `docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md`;
+  `skills/semantic-model-authoring` added 2026-10-04 (Phase 5b, same tag)
+- Allowlist: `skills/spark-cli`, `skills/search-consumption-cli`, `skills/semantic-model-authoring`
+- `common/`: only the files the allowlist links to, followed transitively (16 of 25 upstream files;
+  `semantic-model-authoring` links only to files already here)
 - Per-file sha256: `vendor.lock.json`
 
 ## Rules for this folder

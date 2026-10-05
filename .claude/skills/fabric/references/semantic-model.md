@@ -2,8 +2,10 @@
 
 CCv3-authored from the Fabric course extraction (`docs/research/fabric/2026-10-04-fabric-course-extraction.md`,
 rule ids G-NN) and Microsoft Learn, checked 2026-10-04. It holds the course facts and CCv3 rules for
-semantic models. For TMDL authoring, DAX patterns and model design, Microsoft's `semantic-model-authoring`
-skill is the full guide. CCv3 plans to vendor it behind this hub (intake Phase 5b). Until then, use Learn.
+semantic models. For TMDL authoring, DAX patterns and model design, Microsoft's
+[semantic-model-authoring](../../_vendor/skills-for-fabric/skills/semantic-model-authoring/SKILL.md) skill is the
+full guide (vendored v0.3.18, intake Phase 5b). Read it first, then this file. Where they differ, this file and the
+hub's `semantic-model-authoring` overrides win.
 
 Each line names its source: "Learn", "measured" (a live test on one tenant, with its L-NN lesson id) or
 "unverified" (the LT-NN id names the planned test).

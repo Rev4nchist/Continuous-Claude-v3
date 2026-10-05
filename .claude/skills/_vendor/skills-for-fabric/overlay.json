@@ -73,11 +73,44 @@
   "files": [
    "skills/spark-cli/SKILL.md",
    "skills/search-consumption-cli/SKILL.md",
+   "skills/semantic-model-authoring/SKILL.md",
    "common/COMMON-CLI.md"
   ],
   "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
   "resolution": "Telemetry header text (Dave kept the x-ms-fabric-skill header, 2026-10-02). It names a retry only as a call that carries the header. It does not ask for a retry.",
-  "max_hits": 3
+  "max_hits": 4
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "429 Too Many Requests` \\| Rate limited\\. Honor `Retry-After`",
+  "files": "skills/semantic-model-authoring/references/connection-binding.md",
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "REAL CONFLICT (Phase 5b, 2026-10-04): the bindConnection response table says to honor Retry-After on a 429, which means retry. Hub never-line 1 wins: on a 429 stop all load and report. Bind one data source reference at a time, as upstream says.",
+  "max_hits": 1
+ },
+ {
+  "topic": "retry-on-429",
+  "pattern": "retried deploy|do not (?:attempt to )?retry",
+  "files": "skills/semantic-model-authoring/SKILL.md",
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "Agrees with CCv3: deploy once, and stop on 403, a persistent 401 and a refresh credential error. The deploy line also tells the agent to delete duplicate models: see the delete-item-without-yes entry.",
+  "max_hits": 5
+ },
+ {
+  "topic": "sp-dax-rls",
+  "pattern": "impersonatedUserName|service principal callers when RLS",
+  "files": "skills/semantic-model-authoring/references/semantic-model-rest-api.md",
+  "ccv3_rule": "Never run DAX as a service principal on a model with RLS or SSO (G-40, L-13).",
+  "resolution": "REAL CONFLICT (Phase 5b, 2026-10-04): the sample runs executeQueries as a service principal on an RLS model with impersonatedUserName. Learn says service principals are not supported for datasets with RLS, and L-13 measured a failure. The hub reference semantic-model.md never-line 2 wins: run DAX as a signed-in user with Read and Build.",
+  "max_hits": 2
+ },
+ {
+  "topic": "delete-item-without-yes",
+  "pattern": "delete every duplicate|delete the existing same-named model",
+  "files": "skills/semantic-model-authoring/SKILL.md",
+  "ccv3_rule": "Deleting a Fabric item needs the owner's yes.",
+  "resolution": "REAL CONFLICT (Phase 5b, 2026-10-04): on a 'multiple datasets named' error, and before a deploy over an existing model, upstream deletes same-named models. The hub row wins: list the models with their ids and owners, report, and delete nothing without the owner's yes. Prefer updateDefinition on the one existing model over delete-and-create.",
+  "max_hits": 1
  },
  {
   "topic": "capacity-pause-resume-resize",

@@ -4,7 +4,8 @@
  "commit": "6c11ad58c25992e5d1435ce7cd80d217d5598a31",
  "allowlist": [
   "spark-cli",
-  "search-consumption-cli"
+  "search-consumption-cli",
+  "semantic-model-authoring"
  ],
  "common": "link closure of the allowlist",
  "files": [
@@ -107,6 +108,81 @@
    "path": "skills/search-consumption-cli/apm.yml",
    "bytes": 471,
    "sha256": "14e5ef5f1352c1cd21d8f2bbbbb97012a7a7c883d742c696175503479b3bc112"
+  },
+  {
+   "path": "skills/semantic-model-authoring/SKILL.md",
+   "bytes": 42359,
+   "sha256": "9caff3cad2414786bfbc23c7b102e8274f67f2d55c8bee0a2d5aaa95f554c08d"
+  },
+  {
+   "path": "skills/semantic-model-authoring/apm.yml",
+   "bytes": 698,
+   "sha256": "4d601adf7f925bcb987482b4c8e26bd698256a2250c699b30bb08e89d098eb38"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/connection-binding.md",
+   "bytes": 11033,
+   "sha256": "d5dc8099c7c51c6f06d206dd42c78afcbd7654823e8eb259dc20e20630524a09"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/dax-guidelines.md",
+   "bytes": 11715,
+   "sha256": "a770780a9e0f30b71be3882ba9be1095c8c47ac446614eb498f5a702bd05dfff"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/dax-perf-decision-guide.md",
+   "bytes": 33348,
+   "sha256": "45341667dcc4cd28c808e2f3a9113b1a6041e69a9a7dc663a15a1fb36df245a3"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/dax-perf-patterns.md",
+   "bytes": 31565,
+   "sha256": "92935f12f901c59973fc0231cea69a9edd4423cbd9269957f6b6f8c4b2944292"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/direct-lake-guidelines.md",
+   "bytes": 3334,
+   "sha256": "ffe193058dc216b066b3850ec4917a69c67c339cdb9cc1a633fca7ee60e3a7af"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/field-parameters.md",
+   "bytes": 9875,
+   "sha256": "3731f9a77e2d3b9d1f04784c203de58f28cca40c73121bdbab356cdf43647d60"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/metadata-discovery.md",
+   "bytes": 7413,
+   "sha256": "7b9b77b95fa87e46f5cd78b0472b50981ac245831ee6d7324a1af252fb075588"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/modeling-guidelines.md",
+   "bytes": 16942,
+   "sha256": "60cd9a93b81628f2b7b0c6ae7c6095eb3f55b1794b3f62801be4fc1a6eb9d0d7"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/naming-conventions.md",
+   "bytes": 4487,
+   "sha256": "dbf756c0ef11bd57dcdb4abd6fd3052f2bd43c409914581d1e7cf674138760fb"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/pbip.md",
+   "bytes": 4128,
+   "sha256": "c2ccd5c8de6efd7445365b1df929025badfc966ec6be77eadb9c70ba9c99a795"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/semantic-model-ai-readiness.md",
+   "bytes": 13933,
+   "sha256": "d7068ad027d55b033f07e743c8248b845ec7556e32006288b41a3c1222019e28"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/semantic-model-rest-api.md",
+   "bytes": 20816,
+   "sha256": "1f31d987ee1d231550f6a0fd4d0d800280e38fb265efe0be793a4d5ea02391f2"
+  },
+  {
+   "path": "skills/semantic-model-authoring/references/tmdl-guidelines.md",
+   "bytes": 18970,
+   "sha256": "d214b95735b33a505a6c00d4c4b27b030fd8194c7a249e39e626417e114ad111"
   },
   {
    "path": "skills/spark-cli/SKILL.md",

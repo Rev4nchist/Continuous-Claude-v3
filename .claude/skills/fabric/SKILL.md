@@ -1,6 +1,6 @@
 ---
 name: fabric
-description: Routes Microsoft Fabric work (Spark notebooks, Livy, Materialized Lake Views, lakehouses, shortcuts, OneLake security roles, SQL endpoints, Direct Lake models, DAX, ontology, graphs, GQL, data agents, pipelines, copy jobs, Dataflow Gen2, capacity throttling, item search) to Microsoft and CCv3 guides. Use when work touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli).
+description: Routes Microsoft Fabric work (Spark notebooks, Livy, Materialized Lake Views, lakehouses, shortcuts, OneLake security roles, SQL endpoints, semantic models, TMDL, Direct Lake, DAX, ontology, graphs, GQL, data agents, pipelines, copy jobs, Dataflow Gen2, capacity throttling, item search) to guides. Use when work touches Fabric, OneLake, a lakehouse or a Fabric notebook. Not for KQL (kusto-cli).
 ---
 
 # Fabric hub
@@ -32,7 +32,7 @@ Microsoft's `skills-for-fabric` v0.3.18 is vendored at `../_vendor/skills-for-fa
 | Find an item when the workspace is unknown, or list one item type across all workspaces | [search-consumption-cli](../_vendor/skills-for-fabric/skills/search-consumption-cli/SKILL.md) |
 | Fabric data agent: ask a published agent a question, or create, configure and publish one with the SDK. CCv3-authored, not vendored | [data-agent](references/data-agent.md) |
 | Lakehouse create and schemas, listing tables (HTTP 400 on a schema-enabled lakehouse), OneLake shortcuts and their auth modes, OneLake security roles, the SQL analytics endpoint (read-only data, access mode), medallion layout. CCv3-authored | [lakehouse](references/lakehouse.md) |
-| Direct Lake semantic models and DAX: the Direct Lake mode, OneLake security, `executeQueries` limits, sempy in a notebook. CCv3-authored | [semantic-model](references/semantic-model.md) |
+| Semantic models: create, change TMDL, measures, relationships, DAX and DAX performance, Direct Lake, refresh, deploy, connection binding, AI readiness. Then read the CCv3 reference [semantic-model](references/semantic-model.md) (Direct Lake mode, OneLake security, `executeQueries` limits, sempy). Where the two differ, the CCv3 reference and the overrides below win | [semantic-model-authoring](../_vendor/skills-for-fabric/skills/semantic-model-authoring/SKILL.md) |
 | Fabric IQ ontology (new TMDL experience) and GraphModel: generate, keys, relationships, graph refresh and GQL queries, graph cost, a data agent on an ontology. CCv3-authored | [ontology](references/ontology.md) |
 | Data pipelines, copy jobs and Dataflow Gen2: run, schedule, refresh, definitions, run identity, service principal limits. CCv3-authored | [data-factory](references/data-factory.md) |
 
@@ -59,6 +59,19 @@ to `databases`.
 - Notebook content: use the `POST .../updateDefinition` that `common/SPARK-AUTHORING-CORE.md` recommends;
   the `PATCH .../definition` it also lists is wrong. A notebook runs through the Jobs API (`jobType=RunNotebook`), never
   through a Livy session.
+- `semantic-model-authoring`:
+  - Tier 1 `powerbi-modeling-mcp` is not registered here. For a model in a Fabric workspace use Tier 2:
+    `getDefinition`, edit the TMDL, `updateDefinition` with all parts, by `az rest`. Do not stop at its
+    "Fallback". A Desktop-only PBIX: ask the user to save it as PBIP. A DAX trace needs the MCP: say so.
+  - On "multiple datasets named", list the models with their ids and report. Delete no model without the
+    owner's yes. To change an existing model, `updateDefinition` it; do not delete and create.
+  - `connection-binding.md` says to honor `Retry-After` on a 429: never-line 1 wins, stop.
+  - `executeQueries` as a service principal with `impersonatedUserName` on an RLS model: never. Run DAX as a
+    signed-in user with Read and Build (`references/semantic-model.md` never-line 2).
+  - "Poll LRO to completion": cap the polls. A refresh is a job: one at a time on an F2, after the job
+    history check. A refresh schedule, a permission grant, a parameter update and a bind change the model:
+    run them only when the task asks, and a schedule only with the owner's yes.
+  - `ask_user` means the AskUserQuestion tool.
 
 ## How to use a vendored skill
 
