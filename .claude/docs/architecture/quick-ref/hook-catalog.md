@@ -53,7 +53,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | smart-search-router | Grep | Route to AST-grep or TLDR for structured searches |
 | tldr-read-enforcer | Read | Suggest TLDR structure before reading large files |
 | navigator-safety | Bash | Safety checks for bash commands |
-| package-install-guard | Bash | 4-layer supply-chain check on package installs (typosquat, blocklist, OSV.dev, age); blocks malicious installs |
+| package-install-guard | Bash, PowerShell | Supply-chain check on every install segment (typosquat, blocklist, exact pip pin, OSV.dev, age); blocks malicious or unpinned installs |
 | file-claims | Edit\|Write | Distributed file locking across sessions |
 | test-before-done | TaskUpdate | Require test evidence before marking task complete |
 | rule-router | Bash\|PowerShell\|Agent\|Skill\|Neon/linear/sentry MCP | Load a tool-specific rule from `rules-ondemand/` at the first matching call; `deny-first` rules block once with the rule as the reason |

@@ -280,7 +280,7 @@ function unwrapPayload(raw: string): string {
   return s.replace(/\\(["'`$\\])/g, '$1');
 }
 
-function wrapperPayloadsFromSegments(segments: string[]): string[] {
+export function wrapperPayloadsFromSegments(segments: string[]): string[] {
   const out: string[] = [];
   for (const seg of segments) {
     for (const re of WRAPPER_RES) {
@@ -354,7 +354,7 @@ function bodySubstitutions(body: string, tool: string): string[] {
  * PowerShell: `$x = @'` / `$x = @"` assignments (accepted gap: `iex $x` can still run one).
  * An unterminated block ends at the end of the command. Anything unrecognised is left alone.
  */
-function executableView(command: string, tool: string): string {
+export function executableView(command: string, tool: string): string {
   const out: string[] = [];
   let end: RegExp | null = null;
   let expands = false;
@@ -388,7 +388,7 @@ function executableView(command: string, tool: string): string {
  * from opening a string. A backslash before a newline in PowerShell is a path, not a continuation:
  * a space after it stops parseExecutable (bash rules) from swallowing the newline.
  */
-function normalizeEscapes(s: string, tool: string): string {
+export function normalizeEscapes(s: string, tool: string): string {
   if (tool !== 'PowerShell') return s.replace(/\\\r?\n/g, ' ');
   return s.replace(/`\r?\n/g, ' ').replace(/`([A-Za-z0-9])/g, '$1').replace(/`./g, '').replace(/\\(\r?\n)/g, '\\ $1');
 }

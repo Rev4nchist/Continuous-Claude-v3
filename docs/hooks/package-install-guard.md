@@ -1,6 +1,6 @@
 # package-install-guard — operator reference
 
-Reference for the `package-install-guard` PreToolUse:Bash hook: what it intercepts, the four
+Reference for the `package-install-guard` PreToolUse:Bash and PreToolUse:PowerShell hook: what it intercepts, the
 checks it runs, what each block class means, and how the malicious-package blocklist is kept
 current. This is procedural detail you read *deliberately* — when a block needs interpreting,
 or when the blocklist needs updating — not something an agent needs loaded on every turn.
@@ -12,6 +12,24 @@ is not an option. Everything below is the detail behind that.
 
 Related: `.claude/hooks/src/package-install-guard.ts` (the hook), `.claude/hooks/src/shared/
 malicious-packages.json` (the blocklist), `scripts/update-blocklist.mjs` (the updater).
+
+## Changes since the snapshot (2026-10-04, review item H2)
+
+- The hook runs on the Bash and PowerShell tools. Both `settings.json` copies and the template
+  register it on both matchers, and the hook's own gate is a `COMMAND_TOOLS` set.
+- It checks every executed segment, so `cd x && pip install y` and `Set-Location x; pip install y`
+  are seen. It also looks inside `$(...)` and `bash -c` / `powershell -Command` payloads.
+- More pip forms: `python -m pip`, `py -3.12 -m pip`, `pip3.12`, and a launcher under a path
+  (`.venv\Scripts\pip.exe`).
+- Pin check (deny): `pip install`, `uv pip install` and `python -m pip install` need an exact `==`
+  (or `===`) pin on every package. A range, a wildcard or a bare name is denied. A PEP 508 marker
+  (`"x==1.0; python_version>='3.8'"`) is allowed. Not checked: lockfile tools (`uv add`,
+  `poetry add`), `-r` files, local paths (`.`, `dist\x.whl`), and URL or VCS installs
+  (`git+https://...`). A VCS ref without a commit hash is a known gap.
+- pip global options before `install` (`-q`, `--proxy URL`), interpreter flags before `-m`
+  (`-I`, `-X utf8`), any letter case (`Python`, `PIP`) and `sudo` / `time` leaders are matched.
+  A literal heredoc or here-string that only writes text is not an install.
+- Order: typosquat, blocklist, pin, then the network checks (OSV, age).
 
 ---
 
