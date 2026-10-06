@@ -11,8 +11,7 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { getStateFile } from './shared/test-run-state.js';
 
 interface PostToolUseInput {
   session_id: string;
@@ -26,6 +25,20 @@ interface PostToolUseInput {
 /** Shell tools that carry a command. Must match the settings.json matcher. */
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
+/**
+ * A run of `<name>.mjs` under node: `node` or `node.exe`, optional flags, optional quoted path
+ * with `/` or `\`, then the file. The flag group never takes `--check` or `-c` (a syntax check is
+ * not a run). `--dry-run` and `--help` on the same line are not runs. `git add x.mjs` and
+ * `cat x.mjs` never match. Known limits: a flag with a separate value (`--require tsx`) and a
+ * quoted path that holds a space do not match.
+ */
+function nodeScript(name: string): RegExp {
+  const flag = String.raw`\s+(?!--check\b|-c\b)--?[\w-]+(?:=\S+)?`;
+  const dir = String.raw`["']?(?:[^\s"']*[\\/])?`;
+  const notPlan = String.raw`(?![^\n]*--(?:dry-run|help)\b)`;
+  return new RegExp(String.raw`\bnode(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
+}
+
 const TEST_PATTERNS = [
   /\bvitest\b/,
   /\bjest\b/,
@@ -38,11 +51,12 @@ const TEST_PATTERNS = [
   /\bpnpm\s+test\b/,
   /\byarn\s+test\b/,
   /\bmake\s+test\b/,
+  // Probes, ratchets and the verify entry point are test runs (PR1a, 2026-10-06).
+  nodeScript('[\\w.-]+-probe'),
+  nodeScript('audit-skills'),
+  nodeScript('context-budget-guard'),
+  nodeScript('verify'),
 ];
-
-function getStateFile(sessionId: string): string {
-  return path.join(os.tmpdir(), `claude-recent-test-runs-${sessionId}.json`);
-}
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -79,8 +93,7 @@ async function main() {
   const isTestCommand = TEST_PATTERNS.some((p) => p.test(command));
 
   if (isTestCommand) {
-    const sessionId = data.session_id || 'default';
-    const stateFile = getStateFile(sessionId);
+    const stateFile = getStateFile(data.session_id);
     try {
       fs.writeFileSync(
         stateFile,

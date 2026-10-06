@@ -17,7 +17,11 @@
       "devCommand": null,
       "status": "active",
       "sentryProject": "",
-      "linearTeam": "the-lab"
+      "linearTeam": "the-lab",
+      "e2e": {
+        "command": "node scripts/rules/rule-router-probe.mjs && node scripts/skills/audit-skills.mjs && node scripts/rules/context-budget-guard.mjs --repo",
+        "artifact": ".claude/cache/e2e/<stamp>-verify-continuous-claude.log"
+      }
     },
     {
       "name": "NorthStar Transformation",
@@ -347,7 +351,11 @@
       "status": "in-development",
       "sentryProject": "",
       "linearTeam": "the-lab",
-      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os]."
+      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os].",
+      "e2e": {
+        "command": "npm run typecheck && npm run db:check",
+        "artifact": ".claude/cache/e2e/<stamp>-verify-agentic-os.log"
+      }
     },
     {
       "name": "buzz",
@@ -421,6 +429,31 @@
       "status": "active",
       "sentryProject": "",
       "linearTeam": ""
+    },
+    {
+      "name": "Minions (fourthbot-next)",
+      "path": "C:/Users/david.hayes/Projects/fourthbot-next",
+      "stack": [
+        "TypeScript",
+        "pnpm",
+        "Hono",
+        "PostgreSQL 17",
+        "pg-boss",
+        "React 19",
+        "Vite",
+        "Playwright"
+      ],
+      "description": "Minions: a governed team-of-bots workspace, local GrokBot-like build on a real model (plan L0-L6)",
+      "port": 5174,
+      "url": "http://127.0.0.1:5174/",
+      "devCommand": "pnpm stack:up && pnpm dev:web",
+      "status": "active",
+      "sentryProject": "",
+      "linearTeam": "",
+      "e2e": {
+        "command": "node .claude/skills/verify-minions/drive.mjs",
+        "artifact": ".claude/cache/e2e/<stamp>-verify-minions-fourthbot-next.log"
+      }
     }
   ]
 }

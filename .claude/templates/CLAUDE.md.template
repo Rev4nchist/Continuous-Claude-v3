@@ -137,6 +137,7 @@ the result was absent, stale or broken.
   system. A timed-out command (exit 143) is not proof of failure; check the state.
 - TypeScript or Python changes: run the type check (`tsc --noEmit`, `pyright`) and the linter too.
 - Ask: "Would a staff engineer approve this?" If a fix feels hacky, look for the elegant one.
+- Before "done", if the registry entry has `e2e`, run `node ~/.claude/scripts/verify.mjs` and cite its sidecar.
 
 ### Testing standard [H:8]
 

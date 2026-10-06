@@ -98,6 +98,7 @@ const LEGACY_SPEAKING = [
   /result:\s*['"](?:continue|block)['"]\s*,\s*(?:message|reason)\b/,
   /\{\s*(?:message|reason)\s*\}/,
   /result:\s*['"]block['"]\s*,[\s\S]{0,80}?\breason\b/,
+  /values:\s*\{\s*system\b/,
 ];
 
 /**
@@ -119,8 +120,19 @@ const ALLOWED_DISCARD = new Map([
   ['session-end-handoff-indexer', 'SessionEnd -- no turn remains to receive context'],
 ]);
 
+/**
+ * Registered hooks found to use the discarded `values.system` shape on 2026-10-06, when that
+ * shape joined LEGACY_SPEAKING. They are NOT exempt on merit: each must move to
+ * hookSpecificOutput (or be retired), then leave this list. Never add a name here.
+ */
+const KNOWN_DEBT = new Map([
+  ['roadmap-reconcile', 'values.system output; fix in a follow-up hook PR'],
+  ['periodic-extract', 'values.system output; fix in a follow-up hook PR'],
+]);
+
 const speakers = [];
 const mute = [];
+const debtUsed = new Set();   // KNOWN_DEBT names that still discard output
 let sourcesScanned = 0;
 
 for (const name of registered.names) {
@@ -136,7 +148,19 @@ for (const name of registered.names) {
 
   if (hasContract) speakers.push(name);
   // A bare {result:'continue'} is the honest no-op and is NOT a violation.
-  if (speaksLegacy && !hasContract && !ALLOWED_DISCARD.has(name)) mute.push(name);
+  const discards = speaksLegacy && !hasContract && !ALLOWED_DISCARD.has(name);
+  if (discards && KNOWN_DEBT.has(name)) debtUsed.add(name);
+  else if (discards) mute.push(name);
+}
+
+// A fixed or removed hook must leave KNOWN_DEBT, or its exemption outlives the debt.
+for (const name of KNOWN_DEBT.keys()) {
+  if (!debtUsed.has(name)) {
+    findings.push({
+      kind: 'stale-debt',
+      detail: `${name} is in KNOWN_DEBT but no longer discards output (fixed, retired or unregistered). Remove it from KNOWN_DEBT.`,
+    });
+  }
 }
 
 if (sourcesScanned === 0) {
@@ -151,7 +175,7 @@ if (sourcesScanned === 0) {
   for (const name of mute) {
     findings.push({
       kind: 'discarded-output',
-      detail: `${name}.ts carries a message in {result,message|reason}, which the harness DISCARDS, and emits no hookSpecificOutput. Use shared/output.ts outputWithMessage(msg, <event>) or outputDeny(reason).`,
+      detail: `${name}.ts carries a message in a discarded legacy field ({result,message|reason} or values.system), which the harness never reads, and emits no hookSpecificOutput. Use shared/output.ts outputWithMessage(msg, <event>) or outputDeny(reason).`,
     });
   }
 }
@@ -203,6 +227,7 @@ const summary = {
   sourcesScanned,
   speakers: speakers.length,
   discardedOutput: mute.length,
+  knownDebt: [...debtUsed],
   timerSites,
   timerSafe,
   findings,
@@ -213,7 +238,7 @@ if (JSON_OUT) {
 } else if (ok) {
   console.log(
     `PASS  hook-contract-guard  ${registered.entries} live entries / ${registered.names.length} names, ` +
-    `${sourcesScanned} sources scanned, ${speakers.length} speak the contract, 0 discarded-output, ` +
+    `${sourcesScanned} sources scanned, ${speakers.length} speak the contract, 0 discarded-output, ${debtUsed.size} known-debt (${[...debtUsed].join(', ') || 'none'}), ` +
     `${timerSafe}/${timerSites} timers safe`);
 } else {
   console.error(

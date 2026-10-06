@@ -15,6 +15,7 @@ End-to-end check per surface:
 | Sync (`scripts/sync-to-active.sh`) | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temp home) | its PASS/FAIL lines |
 | Coordination (lanes, claims, leases) | the matching `scripts/coordination/*-probe.mjs` | the probe's output |
 | A rule, skill or agent file | behaviour: after the sync, run a fresh headless session on a prompt the change targets, `claude -p "<prompt>" --output-format json`, and confirm the new behaviour appears (for a skill: that it loads). Then its static ratchet: `node scripts/rules/context-budget-guard.mjs --repo`, `node scripts/skills/audit-skills.mjs`, `node scripts/check-agent-model-drift.mjs .`, `node scripts/agents/check-agent-body.mjs`. For an agent, confirm `"effort":"high"` in the subagent transcript. | the session JSON, plus the ratchet's summary line |
+| Any surface, when the registry entry has `e2e` | `node ~/.claude/scripts/verify.mjs` | the `.log` and its `.json` sidecar |
 
 Put artifacts in `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>` (gitignored) and name the file in the
 PR's Evidence section.

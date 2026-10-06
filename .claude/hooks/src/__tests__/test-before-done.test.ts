@@ -11,14 +11,12 @@
  * - If no recent test run (>5 min or no state file), returns advisory warning
  * - If recent test run found (<5 min), returns empty {}
  * - Non-completion TaskUpdate calls pass through silently
- * - Advisory only (system message), NOT blocking (no permissionDecision: deny)
+ * - Advisory only (hookSpecificOutput.additionalContext), NOT blocking (no permissionDecision: deny)
  * - Fails open: any error -> output {}
  */
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
-import * as path from 'path';
-import * as os from 'os';
 
 import {
   shouldWarn,
@@ -26,6 +24,7 @@ import {
   buildWarningOutput,
   handleTaskUpdate,
 } from '../test-before-done.js';
+import { getStateFile } from '../shared/test-run-state.js';
 
 // ---------------------------------------------------------------------------
 // Constants
@@ -33,25 +32,19 @@ import {
 
 const TEST_SESSION = 'test-before-done-session';
 const TEST_SESSION_B = 'test-before-done-session-b';
-const STATE_BASE_NAME = 'recent-test-runs';
 
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
-function getStatePath(sessionId: string): string {
-  const safeSid = sessionId.replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 32);
-  return path.join(os.tmpdir(), `claude-${STATE_BASE_NAME}-${safeSid}.json`);
-}
-
 function writeTestState(sessionId: string, lastTestRun: number, command = 'uv run pytest'): void {
-  const statePath = getStatePath(sessionId);
+  const statePath = getStateFile(sessionId);
   fs.writeFileSync(statePath, JSON.stringify({ lastTestRun, command }), 'utf-8');
 }
 
 function cleanupStateFiles(): void {
   for (const sid of [TEST_SESSION, TEST_SESSION_B]) {
-    const statePath = getStatePath(sid);
+    const statePath = getStateFile(sid);
     try {
       if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
     } catch { /* ignore */ }
@@ -173,13 +166,13 @@ describe('hasRecentTestRun', () => {
   });
 
   it('returns false when state file contains invalid JSON', () => {
-    const statePath = getStatePath(TEST_SESSION);
+    const statePath = getStateFile(TEST_SESSION);
     fs.writeFileSync(statePath, 'not-json', 'utf-8');
     expect(hasRecentTestRun(TEST_SESSION)).toBe(false);
   });
 
   it('returns false when state file is empty', () => {
-    const statePath = getStatePath(TEST_SESSION);
+    const statePath = getStateFile(TEST_SESSION);
     fs.writeFileSync(statePath, '', 'utf-8');
     expect(hasRecentTestRun(TEST_SESSION)).toBe(false);
   });
@@ -196,22 +189,21 @@ describe('hasRecentTestRun', () => {
 // =============================================================================
 
 describe('buildWarningOutput', () => {
-  it('returns an object with values.system string', () => {
-    const output = buildWarningOutput();
-    expect(output).toHaveProperty('values');
-    expect(output.values).toHaveProperty('system');
-    expect(typeof output.values.system).toBe('string');
+  it('returns hookSpecificOutput.additionalContext and no values key', () => {
+    const output = buildWarningOutput() as any;
+    expect(output.hookSpecificOutput.hookEventName).toBe('PreToolUse');
+    expect(typeof output.hookSpecificOutput.additionalContext).toBe('string');
+    expect(output).not.toHaveProperty('values');
   });
 
   it('warning message mentions test execution', () => {
     const output = buildWarningOutput();
-    expect(output.values.system.toLowerCase()).toContain('test');
+    expect(output.hookSpecificOutput.additionalContext.toLowerCase()).toContain('test');
   });
 
-  it('warning message mentions verification', () => {
+  it('warning message names the verify entry point', () => {
     const output = buildWarningOutput();
-    const msg = output.values.system.toLowerCase();
-    expect(msg).toMatch(/verif|confirm|check/);
+    expect(output.hookSpecificOutput.additionalContext).toContain('verify.mjs');
   });
 
   it('does NOT contain permissionDecision (advisory only)', () => {
@@ -234,8 +226,8 @@ describe('handleTaskUpdate', () => {
     };
     const result = handleTaskUpdate(input);
     expect(result).not.toBeNull();
-    expect(result).toHaveProperty('values');
-    expect(result!.values).toHaveProperty('system');
+    expect(result).toHaveProperty('hookSpecificOutput');
+    expect(result!.hookSpecificOutput).toHaveProperty('additionalContext');
   });
 
   it('returns null (no warning) when completing WITH recent test', () => {

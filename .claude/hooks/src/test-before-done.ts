@@ -4,7 +4,7 @@
  *
  * PreToolUse hook on TaskUpdate. When a task is being marked 'completed',
  * checks if a test command was run recently. If not, injects an advisory
- * system warning (NOT blocking).
+ * warning as hookSpecificOutput.additionalContext (NOT blocking).
  *
  * State file: $TEMP/claude-recent-test-runs-<sessionId>.json
  * Content:    { "lastTestRun": <epoch ms>, "command": "<cmd>" }
@@ -12,20 +12,18 @@
  * The state file is written by companion PostToolUse hooks that track
  * Bash commands containing test-related patterns (pytest, vitest, jest, etc).
  *
- * Advisory only -- uses values.system message injection, no permissionDecision.
+ * Advisory only -- hookSpecificOutput.additionalContext, no permissionDecision.
  * Fails open: any error -> output {}.
  */
 
 import { readFileSync, existsSync } from 'fs';
-import { join } from 'path';
-import { tmpdir } from 'os';
 import { createLogger } from './shared/logger.js';
+import { getStateFile } from './shared/test-run-state.js';
 
 const log = createLogger('test-before-done');
 
 // 5 minutes threshold for "recent" test run
 const RECENT_TEST_THRESHOLD_MS = 300_000;
-const STATE_BASE_NAME = 'recent-test-runs';
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -43,8 +41,9 @@ interface TestRunState {
 }
 
 interface WarningOutput {
-  values: {
-    system: string;
+  hookSpecificOutput: {
+    hookEventName: 'PreToolUse';
+    additionalContext: string;
   };
 }
 
@@ -68,8 +67,7 @@ export function shouldWarn(input: any): boolean {
  */
 export function hasRecentTestRun(sessionId: string): boolean {
   try {
-    const safeSid = (sessionId || 'unknown').replace(/[^a-zA-Z0-9-_]/g, '_').substring(0, 32);
-    const statePath = join(tmpdir(), `claude-${STATE_BASE_NAME}-${safeSid}.json`);
+    const statePath = getStateFile(sessionId);
 
     if (!existsSync(statePath)) return false;
 
@@ -88,15 +86,17 @@ export function hasRecentTestRun(sessionId: string): boolean {
 }
 
 /**
- * Build the advisory warning output (system message injection).
+ * Build the advisory warning output (additionalContext injection).
  * Does NOT use permissionDecision -- purely advisory.
  */
 export function buildWarningOutput(): WarningOutput {
   return {
-    values: {
-      system: "WARNING: No test execution detected before marking task complete. " +
-        "Consider running tests to verify the change works before completing this task."
-    }
+    hookSpecificOutput: {
+      hookEventName: 'PreToolUse',
+      additionalContext:
+        'WARNING: no test run detected in the last 5 minutes before this task was marked complete. ' +
+        'Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output.',
+    },
   };
 }
 
@@ -108,7 +108,7 @@ export function handleTaskUpdate(input: any): WarningOutput | null {
   try {
     if (!shouldWarn(input)) return null;
 
-    const sessionId = input.session_id || 'unknown';
+    const sessionId = input.session_id;
     if (hasRecentTestRun(sessionId)) return null;
 
     log.info('No recent test run detected on task completion', { sessionId });

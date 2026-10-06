@@ -96,7 +96,11 @@ Append a new entry to the `projects` array in `.claude/project-registry.json`:
 
 Required fields: `name`, `path`, `stack`, `description`, `status`.
 Optional fields (nullable): `port`, `url`, `devCommand`, `e2e`.
-`e2e` is the project's end-to-end check (CLAUDE.md "Testing standard"): `{ "command": "...", "artifact": "<path the run writes>" }`. The project's AGENTS.md "Testing" section states the same values.
+`e2e` is the project's end-to-end check (CLAUDE.md "Testing standard"). Two forms:
+`{ "command": "<shell command, run in the project path>", "artifact": "<path the run writes, relative to the repo root; <stamp> allowed>" }`
+or `{ "none": "<reason there is no surface>" }`. `node ~/.claude/scripts/verify.mjs` runs it and writes `<artifact>.json`.
+The command runs under `cmd.exe` on Windows (`shell: true`): use `&&`, no POSIX quoting, no `$VAR`, no `;`. Keep it under 600 s.
+The project's AGENTS.md "Testing" section states the same values.
 
 ### Update Project Info
 
@@ -125,7 +129,7 @@ Set `status` to `"inactive"`. Do not remove the entry -- inactive projects remai
       "port": "number | null",
       "url": "string | null (local dev URL)",
       "devCommand": "string | null (e.g. 'npm run dev')",
-      "e2e": "{ command, artifact } | null (end-to-end check and the file it writes)",
+      "e2e": "{ command, artifact } | { none: reason } | null (end-to-end check; verify.mjs runs it)",
       "status": "'active' | 'inactive'"
     }
   ]

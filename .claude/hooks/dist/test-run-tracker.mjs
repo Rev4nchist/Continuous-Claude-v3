@@ -3,9 +3,23 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 
 // src/test-run-tracker.ts
 import * as fs from "fs";
+
+// src/shared/test-run-state.ts
 import * as os from "os";
 import * as path from "path";
+function getStateFile(sessionId) {
+  const safe = (sessionId || "unknown").replace(/[^a-zA-Z0-9-_]/g, "_");
+  return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
+}
+
+// src/test-run-tracker.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+function nodeScript(name) {
+  const flag = String.raw`\s+(?!--check\b|-c\b)--?[\w-]+(?:=\S+)?`;
+  const dir = String.raw`["']?(?:[^\s"']*[\\/])?`;
+  const notPlan = String.raw`(?![^\n]*--(?:dry-run|help)\b)`;
+  return new RegExp(String.raw`\bnode(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
+}
 var TEST_PATTERNS = [
   /\bvitest\b/,
   /\bjest\b/,
@@ -17,11 +31,13 @@ var TEST_PATTERNS = [
   /\bnpm\s+run\s+test\b/,
   /\bpnpm\s+test\b/,
   /\byarn\s+test\b/,
-  /\bmake\s+test\b/
+  /\bmake\s+test\b/,
+  // Probes, ratchets and the verify entry point are test runs (PR1a, 2026-10-06).
+  nodeScript("[\\w.-]+-probe"),
+  nodeScript("audit-skills"),
+  nodeScript("context-budget-guard"),
+  nodeScript("verify")
 ];
-function getStateFile(sessionId) {
-  return path.join(os.tmpdir(), `claude-recent-test-runs-${sessionId}.json`);
-}
 async function readStdin() {
   return new Promise((resolve) => {
     let data = "";
@@ -50,8 +66,7 @@ async function main() {
   const command = data.tool_input?.command || "";
   const isTestCommand = TEST_PATTERNS.some((p) => p.test(command));
   if (isTestCommand) {
-    const sessionId = data.session_id || "default";
-    const stateFile = getStateFile(sessionId);
+    const stateFile = getStateFile(data.session_id);
     try {
       fs.writeFileSync(
         stateFile,
