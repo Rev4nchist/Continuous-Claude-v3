@@ -1,5 +1,5 @@
 {
-  "_doc": "Trigger probe cases. Each prompt EXPECTS exactly the listed skill(s). Any other skill firing on that prompt counts as a false fire. Keep prompts in Dave's voice. Add a case when a skill is rewritten. Cases that expected a skill archived on 2026-10-01 were removed; add one back when a live skill clearly owns the prompt. A negative case has an empty expect list and a forbid list: it is a hit when no forbidden skill fires, and only a forbidden skill counts as a false fire.",
+  "_doc": "Trigger probe cases. Each prompt EXPECTS exactly the listed skill(s). Any other skill firing on that prompt counts as a false fire. Keep prompts in Dave's voice. Add a case when a skill is rewritten. Cases that expected a skill archived on 2026-10-01 were removed; add one back when a live skill clearly owns the prompt. A forbid list makes the case a miss when any listed skill fires, and only a forbidden skill counts as a false fire. A negative case has an empty expect list and a forbid list: it is a hit when no forbidden skill fires. A case with both lists also needs one expected skill to fire.",
   "cases": [
     { "prompt": "commit what we have so far", "expect": ["commit"] },
     { "prompt": "write up a handoff so the next session can pick this up", "expect": ["create_handoff"] },
@@ -34,9 +34,9 @@
     { "prompt": "how do I rebind ctrl+s in claude code", "expect": ["keybindings-help"] },
     { "prompt": "allow npm commands without prompting", "expect": ["update-config"] },
     { "prompt": "what model ids and prices does the claude api have right now", "expect": ["claude-api"] },
-    { "prompt": "fix the failing vitest in skill-router-integration", "expect": ["systematic-debugging"] },
-    { "prompt": "the rule-router hook fires on every WebFetch even when no rule matches, find out why and fix it", "expect": ["systematic-debugging"] },
-    { "prompt": "sync-to-active.sh exits 1 on a fresh clone, something is broken", "expect": ["systematic-debugging"] },
+    { "prompt": "fix the failing vitest in skill-router-integration", "expect": ["systematic-debugging"], "forbid": ["fix"] },
+    { "prompt": "the rule-router hook fires on every WebFetch even when no rule matches, find out why and fix it", "expect": ["systematic-debugging"], "forbid": ["fix"] },
+    { "prompt": "sync-to-active.sh exits 1 on a fresh clone, something is broken", "expect": ["systematic-debugging"], "forbid": ["fix"] },
     { "prompt": "add a feature flag to the agentic-os fleet grid", "expect": ["build"] },
     { "prompt": "write a PySpark cell for the Fabric notebook that dedups the bronze sales table into silver", "expect": ["fabric"] },
     { "prompt": "my Fabric notebook run failed with an OOM, figure out why", "expect": ["fabric"] },

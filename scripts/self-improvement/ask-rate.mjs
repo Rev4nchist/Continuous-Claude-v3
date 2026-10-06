@@ -27,19 +27,36 @@ export function endsWithQuestion(text) {
   return /\?["')\]*_`]*\s*$/.test((text || '').replace(NEXT_STEPS, '').trim());
 }
 
-/** Parse one transcript (an array of JSONL lines) into ask counts. */
-export function countAsks(lines) {
-  let entrypoint = null, asks = 0, lastText = '';
+// A real human prompt: a user event that is not a tool_result carrier, a sidechain event or a meta line.
+function isHumanPrompt(o) {
+  if (o.type !== 'user' || o.isSidechain || o.isMeta) return false;
+  const c = o.message?.content;
+  return typeof c === 'string' || (Array.isArray(c) && c.length > 0 && !c.some((b) => b.type === 'tool_result'));
+}
+
+/**
+ * Parse one transcript (an array of JSONL lines) into ask counts.
+ * Plain questions are counted at turn boundaries: the final assistant text before each human prompt,
+ * and the final text of the session. `since` (ms epoch) keeps only events stamped at or after it.
+ * `active` says the session has an assistant event in that window.
+ */
+export function countAsks(lines, since = -Infinity) {
+  let entrypoint = null, asks = 0, plainQ = 0, active = false, last = null;
+  const closeTurn = () => { if (last?.inWindow && endsWithQuestion(last.text)) plainQ++; last = null; };
   for (const line of lines) {
     let o; try { o = JSON.parse(line); } catch { continue; }
     if (!entrypoint && o.entrypoint) entrypoint = o.entrypoint;
+    if (isHumanPrompt(o)) { closeTurn(); continue; }
     if (o.type !== 'assistant' || o.isSidechain || !Array.isArray(o.message?.content)) continue;
+    const inWindow = since === -Infinity || Date.parse(o.timestamp) >= since;
+    if (inWindow) active = true;
     for (const b of o.message.content) {
-      if (b.type === 'tool_use' && b.name === 'AskUserQuestion' && !isSurvey(b.input?.questions?.[0]?.question)) asks++;
-      if (b.type === 'text' && b.text) lastText = b.text;
+      if (inWindow && b.type === 'tool_use' && b.name === 'AskUserQuestion' && !isSurvey(b.input?.questions?.[0]?.question)) asks++;
+      if (b.type === 'text' && b.text) last = { text: b.text, inWindow };
     }
   }
-  return { entrypoint: entrypoint || 'unknown', asks, plainQ: endsWithQuestion(lastText) ? 1 : 0 };
+  closeTurn();
+  return { entrypoint: entrypoint || 'unknown', asks, plainQ, active };
 }
 
 const encodeProject = (dir) => path.resolve(dir).replace(/[^A-Za-z0-9]/g, '-');
@@ -116,7 +133,8 @@ async function main() {
   for (const f of all) {
     const session = path.basename(f, '.jsonl');
     if (cfg.exclude.some((p) => session.startsWith(p))) continue;
-    rows.push({ session, ...countAsks(await readLines(f)) });
+    const row = countAsks(await readLines(f), since);
+    if (row.active) rows.push({ session, ...row }); // per-event timestamps: a resumed old session passes the mtime filter alone
   }
   const by = summarize(rows);
   const md = render(cfg, by, rows.length, since);

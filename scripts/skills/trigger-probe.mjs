@@ -133,18 +133,20 @@ export function runError({ error, status, stdout = '' }) {
   return capped && skillsFired(stdout).length ? null : `exit ${status}`;
 }
 
-// Hit and false fires of one case. A case with a `forbid` list is a negative case: it is a hit when no
-// forbidden skill fires, and only a forbidden skill is a false fire. Other skills may own its prompt.
+// Hit and false fires of one case. A case with a `forbid` list is a miss when any forbidden skill fires,
+// and only a forbidden skill is a false fire there. With an empty expect list (a negative case) nothing
+// else is required. With an expect list, one expected skill must also fire.
 export function scoreCase(c, fired) {
   if (Array.isArray(c.forbid) && c.forbid.length) {
     const bad = fired.filter((s) => c.forbid.includes(s));
-    return { hit: !bad.length, falseFires: bad };
+    const needs = (c.expect || []).length > 0;
+    return { hit: !bad.length && (!needs || fired.some((s) => c.expect.includes(s))), falseFires: bad };
   }
   return { hit: fired.some((s) => c.expect.includes(s)), falseFires: fired.filter((s) => !c.expect.includes(s)) };
 }
 
-// What a case asks for, for the dry-run and result lines: a negative case shows its forbid list.
-const wanted = (c) => (Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : `expect ${(c.expect || []).join('|')}`);
+// What a case asks for, for the dry-run and result lines: the expect list, then the forbid list if any.
+const wanted = (c) => [(c.expect || []).length ? `expect ${c.expect.join('|')}` : '', Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : ''].filter(Boolean).join(', ');
 
 function runCase(prompt, model, cwd = repo, alias = null, effort = null, streamFile = null) {
   const { cmd, args } = buildCommand(model, emptyMcpConfigPath(), noHooksSettingsPath(alias), effort);
