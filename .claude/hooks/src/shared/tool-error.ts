@@ -57,3 +57,27 @@ export function detectToolError(toolResponse: unknown): boolean {
 
   return false;
 }
+
+/**
+ * The exit code in a tool_response, or null when the payload has none.
+ *
+ * Moved here from msys-crash-capture.ts so test-run-tracker and msys-crash-capture share it
+ * (a hook file cannot be imported by another: its top-level main() would run in the bundle).
+ *
+ * Evidence (2026-10-06, isolated `claude -p --settings` capture, see
+ * .claude/cache/e2e/2026-10-06-correct-posttooluse-bash.json): a PASSING Bash PostToolUse
+ * tool_response is {stdout, stderr, interrupted, isImage, noOutputExpected}: no exit field. A
+ * failing command never reaches PostToolUse; it fires PostToolUseFailure with
+ * `error: "Exit code N"` and no tool_response (test-run-tracker reads the event name).
+ */
+export function exitCodeOf(resp: unknown): number | null {
+  if (resp && typeof resp === 'object') {
+    const o = resp as Record<string, unknown>;
+    for (const k of ['exit_code', 'exitCode', 'code', 'status']) {
+      if (typeof o[k] === 'number') return o[k] as number;
+    }
+    if (o.is_error === true) return -1;
+  }
+  return null;
+}
+

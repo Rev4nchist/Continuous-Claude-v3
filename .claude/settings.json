@@ -159,6 +159,14 @@
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/package-install-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/commit-preflight.mjs"
+            ]
           }
         ]
       },
@@ -178,6 +186,14 @@
             "command": "node",
             "args": [
               "C:/Users/david.hayes/.claude/hooks/dist/package-install-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/commit-preflight.mjs"
             ]
           }
         ]
@@ -449,6 +465,21 @@
               "C:/Users/david.hayes/.claude/hooks/dist/session-end-handoff-indexer.mjs"
             ],
             "timeout": 15000
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "C:/Users/david.hayes/.claude/hooks/dist/test-run-tracker.mjs"
+            ]
           }
         ]
       }

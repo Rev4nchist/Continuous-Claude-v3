@@ -396,6 +396,8 @@ describe('a missing session_id records nothing and the advisory still shows', ()
     await track({ tool_name: 'PowerShell', tool_input: probe });
     for (const p of legacy) expect(fs.existsSync(p)).toBe(false);
     expect(hasRecentTestRun(undefined)).toBe(false);
-    expect(handleTaskUpdate(complete)).not.toBeNull();
+    // An empty directory, so a verify sidecar written in this checkout cannot decide the result.
+    const cwd = fs.mkdtempSync(path.join(os.tmpdir(), 'trt-norepo-'));
+    expect(handleTaskUpdate({ ...complete, cwd })).not.toBeNull();
   });
 });

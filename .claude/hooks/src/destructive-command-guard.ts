@@ -54,6 +54,7 @@ import {
   extractShellWrapperPayloads,
   normalizeGitGlobalOptions,
 } from './shared/destructive-classifier.js';
+import { isUnattended } from './shared/unattended.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -79,18 +80,9 @@ interface HookOutput {
   };
 }
 
-/**
- * Unattended = no human is available to answer an interactive prompt.
- * In these contexts an 'ask' would hang forever, so destructive ops fail CLOSED
- * (deny). bypassPermissions is treated as unattended/yolo: even there, truly
- * destructive ops are blocked as a circuit breaker (overridable via SKIP env).
- */
-export function isUnattended(input: HookInput, env: NodeJS.ProcessEnv = process.env): boolean {
-  if (input.permission_mode === 'bypassPermissions') return true;
-  if (env.CLAUDE_AGENT_ID) return true;          // subagent context
-  if (env.CI === 'true' || env.CI === '1') return true;
-  return false;
-}
+// Unattended contexts (bypassPermissions, subagent, CI): an 'ask' would hang forever, so
+// destructive ops fail CLOSED (deny). Moved to shared/unattended.ts, re-exported for the tests.
+export { isUnattended };
 
 export type Decision = { decision: 'allow' | 'ask' | 'deny'; pattern?: string };
 

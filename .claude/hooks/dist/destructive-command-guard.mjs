@@ -409,14 +409,16 @@ function classifyDestructive(command, depth = 0, tool = "Bash") {
   return null;
 }
 
-// src/destructive-command-guard.ts
-var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+// src/shared/unattended.ts
 function isUnattended(input, env = process.env) {
   if (input.permission_mode === "bypassPermissions") return true;
   if (env.CLAUDE_AGENT_ID) return true;
   if (env.CI === "true" || env.CI === "1") return true;
   return false;
 }
+
+// src/destructive-command-guard.ts
+var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 function decide(command, input, env = process.env) {
   if (env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command)) {
     return { decision: "allow" };

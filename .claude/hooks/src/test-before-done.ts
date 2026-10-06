@@ -3,11 +3,12 @@
  * Test Before Done Hook
  *
  * PreToolUse hook on TaskUpdate. When a task is being marked 'completed',
- * checks if a test command was run recently. If not, injects an advisory
- * warning as hookSpecificOutput.additionalContext (NOT blocking).
+ * asks shared/done-proof.ts `judge` whether the change has proof (the same judge as
+ * commit-preflight). No proof: injects an advisory warning as
+ * hookSpecificOutput.additionalContext (NOT blocking).
  *
  * State file: $TEMP/claude-recent-test-runs-<sessionId>.json
- * Content:    { "lastTestRun": <epoch ms>, "command": "<cmd>" }
+ * Content:    { "lastTestRun": <epoch ms>, "command": "<cmd>", "ok": true|false|null }
  *
  * The state file is written by companion PostToolUse hooks that track
  * Bash commands containing test-related patterns (pytest, vitest, jest, etc).
@@ -16,14 +17,12 @@
  * Fails open: any error -> output {}.
  */
 
-import { readFileSync, existsSync } from 'fs';
+import { readFileSync } from 'fs';
+import { judge, latestSidecar, readTestRun, runProves } from './shared/done-proof.js';
+import { resolveHead } from './shared/git-head.js';
 import { createLogger } from './shared/logger.js';
-import { getStateFile } from './shared/test-run-state.js';
 
 const log = createLogger('test-before-done');
-
-// 5 minutes threshold for "recent" test run
-const RECENT_TEST_THRESHOLD_MS = 300_000;
 
 // ---------------------------------------------------------------------------
 // Interfaces
@@ -31,13 +30,9 @@ const RECENT_TEST_THRESHOLD_MS = 300_000;
 
 interface HookInput {
   session_id?: string;
+  cwd?: string;
   tool_name: string;
   tool_input: Record<string, unknown>;
-}
-
-interface TestRunState {
-  lastTestRun: number;
-  command?: string;
 }
 
 interface WarningOutput {
@@ -62,39 +57,27 @@ export function shouldWarn(input: any): boolean {
 }
 
 /**
- * Check if a test command ran recently for the given session.
- * Reads the state file and checks if lastTestRun is within threshold.
+ * True when the session's last test run counts as proof: within 5 minutes, not a ratchet, not
+ * failed (shared/done-proof.ts runProves). Reads the state file; fails open to false.
+ *
+ * Not used by the hook itself any more (handleTaskUpdate asks `judge`). Kept as the public
+ * reader that test-before-done.test.ts and test-run-tracker.test.ts pin: the tracker/reader
+ * state-path contract.
  */
 export function hasRecentTestRun(sessionId: string | undefined): boolean {
-  try {
-    const statePath = getStateFile(sessionId);
-
-    // No session id: no state file, so the advisory shows.
-    if (!statePath || !existsSync(statePath)) return false;
-
-    const raw = readFileSync(statePath, 'utf-8');
-    if (!raw.trim()) return false;
-
-    const state: TestRunState = JSON.parse(raw);
-    if (!state.lastTestRun || typeof state.lastTestRun !== 'number') return false;
-
-    const elapsed = Date.now() - state.lastTestRun;
-    return elapsed < RECENT_TEST_THRESHOLD_MS;
-  } catch {
-    // Fail open -- treat as no recent test
-    return false;
-  }
+  return runProves(readTestRun(sessionId), Date.now());
 }
 
 /**
  * Build the advisory warning output (additionalContext injection).
  * Does NOT use permissionDecision -- purely advisory.
  */
-export function buildWarningOutput(): WarningOutput {
+export function buildWarningOutput(message?: string): WarningOutput {
   return {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
       additionalContext:
+        message ??
         'WARNING: no test run detected in the last 5 minutes before this task was marked complete. ' +
         'Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output.',
     },
@@ -102,18 +85,29 @@ export function buildWarningOutput(): WarningOutput {
 }
 
 /**
- * Main handler: checks if we should warn, then checks for recent tests.
+ * Main handler: checks if we should warn, then asks the same judge as commit-preflight.
  * Returns the warning output if needed, or null if no warning.
+ *
+ * A TaskUpdate has no repo of its own, so the repo is the payload cwd (else the process cwd) and
+ * hasE2e is true: this hook has always warned when no test ran, and keeps doing so.
  */
 export function handleTaskUpdate(input: any): WarningOutput | null {
   try {
     if (!shouldWarn(input)) return null;
 
     const sessionId = input.session_id;
-    if (hasRecentTestRun(sessionId)) return null;
+    const head = resolveHead(typeof input.cwd === 'string' && input.cwd ? input.cwd : process.cwd());
+    const verdict = judge({
+      run: readTestRun(sessionId),
+      sidecar: head ? latestSidecar(head.repoRoot) : null,
+      head: head?.sha ?? null,
+      hasE2e: true,
+      now: Date.now(),
+    });
+    if (verdict.kind === 'proven') return null;
 
-    log.info('No recent test run detected on task completion', { sessionId });
-    return buildWarningOutput();
+    log.info('No proof of a working change on task completion', { sessionId, verdict: verdict.kind });
+    return verdict.kind === 'none' ? buildWarningOutput() : buildWarningOutput(`WARNING: ${verdict.message}`);
   } catch (err) {
     log.error('handleTaskUpdate failed', { error: String(err) });
     // Fail open

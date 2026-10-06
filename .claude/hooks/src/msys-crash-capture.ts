@@ -23,6 +23,7 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from 'f
 import { dirname, join } from 'path';
 import { spawnSync } from 'child_process';
 import { homedir } from 'os';
+import { exitCodeOf } from './shared/tool-error.js';
 
 const MSYS_SIGNATURES = [
   /fatal error - add_item/i,
@@ -58,17 +59,6 @@ export function isMsysCrash(responseTxt: string, command: string): boolean {
   const cmd = command || '';
   if (/add_item|cygheap|msys-events|msys-crash|windows-platform/i.test(cmd)) return false;
   return true;
-}
-
-function exitCodeOf(resp: unknown): number | null {
-  if (resp && typeof resp === 'object') {
-    const o = resp as Record<string, unknown>;
-    for (const k of ['exit_code', 'exitCode', 'code', 'status']) {
-      if (typeof o[k] === 'number') return o[k] as number;
-    }
-    if (o.is_error === true) return -1;
-  }
-  return null;
 }
 
 export function redactCommand(cmd: string): string {
