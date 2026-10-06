@@ -1,0 +1,25 @@
+{
+  "session_id": "<SESSION>",
+  "transcript_path": "C:\\Users\\david.hayes\\.claude\\projects\\C--Users-david-hayes-continuous-claude-correct\\<SESSION>.jsonl",
+  "cwd": "C:\\Users\\david.hayes\\continuous-claude-correct",
+  "prompt_id": "7fcfe134-f93e-45e8-b3dc-08929efefcb2",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "node -e \"console.log(1)\"",
+    "description": "Print 1 with Node"
+  },
+  "tool_response": {
+    "stdout": "1",
+    "stderr": "",
+    "interrupted": false,
+    "isImage": false,
+    "noOutputExpected": false
+  },
+  "tool_use_id": "toolu_01YYP8CaoPDcBekozLdpGTCA",
+  "duration_ms": 11194
+}

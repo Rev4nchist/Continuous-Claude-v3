@@ -1,0 +1,16 @@
+{
+  "session_id": "<SESSION>",
+  "transcript_path": "C:\\Users\\david.hayes\\.claude\\projects\\C--Users-david-hayes-continuous-claude-correct\\<SESSION>.jsonl",
+  "prompt_id": "bbb4e9af-fcbc-44f1-9f56-1185bd39fbba",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PreToolUse",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "git -C <OTHER> commit -m \"feat(hooks): remind every session to start the CodeRabbit loop when a PR opens\"",
+    "description": "Commit in the other repo"
+  },
+  "tool_use_id": "toolu_01LeQ62u1QFX2ChmxwMKg7Cv"
+}

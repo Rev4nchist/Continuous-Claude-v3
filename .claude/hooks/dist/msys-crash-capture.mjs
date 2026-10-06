@@ -5,6 +5,20 @@ import { appendFileSync, mkdirSync, readFileSync, renameSync, statSync } from "f
 import { dirname, join } from "path";
 import { spawnSync } from "child_process";
 import { homedir } from "os";
+
+// src/shared/tool-error.ts
+function exitCodeOf(resp) {
+  if (resp && typeof resp === "object") {
+    const o = resp;
+    for (const k of ["exit_code", "exitCode", "code", "status"]) {
+      if (typeof o[k] === "number") return o[k];
+    }
+    if (o.is_error === true) return -1;
+  }
+  return null;
+}
+
+// src/msys-crash-capture.ts
 var MSYS_SIGNATURES = [
   /fatal error - add_item/i,
   /cygheap base mismatch/i,
@@ -33,16 +47,6 @@ function isMsysCrash(responseTxt, command) {
   const cmd = command || "";
   if (/add_item|cygheap|msys-events|msys-crash|windows-platform/i.test(cmd)) return false;
   return true;
-}
-function exitCodeOf(resp) {
-  if (resp && typeof resp === "object") {
-    const o = resp;
-    for (const k of ["exit_code", "exitCode", "code", "status"]) {
-      if (typeof o[k] === "number") return o[k];
-    }
-    if (o.is_error === true) return -1;
-  }
-  return null;
 }
 function redactCommand(cmd) {
   if (!cmd) return "";

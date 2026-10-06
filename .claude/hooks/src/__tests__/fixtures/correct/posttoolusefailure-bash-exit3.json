@@ -1,0 +1,20 @@
+{
+  "session_id": "<SESSION>",
+  "transcript_path": "C:\\Users\\david.hayes\\.claude\\projects\\C--Users-david-hayes-continuous-claude-correct\\<SESSION>.jsonl",
+  "cwd": "C:\\Users\\david.hayes\\continuous-claude-correct",
+  "prompt_id": "bbb4e9af-fcbc-44f1-9f56-1185bd39fbba",
+  "permission_mode": "default",
+  "effort": {
+    "level": "high"
+  },
+  "hook_event_name": "PostToolUseFailure",
+  "tool_name": "Bash",
+  "tool_input": {
+    "command": "node -e \"process.exit(3)\"",
+    "description": "Run Node to exit with code 3"
+  },
+  "tool_use_id": "toolu_01LeQ62u1QFX2ChmxwMKg7Cv",
+  "error": "Exit code 3",
+  "is_interrupt": false,
+  "duration_ms": 10992
+}

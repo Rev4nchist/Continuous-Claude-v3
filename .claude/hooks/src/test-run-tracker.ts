@@ -6,20 +6,29 @@
  * and records the timestamp. test-before-done reads this to verify tests
  * were actually run before marking tasks complete.
  *
- * Hook: PostToolUse (Bash)
- * State: $TEMP/claude-recent-test-runs-{sessionId}.json
+ * Hook: PostToolUse and PostToolUseFailure (Bash|PowerShell). A failing command arrives only as
+ * PostToolUseFailure, so both events must be registered or a failed run is never recorded.
+ * State: $TEMP/claude-recent-test-runs-{sessionId}.json = {lastTestRun, command, ok}
  */
 
 import * as fs from 'fs';
+import { isRatchet } from './shared/done-proof.js';
+import { maskQuoted } from './shared/mask-quotes.js';
 import { getStateFile } from './shared/test-run-state.js';
+import { exitCodeOf } from './shared/tool-error.js';
 
 interface PostToolUseInput {
   session_id?: string;
+  hook_event_name?: string;
   tool_name: string;
   tool_input: {
     command?: string;
     [key: string]: unknown;
   };
+  tool_response?: unknown;
+  /** PostToolUseFailure only: "Exit code N" for a command that exited non-zero. */
+  error?: string;
+  is_interrupt?: boolean;
 }
 
 /** Shell tools that carry a command. Must match the settings.json matcher. */
@@ -43,24 +52,76 @@ function nodeScript(name: string): RegExp {
   return new RegExp(String.raw`${start}node(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
 }
 
-const TEST_PATTERNS = [
-  /\bvitest\b/,
-  /\bjest\b/,
-  /\bpytest\b/,
-  /\bnpm\s+test\b/,
-  /\bcargo\s+test\b/,
-  /\bgo\s+test\b/,
-  /\bmocha\b/,
-  /\bnpm\s+run\s+test\b/,
-  /\bpnpm\s+test\b/,
-  /\byarn\s+test\b/,
-  /\bmake\s+test\b/,
-  // Probes, ratchets and the verify entry point are test runs (PR1a, 2026-10-06).
+/**
+ * A test tool counts as a run only where the shell runs it: at a command position, behind the
+ * launchers people use (an env prefix, `npx`, `pnpm exec`, `uv run`, `python -m`, `cross-env`) and
+ * an optional path (`./node_modules/.bin/`). A command that only NAMES the tool (a commit message,
+ * `grep -r pytest`, `cat jest.config.js`) is not a run: a run is proof for the next 5 minutes.
+ * Run on the quote-masked command (see isTestCommand), so text inside quotes never counts.
+ */
+const CMD_START = String.raw`(?:^\s*|[;&|(]\s*|\n\s*)(?:&\s+)?(?:\w+=\S*\s+)*`;
+const LAUNCHERS = String.raw`(?:(?:npx|pnpx|bunx)(?:\.cmd)?(?:\s+--?[\w-]+(?:=\S+)?)*\s+|(?:pnpm|yarn|npm)(?:\.cmd)?\s+(?:exec\s+|dlx\s+)?|(?:uv|poetry|pipenv|pdm)\s+run\s+|python3?(?:\.exe)?\s+-m\s+|py\s+-m\s+|cross-env\s+(?:\w+=\S*\s+)*)*`;
+const TOOL_PATH = String.raw`(?:[^\s"';&|()]*[\\/])?`;
+const atCommand = (body: string): RegExp => new RegExp(CMD_START + body);
+
+const TOOL_PATTERNS = [
+  atCommand(`${LAUNCHERS}${TOOL_PATH}(?:vitest|jest|pytest|mocha)(?:\\.cmd|\\.exe)?\\b`),
+  atCommand(String.raw`(?:npm|pnpm|yarn)(?:\.cmd)?\s+(?:run\s+)?test\b`),
+  atCommand(String.raw`cargo\s+test\b`),
+  atCommand(String.raw`go\s+test\b`),
+  atCommand(String.raw`make\s+test\b`),
+];
+
+// Probes, ratchets and the verify entry point are test runs (PR1a, 2026-10-06). Run on the raw
+// command: the path may be quoted (`node "C:\x\verify.mjs"`).
+const NODE_PATTERNS = [
   nodeScript('[\\w.-]+-probe'),
   nodeScript('audit-skills'),
   nodeScript('context-budget-guard'),
   nodeScript('verify'),
 ];
+
+const TEST_PATTERNS = [...TOOL_PATTERNS, ...NODE_PATTERNS];
+
+/** Is `command` a test run? Tools are matched on the quote-masked view, scripts on the raw one. */
+export function isTestCommand(command: string, tool: string = 'Bash'): boolean {
+  if (NODE_PATTERNS.some((p) => p.test(command))) return true;
+  const masked = maskQuoted(command, tool);
+  return TOOL_PATTERNS.some((p) => p.test(masked));
+}
+
+/**
+ * Did the run pass? true / false, or null when it cannot be told.
+ *
+ * Evidence (step 0 of PR2, 2026-10-06, real payloads in
+ * .claude/cache/e2e/2026-10-06-correct-posttooluse-bash.json): a passing Bash call fires
+ * PostToolUse with a tool_response that has NO exit-code field; a failing call fires
+ * PostToolUseFailure with `error: "Exit code N"` and no tool_response. So the event name is the
+ * signal. An exit code in tool_response, if a future payload carries one, wins. An interrupt
+ * (the user pressed Escape) is `false`: the run did not finish, so it is not proof, and null
+ * counts as a pass in done-proof.
+ */
+export function okOf(data: PostToolUseInput): boolean | null {
+  if (data.hook_event_name === 'PostToolUseFailure') return false;
+  const code = exitCodeOf(data.tool_response);
+  if (code !== null) return code === 0;
+  return data.hook_event_name === 'PostToolUse' ? true : null;
+}
+
+/**
+ * The state file holds ONE run. A ratchet (context-budget-guard, audit-skills) is never proof, so
+ * it must not overwrite a test run: AGENTS.md says to run vitest and then the ratchet, and the
+ * second must not erase the first.
+ */
+function keepsEarlierRun(stateFile: string, command: string): boolean {
+  if (!isRatchet(command)) return false;
+  try {
+    const prev = JSON.parse(fs.readFileSync(stateFile, 'utf8'));
+    return typeof prev?.lastTestRun === 'number' && typeof prev?.command === 'string' && !isRatchet(prev.command);
+  } catch {
+    return false;
+  }
+}
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -94,18 +155,23 @@ async function main() {
   }
 
   const command = data.tool_input?.command || '';
-  const isTestCommand = TEST_PATTERNS.some((p) => p.test(command));
 
-  if (isTestCommand) {
+  // A background start fires PostToolUse before any test finishes: its result is unknown, so it
+  // records nothing (a recorded pass here would be proof for a run that has not happened).
+  if (isTestCommand(command, data.tool_name) && data.tool_input?.run_in_background !== true) {
     const stateFile = getStateFile(data.session_id);
     if (!stateFile) {
+      console.log(JSON.stringify({}));
+      return;
+    }
+    if (keepsEarlierRun(stateFile, command)) {
       console.log(JSON.stringify({}));
       return;
     }
     try {
       fs.writeFileSync(
         stateFile,
-        JSON.stringify({ lastTestRun: Date.now(), command })
+        JSON.stringify({ lastTestRun: Date.now(), command, ok: okOf(data) })
       );
     } catch {
       // Fail open

@@ -17,6 +17,8 @@
 
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import * as fs from 'fs';
+import * as os from 'os';
+import * as path from 'path';
 
 import {
   shouldWarn,
@@ -32,6 +34,14 @@ import { getStateFile } from '../shared/test-run-state.js';
 
 const TEST_SESSION = 'test-before-done-session';
 const TEST_SESSION_B = 'test-before-done-session-b';
+
+/**
+ * handleTaskUpdate reads the verify sidecars of the repo at `cwd`. These tests are about the test-run
+ * state file, so they run in an empty directory: a sidecar a developer just wrote in this checkout
+ * must not decide them.
+ */
+const NO_REPO = fs.mkdtempSync(path.join(os.tmpdir(), 'tbd-norepo-'));
+const handle = (input: any) => handleTaskUpdate(input && typeof input === 'object' ? { cwd: NO_REPO, ...input } : input);
 
 /** getStateFile is null only without a session id; every id in this file is real. */
 const stateFile = (id: string): string => getStateFile(id)!;
@@ -227,7 +237,7 @@ describe('handleTaskUpdate', () => {
       tool_name: 'TaskUpdate',
       tool_input: { status: 'completed' },
     };
-    const result = handleTaskUpdate(input);
+    const result = handle(input);
     expect(result).not.toBeNull();
     expect(result).toHaveProperty('hookSpecificOutput');
     expect(result!.hookSpecificOutput).toHaveProperty('additionalContext');
@@ -240,7 +250,7 @@ describe('handleTaskUpdate', () => {
       tool_name: 'TaskUpdate',
       tool_input: { status: 'completed' },
     };
-    const result = handleTaskUpdate(input);
+    const result = handle(input);
     expect(result).toBeNull();
   });
 
@@ -250,7 +260,7 @@ describe('handleTaskUpdate', () => {
       tool_name: 'TaskUpdate',
       tool_input: { status: 'in_progress' },
     };
-    const result = handleTaskUpdate(input);
+    const result = handle(input);
     expect(result).toBeNull();
   });
 
@@ -260,23 +270,23 @@ describe('handleTaskUpdate', () => {
       tool_name: 'Bash',
       tool_input: { command: 'ls' },
     };
-    const result = handleTaskUpdate(input);
+    const result = handle(input);
     expect(result).toBeNull();
   });
 
   it('does not crash on null input', () => {
-    expect(() => handleTaskUpdate(null as any)).not.toThrow();
-    expect(handleTaskUpdate(null as any)).toBeNull();
+    expect(() => handle(null as any)).not.toThrow();
+    expect(handle(null as any)).toBeNull();
   });
 
   it('does not crash on undefined input', () => {
-    expect(() => handleTaskUpdate(undefined as any)).not.toThrow();
-    expect(handleTaskUpdate(undefined as any)).toBeNull();
+    expect(() => handle(undefined as any)).not.toThrow();
+    expect(handle(undefined as any)).toBeNull();
   });
 
   it('does not crash on empty object', () => {
-    expect(() => handleTaskUpdate({} as any)).not.toThrow();
-    expect(handleTaskUpdate({} as any)).toBeNull();
+    expect(() => handle({} as any)).not.toThrow();
+    expect(handle({} as any)).toBeNull();
   });
 
   it('uses session_id from input for state file lookup', () => {
@@ -295,8 +305,8 @@ describe('handleTaskUpdate', () => {
     };
 
     // Session A should pass (has recent test)
-    expect(handleTaskUpdate(inputA)).toBeNull();
+    expect(handle(inputA)).toBeNull();
     // Session B should warn (no recent test)
-    expect(handleTaskUpdate(inputB)).not.toBeNull();
+    expect(handle(inputB)).not.toBeNull();
   });
 });

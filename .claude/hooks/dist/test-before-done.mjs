@@ -2,14 +2,208 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/test-before-done.ts
-import { readFileSync, existsSync as existsSync2 } from "fs";
+import { readFileSync as readFileSync3 } from "fs";
+
+// src/shared/done-proof.ts
+import { existsSync, readdirSync, readFileSync, statSync } from "fs";
+import { join as join2, resolve } from "path";
+
+// src/shared/test-run-state.ts
+import * as os from "os";
+import * as path from "path";
+function getStateFile(sessionId) {
+  if (!sessionId) return null;
+  const safe = sessionId.replace(/[^a-zA-Z0-9-_]/g, "_");
+  return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
+}
+
+// src/shared/done-proof.ts
+var MIN = 6e4;
+var PROOF_WINDOW_MS = 5 * MIN;
+var FAILURE_WINDOW_MS = 30 * MIN;
+var VERIFY = "node ~/.claude/scripts/verify.mjs";
+var RATCHETS = [/\bcontext-budget-guard\b/, /\baudit-skills\b/];
+function isRatchet(command) {
+  return !!command && RATCHETS.some((re) => re.test(command));
+}
+function readTestRun(sessionId) {
+  try {
+    const file = getStateFile(sessionId);
+    if (!file || !existsSync(file)) return null;
+    const raw = readFileSync(file, "utf8");
+    if (!raw.trim()) return null;
+    const s = JSON.parse(raw);
+    if (typeof s?.lastTestRun !== "number" || !s.lastTestRun) return null;
+    return {
+      lastTestRun: s.lastTestRun,
+      command: typeof s.command === "string" ? s.command : void 0,
+      ok: typeof s.ok === "boolean" ? s.ok : null
+    };
+  } catch {
+    return null;
+  }
+}
+var MAX_SIDECARS = 50;
+function latestSidecar(repoRoot) {
+  const dir = join2(repoRoot, ".claude", "cache", "e2e");
+  let names;
+  try {
+    names = readdirSync(dir).filter((n) => n.endsWith(".log.json"));
+  } catch {
+    return null;
+  }
+  const newest = names.map((n) => {
+    try {
+      return { n, t: statSync(join2(dir, n)).mtimeMs };
+    } catch {
+      return { n, t: 0 };
+    }
+  }).sort((a, b) => b.t - a.t).slice(0, MAX_SIDECARS);
+  let best = null;
+  let bestAt = -Infinity;
+  for (const { n } of newest) {
+    try {
+      const j = JSON.parse(readFileSync(join2(dir, n), "utf8"));
+      const at = Date.parse(j.started);
+      if (Number.isNaN(at) || at <= bestAt) continue;
+      bestAt = at;
+      best = {
+        exit: typeof j.exit === "number" ? j.exit : null,
+        started: typeof j.started === "string" ? j.started : null,
+        finished: typeof j.finished === "string" ? j.finished : null,
+        head: typeof j.head === "string" ? j.head : null,
+        artifact: typeof j.artifact === "string" ? j.artifact : void 0
+      };
+    } catch {
+    }
+  }
+  return best;
+}
+var sidecarAt = (s) => Date.parse(s.finished ?? s.started ?? "");
+var SKEW_MS = MIN;
+var fresh = (at, now, window) => now - at > -SKEW_MS && now - at < window;
+function runProves(run, now) {
+  return !!run && fresh(run.lastTestRun, now, PROOF_WINDOW_MS) && !isRatchet(run.command) && run.ok !== false;
+}
+var HEX_HEAD = /^[0-9a-f]{7,40}$/i;
+function headMatches(sidecar, head) {
+  return !!sidecar.head && !!head && HEX_HEAD.test(sidecar.head) && head.toLowerCase().startsWith(sidecar.head.toLowerCase());
+}
+function sidecarProves(s, head, now) {
+  if (s.exit !== 0 || !s.finished) return false;
+  return fresh(Date.parse(s.finished), now, PROOF_WINDOW_MS) && headMatches(s, head);
+}
+var shortCmd = (c) => (c ?? "unknown command").replace(/\s+/g, " ").slice(0, 120);
+function failure(run, s, now) {
+  const counted = run && !isRatchet(run.command) ? run : null;
+  const sAt = s ? sidecarAt(s) : NaN;
+  const sRecent = !!s && fresh(sAt, now, FAILURE_WINDOW_MS);
+  const sidecarIsNewest = !counted || sAt >= counted.lastTestRun;
+  if (s && sRecent && sidecarIsNewest && typeof s.exit === "number" && s.exit !== 0) {
+    const message = `last verify exited ${s.exit} (${s.artifact ?? "no artifact"}): fix and re-run ${VERIFY}`;
+    return { verdict: { kind: "failed", message }, at: sAt };
+  }
+  const passedSince = !!s && s.exit === 0 && sAt > (counted?.lastTestRun ?? Infinity);
+  if (counted && counted.ok === false && fresh(counted.lastTestRun, now, FAILURE_WINDOW_MS) && !passedSince) {
+    const message = `last test run failed (${shortCmd(counted.command)}): fix it and re-run it, or run ${VERIFY}`;
+    return { verdict: { kind: "failed", message }, at: counted.lastTestRun };
+  }
+  if (s && sRecent && sidecarIsNewest && s.exit === null) {
+    const message = `last verify (${s.artifact ?? "no artifact"}) is still running or was killed: let it finish or re-run ${VERIFY}`;
+    return { verdict: { kind: "killed", message }, at: sAt };
+  }
+  return null;
+}
+function judge(i) {
+  const { run, sidecar, head, now } = i;
+  const proofAt = Math.max(
+    runProves(run, now) ? run.lastTestRun : -Infinity,
+    sidecar && sidecarProves(sidecar, head, now) ? sidecarAt(sidecar) : -Infinity
+  );
+  const bad = failure(run, sidecar, now);
+  if (bad && bad.at > proofAt) return bad.verdict;
+  if (proofAt > -Infinity) return { kind: "proven", message: "" };
+  if (sidecar && sidecar.exit === 0 && sidecar.head && head && !headMatches(sidecar, head) && fresh(sidecarAt(sidecar), now, FAILURE_WINDOW_MS)) {
+    return { kind: "stale", message: `verify ran on ${sidecar.head}, HEAD is ${head.slice(0, 7)}: re-run ${VERIFY}` };
+  }
+  if (!i.hasE2e) return { kind: "proven", message: "" };
+  return {
+    kind: "none",
+    message: `no test run or verify sidecar in the last 5 minutes: run ${VERIFY} and cite its output`
+  };
+}
+
+// src/shared/git-head.ts
+import { existsSync as existsSync2, readFileSync as readFileSync2, statSync as statSync2 } from "fs";
+import { basename, dirname, isAbsolute, join as join3, resolve as resolve2 } from "path";
+var SHA_RE = /^[0-9a-f]{40}$/i;
+function read(path2) {
+  try {
+    return readFileSync2(path2, "utf8");
+  } catch {
+    return null;
+  }
+}
+function findDotGit(start) {
+  let dir = resolve2(start);
+  for (; ; ) {
+    if (existsSync2(join3(dir, ".git"))) return dir;
+    const parent = dirname(dir);
+    if (parent === dir) return null;
+    dir = parent;
+  }
+}
+function gitDirOf(root) {
+  const dotGit = join3(root, ".git");
+  if (statSync2(dotGit).isDirectory()) return dotGit;
+  const m = (read(dotGit) ?? "").match(/^gitdir:\s*(.+?)\s*$/m);
+  if (!m) return null;
+  const target = isAbsolute(m[1]) ? m[1] : resolve2(root, m[1]);
+  return statSync2(target).isDirectory() ? target : null;
+}
+function commonDirOf(gitDir) {
+  const rel = read(join3(gitDir, "commondir"))?.trim();
+  if (!rel) return gitDir;
+  return isAbsolute(rel) ? rel : resolve2(gitDir, rel);
+}
+function shaOfBranch(branch, gitDir, commonDir) {
+  for (const dir of /* @__PURE__ */ new Set([gitDir, commonDir])) {
+    const loose = read(join3(dir, "refs", "heads", ...branch.split("/")))?.trim();
+    if (loose && SHA_RE.test(loose)) return loose;
+  }
+  const packed = read(join3(commonDir, "packed-refs")) ?? "";
+  for (const line of packed.split(/\r?\n/)) {
+    const m = line.match(/^([0-9a-f]{40})\s+refs\/heads\/(.+?)\s*$/i);
+    if (m && m[2] === branch) return m[1];
+  }
+  return null;
+}
+function resolveHead(dir) {
+  try {
+    if (!dir || !existsSync2(dir)) return null;
+    const repoRoot = findDotGit(dir);
+    if (!repoRoot) return null;
+    const gitDir = gitDirOf(repoRoot);
+    if (!gitDir) return null;
+    const commonDir = commonDirOf(gitDir);
+    const mainRoot = basename(commonDir) === ".git" ? dirname(commonDir) : repoRoot;
+    const head = read(join3(gitDir, "HEAD"))?.trim();
+    if (!head) return null;
+    const ref = head.match(/^ref:\s*refs\/heads\/(.+)$/);
+    if (ref) return { repoRoot, mainRoot, branch: ref[1], sha: shaOfBranch(ref[1], gitDir, commonDir) };
+    if (SHA_RE.test(head)) return { repoRoot, mainRoot, branch: null, sha: head };
+    return null;
+  } catch {
+    return null;
+  }
+}
 
 // src/shared/logger.ts
-import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { dirname, join } from "path";
+import { appendFileSync, existsSync as existsSync3, mkdirSync, statSync as statSync3, renameSync } from "fs";
+import { dirname as dirname2, join as join4 } from "path";
 import { homedir } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
-var LOG_DIR = dirname(LOG_FILE);
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join4(homedir(), ".claude", "logs", "hooks.log");
+var LOG_DIR = dirname2(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
 var LEVEL_ORDER = {
@@ -22,14 +216,14 @@ function shouldLog(level) {
   return LEVEL_ORDER[level] >= LEVEL_ORDER[MIN_LEVEL];
 }
 function ensureLogDir() {
-  if (!existsSync(LOG_DIR)) {
+  if (!existsSync3(LOG_DIR)) {
     mkdirSync(LOG_DIR, { recursive: true });
   }
 }
 function rotateIfNeeded() {
   try {
-    if (existsSync(LOG_FILE)) {
-      const stat = statSync(LOG_FILE);
+    if (existsSync3(LOG_FILE)) {
+      const stat = statSync3(LOG_FILE);
       if (stat.size > MAX_LOG_SIZE) {
         const rotated = LOG_FILE + ".1";
         renameSync(LOG_FILE, rotated);
@@ -75,18 +269,8 @@ function createLogger(hookName) {
   };
 }
 
-// src/shared/test-run-state.ts
-import * as os from "os";
-import * as path from "path";
-function getStateFile(sessionId) {
-  if (!sessionId) return null;
-  const safe = sessionId.replace(/[^a-zA-Z0-9-_]/g, "_");
-  return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
-}
-
 // src/test-before-done.ts
 var log = createLogger("test-before-done");
-var RECENT_TEST_THRESHOLD_MS = 3e5;
 function shouldWarn(input) {
   if (!input || typeof input !== "object") return false;
   if (input.tool_name !== "TaskUpdate") return false;
@@ -94,24 +278,13 @@ function shouldWarn(input) {
   return input.tool_input.status === "completed";
 }
 function hasRecentTestRun(sessionId) {
-  try {
-    const statePath = getStateFile(sessionId);
-    if (!statePath || !existsSync2(statePath)) return false;
-    const raw = readFileSync(statePath, "utf-8");
-    if (!raw.trim()) return false;
-    const state = JSON.parse(raw);
-    if (!state.lastTestRun || typeof state.lastTestRun !== "number") return false;
-    const elapsed = Date.now() - state.lastTestRun;
-    return elapsed < RECENT_TEST_THRESHOLD_MS;
-  } catch {
-    return false;
-  }
+  return runProves(readTestRun(sessionId), Date.now());
 }
-function buildWarningOutput() {
+function buildWarningOutput(message) {
   return {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
-      additionalContext: "WARNING: no test run detected in the last 5 minutes before this task was marked complete. Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output."
+      additionalContext: message ?? "WARNING: no test run detected in the last 5 minutes before this task was marked complete. Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output."
     }
   };
 }
@@ -119,9 +292,17 @@ function handleTaskUpdate(input) {
   try {
     if (!shouldWarn(input)) return null;
     const sessionId = input.session_id;
-    if (hasRecentTestRun(sessionId)) return null;
-    log.info("No recent test run detected on task completion", { sessionId });
-    return buildWarningOutput();
+    const head = resolveHead(typeof input.cwd === "string" && input.cwd ? input.cwd : process.cwd());
+    const verdict = judge({
+      run: readTestRun(sessionId),
+      sidecar: head ? latestSidecar(head.repoRoot) : null,
+      head: head?.sha ?? null,
+      hasE2e: true,
+      now: Date.now()
+    });
+    if (verdict.kind === "proven") return null;
+    log.info("No proof of a working change on task completion", { sessionId, verdict: verdict.kind });
+    return verdict.kind === "none" ? buildWarningOutput() : buildWarningOutput(`WARNING: ${verdict.message}`);
   } catch (err) {
     log.error("handleTaskUpdate failed", { error: String(err) });
     return null;
@@ -129,7 +310,7 @@ function handleTaskUpdate(input) {
 }
 function main() {
   try {
-    const raw = readFileSync(0, "utf-8");
+    const raw = readFileSync3(0, "utf-8");
     if (!raw.trim()) {
       console.log(JSON.stringify({}));
       return;
