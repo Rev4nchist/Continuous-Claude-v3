@@ -404,11 +404,11 @@
         "PostgreSQL",
         "AKS"
       ],
-      "description": "Fourth Harness control plane + Agent Delivery Platform monorepo (Azure, Entra-only, Kata sandbox)",
+      "description": "Fourth Harness control plane + Agent Delivery Platform monorepo (Azure, Entra-only, Kata sandbox) (reference only since 2026-09-30; the live build is Minions in fourthbot-next)",
       "port": 3002,
       "url": "https://fourthbot.localhost/",
       "devCommand": "pnpm dev",
-      "status": "active",
+      "status": "reference",
       "sentryProject": "",
       "linearTeam": ""
     },
@@ -454,6 +454,23 @@
         "command": "node .claude/skills/verify-minions/drive.mjs",
         "artifact": ".claude/cache/e2e/<stamp>-verify-minions-fourthbot-next.log"
       }
+    },
+    {
+      "name": "fourth-company-brain",
+      "path": "C:/Users/david.hayes/Projects/FourthCompanyBrain",
+      "stack": [
+        "Markdown",
+        "JSON Schema",
+        "TypeScript",
+        "Node.js"
+      ],
+      "description": "Fourth Brain product-knowledge spine + knowledge-to-content change propagation (Notion is SoT)",
+      "port": null,
+      "url": null,
+      "devCommand": null,
+      "status": "active",
+      "sentryProject": "",
+      "linearTeam": ""
     }
   ]
 }
