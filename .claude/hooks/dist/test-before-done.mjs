@@ -79,7 +79,8 @@ function createLogger(hookName) {
 import * as os from "os";
 import * as path from "path";
 function getStateFile(sessionId) {
-  const safe = (sessionId || "unknown").replace(/[^a-zA-Z0-9-_]/g, "_");
+  if (!sessionId) return null;
+  const safe = sessionId.replace(/[^a-zA-Z0-9-_]/g, "_");
   return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
 }
 
@@ -95,7 +96,7 @@ function shouldWarn(input) {
 function hasRecentTestRun(sessionId) {
   try {
     const statePath = getStateFile(sessionId);
-    if (!existsSync2(statePath)) return false;
+    if (!statePath || !existsSync2(statePath)) return false;
     const raw = readFileSync(statePath, "utf-8");
     if (!raw.trim()) return false;
     const state = JSON.parse(raw);

@@ -33,18 +33,21 @@ import { getStateFile } from '../shared/test-run-state.js';
 const TEST_SESSION = 'test-before-done-session';
 const TEST_SESSION_B = 'test-before-done-session-b';
 
+/** getStateFile is null only without a session id; every id in this file is real. */
+const stateFile = (id: string): string => getStateFile(id)!;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function writeTestState(sessionId: string, lastTestRun: number, command = 'uv run pytest'): void {
-  const statePath = getStateFile(sessionId);
+  const statePath = stateFile(sessionId);
   fs.writeFileSync(statePath, JSON.stringify({ lastTestRun, command }), 'utf-8');
 }
 
 function cleanupStateFiles(): void {
   for (const sid of [TEST_SESSION, TEST_SESSION_B]) {
-    const statePath = getStateFile(sid);
+    const statePath = stateFile(sid);
     try {
       if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
     } catch { /* ignore */ }
@@ -166,13 +169,13 @@ describe('hasRecentTestRun', () => {
   });
 
   it('returns false when state file contains invalid JSON', () => {
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     fs.writeFileSync(statePath, 'not-json', 'utf-8');
     expect(hasRecentTestRun(TEST_SESSION)).toBe(false);
   });
 
   it('returns false when state file is empty', () => {
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     fs.writeFileSync(statePath, '', 'utf-8');
     expect(hasRecentTestRun(TEST_SESSION)).toBe(false);
   });

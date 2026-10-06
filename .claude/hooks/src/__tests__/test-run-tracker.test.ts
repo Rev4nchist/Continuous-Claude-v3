@@ -32,18 +32,21 @@ import { PassThrough } from 'stream';
 const TEST_SESSION = 'test-run-tracker-session';
 const TEST_SESSION_B = 'test-run-tracker-session-b';
 
+/** getStateFile is null only without a session id; the tests that use this helper pass real ids. */
+const stateFile = (id: string): string => getStateFile(id)!;
+
 // ---------------------------------------------------------------------------
 // Helpers
 // ---------------------------------------------------------------------------
 
 function writeTestState(sessionId: string, lastTestRun: number, command = 'npm test'): void {
-  const statePath = getStateFile(sessionId);
+  const statePath = stateFile(sessionId);
   fs.writeFileSync(statePath, JSON.stringify({ lastTestRun, command }), 'utf-8');
 }
 
 function cleanupStateFiles(): void {
   for (const sid of [TEST_SESSION, TEST_SESSION_B]) {
-    const statePath = getStateFile(sid);
+    const statePath = stateFile(sid);
     try {
       if (fs.existsSync(statePath)) fs.unlinkSync(statePath);
     } catch { /* ignore */ }
@@ -120,20 +123,20 @@ describe('TEST_PATTERNS', () => {
 
 describe('getStateFile', () => {
   it('returns path in tmpdir with session ID', () => {
-    const result = getStateFile(TEST_SESSION);
+    const result = stateFile(TEST_SESSION);
     expect(result).toContain(os.tmpdir());
     expect(result).toContain(TEST_SESSION);
     expect(result).toContain('claude-recent-test-runs-');
   });
 
   it('produces different paths for different sessions', () => {
-    const pathA = getStateFile(TEST_SESSION);
-    const pathB = getStateFile(TEST_SESSION_B);
+    const pathA = stateFile(TEST_SESSION);
+    const pathB = stateFile(TEST_SESSION_B);
     expect(pathA).not.toBe(pathB);
   });
 
   it('handles default session ID', () => {
-    const result = getStateFile('default');
+    const result = stateFile('default');
     expect(result).toContain('claude-recent-test-runs-default');
   });
 });
@@ -148,10 +151,10 @@ describe('session isolation', () => {
     writeTestState(TEST_SESSION, Date.now(), 'npm test');
 
     // Session A state file exists
-    expect(fs.existsSync(getStateFile(TEST_SESSION))).toBe(true);
+    expect(fs.existsSync(stateFile(TEST_SESSION))).toBe(true);
 
     // Session B state file does not exist
-    expect(fs.existsSync(getStateFile(TEST_SESSION_B))).toBe(false);
+    expect(fs.existsSync(stateFile(TEST_SESSION_B))).toBe(false);
   });
 });
 
@@ -163,13 +166,13 @@ describe('state file content', () => {
   it('writes valid JSON with lastTestRun and command', () => {
     const before = Date.now();
     writeTestState(TEST_SESSION, before, 'vitest run');
-    const content = JSON.parse(fs.readFileSync(getStateFile(TEST_SESSION), 'utf-8'));
+    const content = JSON.parse(fs.readFileSync(stateFile(TEST_SESSION), 'utf-8'));
     expect(content).toHaveProperty('lastTestRun', before);
     expect(content).toHaveProperty('command', 'vitest run');
   });
 
   it('handles empty state file gracefully', () => {
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     fs.writeFileSync(statePath, '', 'utf-8');
     expect(() => {
       try { JSON.parse(fs.readFileSync(statePath, 'utf-8')); } catch { /* expected */ }
@@ -177,7 +180,7 @@ describe('state file content', () => {
   });
 
   it('handles malformed JSON gracefully', () => {
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     fs.writeFileSync(statePath, 'not-json{{{', 'utf-8');
     expect(() => {
       try { JSON.parse(fs.readFileSync(statePath, 'utf-8')); } catch { /* expected */ }
@@ -214,7 +217,7 @@ describe('main() integration', () => {
     mockStdin.end(input);
     await mainPromise;
 
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(true);
     const content = JSON.parse(fs.readFileSync(statePath, 'utf-8'));
     expect(content).toHaveProperty('lastTestRun');
@@ -236,7 +239,7 @@ describe('main() integration', () => {
     mockStdin.end(input);
     await mainPromise;
 
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(false);
   });
 
@@ -254,7 +257,7 @@ describe('main() integration', () => {
     mockStdin.end(input);
     await mainPromise;
 
-    const statePath = getStateFile(TEST_SESSION);
+    const statePath = stateFile(TEST_SESSION);
     expect(fs.existsSync(statePath)).toBe(false);
   });
 });
@@ -308,6 +311,19 @@ describe('probe, ratchet and verify patterns', () => {
   it('counts node.exe', () => {
     expect(isRun('node.exe scripts/rules/rule-router-probe.mjs')).toBe(true);
   });
+
+  it('does not count a command that only prints the node line', () => {
+    expect(isRun('echo node scripts/verify.mjs')).toBe(false);
+    expect(isRun('Write-Output "node scripts/rules/rule-router-probe.mjs"')).toBe(false);
+  });
+
+  it('counts node after a command separator, a call operator or at the start', () => {
+    expect(isRun('cd x && node scripts/rules/rule-router-probe.mjs')).toBe(true);
+    expect(isRun("$env:A='1'; node .claude/scripts/verify.mjs")).toBe(true);
+    expect(isRun('& node scripts/skills/audit-skills.mjs')).toBe(true);
+    expect(isRun('node ~/.claude/scripts/verify.mjs')).toBe(true);
+    expect(isRun('cd x\nnode scripts/rules/rule-router-probe.mjs')).toBe(true);
+  });
 });
 
 // =============================================================================
@@ -318,7 +334,7 @@ describe('tracker and reader share one state path', () => {
   const UUID = '0f8fad5b-d9cb-469f-a165-70867728950e';
 
   afterEach(() => {
-    try { fs.unlinkSync(getStateFile(UUID)); } catch { /* ignore */ }
+    try { fs.unlinkSync(stateFile(UUID)); } catch { /* ignore */ }
   });
 
   it('hasRecentTestRun is true after the tracker records a run for a UUID session', async () => {
@@ -341,28 +357,45 @@ describe('tracker and reader share one state path', () => {
 });
 
 // =============================================================================
-// Test 8: a missing session id still gives the tracker and the reader one file
+// Test 8: a missing session id has no state file, so no session can silence another
 // =============================================================================
 
-describe('tracker and reader share a path when session_id is missing', () => {
-  afterEach(() => {
-    try { fs.unlinkSync(getStateFile(undefined as unknown as string)); } catch { /* ignore */ }
-  });
+describe('a missing session_id records nothing and the advisory still shows', () => {
+  // Paths the old shared fallback wrote: `unknown`, and `` (empty id).
+  const legacy = ['unknown', ''].map(
+    (s) => path.join(os.tmpdir(), `claude-recent-test-runs-${s}.json`),
+  );
+  const clean = () => {
+    for (const p of legacy) { try { fs.unlinkSync(p); } catch { /* ignore */ } }
+  };
+  beforeEach(clean);
+  afterEach(clean);
 
-  it('the reader sees a run the tracker recorded without a session id', async () => {
+  async function track(payload: Record<string, unknown>): Promise<void> {
     const mockStdin = new PassThrough();
     const original = process.stdin;
     Object.defineProperty(process, 'stdin', { value: mockStdin, writable: true });
     try {
       const mainPromise = main();
-      mockStdin.end(JSON.stringify({
-        tool_name: 'PowerShell',
-        tool_input: { command: 'node scripts/rules/rule-router-probe.mjs' },
-      }));
+      mockStdin.end(JSON.stringify(payload));
       await mainPromise;
     } finally {
       Object.defineProperty(process, 'stdin', { value: original, writable: true });
     }
-    expect(handleTaskUpdate({ tool_name: 'TaskUpdate', tool_input: { status: 'completed' } })).toBeNull();
+  }
+
+  const probe = { command: 'node scripts/rules/rule-router-probe.mjs' };
+  const complete = { tool_name: 'TaskUpdate', tool_input: { status: 'completed' } };
+
+  it('getStateFile returns null for a missing or empty id', () => {
+    expect(getStateFile(undefined)).toBeNull();
+    expect(getStateFile('')).toBeNull();
+  });
+
+  it('the tracker writes no file and the reader reports no recent run', async () => {
+    await track({ tool_name: 'PowerShell', tool_input: probe });
+    for (const p of legacy) expect(fs.existsSync(p)).toBe(false);
+    expect(hasRecentTestRun(undefined)).toBe(false);
+    expect(handleTaskUpdate(complete)).not.toBeNull();
   });
 });

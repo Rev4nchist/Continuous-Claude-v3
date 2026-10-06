@@ -8,7 +8,8 @@ import * as fs from "fs";
 import * as os from "os";
 import * as path from "path";
 function getStateFile(sessionId) {
-  const safe = (sessionId || "unknown").replace(/[^a-zA-Z0-9-_]/g, "_");
+  if (!sessionId) return null;
+  const safe = sessionId.replace(/[^a-zA-Z0-9-_]/g, "_");
   return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
 }
 
@@ -18,7 +19,8 @@ function nodeScript(name) {
   const flag = String.raw`\s+(?!--check\b|-c\b)--?[\w-]+(?:=\S+)?`;
   const dir = String.raw`["']?(?:[^\s"']*[\\/])?`;
   const notPlan = String.raw`(?![^\n]*--(?:dry-run|help)\b)`;
-  return new RegExp(String.raw`\bnode(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
+  const start = String.raw`(?:^|[;&|(]\s*|\n\s*)(?:&\s+)?`;
+  return new RegExp(String.raw`${start}node(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
 }
 var TEST_PATTERNS = [
   /\bvitest\b/,
@@ -67,6 +69,10 @@ async function main() {
   const isTestCommand = TEST_PATTERNS.some((p) => p.test(command));
   if (isTestCommand) {
     const stateFile = getStateFile(data.session_id);
+    if (!stateFile) {
+      console.log(JSON.stringify({}));
+      return;
+    }
     try {
       fs.writeFileSync(
         stateFile,

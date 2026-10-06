@@ -98,7 +98,7 @@ Required fields: `name`, `path`, `stack`, `description`, `status`.
 Optional fields (nullable): `port`, `url`, `devCommand`, `e2e`.
 `e2e` is the project's end-to-end check (CLAUDE.md "Testing standard"). Two forms:
 `{ "command": "<shell command, run in the project path>", "artifact": "<path the run writes, relative to the repo root; <stamp> allowed>" }`
-or `{ "none": "<reason there is no surface>" }`. `node ~/.claude/scripts/verify.mjs` runs it and writes `<artifact>.json`.
+or `{ "none": "<reason there is no surface>" }`. `artifact` is optional. It defaults to `.claude/cache/e2e/<stamp>-verify-<project slug>.log` in the project repo. `node ~/.claude/scripts/verify.mjs` runs it and writes `<artifact>.json`.
 The command runs under `cmd.exe` on Windows (`shell: true`): use `&&`, no POSIX quoting, no `$VAR`, no `;`. Keep it under 600 s.
 The project's AGENTS.md "Testing" section states the same values.
 

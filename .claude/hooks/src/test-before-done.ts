@@ -65,11 +65,12 @@ export function shouldWarn(input: any): boolean {
  * Check if a test command ran recently for the given session.
  * Reads the state file and checks if lastTestRun is within threshold.
  */
-export function hasRecentTestRun(sessionId: string): boolean {
+export function hasRecentTestRun(sessionId: string | undefined): boolean {
   try {
     const statePath = getStateFile(sessionId);
 
-    if (!existsSync(statePath)) return false;
+    // No session id: no state file, so the advisory shows.
+    if (!statePath || !existsSync(statePath)) return false;
 
     const raw = readFileSync(statePath, 'utf-8');
     if (!raw.trim()) return false;
