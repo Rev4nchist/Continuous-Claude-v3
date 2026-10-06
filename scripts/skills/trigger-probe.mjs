@@ -41,6 +41,9 @@ export function emptyMcpConfigPath() {
 export function noHooksSettingsPath(alias = null) {
   const p = path.join(os.tmpdir(), `trigger-probe-no-hooks-${process.pid}${alias ? `-${alias.from}` : ''}.json`);
   const settings = { disableAllHooks: true };
+  // TRIGGER_PROBE_CLAUDE_MD_EXCLUDES (comma list of globs): CLAUDE.md files the run must not load, for an A/B of CLAUDE.md text under CLAUDE_CONFIG_DIR.
+  const ex = (process.env.TRIGGER_PROBE_CLAUDE_MD_EXCLUDES || '').split(',').map((x) => x.trim()).filter(Boolean);
+  if (ex.length) settings.claudeMdExcludes = ex;
   if (alias) settings.skillOverrides = { [alias.from]: 'off' };
   fs.writeFileSync(p, JSON.stringify(settings));
   return p;
@@ -89,10 +92,11 @@ export function resolveClaude(env = process.env) {
 
 const fwd = (p) => p.replace(/\\/g, '/');
 
-export function buildCommand(model, mcpConfig = emptyMcpConfigPath(), settings = noHooksSettingsPath()) {
+export function buildCommand(model, mcpConfig = emptyMcpConfigPath(), settings = noHooksSettingsPath(), effort = null) {
   const args = ['-p', '--output-format', 'stream-json', '--verbose', '--tools', 'Skill', '--max-turns', '2',
     '--strict-mcp-config', '--mcp-config', fwd(mcpConfig), '--settings', fwd(settings), '--no-session-persistence'];
   if (model) args.push('--model', model);
+  if (effort) args.push('--effort', effort);
   return { cmd: resolveClaude(), args };
 }
 
@@ -129,25 +133,28 @@ export function runError({ error, status, stdout = '' }) {
   return capped && skillsFired(stdout).length ? null : `exit ${status}`;
 }
 
-// Hit and false fires of one case. A case with a `forbid` list is a negative case: it is a hit when no
-// forbidden skill fires, and only a forbidden skill is a false fire. Other skills may own its prompt.
+// Hit and false fires of one case. A case with a `forbid` list is a miss when any forbidden skill fires,
+// and only a forbidden skill is a false fire there. With an empty expect list (a negative case) nothing
+// else is required. With an expect list, one expected skill must also fire.
 export function scoreCase(c, fired) {
   if (Array.isArray(c.forbid) && c.forbid.length) {
     const bad = fired.filter((s) => c.forbid.includes(s));
-    return { hit: !bad.length, falseFires: bad };
+    const needs = (c.expect || []).length > 0;
+    return { hit: !bad.length && (!needs || fired.some((s) => c.expect.includes(s))), falseFires: bad };
   }
   return { hit: fired.some((s) => c.expect.includes(s)), falseFires: fired.filter((s) => !c.expect.includes(s)) };
 }
 
-// What a case asks for, for the dry-run and result lines: a negative case shows its forbid list.
-const wanted = (c) => (Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : `expect ${(c.expect || []).join('|')}`);
+// What a case asks for, for the dry-run and result lines: the expect list, then the forbid list if any.
+const wanted = (c) => [(c.expect || []).length ? `expect ${c.expect.join('|')}` : '', Array.isArray(c.forbid) && c.forbid.length ? `forbid ${c.forbid.join('|')}` : ''].filter(Boolean).join(', ');
 
-function runCase(prompt, model, cwd = repo, alias = null) {
-  const { cmd, args } = buildCommand(model, emptyMcpConfigPath(), noHooksSettingsPath(alias));
+function runCase(prompt, model, cwd = repo, alias = null, effort = null, streamFile = null) {
+  const { cmd, args } = buildCommand(model, emptyMcpConfigPath(), noHooksSettingsPath(alias), effort);
   const env = { ...process.env };
   delete env.ANTHROPIC_API_KEY; // subscription, not API billing (headless-claude-mcp rule)
   // Prompt goes over stdin: a long multi-line argv on Windows arrived empty (verified 2026-08-19).
   const r = spawnSync(cmd, args, { input: prompt, encoding: 'utf8', timeout: 180000, env, shell: false, cwd, maxBuffer: 64 * 1024 * 1024 });
+  if (streamFile) fs.writeFileSync(streamFile, r.stdout || ''); // --stream-dir: keep each session's stream-json as the artifact
   const raw = skillsFired(r.stdout || '');
   const error = aliasLeak(raw, alias) || runError({ error: r.error, status: r.status, stdout: r.stdout || '' });
   return { fired: unalias(raw, alias), hooksRan: hooksRan(r.stdout || ''), status: r.status, error, stderr: (r.stderr || '').slice(0, 300) };
@@ -177,10 +184,17 @@ function main(argv) {
     return 2;
   }
   const { cases: all } = JSON.parse(fs.readFileSync(CASES, 'utf8'));
-  const cases = all.slice(0, LIMIT);
+  const only = opt('--only', null);
+  let onlyRe;
+  try { onlyRe = only ? new RegExp(only) : null; } catch (e) { console.error(`--only is not a regex: ${e.message}`); return 2; }
+  // --only <regex>: keep the cases whose expect list (joined with a space) matches. Applied before --limit.
+  const EFFORT = opt('--effort', null);
+  const STREAM_DIR = opt('--stream-dir', null);
+  if (STREAM_DIR) fs.mkdirSync(STREAM_DIR, { recursive: true });
+  const cases = all.filter((c) => !onlyRe || onlyRe.test((c.expect || []).join(' '))).slice(0, LIMIT);
 
   if (argv.includes('--dry-run')) {
-    const { cmd, args } = buildCommand(MODEL, emptyMcpConfigPath(), noHooksSettingsPath(ALIAS));
+    const { cmd, args } = buildCommand(MODEL, emptyMcpConfigPath(), noHooksSettingsPath(ALIAS), EFFORT);
     console.log(`exe: ${cmd}  (spawned with shell:false; the prompt goes on stdin; cwd ${CWD})`);
     console.log(`argv: ${JSON.stringify(args)}`);
     for (const c of cases) console.log(`stdin: ${JSON.stringify(c.prompt)}   # ${wanted(c)}`);
@@ -188,8 +202,8 @@ function main(argv) {
     return 0;
   }
 
-  const results = cases.map((c) => {
-    const r = runCase(c.prompt, MODEL, CWD, ALIAS);
+  const results = cases.map((c, i) => {
+    const r = runCase(c.prompt, MODEL, CWD, ALIAS, EFFORT, STREAM_DIR && path.join(STREAM_DIR, `case-${String(i + 1).padStart(2, '0')}.jsonl`));
     const s = scoreCase(c, r.fired);
     const hit = !r.error && s.hit;
     const falseFires = r.error ? [] : s.falseFires;

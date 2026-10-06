@@ -1,0 +1,2 @@
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-06T10:00:00Z","message":{"role":"assistant","model":"claude-test","content":[{"type":"tool_use","id":"t1","name":"AskUserQuestion","input":{"questions":[{"question":"Vitest or node:test?"}]}}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-10-06T10:01:00Z","message":{"role":"user","content":"stop asking, just pick one"}}

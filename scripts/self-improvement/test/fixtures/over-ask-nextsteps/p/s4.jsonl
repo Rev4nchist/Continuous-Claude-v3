@@ -1,0 +1,2 @@
+{"type":"assistant","isSidechain":false,"timestamp":"2026-10-06T10:00:00Z","message":{"role":"assistant","model":"claude-test","content":[{"type":"text","text":"Which test runner should I use, vitest or node:test?\n\n## Next steps\n1. Reply with the runner name."}]}}
+{"type":"user","isSidechain":false,"timestamp":"2026-10-06T10:01:00Z","message":{"role":"user","content":"stop asking, just pick one"}}
