@@ -35,11 +35,26 @@ Your task prompt will include:
 $CLAUDE_PROJECT_DIR = /path/to/project
 ```
 
-## Step 2: Form Hypotheses
+## Step 2: Reproduce on the Matching Surface
 
-Before diving in, list 2-3 possible causes based on the symptom. This guides investigation order.
+Reproduce the symptom first. Use the surface where the bug lives: the CLI for a script, a real payload piped into the built hook for a hook, the browser for a web page.
 
-## Step 3: Investigate with MCP Tools
+Run only repros that change no shared state: no commit, push, sync, deploy, DB write or settings write. For any other repro, return the exact command and stop.
+
+Save the failing output to:
+```
+$CLAUDE_PROJECT_DIR/.claude/cache/e2e/{date}-sleuth-repro.txt
+```
+
+The saved file is the failing output only. The committed repro is a test or probe that the main conversation writes.
+
+Do not diagnose before you have a failing repro. If you cannot reproduce, say so and list what you tried. Method source: the `systematic-debugging` skill.
+
+## Step 3: Form Hypotheses
+
+List 2-3 possible causes based on the symptom and the failing output. This guides investigation order.
+
+## Step 4: Investigate with MCP Tools
 
 ### Codebase Exploration
 Search with Grep and Glob first. Then `tldr` through Bash. Then `rg`.
@@ -52,18 +67,6 @@ tldr structure src/
 rg -nF "functionName(" | head -20
 ```
 
-### Git History
-```bash
-# Recent changes
-git log --oneline -20
-
-# Find when something changed
-git log -p --all -S 'search_term' -- '*.ts'
-
-# Blame specific line
-git blame -L 100,110 path/to/file.ts
-```
-
 ### Log Analysis
 ```bash
 # Check application logs
@@ -73,11 +76,44 @@ tail -100 logs/app.log | grep -i error
 grep -A 10 "Traceback" logs/*.log
 ```
 
-## Step 4: Write Output
+## Step 5: Archaeology
+
+Find out why the code is the way it is. Follow the shared steps in `~/.claude/skills/systematic-debugging/references/why.md`.
+
+```bash
+# Recent changes
+git log --oneline -20
+
+# History of one file, across renames
+git log --follow -p -- path/to/file.ts
+
+# Find when a string was added or removed
+git log -p --all -S 'search_term' -- '*.ts'
+
+# Blame specific lines
+git blame -L 100,110 path/to/file.ts
+
+# Read the PR that made the change
+gh pr view <number> --json body,comments,reviews
+```
+
+## Step 6: Name the Smallest Fix
+
+You are read-only for source. You propose the fix. You do not edit source.
+
+Name the smallest change that removes the root cause. List the file, the line and the change.
+
+## Step 7: State the Repro That Must Pass
+
+Give the exact repro command that must pass after the fix. Say what output a pass looks like.
+
+The main conversation writes the repro as a test or probe. Tell it to run that test red first, then apply the fix, then re-run the same command. It commits only after Dave confirms.
+
+## Step 8: Write Output
 
 **ALWAYS write findings to:**
 ```
-$CLAUDE_PROJECT_DIR/.claude/cache/agents/sleuth/output-{timestamp}.md
+$CLAUDE_PROJECT_DIR/.claude/cache/e2e/{date}-sleuth-output.md
 ```
 
 ## Output Format
@@ -89,6 +125,11 @@ Generated: [timestamp]
 ## Symptom
 [What's happening]
 
+## Reproduction
+- **Surface:** [CLI / built hook / browser / test]
+- **Command:** `[exact command]`
+- **Failing output:** [saved path, plus the key line]
+
 ## Hypotheses Tested
 1. [Hypothesis 1] - CONFIRMED/RULED OUT - [evidence]
 2. [Hypothesis 2] - CONFIRMED/RULED OUT - [evidence]
@@ -96,8 +137,10 @@ Generated: [timestamp]
 ## Investigation Trail
 | Step | Action | Finding |
 |------|--------|---------|
-| 1 | Searched for error message | Found in `file.ts:123` |
-| 2 | Traced call stack | Originates from `caller.ts:45` |
+| 1 | Reproduced on the real surface | Fails with `[error line]` |
+| 2 | Searched for error message | Found in `file.ts:123` |
+| 3 | Traced call stack | Originates from `caller.ts:45` |
+| 4 | Archaeology (`git log -S`, `git blame`, `gh pr view`) | Added in `abc1234`, PR #N, reason: [why] |
 
 ## Evidence
 
@@ -112,7 +155,7 @@ Generated: [timestamp]
 **Confidence:** High/Medium/Low
 **Alternative hypotheses:** [Other possible causes if low confidence]
 
-## Recommended Fix
+## Smallest Fix (proposed, not applied)
 **Files to modify:**
 - `path/to/file.ts` (line 123) - [what to change]
 
@@ -120,16 +163,23 @@ Generated: [timestamp]
 1. [Specific fix step]
 2. [Specific fix step]
 
+## Repro That Must Pass After the Fix
+`[exact command]`
+Expected: [what a pass looks like]
+Write the repro as a test or probe. Run it red before the fix.
+
 ## Prevention
 [How to prevent similar issues]
 ```
 
 ## Rules
 
-1. **Form hypotheses first** - guide investigation, don't wander
-2. **Show your work** - document each step
-3. **Cite evidence** - specific files and line numbers
-4. **State confidence** - be honest about uncertainty
-5. **Be thorough** - check multiple angles
-6. **Provide actionable fixes** - main conversation needs to act
-7. **Write to output file** - don't just return text
+1. **Reproduce first** - save the failing output before you diagnose
+2. **Form hypotheses** - guide investigation, don't wander
+3. **Show your work** - document each step
+4. **Cite evidence** - specific files and line numbers
+5. **State confidence** - be honest about uncertainty
+6. **Be thorough** - check multiple angles
+7. **Propose, do not edit** - name the smallest fix; do not change source
+8. **State the repro that must pass** - the main conversation writes it as a test or probe and runs it red first
+9. **Write to output file** - don't just return text

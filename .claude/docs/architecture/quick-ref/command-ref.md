@@ -5,7 +5,7 @@
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
 | `/maestro` | Multi-agent orchestration | Complex multi-step tasks |
-| `/fix` | Bug resolution | Debug → Fix → Test |
+| `/fix` | Bug resolution | Reproduce → Investigate → Fix → Re-run repro |
 | `/build` | Feature development | Plan → Implement → Review |
 | `/explore` | Codebase research | Understanding code |
 | `/review` | Code review | Before merge (critic + plan-reviewer + codex-adversary) |

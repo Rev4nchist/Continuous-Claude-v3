@@ -1,5 +1,5 @@
 #!/usr/bin/env node
-// Skills gate: one deterministic check for every SKILL.md (rules G01-G32).
+// Skills gate: one deterministic check for every SKILL.md (rules G01-G33).
 // Spec: .claude/cache/skills-eval/phase0/phase0-results.json docs.gateRules.
 //
 // Hard rules fail on any finding. Ratchet rules compare against audit-skills.baseline.json and
@@ -112,7 +112,8 @@ function repoFacts(o) {
   const mcpServers = new Set([...Object.keys(tpl.mcpServers || {}), ...Object.keys(mcpJson.mcpServers || mcpJson)]);
   let agentNames = new Set();
   try { agentNames = new Set(fs.readdirSync(o.agentsDir).filter((n) => /\.md$/.test(n)).map((n) => n.replace(/\.md$/, ''))); } catch { /* no agents dir */ }
-  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, home: o.home, repoRoot: o.repoRoot, fallbackRoot: o.fallbackRoot, exists: existsFn(o) };
+  const skillNames = new Set([...listSkillDirs(o.skillsRoot).skills, ...(o.includeActive ? listSkillDirs(o.activeRoot).skills : [])].map((d) => d.name));
+  return { maxDescChars: Number(tpl.skillListingMaxDescChars) || 1536, mcpServers, agentNames, skillNames, home: o.home, repoRoot: o.repoRoot, fallbackRoot: o.fallbackRoot, exists: existsFn(o) };
 }
 
 export function resolveOptions(opts = {}) {

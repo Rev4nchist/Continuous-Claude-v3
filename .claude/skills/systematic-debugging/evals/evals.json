@@ -23,7 +23,7 @@
       "Does not present lowering the threshold to 0 as the fix; at most it treats it as a test of one hypothesis, and says a fix waits until the root cause is known.",
       "Lists checking what changed since this morning (recent commits or git log, deploys, config edits, container or database restarts) as an early step.",
       "Names at least two distinct candidate causes (for example the database connection or port, an empty or re-created table, an embedding model or dimension change, a wrong project scope) and, for each, a check that would confirm or eliminate it.",
-      "Starts with a reproduction: one known query that should return a hit, run before and after each change.",
+      "Starts with a reproduction: one known query that should return a hit, run before and after each change, with its failing output saved.",
       "Says to change one thing at a time and re-test after each single change."
     ]
   },
@@ -41,7 +41,8 @@
       "Names at least one rival cause (the deleted_at IS NULL filter, or CSV quoting or newline splitting) and cites the log evidence that rules it out (count of live users = 10000; wc -l = 9963 with no unbalanced quote).",
       "Flags that orders.ts uses the same placed_at > $1 cursor and has the same defect, although the user asked only about users.",
       "Gives a fix with a unique tiebreaker: keyset pagination on (created_at, id), for example WHERE (created_at, id) > ($1, $2) ORDER BY created_at, id.",
-      "Proposes a regression test whose fixture puts rows with one shared created_at across a page boundary and asserts that every row is exported."
+      "Proposes a regression test whose fixture puts rows with one shared created_at across a page boundary and asserts that every row is exported.",
+      "Gives the reproduction (the failing fixture or a count check that shows 38 missing rows) before the fix, and says to run that same check after the fix and see it pass."
     ]
   }
 ]

@@ -236,7 +236,7 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | build (brownfield) | onboard → oracle → plan-agent → validate-agent → kraken |
 | build (tdd) | plan-agent → kraken (TDD) → arbiter |
 | fix (bug) | sleuth (multi-file) OR debug-agent (general) → [user confirm] → kraken → arbiter → commit |
-| fix (hook) | debug-hooks → [user confirm] → kraken → test |
+| fix (hook) | reproduce → sleuth → [user confirm] → kraken → re-run repro |
 | fix (deps / pr-comments) | oracle / scout → plan-agent → [user confirm] → kraken → commit |
 | refactor | phoenix → plan-agent → kraken → plan-reviewer → arbiter (+judge optional) |
 | migrate | oracle → phoenix → plan-agent → kraken → surveyor |

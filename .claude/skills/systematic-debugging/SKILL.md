@@ -3,115 +3,61 @@ name: systematic-debugging
 description: Root-cause investigation framework applied before writing any fix. Use when user says "debug", "fix this bug", "why is X broken", "find the root cause".
 ---
 
-# Systematic Debugging Skill
+# Systematic Debugging
 
-## Iron Law
-NO fixes without root cause investigation. Jumping to solutions causes:
-- Wrong fixes that mask real issues
-- Recurring bugs
-- Wasted time
+No fix before you know the root cause. A fix without a repro and a cause masks the bug, and the bug comes back.
 
-## 4-Phase Framework
+Copy the 5 steps into the task list. A step you skip stays in the list as `skip: <reason>`.
 
-### Phase 1: Root Cause Investigation [MANDATORY]
-```yaml
-Steps:
-  1. Reproduce the issue reliably
-  2. Gather evidence (logs, stack traces, error messages)
-  3. Identify what changed recently (git log, deployments)
-  4. Form hypothesis about root cause
-  5. Document findings before proceeding
+## 1. Reproduce and save the failing output
 
-Red Flags (return to Phase 1):
-  - Cannot reproduce consistently
-  - Multiple unrelated symptoms
-  - Fix doesn't match root cause
-  - "It works on my machine"
+- Run the failure on the surface where it happens: the built hook with a real payload, the CLI, the
+  browser flow, the query. Use the project's E2E command when it has one (`AGENTS.md` "Testing").
+- Save the command and its failing output to a file (in CCv3: `.claude/cache/e2e/`). This is the repro.
+- Cannot reproduce? Stop. Collect more evidence (logs, timestamps, inputs) before you form a theory.
+  Do not fix what you cannot see fail.
+- Read-only task ("just tell me", "no fix yet"): still give the exact repro command, and say what
+  output proves the bug.
 
-Heuristic (incident-proven, 2026-05-24 hook regression):
-  - RECURRING IDENTICAL failures -> suspect INFRASTRUCTURE (loops, syncs,
-    daemons, stale baselines), not actor behavior. The same defect appearing
-    repeatedly after "fixes" means something is regenerating it.
-```
+## 2. Find what changed and why the code is the way it is
 
-### Phase 2: Pattern Analysis
-```yaml
-Steps:
-  1. Search codebase for similar patterns
-  2. Check if issue exists elsewhere
-  3. Review related tests
-  4. Identify scope of impact
+Follow `references/why.md`. In short:
+- `git log --follow -- <file>`, `git log -S '<string>'`, `git blame -L <a>,<b> <file>`.
+- `gh pr view <n> --json body,comments,reviews` for the PR that added the line.
+- Check recent deploys, syncs, config edits and restarts against the first failure time.
 
-Questions:
-  - Is this a systemic issue or isolated?
-  - Are there other places with same pattern?
-  - What tests should have caught this?
-```
+List 2-3 candidate causes. For each, give the check that confirms or rules it out, and run the
+checks you can. Then name the cause: "The root cause is X because Y", with a file and line.
 
-### Phase 3: Hypothesis Testing
-```yaml
-Steps:
-  1. Create minimal reproduction
-  2. Test hypothesis with smallest change
-  3. Verify fix addresses root cause (not symptom)
-  4. Check for side effects
+- **Rival causes.** For the cause you name, state the evidence that rules out each other candidate.
+  Stopping at the first fit ships wrong diagnoses.
+- **Recurring identical failure** (the same defect after each "fix"): suspect a process that
+  regenerates it (a sync, loop, daemon or stale baseline), not a person.
+- **Same pattern elsewhere.** Search for the same code shape. Report each other site, even when the
+  ask names only one.
 
-Validation:
-  - Does the fix match the root cause?
-  - Are there regression risks?
-  - What edge cases exist?
-  - Rival hypotheses ruled out? Name at least one OTHER cause that produces
-    the same symptoms and state the evidence that eliminates it — stopping at
-    the first fit is how wrong diagnoses ship.
-```
+## 3. Make the smallest fix
 
-### Phase 4: Implementation
-```yaml
-Steps:
-  1. Implement fix targeting root cause
-  2. Add tests preventing recurrence
-  3. Document the fix and why it works
-  4. Review for similar patterns to fix
+- Change one thing. Fix the cause, not the symptom. Name what else the change can touch.
+- Several changes at once hide which one worked. "Try this and see" is not a fix.
 
-Completion Criteria:
-  - Root cause addressed (not masked)
-  - Tests added
-  - No new issues introduced
-  - Documentation updated if needed
-```
+## 4. Run the same repro and see it pass
 
-## Anti-Patterns to Avoid
+- Run the exact command from step 1. Save the passing output next to the failing one.
+- Also run the checks for the surface you changed (tests, type check, lint, build).
+- Ask which test should have caught this. Add the missing case to it.
+- The repro still fails: return to step 2. After 3 failed fixes, stop and report what you tried.
 
-```yaml
-Forbidden:
-  - "Let me try this and see if it works"
-  - Making multiple changes at once
-  - Fixing symptoms instead of causes
-  - Skipping reproduction steps
-  - Not documenting findings
+## 5. Keep the repro as a test
 
-Required:
-  - "The root cause is X because Y"
-  - Single change per test
-  - Evidence-based conclusions
-  - Reproducible test case
-  - Written investigation notes
-```
+- Turn the repro into a test or probe that fails without the fix. Make it the first change in the
+  diff, and name its red and green runs in the commit or PR.
+- Commit only when the task allows commits. The repro does not give you a separate permission to commit.
+- No test framework reaches it cheaply: keep the saved repro command and output as the artifact,
+  and name it in the commit or PR.
 
-## Integration with SuperClaude
+## Hand-off checks
 
-```yaml
-Activation:
-  - Bug|Error|Fix|Debug keywords detected
-  - Error stack traces in context
-  - User reports issue
-  - Test failures
-
-Persona Alignment:
-  - analyzer persona primary
-  - qa persona for test coverage
-  - security persona if vulnerability related
-```
-
----
-*ClaudeKit Skills | systematic-debugging v1.0 | Root cause first*
+- The cause has a file and line, and each other candidate is ruled out with evidence.
+- The step 1 command fails before the fix and passes after it. Both outputs are saved.
+- Other sites with the same pattern are listed.

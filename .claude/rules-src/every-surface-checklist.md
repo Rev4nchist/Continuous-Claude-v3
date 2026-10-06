@@ -19,6 +19,9 @@ The most common defect in this repo is a change that works on the path you teste
 everywhere else (Theo calls this "hit every surface" [vid:e1snsuY4lTI @32:54]). CCv3 has many
 two-copy surfaces. Before you say "done", walk this list and name which rows applied.
 
+Before you change a rule, hook or skill whose reason you do not know, run the steps in
+`.claude/skills/systematic-debugging/references/why.md` (blame, PR review, records, null results).
+
 | Surface | The two copies | Rule |
 |---|---|---|
 | Rules | `.claude/rules-src/*.md` (repo, canonical) and `~/.claude/rules/*.md` (active, auto-loaded) | Edit `rules-src` only. Never create `.claude/rules/` in the repo: Claude Code auto-loads it as project scope and every rule is paid for twice. |

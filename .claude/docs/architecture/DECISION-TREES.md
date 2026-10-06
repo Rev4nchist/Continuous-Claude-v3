@@ -190,7 +190,7 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
 | Goal | Workflow | Description |
 |------|----------|-------------|
 | Explore codebase | `/explore` | scout with depth control |
-| Fix a bug | `/fix` | debug → implement → test |
+| Fix a bug | `/fix` | reproduce → investigate → implement → re-run repro |
 | Build feature | `/build` | plan → implement → review |
 | Orchestrate many | `/maestro` | Coordinate specialists |
 | Security audit | `/security` | aegis + verification |

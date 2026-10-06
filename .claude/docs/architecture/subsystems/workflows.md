@@ -8,7 +8,7 @@
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
 │  /maestro  - Coordinate multiple specialists               │
-│  /fix      - Debug → Implement → Test                      │
+│  /fix      - Reproduce → Investigate → Fix → Re-run repro  │
 │  /build    - Plan → Implement → Review                     │
 │  /explore  - Codebase research at varying depths           │
 │  /premortem- Adversarial failure-mode analysis of a plan   │
@@ -63,12 +63,12 @@ Synthesize Results
 Bug investigation and resolution.
 
 ```
-Investigate ──→ Implement ──→ Test ──→ Commit
-     │              │           │         │
-     ▼              ▼           ▼         ▼
-debug-agent      spark      arbiter    /commit
-  (find root     (apply     (verify    (if asked)
-   cause)         fix)       fix)
+Reproduce ──→ Investigate ──→ Implement ──→ Re-run repro ──→ Commit
+    │              │              │               │            │
+    ▼              ▼              ▼               ▼            ▼
+ real surface    sleuth      spark / kraken   same command   /commit
+ (failing out)  (root cause)  (apply fix)    (must pass)  (after Dave
+                                                            confirms)
 ```
 
 **Usage:** `/fix "login button not responding"`
