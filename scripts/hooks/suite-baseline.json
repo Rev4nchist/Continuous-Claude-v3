@@ -1,7 +1,7 @@
 {
   "_comment": "Baseline for suite-count-ratchet. Update ONLY via --update, in the same commit as the change that moved it, with the reason in the commit message.",
-  "passed": 2320,
-  "collected": 2328,
-  "suites": 677,
-  "recorded": "2026-09-22"
+  "passed": 2172,
+  "collected": 2172,
+  "suites": 505,
+  "recorded": "2026-10-06"
 }

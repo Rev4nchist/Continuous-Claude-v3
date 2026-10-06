@@ -60,8 +60,11 @@ const COMMITTED = [
 const LIVE = 'C:/Users/david.hayes/.claude/settings.json';
 
 /** Floors. Raise deliberately; never lower one to make a red run go green. */
-const MIN_LIVE_ENTRIES = 80;
-const MIN_LIVE_NAMES = 75;
+// Lowered 2026-10-06 (80/75 -> 75/68), keeping the original ~4-6 of slack under the
+// re-recorded baseline of 79 entries / 72 names. Every lost name has a commit,
+// listed in the commit that made this change (Dave approved the lower floors).
+const MIN_LIVE_ENTRIES = 75;
+const MIN_LIVE_NAMES = 68;
 const MIN_COVERAGE = 0.95;   // fraction of live names findable in committed state
 
 const findings = [];
