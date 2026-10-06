@@ -54,7 +54,7 @@ const config = [
   },
 
   {
-    ignores: ['.next/**', 'node_modules/**', 'drizzle/**', 'next-env.d.ts'],
+    ignores: ['.next/**', '.next-e2e/**', 'node_modules/**', 'drizzle/**', 'next-env.d.ts'],
   },
 ];
 

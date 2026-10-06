@@ -351,9 +351,9 @@
       "status": "in-development",
       "sentryProject": "",
       "linearTeam": "the-lab",
-      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os].",
+      "notes": "Shares the continuous_claude database with 3 other apps. NEVER run drizzle-kit push - it diffs live and would drop the other apps 40 public tables. Migrations only: db:generate -> db:check -> db:migrate, schemaFilter [agentic_os]. e2e: runs its own dev server on 3011 (dashboard stays on 3010); needs npm ci at the repo root (Playwright lives there) and AGENTIC_OS_DATABASE_URL or apps/agentic-os/.env.local.",
       "e2e": {
-        "command": "npm run typecheck && npm run db:check",
+        "command": "npm run typecheck && npm run db:check && npm run e2e",
         "artifact": ".claude/cache/e2e/<stamp>-verify-agentic-os.log"
       }
     },

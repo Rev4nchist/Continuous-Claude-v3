@@ -12,7 +12,8 @@
     "typecheck": "tsc --noEmit",
     "db:generate": "drizzle-kit generate",
     "db:migrate": "drizzle-kit migrate",
-    "db:check": "node scripts/check-migration-sql.mjs"
+    "db:check": "node scripts/check-migration-sql.mjs",
+    "e2e": "playwright test"
   },
   "dependencies": {
     "class-variance-authority": "^0.7.1",
