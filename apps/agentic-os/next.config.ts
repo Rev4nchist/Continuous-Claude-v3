@@ -2,6 +2,13 @@ import type { NextConfig } from 'next';
 
 const nextConfig: NextConfig = {
   /**
+   * The e2e check (playwright.config.ts) sets this so its dev server gets its OWN
+   * build directory. Next 16 allows one `next dev` per distDir, so without it the
+   * check cannot run while the dashboard is open. Unset, it is the default `.next`.
+   */
+  distDir: process.env.AGENTIC_OS_DIST_DIR || '.next',
+
+  /**
    * Pin the workspace root to this app.
    *
    * Without this, Turbopack walks up looking for a lockfile, finds THREE
