@@ -4,6 +4,7 @@
 // incidents, then write rules from recurring classes (>=2 independent sessions).
 //
 // Usage: node scripts/self-improvement/failure-audit.mjs [--days 30] [--out file.md] [--json file.json]
+//        [--root <projects dir>] [--exclude <sessionPrefix>]...
 // Read-only over transcripts. Writes only --out/--json. Output stays repo-local
 // (docs/self-improvement/audits) because it contains session text.
 
@@ -11,6 +12,7 @@ import fs from 'node:fs';
 import path from 'node:path';
 import os from 'node:os';
 import readline from 'node:readline';
+import { endsWithQuestion, isSurvey } from './ask-rate.mjs';
 
 const args = process.argv.slice(2);
 const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : d; };
@@ -19,7 +21,8 @@ const OUT = opt('--out', null);
 const JSON_OUT = opt('--json', null);
 const DUMP = opt('--dump', null);
 const dumpRows = [];
-const ROOT = path.join(os.homedir(), '.claude', 'projects');
+const ROOT = opt('--root', path.join(os.homedir(), '.claude', 'projects'));
+const EXCLUDE = args.flatMap((a, i) => (a === '--exclude' && args[i + 1] ? [args[i + 1]] : []));
 const since = Date.now() - DAYS * 864e5;
 
 // Correction classes: [id, label, regex on the lowercased human message]. First match wins.
@@ -28,7 +31,8 @@ const CLASSES = [
   ['wrong_target', 'wrong file / branch / process / project', /\b(wrong (file|branch|project|repo|directory|folder|process|session|machine)|not that (file|one)|that'?s the wrong|in the wrong)\b/],
   ['no_verify', 'claimed done without evidence / did not check', /\b(did you (actually|even) (run|test|check|verify)|didn'?t (run|test|check|verify)|not verified|you claimed|prove it|show me the (output|evidence)|it'?s not (working|fixed)|still (broken|failing|not working))\b/],
   ['misread', 'misread the request / answered a different question', /\b(that'?s not what i (asked|meant|said)|not what i (asked|meant|want)|you misunderstood|misread|i said|re-?read (my|the) (message|request|prompt))\b/],
-  ['stopped_early', 'stopped early / incomplete / asked instead of doing', /\b(why did you stop|you stopped|finish (it|the task|what you started)|don'?t stop|keep going|just do it|stop asking|don'?t ask|you didn'?t finish)\b/],
+  ['over_ask', 'asked what a command could answer', /\b(stop asking|don'?t ask( me)?|just (pick|choose|decide)( one)?|you could have (checked|looked|run)|why (did|are) you ask|check (it|that) yourself|look it up)\b/],
+  ['stopped_early', 'stopped early / incomplete', /\b(why did you stop|you stopped|finish (it|the task|what you started)|don'?t stop|keep going|just do it|you didn'?t finish)\b/],
   ['regression', 'broke something that worked', /\b(you broke|broke (the|my|it)|regress(ed|ion)|used to work|was working before|undo (that|this)|revert (that|this|your))\b/],
   ['format', 'output format / verbosity / style', /\b(too (long|verbose|wordy)|shorter|be concise|too many words|em ?dash|next steps block|format(ting)? (is|was) wrong|plain text|don'?t use (blockquote|markdown))\b/],
   ['tool_misuse', 'wrong tool / command / platform mistake', /\b(use (powershell|bash) instead|don'?t use (that|the) (tool|command)|wrong (tool|command)|python3|that command (doesn'?t|won'?t) work)\b/],
@@ -83,14 +87,19 @@ let sessions = 0, humanMsgs = 0;
 for (const f of files) {
   const project = path.basename(path.dirname(f));
   const session = path.basename(f, '.jsonl');
+  if (EXCLUDE.some((p) => session.startsWith(p))) continue;
   const rl = readline.createInterface({ input: fs.createReadStream(f, 'utf8'), crlfDelay: Infinity });
-  let model = 'unknown', lastAssistant = '', seen = false;
+  let model = 'unknown', lastAssistant = '', lastAssistantEndsQ = false, seen = false;
   for await (const line of rl) {
     let o; try { o = JSON.parse(line); } catch { continue; }
     if (o.type === 'assistant' && o.message?.model && !o.isSidechain) {
       model = o.message.model;
-      const t = (o.message.content || []).filter((b) => b.type === 'text').map((b) => b.text).join(' ');
-      if (t) lastAssistant = t.slice(0, 300);
+      const blocks = o.message.content || [];
+      const t = blocks.filter((b) => b.type === 'text').map((b) => b.text).join(' ');
+      // An AskUserQuestion call is an ask even with no text; the Next steps block does not hide a question above it.
+      const asked = blocks.some((b) => b.type === 'tool_use' && b.name === 'AskUserQuestion' && !isSurvey(b.input?.questions?.[0]?.question));
+      if (t) { lastAssistant = t.slice(0, 300); lastAssistantEndsQ = endsWithQuestion(t); }
+      if (asked) lastAssistantEndsQ = true;
       continue;
     }
     if (!isHuman(o)) continue;
@@ -102,6 +111,7 @@ for (const f of files) {
     if (DUMP) dumpRows.push({ ts: o.timestamp, project, session: session.slice(0, 8), model, prev: lastAssistant.slice(0, 200).replace(/\s+/g, ' '), text: text.slice(0, 400).replace(/\s+/g, ' ') });
     const low = text.slice(0, 600).toLowerCase();
     for (const [id, label, re] of CLASSES) {
+      if (id === 'over_ask' && !lastAssistantEndsQ) continue; // counts only when the agent just asked
       if (re.test(low)) {
         m.corrections++; m.byClass[id] = (m.byClass[id] || 0) + 1;
         (sessionsByClass[id] ||= new Set()).add(session);

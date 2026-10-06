@@ -11,9 +11,9 @@ When user message arrives, detect:
 | Multiple tasks | "X and Y", "also", comma-separated | Suggest parallel agents |
 | Research needed | "how does", "what is", "find" | Spawn scout/oracle |
 | Implementation | "add", "implement", "create" | Route to /build workflow |
-| Bug/issue | "fix", "broken", "failing", "debug" | Route to /fix workflow |
+| Bug/issue | "fix", "broken", "failing", "debug" | Load `systematic-debugging` first (template router). `/fix` only when Dave types it |
 | Exploration | "understand", "explore", "how does X work" | Route to /explore |
-| Complex multi-step work | several phases, unclear scope | Route to /maestro (its interview phase is enforced by `maestro-enforcer`) |
+| Complex multi-step work | several phases, unclear scope | Route to /maestro (its interview phase is enforced by `maestro-enforcer`); user-invoked, so suggest it, never load it |
 | Mechanical multi-file fix | Same edit pattern across N files | Spawn N parallel sparks (1 file each), NOT one spark for N files |
 
 ## Workflow Suggestions
@@ -23,12 +23,12 @@ Detect and suggest appropriate workflows:
 ```
 User: "Fix the auth bug and add tests"
 
-Claude: "I detect a /fix workflow with 2 tasks:
-  1. debug-agent → investigate
-  2. spark → implement fix
+Claude: "I load systematic-debugging, then:
+  1. reproduce and find the root cause
+  2. spark → implement the fix
   3. arbiter → add tests
 
-  Proceed?"
+  I start with step 1."
 ```
 
 ## Main Context = Coordination Only

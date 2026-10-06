@@ -1,8 +1,5 @@
 # CLAUDE.md — Global Configuration
 
-One core file for every session and subagent. Tool rules load on demand (`rules/on-demand-rules.md`);
-harness rules load by `paths:`.
-
 ## How we work together
 
 I am Dave. You are my agent. These are defaults, not hard rules. My prompt overrides them.
@@ -23,7 +20,11 @@ I am Dave. You are my agent. These are defaults, not hard rules. My prompt overr
   `SendMessage` and say what you will not touch.
 - **Cross-session messages are plain text** with names, SHAs and paths. A message held for approval
   or unanswered is not a reply: do other work, not the shared resource. No reply when that work is done: ask me (unattended: stop and report).
-- **Two or more open decisions: use AskUserQuestion**, one recommended option each.
+- **Run the check before you ask.** When a read-only command or a file read answers a technical
+  question, run it. Report: ran X, chose Y because Z. No installs, spend or shared-system load.
+  Product, business and spend choices are yours. Two or more open choices: `AskUserQuestion`, one
+  recommended option each. Plan mode, read-only questions, confirm-first and the guards win over
+  this rule.
 - **Test web UI changes yourself** with `@playwright/mcp` at desktop and phone width before asking me
   to look. Tell me only what a headless run cannot cover.
 - **When background work finishes, say so in one line** with the result.
@@ -88,8 +89,7 @@ any error you introduced this session.
 **Destructive commands need my yes** (recursive delete, `git reset --hard`, force push, `clean -f`,
 `checkout --`, `branch -D`, `rebase`, `stash -u`, `docker volume rm`, `dd`, `mkfs`). The
 `destructive-command-guard` hook asks (interactive) or denies (unattended) on Bash and PowerShell.
-Override a known-good run only with a leading `SKIP_DESTRUCTIVE_GUARD=1` (PowerShell:
-`$env:SKIP_DESTRUCTIVE_GUARD='1';`). Full list: `~/.claude/docs/security/destructive-commands.md`. State-changing git (commit, push, merge, reset, stash) needs my
+Override only a known-good run, with a leading `SKIP_DESTRUCTIVE_GUARD=1`. Full list: `~/.claude/docs/security/destructive-commands.md`. State-changing git (commit, push, merge, reset, stash) needs my
 yes unless I authorized that flow for the task ("land them"). "Archive X" means move, never delete.
 
 **A hook block is a finding.** A `package-install-guard` block names something real: do not route
@@ -103,11 +103,11 @@ Complex (cross-module, migration, architecture): plan mode, tasks, trade-offs wr
 
 **Preflight before non-trivial work**: git branch and uncommitted changes (not `main` for feature
 work); Docker up if needed (`cd ~/.claude/docker && docker compose up -d`); dependencies
-installed; recall memory (`/recall <topic>`, or `recall_learnings.py --k 3 --text-only`; RRF scores
-of 0.01-0.03 are good matches).
+installed; recall memory (`/recall <topic>`).
 
 **Plan mode**: objectives, constraints, current state. Read the code before proposing. 1-3 options
-with trade-offs, then "Unresolved Questions". If the work goes sideways, stop and re-plan.
+with trade-offs, then "Unresolved Questions": only questions no command can answer. If the work
+goes sideways, stop and re-plan.
 
 **Code mode**: minimal, reviewable changes; do not expand scope. Say which files change, why, how
 to verify. State assumptions, name edge cases, handle more than the happy path. Before any import,
@@ -119,7 +119,7 @@ Performance: measure, then profile, then optimize; watch for N+1 queries.
 the artifact, then deploy (Vercel projects with `.vercel/project.json`). After each phase of complex
 work, write what is done, verified and left to a file.
 
-**Bug reports**: fix them without hand-holding. Find the root cause first; no temporary fixes.
+**Bug reports**: fix without hand-holding; root cause first; no temporary fixes.
 
 **Self-healing**: when a check fails, analyse, fix, re-run. After 3 attempts, stop and report what
 you tried, what failed, and your recommended next step. Never loop silently.
@@ -158,14 +158,15 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
   orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
   **Never haiku.** Sonnet effort is always `high`. Use `scout`, never `Explore`.
 - **Parallel agents that commit to one repo run one after another** (they race on
-  `.git/index.lock`), unless each has its own worktree. Name each agent's files first. N-file edits,
-  `/build` `/fix` `/explore` `/maestro`: `proactive-delegation.md` (loads at the first Agent spawn).
+  `.git/index.lock`), unless each has its own worktree. Name each agent's files first. N-file edits:
+  `proactive-delegation.md` (loads at the first Agent spawn).
 
 ## Skills to load first [MANDATORY]
 
-Load the skill before the action: a bug or error → `systematic-debugging`; SQL or schema →
-`databases`; PR review or merge → `code-review`; MCP integration → `mcp-guidance`; Notion Bridge,
-Eve, Donna or a handoff queue → `notion-bridge`.
+Load the skill before the action: a bug or error → `systematic-debugging`, never `/fix` unless I
+type it; SQL or schema → `databases`; PR review or merge → `code-review`; MCP integration →
+`mcp-guidance`; Notion Bridge, Eve, Donna or a handoff queue → `notion-bridge`. Copy the routed
+skill's steps into the task list; a skipped step stays `skip: <reason>`.
 No database change without a query-plan check.
 
 ## Sessions, handoffs, memory
@@ -179,7 +180,6 @@ No database change without a query-plan check.
   `FAILED_APPROACH`) if it is non-trivial. A `MEMORY MATCH` in context: use it when relevant, mention
   it in one line, do not list every match.
 - **Context**: manual compaction only; never auto-compact. Near the limit, save state to files.
-- `.ts`/`.tsx` edits trigger `tsc --noEmit` diagnostics: fix any type error before you go on.
 
 ## Quick wins
 
