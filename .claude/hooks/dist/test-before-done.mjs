@@ -3,8 +3,6 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 
 // src/test-before-done.ts
 import { readFileSync, existsSync as existsSync2 } from "fs";
-import { join as join2 } from "path";
-import { tmpdir } from "os";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
@@ -77,10 +75,18 @@ function createLogger(hookName) {
   };
 }
 
+// src/shared/test-run-state.ts
+import * as os from "os";
+import * as path from "path";
+function getStateFile(sessionId) {
+  if (!sessionId) return null;
+  const safe = sessionId.replace(/[^a-zA-Z0-9-_]/g, "_");
+  return path.join(os.tmpdir(), `claude-recent-test-runs-${safe}.json`);
+}
+
 // src/test-before-done.ts
 var log = createLogger("test-before-done");
 var RECENT_TEST_THRESHOLD_MS = 3e5;
-var STATE_BASE_NAME = "recent-test-runs";
 function shouldWarn(input) {
   if (!input || typeof input !== "object") return false;
   if (input.tool_name !== "TaskUpdate") return false;
@@ -89,9 +95,8 @@ function shouldWarn(input) {
 }
 function hasRecentTestRun(sessionId) {
   try {
-    const safeSid = (sessionId || "unknown").replace(/[^a-zA-Z0-9-_]/g, "_").substring(0, 32);
-    const statePath = join2(tmpdir(), `claude-${STATE_BASE_NAME}-${safeSid}.json`);
-    if (!existsSync2(statePath)) return false;
+    const statePath = getStateFile(sessionId);
+    if (!statePath || !existsSync2(statePath)) return false;
     const raw = readFileSync(statePath, "utf-8");
     if (!raw.trim()) return false;
     const state = JSON.parse(raw);
@@ -104,15 +109,16 @@ function hasRecentTestRun(sessionId) {
 }
 function buildWarningOutput() {
   return {
-    values: {
-      system: "WARNING: No test execution detected before marking task complete. Consider running tests to verify the change works before completing this task."
+    hookSpecificOutput: {
+      hookEventName: "PreToolUse",
+      additionalContext: "WARNING: no test run detected in the last 5 minutes before this task was marked complete. Run the project check (node ~/.claude/scripts/verify.mjs, or the AGENTS.md Testing row) and cite its output."
     }
   };
 }
 function handleTaskUpdate(input) {
   try {
     if (!shouldWarn(input)) return null;
-    const sessionId = input.session_id || "unknown";
+    const sessionId = input.session_id;
     if (hasRecentTestRun(sessionId)) return null;
     log.info("No recent test run detected on task completion", { sessionId });
     return buildWarningOutput();

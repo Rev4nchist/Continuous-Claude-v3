@@ -11,11 +11,10 @@
  */
 
 import * as fs from 'fs';
-import * as os from 'os';
-import * as path from 'path';
+import { getStateFile } from './shared/test-run-state.js';
 
 interface PostToolUseInput {
-  session_id: string;
+  session_id?: string;
   tool_name: string;
   tool_input: {
     command?: string;
@@ -25,6 +24,24 @@ interface PostToolUseInput {
 
 /** Shell tools that carry a command. Must match the settings.json matcher. */
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+
+/**
+ * A run of `<name>.mjs` under node: `node` or `node.exe`, optional flags, optional quoted path
+ * with `/` or `\`, then the file. The flag group never takes `--check` or `-c` (a syntax check is
+ * not a run). `--dry-run` and `--help` on the same line are not runs. `git add x.mjs` and
+ * `cat x.mjs` never match. `node` must start a command: at the start of the string or after
+ * `;`, `&`, `|`, `(` or a newline, with an optional PowerShell `&` call operator. So
+ * `echo node x.mjs` is not a run. Known limits: a flag with a separate value (`--require tsx`),
+ * a quoted path that holds a space, and a `node` after a keyword (`then node x.mjs`) or a
+ * wrapper (`time node x.mjs`, `cd x; if (1) { node x.mjs }`) do not match.
+ */
+function nodeScript(name: string): RegExp {
+  const flag = String.raw`\s+(?!--check\b|-c\b)--?[\w-]+(?:=\S+)?`;
+  const dir = String.raw`["']?(?:[^\s"']*[\\/])?`;
+  const notPlan = String.raw`(?![^\n]*--(?:dry-run|help)\b)`;
+  const start = String.raw`(?:^|[;&|(]\s*|\n\s*)(?:&\s+)?`;
+  return new RegExp(String.raw`${start}node(?:\.exe)?(?:${flag})*\s+${dir}${name}\.mjs\b${notPlan}`);
+}
 
 const TEST_PATTERNS = [
   /\bvitest\b/,
@@ -38,11 +55,12 @@ const TEST_PATTERNS = [
   /\bpnpm\s+test\b/,
   /\byarn\s+test\b/,
   /\bmake\s+test\b/,
+  // Probes, ratchets and the verify entry point are test runs (PR1a, 2026-10-06).
+  nodeScript('[\\w.-]+-probe'),
+  nodeScript('audit-skills'),
+  nodeScript('context-budget-guard'),
+  nodeScript('verify'),
 ];
-
-function getStateFile(sessionId: string): string {
-  return path.join(os.tmpdir(), `claude-recent-test-runs-${sessionId}.json`);
-}
 
 async function readStdin(): Promise<string> {
   return new Promise((resolve) => {
@@ -79,8 +97,11 @@ async function main() {
   const isTestCommand = TEST_PATTERNS.some((p) => p.test(command));
 
   if (isTestCommand) {
-    const sessionId = data.session_id || 'default';
-    const stateFile = getStateFile(sessionId);
+    const stateFile = getStateFile(data.session_id);
+    if (!stateFile) {
+      console.log(JSON.stringify({}));
+      return;
+    }
     try {
       fs.writeFileSync(
         stateFile,
