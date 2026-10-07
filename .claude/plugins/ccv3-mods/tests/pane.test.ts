@@ -28,7 +28,7 @@ const OS: CommandRunInput = {
 type World = { lanes?: string; scriptExists?: boolean; agents?: { id: string; description: string; type: string; status: string }[] }
 
 const world = (on: On, opts: World = {}) => {
-  mock.clock(on, { now: 1_000 })
+  const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/home' })
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('fs.exists', () => ({ value: opts.scriptExists ?? true }))
@@ -38,6 +38,8 @@ const world = (on: On, opts: World = {}) => {
   }))
   on('session.id', () => ({ value: 'test-session' }))
   on('agent.list', () => ({ value: (opts.agents ?? []) as AgentInfo[] }))
+  // /os returns at once; its lane and agent reads land when the event loop settles.
+  return { settle: () => clock.advance(1) }
 }
 
 const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', rows = 24): Promise<string[]> => {
@@ -56,7 +58,7 @@ const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal',
 
 describe('agentic-os pane', () => {
   test('F8 F9 /os opens the pane by its id and shows the held lane', async ($, on) => {
-    world(on, { lanes: JSON.stringify([{ id: 'mods-agentic-os', title: 'Mods', state: 'active', note: 'n' }]) })
+    const { settle } = world(on, { lanes: JSON.stringify([{ id: 'mods-agentic-os', title: 'Mods', state: 'active', note: 'n' }]) })
     const opened: string[] = []
     on('ui.open', (_$, e) => {
       opened.push(e.id)
@@ -64,22 +66,25 @@ describe('agentic-os pane', () => {
     })
 
     const ran = await $.command.run(OS)
+    await settle()
     expect(opened).toEqual(['agentic-os'])
     expect(ran.text).toBe('Agentic OS pane opened.')
     expect((await paneText($)).join('\n')).toContain('mods-agentic-os · active')
   })
 
   test('F9 an empty lane list reads as no lane held', async ($, on) => {
-    world(on, { lanes: '[]' })
+    const { settle } = world(on, { lanes: '[]' })
     on('ui.open', () => ({ value: { isPlaced: true as const } }))
     await $.command.run(OS)
+    await settle()
     expect((await paneText($)).join('\n')).toContain('no lane held')
   })
 
   test('F9 a missing lane board reads as not read, not as no lane', async ($, on) => {
-    world(on, { scriptExists: false })
+    const { settle } = world(on, { scriptExists: false })
     on('ui.open', () => ({ value: { isPlaced: true as const } }))
     await $.command.run(OS)
+    await settle()
     expect((await paneText($)).join('\n')).toContain('lane board not read')
   })
 
@@ -103,7 +108,7 @@ describe('agentic-os pane', () => {
   })
 
   test('F11 only live agents are listed', async ($, on) => {
-    world(on, {
+    const { settle } = world(on, {
       agents: [
         { id: 'a1', description: 'map hooks', type: 'scout', status: 'running' },
         { id: 'a2', description: 'old review', type: 'critic', status: 'completed' },
@@ -111,6 +116,7 @@ describe('agentic-os pane', () => {
     })
     on('ui.open', () => ({ value: { isPlaced: true as const } }))
     await $.command.run(OS)
+    await settle()
     const text = (await paneText($)).join('\n')
     expect(text).toContain('▶ scout · map hooks')
     expect(text).not.toContain('old review')

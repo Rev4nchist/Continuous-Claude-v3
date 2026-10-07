@@ -10,7 +10,7 @@ import type { PaneRow } from './pane-model'
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
 const turn = atom({ plugin: 'ccv3-mods', key: 'turn' } as const, null as OsTurn | null)
-const step = atom({ plugin: 'ccv3-mods', key: 'step' } as const, null as OsStep | null)
+const steps = atom({ plugin: 'ccv3-mods', key: 'steps' } as const, [] as OsStep[])
 const ctx = atom({ plugin: 'ccv3-mods', key: 'ctx' } as const, null as number | null)
 const agents = atom({ plugin: 'ccv3-mods', key: 'agents' } as const, [] as OsAgent[])
 const lanes = atom({ plugin: 'ccv3-mods', key: 'lanes' } as const, null as OsLane[] | null)
@@ -43,7 +43,7 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
   tasks: await read($, tasks),
   plan: await read($, plan),
   turn: await read($, turn),
-  step: await read($, step),
+  step: (await read($, steps)).at(-1) ?? null,
   ctx: await read($, ctx),
   agents: await read($, agents),
   lanes: await read($, lanes),
@@ -85,7 +85,7 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
     const script = `${home}/continuous-claude/scripts/coordination/lane.mjs`
     if (!home || !(await $.fs.exists(script))) return
     const sessionId = await $.session.id()
-    const run = await $.process.run(['node', script, 'mine', '--json', '--as', sessionId], { timeoutMs: 15000 })
+    const run = await $.process.run(['node', script, 'mine', '--json', '--as', sessionId], { timeoutMs: 5000 })
     const parsed = run.exitCode === 0 ? parseLanes(run.stdout) : null
     if (parsed) await update($, lanes, () => parsed)
   } catch {
@@ -95,7 +95,7 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
 
 /** While a turn runs: redraw elapsed times and re-read the agents. */
 const pulse = async ($: EngineInterface): Promise<void> => {
-  if ((await read($, turn)) === null && (await read($, step)) === null) return
+  if ((await read($, turn)) === null && (await read($, steps)).length === 0) return
   const now = await $.clock.now()
   await update($, tick, () => now)
   await refreshAgents($)
@@ -153,11 +153,10 @@ export const agenticOs = (on: On) => {
 
   on('command.run', { command: 'os' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agentic OS' })
-    // The pane is already up; these fill its AGENTS and LANE rows as they land.
-    await Promise.all([refreshLanes($), refreshAgents($)])
-    await writeSnapshot($)
+    // The pane is up at once; the AGENTS and LANE rows fill in as the reads land.
+    void Promise.all([refreshLanes($), refreshAgents($)]).then(() => writeSnapshot($))
     return { text: opened.isPlaced ? 'Agentic OS pane opened.' : `Agentic OS pane waits: ${opened.reason}` }
-  })
+  }).catch(() => ({ text: 'Agentic OS pane failed to open.' }))
 
   on('turn.start', async ($, e, next) => {
     const startedAt = await $.clock.now()
@@ -168,7 +167,7 @@ export const agenticOs = (on: On) => {
   on('turn.complete', async ($, e, next) => {
     if (e.agentId === undefined) {
       await update($, turn, () => null)
-      await update($, step, () => null)
+      await update($, steps, () => [])
       await writeSnapshot($)
     }
     return next(e)
@@ -188,9 +187,9 @@ export const agenticOs = (on: On) => {
     const tool = String(e.tool)
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
-    await update($, step, () => ({ id, tool, label: stepLabel(tool, input), startedAt }))
+    await update($, steps, list => [...list, { id, tool, label: stepLabel(tool, input), startedAt }])
     const ran = await next(e)
-    await update($, step, current => (current?.id === id ? null : current))
+    await update($, steps, list => list.filter(one => one.id !== id))
     if (await record($, tool, input, ran)) await writeSnapshot($)
     refreshAfter($, tool, input)
     return ran
@@ -213,9 +212,8 @@ export const agenticOs = (on: On) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     await read($, tick)
     const { Box, Text } = $.ui.resolve(e)
-    const height = e.viewport?.rows ?? 24
-    const room = e.props.placement === 'inline' ? Math.min(18, height - 4) : height - 4
-    const rows = paneRows(await view($), await $.clock.now(), e.props.bodyColumns, Math.max(8, room))
+    // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
+    const rows = paneRows(await view($), await $.clock.now(), e.props.bodyColumns, e.props.scroll.bodyRows)
     return (
       <Box flexDirection="column">
         {rows.map(row => (

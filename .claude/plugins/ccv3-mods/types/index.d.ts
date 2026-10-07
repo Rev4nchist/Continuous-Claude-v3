@@ -23,7 +23,8 @@ declare module 'claude-code' {
       tasks: OsTask[]
       plan: OsPlan | null
       turn: OsTurn | null
-      step: OsStep | null
+      /** Running main-loop tool calls, oldest first; NOW shows the newest. */
+      steps: OsStep[]
       ctx: number | null
       agents: OsAgent[]
       lanes: OsLane[] | null
