@@ -24,9 +24,14 @@ export const addTask = (tasks: OsTask[], id: string, subject: string, activeForm
   { id, subject, status: 'pending', ...(activeForm ? { activeForm } : {}) },
 ]
 
+const STATUSES: readonly unknown[] = ['pending', 'in_progress', 'completed']
+
+const isStatus = (value: unknown): value is OsTaskStatus => STATUSES.includes(value)
+
 export const patchTask = (tasks: OsTask[], patch: TaskPatch): OsTask[] => {
-  const { status } = patch
-  if (status === 'deleted') return tasks.filter(task => task.id !== patch.taskId)
+  if (patch.status === 'deleted') return tasks.filter(task => task.id !== patch.taskId)
+  // A status outside the known set is ignored, so the band never counts it.
+  const status = isStatus(patch.status) ? patch.status : undefined
   return tasks.map(task =>
     task.id !== patch.taskId
       ? task
@@ -39,13 +44,16 @@ export const patchTask = (tasks: OsTask[], patch: TaskPatch): OsTask[] => {
   )
 }
 
-export const tasksFromTodos = (todos: readonly Todo[]): OsTask[] =>
-  todos.map((todo, i) => ({
-    id: `todo-${i + 1}`,
-    subject: todo.content,
-    status: todo.status,
-    activeForm: todo.activeForm,
-  }))
+/** Valid todos only: a non-list or an entry without text or a known status is skipped. */
+export const tasksFromTodos = (todos: unknown): OsTask[] =>
+  (Array.isArray(todos) ? (todos as Partial<Todo>[]) : [])
+    .filter(todo => typeof todo?.content === 'string' && isStatus(todo.status))
+    .map((todo, i) => ({
+      id: `todo-${i + 1}`,
+      subject: todo.content as string,
+      status: todo.status as OsTaskStatus,
+      ...(typeof todo.activeForm === 'string' ? { activeForm: todo.activeForm } : {}),
+    }))
 
 export const planTitle = (plan: string): string => {
   const lines = plan.split(/\r?\n/).map(line => line.trim()).filter(Boolean)

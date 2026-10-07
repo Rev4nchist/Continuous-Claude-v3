@@ -12,7 +12,7 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 
 ## Load
 
-- Development, one session: `claude --plugin-dir C:\Users\david.hayes\continuous-claude\.claude\plugins\ccv3-mods`
+- Development, one session, from the repo root: `claude --plugin-dir .claude/plugins/ccv3-mods`
 - Every session: `CLAUDE_CODE_PLUGIN_DIRS` in the `env` block of `~/.claude/settings.json` (not wired yet).
 
 ## Check

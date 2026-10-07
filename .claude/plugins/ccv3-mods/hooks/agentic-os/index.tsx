@@ -106,9 +106,11 @@ const record = async ($: EngineInterface, tool: string, input: Record<string, un
   const out = okResult(ran)
   if (!out) return false
   if (tool === 'TaskCreate') {
-    const task = out.task as { id: string; subject: string } | undefined
-    if (!task) return false
-    await update($, tasks, list => addTask(list, task.id, task.subject, input.activeForm as string | undefined))
+    const task = out.task as { id?: unknown; subject?: unknown } | undefined
+    const id = task?.id
+    const subject = task?.subject
+    if (typeof id !== 'string' || typeof subject !== 'string') return false
+    await update($, tasks, list => addTask(list, id, subject, input.activeForm as string | undefined))
     return true
   }
   if (tool === 'TaskUpdate') {
@@ -117,9 +119,9 @@ const record = async ($: EngineInterface, tool: string, input: Record<string, un
     return true
   }
   if (tool === 'TodoWrite') {
-    const todos = out.newTodos as Parameters<typeof tasksFromTodos>[0] | undefined
-    if (!todos) return false
-    await update($, tasks, () => tasksFromTodos(todos))
+    if (!Array.isArray(out.newTodos)) return false
+    const fresh = tasksFromTodos(out.newTodos)
+    await update($, tasks, () => fresh)
     return true
   }
   if (tool === 'ExitPlanMode') {
