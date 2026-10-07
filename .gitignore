@@ -107,6 +107,9 @@ plans/
 # Ignore local plugins, except the claude-hud status line launcher and its config (2026-10-01)
 .claude/plugins/*
 !.claude/plugins/claude-hud/
+# ccv3-mods: CCv3 function-hook mods (2026-10-07); the engine writes .claude-plugin/types/ on load
+!.claude/plugins/ccv3-mods/
+.claude/plugins/ccv3-mods/.claude-plugin/types/
 session-env/
 telemetry/
 tldr/
