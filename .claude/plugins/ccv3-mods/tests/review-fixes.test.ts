@@ -4,6 +4,9 @@ import type { Engine } from 'claude-code/testing'
 
 import type { OsTask } from '../types'
 import { taskRows } from '../hooks/agentic-os/pane-model'
+import type { PaneRow } from '../hooks/agentic-os/pane-model'
+
+const textOf = (row: PaneRow) => [...row.left, ...(row.right ?? [])].map(span => span.text).join('').trim()
 
 // Critic review of f1131b6, reproduced before the fix:
 // R1 the fold returns room + 1 rows when tasks are hidden
@@ -19,8 +22,8 @@ describe('task fold', () => {
   test('R1 R2 R3 twelve open tasks, the tenth active, fit six rows with the active one shown', () => {
     const rows = taskRows(tasks(12, i => (i === 9 ? 'in_progress' : 'pending')), 6)
     expect(rows.length).toBeLessThanOrEqual(6)
-    expect(rows.some(row => row.text === '▶ task 10')).toBe(true)
-    expect(rows.some(row => row.text.startsWith('✓ 0'))).toBe(false)
+    expect(rows.some(row => textOf(row) === '▶ task 10')).toBe(true)
+    expect(rows.some(row => textOf(row).startsWith('✓ 0'))).toBe(false)
   })
 
   test('R1 finished and open tasks together never pass the room, at any room size', () => {
@@ -28,7 +31,7 @@ describe('task fold', () => {
     for (const room of [1, 2, 3, 6, 10]) {
       const rows = taskRows(list, room)
       expect(rows.length).toBeLessThanOrEqual(room)
-      expect(rows.some(row => row.text.startsWith('▶'))).toBe(true)
+      expect(rows.some(row => textOf(row).startsWith('▶'))).toBe(true)
     }
   })
 })
@@ -52,7 +55,7 @@ const paneRowsDrawn = async ($: Engine, bodyRows: number): Promise<string[]> => 
     props: { title: 'Agentic OS', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} },
     viewport: { columns: 60, rows: 40 },
   })
-  const texts = (await pane.findAll({ type: 'Text' })).map(found => found.text)
+  const texts = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text)
   await pane.unmount()
   return texts
 }
@@ -91,7 +94,9 @@ describe('parallel steps', () => {
       component: 'AbovePrompt',
       props: { hasSurvey: false, isWorking: true, maxRows: 10, bodyColumns: 120, scroll: { offset: 0, bodyRows: 10 }, view: {} },
     })
-    expect((await band.find({ type: 'Text' }))?.text ?? '').toContain('Glob slow/**')
+    const text = (await band.find({ key: 'row-band' }))?.text ?? ''
+    expect(text).toContain('slow/**')
+    expect(text).not.toContain('fast/**')
     await band.unmount()
     release['slow/**']?.()
     await first

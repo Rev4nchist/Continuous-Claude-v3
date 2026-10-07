@@ -2,10 +2,10 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, TextProps } from 'claude-code'
 
 import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn } from '../../types'
-import { addTask, bandText, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
+import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
-import { paneRows, parseLanes } from './pane-model'
-import type { PaneRow } from './pane-model'
+import { bandSpans, paneRows, parseLanes } from './pane-model'
+import type { Span, Tone } from './pane-model'
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
@@ -21,12 +21,19 @@ const PANE = 'agentic-os'
 const PULSE_MS = 5000
 const LIVE_AGENT = new Set(['pending', 'running', 'waiting', 'idle'])
 
-const TONE: Record<PaneRow['tone'], TextProps> = {
+/** Theme keys only, so the pane follows the person's light or dark theme. */
+const TONE: Record<Tone, TextProps> = {
+  title: { color: 'claude', bold: true },
   head: { bold: true },
   active: { color: 'claude', bold: true },
   done: { color: 'success' },
   todo: {},
   dim: { dimColor: true },
+  ok: { color: 'success' },
+  warn: { color: 'warning' },
+  bad: { color: 'error' },
+  chip: { color: 'inverseText', backgroundColor: 'claude', bold: true },
+  track: { color: 'subtle' },
 }
 
 type Result = { result?: unknown; isError?: boolean; deny?: string }
@@ -187,7 +194,7 @@ export const agenticOs = (on: On) => {
     const tool = String(e.tool)
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
-    await update($, steps, list => [...list, { id, tool, label: stepLabel(tool, input), startedAt }])
+    await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
     const ran = await next(e)
     await update($, steps, list => list.filter(one => one.id !== id))
     if (await record($, tool, input, ran)) await writeSnapshot($)
@@ -200,10 +207,15 @@ export const agenticOs = (on: On) => {
     const now = await view($)
     if (e.props.hasSurvey || isQuiet(now)) return next(e)
     const { Box, Text } = $.ui.resolve(e)
+    const spans = bandSpans(now, await $.clock.now(), e.props.bodyColumns)
     return (
-      <Box>
-        <Text dimColor wrap="truncate-end">
-          {bandText(now, await $.clock.now(), e.props.bodyColumns)}
+      <Box key="row-band">
+        <Text wrap="truncate-end">
+          {spans.map((span, i) => (
+            <Text key={`s${i}`} {...TONE[span.tone]}>
+              {span.text}
+            </Text>
+          ))}
         </Text>
       </Box>
     )
@@ -212,14 +224,25 @@ export const agenticOs = (on: On) => {
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     await read($, tick)
     const { Box, Text } = $.ui.resolve(e)
-    // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
-    const rows = paneRows(await view($), await $.clock.now(), e.props.bodyColumns, e.props.scroll.bodyRows)
-    return (
-      <Box flexDirection="column">
-        {rows.map(row => (
-          <Text key={row.key} wrap="truncate-end" {...TONE[row.tone]}>
-            {row.text}
+    const line = (spans: Span[]) => (
+      <Text wrap="truncate-end">
+        {spans.map((span, i) => (
+          <Text key={`s${i}`} {...TONE[span.tone]}>
+            {span.text}
           </Text>
+        ))}
+      </Text>
+    )
+    // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
+    // paddingX takes one column each side.
+    const rows = paneRows(await view($), await $.clock.now(), e.props.bodyColumns - 2, e.props.scroll.bodyRows)
+    return (
+      <Box flexDirection="column" paddingX={1}>
+        {rows.map(row => (
+          <Box key={`row-${row.key}`} flexDirection="row" justifyContent="space-between">
+            {line(row.left)}
+            {row.right ? line(row.right) : null}
+          </Box>
         ))}
       </Box>
     )

@@ -51,7 +51,7 @@ const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal',
     props: PANE_PROPS,
     viewport: { columns: 60, rows },
   })
-  const texts = (await pane.findAll({ type: 'Text' })).map(found => found.text)
+  const texts = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text)
   await pane.unmount()
   return texts
 }
@@ -69,7 +69,7 @@ describe('agentic-os pane', () => {
     await settle()
     expect(opened).toEqual(['agentic-os'])
     expect(ran.text).toBe('Agentic OS pane opened.')
-    expect((await paneText($)).join('\n')).toContain('mods-agentic-os · active')
+    expect((await paneText($)).join('\n')).toMatch(/mods-agentic-os\s+● active/)
   })
 
   test('F9 an empty lane list reads as no lane held', async ($, on) => {
@@ -100,7 +100,7 @@ describe('agentic-os pane', () => {
 
     for (const surface of ['terminal', 'desktop'] as const) {
       const text = (await paneText($, surface, 16)).join('\n')
-      expect(text).toContain('TASKS 15/20 done')
+      expect(text).toContain('15/20 done')
       expect(text).toContain('✓ 15 done')
       expect(text).toContain('▶ Doing step 16')
       expect(text).not.toContain('✓ step 1\n')
@@ -118,7 +118,7 @@ describe('agentic-os pane', () => {
     await $.command.run(OS)
     await settle()
     const text = (await paneText($)).join('\n')
-    expect(text).toContain('▶ scout · map hooks')
+    expect(text).toMatch(/▶ scout\s+map hooks/)
     expect(text).not.toContain('old review')
   })
 })

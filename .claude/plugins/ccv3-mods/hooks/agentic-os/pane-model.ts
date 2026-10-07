@@ -2,11 +2,59 @@ import type { OsAgent, OsLane, OsTask } from '../../types'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
 
-/** One drawn row of the pane. `tone` maps to a theme colour at draw time. */
-export type PaneRow = { key: string; text: string; tone: 'head' | 'done' | 'active' | 'todo' | 'dim' }
+/** A colour role; the render maps each to theme props, so light and dark both work. */
+export type Tone = 'title' | 'head' | 'active' | 'done' | 'todo' | 'dim' | 'ok' | 'warn' | 'bad' | 'chip' | 'track'
 
-const MARK: Record<OsTask['status'], string> = { completed: '✓', in_progress: '▶', pending: '○' }
-const TONE: Record<OsTask['status'], PaneRow['tone']> = { completed: 'done', in_progress: 'active', pending: 'todo' }
+/** A run of text in one tone. */
+export type Span = { text: string; tone: Tone }
+
+/** One drawn line: spans on the left, an optional right-aligned group. */
+export type PaneRow = { key: string; left: Span[]; right?: Span[] }
+
+const sp = (text: string, tone: Tone): Span => ({ text, tone })
+
+const width = (spans: Span[] = []) => spans.reduce((n, s) => n + s.text.length, 0)
+
+/** Clips the left spans so left, a one-cell gap and right fit `columns`. */
+const fit = (row: PaneRow, columns: number): PaneRow => {
+  let room = Math.max(4, columns - (row.right ? width(row.right) + 1 : 0))
+  const left: Span[] = []
+  for (const span of row.left) {
+    if (room <= 0) break
+    const text = clip(span.text, room)
+    left.push({ ...span, text })
+    room -= text.length
+  }
+  return { ...row, left }
+}
+
+/** A text gauge: `filled` cells in `tone`, the rest as an empty track. */
+export const bar = (fraction: number, cells: number, tone: Tone, glyphs = ['█', '░']): Span[] => {
+  const filled = Math.round(Math.min(1, Math.max(0, fraction)) * cells)
+  return [sp((glyphs[0] ?? '█').repeat(filled), tone), sp((glyphs[1] ?? '░').repeat(cells - filled), 'track')]
+}
+
+/** Green under half full, amber to three quarters, red past that. */
+export const gaugeTone = (percent: number): Tone => (percent < 50 ? 'ok' : percent < 75 ? 'warn' : 'bad')
+
+const LANE_TONE: Record<string, Tone> = { active: 'ok', ready: 'ok', review: 'warn', blocked: 'bad', done: 'dim', backlog: 'dim' }
+
+const MARK: Record<OsTask['status'], Span> = {
+  completed: sp('✓ ', 'done'),
+  in_progress: sp('▶ ', 'active'),
+  pending: sp('○ ', 'dim'),
+}
+
+const taskRow = (task: OsTask): PaneRow => ({
+  key: `task-${task.id}`,
+  left: [
+    sp('  ', 'dim'),
+    MARK[task.status],
+    task.status === 'in_progress'
+      ? sp(task.activeForm ?? task.subject, 'active')
+      : sp(task.subject, task.status === 'completed' ? 'dim' : 'todo'),
+  ],
+})
 
 /**
  * The task rows that fit in `room`, never more. A list that fits shows in
@@ -14,24 +62,20 @@ const TONE: Record<OsTask['status'], PaneRow['tone']> = { completed: 'done', in_
  * active task leads the open ones, and a "… N more" row takes the last row.
  */
 export const taskRows = (tasks: OsTask[], room: number): PaneRow[] => {
-  const row = (task: OsTask): PaneRow => ({
-    key: `task-${task.id}`,
-    text: `${MARK[task.status]} ${task.status === 'in_progress' ? (task.activeForm ?? task.subject) : task.subject}`,
-    tone: TONE[task.status],
-  })
-  if (tasks.length <= room) return tasks.map(row)
+  if (tasks.length <= room) return tasks.map(taskRow)
   const done = tasks.filter(task => task.status === 'completed').length
   const open = [
     ...tasks.filter(task => task.status === 'in_progress'),
     ...tasks.filter(task => task.status === 'pending'),
   ]
-  const head: PaneRow[] = done > 0 && room > 1 ? [{ key: 'task-done', text: `✓ ${done} done`, tone: 'done' }] : []
+  const head: PaneRow[] =
+    done > 0 && room > 1 ? [{ key: 'task-done', left: [sp('  ', 'dim'), sp(`✓ ${done} done`, 'done')] }] : []
   const space = room - head.length
-  if (open.length <= space) return [...head, ...open.map(row)]
+  if (open.length <= space) return [...head, ...open.map(taskRow)]
   const shown = open.slice(0, Math.max(1, space - 1))
   const hidden = open.length - shown.length
-  const more: PaneRow[] = space > shown.length ? [{ key: 'task-more', text: `… ${hidden} more`, tone: 'dim' }] : []
-  return [...head, ...shown.map(row), ...more]
+  const more: PaneRow[] = space > shown.length ? [{ key: 'task-more', left: [sp(`    … ${hidden} more`, 'dim')] }] : []
+  return [...head, ...shown.map(taskRow), ...more]
 }
 
 /** Agent rows, at most `cap`; the list arrives already cut to live agents (refreshAgents). */
@@ -39,53 +83,133 @@ const agentRows = (agents: OsAgent[], cap: number): PaneRow[] => {
   const shown = agents.length <= cap ? agents : agents.slice(0, Math.max(1, cap - 1))
   const rows: PaneRow[] = shown.map(agent => ({
     key: `agent-${agent.id}`,
-    text: `${agent.status === 'running' ? '▶' : '·'} ${agent.type} · ${agent.description}`,
-    tone: agent.status === 'running' ? 'active' : 'dim',
+    left: [
+      sp('  ', 'dim'),
+      agent.status === 'running' ? sp('▶ ', 'active') : sp('· ', 'dim'),
+      sp(agent.type, 'todo'),
+      sp(`  ${agent.description}`, 'dim'),
+    ],
   }))
   const hidden = agents.length - shown.length
-  return hidden > 0 ? [...rows, { key: 'agent-more', text: `… ${hidden} agents more`, tone: 'dim' }] : rows
+  return hidden > 0 ? [...rows, { key: 'agent-more', left: [sp(`    … ${hidden} agents more`, 'dim')] }] : rows
 }
 
 const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
-  if (lanes === null) return [{ key: 'lane-none', text: 'lane board not read', tone: 'dim' }]
-  if (lanes.length === 0) return [{ key: 'lane-none', text: 'no lane held', tone: 'dim' }]
-  return lanes.map(lane => ({ key: `lane-${lane.id}`, text: `${lane.id} · ${lane.state}`, tone: 'todo' }))
+  if (lanes === null) return [{ key: 'lane-none', left: [sp('  lane board not read', 'dim')] }]
+  if (lanes.length === 0) return [{ key: 'lane-none', left: [sp('  no lane held', 'dim')] }]
+  const [first, ...rest] = lanes
+  const chip = (lane: OsLane): PaneRow => ({
+    key: `lane-${lane.id}`,
+    left: [sp('  ', 'dim'), sp(` ${lane.id} `, 'chip'), sp(' ', 'dim'), sp(`● ${lane.state}`, LANE_TONE[lane.state] ?? 'dim')],
+  })
+  const note: PaneRow[] = first?.note ? [{ key: 'lane-note', left: [sp(`    ↳ ${first.note}`, 'dim')] }] : []
+  return first ? [chip(first), ...note, ...rest.map(chip)] : []
 }
 
-/** Every row of the pane, each clipped to `columns`, fitted to `rows`. */
+const head = (key: string, label: string, right?: Span[]): PaneRow => ({
+  key,
+  left: [sp(label, 'head')],
+  ...(right ? { right } : {}),
+})
+
+const gap = (key: string): PaneRow => ({ key, left: [sp(' ', 'dim')] })
+
+/** Every row of the pane, fitted to `columns` and never more than `rows`. */
 export const paneRows = (view: OsView, nowMs: number, columns: number, rows: number): PaneRow[] => {
   const done = view.tasks.filter(task => task.status === 'completed').length
-  const head = (key: string, text: string): PaneRow => ({ key, text, tone: 'head' })
-  const now: PaneRow = view.step
-    ? { key: 'now', text: `${view.step.label} ${elapsed(nowMs - view.step.startedAt)}`, tone: 'active' }
-    : { key: 'now', text: view.turn ? `thinking ${elapsed(nowMs - view.turn.startedAt)}` : 'idle', tone: 'dim' }
-  const agents = agentRows(view.agents, Math.max(1, Math.floor(rows / 4)))
-  const footer: PaneRow = {
-    key: 'footer',
-    text: [view.ctx !== null ? `ctx ${view.ctx}%` : '', view.turn ? `turn ${elapsed(nowMs - view.turn.startedAt)}` : '']
-      .filter(Boolean)
-      .join(' · '),
-    tone: 'dim',
-  }
+  const total = view.tasks.length
+  const rule: PaneRow = { key: 'rule', left: [sp('─'.repeat(Math.max(1, columns)), 'track')] }
 
-  const fixed: PaneRow[] = [
-    head('h-plan', `PLAN  ${view.plan?.title ?? '—'}`),
-    head('h-tasks', `TASKS ${done}/${view.tasks.length} done`),
+  const status: Span[] = view.step || view.turn
+    ? [sp('● ', 'warn'), sp(`working ${elapsed(nowMs - (view.turn ?? view.step)!.startedAt)}`, 'dim')]
+    : [sp('○ idle', 'dim')]
+  const top: PaneRow[] = [{ key: 'title', left: [sp('◆ AGENTIC OS', 'title')], right: status }, rule]
+
+  const plan: PaneRow[] = [
+    head('h-plan', 'PLAN'),
+    view.plan
+      ? { key: 'plan', left: [sp('  ', 'dim'), sp(view.plan.title, 'todo')], ...(view.plan.file ? { right: [sp(view.plan.file.split(/[\\/]/).pop() ?? '', 'dim')] } : {}) }
+      : { key: 'plan', left: [sp('  no plan yet', 'dim')] },
   ]
-  const tail: PaneRow[] = [
+
+  const taskHead: PaneRow[] = [
+    head('h-tasks', 'TASKS', total ? [sp(`${done}/${total} done`, 'dim')] : undefined),
+    ...(total
+      ? [{ key: 'task-bar', left: [sp('  ', 'dim'), ...bar(done / total, Math.max(6, Math.min(30, columns - 10)), 'ok'), sp(` ${Math.round((done / total) * 100)}%`, 'dim')] }]
+      : []),
+  ]
+
+  const now: PaneRow[] = [
     head('h-now', 'NOW'),
-    now,
-    ...(agents.length ? [head('h-agents', 'AGENTS'), ...agents] : []),
-    head('h-lane', 'LANE'),
-    ...laneRows(view.lanes),
-    ...(footer.text ? [footer] : []),
+    view.step
+      ? {
+          key: 'now',
+          left: [sp('  ', 'dim'), sp(` ${view.step.tool} `, 'chip'), sp(` ${view.step.label}`, 'active')],
+          right: [sp(elapsed(nowMs - view.step.startedAt), 'dim')],
+        }
+      : view.turn
+        ? { key: 'now', left: [sp('  ◌ thinking', 'dim')], right: [sp(elapsed(nowMs - view.turn.startedAt), 'dim')] }
+        : { key: 'now', left: [sp('  ○ idle', 'dim')] },
   ]
-  const room = Math.max(1, rows - fixed.length - tail.length)
-  const tasks = view.tasks.length ? taskRows(view.tasks, room) : [{ key: 'task-none', text: 'no tasks yet', tone: 'dim' as const }]
+
+  const agentCap = Math.max(1, Math.floor(rows / 4))
+  const live = view.agents.filter(agent => agent.status === 'running').length
+  const agents: PaneRow[] = view.agents.length
+    ? [head('h-agents', 'AGENTS', [sp(`${live} running`, 'dim')]), ...agentRows(view.agents, agentCap)]
+    : []
+
+  const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
+
+  const footer: PaneRow[] =
+    view.ctx !== null
+      ? [
+          rule,
+          {
+            key: 'ctx',
+            left: [sp('ctx ', 'dim'), ...bar(view.ctx / 100, Math.max(6, Math.min(20, columns - 16)), gaugeTone(view.ctx), ['▰', '▱']), sp(` ${view.ctx}%`, gaugeTone(view.ctx))],
+            ...(view.turn ? { right: [sp(`turn ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')] } : {}),
+          },
+        ]
+      : []
+
+  // Sections after TASKS; gaps go between sections and are the first rows to go.
+  const after = [now, agents, lane].filter(section => section.length)
+  const gaps = 1 + after.length
+  const fixed = top.length + plan.length + taskHead.length + after.flat().length + footer.length
+  const roomWithGaps = rows - fixed - gaps
+  const useGaps = roomWithGaps >= Math.min(3, Math.max(1, total))
+  const room = Math.max(1, useGaps ? roomWithGaps : rows - fixed)
+
+  const tasks = total ? taskRows(view.tasks, room) : [{ key: 'task-none', left: [sp('  no tasks yet', 'dim')] }]
+  const sep = (i: number) => (useGaps ? [gap(`gap-${i}`)] : [])
+  const all: PaneRow[] = [
+    ...top,
+    ...plan,
+    ...sep(0),
+    ...taskHead,
+    ...tasks,
+    ...after.flatMap((section, i) => [...sep(i + 1), ...section]),
+    ...footer.map((row, i) => (i === 0 ? { ...row, key: 'rule-foot' } : row)),
+  ]
   // A body shorter than the fixed rows cuts from the bottom rather than overflow.
-  return [...fixed, ...tasks, ...tail]
-    .slice(0, Math.max(1, rows))
-    .map(row => ({ ...row, text: clip(row.text, Math.max(10, columns)) }))
+  return all.slice(0, Math.max(1, rows)).map(row => fit(row, Math.max(10, columns)))
+}
+
+/** The band's spans: plan, progress, the active task, the running step, context. */
+export const bandSpans = (view: OsView, nowMs: number, columns: number): Span[] => {
+  const parts: Span[][] = []
+  if (view.plan) parts.push([sp('◆ ', 'title'), sp(view.plan.title, 'todo')])
+  if (view.tasks.length) {
+    const done = view.tasks.filter(task => task.status === 'completed').length
+    parts.push([...bar(done / view.tasks.length, 8, 'ok', ['▰', '▱']), sp(` ${done}/${view.tasks.length} done`, 'dim')])
+    const active = view.tasks.find(task => task.status === 'in_progress')
+    if (active) parts.push([sp('▶ ', 'active'), sp(active.activeForm ?? active.subject, 'active')])
+  }
+  if (view.step) parts.push([sp(`${view.step.tool} ${view.step.label}`.trim(), 'dim'), sp(` ${elapsed(nowMs - view.step.startedAt)}`, 'dim')])
+  else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
+  if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
+  const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
+  return fit({ key: 'band', left: joined }, Math.max(10, columns)).left
 }
 
 /** Lane rows from `lane.mjs mine --json` output; null when it is not a lane list. */

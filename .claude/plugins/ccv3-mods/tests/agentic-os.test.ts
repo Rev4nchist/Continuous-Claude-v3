@@ -30,7 +30,7 @@ const world = (on: On) => {
 
 const bandOn = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal'): Promise<string | undefined> => {
   const band = await $.ui.mount({ plugin: 'ccv3-mods', surface, component: 'AbovePrompt', props: BAND_PROPS })
-  const text = (await band.find({ type: 'Text' }))?.text
+  const text = (await band.find({ key: 'row-band' }))?.text
   await band.unmount()
   return text
 }

@@ -63,14 +63,14 @@ export const planTitle = (plan: string): string => {
 
 const basename = (path: string): string => path.split(/[\\/]/).pop() ?? path
 
-/** A short human label for the tool call that is running. */
-export const stepLabel = (tool: string, input: Record<string, unknown>): string => {
+/** What the running call works on; the tool name shows beside it, so it is not repeated. */
+export const stepLabel = (input: Record<string, unknown>): string => {
   const text = (key: string) => (typeof input[key] === 'string' ? (input[key] as string) : '')
   if (text('description')) return clip(text('description'), 50)
-  if (text('file_path')) return `${tool} ${basename(text('file_path'))}`
+  if (text('file_path')) return basename(text('file_path'))
   if (text('command')) return clip(text('command').split(/\r?\n/)[0] ?? '', 50)
-  if (text('pattern')) return `${tool} ${clip(text('pattern'), 40)}`
-  return tool
+  if (text('pattern')) return clip(text('pattern'), 40)
+  return ''
 }
 
 export const clip = (text: string, max: number): string =>
@@ -84,19 +84,3 @@ export const elapsed = (ms: number): string => {
 /** True when the band has nothing worth a row: no plan, no tasks, no step. */
 export const isQuiet = (view: OsView): boolean =>
   view.plan === null && view.tasks.length === 0 && view.step === null
-
-/** The band's one line, clipped to `columns`. */
-export const bandText = (view: OsView, nowMs: number, columns: number): string => {
-  const parts: string[] = []
-  if (view.plan) parts.push(`◆ ${view.plan.title}`)
-  if (view.tasks.length) {
-    const done = view.tasks.filter(task => task.status === 'completed').length
-    parts.push(`${done}/${view.tasks.length} done`)
-    const active = view.tasks.find(task => task.status === 'in_progress')
-    if (active) parts.push(`▶ ${active.activeForm ?? active.subject}`)
-  }
-  if (view.step) parts.push(`now: ${view.step.label} ${elapsed(nowMs - view.step.startedAt)}`)
-  else if (view.turn) parts.push(`turn ${elapsed(nowMs - view.turn.startedAt)}`)
-  if (view.ctx !== null) parts.push(`ctx ${view.ctx}%`)
-  return clip(parts.join(' · '), Math.max(10, columns))
-}
