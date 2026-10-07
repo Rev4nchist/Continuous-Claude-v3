@@ -16758,6 +16758,66 @@
       "reason": "Malware in @diezyclutch/baileys (GHSA-5f29-482c-j4rr)",
       "date": "2026-10-05",
       "advisory": "https://github.com/advisories/GHSA-5f29-482c-j4rr"
+    },
+    "spf-analytics": {
+      "blocked_all": true,
+      "reason": "Malware in spf-analytics (GHSA-fj97-8h42-crgr)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-fj97-8h42-crgr"
+    },
+    "vectorizers": {
+      "blocked_all": true,
+      "reason": "Malware in vectorizers (GHSA-q8rg-7mvv-2c63)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-q8rg-7mvv-2c63"
+    },
+    "random-certs": {
+      "blocked_all": true,
+      "reason": "Malware in random-certs (GHSA-2cfv-92gp-9f6m)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-2cfv-92gp-9f6m"
+    },
+    "waie-crash-baileys": {
+      "blocked_all": true,
+      "reason": "Malware in waie-crash-baileys (GHSA-5r5f-v5vv-289q)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-5r5f-v5vv-289q"
+    },
+    "troubleshooting": {
+      "blocked_all": true,
+      "reason": "Malicious code in troubleshooting (npm) (GHSA-42gg-4m94-8m7w)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-42gg-4m94-8m7w"
+    },
+    "browser-metrics-plugin.contrib": {
+      "blocked_all": true,
+      "reason": "Malicious code in browser-metrics-plugin.contrib (npm) (GHSA-qxf4-wgfv-6mvr)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-qxf4-wgfv-6mvr"
+    },
+    "personio-pipeline-projen": {
+      "blocked_all": true,
+      "reason": "Malicious code in personio-pipeline-projen (npm) (GHSA-ph63-hxpv-5cwm)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-ph63-hxpv-5cwm"
+    },
+    "windows_registry_editor": {
+      "blocked_all": true,
+      "reason": "Malicious code in windows_registry_editor (npm) (GHSA-mmx2-rhc3-vg25)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-mmx2-rhc3-vg25"
+    },
+    "store-webpack-config": {
+      "blocked_all": true,
+      "reason": "Malicious code in store-webpack-config (npm) (GHSA-v9x4-6r9x-f7mf)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-v9x4-6r9x-f7mf"
+    },
+    "css-jptvix-polyfill": {
+      "blocked_all": true,
+      "reason": "Malicious code in css-jptvix-polyfill (npm) (GHSA-m6m7-6f4x-c5v3)",
+      "date": "2026-10-06",
+      "advisory": "https://github.com/advisories/GHSA-m6m7-6f4x-c5v3"
     }
   }
 }
