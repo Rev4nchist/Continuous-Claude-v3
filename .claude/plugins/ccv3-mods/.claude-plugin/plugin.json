@@ -1,0 +1,9 @@
+{
+  "name": "ccv3-mods",
+  "version": "0.1.0",
+  "description": "CCv3 mods: the Agentic OS band shows the plan, the tasks and the current step of this session.",
+  "types": "./types/index.d.ts",
+  "author": {
+    "name": "Rev4nchist"
+  }
+}
