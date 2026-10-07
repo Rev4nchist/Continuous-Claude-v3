@@ -13,6 +13,10 @@ export type OsTurn = { id: string; startedAt: number }
 
 export type OsStep = { id: string; tool: string; label: string; startedAt: number }
 
+export type OsAgent = { id: string; description: string; type: string; status: string }
+
+export type OsLane = { id: string; title: string; state: string; note?: string }
+
 declare module 'claude-code' {
   interface PluginState {
     'ccv3-mods': {
@@ -21,6 +25,9 @@ declare module 'claude-code' {
       turn: OsTurn | null
       step: OsStep | null
       ctx: number | null
+      agents: OsAgent[]
+      lanes: OsLane[] | null
+      tick: number
     }
   }
 }

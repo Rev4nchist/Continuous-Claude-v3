@@ -1,4 +1,4 @@
-import type { OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn } from '../../types'
+import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn } from '../../types'
 
 export type OsView = {
   tasks: OsTask[]
@@ -6,6 +6,8 @@ export type OsView = {
   turn: OsTurn | null
   step: OsStep | null
   ctx: number | null
+  agents: OsAgent[]
+  lanes: OsLane[] | null
 }
 
 type TaskPatch = {
@@ -66,7 +68,7 @@ export const stepLabel = (tool: string, input: Record<string, unknown>): string 
 export const clip = (text: string, max: number): string =>
   text.length <= max ? text : `${text.slice(0, Math.max(0, max - 1))}…`
 
-const elapsed = (ms: number): string => {
+export const elapsed = (ms: number): string => {
   const total = Math.max(0, Math.floor(ms / 1000))
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
