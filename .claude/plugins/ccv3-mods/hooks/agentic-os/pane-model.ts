@@ -106,7 +106,10 @@ const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
   return first ? [chip(first), ...note, ...rest.map(chip)] : []
 }
 
-const PR_TONE: Record<string, Tone> = { READY: 'ok', LIMITED: 'warn', PENDING: 'dim' }
+/** A watched PR a person or the model must look at: rate limited, reviewed with findings, or no review. */
+const attention = (state: string | null): boolean => state === 'LIMITED' || state === 'REVIEWED' || state === 'STALLED'
+
+const PR_TONE: Record<string, Tone> = { READY: 'ok', LIMITED: 'warn', REVIEWED: 'warn', STALLED: 'warn', PENDING: 'dim' }
 
 /** Watched PR rows, at most `cap`. A PR not checked yet reads as waiting. */
 const prRows = (prs: PrWatch[], cap: number): PaneRow[] => {
@@ -223,7 +226,7 @@ export const bandSpans = (view: OsView, nowMs: number, columns: number): Span[] 
   }
   if (view.step) parts.push([sp(`${view.step.tool} ${view.step.label}`.trim(), 'dim'), sp(` ${elapsed(nowMs - view.step.startedAt)}`, 'dim')])
   else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
-  if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${one.state === 'LIMITED' ? '!' : ''}`).join(' ')}`, view.prs.some(one => one.state === 'LIMITED') ? 'warn' : 'dim')])
+  if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${attention(one.state) ? '!' : ''}`).join(' ')}`, view.prs.some(one => attention(one.state)) ? 'warn' : 'dim')])
   if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
   const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
   return fit({ key: 'band', left: joined }, Math.max(10, columns)).left

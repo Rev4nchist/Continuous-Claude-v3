@@ -5,6 +5,7 @@ import type { PrWatch } from '../../types'
 import {
   BACKOFF_MS,
   BACKOFF_SLACK_MS,
+  MAX_FAILS,
   STATUS_TIMEOUT_MS,
   TICK_MS,
   addWatch,
@@ -13,6 +14,7 @@ import {
   isPrNumber,
   isStale,
   landCommand,
+  noteFailure,
   parseArgs,
   parseProbe,
   readDoc,
@@ -35,6 +37,7 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 
 const STATUS_SCRIPT = 'scripts/github/coderabbit-status.mjs'
+const REPO = 'Rev4nchist/Continuous-Claude-v3'
 const KEY_PREFIX = 'pr-watch:'
 const WATCH_TOOL = 'mcp__ccv3-mods__pr_watch'
 const STATUS_TOOL = 'mcp__ccv3-mods__pr_status'
@@ -75,14 +78,14 @@ const findRoot = async ($: EngineInterface): Promise<string | null> => {
 const probe = async ($: EngineInterface, pr: number): Promise<Probe> => {
   try {
     const root = await findRoot($)
-    if (!root) return { kind: 'error', text: `${STATUS_SCRIPT} not found in the session root or ~/continuous-claude` }
+    if (!root) return { kind: 'error', text: `${STATUS_SCRIPT} not found in the session root or ~/continuous-claude`, perPr: false }
     const run = await $.process.run(['node', `${root}/${STATUS_SCRIPT}`, String(pr), '--json'], {
       cwd: root,
       timeoutMs: STATUS_TIMEOUT_MS,
     })
     return parseProbe(run)
   } catch (err) {
-    return { kind: 'error', text: `could not run the status script (${err instanceof Error ? err.message : String(err)})` }
+    return { kind: 'error', text: `could not run the status script (${err instanceof Error ? err.message : String(err)})`, perPr: false }
   }
 }
 
@@ -139,17 +142,18 @@ const landNow = async ($: EngineInterface, pr: number, via: string): Promise<str
   const consent = `The user pressed "Land" on ${via}`
   const names = new Set((await $.tool.list().catch(() => [])).map(tool => tool.name))
   const common = { command, consent, timeout: 600_000, description: `Land PR #${pr} with land-pr.ps1` }
-  try {
-    if (names.has('PowerShell') || names.has('Bash')) {
+  if (names.has('PowerShell') || names.has('Bash')) {
+    try {
       const ran = names.has('PowerShell')
         ? await $.tool.call({ tool: 'PowerShell', ...common })
         : await $.tool.call({ tool: 'Bash', ...common })
       if (ran.deny !== undefined) return `Land refused: ${ran.deny}`
       const out = clipTail(outputOf(ran).trim(), 800)
       return ran.isError === true ? `Land failed:\n${out}` : out
+    } catch {
+      // The engine rejects an aborted call: Dave pressed Escape. His stop is not a reason to merge again.
+      return `Land interrupted: nothing re-submitted. Check PR #${pr}, then press Land again.`
     }
-  } catch {
-    // The call was rejected: hand the model the same instruction below.
   }
   // prompt.submit from inside a command.run hook would wait on the turn that hook holds: submit from a later dispatch.
   const text = `Dave pressed "Land" on ${via}. That press is his merge yes for PR #${pr} only. Run exactly: ${command} Then report its output.`
@@ -172,8 +176,9 @@ const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
     if (await confirmLand($, alert.pr)) {
       const out = await landNow($, alert.pr, `the READY alert for #${alert.pr}`)
       $.ui.toast(`Land #${alert.pr}: ${lastLine(out)}`, { timeoutMs: 15_000 })
+      return
     }
-    return
+    // No or a dismissed dialog: the PR already left the list, so the report line is the trace of READY.
   }
   await $.prompt.submit({ text: reportLine(alert) })
 }
@@ -195,14 +200,22 @@ const check = async ($: EngineInterface): Promise<void> => {
   if (before.prs.length === 0 || now + BACKOFF_SLACK_MS < before.backoffUntil) return
   const results: Results = new Map()
   const alerts: Alert[] = []
+  const notices: string[] = []
   let failure: string | null = null
   for (const watch of before.prs) {
     const result = await probe($, watch.pr)
     if (result.kind === 'error') {
-      failure = result.text
-      break
+      // An error all PRs share stops this check. One PR's own error counts against that PR only.
+      if (!result.perPr) {
+        failure = result.text
+        break
+      }
+      const kept = noteFailure(watch)
+      results.set(watch.pr, kept)
+      if (!kept) notices.push(`PR #${watch.pr}: dropped from the watch list after ${MAX_FAILS} failed checks in a row (${result.text}).`)
+      continue
     }
-    const settled = settle(watch, result.status)
+    const settled = settle(watch, result.status, now)
     results.set(watch.pr, settled.watch)
     if (settled.alert) alerts.push(settled.alert)
   }
@@ -212,6 +225,7 @@ const check = async ($: EngineInterface): Promise<void> => {
   if (failure !== null && before.backoffUntil === 0) {
     $.ui.toast(`PR watcher: status check failed (${failure}). Trying again in 15 minutes.`, { timeoutMs: 10_000 })
   }
+  for (const notice of notices) $.ui.toast(notice, { timeoutMs: 10_000 })
   for (const alert of alerts) await deliver($, alert)
 }
 
@@ -229,6 +243,17 @@ const arm = ($: EngineInterface): void => {
   })
 }
 
+/** Adds a PR only when its status can be read, so a typo or a foreign number never joins the list. */
+const addChecked = async ($: EngineInterface, pr: number): Promise<string | null> => {
+  const result = await probe($, pr)
+  if (result.kind === 'error') {
+    return `Not watching #${pr}: could not read the status (${result.text}). Check the number: the watcher reads ${REPO} only.`
+  }
+  const doc = await loadDoc($)
+  await saveDoc($, { ...doc, prs: addWatch(doc.prs, pr, false) })
+  return null
+}
+
 const USAGE = 'Usage: /watch <pr> [--once]   or   /watch to list the PRs watched'
 
 const watchCommand = async ($: EngineInterface, args: string): Promise<{ text: string }> => {
@@ -242,8 +267,8 @@ const watchCommand = async ($: EngineInterface, args: string): Promise<{ text: s
     const note = once ? '' : 'This session is headless: checked once, nothing is watched.\n'
     return { text: note + probeText(pr, await probe($, pr)) }
   }
-  const doc = await loadDoc($)
-  await saveDoc($, { ...doc, prs: addWatch(doc.prs, pr, false) })
+  const refused = await addChecked($, pr)
+  if (refused) return { text: refused }
   return { text: `Watching #${pr}. A check runs every 5 minutes; Dave gets a toast and the model one report line at READY.` }
 }
 
@@ -304,7 +329,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       await $.tool.register({
         name: 'pr_watch',
         description:
-          'Adds a pull request to the watch list. Every 5 minutes the session checks CodeRabbit and CI for it, then tells Dave (toast) and you (one report line) when it is READY, merged or closed. Never merges. Call this when you open a PR.',
+          'Adds a pull request in Rev4nchist/Continuous-Claude-v3 to the watch list. Every 5 minutes the session checks CodeRabbit and CI for it. It tells Dave (toast) and you (one report line) when the PR is READY, merged or closed, when CodeRabbit reviewed it and findings or failed checks need action, and when no review comes in 60 minutes. Never merges. Call this when you open a PR in that repo.',
         inputSchema: prSchema,
       })
     }
@@ -334,10 +359,10 @@ export const prLoop = (on: On) => {
   on('tool.call', { tool: WATCH_TOOL }, async ($, e) => {
     const pr = inputPr(e)
     if (pr === null) return { deny: 'pr_watch needs "pr": a positive whole number.' }
-    const doc = await loadDoc($)
-    await saveDoc($, { ...doc, prs: addWatch(doc.prs, pr, false) })
+    const refused = await addChecked($, pr)
+    if (refused) return textResult(refused)
     return textResult(
-      `Watching #${pr}. The session checks every 5 minutes and tells Dave and you at READY, merged or closed. Do not merge.`,
+      `Watching #${pr}. The session checks every 5 minutes and tells Dave and you at READY, merged or closed, when a review needs action, and when none comes in 60 minutes. Do not merge.`,
     )
   }).catch(($, e, next) => next(e))
 

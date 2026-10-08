@@ -23,6 +23,13 @@ import type { Engine } from 'claude-code/testing'
 // W17 the status process is a failed spawn: nothing is reported as READY
 // W19 the pane and the band show the watched PRs, so a wait is visible
 // W18 a list untouched for a week is deleted, so dead sessions leave nothing
+// W20 an aborted Land call re-submits nothing: Dave's Escape is not a second merge request
+// W21 a reviewed head with open threads or a failed check alerts the model once per head
+// W22 no review 60 minutes after the head appeared alerts once; a push restarts the clock
+// W23 a status script without prState or merged is an error, never CLOSED
+// W24 one PR's own error never stops the others; three in a row drop it; shared errors still back off
+// W25 pr_watch and /watch refuse a PR whose status cannot be read; the tool names its repo
+// W12 (again) a READY alert answered No or dismissed still gives the model its report line
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -66,7 +73,8 @@ const MERGED = (pr: number) => status(pr, { prState: 'closed', merged: true, rea
 const CLOSED = (pr: number) => status(pr, { prState: 'closed', reasons: ['PR is closed'] })
 const LIMITED = (pr: number) => status(pr, { rateLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed'] })
 
-type Reply = Status | 'error' | 'spawn-fail'
+// 'not-found' is a 404 for one PR; 'old-script' is a status script that predates prState and merged.
+type Reply = Status | 'error' | 'spawn-fail' | 'not-found' | 'old-script'
 type Opts = {
   script?: Record<number, Reply[]>
   env?: Record<string, string>
@@ -74,6 +82,7 @@ type Opts = {
   answer?: 'Land' | 'No' | 'dismiss'
   tools?: string[]
   home?: boolean
+  landThrows?: boolean
 }
 
 const world = (on: On, opts: Opts = {}) => {
@@ -91,7 +100,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
   const script = opts.script ?? {}
-  const seen = { status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[], registered: [] as string[], tools: [] as string[] }
+  const seen = { status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[], registered: [] as string[], tools: [] as string[], descriptions: {} as Record<string, string> }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.id', () => ({ value: SESSION }))
@@ -105,6 +114,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('tool.register', (_$, e) => {
     seen.tools.push(e.name)
+    seen.descriptions[e.name] = String((e as unknown as { description?: string }).description)
     return { value: { tool: `mcp__ccv3-mods__${e.name}` } }
   })
   on('tool.list', () => ({ value: (opts.tools ?? ['Bash', 'PowerShell']).map(name => ({ name })) as never }))
@@ -127,6 +137,11 @@ const world = (on: On, opts: Opts = {}) => {
     const reply = (queue.length > 1 ? queue.shift() : queue[0]) as Reply
     if (reply === 'error') return { value: { exitCode: 2, stdout: '', stderr: 'coderabbit-status: could not determine (API rate limit exceeded)', isStdoutTruncated: false, isStderrTruncated: false } }
     if (reply === 'spawn-fail') return { value: { exitCode: 1, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (reply === 'not-found') return { value: { exitCode: 2, stdout: '', stderr: 'coderabbit-status: could not determine (gh: Not Found (HTTP 404))', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (reply === 'old-script') {
+      const { prState: _prState, merged: _merged, ...old } = status(pr)
+      return { value: { exitCode: 1, stdout: JSON.stringify(old), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
+    }
     return { value: { exitCode: reply.ready ? 0 : 1, stdout: JSON.stringify(reply), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('tool.call', { tool: 'AskUserQuestion' }, (_$, e) => {
@@ -137,6 +152,8 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('tool.call', { tool: 'PowerShell' }, (_$, e) => {
     seen.land.push({ ...e })
+    // The engine rejects a tool call that is aborted (claude-code.d.ts, tool.call): Dave pressed Escape.
+    if (opts.landThrows) throw new Error('aborted')
     return { result: { stdout: 'LANDED #1', stderr: '', interrupted: false } }
   })
   on('tool.call', { tool: 'Bash' }, (_$, e) => {
@@ -155,8 +172,13 @@ const stored = (store: Map<string, unknown>): Doc | undefined => store.get(KEY) 
 const run = ($: Engine, command: string, args: string) =>
   $.command.run({ command, args, origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })
 
-const seed = (prs: { pr: number; state?: string | null; whenReady?: boolean }[], backoffUntil = 0) => ({
-  [KEY]: { prs: prs.map(p => ({ pr: p.pr, state: p.state ?? null, whenReady: p.whenReady ?? false })), backoffUntil, touched: 1_000_000 },
+type SeedPr = { pr: number; state?: string | null; whenReady?: boolean; head?: string; since?: number; alerted?: string; fails?: number }
+const seed = (prs: SeedPr[], backoffUntil = 0) => ({
+  [KEY]: {
+    prs: prs.map(({ state, whenReady, ...p }) => ({ ...p, state: state ?? null, whenReady: whenReady ?? false })),
+    backoffUntil,
+    touched: 1_000_000,
+  },
 })
 
 describe('pr-loop watcher', () => {
@@ -318,7 +340,7 @@ describe('pr-loop view', () => {
 
 describe('pr-loop tools', () => {
   test('W7 pr_watch rejects a bad PR number and adds a repeated PR once', async ($, on) => {
-    const { store } = world(on)
+    const { store } = world(on, { script: { 12: [status(12)] } })
     await start($)
     for (const pr of [0, -1, 1.5, '12', null]) {
       const bad = await $.tool.call({ tool: PR_TOOL, pr })
@@ -365,7 +387,7 @@ describe('/watch', () => {
   })
 
   test('/watch N adds the PR; /watch lists it', async ($, on) => {
-    const { store } = world(on)
+    const { store } = world(on, { script: { 12: [status(12)] } })
     await start($)
     const added = await run($, 'watch', '12')
     expect(added.text).toContain('#12')
@@ -479,6 +501,20 @@ describe('/land', () => {
     await clock.advance(TICK)
     expect(seen.asks.length).toBe(1)
     expect(seen.land).toEqual([])
+    // The PR left the list at READY: a No must not leave Dave with only a 10 second toast.
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('#7')
+    expect(seen.submits[0]).toMatch(/READY/)
+    expect(seen.submits[0]).toMatch(/do not merge/i)
+  })
+
+  test('W12 a flagged PR whose dialog is dismissed still reports READY to the model', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'dismiss', store: seed([{ pr: 7, state: 'PENDING', whenReady: true }]), script: { 7: [READY(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.land).toEqual([])
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/READY/)
   })
 
   test('W13 with no shell tool, Land hands the model one instruction instead', async ($, on) => {
@@ -491,5 +527,194 @@ describe('/land', () => {
     expect(seen.submits[0]).toContain('land-pr.ps1')
     expect(seen.submits[0]).toContain('-Pr 12')
     expect(seen.submits[0]).toContain('pressed "Land"')
+  })
+})
+
+const HEAD_A = 'a'.repeat(40)
+const HEAD_B = 'b'.repeat(40)
+const NOW = 1_000_000
+const REVIEWED_WITH_THREADS = (pr: number, over: Partial<Status> = {}) =>
+  status(pr, { reviewedHead: true, unresolved: 3, reasons: ['3 review thread(s) unresolved'], mergeable_state: 'blocked', ...over })
+
+describe('/land interrupted', () => {
+  test('W20 an aborted Land call submits nothing and says so; it does not ask the model to merge again', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'Land', landThrows: true, script: { 12: [READY(12)] } })
+    await start($)
+    const out = await run($, 'land', '12')
+    await clock.advance(1)
+    expect(seen.land.length).toBe(1)
+    expect(seen.submits).toEqual([])
+    expect(out.text).toMatch(/interrupted/i)
+    expect(out.text).not.toMatch(/No shell tool/i)
+  })
+
+  test('W20 an aborted Land from the READY dialog also submits nothing', async ($, on) => {
+    const { clock, seen } = world(on, { answer: 'Land', landThrows: true, store: seed([{ pr: 7, state: 'PENDING', whenReady: true }]), script: { 7: [READY(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(1)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts.some(text => /interrupted/i.test(text))).toBe(true)
+  })
+})
+
+describe('pr-loop review alerts', () => {
+  test('W21 a reviewed head with open threads alerts once with the act-on-it instruction, and stays watched', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 7, state: 'PENDING' }]), script: { 7: [REVIEWED_WITH_THREADS(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('#7')
+    expect(seen.submits[0]).toContain('3 review thread(s) unresolved')
+    expect(seen.submits[0]).toContain('When the review lands')
+    expect(seen.submits[0]).toMatch(/do not merge/i)
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toMatch(/#7/)
+    expect(stored(store)?.prs.map(p => p.pr)).toEqual([7])
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('W21 a failing check on a reviewed head alerts', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 7, state: 'PENDING' }]), script: { 7: [status(7, { reviewedHead: true, unresolved: 0, reasons: ['check "ci" is completed/failure'] })] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('W21 a reviewed head whose checks are still running is not an alert', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 7, state: 'PENDING' }]), script: { 7: [status(7, { reviewedHead: true, unresolved: 0, reasons: ['check "ci" is in_progress/null'] })] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts).toEqual([])
+  })
+
+  test('W21 a new head with a new review alerts again, even when both fall between two checks', async ($, on) => {
+    const { clock, seen } = world(on, {
+      store: seed([{ pr: 7, state: 'REVIEWED', head: HEAD_A, since: NOW - MIN, alerted: `REVIEWED:${HEAD_A}` }]),
+      script: { 7: [REVIEWED_WITH_THREADS(7, { head: HEAD_B, headShort: 'bbbbbbb' })] },
+    })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('bbbbbbb')
+  })
+
+  test('W22 no review 60 minutes after the head appeared alerts once', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 7, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 7: [status(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/no CodeRabbit review/i)
+    expect(seen.submits[0]).toMatch(/do not post @coderabbitai review/i)
+    expect(stored(store)?.prs.map(p => p.pr)).toEqual([7])
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('W22 30 minutes without a review is still quiet', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 7, state: 'PENDING', head: HEAD_A, since: NOW - 30 * MIN }]), script: { 7: [status(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('W22 a push restarts the 60 minute clock', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 7, state: 'PENDING', head: HEAD_B, since: NOW - 90 * MIN }]), script: { 7: [status(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('W22 the 60 minutes run from the first check when the list had no clock', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [status(7)] } })
+    await start($)
+    for (let i = 0; i < 11; i++) await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+})
+
+describe('pr-loop bad status answers', () => {
+  test('W23 a status script without prState is an error, never CLOSED', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 5 }]), script: { 5: ['old-script'] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.toasts.some(text => /^PR #5: (closed|merged)/i.test(text))).toBe(false)
+    expect(seen.toasts.some(text => /prState/.test(text))).toBe(true)
+    expect(stored(store)?.prs.map(p => p.pr)).toEqual([5])
+  })
+
+  test('W23 /land on a status script without prState does not call the PR closed', async ($, on) => {
+    const { seen } = world(on, { answer: 'Land', script: { 12: ['old-script'] } })
+    await start($)
+    const out = await run($, 'land', '12')
+    expect(out.text).not.toMatch(/closed/i)
+    expect(out.text).toMatch(/prState/)
+    expect(seen.asks).toEqual([])
+  })
+})
+
+describe('pr-loop one bad PR', () => {
+  test('W24 a PR that answers 404 does not stop the checks of the PRs after it', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 99 }, { pr: 7 }]), script: { 99: ['not-found'], 7: [READY(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.status).toEqual([99, 7])
+    expect(seen.toasts.some(text => /#7.*READY/.test(text))).toBe(true)
+    expect(stored(store)?.backoffUntil ?? 0).toBe(0)
+  })
+
+  test('W24 a PR that fails three checks in a row is dropped with a notice', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 99 }]), script: { 99: ['not-found'] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(stored(store)?.prs.map(p => p.pr)).toEqual([99])
+    expect(seen.toasts).toEqual([])
+    await clock.advance(TICK)
+    expect(stored(store)).toBeUndefined()
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toMatch(/#99.*dropped/i)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('W24 a good answer between failures resets the count', async ($, on) => {
+    const { clock, store } = world(on, { store: seed([{ pr: 99, fails: 2 }]), script: { 99: [status(99)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(stored(store)?.prs.map(p => p.pr)).toEqual([99])
+    expect((stored(store)?.prs[0] as { fails?: number }).fails ?? 0).toBe(0)
+  })
+
+  test('W24 an error every PR shares still backs the watcher off', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 5 }, { pr: 6 }]), script: { 5: ['error'], 6: [status(6)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.status).toEqual([5])
+    expect((stored(store)?.backoffUntil ?? 0) > 0).toBe(true)
+  })
+
+  test('W25 pr_watch refuses a PR whose status cannot be read, and /watch does too', async ($, on) => {
+    const { seen, store } = world(on, { script: { 13: ['not-found'] } })
+    await start($)
+    const ran = await $.tool.call({ tool: PR_TOOL, pr: 13 })
+    const blocks = ran.result as { type: string; text: string }[]
+    expect(blocks[0]?.text).toMatch(/not watching #13/i)
+    const out = await run($, 'watch', '13')
+    expect(out.text).toMatch(/not watching #13/i)
+    expect(seen.status).toEqual([13, 13])
+    expect(stored(store)).toBeUndefined()
+  })
+
+  test('W25 pr_watch names the repository it checks', async ($, on) => {
+    const { seen } = world(on)
+    await start($)
+    expect(seen.descriptions.pr_watch).toContain('Rev4nchist/Continuous-Claude-v3')
   })
 })

@@ -6,7 +6,8 @@ not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 mi
 
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
 `scripts/github/coderabbit-status.mjs`, tells Dave with a toast, and tells you with one report line at
-READY, merged or closed. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>`
+READY, merged or closed, when a reviewed head has findings or a failed check (act per "When the review lands"),
+and when no review comes in 60 minutes. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>`
 to watch and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
 ## Loop prompt (fallback)
