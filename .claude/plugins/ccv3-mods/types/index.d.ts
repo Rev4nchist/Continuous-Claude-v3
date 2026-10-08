@@ -29,6 +29,8 @@ declare module 'claude-code' {
       agents: OsAgent[]
       lanes: OsLane[] | null
       tick: number
+      /** Set at session.start from `isInteractive`: a headless run gets capture and snapshots only. */
+      mode: 'interactive' | 'headless'
     }
   }
 }
