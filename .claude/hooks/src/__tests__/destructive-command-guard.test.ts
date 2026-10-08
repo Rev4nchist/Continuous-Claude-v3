@@ -14,7 +14,39 @@ import {
   stripQuotedStrings,
   parseExecutable,
   extractShellWrapperPayloads,
+  reasonFor,
 } from '../destructive-command-guard.js';
+
+describe('deny text does not teach the agent to override the guard', () => {
+  // 59 of 59 agent overrides in the mods usage review followed the old advice in this text.
+  const deny = reasonFor('deny', 'recursive rm', 'rm -rf build');
+
+  it('never names SKIP_DESTRUCTIVE_GUARD or the PowerShell override form', () => {
+    expect(deny).not.toMatch(/SKIP_DESTRUCTIVE_GUARD/);
+    expect(deny).not.toMatch(/\$env:/);
+    expect(deny).not.toMatch(/re-run with/i);
+  });
+
+  it('tells the agent to ask Dave for a yes, or state the reason', () => {
+    expect(deny).toMatch(/ask Dave for a yes/i);
+    expect(deny).toMatch(/state the reason/i);
+  });
+
+  it('keeps the matched rule and the command so the agent can see what was blocked', () => {
+    expect(deny).toContain('Matched: recursive rm');
+    expect(deny).toContain('Command: rm -rf build');
+  });
+
+  it('leaves the interactive ask text unchanged', () => {
+    const ask = reasonFor('ask', 'recursive rm', 'rm -rf build');
+    expect(ask).toMatch(/^CONFIRM: this is a destructive command/);
+    expect(ask).toContain('Approve only if you intend this irreversible operation');
+  });
+
+  it('still honours the override mechanism itself (Dave uses it)', () => {
+    expect(decide('SKIP_DESTRUCTIVE_GUARD=1 rm -rf build', { permission_mode: 'bypassPermissions' }, {}).decision).toBe('allow');
+  });
+});
 
 describe('no false-positive on destructive keywords inside string literals', () => {
   it('git commit -m with destructive words in the message → allow', () => {

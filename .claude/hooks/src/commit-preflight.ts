@@ -34,6 +34,7 @@ import { hasE2e, judge, latestSidecar, readTestRun } from './shared/done-proof.j
 import { resolveHead } from './shared/git-head.js';
 import { maskQuoted } from './shared/mask-quotes.js';
 import { isUnattended } from './shared/unattended.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const PROTECTED_BRANCHES = new Set(['main', 'master']);
@@ -314,7 +315,11 @@ function main(): void {
     console.log('{}');
     return;
   }
-  console.log(JSON.stringify(preflight(input) ?? {}));
+  const out = preflight(input);
+  if (out?.hookSpecificOutput.permissionDecision === 'ask') {
+    logGuardDecision('commit-preflight', input, 'ask', 'commit-on-protected-branch', { command: String(input.tool_input?.command ?? '') });
+  }
+  console.log(JSON.stringify(out ?? {}));
 }
 
 // Auto-run only as a hook; VITEST imports the pure functions above.

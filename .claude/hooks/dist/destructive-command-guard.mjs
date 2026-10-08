@@ -417,13 +417,82 @@ function isUnattended(input, env = process.env) {
   return false;
 }
 
+// src/shared/guard-log.ts
+import { appendFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
+import { dirname, join } from "path";
+var COMMAND_HEAD_CHARS = 80;
+var REASON_CHARS = 200;
+function guardLogPath(env = process.env) {
+  const home = env.USERPROFILE || env.HOME || homedir();
+  return env.CCV3_GUARD_DECISIONS_LOG || join(home, ".claude", "logs", "guard-decisions.jsonl");
+}
+var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+var MASKS = [
+  // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+  [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+  // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+  // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+  [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+  [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+  [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+  // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+  [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+  // `sshpass -p pw ssh host`
+  [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+  [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+  [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+  [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+  [/\bgithub_pat_\w+/g, "***"],
+  [/\bxox[abprs]-[\w-]+/g, "***"],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+  [/\bAIza[\w-]{30,}/g, "***"],
+  [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+  // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+  [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+];
+function maskSecrets(text) {
+  return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+function commandHead(command) {
+  return maskSecrets(command).replace(/\s+/g, " ").trim().slice(0, COMMAND_HEAD_CHARS);
+}
+function shouldWrite(env) {
+  return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+}
+function logGuardDecision(hook, input, decision, reason, opts = {}) {
+  const env = opts.env ?? process.env;
+  try {
+    if (!shouldWrite(env)) return;
+    const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      hook,
+      tool: input?.tool_name || input?.tool || "",
+      decision,
+      reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
+      session_id: input?.session_id || ""
+    };
+    if (agent) entry.agent_id = agent;
+    if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
+    const path = guardLogPath(env);
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
+}
+
 // src/destructive-command-guard.ts
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
+var HOOK = "destructive-command-guard";
 function decide(command, input, env = process.env) {
-  if (env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command)) {
-    return { decision: "allow" };
-  }
+  const overridden = env.SKIP_DESTRUCTIVE_GUARD === "1" || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command) || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || "Bash");
+  if (overridden) return pattern ? { decision: "allow", pattern, override: true } : { decision: "allow" };
   if (!pattern) return { decision: "allow" };
   return { decision: isUnattended(input, env) ? "deny" : "ask", pattern };
 }
@@ -434,7 +503,7 @@ function reasonFor(decision, pattern, command) {
 Matched: ${pattern}
 Command: ${command.slice(0, 300)}
 
-${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. If you genuinely intend it here, re-run with SKIP_DESTRUCTIVE_GUARD=1 prefixed (PowerShell tool: start the command with $env:SKIP_DESTRUCTIVE_GUARD='1'; ), or run it interactively.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`}`;
+${decision === "deny" ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. Ask Dave for a yes, or state the reason this command is needed. Do not work around this block.` : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`}`;
 }
 async function main() {
   let input = {};
@@ -457,11 +526,13 @@ async function main() {
     console.log("{}");
     return;
   }
-  const { decision, pattern } = decide(command, input);
+  const { decision, pattern, override } = decide(command, input);
+  if (override && pattern) logGuardDecision(HOOK, input, "override", pattern, { command });
   if (decision === "allow" || !pattern) {
     console.log("{}");
     return;
   }
+  logGuardDecision(HOOK, input, decision, pattern, { command });
   const output = {
     hookSpecificOutput: {
       hookEventName: "PreToolUse",
@@ -483,5 +554,6 @@ export {
   isUnattended,
   normalizeGitGlobalOptions,
   parseExecutable,
+  reasonFor,
   stripQuotedStrings
 };

@@ -12,6 +12,11 @@
  *     with the rule in view and re-issues the call if it still fits. Used for rules that must
  *     change the DECISION (confirm-first Codex/Grok/CMA runs, commit and PR text), because
  *     context injected at PreToolUse arrives after the command was already chosen.
+ *     The block happens once per SESSION. A subagent is a fresh context and still needs the rule
+ *     text, but once the session has had the block, a subagent gets the rule as additionalContext
+ *     instead of a second block (about 302 of 339 denies were such repeats). The main thread
+ *     always keeps its own block-once. A gate rule (manifest `"subagent": "block"`: codex, grok, cma,
+ *     kie-spend, browser-deprecated) is exempt: each fresh subagent is blocked once for it.
  *   - mode 'inject': add the rule text as additionalContext and let the call run.
  *
  * Also registered on SessionStart (matcher compact|clear): it removes the main agent's markers so
@@ -25,12 +30,15 @@ import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSy
 import { homedir, tmpdir } from 'os';
 import { join, dirname } from 'path';
 import { outputContinue, outputDeny } from './shared/output.js';
+import { logGuardDecision } from './shared/guard-log.js';
 import { stripQuotedStrings, parseExecutable, extractShellWrapperPayloads } from './shared/destructive-classifier.js';
 
 export interface RuleEntry {
   id: string;
   files: string[];
   mode: 'deny-first' | 'inject';
+  /** 'block': a gate (spend, confirm-first). Every fresh subagent is blocked once, never downgraded to an inject. */
+  subagent?: 'block';
   command?: string[];
   segment?: string[];
   agent?: string[];
@@ -161,6 +169,17 @@ function stateDir(input: HookInput): string {
   return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, '_')}`);
 }
 
+/** One folder per session: a marker per deny-first rule whose block this session has had. */
+function blockedDir(input: HookInput): string {
+  const key = (input.session_id || 'no-session').replace(/[^A-Za-z0-9_-]/g, '_');
+  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-blocked-${key}`);
+}
+
+/** A call from a subagent: the payload names an agent, or the process runs inside one. */
+function isSubagent(input: HookInput): boolean {
+  return !!(input.agent_id || process.env.CLAUDE_AGENT_ID);
+}
+
 /**
  * Atomically claim a rule for this session: the 'wx' flag creates the marker only if it does not
  * exist, so when parallel tool calls race, exactly one of them emits the rule.
@@ -283,17 +302,33 @@ export function run(raw: string): void {
   if (matched.length === 0) { outputContinue(); return; }
   const state = stateDir(input);
   const won = matched.filter((r) => claim(state, r.id));
+  // A deny-first rule blocks once per session. The caller that takes the session marker blocks.
+  // A subagent that finds the marker taken gets the rule injected instead; the main thread
+  // takes the marker too but blocks regardless (block-once for the main thread is unchanged).
+  // A rule flagged `subagent: "block"` (spend and confirm-first gates) is never downgraded: injected
+  // text arrives after the command was chosen, so each fresh subagent is blocked once for it.
+  const sessionClaims: string[] = [];
+  const downgraded: string[] = [];
+  const toShow = won.map((r): RuleEntry => {
+    if (r.mode !== 'deny-first') return r;
+    if (claim(blockedDir(input), r.id)) { sessionClaims.push(r.id); return r; }
+    if (!isSubagent(input) || r.subagent === 'block') return r;
+    downgraded.push(r.id);
+    return { ...r, mode: 'inject' };
+  });
   let d: Decision;
   try {
-    d = decide(won, [], dir);
+    d = decide(toShow, [], dir);
   } catch (err) {
     // A rule file could not be read: release the claims so a later call can still show the rule.
     for (const r of won) { try { unlinkSync(join(state, r.id)); } catch { /* already gone */ } }
+    for (const id of sessionClaims) { try { unlinkSync(join(blockedDir(input), id)); } catch { /* already gone */ } }
     throw err;
   }
   if (d.kind === 'none') { outputContinue(); return; }
-  logFire(input, d, won);
+  logFire(input, d, won, downgraded.length ? { downgraded } : {});
   if (d.kind === 'deny') {
+    logGuardDecision('rule-router', input, 'deny', `rule-block: ${d.ids.join(',')}`);
     outputDeny(d.text, 'deny');
   } else {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', additionalContext: d.text } }));

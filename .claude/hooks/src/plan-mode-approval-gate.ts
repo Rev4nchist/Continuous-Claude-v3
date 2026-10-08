@@ -55,6 +55,7 @@ import { join } from 'path';
 import { homedir } from 'os';
 import { createLogger } from './shared/logger.js';
 import { logHook } from './shared/session-activity.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 const log = createLogger('plan-mode-approval-gate');
 
@@ -394,6 +395,7 @@ function main(): void {
         rawPermissionMode,
         permissionMode,
       });
+      logGuardDecision('plan-mode-approval-gate', input, 'ask', 'exit-plan-mode-approval');
       emitAsk(decision.reason);
     } else if (decision.action === 'deny') {
       log.info('Denying ExitPlanMode in bypass-permissions mode', {
@@ -401,6 +403,7 @@ function main(): void {
         rawPermissionMode,
         permissionMode,
       });
+      logGuardDecision('plan-mode-approval-gate', input, 'deny', 'exit-plan-mode-in-bypass');
       emitDeny(decision.reason);
     } else {
       log.info('Allowing ExitPlanMode without prompt', {

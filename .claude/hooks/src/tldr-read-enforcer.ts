@@ -32,6 +32,7 @@ import {
   cacheDaemonUnreachable,
 } from './daemon-client';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 // Search context from smart-search-router
 interface SearchContext {
@@ -722,6 +723,7 @@ Test files and .claude/hooks|skills paths bypass this hook entirely.`;
   };
 
   // Net-savings inputs (remediation §7) ride on the deny row.
+  logGuardDecision('tldr-read-enforcer', input, 'deny', 'tldr-summary-injected');
   finish(JSON.stringify(output), {
     outcome: 'deny',
     reason: 'summary_injected',

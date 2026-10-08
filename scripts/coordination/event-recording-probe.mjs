@@ -19,6 +19,8 @@
  */
 import { spawn } from 'node:child_process';
 import { execFileSync } from 'node:child_process';
+// The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
+process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
 
 const REPO = 'C:/Users/david.hayes/continuous-claude';
 const CANON = 'c:/users/david.hayes/continuous-claude';
