@@ -154,9 +154,9 @@ A project's E2E command lives in its AGENTS.md "Testing" section; its CLAUDE.md 
 - **Delegate for breadth or adversarial review**, not for ordinary single-pass work: 3+ files to
   read (scout), external research (oracle), parallel independent edits, review (critic,
   principal-reviewer). Main context coordinates; agents do the reading.
-- **Models**: every agent gets `opus` for judgment (planning, review, orchestration, forensics) or
-  `sonnet` for execution. **Never haiku.** Effort always `high`. Call the Fable **advisor** before a
-  big plan, on a repeated error, and before calling a long task done.
+- **Models**: predefined agents carry an explicit tier: `opus` for judgment (planning, review,
+  orchestration, forensics), `sonnet` for execution. Workflow and ad-hoc agents pick the same way.
+  **Never haiku.** Sonnet effort is always `high`. Use `scout`, never `Explore`.
 - **Parallel agents that commit to one repo run one after another** (they race on
   `.git/index.lock`), unless each has its own worktree. Name each agent's files first. N-file edits:
   `proactive-delegation.md` (loads at the first Agent spawn).

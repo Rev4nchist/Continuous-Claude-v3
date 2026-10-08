@@ -16,8 +16,10 @@ post's, so almost all of it was in place. The post added two things CCv3 lacked:
 - **A Fable advisor.** Set `advisorModel: "fable"`. The main model consults it with the full
   transcript, and subagents inherit it.
 - **An Opus 5.5 effort pin.** Per the docs, a top-level `effortLevel` in user settings does not count
-  for Opus 5.5, and Opus 5.5 defaults to medium. So the main Opus sessions were most likely running at
-  medium, not the high Dave set. `modelSettings.claude-opus-5-5.effortLevel: high` fixes that.
+  for Opus 5.5, and Opus 5.5 defaults to medium. Unverified: whether Dave's main Opus sessions actually
+  ran at medium. His active `modelSettings` is machine-local and may already pin Opus, and `--effort`
+  overrides it. Check with `/effort`, or read `"effort":` in a recent main-session transcript.
+  `modelSettings.claude-opus-5-5.effortLevel: high` makes high the default either way.
 
 ## 2. Verdicts
 
@@ -27,7 +29,7 @@ post's, so almost all of it was in place. The post added two things CCv3 lacked:
 | An agent named `Explore` overrides the built-in | SKIP | `explore-to-scout.ts` already blocks `Explore` and redirects to `scout` (Sonnet). |
 | Sonnet worker at medium effort | SKIP | Dave, 2026-10-08: keep high. Before the 2026-09-30 pin, 46 of 99 Sonnet runs had silently run at medium. |
 | `advisorModel: fable` | ADOPT | Added to `.claude/settings.json` and the template. |
-| Consult at 3 moments (before a big plan, a repeated error, before done) | ADOPT | One line in `.claude/templates/CLAUDE.md.template`, "Agents and delegation". |
+| Consult at 3 moments (before a big plan, a repeated error, before done) | SKIP the CLAUDE.md line | When the advisor is on, the `advisor` tool injects its own instructions: call it before substantive work, when stuck, and before declaring done. Those are the same three moments. A CLAUDE.md line would duplicate them and cost always-loaded budget, which has 8 characters of headroom. |
 | `modelSettings.claude-opus-5-5.effortLevel: high` | ADOPT | Template `modelSettings`. Recorded as policy in `sync-known-gaps.md`. |
 | Check the env vars that disable the advisor or force a model | DONE | None is set in the repo, the template or the scripts: `CLAUDE_CODE_DISABLE_ADVISOR_TOOL`, `DISABLE_TELEMETRY`, `DISABLE_GROWTHBOOK`, `DO_NOT_TRACK`, `CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC`, `CLAUDE_CODE_EFFORT_LEVEL`, `CLAUDE_CODE_SUBAGENT_MODEL`. `no-haiku-enforcer.ts` already fails if `CLAUDE_CODE_SUBAGENT_MODEL` is set. Dave should still check his Windows user env, which this repo cannot see. |
 | CLI v2.1.293 or later | OK | 2.1.294 in the cloud container. Using Fable 5.1 as the advisor needs v2.1.257 or later. |
@@ -48,5 +50,8 @@ post's, so almost all of it was in place. The post added two things CCv3 lacked:
 - **Fable access.** `docs/fable-manual/OPERATING-MANUAL.md` records that Fable plan access ended on
   2026-07-11. If Dave's account cannot use Fable 5.1, the advisor stays off. Run `/advisor` with no
   argument to see the current state.
+- **Scope.** The repo's `.claude/settings.json` is project scope, so the advisor is on in every session
+  in this repo, every subagent (they inherit it), and the scheduled headless scripts. Possible follow-up,
+  Dave's call: set `CLAUDE_CODE_DISABLE_ADVISOR_TOOL=1` in those scripts.
 - **Cost.** Each advisor call sends the full transcript to Fable, so a long session makes for an
   expensive call. If the bill jumps, fall back to `advisorModel: "opus"`.
