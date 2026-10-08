@@ -110,13 +110,30 @@ function markFired(sessionId: string, url: string): void {
   }
 }
 
+/**
+ * pr_watch (the ccv3-mods plugin) checks one fixed repo, so only that repo's PRs are sent to it.
+ * Any other repo keeps the /loop.
+ */
+const WATCH_REPO = 'rev4nchist/continuous-claude-v3';
+
+const loopText = (info: PrInfo): string =>
+  `/loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR #${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss false positives; verify thread isResolved via GraphQL; never merge)`;
+
 export function buildContext(info: PrInfo): string {
+  const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, `;
+  if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
+    return (
+      head +
+      `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. ` +
+      `It watches CodeRabbit and CI for you and tells Dave and you at READY; never merge. ` +
+      `Only if that tool does not exist, start the CODERABBIT LOOP instead: ${loopText(info)}. ` +
+      `This applies to every PR in every session.`
+    );
+  }
   return (
-    `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, START THE CODERABBIT ` +
-    `LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR ` +
-    `#${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss ` +
-    `false positives; verify thread isResolved via GraphQL; never merge). This applies to every ` +
-    `PR in every session.`
+    head +
+    `START THE CODERABBIT LOOP NOW, in this same turn: ${loopText(info)}. ` +
+    `This applies to every PR in every session.`
   );
 }
 

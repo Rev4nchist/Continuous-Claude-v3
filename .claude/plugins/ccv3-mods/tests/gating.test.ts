@@ -178,7 +178,7 @@ describe('agentic-os opt-out', () => {
     const { calls } = world(on, { CCV3_MODS_OFF: '0' })
     await start($, true)
     await $.tool.call({ tool: 'TaskCreate', subject: 'still on', description: 'd' })
-    expect(calls.commands).toEqual(['os'])
+    expect(calls.commands).toContain('os')
     expect(snapshotWrites(calls).length).toBe(1)
     expect(await bandText($)).toContain('0/1 done')
   })

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, TextProps } from 'claude-code'
 
-import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn } from '../../types'
+import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
 import { bandSpans, paneRows, parseLanes } from './pane-model'
@@ -14,6 +14,8 @@ const steps = atom({ plugin: 'ccv3-mods', key: 'steps' } as const, [] as OsStep[
 const ctx = atom({ plugin: 'ccv3-mods', key: 'ctx' } as const, null as number | null)
 const agents = atom({ plugin: 'ccv3-mods', key: 'agents' } as const, [] as OsAgent[])
 const lanes = atom({ plugin: 'ccv3-mods', key: 'lanes' } as const, null as OsLane[] | null)
+/** The PRs the pr-loop module watches. Read only here: the same atom pr-loop declares and writes. */
+const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 /** Bumped every few seconds while a turn runs, so elapsed times redraw. */
 const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
 /**
@@ -63,6 +65,7 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
   ctx: await read($, ctx),
   agents: await read($, agents),
   lanes: await read($, lanes),
+  prs: await read($, prs),
 })
 
 /**

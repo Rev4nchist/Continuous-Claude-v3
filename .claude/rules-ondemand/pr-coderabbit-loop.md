@@ -1,9 +1,15 @@
 # PR submitted → CodeRabbit review loop
 
-When a PR opens (`gh pr create` or `POST .../pulls`), start a `/loop` in the same turn. Interval 5
-minutes. Do not wait to be asked.
+When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool with the PR number
+(`pr: <N>`) in the same turn. Do not wait to be asked. Only if that tool does not exist, or the PR is
+not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 minutes.
 
-## Loop prompt
+`pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
+`scripts/github/coderabbit-status.mjs`, tells Dave with a toast, and tells you with one report line at
+READY, merged or closed. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>`
+to watch and `/land <N>` to land: pressing Land in `/land` is his merge yes.
+
+## Loop prompt (fallback)
 
 Check CodeRabbit on the PR via the REST API. Use `GH_CONFIG_DIR` for the repo's account.
 
