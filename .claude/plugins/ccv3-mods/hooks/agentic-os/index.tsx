@@ -16,6 +16,12 @@ const agents = atom({ plugin: 'ccv3-mods', key: 'agents' } as const, [] as OsAge
 const lanes = atom({ plugin: 'ccv3-mods', key: 'lanes' } as const, null as OsLane[] | null)
 /** Bumped every few seconds while a turn runs, so elapsed times redraw. */
 const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
+/**
+ * Set at every session.start from `isInteractive`. Headless (a `-p` run or the
+ * SDK) keeps capture and snapshots but spawns nothing and arms no timer.
+ * An atom, not a module variable, so a reload that skips session.start keeps it.
+ */
+const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 
 const PANE = 'agentic-os'
 const PULSE_MS = 5000
@@ -43,6 +49,9 @@ const okResult = (ran: Result): Record<string, unknown> | undefined =>
   ran.deny === undefined && ran.isError !== true && typeof ran.result === 'object' && ran.result !== null
     ? (ran.result as Record<string, unknown>)
     : undefined
+
+/** CCV3_MODS_OFF=1 keeps the whole module inert: every hook passes the event on. */
+const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
 
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
 
@@ -73,6 +82,13 @@ const writeSnapshot = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+/**
+ * A turn-end snapshot is kept for interactive sessions and for headless runs that hold a task or a plan.
+ * Other headless runs (reports, probes, workflow agents) would add a file each and nothing prunes the folder.
+ */
+const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
+  (await read($, mode)) === 'interactive' || (await read($, tasks)).length > 0 || (await read($, plan)) !== null
+
 const refreshAgents = async ($: EngineInterface): Promise<void> => {
   try {
     const list = await $.agent.list()
@@ -85,9 +101,13 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** Reads this session's lanes from the CCv3 lane board, when the repo is there. */
+/**
+ * Reads this session's lanes from the CCv3 lane board, when the repo is there.
+ * The one place that spawns lane.mjs, so the headless gate sits here.
+ */
 const refreshLanes = async ($: EngineInterface): Promise<void> => {
   try {
+    if ((await read($, mode)) !== 'interactive') return
     const home = await homeDir($)
     const script = `${home}/continuous-claude/scripts/coordination/lane.mjs`
     if (!home || !(await $.fs.exists(script))) return
@@ -149,6 +169,10 @@ const refreshAfter = ($: EngineInterface, tool: string, input: Record<string, un
 
 export const agenticOs = (on: On) => {
   on('session.start', async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
+    // Headless: no /os pane to open, no timer and no process. Capture and snapshots still run.
+    if (!e.isInteractive) return next(e)
     await $.command.register({
       name: 'os',
       description: 'Agentic OS pane: plan, tasks, current step, agents and lane of this session',
@@ -165,22 +189,26 @@ export const agenticOs = (on: On) => {
     return { text: opened.isPlaced ? 'Agentic OS pane opened.' : `Agentic OS pane waits: ${opened.reason}` }
   }).catch(() => ({ text: 'Agentic OS pane failed to open.' }))
 
+  // No off check on command.run: with the mod off, session.start never registers /os, so it never fires.
   on('turn.start', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     const startedAt = await $.clock.now()
     await update($, turn, () => ({ id: e.turnId, startedAt }))
     return next(e)
   })
 
   on('turn.complete', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     if (e.agentId === undefined) {
       await update($, turn, () => null)
       await update($, steps, () => [])
-      await writeSnapshot($)
+      if (await worthSnapshot($)) await writeSnapshot($)
     }
     return next(e)
   })
 
   on('session.measure', async ($, e, next) => {
+    if (await isOff($)) return next(e)
     if (e.changed.includes('context') && e.context.percent !== undefined) {
       await update($, ctx, () => e.context.percent ?? null)
     }
@@ -189,7 +217,7 @@ export const agenticOs = (on: On) => {
 
   // Observer, never a gate: on a failure the call goes on as if unhooked.
   on('tool.call', async ($, e, next) => {
-    if (e.agentId !== undefined) return next(e)
+    if (e.agentId !== undefined || (await isOff($))) return next(e)
     const input = e as unknown as Record<string, unknown>
     const tool = String(e.tool)
     const id = e.tool_use_id
@@ -203,6 +231,7 @@ export const agenticOs = (on: On) => {
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
     await read($, tick)
     const now = await view($)
     if (e.props.hasSurvey || isQuiet(now)) return next(e)
