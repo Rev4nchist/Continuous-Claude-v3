@@ -54,9 +54,11 @@ hook only in the active file). Two classes of divergence are EXPECTED and never 
 `remoteControlAtStartup`, `skipAutoPermissionPrompt`, `skipWorkflowUsageWarning`,
 `switchModelsOnFlag`, `theme`, `tui`, `voiceEnabled`. The two `skillListing*` keys are NOT local:
 they decide which skills the router sees, so they live in the template (P24).
-Exception: the `modelSettings` entries for `claude-sonnet-5` and `claude-sonnet-5-5`
-(`effortLevel: high`) are policy, not preference, and live in the template (Dave, 2026-09-30:
-Sonnet always runs at high). Other `modelSettings` entries stay machine-local.
+Exception: the `modelSettings` entries for `claude-sonnet-5`, `claude-sonnet-5-5` and
+`claude-opus-5-5` (`effortLevel: high`) are policy, not preference, and live in the template (Dave,
+2026-09-30: Sonnet always runs at high; Opus 5.5 added 2026-10-08). Other `modelSettings` entries
+stay machine-local. `advisorModel` is policy too and lives in repo and template. `settings.json` is
+`NEVER_SYNC`, so Dave applies these to `~/.claude/settings.json` by hand.
 Exception: a GitHub-sourced `extraKnownMarketplaces` entry that backs a plugin in the template's
 `enabledPlugins` lives in the template (`typesafe-ai`, `claude-hud`, 2026-10-01). Without it a new
 machine cannot resolve the plugin. A `directory` marketplace (a local path) stays machine-local.
