@@ -27,12 +27,12 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 
 ## Check
 
+This is the testing row for a mod. It lives here, not in `AGENTS.md`: that file is always loaded and has 5 characters of headroom under `scripts/rules/context-budget.json` (a one-row addition measured 23747 of 23516).
+
 Run from the repo root:
 
-1. `tsc -p .claude/plugins/ccv3-mods` (the engine writes `tsconfig.json` and `.claude-plugin/types/` on load)
-2. `claude plugin validate .claude/plugins/ccv3-mods`
-3. `claude plugin test .claude/plugins/ccv3-mods`
-4. End to end: `claude -p --plugin-dir .claude/plugins/ccv3-mods --allowedTools TaskCreate TaskUpdate --output-format json` with a prompt that creates tasks. Then read the snapshot file named by the run's `session_id`.
+1. `node scripts/mods/validate-mods.mjs`. One command, one summary line, exit 1 on failure. It runs `claude plugin validate --json` (fails when any `gatingHooks` entry lacks `.catch`), `tsc -p .claude/plugins/ccv3-mods` and `claude plugin test .claude/plugins/ccv3-mods`. The engine writes `.claude-plugin/types/` on a load; a fresh worktree has none until step 2 has run once, and `tsc` then reports NOT RUN, never a pass.
+2. End to end: `node scripts/mods/e2e-headless.mjs`. It runs `claude -p --plugin-dir .claude/plugins/ccv3-mods --allowedTools TaskCreate TaskUpdate --output-format json` with a prompt that creates tasks, then reads the snapshot named by the run's `session_id`. A second run with `CCV3_MODS_OFF=1` must write no snapshot. Output goes to `.claude/cache/e2e/<date>-mods-headless-*.json`.
 
 ## Facts proven on 2.1.292 (2026-10-07)
 
@@ -42,3 +42,5 @@ Run from the repo root:
 - In `claude plugin test`, op events (`fs.exists`, `process.run`, `agent.list`, `ui.open`, `session.id`) are answered with `{ value }`.
 - `e.tool_use_id` in `tool.call` equals the transcript's `tool_use` id.
 - In `claude plugin test`, a `Text` element's `key` is not kept. Find band text by `type: 'Text'`.
+- A headless `claude -p --plugin-dir` run writes `.claude-plugin/types/` (seen on 2.1.293, 2026-10-07), so one e2e run is enough to make `tsc -p` work in a fresh worktree.
+- A headless snapshot has `lanes: null`: the lane board is never read there.
