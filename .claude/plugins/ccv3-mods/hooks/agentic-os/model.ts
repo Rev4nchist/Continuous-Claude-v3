@@ -1,4 +1,4 @@
-import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn } from '../../types'
+import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTaskStatus, OsTurn, PrWatch } from '../../types'
 
 export type OsView = {
   tasks: OsTask[]
@@ -8,6 +8,8 @@ export type OsView = {
   ctx: number | null
   agents: OsAgent[]
   lanes: OsLane[] | null
+  /** The PRs the pr-loop module watches; empty when none. */
+  prs: PrWatch[]
 }
 
 type TaskPatch = {
@@ -81,6 +83,6 @@ export const elapsed = (ms: number): string => {
   return `${Math.floor(total / 60)}:${String(total % 60).padStart(2, '0')}`
 }
 
-/** True when the band has nothing worth a row: no plan, no tasks, no step. */
+/** True when the band has nothing worth a row: no plan, no tasks, no step, no watched PR. */
 export const isQuiet = (view: OsView): boolean =>
-  view.plan === null && view.tasks.length === 0 && view.step === null
+  view.plan === null && view.tasks.length === 0 && view.step === null && view.prs.length === 0

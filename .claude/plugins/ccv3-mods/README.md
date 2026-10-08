@@ -10,6 +10,10 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 | `hooks/agentic-os/` | Captures this session's tasks (`TaskCreate`, `TaskUpdate`, `TodoWrite`), plan (`ExitPlanMode`), current step and context %. Draws one band above the prompt. Writes `~/.claude/state/agentic-os/<session-id>.json` after each task, plan or turn change. Observer only: it never denies or rewrites a call. |
 | `/os` (same module) | Opens the Agentic OS pane: PLAN, TASKS (finished tasks fold first), NOW, AGENTS, LANE, ctx %. Zero model tokens. Reads this session's lanes with `lane.mjs mine --json` from `~/continuous-claude` when present. Elapsed times redraw every 5 s while a turn runs. Interactive sessions only. |
 
+| `hooks/pr-loop/` | Replaces the CodeRabbit `/loop` cron. Tools `pr_watch {pr}` (interactive only) and `pr_status {pr}` for the model, commands `/watch` and `/land` for Dave. Every 5 minutes an interactive session runs `scripts/github/coderabbit-status.mjs <N> --json` per watched PR. At READY, merged or closed Dave gets a toast; at READY, a CodeRabbit rate limit, a reviewed head with open threads or a failed check (REVIEWED), or no review 60 minutes after the head appeared (STALLED) the model gets one line. REVIEWED and STALLED alert once per head and keep the watch; the REVIEWED line points the model at "When the review lands" in `pr-coderabbit-loop.md`. A READY alert answered No still gives the model its report line. It never merges. The watch list is in `$.store` under `pr-watch:<session-id>`, so a reload re-arms it. An error all PRs share (rate limit, failed spawn, a status script without `prState`) backs the checks off to 15 minutes. An error of one PR alone (404, a list too long) counts against that PR; the third in a row drops it with a toast. `pr_watch` and `/watch N` probe first and refuse a PR whose status cannot be read. The Agentic OS band and pane show a PRS row. |
+| `/watch` (same module) | `/watch` lists the watched PRs. `/watch N` adds one. `/watch N --once` answers with the status and arms nothing. Headless, `/watch N` is `--once`. |
+| `/land N` (same module) | Answers without a model call. Shows the status. When READY and interactive it asks `Land #N?` with `Land` or `No`. Pressing Land is Dave's merge yes: it runs `land-pr.ps1 -Pr N` through the PowerShell (else Bash) tool with `consent`. Dismiss, No, an error or a headless run lands nothing. `/land N --when-ready` watches the PR and asks Land/No when it turns READY. With no shell tool, Land hands the model one instruction instead. An aborted Land call (Escape) re-submits nothing. |
+
 ## Load
 
 - Development, one session, from the repo root: `claude --plugin-dir .claude/plugins/ccv3-mods`
@@ -21,6 +25,7 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 |---|---|---|
 | Interactive (`isInteractive` true) | Yes | Yes |
 | Headless (`claude -p`, SDK; `isInteractive` false) | Yes, with a limit: a snapshot is written after a task or plan change, and at turn end only when the session holds a task or a plan. A headless run with neither writes no file | No. Nothing is spawned and no timer is armed |
+| PR module (`hooks/pr-loop/`) | `/watch` and `/land` answer in both modes; `pr_status` is registered in both | Interactive only: the 5 minute watcher, `pr_watch`, the Land/No dialog and the Land call. Headless `/land` shows the status and lands nothing. |
 | `CCV3_MODS_OFF=1` in the process env | No. Every hook passes the event on | No |
 
 Nothing prunes `~/.claude/state/agentic-os/`. The limit above keeps scheduled reports, probes and workflow agents from adding one file per run. Test: `G9 G10 G11` in `tests/gating.test.ts`.
@@ -44,6 +49,12 @@ Run from the repo root:
 - In `claude plugin test`, op events (`fs.exists`, `process.run`, `agent.list`, `ui.open`, `session.id`) are answered with `{ value }`.
 - `e.tool_use_id` in `tool.call` equals the transcript's `tool_use` id.
 - In `claude plugin test`, a `Text` element's `key` is not kept. Find band text by `type: 'Text'`.
+- The plugin may hold one `session.start` hook without a matcher. A second one fails the whole plugin load. The PR module uses two hooks narrowed by `{ isInteractive: true }` and `{ isInteractive: false }`.
+- `$` and atoms cannot cross an import. A helper that takes `$`, or an atom read with `read($, atom)`, must sit in the file of the hook. A pure helper (`model.ts`) may be imported. The `mode` and `prs` atoms are declared in each file that reads them, with the same plugin and key.
+- A tool served by a mod answers with a string or a list of content blocks (`[{ type: 'text', text }]`). The MCP result object `{ content, isError }` fails with "result does not match its output shape". `claude plugin test` does not check this: only a live run does (`mcp__ccv3-mods__pr_status` called by the model).
+- `$.prompt.submit` inside a `command.run` hook is refused ("it would wait on the turn this hook is holding"). Submit from `$.clock.after(1, ...)`.
+- `$.tool.call` with `consent` inside a `command.run` hook works in `claude plugin test`. Live use of Land is not proven: no PR was landed.
+- `claude -p "/watch 105"` from Git Bash: Git Bash rewrites a leading `/watch` to `C:/.../Git/watch`, the model gets plain text and spends a turn. Set `MSYS_NO_PATHCONV=1` or run from PowerShell. The E2E script is `.claude/cache/e2e/2026-10-07-pr-loop-run.sh` (gitignored).
 - A headless `claude -p --plugin-dir` run writes `.claude-plugin/types/` (seen on 2.1.293, 2026-10-07), so one e2e run is enough to make `tsc -p` work in a fresh worktree.
 - A headless snapshot has `lanes: null`: the lane board is never read there.
 - Two plugins named `ccv3-mods` (one from `--plugin-dir`, one from `CLAUDE_CODE_PLUGIN_DIRS`) do not both load. The debug log says `hooks module ccv3-mods@inline not loaded: another plugin of that name loads first`. With the repo copy on `--plugin-dir` and a marked copy on the env var, the snapshot came from the repo copy. Seen on 2.1.293, 2026-10-07. The e2e run still clears the env var so a stale copy cannot stand in for the repo copy.

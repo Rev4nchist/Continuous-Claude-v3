@@ -79,12 +79,27 @@ describe('pr-opened-coderabbit-loop classifiers (unit)', () => {
     expect(responseText(null)).toBe('');
   });
 
-  it('builds context naming the loop, owner/repo/number and the never-merge rule', () => {
+  it('builds context naming the loop, owner/repo/number and the never-merge rule for another repo', () => {
     const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
     expect(ctx).toContain('PR OPENED: https://github.com/acme/widgets/pull/42');
     expect(ctx).toContain('/loop 5m');
     expect(ctx).toContain('acme/widgets PR #42');
     expect(ctx).toContain('never merge');
+  });
+
+  // A repo-less pr_watch watches Rev4nchist/Continuous-Claude-v3 only: naming it for another repo's PR would watch the wrong PR.
+  it('for the CCv3 repo names pr_watch first with the PR number, and the loop only as the fallback', () => {
+    const ctx = buildContext({ owner: 'Rev4nchist', repo: 'Continuous-Claude-v3', number: '107', url: 'https://github.com/Rev4nchist/Continuous-Claude-v3/pull/107' });
+    expect(ctx).toContain('pr_watch');
+    expect(ctx).toContain('pr: 107');
+    expect(ctx.indexOf('pr_watch')).toBeLessThan(ctx.indexOf('/loop 5m'));
+    expect(ctx).toMatch(/only if (that|the) tool (does not exist|is missing)/i);
+    expect(ctx).toContain('never merge');
+  });
+
+  it('for another repo does not send the model to pr_watch', () => {
+    const ctx = buildContext({ owner: 'acme', repo: 'widgets', number: '42', url: 'https://github.com/acme/widgets/pull/42' });
+    expect(ctx).not.toContain('pr_watch');
   });
 });
 

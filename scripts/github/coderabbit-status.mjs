@@ -92,7 +92,7 @@ export function evaluate({ pull, combined, checkRuns, threads, reviews = [], com
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref,
     reviewed: Boolean(cr && cr.state === 'success' && reviewedHead), coderabbit: cr ? cr.state : 'absent', coderabbitDescription: cr?.description ?? null, rateLimited, reviewedHead,
-    unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state,
+    unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
     ready: reasons.length === 0, reasons,
   };
 }

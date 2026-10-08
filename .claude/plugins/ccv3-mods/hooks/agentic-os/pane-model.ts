@@ -1,4 +1,4 @@
-import type { OsAgent, OsLane, OsTask } from '../../types'
+import type { OsAgent, OsLane, OsTask, PrWatch } from '../../types'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
 
@@ -106,6 +106,22 @@ const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
   return first ? [chip(first), ...note, ...rest.map(chip)] : []
 }
 
+/** A watched PR a person or the model must look at: rate limited, reviewed with findings, or no review. */
+const attention = (state: string | null): boolean => state === 'LIMITED' || state === 'REVIEWED' || state === 'STALLED'
+
+const PR_TONE: Record<string, Tone> = { READY: 'ok', LIMITED: 'warn', REVIEWED: 'warn', STALLED: 'warn', PENDING: 'dim' }
+
+/** Watched PR rows, at most `cap`. A PR not checked yet reads as waiting. */
+const prRows = (prs: PrWatch[], cap: number): PaneRow[] => {
+  const shown = prs.length <= cap ? prs : prs.slice(0, Math.max(1, cap - 1))
+  const rows: PaneRow[] = shown.map(one => ({
+    key: `pr-${one.pr}`,
+    left: [sp('  ', 'dim'), sp(` #${one.pr} `, 'chip'), sp(' ', 'dim'), sp(`● ${one.state ?? 'PENDING'}`, PR_TONE[one.state ?? 'PENDING'] ?? 'dim')],
+  }))
+  const hidden = prs.length - shown.length
+  return hidden > 0 ? [...rows, { key: 'pr-more', left: [sp(`    … ${hidden} PRs more`, 'dim')] }] : rows
+}
+
 const head = (key: string, label: string, right?: Span[]): PaneRow => ({
   key,
   left: [sp(label, 'head')],
@@ -159,6 +175,9 @@ export const paneRows = (view: OsView, nowMs: number, columns: number, rows: num
     : []
 
   const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
+  const prs: PaneRow[] = view.prs.length
+    ? [head('h-prs', 'PRS', [sp(`${view.prs.length} watched`, 'dim')]), ...prRows(view.prs, agentCap)]
+    : []
 
   const footer: PaneRow[] =
     view.ctx !== null
@@ -173,7 +192,7 @@ export const paneRows = (view: OsView, nowMs: number, columns: number, rows: num
       : []
 
   // Sections after TASKS; gaps go between sections and are the first rows to go.
-  const after = [now, agents, lane].filter(section => section.length)
+  const after = [now, agents, lane, prs].filter(section => section.length)
   const gaps = 1 + after.length
   const fixed = top.length + plan.length + taskHead.length + after.flat().length + footer.length
   const roomWithGaps = rows - fixed - gaps
@@ -207,6 +226,7 @@ export const bandSpans = (view: OsView, nowMs: number, columns: number): Span[] 
   }
   if (view.step) parts.push([sp(`${view.step.tool} ${view.step.label}`.trim(), 'dim'), sp(` ${elapsed(nowMs - view.step.startedAt)}`, 'dim')])
   else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
+  if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${attention(one.state) ? '!' : ''}`).join(' ')}`, view.prs.some(one => attention(one.state)) ? 'warn' : 'dim')])
   if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
   const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
   return fit({ key: 'band', left: joined }, Math.max(10, columns)).left

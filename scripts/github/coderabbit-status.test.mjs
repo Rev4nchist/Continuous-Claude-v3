@@ -151,3 +151,22 @@ test('a reviewed head is never flagged rate limited, even if the status text is 
   assert.equal(r.rateLimited, false);
   assert.equal(r.reviewedHead, true);
 });
+
+// The pr-loop mod reads --json to tell "still waiting" from "nothing left to watch". It must not
+// parse the reason text for that: the result carries the PR's own state and merged flag.
+test('the result names the PR state and merged flag, so a watcher can stop on closed or merged', () => {
+  const open = evaluate(input());
+  assert.equal(open.prState, 'open');
+  assert.equal(open.merged, false);
+  const closed = input();
+  closed.pull.state = 'closed';
+  const c = evaluate(closed);
+  assert.equal(c.prState, 'closed');
+  assert.equal(c.merged, false);
+  const merged = input();
+  merged.pull.state = 'closed';
+  merged.pull.merged = true;
+  const m = evaluate(merged);
+  assert.equal(m.merged, true);
+  assert.equal(m.ready, false);
+});
