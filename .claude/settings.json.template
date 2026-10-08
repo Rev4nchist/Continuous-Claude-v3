@@ -269,14 +269,6 @@
               "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/context-pct-warning.mjs"
-            ],
-            "timeout": 10000
           }
         ]
       }

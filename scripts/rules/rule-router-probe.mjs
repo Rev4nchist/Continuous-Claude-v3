@@ -20,8 +20,10 @@ const HOOK = join(repo, '.claude/hooks/dist/rule-router.mjs');
 const RULES = join(repo, '.claude/rules-ondemand');
 const state = mkdtempSync(join(tmpdir(), 'rule-router-probe-'));
 const log = join(state, 'fires.jsonl');
+// The built hook also writes guard-decisions.jsonl; keep the probe's denies out of the real log.
+const guardLog = join(state, 'guard-decisions.jsonl');
 
-const hookEnv = (rulesDir) => ({ ...process.env, CLAUDE_RULES_ONDEMAND_DIR: rulesDir, CLAUDE_RULE_ROUTER_STATE_DIR: state, CLAUDE_RULE_ROUTER_LOG: log, CLAUDE_AGENT_ID: '' });
+const hookEnv = (rulesDir) => ({ ...process.env, CLAUDE_RULES_ONDEMAND_DIR: rulesDir, CLAUDE_RULE_ROUTER_STATE_DIR: state, CLAUDE_RULE_ROUTER_LOG: log, CCV3_GUARD_DECISIONS_LOG: guardLog, CLAUDE_AGENT_ID: '' });
 
 function parse(out) {
   const j = JSON.parse(out.trim() || '{}');
@@ -69,7 +71,18 @@ const CASES = [
   ['land-pr injects merge + CodeRabbit rules', ps('s9', 'pwsh -File scripts/github/land-pr.ps1 -Pr 57'), 'inject', ['git-merge', 'pr-coderabbit-loop'], []],
   ['codex-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'codex-adversary' } }, 'deny', ['codex'], []],
   ['Task tool name works too', { session_id: 's10b', tool_name: 'Task', tool_input: { subagent_type: 'grok-worker' } }, 'deny', ['grok'], []],
-  ['a subagent gets its own copy', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
+  ['a gate rule (codex) still blocks a subagent after the session had the block', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
+  ['an ordinary block rule (commit style) blocks the main thread once', bash('s10d', 'git -C /c/repo commit -F msg.txt'), 'deny', ['pr-and-commit-style'], []],
+  ['...then a subagent of that session gets it injected, not blocked again', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-1' }), 'inject', ['pr-and-commit-style'], []],
+  ['...and the next subagent gets the inject too', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-2' }), 'inject', ['pr-and-commit-style'], []],
+  ['spend gate (kie-spend): main thread blocked first', bash('s10e', 'node scripts/kie.mjs still --prompt hero'), 'deny', ['kie-spend'], []],
+  ['...a later subagent running the paid call is blocked too, not injected', bash('s10e', 'node scripts/kie.mjs still --prompt hero', { agent_id: 'sub-1' }), 'deny', ['kie-spend'], []],
+  ['CMA gate: main thread blocked first', bash('s10f', 'ant sessions list'), 'deny', ['cma'], []],
+  ['...a later subagent running a CMA call is blocked too, not injected', bash('s10f', 'ant sessions list', { agent_id: 'sub-1' }), 'deny', ['cma'], []],
+  ['...and sees it once, not on every call', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'none', [], []],
+  ['a subagent that is first in its session still takes the block', bash('s10c', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
+  ['...the next subagent of that session is blocked too (gate rule)', bash('s10c', 'codex exec -', { agent_id: 'sub-2' }), 'deny', ['codex'], []],
+  ['...and the main thread of that session is still blocked once', bash('s10c', 'codex exec -'), 'deny', ['codex'], []],
   ['any Agent spawn injects the delegation rule once', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'scout' } }, 'inject', ['delegation'], ['codex']],
   ['...and not again in the same session', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'kraken' } }, 'none', [], []],
   ['harness-update skill injects', { session_id: 's11', tool_name: 'Skill', tool_input: { skill: 'harness-update' } }, 'inject', ['harness-update'], []],
@@ -100,7 +113,7 @@ const CASES = [
   // Re-arm (2026-10-03): /compact drops the rule texts from context, so SessionStart with source
   // compact or clear must let the main agent's rules fire again. Subagents and other sessions keep theirs.
   ['re-arm: codex blocks in session r1', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
-  ['re-arm: a subagent of r1 gets its own copy', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'deny', ['codex'], []],
+  ['re-arm: a subagent of r1 is blocked too (gate rule)', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'deny', ['codex'], []],
   ['re-arm: codex blocks in session r2', bash('r2', 'codex exec -'), 'deny', ['codex'], []],
   ['re-arm: SessionStart startup emits nothing', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'startup' }, 'none', [], []],
   ['...and does not re-arm', bash('r1', 'codex exec -'), 'none', [], []],

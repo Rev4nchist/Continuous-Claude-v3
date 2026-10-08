@@ -2,9 +2,9 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/rule-router.ts
-import { readFileSync, readdirSync, appendFileSync, mkdirSync, openSync, closeSync, unlinkSync } from "fs";
-import { homedir, tmpdir } from "os";
-import { join, dirname } from "path";
+import { readFileSync, readdirSync, appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, openSync, closeSync, unlinkSync } from "fs";
+import { homedir as homedir2, tmpdir } from "os";
+import { join as join2, dirname as dirname2 } from "path";
 
 // src/shared/output.ts
 function outputContinue() {
@@ -18,6 +18,75 @@ function outputDeny(reason, decision = "deny") {
       permissionDecisionReason: reason
     }
   }));
+}
+
+// src/shared/guard-log.ts
+import { appendFileSync, mkdirSync } from "fs";
+import { homedir } from "os";
+import { dirname, join } from "path";
+var COMMAND_HEAD_CHARS = 80;
+var REASON_CHARS = 200;
+function guardLogPath(env = process.env) {
+  const home = env.USERPROFILE || env.HOME || homedir();
+  return env.CCV3_GUARD_DECISIONS_LOG || join(home, ".claude", "logs", "guard-decisions.jsonl");
+}
+var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+var MASKS = [
+  // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+  [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+  // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+  // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+  [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+  [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+  [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+  // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+  [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+  // `sshpass -p pw ssh host`
+  [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+  [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+  [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+  [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+  [/\bgithub_pat_\w+/g, "***"],
+  [/\bxox[abprs]-[\w-]+/g, "***"],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+  [/\bAIza[\w-]{30,}/g, "***"],
+  [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+  // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+  [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+];
+function maskSecrets(text) {
+  return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+function commandHead(command) {
+  return maskSecrets(command).replace(/\s+/g, " ").trim().slice(0, COMMAND_HEAD_CHARS);
+}
+function shouldWrite(env) {
+  return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+}
+function logGuardDecision(hook, input, decision, reason, opts = {}) {
+  const env = opts.env ?? process.env;
+  try {
+    if (!shouldWrite(env)) return;
+    const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      hook,
+      tool: input?.tool_name || input?.tool || "",
+      decision,
+      reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
+      session_id: input?.session_id || ""
+    };
+    if (agent) entry.agent_id = agent;
+    if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
+    const path = guardLogPath(env);
+    mkdirSync(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
 }
 
 // src/shared/destructive-classifier.ts
@@ -256,7 +325,7 @@ var REARM_SOURCES = /* @__PURE__ */ new Set(["compact", "clear"]);
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var AGENT_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent"]);
 function rulesDir() {
-  return process.env.CLAUDE_RULES_ONDEMAND_DIR || join(homedir(), ".claude", "rules-ondemand");
+  return process.env.CLAUDE_RULES_ONDEMAND_DIR || join2(homedir2(), ".claude", "rules-ondemand");
 }
 function splitUnquoted(command, tool) {
   const escape = tool === "PowerShell" ? "`" : "\\";
@@ -333,12 +402,19 @@ function matchRules(input, manifest) {
 }
 function stateDir(input) {
   const key = `${input.session_id || "no-session"}-${input.agent_id || process.env.CLAUDE_AGENT_ID || "main"}`;
-  return join(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`);
+  return join2(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-${key.replace(/[^A-Za-z0-9_-]/g, "_")}`);
+}
+function blockedDir(input) {
+  const key = (input.session_id || "no-session").replace(/[^A-Za-z0-9_-]/g, "_");
+  return join2(process.env.CLAUDE_RULE_ROUTER_STATE_DIR || tmpdir(), `rule-router-blocked-${key}`);
+}
+function isSubagent(input) {
+  return !!(input.agent_id || process.env.CLAUDE_AGENT_ID);
 }
 function claim(dir, id) {
   try {
-    mkdirSync(dir, { recursive: true });
-    closeSync(openSync(join(dir, id), "wx"));
+    mkdirSync2(dir, { recursive: true });
+    closeSync(openSync(join2(dir, id), "wx"));
     return true;
   } catch {
     return false;
@@ -346,10 +422,10 @@ function claim(dir, id) {
 }
 function ruleText(entry, dir) {
   return entry.files.map((f) => `----- ~/.claude/rules-ondemand/${f} -----
-${readFileSync(join(dir, f), "utf8").trim()}`).join("\n\n");
+${readFileSync(join2(dir, f), "utf8").trim()}`).join("\n\n");
 }
 function falseFireFooter(ids) {
-  const script = join(process.env.CCV3_REPO || join(homedir(), "continuous-claude"), "scripts", "rules", "rule-router-false-fires.mjs").replace(/\\/g, "/");
+  const script = join2(process.env.CCV3_REPO || join2(homedir2(), "continuous-claude"), "scripts", "rules", "rule-router-false-fires.mjs").replace(/\\/g, "/");
   return `
 
 ----- If a rule above is NOT about this call -----
@@ -388,10 +464,10 @@ function triggerWords(input, fired) {
 }
 function logFire(input, d, fired, extra = {}) {
   try {
-    const path = process.env.CLAUDE_RULE_ROUTER_LOG || join(homedir(), ".claude", "logs", "rule-router.jsonl");
-    mkdirSync(dirname(path), { recursive: true });
+    const path = process.env.CLAUDE_RULE_ROUTER_LOG || join2(homedir2(), ".claude", "logs", "rule-router.jsonl");
+    mkdirSync2(dirname2(path), { recursive: true });
     const what = d.kind === "rearm" ? `SessionStart ${input.source}` : triggerWords(input, fired);
-    appendFileSync(path, JSON.stringify({
+    appendFileSync2(path, JSON.stringify({
       // The same session and agent identity the claim markers use, so the audit's dedupe key matches.
       ts: (/* @__PURE__ */ new Date()).toISOString(),
       session: input.session_id || "no-session",
@@ -416,7 +492,7 @@ function rearm(input) {
   let removed = 0;
   for (const id of ids) {
     try {
-      unlinkSync(join(dir, id));
+      unlinkSync(join2(dir, id));
       removed++;
     } catch {
     }
@@ -443,7 +519,7 @@ function run(raw) {
     return;
   }
   const dir = rulesDir();
-  const manifest = JSON.parse(readFileSync(join(dir, "manifest.json"), "utf8"));
+  const manifest = JSON.parse(readFileSync(join2(dir, "manifest.json"), "utf8"));
   const matched = matchRules(input, manifest);
   if (matched.length === 0) {
     outputContinue();
@@ -451,13 +527,31 @@ function run(raw) {
   }
   const state = stateDir(input);
   const won = matched.filter((r) => claim(state, r.id));
+  const sessionClaims = [];
+  const downgraded = [];
+  const toShow = won.map((r) => {
+    if (r.mode !== "deny-first") return r;
+    if (claim(blockedDir(input), r.id)) {
+      sessionClaims.push(r.id);
+      return r;
+    }
+    if (!isSubagent(input) || r.subagent === "block") return r;
+    downgraded.push(r.id);
+    return { ...r, mode: "inject" };
+  });
   let d;
   try {
-    d = decide(won, [], dir);
+    d = decide(toShow, [], dir);
   } catch (err) {
     for (const r of won) {
       try {
-        unlinkSync(join(state, r.id));
+        unlinkSync(join2(state, r.id));
+      } catch {
+      }
+    }
+    for (const id of sessionClaims) {
+      try {
+        unlinkSync(join2(blockedDir(input), id));
       } catch {
       }
     }
@@ -467,8 +561,9 @@ function run(raw) {
     outputContinue();
     return;
   }
-  logFire(input, d, won);
+  logFire(input, d, won, downgraded.length ? { downgraded } : {});
   if (d.kind === "deny") {
+    logGuardDecision("rule-router", input, "deny", `rule-block: ${d.ids.join(",")}`);
     outputDeny(d.text, "deny");
   } else {
     console.log(JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", additionalContext: d.text } }));

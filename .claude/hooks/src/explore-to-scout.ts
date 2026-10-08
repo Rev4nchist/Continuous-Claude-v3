@@ -10,6 +10,8 @@
  * recommend Explore) + the use-scout-not-explore rule.
  */
 
+import { logGuardDecision } from './shared/guard-log.js';
+
 export interface HookInput {
   tool?: string;
   tool_name?: string;
@@ -70,6 +72,7 @@ async function main(): Promise<void> {
   }
 
   const output = decide(input);
+  if (output) logGuardDecision('explore-to-scout', input, 'deny', 'explore-agent-blocked');
   console.log(output ? JSON.stringify(output) : '{}');
 }
 

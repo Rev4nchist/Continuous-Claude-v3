@@ -18,6 +18,7 @@ import { createLogger } from './shared/logger.js';
 import { writeStateWithLock, readStateWithLock } from './shared/atomic-write.js';
 import { validateMaestroState } from './shared/state-schema.js';
 import { logHook } from './shared/session-activity.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 const log = createLogger('maestro-enforcer');
 
@@ -97,7 +98,12 @@ function readStdin(): string {
   return readFileSync(0, 'utf-8');
 }
 
+/** The payload being handled, kept so a block can be logged. Set once in main(). */
+let currentInput: HookInput | undefined;
+
 function makeBlockOutput(reason: string): void {
+  const rule = reason.split('\n').map((l) => l.trim()).find(Boolean) ?? 'maestro-block';
+  logGuardDecision('maestro-enforcer', currentInput, 'deny', rule);
   const output = {
     hookSpecificOutput: {
       hookEventName: 'PreToolUse',
@@ -134,6 +140,7 @@ async function main() {
       return;
     }
 
+    currentInput = input;
     const sessionId = input.session_id;
     const state = readState(sessionId);
 
