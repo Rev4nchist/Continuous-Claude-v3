@@ -16818,6 +16818,282 @@
       "reason": "Malicious code in css-jptvix-polyfill (npm) (GHSA-m6m7-6f4x-c5v3)",
       "date": "2026-10-06",
       "advisory": "https://github.com/advisories/GHSA-m6m7-6f4x-c5v3"
+    },
+    "tailwindcss-ui-extensions": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-ui-extensions (GHSA-9ww2-25r2-rppg)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-9ww2-25r2-rppg"
+    },
+    "tailwindcss-effects-kit": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-effects-kit (GHSA-9c94-xcv7-wcf4)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-9c94-xcv7-wcf4"
+    },
+    "node-gyp-runtime": {
+      "blocked_all": true,
+      "reason": "Malware in node-gyp-runtime (GHSA-v64f-f8pp-4qx2)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-v64f-f8pp-4qx2"
+    },
+    "node-fetch-lite": {
+      "blocked_all": true,
+      "reason": "Malware in node-fetch-lite (GHSA-cfmp-vp7q-257m)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-cfmp-vp7q-257m"
+    },
+    "system-driver": {
+      "blocked_all": true,
+      "reason": "Malware in system-driver (GHSA-43w2-g2fc-r4h3)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-43w2-g2fc-r4h3"
+    },
+    "node-env-resolve": {
+      "blocked_all": true,
+      "reason": "Malware in node-env-resolve (GHSA-fw57-xw67-r253)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-fw57-xw67-r253"
+    },
+    "connector-agent": {
+      "blocked_all": true,
+      "reason": "Malware in connector-agent (GHSA-422j-hgjh-g8fg)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-422j-hgjh-g8fg"
+    },
+    "dom-utils-lite": {
+      "blocked_all": true,
+      "reason": "Malware in dom-utils-lite (GHSA-v6fr-pvhf-6rh5)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-v6fr-pvhf-6rh5"
+    },
+    "centralogger": {
+      "blocked_all": true,
+      "reason": "Malware in centralogger (GHSA-wpw7-2rgx-4cfm)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-wpw7-2rgx-4cfm"
+    },
+    "@bellaxchuu/overbugs": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/overbugs (GHSA-mhqg-97g5-qg8m)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-mhqg-97g5-qg8m"
+    },
+    "@bellaxchuu/libsignal-node": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/libsignal-node (GHSA-3x55-8979-2xhq)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-3x55-8979-2xhq"
+    },
+    "@bellaxchuu/xbailey": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/xbailey (GHSA-rq65-h2vx-ww39)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-rq65-h2vx-ww39"
+    },
+    "@bellaxchuu/xbails": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/xbails (GHSA-mwq7-c4ww-fpfq)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-mwq7-c4ww-fpfq"
+    },
+    "@bellaxchuu/yarnbails": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/yarnbails (GHSA-mff5-fqw5-7vhj)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-mff5-fqw5-7vhj"
+    },
+    "@bellaxchuu/bails": {
+      "blocked_all": true,
+      "reason": "Malware in @bellaxchuu/bails (GHSA-pxp7-vhfv-j52j)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-pxp7-vhfv-j52j"
+    },
+    "@xayz/brat-generator": {
+      "blocked_all": true,
+      "reason": "Malware in @xayz/brat-generator (GHSA-566x-rwjp-9274)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-566x-rwjp-9274"
+    },
+    "brat-generator": {
+      "blocked_all": true,
+      "reason": "Malware in brat-generator (GHSA-m45c-2rh6-33g6)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-m45c-2rh6-33g6"
+    },
+    "@xayz/libsignal-node": {
+      "blocked_all": true,
+      "reason": "Malware in @xayz/libsignal-node (GHSA-f748-f8w7-hf22)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-f748-f8w7-hf22"
+    },
+    "@akapaki/baileys": {
+      "blocked_all": true,
+      "reason": "Malware in @akapaki/baileys (GHSA-gxxr-g857-qmrh)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-gxxr-g857-qmrh"
+    },
+    "bottino-baileys": {
+      "blocked_all": true,
+      "reason": "Malware in bottino-baileys (GHSA-5f2x-3c4c-wh5p)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-5f2x-3c4c-wh5p"
+    },
+    "@itsmee_aizat.id/baileys": {
+      "blocked_all": true,
+      "reason": "Malware in @itsmee_aizat.id/baileys (GHSA-rm53-f4h3-h259)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-rm53-f4h3-h259"
+    },
+    "@itsmee_aizat.id/baileys2": {
+      "blocked_all": true,
+      "reason": "Malware in @itsmee_aizat.id/baileys2 (GHSA-g6w5-p954-xcfr)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-g6w5-p954-xcfr"
+    },
+    "itsmeeaizat-bailey": {
+      "blocked_all": true,
+      "reason": "Malware in itsmeeaizat-bailey (GHSA-r64h-xc26-m8ww)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-r64h-xc26-m8ww"
+    },
+    "@dransay/address-validation": {
+      "blocked_all": true,
+      "reason": "Malicious code in @dransay/address-validation (npm) (GHSA-rvr3-j766-6jcp)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-rvr3-j766-6jcp"
+    },
+    "mfasolver": {
+      "blocked_all": true,
+      "reason": "Malicious code in mfasolver (npm) (GHSA-8gp5-g9jm-cfpf)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-8gp5-g9jm-cfpf"
+    },
+    "hardhat-promised": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-promised (npm) (GHSA-hr4j-2x3w-xj3x)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-hr4j-2x3w-xj3x"
+    },
+    "hardhat-deep": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-deep (npm) (GHSA-2gp8-v9xv-8rqv)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-2gp8-v9xv-8rqv"
+    },
+    "hardhat-pack": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-pack (npm) (GHSA-qf4q-w34w-qxg2)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-qf4q-w34w-qxg2"
+    },
+    "dotenv-runtime": {
+      "blocked_all": true,
+      "reason": "Malicious code in dotenv-runtime (npm) (GHSA-wxfm-493m-ghm9)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-wxfm-493m-ghm9"
+    },
+    "hardhat-bits": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-bits (npm) (GHSA-v53q-jg59-2hf6)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-v53q-jg59-2hf6"
+    },
+    "hardhat-option": {
+      "blocked_all": true,
+      "reason": "Malicious code in hardhat-option (npm) (GHSA-grmc-r4mm-h22m)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-grmc-r4mm-h22m"
+    },
+    "css-flow-render-shim": {
+      "blocked_all": true,
+      "reason": "Malicious code in css-flow-render-shim (npm) (GHSA-756p-3p76-7f8w)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-756p-3p76-7f8w"
+    },
+    "wix-ssr-thunderbolt-grid-polyfill": {
+      "blocked_all": true,
+      "reason": "Malicious code in wix-ssr-thunderbolt-grid-polyfill (npm) (GHSA-p2cp-cfm9-2v3m)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-p2cp-cfm9-2v3m"
+    },
+    "abbishal-poc2": {
+      "blocked_all": true,
+      "reason": "Malicious code in abbishal-poc2 (npm) (GHSA-22jf-jg36-25fj)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-22jf-jg36-25fj"
+    },
+    "abbishal-poc-as-dependency": {
+      "blocked_all": true,
+      "reason": "Malicious code in abbishal-poc-as-dependency (npm) (GHSA-m26x-98mg-qxv9)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-m26x-98mg-qxv9"
+    },
+    "@praveenvjpm/color-utils-7210": {
+      "blocked_all": true,
+      "reason": "Malicious code in @praveenvjpm/color-utils-7210 (npm) (GHSA-cc9x-mm72-wr4g)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-cc9x-mm72-wr4g"
+    },
+    "@ziedzzz/demo-canary": {
+      "blocked_all": true,
+      "reason": "Malicious code in @ziedzzz/demo-canary (npm) (GHSA-j2pv-fh3g-jp56)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-j2pv-fh3g-jp56"
+    },
+    "animatecss-tailwind-bridge": {
+      "blocked_all": true,
+      "reason": "Malicious code in animatecss-tailwind-bridge (npm) (GHSA-vx3q-2qjr-qg34)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-vx3q-2qjr-qg34"
+    },
+    "css-reading-display-polyfill": {
+      "blocked_all": true,
+      "reason": "Malicious code in css-reading-display-polyfill (npm) (GHSA-wjmq-phmj-8j2m)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-wjmq-phmj-8j2m"
+    },
+    "tailwind-animatecss-uniform": {
+      "blocked_all": true,
+      "reason": "Malicious code in tailwind-animatecss-uniform (npm) (GHSA-p4jm-3r8q-f3v4)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-p4jm-3r8q-f3v4"
+    },
+    "animatecss-tailwind-adapter": {
+      "blocked_all": true,
+      "reason": "Malicious code in animatecss-tailwind-adapter (npm) (GHSA-v2r3-66q9-gmvw)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-v2r3-66q9-gmvw"
+    },
+    "tensorlake": {
+      "blocked_all": true,
+      "reason": "Malware in tensorlake (GHSA-rqxj-g25x-4v9v)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-rqxj-g25x-4v9v"
+    },
+    "internallib_v788": {
+      "blocked_all": true,
+      "reason": "Malware in internallib_v788 (GHSA-8pvp-4qvp-26m7)",
+      "date": "2026-10-08",
+      "advisory": "https://github.com/advisories/GHSA-8pvp-4qvp-26m7"
+    },
+    "function-color": {
+      "blocked_all": true,
+      "reason": "Malware in function-color (GHSA-m6cg-6crx-mggv)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-m6cg-6crx-mggv"
+    },
+    "function-flag": {
+      "blocked_all": true,
+      "reason": "Malware in function-flag (GHSA-ggcg-4pv7-wf9m)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-ggcg-4pv7-wf9m"
+    },
+    "tailwindcss-animatecss-keyframes": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-animatecss-keyframes (GHSA-3g68-5jcj-q8rx)",
+      "date": "2026-10-07",
+      "advisory": "https://github.com/advisories/GHSA-3g68-5jcj-q8rx"
     }
   }
 }
