@@ -150,7 +150,10 @@ SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
 # Nested dirs synced on their own (2026-10-01). plugins/claude-hud holds the status line launcher
 # and its config. The rest of ~/.claude/plugins is Claude Code's own state (cache, marketplaces,
 # installed_plugins.json): never sync or count the whole plugins/ dir.
-SYNC_SUBDIRS="plugins/claude-hud"
+# plugins/ccv3-mods (2026-10-07) is the CCv3 function-hook mods plugin. CLAUDE_CODE_PLUGIN_DIRS in
+# ~/.claude/settings.json points at the active copy. Its .claude-plugin/types/ is written by the
+# engine on load and is never synced (see the find filters in copy_dir and changed_is_excluded).
+SYNC_SUBDIRS="plugins/claude-hud plugins/ccv3-mods"
 
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
@@ -555,7 +558,7 @@ copy_dir() {
         $skip_file && continue
 
         guarded_copy "$src_file" "$dst_file"
-    done < <(find "$src_path" -type f ! -name "*.pid" ! -name "*.lock" ! -path "*/.tldr/*" ! -path "*/node_modules/*" ! -path "*/cache/*" ! -path "*/dist/*" 2>/dev/null)
+    done < <(find "$src_path" -type f ! -name "*.pid" ! -name "*.lock" ! -path "*/.tldr/*" ! -path "*/node_modules/*" ! -path "*/cache/*" ! -path "*/dist/*" ! -path "*/.claude-plugin/types/*" 2>/dev/null)
 }
 
 # -----------------------------------------------------------------------------
@@ -651,6 +654,7 @@ if $CHANGED; then
         done
         case "/$p/" in
             */.tldr/*|*/node_modules/*|*/cache/*|*/dist/*) return 0 ;;
+            */.claude-plugin/types/*) return 0 ;;   # engine-written, see SYNC_SUBDIRS
         esac
         return 1
     }
@@ -672,7 +676,7 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/commands/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*)
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/commands/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*|.claude/plugins/ccv3-mods/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
@@ -1041,7 +1045,7 @@ if ! $DRY_RUN; then
         missing=0
         while IFS= read -r src_file; do
             [[ -f "$ACTIVE_CLAUDE/$dir/${src_file#$REPO_CLAUDE/$dir/}" ]] || missing=$((missing+1))
-        done < <(find "$REPO_CLAUDE/$dir" -type f 2>/dev/null)
+        done < <(find "$REPO_CLAUDE/$dir" -type f ! -path "*/.claude-plugin/types/*" 2>/dev/null)
         if [[ "$missing" -eq 0 ]]; then
             echo "  $dir: OK (every repo file present)"
         else
