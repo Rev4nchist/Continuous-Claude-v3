@@ -12,6 +12,9 @@ import type { Engine } from 'claude-code/testing'
 // G6 CCV3_MODS_OFF=1: any hook still acts (command, timer, spawn, snapshot, band, answer)
 // G7 CCV3_MODS_OFF set to anything but 1 switches the mod off
 // G8 the pulse is armed by session.start itself, so a reload (which re-runs it) re-arms it
+// G9 headless: a turn that made no task or plan change writes a snapshot, so every -p job fills the folder
+// G10 headless: a turn after a task change stops writing its snapshot
+// G11 interactive: a turn with no task still writes its snapshot, so the dashboard sees the live session
 
 type Calls = { run: string[][]; agentList: number; writes: { path: string; text: string }[]; commands: string[] }
 
@@ -30,6 +33,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
   const calls: Calls = { run: [], agentList: 0, writes: [], commands: [] }
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.complete', (_$, e) => ({ text: e.answer }))
   on('fs.exists', () => ({ value: true }))
   on('fs.write', (_$, e) => {
     calls.writes.push({ path: e.path, text: e.text })
@@ -107,6 +111,29 @@ describe('agentic-os headless gate', () => {
     await $.tool.call({ tool: 'TaskCreate', subject: 'probe the gate', description: 'd' })
     const [snapshot] = snapshotWrites(calls)
     expect(snapshot?.text).toContain('probe the gate')
+  })
+
+  test('G9 headless: a turn that changed no task or plan writes no snapshot', async ($, on) => {
+    const { calls } = world(on)
+    await start($, false)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    expect(snapshotWrites(calls)).toEqual([])
+  })
+
+  test('G10 headless: a turn after a task change still writes its snapshot', async ($, on) => {
+    const { calls } = world(on)
+    await start($, false)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'kept', description: 'd' })
+    const before = snapshotWrites(calls).length
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    expect(snapshotWrites(calls).length).toBe(before + 1)
+  })
+
+  test('G11 interactive: a turn with no task still writes its snapshot', async ($, on) => {
+    const { calls } = world(on)
+    await start($, true)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    expect(snapshotWrites(calls).length).toBe(1)
   })
 
   test('G5 G8 interactive arms the pulse and reads the lane board at session start', async ($, on) => {

@@ -82,6 +82,13 @@ const writeSnapshot = async ($: EngineInterface): Promise<void> => {
   }
 }
 
+/**
+ * A turn-end snapshot is kept for interactive sessions and for headless runs that hold a task or a plan.
+ * Other headless runs (reports, probes, workflow agents) would add a file each and nothing prunes the folder.
+ */
+const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
+  (await read($, mode)) === 'interactive' || (await read($, tasks)).length > 0 || (await read($, plan)) !== null
+
 const refreshAgents = async ($: EngineInterface): Promise<void> => {
   try {
     const list = await $.agent.list()
@@ -195,7 +202,7 @@ export const agenticOs = (on: On) => {
     if (e.agentId === undefined) {
       await update($, turn, () => null)
       await update($, steps, () => [])
-      await writeSnapshot($)
+      if (await worthSnapshot($)) await writeSnapshot($)
     }
     return next(e)
   })

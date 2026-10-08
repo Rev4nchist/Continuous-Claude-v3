@@ -11,7 +11,10 @@
  *      `claude -p --plugin-dir <dir>` run writes it (scripts/mods/e2e-headless.mjs does).
  *   3. `claude plugin test <dir>`: fails on a failing test, or on zero tests (a vacuous gate).
  *
- * Usage: node scripts/mods/validate-mods.mjs [plugin-dir]   (default .claude/plugins/ccv3-mods)
+ *      The gate also fails when the report has no `gatingHooks` key at all, or lists fewer than
+ *      --min-gating hooks (default 1). Without that floor a renamed key would pass with zero hooks.
+ *
+ * Usage: node scripts/mods/validate-mods.mjs [plugin-dir] [--min-gating N]   (default dir .claude/plugins/ccv3-mods)
  * Env:   TSC_JS = path to typescript/bin/tsc, when none is found under .claude/hooks.
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
@@ -21,7 +24,10 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const pluginDir = resolve(process.argv[2] ?? join(repoRoot, '.claude/plugins/ccv3-mods'));
+const args = process.argv.slice(2);
+const minAt = args.indexOf('--min-gating');
+const minGating = minAt >= 0 && Number.isInteger(Number(args[minAt + 1])) ? Number(args[minAt + 1]) : 1;
+const pluginDir = resolve(args.find((a, i) => !a.startsWith('--') && i !== minAt + 1) ?? join(repoRoot, '.claude/plugins/ccv3-mods'));
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 280_000 });
 const firstLines = (text, n = 12) => text.trim().split(/\r?\n/).slice(0, n).join('\n');
 
@@ -33,6 +39,19 @@ export const gatingHooksOf = report => [
 
 /** Gating hooks that lack a `.catch`. A missing flag counts as missing. */
 export const withoutCatch = hooks => hooks.filter(hook => hook.hasCatch !== true);
+
+/** Why the .catch gate cannot be trusted or has failed: a lost list, too few hooks, or a bare hook. */
+export const gatingProblems = (report, min) => {
+  const entries = [report?.manifest, ...(report?.contents ?? [])];
+  if (!entries.some(entry => Array.isArray(entry?.gatingHooks))) {
+    return ['validate: the report has no gatingHooks key; the .catch gate cannot run (found 0)'];
+  }
+  const hooks = gatingHooksOf(report);
+  const problems = [];
+  if (hooks.length < min) problems.push(`validate: found ${hooks.length} gating hooks, expected at least ${min}`);
+  for (const hook of withoutCatch(hooks)) problems.push(`validate: gating hook without .catch: ${label(hook)}`);
+  return problems;
+};
 
 const label = hook => `${hook.module ?? '?'} ${hook.hook ?? hook.pattern ?? '?'}`;
 
@@ -51,7 +70,7 @@ const checkValidate = () => {
   for (const entry of [report.manifest, ...(report.contents ?? [])]) {
     for (const error of entry?.errors ?? []) problems.push(`validate: ${entry.file}: ${typeof error === 'string' ? error : JSON.stringify(error)}`);
   }
-  for (const hook of bare) problems.push(`validate: gating hook without .catch: ${label(hook)}`);
+  problems.push(...gatingProblems(report, minGating));
   return { ok: problems.length === 0, note: problems.join('\n'), short: `validate ${problems.length === 0 ? 'OK' : 'FAIL'} (${hooks.length} gating hook${hooks.length === 1 ? '' : 's'}, ${bare.length} without .catch)` };
 };
 

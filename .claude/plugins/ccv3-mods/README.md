@@ -20,8 +20,10 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 | Run | Capture and snapshots | 5 s pulse, `lane.mjs`, `/os`, band |
 |---|---|---|
 | Interactive (`isInteractive` true) | Yes | Yes |
-| Headless (`claude -p`, SDK; `isInteractive` false) | Yes | No. Nothing is spawned and no timer is armed |
+| Headless (`claude -p`, SDK; `isInteractive` false) | Yes, with a limit: a snapshot is written after a task or plan change, and at turn end only when the session holds a task or a plan. A headless run with neither writes no file | No. Nothing is spawned and no timer is armed |
 | `CCV3_MODS_OFF=1` in the process env | No. Every hook passes the event on | No |
+
+Nothing prunes `~/.claude/state/agentic-os/`. The limit above keeps scheduled reports, probes and workflow agents from adding one file per run. Test: `G9 G10 G11` in `tests/gating.test.ts`.
 
 `session.start` sets the mode on each run. A hot reload runs `register` again and fires `session.start` for the changed module (types: `session.start`, "a reload (changed modules only)"). The old environment's timers are dropped and the new `session.start` arms the pulse again. Test: `G5 G8` in `tests/gating.test.ts`.
 
@@ -31,8 +33,8 @@ This is the testing row for a mod. It lives here, not in `AGENTS.md`: that file 
 
 Run from the repo root:
 
-1. `node scripts/mods/validate-mods.mjs`. One command, one summary line, exit 1 on failure. It runs `claude plugin validate --json` (fails when any `gatingHooks` entry lacks `.catch`), `tsc -p .claude/plugins/ccv3-mods` and `claude plugin test .claude/plugins/ccv3-mods`. The engine writes `.claude-plugin/types/` on a load; a fresh worktree has none until step 2 has run once, and `tsc` then reports NOT RUN, never a pass.
-2. End to end: `node scripts/mods/e2e-headless.mjs`. It runs `claude -p --plugin-dir .claude/plugins/ccv3-mods --allowedTools TaskCreate TaskUpdate --output-format json` with a prompt that creates tasks, then reads the snapshot named by the run's `session_id`. A second run with `CCV3_MODS_OFF=1` must write no snapshot. Output goes to `.claude/cache/e2e/<date>-mods-headless-*.json`.
+1. `node scripts/mods/validate-mods.mjs [--min-gating N]`. One command, one summary line, exit 1 on failure. It runs `claude plugin validate --json` (fails when any `gatingHooks` entry lacks `.catch`, when the report has no `gatingHooks` key, or when it lists fewer than N hooks, default 1; unit test: `node --test scripts/mods/validate-mods.test.mjs`), `tsc -p .claude/plugins/ccv3-mods` and `claude plugin test .claude/plugins/ccv3-mods`. The engine writes `.claude-plugin/types/` on a load; a fresh worktree has none until step 2 has run once, and `tsc` then reports NOT RUN, never a pass.
+2. End to end: `node scripts/mods/e2e-headless.mjs`. It runs `claude -p --plugin-dir .claude/plugins/ccv3-mods --allowedTools TaskCreate TaskUpdate --output-format json` with a prompt that creates tasks, then reads the snapshot named by the run's `session_id`. The snapshot must hold `lanes: null` (a headless run never reads the lane board). The run clears `CLAUDE_CODE_PLUGIN_DIRS` and writes a debug log; that log must show one folder loaded as `ccv3-mods`. A second run with `CCV3_MODS_OFF=1` must write no snapshot. Output goes to `.claude/cache/e2e/<date>-mods-headless-*.json`.
 
 ## Facts proven on 2.1.292 (2026-10-07)
 
@@ -44,3 +46,4 @@ Run from the repo root:
 - In `claude plugin test`, a `Text` element's `key` is not kept. Find band text by `type: 'Text'`.
 - A headless `claude -p --plugin-dir` run writes `.claude-plugin/types/` (seen on 2.1.293, 2026-10-07), so one e2e run is enough to make `tsc -p` work in a fresh worktree.
 - A headless snapshot has `lanes: null`: the lane board is never read there.
+- Two plugins named `ccv3-mods` (one from `--plugin-dir`, one from `CLAUDE_CODE_PLUGIN_DIRS`) do not both load. The debug log says `hooks module ccv3-mods@inline not loaded: another plugin of that name loads first`. With the repo copy on `--plugin-dir` and a marked copy on the env var, the snapshot came from the repo copy. Seen on 2.1.293, 2026-10-07. The e2e run still clears the env var so a stale copy cannot stand in for the repo copy.
