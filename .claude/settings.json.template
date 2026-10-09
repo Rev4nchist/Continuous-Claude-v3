@@ -135,6 +135,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
+            ]
           }
         ]
       },
@@ -155,6 +163,14 @@
             "timeout": 10000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
             ]
           }
         ]
