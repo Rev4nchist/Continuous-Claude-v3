@@ -7,7 +7,7 @@ REM Self-redirect all output to a durable log; Task Scheduler discards the conso
 set "LOG=C:\Users\david.hayes\continuous-claude\.claude\logs\rule-router-audit.log"
 
 REM GOTO, not a parenthesized block: %ERRORLEVEL% inside ( ... ) expands before `call` runs
-REM (see scheduled-blocklist-update.bat, where that hid 28 failures).
+REM (see .claude/scripts/scheduled/scheduled-blocklist-update.bat, where that hid 28 failures).
 if /i not "%~1"=="__LOGGED__" goto :RELAUNCH_LOGGED
 goto :BODY
 
