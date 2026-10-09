@@ -38,8 +38,9 @@ const MEANINGFUL = /^\/\*!|^\/\/!|@license|@preserve|__PURE__|__NO_SIDE_EFFECTS_
  * - tree: every node's kind with its nesting, and each leaf token's text. Trivia (whitespace,
  *   newlines, comments) is not part of the tree and JSDoc nodes are skipped, so layout and comments
  *   drop out. Structure stays: `return\nx` (two statements, by ASI) and `return x` differ.
- * - notes: every meaningful comment, whole text, tagged with the index of the token it precedes, so
- *   adding, editing or moving an annotation or a legal notice is a change.
+ * - notes: every meaningful comment, whole text, tagged with the gap between tokens it sits in, so
+ *   adding, editing or moving an annotation or a legal notice to another gap is a change, and a
+ *   newline moved inside the same gap is not.
  * - shebang: the `#!` first line.
  * The TypeScript printer is not used: it keeps whether a block was written on one line or several.
  */
@@ -55,15 +56,17 @@ function fingerprint(ts, text) {
     if (kids.length === 0) {
       // TypeScript splits the trivia between tokens: a comment on the same line as the token
       // before it is that token's trailing comment (`= /* @__PURE__ */ f()`), and one after a line
-      // break is the next token's leading comment. Read both, so none is missed or counted twice.
-      const tag = (ranges, where) => {
+      // break is the next token's leading comment. Read both, so none is missed or counted twice,
+      // and tag each by its gap (gap k sits just before token k), not by which side TypeScript
+      // filed it on: moving a newline around an unchanged annotation must not count as a change.
+      const tag = (ranges, gap) => {
         for (const r of ranges ?? []) {
           const c = text.slice(r.pos, r.end);
-          if (MEANINGFUL.test(c)) notes.push(`${leaf}${where}:${c}`);
+          if (MEANINGFUL.test(c)) notes.push(`${gap}:${c}`);
         }
       };
-      tag(ts.getLeadingCommentRanges(text, n.pos), 'L');
-      tag(ts.getTrailingCommentRanges(text, n.end), 'T');
+      tag(ts.getLeadingCommentRanges(text, n.pos), leaf);
+      tag(ts.getTrailingCommentRanges(text, n.end), leaf + 1);
       if (n.kind !== ts.SyntaxKind.EndOfFileToken) tree.push(`${n.kind}:${n.getText(sf)}`);
       leaf++;
       return;

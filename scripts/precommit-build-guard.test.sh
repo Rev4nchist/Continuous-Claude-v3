@@ -182,6 +182,11 @@ d="$(committed_repo $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening is a 
 stage_edit "$d" $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening was closed on 2026-10-09.\n */\nexport const a = 1;'
 assert_exit "shebang file, JSDoc-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
 
+# --- Case 24: a newline moved before an unchanged annotation -> ALLOW (same gap between tokens)
+d="$(committed_repo $F $'declare function f(): number;\nexport const a = /* @__PURE__ */ f();')"
+stage_edit "$d" $F $'declare function f(): number;\nexport const a =\n  /* @__PURE__ */ f();'
+assert_exit "newline before unchanged annotation (no dist) -> allow" 0 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
