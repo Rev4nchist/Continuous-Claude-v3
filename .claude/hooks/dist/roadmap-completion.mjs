@@ -135,6 +135,7 @@ function parseRoadmap(content) {
       }
       continue;
     }
+    void isAnyH2;
   }
   closeSection(lines.length);
   return result;
