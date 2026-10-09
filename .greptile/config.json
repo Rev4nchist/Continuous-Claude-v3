@@ -1,0 +1,27 @@
+{
+  "autoReview": ["open", "push"],
+  "statusCheck": true,
+  "strictness": 2,
+  "ignorePatterns": ".claude/hooks/dist/**\n**/*.min.js\n**/package-lock.json\n.claude/cache/**\ndocs/reviews/**",
+  "instructions": "CCv3 is a Windows-first Claude Code harness. Many files exist as two copies (repo and ~/.claude, src and dist, settings.json and its template). Prefer findings about correctness, security and drift between the two copies over style.",
+  "rules": [
+    {
+      "id": "hook-dist",
+      "scope": [".claude/hooks/src/**"],
+      "severity": "high",
+      "rule": "A change to a hook in .claude/hooks/src/<name>.ts must include the rebuilt .claude/hooks/dist/<name>.mjs in the same PR."
+    },
+    {
+      "id": "settings-template",
+      "scope": [".claude/settings.json", ".claude/settings.json.template"],
+      "severity": "high",
+      "rule": "A hook registration added to .claude/settings.json must also be added to .claude/settings.json.template, and the reverse."
+    },
+    {
+      "id": "no-rules-dir",
+      "scope": [".claude/**"],
+      "severity": "medium",
+      "rule": "Never add files under .claude/rules/. Rules live in .claude/rules-src/; a .claude/rules/ folder makes Claude Code load every rule twice."
+    }
+  ]
+}
