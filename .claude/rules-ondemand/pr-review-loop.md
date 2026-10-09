@@ -1,7 +1,8 @@
 # PR submitted → Greptile review loop
 
-The review bot is Greptile (`greptile-apps[bot]`). CodeRabbit is being phased out: its status never
-blocks or grants READY. Its open threads still count. Plan: `docs/self-improvement/proposals/2026-10-09-greptile.md`.
+The review bot is Greptile (`greptile-apps[bot]`). CodeRabbit was uninstalled from this repo on
+2026-10-09: a leftover CodeRabbit status never blocks or grants READY, and any open thread still counts.
+Plan: `docs/self-improvement/proposals/2026-10-09-greptile.md`.
 
 When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool with the PR number
 (`pr: <N>`) in the same turn. Do not wait to be asked. Only if that tool does not exist, or the PR is
