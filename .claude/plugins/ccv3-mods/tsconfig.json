@@ -1,3 +1,12 @@
 {
-  "extends": "./.claude-plugin/types/tsconfig.json"
+  "extends": "./.claude-plugin/types/tsconfig.json",
+  "compilerOptions": {
+    // The engine's list also loads "claude-code-mcp": the inputs of every MCP tool the session that
+    // wrote it had connected (581 to 619 tools on this machine). That turns ToolCallInput into one
+    // union of ~650 variants. tsc then runs out of memory at the default heap or stops at TS2589 on
+    // each tool.call matcher and $.tool.call. This mod calls no other server's tool, and its own two
+    // tools fit McpToolName (`mcp__${string}__${string}`), so the MCP root is left out on purpose.
+    // Do not add it back. When the engine's types/tsconfig.json adds a new root, add that name here.
+    "types": ["claude-code", "claude-code-tools"]
+  }
 }
