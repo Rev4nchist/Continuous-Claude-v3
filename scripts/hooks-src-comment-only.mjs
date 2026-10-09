@@ -8,8 +8,9 @@
  * For each path: parse the HEAD version and the staged (index) version with TypeScript and compare
  * their syntax trees without comments or layout. A parser is used, not a token scan: a scanner
  * alone can read `//` inside a regex as a comment and hide a real code change after it.
- * Legal comments (`/*!`, `//!`, @license, @preserve) survive bundling, so any change to a line that
- * holds one counts as a real change.
+ * Not every comment is ignorable. esbuild keeps legal notices and acts on annotations
+ * (`@__PURE__`, `@__NO_SIDE_EFFECTS__`), source-map and JSX pragmas, so those must match exactly,
+ * whole text and position. The `#!` line is copied into the bundle, so it must match too.
  *
  * Usage: node scripts/hooks-src-comment-only.mjs <repo-relative .ts path>...   (run in the repo)
  * Exit 0 = every path is comment/whitespace-only. 1 = at least one is not (or is new). 2 = could not
@@ -28,42 +29,57 @@ function loadTypeScript() {
   return require(require.resolve('typescript', { paths: [join(here, '..', '.claude', 'hooks')] }));
 }
 
-const LEGAL = /\/\*!|\/\/!|@license|@preserve/;
+// Comments esbuild keeps or acts on: legal notices, tree-shaking annotations, source-map and JSX
+// pragmas. Any comment matching this is compared exactly; every other comment is ignorable.
+const MEANINGFUL = /^\/\*!|^\/\/!|@license|@preserve|__PURE__|__NO_SIDE_EFFECTS__|__KEY__|sourceMappingURL|sourceURL|@jsx/;
 
 /**
- * The syntax tree as text: every node's kind with its nesting, and each leaf token's text.
- * Trivia (whitespace, newlines, // and /* comments) is not part of the tree, and JSDoc nodes are
- * skipped, so layout and comments drop out. Structure stays: `return\nx` (two statements, by ASI)
- * and `return x` (one statement) give different text, though their leaf tokens are the same.
+ * What the bundle can depend on, as text:
+ * - tree: every node's kind with its nesting, and each leaf token's text. Trivia (whitespace,
+ *   newlines, comments) is not part of the tree and JSDoc nodes are skipped, so layout and comments
+ *   drop out. Structure stays: `return\nx` (two statements, by ASI) and `return x` differ.
+ * - notes: every meaningful comment, whole text, tagged with the index of the token it precedes, so
+ *   adding, editing or moving an annotation or a legal notice is a change.
+ * - shebang: the `#!` first line.
  * The TypeScript printer is not used: it keeps whether a block was written on one line or several.
  */
-function codeWithoutComments(ts, text, fileName = 'x.ts') {
-  const sf = ts.createSourceFile(fileName, text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
+function fingerprint(ts, text) {
+  const sf = ts.createSourceFile('x.ts', text, ts.ScriptTarget.Latest, true, ts.ScriptKind.TS);
   const isJsDoc = (n) => n.kind >= ts.SyntaxKind.FirstJSDocNode && n.kind <= ts.SyntaxKind.LastJSDocNode;
-  const out = [];
+  const tree = [];
+  const notes = [];
+  let leaf = 0;
   const walk = (n) => {
     if (isJsDoc(n)) return;
     const kids = n.getChildren(sf);
     if (kids.length === 0) {
-      if (n.kind !== ts.SyntaxKind.EndOfFileToken) out.push(`${n.kind}:${n.getText(sf)}`);
+      // TypeScript splits the trivia between tokens: a comment on the same line as the token
+      // before it is that token's trailing comment (`= /* @__PURE__ */ f()`), and one after a line
+      // break is the next token's leading comment. Read both, so none is missed or counted twice.
+      const tag = (ranges, where) => {
+        for (const r of ranges ?? []) {
+          const c = text.slice(r.pos, r.end);
+          if (MEANINGFUL.test(c)) notes.push(`${leaf}${where}:${c}`);
+        }
+      };
+      tag(ts.getLeadingCommentRanges(text, n.pos), 'L');
+      tag(ts.getTrailingCommentRanges(text, n.end), 'T');
+      if (n.kind !== ts.SyntaxKind.EndOfFileToken) tree.push(`${n.kind}:${n.getText(sf)}`);
+      leaf++;
       return;
     }
-    out.push(`(${n.kind}`);
+    tree.push(`(${n.kind}`);
     for (const k of kids) walk(k);
-    out.push(')');
+    tree.push(')');
   };
   walk(sf);
-  return out.join('\n');
-}
-
-/** Lines that carry a legal comment marker; esbuild keeps those comments in the bundle. */
-function legalLines(text) {
-  return text.split(/\r?\n/).filter((l) => LEGAL.test(l)).map((l) => l.trim()).join('\n');
+  const shebang = text.startsWith('#!') ? text.split(/\r?\n/, 1)[0] : '';
+  return JSON.stringify({ shebang, tree, notes });
 }
 
 /** True when `after` differs from `before` only in ordinary comments or whitespace. */
 function isCommentOnlyChange(ts, before, after) {
-  return codeWithoutComments(ts, before) === codeWithoutComments(ts, after) && legalLines(before) === legalLines(after);
+  return fingerprint(ts, before) === fingerprint(ts, after);
 }
 
 function gitShow(spec) {

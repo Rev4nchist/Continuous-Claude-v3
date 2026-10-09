@@ -152,6 +152,36 @@ d="$(committed_repo $F $'export function f(x: number) { return x; }')"
 stage_edit "$d" $F $'export function f(x: number) { return\n x; }'
 assert_exit "newline that changes meaning, return/x (no dist) -> BLOCK" 1 "$(run_guard "$d")"
 
+# --- Case 18: adding an esbuild annotation -> BLOCK (/* @__PURE__ */ lets esbuild drop the call)
+d="$(committed_repo $F $'declare function log(): number;\nexport const a = log();')"
+stage_edit "$d" $F $'declare function log(): number;\nexport const a = /* @__PURE__ */ log();'
+assert_exit "added @__PURE__ annotation (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 19: moving an annotation to another call -> BLOCK
+d="$(committed_repo $F $'declare function f(): number;\nexport const a = /* @__PURE__ */ f();\nexport const b = f();')"
+stage_edit "$d" $F $'declare function f(): number;\nexport const a = f();\nexport const b = /* @__PURE__ */ f();'
+assert_exit "moved @__PURE__ annotation (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 20: editing a continuation line of a multi-line legal comment -> BLOCK
+d="$(committed_repo $F $'/*!\n * old notice\n */\nexport const a = 1;')"
+stage_edit "$d" $F $'/*!\n * new notice\n */\nexport const a = 1;'
+assert_exit "multi-line legal comment body edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 21: changing the #! line -> BLOCK (esbuild copies it into the bundle)
+d="$(committed_repo $F $'#!/usr/bin/env node\nexport const a = 1;')"
+stage_edit "$d" $F $'#!/usr/bin/env -S node --no-warnings\nexport const a = 1;'
+assert_exit "shebang change (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 22: an ordinary comment next to an unchanged annotation -> ALLOW
+d="$(committed_repo $F $'declare function f(): number;\n// old\nexport const a = /* @__PURE__ */ f();')"
+stage_edit "$d" $F $'declare function f(): number;\n// reworded note\nexport const a = /* @__PURE__ */ f();'
+assert_exit "ordinary comment beside unchanged annotation (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 23: a real hook's shape, unchanged #! plus a JSDoc header edit -> ALLOW
+d="$(committed_repo $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening is a tracked follow-up.\n */\nexport const a = 1;')"
+stage_edit "$d" $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening was closed on 2026-10-09.\n */\nexport const a = 1;'
+assert_exit "shebang file, JSDoc-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]
