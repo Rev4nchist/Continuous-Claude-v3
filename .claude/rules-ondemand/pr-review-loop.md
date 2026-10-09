@@ -22,7 +22,8 @@ and `/land <N>` to land: pressing Land in `/land` is his merge yes.
   ended `neutral` with "Review was cancelled" was superseded by a push: it is not a review.
 - Greptile also writes a summary block into the PR body: the last reviewed commit and a confidence
   score. When you edit a PR body, keep the `<!-- greptile_comment -->` ... `<!-- /greptile_comment -->`
-  block byte for byte.
+  block byte for byte. Any edit by a person after Greptile's summary makes the gate report
+  UNAVAILABLE until Greptile rewrites it (one `@greptileai` comment). Edits by apps are fine.
 - Batch fixes into one push. Every push is a new review and costs a credit. After 5 fix rounds
   without READY, stop and report to Dave.
 
@@ -68,6 +69,18 @@ prints "skipped", check out `main` and run `scripts/sync-to-active.sh --changed`
 (`C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe`; `bash` on PATH is WSL).
 Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
 Every step is idempotent; re-run after a partial failure.
+
+## Repos still on CodeRabbit
+
+A repo without `.greptile/config.json` may still use CodeRabbit (`coderabbitai[bot]`). There:
+
+- Proof of a review is a CodeRabbit review object on the head whose body has
+  "Actionable comments posted: N", or its summary comment naming the head commit. A green
+  `CodeRabbit` commit status alone is not a review.
+- "Review rate limited" or "Review limit reached" is not a review. Do not post `@coderabbitai review`
+  after that notice; it is refused. Never request the paid on-demand review. Report to Dave; with his
+  merge yes, land with `-IgnoreReview`.
+- Steps 1-8 of "When the review lands" apply, without the `@greptileai` tag.
 
 ## Loop prompt (fallback, for a repo without pr_watch)
 

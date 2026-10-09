@@ -17,12 +17,15 @@ const run = (conclusion, status = 'completed', id = 2) => ({
   id, name: 'Greptile Review', app: { slug: 'greptile-apps' }, status, conclusion, output: { summary: 'Greptile has reviewed the Pull Request.' },
 });
 
-function input({ prBody = body(HEAD, 5), runs = [run('success')], threads = [], statuses = [] } = {}) {
+const GREPTILE_EDIT = { editor: { __typename: 'Bot', login: 'greptile-apps' } };
+
+function input({ prBody = body(HEAD, 5), runs = [run('success')], threads = [], statuses = [], bodyEdits = [GREPTILE_EDIT] } = {}) {
   return {
     pull: { number: 111, state: 'open', merged: false, mergeable_state: 'clean', body: prBody, head: { sha: HEAD, ref: 'feat/x' } },
     combined: { statuses },
     checkRuns: runs,
     threads,
+    bodyEdits,
   };
 }
 
@@ -69,10 +72,38 @@ test('NOT READY: a newer Greptile run is still in progress', () => {
   assert.equal(r.greptile, 'pending');
 });
 
-test('NOT READY: the summary names an older commit than the head', () => {
+test('NOT READY: a summary naming an older commit is UNAVAILABLE, not pending', () => {
   const r = evaluate(input({ prBody: body(OLD, 5) }));
   assert.equal(r.ready, false);
   assert.equal(r.reviewedHead, false);
+  assert.equal(r.unavailable, true);
+});
+
+test('NOT READY: a summary without a score is UNAVAILABLE', () => {
+  const noScore = body(HEAD, 5).replace(/<!-- greptile_confidence_score:5 -->/, '');
+  const r = evaluate(input({ prBody: noScore }));
+  assert.equal(r.ready, false);
+  assert.equal(r.unavailable, true);
+  assert.ok(r.reasons.some((x) => /no confidence score/.test(x)));
+});
+
+test('NOT READY: a person editing the PR body after Greptile makes the summary unconfirmed', () => {
+  const r = evaluate(input({ bodyEdits: [{ editor: { __typename: 'User', login: 'someone' } }, GREPTILE_EDIT] }));
+  assert.equal(r.ready, false);
+  assert.equal(r.unavailable, true);
+  assert.ok(r.reasons.some((x) => /edited by someone after Greptile/.test(x)));
+});
+
+test('READY: an app editing the PR body after Greptile keeps the summary', () => {
+  const r = evaluate(input({ bodyEdits: [{ editor: { __typename: 'Bot', login: 'coderabbitai' } }, GREPTILE_EDIT] }));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
+test('NOT READY: no body edit history, or none by Greptile, is untrusted', () => {
+  const noHistory = input();
+  delete noHistory.bodyEdits;
+  assert.equal(evaluate(noHistory).ready, false);
+  assert.equal(evaluate(input({ bodyEdits: [{ editor: { __typename: 'User', login: 'Rev4nchist' } }] })).ready, false);
 });
 
 test('NOT READY: a missing summary block is UNAVAILABLE, and the check-only state stays visible', () => {

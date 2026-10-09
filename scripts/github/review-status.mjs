@@ -8,8 +8,10 @@
  *                 The app identity is the trust anchor: only Greptile can create that run.
  *                 A superseded review ends "neutral" ("Review was cancelled"): NOT a review.
  *   - summary:    Greptile writes a block into the PR body with the last reviewed commit and a
- *                 confidence score. It corroborates the check; anyone with write access can edit
- *                 the body, so it can only take READY away, never grant it.
+ *                 confidence score. People with write access can also edit the body, so the block
+ *                 counts only when every body edit after Greptile's newest one came from an app
+ *                 (GitHub Bot). Otherwise the review is UNAVAILABLE until Greptile rewrites it.
+ *                 A usable summary names the head and has a score; anything else is UNAVAILABLE.
  *   - unresolved: review threads still open from any reviewer, from GraphQL isResolved
  *   - checks:     every other status and check run on the head SHA
  *   - mergeable:  GitHub's mergeable_state
@@ -67,7 +69,23 @@ function latestGreptileRun(checkRuns) {
 
 export const UNAVAILABLE_TAIL = "Post one @greptileai comment to re-run it, or land-pr -IgnoreReview on Dave's yes";
 
-export function evaluate({ pull, combined, checkRuns, threads }) {
+/** GraphQL login of the Greptile app as a body editor (no "[bot]" suffix there). */
+const GREPTILE_EDITOR = 'greptile-apps';
+
+/**
+ * Who last touched the PR body after Greptile. `edits` is GraphQL userContentEdits, newest first.
+ * Returns null when Greptile's newest edit is followed only by app edits, else the login (or a
+ * description) of the first non-app editor. Missing history is untrusted.
+ */
+export function bodyEditedAfterGreptile(edits) {
+  if (!Array.isArray(edits)) return 'unknown (no edit history)';
+  const at = edits.findIndex((e) => e?.editor?.login === GREPTILE_EDITOR);
+  if (at < 0) return 'unknown (no Greptile edit in the history read)';
+  const later = edits.slice(0, at).find((e) => e?.editor?.__typename !== 'Bot');
+  return later ? (later.editor?.login ?? 'a deleted account') : null;
+}
+
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits }) {
   const head = pull.head.sha;
   const run = latestGreptileRun(checkRuns);
   let greptile;
@@ -78,13 +96,20 @@ export function evaluate({ pull, combined, checkRuns, threads }) {
   const greptileSummary = run?.output?.summary ?? null;
 
   const summary = parseSummary(pull.body);
-  // reviewedHead needs both: the check run (check-only state stays in `greptile`) and a summary that
-  // names the head. A missing block is UNAVAILABLE: one @greptileai comment makes Greptile rewrite it.
-  const summaryMatches = summary.sha === head;
-  const reviewedHead = greptile === 'reviewed' && summary.present && summaryMatches;
-  const missingSummary = greptile === 'reviewed' && !summary.present;
-  const unavailable = greptile === 'unavailable' || missingSummary;
-  const lowConfidence = reviewedHead && summary.confidence !== null && summary.confidence < MIN_CONFIDENCE;
+  // reviewedHead needs the check run (check-only state stays in `greptile`) AND a usable summary.
+  // After a passed check, any summary problem is UNAVAILABLE with its own reason: one @greptileai
+  // comment makes Greptile rewrite the block.
+  let summaryProblem = null;
+  if (greptile === 'reviewed') {
+    const editor = bodyEditedAfterGreptile(bodyEdits);
+    if (!summary.present) summaryProblem = 'Greptile summary block is missing from the PR body (was the PR body overwritten?)';
+    else if (editor) summaryProblem = `PR body was edited by ${editor} after Greptile's summary, so its score cannot be confirmed`;
+    else if (summary.sha !== head) summaryProblem = `Greptile summary names ${summary.sha ? `commit ${summary.sha.slice(0, 7)}` : 'no commit'}, not the head`;
+    else if (summary.confidence === null) summaryProblem = 'Greptile summary has no confidence score';
+  }
+  const reviewedHead = greptile === 'reviewed' && summaryProblem === null;
+  const unavailable = greptile === 'unavailable' || summaryProblem !== null;
+  const lowConfidence = reviewedHead && summary.confidence < MIN_CONFIDENCE;
 
   const otherStatuses = (combined.statuses || []).filter((s) => !isCodeRabbitStatus(s));
   const badStatuses = otherStatuses.filter((s) => s.state !== 'success');
@@ -98,9 +123,7 @@ export function evaluate({ pull, combined, checkRuns, threads }) {
   if (greptile === 'absent') reasons.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
   if (greptile === 'pending') reasons.push(`Greptile review of the head is ${run.status}`);
   if (unavailable) reasons.push(`Greptile did not finish a review of the head (${run.status}/${run.conclusion}${greptileSummary ? `: "${String(greptileSummary).split('\n')[0]}"` : ''}). ${UNAVAILABLE_TAIL}`);
-  if (missingSummary) reasons.push(`Greptile summary block is missing from the PR body (was the PR body overwritten?). ${UNAVAILABLE_TAIL}`);
-  if (greptile === 'reviewed' && summary.present && !summaryMatches) reasons.push(`Greptile summary names ${summary.sha ? `commit ${summary.sha.slice(0, 7)}` : 'no commit'}, not the head`);
-  if (reviewedHead && summary.present && summary.confidence === null) reasons.push('Greptile summary has no confidence score');
+  if (summaryProblem) reasons.push(`${summaryProblem}. ${UNAVAILABLE_TAIL}`);
   if (lowConfidence) reasons.push(`Greptile confidence ${summary.confidence}/5 is below ${MIN_CONFIDENCE}`);
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
@@ -108,7 +131,7 @@ export function evaluate({ pull, combined, checkRuns, threads }) {
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref, reviewer: 'greptile',
-    greptile, greptileSummary, confidence: summary.confidence, lowConfidence,
+    greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
     rateLimited: unavailable,
@@ -129,11 +152,13 @@ function main() {
     const runsDoc = gh([`repos/${owner}/${name}/commits/${pull.head.sha}/check-runs?per_page=100`]);
     const checkRuns = runsDoc.check_runs;
     if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}}}}}';
+    // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
-    const rt = g.data.repository.pullRequest.reviewThreads;
+    const prq = g.data.repository.pullRequest;
+    const rt = prq.reviewThreads;
     if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
-    result = evaluate({ pull, combined, checkRuns, threads: rt.nodes });
+    result = evaluate({ pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);
     process.exit(2);
@@ -141,7 +166,7 @@ function main() {
   if (args.includes('--json')) console.log(JSON.stringify(result));
   else {
     console.log(`PR #${result.pr} head ${result.headShort} (${result.branch}): ${result.ready ? 'READY' : 'NOT READY'}`);
-    console.log(`  Greptile: ${result.greptile} | review of head: ${result.reviewedHead ? 'yes' : 'NO'} | confidence: ${result.confidence ?? 'n/a'}/5 | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
+    console.log(`  Greptile: ${result.greptile} | review of head: ${result.reviewedHead ? 'yes' : 'NO'} | confidence: ${result.confidence === null ? 'n/a' : `${result.confidence}/5`} | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
     for (const r of result.reasons) console.log(`  - ${r}`);
   }
   process.exit(result.ready ? 0 : 1);
