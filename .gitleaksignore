@@ -1,0 +1,17 @@
+# gitleaks baseline. Triaged 2026-10-09: none of these is a live credential.
+# Format: <commit>:<file>:<rule>:<line>. Exact fingerprints only, so any new finding still fails.
+
+# Test fixtures for secret masking and redaction (fake values).
+66f00835f21d926102c9f6ff34b5e11f9a961bd7:.claude/hooks/src/__tests__/guard-log.test.ts:curl-auth-header:78
+6e3e98c33414a5386d2ce518eb077d70c9cd29cd:.claude/hooks/src/__tests__/msys-crash-capture.test.ts:curl-auth-header:64
+6e3e98c33414a5386d2ce518eb077d70c9cd29cd:.claude/hooks/src/__tests__/msys-crash-capture.test.ts:curl-auth-header:67
+9389032e114d478295c5ba1462fec882d1f7409e:.claude/hooks/src/__tests__/intel-bus-hardening.test.ts:generic-api-key:122
+9389032e114d478295c5ba1462fec882d1f7409e:.claude/hooks/src/__tests__/intel-bus-hardening.test.ts:generic-api-key:271
+9389032e114d478295c5ba1462fec882d1f7409e:.claude/hooks/src/__tests__/intel-bus-hardening.test.ts:jwt:260
+ea1b1ea2d0b0de4fb28f7feaf71b190d5b4ce036:scripts/project-cards/test/sweep.test.mjs:aws-access-token:268
+
+# Public identifiers in docs and review harvest (Entra app client_id GUID, session id), not secrets.
+87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/pr-10.diff:generic-api-key:2670
+87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/pr-9.diff:generic-api-key:1694
+87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/snapshot/agent-recall.jsonl:generic-api-key:21
+b9bf6e35ac80fbfdf0dc0d28e648311294a42066:docs/fastmcp-connector-playbook.md:generic-api-key:635
