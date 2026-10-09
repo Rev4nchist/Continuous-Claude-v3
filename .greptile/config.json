@@ -9,7 +9,7 @@
       "id": "hook-dist",
       "scope": [".claude/hooks/src/**"],
       "severity": "high",
-      "rule": "A change to a hook in .claude/hooks/src/<name>.ts must include the rebuilt .claude/hooks/dist/<name>.mjs in the same PR."
+      "rule": "After a change to a hook in .claude/hooks/src/<name>.ts, rebuild it and include any changed .claude/hooks/dist/<name>.mjs in the same PR. A type-only or comment-only edit that leaves the built output byte-identical needs no dist change."
     },
     {
       "id": "settings-template",
