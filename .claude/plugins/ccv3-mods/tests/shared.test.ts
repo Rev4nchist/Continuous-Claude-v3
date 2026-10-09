@@ -29,6 +29,7 @@ describe('shared tiers', () => {
     const md = '---\nname: spark\nmodel: sonnet\neffort: high\n---\n\nmodel: opus in the body\n'
     expect(parseAgentSpec(md)).toEqual({ model: 'sonnet', effort: 'high' })
     expect(parseAgentSpec('no frontmatter\nmodel: opus')).toEqual({})
+    expect(parseAgentSpec('---\nmodel: inherit\neffort: high\n---\n')).toEqual({ effort: 'high' })
   })
 
   test('S3 S4 drift flags mismatches and Haiku, never a match', () => {
@@ -52,6 +53,7 @@ describe('shared price', () => {
 
   test('S6 cold send prices a cache write, warm send a cache read', () => {
     expect(near(coldCost(330_000, 'claude-opus-5-5'), 1.65)).toBe(true)
+    expect(near(coldCost(330_000, 'claude-opus-5-5', true), 2.64)).toBe(true)
     expect(near(warmCost(330_000, 'claude-opus-5-5'), 0.066)).toBe(true)
     expect(near(warmCost(330_000, 'claude-fable-5-1'), 0.0825)).toBe(true)
     expect(fmtUsd(0.0412)).toBe('$0.04')

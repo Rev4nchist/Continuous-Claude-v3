@@ -17,8 +17,9 @@ const RATES: Record<Tier, Rate | null> = {
   other: null,
 }
 
-/** A cache write costs 1.25× input for the 5-minute TTL (2× for 1 hour; not used here). */
+/** A cache write costs 1.25× input for the 5-minute TTL, 2× for the 1-hour TTL. */
 const CACHE_WRITE = 1.25
+const CACHE_WRITE_1H = 2
 const M = 1_000_000
 
 export type Usage = {
@@ -41,10 +42,13 @@ export const estimate = (usage: Usage, model: string): number | null => {
   )
 }
 
-/** What re-sending `tokens` of context costs when the cache is cold: a cache write. */
-export const coldCost = (tokens: number, model: string): number | null => {
+/**
+ * What re-sending `tokens` of context costs when the cache is cold: a cache write, at the 1-hour
+ * rate when the session caches for an hour (a subscription), else the 5-minute rate.
+ */
+export const coldCost = (tokens: number, model: string, oneHour = false): number | null => {
   const rate = RATES[tierOf(model)]
-  return rate === null ? null : (tokens * rate.input * CACHE_WRITE) / M
+  return rate === null ? null : (tokens * rate.input * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE)) / M
 }
 
 /** What the same context costs warm: a cache read. */

@@ -41,7 +41,7 @@ export const TIER_HEX: Record<Tier, { dark: string; light: string }> = {
 
 /** `model · effort`, e.g. "Opus · high"; the effort part is left off when unknown. */
 export const tierBadge = (model: string, effort?: string | number): string =>
-  effort === undefined ? TIER_LABEL[tierOf(model)] : `${TIER_LABEL[tierOf(model)]} · ${effort}`
+  typeof effort !== 'string' ? TIER_LABEL[tierOf(model)] : `${TIER_LABEL[tierOf(model)]} · ${effort}`
 
 export type AgentSpec = { model?: string; effort?: string }
 
@@ -52,7 +52,8 @@ export const parseAgentSpec = (md: string): AgentSpec => {
   const spec: AgentSpec = {}
   for (const line of head.split(/\r?\n/)) {
     const m = /^(model|effort):\s*["']?([\w.-]+)["']?\s*$/.exec(line)
-    if (m?.[1] === 'model') spec.model = m[2]
+    // `inherit` and `default` name no tier: the run takes the parent's or the session's model.
+    if (m?.[1] === 'model' && m[2] !== 'inherit' && m[2] !== 'default') spec.model = m[2]
     if (m?.[1] === 'effort') spec.effort = m[2]
   }
   return spec
@@ -65,7 +66,8 @@ export const parseAgentSpec = (md: string): AgentSpec => {
 export const driftOf = (spec: AgentSpec, run: { model?: string; effort?: string | number }): string | null => {
   if (run.model !== undefined && tierOf(run.model) === 'haiku') return 'Haiku is banned'
   const tierOff = spec.model !== undefined && run.model !== undefined && tierOf(spec.model) !== tierOf(run.model)
-  const effortOff = spec.effort !== undefined && run.effort !== undefined && String(run.effort) !== spec.effort
+  // A numeric effort is a thinking budget, not a level: it can't be compared with `high`.
+  const effortOff = spec.effort !== undefined && typeof run.effort === 'string' && run.effort !== spec.effort
   if (!tierOff && !effortOff) return null
   const want = [spec.model === undefined ? null : TIER_LABEL[tierOf(spec.model)], spec.effort ?? null]
   return `expected ${want.filter(Boolean).join(' · ')}`
