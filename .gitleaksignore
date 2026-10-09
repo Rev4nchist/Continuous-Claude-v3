@@ -1,5 +1,8 @@
 # gitleaks baseline. Triaged 2026-10-09: none of these is a live credential.
 # Format: <commit>:<file>:<rule>:<line>. Exact fingerprints only, so any new finding still fails.
+# These cover git-history scans (`gitleaks detect`, what scoped-scan.mjs runs). A filesystem scan
+# (`gitleaks dir` / --no-git) needs <file>:<rule>:<line> entries instead. Rewriting any of these
+# commits invalidates its fingerprint.
 
 # Test fixtures for secret masking and redaction (fake values).
 66f00835f21d926102c9f6ff34b5e11f9a961bd7:.claude/hooks/src/__tests__/guard-log.test.ts:curl-auth-header:78
