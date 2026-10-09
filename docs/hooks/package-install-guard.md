@@ -112,12 +112,19 @@ Requires `gh` CLI authenticated (`gh auth status`).
 
 ### Scheduled (daily at 9am)
 
-A Windows Task Scheduler job runs `scripts/scheduled-blocklist-update.bat` daily at 9am. It:
-1. Fetches latest advisories from GitHub
-2. Updates `malicious-packages.json`
+A Windows Task Scheduler job runs `scripts/scheduled-blocklist-update.bat` daily at 9am. The .bat keeps
+the durable log (`.claude/logs/blocklist-update.log`) and calls `scripts/scheduled-blocklist-update.ps1`.
+The job never touches the primary checkout's branch or working tree. It works in a temporary detached
+worktree of `fork/main` and:
+1. Fetches `fork main`
+2. Fetches latest advisories from GitHub and updates `malicious-packages.json`
 3. Rebuilds hooks
-4. Commits and pushes to fork if changes found
-5. Syncs to `~/.claude/`
+4. Commits to `main` and pushes `HEAD:refs/heads/main` to fork, if changes found
+5. Fast-forwards local `main`, then syncs to `~/.claude/` from the temp worktree
+6. Removes the temp worktree
+
+The checked-out branch does not matter. The .bat runs from the primary checkout, so the checked-out
+branch must contain this .bat: until a branch has merged `main`, an older copy of the .bat can still run.
 
 Task name: `CCv3-Blocklist-Update`. Check status: `schtasks /query /tn "CCv3-Blocklist-Update"`
 

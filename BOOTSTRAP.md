@@ -34,7 +34,7 @@ uv run python -m scripts.setup.wizard
 > most of a year old that looks correct.
 >
 > **Both remote names are load-bearing, so do not skip the rename.**
-> `scripts/scheduled-blocklist-update.bat` runs `git push fork HEAD` and
+> `scripts/scheduled-blocklist-update.ps1` runs `git fetch fork main` and `git push fork HEAD:refs/heads/main` and
 > `scripts/check-upstream.sh:13-14` hardcodes `UPSTREAM_REMOTE="origin"` /
 > `FORK_REMOTE="fork"`. A clone that leaves Rev4nchist as `origin` breaks both,
 > and the daily blocklist job fails silently in the Task Scheduler where nobody
