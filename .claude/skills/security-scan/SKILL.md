@@ -15,36 +15,39 @@ ambient. Background: the HexStrike AI eval in `docs/self-improvement/proposals/`
 
 ## The one rule
 
-Run every scan through the gate. Never call a scanner directly.
+Run every scan through the runner. It is installed in `~/.claude`, so it works
+from any project. Local commands scan the current directory.
 
 ```
-node scripts/security/scoped-scan.mjs <deps|secrets|fs|web|allowlist> [arg]
+node "$HOME/.claude/scripts/security/scoped-scan.mjs" <deps|secrets|fs|web|check|allowlist> [arg]
 ```
 
-The `scan-scope-guard` hook blocks a direct `nuclei`, `sqlmap`, `nikto`,
-`masscan`, `wpscan` or `dalfox`. Use the wrapper. The `web` command denies any
-host you do not own (deny by default, fails closed). Owned means loopback or a
-host in `.claude/project-registry.json`.
+The runner's scope gate is the control. `web` denies any host you do not own:
+deny by default, fails closed. Owned means loopback or a host in the project
+registry. No environment variable can change that list.
+
+The `scan-scope-guard` hook is a reminder, not a boundary. When a scanner such as
+`nuclei` or `sqlmap` is typed as the command, it denies the call and points here.
 
 ## Commands
 
-| Command | What it runs | Target | Network? |
+| Command | What it runs | Target | Sends data off the machine? |
 |---|---|---|---|
-| `deps [dir]` | `npm audit` + `osv-scanner` | the local repo | no |
+| `deps [dir]` | `npm audit` + `osv-scanner` | the local repo | yes: package names and versions go to the npm registry and OSV advisory APIs |
 | `secrets [dir]` | `gitleaks` | the local repo | no |
-| `fs [dir]` | `trivy fs` (vuln, misconfig, secret) | the local repo | no |
-| `web <url>` | `nuclei` baseline | an **owned** URL only | yes, gated |
+| `fs [dir]` | `trivy fs` (vuln, misconfig, secret) | the local repo | yes: downloads trivy's vulnerability database |
+| `web <url>` | `nuclei` baseline | an **owned** URL only | yes: requests to that URL; nuclei may update its templates |
+| `check <url>` | the gate decision only | - | no; never scans |
 | `allowlist` | prints the owned hosts | - | no |
 
-A missing tool is reported and skipped. The runner never installs one. Install
-a scanner yourself if you want it (`nuclei`, `trivy`, `gitleaks`, `osv-scanner`
-are single binaries).
+A missing tool is reported and skipped. The runner never installs one.
 
 ## Workflow
 
 1. **Confirm the target.** For a `web` scan, name the URL and confirm you own it.
-   Run `node scripts/security/scoped-scan.mjs allowlist` to see owned hosts.
-2. **Local scans first** (safe, no network): `deps`, then `secrets`, then `fs`.
+   `check <url>` shows the decision without scanning. `allowlist` lists owned hosts.
+2. **Repo scans:** `secrets` (fully offline), then `deps` and `fs` (these contact
+   advisory services, see the table).
 3. **Dynamic scan** (confirm first): `web <owned-url>` against a running dev or
    preview instance.
 4. **Report.** Summarize findings by severity. Propose fixes. Do not auto-fix a
@@ -53,8 +56,8 @@ are single binaries).
 
 ## How every repo benefits
 
-Any project with a `url` in `.claude/project-registry.json` gets the dynamic
-scan for free, bounded to its own declared target. No per-repo setup.
+Any project with a `url` in the project registry gets the dynamic scan, bounded
+to its own declared target. No per-repo setup.
 
 ## Guardrails
 

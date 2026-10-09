@@ -103,25 +103,26 @@ summarizes the findings into a report.* Rebuild it narrowly and defensively.
 
 All defensive, scope-gated, confirm-first. Verified before hand-off.
 
-- **`scripts/security/scoped-scan.mjs`** - the gate + runner. `deps` / `secrets` / `fs` scan the
-  local repo (no network). `web <url>` denies any host that is not loopback or a registry `url`
-  (deny by default, fails closed on an unreadable registry). Never installs a tool; a missing tool
-  is reported and skipped.
-- **`scripts/security/scoped-scan-probe.mjs`** - the deny probe. 8/8 pass: public host denied,
-  bad URL denied, loopback allowed, registry host allowed, non-registry host denied, fail-closed on
-  a bad registry, allowlist clean.
-- **`.claude/hooks/src/scan-scope-guard.ts`** - PreToolUse(Bash|PowerShell) hook. Denies a direct
-  `nuclei` / `sqlmap` / `nikto` / `masscan` / `wpscan` / `dalfox` / `zap-baseline`, routing them
-  through the wrapper. The wrapper's own child process is invisible to the hook, so it is not
-  blocked. nmap is dual-use and not blocked. 20 unit tests + a 5-case stdin E2E
-  (`.claude/cache/e2e/2026-10-09-scan-scope-guard.json`). Registered in repo `settings.json` and
+- **`.claude/scripts/security/scoped-scan.mjs`** - the runner. It syncs to
+  `~/.claude/scripts/security/`, so it works from any project. `deps` / `secrets` / `fs` scan the
+  local repo (`deps` and `fs` contact advisory services). `web <url>` runs only after the gate
+  allows the host. `check <url>` prints the decision and never scans. Never installs a tool.
+- **`.claude/scripts/security/scope-gate.mjs`** - the gate: pure functions, deny by default, fails
+  closed on an unreadable registry. Owned hosts come only from the project registry; no environment
+  variable can change them.
+- **`.claude/scripts/security/scoped-scan-probe.mjs`** - the probe. 15/15 pass: 10 pure-gate cases
+  with fixture hosts, 5 runner cases through `check` and deny paths only, so no scanner starts.
+- **`.claude/hooks/src/scan-scope-guard.ts`** - PreToolUse(Bash|PowerShell) hook. A reminder, not a
+  security boundary: when an active scanner is typed as the command, it denies the call and points
+  to the runner. The runner's gate is the control. Widening the hook's coverage is a follow-up for
+  Dave (PR #111 review). 20 unit tests + a 5-case stdin E2E. Registered in repo `settings.json` and
   the `settings.json.template` under both shells.
 - **`.claude/skills/security-scan/SKILL.md`** - user-invoked skill. The dynamic phase. Mandates the
   wrapper, lists the defensive tools, states the one scope rule.
 - **`.claude/skills/security/SKILL.md`** - added Phase 1.5 pointing static `/security` at the new
   dynamic phase.
 
-Gates run: scope probe 8/8; `audit-skills` 0 hard failures, 0 ratchet regressions; full hook suite
+Gates run: scope probe 15/15 (after the PR #111 review fixes); `audit-skills` 0 hard failures, 0 ratchet regressions; full hook suite
 97 files / 2259 tests / 0 fail; context-budget 23508 chars (unchanged, the skill is not
 always-loaded).
 

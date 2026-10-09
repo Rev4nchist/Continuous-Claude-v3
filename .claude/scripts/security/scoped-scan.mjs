@@ -2,71 +2,38 @@
 /**
  * scoped-scan.mjs - CCv3 defensive, scope-gated security scanner runner.
  *
- * This is the ONLY sanctioned path for dynamic security scans. It runs
- * defensive tools against targets you own. A network scan is denied unless the
- * target host is in project-registry.json or is loopback. The gate fails closed.
+ * The only sanctioned path for dynamic security scans. It runs defensive tools
+ * against targets you own. A network scan is denied unless the target host is
+ * loopback or in the project registry. The gate fails closed.
  *
- * It is the control HexStrike AI lacks: the harness decides the scope, not a
- * prompt. See docs/self-improvement/proposals/2026-10-09-hexstrike-ai.md.
+ * Installed at ~/.claude/scripts/security/ by the forward sync, so it works
+ * from any project. The local commands scan the current directory.
  *
  * Commands:
- *   deps [dir]        Dependency CVE scan (npm audit, then osv-scanner). Local.
- *   secrets [dir]     Secret scan (gitleaks). Local.
- *   fs [dir]          Filesystem + IaC scan (trivy fs). Local.
+ *   deps [dir]        Dependency CVE scan (npm audit, osv-scanner).
+ *   secrets [dir]     Secret scan (gitleaks).
+ *   fs [dir]          Filesystem + IaC scan (trivy fs).
  *   web <url>         DAST baseline (nuclei). SCOPE-GATED to owned targets.
- *   allowlist         Print the computed allowlist and exit.
+ *   check <url>       Print the gate decision only. Never scans.
+ *   allowlist         Print the owned hosts.
  *
- * Exit codes: 0 ok / clean / tool-missing; 1 error or findings; 2 scope DENIED.
+ * Exit codes: 0 ok / clean / tool-missing / allowed; 1 error or findings;
+ * 2 scope DENIED.
  *
  * It never installs a tool. A missing tool is reported and skipped.
  */
 
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync } from 'node:fs';
+import { existsSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 import { dirname, resolve, join } from 'node:path';
+import { decide, loadRegistryHosts } from './scope-gate.mjs';
 
 const DENY = 2;
 const __dirname = dirname(fileURLToPath(import.meta.url));
-const REPO_ROOT = resolve(__dirname, '..', '..');
-// Default is the repo registry. SCOPED_SCAN_REGISTRY overrides the path (used by
-// the probe to supply a fixture). The gate still fails closed if it is unreadable.
-const REGISTRY = process.env.SCOPED_SCAN_REGISTRY || join(REPO_ROOT, '.claude', 'project-registry.json');
-
-// --- allowlist ------------------------------------------------------------
-
-/** Loopback hosts are always owned. `*.localhost` resolves to loopback. */
-function isLoopback(host) {
-  const h = host.toLowerCase();
-  return h === 'localhost' || h === '127.0.0.1' || h === '::1' || h === '[::1]' || h.endsWith('.localhost');
-}
-
-/** Registry hosts you own. Fails closed: unreadable registry => loopback only. */
-function registryHosts() {
-  const hosts = new Set();
-  let raw;
-  try {
-    raw = JSON.parse(readFileSync(REGISTRY, 'utf8'));
-  } catch {
-    return hosts; // fail closed
-  }
-  const projects = Array.isArray(raw) ? raw : raw.projects || [];
-  for (const p of projects) {
-    if (!p || typeof p.url !== 'string') continue;
-    try {
-      hosts.add(new URL(p.url).hostname.toLowerCase());
-    } catch {
-      // url field is not a real URL (e.g. "stdio (...)"); skip it
-    }
-  }
-  return hosts;
-}
-
-function isAllowed(host) {
-  if (!host) return false;
-  if (isLoopback(host)) return true;
-  return registryHosts().has(host.toLowerCase());
-}
+// <claude dir>/scripts/security -> <claude dir>. Repo: .claude. Active: ~/.claude.
+const CLAUDE_DIR = resolve(__dirname, '..', '..');
+const REGISTRY = join(CLAUDE_DIR, 'project-registry.json');
 
 // --- tools ----------------------------------------------------------------
 
@@ -81,8 +48,7 @@ function resolveExe(name) {
 function run(exe, args, opts = {}) {
   console.log(`[scoped-scan] run: ${exe} ${args.join(' ')}`);
   // Node on Windows refuses to spawn a .cmd / .bat without a shell (EINVAL).
-  // Quote the exe and args for the shell. Windows paths cannot contain '"', so
-  // this is a safe quoting of controlled arguments.
+  // Quote the exe and args for the shell. Windows paths cannot contain '"'.
   const useShell = /\.(cmd|bat)$/i.test(exe);
   let r;
   if (useShell) {
@@ -110,6 +76,22 @@ function resolveDir(argv) {
     process.exit(1);
   }
   return dir;
+}
+
+/** Gate a target. Prints the decision. Returns true only when allowed. */
+function gate(target) {
+  const d = decide(target, loadRegistryHosts(REGISTRY));
+  if (d.allowed) {
+    console.log(`[scoped-scan] ALLOWED: ${d.host} (${d.reason}).`);
+    return true;
+  }
+  console.error(
+    `[scoped-scan] DENIED: ${d.reason}.\n` +
+    `  Allowed: loopback (localhost / *.localhost / 127.0.0.1) and hosts in ${REGISTRY}.\n` +
+    `  Add the project to the registry, or scan a target you own. ` +
+    `Scanning a host you do not own may be illegal.`
+  );
+  return false;
 }
 
 // --- commands -------------------------------------------------------------
@@ -150,32 +132,23 @@ function cmdWeb(argv) {
     console.error('[scoped-scan] usage: web <url>');
     return 1;
   }
-  let host;
-  try {
-    host = new URL(target).hostname;
-  } catch {
-    console.error(`[scoped-scan] DENIED: "${target}" is not a valid URL.`);
-    return DENY;
-  }
-  if (!isAllowed(host)) {
-    console.error(
-      `[scoped-scan] DENIED: ${host} is not a target you own.\n` +
-      `  Allowed: loopback (localhost / *.localhost / 127.0.0.1) and hosts in ` +
-      `.claude/project-registry.json.\n` +
-      `  Add the project to the registry, or scan a target you own. ` +
-      `Scanning a host you do not own may be illegal.`
-    );
-    return DENY;
-  }
-  console.log(`[scoped-scan] ALLOWED: ${host} is an owned target.`);
+  if (!gate(target)) return DENY;
   const nuclei = resolveExe('nuclei');
   if (!nuclei) return skipMissing('nuclei', 'https://github.com/projectdiscovery/nuclei');
   return run(nuclei, ['-u', target, '-silent', '-severity', 'medium,high,critical']);
 }
 
+function cmdCheck(argv) {
+  if (!argv[0]) {
+    console.error('[scoped-scan] usage: check <url>');
+    return 1;
+  }
+  return gate(argv[0]) ? 0 : DENY;
+}
+
 function cmdAllowlist() {
-  const hosts = [...registryHosts()].sort();
-  console.log('[scoped-scan] owned hosts (plus all loopback):');
+  const hosts = [...loadRegistryHosts(REGISTRY)].sort();
+  console.log(`[scoped-scan] owned hosts (registry: ${REGISTRY}):`);
   console.log('  loopback: localhost, *.localhost, 127.0.0.1, ::1');
   for (const h of hosts) console.log(`  registry: ${h}`);
   return 0;
@@ -184,9 +157,9 @@ function cmdAllowlist() {
 // --- main -----------------------------------------------------------------
 
 const [cmd, ...rest] = process.argv.slice(2);
-const table = { deps: cmdDeps, secrets: cmdSecrets, fs: cmdFs, web: cmdWeb, allowlist: cmdAllowlist };
+const table = { deps: cmdDeps, secrets: cmdSecrets, fs: cmdFs, web: cmdWeb, check: cmdCheck, allowlist: cmdAllowlist };
 if (!cmd || !table[cmd]) {
-  console.error('usage: scoped-scan.mjs <deps|secrets|fs|web|allowlist> [args]');
+  console.error('usage: scoped-scan.mjs <deps|secrets|fs|web|check|allowlist> [args]');
   process.exit(1);
 }
 process.exit(table[cmd](rest));

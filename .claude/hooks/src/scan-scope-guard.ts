@@ -2,14 +2,15 @@
 /**
  * Scan Scope Guard (PreToolUse:Bash|PowerShell)
  *
- * Denies a direct call to an active network / web scanner. These must run
- * through scripts/security/scoped-scan.mjs, which enforces the registry scope
- * gate (deny by default, fail closed). This is the control HexStrike AI lacks:
- * the harness decides the scope, not a prompt.
+ * A reminder, not a security boundary. When Claude types an active network /
+ * web scanner as the command, this hook denies it and points to the wrapper,
+ * ~/.claude/scripts/security/scoped-scan.mjs. The wrapper's scope gate
+ * (deny by default, fail closed) is the real control: the harness decides the
+ * scope, not a prompt. This hook only matches the leading executable of each
+ * command segment; widening its coverage is a tracked follow-up.
  *
  * The wrapper spawns the scanner as a child of node, which is not a Claude tool
- * call, so the guard never sees it. The guard only blocks Claude typing the
- * scanner directly.
+ * call, so this hook never sees it.
  *
  * Scope: active web / network attack scanners only. General recon such as nmap
  * is dual-use and not blocked here.
@@ -113,9 +114,9 @@ function main(): void {
   logGuardDecision('scan-scope-guard', input, 'deny', tool, { command });
   outputDeny(
     `SCAN SCOPE: direct "${tool}" is blocked. Active scanners run through the ` +
-    `scope gate: node scripts/security/scoped-scan.mjs web <url> (deny by default, ` +
-    `owned targets only). See the security-scan skill. Scanning a host you do not ` +
-    `own may be illegal.`
+    `scope gate: node "$HOME/.claude/scripts/security/scoped-scan.mjs" web <url> ` +
+    `(deny by default, owned targets only). See the security-scan skill. ` +
+    `Scanning a host you do not own may be illegal.`
   );
 }
 

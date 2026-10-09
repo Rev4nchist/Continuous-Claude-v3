@@ -30,7 +30,7 @@ describe('blockedTool', () => {
   });
 
   it('allows the sanctioned wrapper', () =>
-    expect(blockedTool('node scripts/security/scoped-scan.mjs web http://localhost:3000')).toBeNull());
+    expect(blockedTool('node "$HOME/.claude/scripts/security/scoped-scan.mjs" web http://localhost:3000')).toBeNull());
   it('allows benign commands', () => {
     expect(blockedTool('npm audit')).toBeNull();
     expect(blockedTool('git status')).toBeNull();

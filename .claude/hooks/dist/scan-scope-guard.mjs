@@ -147,7 +147,7 @@ function main() {
   }
   logGuardDecision("scan-scope-guard", input, "deny", tool, { command });
   outputDeny(
-    `SCAN SCOPE: direct "${tool}" is blocked. Active scanners run through the scope gate: node scripts/security/scoped-scan.mjs web <url> (deny by default, owned targets only). See the security-scan skill. Scanning a host you do not own may be illegal.`
+    `SCAN SCOPE: direct "${tool}" is blocked. Active scanners run through the scope gate: node "$HOME/.claude/scripts/security/scoped-scan.mjs" web <url> (deny by default, owned targets only). See the security-scan skill. Scanning a host you do not own may be illegal.`
   );
 }
 if (!process.env.VITEST) {
