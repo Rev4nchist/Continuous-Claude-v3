@@ -21,6 +21,7 @@
   9. Always: unlink the junction, remove the worktree.
 
   Exit 0 = success or nothing to do. Exit 1 = a step failed (the log names it).
+  Exit 2 = pushed, but local main or ~/.claude did not follow (log line [PUSHED-NOT-SYNCED]).
   PowerShell 5.1 compatible (Task Scheduler runs powershell.exe), ASCII only.
 #>
 param(
@@ -39,7 +40,9 @@ param(
 # error under Stop when redirected. Every native call below checks $LASTEXITCODE instead.
 $ErrorActionPreference = 'Continue'
 if (-not $NodeModules) { $NodeModules = Join-Path $RepoPath '.claude\hooks\node_modules' }
-if (-not $env:GH_CONFIG_DIR) { $env:GH_CONFIG_DIR = Join-Path $env:USERPROFILE '.config\gh-personal' }
+# Always the personal gh account, as the old .bat did: a GH_CONFIG_DIR inherited from the task's
+# environment must not switch the account update-blocklist.mjs uses.
+$env:GH_CONFIG_DIR = Join-Path $env:USERPROFILE '.config\gh-personal'
 
 $gitSafe = Join-Path $PSScriptRoot 'git-safe.ps1'
 $wtLeaf = 'blocklist-update-' + $PID
@@ -88,7 +91,9 @@ function Invoke-Body {
     try { & npm.cmd run build | Out-Host; $buildRc = $LASTEXITCODE } finally { Pop-Location }
     if ($buildRc -ne 0) { Log '[ERROR] Hook build failed'; return 1 }
 
-    & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs 2>&1 | Out-Null
+    # A failed add (an index.lock, say) would leave nothing staged and read as "no changes": check it.
+    $addOut = & git add -- .claude/hooks/src/shared/malicious-packages.json .claude/hooks/dist/package-install-guard.mjs 2>&1
+    if ($LASTEXITCODE -ne 0) { Log "[ERROR] git add failed: $addOut"; return 1 }
     & git diff --cached --quiet
     if ($LASTEXITCODE -eq 0) { Log 'No blocklist changes detected'; Log 'Blocklist update complete'; return 0 }
 
@@ -118,7 +123,8 @@ function Invoke-Body {
   $localOk = ($LASTEXITCODE -eq 0)
   if (-not $localOk) { Log "[WARN] local $Branch did not fast-forward; it is behind $Remote/$Branch. Run: git pull --ff-only on $Branch" }
 
-  if ($NoSync) { Log 'Sync skipped (-NoSync)' }
+  $synced = $false
+  if ($NoSync) { Log 'Sync skipped (-NoSync)'; $synced = $true }
   elseif (-not $localOk) { Log "Sync skipped: local $Branch is not at the pushed commit" }
   else {
     Log 'Syncing to active directory...'
@@ -129,9 +135,13 @@ function Invoke-Body {
       $env:SYNC_MAIN_DETACHED = '1'
       & $GitBash scripts/sync-to-active.sh --changed | ForEach-Object { Log "  $_" }
       if ($LASTEXITCODE -ne 0) { Log "[WARN] sync exited $LASTEXITCODE; run scripts/sync-to-active.sh --changed from $Branch by hand" }
+      else { $synced = $true }
     }
     finally { Remove-Item Env:\SYNC_MAIN_DETACHED -ErrorAction SilentlyContinue; Pop-Location }
   }
+  # Exit 2 keeps the gap visible in Task Scheduler's Last Result: the push landed, but local
+  # main or ~/.claude did not follow.
+  if (-not $synced) { Log '[PUSHED-NOT-SYNCED] the commit is on the remote; local main or ~/.claude is behind'; return 2 }
   Log 'Blocklist update complete'
   return 0
 }
