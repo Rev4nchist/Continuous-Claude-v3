@@ -277,7 +277,7 @@ handoff depends on a manual step.
 | A hook block is a finding | A block names a real problem. Sessions do not route around it with another tool or a wrapper. |
 | Confirm first | Deletes, history rewrites, schema changes, deploys, sends and paid runs need the operator's approval. |
 | One canonical source | The repo is the source. `scripts/sync-to-active.sh` copies it to `~/.claude` after each commit. |
-| Review every change | Each pull request gets an automated CodeRabbit review (`.coderabbit.yaml`). Fixes cite the review, for example `(CodeRabbit #62)`. |
+| Review every change | Each pull request gets an automated Greptile review (`.greptile/config.json`), gated by `scripts/github/review-status.mjs`. Fixes cite the review, for example `(Greptile #113)`. |
 
 The forward sync has a clobber guard. It keeps a sha256 manifest of each file it wrote. If the
 active copy changed since the last sync, the script moves that copy to a quarantine folder

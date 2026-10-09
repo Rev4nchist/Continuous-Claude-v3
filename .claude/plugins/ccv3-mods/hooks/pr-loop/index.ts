@@ -36,7 +36,7 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 /** This session's watched PRs, mirrored from $.store so the band and pane redraw. */
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 
-const STATUS_SCRIPT = 'scripts/github/coderabbit-status.mjs'
+const STATUS_SCRIPT = 'scripts/github/review-status.mjs'
 const REPO = 'Rev4nchist/Continuous-Claude-v3'
 const KEY_PREFIX = 'pr-watch:'
 const WATCH_TOOL = 'mcp__ccv3-mods__pr_watch'
@@ -310,7 +310,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
   try {
     await $.command.register({
       name: 'watch',
-      description: 'Watch a PR for CodeRabbit and CI; /watch N --once checks now',
+      description: 'Watch a PR for the Greptile review and CI; /watch N --once checks now',
       argumentHint: '<pr> [--once]',
     })
     await $.command.register({
@@ -321,7 +321,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
     await $.tool.register({
       name: 'pr_status',
       description:
-        'Reads the CodeRabbit and CI status of a pull request in Rev4nchist/Continuous-Claude-v3 for its current head. Returns JSON: ready, reasons, unresolved, mergeable_state. Read only.',
+        'Reads the Greptile review and CI status of a pull request in Rev4nchist/Continuous-Claude-v3 for its current head. Returns JSON: ready, reasons, reviewedHead, confidence, unresolved, mergeable_state. Read only.',
       inputSchema: prSchema,
     })
     // A headless run has no watcher, so it offers no pr_watch: the model starts its /loop fallback.
@@ -329,7 +329,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       await $.tool.register({
         name: 'pr_watch',
         description:
-          'Adds a pull request in Rev4nchist/Continuous-Claude-v3 to the watch list. Every 5 minutes the session checks CodeRabbit and CI for it. It tells Dave (toast) and you (one report line) when the PR is READY, merged or closed, when CodeRabbit reviewed it and findings or failed checks need action, and when no review comes in 60 minutes. Never merges. Call this when you open a PR in that repo.',
+          'Adds a pull request in Rev4nchist/Continuous-Claude-v3 to the watch list. Every 5 minutes the session checks the Greptile review and CI for it. It tells Dave (toast) and you (one report line) when the PR is READY, merged or closed, when Greptile reviewed it and findings, a low confidence score or failed checks need action, and when no review comes in 60 minutes. Never merges. Call this when you open a PR in that repo.',
         inputSchema: prSchema,
       })
     }

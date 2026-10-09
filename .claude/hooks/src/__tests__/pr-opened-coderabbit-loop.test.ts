@@ -85,6 +85,8 @@ describe('pr-opened-coderabbit-loop classifiers (unit)', () => {
     expect(ctx).toContain('/loop 5m');
     expect(ctx).toContain('acme/widgets PR #42');
     expect(ctx).toContain('never merge');
+    // The rule file it points at must exist under that name (renamed from pr-coderabbit-loop.md).
+    expect(ctx).toContain('rules-ondemand/pr-review-loop.md');
   });
 
   // A repo-less pr_watch watches Rev4nchist/Continuous-Claude-v3 only: naming it for another repo's PR would watch the wrong PR.

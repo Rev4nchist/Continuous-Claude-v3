@@ -1,7 +1,10 @@
 import type { PrState, PrWatch } from '../../types'
 
-/** What `coderabbit-status.mjs <N> --json` prints. Only the fields the mod reads. */
+/** What `review-status.mjs <N> --json` prints. Only the fields the mod reads. */
 export type PrStatus = {
+  /** Reviewed, but Greptile's confidence is below the bar. Absent from older scripts. */
+  lowConfidence?: boolean
+  confidence?: number | null
   pr: number
   head: string
   headShort: string
@@ -31,7 +34,7 @@ export const BACKOFF_SLACK_MS = 30_000
 export const STATUS_TIMEOUT_MS = 60_000
 /** A watch list nobody touched for a week belongs to a session that is gone. */
 export const STALE_MS = 7 * 24 * 3_600_000
-/** The old /loop stopped after 60 minutes with no CodeRabbit activity. */
+/** A head with no finished review after 60 minutes is STALLED. */
 export const STALL_MS = 3_600_000
 /** A PR whose own check fails this many times in a row leaves the list. */
 export const MAX_FAILS = 3
@@ -98,9 +101,10 @@ export const isClosed = (status: PrStatus): boolean => status.merged || status.p
 /** A check that ended badly: a status in failure or error, or a run that completed without success. A running check is not one. */
 const FAILED_CHECK = /^status ".*" is (failure|error)$|^check ".*" is completed\//
 
-/** The head was reviewed and something needs a fix: open threads or a failed check. */
+/** The head was reviewed and something needs a fix: open threads, a low confidence score or a failed check. */
 const needsAction = (status: PrStatus): boolean =>
-  status.reviewedHead && (status.unresolved > 0 || status.reasons.some(reason => FAILED_CHECK.test(reason)))
+  status.reviewedHead &&
+  (status.unresolved > 0 || status.lowConfidence === true || status.reasons.some(reason => FAILED_CHECK.test(reason)))
 
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
@@ -147,9 +151,9 @@ const WORDS: Record<PrState, string> = {
   READY: 'READY',
   PENDING: 'pending',
   CLOSED: 'closed',
-  LIMITED: 'CodeRabbit rate limited',
+  LIMITED: 'Greptile did not finish the review',
   REVIEWED: 'reviewed, not READY',
-  STALLED: 'no CodeRabbit review after 60 minutes',
+  STALLED: 'no Greptile review after 60 minutes',
 }
 
 const word = (alert: Alert): string => (alert.state === 'CLOSED' && alert.merged ? 'merged' : WORDS[alert.state])
@@ -160,22 +164,23 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
   if (alert.state === 'LIMITED') {
-    return `${lead} was not reviewed because CodeRabbit is rate limited. Report this to Dave. Do not merge it and do not post @coderabbitai review.`
+    return `${lead} has no finished Greptile review (cancelled, failed or skipped). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'STALLED') {
-    return `${lead} has no CodeRabbit review after 60 minutes. Report this to Dave: check that the CodeRabbit app is installed on the repo. Do not merge it and do not post @coderabbitai review.`
+    return `${lead} has no Greptile review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'REVIEWED') {
-    return `${lead} was reviewed by CodeRabbit but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-coderabbit-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave. Do not merge it. The watch continues.`
+    return `${lead} was reviewed by Greptile but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave. Do not merge it. The watch continues.`
   }
-  return `${lead} is READY (CodeRabbit reviewed it, 0 threads unresolved, checks green). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
+  return `${lead} is READY (Greptile reviewed it, confidence at least 4/5, 0 threads unresolved, checks green). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
 }
 
 export const statusText = (status: PrStatus): string => {
   const state = stateOf(status)
   const head = `PR #${status.pr} head ${status.headShort} (${status.branch}): ${state === 'CLOSED' ? (status.merged ? 'MERGED' : 'CLOSED') : state === 'READY' ? 'READY' : 'NOT READY'}`
   const rows = [
-    `  CodeRabbit reviewed the head: ${status.reviewedHead ? 'yes' : 'NO'}`,
+    `  Greptile reviewed the head: ${status.reviewedHead ? 'yes' : 'NO'}`,
+    `  Confidence: ${typeof status.confidence === 'number' ? `${status.confidence}/5` : 'unknown'}`,
     `  Threads unresolved: ${status.unresolved}`,
     `  Mergeable state: ${status.mergeable_state ?? 'unknown'}`,
   ]

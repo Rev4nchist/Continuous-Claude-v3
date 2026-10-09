@@ -185,9 +185,9 @@
       ]
     },
     {
-      "id": "pr-coderabbit-loop",
+      "id": "pr-review-loop",
       "files": [
-        "pr-coderabbit-loop.md"
+        "pr-review-loop.md"
       ],
       "mode": "inject",
       "command": [
@@ -195,7 +195,7 @@
         "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
       ],
       "segment": [
-        "^node(\\.exe)?\\s.*coderabbit-status\\.mjs",
+        "^node(\\.exe)?\\s.*(review|coderabbit)-status\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },
