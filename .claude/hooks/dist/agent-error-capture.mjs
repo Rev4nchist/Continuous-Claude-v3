@@ -260,6 +260,7 @@ function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
     return;
   }
   const content = `${errorContext} -- task failure in the ${agentType} agent, which did not complete.`;
+  void prompt;
   const score = scoreFn(content, `Failed agent invocation: ${agentType}`);
   if (score.classification === "NOISE") {
     console.error(
