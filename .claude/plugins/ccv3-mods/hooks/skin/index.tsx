@@ -39,6 +39,7 @@ export const skin = (on: On) => {
 
   on('command.run', { command: 'skin' }, async ($, e) => {
     const arg = e.args.trim().toLowerCase()
+    if (arg !== '' && arg !== 'on' && arg !== 'off') return { text: 'Usage: /skin on, /skin off, or /skin to toggle.' }
     const want = arg === 'on' ? true : arg === 'off' ? false : !(await read($, skinOn))
     await update($, skinOn, () => want)
     await $.store.set(STORE_KEY, want ? 'on' : 'off')
@@ -49,7 +50,9 @@ export const skin = (on: On) => {
     if (!(await active($))) return next(e)
     const p = e.props
     const icon = SKIN_TOOLS[p.tool]
-    if (icon === undefined) return next(e)
+    // A row that carries its own output (an expanded group, verbose mode) keeps the engine's row:
+    // the skin's row would hide that output, error text included.
+    if (icon === undefined || p.output !== undefined) return next(e)
     const elements = $.ui.resolve(e)
     const { Box, Text } = elements
     const input = (p.input ?? {}) as Record<string, unknown>
@@ -100,6 +103,8 @@ export const skin = (on: On) => {
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
     if (!(await active($)) || e.props.isErrored) return next(e)
     if (e.props.tool !== 'Edit' && e.props.tool !== 'Write' && e.props.tool !== 'MultiEdit') return next(e)
+    // A staged edit was held for review, not applied: the engine says so better than a diff would.
+    if ((e.props.output as { staged?: unknown } | null)?.staged === true) return next(e)
     const hunks = hunksOf(e.props.output)
     if (hunks === null) return next(e)
     const { Box, Text } = $.ui.resolve(e)

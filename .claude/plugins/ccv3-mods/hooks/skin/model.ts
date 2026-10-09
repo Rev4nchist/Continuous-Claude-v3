@@ -82,6 +82,8 @@ export const diffLines = (hunks: readonly Hunk[], max = 40): { lines: DiffLine[]
     let newN = hunk.newStart
     hunk.lines.forEach((raw, i) => {
       const mark = raw[0]
+      // "\ No newline at end of file" belongs to no side: skip it so the numbers stay right.
+      if (mark === '\\') return
       const text = raw.slice(1)
       const line: DiffLine =
         mark === '+'

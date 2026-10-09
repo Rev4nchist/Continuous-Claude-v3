@@ -20,10 +20,10 @@ const PANE_PROPS = {
   view: {},
 }
 
-type Git = { head: string; next: string; show: string }
+type Git = { head: string; next: string; show: string; dirty: string }
 
 const world = (on: On, env: Record<string, string> = {}) => {
-  const git: Git = { head: 'aaa', next: 'aaa', show: '' }
+  const git: Git = { head: 'aaa', next: 'aaa', show: '', dirty: '' }
   const calls = { list: 0 }
   mock.clock(on, { now: 1_000 })
   mock.env(on, env)
@@ -40,11 +40,17 @@ const world = (on: On, env: Record<string, string> = {}) => {
   on('process.run', (_$, e) => {
     const out = (stdout: string) => ({ value: { exitCode: 0, stdout, stderr: '', isStdoutTruncated: false, isStderrTruncated: false } })
     if (e.argv.includes('rev-parse')) return out(`${git.head}\n`)
-    if (e.argv.includes('show')) return out(git.show)
+    if (e.argv.includes('diff-tree')) return out(git.show)
+    if (e.argv.includes('diff')) return out(git.dirty)
     return { value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
   })
   on('tool.call', { tool: 'Read' }, () => ({ result: { type: 'text', file: {} } }))
-  on('tool.call', { tool: 'Edit' }, (_$, e) => (e.file_path.includes('locked') ? { result: 'denied', isError: true } : { result: { filePath: e.file_path } }))
+  // The engine's Edit result carries the real patch: one line kept, one added.
+  on('tool.call', { tool: 'Edit' }, (_$, e) =>
+    e.file_path.includes('locked')
+      ? { result: 'denied', isError: true }
+      : { result: { filePath: e.file_path, structuredPatch: [{ oldStart: 1, oldLines: 2, newStart: 1, newLines: 3, lines: [' one', ' two', '+three'] }] } } as never,
+  )
   on('tool.call', { tool: 'Write' }, () => ({ result: { type: 'create' } }))
   on('tool.call', { tool: 'Bash' }, () => {
     git.head = git.next
@@ -84,7 +90,8 @@ describe('touched files', () => {
     await $.tool.call({ tool: 'Read', file_path: '/repo/src/x.ts' } as never)
     const { text } = await pane($)
     expect(text).toContain('edited 2')
-    expect(text).toContain('+3 −2')
+    // From the patch (+1 −0), not the input strings (which would say +3 −2).
+    expect(text).toContain('+1 −0')
     expect(text).toContain('+4 −0')
   })
 
@@ -102,6 +109,17 @@ describe('touched files', () => {
     expect(text).toContain('committed 1')
     expect(text).toContain('edited 1')
     expect(text).not.toContain('other.ts')
+  })
+
+  test('T3 a file still dirty after the commit stays edited', async ($, on) => {
+    const { git } = world(on)
+    await start($)
+    await $.tool.call({ tool: 'Edit', file_path: '/repo/a.ts', old_string: 'a', new_string: 'b' } as never)
+    git.show = 'a.ts\n'
+    git.dirty = 'a.ts\n'
+    git.next = 'ccc'
+    await $.tool.call({ tool: 'Bash', command: 'git commit --amend --no-edit' } as never)
+    expect((await pane($)).text).toContain('committed 0')
   })
 
   test('T4 Svg icons on desktop, glyphs on the terminal', async ($, on) => {
@@ -128,5 +146,8 @@ describe('touched files', () => {
     expect(isGitCommit('git -C ../r commit -am y')).toBe(true)
     expect(isGitCommit('git commit --dry-run')).toBe(false)
     expect(isGitCommit('git log --grep commit')).toBe(false)
+    expect(isGitCommit('git -c user.name=x --no-pager commit -m y')).toBe(true)
+    expect(isGitCommit('(cd sub && git commit -m z)')).toBe(true)
+    expect(isGitCommit('git commit -m a && npm test --dry-run')).toBe(true)
   })
 })

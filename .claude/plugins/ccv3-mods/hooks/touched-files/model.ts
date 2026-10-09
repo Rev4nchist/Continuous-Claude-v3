@@ -43,22 +43,61 @@ export const touch = (
   )
 }
 
-/** The commit's file list (git show --name-only): edited files it names turn committed. */
-export const commit = (files: readonly FileTouch[], committed: readonly string[]): FileTouch[] => {
+/**
+ * The commit's file list: edited files it names turn committed, unless they are still dirty
+ * (an amend without staging, a partly staged file).
+ */
+export const commit = (files: readonly FileTouch[], committed: readonly string[], dirty: readonly string[] = []): FileTouch[] => {
   const names = new Set(committed.map(name => name.trim()).filter(Boolean))
-  return files.map(file => (file.state === 'edited' && names.has(file.path) ? { ...file, state: 'committed' } : file))
+  const still = new Set(dirty.map(name => name.trim()).filter(Boolean))
+  return files.map(file => (file.state === 'edited' && names.has(file.path) && !still.has(file.path) ? { ...file, state: 'committed' } : file))
 }
 
-/** A Bash/PowerShell command that makes a git commit (not `git commit --dry-run`, not a commit message in an echo). */
+/**
+ * A shell command with a `git commit` segment: global options (`-C dir`, `-c k=v`, `--no-pager`) and a
+ * subshell paren allowed before it; `--dry-run` counts only inside that segment. The caller still
+ * checks that HEAD moved, so a false positive here costs a git call, never a wrong flip.
+ */
 export const isGitCommit = (command: string): boolean =>
-  /(^|[;&|]\s*|\s)git(\s+-C\s+\S+)?\s+commit\b/.test(command) && !/--dry-run/.test(command)
+  command.split(/&&|\|\||;|\|/).some(segment => {
+    const m = /(^|\s|\()git((?:\s+(?:-C\s+\S+|-c\s+\S+|--[\w-]+(?:=\S+)?))*)\s+commit\b(.*)$/.exec(segment)
+    return m !== null && !/--dry-run/.test(m[3] ?? '')
+  })
+
+/** Files the session may keep in the list; read-only entries go first when it fills. */
+export const MAX_FILES = 500
+
+export const capFiles = (files: readonly FileTouch[]): FileTouch[] => {
+  if (files.length <= MAX_FILES) return [...files]
+  const over = files.length - MAX_FILES
+  const drop = new Set(files.filter(file => file.state === 'read').slice(0, over).map(file => file.path))
+  const kept = files.filter(file => !drop.has(file.path))
+  return kept.slice(Math.max(0, kept.length - MAX_FILES))
+}
 
 export type TreeRow = { key: string; depth: number; name: string; isDir: boolean; file?: FileTouch }
 
-/** Directories, then files, each sorted; one row per directory on the way to a touched file. */
+/** Paths ordered segment by segment, ordinal (no locale folding), so a folder's files stay together. */
+const byPath = (a: FileTouch, b: FileTouch): number => {
+  const x = a.path.split('/')
+  const y = b.path.split('/')
+  for (let i = 0; i < Math.min(x.length, y.length); i++) {
+    const xi = x[i] ?? ''
+    const yi = y[i] ?? ''
+    if (xi === yi) continue
+    // At this depth a folder (more segments follow) sorts before a file.
+    const xDir = i < x.length - 1
+    const yDir = i < y.length - 1
+    if (xDir !== yDir) return xDir ? -1 : 1
+    return xi < yi ? -1 : 1
+  }
+  return x.length - y.length
+}
+
+/** One row per directory on the way to a touched file, then the file; folders before files at each level. */
 export const treeRows = (files: readonly FileTouch[]): TreeRow[] => {
   const rows: TreeRow[] = []
-  const sorted = [...files].sort((a, b) => a.path.localeCompare(b.path))
+  const sorted = [...files].sort(byPath)
   const seen = new Set<string>()
   for (const file of sorted) {
     const parts = file.path.split('/')

@@ -13,6 +13,8 @@ import { diffLines, groupSummary, hunksOf, mainArg } from '../hooks/skin/model'
 // K6 an edit's diff card loses line numbers or counts; an errored or patchless result isn't left to the engine
 // K7 the terminal gets Svg icons
 // K8 CCV3_MOD_SKIN_OFF still draws
+// K9 a row carrying its own output (verbose, expanded group) or a staged edit is redrawn by the skin, hiding it;
+//    a stray /skin argument flips the setting
 
 const store: Record<string, unknown> = {}
 
@@ -143,5 +145,16 @@ describe('skin', () => {
     expect(lines.at(-1)?.spans[0]?.text).toBe('… 1 more lines')
     expect(groupSummary([{ tool: 'Read', isRunning: true }])).toBe('Exploring 1 call · 1 Read')
     expect(mainArg('Grep', { pattern: 'foo', path: '/a/b/c/d' })).toBe('foo in …/b/c/d')
+  })
+
+  test('K9 rows with inline output and staged edits are left to the engine; bad /skin args change nothing', async ($, on) => {
+    world(on)
+    await start($)
+    await skinOn($)
+    expect((await draw($, 'ToolUse', USE('Bash', { command: 'npm test' }, { isErrored: true, output: 'boom' }))).key).toBeUndefined()
+    expect((await draw($, 'ToolResult', { tool_use_id: 'u1', tool: 'Edit', output: { ...PATCH, staged: true }, isErrored: false })).key).toBeUndefined()
+    const said = await $.command.run({ command: 'skin', args: 'maybe', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
+    expect(said).toMatchObject({ text: expect.stringContaining('Usage') })
+    expect((await draw($, 'ToolUse', USE('Read', { file_path: '/repo/a.ts' }))).key).toBe('skin-row')
   })
 })

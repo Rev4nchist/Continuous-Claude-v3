@@ -5,7 +5,8 @@ import type { FileTouch } from '../../types'
 import type { Span } from '../agentic-os/pane-model'
 import { ICON_GLYPH, iconSvg } from '../shared/glyphs'
 import { TONE } from '../shared/tones'
-import { STATE_TONE, commit, editCounts, fileRows, isGitCommit, relative, touch } from './model'
+import { diffLines, hunksOf } from '../skin/model'
+import { STATE_TONE, capFiles, commit, editCounts, fileRows, isGitCommit, relative, touch } from './model'
 
 // Touched Files: the files this session's own tool calls named, as a tree in the /files pane.
 // It never lists a folder: nothing outside the session's calls can appear, so it is safe on a shared screen.
@@ -48,20 +49,35 @@ export const touchedFiles = (on: On) => {
     // A commit is real only if HEAD moved: an `echo "git commit"` makes none.
     const before = commits ? await head($, root) : null
     const ran = await next(e)
-    if (!ranClean(ran as Ran)) return ran
     if (commits) {
+      // `git commit && npm test` can land the commit and still fail the call: only a deny means no commit.
+      if ((ran as Ran).deny !== undefined) return ran
       const after = await head($, root)
       if (after !== null && after !== before) {
-        const listed = await $.process.run(['git', 'show', '--name-only', '--format=', 'HEAD'], { cwd: root, timeoutMs: 5000 }).catch(() => null)
-        if (listed?.exitCode === 0) await update($, files, list => commit(list, listed.stdout.split('\n')))
+        const git = ['git', '-c', 'core.quotePath=false']
+        // diff-tree: paths relative to the session root (--relative), merge commits included (-m), the first commit too (--root).
+        const listed = await $.process.run([...git, 'diff-tree', '-m', '-r', '--root', '--no-commit-id', '--name-only', '--relative', 'HEAD'], { cwd: root, timeoutMs: 5000 }).catch(() => null)
+        const dirty = await $.process.run([...git, 'diff', '--name-only', '--relative', 'HEAD'], { cwd: root, timeoutMs: 5000 }).catch(() => null)
+        if (listed?.exitCode === 0) {
+          await update($, files, list => commit(list, listed.stdout.split('\n'), dirty?.exitCode === 0 ? dirty.stdout.split('\n') : []))
+        }
       }
       return ran
     }
+    if (!ranClean(ran as Ran)) return ran
+    const result = (ran as Ran).result as { staged?: unknown; structuredPatch?: unknown } | undefined
+    // A staged edit was held for review: the file did not change.
+    if (result?.staged === true) return ran
     const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : null
     if (path === null) return ran
     const rel = relative(path, root)
-    if (tool === 'Read') await update($, files, list => touch(list, rel, 'read'))
-    else if (tool === 'Edit') await update($, files, list => touch(list, rel, 'edited', editCounts(String(input.old_string ?? ''), String(input.new_string ?? ''))))
+    // Counts from the patch the tool reports when there is one (replace_all, unchanged lines, an overwrite).
+    const hunks = hunksOf(result)
+    if (tool === 'Read') await update($, files, list => capFiles(touch(list, rel, 'read')))
+    else if (hunks !== null) {
+      const { added, removed } = diffLines(hunks, 0)
+      await update($, files, list => capFiles(touch(list, rel, 'edited', { added, removed })))
+    } else if (tool === 'Edit') await update($, files, list => touch(list, rel, 'edited', editCounts(String(input.old_string ?? ''), String(input.new_string ?? ''))))
     else if (Array.isArray(input.edits)) {
       const counts = (input.edits as { old_string?: unknown; new_string?: unknown }[]).reduce(
         (n, one) => {
