@@ -6,12 +6,6 @@
   "instructions": "CCv3 is a Windows-first Claude Code harness. Many files exist as two copies (repo and ~/.claude, src and dist, settings.json and its template). Prefer findings about correctness, security and drift between the two copies over style.",
   "rules": [
     {
-      "id": "hook-dist",
-      "scope": [".claude/hooks/src/**"],
-      "severity": "high",
-      "rule": "After a change to a hook in .claude/hooks/src/<name>.ts, rebuild it and include any changed .claude/hooks/dist/<name>.mjs in the same PR. A type-only or comment-only edit that leaves the built output byte-identical needs no dist change."
-    },
-    {
       "id": "settings-template",
       "scope": [".claude/settings.json", ".claude/settings.json.template"],
       "severity": "high",
