@@ -13,7 +13,7 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
    - `git rev-list --left-right --count fork/main...HEAD` → *behind ahead*. `behind 0` = conflict-free / fast-forwardable.
    - **Working-tree churn is orthogonal to a PR merge** — the merge uses committed history, not your working tree. Uncommitted files never block or contaminate a PR merge.
    - PR mergeability: `gh api repos/<O>/<R>/pulls/<N>` → look for `mergeable_state=clean`.
-   - CI/checks + any bot review (CodeRabbit). No CI configured here → *your* local test suites + `/review` ARE the gate.
+   - CI/checks + the bot review (Greptile). No CI configured here → *your* local test suites + `/review` ARE the gate.
 2. **Sync.** If `behind > 0`, integrate `main` into your branch FIRST (merge or rebase) so conflicts surface locally, not inside the merge.
 3. **Choose the strategy.**
    - **merge-commit** (`--merge`): keeps all commits + adds a merge commit marking the feature boundary. Best when the commits are well-structured/conventional and the granular history has audit value.
@@ -25,7 +25,7 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
 5. **Clean up.** Delete the merged branch (remote + local), advance local `main`, verify `0 0` divergence.
 
 **For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
-It refuses unless `scripts/github/coderabbit-status.mjs` reports READY for the current head, merges
+It refuses unless `scripts/github/review-status.mjs` reports READY for the current head, merges
 with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. It syncs `~/.claude`
 itself. On `main` it syncs from the primary checkout. On any other branch it syncs from a temporary
 detached worktree of `main` (`%TEMP%\land-pr-sync-<N>`, removed afterwards) and leaves the primary

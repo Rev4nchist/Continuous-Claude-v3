@@ -18,7 +18,7 @@ export type OsAgent = { id: string; description: string; type: string; status: s
 export type OsLane = { id: string; title: string; state: string; note?: string }
 
 /**
- * READY, merged or closed ends a watch. LIMITED means CodeRabbit skipped the head (a person decides).
+ * READY, merged or closed ends a watch. LIMITED means the reviewer did not finish a review of the head (a person decides).
  * REVIEWED means the head was reviewed but is not READY (open threads or a failed check): the model acts.
  * STALLED means no review 60 minutes after the head appeared.
  */

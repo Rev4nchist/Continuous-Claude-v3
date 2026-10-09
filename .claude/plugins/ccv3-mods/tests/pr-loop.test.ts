@@ -18,7 +18,7 @@ import type { Engine } from 'claude-code/testing'
 // W12 a watch flagged by --when-ready asks Land/No when READY instead of only reporting
 // W13 /land with no shell tool falls back to one report-only-free instruction for the model
 // W14 CCV3_MODS_OFF=1 arms nothing and registers nothing
-// W15 rate limited CodeRabbit is reported once and the PR stays on the list
+// W15 a review Greptile did not finish is reported once and the PR stays on the list
 // W16 another session's list is not watched: the store is keyed by session id
 // W17 the status process is a failed spawn: nothing is reported as READY
 // W19 the pane and the band show the watched PRs, so a wait is visible
@@ -30,6 +30,7 @@ import type { Engine } from 'claude-code/testing'
 // W24 one PR's own error never stops the others; three in a row drop it; shared errors still back off
 // W25 pr_watch and /watch refuse a PR whose status cannot be read; the tool names its repo
 // W12 (again) a READY alert answered No or dismissed still gives the model its report line
+// W26 a reviewed head below the confidence bar alerts REVIEWED, not STALLED
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -51,6 +52,8 @@ type Status = {
   rateLimited: boolean
   prState: string
   merged: boolean
+  lowConfidence?: boolean
+  confidence?: number | null
 }
 
 const status = (pr: number, over: Partial<Status> = {}): Status => ({
@@ -59,7 +62,7 @@ const status = (pr: number, over: Partial<Status> = {}): Status => ({
   headShort: 'aaaaaaa',
   branch: 'feat/x',
   ready: false,
-  reasons: ['no CodeRabbit review of the head commit (pending)'],
+  reasons: ['no Greptile check on the head commit yet (review pending)'],
   mergeable_state: 'blocked',
   reviewedHead: false,
   unresolved: 0,
@@ -71,7 +74,7 @@ const status = (pr: number, over: Partial<Status> = {}): Status => ({
 const READY = (pr: number) => status(pr, { ready: true, reasons: [], reviewedHead: true, mergeable_state: 'clean' })
 const MERGED = (pr: number) => status(pr, { prState: 'closed', merged: true, reasons: ['already merged', 'PR is closed'] })
 const CLOSED = (pr: number) => status(pr, { prState: 'closed', reasons: ['PR is closed'] })
-const LIMITED = (pr: number) => status(pr, { rateLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed'] })
+const LIMITED = (pr: number) => status(pr, { rateLimited: true, reasons: ['Greptile did not finish a review of the head (completed/neutral)'] })
 
 // 'not-found' is a 404 for one PR; 'old-script' is a status script that predates prState and merged.
 type Reply = Status | 'error' | 'spawn-fail' | 'not-found' | 'old-script'
@@ -128,16 +131,16 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
-    if (!argv.some(part => part.includes('coderabbit-status.mjs'))) {
+    if (!argv.some(part => part.includes('review-status.mjs'))) {
       return { value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
     const pr = Number(argv.find(part => /^\d+$/.test(part)))
     seen.status.push(pr)
     const queue = script[pr] ?? []
     const reply = (queue.length > 1 ? queue.shift() : queue[0]) as Reply
-    if (reply === 'error') return { value: { exitCode: 2, stdout: '', stderr: 'coderabbit-status: could not determine (API rate limit exceeded)', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (reply === 'error') return { value: { exitCode: 2, stdout: '', stderr: 'review-status: could not determine (API rate limit exceeded)', isStdoutTruncated: false, isStderrTruncated: false } }
     if (reply === 'spawn-fail') return { value: { exitCode: 1, stdout: '', stderr: 'node: not found', isStdoutTruncated: false, isStderrTruncated: false } }
-    if (reply === 'not-found') return { value: { exitCode: 2, stdout: '', stderr: 'coderabbit-status: could not determine (gh: Not Found (HTTP 404))', isStdoutTruncated: false, isStderrTruncated: false } }
+    if (reply === 'not-found') return { value: { exitCode: 2, stdout: '', stderr: 'review-status: could not determine (gh: Not Found (HTTP 404))', isStdoutTruncated: false, isStderrTruncated: false } }
     if (reply === 'old-script') {
       const { prState: _prState, merged: _merged, ...old } = status(pr)
       return { value: { exitCode: 1, stdout: JSON.stringify(old), stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
@@ -257,14 +260,14 @@ describe('pr-loop watcher', () => {
     expect((stored(store)?.backoffUntil ?? 0) > 0).toBe(true)
   })
 
-  test('W15 rate limited CodeRabbit is reported once and the PR stays on the list', async ($, on) => {
+  test('W15 a review Greptile did not finish is reported once and the PR stays on the list', async ($, on) => {
     const { clock, seen, store } = world(on, { store: seed([{ pr: 6 }]), script: { 6: [LIMITED(6)] } })
     await start($)
     await clock.advance(TICK)
     await clock.advance(TICK)
     await clock.advance(TICK)
     expect(seen.toasts.length).toBe(1)
-    expect(seen.toasts[0]).toMatch(/rate limited/i)
+    expect(seen.toasts[0]).toMatch(/did not finish/i)
     expect(seen.submits.length).toBe(1)
     expect(stored(store)?.prs.map(p => p.pr)).toEqual([6])
   })
@@ -607,12 +610,23 @@ describe('pr-loop review alerts', () => {
     await start($)
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toMatch(/no CodeRabbit review/i)
-    expect(seen.submits[0]).toMatch(/do not post @coderabbitai review/i)
+    expect(seen.submits[0]).toMatch(/no Greptile review after 60 minutes/i)
+    expect(seen.submits[0]).toMatch(/pr-review-loop\.md "No review on the head"/)
     expect(stored(store)?.prs.map(p => p.pr)).toEqual([7])
     await clock.advance(TICK)
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
+  })
+
+  test('W26 a reviewed head below the confidence bar alerts REVIEWED, not STALLED', async ($, on) => {
+    const low = status(7, { reviewedHead: true, lowConfidence: true, confidence: 3, unresolved: 0, reasons: ['Greptile confidence 3/5 is below 4'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 7, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 7: [low] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by Greptile but is not READY/)
+    expect(seen.submits[0]).toContain('confidence 3/5')
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
   })
 
   test('W22 30 minutes without a review is still quiet', async ($, on) => {

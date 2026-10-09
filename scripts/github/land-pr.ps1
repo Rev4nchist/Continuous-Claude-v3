@@ -7,8 +7,9 @@
   "merge 43 and 44") - Opus 5.5 eval, P35. RUN THIS ONLY AFTER DAVE SAYS MERGE: the merge itself
   is his decision; this script only does the mechanics the same way every time.
 
-  1. Ready check: scripts/github/coderabbit-status.mjs must report READY for the PR's CURRENT head
-     (CodeRabbit reviewed that exact commit, 0 unresolved threads, checks green, mergeable clean).
+  1. Ready check: scripts/github/review-status.mjs must report READY for the PR's CURRENT head
+     (Greptile reviewed that exact commit, confidence >= 4, 0 unresolved threads, checks green,
+     mergeable clean).
      -IgnoreReview skips this; say why in the PR when you use it.
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (Codex, P35).
@@ -56,7 +57,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     # GitHub reports mergeable_state "unknown" for a while after the base branch moves (every PR
     # after the first in a landing run). Re-ask for up to ~90s before treating it as not ready.
     for ($try = 1; $try -le 7; $try++) {
-      $statusJson = node (Join-Path $PSScriptRoot 'coderabbit-status.mjs') $Pr --repo $Repo --json
+      $statusJson = node (Join-Path $PSScriptRoot 'review-status.mjs') $Pr --repo $Repo --json
       $ready = $LASTEXITCODE
       $st = $null; try { $st = $statusJson | ConvertFrom-Json } catch { }
       if (-not $st -or $st.mergeable_state -ne 'unknown') { break }
@@ -65,7 +66,7 @@ if (-not $pull.merged -and -not $CleanupOnly) {
     }
     if ($ready -eq 1 -and $st) { Write-Host "  not ready: $($st.reasons -join '; ')"; Fail "PR #$Pr is not ready. Re-run after the review lands, or pass -IgnoreReview deliberately." }
     # Exit 0 alone is not proof: require the JSON to say ready for THIS head commit.
-    if ($ready -ne 0 -or -not $st -or $st.ready -ne $true -or $st.head -ne $head) { Fail "could not confirm PR #$Pr is ready (coderabbit-status exit $ready). Nothing was merged." }
+    if ($ready -ne 0 -or -not $st -or $st.ready -ne $true -or $st.head -ne $head) { Fail "could not confirm PR #$Pr is ready (review-status exit $ready). Nothing was merged." }
   }
   Step "merging #$Pr ($Method) pinned to head $($head.Substring(0,7))"
   $res = gh api "repos/$Repo/pulls/$Pr/merge" -X PUT -f "merge_method=$Method" -f "sha=$head" 2>&1
