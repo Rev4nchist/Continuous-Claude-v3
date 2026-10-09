@@ -72,3 +72,5 @@ Run from the repo root:
 - `console.log` in a hooks module prints nothing under `claude plugin test`; a thrown error's text shows in the "hook was skipped" line, which is the way to read state there.
 - On 2.1.296 a headless `claude -p --plugin-dir` run no longer writes `.claude-plugin/types/` (it did on 2.1.293), so `validate-mods.mjs` reports `tsc NOT RUN` in a fresh checkout. Type-check against the plugin-authoring skill's `types/claude-code.d.ts` with its header tsconfig until an interactive load writes the folder.
 - `Svg` is in the desktop, vscode and mobile element tables, never the terminal's; every Svg part here has a text fallback.
+- A `claude -p` started from inside a session inherits `CLAUDE_CODE_SESSION_ID` and reports the parent's `session_id` (and writes its snapshot there). `e2e-headless.mjs` drops it and passes `--session-id <uuid>` per run.
+- **Unproven live:** Cache Guard puts a held message back with `$.prompt.fill` one tick after `{ drop }`. Tests (C3) prove the call, not that the desktop composer shows the text. Check once: `CCV3_CACHE_TTL_MIN=1`, wait two minutes, send a long message, and confirm the whole text is back in the box.

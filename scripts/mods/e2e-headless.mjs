@@ -18,6 +18,7 @@
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -48,13 +49,19 @@ const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate']) 
   const env = { ...process.env };
   // The run tests the copy named by --plugin-dir. The user's env must not add a second ccv3-mods.
   delete env.CLAUDE_CODE_PLUGIN_DIRS;
+  // Run from inside a session, the child inherits its id and every run reports (and snapshots under) the
+  // parent's session. Each run gets its own.
+  const parentId = env.CLAUDE_CODE_SESSION_ID ?? null;
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  const sessionId = randomUUID();
   if (off) env.CCV3_MODS_OFF = '1';
   else delete env.CCV3_MODS_OFF;
   writeFileSync(debugPath(label), ''); // --debug-file appends; a stale log would add load lines
   const started = Date.now();
   const ran = spawnSync(
     'claude',
-    ['-p', prompt, '--plugin-dir', pluginDir, '--allowedTools', ...tools, '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
+    ['-p', prompt, '--session-id', sessionId, '--plugin-dir', pluginDir, '--allowedTools', ...tools, '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
     { cwd: repoRoot, env, encoding: 'utf8', timeout: 300_000 },
   );
   writeFileSync(join(outDir, `${date}-mods-headless-${label}.json`), ran.stdout ?? '');
@@ -64,7 +71,7 @@ const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate']) 
   } catch {
     // reported below as a failed check
   }
-  return { label, status: ran.status, seconds: Math.round((Date.now() - started) / 1000), result, stderr: ran.stderr ?? '' };
+  return { label, sessionId, parentId, status: ran.status, seconds: Math.round((Date.now() - started) / 1000), result, stderr: ran.stderr ?? '' };
 };
 
 const checks = [];
@@ -109,7 +116,7 @@ const offFile = offId ? snapshotPath(offId) : null;
 check('off: no snapshot is written', Boolean(offFile) && !existsSync(offFile), offFile ?? 'no session id');
 if (offFile && existsSync(offFile)) rmSync(offFile);
 
-const ledger = run('ledger', false, LEDGER_PROMPT, ['TaskCreate', 'Agent'])
+const ledger = run('ledger', false, LEDGER_PROMPT, ['TaskCreate', 'Agent']);
 const ledgerId = ledger.result?.session_id;
 check('ledger: claude exited 0 with a JSON result', ledger.status === 0 && Boolean(ledgerId), `exit ${ledger.status}, ${ledger.seconds}s, session ${ledgerId}`);
 const ledgerFile = ledgerId ? snapshotPath(ledgerId) : null;
@@ -127,6 +134,13 @@ if (ledgerFile && existsSync(ledgerFile)) {
   }
   rmSync(ledgerFile);
 } else check('ledger: a snapshot named by session_id exists', false, ledgerFile ?? 'no session id');
+
+const ids = [on, off, ledger].map(r => r.result?.session_id);
+check(
+  'each run had its own session (not the parent, not shared)',
+  ids.every((id, i) => id === [on, off, ledger][i].sessionId && id !== on.parentId) && new Set(ids).size === 3,
+  ids.join(', '),
+);
 
 const failed = checks.filter(c => !c.ok).length;
 console.log(`mods e2e-headless: ${checks.length - failed} passed, ${failed} failed`);
