@@ -904,6 +904,7 @@
     }
   },
   "effortLevel": "high",
+  "advisorModel": "fable",
   "skillOverrides": {
     "anthropic-skills:frontend-design": "off",
     "anthropic-skills:frontend-slides": "off",
@@ -919,6 +920,9 @@
       "effortLevel": "high"
     },
     "claude-sonnet-5-5": {
+      "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
       "effortLevel": "high"
     }
   },

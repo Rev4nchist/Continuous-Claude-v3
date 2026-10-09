@@ -888,6 +888,7 @@
     }
   },
   "effortLevel": "high",
+  "advisorModel": "fable",
   "skillOverrides": {
     "anthropic-skills:frontend-design": "off",
     "anthropic-skills:frontend-slides": "off",

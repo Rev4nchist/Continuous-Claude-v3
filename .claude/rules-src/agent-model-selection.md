@@ -24,8 +24,9 @@ pinned `high` too, so review and planning quality does not depend on the main se
   parent `--effort low` gave low.
 - Baseline before the pin: 46 of 99 Sonnet subagent runs medium, 5 low.
 - Proof: read `"effort":"<level>"` in the subagent transcript (`~/.claude/projects/<slug>/<session>/subagents/`).
-- `~/.claude/settings.json` `modelSettings` pins `claude-sonnet-5` and `claude-sonnet-5-5` at high for
-  Sonnet main sessions.
+- `~/.claude/settings.json` `modelSettings` pins `claude-sonnet-5`, `claude-sonnet-5-5` and
+  `claude-opus-5-5` at high for main sessions. Opus 5.5 needs its own entry: a top-level `effortLevel`
+  in user settings does not count for it, and it defaults to medium.
 - A workflow `agent()` on Sonnet passes `effort: 'high'`. For Sonnet work through the Agent tool, use a
   predefined Sonnet agent (it carries the pin) rather than an ad-hoc `model: sonnet` call.
 - Gate: `node scripts/check-agent-model-drift.mjs` fails when any agent lacks `effort: high`. The pin covers
@@ -46,12 +47,14 @@ correct model for subagent work"). Pick by the same judgment-density rule:
   from a precise spec, test runs, formatting.
 - `model: 'opus'` for judgment stages: checking findings against the code, adversarial review,
   synthesis, ranking, design.
-- Fable (or any non-tier model) only when Dave asks for it.
+- Fable (or any non-tier model) only when Dave asks for it. Exception: Fable is the **advisor**
+  (`advisorModel: "fable"`, Dave 2026-10-08). The main model consults it at decision points, with the
+  full transcript, and subagents inherit it. It is never a model for `agent()` or `Agent` calls.
 Omitting `model` stays acceptable for a single ad-hoc question where cost does not matter.
 
 ## Never use Haiku
 
-**Never set `model: haiku`** — no exceptions. Haiku optimizes cost/latency at the expense of accuracy; the Haiku lane is deliberately collapsed up into Sonnet 5. Tasks often seem "quick" but require tracing relationships across files.
+**Never set `model: haiku`** — no exceptions. Haiku optimizes cost/latency at the expense of accuracy; the Haiku lane is deliberately collapsed up into Sonnet 5. Tasks often seem "quick" but require tracing relationships across files. Re-checked against Haiku 5.5 on 2026-10-08: the ban stands, and read-only work stays on Sonnet 5.5 (`docs/self-improvement/proposals/2026-10-08-model-makeup.md`).
 
 ## Never set `CLAUDE_CODE_SUBAGENT_MODEL`
 

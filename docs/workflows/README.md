@@ -142,7 +142,7 @@ Fix complete!
 **Agents:**
 - **scout** (Sonnet): Locates bug using grep, TLDR-code structure, stack traces
 - **premortem** (skill): Quick risk assessment (5 core questions)
-- **spark** (Opus): Applies minimal fix, adds regression test
+- **spark** (Sonnet): Applies minimal fix, adds regression test
 - **arbiter** (Sonnet): Runs tests to verify fix
 
 ---
@@ -189,7 +189,7 @@ Result: 4.8s → 0.1s response time
 - **sleuth** (Sonnet): Initial triage, gather symptoms, logs, stack traces
 - **debug-agent** (Opus): Deep analysis, root cause identification
 - **profiler** (Sonnet): Optional performance measurement for slow code
-- **spark** (Opus): Applies fix based on diagnosis
+- **spark** (Sonnet): Applies fix based on diagnosis
 
 ---
 
@@ -244,7 +244,7 @@ Build complete!
 **Agents:**
 - **oracle** (Sonnet): Optional external research for APIs, libraries, best practices
 - **plan-agent** (Opus): Creates detailed implementation plan with phases
-- **kraken** (Opus): TDD implementation - tests first, then code (uses TLDR-code for 95% token savings)
+- **kraken** (Sonnet): TDD implementation - tests first, then code (uses TLDR-code for 95% token savings)
 - **arbiter** (Sonnet): Runs full test suite, verifies build
 - **scribe** (Sonnet): Documents implementation, creates handoff
 
@@ -294,7 +294,7 @@ TDD workflow complete!
 **Agents:**
 - **plan-agent** (Opus): Designs test cases and approach (no implementation)
 - **arbiter** (Sonnet): Writes failing tests (RED phase)
-- **kraken** (Opus): Writes minimal code to pass tests (GREEN phase)
+- **kraken** (Sonnet): Writes minimal code to pass tests (GREEN phase)
 - **arbiter** (Sonnet): Validates full suite passes
 
 ---
@@ -354,7 +354,7 @@ Refactoring complete!
 **Agents:**
 - **phoenix** (Opus): Analyzes current code using TLDR-code, identifies improvement areas
 - **plan-agent** (Opus): Creates safe refactoring plan with small steps
-- **kraken** (Opus): Implements refactoring following plan exactly
+- **kraken** (Sonnet): Implements refactoring following plan exactly
 - **plan-reviewer** (Opus): Reviews changes for correctness, no behavior changes
 - **arbiter** (Sonnet): Validates all tests still pass
 
@@ -595,7 +595,7 @@ All tests passing! ✅
 **Agents:**
 - **arbiter** (Sonnet): Runs unit tests, type checks, linting (parallel)
 - **arbiter** (Sonnet): Runs integration tests (parallel)
-- **atlas** (Opus): Runs E2E/acceptance tests (after fast tests pass)
+- **atlas** (Sonnet): Runs E2E/acceptance tests (after fast tests pass)
 
 ---
 
@@ -739,7 +739,7 @@ Phase 5: Release notes...
 
 **Agents:**
 - **aegis** (Opus): Security vulnerability scan
-- **atlas** (Opus): Full E2E test suite
+- **atlas** (Sonnet): Full E2E test suite
 - **review-agent** (Opus): Final release review, approval/blocking decision
 - **herald** (Sonnet): Version bump, changelog generation
 - **scribe** (Sonnet): Release notes, documentation updates
@@ -840,8 +840,8 @@ Migration complete! Express → Fastify
 - **oracle** (Sonnet): Research target framework/version, breaking changes
 - **phoenix** (Opus): Analyze current codebase for migration impact (uses TLDR-code)
 - **plan-agent** (Opus): Create phased migration plan with rollback strategy
-- **kraken** (Opus): Implement migration changes phase by phase
-- **surveyor** (Opus): Review migration for completeness, no regressions
+- **kraken** (Sonnet): Implement migration changes phase by phase
+- **surveyor** (Sonnet): Review migration for completeness, no regressions
 
 ---
 
@@ -851,10 +851,10 @@ Migration complete! Express → Fastify
 
 | Agent | Model | Role | Typical Usage |
 |-------|-------|------|---------------|
-| **kraken** | Opus | TDD implementation | Heavy lifting, complex features, follows plans |
-| **spark** | Opus | Quick fixes | Fast turnaround, minimal changes |
+| **kraken** | Sonnet | TDD implementation | Heavy lifting, complex features, follows plans |
+| **spark** | Sonnet | Quick fixes | Fast turnaround, minimal changes |
 | **arbiter** | Sonnet | Test runner | Unit/integration tests, verification |
-| **atlas** | Opus | E2E tests | End-to-end flows, acceptance tests |
+| **atlas** | Sonnet | E2E tests | End-to-end flows, acceptance tests |
 
 ### Investigation Agents
 
@@ -881,7 +881,7 @@ Migration complete! Express → Fastify
 | **critic** | Opus | Code quality review | Style, readability, patterns |
 | **plan-reviewer** | Opus | Architecture review | Plan adherence, design consistency |
 | **review-agent** | Opus | Review synthesis | Merge multiple perspectives, final verdict |
-| **surveyor** | Opus | Migration review | Migration completeness, regression check |
+| **surveyor** | Sonnet | Migration review | Migration completeness, regression check |
 
 ### Planning Agents
 
