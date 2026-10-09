@@ -195,7 +195,7 @@
         "^gh\\s+api\\b(?=.*\\s-X\\s+POST\\b)(?=.*/pulls(\\s|$))"
       ],
       "segment": [
-        "^node(\\.exe)?\\s.*(review|coderabbit)-status\\.mjs",
+        "^node(\\.exe)?\\s.*review-status\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },

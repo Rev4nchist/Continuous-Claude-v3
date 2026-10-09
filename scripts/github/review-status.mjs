@@ -17,8 +17,9 @@
  *   - mergeable:  GitHub's mergeable_state
  * ready = reviewed && confidence >= 4 && unresolved == 0 && checks green && mergeable "clean".
  *
- * CodeRabbit is being phased out (proposal 2026-10-09-greptile.md, decision D2). Its commit status
- * neither blocks nor grants READY. Its review threads still count as unresolved threads.
+ * CodeRabbit was uninstalled from this repo on 2026-10-09 (proposal 2026-10-09-greptile.md, decision
+ * D2). A leftover CodeRabbit commit status on an older PR neither blocks nor grants READY; any review
+ * thread, from any reviewer, still counts as unresolved.
  *
  * Usage: node scripts/github/review-status.mjs <pr-number> [--repo owner/name] [--json]
  * Exit 0 = ready, 1 = not ready (reasons listed), 2 = could not determine.
