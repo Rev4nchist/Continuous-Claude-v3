@@ -38,19 +38,25 @@ export function loadRegistryHosts(path) {
   }
 }
 
+const SCHEMES = new Set(['http:', 'https:']);
+
 /**
- * Decide one target. Returns { allowed, host, reason }.
- * Deny by default: allowed only for loopback or an exact registry host.
+ * Decide one target. Returns { allowed, host, url, reason }.
+ * Deny by default: allowed only for an http(s) URL whose host is loopback or an
+ * exact registry host. `url` is the canonical form; scan that, not the input.
  */
 export function decide(target, hosts) {
-  let host;
+  let u;
   try {
-    host = new URL(target).hostname.toLowerCase();
+    u = new URL(target);
   } catch {
-    return { allowed: false, host: null, reason: `"${target}" is not a valid URL` };
+    return { allowed: false, host: null, url: null, reason: `"${target}" is not a valid URL` };
   }
-  if (!host) return { allowed: false, host, reason: 'URL has no host' };
-  if (isLoopback(host)) return { allowed: true, host, reason: 'loopback' };
-  if (hosts.has(host)) return { allowed: true, host, reason: 'project registry' };
-  return { allowed: false, host, reason: `${host} is not a target you own` };
+  const host = u.hostname.toLowerCase();
+  const deny = (reason) => ({ allowed: false, host, url: null, reason });
+  if (!SCHEMES.has(u.protocol)) return deny(`scheme ${u.protocol} is not http or https`);
+  if (!host) return deny('URL has no host');
+  if (isLoopback(host)) return { allowed: true, host, url: u.href, reason: 'loopback' };
+  if (hosts.has(host)) return { allowed: true, host, url: u.href, reason: 'project registry' };
+  return deny(`${host} is not a target you own`);
 }

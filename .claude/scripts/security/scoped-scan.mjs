@@ -37,21 +37,37 @@ const REGISTRY = join(CLAUDE_DIR, 'project-registry.json');
 
 // --- tools ----------------------------------------------------------------
 
-/** Resolve an executable on PATH. Returns the path, or null if absent. */
+/**
+ * Resolve an executable on PATH. Returns the path, or null when the lookup ran
+ * and found nothing. If the lookup itself fails, it exits 1: a scan that could
+ * not be checked must never look like a clean "not installed" skip.
+ */
 function resolveExe(name) {
   const finder = process.platform === 'win32' ? 'where' : 'which';
   const r = spawnSync(finder, [name], { encoding: 'utf8' });
+  if (r.error) {
+    console.error(`[scoped-scan] could not search PATH for ${name}: ${r.error.message}`);
+    process.exit(1);
+  }
   if (r.status === 0 && r.stdout) return r.stdout.split(/\r?\n/)[0].trim();
   return null;
 }
 
+// Characters cmd.exe treats specially. Shell-run args must not contain them.
+const CMD_META = /["&|<>^%!\r\n]/;
+
 function run(exe, args, opts = {}) {
   console.log(`[scoped-scan] run: ${exe} ${args.join(' ')}`);
   // Node on Windows refuses to spawn a .cmd / .bat without a shell (EINVAL).
-  // Quote the exe and args for the shell. Windows paths cannot contain '"'.
+  // Only then is a shell used, and every argument is checked first.
   const useShell = /\.(cmd|bat)$/i.test(exe);
   let r;
   if (useShell) {
+    const bad = [exe, ...args].find((s) => CMD_META.test(s));
+    if (bad) {
+      console.error(`[scoped-scan] refusing shell run: argument has a shell metacharacter: ${bad}`);
+      return 1;
+    }
     const q = (s) => (/\s/.test(s) ? `"${s}"` : s);
     r = spawnSync([q(exe), ...args.map(q)].join(' '), { stdio: 'inherit', shell: true, cwd: opts.cwd });
   } else {
@@ -78,12 +94,12 @@ function resolveDir(argv) {
   return dir;
 }
 
-/** Gate a target. Prints the decision. Returns true only when allowed. */
+/** Gate a target. Prints the decision. Returns the canonical URL, or null when denied. */
 function gate(target) {
   const d = decide(target, loadRegistryHosts(REGISTRY));
   if (d.allowed) {
-    console.log(`[scoped-scan] ALLOWED: ${d.host} (${d.reason}).`);
-    return true;
+    console.log(`[scoped-scan] ALLOWED: ${d.url} (${d.reason}).`);
+    return d.url;
   }
   console.error(
     `[scoped-scan] DENIED: ${d.reason}.\n` +
@@ -91,7 +107,7 @@ function gate(target) {
     `  Add the project to the registry, or scan a target you own. ` +
     `Scanning a host you do not own may be illegal.`
   );
-  return false;
+  return null;
 }
 
 // --- commands -------------------------------------------------------------
@@ -132,10 +148,12 @@ function cmdWeb(argv) {
     console.error('[scoped-scan] usage: web <url>');
     return 1;
   }
-  if (!gate(target)) return DENY;
+  const url = gate(target);
+  if (!url) return DENY;
   const nuclei = resolveExe('nuclei');
   if (!nuclei) return skipMissing('nuclei', 'https://github.com/projectdiscovery/nuclei');
-  return run(nuclei, ['-u', target, '-silent', '-severity', 'medium,high,critical']);
+  // Scan the canonical URL the gate checked, never the raw input.
+  return run(nuclei, ['-u', url, '-silent', '-severity', 'medium,high,critical']);
 }
 
 function cmdCheck(argv) {
@@ -143,7 +161,7 @@ function cmdCheck(argv) {
     console.error('[scoped-scan] usage: check <url>');
     return 1;
   }
-  return gate(argv[0]) ? 0 : DENY;
+  return gate(argv[0]) !== null ? 0 : DENY;
 }
 
 function cmdAllowlist() {

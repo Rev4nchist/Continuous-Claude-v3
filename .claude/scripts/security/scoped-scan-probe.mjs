@@ -39,11 +39,15 @@ const gateCases = [
   ['allow registry host', 'https://staging.example.com', true],
   ['deny non-registry host', 'https://other.example.com', false],
   ['deny lookalike suffix', 'https://staging.example.com.evil.net', false],
+  ['deny ftp scheme on loopback', 'ftp://localhost/', false],
+  ['deny file scheme', 'file:///C:/Windows/win.ini', false],
 ];
 for (const [label, target, want] of gateCases) {
   const d = decide(target, owned);
   report(d.allowed === want, `gate: ${label}`, d.reason);
 }
+const canon = decide('HTTP://LOCALHOST:3000', owned);
+report(canon.allowed && canon.url === 'http://localhost:3000/', 'gate: returns canonical URL', canon.url);
 report(owned.size === 1, 'gate: non-URL registry entries skipped', `${owned.size} host`);
 const missing = join(tmpdir(), `scoped-scan-missing-${process.pid}.json`);
 report(loadRegistryHosts(missing).size === 0, 'gate: unreadable registry fails closed');

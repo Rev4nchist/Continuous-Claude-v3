@@ -79,10 +79,10 @@ summarizes the findings into a report.* Rebuild it narrowly and defensively.
   - `gitleaks` for secrets.
   - `trivy` for containers and IaC.
   - A `nuclei` HTTP baseline or OWASP ZAP baseline against a URL **from `project-registry.json`**.
-- **A hard scope gate.** A guard reads the target and allows a scan only against a host in
-  `project-registry.json` that you own: localhost, a dev port, or your own Vercel preview URL. It
-  denies every other host. This is the control HexStrike lacks. It is the harness deciding, not the
-  model.
+- **A hard scope gate.** The runner reads the target and allows a scan in exactly two cases: an
+  http(s) URL whose host is loopback (`localhost`, `*.localhost`, `127.0.0.1`, `::1`), or an exact
+  host from a `project-registry.json` `url`. It denies every other host and scheme. This is the
+  control HexStrike lacks. It is the harness deciding, not the model.
 - **Wire it into the existing flow.** The `/security` skill becomes: `aegis` (static) → `security-scan`
   (dynamic, scoped) → `arbiter` (verify fixes). One report, two phases.
 - **How all repos benefit.** Any repo with a registry entry gets the dynamic scan for free, bounded to
@@ -91,8 +91,8 @@ summarizes the findings into a report.* Rebuild it narrowly and defensively.
 ## 4. Risks of the chosen path
 
 - **Scope-gate bypass.** If the gate is weak, a scan could hit a host you do not own. Mitigation: the
-  gate denies by default and allows only exact registry hosts. Add a probe that proves a non-registry
-  host is denied.
+  gate denies by default and allows only loopback or exact registry hosts, over http(s). A probe
+  proves a non-registry host, a lookalike host and a non-http scheme are denied.
 - **Tool install burden on Windows.** `nuclei`, `trivy`, `gitleaks` are single Go binaries, so this is
   small. `osv-scanner` is also a Go binary. ZAP is heavier; prefer `nuclei` first.
 - **Scope creep toward offense.** Keep the tool list defensive. No exploitation, no password attacks,
@@ -110,8 +110,9 @@ All defensive, scope-gated, confirm-first. Verified before hand-off.
 - **`.claude/scripts/security/scope-gate.mjs`** - the gate: pure functions, deny by default, fails
   closed on an unreadable registry. Owned hosts come only from the project registry; no environment
   variable can change them.
-- **`.claude/scripts/security/scoped-scan-probe.mjs`** - the probe. 15/15 pass: 10 pure-gate cases
-  with fixture hosts, 5 runner cases through `check` and deny paths only, so no scanner starts.
+- **`.claude/scripts/security/scoped-scan-probe.mjs`** - the probe. 18/18 pass: 13 pure-gate cases
+  with fixture hosts (incl. scheme and canonical-URL checks), 5 runner cases through `check` and
+  deny paths only, so no scanner starts.
 - **`.claude/hooks/src/scan-scope-guard.ts`** - PreToolUse(Bash|PowerShell) hook. A reminder, not a
   security boundary: when an active scanner is typed as the command, it denies the call and points
   to the runner. The runner's gate is the control. Widening the hook's coverage is a follow-up for
@@ -122,7 +123,7 @@ All defensive, scope-gated, confirm-first. Verified before hand-off.
 - **`.claude/skills/security/SKILL.md`** - added Phase 1.5 pointing static `/security` at the new
   dynamic phase.
 
-Gates run: scope probe 15/15 (after the PR #111 review fixes); `audit-skills` 0 hard failures, 0 ratchet regressions; full hook suite
+Gates run: scope probe 18/18 (after the PR #111 review fixes); `audit-skills` 0 hard failures, 0 ratchet regressions; full hook suite
 97 files / 2259 tests / 0 fail; context-budget 23508 chars (unchanged, the skill is not
 always-loaded).
 
