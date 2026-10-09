@@ -7,7 +7,8 @@
  * ~/.claude/scripts/security/scoped-scan.mjs. The wrapper's scope gate
  * (deny by default, fail closed) is the real control: the harness decides the
  * scope, not a prompt. This hook only matches the leading executable of each
- * command segment; widening its coverage is a tracked follow-up.
+ * command segment. Widening that matching was closed on 2026-10-09 (Dave's decision in
+ * docs/self-improvement/proposals/2026-10-09-hexstrike-ai.md): keep it a reminder.
  *
  * The wrapper spawns the scanner as a child of node, which is not a Claude tool
  * call, so this hook never sees it.

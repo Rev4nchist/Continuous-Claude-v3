@@ -8,6 +8,11 @@ Do not vendor it. Do not add it as an MCP server. Do not depend on it.
 
 Dave's decisions:
 - 2026-10-09: "build it". Built the `security-scan` capability this session (see §5).
+- 2026-10-09: "close the scan-guard follow-up". The `scan-scope-guard` hook stays a reminder; it
+  will not be widened. Command-text matching can never be complete and adds false positives, the
+  runner's scope gate is the control, and none of the blocked scanners is installed. If `nuclei` is
+  installed later for a deployed target, add a control outside command text (for example a
+  firewall egress rule that limits it to localhost) instead of widening the hook.
 
 How it was built: one `oracle` research agent fetched the repo and public reporting. No workflow
 fan-out. A single-repo adoption call needs one research pass, not a swarm. Raw facts came from the
@@ -115,8 +120,8 @@ All defensive, scope-gated, confirm-first. Verified before hand-off.
   deny paths only, so no scanner starts.
 - **`.claude/hooks/src/scan-scope-guard.ts`** - PreToolUse(Bash|PowerShell) hook. A reminder, not a
   security boundary: when an active scanner is typed as the command, it denies the call and points
-  to the runner. The runner's gate is the control. Widening the hook's coverage is a follow-up for
-  Dave (PR #111 review). 20 unit tests + a 5-case stdin E2E. Registered in repo `settings.json` and
+  to the runner. The runner's gate is the control. Widening the hook's coverage was raised in the
+  PR #111 review and closed on 2026-10-09 (see Dave's decisions). 20 unit tests + a 5-case stdin E2E. Registered in repo `settings.json` and
   the `settings.json.template` under both shells.
 - **`.claude/skills/security-scan/SKILL.md`** - user-invoked skill. The dynamic phase. Mandates the
   wrapper, lists the defensive tools, states the one scope rule.
