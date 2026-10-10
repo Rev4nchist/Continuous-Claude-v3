@@ -44,6 +44,8 @@ const TOOL_TIMES_KEPT = 200
 const cacheClock = atom({ plugin: 'ccv3-mods', key: 'cacheClock' } as const, { lastReplyAt: null, heldFor: null } as CacheClock)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
+/** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
+const uiArmed = atom({ plugin: 'ccv3-mods', key: 'uiArmed' } as const, false)
 
 const PANE = 'agentic-os'
 const PULSE_MS = 5000
@@ -191,26 +193,50 @@ const refreshAfter = ($: EngineInterface, tool: string, input: Record<string, un
   if ((tool === 'Bash' || tool === 'PowerShell') && command.includes('lane.mjs')) void refreshLanes($)
 }
 
+/** Proof the plugin loaded, how the session started and where it draws: the one file to read when nothing shows. */
+const writeProof = async ($: EngineInterface, proof: { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }) => {
+  const home = await homeDir($)
+  if (!home) return
+  const sessionId = await $.session.id().catch(() => null)
+  const text = JSON.stringify({ at: new Date().toISOString(), ...proof, sessionId }, null, 2)
+  await $.fs.write(`${home}/${DIAG_DIR}/last-session.json`, text).catch(() => undefined)
+}
+
+/**
+ * The UI side of a session: /os, the 5 s pulse and the lane read. Runs at an interactive (REPL) start and when the
+ * desktop app attaches: the desktop drives Claude Code through the SDK, so its sessions start headless with no
+ * surface and the desktop joins later by `session.attach`. The pulse is armed once per environment.
+ */
+const startUi = async ($: EngineInterface) => {
+  await update($, mode, () => 'interactive')
+  await $.command
+    .register({ name: 'os', description: 'Agentic OS pane: plan, tasks, current step, agents and lane of this session' })
+    .catch(err => noteError($, 'os-register', err))
+  if (!(await read($, uiArmed))) {
+    await update($, uiArmed, () => true)
+    $.clock.every(PULSE_MS, () => void pulse($))
+  }
+  void refreshLanes($)
+}
+
 export const agenticOs = (on: On) => {
   on('session.start', async ($, e, next) => {
     if (await isOff($)) return next(e)
+    // A start (or a reload, which drops the old timers) re-arms the pulse.
+    await update($, uiArmed, () => false)
     await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
-    // Headless: no /os pane to open, no timer and no process. Capture and snapshots still run.
-    if (!e.isInteractive) return next(e)
-    await $.command
-      .register({ name: 'os', description: 'Agentic OS pane: plan, tasks, current step, agents and lane of this session' })
-      .catch(err => noteError($, 'os-register', err))
-    // Proof the plugin loaded in this session, and on which surface: the one file to read when nothing shows.
-    const home = await homeDir($)
-    if (home) {
-      const sessionId = await $.session.id().catch(() => null)
-      const proof = { at: new Date().toISOString(), surface: e.surface ?? null, sessionId, cwd: e.cwd ?? null }
-      await $.fs.write(`${home}/${DIAG_DIR}/last-session.json`, JSON.stringify(proof, null, 2)).catch(() => undefined)
-    }
-    $.clock.every(PULSE_MS, () => void pulse($))
-    void refreshLanes($)
+    await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
+    // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
+    if (e.isInteractive) await startUi($)
     return next(e)
   })
+
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    await writeProof($, { trigger: 'attach', isInteractive: false, surface: e.surface })
+    await startUi($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'os' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agentic OS' })

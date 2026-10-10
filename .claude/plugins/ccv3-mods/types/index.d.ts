@@ -126,11 +126,15 @@ declare module 'claude-code' {
       cacheHold: CacheHold | null
       /** The surface this session draws on (Cache Guard holds only where its card can show). */
       cacheSurface: string | null
+      /** True once this session's first desktop send wrote desktop-prompt.json. */
+      originNoted: boolean
       /** Touched Files (hooks/touched-files): only files this session's tool calls named. */
       files: FileTouch[]
       /** CCv3 Skin (hooks/skin): on/off, mirrored from $.store; call timings for its chips. */
       skinOn: boolean
       toolTimes: Record<string, ToolTime>
+      /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
+      uiArmed: boolean
     }
   }
 }

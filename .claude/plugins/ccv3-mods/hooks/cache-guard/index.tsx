@@ -2,7 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { CacheClock, CacheHold } from '../../types'
-import { isDesktop } from '../shared/diag'
+import { DIAG_DIR, isDesktop } from '../shared/diag'
 import { coldCost, warmCost } from '../shared/price'
 import { TONE } from '../shared/tones'
 import { DROP_REASON, cardLines, isCold, isPlainPrompt, ttlMinutes } from './model'
@@ -17,6 +17,8 @@ const cacheClock = atom({ plugin: 'ccv3-mods', key: 'cacheClock' } as const, { l
 const cacheHold = atom({ plugin: 'ccv3-mods', key: 'cacheHold' } as const, null as CacheHold | null)
 /** The surface this session draws on; Cache Guard holds only in the desktop app. */
 const cacheSurface = atom({ plugin: 'ccv3-mods', key: 'cacheSurface' } as const, null as string | null)
+/** True once this session's first desktop send was recorded. */
+const originNoted = atom({ plugin: 'ccv3-mods', key: 'originNoted' } as const, false)
 /** Set at session.start by agentic-os (and pr-loop): the same atom, declared here to read it. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 
@@ -26,6 +28,12 @@ const isOff = async ($: EngineInterface): Promise<boolean> =>
 export const cacheGuard = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     await update($, cacheSurface, () => e.surface ?? null)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The desktop app drives Claude Code through the SDK: its sessions start headless and the desktop attaches later.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    await update($, cacheSurface, () => e.surface)
     return next(e)
   }).catch(($, e, next) => next(e))
 
@@ -39,6 +47,14 @@ export const cacheGuard = (on: On) => {
   }).catch(($, e, next) => next(e))
 
   on('prompt.submit', async ($, e, next) => {
+    // Once per session in the desktop app, record how its composer's sends arrive (composer or sdk): the hold rule
+    // below accepts only `composer`, and the desktop's own kind has not been seen live yet.
+    if ((await read($, cacheSurface)) === 'desktop' && !(await read($, originNoted))) {
+      await update($, originNoted, () => true)
+      const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+      const note = JSON.stringify({ at: new Date().toISOString(), origin: e.origin.kind, turnId: e.turnId ?? null }, null, 2)
+      if (home) await $.fs.write(`${home}/${DIAG_DIR}/desktop-prompt.json`, note).catch(() => undefined)
+    }
     // Only the person's own plain Enter at the prompt, between turns: no slash or bang command,
     // no attachment (a re-send couldn't carry it), in an interactive terminal or desktop session.
     if (e.origin.kind !== 'composer' || e.turnId !== undefined || !isPlainPrompt(e.text, e.attachments?.length ?? 0)) return next(e)

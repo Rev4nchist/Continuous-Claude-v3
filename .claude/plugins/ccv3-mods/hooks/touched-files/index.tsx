@@ -35,13 +35,23 @@ const noteError = async ($: EngineInterface, where: string, err: unknown) => {
   if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
 }
 
+/** Registers /files: at an interactive start, and when the desktop app attaches. */
+const startUi = async ($: EngineInterface) => {
+  if (await isOff($)) return
+  await $.command
+    .register({ name: 'files', description: 'Touched Files: the files this session read, edited and committed' })
+    .catch(err => noteError($, 'files-register', err))
+}
+
 export const touchedFiles = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
-    if (!(await isOff($))) {
-      await $.command
-        .register({ name: 'files', description: 'Touched Files: the files this session read, edited and committed' })
-        .catch(err => noteError($, 'files-register', err))
-    }
+    await startUi($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The desktop app drives Claude Code through the SDK: its sessions start headless and the desktop attaches later.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    await startUi($)
     return next(e)
   }).catch(($, e, next) => next(e))
 
