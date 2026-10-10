@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { AgentRun, CacheClock, HudState, ToolTime, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
 import { hudParts, hudSpans } from '../hud/model'
+import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
@@ -62,6 +63,12 @@ const okResult = (ran: Result): Record<string, unknown> | undefined =>
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
 
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+
+/** Leaves ~/.claude/state/ccv3-mods/errors/<time>-<where>.json, so a failure no one sees still says what broke. */
+const noteError = async ($: EngineInterface, where: string, err: unknown) => {
+  const home = await homeDir($)
+  if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
+}
 
 const view = async ($: EngineInterface): Promise<OsView> => ({
   tasks: await read($, tasks),
@@ -190,10 +197,16 @@ export const agenticOs = (on: On) => {
     await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
     // Headless: no /os pane to open, no timer and no process. Capture and snapshots still run.
     if (!e.isInteractive) return next(e)
-    await $.command.register({
-      name: 'os',
-      description: 'Agentic OS pane: plan, tasks, current step, agents and lane of this session',
-    })
+    await $.command
+      .register({ name: 'os', description: 'Agentic OS pane: plan, tasks, current step, agents and lane of this session' })
+      .catch(err => noteError($, 'os-register', err))
+    // Proof the plugin loaded in this session, and on which surface: the one file to read when nothing shows.
+    const home = await homeDir($)
+    if (home) {
+      const sessionId = await $.session.id().catch(() => null)
+      const proof = { at: new Date().toISOString(), surface: e.surface ?? null, sessionId, cwd: e.cwd ?? null }
+      await $.fs.write(`${home}/${DIAG_DIR}/last-session.json`, JSON.stringify(proof, null, 2)).catch(() => undefined)
+    }
     $.clock.every(PULSE_MS, () => void pulse($))
     void refreshLanes($)
     return next(e)

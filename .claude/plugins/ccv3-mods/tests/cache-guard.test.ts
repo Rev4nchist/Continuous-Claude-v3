@@ -11,7 +11,7 @@ import type { Engine } from 'claude-code/testing'
 // C6 a slash or bang command, or a message with an attachment, is held
 // C7 /clear or compaction leaves the old clock, so the fresh context's first send is held
 // C8 an interrupted turn doesn't count as a reply (stale clock, a warm send held)
-// C9 CCV3_MOD_CACHE_OFF still holds; a surface that can't draw the card holds
+// C9 CCV3_MOD_CACHE_OFF still holds; a surface other than the desktop app holds (the terminal included)
 // C10 the card stays after Dismiss or a new send, or hides the band when nothing is held
 // C11 the cold figure is priced at the 5-minute write on a subscription (1-hour cache)
 
@@ -55,7 +55,7 @@ const world = (on: On, env: Record<string, string> = {}, subscription = true) =>
   return { clock, sent, filled }
 }
 
-const start = ($: Engine, isInteractive = true, surface: string | null = 'terminal') =>
+const start = ($: Engine, isInteractive = true, surface: string | null = 'desktop') =>
   $.session.start({ cwd: '/repo', surface: isInteractive ? surface : null, isInteractive } as never)
 
 /** The main loop answered (or was interrupted, which talks to the model just the same). */
@@ -166,6 +166,14 @@ describe('cache guard', () => {
   test('C9 a surface that cannot draw the card never holds', async ($, on) => {
     const { clock } = world(on)
     await start($, true, 'vscode')
+    await reply($)
+    await clock.advance(2 * HOUR)
+    expect(await type($, 'go')).toMatchObject({ text: 'go' })
+  })
+
+  test('C9 the terminal never holds: Cache Guard is desktop-only', async ($, on) => {
+    const { clock } = world(on)
+    await start($, true, 'terminal')
     await reply($)
     await clock.advance(2 * HOUR)
     expect(await type($, 'go')).toMatchObject({ text: 'go' })

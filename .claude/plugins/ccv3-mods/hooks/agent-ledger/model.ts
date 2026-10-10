@@ -1,4 +1,4 @@
-// Agent Ledger, pure: runs, their totals and the /agents pane's rows.
+// Agent Ledger, pure: runs, their totals and the /ledger pane's rows.
 
 import type { AgentRun } from '../../types'
 import { elapsed } from '../agentic-os/model'
@@ -118,7 +118,7 @@ const runRows = (run: AgentRun, nowMs: number): PaneRow[] => {
   return rows
 }
 
-/** The /agents pane: totals, then running and finished runs (newest first), cut to `rows`. */
+/** The /ledger pane: totals, then running and finished runs (newest first), cut to `rows`. */
 export const ledgerRows = (runs: readonly AgentRun[], nowMs: number, columns: number, rows: number, offset = 0): PaneRow[] => {
   const sum = summarize(runs)
   const head: PaneRow[] = [
