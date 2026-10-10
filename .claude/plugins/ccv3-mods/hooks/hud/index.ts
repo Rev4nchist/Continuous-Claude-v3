@@ -50,6 +50,12 @@ export const hudCapture = (on: On) => {
     return next(e)
   }).catch(($, e, next) => next(e))
 
+  // The desktop app drives Claude Code through the SDK: its sessions start headless and the desktop attaches later.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    await start($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
   // The plugin's one turn.step hook. A subagent's request feeds its Agent Ledger run; a main-loop request the HUD.
   on('turn.step', async function* ($, e, next) {
     const agentId = e.agentId

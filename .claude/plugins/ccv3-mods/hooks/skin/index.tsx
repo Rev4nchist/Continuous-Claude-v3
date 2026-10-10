@@ -36,14 +36,25 @@ const noteError = async ($: EngineInterface, where: string, err: unknown) => {
   if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
 }
 
+/** Registers /skin and restores the saved choice, in the desktop app only (or under CCV3_FORCE_SURFACE=desktop). */
+const startUi = async ($: EngineInterface, surface: string | null) => {
+  if ((await isOff($)) || !isDesktop(surface, await $.env.get('CCV3_FORCE_SURFACE'))) return
+  await $.command
+    .register({ name: 'skin', description: 'CCv3 Skin: /skin on, /skin off (remembered across sessions)', argumentHint: 'on|off' })
+    .catch(err => noteError($, 'skin-register', err))
+  const saved = await $.store.get(STORE_KEY).catch(() => undefined)
+  await update($, skinOn, () => saved === 'on')
+}
+
 export const skin = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
-    if ((await isOff($)) || !isDesktop(e.surface, await $.env.get('CCV3_FORCE_SURFACE'))) return next(e)
-    await $.command
-      .register({ name: 'skin', description: 'CCv3 Skin: /skin on, /skin off (remembered across sessions)', argumentHint: 'on|off' })
-      .catch(err => noteError($, 'skin-register', err))
-    const saved = await $.store.get(STORE_KEY).catch(() => undefined)
-    await update($, skinOn, () => saved === 'on')
+    await startUi($, e.surface)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The desktop app drives Claude Code through the SDK: its sessions start headless and the desktop attaches later.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    await startUi($, e.surface)
     return next(e)
   }).catch(($, e, next) => next(e))
 

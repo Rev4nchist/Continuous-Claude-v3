@@ -31,13 +31,14 @@ Plan: `.claudedocs/2026-10-07-mods-plan.md` in the primary checkout.
 
 ## Diagnostics
 
-Every interactive session writes `~/.claude/state/ccv3-mods/last-session.json` (`surface`, `sessionId`, `cwd`): if it isn't fresh after a session opened, the plugin did not load there. A refused or failed command registration writes `~/.claude/state/ccv3-mods/errors/<time>-<where>.json` and the other modules carry on. `CCV3_FORCE_SURFACE=desktop` runs the desktop-only parts (Skin, Cache Guard) in a terminal, for testing.
+Every session start and every desktop attach writes `~/.claude/state/ccv3-mods/last-session.json` (`trigger` start or attach, `isInteractive`, `surface`, `sessionId`): if it isn't fresh after a session opened, the plugin did not load there. The first send in a desktop session writes `desktop-prompt.json` with its `origin` kind (Cache Guard holds only `composer`). A refused or failed command registration writes `~/.claude/state/ccv3-mods/errors/<time>-<where>.json` and the other modules carry on. `CCV3_FORCE_SURFACE=desktop` runs the desktop-only parts (Skin, Cache Guard) in a terminal, for testing.
 
 ## Where it runs
 
 | Run | Capture and snapshots | 5 s pulse, `lane.mjs`, `/os`, band |
 |---|---|---|
 | Interactive (`isInteractive` true) | Yes | Yes |
+| Desktop app (an SDK start, `isInteractive` false, then `session.attach` on `desktop`) | Yes | Yes, from the attach: commands, HUD, pulse, Cache Guard, Skin. pr-loop's watcher stays REPL-only |
 | Headless (`claude -p`, SDK; `isInteractive` false) | Yes, with a limit: a snapshot is written after a task or plan change, and at turn end only when the session holds a task or a plan. A headless run with neither writes no file | No. Nothing is spawned and no timer is armed |
 | PR module (`hooks/pr-loop/`) | `/watch` and `/land` answer in both modes; `pr_status` is registered in both | Interactive only: the 5 minute watcher, `pr_watch`, the Land/No dialog and the Land call. Headless `/land` shows the status and lands nothing. |
 | `CCV3_MODS_OFF=1` in the process env | No. Every hook passes the event on | No |
@@ -80,6 +81,7 @@ Run from the repo root:
 - `console.log` in a hooks module prints nothing under `claude plugin test`; a thrown error's text shows in the "hook was skipped" line, which is the way to read state there.
 - On 2.1.296 a headless `claude -p --plugin-dir` run no longer writes `.claude-plugin/types/` (it did on 2.1.293), so `validate-mods.mjs` reports `tsc NOT RUN` in a fresh checkout. Type-check against the plugin-authoring skill's `types/claude-code.d.ts` with its header tsconfig until an interactive load writes the folder.
 - `Svg` is in the desktop, vscode and mobile element tables, never the terminal's; every Svg part here has a text fallback.
+- The desktop app (2.31226.1, Claude Code 2.1.295) runs its local sessions through the SDK: `session.start` comes with `isInteractive: false` and `surface: null`, and the desktop joins by `session.attach` (`surface: 'desktop'`). Every UI part gated on `{ isInteractive: true }` was skipped there while capture and `pr_status` loaded (2026-10-10). Each UI module now starts on either trigger.
 - `$.command.register` refuses a built-in's name (`/agents`), and the throw failed the whole `session.start` chain: `/files` and `/skin` never registered and typing them said "Unknown command" (2.1.296, 2026-10-10, live in a terminal). Every registration now has its own `.catch`, and the ledger is `/ledger`.
 - A `claude -p` started from inside a session inherits `CLAUDE_CODE_SESSION_ID` and reports the parent's `session_id` (and writes its snapshot there). `e2e-headless.mjs` drops it and passes `--session-id <uuid>` per run.
 - **Unproven live:** Cache Guard puts a held message back with `$.prompt.fill` one tick after `{ drop }`. Tests (C3) prove the call, not that the desktop composer shows the text. Check once: `CCV3_CACHE_TTL_MIN=1`, wait two minutes, send a long message, and confirm the whole text is back in the box.

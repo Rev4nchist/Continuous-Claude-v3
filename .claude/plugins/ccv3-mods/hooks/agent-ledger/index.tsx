@@ -41,13 +41,23 @@ const specOf = async ($: EngineInterface, type: string): Promise<AgentRun['spec'
   return {}
 }
 
+/** Registers /ledger: at an interactive start, and when the desktop app attaches. */
+const startUi = async ($: EngineInterface) => {
+  if (await isOff($)) return
+  await $.command
+    .register({ name: 'ledger', description: 'Agent Ledger: each subagent this session, its tier, tokens and estimated cost' })
+    .catch(err => noteError($, 'ledger-register', err))
+}
+
 export const agentLedger = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
-    if (!(await isOff($))) {
-      await $.command
-        .register({ name: 'ledger', description: 'Agent Ledger: each subagent this session, its tier, tokens and estimated cost' })
-        .catch(err => noteError($, 'ledger-register', err))
-    }
+    await startUi($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // The desktop app drives Claude Code through the SDK: its sessions start headless and the desktop attaches later.
+  on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
+    await startUi($)
     return next(e)
   }).catch(($, e, next) => next(e))
 
