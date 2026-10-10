@@ -45,6 +45,7 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
+import { tmpdir } from 'os';
 import { resolve } from 'path';
 import { fileURLToPath } from 'url';
 
@@ -210,6 +211,8 @@ function childEnv(): NodeJS.ProcessEnv {
   env['CLAUDE_PROJECT_DIR'] = REPO_DIR;
   // Belt-and-suspenders: suppress embedding-daemon spawns (see memory-awareness.test.ts).
   env['CCV3_EMBEDDING_NO_SPAWN'] = '1';
+  // VITEST is stripped above, so the guard hooks would log their denies to the real ~/.claude/logs file.
+  env['CCV3_GUARD_DECISIONS_LOG'] = resolve(tmpdir(), 'task-hooks-integration-guard-decisions.jsonl');
   return env;
 }
 

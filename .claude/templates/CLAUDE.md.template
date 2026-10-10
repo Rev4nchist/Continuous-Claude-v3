@@ -89,7 +89,7 @@ any error you introduced this session.
 **Destructive commands need my yes** (recursive delete, `git reset --hard`, force push, `clean -f`,
 `checkout --`, `branch -D`, `rebase`, `stash -u`, `docker volume rm`, `dd`, `mkfs`). The
 `destructive-command-guard` hook asks (interactive) or denies (unattended) on Bash and PowerShell.
-Override only a known-good run, with a leading `SKIP_DESTRUCTIVE_GUARD=1`. Full list: `~/.claude/docs/security/destructive-commands.md`. State-changing git (commit, push, merge, reset, stash) needs my
+Add `SKIP_DESTRUCTIVE_GUARD=1` only after my yes to that exact command. Full list: `~/.claude/docs/security/destructive-commands.md`. State-changing git (commit, push, merge, reset, stash) needs my
 yes unless I authorized that flow for the task ("land them"). "Archive X" means move, never delete.
 
 **A hook block is a finding.** A `package-install-guard` block names something real: do not route

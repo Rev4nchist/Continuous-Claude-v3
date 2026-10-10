@@ -704,15 +704,25 @@ describe('package-install-guard', () => {
   });
 
   describe('deny envelope (built hook, subprocess)', () => {
+    /** The built hook runs without VITEST, so its guard log must go to a temp file, never ~/.claude/logs. */
+    async function builtHookEnv(): Promise<{ env: NodeJS.ProcessEnv; log: string }> {
+      const { mkdtempSync } = await import('node:fs');
+      const { tmpdir } = await import('node:os');
+      const { join } = await import('node:path');
+      const log = join(mkdtempSync(join(tmpdir(), 'pig-guard-log-')), 'guard-decisions.jsonl');
+      const env: NodeJS.ProcessEnv = { ...process.env, CCV3_GUARD_DECISIONS_LOG: log };
+      delete env.VITEST;
+      delete env.VITEST_WORKER_ID;
+      return { env, log };
+    }
+
     it('denies an unpinned pip install sent through the PowerShell tool', async () => {
       const { spawnSync } = await import('node:child_process');
       const { existsSync } = await import('node:fs');
       const { fileURLToPath } = await import('node:url');
       const dist = fileURLToPath(new URL('../../dist/package-install-guard.mjs', import.meta.url));
       if (!existsSync(dist)) return;
-      const env = { ...process.env };
-      delete env.VITEST;
-      delete env.VITEST_WORKER_ID;
+      const { env } = await builtHookEnv();
       const res = spawnSync(process.execPath, [dist], {
         input: makePayload('Set-Location C:\\x; python -m pip install requests', 'PowerShell'),
         encoding: 'utf8',
@@ -733,9 +743,7 @@ describe('package-install-guard', () => {
       if (!existsSync(dist)) return; // dist not built in this checkout; the build step runs this in CI
       // The hook skips main() when VITEST is set (so importing it in tests is side-effect free);
       // the subprocess must not inherit that or it prints nothing.
-      const env = { ...process.env };
-      delete env.VITEST;
-      delete env.VITEST_WORKER_ID;
+      const { env, log } = await builtHookEnv();
       const res = spawnSync(process.execPath, [dist], {
         input: makePayload('pip install requets'),
         encoding: 'utf8',
@@ -747,6 +755,11 @@ describe('package-install-guard', () => {
       expect(out.hookSpecificOutput.hookEventName).toBe('PreToolUse');
       expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
       expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/typosquat/i);
+      // The deny reaches the guard log named by CCV3_GUARD_DECISIONS_LOG, and only that one.
+      const { readFileSync } = await import('node:fs');
+      const rows = readFileSync(log, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+      expect(rows).toHaveLength(1);
+      expect(rows[0]).toMatchObject({ hook: 'package-install-guard', decision: 'deny', session_id: 'test-session' });
     });
   });
 });

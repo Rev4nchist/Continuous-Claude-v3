@@ -112,12 +112,25 @@ Requires `gh` CLI authenticated (`gh auth status`).
 
 ### Scheduled (daily at 9am)
 
-A Windows Task Scheduler job runs `scripts/scheduled-blocklist-update.bat` daily at 9am. It:
-1. Fetches latest advisories from GitHub
-2. Updates `malicious-packages.json`
+A Windows Task Scheduler job runs `C:\Users\david.hayes\.claude\scripts\scheduled\scheduled-blocklist-update.bat` daily at 9am.
+The repo source is `.claude/scripts/scheduled/`; the forward sync (`scripts/sync-to-active.sh`, from `main` only)
+installs it, so the job that runs is always main's version, not the primary checkout's branch. The .bat keeps
+the durable log (`.claude/logs/blocklist-update.log`) and passes its arguments unchanged to `scheduled-blocklist-update.ps1`.
+The job never touches the primary checkout's branch or working tree. It works in a temporary detached
+worktree of `fork/main` and:
+1. Fetches `fork main`
+2. Fetches latest advisories from GitHub and updates `malicious-packages.json`
 3. Rebuilds hooks
-4. Commits and pushes to fork if changes found
-5. Syncs to `~/.claude/`
+4. Commits to `main` and pushes `HEAD:refs/heads/main` to fork, if changes found
+5. Fast-forwards local `main` (also when step 4 found nothing, so an earlier partial run catches up), then syncs to `~/.claude/` from the temp worktree and checks `~/.claude/state/sync-cursor` equals local `main`
+6. Removes the temp worktree
+
+Exit codes: 0 ok, 1 a step failed, 2 `[PUSHED-NOT-SYNCED]` (local `main` or `~/.claude` did not follow the remote).
+`-NoSync` waives only the `~/.claude` sync; a failed local update still returns 2.
+
+Point the task at the installed copy once, after the sync has installed it:
+`pwsh -File .claude/scripts/scheduled/register-blocklist-task.ps1 -WhatIf`, then without `-WhatIf`.
+It refuses if the installed .bat is missing and saves the old task XML under `~/.claude/state/`.
 
 Task name: `CCv3-Blocklist-Update`. Check status: `schtasks /query /tn "CCv3-Blocklist-Update"`
 

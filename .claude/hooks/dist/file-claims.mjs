@@ -12,7 +12,11 @@ var __require = /* @__PURE__ */ ((x) => typeof require !== "undefined" ? require
   throw Error('Dynamic require of "' + x + '" is not supported');
 });
 var __commonJS = (cb, mod) => function __require2() {
-  return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  try {
+    return mod || (0, cb[__getOwnPropNames(cb)[0]])((mod = { exports: {} }).exports, mod), mod.exports;
+  } catch (e) {
+    throw mod = 0, e;
+  }
 };
 var __copyProps = (to, from, except, desc) => {
   if (from && typeof from === "object" || typeof from === "function") {
@@ -3352,8 +3356,8 @@ var require_split2 = __commonJS({
     "use strict";
     var { Transform } = __require("stream");
     var { StringDecoder } = __require("string_decoder");
-    var kLast = Symbol("last");
-    var kDecoder = Symbol("decoder");
+    var kLast = /* @__PURE__ */ Symbol("last");
+    var kDecoder = /* @__PURE__ */ Symbol("decoder");
     function transform(chunk, enc, cb) {
       let list;
       if (this.overflow) {
@@ -5587,6 +5591,75 @@ function normalizeProjectKey(p) {
   return p.replace(/\\/g, "/").replace(/\/+$/, "").toLowerCase();
 }
 
+// src/shared/guard-log.ts
+import { appendFileSync, mkdirSync as mkdirSync2 } from "fs";
+import { homedir as homedir2 } from "os";
+import { dirname, join as join2 } from "path";
+var COMMAND_HEAD_CHARS = 80;
+var REASON_CHARS = 200;
+function guardLogPath(env = process.env) {
+  const home = env.USERPROFILE || env.HOME || homedir2();
+  return env.CCV3_GUARD_DECISIONS_LOG || join2(home, ".claude", "logs", "guard-decisions.jsonl");
+}
+var SECRET_NAME = "[\\w.-]*(?:key|token|secret|passw(?:or)?d|pwd|auth|credential|cookie)[\\w.-]*";
+var MASKS = [
+  // A URL inside quotes may hold a password with a space: the closing quote ends it, not the space.
+  [/(["'])([a-z][\w+.-]*:\/\/)[^\s/@:"']+:(?:(?!\1)[^/@])+@/gi, "$1$2***@"],
+  [/(:\/\/)[^\s/@:]+:[^\s/@]+@/g, "$1***@"],
+  // `curl -u user:pass`, `curl --user user:pass`. A numeric user (`docker run -u 1000:1000`) is a uid:gid.
+  // Quoting decides where the credential ends: `-u "user:two words"`, `-u user:"two words"`.
+  [/(\s(?:-u[\s=]*|--user[\s=]+)")(?!\d+:)([^":]+):[^"]*"/g, '$1$2:***"'],
+  [/(\s(?:-u[\s=]*|--user[\s=]+)')(?!\d+:)([^':]+):[^']*'/g, "$1$2:***'"],
+  [/(\s(?:-u[\s=]*|--user[\s=]+))(?!\d+:)([^\s:"']+):(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1$2:***"],
+  // `mysql -uroot -pS3cret`: the password is glued to -p. Case matters: -P is the port.
+  [/(\b(?:mysql|mariadb)\w*\b[^|;&\n]*?\s-p)(?:"[^"]*"|'[^']*'|[^\s"'])+/g, "$1***"],
+  // `sshpass -p pw ssh host`
+  [/(\bsshpass\s+-p\s*)(?:"[^"]*"|'[^']*'|[^\s"']+)/g, "$1***"],
+  [/\b(Bearer|Basic|Token)\s+[^\s'"]+/gi, "$1 ***"],
+  [new RegExp(`(${SECRET_NAME})(\\s*[=:]\\s*)("[^"]*"|'[^']*'|[^\\s'"]+)`, "gi"), "$1$2***"],
+  [new RegExp(`(--?${SECRET_NAME})(\\s+)("[^"]*"|'[^']*'|[^\\s'"-][^\\s'"]*)`, "gi"), "$1$2***"],
+  [/\b(?:sk|pk|rk)-[A-Za-z0-9_-]{8,}/g, "***"],
+  [/\bgh[pousr]_[A-Za-z0-9]{16,}/g, "***"],
+  [/\bgithub_pat_\w+/g, "***"],
+  [/\bxox[abprs]-[\w-]+/g, "***"],
+  [/\bnpm_[A-Za-z0-9]{20,}/g, "***"],
+  [/\bAKIA[0-9A-Z]{16}\b/g, "***"],
+  [/\bAIza[\w-]{30,}/g, "***"],
+  [/\beyJ[\w-]+\.[\w-]+\.[\w-]+/g, "***"],
+  // Any other long opaque run that mixes letters and digits (hex, base64url keys).
+  [/\b(?=[A-Za-z0-9_-]*\d)(?=[A-Za-z0-9_-]*[A-Za-z])[A-Za-z0-9_-]{32,}/g, "***"]
+];
+function maskSecrets(text) {
+  return MASKS.reduce((acc, [re, to]) => acc.replace(re, to), text);
+}
+function commandHead(command) {
+  return maskSecrets(command).replace(/\s+/g, " ").trim().slice(0, COMMAND_HEAD_CHARS);
+}
+function shouldWrite(env) {
+  return !!env.CCV3_GUARD_DECISIONS_LOG || !env.VITEST;
+}
+function logGuardDecision(hook, input, decision, reason, opts = {}) {
+  const env = opts.env ?? process.env;
+  try {
+    if (!shouldWrite(env)) return;
+    const agent = input?.agent_id || env.CLAUDE_AGENT_ID || void 0;
+    const entry = {
+      ts: (/* @__PURE__ */ new Date()).toISOString(),
+      hook,
+      tool: input?.tool_name || input?.tool || "",
+      decision,
+      reason: maskSecrets(String(reason)).replace(/\s+/g, " ").trim().slice(0, REASON_CHARS),
+      session_id: input?.session_id || ""
+    };
+    if (agent) entry.agent_id = agent;
+    if (typeof opts.command === "string" && opts.command) entry.command = commandHead(opts.command);
+    const path = guardLogPath(env);
+    mkdirSync2(dirname(path), { recursive: true, mode: 448 });
+    appendFileSync(path, JSON.stringify(entry) + "\n", { mode: 384 });
+  } catch {
+  }
+}
+
 // src/file-claims.ts
 var STALE_THRESHOLD_MS = 5 * 60 * 1e3;
 var BREAK_GLASS = process.env.COORDINATION_BREAK_GLASS === "1";
@@ -5652,6 +5725,7 @@ heartbeating, so an idle-but-alive session is never preempted.
 
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
+      logGuardDecision("file-claims", input, "deny", `file-conflict: held by ${decision.holder}`);
       output = {
         hookSpecificOutput: {
           hookEventName: "PreToolUse",
@@ -5662,6 +5736,9 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
       break;
     }
     case "takeover":
+      if (decision.breakGlass) {
+        logGuardDecision("file-claims", input, "override", `break-glass: forced takeover from ${decision.holder}`);
+      }
       output = {
         result: "continue",
         message: decision.breakGlass ? `[WARN] BREAK-GLASS: forced the lock for "${fileName}" away from session ${decision.holder}, whose lease was still valid. This was logged. Re-read the file before writing.` : `[INFO] Took over the expired lock for "${fileName}" from inactive session ${decision.holder} (lease ${decision.priorFence} -> ${decision.fence}). They may have changed it -- re-read before writing.`

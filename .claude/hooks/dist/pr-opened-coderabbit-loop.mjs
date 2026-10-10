@@ -74,8 +74,14 @@ function markFired(sessionId, url) {
   } catch {
   }
 }
+var WATCH_REPO = "rev4nchist/continuous-claude-v3";
+var loopText = (info) => `/loop 5m Check the review bot (Greptile; CodeRabbit on a repo not moved yet) on ${info.owner}/${info.repo} PR #${info.number} (stop when a review of the head lands or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
 function buildContext(info) {
-  return `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, START THE CODERABBIT LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR #${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss false positives; verify thread isResolved via GraphQL; never merge). This applies to every PR in every session.`;
+  const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
+  if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
+    return head + `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. It watches the Greptile review and CI for you and tells Dave and you at READY; never merge. Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. This applies to every PR in every session.`;
+  }
+  return head + `START THE REVIEW LOOP NOW, in this same turn: ${loopText(info)}. This applies to every PR in every session.`;
 }
 function main() {
   const raw = readFileSync(0, "utf8");

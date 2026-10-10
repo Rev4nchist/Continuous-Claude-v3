@@ -13,7 +13,7 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
    - `git rev-list --left-right --count fork/main...HEAD` → *behind ahead*. `behind 0` = conflict-free / fast-forwardable.
    - **Working-tree churn is orthogonal to a PR merge** — the merge uses committed history, not your working tree. Uncommitted files never block or contaminate a PR merge.
    - PR mergeability: `gh api repos/<O>/<R>/pulls/<N>` → look for `mergeable_state=clean`.
-   - CI/checks + any bot review (CodeRabbit). No CI configured here → *your* local test suites + `/review` ARE the gate.
+   - CI/checks + the bot review (Greptile). No CI configured here → *your* local test suites + `/review` ARE the gate.
 2. **Sync.** If `behind > 0`, integrate `main` into your branch FIRST (merge or rebase) so conflicts surface locally, not inside the merge.
 3. **Choose the strategy.**
    - **merge-commit** (`--merge`): keeps all commits + adds a merge commit marking the feature boundary. Best when the commits are well-structured/conventional and the granular history has audit value.
@@ -25,7 +25,7 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
 5. **Clean up.** Delete the merged branch (remote + local), advance local `main`, verify `0 0` divergence.
 
 **For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
-It refuses unless `scripts/github/coderabbit-status.mjs` reports READY for the current head, merges
+It refuses unless `scripts/github/review-status.mjs` reports READY for the current head, merges
 with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. It syncs `~/.claude`
 itself. On `main` it syncs from the primary checkout. On any other branch it syncs from a temporary
 detached worktree of `main` (`%TEMP%\land-pr-sync-<N>`, removed afterwards) and leaves the primary
@@ -38,7 +38,7 @@ WSL). Never hand-copy a synced file into `~/.claude`: the next sync quarantines 
 - **A timed-out command (exit 143) is NOT necessarily a failure.** VERIFY state before concluding — `gh pr merge` timed out yet the merge had already succeeded (`gh api …/pulls/<N>` → `merged=true`). Same for pushes/deletes.
 - **The Bash tool hangs on git/network ops when GitHub is slow.** Its shell-profile init does a network step, so *every* Bash command times out (even local `git branch`). **Switch to the PowerShell tool for git/remote operations** — different init, unaffected: `git -C <repo> <cmd>`. (See `windows-platform.md`.)
 - **`gh` GraphQL hits `read:org` scope errors** on some fields (`gh pr edit`/`gh pr view`) with the current token. **Use the REST API (`gh api`)** — it needs no org scope. `gh api repos/<O>/<R>/pulls/<N> … -X PATCH -f title=… -f body="$BODY"` to edit a PR.
-- **Deleting a remote branch is destructive-guard-gated** (`git push --delete`). To do it deliberately for a *merged* branch: `SKIP_DESTRUCTIVE_GUARD=1` as the **LEADING token**, **foreground** (a background run reads as unattended → fail-closed regardless of the flag). On the **PowerShell tool** the guard applies too (since 2026-09-23); the override there is a leading `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement.
+- **Deleting a remote branch is destructive-guard-gated** (`git push --delete`). To do it deliberately for a *merged* branch, after Dave says yes to that exact command: `SKIP_DESTRUCTIVE_GUARD=1` as the **LEADING token**, **foreground** (a background run reads as unattended → fail-closed regardless of the flag). On the **PowerShell tool** the guard applies too (since 2026-09-23); the override there is a leading `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement.
 - **`git branch -d` refusing "not fully merged" right after a PR merge is usually a STALE tracking ref, not real divergence.** Do **NOT** jump to `-D`. Instead: `git fetch fork --prune`, then VERIFY — `git merge-base --is-ancestor <feature-tip> main` (exit 0 = truly merged) and `git rev-list --left-right --count fork/main...main` (`N 0` = local main is only *behind*, safe). Only after that confirms do you advance/delete. **Verify before you force.**
 - **Local `main` can silently lag/diverge from the canonical remote via auto-commit hooks** (a roadmap-sync hook committed a "post-merge carryover" stamp onto local main). After a remote merge: `git fetch fork --prune`; if local main is behind with **0 divergence** (verified above), `git reset --hard fork/main` cleanly advances it AND clears a messy working tree in one move. Untracked real content (e.g. `docs/self-improvement/proposals/*`) survives; regenerable churn is preserved in any prior `git stash`.
 
@@ -54,6 +54,6 @@ Session/hook churn (hook `dist/` rebuilds, `data/snapshots/*`, `ROADMAP.md` stam
 | PR mergeable? | `gh api repos/<O>/<R>/pulls/<N>` → `mergeable_state` |
 | Merge (scripted) | `gh api repos/<O>/<R>/pulls/<N>/merge -X PUT -f merge_method=merge` |
 | Edit PR (scope-safe) | `gh api repos/<O>/<R>/pulls/<N> -X PATCH -f title=… -f body="$B"` |
-| Delete remote branch | `SKIP_DESTRUCTIVE_GUARD=1 git push fork --delete <branch>` (leading token, foreground) |
+| Delete remote branch | `SKIP_DESTRUCTIVE_GUARD=1 git push fork --delete <branch>` (leading token, foreground; only after Dave says yes to that exact command) |
 | Verify truly merged | `git merge-base --is-ancestor <tip> main; echo $?` (0 = merged) |
 | Advance local main | `git fetch fork --prune; git reset --hard fork/main` (behind-only) |

@@ -93,6 +93,100 @@ d="$(new_repo)"
 echo "export const a=1;" > "$d/.claude/hooks/src/shared/util.ts"; git -C "$d" add .claude/hooks/src/shared/util.ts
 assert_exit "nested src-only (no dist) -> BLOCK" 1 "$(run_guard "$d")"
 
+# --- Comment-only allowance (scripts/hooks-src-comment-only.mjs). Each case commits a base
+# version, then stages an edit and no dist. The guard must ALLOW only when the dist cannot change.
+committed_repo() {  # $1 = repo-relative path, $2 = base content -> echoes repo dir with base committed
+  local d; d="$(new_repo)"
+  mkdir -p "$d/$(dirname "$1")"
+  printf '%s\n' "$2" > "$d/$1"
+  git -C "$d" add "$1" && git -C "$d" commit -q -m base
+  echo "$d"
+}
+stage_edit() {  # $1 = repo dir, $2 = path, $3 = new content
+  printf '%s\n' "$3" > "$1/$2"; git -C "$1" add "$2"
+}
+F=.claude/hooks/src/foo.ts
+
+# --- Case 10: comment-only edit -> ALLOW (the PR #119 case)
+d="$(committed_repo $F $'// old note\nexport const a = 1;')"
+stage_edit "$d" $F $'// new note, reworded\nexport const a = 1; /* trailing */'
+assert_exit "comment-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 11: whitespace/format-only edit -> ALLOW
+d="$(committed_repo $F $'export const a = 1;\nexport function f(x: number) { return x + a; }')"
+stage_edit "$d" $F $'export const a=1;\n\nexport function f( x: number ) {\n  return x + a;\n}'
+assert_exit "whitespace-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 12: real code edit -> BLOCK
+d="$(committed_repo $F $'export const a = 1;')"
+stage_edit "$d" $F $'export const a = 2;'
+assert_exit "code edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 13: legal comment change -> BLOCK (esbuild keeps /*! ... */ in the bundle)
+d="$(committed_repo $F $'/*! v1 */\nexport const a = 1;')"
+stage_edit "$d" $F $'/*! v2 */\nexport const a = 1;'
+assert_exit "legal comment edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 14: a code change after a regex holding // -> BLOCK (a plain token scan reads the
+# rest of the line as a comment and would miss it)
+d="$(committed_repo $F $'const r = /a\\/\\//; export const x = r.test("a//") ? 1 : 0;')"
+stage_edit "$d" $F $'const r = /a\\/\\//; export const x = r.test("a//") ? 2 : 0;'
+assert_exit "code change after a // regex (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 15: two files, one comment-only and one code edit -> BLOCK
+d="$(committed_repo $F $'export const a = 1;')"
+mkdir -p "$d/.claude/hooks/src/shared"
+printf '%s\n' 'export const b = 1;' > "$d/.claude/hooks/src/shared/b.ts"
+git -C "$d" add .claude/hooks/src/shared/b.ts && git -C "$d" commit -q -m b
+stage_edit "$d" $F $'// only a comment\nexport const a = 1;'
+stage_edit "$d" .claude/hooks/src/shared/b.ts 'export const b = 3;'
+assert_exit "comment-only + code edit together (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 16: a JSDoc header edit -> ALLOW (the exact PR #119 shape)
+d="$(committed_repo $F $'/**\n * Widening is a tracked follow-up.\n */\nexport const a = 1;')"
+stage_edit "$d" $F $'/**\n * Widening was closed on 2026-10-09.\n * See the proposal.\n */\nexport const a = 1;'
+assert_exit "JSDoc-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 17: a newline that changes meaning (ASI) -> BLOCK
+d="$(committed_repo $F $'export function f(x: number) { return x; }')"
+stage_edit "$d" $F $'export function f(x: number) { return\n x; }'
+assert_exit "newline that changes meaning, return/x (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 18: adding an esbuild annotation -> BLOCK (/* @__PURE__ */ lets esbuild drop the call)
+d="$(committed_repo $F $'declare function log(): number;\nexport const a = log();')"
+stage_edit "$d" $F $'declare function log(): number;\nexport const a = /* @__PURE__ */ log();'
+assert_exit "added @__PURE__ annotation (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 19: moving an annotation to another call -> BLOCK
+d="$(committed_repo $F $'declare function f(): number;\nexport const a = /* @__PURE__ */ f();\nexport const b = f();')"
+stage_edit "$d" $F $'declare function f(): number;\nexport const a = f();\nexport const b = /* @__PURE__ */ f();'
+assert_exit "moved @__PURE__ annotation (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 20: editing a continuation line of a multi-line legal comment -> BLOCK
+d="$(committed_repo $F $'/*!\n * old notice\n */\nexport const a = 1;')"
+stage_edit "$d" $F $'/*!\n * new notice\n */\nexport const a = 1;'
+assert_exit "multi-line legal comment body edit (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 21: changing the #! line -> BLOCK (esbuild copies it into the bundle)
+d="$(committed_repo $F $'#!/usr/bin/env node\nexport const a = 1;')"
+stage_edit "$d" $F $'#!/usr/bin/env -S node --no-warnings\nexport const a = 1;'
+assert_exit "shebang change (no dist) -> BLOCK" 1 "$(run_guard "$d")"
+
+# --- Case 22: an ordinary comment next to an unchanged annotation -> ALLOW
+d="$(committed_repo $F $'declare function f(): number;\n// old\nexport const a = /* @__PURE__ */ f();')"
+stage_edit "$d" $F $'declare function f(): number;\n// reworded note\nexport const a = /* @__PURE__ */ f();'
+assert_exit "ordinary comment beside unchanged annotation (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 23: a real hook's shape, unchanged #! plus a JSDoc header edit -> ALLOW
+d="$(committed_repo $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening is a tracked follow-up.\n */\nexport const a = 1;')"
+stage_edit "$d" $F $'#!/usr/bin/env node\n/**\n * Scan guard. Widening was closed on 2026-10-09.\n */\nexport const a = 1;'
+assert_exit "shebang file, JSDoc-only edit (no dist) -> allow" 0 "$(run_guard "$d")"
+
+# --- Case 24: a newline moved before an unchanged annotation -> ALLOW (same gap between tokens)
+d="$(committed_repo $F $'declare function f(): number;\nexport const a = /* @__PURE__ */ f();')"
+stage_edit "$d" $F $'declare function f(): number;\nexport const a =\n  /* @__PURE__ */ f();'
+assert_exit "newline before unchanged annotation (no dist) -> allow" 0 "$(run_guard "$d")"
+
 echo ""
 echo "precommit-build-guard tests: $PASS passed, $FAIL failed"
 [ "$FAIL" -eq 0 ]

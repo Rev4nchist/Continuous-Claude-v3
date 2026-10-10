@@ -27,7 +27,9 @@
  * (DB DROP/PowerShell Remove-Item are deliberately out — see note by the pattern list).
  * Fail-OPEN on any parse/logic error — a guard bug must never brick all Bash.
  * Override: prefix the command with SKIP_DESTRUCTIVE_GUARD=1 (detected in the
- * command string, since a PreToolUse hook does not inherit the command's env).
+ * command string, since a PreToolUse hook does not inherit the command's env). Dave uses it;
+ * the deny text does NOT mention it, because agents followed that advice 59 of 59 times.
+ * Every override is logged to guard-decisions.jsonl (shared/guard-log.ts).
  *
  * ACCEPTED LIMITATIONS (white-box verify sweep 2026-06-29 — this is a BACKSTOP,
  * NOT a sandbox; human confirm-first + settings deny + per-tool rules also apply):
@@ -55,6 +57,7 @@ import {
   normalizeGitGlobalOptions,
 } from './shared/destructive-classifier.js';
 import { isUnattended } from './shared/unattended.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 // Re-exported so existing imports (and the test file) keep working.
 export { classifyDestructive, stripQuotedStrings, parseExecutable, extractShellWrapperPayloads, normalizeGitGlobalOptions };
@@ -68,9 +71,11 @@ interface HookInput {
   };
   permission_mode?: string;
   session_id?: string;
+  agent_id?: string;
 }
 
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
+const HOOK = 'destructive-command-guard';
 
 interface HookOutput {
   hookSpecificOutput: {
@@ -84,7 +89,8 @@ interface HookOutput {
 // destructive ops fail CLOSED (deny). Moved to shared/unattended.ts, re-exported for the tests.
 export { isUnattended };
 
-export type Decision = { decision: 'allow' | 'ask' | 'deny'; pattern?: string };
+/** `override` is set only when the override let a command through that the guard would have flagged. */
+export type Decision = { decision: 'allow' | 'ask' | 'deny'; pattern?: string; override?: boolean };
 
 /**
  * Decide allow/ask/deny for a Bash command. Pure — easy to unit test.
@@ -101,22 +107,21 @@ export function decide(command: string, input: HookInput, env: NodeJS.ProcessEnv
   // `echo SKIP_DESTRUCTIVE_GUARD=1 && rm -rf x` would disable the guard.
   // PowerShell has no `VAR=1 cmd` prefix form, so its override is a leading
   // `$env:SKIP_DESTRUCTIVE_GUARD='1';` statement (still leading-only, per F2).
-  if (env.SKIP_DESTRUCTIVE_GUARD === '1' || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)
-      || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command)) {
-    return { decision: 'allow' };
-  }
+  const overridden = env.SKIP_DESTRUCTIVE_GUARD === '1' || /^\s*SKIP_DESTRUCTIVE_GUARD=1\s+/.test(command)
+      || /^\s*\$env:SKIP_DESTRUCTIVE_GUARD\s*=\s*['"]?1['"]?\s*;/i.test(command);
   const pattern = classifyDestructive(command, 0, input.tool_name || input.tool || 'Bash');
+  if (overridden) return pattern ? { decision: 'allow', pattern, override: true } : { decision: 'allow' };
   if (!pattern) return { decision: 'allow' };
   return { decision: isUnattended(input, env) ? 'deny' : 'ask', pattern };
 }
 
-function reasonFor(decision: 'ask' | 'deny', pattern: string, command: string): string {
+export function reasonFor(decision: 'ask' | 'deny', pattern: string, command: string): string {
   const head = decision === 'deny'
     ? `BLOCKED (fail-closed): destructive command in an unattended/bypass context`
     : `CONFIRM: this is a destructive command`;
   return `${head}\n\nMatched: ${pattern}\nCommand: ${command.slice(0, 300)}\n\n${
     decision === 'deny'
-      ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. If you genuinely intend it here, re-run with SKIP_DESTRUCTIVE_GUARD=1 prefixed (PowerShell tool: start the command with $env:SKIP_DESTRUCTIVE_GUARD='1'; ), or run it interactively.`
+      ? `An interactive confirmation would hang a headless/autonomous run, so this is denied. Ask Dave for a yes, or state the reason this command is needed. Do not work around this block.`
       : `Approve only if you intend this irreversible operation. (Gate: destructive-command-guard; see ~/.claude/docs/security/destructive-commands.md.)`
   }`;
 }
@@ -141,8 +146,10 @@ async function main(): Promise<void> {
   const command = input.tool_input?.command;
   if (typeof command !== 'string' || !command.trim()) { console.log('{}'); return; }
 
-  const { decision, pattern } = decide(command, input);
+  const { decision, pattern, override } = decide(command, input);
+  if (override && pattern) logGuardDecision(HOOK, input, 'override', pattern, { command });
   if (decision === 'allow' || !pattern) { console.log('{}'); return; }
+  logGuardDecision(HOOK, input, decision, pattern, { command });
 
   const output: HookOutput = {
     hookSpecificOutput: {

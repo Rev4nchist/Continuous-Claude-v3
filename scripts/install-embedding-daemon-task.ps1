@@ -5,7 +5,7 @@
 .DESCRIPTION
   Idempotent. Replaces any existing task with the same name.
   Runs the embedding daemon pre-warm at logon with a 30s delay (no admin required).
-  Mirrors the CCv3-Blocklist-Update pattern documented in
+  Mirrors the CCv3-Blocklist-Update task (job: .claude/scripts/scheduled/scheduled-blocklist-update.bat), documented in
   docs/hooks/package-install-guard.md.
 
 .NOTES

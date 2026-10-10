@@ -27,6 +27,7 @@ import {
   parseExecutable, executableView, normalizeEscapes, wrapperPayloadsFromSegments,
 } from './shared/destructive-classifier.js';
 import { checkTyposquat } from './shared/typosquat-detect.js';
+import { logGuardDecision } from './shared/guard-log.js';
 import maliciousPackages from './shared/malicious-packages.json';
 
 // ---------------------------------------------------------------------------
@@ -749,6 +750,9 @@ async function main() {
 
   // Fast path: no segment installs a package -> passthrough immediately
   const installs = installSegments(command, input.tool_name);
+  if (installs.length > 0 && checkOverride(command)) {
+    logGuardDecision('package-install-guard', input, 'override', 'SKIP_PACKAGE_GUARD', { command });
+  }
   if (installs.length === 0 || checkOverride(command)) {
     outputContinue();
     return;
@@ -758,6 +762,7 @@ async function main() {
   for (const segment of installs) {
     const result = await checkInstall(segment);
     if (result.deny) {
+      logGuardDecision('package-install-guard', input, 'deny', result.deny.replace(/^PACKAGE SECURITY:\s*/, '').split(/\.\s/)[0], { command });
       outputDeny(result.deny);
       return;
     }

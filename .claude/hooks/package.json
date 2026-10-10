@@ -15,12 +15,15 @@
         "@colbymchenry/codegraph": "0.9.9",
         "@types/node": "^20.11.0",
         "@types/pg": "^8.20.0",
-        "esbuild": "^0.24.0",
+        "esbuild": "^0.28.2",
         "typescript": "^5.3.3",
-        "vitest": "^4.0.16"
+        "vitest": "^4.1.11"
     },
     "dependencies": {
         "better-sqlite3": "^12.5.0",
         "pg": "^8.22.0"
+    },
+    "overrides": {
+        "vite": "7.3.6"
     }
 }

@@ -19,7 +19,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `opencli-first.md` | web fetch and search | inject |
 | `harness-update.md` | Codex/Grok CLI or model updates | inject |
 | `git-merge-workflow.md` | merges and branch cleanup | inject |
-| `pr-coderabbit-loop.md` | opening PRs; CodeRabbit | inject |
+| `pr-review-loop.md` | opening PRs; Greptile | inject |
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
 | `headless-claude-mcp.md` | headless `claude -p` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP or its skill | inject |
@@ -31,7 +31,7 @@ Decisions these rules shape before any tool call:
 - CMA bills Dave's API key, not the subscription. Grok is parked on this machine.
 - Fabric: run the project preflight first; stop all load on the first capacity error; never pause or resize a capacity.
 - Never merge a PR without Dave's explicit yes. Land CCv3 PRs with `scripts/github/land-pr.ps1`.
-- Never request the paid CodeRabbit on-demand review.
+- Never raise the Greptile review tier without Dave's yes.
 - Headless `claude -p` that needs a claude.ai connector: clear `ANTHROPIC_API_KEY` and pass `--allowedTools`.
 
 ## Folded into skills

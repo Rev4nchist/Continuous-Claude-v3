@@ -592,6 +592,38 @@ out="$(sync --changed)"
 chk "deleting the template keeps the live CLAUDE.md" "$( [ "$(cat "$ACT/CLAUDE.md" 2>/dev/null)" = "core v2" ] && echo 1 || echo 0)"
 chk "...and says so" "$(printf '%s' "$out" | grep -q 'CLAUDE.md.template deleted in repo -- active CLAUDE.md kept' && echo 1 || echo 0)"
 
+echo "=== T17: plugins/ccv3-mods syncs, and the engine-written .claude-plugin/types stays out ==="
+# Failure modes: (a) --changed does not carry a mod file to ~/.claude/plugins/ccv3-mods, (b) the full
+# mirror does not, (c) the engine's .claude-plugin/types/ is copied over (it is machine-written and
+# gitignored in the real repo; the loaded copy writes its own), (d) the engine's types in the active
+# copy are deleted when the repo deletes a mod file, (e) the verify step counts the excluded types
+# as missing and prints MISMATCH, (f) .claude-plugin/plugin.json is wrongly excluded with it.
+MODS="$REPO/.claude/plugins/ccv3-mods"
+mkdir -p "$MODS/hooks" "$MODS/.claude-plugin/types" "$ACT/plugins/ccv3-mods/.claude-plugin/types"
+printf 'engine-active\n' > "$ACT/plugins/ccv3-mods/.claude-plugin/types/tsconfig.json"
+printf 'm1\n' > "$MODS/hooks/register.tsx"
+printf '{"name":"ccv3-mods"}\n' > "$MODS/.claude-plugin/plugin.json"
+printf 'engine-repo\n' > "$MODS/.claude-plugin/types/tsconfig.json"
+printf 'only-in-repo\n' > "$MODS/.claude-plugin/types/only-in-repo.d.ts"
+commit t17-v1
+sync --changed >/dev/null
+chk "(a) --changed: register.tsx reaches ~/.claude/plugins/ccv3-mods" "$( [ "$(cat "$ACT/plugins/ccv3-mods/hooks/register.tsx" 2>/dev/null)" = "m1" ] && echo 1 || echo 0)"
+chk "(f) --changed: .claude-plugin/plugin.json reaches the active copy" "$(has "$ACT/plugins/ccv3-mods/.claude-plugin/plugin.json")"
+chk "(c) --changed: the engine's types are not overwritten from the repo" "$( [ "$(cat "$ACT/plugins/ccv3-mods/.claude-plugin/types/tsconfig.json")" = "engine-active" ] && echo 1 || echo 0)"
+chk "(c) --changed: no extra types file appears in the active copy" "$(not "$ACT/plugins/ccv3-mods/.claude-plugin/types/only-in-repo.d.ts")"
+printf 'm2\n' > "$MODS/hooks/register.tsx"; commit t17-v2
+sync >/dev/null
+chk "(b) full mirror: register.tsx updated" "$( [ "$(cat "$ACT/plugins/ccv3-mods/hooks/register.tsx" 2>/dev/null)" = "m2" ] && echo 1 || echo 0)"
+chk "(c) full mirror: the engine's types are not overwritten from the repo" "$( [ "$(cat "$ACT/plugins/ccv3-mods/.claude-plugin/types/tsconfig.json")" = "engine-active" ] && echo 1 || echo 0)"
+g rm -q .claude/plugins/ccv3-mods/hooks/register.tsx; g commit -q -m t17-delete
+sync --changed >/dev/null
+chk "--changed delete removes register.tsx" "$(not "$ACT/plugins/ccv3-mods/hooks/register.tsx")"
+chk "(d) the engine's types in the active copy survive" "$(has "$ACT/plugins/ccv3-mods/.claude-plugin/types/tsconfig.json")"
+mkdir -p "$MODS/hooks"; printf 'm3\n' > "$MODS/hooks/register.tsx"; commit t17-v3
+out="$(sync)"
+# Other dirs may show a MISMATCH left by earlier fixtures (T16's skill CLAUDE.md), so look at this line only.
+chk "(e) full sync verify: plugins/ccv3-mods OK, not MISMATCH" "$(printf '%s' "$out" | grep -q 'plugins/ccv3-mods: OK' && ! printf '%s' "$out" | grep -q 'plugins/ccv3-mods: MISMATCH' && echo 1 || echo 0)"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

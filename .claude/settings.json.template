@@ -134,6 +134,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
+            ]
           }
         ]
       },
@@ -154,6 +162,14 @@
             "timeout": 10000,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5000,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
             ]
           }
         ]
@@ -269,14 +285,6 @@
               "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
             ],
             "timeout": 5000
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/context-pct-warning.mjs"
-            ],
-            "timeout": 10000
           }
         ]
       }
@@ -778,7 +786,8 @@
     "trace-claude-code@braintrust-claude-plugin": false,
     "microsoft-docs@claude-plugins-official": true,
     "plugin-dev@claude-plugins-official": true,
-    "typesafe@typesafe-ai": true
+    "typesafe@typesafe-ai": true,
+    "ccv3-mods@ccv3": true
   },
   "alwaysThinkingEnabled": true,
   "skipDangerousModePermissionPrompt": true,
@@ -895,6 +904,7 @@
     }
   },
   "effortLevel": "high",
+  "advisorModel": "fable",
   "skillOverrides": {
     "anthropic-skills:frontend-design": "off",
     "anthropic-skills:frontend-slides": "off",
@@ -911,6 +921,9 @@
     },
     "claude-sonnet-5-5": {
       "effortLevel": "high"
+    },
+    "claude-opus-5-5": {
+      "effortLevel": "high"
     }
   },
   "extraKnownMarketplaces": {
@@ -924,6 +937,12 @@
       "source": {
         "source": "github",
         "repo": "jarrodwatts/claude-hud"
+      }
+    },
+    "ccv3": {
+      "source": {
+        "source": "directory",
+        "path": "{{CLAUDE_HOME}}/plugins/ccv3-mods"
       }
     }
   }

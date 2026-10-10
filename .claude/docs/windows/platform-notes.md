@@ -120,7 +120,7 @@ Observed repeatedly 2026-07-06: while GitHub was slow, **every** Bash-tool comma
 
 **Rule:** when Bash-tool git/network ops hang, **switch to the PowerShell tool** — it doesn't source that profile and runs instantly. Use `git -C <repo> <cmd>` (no `cd`). This applies to any git/`gh`/network op, not just merges.
 
-The `destructive-command-guard` gates the PowerShell tool as well (since 2026-09-23), including `git -C <repo> reset --hard` and `git stash -u`. Override there: start the command with `$env:SKIP_DESTRUCTIVE_GUARD='1';`.
+The `destructive-command-guard` gates the PowerShell tool as well (since 2026-09-23), including `git -C <repo> reset --hard` and `git stash -u`. Override there, only after Dave says yes to that exact command: start the command with `$env:SKIP_DESTRUCTIVE_GUARD='1';`.
 
 ## Deleting a junction from the PowerShell tool [H:7]
 

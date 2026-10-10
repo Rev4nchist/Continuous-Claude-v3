@@ -13,6 +13,7 @@ import { readFileSync } from 'fs';
 import { resolveFileClaim } from './shared/db-utils-pg.js';
 import { resolveSessionId, canonicalProject } from './shared/session-id.js';
 import type { PreToolUseInput, HookOutput } from './shared/types.js';
+import { logGuardDecision } from './shared/guard-log.js';
 
 // Stale session threshold (5 minutes). This is only ONE HALF of the reclamation
 // rule -- the lease must ALSO have expired. See resolveFileClaim.
@@ -144,6 +145,7 @@ heartbeating, so an idle-but-alive session is never preempted.
 Coordinate with that session, or work on something else.
 To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
 
+      logGuardDecision('file-claims', input, 'deny', `file-conflict: held by ${decision.holder}`);
       output = {
         hookSpecificOutput: {
           hookEventName: 'PreToolUse',
@@ -155,6 +157,11 @@ To override deliberately: set COORDINATION_BREAK_GLASS=1 (it is logged).`;
     }
 
     case 'takeover':
+      // A forced takeover overrides the lock rule: leave a guard-log record next to the
+      // claim_break_glass event. The DB result decides, not the env flag.
+      if (decision.breakGlass) {
+        logGuardDecision('file-claims', input, 'override', `break-glass: forced takeover from ${decision.holder}`);
+      }
       // Custody changed hands, so somebody else may have edited this file since
       // anyone last looked at it. The fence transition is the evidence, and it
       // is worth putting in front of the model rather than only in the DB.

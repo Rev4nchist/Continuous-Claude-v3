@@ -4,7 +4,8 @@
  * Detects a PR being opened (`gh pr create` or `gh api ... /pulls -X POST`)
  * and, when the tool response looks like a genuine success (a PR URL or a
  * "number" field), injects additionalContext telling the model to start the
- * CodeRabbit review loop (see rules-ondemand/pr-coderabbit-loop.md) in the same turn.
+ * PR review loop (see rules-ondemand/pr-review-loop.md) in the same turn. The file keeps
+ * its old name so neither settings.json copy changes; the reviewer is now Greptile.
  *
  * Fires at most once per PR URL per session: a small state file under
  * os.tmpdir(), keyed by session_id + url, suppresses repeats.
@@ -110,13 +111,30 @@ function markFired(sessionId: string, url: string): void {
   }
 }
 
+/**
+ * pr_watch (the ccv3-mods plugin) checks one fixed repo, so only that repo's PRs are sent to it.
+ * Any other repo keeps the /loop.
+ */
+const WATCH_REPO = 'rev4nchist/continuous-claude-v3';
+
+const loopText = (info: PrInfo): string =>
+  `/loop 5m Check the review bot (Greptile; CodeRabbit on a repo not moved yet) on ${info.owner}/${info.repo} PR #${info.number} (stop when a review of the head lands or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
+
 export function buildContext(info: PrInfo): string {
+  const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
+  if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
+    return (
+      head +
+      `FIRST call the pr_watch tool with pr: ${info.number} (mcp__ccv3-mods__pr_watch), in this same turn. ` +
+      `It watches the Greptile review and CI for you and tells Dave and you at READY; never merge. ` +
+      `Only if that tool does not exist, start the REVIEW LOOP instead: ${loopText(info)}. ` +
+      `This applies to every PR in every session.`
+    );
+  }
   return (
-    `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-coderabbit-loop.md, START THE CODERABBIT ` +
-    `LOOP NOW, in this same turn: /loop 5m Check CodeRabbit on ${info.owner}/${info.repo} PR ` +
-    `#${info.number} (stop when a review lands or after 60 minutes; fix real findings; dismiss ` +
-    `false positives; verify thread isResolved via GraphQL; never merge). This applies to every ` +
-    `PR in every session.`
+    head +
+    `START THE REVIEW LOOP NOW, in this same turn: ${loopText(info)}. ` +
+    `This applies to every PR in every session.`
   );
 }
 

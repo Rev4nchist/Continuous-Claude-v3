@@ -19,6 +19,7 @@ import { readFileSync, readdirSync, statSync, realpathSync } from 'fs';
 import { join, isAbsolute } from 'path';
 import { homedir } from 'os';
 import { fileURLToPath } from 'url';
+import { logGuardDecision } from './shared/guard-log.js';
 
 interface TaskInput {
   tool_name?: string;
@@ -200,7 +201,10 @@ function main(): void {
   }
   const decision = decide(input, { home: homedir(), projectDir: process.env.CLAUDE_PROJECT_DIR });
   if (decision.allow) outputContinue();
-  else outputBlock(decision.reason);
+  else {
+    logGuardDecision('agent-model-guard', input, 'deny', `agent-not-found: ${String(input.tool_input?.subagent_type).slice(0, 60)}`);
+    outputBlock(decision.reason);
+  }
 }
 
 // Entry only when this file is the process entrypoint, so a test can import decide() safely.

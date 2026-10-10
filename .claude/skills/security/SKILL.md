@@ -94,6 +94,19 @@ Task(
 )
 ```
 
+### Phase 1.5: Dynamic scan (optional, your own target)
+
+Phase 1 reads code (static). To also scan a running app and its dependencies
+(dynamic), run the `security-scan` skill. It is scope-gated to targets you own
+and confirm-first:
+
+```
+/security-scan          # then: deps, secrets, fs, and web <owned-url>
+```
+
+Use it when the project has a running instance or a registry `url`. Skip it for
+a pure static review.
+
 ### Phase 2: Verification (After Fixes)
 
 ```
