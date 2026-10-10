@@ -3,11 +3,12 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { AgentRun } from '../../types'
 import type { Span } from '../agentic-os/pane-model'
+import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { parseAgentSpec } from '../shared/tiers'
 import { TONE } from '../shared/tones'
 import { capRuns, ledgerRows, newRun, withSpec } from './model'
 
-// Agent Ledger capture and the /agents pane. A run's per-request tokens come from the turn.step hook in
+// Agent Ledger capture and the /ledger pane (`/agents` is a built-in: registering it is refused). A run's per-request tokens come from the turn.step hook in
 // hooks/hud/index.ts, and its end from turn.complete in hooks/agentic-os/index.tsx: a plugin holds one
 // unmatched hook per event, so those two hooks serve every module.
 
@@ -15,12 +16,18 @@ const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as
 /** Bumped by the agentic-os pulse, so elapsed times redraw. */
 const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
 
-const PANE = 'agents'
+const PANE = 'ledger'
 
 const isOff = async ($: EngineInterface): Promise<boolean> =>
   (await $.env.get('CCV3_MODS_OFF')) === '1' || (await $.env.get('CCV3_MOD_LEDGER_OFF')) === '1'
 
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+
+/** Leaves ~/.claude/state/ccv3-mods/errors/<time>-<where>.json, so a failure no one sees still says what broke. */
+const noteError = async ($: EngineInterface, where: string, err: unknown) => {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
+}
 
 /** The agent's `model:` and `effort:`, from the project's .claude/agents first, then ~/.claude/agents. */
 const specOf = async ($: EngineInterface, type: string): Promise<AgentRun['spec']> => {
@@ -37,7 +44,9 @@ const specOf = async ($: EngineInterface, type: string): Promise<AgentRun['spec'
 export const agentLedger = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     if (!(await isOff($))) {
-      await $.command.register({ name: 'agents', description: 'Agent Ledger: each subagent this session, its tier, tokens and estimated cost' })
+      await $.command
+        .register({ name: 'ledger', description: 'Agent Ledger: each subagent this session, its tier, tokens and estimated cost' })
+        .catch(err => noteError($, 'ledger-register', err))
     }
     return next(e)
   }).catch(($, e, next) => next(e))
@@ -56,7 +65,7 @@ export const agentLedger = (on: On) => {
     return result
   }).catch(($, e, next) => next(e))
 
-  on('command.run', { command: 'agents' }, async $ => {
+  on('command.run', { command: 'ledger' }, async $ => {
     const opened = await $.ui.open({ id: PANE, title: 'Agents' })
     return { text: opened.isPlaced ? 'Agent Ledger opened.' : `Agent Ledger waits: ${opened.reason}` }
   }).catch(() => ({ text: 'Agent Ledger failed to open.' }))

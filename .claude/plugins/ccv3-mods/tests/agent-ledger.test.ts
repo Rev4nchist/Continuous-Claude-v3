@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-// Ways the Agent Ledger can fail, one test each. Checks read the /agents pane, the band or the snapshot.
+// Ways the Agent Ledger can fail, one test each. Checks read the /ledger pane, the band or the snapshot.
 // L1 a started subagent is not recorded (or a denied spawn is)
 // L2 tokens from several requests don't add up, or cost shows before the run ends
 // L3 a run off its agent's spec (spark: sonnet/high) is not flagged; one on spec is
@@ -82,7 +82,7 @@ const finish = ($: Engine, agentId: string, reason = 'answer') =>
   $.turn.complete({ answer: '', durationMs: 1, isAborted: reason === 'aborted', turnId: 'sub', agentId, reason } as never)
 
 const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal') => {
-  const pane = await $.ui.mount({ plugin: 'ccv3-mods', surface, component: 'Pane', requestId: 'agents', props: PANE_PROPS, viewport: { columns: 80, rows: 40 } })
+  const pane = await $.ui.mount({ plugin: 'ccv3-mods', surface, component: 'Pane', requestId: 'ledger', props: PANE_PROPS, viewport: { columns: 80, rows: 40 } })
   const text = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text).join('\n')
   await pane.unmount()
   return text

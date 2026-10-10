@@ -13,6 +13,7 @@ import { diffLines, groupSummary, hunksOf, mainArg } from '../hooks/skin/model'
 // K6 an edit's diff card loses line numbers or counts; an errored or patchless result isn't left to the engine
 // K7 the terminal gets Svg icons
 // K8 CCV3_MOD_SKIN_OFF still draws
+// K10 a terminal session draws skin rows (Skin is desktop-only)
 // K9 a row carrying its own output (verbose, expanded group) or a staged edit is redrawn by the skin, hiding it;
 //    a stray /skin argument flips the setting
 
@@ -40,7 +41,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
   return { clock }
 }
 
-const start = ($: Engine) => $.session.start({ cwd: '/repo', surface: 'terminal', isInteractive: true } as never)
+const start = ($: Engine) => $.session.start({ cwd: '/repo', surface: 'desktop', isInteractive: true } as never)
 const skinOn = ($: Engine) => $.command.run({ command: 'skin', args: 'on', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 120 } } as never)
 
 const USE = (tool: string, input: Record<string, unknown>, extra: Record<string, unknown> = {}) => ({
@@ -85,6 +86,8 @@ describe('skin', () => {
     expect(desktop.text).toContain('0.2s')
     expect(desktop.svgs).toBe(1)
     expect((await draw($, 'ToolUse', USE('Read', { file_path: '/x' }), 'terminal')).svgs).toBe(0)
+    // K10: the terminal keeps the engine's own row, Skin on or not.
+    expect((await draw($, 'ToolUse', USE('Read', { file_path: '/x' }), 'terminal')).key).toBeUndefined()
     expect((await draw($, 'ToolUse', USE('Bash', { command: 'npm test\nmore' }, { isErrored: true }))).text).toContain('error')
   })
 

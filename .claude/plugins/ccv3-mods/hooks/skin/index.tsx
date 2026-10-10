@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { AgentRun, ToolTime } from '../../types'
+import { DIAG_DIR, errorFile, errorText, isDesktop } from '../shared/diag'
 import { ICON_GLYPH, iconSvg } from '../shared/glyphs'
 import { tierBadge } from '../shared/tiers'
 import { TONE } from '../shared/tones'
@@ -9,7 +10,7 @@ import { tierTone } from '../agent-ledger/model'
 import { SKIN_TOOLS, diffLines, fmtMs, groupSummary, hunksOf, mainArg } from './model'
 
 // CCv3 Skin: tool rows with icons, timings and tier badges, collapsed groups as one line, edits as diff
-// cards. OFF by default (it replaces how the app draws every tool call); `/skin on` turns it on and
+// cards. Desktop app only (the terminal keeps the engine's rows). OFF by default (it replaces how the app draws every tool call); `/skin on` turns it on and
 // $.store keeps the choice across sessions. Any tool it doesn't know, or any error, draws the engine's own.
 
 const skinOn = atom({ plugin: 'ccv3-mods', key: 'skinOn' } as const, false)
@@ -25,13 +26,22 @@ const isOff = async ($: EngineInterface): Promise<boolean> =>
 /** Svg can't read theme keys: one icon colour per tool family. */
 const ICON_HEX: Record<string, string> = { edit: '#D97757', agent: '#5B8FD9', advisor: '#8A74D6', shell: '#C9922E' }
 
-/** Skin on, not switched off, and drawing for this session. */
-const active = async ($: EngineInterface): Promise<boolean> => (await read($, skinOn)) && !(await isOff($))
+/** Skin on, not switched off, and drawing in the desktop app. */
+const active = async ($: EngineInterface, surface: string): Promise<boolean> =>
+  isDesktop(surface, await $.env.get('CCV3_FORCE_SURFACE')) && (await read($, skinOn)) && !(await isOff($))
+
+/** Leaves ~/.claude/state/ccv3-mods/errors/<time>-<where>.json, so a failure no one sees still says what broke. */
+const noteError = async ($: EngineInterface, where: string, err: unknown) => {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
+}
 
 export const skin = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    await $.command.register({ name: 'skin', description: 'CCv3 Skin: /skin on, /skin off (remembered across sessions)', argumentHint: 'on|off' })
+    if ((await isOff($)) || !isDesktop(e.surface, await $.env.get('CCV3_FORCE_SURFACE'))) return next(e)
+    await $.command
+      .register({ name: 'skin', description: 'CCv3 Skin: /skin on, /skin off (remembered across sessions)', argumentHint: 'on|off' })
+      .catch(err => noteError($, 'skin-register', err))
     const saved = await $.store.get(STORE_KEY).catch(() => undefined)
     await update($, skinOn, () => saved === 'on')
     return next(e)
@@ -47,7 +57,7 @@ export const skin = (on: On) => {
   }).catch(() => ({ text: 'CCv3 Skin could not change.' }))
 
   on('ui.render', { component: 'ToolUse' }, async ($, e, next) => {
-    if (!(await active($))) return next(e)
+    if (!(await active($, e.surface))) return next(e)
     const p = e.props
     const icon = SKIN_TOOLS[p.tool]
     // A row that carries its own output (an expanded group, verbose mode) keeps the engine's row:
@@ -90,7 +100,7 @@ export const skin = (on: On) => {
   })
 
   on('ui.render', { component: 'ToolGroup' }, async ($, e, next) => {
-    if (!(await active($)) || e.props.isExpanded) return next(e)
+    if (!(await active($, e.surface)) || e.props.isExpanded) return next(e)
     const { Box, Text } = $.ui.resolve(e)
     return (
       <Box key="skin-group" flexDirection="row" gap={1} borderStyle="round" borderColor="subtle" paddingX={1}>
@@ -101,7 +111,7 @@ export const skin = (on: On) => {
   })
 
   on('ui.render', { component: 'ToolResult' }, async ($, e, next) => {
-    if (!(await active($)) || e.props.isErrored) return next(e)
+    if (!(await active($, e.surface)) || e.props.isErrored) return next(e)
     if (e.props.tool !== 'Edit' && e.props.tool !== 'Write' && e.props.tool !== 'MultiEdit') return next(e)
     // A staged edit was held for review, not applied: the engine says so better than a diff would.
     if ((e.props.output as { staged?: unknown } | null)?.staged === true) return next(e)

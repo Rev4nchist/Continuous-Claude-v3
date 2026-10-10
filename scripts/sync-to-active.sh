@@ -150,9 +150,10 @@ SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
 # Nested dirs synced on their own (2026-10-01). plugins/claude-hud holds the status line launcher
 # and its config. The rest of ~/.claude/plugins is Claude Code's own state (cache, marketplaces,
 # installed_plugins.json): never sync or count the whole plugins/ dir.
-# plugins/ccv3-mods (2026-10-07) is the CCv3 function-hook mods plugin. CLAUDE_CODE_PLUGIN_DIRS in
-# ~/.claude/settings.json points at the active copy. Its .claude-plugin/types/ is written by the
-# engine on load and is never synced (see the find filters in copy_dir and changed_is_excluded).
+# plugins/ccv3-mods (2026-10-07) is the CCv3 function-hook mods plugin, installed from the local
+# marketplace `ccv3` (its marketplace.json is in its .claude-plugin/), which loads the active copy in
+# place. Its .claude-plugin/types/ is written by the engine on load and is never synced (see the
+# find filters in copy_dir and changed_is_excluded).
 SYNC_SUBDIRS="plugins/claude-hud plugins/ccv3-mods"
 
 # Explicit source->dest mapping for the rules tree (names differ, see above).

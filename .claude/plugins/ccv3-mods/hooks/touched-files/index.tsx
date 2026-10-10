@@ -3,6 +3,7 @@ import type { EngineInterface, On } from 'claude-code'
 
 import type { FileTouch } from '../../types'
 import type { Span } from '../agentic-os/pane-model'
+import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ICON_GLYPH, iconSvg } from '../shared/glyphs'
 import { TONE } from '../shared/tones'
 import { diffLines, hunksOf } from '../skin/model'
@@ -28,10 +29,18 @@ const head = async ($: EngineInterface, root: string): Promise<string | null> =>
 
 const STATE_HEX: Record<FileTouch['state'], string> = { read: '#8A867D', edited: '#D97757', committed: '#4E9A6A' }
 
+/** Leaves ~/.claude/state/ccv3-mods/errors/<time>-<where>.json, so a failure no one sees still says what broke. */
+const noteError = async ($: EngineInterface, where: string, err: unknown) => {
+  const home = (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+  if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
+}
+
 export const touchedFiles = (on: On) => {
   on('session.start', { isInteractive: true }, async ($, e, next) => {
     if (!(await isOff($))) {
-      await $.command.register({ name: 'files', description: 'Touched Files: the files this session read, edited and committed' })
+      await $.command
+        .register({ name: 'files', description: 'Touched Files: the files this session read, edited and committed' })
+        .catch(err => noteError($, 'files-register', err))
     }
     return next(e)
   }).catch(($, e, next) => next(e))

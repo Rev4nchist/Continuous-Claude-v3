@@ -2,19 +2,20 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { CacheClock, CacheHold } from '../../types'
+import { isDesktop } from '../shared/diag'
 import { coldCost, warmCost } from '../shared/price'
 import { TONE } from '../shared/tones'
 import { DROP_REASON, cardLines, isCold, isPlainPrompt, ttlMinutes } from './model'
 
 // Cache Guard: holds the first send after the prompt cache went cold, once, and shows what it would cost.
 // The held text goes straight back into the prompt box, so the person's next Enter sends it as their
-// own message (mentions and all). Interactive terminal and desktop sessions only: a held prompt in a
-// -p run, a scheduled script or a surface that can't draw the card would never be seen.
+// own message (mentions and all). Interactive desktop-app sessions only: Dave keeps the terminal as is, and a
+// held prompt in a -p run or a scheduled script would never be seen.
 
 /** Stamped by the agentic-os turn.complete hook (the plugin's one unmatched turn.complete hook). */
 const cacheClock = atom({ plugin: 'ccv3-mods', key: 'cacheClock' } as const, { lastReplyAt: null, heldFor: null } as CacheClock)
 const cacheHold = atom({ plugin: 'ccv3-mods', key: 'cacheHold' } as const, null as CacheHold | null)
-/** The surface this session draws on; the card shows only on terminal and desktop. */
+/** The surface this session draws on; Cache Guard holds only in the desktop app. */
 const cacheSurface = atom({ plugin: 'ccv3-mods', key: 'cacheSurface' } as const, null as string | null)
 /** Set at session.start by agentic-os (and pr-loop): the same atom, declared here to read it. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
@@ -43,7 +44,7 @@ export const cacheGuard = (on: On) => {
     if (e.origin.kind !== 'composer' || e.turnId !== undefined || !isPlainPrompt(e.text, e.attachments?.length ?? 0)) return next(e)
     if ((await isOff($)) || (await read($, mode)) !== 'interactive') return next(e)
     const surface = await read($, cacheSurface)
-    if (surface !== 'terminal' && surface !== 'desktop') return next(e)
+    if (!isDesktop(surface, await $.env.get('CCV3_FORCE_SURFACE'))) return next(e)
     // A new message while the card is up goes through (this window was held once) and clears the card.
     if ((await read($, cacheHold)) !== null) await update($, cacheHold, () => null)
     const clock = await read($, cacheClock)
