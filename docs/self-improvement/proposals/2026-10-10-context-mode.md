@@ -5,7 +5,7 @@ tools), the plugin hooks, and the session-continuity store. **WATCH** one tool, 
 docs. Revisit it only if probe D shows repeated large doc fetches. Even then, running it means booting the same MCP
 server, with the same writes to `~/.claude` (§5, §7). **Steal** four things and rebuild them in CCv3's own words: (A) a routed "derive, don't dump" rule, (B) verify,
 then delete, the 100K Bash output override, (C) make the PreCompact handoff fire on manual `/compact`, (D) a
-net-savings probe. Status: **awaiting Dave**. Nothing is built.
+net-savings probe. Status: **B settled (no change needed), D built; A designed, awaiting Dave** (§7a). C not started.
 
 Why now: context-mode claims "98% context savings" and ships as a Claude Code plugin. CCv3's always-loaded text has no
 headroom left: 9 chars under the ratchet [ran]. So the next context win has to come from tool output, and context-mode
@@ -24,7 +24,7 @@ code read, [ran] executed, [docs] Claude Code docs, [inferred] reasoning.
   one-liner answered **5/5 in 1,334 B** (0.31% of 429 KB raw); context-mode's search recipe answered **1/5 in 66 KB** [ran].
   The 429 KB is raw stdout, not what Claude Code shows. At its default ~30K ceiling, 4 of the 5 outputs would come
   back as ~2 KB file previews, so the realistic plain-Bash baseline is ~38 KB, and the model would still need follow-up
-  calls to answer [inferred, w3-cache]. Running the same one-liner through `ctx_execute` also scored 5/5 (2,644 B).
+  calls to answer [ran: §3 threshold probe]. Running the same one-liner through `ctx_execute` also scored 5/5 (2,644 B).
 - **It does not break the prompt cache; it adds tokens that are cached, then re-read.** Every injection is appended in the
   conversation layer [docs]. Cost: ~+0.6M tokens processed per session with hooks only, ~+2.4M with the tools in use,
   mostly from subagents [inferred, §3].
@@ -138,10 +138,22 @@ and git-log attribution.
 **Where the verdict flips.** Sessions with few subagent spawns, mostly single-fact lookups over 5-30 KB outputs that the
 intent path answers in one call. Above ~30 KB, Claude Code already saves the output to a file and returns a ≤2 KB
 preview [docs: tools-reference "Output limits"; ran: 30.5K, 43.7K and 57.9K outputs persisted in this session].
-**Caveat:** that native baseline holds only if CCv3's `BASH_MAX_OUTPUT_LENGTH=100K` override is not live.
-`ROADMAP.archive.md:8` records it being set on 2026-03-27. It is not in the repo, so it may still be set on Dave's machine.
-If it is live, 30-100 KB outputs come back inline today. context-mode does not fix that band either: without `intent` it
-returns 5-100 KB verbatim. Steal B fixes it natively.
+**The 100K override does not change this (steal B, settled 2026-10-10).** `ROADMAP.archive.md:8` records
+`BASH_MAX_OUTPUT_LENGTH=100K` being set on 2026-03-27. In Claude Code 2.1.296 that variable only sizes a read-back window.
+The inline ceiling is the `bashOutputMaxChars` setting, default 30,000, clamped 4,000-128,000 [read: CC binary, the Bash
+tool's `maxResultSizeChars`]. A headless probe confirmed it [ran: `.claude/cache/e2e/2026-10-10-bash-output-ceiling.json`]:
+
+| Output | Setting | Model saw |
+|---|---|---|
+| 25,000 chars | none | 25,000 inline |
+| 40,000 chars | none | 2,302-char preview, file saved |
+| 40,000 chars | `BASH_MAX_OUTPUT_LENGTH=100000` | 2,323-char preview, file saved |
+| 120,000 chars | `BASH_MAX_OUTPUT_LENGTH=100000` | 2,303-char preview, file saved |
+| 40,000 chars | `bashOutputMaxChars: 100000` | 40,000 inline |
+
+So 30-100 KB outputs are already saved to a file today. The risk is the reverse: migrating the old intent to
+`bashOutputMaxChars: 100000` would bring that band back inline. context-mode does not help either way: without `intent` it
+returns 5-100 KB verbatim.
 
 ## 4. Measured reduction on CCv3's real workload
 
@@ -157,7 +169,7 @@ no-MCP baseline (`probe/w3/step3*.json`).
 | Approach (5 questions) | Bytes returned | Calls | Correct |
 |---|---:|---:|---|
 | Plain Bash, raw command (raw stdout) | 429,052 | 5 | 2, plus 3 the model must count or compare by eye |
-| Plain Bash, raw command, as Claude Code returns it at the default ~30K ceiling | ~38,000 | 5, plus follow-ups | a, b, d and e come back as ~2 KB previews, so 4/5 need a grep or Read of the saved file [inferred, w3-cache; only if the 100K override is not live, §3] |
+| Plain Bash, raw command, as Claude Code returns it at the default ~30K ceiling | ~38,000 | 5, plus follow-ups | a, b, d and e come back as ~2 KB previews, so 4/5 need a grep or Read of the saved file [inferred, w3-cache; confirmed by the §3 threshold probe] |
 | **Plain Bash, summarising one-liner** | **1,334** | 5 | **5/5** |
 | `ctx_execute` running the same one-liner (with or without `intent`) | 2,644-2,686 | 5 | 5/5 |
 | `ctx_batch_execute` with only the processing command and 1 query | 7,176 | 5 | 5/5 |
@@ -256,9 +268,9 @@ in the drift checks; accept +4.6 KB per spawn. Also pin by commit SHA and never 
 | # | Idea | Surface and size | Gate (AGENTS.md) |
 |---|---|---|---|
 | A | **"Derive, don't dump."** For a count, filter, max or one fact in a big output, write the command so it prints only the answer. A plain view or a state change runs as is. For a large page, `curl -o` to a scratch file, then grep or jq it | On-demand rule `.claude/rules-ondemand/output-discipline.md` (~600 chars), rule-router `inject` on dump-prone heads (`cat`/`Get-Content`, `git log/show/diff`, `find`, `ls -R`, `grep -r`/`rg`, `gh api`, `curl`/`iwr`, test runners). Fires once per agent_id (`rule-router.ts:166-168`), so subagents are covered, and PowerShell too. The index row needs ~90 chars and **headroom is 9**: either a reviewed `maxChars` raise or a cut in the same PR | `claude -p` on the 5 probe questions, rule on vs off, N≥3, comparing `usage` tokens and correctness, plus a subagent arm. Then the 4 ratchets. Artifact `.claude/cache/e2e/<date>-output-discipline.json` |
-| B | **The native flood net.** Find where `BASH_MAX_OUTPUT_LENGTH=100000` lives on Dave's machine. If it controls inline vs saved-to-file, remove it | A settings env change, which is a deletion | A threshold probe with 40K and 120K outputs, before and after. Pass = the 40K output comes back as a saved-file preview. Artifact `.claude/cache/e2e/<date>-bash-output-ceiling.json`. **Run first:** it decides the size of A |
+| B | **The native flood net. DONE 2026-10-10: no token effect.** `BASH_MAX_OUTPUT_LENGTH` no longer sets the inline ceiling (§3 table). Removing it from Dave's machine is hygiene only. Never set `bashOutputMaxChars` above 30,000 | Delete the env var where it lives: `~/.claude/settings.json` `env` (never synced from the repo) or a Windows user variable | Ran: 5-arm headless threshold probe, `.claude/cache/e2e/2026-10-10-bash-output-ceiling.json` |
 | C | **A PreCompact handoff on manual `/compact`.** `pre-compact-continuity.ts:41` writes the transcript handoff only when `trigger === 'auto'`, and there were 0 auto compactions in 30 days. C1: also run it on `manual`, with a byte cap on the compact injection. C2: delete the dead branch if 2-4 weeks show no re-asks after compaction. Check first that auto-handoffs do not crowd the 5 unmarked-handoff slots (`session-start-continuity.ts:447-472`) | A one-line hook change plus a cap | `npm run build`, then pipe real `trigger:"manual"` PreCompact and `source:"compact"` SessionStart payloads into the built hooks. Artifacts are both stdout JSONs |
-| D | **A net-savings probe.** It replaces any `ctx_stats`-style metric. Net = baseline result bytes − (new result + tool input + follow-up bytes), always paired with correctness | `scripts/context/bash-output-bands-probe.mjs`: a recursive scan of transcripts. It reports Bash/PowerShell result sizes in bands <5K, 5-30K, 30-100K and persisted, split main vs subagent, plus re-reads of saved output files | Probe output with a positive control. It is the baseline for A and B |
+| D | **A net-savings probe. BUILT 2026-10-10.** It replaces any `ctx_stats`-style metric. Net = baseline result bytes − (new result + tool input + follow-up bytes), always paired with correctness | `scripts/usage/bash-output-bands.mjs` (reuses `token-report.mjs` helpers): Bash/PowerShell results in bands <5K, 5-30K, ≥30K inline and saved-to-file, main vs subagent, re-reads of saved files, top command heads. 12 `node:test` cases, 4 mutations all caught | Positive control: the 5 probe-B transcripts give exactly 1 small, 1 mid, 1 large, 3 saved (200K original). First real run: `.claude/cache/e2e/2026-10-10-bash-output-bands.md` (see §7a) |
 
 Rejected: the curl/wget deny (it only redirects to ctx tools and collides with the cma/kusto/fabric router rules);
 the FTS5 pointer (weaker than the native net, 1/5 on aggregates); the Agent prompt append (+4,637 B per spawn, never
@@ -274,13 +286,61 @@ unknown (§4). The costs:
 Revisit only if probe D shows repeated large doc fetches. The "curl to a file, then grep" clause in A covers the
 common case.
 
-Honest prior for A: advisory text has had 0/16 uptake before (search-router). Injection also arrives after the command is
-chosen, so the measurement decides, not the design.
+### 7a. B and D results, and how A would work (2026-10-10)
+
+**B: no change needed.** See §3. `BASH_MAX_OUTPUT_LENGTH` is inert for inline size on CC 2.1.296, so the native
+30K flood net is already on. Dave can delete the variable for hygiene; it changes nothing in context.
+
+**D: first run.** `node scripts/usage/bash-output-bands.mjs --days 2` over this evaluation's own transcripts: 1 main session
+and 18 reader subagents. **This is not Dave's workload.** It is an audit session full of agents reading an unfamiliar repo,
+so read-heavy commands dominate. The real baseline is the same command with `--days 30` on Dave's machine.
+
+| thread | results | small <5K | mid 5-30K | ≥30K inline | saved to file | errors |
+|---|---|---|---|---|---|---|
+| main | 47 | 37 / 40.5K | 8 / 85.6K | 0 | 0 | 2 / 1.9K |
+| subagent | 536 | 331 / 583.5K | 186 / 1.97M | 0 | 11 (590K original, 24K preview, 0 re-reads) | 8 / 16.4K |
+
+Cells are count / characters seen. What it shows:
+- **Subagents produce 96% of shell output.** Any lever has to reach them, and the rule-router marker is per `agent_id`.
+- **The native net works and is cheap.** 11 saved files kept 566K characters out of context, and no agent re-read one.
+- **A's honest pool is 1.13M of 2.72M inline characters (41%), not 2.05M.** 925K of the 5K+ output was a file read
+  through the shell (`sed -n 1,200p f`, `cat f`, no pipe). The agent needed that content, so "derive, don't dump"
+  does not apply. The remaining pool is led by `grep -rn` (459K across 152 calls), mixed `cat`/`sed` chains, `ls` and
+  `wc` (the head table is in `.claude/cache/e2e/2026-10-10-bash-output-bands.md`).
+- [Speculation] If `sed`/`cat` also dominate on Dave's machine, where `tldr-read-enforcer` is live, agents are reading
+  files through Bash and routing around TLDR. That cannot be tested here; hooks are not active in this container.
+
+**A in practice.** The constraint that decides the design is `rule-router.ts:14`: an `inject` lands next to the tool
+result, after the command was chosen. So the first dump in an agent always lands. The rule shapes that agent's later
+calls (the reader subagents above made ~30 shell calls each).
+
+| Option | How it fires | Cost | Trade-off |
+|---|---|---|---|
+| **(a) rule-router `inject` (recommended)** | Manifest entry `output-discipline`, `mode: inject`, command regexes on enumeration heads only: `grep -r`/`rg`, `find`, `ls -R`, `git log` without `-n`/`--oneline`, `git diff` without `--stat`, `gh api`, test runners, `Get-ChildItem -Recurse`. Once per `agent_id`. **Not** `cat`/`sed`/`head`/`Get-Content`: those are reads, and nagging them is noise | ~600 chars, once per agent that runs such a head. No new code: a manifest row and one rule file | Reactive. The 0/16 uptake prior from search-router applies |
+| (b) PostToolUse hook on result size ≥ 5K | Fires exactly when a dump happened, whatever the head | ~600 chars only for agents that dumped | Most precise, but new hook code (build, register, tests), against the remediation plan's preference for deletion |
+| (c) One line in agent bodies | Preventive: present before the first command | ~150 chars per spawn, every spawn | Misses Workflow agents and built-in agent types |
+
+What an agent would see under (a), after its first `grep -rn foo .`:
+
+> [rule-router] On-demand rule for this call (output-discipline): When a shell command's output is only the means to an
+> answer (a count, a list of files, a max, which commit, whether X exists), write the command so it prints the answer:
+> `grep -rl` or `grep -c` instead of `grep -rn`, `| wc -l`, `| sort | uniq -c | sort -rn | head`, `git log --oneline -n 20
+> -- path`, `jq` paths, `Select-Object -First`. For a large web page, `curl -sS -o <scratch>/page.html` and then grep it.
+> Reading a file to understand it is not a dump: use Read, or `sed -n` ranges. Output over 30K is already saved to a file;
+> grep that file instead of re-printing it.
+
+Expected effect, from D's run: the pool is 1.13M characters. If later calls convert at even 30%, that is ~340K characters
+(≥85K tokens) over 2 days of one heavy session. That is an upper bound shaped by an audit workload, and the 0/16 prior
+says the real rate may be near zero. **The measurement decides.** Gate:
+1. D on Dave's machine, `--days 30`, before and after; the pool per 100 shell calls must fall.
+2. The 5-question headless A/B from §4 (`claude -p`, rule on vs off, N≥3), comparing tokens and correctness, plus one
+   subagent arm.
+3. The always-loaded budget: the manifest index row needs ~90 chars and headroom is 9 (§1), so decision D3 stands.
 
 | # | Decision for Dave | Recommendation |
 |---|---|---|
 | D1 | Install context-mode at all? | **No.** If you want to try it, use a throwaway profile, never `~/.claude`. |
-| D2 | Order of work | **B, then D, then A.** B may make A smaller. D gives both a baseline. |
+| D2 | Order of work | **B and D done.** Next: run D on Dave's machine (`--days 30`) for the real baseline, then A. |
 | D3 | Budget for A's index row | **Raise `maxChars` by ~100 with review**, or name a cut. |
 | D4 | C1 (flip) or C2 (delete) | **Wait for D's evidence** on re-asks after `/compact`. |
 | D5 | Report upstream bugs (§8)? | Your call. These are outward-facing actions. |
