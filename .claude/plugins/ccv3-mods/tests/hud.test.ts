@@ -1,0 +1,215 @@
+import { describe, expect, mock, test } from 'claude-code/testing'
+import type { On, RenderElement } from 'claude-code'
+import type { Engine } from 'claude-code/testing'
+
+import { hudParts } from '../hooks/hud/model'
+
+// Ways the HUD can fail, one test each. Every check reads the band the person sees.
+// H1 the advisor chip says "on" when advisorModel is set but a kill switch keeps it off
+// H2 effort below the high pin is not flagged (or high is flagged)
+// H3 a subagent's request overwrites the main loop's model and effort
+// H4 advisor calls on the main loop are not counted
+// H5 rate-limit bars draw with no subscription windows, or miss a measured change
+// H6 the terminal gets Svg (it can't draw it) or the desktop gets none
+// H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
+// H8 with the HUD up, ctx shows twice (ring and task row); with it off, the task row loses ctx
+// H9 a kill switch is set but the advisor runs anyway: the chip stays "blocked"
+// H10 a dated model id shows a date as its version; a spend limit's label breaks on the terminal
+
+const BAND_PROPS = {
+  hasSurvey: false,
+  isWorking: false,
+  maxRows: 10,
+  bodyColumns: 160,
+  scroll: { offset: 0, bodyRows: 10 },
+  view: {},
+}
+
+type World = { env?: Record<string, string>; settings?: Record<string, unknown>; limits?: { kind: string; percentUsed: number }[] }
+
+const beneath = { advisorCalls: 0 }
+
+const world = (on: On, w: World = {}) => {
+  on('turn.step', async function* (_$, e) {
+    return {
+      turnId: e.turnId,
+      index: e.index,
+      answer: '',
+      toolUses: [],
+      serverToolUses: Array.from({ length: beneath.advisorCalls }, (_, i) => ({ id: `a${i}`, name: 'advisor', input: {}, startedAt: 1 })),
+      stopReason: 'end_turn' as const,
+      usage: null,
+    }
+  })
+  mock.clock(on, { now: 1_000 })
+  mock.env(on, w.env ?? {})
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+  on('settings.read', () => ({ value: w.settings ?? { advisorModel: 'fable' } }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({
+    value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: w.limits ?? [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: 3.84 } },
+  }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('fs.exists', () => ({ value: false }))
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.measure', (_$, e) => ({ changed: e.changed }))
+  on('session.id', () => ({ value: 's1' }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+}
+
+const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
+
+/** One model request; the engine beneath (in `world`) answers with `beneath.advisorCalls` advisor uses. */
+const step = async ($: Engine, input: { model: string; effort?: string; agentId?: string }, advisorCalls = 0) => {
+  beneath.advisorCalls = advisorCalls
+  const stream = $.turn.step({ turnId: 't1', index: 0, messageCount: 1, ...input } as never)
+  for await (const _chunk of stream) {
+    // drain
+  }
+  await stream.result
+}
+
+const hudOn = async ($: Engine, surface: 'terminal' | 'desktop') => {
+  const band = await $.ui.mount({ plugin: 'ccv3-mods', surface, component: 'AbovePrompt', props: BAND_PROPS })
+  const row = await band.find({ key: 'row-hud' })
+  // A Text element's key is not kept in tests (README, Facts proven): find the chip by its text.
+  const model = await band.find({ type: 'Text', text: /^ (Opus|Sonnet|Fable) / })
+  const svgs = await band.findAll({ type: 'Svg' })
+  const taskRow = (await band.find({ key: 'row-band' }))?.text
+  await band.unmount()
+  return { text: row?.text, modelProps: model?.props, svgs: svgs.length, taskRow }
+}
+
+describe('hud', () => {
+  test('H1 a kill switch shows the advisor as blocked, with the reason', async ($, on) => {
+    world(on, { env: { DISABLE_TELEMETRY: '1' } })
+    await start($)
+    for (const surface of ['terminal', 'desktop'] as const) {
+      expect((await hudOn($, surface)).text).toContain('Fable advisor blocked: DISABLE_TELEMETRY')
+    }
+  })
+
+  test('H1 no advisorModel shows advisor off; set and unblocked shows it on', async ($, on) => {
+    world(on, { settings: {} })
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('advisor off')
+  })
+
+  test('H1 advisorModel set and no kill switch shows the advisor on', async ($, on) => {
+    world(on)
+    await start($)
+    const text = (await hudOn($, 'terminal')).text ?? ''
+    expect(text).toContain('Fable advisor')
+    expect(text).not.toContain('blocked')
+    expect(text).not.toContain('advisor off')
+  })
+
+  test('H2 H3 medium effort turns the chip red; a subagent request changes nothing', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'medium' })
+    await step($, { model: 'claude-sonnet-5-5', effort: 'high', agentId: 'sub1' })
+    const desktop = await hudOn($, 'desktop')
+    expect(desktop.text).toContain('Opus 5.5 · medium')
+    expect(desktop.modelProps?.backgroundColor).toBe('error')
+    await step($, { model: 'claude-opus-5-5', effort: 'high' })
+    expect((await hudOn($, 'desktop')).modelProps?.backgroundColor).toBe('claude')
+  })
+
+  test('H4 advisor uses on the main loop are counted', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    await step($, { model: 'claude-sonnet-5-5', effort: 'high', agentId: 'sub1' }, 3)
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  test('H9 an advisor use clears a "blocked" chip', async ($, on) => {
+    world(on, { env: { DISABLE_TELEMETRY: 'yes' } })
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('blocked')
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 1)
+    const text = (await hudOn($, 'terminal')).text ?? ''
+    expect(text).toContain('Fable advisor ×1')
+    expect(text).not.toContain('blocked')
+  })
+
+  test('H9 an env value like "no" is not a kill switch', async ($, on) => {
+    world(on, { env: { DISABLE_TELEMETRY: 'no' } })
+    await start($)
+    expect((await hudOn($, 'terminal')).text).not.toContain('blocked')
+  })
+
+  test('H10 dated ids and spend limits', async ($, on) => {
+    const parts = hudParts(
+      { model: 'claude-opus-4-20250514', effort: 'high', advisor: { state: 'off', calls: 0 }, costUsd: null, limits: [{ kind: 'spend_limit', percentUsed: 40 }] },
+      null,
+    )
+    expect(parts.find(part => part.key === 'hud-model')).toMatchObject({ text: 'Opus 4 · high' })
+    world(on, { limits: [{ kind: 'spend_limit', percentUsed: 40 }] })
+    await start($)
+    const text = (await hudOn($, 'terminal')).text ?? ''
+    expect(text).toContain('spend limit ▰')
+    expect(text).toContain('40%')
+  })
+
+  test('H5 no rate-limit windows, no bars; a measured change shows up', async ($, on) => {
+    world(on, { limits: [] })
+    await start($)
+    expect((await hudOn($, 'terminal')).text).not.toContain('5h')
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 61 }], cost: { usd: 4.1 }, changed: ['rateLimits', 'cost'] } as never)
+    const text = (await hudOn($, 'terminal')).text
+    expect(text).toContain('7d')
+    expect(text).toContain('61%')
+    expect(text).toContain('$4.10')
+  })
+
+  test('H6 Svg on desktop, never on the terminal', async ($, on) => {
+    world(on)
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }], changed: ['context'] } as never)
+    const terminal = await hudOn($, 'terminal')
+    expect(terminal.svgs).toBe(0)
+    expect(terminal.text).toMatch(/[▰▱]/)
+    expect((await hudOn($, 'desktop')).svgs).toBe(2)
+  })
+
+  test('H7 off switch and headless runs draw no HUD row', async ($, on) => {
+    world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
+    await start($)
+    expect((await hudOn($, 'desktop')).text).toBeUndefined()
+  })
+
+  test('H7 CCV3_MODS_OFF draws no HUD row', async ($, on) => {
+    world(on, { env: { CCV3_MODS_OFF: '1' } })
+    await start($)
+    expect((await hudOn($, 'desktop')).text).toBeUndefined()
+  })
+
+  test('H7 a headless run draws no HUD row', async ($, on) => {
+    world(on)
+    await start($, false)
+    expect((await hudOn($, 'desktop')).text).toBeUndefined()
+  })
+
+  test('H8 with the HUD up, ctx is in the ring only', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const seen = await hudOn($, 'terminal')
+    expect(seen.text).toContain('ctx 42%')
+    expect(seen.taskRow).toContain('0/1 done')
+    expect(seen.taskRow).not.toContain('ctx')
+  })
+
+  test('H8 with the HUD off, the task row keeps ctx', async ($, on) => {
+    world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    expect((await hudOn($, 'terminal')).taskRow).toContain('ctx 42%')
+  })
+})

@@ -3,7 +3,14 @@ import { clip, elapsed } from './model'
 import type { OsView } from './model'
 
 /** A colour role; the render maps each to theme props, so light and dark both work. */
-export type Tone = 'title' | 'head' | 'active' | 'done' | 'todo' | 'dim' | 'ok' | 'warn' | 'bad' | 'chip' | 'track'
+export type Tone =
+  | 'title' | 'head' | 'active' | 'done' | 'todo' | 'dim' | 'ok' | 'warn' | 'bad' | 'chip' | 'track'
+  /** HUD: the model chip when effort is below the high pin, and the advisor. */
+  | 'chipBad' | 'advisor'
+  /** Agent Ledger: a Sonnet tier badge. */
+  | 'sonnetTier'
+  /** Skin diff lines. */
+  | 'diffAdd' | 'diffDel'
 
 /** A run of text in one tone. */
 export type Span = { text: string; tone: Tone }
@@ -16,7 +23,7 @@ const sp = (text: string, tone: Tone): Span => ({ text, tone })
 const width = (spans: Span[] = []) => spans.reduce((n, s) => n + s.text.length, 0)
 
 /** Clips the left spans so left, a one-cell gap and right fit `columns`. */
-const fit = (row: PaneRow, columns: number): PaneRow => {
+export const fit = (row: PaneRow, columns: number): PaneRow => {
   let room = Math.max(4, columns - (row.right ? width(row.right) + 1 : 0))
   const left: Span[] = []
   for (const span of row.left) {
@@ -215,7 +222,7 @@ export const paneRows = (view: OsView, nowMs: number, columns: number, rows: num
 }
 
 /** The band's spans: plan, progress, the active task, the running step, context. */
-export const bandSpans = (view: OsView, nowMs: number, columns: number): Span[] => {
+export const bandSpans = (view: OsView, nowMs: number, columns: number, agentsPart: Span[] | null = null): Span[] => {
   const parts: Span[][] = []
   if (view.plan) parts.push([sp('◆ ', 'title'), sp(view.plan.title, 'todo')])
   if (view.tasks.length) {
@@ -227,6 +234,7 @@ export const bandSpans = (view: OsView, nowMs: number, columns: number): Span[] 
   if (view.step) parts.push([sp(`${view.step.tool} ${view.step.label}`.trim(), 'dim'), sp(` ${elapsed(nowMs - view.step.startedAt)}`, 'dim')])
   else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
   if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${attention(one.state) ? '!' : ''}`).join(' ')}`, view.prs.some(one => attention(one.state)) ? 'warn' : 'dim')])
+  if (agentsPart) parts.push(agentsPart)
   if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
   const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
   return fit({ key: 'band', left: joined }, Math.max(10, columns)).left

@@ -1,7 +1,13 @@
 import { atom, read, update } from 'claude-code'
-import type { EngineInterface, On, TextProps } from 'claude-code'
+import type { EngineInterface, On } from 'claude-code'
 
-import type { OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheClock, HudState, ToolTime, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import { hudParts, hudSpans } from '../hud/model'
+import { ledgerBandSpans, settle } from '../agent-ledger/model'
+import type { AgentStatus } from 'claude-code'
+import type { HudPart } from '../hud/model'
+import { barSvg, ringSvg } from '../shared/glyphs'
+import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
 import { bandSpans, paneRows, parseLanes } from './pane-model'
@@ -23,26 +29,26 @@ const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
  * SDK) keeps capture and snapshots but spawns nothing and arms no timer.
  * An atom, not a module variable, so a reload that skips session.start keeps it.
  */
+/** The HUD row, written by hooks/hud (same key); null keeps the band as it was before the HUD. */
+const hud = atom({ plugin: 'ccv3-mods', key: 'hud' } as const, null as HudState | null)
+
+/** Agent Ledger runs (hooks/agent-ledger); turn.complete below settles them. */
+const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as AgentRun[])
+
+/** Call timings for the skin's chips (hooks/skin), the last TOOL_TIMES_KEPT calls. */
+const toolTimes = atom({ plugin: 'ccv3-mods', key: 'toolTimes' } as const, {} as Record<string, ToolTime>)
+const TOOL_TIMES_KEPT = 200
+
+/** Cache Guard's clock (hooks/cache-guard): stamped here because this is the plugin's turn.complete hook. */
+const cacheClock = atom({ plugin: 'ccv3-mods', key: 'cacheClock' } as const, { lastReplyAt: null, heldFor: null } as CacheClock)
+
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 
 const PANE = 'agentic-os'
 const PULSE_MS = 5000
 const LIVE_AGENT = new Set(['pending', 'running', 'waiting', 'idle'])
 
-/** Theme keys only, so the pane follows the person's light or dark theme. */
-const TONE: Record<Tone, TextProps> = {
-  title: { color: 'claude', bold: true },
-  head: { bold: true },
-  active: { color: 'claude', bold: true },
-  done: { color: 'success' },
-  todo: {},
-  dim: { dimColor: true },
-  ok: { color: 'success' },
-  warn: { color: 'warning' },
-  bad: { color: 'error' },
-  chip: { color: 'inverseText', backgroundColor: 'claude', bold: true },
-  track: { color: 'subtle' },
-}
+// TONE, SVG_TRACK and svgHex live in ../shared/tones.ts: the ledger, files and skin modules draw with them too.
 
 type Result = { result?: unknown; isError?: boolean; deny?: string }
 
@@ -78,7 +84,7 @@ const writeSnapshot = async ($: EngineInterface): Promise<void> => {
     const home = await homeDir($)
     if (!home) return
     const sessionId = await $.session.id()
-    const snapshot = { sessionId, at: await $.clock.now(), ...(await view($)) }
+    const snapshot = { sessionId, at: await $.clock.now(), ...(await view($)), agentRuns: await read($, agentRuns) }
     await $.fs.write(`${home}/.claude/state/agentic-os/${sessionId}.json`, JSON.stringify(snapshot, null, 2))
   } catch {
     // Observer only: a snapshot is best effort.
@@ -95,6 +101,14 @@ const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
 const refreshAgents = async ($: EngineInterface): Promise<void> => {
   try {
     const list = await $.agent.list()
+    // A run whose loop ended without a turn.complete here (a remote or killed agent) settles from the list.
+    const ended = new Map(list.filter(agent => !LIVE_AGENT.has(agent.status)).map(agent => [agent.id, agent.status] as [string, AgentStatus]))
+    if ((await read($, agentRuns)).some(run => run.status === 'running' && ended.has(run.id))) {
+      const now = await $.clock.now()
+      await update($, agentRuns, runs =>
+        runs.map(run => (run.status === 'running' && ended.has(run.id) ? settle(run, now, ended.get(run.id) !== 'completed') : run)),
+      )
+    }
     const live = list
       .filter(agent => LIVE_AGENT.has(agent.status))
       .map(({ id, description, type, status }) => ({ id, description, type, status }))
@@ -202,7 +216,17 @@ export const agenticOs = (on: On) => {
 
   on('turn.complete', async ($, e, next) => {
     if (await isOff($)) return next(e)
-    if (e.agentId === undefined) {
+    const agentId = e.agentId
+    if (agentId !== undefined) {
+      const endedAt = await $.clock.now()
+      const failed = e.isAborted || e.reason === 'error' || e.reason === 'aborted' || e.reason === 'refusal'
+      await update($, agentRuns, runs => runs.map(run => (run.id === agentId ? settle(run, endedAt, failed) : run)))
+      if (await worthSnapshot($)) await writeSnapshot($)
+    }
+    if (agentId === undefined) {
+      // The main loop just talked to the model (an interrupted turn too): the prompt cache is warm.
+      const repliedAt = await $.clock.now()
+      await update($, cacheClock, clock => ({ ...clock, lastReplyAt: repliedAt }))
       await update($, turn, () => null)
       await update($, steps, () => [])
       if (await worthSnapshot($)) await writeSnapshot($)
@@ -215,6 +239,12 @@ export const agenticOs = (on: On) => {
     if (e.changed.includes('context') && e.context.percent !== undefined) {
       await update($, ctx, () => e.context.percent ?? null)
     }
+    // The HUD's cost and limits. Here, not in hooks/hud: a plugin holds one unmatched hook per event.
+    await update($, hud, now =>
+      now === null
+        ? now
+        : { ...now, costUsd: e.cost?.usd ?? now.costUsd, limits: e.rateLimits.map(({ kind, percentUsed }) => ({ kind, percentUsed })) },
+    )
     return next(e)
   })
 
@@ -226,7 +256,13 @@ export const agenticOs = (on: On) => {
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
+    await update($, toolTimes, times => {
+      const kept = Object.entries(times).slice(-(TOOL_TIMES_KEPT - 1))
+      return { ...Object.fromEntries(kept), [id]: { startedAt, ms: null } }
+    })
     const ran = await next(e)
+    const endedAt = await $.clock.now()
+    await update($, toolTimes, times => (times[id] ? { ...times, [id]: { startedAt, ms: endedAt - startedAt } } : times))
     await update($, steps, list => list.filter(one => one.id !== id))
     if (await record($, tool, input, ran)) await writeSnapshot($)
     refreshAfter($, tool, input)
@@ -237,11 +273,15 @@ export const agenticOs = (on: On) => {
     if (await isOff($)) return next(e)
     await read($, tick)
     const now = await view($)
-    if (e.props.hasSurvey || isQuiet(now)) return next(e)
-    const { Box, Text } = $.ui.resolve(e)
-    const spans = bandSpans(now, await $.clock.now(), e.props.bodyColumns)
-    return (
-      <Box key="row-band">
+    const hudNow = await read($, hud)
+    const runs = await read($, agentRuns)
+    // Finished runs alone don't keep the band up; a running one does.
+    const quiet = isQuiet(now) && !runs.some(run => run.status === 'running')
+    if (e.props.hasSurvey || (quiet && hudNow === null)) return next(e)
+    const elements = $.ui.resolve(e)
+    const { Box, Text } = elements
+    const spansRow = (key: string, spans: Span[]) => (
+      <Box key={key}>
         <Text wrap="truncate-end">
           {spans.map((span, i) => (
             <Text key={`s${i}`} {...TONE[span.tone]}>
@@ -249,6 +289,43 @@ export const agenticOs = (on: On) => {
             </Text>
           ))}
         </Text>
+      </Box>
+    )
+    let hudRow = null
+    if (hudNow !== null) {
+      const parts = hudParts(hudNow, now.ctx)
+      // The terminal draws no Svg: its HUD is text gauges. Every other surface gets the rings and bars.
+      if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(parts))
+      else {
+        const { Svg } = elements
+        const part = (one: HudPart) => {
+          if (one.kind === 'chip') return <Text key={one.key} {...TONE[one.tone]}>{` ${one.text} `}</Text>
+          if (one.kind === 'text') return <Text key={one.key} {...TONE[one.tone]}>{one.text}</Text>
+          const source = one.kind === 'ring' ? ringSvg(one.percent, svgHex(one.tone), SVG_TRACK) : barSvg(one.percent / 100, svgHex(one.tone), SVG_TRACK)
+          return (
+            <Box key={one.key} flexDirection="row" alignItems="center" gap={1}>
+              <Svg source={source} alt={one.label} width={one.kind === 'ring' ? 18 : 56} height={one.kind === 'ring' ? 18 : 6} />
+              <Text {...TONE.dim}>{one.label}</Text>
+            </Box>
+          )
+        }
+        hudRow = (
+          <Box key="row-hud" flexDirection="row" alignItems="center" gap={2} flexWrap="wrap">
+            {parts.map(part)}
+          </Box>
+        )
+      }
+    }
+    // With the HUD up, ctx lives in its ring, so the task row leaves it out.
+    // One row of room: the HUD alone.
+    const bandRow = quiet || (hudRow !== null && e.props.maxRows < 2)
+      ? null
+      : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, await $.clock.now(), e.props.bodyColumns, ledgerBandSpans(runs)))
+    if (hudRow === null) return bandRow ?? next(e)
+    return (
+      <Box flexDirection="column">
+        {hudRow}
+        {bandRow}
       </Box>
     )
   })

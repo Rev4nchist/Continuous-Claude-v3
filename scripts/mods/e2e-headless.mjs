@@ -8,6 +8,9 @@
  *   exactly one ccv3-mods plugin loaded, the one under test: a second copy (say the active
  *   copy from CLAUDE_CODE_PLUGIN_DIRS) would drop one of the two by name and could hide a regression.
  * Run 2 (CCV3_MODS_OFF=1): the same prompt. The mod must write no snapshot.
+ * Run 3 (ledger): a TaskCreate, then one Agent call to the repo's `scout` agent. The snapshot must carry
+ *   that run in `agentRuns` (Agent Ledger): type scout, a Sonnet model, tokens counted from its turn.step
+ *   requests, settled done, the spec read from .claude/agents/scout.md, and no drift.
  *
  * Usage: node scripts/mods/e2e-headless.mjs [plugin-dir] [--date YYYY-MM-DD]
  * Saves under .claude/cache/e2e/<date>-mods-headless-*.json (gitignored).
@@ -15,6 +18,7 @@
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
 import { spawnSync } from 'node:child_process';
+import { randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -35,18 +39,29 @@ const PROMPT =
 const debugPath = label => join(outDir, `${date}-mods-headless-${label}-debug.log`);
 const snapshotPath = id => join(homedir(), '.claude', 'state', 'agentic-os', `${id}.json`);
 
+const LEDGER_PROMPT =
+  "First use the TaskCreate tool with subject 'gamma' and description 'ledger'. Then use the Agent tool once with " +
+  "subagent_type 'scout', description 'say ok', and prompt 'Reply with the single word ok. Use no tools.' " +
+  'Then reply with the single word done.';
+
 /** One headless run. The off run sets CCV3_MODS_OFF=1; the on run clears it. */
-const run = (label, off) => {
+const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate']) => {
   const env = { ...process.env };
   // The run tests the copy named by --plugin-dir. The user's env must not add a second ccv3-mods.
   delete env.CLAUDE_CODE_PLUGIN_DIRS;
+  // Run from inside a session, the child inherits its id and every run reports (and snapshots under) the
+  // parent's session. Each run gets its own.
+  const parentId = env.CLAUDE_CODE_SESSION_ID ?? null;
+  delete env.CLAUDE_CODE_SESSION_ID;
+  delete env.CLAUDE_CODE_CHILD_SESSION;
+  const sessionId = randomUUID();
   if (off) env.CCV3_MODS_OFF = '1';
   else delete env.CCV3_MODS_OFF;
   writeFileSync(debugPath(label), ''); // --debug-file appends; a stale log would add load lines
   const started = Date.now();
   const ran = spawnSync(
     'claude',
-    ['-p', PROMPT, '--plugin-dir', pluginDir, '--allowedTools', 'TaskCreate', 'TaskUpdate', '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
+    ['-p', prompt, '--session-id', sessionId, '--plugin-dir', pluginDir, '--allowedTools', ...tools, '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
     { cwd: repoRoot, env, encoding: 'utf8', timeout: 300_000 },
   );
   writeFileSync(join(outDir, `${date}-mods-headless-${label}.json`), ran.stdout ?? '');
@@ -56,7 +71,7 @@ const run = (label, off) => {
   } catch {
     // reported below as a failed check
   }
-  return { label, status: ran.status, seconds: Math.round((Date.now() - started) / 1000), result, stderr: ran.stderr ?? '' };
+  return { label, sessionId, parentId, status: ran.status, seconds: Math.round((Date.now() - started) / 1000), result, stderr: ran.stderr ?? '' };
 };
 
 const checks = [];
@@ -100,6 +115,32 @@ check('off: claude exited 0 with a JSON result', off.status === 0 && Boolean(off
 const offFile = offId ? snapshotPath(offId) : null;
 check('off: no snapshot is written', Boolean(offFile) && !existsSync(offFile), offFile ?? 'no session id');
 if (offFile && existsSync(offFile)) rmSync(offFile);
+
+const ledger = run('ledger', false, LEDGER_PROMPT, ['TaskCreate', 'Agent']);
+const ledgerId = ledger.result?.session_id;
+check('ledger: claude exited 0 with a JSON result', ledger.status === 0 && Boolean(ledgerId), `exit ${ledger.status}, ${ledger.seconds}s, session ${ledgerId}`);
+const ledgerFile = ledgerId ? snapshotPath(ledgerId) : null;
+if (ledgerFile && existsSync(ledgerFile)) {
+  copyFileSync(ledgerFile, join(outDir, `${date}-mods-headless-ledger-snapshot.json`));
+  const runs = JSON.parse(readFileSync(ledgerFile, 'utf8')).agentRuns ?? [];
+  const scout = runs.find(r => r.type === 'scout');
+  check('ledger: the scout run is in agentRuns', Boolean(scout), `${runs.length} run(s)`);
+  if (scout) {
+    check('ledger: run model is Sonnet', /sonnet/i.test(scout.model ?? ''), String(scout.model));
+    check('ledger: tokens counted from its requests', scout.tokens > 0, `${scout.tokens} tokens, ~$${(scout.costUsd ?? 0).toFixed(4)}`);
+    check('ledger: run settled done', scout.status === 'done', String(scout.status));
+    check('ledger: spec read from scout.md', scout.spec?.model === 'sonnet' && scout.spec?.effort === 'high', JSON.stringify(scout.spec));
+    check('ledger: no drift on a scout run', scout.drift === null, String(scout.drift));
+  }
+  rmSync(ledgerFile);
+} else check('ledger: a snapshot named by session_id exists', false, ledgerFile ?? 'no session id');
+
+const ids = [on, off, ledger].map(r => r.result?.session_id);
+check(
+  'each run had its own session (not the parent, not shared)',
+  ids.every((id, i) => id === [on, off, ledger][i].sessionId && id !== on.parentId) && new Set(ids).size === 3,
+  ids.join(', '),
+);
 
 const failed = checks.filter(c => !c.ok).length;
 console.log(`mods e2e-headless: ${checks.length - failed} passed, ${failed} failed`);
