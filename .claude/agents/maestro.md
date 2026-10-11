@@ -301,10 +301,10 @@ Recommend skills to agents based on task:
 
 | Task Type | Recommended Skills |
 |-----------|-------------------|
-| Research | explore, repo-research-analyst, reference-sdk |
-| Planning | plan-mode, premortem |
+| Research | explore, research |
+| Planning | plan-agent, premortem |
 | Implementation | tdd, build |
-| Debugging | systematic-debugging, fix, debug |
+| Debugging | systematic-debugging, debug |
 | Refactoring | refactor, code-review |
 | Database work | databases |
 | Review | code-review |
