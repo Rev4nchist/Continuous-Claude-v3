@@ -43,6 +43,8 @@ Do not raise the review tier (`@greptileai review this at apex`, 10 credits) wit
    - P0: must fix before merge. Never dismiss a P0 without Dave's yes.
    - P1: fix, or dismiss with a one-line reason.
    - P2: fix if cheap, or dismiss with a reason.
+   - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
+     fix or dismiss it.
 2. Fix real findings on the PR branch. Commit and push once.
 3. For each fix, reply `@greptileai Fixed in <sha>: <what changed>`, then resolve the thread through
    GraphQL `resolveReviewThread`. Greptile never resolves GitHub threads itself.

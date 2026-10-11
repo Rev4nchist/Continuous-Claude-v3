@@ -78,6 +78,33 @@ tiger:
 
 If you cannot fill in `mitigation_checked` with specific evidence, it's not a verified tiger.
 
+### Prove the Load-Bearing Fact (REQUIRED)
+
+Each tiger and each paper tiger rests on one fact. For a tiger: the fact that makes the threat real.
+For a paper tiger: the fact the change is safe because of. Name that one fact, then rate how sure you are:
+
+| Level | Name | You did this |
+|-------|------|--------------|
+| 1 | said so | A person, a doc or a comment states it |
+| 2 | line cited | You read the line that states it |
+| 3 | walked it | You traced the code path by reading |
+| 4 | ran it | A script that calls the real code showed it |
+| 5 | ran it in the app | You saw it in the running product |
+
+Prove the fact at level 4. Write a small script in the scratchpad that calls the real code, run it,
+and save its output. Run only scripts that change no shared state. If you cannot reach level 4, mark
+the fact `unproven` and say what stopped you. Never report a level you did not reach.
+
+Also check where grep stops: database columns, API payloads, config flags, and callers in other repos.
+
+```yaml
+load_bearing_fact: "<the one fact>"
+certainty: 1-5 | unproven
+proof: "<script path and the output line, or what stopped you>"
+```
+
+Add these three fields to every tiger and paper tiger in the output formats below.
+
 ## Workflow
 
 ### Step 1: Detect Context & Depth

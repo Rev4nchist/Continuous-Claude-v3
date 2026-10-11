@@ -38,6 +38,7 @@ Answer each one from code you read.
 - Patterns: matches existing code and style.
 - Tests: exist, cover main paths and edge cases, are readable.
 - Docs: complex logic and public APIs explained, no outdated comments.
+- Added comments: flag each one that restates the code below it or carries a generator banner. Severity low.
 
 ## Severity
 
