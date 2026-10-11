@@ -147,7 +147,7 @@ Approach: {diagnosis.approach}
 Repro command: {repro.command}
 
 Steps:
-1. Write the failing repro test, run it red, save the output. Make it the first change in the diff. Do not commit. Kraken never commits.
+1. Write the failing repro test, run it red, save the output. Make it the first change in the diff. Do not commit. Kraken never commits. With `--no-test`: run the repro as a command or a scratch file outside the repo, and add no test file.
 2. Implement minimal fix to pass the repro
 3. Re-run the same repro command and see it pass
 4. Refactor if needed
@@ -166,7 +166,7 @@ Repro command: {repro.command}
 Follow the `hooks` skill:
 1. Check hook registration in settings.json
 2. Verify shell wrapper exists and is executable
-3. Write the failing repro (mock input), run it red, save the output. Make it the first change in the diff. Do not commit. Kraken never commits.
+3. Write the failing repro (mock input), run it red, save the output. Make it the first change in the diff. Do not commit. Kraken never commits. With `--no-test`: keep the mock input outside the repo, and add no test file.
 4. Rebuild if TypeScript source was modified
 5. Re-run the same repro and see it pass
 6. Verify hook fires correctly

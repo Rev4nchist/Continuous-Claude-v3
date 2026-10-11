@@ -447,7 +447,8 @@ const PLAIN_FENCES = new Set(['', 'text', 'txt', 'md', 'markdown']);
 const CHAIN_TOKEN_RE = /^([a-z][a-z0-9_-]*)(?:\s*\([^)]*\))?$/;
 
 function chainToken(seg) {
-  const t = seg.replace(/[`*"']/g, '').replace(/^.*\bChain:\s*/, '').replace(/[.,;]+$/, '').trim();
+  // A list marker ("- ", "1. ") in front of the first segment is not part of the name.
+  const t = seg.replace(/[`*"']/g, '').replace(/^.*\bChain:\s*/, '').replace(/^\s*(?:[-+]|\d+[.)])\s+/, '').replace(/[.,;]+$/, '').trim();
   const m = t.match(CHAIN_TOKEN_RE);
   return m ? m[1] : null;
 }

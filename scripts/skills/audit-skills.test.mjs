@@ -392,6 +392,21 @@ test('G33 checks a → chain inside a tagged fence but not -> code syntax', () =
   assert.ok(!hit(rep, 'G33', 'code'));
 });
 
+test('G33 checks a two-step chain behind a list marker', () => {
+  const root = fixture({
+    bad: skillText('bad', { body: '- ghost-name → implement\n* ghost-two → scout\n1. ghost-three -> plan\n' }),
+    ok: skillText('ok', { body: '- scout → implement\n1. reproduce -> plan\n' }),
+  });
+  const rep = run(root);
+  assert.equal(rep.rules.G33.findings.filter((x) => x.skill === 'bad').length, 3, JSON.stringify(rep.rules.G33.findings));
+  assert.ok(!hit(rep, 'G33', 'ok'));
+});
+
+test('the baseline holds every ratchet rule in both scopes', () => {
+  const b = JSON.parse(fs.readFileSync(path.join(here, 'audit-skills.baseline.json'), 'utf8'));
+  assert.deepEqual(Object.keys(b.scopes['repo+active'].rules).sort(), Object.keys(b.scopes.repo.rules).sort());
+});
+
 test('G29 flags a directory without SKILL.md but not an allow-listed _ folder', () => {
   const root = fixture({ good: skillText('good') });
   fs.mkdirSync(path.join(root, '.claude', 'skills', 'orphan'));

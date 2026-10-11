@@ -186,6 +186,8 @@ Route to `kraken` with scope-appropriate prompt.
 
 For `bug` and `hook`, write the repro test first. Run it red and save the output. Make it the first change in the diff. Do not commit it here. After the fix, re-run the same repro command. The fix is done only when that repro passes. Save the passing output.
 
+With `--no-test`, the repro is a temporary check: a command or a scratch file outside the repo. Run it red, fix, run it green. Add no test file to the diff.
+
 See `references/agents.md` for per-scope kraken prompts.
 
 ### Phase 6: Regression Test (unless --no-test)
