@@ -15,9 +15,9 @@ options:
   - label: "Brownfield - existing code"
     description: "Chain: onboard → research → plan → validate → implement"
   - label: "TDD - test-first"
-    description: "Chain: plan → tdd → implement"
+    description: "Chain: plan → tdd"
   - label: "Refactor - improve structure"
-    description: "Chain: impact analysis → plan → TDD → implement"
+    description: "Chain: impact analysis → plan → tdd"
 ```
 
 **Mapping:**

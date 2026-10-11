@@ -26,10 +26,10 @@ You are a workflow orchestrator that chains existing skills for feature developm
 |------|-------|----------|
 | `greenfield` | discovery-interview → plan-agent → validate-agent → kraken → commit → open the PR | New feature from scratch |
 | `brownfield` | onboard → research-codebase → plan-agent → validate-agent → kraken | Feature in existing codebase |
-| `tdd` | plan-agent → tdd → kraken | Test-first implementation |
-| `refactor` | tldr-code → plan-agent → tdd → kraken | Safe refactoring with impact analysis |
+| `tdd` | plan-agent → tdd | Test-first implementation |
+| `refactor` | tldr-code → plan-agent → tdd | Safe refactoring with impact analysis |
 
-Each name is a skill in `.claude/skills` or an agent in `.claude/agents`. `kraken` implements the plan. "Open the PR" is a step, not a skill: follow `pr-and-commit-style.md`.
+Each name is a skill in `.claude/skills` or an agent in `.claude/agents`. `kraken` implements the plan. The `tdd` skill implements too: it writes each failing test with `arbiter` and makes it pass with `kraken`, so the `tdd` and `refactor` modes have no separate `kraken` phase. "Open the PR" is a step, not a skill: follow `pr-and-commit-style.md`.
 
 ## Options
 
@@ -65,8 +65,8 @@ Build the skill chain based on mode:
 CHAINS = {
     "greenfield": ["discovery-interview", "plan-agent", "validate-agent", "kraken", "commit", "open-pr"],
     "brownfield": ["onboard", "research-codebase", "plan-agent", "validate-agent", "kraken"],
-    "tdd": ["plan-agent", "tdd", "kraken"],
-    "refactor": ["tldr-code", "plan-agent", "tdd", "kraken"]
+    "tdd": ["plan-agent", "tdd"],
+    "refactor": ["tldr-code", "plan-agent", "tdd"]
 }
 ```
 

@@ -136,16 +136,12 @@ Options:
 ### tdd (tdd/refactor modes)
 
 ```
-Present TDD guidance to user:
-
-"Entering TDD mode. For each feature:
-1. Write failing test first
-2. Implement minimal code to pass
-3. Refactor while keeping tests green
-
-I'll guide you through each cycle. Starting with first test..."
+Load the tdd skill and follow it on the approved plan:
+1. Decompose the plan into vertical slices
+2. Per slice: arbiter writes 1-3 failing tests (RED), kraken makes them pass (GREEN), arbiter verifies
+3. arbiter runs the full suite at the end
 ```
-This is interactive — guide user through TDD cycles.
+This phase is the implementation. Do not run a separate kraken phase after it.
 
 ### kraken
 
@@ -162,12 +158,15 @@ else:
           prompt="""
           Plan: [Plan content]
           Your task: Task N of M: <task description>
-          Previous handoff: [Previous task handoff or "First task"]
-          Handoff directory: thoughts/shared/handoffs/<session>/
+          Previous task: [Summary saved from the previous task, or "First task"]
           """
         )
+        # kraken writes no handoff file. It returns status, a summary and followups.
+        Save that return value to <session>/task-NN-<description>.md yourself.
+        If status is "partial": re-spawn kraken with the followups text, before the next task.
+        If status is "blocked": stop and go to Step 3 (Handle Errors).
 ```
-Output: Task handoffs at `<session>/task-NN-<description>.md`
+Output: Task handoffs at `<session>/task-NN-<description>.md`, written by the orchestrator. Resume reads them.
 
 **CHECKPOINT after each implementation phase:**
 ```
@@ -290,7 +289,7 @@ User: /build tdd Add rate limiting to API endpoints
 
 Claude: Starting TDD workflow for "Add rate limiting to API endpoints"
 
-Phase 1/3: Planning
+Phase 1/2: Planning
 [Creates plan with test specifications]
 
 --- CHECKPOINT ---
@@ -298,7 +297,7 @@ Plan approved? [Y/n]
 
 User: Y
 
-Phase 2/3: TDD Implementation
+Phase 2/2: TDD Implementation
 
 Let's start with the first test. According to the plan, we need to test:
 "Rate limiter returns 429 after 100 requests per minute"
@@ -322,8 +321,10 @@ REFACTOR - Any cleanup needed?
 Next test: "Rate limiter resets after window expires"
 ...
 
-Phase 3/3: Implementation
-[Integrates rate limiter into endpoints]
+Last slice: "Endpoints use the rate limiter"
+[Same RED, GREEN, VERIFY cycle]
+
+Final full suite: PASSED
 
 Build complete!
 ```
@@ -335,7 +336,7 @@ User: /build refactor Extract auth logic into separate module
 
 Claude: Starting refactor workflow for "Extract auth logic into separate module"
 
-Phase 1/4: Impact Analysis
+Phase 1/3: Impact Analysis
 Running: tldr impact auth src/ --depth 3
 
 Impact analysis complete:
@@ -354,7 +355,7 @@ User: Y
 
 [Shows detailed impact report]
 
-Phase 2/4: Planning
+Phase 2/3: Planning
 [Creates refactor plan based on impact analysis]
 ...
 ```
