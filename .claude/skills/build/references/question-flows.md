@@ -15,9 +15,9 @@ options:
   - label: "Brownfield - existing code"
     description: "Chain: onboard → research → plan → validate → implement"
   - label: "TDD - test-first"
-    description: "Chain: plan → test-driven-development → implement"
+    description: "Chain: plan → tdd"
   - label: "Refactor - improve structure"
-    description: "Chain: impact analysis → plan → TDD → implement"
+    description: "Chain: impact analysis → plan → tdd"
 ```
 
 **Mapping:**
@@ -197,7 +197,7 @@ Before starting, show what will run:
 Based on your answers, I'll run:
 
 **Mode:** brownfield
-**Chain:** onboard → research-codebase → plan-agent → implement_plan
+**Chain:** onboard → research-codebase → plan-agent → kraken
 **Options:** --skip-commit
 **Description:** "Add user authentication with OAuth"
 

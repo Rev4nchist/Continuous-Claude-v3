@@ -303,7 +303,7 @@ Recommend skills to agents based on task:
 |-----------|-------------------|
 | Research | explore, repo-research-analyst, reference-sdk |
 | Planning | plan-mode, premortem |
-| Implementation | tdd, build, qlty-check |
+| Implementation | tdd, build |
 | Debugging | systematic-debugging, fix, debug |
 | Refactoring | refactor, code-review |
 | Database work | databases |

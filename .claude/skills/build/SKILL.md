@@ -24,10 +24,12 @@ You are a workflow orchestrator that chains existing skills for feature developm
 
 | Mode | Chain | Use Case |
 |------|-------|----------|
-| `greenfield` | discovery-interview → plan-agent → validate-agent → implement_plan → commit → describe_pr | New feature from scratch |
-| `brownfield` | onboard → research-codebase → plan-agent → validate-agent → implement_plan | Feature in existing codebase |
-| `tdd` | plan-agent → test-driven-development → implement_plan | Test-first implementation |
-| `refactor` | tldr-impact → plan-agent → test-driven-development → implement_plan | Safe refactoring with impact analysis |
+| `greenfield` | discovery-interview → plan-agent → validate-agent → kraken → commit → open the PR | New feature from scratch |
+| `brownfield` | onboard → research-codebase → plan-agent → validate-agent → kraken | Feature in existing codebase |
+| `tdd` | plan-agent → tdd | Test-first implementation |
+| `refactor` | tldr-code → plan-agent → tdd | Safe refactoring with impact analysis |
+
+Each name is a skill in `.claude/skills` or an agent in `.claude/agents`. `kraken` implements the plan. The `tdd` skill implements too: it writes each failing test with `arbiter` and makes it pass with `kraken`, so the `tdd` and `refactor` modes have no separate `kraken` phase. "Open the PR" is a step, not a skill: follow `pr-and-commit-style.md`.
 
 ## Options
 
@@ -61,10 +63,10 @@ Build the skill chain based on mode:
 
 ```python
 CHAINS = {
-    "greenfield": ["discovery-interview", "plan-agent", "validate-agent", "implement_plan", "commit", "describe_pr"],
-    "brownfield": ["onboard", "research-codebase", "plan-agent", "validate-agent", "implement_plan"],
-    "tdd": ["plan-agent", "test-driven-development", "implement_plan"],
-    "refactor": ["tldr-impact", "plan-agent", "test-driven-development", "implement_plan"]
+    "greenfield": ["discovery-interview", "plan-agent", "validate-agent", "kraken", "commit", "open-pr"],
+    "brownfield": ["onboard", "research-codebase", "plan-agent", "validate-agent", "kraken"],
+    "tdd": ["plan-agent", "tdd"],
+    "refactor": ["tldr-code", "plan-agent", "tdd"]
 }
 ```
 
@@ -72,7 +74,7 @@ Apply options to modify chain:
 - `--skip-discovery`: Remove "discovery-interview"
 - `--skip-validate`: Remove "validate-agent"
 - `--skip-commit`: Remove "commit"
-- `--skip-pr`: Remove "describe_pr"
+- `--skip-pr`: Remove "open-pr"
 
 ### Step 1: Setup
 
@@ -165,7 +167,7 @@ Set defaults in `.claude/settings.json`:
       "default_mode": "brownfield",
       "always_validate": true,
       "auto_commit": false,
-      "checkpoint_phases": ["plan-agent", "implement_plan"]
+      "checkpoint_phases": ["plan-agent", "kraken"]
     }
   }
 }
@@ -185,11 +187,9 @@ Set defaults in `.claude/settings.json`:
 - `/discovery-interview` - Deep interview for requirements
 - `/plan-agent` - Create implementation plans
 - `/validate-agent` - Validate tech choices
-- `/implement_plan` - Execute implementation plans
-- `/implement_task` - Single task implementation
-- `/test-driven-development` - TDD workflow
+- `/tdd` - TDD workflow
 - `/commit` - Create commits
-- `/describe_pr` - Generate PR descriptions
-- `/onboard` - Codebase analysis
-- `/research-codebase` - Research existing code
+- `kraken` agent - Implements the plan, one task at a time
+- `onboard` agent - Codebase analysis
+- `research-codebase` agent - Research existing code
 - `/tldr-code` - Code analysis CLI

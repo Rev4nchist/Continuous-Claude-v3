@@ -232,7 +232,7 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 
 | Workflow | Sequence |
 |----------|----------|
-| build (greenfield) | discovery-interview → plan-agent → validate-agent → kraken/implement_plan → commit → describe_pr |
+| build (greenfield) | discovery-interview → plan-agent → validate-agent → kraken → commit → open the PR |
 | build (brownfield) | onboard → oracle → plan-agent → validate-agent → kraken |
 | build (tdd) | plan-agent → kraken (TDD) → arbiter |
 | fix (bug) | sleuth (multi-file) OR debug-agent (general) → [user confirm] → kraken → arbiter → commit |
