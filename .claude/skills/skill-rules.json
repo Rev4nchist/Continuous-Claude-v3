@@ -215,22 +215,9 @@
       "description": "Meta-skill for bug investigation and resolution. Routes to scout → premortem → spark → arbiter.",
       "promptTriggers": {
         "keywords": [
-          "/fix",
-          "fix the bug",
-          "fix this",
-          "broken",
-          "not working",
-          "failing test",
-          "error in",
-          "bug in",
-          "quick fix"
+          "/fix"
         ],
-        "intentPatterns": [
-          "fix.*?(bug|error|issue|problem)",
-          "(broken|not working|failing)",
-          "(this|that).*(broken|not working)",
-          "why.*?(failing|broken|error)"
-        ]
+        "intentPatterns": []
       },
       "evalScore": 100,
       "evalTier": "verified",

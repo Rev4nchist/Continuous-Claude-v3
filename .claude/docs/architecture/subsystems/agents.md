@@ -140,7 +140,7 @@ Agents add latency. Use directly when task is simple.
 
 | Workflow | Agents Used |
 |----------|-------------|
-| /fix | debug-agent → spark → arbiter |
+| /fix | sleuth → spark or kraken → arbiter |
 | /build | architect → kraken → critic |
 | /explore | scout (with depth control) |
 | /review | critic + plan-reviewer + codex-adversary (parallel Phase 1) |

@@ -876,51 +876,58 @@
       {
         "prompt": "I need to fix the bug",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "keyword",
-        "matchedTerm": "fix the bug"
+        "matchedTerm": "fix the bug",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I want to fix this now",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "keyword",
-        "matchedTerm": "fix this"
+        "matchedTerm": "fix this",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I need to broken for the current project",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "keyword",
-        "matchedTerm": "broken"
+        "matchedTerm": "broken",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "Please not working",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "keyword",
-        "matchedTerm": "not working"
+        "matchedTerm": "not working",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I want to fix bug in this project",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "intent",
-        "pattern": "fix.*?(bug|error|issue|problem)"
+        "pattern": "fix.*?(bug|error|issue|problem)",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I want to broken in this project",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "intent",
-        "pattern": "(broken|not working|failing)"
+        "pattern": "(broken|not working|failing)",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I want to this broken in this project",
         "expectedSkill": "fix",
-        "shouldTrigger": true,
+        "shouldTrigger": false,
         "source": "intent",
-        "pattern": "(this|that).*(broken|not working)"
+        "pattern": "(this|that).*(broken|not working)",
+        "reason": "fix is user-invoked (disable-model-invocation: true); plain-language prompts must not load it"
       },
       {
         "prompt": "I need to commit",

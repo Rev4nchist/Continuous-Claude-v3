@@ -1,5 +1,5 @@
 // Shared rule library for the skills gate (scripts/skills/audit-skills.mjs).
-// One implementation of every per-skill rule G01-G29. Zero dependencies.
+// One implementation of every per-skill rule G01-G29 and G33. Zero dependencies.
 // Cross-skill rules (G07, G15, G30, G31, G32) live in audit-skills.mjs.
 //
 // Spec: .claude/cache/skills-eval/phase0/phase0-results.json docs.gateRules (G01-G32).
@@ -87,6 +87,7 @@ export const RULES = [
   ['G30', 'non-vacuous', 'hard'],
   ['G31', 'listing-size-ratchet', 'ratchet'],
   ['G32', 'skill-forge-template-passes', 'hard'],
+  ['G33', 'chain-tokens-resolve', 'ratchet'],
 ].map(([id, name, mode]) => ({ id, name, mode }));
 
 // Rules that read only the description. audit-descriptions.mjs runs this subset.
@@ -393,6 +394,7 @@ export function checkBody(s, ctx) {
   }
   r.push(...checkRetired(s));
   r.push(...checkMcp(s, ctx));
+  r.push(...checkChains(s, ctx));
   return r;
 }
 
@@ -422,6 +424,65 @@ function checkMcp(s, ctx) {
     // No `g` flag: a global RegExp keeps lastIndex between .test() calls and skips the next line.
     const re = new RegExp(`(?<![\\w_/-])${server.replace(/[.*+?^${}()|[\]\\]/g, '\\$&')}:[a-z][a-z0-9_-]+`);
     for (const l of s.body) if (!l.isFence && re.test(l.text) && !/https?:\/\//.test(l.text)) r.push(f('G28', `bare "${server}:tool" form; use mcp__${server}__tool`, l.n));
+  }
+  return r;
+}
+
+// ------------------------------------------------------------------ chains (G33)
+
+// A chain is a line of identifiers joined by arrows: "sleuth → diagnose → kraken (TDD) → commit".
+// Every token must be a skill folder, an agent file, or a plain step verb. A verb that is also a
+// skill folder (test, commit, research, review, fix, build) needs no entry. Allow-list: only words
+// that appear in a real chain and name no skill or agent.
+export const CHAIN_VERBS = new Set([
+  'investigate', 'diagnose', 'implement', // fix: "investigate → diagnose → implement → test → commit"
+  'plan', 'preflight', // fix: "preflight → research → plan → implement"
+  'reproduce', 'lint', // fix: "reproduce → sleuth → ..." and "kraken → lint → commit"
+  'refine', 'repeat', // maestro/SKILL.md:316 "phoenix → judge → refine → repeat" (loop steps)
+]);
+const ARROW_RE = /\s*(?:→|->)\s*/;
+// Inside a fence with a language tag, "x -> y" is code syntax (a lambda, a return type); only → counts.
+const UNICODE_ARROW_RE = /\s*→\s*/;
+const PLAIN_FENCES = new Set(['', 'text', 'txt', 'md', 'markdown']);
+const CHAIN_TOKEN_RE = /^([a-z][a-z0-9_-]*)(?:\s*\([^)]*\))?$/;
+
+function chainToken(seg) {
+  // A list marker ("- ", "1. ") in front of the first segment is not part of the name.
+  const t = seg.replace(/[`*"']/g, '').replace(/^.*\bChain:\s*/, '').replace(/^\s*(?:[-+]|\d+[.)])\s+/, '').replace(/[.,;]+$/, '').trim();
+  const m = t.match(CHAIN_TOKEN_RE);
+  return m ? m[1] : null;
+}
+
+// One entry per arrow segment: the identifier, or null when the segment is prose. A table row is
+// cut at its pipes.
+export function chainTokens(text, arrow = ARROW_RE) {
+  const segs = text.split(arrow);
+  if (segs.length < 2) return [];
+  segs[0] = segs[0].split('|').pop();
+  segs[segs.length - 1] = segs[segs.length - 1].split('|')[0];
+  return segs.map(chainToken);
+}
+
+// A line is a chain when every segment is an identifier, or when two segments are real skills,
+// agents or step verbs (the rest may be prose such as "re-run repro"). "click item -> wait 1-2s -> re-snapshot"
+// is neither, so it is prose.
+function chainNames(text, resolves, arrow) {
+  const tokens = chainTokens(text, arrow);
+  const known = tokens.filter((t) => t && (CHAIN_VERBS.has(t) || resolves(t)));
+  return tokens.length >= 2 && (tokens.every(Boolean) || known.length >= 2) ? tokens.filter(Boolean) : [];
+}
+
+function checkChains(s, ctx) {
+  const r = [];
+  if (ctx.vendorRoot || !ctx.skillNames) return r; // vendored chains name the vendor's own skills
+  const resolves = (t) => ctx.skillNames.has(t) || ctx.agentNames.has(t);
+  for (const l of s.body) {
+    if (l.isFence) continue;
+    const arrow = l.fence === null || PLAIN_FENCES.has(l.fence.toLowerCase()) ? ARROW_RE : UNICODE_ARROW_RE;
+    for (const t of chainNames(l.text, resolves, arrow)) {
+      if (CHAIN_VERBS.has(t) || resolves(t)) continue;
+      r.push(f('G33', `chain token "${t}" is no skill in .claude/skills, no agent in .claude/agents and no step verb: ${l.text.trim().slice(0, 60)}`, l.n));
+    }
   }
   return r;
 }

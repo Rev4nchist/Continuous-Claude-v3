@@ -327,6 +327,86 @@ test('G28 flags an mcp__ server missing from the configured servers', () => {
   assert.ok(!hit(rep, 'G28', 'ok'));
 });
 
+// G33: a chain such as "a → b → c" names skills and agents. Each identifier must resolve to a skill
+// folder, an agent file, or an allow-listed plain step verb.
+test('G33 flags a chain token that is no skill, no agent and no step verb', () => {
+  const root = fixture({ bad: skillText('bad', { body: '| `hook` | debug-hooks → diagnose → implement |\n' }) });
+  const rep = run(root);
+  assert.ok(hit(rep, 'G33', 'bad'));
+  const x = rep.rules.G33.findings.find((y) => y.skill === 'bad');
+  assert.match(x.msg, /debug-hooks/);
+  assert.ok(x.line >= 1);
+  assert.equal(rep.rules.G33.findings.length, 1, 'diagnose and implement are allow-listed verbs');
+});
+
+test('G33 passes a chain of a fixture skill, a fixture agent and step verbs', () => {
+  const root = fixture({
+    helper: skillText('helper'),
+    ok: skillText('ok', { body: 'Chain: helper → scout (TDD) → implement → diagnose -> plan\n| `bug` | `helper` → scout → lint |\n' }),
+  });
+  assert.ok(!hit(run(root), 'G33', 'ok'));
+});
+
+test('G33 does not flag an arrow that is not a chain of identifiers', () => {
+  const root = fixture({
+    prose: skillText('prose', { body: 'Narrative: Hook → Problem → Solution.\nSPA: click item → wait 1-2s → re-snapshot.\nBuild HTML → quality gate → deliver.\nA lone ghost-step → is not a chain.\n' }),
+    code: skillText('code', { body: '```js\nghost -> phantom\n```\n' }),
+  });
+  const rep = run(root);
+  assert.ok(!hit(rep, 'G33', 'prose'), JSON.stringify(rep.rules.G33.findings));
+  assert.ok(!hit(rep, 'G33', 'code'));
+});
+
+test('G33 checks a chain in an untagged fence', () => {
+  const root = fixture({ bad: skillText('bad', { body: '```\nscout -> ghost-agent -> implement\n```\n' }) });
+  assert.ok(hit(run(root), 'G33', 'bad'));
+});
+
+test('G33 checks identifiers in a chain that also holds a prose segment, when two segments are real', () => {
+  const root = fixture({
+    bad: skillText('bad', { body: '| `bug` | reproduce-step → scout → re-run repro → scout → implement |\n' }),
+    ok: skillText('ok', { body: '| `bug` | scout → re-run repro → scout → implement |\n' }),
+  });
+  const rep = run(root);
+  assert.ok(hit(rep, 'G33', 'bad'));
+  assert.ok(!hit(rep, 'G33', 'ok'));
+});
+
+test('G33 counts step verbs toward a chain that also holds prose segments', () => {
+  const root = fixture({
+    bad: skillText('bad', { body: '| `hook` | reproduce → ghost-name → hooks skill → implement → re-run repro |\n' }),
+    ok: skillText('ok', { body: '| `hook` | reproduce → investigate → hooks skill → implement → re-run repro |\n' }),
+  });
+  const rep = run(root);
+  assert.ok(hit(rep, 'G33', 'bad'), 'verbs reproduce and implement make the line a chain');
+  assert.ok(!hit(rep, 'G33', 'ok'));
+});
+
+test('G33 checks a → chain inside a tagged fence but not -> code syntax', () => {
+  const root = fixture({
+    bad: skillText('bad', { body: '```yaml\ndescription: "Chain: scout → ghost-agent → implement"\n```\n' }),
+    code: skillText('code', { body: '```js\nconst f = (a) => a;\nghost -> phantom -> ghoul\n```\n' }),
+  });
+  const rep = run(root);
+  assert.ok(hit(rep, 'G33', 'bad'));
+  assert.ok(!hit(rep, 'G33', 'code'));
+});
+
+test('G33 checks a two-step chain behind a list marker', () => {
+  const root = fixture({
+    bad: skillText('bad', { body: '- ghost-name → implement\n* ghost-two → scout\n1. ghost-three -> plan\n' }),
+    ok: skillText('ok', { body: '- scout → implement\n1. reproduce -> plan\n' }),
+  });
+  const rep = run(root);
+  assert.equal(rep.rules.G33.findings.filter((x) => x.skill === 'bad').length, 3, JSON.stringify(rep.rules.G33.findings));
+  assert.ok(!hit(rep, 'G33', 'ok'));
+});
+
+test('the baseline holds every ratchet rule in both scopes', () => {
+  const b = JSON.parse(fs.readFileSync(path.join(here, 'audit-skills.baseline.json'), 'utf8'));
+  assert.deepEqual(Object.keys(b.scopes['repo+active'].rules).sort(), Object.keys(b.scopes.repo.rules).sort());
+});
+
 test('G29 flags a directory without SKILL.md but not an allow-listed _ folder', () => {
   const root = fixture({ good: skillText('good') });
   fs.mkdirSync(path.join(root, '.claude', 'skills', 'orphan'));

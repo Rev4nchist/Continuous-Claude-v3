@@ -1,12 +1,15 @@
 ---
 name: fix
-description: "Debug, implement, test, and commit fixes for a bug. Use when the user says \"fix this\", \"debug this\", \"/fix\", or reports something broken."
+description: "Runs the /fix bug workflow: reproduce, investigate, fix, re-run the repro, commit after Dave confirms. Use when the user types /fix."
 allowed-tools: [Bash, Read, Grep, Write, Edit, Task]
+disable-model-invocation: true
 ---
 
 # Fix
 
 Workflow orchestrator for bug investigation and resolution. Chains specialized agents based on issue scope.
+
+Only the `/fix` slash command loads this skill. The method comes from the `systematic-debugging` skill: reproduce first, find the root cause, fix, then re-run the same repro.
 
 **References:**
 - Agent chains + implementation prompts: `references/agents.md`
@@ -31,13 +34,13 @@ options:
   - label: "Help me choose (Recommended)"
     description: "I'll ask questions to pick the right fix workflow"
   - label: "Bug - something is broken"
-    description: "Chain: investigate → diagnose → implement → test → commit"
+    description: "Chain: reproduce → investigate → diagnose → implement → re-run repro → commit"
   - label: "Hook - Claude Code hook issue"
-    description: "Chain: debug-hooks → hook-developer → implement → test"
+    description: "Chain: reproduce → investigate → hooks skill → implement → re-run repro"
   - label: "Dependencies - import/package errors"
-    description: "Chain: preflight → research → plan → implement → qlty-check"
+    description: "Chain: preflight → research → plan → implement → lint"
   - label: "PR Comments - address reviewer feedback"
-    description: "Chain: github-search → research → plan → implement → commit"
+    description: "Chain: fetch PR comments → research → plan → implement → commit"
 ```
 
 **Mapping:**
@@ -68,7 +71,7 @@ Free text — capture the error message, unexpected behavior, or PR link.
 options:
   - label: "Diagnose and fix" → full workflow
   - label: "Diagnose only (dry run)" → --dry-run
-  - label: "Quick fix" → skip investigation, go straight to spark
+  - label: "Quick fix" → reproduce → spark → re-run repro
 ```
 
 ### Phase 4: Testing & Commit
@@ -88,7 +91,7 @@ Based on your answers, I'll run:
 
 **Scope:** bug
 **Issue:** "Login button not responding on Safari"
-**Chain:** sleuth (investigate) → spark (fix) → arbiter (test) → commit
+**Chain:** reproduce → sleuth (investigate) → spark (fix) → re-run repro → arbiter (test) → commit
 **Options:** (none)
 
 Proceed? [Yes / Adjust settings]
@@ -98,10 +101,10 @@ Proceed? [Yes / Adjust settings]
 
 | Scope | Chain |
 |-------|-------|
-| `bug` | sleuth → diagnose → premortem → kraken (TDD) → kraken (test) → commit |
-| `hook` | debug-hooks → diagnose → premortem → kraken (hook-dev) → test → commit |
-| `deps` | dependency-preflight → oracle → plan-agent → premortem → kraken → qlty-check → commit |
-| `pr-comments` | github-search → research-codebase → plan-agent → premortem → kraken → commit |
+| `bug` | reproduce → sleuth → diagnose → premortem → kraken (TDD) → re-run repro → kraken (test) → commit |
+| `hook` | reproduce → sleuth → diagnose → premortem → kraken (hooks skill) → re-run repro → commit |
+| `deps` | preflight → oracle → plan-agent → premortem → kraken → lint → commit |
+| `pr-comments` | fetch PR comments → research-codebase → plan-agent → premortem → kraken → commit |
 
 See `references/agents.md` for full per-scope flow diagrams.
 
@@ -138,9 +141,11 @@ for arg in "$@"; do
 done
 ```
 
-### Phase 2: Investigation (Parallel)
+### Phase 2: Reproduce, then Investigate
 
-Spawn `sleuth` (bug/hook) or scope-appropriate agents (deps/pr-comments).
+For `bug` and `hook`, reproduce first. Run the failing command or hook payload on the real surface. Save the failing output. Do not diagnose before you have a failing repro. The method source is the `systematic-debugging` skill.
+
+Then spawn `sleuth` (bug/hook) or scope-appropriate agents (deps/pr-comments). Pass the repro command and its saved output to the agent.
 
 See `references/debugging-procedures.md` for the full sleuth investigation prompt.
 
@@ -179,11 +184,15 @@ See `references/debugging-procedures.md` for premortem context template.
 
 Route to `kraken` with scope-appropriate prompt.
 
+For `bug` and `hook`, write the repro test first. Run it red and save the output. Make it the first change in the diff. Do not commit it here. After the fix, re-run the same repro command. The fix is done only when that repro passes. Save the passing output.
+
+With `--no-test`, the repro is a temporary check: a command or a scratch file outside the repo. Run it red, fix, run it green. Add no test file to the diff.
+
 See `references/agents.md` for per-scope kraken prompts.
 
 ### Phase 6: Regression Test (unless --no-test)
 
-Spawn `kraken` to write a focused regression test.
+For `bug` and `hook`, promote the Phase 5 repro into the regression test. It ran red before the fix and green after. Write no second test. For other scopes, spawn `kraken` to write a focused regression test.
 
 See `references/agents.md` for the regression test prompt.
 
@@ -200,6 +209,8 @@ If "needs adjustment" → return to Phase 5.
 If "revert" → run rollback and exit.
 
 ### Phase 8: Commit (unless --no-commit)
+
+Commit only here, after Dave confirms in Phase 7. Never commit under `--no-commit` or "Just fix, nothing else". Kraken never commits.
 
 Spawn `general-purpose` agent following the commit skill: git diff review → descriptive message → await confirmation → execute.
 
