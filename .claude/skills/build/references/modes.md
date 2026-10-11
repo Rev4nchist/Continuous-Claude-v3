@@ -57,7 +57,7 @@ Task(
 ```
 Output: Research document at `thoughts/shared/research/<date>-<topic>.md`
 
-### tldr-impact (refactor mode only)
+### tldr-code (refactor mode only)
 
 ```bash
 # Run impact analysis on the function/module being refactored
@@ -133,7 +133,7 @@ Options:
 3. Abort workflow
 ```
 
-### test-driven-development (tdd/refactor modes)
+### tdd (tdd/refactor modes)
 
 ```
 Present TDD guidance to user:
@@ -147,23 +147,19 @@ I'll guide you through each cycle. Starting with first test..."
 ```
 This is interactive — guide user through TDD cycles.
 
-### implement_plan
+### kraken
 
 ```python
 # Check plan size
 if task_count <= 3:
     # Direct implementation
-    Follow implement_plan skill directly
+    Implement the plan in the main conversation
 else:
     # Agent orchestration mode
     For each task:
         Task(
-          subagent_type="implement_task",
+          subagent_type="kraken",
           prompt="""
-          [Contents of implement_task SKILL.md]
-
-          ---
-
           Plan: [Plan content]
           Your task: Task N of M: <task description>
           Previous handoff: [Previous task handoff or "First task"]
@@ -198,13 +194,13 @@ Follow commit skill:
 4. Generate reasoning file
 ```
 
-### describe_pr
+### open-pr
 
 ```
-Follow describe_pr skill:
-1. Create PR if not exists
-2. Generate description from changes
-3. Update PR with description
+Follow pr-and-commit-style.md (no skill for this step):
+1. Push the branch to fork
+2. Write the title and description: the problem first, then the fix, then Evidence
+3. Create the PR with gh api (REST)
 ```
 
 ---
@@ -219,7 +215,7 @@ User: /build greenfield Add user authentication with OAuth
 Claude: Starting greenfield workflow for "Add user authentication with OAuth"
 
 Creating session: build-20260108-user-auth-oauth
-Chain: discovery-interview -> plan-agent -> validate-agent -> implement_plan -> commit -> describe_pr
+Chain: discovery-interview -> plan-agent -> validate-agent -> kraken -> commit -> open the PR
 
 Phase 1/6: Discovery Interview
 [Spawns discovery-interview agent]
