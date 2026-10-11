@@ -18117,6 +18117,12 @@ var malicious_packages_default = {
       reason: "Malware in asepxyz-signal (GHSA-38rx-c4rh-xc4p)",
       date: "2026-10-09",
       advisory: "https://github.com/advisories/GHSA-38rx-c4rh-xc4p"
+    },
+    "react-dropzone-v4": {
+      blocked_all: true,
+      reason: "Malicious code in react-dropzone-v4 (npm) (GHSA-7945-qpg8-rjvv)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-7945-qpg8-rjvv"
     }
   }
 };
