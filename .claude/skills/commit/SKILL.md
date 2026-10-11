@@ -1,6 +1,6 @@
 ---
 name: commit
-description: Create git commits with user approval, no Claude attribution. Use when user says "commit", "commit these changes", "create a commit", "/commit".
+description: Create git commits with user approval. Use when user says "commit", "commit these changes", "create a commit", "/commit".
 ---
 
 # Commit Changes
@@ -38,11 +38,11 @@ You are tasked with creating git commits for the changes made during this sessio
    - Stored in `.git/claude/commits/<hash>/reasoning.md`
 
 ## Important:
-- **NEVER add co-author information or Claude attribution**
-- Commits should be authored solely by the user
-- Do not include any "Generated with Claude" messages
-- Do not add "Co-Authored-By" lines
-- Write commit messages as if the user wrote them
+- **Attribution follows the session prompt.** End the commit message with the trailers it gives
+  (for example `Co-Authored-By` and `Claude-Session`), exactly as written.
+- Add no other attribution. If the session prompt gives no trailers, add none.
+- Do not include any "Generated with Claude" message in a commit message.
+- The rule `pr-and-commit-style.md` wins when it and this skill differ.
 
 ## Remember:
 - You have the full context of what was done in this session
