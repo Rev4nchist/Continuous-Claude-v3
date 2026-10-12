@@ -35,7 +35,7 @@ Multi-perspective code review with parallel specialists, including a cross-model
          └──────────────┘  │
                            │
          ┌──────────────┐  │
-         │codex-adversary│ ─┘   ← Cross-model (OpenAI Codex)
+         │ Codex runner │ ─┘   ← Cross-model (OpenAI Codex)
          │ (mode=code)  │
          └──────────────┘
 
@@ -50,7 +50,7 @@ Multi-perspective code review with parallel specialists, including a cross-model
 | 1 | **critic** | Code quality, patterns, readability | Parallel |
 | 1 | **plan-reviewer** | Architecture, plan adherence | Parallel |
 | 1 | **plan-reviewer** | Change impact, risk assessment | Parallel |
-| 1 | **codex-adversary** | Cross-model adversarial review (different training family) | Parallel |
+| 1 | **Codex runner** (`adversary.mjs`, no subagent) | Cross-model adversarial review (different training family) | Parallel, background |
 | 2 | **review-agent** | Synthesize all reviews, final verdict | After 1 |
 
 ## Review Perspectives
@@ -58,7 +58,7 @@ Multi-perspective code review with parallel specialists, including a cross-model
 - **critic**: Is this good code? (Style, patterns, readability)
 - **plan-reviewer**: Does this match the design? (Architecture, plan)
 - **plan-reviewer**: Is this change safe? (Risk, impact, regressions)
-- **codex-adversary**: What would a different model family catch? (Cross-model triangulation — see `.claude/rules-ondemand/codex-adversarial.md`)
+- **Codex runner**: What would a different model family catch? (Cross-model triangulation — see `.claude/rules-ondemand/codex-adversarial.md`)
 - **review-agent**: Overall assessment and recommendations
 
 ## Execution
@@ -121,27 +121,23 @@ Task(
 
 # Cross-model adversarial review (skip if --no-codex flag passed)
 # See .claude/rules-ondemand/codex-adversarial.md for cost/quota guidance.
-Task(
-  subagent_type="codex-adversary",
-  prompt="""
-  ## Mode
-  code
-
-  ## Scope
-  base ref: [BASE_REF, e.g. main or HEAD~1]
-
-  ## Focus
-  [optional — e.g. "auth boundary", "data loss paths", or omit to let Codex pick]
-
-  ## Codebase
-  $CLAUDE_PROJECT_DIR
-  """,
+# No subagent: the main session runs the Codex runner itself, in the background,
+# in parallel with the three Claude reviewers above. A run takes up to 9 minutes.
+Bash(
+  command='node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <ABSOLUTE project path> --mode code --base <BASE_REF, e.g. main or HEAD~1> --via skill:review',
   run_in_background=true
 )
+# Uncommitted work: use --working-tree in place of --base. Untracked files are not
+# reviewed; line 2 of the runner output reports the count.
+# Optional focus (e.g. "auth boundary", "data loss paths"): write the text to a file and add
+# --focus-file <abs path>. Never put free text in the command line.
+# Plan mode: do NOT run it. Say "Cross-model pass: deferred (plan mode)".
 
-# Wait for all four parallel reviews
-[Check TaskOutput for all four]
+# Wait for all four parallel reviews (the completion notices). Never poll in a loop.
+[Check TaskOutput for the three Task reviews; the runner's stdout arrives with its completion notice]
 ```
+
+The runner prints a `CODEX-RECEIPT v1 ...` line first. Keep that line. It is the proof that Codex, not Claude, reviewed.
 
 ### Phase 2: Synthesis
 
@@ -155,14 +151,17 @@ Task(
   - critic: [code quality findings]
   - plan-reviewer: [architecture findings]
   - plan-reviewer: [change impact findings]
-  - codex-adversary: [cross-model findings — prefix each with [Codex] in output]
+  - Codex runner: [receipt line + cross-model findings]
 
-  Treat codex-adversary as a DISTINCT cross-model input — NOT pooled with critic.
-  Findings BOTH critic and codex-adversary flag are high-confidence.
-  Findings only codex-adversary flags are the cross-model lift.
+  Pass the runner's receipt line in verbatim. A finding gets the [Codex] tag ONLY when
+  that line matches ^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ . Without a
+  matching line there is no [Codex] group.
+  Treat Codex as a DISTINCT cross-model input — NOT pooled with critic.
+  Findings BOTH critic and Codex flag are high-confidence.
+  Findings only Codex flags are the cross-model lift.
 
   THIN-APPROVE RULE (dogfood-proven 2026-07-11 — this exact check caught the run's
-  only HIGH finding): if codex-adversary returns approve with ZERO findings AND its
+  only HIGH finding): if Codex returns an ok-receipt approve with ZERO findings AND its
   run showed instability (fork-storms, timeouts, near-instant return, no visible
   engagement with the diff), do NOT bank the approve — evidence quality inherits
   from process health. Add a supplemental critic pass over the same scope before
@@ -171,6 +170,9 @@ Task(
 
   Create final review:
   - Overall verdict (APPROVE / REQUEST_CHANGES / NEEDS_DISCUSSION)
+  - Under the verdict, print `Cross-model reviewer: <receipt line>` (verbatim), or
+    `Cross-model pass: NO CODEX REVIEW (<status>)` with no [Codex] group.
+    Plan mode: `Cross-model pass: deferred (plan mode)`.
   - Prioritized action items (group: both-flagged, claude-only, [Codex]-only)
   - Blocking vs non-blocking issues
   - Summary for PR description
@@ -180,19 +182,15 @@ Task(
 
 ### Phase 3: Telemetry
 
-After synthesis, append one row to `.claude/logs/codex-lift.jsonl`:
+After synthesis, append one row to `.claude/logs/codex-lift.jsonl` through the runner. Write a row ONLY for an `ok` receipt. A run that did not happen has no lift row.
 
 ```bash
-mkdir -p "$CLAUDE_PROJECT_DIR/.claude/logs"
-jq -nc \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg skill "review" \
-  --arg scope "[SCOPE]" \
-  --argjson critic_count <N> \
-  --argjson codex_count <N> \
-  --argjson both_count <N> \
-  '{ts:$ts, skill:$skill, scope:$scope, critic_only:($critic_count - $both_count), codex_only:($codex_count - $both_count), both:$both_count, via:"direct"}' \
-  >> "$CLAUDE_PROJECT_DIR/.claude/logs/codex-lift.jsonl"
+node "$HOME/.claude/scripts/codex/adversary.mjs" lift \
+  --run <run-id from the receipt> \
+  --skill review \
+  --scope "[SCOPE]" \
+  --claude-only <N> --codex-only <N> --both <N> \
+  --project <ABSOLUTE project path>
 ```
 
 This is the actual signal of value — track cross-model lift over time.
@@ -202,7 +200,7 @@ This is the actual signal of value — track cross-model lift over time.
 ### Full Review
 ```
 User: /review
-→ All five agents (critic + 2x plan-reviewer + codex-adversary + review-agent), comprehensive review
+→ Four agents (critic + 2x plan-reviewer + review-agent) plus the Codex runner, comprehensive review
 ```
 
 ### Quick Review
@@ -214,7 +212,7 @@ User: /review --quick
 ### No Codex
 ```
 User: /review --no-codex
-→ Skip codex-adversary (saves a Codex turn). Use for trivial diffs, doc-only changes,
+→ Skip the Codex runner (saves a Codex turn). Use for trivial diffs, doc-only changes,
   or when ChatGPT subscription quota is constrained. See .claude/rules-ondemand/codex-adversarial.md.
 ```
 
@@ -242,7 +240,7 @@ Phase 1: Running parallel reviews...
 │ critic: Reviewing code quality...          │
 │ plan-reviewer: Checking architecture...    │
 │ plan-reviewer: Assessing change impact...  │
-│ codex-adversary: Cross-model review...     │
+│ Codex runner: Cross-model review...        │
 └────────────────────────────────────────────┘
 
 critic: Found 2 issues
@@ -255,7 +253,7 @@ plan-reviewer: Medium risk
 - Affects: login, signup, password reset
 - Breaking change: session token format
 
-codex-adversary: verdict=needs-attention, 3 findings
+Codex runner: CODEX-RECEIPT v1 status=ok ... model=gpt-6.1-sol ...; verdict=needs-attention, 3 findings
 - [Codex] auth.ts:42 — session token rotation not idempotent under concurrent login
 - [Codex] login.ts:88 — missing input validation in login() (agrees with critic)
 - [Codex] session.ts:14 — token format change has no migration path for in-flight sessions

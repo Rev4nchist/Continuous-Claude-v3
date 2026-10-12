@@ -1,13 +1,13 @@
 ---
 name: codex
-description: Hand a well-specified task to OpenAI Codex (gpt-5.6-luna @ max, ChatGPT subscription) to answer or implement with write access. Use when the user types /codex, says "hand this to Codex", or "delegate to Codex". Not for review — use /review or /premortem.
+description: Hand a well-specified task to OpenAI Codex (gpt-5.6-luna @ max, ChatGPT subscription) to answer a question (the write lane is frozen). Use when the user types /codex, says "hand this to Codex", or "delegate to Codex". Not for review — use /review or /premortem.
 ---
 
 # /codex — Delegate a task to the Codex harness (gpt-5.6-luna @ max)
 
-Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (never an API key) to work through it. A different training family (GPT-5.6 Luna) executing the task gives cross-model leverage — Theo's "let Codex do the well-spec'd execution, keep Claude for orchestration" pattern, realized in CCv3. The read-only `codex-adversary` reviewer is untouched; this is its write-capable sibling.
+Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (never an API key) to work through it. A different training family (GPT-5.6 Luna) executing the task gives cross-model leverage — Theo's "let Codex do the well-spec'd execution, keep Claude for orchestration" pattern, realized in CCv3. Review goes through the Codex runner (`/codex-adversary`); this is its write-capable sibling. **The write lane (`--implement`, `--resume`) is FROZEN** (DESIGN-RESEARCH section 19).
 
-**Roster position (Game Plan):** Codex's primary roles are **reviewer and fixer** — deep review via `codex-adversary`, fix patches via `--implement` scoped to booth findings. For milestone *building*, **Grok is the default builder** (`/grok --implement`); Codex builds only as **failover** (Grok dead/quota-capped/hung) or when the human explicitly overrides with `--builder codex` for a specialized milestone. A failover-built milestone is then graded by Claude critics, never by Codex itself. Doctrine: `.workroom/PROTOCOL.md`.
+**Roster position (Game Plan):** Codex's primary roles are **reviewer and fixer** — deep review through the Codex runner (`/codex-adversary`); fix patches via `--implement` scoped to booth findings, but `--implement` is FROZEN (DESIGN-RESEARCH section 19), so a Claude `kraken` fixes until it lifts. For milestone *building*, **Grok is the default builder** (`/grok --implement`); Codex builds only as **failover** (Grok dead/quota-capped/hung) or when the human explicitly overrides with `--builder codex` for a specialized milestone. A failover-built milestone is then graded by Claude critics, never by Codex itself. Doctrine: `.workroom/PROTOCOL.md`.
 
 **Safety contract:** `.claude/rules-ondemand/codex-worker-safety.md` (confirm-first, sandbox-is-the-boundary, worktree isolation, review-gate). **Engine:** the `codex-worker` agent. **Cross-model review convention:** `.claude/rules-ondemand/codex-adversarial.md`.
 
@@ -15,7 +15,7 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 
 - `/codex <request>` — explicit invocation (primary path)
 - "hand this to Codex", "have Codex implement …", "delegate this to Codex", "codex, work through …"
-- You want GPT-5.6 Luna to actually DO a well-specified task — **fix patches, focused refactors, scripts, analysis**. For workroom milestone builds, default to `/grok --implement` (Grok is the rostered builder); reach for `/codex --implement` as failover or explicit `--builder codex` override
+- You want GPT-5.6 Luna to actually DO a well-specified task — **fix patches, focused refactors, scripts, analysis**. For workroom milestone builds, default to `/grok --implement` (Grok is the rostered builder); `/codex --implement` (failover or explicit `--builder codex` override) is FROZEN for now
 - NOT for code/plan review as a workflow → use `/review` / `/premortem` (they already run Codex read-only); `--review` below is the one-off alias
 
 ## Modes
@@ -23,11 +23,13 @@ Hands an arbitrary request to OpenAI Codex on Dave's **ChatGPT subscription** (n
 | Mode | Invoke | Sandbox | Confirm? | Default effort | Writes land where |
 |------|--------|---------|----------|----------------|-------------------|
 | **ask** (default) | `/codex <question>` | `read-only` | no | max | nowhere (answer only) |
-| **implement** | `/codex --implement <task>` | `workspace-write` | **yes** (unless `--yes`) | max | isolated git worktree → you review the diff → apply/discard |
-| **resume** | `/codex --resume <followup>` | inherits | yes | inherits | same worktree/thread |
-| **review** (alias) | `/codex --review [base]` | read-only | no | max | delegates to `codex-adversary` unchanged |
+| **implement** | `/codex --implement <task>` | `workspace-write` | **FROZEN** | max | refused: the workspace-write fixture fails on codex-cli 0.162.1 (DESIGN-RESEARCH section 19) |
+| **resume** | `/codex --resume <followup>` | inherits | **FROZEN** | inherits | refused, same reason |
+| **review** (alias) | `/codex --review [base]` | read-only | no | `gpt-6.1-sol @ xhigh` | calls the Codex runner (`adversary.mjs`) directly; shows its receipt |
 
-**Flags:** `--model gpt-5.6-luna|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5` (default `gpt-5.6-luna`; the model cache fetched 2026-09-08 lists Luna with `max` support and Astra with `ultra`; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17); ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
+**Write lane frozen (Dave's decision, DESIGN-RESEARCH section 19).** `--implement` and `--resume` run nothing and return the `CODEX IMPLEMENT FROZEN` message from the `codex-worker` agent: the workspace-write fixture fails on codex-cli 0.162.1; ask and review still work. Unfreeze: quit the Codex desktop app, re-run the fixture, and on a pass remove the freeze and add a dated note to section 19.
+
+**Flags:** `--model gpt-5.6-luna|gpt-6.1-sol|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.5` (default `gpt-5.6-luna` for the worker; the model cache fetched 2026-10-12 on codex-cli 0.162.1 lists Luna with `max` support and `gpt-6.1-sol`, Astra, Sol and Terra with `ultra`; workers use at most `max`; any `-codex` or fabricated id is rejected — it 400s on the subscription). `--effort low|medium|high|xhigh|max|ultra` (`max` is the default for the default Luna profile; use a supported effort for an explicitly selected legacy model; `ultra` auto-delegates — unprobed, avoid unattended). `--yes` (skip the interactive confirm for orchestrator/Ralph use — still sandboxed, still logged, still produces a reviewable patch). `--complex` (multi_agent fan-out for genuinely BROAD ask/implement tasks — opt-in; checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds — it no longer refuses (2026-09-03, DESIGN-RESEARCH §17); ~1,940 tok/call + fan-out latency; NOT re-applied on resume).
 
 ## Execution
 
@@ -69,31 +71,26 @@ Task(
 
 For **implement**, the worker will surface the exact command + target worktree and (unless `--yes`) wait for your explicit go-ahead, run Codex with `workspace-write` inside a throwaway worktree, independently `git diff` the result, and show you the patch before anything touches your live working tree. Present that diff to the user; on approval the worker applies it, otherwise it discards and removes the worktree. The worker also returns the Codex **session id** and **worktree path** — pass both back on a later `--resume` so it continues the exact thread (robust under concurrency, unlike `--last`).
 
-### `--review` → delegate to the existing reviewer
+### `--review` → call the runner directly
+
+No subagent. The main session runs the Codex runner in the background and waits for the completion notice (up to 9 minutes; never poll in a loop). Plan mode: run nothing and say `Cross-model pass deferred: plan mode.`
 
 ```
-Task(
-  subagent_type="codex-adversary",
-  prompt="""
-  ## Mode
-  code
-  ## Scope
-  base ref: [BASE_REF, default main]
-  ## Codebase
-  $CLAUDE_PROJECT_DIR
-  """
+Bash(
+  command='node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <ABSOLUTE project path> --mode code --base <BASE_REF, default main> --via skill:codex',
+  run_in_background=true
 )
 ```
-`/codex --review` is a convenience alias so users have one mental entry point (`/codex`) — it reuses `codex-adversary`'s carefully-tuned read-only flags, it does NOT reimplement review.
+For uncommitted work, use `--working-tree` in place of `--base`. Untracked files are not reviewed; line 2 of the output reports the count. Show Dave the receipt line (line 1) and line 2 first, verbatim. A finding is `[Codex]` only when the receipt matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `. On any other status say `NO CODEX REVIEW (<status>)` and never write a review yourself. `/codex --review` is a convenience alias so users have one mental entry point (`/codex`); the full review skill is `/codex-adversary`.
 
 ## Guardrails (summary — full text in `.claude/rules-ondemand/codex-worker-safety.md`)
 
 - **Subscription only.** The worker asserts `codex login status` = "Logged in using ChatGPT" and strips `OPENAI_API_KEY`/`CODEX_API_KEY` from Codex's env. Fails loud, never silently uses an API key.
-- **Confirm-first for `implement`/`resume`** (the only approval gate — `codex exec` has none). `--yes` skips only the interactive pause.
+- **`implement`/`resume` are FROZEN** until the workspace-write fixture passes on the installed CLI. When they thaw: confirm-first (the only approval gate — `codex exec` has none). `--yes` skips only the interactive pause.
 - **Worktree isolation by default** — write runs happen in a throwaway git worktree **outside** the repo (sibling `../.codex-worktrees/<repo>-<ts>-<pid>`), never in-place, so they can't collide with your live session or the `file_claims` DB. (An `--in-place` mode was considered and **dropped** in v2 — worktree isolation is the retained safety win.)
 - **Auto worktree GC** — before each implement run, stale *clean* worktree dirs (~190MB each) older than `$CODEX_WT_GC_DAYS` (default 7d) are reclaimed; a worktree with unreviewed (dirty) changes is never touched, so a dormant awaiting-`resume` one is safe. Manual sweep: `scripts/codex/gc-worktrees.sh`.
 - **Review-gate** — never auto-commits/auto-merges; produces a patch you approve first.
-- **Model allowlist** — `gpt-6-astra/gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5` only (live-probed 2026-09-08 on 0.153.4).
+- **Model allowlist** — `gpt-6.1-sol/gpt-6-astra/gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5` only (live-probed on 0.162.1, DESIGN-RESEARCH section 19; `gpt-5.5` retires from Codex mid-October 2026, remove it at the next `/harness-update codex`).
 - **No hook can see inside Codex's sandbox** — enforcement is `--sandbox` + this preflight, not any Claude Code hook.
 - **Usage-limit aware** — if the ChatGPT subscription quota is exhausted, `/codex` returns a clean "usage limit hit; resets ~<time>" message (never a fabricated result) and logs `usage_limited:true`. Detection is reactive — the subscription exposes no queryable quota surface to preflight.
 - **`--complex` warns, no longer gates** (2026-09-03) — multi_agent fan-out (ask/implement) checks `~/.codex/agents/explorer.toml` for the gpt-5.6-luna pin and WARNS if absent, but proceeds; an A/B with the file deleted found identical fan-out and zero gpt-4.1 (DESIGN-RESEARCH §17) (prevents the gpt-4.1 role-fallback 400); opt-in, never default, with a standing Windows re-probe caveat (openai/codex#19399). The primary `/codex` worker still defaults to gpt-5.6-luna @ max.
@@ -105,7 +102,7 @@ User: /codex how does the report-registry upsert dedupe by Run ID?
 → ask mode, read-only. Returns GPT-5.6 Luna's answer sourced from the clean -o capture. No confirm, no writes.
 
 User: /codex --implement add a --limit flag to scripts/report-registry/query.mjs
-→ implement mode. Shows the codex exec command + worktree path, waits for your OK,
+→ FROZEN: returns the freeze message and runs nothing. When thawed, implement mode. Shows the codex exec command + worktree path, waits for your OK,
   runs Codex with workspace-write in an isolated worktree, shows you the diff,
   applies it to your working tree on approval. Logs a telemetry row.
 
@@ -117,10 +114,10 @@ User: /codex --implement --complex refactor the report-registry pipeline end-to-
   extra tokens + latency. WARNS (does not refuse) if the explorer pin is missing.
 
 User: /codex --resume also add a test for the new flag
-→ continues the same Codex thread + worktree.
+→ FROZEN (see above). When thawed, continues the same Codex thread + worktree.
 
 User: /codex --review main
-→ runs the standard cross-model adversarial review (codex-adversary), read-only.
+→ runs the cross-model adversarial review through the Codex runner, read-only, and shows its receipt.
 ```
 
 ## Telemetry
@@ -198,7 +195,7 @@ The **`ask`** mode passes **`--ignore-user-config`** to skip loading Dave's inte
 - **Always feed the prompt from a file** via `- < "$PROMPT_FILE"`, never an inherited TTY (hang bug openai/codex#20919). Same universal rule as `ntn` (`.claude/rules-ondemand/notion-cli-safety.md`).
 - **Rely on an external timeout** (the Bash-tool timeout or `timeout` wrapper), not Codex's own — documented Windows stall bugs (#18983, #20200) mean Codex doesn't reliably self-terminate a stuck run.
 - **`-o <file>` is the mandatory clean-output contract** — it strips the ~100+ lines of startup noise (skill-YAML load errors, MCP auth failures, hook lines). Parse findings/answers from the `-o` file, fall back to the full log's post-`codex`-sentinel text only if `-o` is empty.
-- **`workspace-write` sandbox blocks subprocess launches on Windows** (`CreateProcessAsUserW failed: 5`, verified 2026-07-07 dogfood). Codex can create/edit files but CANNOT run `git`/`node`/tests inside its own sandbox — it writes code BLIND and self-reports done without executing it. The orchestrator's out-of-sandbox verification is the ONLY verification, and it must actually **run** changed runnable code, not just `node --check` (syntax-check missed a real `spawnSync`-ENOENT bug in dogfooding). **`--sandbox read-only` blocks subprocess spawns too** (verified 2026-07-19): a codex-adversary review under read-only had EVERY spawn (`git`, `Get-Content`) denied the same way — not just writes. So a read-only reviewer must receive all needed context INLINE in the prompt and be told NOT to spawn tools, or it burns its whole budget on denied spawns and can fork-storm (see `.claude/agents/codex-adversary.md` Step 4 directive).
+- **`workspace-write` sandbox blocks subprocess launches on Windows** (`CreateProcessAsUserW failed: 5`, verified 2026-07-07 dogfood). Codex can create/edit files but CANNOT run `git`/`node`/tests inside its own sandbox — it writes code BLIND and self-reports done without executing it. The orchestrator's out-of-sandbox verification is the ONLY verification, and it must actually **run** changed runnable code, not just `node --check` (syntax-check missed a real `spawnSync`-ENOENT bug in dogfooding). **`--sandbox read-only` blocks subprocess spawns too** (verified 2026-07-19): a codex-adversary review under read-only had EVERY spawn (`git`, `Get-Content`) denied the same way — not just writes. So a read-only reviewer must receive all needed context INLINE in the prompt and be told NOT to spawn tools, or it burns its whole budget on denied spawns and can fork-storm (see the runner prompt in `.claude/scripts/codex/adversary.mjs`).
 - **`codex exec resume` takes no `--sandbox`/`-C`** — it inherits the resumed session's cwd + sandbox; `--last` is cwd-scoped, so `cd` into the worktree, don't pass `-C`. Passing `--sandbox` errors RC=2. Prefer capturing + reusing the explicit Codex session id (v1) over cwd-scoped `--last`.
 
 ## Version drift
@@ -222,7 +219,7 @@ There is no per-call dollar price — the cost is ChatGPT-subscription quota (tw
 | `/codex <question>` (ask, read-only) | No |
 | `/codex --implement …` (workspace-write, worktree) | **Yes** (unless `--yes`) |
 | `/codex --resume …` (implement thread) | Yes |
-| `/codex --review …` (delegates to codex-adversary) | No (read-only) |
+| `/codex --review …` (calls the Codex runner) | No (read-only) |
 | Applying the worktree patch to the live tree | **Yes** — human reviews the diff first |
 | `git branch -D codex/<ts>` cleanup (interactive) | Yes (destructive-commands rule) |
 | Enabling network / `danger-full-access` | **Yes**, never default |
@@ -231,6 +228,8 @@ There is no per-call dollar price — the cost is ChatGPT-subscription quota (tw
 ```
 
 ---
+
+Superseded: reviews now go through the runner. See .claude/rules-ondemand/codex-adversarial.md. The text below is history.
 
 <!-- archived-rule:codex-adversarial.md ref:b800899 -->
 ## Reference: pre-split text of `rules-ondemand/codex-adversarial.md` (archived 2026-07-29)

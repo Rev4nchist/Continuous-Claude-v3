@@ -28,7 +28,7 @@
 | APIs/integration | liaison | opus | Interface review |
 | Migrations | surveyor | opus | Upgrade review |
 | Architecture | principal-reviewer | opus | High-level audit |
-| Cross-model adversarial review | codex-adversary | sonnet | Invokes OpenAI Codex (gpt-5.5 @ xhigh) — used in /review Phase 1 (parallel with critic) and /premortem |
+| Cross-model adversarial review (Workflow stage) | codex-adversary | sonnet | Envelope: runs the Codex runner (`adversary.mjs`, default gpt-6.1-sol @ xhigh) once and returns its CODEX-RECEIPT line. Main session: use `/codex-adversary`, `/review` or `/premortem`, which call the runner directly |
 | Validate a plan | plan-reviewer | sonnet | Reviews architect/phoenix plans before implementation |
 | **Debug** |
 | Investigation | debug-agent | opus | Find root cause |
