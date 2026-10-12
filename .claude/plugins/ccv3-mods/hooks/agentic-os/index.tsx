@@ -210,6 +210,38 @@ const writeProof = async ($: EngineInterface, proof: Proof, isSlot = true) => {
   if (sessionId) await $.fs.write(`${home}/${DIAG_DIR}/sessions/${sessionId}.${proof.trigger}.json`, text).catch(() => undefined)
 }
 
+/** True once this session's first turn left its beacon. */
+const turnBeaconed = atom({ plugin: 'ccv3-mods', key: 'turnBeaconed' } as const, false)
+
+/**
+ * A diagnostic that depends on nothing else in this module: written first, before the off check and any atom.
+ * Desktop sessions left no proof at all (2026-10-12) and every write here swallows its error, so these files say
+ * how far a session got: `enter` the start hook ran, `turn` the first turn began, `error` the start hook threw.
+ * With no home directory it falls back to .claude/cache/e2e under the session's working folder, and says why.
+ */
+const beacon = async ($: EngineInterface, name: 'enter' | 'turn' | 'error', extra: Record<string, unknown> = {}) => {
+  try {
+    const [userProfile, home, entrypoint, off, sessionId] = await Promise.all([
+      $.env.get('USERPROFILE'),
+      $.env.get('HOME'),
+      $.env.get('CLAUDE_CODE_ENTRYPOINT'),
+      $.env.get('CCV3_MODS_OFF'),
+      $.session.id().catch(() => null),
+    ])
+    // The off switch keeps the whole module inert, the beacon too.
+    if (off === '1') return
+    const base = userProfile ?? home
+    const facts = { at: new Date().toISOString(), name, sessionId, entrypoint: entrypoint ?? null, hasUserProfile: userProfile !== undefined, hasHome: home !== undefined, ...extra }
+    const id = sessionId ?? 'unknown'
+    const primary = base ? `${base}/${DIAG_DIR}/sessions/${id}.${name}.json` : null
+    const failure = primary ? await $.fs.write(primary, JSON.stringify({ ...facts, via: 'home' }, null, 2)).then(() => null, (err: unknown) => String(err)) : 'no home directory'
+    if (failure === null) return
+    await $.fs.write(`.claude/cache/e2e/beacon-${id}.${name}.json`, JSON.stringify({ ...facts, via: 'cwd', primaryFailed: failure }, null, 2))
+  } catch {
+    // A beacon never breaks the session.
+  }
+}
+
 /**
  * The UI side of a session: /os, the 5 s pulse and the lane read. Runs at an interactive (REPL) start and when the
  * desktop app attaches: the desktop drives Claude Code through the SDK, so its sessions start headless with no
@@ -229,14 +261,20 @@ const startUi = async ($: EngineInterface) => {
 
 export const agenticOs = (on: On) => {
   on('session.start', async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    // A start (or a reload, which drops the old timers) re-arms the pulse.
-    await update($, uiArmed, () => false)
-    await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
-    await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
-    // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
-    if (e.isInteractive) await startUi($)
-    return next(e)
+    await beacon($, 'enter', { isInteractive: e.isInteractive, surface: e.surface ?? null })
+    try {
+      if (await isOff($)) return next(e)
+      // A start (or a reload, which drops the old timers) re-arms the pulse.
+      await update($, uiArmed, () => false)
+      await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
+      await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
+      // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
+      if (e.isInteractive) await startUi($)
+      return next(e)
+    } catch (err) {
+      await beacon($, 'error', { where: 'session.start', message: err instanceof Error ? err.message : String(err) })
+      throw err
+    }
   })
 
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
@@ -263,6 +301,10 @@ export const agenticOs = (on: On) => {
   // No off check on command.run: with the mod off, session.start never registers /os, so it never fires.
   on('turn.start', async ($, e, next) => {
     if (await isOff($)) return next(e)
+    if (!(await read($, turnBeaconed).catch(() => false))) {
+      await beacon($, 'turn')
+      await update($, turnBeaconed, () => true).catch(() => undefined)
+    }
     const startedAt = await $.clock.now()
     await update($, turn, () => ({ id: e.turnId, startedAt }))
     return next(e)
