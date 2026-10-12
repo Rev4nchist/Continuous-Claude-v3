@@ -135,6 +135,8 @@ declare module 'claude-code' {
       toolTimes: Record<string, ToolTime>
       /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
       uiArmed: boolean
+      /** True once this session's first turn left its beacon file (agentic-os). */
+      turnBeaconed: boolean
     }
   }
 }
