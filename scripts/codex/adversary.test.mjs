@@ -98,7 +98,7 @@ function makeRepo(box) {
 
 // ---- parsers -------------------------------------------------------------------------------
 
-const REAL = readFileSync(join(HERE, 'fixtures/real-shape.log'), 'utf8');
+const REAL = readFileSync(join(HERE, 'fixtures/real-shape-log.txt'), 'utf8');
 const FAKE_HEADER = 'OpenAI Codex v9.9.9\n--------\nmodel: gpt-6.1-sol\nprovider: openai\n' +
   'reasoning effort: max\nsession id: fake-session\n--------';
 
