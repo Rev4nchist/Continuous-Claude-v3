@@ -193,13 +193,21 @@ const refreshAfter = ($: EngineInterface, tool: string, input: Record<string, un
   if ((tool === 'Bash' || tool === 'PowerShell') && command.includes('lane.mjs')) void refreshLanes($)
 }
 
-/** Proof the plugin loaded, how the session started and where it draws: the one file to read when nothing shows. */
-const writeProof = async ($: EngineInterface, proof: { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }) => {
+type Proof = { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }
+
+/**
+ * Proof the plugin loaded, how the session started and where it draws.
+ * last-session.json is one slot that any session overwrites, so it can only say what the newest session did.
+ * sessions/<id>.<trigger>.json is one file per session and trigger: a start never hides an attach, and no
+ * other session touches it. Read that one when you ask "did the desktop attach?".
+ */
+const writeProof = async ($: EngineInterface, proof: Proof, isSlot = true) => {
   const home = await homeDir($)
   if (!home) return
   const sessionId = await $.session.id().catch(() => null)
   const text = JSON.stringify({ at: new Date().toISOString(), ...proof, sessionId }, null, 2)
-  await $.fs.write(`${home}/${DIAG_DIR}/last-session.json`, text).catch(() => undefined)
+  if (isSlot) await $.fs.write(`${home}/${DIAG_DIR}/last-session.json`, text).catch(() => undefined)
+  if (sessionId) await $.fs.write(`${home}/${DIAG_DIR}/sessions/${sessionId}.${proof.trigger}.json`, text).catch(() => undefined)
 }
 
 /**
@@ -235,6 +243,13 @@ export const agenticOs = (on: On) => {
     if (await isOff($)) return next(e)
     await writeProof($, { trigger: 'attach', isInteractive: false, surface: e.surface })
     await startUi($)
+    return next(e)
+  }).catch(($, e, next) => next(e))
+
+  // Any other surface that attaches is only recorded, never drawn on. If the desktop app attaches under a name
+  // the hook above does not match, this file is the one place it shows.
+  on('session.attach', async ($, e, next) => {
+    if (e.surface !== 'desktop' && !(await isOff($))) await writeProof($, { trigger: 'attach', isInteractive: false, surface: e.surface }, false)
     return next(e)
   }).catch(($, e, next) => next(e))
 
