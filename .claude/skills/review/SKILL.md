@@ -139,6 +139,11 @@ Bash(
 
 The runner prints a `CODEX-RECEIPT v1 ...` line first. Keep that line. It is the proof that Codex, not Claude, reviewed.
 
+When the run ends, in this order:
+1. Read line 1. If it matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `, take the run id from `run=` and run `node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota).
+2. Only when verify prints `VERIFY ok` (exit 0): pass the receipt line and the findings to synthesis as Codex's.
+3. Verify fails: report `Cross-model pass: NO CODEX REVIEW (verify failed: <reason>)`, pass no findings as Codex's, and write no lift row.
+
 ### Phase 2: Synthesis
 
 ```

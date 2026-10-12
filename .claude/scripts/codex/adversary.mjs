@@ -42,7 +42,6 @@ export const MODELS = {
   'gpt-5.6-sol': { ceiling: 'max', note: 'Older workhorse; fallback for gpt-6.1-sol.' },
   'gpt-5.6-terra': { ceiling: 'max', note: 'Older balanced tier; fallback when Sol is limited.' },
   'gpt-5.6-luna': { ceiling: 'max', note: 'Older fast tier; cheapest. Re-check loops, small diffs.' },
-  'gpt-5.5': { ceiling: 'xhigh', note: 'Legacy; retires from Codex 2026-10-14. Do not select.' },
 };
 // `ultra` is absent on purpose: it delegates to sub-agents, which every run disables.
 const EFFORTS = ['low', 'medium', 'high', 'xhigh', 'max'];
@@ -429,27 +428,78 @@ export function execArgs({ model, effort, project, finalPath }) {
     '-C', project, '-o', finalPath, '-'];
 }
 
+// ---- stopping a run's process tree ----------------------------------------------------------
+// Never taskkill /T and never a by-name sweep: both would hit parallel runs and the Codex app.
+
 /**
- * Stops the process and everything below it. Windows: one PowerShell call that walks descendants of
- * this pid, counting only processes created at or after `since` (a reused PID cannot match). Never
- * taskkill /T and never a by-name sweep: both would hit parallel runs.
+ * Rows of { pid, ppid, start } from `<pid> <ppid> <start>` lines. start is epoch milliseconds (the
+ * Windows listing) or a `ps -o lstart=` date. An unreadable date counts as young: the ppid link decides.
  */
-export function killTree(pid, env, since = Date.now() - 60000) {
-  if (process.platform !== 'win32') {
-    try { process.kill(-pid, 'SIGKILL'); } catch { /* already gone */ }
-    return;
-  }
-  const script = `$since=[DateTimeOffset]::FromUnixTimeMilliseconds(${Math.floor(since)}).LocalDateTime; ` +
-    `$all=@(Get-CimInstance Win32_Process | Where-Object { $_.CreationDate -ge $since }); ` +
-    `$ids=New-Object System.Collections.Generic.List[int]; $ids.Add(${Number(pid)}); ` +
-    `for($i=0;$i -lt $ids.Count;$i++){ foreach($p in $all){ ` +
-    `if($p.ParentProcessId -eq $ids[$i] -and -not $ids.Contains([int]$p.ProcessId)){ $ids.Add([int]$p.ProcessId) } } }; ` +
-    `$young=@($all | ForEach-Object { [int]$_.ProcessId }); ` +
-    `$kill=@($ids | Where-Object { $young -contains $_ }); ` +
-    `if($kill.Count){ Stop-Process -Id $kill -Force -ErrorAction SilentlyContinue }`;
-  spawnSync('powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', script], {
-    windowsHide: true, timeout: 30000, env: cleanEnv(env),
+export function parseProcessTable(text) {
+  return text.split(/\r?\n/).flatMap((line) => {
+    const m = /^\s*(\d+)\s+(\d+)\s+(.+?)\s*$/.exec(line);
+    if (!m) return [];
+    const start = /^\d+$/.test(m[3]) ? Number(m[3]) : Date.parse(m[3]);
+    return [{ pid: Number(m[1]), ppid: Number(m[2]), start: Number.isNaN(start) ? Infinity : start }];
   });
+}
+
+/**
+ * Pids to stop: the root plus every descendant of it (a detached grandchild keeps its ppid link),
+ * counting only processes started at or after `since`. A reused pid older than that is left alone.
+ */
+export function treeToStop(rootPid, table, since) {
+  const young = table.filter((p) => p.start >= since);
+  const members = new Set([rootPid]);
+  for (let grew = true; grew;) {
+    grew = false;
+    for (const p of young) {
+      if (members.has(p.ppid) && !members.has(p.pid)) { members.add(p.pid); grew = true; }
+    }
+  }
+  return young.map((p) => p.pid).filter((pid) => members.has(pid) && pid > 1 && pid !== process.pid);
+}
+
+const POWERSHELL_TABLE = `Get-CimInstance Win32_Process | Where-Object { $_.CreationDate } | ` +
+  `ForEach-Object { '{0} {1} {2}' -f $_.ProcessId, $_.ParentProcessId, ([DateTimeOffset]$_.CreationDate).ToUnixTimeMilliseconds() }`;
+
+function listProcesses(env) {
+  const win = process.platform === 'win32';
+  const [cmd, args] = win
+    ? ['powershell.exe', ['-NoProfile', '-NonInteractive', '-Command', POWERSHELL_TABLE]]
+    : ['ps', ['-e', '-o', 'pid=,ppid=,lstart=']];
+  const r = spawnSync(cmd, args, {
+    encoding: 'utf8', windowsHide: true, timeout: 30000, env: { ...cleanEnv(env), LC_ALL: 'C' },
+  });
+  return r.error ? [] : parseProcessTable(r.stdout);
+}
+
+/** Stops the root and its descendants; returns the pids it signalled. If the listing fails, the root alone. */
+export function killTree(pid, env, since = Date.now() - 60000) {
+  const table = listProcesses(env);
+  const stop = table.length ? treeToStop(pid, table, since) : [pid];
+  if (process.platform !== 'win32' && stop.includes(pid)) {
+    try { process.kill(-pid, 'SIGKILL'); } catch { /* group already gone */ }
+  }
+  for (const target of stop) {
+    try { process.kill(target, 'SIGKILL'); } catch { /* already gone */ }
+  }
+  return stop;
+}
+
+const isAlive = (pid) => {
+  try { process.kill(pid, 0); return true; } catch (e) { return e.code === 'EPERM'; }
+};
+
+/** Waits up to `waitMs` for the pids to exit; returns the ones still alive. Async so node can reap children. */
+export async function survivors(pids, waitMs) {
+  const deadline = Date.now() + waitMs;
+  let alive = pids.filter(isAlive);
+  while (alive.length && Date.now() < deadline) {
+    await new Promise((resolve) => setTimeout(resolve, 100));
+    alive = alive.filter(isAlive);
+  }
+  return alive;
 }
 
 // Ctrl+C or a kill signal to the runner must not leave Codex running: stop its tree, then exit.
@@ -462,6 +512,8 @@ function stopOnSignal(child, env, since) {
   process.on('SIGTERM', handler);
   return () => { process.off('SIGINT', handler); process.off('SIGTERM', handler); };
 }
+
+const NOT_EXITED = Symbol('not exited');
 
 /** Runs `codex exec` with stdin from the prompt file and stdout+stderr into the log file. */
 function runCodex(args, env, files, timeoutS) {
@@ -478,14 +530,19 @@ function runCodex(args, env, files, timeoutS) {
   return new Promise((done) => {
     let timedOut = false;
     const finishRun = (res) => { unhook(); done({ timedOut, ...res }); };
-    const timer = setTimeout(() => {
+    const exited = new Promise((resolve) => child.once('exit', (code) => resolve(code)));
+    const timer = setTimeout(async () => {
       timedOut = true;
-      killTree(child.pid, env, since);
-      // The exit event confirms the tree stop; without it in 5 s the cleanup failed.
-      setTimeout(() => { child.unref(); finishRun({ exitCode: null, cleanup: 'failed', pid: child.pid }); }, 5000).unref();
+      const stopped = killTree(child.pid, env, since);
+      // The cleanup is ok only when the root exited and every pid the walk found is gone.
+      const code = await Promise.race([exited, new Promise((resolve) => setTimeout(resolve, 5000, NOT_EXITED))]);
+      const left = await survivors(stopped.filter((p) => p !== child.pid), 3000);
+      if (code === NOT_EXITED) left.push(child.pid);
+      child.unref();
+      finishRun({ exitCode: code === NOT_EXITED ? null : code, cleanup: left.length ? 'failed' : 'ok', pids: left });
     }, timeoutS * 1000);
     child.on('error', (e) => { clearTimeout(timer); finishRun({ exitCode: null, error: e.message }); });
-    child.on('exit', (exitCode) => { clearTimeout(timer); finishRun({ exitCode, cleanup: timedOut ? 'ok' : null }); });
+    child.on('exit', (exitCode) => { if (!timedOut) { clearTimeout(timer); finishRun({ exitCode, cleanup: null }); } });
   });
 }
 
@@ -526,7 +583,7 @@ function stripEcho(log, prompt) {
 function reasonFor(rec, logText, timeoutS, res) {
   if (res.error) return `Could not start Codex: ${res.error}`;
   const retry = /try again at ([^.\n]+)/.exec(logText)?.[1]?.trim();
-  const stopped = res.cleanup === 'failed' ? `; cleanup failed, pid ${res.pid} may still run` : '';
+  const stopped = res.cleanup === 'failed' ? `; cleanup failed, pid ${res.pids?.join(',')} may still run` : '';
   return {
     ok: '',
     timeout: `Codex did not finish within ${timeoutS} seconds and was stopped${stopped}`,
@@ -695,7 +752,8 @@ function readRows(env) {
 function logHeaderProblem(dir, rec) {
   const header = parseHeader(readIfThere(join(dir, 'log.txt')));
   if (!header) return 'log.txt has no Codex header';
-  const same = header.model === rec.model_observed && header.sessionId === rec.session_id && header.cliVersion === rec.cli;
+  const same = header.model === rec.model_observed && header.sessionId === rec.session_id && header.cliVersion === rec.cli &&
+    header.provider === rec.provider && header.effort === rec.effort;
   return same ? null : 'the log.txt header differs from the receipt';
 }
 

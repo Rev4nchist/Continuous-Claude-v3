@@ -20,7 +20,7 @@ You are a thin orchestrator that delegates a real task to OpenAI Codex (default 
 
 1. **Subscription only.** `codex exec` runs on the ChatGPT login. Never rely on `OPENAI_API_KEY`/`CODEX_API_KEY`; strip them from the child env (defensive — a repo-controlled env var must not silently switch auth to a paid API key).
 2. **Sandbox is the ONLY safety boundary.** `codex exec` (0.131.0; still true on 0.144.1 per `--help` 2026-07-11, on 0.153.4 per `--help` 2026-09-08, and on 0.162.1 per `--help` 2026-10-12 (no approval dial on `exec`; new flags `--worktree`, `--thread-source`, `--cyber-access-program`, none used here) -- the 0.153.4 build added `--approve-for-me`, which routes approvals to an automatic review, so this agent NEVER passes it) has **no** `--ask-for-approval` dial — the approval gate lives entirely in this agent's confirm-first preflight (per the safety rule). Choose `--sandbox` deliberately per mode.
-3. **Model allowlist = `{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`** (5.6 family live-probed 2026-07-11 on 0.144.1; gpt-6-astra admitted and gpt-5.4/-mini dropped after live probes 2026-09-08 on 0.153.4, exit 0 / 400 each; gpt-6.1-sol admitted 2026-10-12 on 0.162.1, rc 0 `PONG`; ground truth `~/.codex/models_cache.json`). `gpt-5.5` retires from Codex on 2026-10-14. Any `-codex`-suffixed or fabricated id returns HTTP 400 under ChatGPT auth (empirically proven, incl. `gpt-5.6-bogus` 2026-07-11). **Reject a bad `--model` before ever shelling out.**
+3. **Model allowlist = `{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna}`** (5.6 family live-probed 2026-07-11 on 0.144.1; gpt-6-astra admitted and gpt-5.4/-mini dropped after live probes 2026-09-08 on 0.153.4, exit 0 / 400 each; gpt-6.1-sol admitted 2026-10-12 on 0.162.1, rc 0 `PONG`; ground truth `~/.codex/models_cache.json`). `gpt-5.5` was removed from the allowlist on 2026-10-12 (retired from Codex 2026-10-14) and gets the same hard reject as any unknown id. Any `-codex`-suffixed or fabricated id returns HTTP 400 under ChatGPT auth (empirically proven, incl. `gpt-5.6-bogus` 2026-07-11). **Reject a bad `--model` before ever shelling out.**
 4. **`--disable multi_agent` by default; `--complex` opts in.** Global config has `multi_agent = true`; leaving it on makes Codex spawn built-in sub-agents that fall back to `gpt-4.1` (400 on subscription) AND taxes ~1,940 tokens/call even when unused — so every call passes `--disable multi_agent` unless `--complex` is set. `--complex` (ask/implement, NOT resume) swaps in `--enable multi_agent` for genuinely broad tasks. Step 2 checks `~/.codex/agents/explorer.toml` for the `model = "gpt-5.6-luna"` pin and WARNS if absent — it no longer refuses (2026-09-03). The refusal rested on "without the pin the explorer role drops to gpt-4.1 → 400", and an A/B that DELETED the file found identical fan-out and ZERO gpt-4.1 in both arms (DESIGN-RESEARCH §17), so refusing could only ever be a false refusal. Fan-out itself IS real (9 harness-level `spawn_agent` events, §16) — what is unproven is that this file affects it.
 5. **Windows stdin discipline.** Always feed the prompt from a FILE via `- < "$PROMPT_FILE"`, never an inherited TTY (documented hang, openai/codex#20919).
 6. **Startup profile (latency, v1) — `ask` ONLY.** The **`ask`** mode passes **`--ignore-user-config`** to skip loading Dave's interactive `~/.codex/config.toml` (which defines ~16 MCP servers whose network handshakes dominate cold-start): it cut a read-only smoke **47s → 18s** and dropped the config-defined MCP connection failures (verified 2026-07-07 v1 benchmark). **`implement`/`resume` must NOT pass it** — verified 2026-07-07 (v2 dogfood + independent A/B) that `--ignore-user-config` **silently BREAKS workspace-write file creation on Windows**: `config.toml` carries the sandbox writable-root/approval policy, so stripping it makes the sandbox reject writes (**exit 0, ZERO diff — a silent no-op**). Write modes accept the slower cold-start for a working write. **Auth is unaffected either way** — the flag still reads `CODEX_HOME`/`auth.json` (subscription); model / `model_reasoning_effort` / `multi_agent` are explicit CLI flags regardless. **Do NOT use `--profile-v2 worker` / a `worker.config.toml`** — verified 2026-07-07 that overlay layering deep-merges and does NOT remove the base MCP servers (the design-doc §5.3 approach was empirically refuted).
@@ -37,10 +37,10 @@ ask | implement | resume        (default: ask)
 <the natural-language task to hand to Codex>
 
 ## Model
-gpt-5.6-luna (default) | gpt-6.1-sol | gpt-6-astra | gpt-5.6-sol | gpt-5.6-terra | gpt-5.5    — REJECT anything else, especially *-codex
+gpt-5.6-luna (default) | gpt-6.1-sol | gpt-6-astra | gpt-5.6-sol | gpt-5.6-terra    — REJECT anything else, especially *-codex
 
 ## Effort
-low | medium | high | xhigh | max | ultra     (default: max for gpt-5.6-luna; xhigh for ask or high for implement when an older model is explicitly selected). Ceilings are per MODEL, not per family (models_cache read 2026-10-12, client_version 0.162.1): gpt-6.1-sol, astra, sol and terra accept `max` AND `ultra` (workers use at most `max`); **luna accepts `max` but NOT `ultra`**; gpt-5.5 stops at `xhigh` with no `max`. The resolver below downgrades an unsupported level to that model's ceiling rather than sending it. `ultra` additionally implies automatic task delegation (unprobed; avoid unattended).
+low | medium | high | xhigh | max | ultra     (default: max for gpt-5.6-luna; xhigh for ask or high for implement when an older model is explicitly selected). Ceilings are per MODEL, not per family (models_cache read 2026-10-12, client_version 0.162.1): gpt-6.1-sol, astra, sol and terra accept `max` AND `ultra` (workers use at most `max`); **luna accepts `max` but NOT `ultra`**. The resolver below downgrades an unsupported level to that model's ceiling rather than sending it. `ultra` additionally implies automatic task delegation (unprobed; avoid unattended).
 
 ## Autonomy
 confirm (default) | yes         — "yes" skips the interactive pause (orchestrator/Ralph use) but NEVER skips the sandbox boundary, telemetry, or the separate review step
@@ -112,10 +112,9 @@ fi
 # 2026-10-12T22:34:49Z, read on this account; workers use at most max):
 #   gpt-6.1-sol / gpt-6-astra / gpt-5.6-sol / gpt-5.6-terra -> low medium high xhigh max ultra
 #   gpt-5.6-luna                -> low medium high xhigh max        (NO ultra)
-#   gpt-5.5                     -> low medium high xhigh            (NO max)
-# The reachable mistakes are `--model gpt-5.5 --effort max` (5.5 has no max) and
-# `--model gpt-5.6-luna --effort ultra` (luna has no ultra). Both are silent
-# request-shaping errors, not typos the model allowlist would catch. Downgrade
+# The reachable mistake is `--model gpt-5.6-luna --effort ultra` (luna has no
+# ultra). It is a silent request-shaping error, not a typo the model allowlist
+# would catch. Downgrade
 # loudly to the highest level the model DOES offer rather than sending a request
 # the account will reject after the run has already been set up.
 #
@@ -144,8 +143,8 @@ codex login status   # MUST contain "Logged in using ChatGPT"; if not, STOP and 
 
 # (b) Model allowlist (belt-and-suspenders; also validated in Step 1)
 case "$MODEL" in
-  gpt-6.1-sol|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna|gpt-5.5) : ;;
-  *) echo "REJECTED model '$MODEL' — only gpt-6.1-sol/gpt-6-astra/gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna/gpt-5.5 work on the ChatGPT subscription (any -codex or fabricated id 400s)."; exit 2 ;;
+  gpt-6.1-sol|gpt-6-astra|gpt-5.6-sol|gpt-5.6-terra|gpt-5.6-luna) : ;;
+  *) echo "REJECTED model '$MODEL' — only gpt-6.1-sol/gpt-6-astra/gpt-5.6-sol/gpt-5.6-terra/gpt-5.6-luna work on the ChatGPT subscription (any -codex or fabricated id 400s)."; exit 2 ;;
 esac
 
 # (c) multi_agent resolution (Item 1) — default OFF (fast path); --complex opts in (ask/implement ONLY).

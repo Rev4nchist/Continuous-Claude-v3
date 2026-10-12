@@ -19,6 +19,7 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
    - `## Mode`: `code` (default) or `plan`.
    - `## Scope`: a base ref for code, or an absolute plan path for plan. No scope in code mode means `--working-tree`.
    - `## Focus`: optional free text. Never put it in the command line. Write it to a file under the project's `.claude/cache/agents/codex-adversary/` with a quoted heredoc (`<<'EOF'`) so nothing expands. Pass the file as `--focus-file <abs>`.
+   - `## Diff file`: optional. An absolute path to a diff file. Pass it as `--diff-file <abs>` in place of `--base`.
    - `## Codebase`: an absolute project path. Never rely on `$CLAUDE_PROJECT_DIR`.
    - `## Model` and `## Codex effort`: optional. Pass them as `--model` and `--effort`. An `Effort:` line in a caller prompt means Codex effort.
    - `## Workroom`: optional. Pass `room:` as `--room`. The caller, not you, checks the self-grade conflict in `.workroom/PROTOCOL.md`.
@@ -40,4 +41,4 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
 ## Receipt gate
 
 A result is a Codex review only when line 1 matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `.
-Callers apply this gate. Tag a finding `[Codex]` only after it passes.
+Callers apply this gate. Tag a finding `[Codex]` only after it passes. Callers also run `verify <run-id>` before they tag findings; this agent does not.

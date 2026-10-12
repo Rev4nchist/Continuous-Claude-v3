@@ -6,7 +6,7 @@ Grounding: verified 2026-07-11 against `codex-cli 0.144.1`, re-verified 2026-09-
 
 ## Write lane FROZEN (Dave, 2026-10-12)
 
-`/codex --implement` and `--resume` are **FROZEN** until the workspace-write fixture passes. On `codex-cli 0.162.1` the fixture fails twice (`hello.txt` not created, rc 0, no diff): the Codex sandbox setup refresh fails and `codex doctor` reports `elevated Windows sandbox provisioning recorded a structured failure`. The same fixture passed on 0.153.4. This is not a guard regression: the sandbox denies more, not less. The worker returns `CODEX IMPLEMENT FROZEN (2026-10-12): ...` and runs nothing. Unfreeze: quit the Codex desktop app, re-run the fixture, and on a pass remove the freeze and add a dated note to DESIGN-RESEARCH section 19. `ask` and review still work. The freeze also stops the Game Plan fixer and `builder-failover` roles.
+`/codex --implement` and `--resume` are **FROZEN** until the workspace-write fixture passes. On `codex-cli 0.162.1` the fixture fails twice (`hello.txt` not created, rc 0, no diff): the Codex sandbox setup refresh fails and `codex doctor` reports `elevated Windows sandbox provisioning recorded a structured failure`. The same fixture passed on 0.153.4. This is not a guard regression: the sandbox denies more, not less. The worker returns `CODEX IMPLEMENT FROZEN (2026-10-12): ...` and runs nothing. Unfreeze: stop the Windows service `CodexSandboxService.OpenAI.Codex` from an elevated shell (or find the process that holds `node_repl.exe`), re-run the fixture, and on a pass remove the freeze and add a dated note to DESIGN-RESEARCH section 19. `ask` and review still work. The freeze also stops the Game Plan fixer and `builder-failover` roles.
 
 ## Scope: `codex exec` only, NOT the Codex Desktop app
 
@@ -59,14 +59,14 @@ lane differs: its default is `gpt-6.1-sol @ xhigh`, set in the runner's `MODELS`
 **The effort ceiling is per-MODEL, not per-family, and a wrong pair is not a
 typo the model allowlist can catch.** Ground truth `~/.codex/models_cache.json`
 (read 2026-09-03): sol and terra offer `max` AND `ultra`; **luna offers `max`
-but NOT `ultra`**; **gpt-5.5 / 5.4 / 5.4-mini top out at `xhigh` and have NO
-`max`**. So `--model gpt-5.5 --effort max` and `--model gpt-5.6-luna --effort
-ultra` are both well-formed requests this account rejects. Each worker resolves
+but NOT `ultra`**; (`gpt-5.5`, `gpt-5.4` and `gpt-5.4-mini` are no longer admitted). So
+`--model gpt-5.6-luna --effort ultra` is a well-formed request this account
+rejects. Each worker resolves
 the ceiling from the chosen model and downgrades loudly rather than sending one.
 Re-read the cache before changing either table — do not carry these levels from
 memory.
 
-Hard-reject any `--model` not in `{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}` (`gpt-6.1-sol` admitted 2026-10-12 on 0.162.1, rc 0 `PONG`; ceiling `ultra` in the cache, workers use at most `max`; `gpt-5.5` retires from Codex 2026-10-14). `gpt-6-sol` and `gpt-6-luna` are in the cache but were NOT probed and are NOT admitted. The adversary lane has its own default (`gpt-6.1-sol @ xhigh`, set by the runner); the worker default stays `gpt-5.6-luna @ max`. Any `-codex`-suffixed or fabricated id returns HTTP 400 on this account. Treat ANY other id as **unverified-until-live-probed on this exact account via `/harness-update`**, regardless of what public docs claim. (Probe evidence + the 400 taxonomy live in the skill / DESIGN-RESEARCH.)
+Hard-reject any `--model` not in `{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna}` (`gpt-6.1-sol` admitted 2026-10-12 on 0.162.1, rc 0 `PONG`; ceiling `ultra` in the cache, workers use at most `max`; `gpt-5.5` was removed 2026-10-12 ahead of its 2026-10-14 Codex retirement, DESIGN-RESEARCH section 19). `gpt-6-sol` and `gpt-6-luna` are in the cache but were NOT probed and are NOT admitted. The adversary lane has its own default (`gpt-6.1-sol @ xhigh`, set by the runner); the worker default stays `gpt-5.6-luna @ max`. Any `-codex`-suffixed or fabricated id returns HTTP 400 on this account. Treat ANY other id as **unverified-until-live-probed on this exact account via `/harness-update`**, regardless of what public docs claim. (Probe evidence + the 400 taxonomy live in the skill / DESIGN-RESEARCH.)
 
 ## multi_agent and `--ignore-user-config`
 

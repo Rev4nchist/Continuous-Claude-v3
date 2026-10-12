@@ -18,5 +18,5 @@ Version pins below are informational mirrors — the DESIGN-RESEARCH docs are th
 
 | Harness | Design doc | Verified as of |
 |---|---|---|
-| Codex | `docs/codex-integration/DESIGN-RESEARCH.md` (§19 = latest) | CLI 0.162.1, 2026-10-12 (§19: gpt-6.1-sol admitted, implement lane frozen); worker default `gpt-5.6-luna @ max` (§15), adversary default `gpt-6.1-sol @ xhigh` |
+| Codex | `docs/codex-integration/DESIGN-RESEARCH.md` (§19 = latest) | CLI 0.162.1, 2026-10-12 (§19: gpt-6.1-sol admitted, gpt-5.5 removed, implement lane frozen); worker default `gpt-5.6-luna @ max` (§15), adversary default `gpt-6.1-sol @ xhigh` |
 | Grok | `docs/grok-integration/DESIGN-RESEARCH.md` | 0.2.93, 2026-07-11 |

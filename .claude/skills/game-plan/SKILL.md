@@ -87,9 +87,12 @@ Run the Codex runner yourself from the main session, in the background (no subag
 the completion notice and never poll in a loop:
 `node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <abs> --mode code --diff-file <abs milestone patch> --room <abs room path> --via skill:game-plan`
 (scope = the milestone patch, grade against CONTRACT R/D). The runner copies the receipt line
-into `findings/booth-codex-<run-id>.md`. A finding is `[Codex]` only when the receipt matches
-`^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `; with no ok receipt the booth did
-not run Codex, and you say so. Then apply the **thin-approve rule**: if Codex returns
+into `findings/booth-codex-<run-id>.md`. When the run ends, read line 1. If it matches
+`^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `, take the run id from `run=` and run
+`node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota). A finding is
+`[Codex]` only when verify prints `VERIFY ok` (exit 0). With no ok receipt, or when verify
+fails, the booth did not run Codex: say `Cross-model pass: NO CODEX REVIEW (<status or verify
+failed: <reason>>)`, show no findings as Codex's, and write no lift row. Then apply the **thin-approve rule**: if Codex returns
 approve with zero findings AND the run showed instability (storms/timeouts) or no visible
 engagement, add a supplemental `critic` (Claude) pass before trusting it — the dogfood's
 only HIGH was caught exactly this way. Findings land in `findings/booth-*.md`.

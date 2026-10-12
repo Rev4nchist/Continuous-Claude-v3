@@ -1002,8 +1002,11 @@ This is not a guard regression. The sandbox denies more, not less.
 `/codex --implement` and `--resume` are FROZEN until the fixture passes. The
 worker returns `CODEX IMPLEMENT FROZEN (2026-10-12): the workspace-write fixture
 fails on codex-cli 0.162.1. See docs/codex-integration/DESIGN-RESEARCH.md section
-19. ask and review still work.` Unfreeze: quit the Codex desktop app, re-run the
-fixture, and on a pass remove the freeze and add a dated note here.
+19. ask and review still work.` Unfreeze: stop the Windows service `CodexSandboxService.OpenAI.Codex`
+from an elevated shell (or find the process that holds the file), re-run the
+fixture, and on a pass remove the freeze and add a dated note here. (The first
+version of this step said to quit the desktop app. The re-test below shows that
+is not enough.)
 
 ### Ground truth `~/.codex/models_cache.json` after a 0.162.1 turn
 
@@ -1040,11 +1043,12 @@ Codex named both planted bugs (`invoice-access.js:12` inverted ownership check, 
 
 ### Allowlist after this pass
 
-`{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`.
+`{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`,
+then gpt-5.5 was removed, see below.
 Adversary default: `gpt-6.1-sol @ xhigh` (Dave, 2026-10-12). Worker default
 unchanged: `gpt-5.6-luna @ max` (section 15). Workers use at most `max`. OpenAI's
-model page says `gpt-5.5` retires from Codex on 2026-10-14: remove it at the next
-`/harness-update codex` run.
+model page says `gpt-5.5` retires from Codex on 2026-10-14. It was removed ahead
+of that date (see "gpt-5.5 removed" below).
 
 ### Registry walk
 
@@ -1055,3 +1059,34 @@ ceiling `case`, gate `case`, freeze reject), `rules-ondemand/codex-worker-safety
 `skills/cli-integration/SKILL.md`, `rules-ondemand/harness-update.md`. The
 registry row for `codex-adversary.md` now points at
 `.claude/scripts/codex/adversary.mjs` (the `MODELS` table).
+
+### gpt-5.5 removed (2026-10-12)
+
+Removed from the allowlist at Dave's request, ahead of OpenAI's 2026-10-14 Codex
+retirement. The live cache (`client_version 0.162.1`) already marks it `hide`. It
+was not re-probed. Allowlist after removal: `{gpt-6.1-sol, gpt-6-astra,
+gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna}`. `gpt-5.5` now gets the same hard
+reject as any unknown id. Edit points updated: `agents/codex-worker.md`,
+`rules-ondemand/codex-worker-safety.md`, `rules-ondemand/codex-adversarial.md`,
+`rules-ondemand/harness-update.md`, `skills/codex/SKILL.md`,
+`skills/cli-integration/SKILL.md`. The runner's `MODELS` table is edited by the
+runner change.
+
+### Write fixture re-test with the Codex desktop app closed (2026-10-12)
+
+Dave quit the Codex desktop app. The same workspace-write fixture on codex-cli
+0.162.1 FAILED again: `hello.txt` not created, rc 0, commit count 1,
+`thread_id 01a1327f-ea60-7e32-92a4-324ef5f60da5`.
+
+- The sandbox log at 23:43:40Z shows the same error: `runtime read/execute
+  validation failed: validate runtime read/execute access on
+  C:\Users\david.hayes\AppData\Local\OpenAI\Codex\runtimes\cua_node\b63ee7ee40c23b77\bin\node_repl.exe:
+  open ACL target for root-only update: The process cannot access the file because
+  it is being used by another process. (os error 32)`
+- The Windows service `CodexSandboxService.OpenAI.Codex` (process
+  `codex-windows-sandbox-service.exe`, start type Automatic) was still running
+  after the app closed.
+- Cause [Speculation]: that service holds the file.
+
+The freeze stays. Next test: stop that service from an elevated shell, then
+re-run the fixture. On a pass, remove the freeze and add a dated note here.

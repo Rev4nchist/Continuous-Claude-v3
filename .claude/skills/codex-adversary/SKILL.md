@@ -19,6 +19,7 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
 - A base ref (for example `main`): review `<ref>...HEAD`. Default `main`.
 - `--staged`: review the staged diff.
 - `--working-tree`: review uncommitted work (staged plus unstaged tracked changes). Untracked files are not reviewed. Line 2 of the output reports the count.
+- `--diff-file <abs path>`: review that diff file (passed to the runner as `--diff-file`, in place of `--base`).
 - A plan path: review that plan file (`--mode plan`).
 - `--focus <text>`: tell Codex where to attack. Write the text to a file and pass `--focus-file <abs>`. Never put free text in the command line.
 - `--model <id>` and `--effort <level>`: override the default.
@@ -31,9 +32,10 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
    `node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <abs dir> --mode code --base <ref> --via skill:codex-adversary`
    Plan review: `--mode plan --plan <abs path>`. Staged diff: `--staged` in place of `--base`. Uncommitted work: `--working-tree` in place of `--base`. Add `--focus-file <abs>` for a focus.
 3. Wait for the completion notice. A run takes up to 9 minutes. Never poll in a loop.
-4. Show Dave the receipt line and line 2 first, verbatim.
-5. Status `ok`: show the findings grouped by confidence. Tag each finding `[Codex]`. If the receipt shows `json=0`, Codex answered in prose: show the raw answer and say so.
-6. Any other status: report `NO CODEX REVIEW (<status>)` and the fix below. Never write a review yourself.
+4. Read line 1. If it matches the gate regex (see Label rule), take the run id from `run=` and run `node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>`. It spends no quota.
+5. Only when verify prints `VERIFY ok` (exit 0): show Dave the receipt line and line 2 first, verbatim. Then show the findings grouped by confidence. Tag each finding `[Codex]`. If the receipt shows `json=0`, Codex answered in prose: show the raw answer and say so.
+6. Verify fails: report `Cross-model pass: NO CODEX REVIEW (verify failed: <reason>)`. Show no findings as Codex's. Write no lift row.
+7. Any other status: report `NO CODEX REVIEW (<status>)` and the fix below. Never write a review yourself.
 
 | Status | Fix |
 |---|---|
@@ -58,4 +60,4 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
 
 A finding is `[Codex]` only when the receipt line matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `.
 Never tag a Claude finding `[Codex]`. Never substitute a Claude reviewer without saying so.
-When in doubt, run `adversary.mjs verify <run-id>`.
+Run `adversary.mjs verify <run-id>` before you tag any finding. No `VERIFY ok` means no `[Codex]` tag.

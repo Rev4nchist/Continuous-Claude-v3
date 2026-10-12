@@ -267,7 +267,7 @@ Bash(
 
 Before the call, write the focus text to the focus file (for example in the project's `.claude/cache/`): the claude_tigers one-line list, and a request for tigers, elephants, and wrongly dismissed paper_tigers. Never put free text in the command line.
 
-The runner prints a `CODEX-RECEIPT v1 ...` line first. Keep it. Tag findings `[Codex]` and use `sources: [.., codex]` ONLY when that line matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `. On any other status, report `Cross-model pass: NO CODEX REVIEW (<status>)` and the runner's fix. Do not write a Codex review yourself.
+The runner prints a `CODEX-RECEIPT v1 ...` line first. Keep it. When the run ends, read line 1. If it matches the gate regex below, take the run id from `run=` and run `node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota). Only when verify prints `VERIFY ok` (exit 0), show the receipt line and line 2, then the findings. If verify fails, report `Cross-model pass: NO CODEX REVIEW (verify failed: <reason>)`, show no findings as Codex's, and write no lift row. Tag findings `[Codex]` and use `sources: [.., codex]` ONLY when that line matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `. On any other status, report `Cross-model pass: NO CODEX REVIEW (<status>)` and the runner's fix. Do not write a Codex review yourself.
 
 **Grok path** (unchanged):
 

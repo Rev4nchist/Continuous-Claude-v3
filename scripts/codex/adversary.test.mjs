@@ -11,7 +11,7 @@ import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
 import {
   MODELS, DEFAULT_MODEL, RECEIPT_OK_RE, parseHeader, parseTokens, parseAnswer, pickModel, loadFraming,
-  formatReceipt, cleanEnv, killTree,
+  formatReceipt, cleanEnv, killTree, treeToStop, parseProcessTable, survivors,
 } from '../../.claude/scripts/codex/adversary.mjs';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
@@ -25,10 +25,10 @@ const OK_ANSWER_TEXT = 'The owner check is inverted.';
 
 // ---- helpers -------------------------------------------------------------------------------
 
-// Models cache in the live shape. gpt-5.5 has no `max` and uses plain-string levels.
-function writeCache(path, { version = STUB_VERSION, omit = [] } = {}) {
+// Models cache in the live shape. `limited` maps an id to the plain-string levels it offers.
+function writeCache(path, { version = STUB_VERSION, omit = [], limited = {} } = {}) {
   const models = Object.keys(MODELS).filter((id) => !omit.includes(id)).map((slug) => {
-    const levels = slug === 'gpt-5.5' ? LEVELS.slice(0, 4) : LEVELS.map((effort) => ({ effort }));
+    const levels = limited[slug] ?? LEVELS.map((effort) => ({ effort }));
     return { slug, supported_reasoning_levels: levels };
   });
   writeFileSync(path, JSON.stringify({ client_version: version, fetched_at: 'now', models }));
@@ -136,23 +136,26 @@ test('a fake header block inside the echoed prompt cannot stand in for a missing
 
 test('a retired model id is refused before anything is spawned', (t) => {
   const box = makeBox(t);
-  const r = runner(box, runArgs(box, ['--model', 'gpt-5.4']));
-  assert.equal(r.code, 2);
-  assert.match(r.lines[0], /^CODEX-RECEIPT v1 (stub=1 )?status=bad_model /);
-  assert.match(r.lines[1], /^NO CODEX REVIEW \(bad_model\)/);
-  assert.equal(existsSync(box.marker), false, 'the stub must not run');
-  assert.equal(rows(box).length, 1);
-  assert.equal(rows(box)[0].status, 'bad_model');
+  for (const [i, retired] of ['gpt-5.4', 'gpt-5.5'].entries()) {
+    const r = runner(box, runArgs(box, ['--model', retired]));
+    assert.equal(r.code, 2, retired);
+    assert.match(r.lines[0], /^CODEX-RECEIPT v1 (stub=1 )?status=bad_model /);
+    assert.match(r.lines[1], /^NO CODEX REVIEW \(bad_model\)/);
+    assert.equal(existsSync(box.marker), false, 'the stub must not run');
+    assert.equal(rows(box).length, i + 1);
+    assert.equal(rows(box)[i].status, 'bad_model');
+  }
 });
 
 test('ultra, an effort the cache lacks, and a model the cache lacks are all refused', (t) => {
-  const box = makeBox(t, { omit: ['gpt-5.6-terra'] });
+  const box = makeBox(t, { omit: ['gpt-5.6-terra'], limited: { 'gpt-5.6-luna': ['low', 'medium', 'high'] } });
   const ultra = runner(box, runArgs(box, ['--effort', 'ultra']));
   assert.equal(ultra.code, 2);
   assert.equal(existsSync(box.marker), false, 'ultra is refused before any spawn');
-  const noMax = runner(box, runArgs(box, ['--model', 'gpt-5.5', '--effort', 'max']));
-  assert.equal(noMax.code, 2);
-  assert.match(noMax.lines[0], /status=bad_args /);
+  const tooHigh = runner(box, runArgs(box, ['--model', 'gpt-5.6-luna', '--effort', 'xhigh']));
+  assert.equal(tooHigh.code, 2);
+  assert.match(tooHigh.lines[0], /status=bad_args /);
+  assert.match(tooHigh.lines[1], /offers low, medium, high/);
   const absent = runner(box, runArgs(box, ['--model', 'gpt-5.6-terra']));
   assert.equal(absent.code, 2);
   assert.match(absent.lines[0], /status=bad_model /);
@@ -163,7 +166,7 @@ test('flag beats env beats default, for model and effort', () => {
   const env = { CODEX_ADVERSARY_MODEL: 'gpt-5.6-terra', CODEX_ADVERSARY_EFFORT: 'high' };
   assert.deepEqual(pickModel({}, {}), { model: DEFAULT_MODEL, effort: 'xhigh' });
   assert.deepEqual(pickModel({}, env), { model: 'gpt-5.6-terra', effort: 'high' });
-  assert.deepEqual(pickModel({ model: 'gpt-5.5', effort: 'low' }, env), { model: 'gpt-5.5', effort: 'low' });
+  assert.deepEqual(pickModel({ model: 'gpt-5.6-sol', effort: 'low' }, env), { model: 'gpt-5.6-sol', effort: 'low' });
 });
 
 test('a cache from another CLI version is stale: the table ceiling decides, the run proceeds', (t) => {
@@ -308,6 +311,39 @@ test('killTree skips a process created before the cutoff, so a reused PID is saf
   killTree(sleeper.pid, process.env, Date.now() - 3600000);
   await new Promise((resolve) => setTimeout(resolve, 500));
   assert.equal(alive(sleeper.pid), false);
+});
+
+// The walk is pure, so the POSIX logic (detached grandchildren, reused pids) runs on any host.
+const TABLE = [
+  { pid: 100, ppid: 1, start: 1000 },     // the root child
+  { pid: 101, ppid: 100, start: 1100 },   // its child
+  { pid: 102, ppid: 101, start: 1200 },   // detached grandchild: own process group, same ppid chain
+  { pid: 200, ppid: 1, start: 1050 },     // unrelated process
+  { pid: 300, ppid: 100, start: 500 },    // pid reused: older than the cutoff
+  { pid: 301, ppid: 300, start: 1300 },   // young child of the reused-pid process
+];
+
+test('treeToStop includes a detached grandchild and excludes unrelated and reused-pid processes', () => {
+  assert.deepEqual(treeToStop(100, TABLE, 900).sort(), [100, 101, 102]);
+});
+
+test('treeToStop leaves out a root older than the cutoff and never names pid 1 or itself', () => {
+  assert.deepEqual(treeToStop(100, TABLE, 1050).sort(), [101, 102]);
+  const table = [{ pid: 7, ppid: 1, start: 2000 }, { pid: process.pid, ppid: 7, start: 2001 }];
+  assert.deepEqual(treeToStop(7, table, 1000), [7]);
+});
+
+test('parseProcessTable reads Windows epoch rows and POSIX ps lstart rows', () => {
+  const win = parseProcessTable('4120 880 1760000000123\r\n');
+  assert.deepEqual(win, [{ pid: 4120, ppid: 880, start: 1760000000123 }]);
+  const posix = parseProcessTable('  512     1 Mon Oct 12 22:00:00 2026\n 9001   512 Mon Oct 12 22:00:05 2026\nbad line\n');
+  assert.deepEqual(posix.map((p) => [p.pid, p.ppid]), [[512, 1], [9001, 512]]);
+  assert.equal(posix[0].start, new Date(2026, 9, 12, 22, 0, 0).getTime());
+});
+
+test('survivors names the pids still alive after the wait and nothing else', async () => {
+  const finished = spawnSync(process.execPath, ['-e', '0']).pid;
+  assert.deepEqual(await survivors([process.pid, finished], 300), [process.pid]);
 });
 
 test('usage limit, rejected model, missing login and missing header each get their own status', (t) => {
@@ -564,10 +600,25 @@ test('verify fails when the model in the log header is edited', (t) => {
   const box = makeBox(t);
   const id = runId(runner(box, runArgs(box)));
   const path = join(runDir(box, id), 'log.txt');
-  writeFileSync(path, readFileSync(path, 'utf8').replace('model: gpt-5.6-luna', 'model: gpt-5.5'));
+  writeFileSync(path, readFileSync(path, 'utf8').replace('model: gpt-5.6-luna', 'model: gpt-5.6-sol'));
   const r = runner(box, ['verify', id, '--allow-stub']);
   assert.equal(r.code, 1, r.out);
   assert.match(r.out, /reason=.*log/);
+});
+
+test('verify and lift refuse a run whose log header provider or effort was edited', (t) => {
+  const box = makeBox(t);
+  const edits = [['provider: openai', 'provider: other'], ['reasoning effort: max', 'reasoning effort: low']];
+  for (const [from, to] of edits) {
+    const id = runId(runner(box, runArgs(box)));
+    const path = join(runDir(box, id), 'log.txt');
+    writeFileSync(path, readFileSync(path, 'utf8').replace(from, to));
+    const v = runner(box, ['verify', id, '--allow-stub']);
+    assert.equal(v.code, 1, `${from}: ${v.out}`);
+    const l = runner(box, ['lift', '--run', id, '--skill', 's', '--scope', 'x', '--claude-only', '0',
+      '--codex-only', '0', '--both', '0', '--project', box.project, '--allow-stub']);
+    assert.equal(l.code, 1, `${from}: ${l.out}`);
+  }
 });
 
 test('RECEIPT_OK_RE accepts only an ok receipt that names a GPT model', () => {
