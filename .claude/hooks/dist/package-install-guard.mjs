@@ -18123,6 +18123,180 @@ var malicious_packages_default = {
       reason: "Malicious code in react-dropzone-v4 (npm) (GHSA-7945-qpg8-rjvv)",
       date: "2026-10-11",
       advisory: "https://github.com/advisories/GHSA-7945-qpg8-rjvv"
+    },
+    "liferay-workspace-scripts": {
+      blocked_all: true,
+      reason: "Malware in liferay-workspace-scripts (GHSA-rm73-xcfr-76qq)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-rm73-xcfr-76qq"
+    },
+    "@zaka13/zakasite": {
+      blocked_all: true,
+      reason: "Malware in @zaka13/zakasite (GHSA-j7rx-j64h-2fch)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-j7rx-j64h-2fch"
+    },
+    "@user-services/web-components": {
+      blocked_all: true,
+      reason: "Malware in @user-services/web-components (GHSA-f3g4-6hpx-9mcq)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-f3g4-6hpx-9mcq"
+    },
+    "@tesla-insurance/vinless-quote": {
+      blocked_all: true,
+      reason: "Malware in @tesla-insurance/vinless-quote (GHSA-6m9v-pw95-fc67)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-6m9v-pw95-fc67"
+    },
+    "css-nesting-transform": {
+      blocked_all: true,
+      reason: "Malicious code in css-nesting-transform (npm) (GHSA-3p4f-rhj3-crjv)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-3p4f-rhj3-crjv"
+    },
+    "@dransay/api": {
+      blocked_all: true,
+      reason: "Malicious code in @dransay/api (npm) (GHSA-wcrv-mq2h-33qj)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-wcrv-mq2h-33qj"
+    },
+    "ap3-foundations-ui": {
+      blocked_all: true,
+      reason: "Malicious code in ap3-foundations-ui (npm) (GHSA-4r79-x33v-862h)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-4r79-x33v-862h"
+    },
+    "@s4yhiitestpoc/r2-https-b": {
+      blocked_all: true,
+      reason: "Malicious code in @s4yhiitestpoc/r2-https-b (npm) (GHSA-whjq-6xm5-ggvh)",
+      date: "2026-10-12",
+      advisory: "https://github.com/advisories/GHSA-whjq-6xm5-ggvh"
+    },
+    "hridoy-ultimate": {
+      blocked_all: true,
+      reason: "Malicious code in hridoy-ultimate (npm) (GHSA-8chm-j6jp-f4h3)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-8chm-j6jp-f4h3"
+    },
+    "exodus-firestore-synchronize": {
+      blocked_all: true,
+      reason: "Malicious code in exodus-firestore-synchronize (npm) (GHSA-m497-v5g4-6c4q)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-m497-v5g4-6c4q"
+    },
+    "nested-lib": {
+      blocked_all: true,
+      reason: "Malicious code in nested-lib (npm) (GHSA-vhwg-xx2q-m28q)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-vhwg-xx2q-m28q"
+    },
+    "some-very-long-package-name": {
+      blocked_all: true,
+      reason: "Malicious code in some-very-long-package-name (npm) (GHSA-rf49-p2c5-fh8p)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-rf49-p2c5-fh8p"
+    },
+    "nitro-bundled-dep": {
+      blocked_all: true,
+      reason: "Malicious code in nitro-bundled-dep (npm) (GHSA-j6mc-gqc2-j75h)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-j6mc-gqc2-j75h"
+    },
+    "ksp-app": {
+      blocked_all: true,
+      reason: "Malicious code in ksp-app (npm) (GHSA-2f2f-3rf8-8fgc)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-2f2f-3rf8-8fgc"
+    },
+    "react-paginate-v5": {
+      blocked_all: true,
+      reason: "Malicious code in react-paginate-v5 (npm) (GHSA-fg5r-8pv8-mvc8)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-fg5r-8pv8-mvc8"
+    },
+    "another-very-long-name": {
+      blocked_all: true,
+      reason: "Malicious code in another-very-long-name (npm) (GHSA-9w99-w8fq-2x8w)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-9w99-w8fq-2x8w"
+    },
+    "deposit-limit-fe": {
+      blocked_all: true,
+      reason: "Malicious code in deposit-limit-fe (npm) (GHSA-pwj2-g23f-p5jg)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-pwj2-g23f-p5jg"
+    },
+    cloudflare_module: {
+      blocked_all: true,
+      reason: "Malicious code in cloudflare_module (npm) (GHSA-9p5g-9jf3-6739)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-9p5g-9jf3-6739"
+    },
+    "nitro-cjs-requirer": {
+      blocked_all: true,
+      reason: "Malicious code in nitro-cjs-requirer (npm) (GHSA-hp5p-fc9h-wfg5)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-hp5p-fc9h-wfg5"
+    },
+    "pay-methods-kmf": {
+      blocked_all: true,
+      reason: "Malicious code in pay-methods-kmf (npm) (GHSA-7644-gqv2-mhcv)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-7644-gqv2-mhcv"
+    },
+    "ksp-client-registry": {
+      blocked_all: true,
+      reason: "Malicious code in ksp-client-registry (npm) (GHSA-8mf7-79w4-6frj)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-8mf7-79w4-6frj"
+    },
+    "@s4yhiitestpoc/r2-https": {
+      blocked_all: true,
+      reason: "Malicious code in @s4yhiitestpoc/r2-https (npm) (GHSA-r3vq-5g6w-hwmm)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-r3vq-5g6w-hwmm"
+    },
+    "@s4yhiitestpoc/r3-https": {
+      blocked_all: true,
+      reason: "Malicious code in @s4yhiitestpoc/r3-https (npm) (GHSA-m7mp-74j7-2w45)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-m7mp-74j7-2w45"
+    },
+    "@s4yhiitestpoc/scan-https-d": {
+      blocked_all: true,
+      reason: "Malicious code in @s4yhiitestpoc/scan-https-d (npm) (GHSA-845p-jq49-x946)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-845p-jq49-x946"
+    },
+    "@coopeuch/core": {
+      blocked_all: true,
+      reason: "Malicious code in @coopeuch/core (npm) (GHSA-pxq4-wc36-p967)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-pxq4-wc36-p967"
+    },
+    "@coopeuch/common": {
+      blocked_all: true,
+      reason: "Malicious code in @coopeuch/common (npm) (GHSA-pcjv-x9w3-wc2g)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-pcjv-x9w3-wc2g"
+    },
+    "@coopeuch/components": {
+      blocked_all: true,
+      reason: "Malicious code in @coopeuch/components (npm) (GHSA-p3q5-2wv6-qx57)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-p3q5-2wv6-qx57"
+    },
+    "@coopeuch/config": {
+      blocked_all: true,
+      reason: "Malicious code in @coopeuch/config (npm) (GHSA-m89q-pg4c-ffx9)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-m89q-pg4c-ffx9"
+    },
+    "@coopeuch/button": {
+      blocked_all: true,
+      reason: "Malicious code in @coopeuch/button (npm) (GHSA-gwpw-pvv6-cxg3)",
+      date: "2026-10-11",
+      advisory: "https://github.com/advisories/GHSA-gwpw-pvv6-cxg3"
     }
   }
 };
