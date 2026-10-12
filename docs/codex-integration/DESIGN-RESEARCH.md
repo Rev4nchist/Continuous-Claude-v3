@@ -933,3 +933,160 @@ for a subprocess where gpt-5.6-luna answered the same shape of question from
 inline context. Consequence: an astra ask/review must carry its context INLINE
 in the prompt (which the reviewer already does) and must be told not to spawn
 tools; do not point astra at "read file X" tasks on Windows.
+
+
+## 19. Upgrade 0.153.4 -> 0.162.1; gpt-6.1-sol admitted; implement lane frozen (2026-10-12)
+
+Run of `/harness-update codex`. The upgrade admitted `gpt-6.1-sol`, the new
+adversary default. The workspace-write fixture failed on 0.162.1, so the write
+lane (`/codex --implement`, `--resume`) is frozen. Evidence file:
+`.claude/cache/e2e/2026-10-12-codex-harness-update-0.162.1.txt`.
+
+### Snapshot and rollback pin
+
+- Before: `codex-cli 0.153.4`, `codex login status` -> `Logged in using ChatGPT`.
+- Cache copied to `docs/codex-integration/snapshots/models_cache.0.153.4.json`.
+- Rollback: `npm i -g @openai/codex@0.153.4`.
+- After: `npm i -g @openai/codex@0.162.1` -> `codex-cli 0.162.1`; auth still
+  `Logged in using ChatGPT`.
+
+### Capability surface on 0.162.1 (`codex exec --help`)
+
+Present: `-o`, `--ephemeral`, `--ignore-user-config`, `--ignore-rules`, `--json`,
+`-s/--sandbox`, `--output-schema`, `--skip-git-repo-check`, `--enable/--disable`,
+`-C`, `-m`, `--approve-for-me`, `--dangerously-bypass-hook-trust`. New since
+0.153.4: `--worktree`, `--thread-source`, `--cyber-access-program`. No approval
+dial on `exec`. `codex features list`: `hooks stable true`, `multi_agent stable
+true`, so `--disable hooks` is a valid flag.
+
+### Two-probe model ids (effort low, read-only, ephemeral, `--disable multi_agent --disable hooks`)
+
+| id | result |
+|---|---|
+| gpt-6.1-sol (0.162.1) | rc 0, `PONG`, header `model: gpt-6.1-sol`, session `01a1323f-9dc5-70d0-b1e8-6103e0564974`, 140 tokens -- NEW, admitted |
+| gpt-6.1-sol-bogus | rc 1, `{"type":"error","status":400,"error":{"type":"invalid_request_error","message":"The 'gpt-6.1-sol-bogus' model is not supported when using Codex with a ChatGPT account."}}` |
+| gpt-5.6-luna | rc 0, `PONG` |
+| gpt-6.1-sol on 0.153.4 (A/B after a rollback) | rc 1, the SAME "not supported when using Codex with a ChatGPT account" 400 |
+
+**Taxonomy correction.** A version-gated id can return the "not supported" shape,
+not only "requires a newer version". Upgrade the CLI before you conclude an id is
+off the subscription.
+
+### Read-only guard probe
+
+Asked to create `guard-test.txt`, the model answered `Write blocked. Error: "patch
+rejected: writing is blocked by read-only sandbox; rejected by user approval
+settings"`. The file does not exist afterwards. The guard holds.
+
+### Workspace-write fixture: FAILED
+
+Throwaway repo, `gpt-5.6-luna`, effort low, `--json`. FAILED twice on 0.162.1:
+`hello.txt` not created, rc 0, commit count 1, and `thread.started` still carries
+a `thread_id`. The same fixture PASSED on 0.153.4 in the same hour (`hello.txt` =
+`HELLO`, commit count 1).
+
+- `~/.codex/.sandbox/sandbox.2026-10-12.log`: `setup refresh ... runtime
+  read/execute validation failed: validate runtime read/execute access on
+  C:\Users\david.hayes\AppData\Local\OpenAI\Codex\runtimes\cua_node\b63ee7ee40c23b77\bin\node_repl.exe:
+  open ACL target for root-only update: The process cannot access the file because
+  it is being used by another process. (os error 32)`
+- `setup_error.json`: `helper_unknown_error`, `setup refresh had errors`.
+- `codex doctor`: `sandbox  elevated Windows sandbox provisioning recorded a
+  structured failure`.
+- Cause [Speculation]: the Codex desktop app's sandbox service
+  (`CodexSandboxService.OpenAI.Codex`) holds that runtime file open.
+
+### Decision (Dave, 2026-10-12): stay on 0.162.1, freeze the write lane
+
+This is not a guard regression. The sandbox denies more, not less.
+`/codex --implement` and `--resume` are FROZEN until the fixture passes. The
+worker returns `CODEX IMPLEMENT FROZEN (2026-10-12): the workspace-write fixture
+fails on codex-cli 0.162.1. See docs/codex-integration/DESIGN-RESEARCH.md section
+19. ask and review still work.` Unfreeze: stop the Windows service `CodexSandboxService.OpenAI.Codex`
+from an elevated shell (or find the process that holds the file), re-run the
+fixture, and on a pass remove the freeze and add a dated note here. (The first
+version of this step said to quit the desktop app. The re-test below shows that
+is not enough.)
+
+### Ground truth `~/.codex/models_cache.json` after a 0.162.1 turn
+
+`client_version 0.162.1`, fetched `2026-10-12T22:34:49Z`, 10 ids:
+
+| id | picker | efforts | default | description |
+|---|---|---|---|---|
+| gpt-6.1-sol | list | low medium high xhigh max ultra | medium | Latest workhorse model for coding and everyday work. |
+| gpt-6-astra | list | low medium high xhigh max ultra | low | n/r |
+| gpt-6-sol | list | low medium high xhigh max ultra | n/r | Previous generation workhorse model. |
+| gpt-6-luna | list | low medium high xhigh max | n/r | Fast and affordable model for easier tasks. |
+| gpt-reserve | hide | n/r | n/r | n/r |
+| gpt-5.6-sol | list | low medium high xhigh max ultra | n/r | n/r |
+| gpt-5.6-terra | list | low medium high xhigh max ultra | n/r | n/r |
+| gpt-5.6-luna | list | low medium high xhigh max | n/r | n/r |
+| gpt-5.5 | hide | low medium high xhigh | n/r | n/r |
+| codex-auto-review | hide | n/r | n/r | n/r |
+
+`n/r` = not recorded in this pass. `gpt-6-sol` and `gpt-6-luna` were NOT probed and are NOT admitted.
+
+**Caveat.** After an upgrade or a rollback the cache keeps the old
+`client_version` and id list until the next real turn. A cache from another CLI
+version is stale. The runner (`.claude/scripts/codex/adversary.mjs`) compares the cache's
+`client_version` with `codex --version` and ignores a stale cache. The snapshot
+`snapshots/models_cache.0.162.1.json` was taken after the first runner turn
+(`client_version 0.162.1`, 10 ids).
+
+### First runner turn (2026-10-12)
+
+`adversary.mjs run --mode code --diff-file scripts/codex/fixtures/planted.diff`, default model:
+`CODEX-RECEIPT v1 status=ok run=20261012T230017Z-1308 model=gpt-6.1-sol requested=gpt-6.1-sol effort=xhigh provider=openai cli=0.162.1 session=01a13258-6b7c-7540-a2e1-77bbe0f3069d exit=0 final_bytes=799 sha256=04beebf8bb945bd3 tokens=34691 duration_s=18.4 via=manual`.
+Codex named both planted bugs (`invoice-access.js:12` inverted ownership check, `:17` slice off by one).
+`verify 20261012T230017Z-1308` -> `VERIFY ok`. Evidence: `.claude/cache/e2e/2026-10-12-codex-adversary-live1.txt`.
+
+### Allowlist after this pass
+
+`{gpt-6.1-sol, gpt-6-astra, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna, gpt-5.5}`,
+then gpt-5.5 was removed, see below.
+Adversary default: `gpt-6.1-sol @ xhigh` (Dave, 2026-10-12). Worker default
+unchanged: `gpt-5.6-luna @ max` (section 15). Workers use at most `max`. OpenAI's
+model page says `gpt-5.5` retires from Codex on 2026-10-14. It was removed ahead
+of that date (see "gpt-5.5 removed" below).
+
+### Registry walk
+
+Updated: `agents/codex-worker.md` (allowlist prose, `## Model` and effort notes,
+ceiling `case`, gate `case`, freeze reject), `rules-ondemand/codex-worker-safety.md`
+(freeze section, matrix rows, allowlist, version drift),
+`rules-ondemand/codex-adversarial.md`, `skills/codex/SKILL.md`,
+`skills/cli-integration/SKILL.md`, `rules-ondemand/harness-update.md`. The
+registry row for `codex-adversary.md` now points at
+`.claude/scripts/codex/adversary.mjs` (the `MODELS` table).
+
+### gpt-5.5 removed (2026-10-12)
+
+Removed from the allowlist at Dave's request, ahead of OpenAI's 2026-10-14 Codex
+retirement. The live cache (`client_version 0.162.1`) already marks it `hide`. It
+was not re-probed. Allowlist after removal: `{gpt-6.1-sol, gpt-6-astra,
+gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna}`. `gpt-5.5` now gets the same hard
+reject as any unknown id. Edit points updated: `agents/codex-worker.md`,
+`rules-ondemand/codex-worker-safety.md`, `rules-ondemand/codex-adversarial.md`,
+`rules-ondemand/harness-update.md`, `skills/codex/SKILL.md`,
+`skills/cli-integration/SKILL.md`. The runner's `MODELS` table is edited by the
+runner change.
+
+### Write fixture re-test with the Codex desktop app closed (2026-10-12)
+
+Dave quit the Codex desktop app. The same workspace-write fixture on codex-cli
+0.162.1 FAILED again: `hello.txt` not created, rc 0, commit count 1,
+`thread_id 01a1327f-ea60-7e32-92a4-324ef5f60da5`.
+
+- The sandbox log at 23:43:40Z shows the same error: `runtime read/execute
+  validation failed: validate runtime read/execute access on
+  C:\Users\david.hayes\AppData\Local\OpenAI\Codex\runtimes\cua_node\b63ee7ee40c23b77\bin\node_repl.exe:
+  open ACL target for root-only update: The process cannot access the file because
+  it is being used by another process. (os error 32)`
+- The Windows service `CodexSandboxService.OpenAI.Codex` (process
+  `codex-windows-sandbox-service.exe`, start type Automatic) was still running
+  after the app closed.
+- Cause [Speculation]: that service holds the file.
+
+The freeze stays. Next test: stop that service from an elevated shell, then
+re-run the fixture. On a pass, remove the freeze and add a dated note here.

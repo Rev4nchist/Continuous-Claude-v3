@@ -22,6 +22,7 @@ import { readFileSync, existsSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, dirname } from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { MODELS } from '../../.claude/scripts/codex/adversary.mjs';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const WORKER = join(REPO, '.claude', 'agents', 'codex-worker.md');
@@ -37,11 +38,10 @@ if (!m) {
 const CANON = m[0].replace(/\\/g, '');
 console.log(`canonical explorer pin (from the executable guard): ${CANON}`);
 
-// The verified model allowlist (DESIGN-RESEARCH section 13). A pin value must be
-// one of these; anything else on a pin line is narrative, not a pin.
-const ALLOWLIST = new Set([
-  'gpt-5.6-sol', 'gpt-5.6-terra', 'gpt-5.6-luna', 'gpt-5.5', 'gpt-5.4', 'gpt-5.4-mini',
-]);
+// The verified model allowlist: the runner's MODELS table is the single source
+// (DESIGN-RESEARCH sections 13 and 19). A pin value must be one of these; anything
+// else on a pin line is narrative, not a pin.
+const ALLOWLIST = new Set(Object.keys(MODELS));
 if (!ALLOWLIST.has(CANON)) {
   console.error(`FAIL: the guard's own pin '${CANON}' is not in the verified allowlist`);
   process.exit(1);

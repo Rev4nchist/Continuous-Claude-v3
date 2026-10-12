@@ -69,7 +69,7 @@ For each candidate id (from the refreshed models_cache, or `--model` argument):
 2. **Negative probe** — a fabricated id (e.g. `<id>-bogus`), expect the account's documented rejection shape.
 3. Read the ground-truth models_cache and reconcile.
 
-Codex 400 taxonomy: "requires a newer version of Codex" = CLI too old (go to Step 2); "not supported when using Codex with a ChatGPT account" = id not on this subscription.
+Codex 400 taxonomy: "requires a newer version of Codex" = CLI too old (go to Step 2); "not supported when using Codex with a ChatGPT account" = id not on this subscription, OR the CLI is too old. **Correction (DESIGN-RESEARCH section 19):** a version-gated id can return the "not supported" shape too (`gpt-6.1-sol` on 0.153.4 did). Upgrade the CLI before you conclude an id is off the subscription. A models cache from another CLI version is stale until the next real turn.
 
 ### Step 6 — Walk the edit-point registry
 Update every registered location with the verified allowlist + new version stamps. **These tables ARE the registry — keep them current when files move or a new harness is added.**
@@ -80,7 +80,8 @@ Update every registered location with the verified allowlist + new version stamp
 | `.claude/agents/codex-worker.md` | the `case` gate (Step 2b) — THE mechanical enforcement; prose in constraint #3, `## Model` input contract, effort note |
 | `.claude/rules-ondemand/codex-worker-safety.md` | "Model allowlist" section + Grounding line + "Version drift" section |
 | `.claude/skills/codex/SKILL.md` | user-facing `--model`/`--effort` flags line |
-| `.claude/agents/codex-adversary.md` | `CODEX_ADVERSARY_MODEL` validation `case` + comment |
+| `.claude/scripts/codex/adversary.mjs` | the `MODELS` table and `DEFAULT_MODEL` / `DEFAULT_EFFORT`: the single allowlist for review |
+| `.claude/skills/codex-adversary/SKILL.md` | the model table (default, security, re-check, fallbacks) |
 | `.claude/rules-ondemand/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
 | `.claude/skills/cli-integration/SKILL.md` | Codex inventory row |
 | `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Codex row) |

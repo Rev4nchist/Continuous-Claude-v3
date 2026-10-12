@@ -20,13 +20,26 @@ ORCHESTRATE              DOCS                     DEPLOY
 ├── maestro              └── scribe               └── deployer
 ```
 
-**codex-adversary** is a cross-model reviewer: it shells out to OpenAI Codex
-(`codex exec`, default `gpt-5.5 @ xhigh`) so a *different* training family
-challenges Claude's work. It runs in parallel during `/review` Phase 1
-(alongside `critic` and `plan-reviewer`), is the adversarial step in
-`/premortem`, and is auto-offered by the `plan-exit-premortem-prompt` hook
-after `ExitPlanMode`. Its findings are prefixed `[Codex]` in synthesis so
-cross-model agreement is visible at a glance.
+**Cross-model review** runs through one Codex runner script,
+`.claude/scripts/codex/adversary.mjs` (default `gpt-6.1-sol @ xhigh`), so a
+*different* training family challenges Claude's work. The runner checks login,
+builds the prompt, bounds the run, and prints a `CODEX-RECEIPT v1` line that
+names the reviewing GPT model. The main session calls the runner directly
+(`/codex-adversary`, `/review`, `/premortem`), in the background, in parallel
+with `critic` and `plan-reviewer`. **codex-adversary** is only an envelope for
+Workflow `agent()` stages: it runs the runner once and returns its output
+unchanged. It never reviews and never types `codex exec`. The
+`plan-exit-premortem-prompt` hook auto-offers `/premortem` after
+`ExitPlanMode`. A finding is prefixed `[Codex]` in synthesis only when the
+receipt line shows `status=ok` and a `gpt-*` model. A stub run or an overridden
+binary (`stub=1`, `bin=env`) never passes that gate.
+
+Every run appends one row to `~/.claude/logs/codex-adversary.jsonl`. Keys:
+`ts, run, status, via, mode, scope, project, model_requested, model_observed,
+effort, effort_requested, provider, cli, bin, session_id, exit_code,
+final_bytes, final_sha256, json, tokens, duration_s, prompt_bytes, framing,
+cache, usage_limited, stub, untracked_not_reviewed, cleanup, reason`. Field
+meanings: `.claude/logs/codex-lift.README.md`.
 
 ## Agent Selection Guide
 
@@ -45,7 +58,7 @@ cross-model agreement is visible at a glance.
 | Debug issue | debug-agent | opus | All tools |
 | Root cause | sleuth | opus | Grep, Glob, Bash |
 | Code review | critic | opus | Read, Grep |
-| Cross-model review | codex-adversary | sonnet | Read, Grep, Glob, Bash (invokes `codex` CLI) |
+| Cross-model review (Workflow stage) | codex-adversary | sonnet | Bash (runs `adversary.mjs`, returns a CODEX-RECEIPT line) |
 | Validate a plan | plan-reviewer | sonnet | Read, Grep, Glob |
 | Security audit | aegis | opus | Read, Bash, Grep |
 | Multi-step orchestration | maestro | opus | Read, Bash, Task, Skill |
@@ -143,8 +156,8 @@ Agents add latency. Use directly when task is simple.
 | /fix | sleuth → spark or kraken → arbiter |
 | /build | architect → kraken → critic |
 | /explore | scout (with depth control) |
-| /review | critic + plan-reviewer + codex-adversary (parallel Phase 1) |
-| /premortem | inline failure-mode analysis + codex-adversary cross-model pass |
+| /review | critic + plan-reviewer + Codex runner (parallel Phase 1, background) |
+| /premortem | inline failure-mode analysis + Codex runner cross-model pass |
 | /maestro | Coordinates any specialists |
 
 ## Deep Dive

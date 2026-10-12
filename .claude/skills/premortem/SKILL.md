@@ -248,17 +248,33 @@ premortem:
 
 Same training family = same blind spots. After Claude's verified tigers/elephants/paper_tigers list is built, run an adversarial pass through one or more different-family reviewers to find risks Claude missed.
 
-**Reviewer selection.** The post-ExitPlanMode hook (or the user directly) picks: **Codex** (default), **Grok**, **Both**, or **Skip**. `--no-codex` skips the Codex pass (back-compat); `--grok` uses Grok instead; `--reviewers both` runs both. When Both is selected, spawn the two adversary Tasks **in parallel** (single message, two tool calls).
+**Reviewer selection.** The post-ExitPlanMode hook (or the user directly) picks: **Codex** (default), **Grok**, **Both**, or **Skip**. `--no-codex` skips the Codex pass (back-compat); `--grok` uses Grok instead; `--reviewers both` runs both. When Both is selected, start the two passes **in parallel** (single message, two tool calls): the Codex runner in the background, and the Grok adversary Task.
+
+**Plan mode:** do NOT run Codex. Report `Cross-model pass: deferred (plan mode)`. The ExitPlanMode hook offers `/premortem` afterwards, and the Codex pass runs then.
 
 **Skip if** the user chose Skip OR the target is a trivial doc-only change OR the relevant subscription quota is exhausted this session. See `.claude/rules-ondemand/codex-adversarial.md` and `.claude/rules-ondemand/grok-worker-safety.md`.
 
-**Reviewer agent type unavailable?** Agents merged mid-session don't register until the next session start (hit 2026-07-11: `grok-adversary` absent from the Agent registry hours after merge). Do NOT silently downgrade to a Claude-family reviewer — that forfeits the cross-model value the user chose. Fallback: execute the adversary's own contract inline — read its `.claude/agents/<name>.md`, run the documented CLI invocation yourself (same read-only tool guard, same identity pin, same output paths), and parse findings from its clean-output file.
+**Reviewer unavailable?** Agents merged mid-session don't register until the next session start (hit 2026-07-11: `grok-adversary` absent from the Agent registry hours after merge). Do NOT silently downgrade to a Claude-family reviewer — that forfeits the cross-model value the user chose. Fallback for Grok: execute the adversary's own contract inline — read `.claude/agents/grok-adversary.md`, run the documented CLI invocation yourself (same read-only tool guard, same identity pin, same output paths), and parse findings from its clean-output file. Fallback for Codex: run the runner yourself (the Codex path below needs no agent registration).
+
+**Codex path.** No subagent. The main session runs the runner in the background. A run takes up to 9 minutes. Wait for the completion notice and never poll in a loop.
 
 ```
-# Spawn the selected adversary agent(s) in plan mode pointed at the plan file.
-# subagent_type: "codex-adversary" and/or "grok-adversary" — same prompt contract for both.
+Bash(
+  command='node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <ABSOLUTE project path> --mode plan --plan <ABSOLUTE path to the plan file> --focus-file <ABSOLUTE path to the focus file> --via skill:premortem',
+  run_in_background=true
+)
+```
+
+Before the call, write the focus text to the focus file (for example in the project's `.claude/cache/`): the claude_tigers one-line list, and a request for tigers, elephants, and wrongly dismissed paper_tigers. Never put free text in the command line.
+
+The runner prints a `CODEX-RECEIPT v1 ...` line first. Keep it. When the run ends, read line 1. If it matches the gate regex below, take the run id from `run=` and run `node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota). Only when verify prints `VERIFY ok` (exit 0), show the receipt line and line 2, then the findings. If verify fails, report `Cross-model pass: NO CODEX REVIEW (verify failed: <reason>)`, show no findings as Codex's, and write no lift row. Tag findings `[Codex]` and use `sources: [.., codex]` ONLY when that line matches `^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `. On any other status, report `Cross-model pass: NO CODEX REVIEW (<status>)` and the runner's fix. Do not write a Codex review yourself.
+
+**Grok path** (unchanged):
+
+```
+# Spawn the Grok adversary agent in plan mode pointed at the plan file.
 Task(
-  subagent_type="codex-adversary",   # and/or "grok-adversary" (parallel when Both)
+  subagent_type="grok-adversary",    # parallel with the Codex runner when Both
   prompt="""
   ## Mode
   plan
@@ -365,29 +381,23 @@ Append to the plan file:
 ### Pre-Mortem Run:
 - Date: {timestamp}
 - Mode: {quick|deep}
-- Cross-model pass: {codex|grok|both|skipped}
+- Cross-model pass: {the Codex receipt line (verbatim) | grok | both | skipped | deferred (plan mode) | NO CODEX REVIEW (<status>)}
 - Tigers: {total} (claude-only: {N}, codex-only: {N}, grok-only: {N}, agreed: {N}) | Elephants: {count}
 ```
 
 ### Step 6: Telemetry
 
-After the user response is handled, append one row **per cross-model reviewer that ran** — Codex rows to `.claude/logs/codex-lift.jsonl`, Grok rows to `.claude/logs/grok-lift.jsonl` (same schema, `model` field distinguishes):
+After the user response is handled, append one row **per cross-model reviewer that ran**. Codex rows go through the runner's `lift` subcommand (only for an `ok` receipt). Grok rows go to `.claude/logs/grok-lift.jsonl`:
 
 ```bash
-mkdir -p "$CLAUDE_PROJECT_DIR/.claude/logs"
-jq -nc \
-  --arg ts "$(date -u +%Y-%m-%dT%H:%M:%SZ)" \
-  --arg skill "premortem" \
-  --arg scope "[plan path or scope]" \
-  --arg model "codex" \
-  --argjson claude_only <N> \
-  --argjson codex_only <N> \
-  --argjson both <N> \
-  --arg via "direct" \
-  '{ts:$ts, skill:$skill, scope:$scope, model:$model, claude_only:$claude_only, codex_only:$codex_only, both:$both, via:$via}' \
-  >> "$CLAUDE_PROJECT_DIR/.claude/logs/codex-lift.jsonl"
-# Grok pass ran too? Same shape with --arg model "grok", counts = grok_only in the codex_only
-# position (field name kept for schema back-compat; `model` disambiguates), appended to grok-lift.jsonl.
+node "$HOME/.claude/scripts/codex/adversary.mjs" lift \
+  --run <run-id from the receipt> \
+  --skill premortem \
+  --scope "[plan path or scope]" \
+  --claude-only <N> --codex-only <N> --both <N> \
+  --project <ABSOLUTE project path>
+# Grok pass ran too? Append a row to .claude/logs/grok-lift.jsonl with jq: fields ts, skill, scope,
+# model "grok", claude_only, codex_only (= grok_only; field name kept for schema back-compat), both, via "direct".
 ```
 
 The reviewer-only count is that model's cross-model lift — the value it added beyond what Claude found. Track over time per model to validate each pass is worth its quota.

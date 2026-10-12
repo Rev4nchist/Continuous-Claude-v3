@@ -12,9 +12,27 @@ Tracks the value Codex actually adds beyond what Claude finds, per `/review` and
   "claude_only": 3,                  // findings only Claude/critic flagged
   "codex_only": 2,                   // findings only Codex flagged (THE LIFT)
   "both": 4,                         // findings BOTH flagged (high-confidence)
-  "via": "direct" | "envoy"          // transport — direct codex-adversary or via Envoy room
+  "via": "runner" | "direct" | "envoy", // transport — "runner" = written by `adversary.mjs lift` (current); "direct"/"envoy" = older rows
+  "reviewer_model": "gpt-6.1-sol",   // runner rows: the model the receipt observed
+  "reviewer_effort": "xhigh",        // runner rows: the effort the run used
+  "codex_run": "<run-id>",           // runner rows: joins to a row in ~/.claude/logs/codex-adversary.jsonl
+  "codex_status": "ok"               // runner rows: receipt status (lift rows are written only for "ok")
 }
 ```
+
+Write rows with `node "$HOME/.claude/scripts/codex/adversary.mjs" lift --run <run-id> --skill <name> --scope <text> --claude-only <n> --codex-only <n> --both <n> --project <abs dir>`. Do not hand-write a row with a hardcoded `via`.
+
+## Per-run receipts
+
+Every runner call (not only reviews that reach synthesis) appends one row to `~/.claude/logs/codex-adversary.jsonl` and writes `~/.claude/cache/codex-adversary/runs/<run>/`. Keys:
+
+`ts, run, status, via, mode, scope, project, model_requested, model_observed, effort, effort_requested, provider, cli, bin, session_id, exit_code, final_bytes, final_sha256, json, tokens, duration_s, prompt_bytes, framing, cache, usage_limited, stub, untracked_not_reviewed, cleanup, reason`
+
+`bin` shows which Codex binary ran (`bin=env` means an overridden binary). `json` is 1 when Codex answered in JSON, 0 when it answered in prose. `untracked_not_reviewed` counts untracked files that a `--working-tree` run did not review. `cleanup` records how the runner stopped its own process tree.
+
+`node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` checks the stored receipt and the saved log of one run. A lift row joins to its receipt row on `codex_run` = `run`. This file lives under `~/.claude/logs/`, outside any repo, so it is never committed.
+
+## Meaning of the counts
 
 For `/review`, "Claude" means the combined critic + plan-reviewer outputs. For `/premortem`, "Claude" means the inline 3-category risk framework output.
 
@@ -65,6 +83,6 @@ If after 20+ runs `avg(codex_only) < 0.2`, consider:
 - Disabling the default Codex pass and making it opt-in (`--codex` flag instead of `--no-codex`)
 - Investigating whether Codex output is being filtered out incorrectly during synthesis
 
-## Not gitignored
+## Git status
 
-This file IS committed (small, valuable signal over time). Don't add it to `.gitignore`.
+`codex-lift.jsonl` is NOT committed. `.gitignore` line 35 (`.claude/logs/*.jsonl`) ignores it, as it ignores every jsonl log in this directory. This README is tracked; the data is local to each machine. (An earlier version of this README claimed the file was committed. That was wrong.)

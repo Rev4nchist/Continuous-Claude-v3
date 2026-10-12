@@ -71,7 +71,8 @@ explicitly approved build order; record the basis verbatim in `status.json.gate1
    standing human approval; the worker still worktree-isolates, telemetries, and returns a
    review-gated patch). Failover: on Grok death/quota, re-dispatch the SAME scope file to
    `codex-worker` (`role: builder-failover`) and record it in `status.json.failovers` —
-   that milestone's booth primary becomes Claude critics.
+   that milestone's booth primary becomes Claude critics. `codex-worker` implement is FROZEN
+   (DESIGN-RESEARCH section 19): until it lifts, the failover builder is a Claude `kraken`.
 3. **Hub smoke** — run the scope file's acceptance commands YOURSELF (in the worktree or
    post-apply), record exit codes in `milestones/M<N>-result.md`. Builder narrative ≠
    evidence. Telemetry row present = part of completion evidence.
@@ -80,8 +81,18 @@ explicitly approved build order; record the basis verbatim in `status.json.gate1
 
 ## Step 7 — Review booth
 
-Dispatch `codex-adversary` (mode=code, `role: reviewer`, scope = the milestone patch,
-grade against CONTRACT R/D). Then apply the **thin-approve rule**: if Codex returns
+Plan mode: do not run Codex. Say the cross-model pass is deferred (plan mode).
+
+Run the Codex runner yourself from the main session, in the background (no subagent). Wait for
+the completion notice and never poll in a loop:
+`node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <abs> --mode code --diff-file <abs milestone patch> --room <abs room path> --via skill:game-plan`
+(scope = the milestone patch, grade against CONTRACT R/D). The runner copies the receipt line
+into `findings/booth-codex-<run-id>.md`. When the run ends, read line 1. If it matches
+`^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `, take the run id from `run=` and run
+`node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota). A finding is
+`[Codex]` only when verify prints `VERIFY ok` (exit 0). With no ok receipt, or when verify
+fails, the booth did not run Codex: say `Cross-model pass: NO CODEX REVIEW (<status or verify
+failed: <reason>>)`, show no findings as Codex's, and write no lift row. Then apply the **thin-approve rule**: if Codex returns
 approve with zero findings AND the run showed instability (storms/timeouts) or no visible
 engagement, add a supplemental `critic` (Claude) pass before trusting it — the dogfood's
 only HIGH was caught exactly this way. Findings land in `findings/booth-*.md`.
@@ -89,8 +100,10 @@ only HIGH was caught exactly this way. Findings land in `findings/booth-*.md`.
 ## Step 8 — Fix loop (bounded)
 
 Findings → `fix_round += 1`; when it would exceed `fix_rounds_max`, set phase `blocked`
-and hand the human the decision — never loop past the cap. Dispatch `codex-worker`
-(mode=implement, `role: fixer`, the findings file as scope; fixes only, no new files).
+and hand the human the decision — never loop past the cap. `codex-worker` implement is
+FROZEN (DESIGN-RESEARCH section 19), so dispatch a Claude `kraken` as the fixer (the findings
+file as scope; fixes only, no new files). When the freeze lifts, `codex-worker`
+(mode=implement, `role: fixer`) is the fixer again.
 Hub re-verifies with the SAME smokes plus a targeted probe per HIGH finding (e.g. the
 canary-secret probe pattern), applies, commits. A fixer never grades its own fix — hub
 verification is the grade.
@@ -113,8 +126,8 @@ self-approve; never auto-merge. Stamp `gate2_approved_at`, phase → `done`.
 - **Grok dispatches: ≥300s external timeout**, and one cold start ran ~11–12 min — on an
   agent timeout, poll for its output file before re-invoking (a duplicate run wastes quota).
 - **Codex prompts stay COMPACT** — rich checklist prompts fork-stormed under
-  `--sandbox read-only` on Windows (DESIGN-RESEARCH §14). After any Codex timeout, check
-  `tasklist | findstr codex` and kill orphaned trees.
+  `--sandbox read-only` on Windows (DESIGN-RESEARCH §14). The runner stops its own process
+  tree. Never stop Codex by name: that can stop a parallel run or the Codex desktop app.
 - **Serialize commits** — one milestone's apply+commit completes before the next wave
   (`.git/index.lock` races are real).
 - Room state is the ONLY session state: any fresh session continues via `/workroom resume`.
