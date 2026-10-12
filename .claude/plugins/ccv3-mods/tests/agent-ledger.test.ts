@@ -23,6 +23,9 @@ const PANE_PROPS = {
   view: {},
 }
 
+// Windows reports backslash paths with a drive letter; compare forward-slash paths without the drive.
+const posix = (p: string) => p.replace(/\\/g, '/').replace(/^[A-Za-z]:(?=\/)/, '')
+
 const SPARK_MD = '---\nname: spark\nmodel: sonnet\neffort: high\n---\nbody\n'
 
 type Beneath = { spawnModel: string; agentId: string; deny?: string; usage: { input_tokens: number; output_tokens: number } | null; usageModel: string }
@@ -41,10 +44,10 @@ const world = (on: On, env: Record<string, string> = {}) => {
   on('settings.read', () => ({ value: {} }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
-  on('fs.exists', (_$, e) => ({ value: e.path === '/repo/.claude/agents/spark.md' }))
+  on('fs.exists', (_$, e) => ({ value: posix(e.path) === '/repo/.claude/agents/spark.md' }))
   on('fs.read', () => ({ value: SPARK_MD }))
   on('fs.write', (_$, e) => {
-    writes[e.path] = e.text
+    writes[posix(e.path)] = e.text
     return { value: undefined }
   })
   on('agent.spawn', () => (beneath.deny ? { deny: beneath.deny } : { model: beneath.spawnModel, agentId: beneath.agentId }))

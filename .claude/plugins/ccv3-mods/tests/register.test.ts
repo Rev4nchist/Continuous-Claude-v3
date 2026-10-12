@@ -26,7 +26,8 @@ const world = (on: On, refuse: string[], env: Record<string, string> = {}) => {
   on('settings.read', () => ({ value: {} }))
   on('fs.exists', () => ({ value: false }))
   on('fs.write', (_$, e) => {
-    seen.writes.push({ path: e.path, text: e.text })
+    // Windows reports backslash paths; record forward slashes so the suffix checks hold on every OS.
+    seen.writes.push({ path: e.path.replace(/\\/g, '/'), text: e.text })
     return { value: undefined }
   })
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
