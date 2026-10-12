@@ -1,4 +1,5 @@
 {
+  "elementOrder": ["project", "addedDirs", "promptCache", "memory", "environment", "tools", "skills", "mcp", "agents", "todos", "sessionTime"],
   "display": {
     "showTools": true,
     "showAgents": true,
