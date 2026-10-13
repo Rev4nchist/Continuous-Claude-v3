@@ -2,7 +2,7 @@ import { describe, expect, mock, test } from 'claude-code/testing'
 import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
-import { EMPTY_CACHE, MISS_CAP, addRequest, cacheLabel, cacheReport, cacheView, isSubscription, ttlMinutes } from '../hooks/hud/cache'
+import { EMPTY_CACHE, MISS_CAP, addRequest, afterCompaction, cacheLabel, cacheReport, cacheView, isSubscription, ttlMinutes } from '../hooks/hud/cache'
 import type { CacheRequest } from '../hooks/hud/cache'
 import type { CacheState } from '../types'
 
@@ -430,6 +430,19 @@ describe('cache model', () => {
     const after = addRequest({ ...big, compacted: true }, request({ read: 36_000, write: 97_800, at: 120_000 }))
     expect(after.misses.at(-1)).toMatchObject({ cause: 'compaction', rewritten: 97_800 })
     expect(after.compacted).toBe(false)
+  })
+
+  test('K8 a partly cached prompt that compacts and is served whole is no miss', () => {
+    // 100k prompt with 40k cached compacts to 90k; the next request reads the 40k and writes 50k of new text.
+    const partly = addRequest(EMPTY_CACHE, request({ input: 60_000, read: 0, write: 40_000, at: 60_000 }))
+    const compacted = afterCompaction(partly, 90_000)
+    expect(compacted).toMatchObject({ compacted: true, contextTokens: 90_000, cachedTokens: 40_000 })
+    const next = addRequest(compacted, request({ input: 0, read: 40_000, write: 50_000, at: 120_000 }))
+    expect(next.missCount).toBe(1) // the session start alone
+    // A cache that held more than the new prompt holds no more than the new prompt.
+    expect(afterCompaction(warm(), 30_000).cachedTokens).toBe(30_000)
+    expect(afterCompaction(warm(), undefined)).toMatchObject({ compacted: true, cachedTokens: 100_000 })
+    expect(afterCompaction(EMPTY_CACHE, 30_000)).toBe(EMPTY_CACHE)
   })
 
   test('K8 the miss list is capped and the count is not', () => {

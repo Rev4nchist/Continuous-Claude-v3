@@ -103,7 +103,9 @@ if (onFile && existsSync(onFile)) {
   );
   // ctx moves per request, not per turn: at turn end it is the LAST request's prompt over the window. Without
   // the per-request update it would hold the first response's share (session.measure fires there, then after the turn).
-  const window = Object.values(on.result?.modelUsage ?? {})[0]?.contextWindow;
+  // The window of the model that answered last: a run that changes model reports more than one.
+  const models = on.result?.modelUsage ?? {};
+  const window = (models[cache.lastModel] ?? Object.values(models)[0])?.contextWindow;
   const lastShare = window > 0 ? Math.round((100 * cache.contextTokens) / window) : null;
   check("on: snapshot ctx is the last request's share of the window", lastShare !== null && lastShare > 0 && snap.ctx === lastShare, `ctx ${snap.ctx}, last prompt ${cache.contextTokens} of ${window} tokens`);
   rmSync(onFile);

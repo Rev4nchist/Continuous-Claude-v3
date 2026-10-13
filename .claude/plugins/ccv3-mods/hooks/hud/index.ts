@@ -4,7 +4,7 @@ import type { EngineInterface, On, TurnUsage } from 'claude-code'
 import type { AgentRun, CacheState, HudState } from '../../types'
 import { addStep } from '../agent-ledger/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
-import { EMPTY_CACHE, addRequest, cacheReport, isSubscription, percentOf, ttlMinutes } from './cache'
+import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, percentOf, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
 import type { KillSwitch } from './model'
 
@@ -166,7 +166,7 @@ export const hudCapture = (on: On) => {
         // The next request rewrites the compacted prompt: /cache names the cause, and a cold send is
         // priced at the new size.
         if ((await $.env.get('CCV3_MOD_HUD_OFF')) !== '1') {
-          await update($, cache, now => (now.requests === 0 ? now : { ...now, compacted: true, contextTokens: after ?? now.contextTokens, cachedTokens: after ?? now.cachedTokens }))
+          await update($, cache, now => afterCompaction(now, after))
         }
       }
     } catch {

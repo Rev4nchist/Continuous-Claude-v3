@@ -48,6 +48,17 @@ export const ttlMinutes = (override: string | undefined, subscription: boolean):
 export const percentOf = (tokens: number, window: number): number | null =>
   window > 0 ? Math.min(100, Math.max(0, Math.round((100 * tokens) / window))) : null
 
+/**
+ * The state after a compaction of the main conversation to `tokensAfter` (absent when the engine
+ * recorded none). The prompt is the new size. The cache holds no more than it held before and no
+ * more than the new prompt: a prompt that was only partly cached stays partly cached.
+ */
+export const afterCompaction = (state: CacheState, tokensAfter: number | undefined): CacheState => {
+  if (state.requests === 0) return state
+  const cachedTokens = tokensAfter === undefined || state.cachedTokens === null ? state.cachedTokens : Math.min(state.cachedTokens, tokensAfter)
+  return { ...state, compacted: true, contextTokens: tokensAfter ?? state.contextTokens, cachedTokens }
+}
+
 export type CacheRequest = {
   usage: Usage & { model: string }
   /** The request's prompt size as the engine counts the window; null falls back to the usage sum. */
