@@ -2,6 +2,7 @@ import type { Register } from 'claude-code'
 
 import { agentLedger } from './agent-ledger/index'
 import { agenticOs } from './agentic-os/index'
+import { compactKeeper } from './compact-keeper/index'
 import { hudCapture } from './hud/index'
 import { prLoop } from './pr-loop/index'
 import { touchedFiles } from './touched-files/index'
@@ -13,4 +14,5 @@ export const register: Register = on => {
   agentLedger(on)
   touchedFiles(on)
   prLoop(on)
+  compactKeeper(on)
 }

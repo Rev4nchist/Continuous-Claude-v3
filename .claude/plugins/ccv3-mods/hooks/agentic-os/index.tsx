@@ -279,6 +279,18 @@ export const agenticOs = (on: On) => {
     }
   })
 
+  // A /clear or a resume in the same process starts a new conversation: the old tasks and plan are not its own.
+  // The engine keeps the process, so these atoms would outlive the conversation (the HUD resets ctx and the cache the same way).
+  for (const reason of ['clear', 'resume'] as const) {
+    on('session.end', { reason }, async ($, e, next) => {
+      if (!(await isOff($))) {
+        await update($, tasks, () => [])
+        await update($, plan, () => null)
+      }
+      return next(e)
+    }).catch(($, e, next) => next(e))
+  }
+
   on('session.attach', { surface: 'desktop' }, async ($, e, next) => {
     if (await isOff($)) return next(e)
     await writeProof($, { trigger: 'attach', isInteractive: false, surface: e.surface })

@@ -14,15 +14,18 @@
  * Run 3 (ledger): a TaskCreate, then one Agent call to the repo's `scout` agent. The snapshot must carry
  *   that run in `agentRuns` (Agent Ledger): type scout, a Sonnet model, tokens counted from its turn.step
  *   requests, settled done, the spec read from .claude/agents/scout.md, and no drift.
+ * Run 4 (compact keeper): one stream-json process: two TaskCreate calls, `/compact`, a question. The compaction
+ *   summary in the session transcript must hold the marker line `KEEPER <session8> open 2 of 2`. A second process
+ *   with CCV3_MODS_OFF=1 must leave it out.
  *
  * Usage: node scripts/mods/e2e-headless.mjs [plugin-dir] [--date YYYY-MM-DD]
  * Saves under .claude/cache/e2e/<date>-mods-headless-*.json (gitignored).
  * Removes the two snapshots it caused, so test sessions stay out of the dashboard's folder.
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
-import { spawnSync } from 'node:child_process';
+import { spawn, spawnSync } from 'node:child_process';
 import { randomUUID } from 'node:crypto';
-import { copyFileSync, existsSync, mkdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -75,6 +78,92 @@ const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate'], 
     // reported below as a failed check
   }
   return { label, sessionId, parentId, status: ran.status, seconds: Math.round((Date.now() - started) / 1000), result, stderr: ran.stderr ?? '' };
+};
+
+/**
+ * One headless process fed three messages: two TaskCreate calls, `/compact`, a question. The mod's state lives in memory,
+ * so a `--resume` would not hold the tasks: the compaction must happen in the process that made them. Returns the
+ * compaction summary read from the session transcript (the engine writes it there, not to the stream).
+ */
+const runStream = (label, off) =>
+  new Promise(resolveRun => {
+    const env = { ...process.env };
+    for (const key of ['CLAUDE_CODE_PLUGIN_DIRS', 'CLAUDE_CODE_SESSION_ID', 'CLAUDE_CODE_CHILD_SESSION']) delete env[key];
+    if (off) env.CCV3_MODS_OFF = '1';
+    else delete env.CCV3_MODS_OFF;
+    const sessionId = randomUUID();
+    const messages = [
+      "Use the TaskCreate tool twice: subject 'alpha' with description 'first', then subject 'beta' with description 'second'. Then reply with the single word done.",
+      '/compact',
+      'Which tasks were we working on? Answer with the task subjects only, or say none.',
+    ];
+    const args = ['-p', '--input-format', 'stream-json', '--output-format', 'stream-json', '--verbose', '--session-id', sessionId, '--plugin-dir', pluginDir, '--allowedTools', 'TaskCreate', '--effort', 'high', '--max-budget-usd', '2'];
+    const child = spawn('claude', args, { cwd: repoRoot, env, stdio: ['pipe', 'pipe', 'pipe'] });
+    const lines = [];
+    let buffer = '';
+    let sent = 0;
+    let results = 0;
+    const send = () => {
+      if (sent >= messages.length) return child.stdin.end();
+      child.stdin.write(`${JSON.stringify({ type: 'user', message: { role: 'user', content: messages[sent] } })}\n`);
+      sent += 1;
+    };
+    child.stdout.on('data', chunk => {
+      buffer += chunk.toString('utf8');
+      for (let at = buffer.indexOf('\n'); at >= 0; at = buffer.indexOf('\n')) {
+        const line = buffer.slice(0, at);
+        buffer = buffer.slice(at + 1);
+        if (!line.trim()) continue;
+        lines.push(line);
+        try {
+          if (JSON.parse(line).type === 'result') {
+            results += 1;
+            send();
+          }
+        } catch {
+          // not JSON
+        }
+      }
+    });
+    // Read stderr: a pipe nobody drains fills, and the child then stops before its next result. Saved with the run.
+    let stderr = '';
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
+    const timer = setTimeout(() => child.kill(), 280_000);
+    // One answer per run: a startup error and a close can both fire.
+    let settled = false;
+    const finish = (status, error = null) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      writeFileSync(join(outDir, `${date}-mods-headless-${label}.jsonl`), lines.join('\n'));
+      writeFileSync(join(outDir, `${date}-mods-headless-${label}.stderr.txt`), error ? `${error}\n${stderr}` : stderr);
+      resolveRun({ label, sessionId, status, results, error, summary: compactionSummary(sessionId) });
+    };
+    // `claude` that cannot start is a failed run, not a crash of the whole report.
+    child.on('error', err => finish(null, `could not start claude: ${err.message}`));
+    child.on('close', status => finish(status));
+    // A closed stdin (the child died early) must not throw out of the next write.
+    child.stdin.on('error', () => undefined);
+    send();
+  });
+
+/** The compaction message in the session transcript (the user message that opens "This session is being continued"); null when none. */
+const compactionSummary = sessionId => {
+  const projects = join(homedir(), '.claude', 'projects');
+  const folder = readdirSync(projects).find(name => existsSync(join(projects, name, `${sessionId}.jsonl`)));
+  if (!folder) return null;
+  const rows = readFileSync(join(projects, folder, `${sessionId}.jsonl`), 'utf8').split(/\r?\n/).filter(Boolean);
+  for (const row of rows) {
+    try {
+      const text = JSON.parse(row)?.message?.content;
+      if (typeof text === 'string' && text.startsWith('This session is being continued')) return text;
+    } catch {
+      // a partial line
+    }
+  }
+  return null;
 };
 
 const checks = [];
@@ -172,6 +261,21 @@ if (ledgerFile && existsSync(ledgerFile)) {
   }
   rmSync(ledgerFile);
 } else check('ledger: a snapshot named by session_id exists', false, ledgerFile ?? 'no session id');
+
+// Run 4 (compact keeper). The marker is a line the summarizer must copy word for word. Asking the model "which tasks
+// remain" proves nothing: the engine keeps recent messages, so the unmodified plugin answers it too (probe, 2026-10-13).
+const keeperOn = await runStream('keeper', false);
+const marker = `KEEPER ${keeperOn.sessionId.slice(0, 8)} open 2 of 2`;
+check('keeper: one process ran all three messages and exited 0', keeperOn.status === 0 && keeperOn.results === 3, `exit ${keeperOn.status}, ${keeperOn.results} result(s)${keeperOn.error ? `, ${keeperOn.error}` : ''}`);
+check('keeper: the compaction summary is in the transcript', keeperOn.summary !== null, keeperOn.sessionId);
+check('keeper: the summary holds the marker line', keeperOn.summary?.includes(marker) === true, marker);
+const keeperOff = await runStream('keeper-off', true);
+check(
+  'keeper off: CCV3_MODS_OFF=1 ran all three messages, and its summary has no marker',
+  keeperOff.status === 0 && keeperOff.results === 3 && keeperOff.summary !== null && !keeperOff.summary.includes('KEEPER '),
+  `exit ${keeperOff.status}, ${keeperOff.results} result(s), summary ${keeperOff.summary === null ? 'missing' : 'present'}${keeperOff.error ? `, ${keeperOff.error}` : ''}`,
+);
+for (const run4 of [keeperOn, keeperOff]) rmSync(snapshotPath(run4.sessionId), { force: true });
 
 const ids = [on, off, ledger].map(r => r.result?.session_id);
 check(
