@@ -79,27 +79,8 @@ export type AgentRun = {
   drift: string | null
 }
 
-/**
- * Cache Guard's clock: when the main loop last answered, and which quiet window was already held once.
- * Both in `$.clock.now()` milliseconds.
- */
-export type CacheClock = { lastReplyAt: number | null; heldFor: number | null }
-
-/** A send Cache Guard held: the text to re-send on "Send anyway" and the figures the card shows. */
-export type CacheHold = {
-  text: string
-  idleMs: number
-  ttlMin: number
-  tokens: number | null
-  coldUsd: number | null
-  warmUsd: number | null
-}
-
 /** A file this session touched: read, edited, or edited and then committed. Path is relative to the session root. */
 export type FileTouch = { path: string; state: 'read' | 'edited' | 'committed'; added: number; removed: number }
-
-/** When a tool call started and how long it ran (ms), by tool_use_id; the skin's timing chip. */
-export type ToolTime = { startedAt: number; ms: number | null }
 
 declare module 'claude-code' {
   interface PluginState {
@@ -121,18 +102,8 @@ declare module 'claude-code' {
       hud: HudState | null
       /** Subagent runs this session, oldest first (Agent Ledger). */
       agentRuns: AgentRun[]
-      /** Cache Guard (hooks/cache-guard). */
-      cacheClock: CacheClock
-      cacheHold: CacheHold | null
-      /** The surface this session draws on (Cache Guard holds only where its card can show). */
-      cacheSurface: string | null
-      /** True once this session's first desktop send wrote desktop-prompt.json. */
-      originNoted: boolean
       /** Touched Files (hooks/touched-files): only files this session's tool calls named. */
       files: FileTouch[]
-      /** CCv3 Skin (hooks/skin): on/off, mirrored from $.store; call timings for its chips. */
-      skinOn: boolean
-      toolTimes: Record<string, ToolTime>
       /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */

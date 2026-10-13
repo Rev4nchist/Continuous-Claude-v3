@@ -6,7 +6,7 @@ import type { Span } from '../agentic-os/pane-model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ICON_GLYPH, iconSvg } from '../shared/glyphs'
 import { TONE } from '../shared/tones'
-import { diffLines, hunksOf } from '../skin/model'
+import { diffLines, hunksOf } from '../shared/diff'
 import { STATE_TONE, capFiles, commit, editCounts, fileRows, isGitCommit, relative, touch } from './model'
 
 // Touched Files: the files this session's own tool calls named, as a tree in the /files pane.

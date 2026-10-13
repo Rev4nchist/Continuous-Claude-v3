@@ -5,20 +5,18 @@ import type { Engine } from 'claude-code/testing'
 // The desktop app drives Claude Code through the SDK: its session starts with isInteractive false and surface null,
 // and the desktop joins later by session.attach. Found live 2026-10-10 (desktop 2.31226.1, Claude Code 2.1.295):
 // the mods loaded (pr_status was there) and drew nothing. Ways the attach path can fail, one test each.
-// A1 a desktop attach registers no commands, so /os /ledger /files /skin say "Unknown command"
+// A1 a desktop attach registers no commands, so /os /ledger /files say "Unknown command"
 // A2 a desktop attach leaves no proof, or the proof can't tell an attach from a start
 // A3 a desktop attach draws no HUD row
 // A4 two attaches (a reconnect) arm two pulses
-// A5 Cache Guard never holds in an attached desktop session
 // A6 a headless run that nothing attaches to starts any UI (commands, pulse)
 
-type Seen = { commands: string[]; writes: { path: string; text: string }[]; agentList: number; filled: string[] }
+type Seen = { commands: string[]; writes: { path: string; text: string }[]; agentList: number }
 
 const BAND_PROPS = { hasSurvey: false, isWorking: false, maxRows: 10, bodyColumns: 160, scroll: { offset: 0, bodyRows: 10 }, view: {} }
-const HOUR = 60 * 60_000
 
 const world = (on: On) => {
-  const seen: Seen = { commands: [], writes: [], agentList: 0, filled: [] }
+  const seen: Seen = { commands: [], writes: [], agentList: 0 }
   const clock = mock.clock(on, { now: 1_000_000 })
   mock.env(on, { USERPROFILE: 'C:/home' })
   mock.store(on, {})
@@ -48,10 +46,6 @@ const world = (on: On) => {
     return { value: { command: e.name } }
   })
   on('turn.complete', (_$, e) => ({ text: e.answer }))
-  on('prompt.fill', (_$, e) => {
-    seen.filled.push(e.text)
-    return { isFilled: true }
-  })
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   return { seen, clock }
 }
@@ -66,7 +60,7 @@ describe('desktop attach', () => {
   test('A1 an attach registers the commands', async ($, on) => {
     const { seen } = world(on)
     await desktopSession($)
-    expect(seen.commands).toEqual(expect.arrayContaining(['os', 'ledger', 'files', 'skin']))
+    expect(seen.commands).toEqual(expect.arrayContaining(['os', 'ledger', 'files']))
   })
 
   test('A2 the proof says attach, desktop', async ($, on) => {
@@ -94,23 +88,11 @@ describe('desktop attach', () => {
     expect(perPulse).toBeLessThanOrEqual(1)
   })
 
-  test('A5 Cache Guard holds a cold composer send in an attached desktop session', async ($, on) => {
-    const { clock, seen } = world(on)
-    await desktopSession($)
-    await $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 't', reason: 'answer' } as never)
-    await clock.advance(2 * HOUR)
-    const held = await $.prompt.submit({ text: 'recap please', wait: false, origin: { kind: 'composer' } } as never)
-    expect(held).toMatchObject({ drop: expect.stringContaining('Cache Guard') })
-    await clock.advance(10)
-    expect(seen.filled).toEqual(['recap please'])
-    expect(seen.writes.some(w => w.path.endsWith('desktop-prompt.json') && w.text.includes('"composer"'))).toBe(true)
-  })
-
   test('A6 a headless run with no attach starts no UI', async ($, on) => {
     const { seen, clock } = world(on)
     await $.session.start({ cwd: 'C:/r', surface: null, isInteractive: false } as never)
     await clock.advance(10_000)
-    expect(seen.commands.filter(c => ['os', 'ledger', 'files', 'skin'].includes(c))).toEqual([])
+    expect(seen.commands.filter(c => ['os', 'ledger', 'files'].includes(c))).toEqual([])
     expect(seen.agentList).toBe(0)
   })
 })
