@@ -1,7 +1,7 @@
 {
   "name": "ccv3-mods",
   "version": "0.1.0",
-  "description": "CCv3 mods: Agentic OS band and HUD, Agent Ledger (/ledger), Cache Guard, Touched Files (/files), CCv3 Skin (/skin), PR loop.",
+  "description": "CCv3 mods: Agentic OS band and HUD, Agent Ledger (/ledger), Touched Files (/files), PR loop.",
   "types": "./types/index.d.ts",
   "author": {
     "name": "Rev4nchist"

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheClock, HudState, ToolTime, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, HudState, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
@@ -35,13 +35,6 @@ const hud = atom({ plugin: 'ccv3-mods', key: 'hud' } as const, null as HudState 
 
 /** Agent Ledger runs (hooks/agent-ledger); turn.complete below settles them. */
 const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as AgentRun[])
-
-/** Call timings for the skin's chips (hooks/skin), the last TOOL_TIMES_KEPT calls. */
-const toolTimes = atom({ plugin: 'ccv3-mods', key: 'toolTimes' } as const, {} as Record<string, ToolTime>)
-const TOOL_TIMES_KEPT = 200
-
-/** Cache Guard's clock (hooks/cache-guard): stamped here because this is the plugin's turn.complete hook. */
-const cacheClock = atom({ plugin: 'ccv3-mods', key: 'cacheClock' } as const, { lastReplyAt: null, heldFor: null } as CacheClock)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -320,9 +313,6 @@ export const agenticOs = (on: On) => {
       if (await worthSnapshot($)) await writeSnapshot($)
     }
     if (agentId === undefined) {
-      // The main loop just talked to the model (an interrupted turn too): the prompt cache is warm.
-      const repliedAt = await $.clock.now()
-      await update($, cacheClock, clock => ({ ...clock, lastReplyAt: repliedAt }))
       await update($, turn, () => null)
       await update($, steps, () => [])
       if (await worthSnapshot($)) await writeSnapshot($)
@@ -352,13 +342,7 @@ export const agenticOs = (on: On) => {
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
-    await update($, toolTimes, times => {
-      const kept = Object.entries(times).slice(-(TOOL_TIMES_KEPT - 1))
-      return { ...Object.fromEntries(kept), [id]: { startedAt, ms: null } }
-    })
     const ran = await next(e)
-    const endedAt = await $.clock.now()
-    await update($, toolTimes, times => (times[id] ? { ...times, [id]: { startedAt, ms: endedAt - startedAt } } : times))
     await update($, steps, list => list.filter(one => one.id !== id))
     if (await record($, tool, input, ran)) await writeSnapshot($)
     refreshAfter($, tool, input)

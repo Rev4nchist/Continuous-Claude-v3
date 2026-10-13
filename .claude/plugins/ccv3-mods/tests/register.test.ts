@@ -3,19 +3,19 @@ import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 // Ways command registration can fail, one test each. Found live on 2.1.296: `/agents` is a built-in name,
-// the engine refused it, the throw failed the session.start chain and /files and /skin never registered.
+// the engine refused it, the throw failed the session.start chain and /files never registered.
 // R1 one refused name stops the other modules' commands
 // R2 a refused name leaves no trace (nothing on disk says what broke)
 // R3 the Agent Ledger asks for a built-in name again
 // R4 a session leaves no proof it loaded, or the proof misses the surface
-// R5 a terminal session registers /skin (Skin is desktop-only); CCV3_FORCE_SURFACE=desktop doesn't force it
+// R5 /skin comes back: Skin is archived (archive/ccv3-mods-desktop-2026-10) and must register nowhere
 
 type Seen = { commands: string[]; writes: { path: string; text: string }[] }
 
-const world = (on: On, refuse: string[], env: Record<string, string> = {}) => {
+const world = (on: On, refuse: string[]) => {
   const seen: Seen = { commands: [], writes: [] }
   mock.clock(on, { now: 1_000 })
-  mock.env(on, { USERPROFILE: 'C:/home', ...env })
+  mock.env(on, { USERPROFILE: 'C:/home' })
   mock.store(on, {})
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
@@ -45,7 +45,7 @@ describe('command registration', () => {
   test('R1 R2 a refused name leaves the other commands and a note on disk', async ($, on) => {
     const seen = world(on, ['files'])
     await start($, 'desktop')
-    expect(seen.commands).toEqual(expect.arrayContaining(['os', 'ledger', 'skin', 'watch', 'land']))
+    expect(seen.commands).toEqual(expect.arrayContaining(['os', 'ledger', 'watch', 'land']))
     const note = seen.writes.find(w => w.path.includes('/.claude/state/ccv3-mods/errors/'))
     expect(note?.path).toContain('files-register')
     expect(note?.text).toContain('"where": "files-register"')
@@ -66,16 +66,17 @@ describe('command registration', () => {
     expect(JSON.parse(proof?.text ?? '{}')).toMatchObject({ surface: 'desktop', sessionId: 's1' })
   })
 
-  test('R5 Skin registers only in the desktop app, or when forced', async ($, on) => {
+  test('R5 a terminal session registers /files and never /skin', async ($, on) => {
     const seen = world(on, [])
     await start($, 'terminal')
     expect(seen.commands).not.toContain('skin')
     expect(seen.commands).toContain('files')
   })
 
-  test('R5 CCV3_FORCE_SURFACE=desktop registers Skin in a terminal', async ($, on) => {
-    const seen = world(on, [], { CCV3_FORCE_SURFACE: 'desktop' })
-    await start($, 'terminal')
-    expect(seen.commands).toContain('skin')
+  test('R5 a desktop session registers /files and never /skin', async ($, on) => {
+    const seen = world(on, [])
+    await start($, 'desktop')
+    expect(seen.commands).not.toContain('skin')
+    expect(seen.commands).toContain('files')
   })
 })

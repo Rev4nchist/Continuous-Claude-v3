@@ -3,6 +3,7 @@ import { describe, expect, test } from 'claude-code/testing'
 import { coldCost, estimate, fmtUsd, warmCost } from '../hooks/shared/price'
 import { driftOf, parseAgentSpec, tierOf } from '../hooks/shared/tiers'
 import { barSvg, ringSvg } from '../hooks/shared/glyphs'
+import { diffLines, hunksOf } from '../hooks/shared/diff'
 
 const near = (got: number | null, want: number): boolean => got !== null && Math.abs(got - want) < 1e-9
 
@@ -14,6 +15,7 @@ const near = (got: number | null, want: number): boolean => got !== null && Math
 // S5 the estimate ignores cache reads/writes or prices an unknown model
 // S6 the cold send is priced at the read rate (or the warm one at the write rate)
 // S7 an Svg ring/bar is malformed or overflows at 0 and 100 percent
+// S8 a patch is read wrong: numbering, added/removed counts, the cut line, or a result with no patch
 
 describe('shared tiers', () => {
   test('S1 model ids map to tiers', () => {
@@ -58,6 +60,20 @@ describe('shared price', () => {
     expect(near(warmCost(330_000, 'claude-fable-5-1'), 0.0825)).toBe(true)
     expect(fmtUsd(0.0412)).toBe('$0.04')
     expect(fmtUsd(12.4)).toBe('$12.40')
+  })
+})
+
+describe('shared diff', () => {
+  test('S8 diff numbering, counts and the cut line; no patch means null', () => {
+    const patch = { structuredPatch: [{ oldStart: 10, oldLines: 2, newStart: 10, newLines: 3, lines: [' keep', '-old', '+new', '+more'] }] }
+    const hunks = hunksOf(patch)
+    expect(hunks).not.toBeNull()
+    const { lines, added, removed } = diffLines(hunks ?? [], 3)
+    expect([added, removed]).toEqual([2, 1])
+    expect(lines.map(line => line.number)).toEqual(['10', '11', '11', ''])
+    expect(lines.at(-1)?.spans[0]?.text).toBe('… 1 more lines')
+    expect(hunksOf({ structuredPatch: [] })).toBeNull()
+    expect(hunksOf('no patch')).toBeNull()
   })
 })
 

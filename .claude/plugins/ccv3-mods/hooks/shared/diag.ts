@@ -12,7 +12,3 @@ export const errorText = (where: string, err: unknown, surface: string | null = 
 
 /** A file name that sorts by time and says which module failed. */
 export const errorFile = (where: string, now = Date.now()): string => `errors/${now}-${where.replace(/[^\w-]/g, '_')}.json`
-
-/** True when the session draws in the desktop app. `CCV3_FORCE_SURFACE=desktop` forces it, to try the desktop path in a terminal. */
-export const isDesktop = (surface: string | null | undefined, forced: string | undefined): boolean =>
-  (forced === 'desktop' ? 'desktop' : surface) === 'desktop'
