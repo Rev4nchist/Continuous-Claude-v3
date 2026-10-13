@@ -234,7 +234,7 @@ Agents and sessions exchange work through typed channels, not chat copy-paste.
 | Workflows | An orchestrator and its workers | Parallel research, synthesis, adversarial check | `/maestro`, `/build`, `/premortem` skills |
 | Lanes and messages | Parallel sessions | Lanes, leases and direct messages in PostgreSQL | `scripts/coordination/lane.mjs` |
 | File claims | Parallel sessions | A lock checked before each edit | `file-claims` hook |
-| Cross-model review | Claude and OpenAI Codex | A second model family reviews diffs and plans | `codex-adversary`, `codex-worker` agents |
+| Cross-model review | Claude and OpenAI Codex | A second model family reviews diffs and plans | `/codex-adversary` skill (Codex runner), `codex-worker` agent |
 | Handoffs | A session and the next session | Typed record with an outcome | `/create_handoff`, `/resume_handoff` skills |
 | Assistant bridge | A Claude.ai work assistant and Claude Code | Rows in a shared Notion database | `notion-bridge` skill |
 
@@ -253,9 +253,10 @@ claims a lane before it starts work. `lane.mjs` identifies a session by `CLAUDE_
 so two sessions never share one identity. `lane.mjs say` and `lane.mjs inbox` carry direct
 messages between live sessions. The `file-claims` hook blocks edits that collide.
 
-**Cross-model review.** `codex-adversary` sends a diff or a plan to OpenAI Codex for review. A
-second model family has different blind spots. `codex-worker` hands a task to Codex. It writes
-only in an isolated git worktree. The `/premortem` skill includes a Codex pass by default.
+**Cross-model review.** The Codex runner sends a diff or a plan to OpenAI Codex (GPT) for review
+and prints a `CODEX-RECEIPT` line that names the GPT model. A
+second model family has different blind spots. `codex-worker` hands a task to Codex. Its write
+modes are frozen since 2026-10-12. The `/premortem` skill includes a Codex pass by default.
 
 **Typed handoffs.** A session that cannot finish writes a handoff. Each handoff records an
 outcome: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED`. `/resume_handoff` restores the

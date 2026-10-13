@@ -1,6 +1,6 @@
 #!/usr/bin/env node
 /**
- * adversary.mjs — owns the Codex run for the codex-adversary agent and prints a receipt.
+ * adversary.mjs — owns the Codex run for every review caller and prints a receipt.
  *
  * Nothing else proves a GPT model wrote the review, so this script parses Codex's own log header
  * and prints one machine-checkable line (CODEX-RECEIPT) before any answer. A caller that does not
@@ -56,7 +56,7 @@ const DEFAULT_TIMEOUT_S = 540;
 const EXIT = { ok: 0, bad_model: 2, bad_args: 2, auth: 2, cli_missing: 2, timeout: 4 };
 const SCRIPT_DIR = dirname(fileURLToPath(import.meta.url));
 
-// Fallback framing, a copy of the inline framing in the codex-adversary agent. Used only when the sibling file is missing.
+// Fallback framing, a shortened copy of the core text in adversarial-review.md (no plan-mode section). Used only when that sibling file is missing.
 const EMBEDDED_FRAMING = `You are performing an adversarial software review. Your job is to BREAK CONFIDENCE
 in this change, not to validate it. Default to skepticism. Assume the change can
 fail in subtle, high-cost, or user-visible ways until the evidence says otherwise.

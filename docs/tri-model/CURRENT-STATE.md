@@ -62,7 +62,7 @@ _Refresh: `node scripts/tri-model/sync-current-state.mjs` (narrative below the m
 ## Standing facts from the connection layer (unchanged, evidence in DESIGN-RESEARCH docs)
 
 - Grok read-only = `--tools "read_file,list_dir,grep"` ONLY (`--sandbox` decorative; `--permission-mode plan` doesn't block writes headless). `-w` ignored headless → `../.grok-worktrees/`. Identity pin = `auth.json .email`. CLI auto-updates.
-- Codex 0.144.1; models `gpt-5.5` (default) + `gpt-5.6-sol/terra/luna` + `gpt-5.4/-mini`; no approval dial — sandbox is the boundary; `thread_id` resume.
+- Codex 0.162.1; defaults `gpt-6.1-sol @ xhigh` (review) and `gpt-5.6-luna @ max` (worker), allowlists in the runner `MODELS` table (review) and `codex-worker-safety.md` (worker); write lane (implement, resume) frozen since 2026-10-12; no approval dial — sandbox is the boundary.
 - Any model/CLI change goes through `/harness-update` (edit-point registries; two-probe rule; rollback pins).
 
 ## Reading order for a fresh session

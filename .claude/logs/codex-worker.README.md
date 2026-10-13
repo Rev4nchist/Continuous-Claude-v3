@@ -10,7 +10,7 @@ One row per `/codex` run (the `codex-worker` agent). Distinct from `codex-lift.j
 {
   "ts": "2026-07-06T14:32:00Z",        // ISO 8601 UTC
   "mode": "ask" | "implement" | "resume",   // exactly one; never a "+"-joined pair
-  "model": "gpt-5.5",                    // always in {gpt-5.5, gpt-5.4, gpt-5.4-mini}
+  "model": "gpt-5.6-luna",               // always an id on the allowlist in .claude/rules-ondemand/codex-worker-safety.md
   "effort": "high" | "xhigh" | "medium" | "low",
   "sandbox": "read-only" | "workspace-write",
   "multi_agent": false,                  // true = --complex ENABLED fan-out (--enable passed) for this run — NOT proof sub-agents spawned. Codex only fans out for tasks it deems complex, so a trivial --complex task logs true yet runs single-agent. ask/implement only. (A future `subagents_spawned`/`subagent_models` field parsing the --json stream is a v3 candidate.)
