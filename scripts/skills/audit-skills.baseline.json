@@ -200,9 +200,10 @@
      }
     },
     "G28": {
-     "count": 5,
+     "count": 6,
      "skills": {
       "databases": 1,
+      "knowledge-base": 1,
       "neonctl": 1,
       "shadcn-create": 2,
       "weekly-report": 1
