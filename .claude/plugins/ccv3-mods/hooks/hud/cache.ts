@@ -18,6 +18,7 @@ export const EMPTY_CACHE: CacheState = {
   lastModel: null,
   lastTurnId: null,
   compacted: false,
+  resumed: false,
   ttlMin: 60,
   oneHour: true,
   misses: [],
@@ -26,8 +27,6 @@ export const EMPTY_CACHE: CacheState = {
 
 /** Misses kept for /cache; `missCount` still counts the ones dropped. */
 export const MISS_CAP = 30
-/** A session's first request that carries more messages than this continues an older conversation. */
-const FRESH_MESSAGES = 2
 const MIN = 60_000
 
 /** A subscription reports its own rate-limit windows; a gateway's `spend_limit` is not one. */
@@ -44,20 +43,13 @@ export const ttlMinutes = (override: string | undefined, subscription: boolean):
   return subscription ? 60 : 5
 }
 
-/** A whole percentage of the window, as the engine rounds its own. */
-export const percentOf = (tokens: number, window: number): number | null =>
-  window > 0 ? Math.min(100, Math.max(0, Math.round((100 * tokens) / window))) : null
-
 /**
- * The state after a compaction of the main conversation to `tokensAfter` (absent when the engine
- * recorded none). The prompt is the new size. The cache holds no more than it held before and no
- * more than the new prompt: a prompt that was only partly cached stays partly cached.
+ * The state after a compaction of the main conversation: only the flag. The size the engine
+ * records then (`tokensAfter`) is not the next prompt: the engine attaches files, memory and hook
+ * context again (probe, 2026-10-13: tokensAfter 17,863, next prompt 90,501). So what the cache held
+ * stands until the next request, whose own size bounds it, and a cold send has no known size.
  */
-export const afterCompaction = (state: CacheState, tokensAfter: number | undefined): CacheState => {
-  if (state.requests === 0) return state
-  const cachedTokens = tokensAfter === undefined || state.cachedTokens === null ? state.cachedTokens : Math.min(state.cachedTokens, tokensAfter)
-  return { ...state, compacted: true, contextTokens: tokensAfter ?? state.contextTokens, cachedTokens }
-}
+export const afterCompaction = (state: CacheState): CacheState => (state.requests === 0 ? state : { ...state, compacted: true })
 
 export type CacheRequest = {
   usage: Usage & { model: string }
@@ -67,15 +59,13 @@ export type CacheRequest = {
   sentAt: number
   at: number
   turnId: string
-  /** Messages the request carried: a first request with a history is a resume. */
-  messageCount: number
   ttlMin: number
   /** Writes are 1-hour entries (a subscription): the rate a rewrite is priced at. */
   oneHour: boolean
 }
 
 const causeOf = (state: CacheState, req: CacheRequest, idleMs: number): CacheMissCause => {
-  if (state.requests === 0) return req.messageCount > FRESH_MESSAGES ? 'resume' : 'start'
+  if (state.requests === 0) return state.resumed ? 'resume' : 'start'
   if (idleMs > state.ttlMin * MIN) return 'expired'
   if (state.compacted) return 'compaction'
   if (state.lastModel !== req.usage.model) return 'model'
@@ -118,6 +108,7 @@ export const addRequest = (state: CacheState, req: CacheRequest): CacheState => 
     lastModel: req.usage.model,
     lastTurnId: req.turnId,
     compacted: false,
+    resumed: state.resumed,
     ttlMin: req.ttlMin,
     oneHour: req.oneHour,
     misses: miss === null ? state.misses : [...state.misses, miss].slice(-MISS_CAP),
@@ -135,7 +126,7 @@ export const hitRate = (state: CacheState): number | null => {
  * Tokens a cold send writes to the cache: what the cache held. After a compaction the prompt is new
  * text the cache never held, and the next send caches all of it, so the compacted size stands in.
  */
-const coldTokens = (state: CacheState): number | null => (state.compacted ? state.contextTokens : state.cachedTokens)
+const coldTokens = (state: CacheState): number | null => (state.compacted ? null : state.cachedTokens)
 
 /**
  * The cache as the HUD shows it now. `off`: no request read or wrote the cache. `cold`: idle past

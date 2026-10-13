@@ -8,6 +8,8 @@
  *   the run itself reports, and `ctx` must be set. The debug log must show
  *   exactly one ccv3-mods plugin loaded, the one under test: a second copy (say the active
  *   copy from CLAUDE_CODE_PLUGIN_DIRS) would drop one of the two by name and could hide a regression.
+ * Run 1b (resume): run 1's session again by --resume. Its snapshot must hold `cache.resumed: true`, and a miss
+ *   on its first request must carry the cause `resume`; run 1 itself must hold `resumed: false` and no such cause.
  * Run 2 (CCV3_MODS_OFF=1): the same prompt. The mod must write no snapshot.
  * Run 3 (ledger): a TaskCreate, then one Agent call to the repo's `scout` agent. The snapshot must carry
  *   that run in `agentRuns` (Agent Ledger): type scout, a Sonnet model, tokens counted from its turn.step
@@ -46,7 +48,7 @@ const LEDGER_PROMPT =
   'Then reply with the single word done.';
 
 /** One headless run. The off run sets CCV3_MODS_OFF=1; the on run clears it. */
-const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate']) => {
+const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate'], resumeId = null) => {
   const env = { ...process.env };
   // The run tests the copy named by --plugin-dir. The user's env must not add a second ccv3-mods.
   delete env.CLAUDE_CODE_PLUGIN_DIRS;
@@ -62,7 +64,7 @@ const run = (label, off, prompt = PROMPT, tools = ['TaskCreate', 'TaskUpdate']) 
   const started = Date.now();
   const ran = spawnSync(
     'claude',
-    ['-p', prompt, '--session-id', sessionId, '--plugin-dir', pluginDir, '--allowedTools', ...tools, '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
+    ['-p', prompt, ...(resumeId ? ['--resume', resumeId] : ['--session-id', sessionId]), '--plugin-dir', pluginDir, '--allowedTools', ...tools, '--output-format', 'json', '--effort', 'high', '--max-budget-usd', '1', '--debug-file', debugPath(label)],
     { cwd: repoRoot, env, encoding: 'utf8', timeout: 300_000 },
   );
   writeFileSync(join(outDir, `${date}-mods-headless-${label}.json`), ran.stdout ?? '');
@@ -108,7 +110,27 @@ if (onFile && existsSync(onFile)) {
   const window = (models[cache.lastModel] ?? Object.values(models)[0])?.contextWindow;
   const lastShare = window > 0 ? Math.round((100 * cache.contextTokens) / window) : null;
   check("on: snapshot ctx is the last request's share of the window", lastShare !== null && lastShare > 0 && snap.ctx === lastShare, `ctx ${snap.ctx}, last prompt ${cache.contextTokens} of ${window} tokens`);
+  // A fresh session always writes its first prompt: that is a start, never a resume (the engine says `startup`).
+  const causes = (cache.misses ?? []).map(miss => miss.cause);
+  check('on: a fresh session is not named a resume', cache.resumed === false && !causes.includes('resume'), `resumed ${cache.resumed}, misses ${causes.join(',') || 'none'}`);
   rmSync(onFile);
+}
+
+// The same session again, by --resume: the engine says `resume`, and a rewrite on its first request carries that cause.
+if (onId) {
+  const resumed = run('resume', false, "Use the TaskCreate tool with subject 'delta' and description 'resumed'. Then reply with the single word done.", ['TaskCreate'], onId);
+  check('resume: claude exited 0 on the same session', resumed.status === 0 && resumed.result?.session_id === onId, `exit ${resumed.status}, ${resumed.seconds}s, session ${resumed.result?.session_id}`);
+  if (existsSync(onFile)) {
+    copyFileSync(onFile, join(outDir, `${date}-mods-headless-resume-snapshot.json`));
+    const cache = JSON.parse(readFileSync(onFile, 'utf8')).cache ?? {};
+    const first = (cache.misses ?? [])[0];
+    check(
+      'resume: the engine named it a resume, and so does a first-request miss',
+      cache.resumed === true && (first === undefined || first.cause === 'resume'),
+      `resumed ${cache.resumed}, first miss ${first ? `${first.cause}, rewrote ${first.rewritten}` : 'none'}`,
+    );
+    rmSync(onFile);
+  } else check('resume: a snapshot named by session_id exists', false, onFile);
 }
 
 const norm = text => text.replace(/\\/g, '/').toLowerCase();

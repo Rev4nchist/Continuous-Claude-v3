@@ -4,7 +4,7 @@ import type { EngineInterface, On, TurnUsage } from 'claude-code'
 import type { AgentRun, CacheState, HudState } from '../../types'
 import { addStep } from '../agent-ledger/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
-import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, percentOf, ttlMinutes } from './cache'
+import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
 import type { KillSwitch } from './model'
 
@@ -42,7 +42,7 @@ const setSwitches = async ($: EngineInterface): Promise<KillSwitch[]> => {
  * figure is fresh as soon as the response is in (probe, 2026-10-13: `$.session.usage()` after
  * `next(e)` equals the request's input + cache read + cache write).
  */
-type Step = { turnId: string; messageCount: number; sentAt: number | null }
+type Step = { turnId: string; sentAt: number | null }
 
 const measureStep = async ($: EngineInterface, step: Step, usage: TurnUsage | null): Promise<void> => {
   if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
@@ -56,7 +56,7 @@ const measureStep = async ($: EngineInterface, step: Step, usage: TurnUsage | nu
   await update($, cache, now => {
     // A failed usage read says nothing about the account: the last request's rate, and so its lifetime, stand.
     const oneHour = subscription ?? now.oneHour
-    return addRequest(now, { usage, contextTokens: session?.context.tokens ?? null, sentAt: step.sentAt ?? at, at, turnId: step.turnId, messageCount: step.messageCount, ttlMin: ttlMinutes(override, oneHour), oneHour })
+    return addRequest(now, { usage, contextTokens: session?.context.tokens ?? null, sentAt: step.sentAt ?? at, at, turnId: step.turnId, ttlMin: ttlMinutes(override, oneHour), oneHour })
   })
 }
 
@@ -122,7 +122,7 @@ export const hudCapture = (on: On) => {
     const sentAt = await $.clock.now().catch(() => null)
     const result = yield* next(e)
     try {
-      await measureStep($, { turnId: e.turnId, messageCount: e.messageCount, sentAt }, result.usage)
+      await measureStep($, { turnId: e.turnId, sentAt }, result.usage)
     } catch {
       // Observer only.
     }
@@ -154,25 +154,37 @@ export const hudCapture = (on: On) => {
   })
 
   // A compaction of the main conversation empties the window: the old percent is wrong at once, and the
-  // engine reports none until the next response. The size it recorded stands in until then. A `precompute`
-  // installs nothing, and a subagent's compaction is not this window.
+  // engine reports none until the next response. No figure stands in: the size the engine records at the
+  // compaction (`tokensAfter`) is far below the next prompt (see afterCompaction), so the HUD shows no ctx
+  // until that response. A `precompute` installs nothing, and a subagent's compaction is not this window.
   on('session.compact', async ($, e, next) => {
     const result = await next(e)
     try {
       if (e.agentId === undefined && e.trigger !== 'precompute' && result.skip === undefined && (await $.env.get('CCV3_MODS_OFF')) !== '1') {
-        const after = result.tokensAfter
-        const window = after === undefined ? undefined : (await $.session.usage().catch(() => null))?.context.window
-        await update($, ctx, () => (after === undefined || window === undefined ? null : percentOf(after, window)))
-        // The next request rewrites the compacted prompt: /cache names the cause, and a cold send is
-        // priced at the new size.
-        if ((await $.env.get('CCV3_MOD_HUD_OFF')) !== '1') {
-          await update($, cache, now => afterCompaction(now, after))
-        }
+        await update($, ctx, () => null)
+        // The next request rewrites the compacted prompt: /cache names the cause.
+        if ((await $.env.get('CCV3_MOD_HUD_OFF')) !== '1') await update($, cache, afterCompaction)
       }
     } catch {
       // Observer only: the compaction stands as the engine made it.
     }
     return result
+  }).catch(($, e, next) => next(e))
+
+  // How the conversation began, in the engine's own word. A resumed or forked one sends a history the cache
+  // may no longer hold, so a rewrite on its first request is flagged; a fresh one always writes, and is not.
+  // The message count cannot tell them apart: a fresh first request here carries about 40 messages of hook
+  // and memory context (probe, 2026-10-13: 41 fresh, 60 resumed). `compact` is not a new conversation.
+  on('classic.SessionStart', async ($, e, next) => {
+    try {
+      if (e.source !== 'compact' && !(await isOff($))) {
+        const resumed = e.source === 'resume' || e.source === 'fork'
+        await update($, cache, now => (now.resumed === resumed ? now : { ...now, resumed }))
+      }
+    } catch {
+      // Observer only.
+    }
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   // `/clear` keeps the process and fires no session.start; `resume` puts another session in this one's place.
