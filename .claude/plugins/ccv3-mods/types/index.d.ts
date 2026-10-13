@@ -58,6 +58,52 @@ export type HudState = {
 }
 
 /**
+ * Why a main-loop request rewrote prompt the cache held before. `start` and `resume` are the first
+ * request of a conversation (`resume`: it carried a history); `expired` is idle time past the cache lifetime; `changed` is
+ * a prefix that differs for a reason the mod cannot name (tools, system prompt, an edited history).
+ */
+export type CacheMissCause = 'start' | 'resume' | 'expired' | 'compaction' | 'model' | 'changed'
+
+/** One miss. `rewritten` is tokens; `usd` prices that rewrite as a cache write (hooks/shared/price.ts), null with no price. */
+export type CacheMiss = {
+  at: number
+  idleMs: number
+  rewritten: number
+  cause: CacheMissCause
+  model: string
+  turnId: string
+  usd: number | null
+}
+
+/**
+ * Prompt-cache use of the main loop, summed per model request (turn.step). Subagents are the Agent
+ * Ledger's. `contextTokens` is the last request's prompt size; `ttlMin` the cache lifetime assumed
+ * (the API reports none per request). `savedUsd` is an estimate against the same requests uncached.
+ */
+export type CacheState = {
+  requests: number
+  input: number
+  read: number
+  write: number
+  savedUsd: number
+  contextTokens: number | null
+  /** Tokens the cache holds after the last request that used it: what a later request can read, and what a cold send rewrites. */
+  cachedTokens: number | null
+  /** When the last request that read or wrote the cache was sent: the entry's lifetime runs from here. */
+  lastUsedAt: number | null
+  lastModel: string | null
+  lastTurnId: string | null
+  /** True from a compaction until the next request, which names it as the cause of its miss. */
+  compacted: boolean
+  ttlMin: number
+  /** Writes are 1-hour entries (a subscription): the rate a rewrite is priced at. */
+  oneHour: boolean
+  /** Newest last, capped; `missCount` counts every one. */
+  misses: CacheMiss[]
+  missCount: number
+}
+
+/**
  * One subagent run as the Agent Ledger shows it. Tokens and cost add up per model request
  * (turn.step); `costUsd` is an estimate from hooks/shared/price.ts, never the bill.
  * `drift` says how the run broke its agent's .md (`model:`, `effort:`), or that it ran on Haiku.
@@ -100,6 +146,8 @@ declare module 'claude-code' {
       prs: PrWatch[]
       /** The HUD row; null in headless runs and under CCV3_MOD_HUD_OFF, so the band stays as it was. */
       hud: HudState | null
+      /** Prompt-cache use of the main loop (hooks/hud): the HUD's cache element and /cache. */
+      cache: CacheState
       /** Subagent runs this session, oldest first (Agent Ledger). */
       agentRuns: AgentRun[]
       /** Touched Files (hooks/touched-files): only files this session's tool calls named. */

@@ -4,7 +4,8 @@
  *
  * Run 1 (mod on): the prompt makes TaskCreate and TaskUpdate calls. The mod must write
  *   ~/.claude/state/agentic-os/<session_id>.json with both tasks and the first one completed,
- *   and `lanes: null` (a headless run never reads the lane board). The debug log must show
+ *   and `lanes: null` (a headless run never reads the lane board). Its `cache` counts must equal the usage
+ *   the run itself reports, and `ctx` must be set. The debug log must show
  *   exactly one ccv3-mods plugin loaded, the one under test: a second copy (say the active
  *   copy from CLAUDE_CODE_PLUGIN_DIRS) would drop one of the two by name and could hide a regression.
  * Run 2 (CCV3_MODS_OFF=1): the same prompt. The mod must write no snapshot.
@@ -92,21 +93,32 @@ if (onFile && existsSync(onFile)) {
   check('on: snapshot holds both tasks, alpha completed', subjects.join(',') === 'alpha:completed,beta:pending', subjects.join(','));
   check('on: snapshot sessionId matches the run', snap.sessionId === onId);
   check('on: headless read no lane board', snap.lanes === null, `lanes ${JSON.stringify(snap.lanes)}`);
+  // The cache counts come from turn.step, one per main-loop request: their sums must equal the run's own usage.
+  const used = on.result?.usage ?? {};
+  const cache = snap.cache ?? {};
+  check(
+    'on: snapshot cache counts equal the usage the run reports',
+    cache.requests > 0 && cache.read === used.cache_read_input_tokens && cache.write === used.cache_creation_input_tokens && cache.input === used.input_tokens,
+    `${cache.requests} request(s), read ${cache.read}/${used.cache_read_input_tokens}, write ${cache.write}/${used.cache_creation_input_tokens}, input ${cache.input}/${used.input_tokens}`,
+  );
+  // ctx moves per request, not per turn: at turn end it is the LAST request's prompt over the window. Without
+  // the per-request update it would hold the first response's share (session.measure fires there, then after the turn).
+  const window = Object.values(on.result?.modelUsage ?? {})[0]?.contextWindow;
+  const lastShare = window > 0 ? Math.round((100 * cache.contextTokens) / window) : null;
+  check("on: snapshot ctx is the last request's share of the window", lastShare !== null && lastShare > 0 && snap.ctx === lastShare, `ctx ${snap.ctx}, last prompt ${cache.contextTokens} of ${window} tokens`);
   rmSync(onFile);
 }
 
 const norm = text => text.replace(/\\/g, '/').toLowerCase();
-const loads = existsSync(debugPath('on'))
-  ? readFileSync(debugPath('on'), 'utf8')
-      .split(/\r?\n/)
-      .filter(line => /Read hooks\.json for plugin ccv3-mods/.test(line))
-  : [];
-// The engine may read the same hooks.json more than once per run; two different folders is the clash.
-const folders = [...new Set(loads.map(line => norm(line.slice(line.lastIndexOf('): ') + 3))))];
+const debugLines = existsSync(debugPath('on')) ? readFileSync(debugPath('on'), 'utf8').split(/\r?\n/) : [];
+// The engine reads every hooks.json it knows, the installed marketplace copy too (`ccv3-mods@ccv3`), and then
+// loads one hooks module per plugin name. Which module loaded is the fact: `@inline` is the --plugin-dir copy.
+const read = debugLines.filter(line => /Read hooks\.json for plugin ccv3-mods/.test(line)).map(line => norm(line.slice(line.lastIndexOf('): ') + 3)));
+const loaded = [...new Set(debugLines.map(line => /hooks module (ccv3-mods@\S+) loaded/.exec(line)?.[1]).filter(Boolean))];
 check(
   'on: only the plugin under test loaded as ccv3-mods',
-  folders.length === 1 && folders[0].startsWith(norm(pluginDir)),
-  `${folders.length} folder(s) from ${loads.length} read(s)`,
+  loaded.length === 1 && loaded[0] === 'ccv3-mods@inline' && read.some(file => file.startsWith(norm(pluginDir))),
+  `loaded ${loaded.join(', ') || 'none'}; ${new Set(read).size} hooks.json folder(s) read`,
 );
 
 const off = run('off', true);
