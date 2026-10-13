@@ -8,8 +8,8 @@
 | `/fix` | Bug resolution | Reproduce → Investigate → Fix → Re-run repro |
 | `/build` | Feature development | Plan → Implement → Review |
 | `/explore` | Codebase research | Understanding code |
-| `/review` | Code review | Before merge (critic + plan-reviewer + codex-adversary) |
-| `/premortem` | Failure-mode analysis | Before implementing a plan (inline imagining + codex-adversary cross-model pass) |
+| `/review` | Code review | Before merge (critic + plan-reviewer + Codex runner) |
+| `/premortem` | Failure-mode analysis | Before implementing a plan (inline imagining + Codex runner cross-model pass) |
 | `/release` | Release prep | Audit → Test → Changelog |
 
 ## Research Commands
@@ -106,4 +106,4 @@ Orchestrate:  /maestro
 | kraken | TDD implementation |
 | spark | Quick fixes |
 | arbiter | Test runner |
-| codex-adversary | Cross-model adversarial review (OpenAI Codex via `codex exec`) |
+| codex-adversary | Envelope for Workflow `agent()` stages: runs the Codex runner (`adversary.mjs`) once and returns a CODEX-RECEIPT line |

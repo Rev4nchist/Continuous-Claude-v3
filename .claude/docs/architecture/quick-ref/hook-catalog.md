@@ -66,7 +66,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | agent-verification | Agent | Verify agent output claims |
 | epistemic-reminder | Grep\|Read | Warn about unverified grep/read claims |
 | post-plan-roadmap | ExitPlanMode | Sync plan to ROADMAP.md after approval |
-| plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (codex-adversary cross-model pass) after plan approval |
+| plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (Codex runner cross-model pass) after plan approval |
 | roadmap-completion | TaskUpdate\|Bash | Track roadmap task completions |
 | git-commit-roadmap | Bash | Update ROADMAP.md after git commits |
 | test-run-tracker | Bash | Track test execution results |

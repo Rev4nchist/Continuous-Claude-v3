@@ -24,15 +24,15 @@ First-class adversarial failure-mode analysis of an approved plan. Auto-offered
 by the `plan-exit-premortem-prompt` hook after every `ExitPlanMode`.
 
 ```
-Plan ──→ Imagine failure modes ──→ codex-adversary ──→ Folded mitigations
+Plan ──→ Imagine failure modes ──→ Codex runner    ──→ Folded mitigations
  │            (inline)              (cross-model pass)        │
  ▼                                                            ▼
 ExitPlanMode                                          Hardened plan
 ```
 
 - Identifies "tigers" (likely failures) and "elephants" (unspoken risks).
-- The codex-adversary pass (OpenAI `codex exec`) adds cross-model triangulation —
-  findings only one model catches are the cross-model lift.
+- The Codex pass (OpenAI Codex (GPT), run by `adversary.mjs`) adds cross-model
+  triangulation. Findings only one model catches are the cross-model lift.
 - Skip the Codex pass with `--no-codex` for doc-only or trivial diffs.
 
 **Usage:** `/premortem` (or auto-offered after a plan is approved)
@@ -110,16 +110,19 @@ Comprehensive code review via parallel specialists.
        │   Phase 1 (parallel reviewers)
        ├── critic (code review)
        ├── plan-reviewer (plan / change review)
-       └── codex-adversary (cross-model pass, OpenAI codex exec)
+       └── Codex runner (cross-model pass, OpenAI GPT)
        │
        ▼
    review-agent synthesizes findings
 ```
 
-**Cross-model lift:** `codex-adversary` runs in parallel with critic and
-plan-reviewer. Because Codex is a different model family, it catches blind spots
-the Claude-family reviewers share. Findings flagged by BOTH are high-confidence;
-`[Codex]`-only findings are the cross-model lift. Skip with `--no-codex` for
+**Cross-model lift:** The main session runs the Codex runner
+(`.claude/scripts/codex/adversary.mjs`) directly, in the background, in parallel
+with critic and plan-reviewer. Because Codex is a different model family, it
+catches blind spots the Claude-family reviewers share. Findings flagged by BOTH
+are high-confidence; `[Codex]`-only findings are the cross-model lift, logged by
+`adversary.mjs lift`. A finding gets the `[Codex]` tag only when the runner's
+`CODEX-RECEIPT v1` line passes the receipt gate. Skip with `--no-codex` for
 doc-only or trivial diffs. See `.claude/rules-ondemand/codex-adversarial.md`.
 
 ## /release Workflow

@@ -5,7 +5,7 @@ description: Delegates a task to xAI's Grok Build CLI (grok-4.5) to execute or a
 
 # /grok — Delegate a task to the Grok Build CLI (grok-4.5)
 
-Hands an arbitrary request to xAI Grok on Dave's **X Premium+ subscription** (never an API key) to work through it. A third training family (Grok, distinct from both Claude and GPT-5.5/Codex) executing the task gives additional cross-model leverage on top of `/codex` — same "let the other model do well-spec'd execution, keep Claude for orchestration" pattern, now tri-model. The read-only `grok-adversary` reviewer is its sibling; this is the write-capable one.
+Hands an arbitrary request to xAI Grok on Dave's **X Premium+ subscription** (never an API key) to work through it. A third training family (Grok, distinct from both Claude and OpenAI Codex (GPT)) executing the task gives additional cross-model leverage on top of `/codex` — same "let the other model do well-spec'd execution, keep Claude for orchestration" pattern, now tri-model. The read-only `grok-adversary` reviewer is its sibling; this is the write-capable one.
 
 **Roster position (Game Plan):** Grok is the **default milestone builder and researcher** — `/grok --implement` is the first choice for building workroom milestones, and the `research` role (live web/X, widened write-free allowlist per `grok-worker-safety.md`) feeds `research/` in the room. **Codex is the rostered reviewer/fixer** — Grok never grades its own build; the review booth is Codex + Claude critics. Doctrine: `.workroom/PROTOCOL.md`.
 

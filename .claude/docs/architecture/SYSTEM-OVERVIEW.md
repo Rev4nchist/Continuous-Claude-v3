@@ -133,7 +133,7 @@ Agent Selection Rule:
   Implement → kraken (TDD) / spark (quick fix)
   Debug → debug-agent / sleuth
   Test  → arbiter / atlas (test execution)
-  Review → critic / principal-reviewer / codex-adversary (cross-model)
+  Review → critic / principal-reviewer / Codex runner script (cross-model; codex-adversary agent only in a Workflow stage)
   Deploy → deployer (Vercel / Railway / Sentry / Linear)
 ```
 
