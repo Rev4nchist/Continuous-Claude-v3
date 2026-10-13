@@ -1,6 +1,6 @@
 # Adversarial Review (Vendored)
 
-This is the stable, repo-vendored adversarial framing used by `.claude/agents/codex-adversary.md`. The companion plugin `codex-plugin-cc` may also ship a copy at `~/.claude/plugins/cache/openai/codex-plugin-cc/.../prompts/adversarial-review.md`; if both exist, the vendored copy here wins (predictable behavior across machines).
+This is the stable, repo-vendored adversarial framing. The Codex runner (`.claude/scripts/codex/adversary.mjs`) loads it for every review. The copy in `vendor/codex-plugin-cc/prompts/` and the copy beside the runner must stay byte-identical.
 
 Update this file deliberately. Drift between the vendored copy and upstream is fine — the vendored copy is the source of truth for CCv3 review/premortem behavior.
 

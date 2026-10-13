@@ -129,6 +129,8 @@ One row per run → `.claude/logs/codex-worker.jsonl` (schema: `.claude/logs/cod
 <!-- archived-rule:codex-worker-safety.md ref:b800899 -->
 ## Reference: pre-split text of `rules-ondemand/codex-worker-safety.md` (archived 2026-07-29)
 
+Superseded: the model ids and defaults in the text below are history. See .claude/rules-ondemand/codex-worker-safety.md for the current rule.
+
 The rule now carries only the invariants an agent must hold *before* deciding to use this
 tool. The evidence trail, version pins, probe archaeology and long caveats live here, and
 load only once this skill does. Verbatim snapshot, so nothing that was trimmed is lost:

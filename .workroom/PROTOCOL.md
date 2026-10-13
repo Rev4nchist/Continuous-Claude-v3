@@ -30,8 +30,8 @@ order: `docs/tri-model/SESSION-REVIEW-2026-07-11.md`.
 |------|-----------------|------------|
 | Hub & orchestrator | Claude (session) | this session; advances phase, runs smoke, merges findings |
 | Builder & researcher | Grok `grok-4.5` | `/grok --implement` (milestones), `/grok` ask (research) |
-| Reviewer & fixer | Codex `gpt-5.6-sol` | `codex-adversary` (review), `/codex --implement` (fix patches) |
-| Failover builder | Codex `gpt-5.6-sol` | `/codex --implement` — only on Grok failure or explicit `--builder codex` |
+| Reviewer & fixer | Reviewer: Codex `gpt-6.1-sol`; fixer: Claude `kraken` | Codex runner `adversary.mjs` (review), `kraken` (fix patches; `/codex --implement` is frozen) |
+| Failover builder | Claude `kraken` | Only on Grok failure. `/codex --implement` (`codex-worker`, `role: builder-failover`) is frozen since 2026-10-12 and returns when the freeze lifts |
 
 **Failover rule:** a failover builder for milestone Mn **cannot** be the review-booth
 primary for that same milestone. If Codex built Mn, the grade comes from Claude critics

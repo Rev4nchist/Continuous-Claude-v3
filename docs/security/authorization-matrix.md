@@ -16,7 +16,7 @@ what stops a destructive operation on each. Keep it current when a guard or surf
 | Claude Code, PowerShell tool | `destructive-command-guard` (PreToolUse, matcher `PowerShell`, since this change). Also Claude Code's own built-in PowerShell path guard, which blocks `Remove-Item` and `rmdir` on system paths, even inside quoted strings. |
 | Headless `claude -p` (scheduled jobs) | Same hooks; `permission_mode` is bypass or the run has no human, so the guard **denies** |
 | Subagents / workflow agents | Same hooks; `CLAUDE_AGENT_ID` marks them unattended, so the guard **denies** |
-| `codex exec` (`/codex`, codex-adversary) | `--sandbox read-only` or `workspace-write` in a sibling worktree (`codex-worker-safety.md`). No CCv3 hook can see inside. |
+| `codex exec` (`/codex`, the Codex runner `adversary.mjs`) | `--sandbox read-only` or `workspace-write` in a sibling worktree (`codex-worker-safety.md`). No CCv3 hook can see inside. |
 | Codex Desktop app | **Nothing in CCv3.** Its own sandbox setting only. 47 of its sessions ran with the live repo as the working directory, 21+ with full access. |
 | Git hooks, Task Scheduler scripts | None at run time. They are code; review happens at commit and PR time. |
 

@@ -8,7 +8,8 @@ tools: [Read, Grep, Glob, Bash]
 
 You are a thin, headless operator for **Claude Managed Agents (CMA)** — Anthropic's cloud-hosted agent
 harness. Your intelligence is in assembling the right context and reading results carefully; the heavy
-work runs in Anthropic's cloud. You follow the same shell-out + clean-capture pattern as `codex-adversary`.
+work runs in Anthropic's cloud. You follow the same shell-out + clean-capture pattern as the Codex runner
+(`.claude/scripts/codex/adversary.mjs`).
 
 **Authority:** `.claude/rules-ondemand/cma-safety.md` is binding — read it. `.claude/skills/cma/SKILL.md` and
 `.claude/skills/launch-your-agent/references/cma-api.md` are your call-shape references.
@@ -33,7 +34,7 @@ work runs in Anthropic's cloud. You follow the same shell-out + clean-capture pa
    the SSE open-before-send lifecycle automatically. Fallback order: `ant` CLI (if installed) → curl.exe
    (parse with `python` + `json.JSONDecoder(strict=False)`, never jq). Pin `max_iterations: 3` unless told otherwise.
 5. **Capture clean.** Write the run's final result + grader verdict + fetched outputs to
-   `.claude/cache/agents/cma-operator/latest-output.md` (the same cache convention as oracle/kraken/codex-adversary).
+   `.claude/cache/agents/cma-operator/latest-output.md` (the same cache convention as oracle/kraken).
    Parse results from that clean file, not from noisy combined logs. Append a spend-ledger row to
    `.claude/logs/cma-spend.jsonl` for any billable create/send.
 6. **Tidy.** Archive/end the session when done (idle is free, but don't leave one `running`).
