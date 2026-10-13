@@ -437,6 +437,11 @@ describe('cache model', () => {
     const partly = addRequest(EMPTY_CACHE, request({ input: 60_000, read: 0, write: 40_000, at: 60_000 }))
     const compacted = afterCompaction(partly, 90_000)
     expect(compacted).toMatchObject({ compacted: true, contextTokens: 90_000, cachedTokens: 40_000 })
+    // Left idle past the lifetime, the next send caches the whole 90k prompt: 90_000 × $4 × 2 ÷ 1M, not the 40k price.
+    const cold = cacheView(compacted, 60_000 + 61 * 60_000)
+    expect(cold).toMatchObject({ status: 'cold' })
+    expect(cold?.status === 'cold' ? Math.round((cold.coldUsd ?? 0) * 100) : null).toBe(72)
+    expect(cacheReport(compacted, 60_000 + 61 * 60_000)).toContain('the next send rewrites 90k tokens')
     const next = addRequest(compacted, request({ input: 0, read: 40_000, write: 50_000, at: 120_000 }))
     expect(next.missCount).toBe(1) // the session start alone
     // A cache that held more than the new prompt holds no more than the new prompt.

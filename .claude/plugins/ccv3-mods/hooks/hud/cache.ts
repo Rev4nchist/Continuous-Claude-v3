@@ -132,6 +132,12 @@ export const hitRate = (state: CacheState): number | null => {
 }
 
 /**
+ * Tokens a cold send writes to the cache: what the cache held. After a compaction the prompt is new
+ * text the cache never held, and the next send caches all of it, so the compacted size stands in.
+ */
+const coldTokens = (state: CacheState): number | null => (state.compacted ? state.contextTokens : state.cachedTokens)
+
+/**
  * The cache as the HUD shows it now. `off`: no request read or wrote the cache. `cold`: idle past
  * the lifetime, so the next send rewrites the whole prompt (`coldUsd` prices it). `miss`: a request
  * of the newest turn rewrote `missTokens`; a fresh session's first request is not flagged. Else
@@ -152,7 +158,8 @@ export const cacheView = (state: CacheState, now: number): CacheView | null => {
   // From the send, not the reply: the API refreshes the entry when the request reads it.
   const leftMs = state.ttlMin * MIN - (now - state.lastUsedAt)
   if (leftMs <= 0) {
-    const coldUsd = state.cachedTokens === null || state.lastModel === null ? null : coldCost(state.cachedTokens, state.lastModel, state.oneHour)
+    const tokens = coldTokens(state)
+    const coldUsd = tokens === null || state.lastModel === null ? null : coldCost(tokens, state.lastModel, state.oneHour)
     return { status: 'cold', hitPct, coldUsd }
   }
   const last = state.misses.at(-1)
@@ -186,7 +193,7 @@ const CAUSE_LABEL: Record<CacheMissCause, string> = {
 const stateLine = (state: CacheState, view: CacheView): string => {
   if (view.status === 'off') return 'off: no request read or wrote the cache'
   if (view.status === 'cold') {
-    const cost = view.coldUsd === null ? '' : `: the next send rewrites ${fmtTokens(state.cachedTokens ?? 0)} tokens, ≈ ${fmtUsd(view.coldUsd)}`
+    const cost = view.coldUsd === null ? '' : `: the next send rewrites ${fmtTokens(coldTokens(state) ?? 0)} tokens, ≈ ${fmtUsd(view.coldUsd)}`
     return `cold (keeps ${state.ttlMin} min)${cost}`
   }
   if (view.status === 'miss') return `warm, the newest turn rewrote ${fmtTokens(view.missTokens)} tokens (keeps ${state.ttlMin} min)`
