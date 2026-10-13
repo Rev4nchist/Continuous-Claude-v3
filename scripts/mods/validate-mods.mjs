@@ -7,8 +7,10 @@
  *      entry of `gatingHooks` (manifest or contents) has hasCatch !== true. A gating hook is
  *      one whose answer can refuse a tool call, prompt, command or setting. Without a `.catch`
  *      a hook that throws is skipped and the refusal silently does not happen.
- *   2. `tsc -p <dir>`: needs the engine-written <dir>/.claude-plugin/types/. A headless
- *      `claude -p --plugin-dir <dir>` run writes it (scripts/mods/e2e-headless.mjs does).
+ *   2. `tsc -p <dir>`: needs the engine-written <dir>/.claude-plugin/types/. On 2.1.296 no command
+ *      this gate runs writes it, so a folder without it gets a copy of the primary checkout's.
+ *      The summary line names the date of the types in use. Types older than the engine are a
+ *      risk: refresh them by loading the plugin, or point TYPES_SRC at a newer folder.
  *   3. `claude plugin test <dir>`: fails on a failing test, or on zero tests (a vacuous gate).
  *
  *      The gate also fails when the report has no `gatingHooks` key at all, or lists fewer than
@@ -16,18 +18,29 @@
  *
  * Usage: node scripts/mods/validate-mods.mjs [plugin-dir] [--min-gating N]   (default dir .claude/plugins/ccv3-mods)
  * Env:   TSC_JS = path to typescript/bin/tsc, when none is found under .claude/hooks.
+ *        TYPES_SRC = a .claude-plugin/types folder to copy when the plugin folder has none.
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync } from 'node:fs';
+import { cpSync, existsSync, statSync } from 'node:fs';
 import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const args = process.argv.slice(2);
-const minAt = args.indexOf('--min-gating');
-const minGating = minAt >= 0 && Number.isInteger(Number(args[minAt + 1])) ? Number(args[minAt + 1]) : 1;
-const pluginDir = resolve(args.find((a, i) => !a.startsWith('--') && i !== minAt + 1) ?? join(repoRoot, '.claude/plugins/ccv3-mods'));
+
+/**
+ * The plugin folder and the --min-gating floor named on the command line. The folder is the first argument that is not
+ * a flag and not the value of --min-gating. With no --min-gating, minAt is -1 and `i !== minAt + 1` would skip
+ * argument 0: the folder named on the command line (the bug this guards: the gate then checked the default folder).
+ */
+export const parseArgs = (args, defaultDir) => {
+  const minAt = args.indexOf('--min-gating');
+  const minGating = minAt >= 0 && Number.isInteger(Number(args[minAt + 1])) ? Number(args[minAt + 1]) : 1;
+  const named = args.find((a, i) => !a.startsWith('--') && (minAt < 0 || i !== minAt + 1));
+  return { pluginDir: resolve(named ?? defaultDir), minGating };
+};
+
+const { pluginDir, minGating } = parseArgs(process.argv.slice(2), join(repoRoot, '.claude/plugins/ccv3-mods'));
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 280_000 });
 const firstLines = (text, n = 12) => text.trim().split(/\r?\n/).slice(0, n).join('\n');
 
@@ -74,22 +87,55 @@ const checkValidate = () => {
   return { ok: problems.length === 0, note: problems.join('\n'), short: `validate ${problems.length === 0 ? 'OK' : 'FAIL'} (${hooks.length} gating hook${hooks.length === 1 ? '' : 's'}, ${bare.length} without .catch)` };
 };
 
-const findTsc = () => {
+/** The primary checkout: the worktree's own root, or the folder that holds the shared .git. */
+const primaryRoot = () => {
   const common = sh('git', ['-C', repoRoot, 'rev-parse', '--git-common-dir']).stdout?.trim();
-  const primary = common ? resolve(repoRoot, common, '..') : repoRoot;
+  return common ? resolve(repoRoot, common, '..') : repoRoot;
+};
+
+const findTsc = () => {
   const rel = '.claude/hooks/node_modules/typescript/bin/tsc';
-  return [process.env.TSC_JS, join(repoRoot, rel), join(primary, rel), join(repoRoot, 'node_modules/typescript/bin/tsc')].find(p => p && existsSync(p));
+  return [process.env.TSC_JS, join(repoRoot, rel), join(primaryRoot(), rel), join(repoRoot, 'node_modules/typescript/bin/tsc')].find(p => p && existsSync(p));
+};
+
+/**
+ * The engine writes .claude-plugin/types/ (gitignored), and on 2.1.296 `claude plugin validate`, `claude plugin test`
+ * and a headless `claude -p` all leave it out. A fresh worktree has none, so copy the primary checkout's.
+ * TYPES_SRC names another source folder. Returns the folder's tsconfig date, `{ error }` naming the path when the copy
+ * or the date read fails (a read-only folder must not stop the other two checks), or null when no copy exists.
+ */
+const ensureTypes = () => {
+  const own = join(pluginDir, '.claude-plugin/types');
+  let copied = false;
+  try {
+    if (!existsSync(join(own, 'tsconfig.json'))) {
+      const donor = process.env.TYPES_SRC ?? join(primaryRoot(), '.claude/plugins/ccv3-mods/.claude-plugin/types');
+      if (!existsSync(join(donor, 'tsconfig.json'))) return null;
+      cpSync(donor, own, { recursive: true, preserveTimestamps: true });
+      copied = true;
+    }
+    return { date: statSync(join(own, 'tsconfig.json')).mtime.toISOString().slice(0, 10), copied };
+  } catch (err) {
+    return { error: `${own}: ${err instanceof Error ? err.message : String(err)}` };
+  }
 };
 
 const checkTsc = () => {
-  if (!existsSync(join(pluginDir, '.claude-plugin/types/tsconfig.json'))) {
-    return { ok: false, note: 'tsc: NOT RUN, the engine has not written .claude-plugin/types/. Run node scripts/mods/e2e-headless.mjs once.', short: 'tsc NOT RUN' };
+  const types = ensureTypes();
+  if (types?.error) return { ok: false, note: `tsc: NOT RUN, the types folder could not be copied or read: ${types.error}`, short: 'tsc NOT RUN' };
+  if (!types) {
+    return {
+      ok: false,
+      note: 'tsc: NOT RUN, no .claude-plugin/types/ in the plugin folder or in the primary checkout. On 2.1.296 validate, test and a headless claude -p do not write it. Copy it from a checkout that has one (set TYPES_SRC to its folder).',
+      short: 'tsc NOT RUN',
+    };
   }
   const tsc = findTsc();
   if (!tsc) return { ok: false, note: 'tsc: NOT RUN, no typescript found. Set TSC_JS or run npm install in .claude/hooks.', short: 'tsc NOT RUN' };
   const ran = sh(process.execPath, [tsc, '-p', pluginDir]);
   const ok = ran.status === 0;
-  return { ok, note: ok ? '' : `tsc: exit ${ran.status}\n${firstLines(ran.stdout + (ran.stderr ?? ''), 20)}`, short: `tsc ${ok ? 'OK' : 'FAIL'}` };
+  const from = `types ${types.date}${types.copied ? ', copied' : ''}`;
+  return { ok, note: ok ? '' : `tsc: exit ${ran.status}\n${firstLines(ran.stdout + (ran.stderr ?? ''), 20)}`, short: `tsc ${ok ? 'OK' : 'FAIL'} (${from})` };
 };
 
 const checkTest = () => {
