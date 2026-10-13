@@ -1,6 +1,6 @@
 # grok-worker.jsonl — Grok Task-Execution Telemetry
 
-One row per `/grok` run (the `grok-worker` agent). Sibling of `codex-worker.jsonl` (that tracks GPT-5.5/Codex task execution; this tracks xAI Grok task execution). The `.jsonl` is gitignored (`.claude/logs/*.jsonl`) — machine-local runtime data; this README is committed.
+One row per `/grok` run (the `grok-worker` agent). Sibling of `codex-worker.jsonl` (that tracks OpenAI Codex (GPT) task execution; this tracks xAI Grok task execution). The `.jsonl` is gitignored (`.claude/logs/*.jsonl`) — machine-local runtime data; this README is committed.
 
 ## Schema (one JSON object per TURN)
 
