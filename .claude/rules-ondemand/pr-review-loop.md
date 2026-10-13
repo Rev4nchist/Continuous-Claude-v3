@@ -46,10 +46,14 @@ Do not raise the review tier (`@greptileai review this at apex`, 10 credits) wit
    - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
      fix or dismiss it.
 2. Fix real findings on the PR branch. Commit and push once.
-3. For each fix, reply `@greptileai Fixed in <sha>: <what changed>`, then resolve the thread through
-   GraphQL `resolveReviewThread`. Greptile never resolves GitHub threads itself.
+3. For each real finding you fixed, reply `@greptileai Fixed in <sha>: <what changed>` and add a 👍
+   reaction to the finding. Then resolve the thread through GraphQL `resolveReviewThread`. Greptile
+   never resolves GitHub threads itself.
 4. For each false positive, reply `@greptileai <reason>` and add a 👎 reaction to the finding.
-   Greptile learns from tagged replies and reactions. Then resolve the thread.
+   Then resolve the thread.
+   Greptile learns from tagged replies and from 👍 and 👎 reactions. React only on a finding you
+   judged: 👍 means real and fixed, 👎 means false positive. Add a reaction with
+   `gh api repos/<O>/<R>/pulls/comments/<comment_id>/reactions -f content='+1'` (`-1` for 👎).
 5. Never resolve a thread you did not act on.
 6. Wait for the review of the new head (the push triggers it).
 7. Post the outcome to the user: finding count, fixed count, dismissed count, confidence, CI status.
