@@ -27,11 +27,20 @@ import { dirname, join, resolve } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
 const repoRoot = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
-const args = process.argv.slice(2);
-const minAt = args.indexOf('--min-gating');
-const minGating = minAt >= 0 && Number.isInteger(Number(args[minAt + 1])) ? Number(args[minAt + 1]) : 1;
-// With no --min-gating, minAt is -1 and `i !== minAt + 1` would skip the first argument: the folder named on the command line.
-const pluginDir = resolve(args.find((a, i) => !a.startsWith('--') && (minAt < 0 || i !== minAt + 1)) ?? join(repoRoot, '.claude/plugins/ccv3-mods'));
+
+/**
+ * The plugin folder and the --min-gating floor named on the command line. The folder is the first argument that is not
+ * a flag and not the value of --min-gating. With no --min-gating, minAt is -1 and `i !== minAt + 1` would skip
+ * argument 0: the folder named on the command line (the bug this guards: the gate then checked the default folder).
+ */
+export const parseArgs = (args, defaultDir) => {
+  const minAt = args.indexOf('--min-gating');
+  const minGating = minAt >= 0 && Number.isInteger(Number(args[minAt + 1])) ? Number(args[minAt + 1]) : 1;
+  const named = args.find((a, i) => !a.startsWith('--') && (minAt < 0 || i !== minAt + 1));
+  return { pluginDir: resolve(named ?? defaultDir), minGating };
+};
+
+const { pluginDir, minGating } = parseArgs(process.argv.slice(2), join(repoRoot, '.claude/plugins/ccv3-mods'));
 const sh = (cmd, args) => spawnSync(cmd, args, { encoding: 'utf8', maxBuffer: 64 * 1024 * 1024, timeout: 280_000 });
 const firstLines = (text, n = 12) => text.trim().split(/\r?\n/).slice(0, n).join('\n');
 
@@ -92,22 +101,28 @@ const findTsc = () => {
 /**
  * The engine writes .claude-plugin/types/ (gitignored), and on 2.1.296 `claude plugin validate`, `claude plugin test`
  * and a headless `claude -p` all leave it out. A fresh worktree has none, so copy the primary checkout's.
- * TYPES_SRC names another source folder. Returns the folder's tsconfig date, or null when no copy exists.
+ * TYPES_SRC names another source folder. Returns the folder's tsconfig date, `{ error }` naming the path when the copy
+ * or the date read fails (a read-only folder must not stop the other two checks), or null when no copy exists.
  */
 const ensureTypes = () => {
   const own = join(pluginDir, '.claude-plugin/types');
   let copied = false;
-  if (!existsSync(join(own, 'tsconfig.json'))) {
-    const donor = process.env.TYPES_SRC ?? join(primaryRoot(), '.claude/plugins/ccv3-mods/.claude-plugin/types');
-    if (!existsSync(join(donor, 'tsconfig.json'))) return null;
-    cpSync(donor, own, { recursive: true, preserveTimestamps: true });
-    copied = true;
+  try {
+    if (!existsSync(join(own, 'tsconfig.json'))) {
+      const donor = process.env.TYPES_SRC ?? join(primaryRoot(), '.claude/plugins/ccv3-mods/.claude-plugin/types');
+      if (!existsSync(join(donor, 'tsconfig.json'))) return null;
+      cpSync(donor, own, { recursive: true, preserveTimestamps: true });
+      copied = true;
+    }
+    return { date: statSync(join(own, 'tsconfig.json')).mtime.toISOString().slice(0, 10), copied };
+  } catch (err) {
+    return { error: `${own}: ${err instanceof Error ? err.message : String(err)}` };
   }
-  return { date: statSync(join(own, 'tsconfig.json')).mtime.toISOString().slice(0, 10), copied };
 };
 
 const checkTsc = () => {
   const types = ensureTypes();
+  if (types?.error) return { ok: false, note: `tsc: NOT RUN, the types folder could not be copied or read: ${types.error}`, short: 'tsc NOT RUN' };
   if (!types) {
     return {
       ok: false,
