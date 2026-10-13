@@ -50,7 +50,6 @@ Rule file: `.claude/rules-ondemand/codex-adversarial.md`.
 | Use | Model and effort |
 |---|---|
 | Default | `gpt-6.1-sol @ xhigh` |
-| Security, data loss, migrations, final gates | `gpt-6-astra @ high` |
 | Re-check loops, small diffs | `gpt-5.6-luna @ high` |
 | Fallbacks | `gpt-5.6-sol`, `gpt-5.6-terra` |
 

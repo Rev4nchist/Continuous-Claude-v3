@@ -81,7 +81,7 @@ Update every registered location with the verified allowlist + new version stamp
 | `.claude/rules-ondemand/codex-worker-safety.md` | "Model allowlist" section + Grounding line + "Version drift" section |
 | `.claude/skills/codex/SKILL.md` | user-facing `--model`/`--effort` flags line |
 | `.claude/scripts/codex/adversary.mjs` | the `MODELS` table and `DEFAULT_MODEL` / `DEFAULT_EFFORT`: the single allowlist for review |
-| `.claude/skills/codex-adversary/SKILL.md` | the model table (default, security, re-check, fallbacks) |
+| `.claude/skills/codex-adversary/SKILL.md` | the model table (default, re-check, fallbacks) |
 | `.claude/rules-ondemand/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
 | `.claude/skills/cli-integration/SKILL.md` | Codex inventory row |
 | `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Codex row) |

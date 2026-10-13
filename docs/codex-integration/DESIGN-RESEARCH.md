@@ -1131,3 +1131,21 @@ PR #133 landed as `main` `31b8905`. Runs from the synced copy
 
 A plan-mode `/codex-adversary` printed the deferred line and ran no command
 (Dave's report; the path writes no log row by design).
+
+### gpt-6-astra removed from the allowlists (2026-10-12)
+
+Dave's rule: "We should never use any gpt6 models - only the models i explicitly say".
+He named `gpt-6.1-sol @ xhigh` as the default reviewer. He did not name `gpt-6-astra`.
+Asked whether to remove it from the runner allowlist and the `codex-adversary` skill, he answered "Yes".
+
+This is an owner decision, not a probe result. The id was admitted on 2026-09-08 (section 18).
+It was not re-probed today.
+
+Allowlist after removal: `{gpt-6.1-sol, gpt-5.6-sol, gpt-5.6-terra, gpt-5.6-luna}`.
+Review default stays `gpt-6.1-sol @ xhigh`. Worker default stays `gpt-5.6-luna @ max`.
+
+Edit points changed: the 8 files of the harness-update registry, plus the runner test
+(`scripts/codex/adversary.test.mjs`), which now refuses `gpt-6-astra`.
+There is no CLI change. The CLI is still 0.162.1.
+
+To re-admit `gpt-6-astra`, Dave must name the id. Then run `/harness-update codex`.

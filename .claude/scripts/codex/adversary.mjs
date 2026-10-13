@@ -38,7 +38,6 @@ export const DEFAULT_EFFORT = 'xhigh';
 // `ceiling` is the highest effort a review may send; notes follow the server's own descriptions.
 export const MODELS = {
   'gpt-6.1-sol': { ceiling: 'max', note: 'Latest workhorse; the default reviewer.' },
-  'gpt-6-astra': { ceiling: 'max', note: 'Frontier; security, data loss, final gates. Highest cost.' },
   'gpt-5.6-sol': { ceiling: 'max', note: 'Older workhorse; fallback for gpt-6.1-sol.' },
   'gpt-5.6-terra': { ceiling: 'max', note: 'Older balanced tier; fallback when Sol is limited.' },
   'gpt-5.6-luna': { ceiling: 'max', note: 'Older fast tier; cheapest. Re-check loops, small diffs.' },
