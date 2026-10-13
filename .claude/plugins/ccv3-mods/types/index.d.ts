@@ -95,6 +95,8 @@ export type CacheState = {
   lastTurnId: string | null
   /** True from a compaction until the next request, which names it as the cause of its miss. */
   compacted: boolean
+  /** The engine started this conversation as a resume or a fork (classic SessionStart `source`): its first request carries a history. */
+  resumed: boolean
   ttlMin: number
   /** Writes are 1-hour entries (a subscription): the rate a rewrite is priced at. */
   oneHour: boolean

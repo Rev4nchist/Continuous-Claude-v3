@@ -8,10 +8,12 @@ import type { CacheState } from '../types'
 
 // Ways the context figure and the cache element can fail, one test each.
 // X1 ctx holds the last turn's value while a turn makes more requests (the engine measures per turn)
-// X2 ctx holds the pre-compaction value after /compact; a subagent's, a precomputed or a vetoed compaction moves it
+// X2 ctx holds the pre-compaction value after /compact, or shows the size the engine reports (far below the next
+//    prompt); a subagent's, a precomputed or a vetoed compaction moves it
 // X3 /clear or a resume in the same process keeps the old conversation's ctx and cache counts
 // K1 the hit rate counts a subagent's requests, or is not read ÷ all input
-// K2 a request that rewrote the prompt is not flagged, or the flag never clears
+/// K2 a request that rewrote the prompt is not flagged, or the flag never clears; a fresh session's first request
+//    is flagged as a resume
 // K3 the countdown stands still while the session is idle; past the lifetime the element is not COLD
 // K4 an off switch still captures or draws the cache; ctx stops moving with the HUD off
 // K5 /cache is missing, costs a model turn, or names no cause
@@ -80,6 +82,7 @@ const world = (on: On, env: Record<string, string> = {}, limits = [{ kind: 'five
   })
   on('session.compact', () => (beneath.skip ? { skip: 'vetoed' } : { messages: [SUMMARY], ...(beneath.tokensAfter === undefined ? {} : { tokensAfter: beneath.tokensAfter }) }))
   on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
+  on('classic.SessionStart', () => ({}))
   on('command.register', (_$, e) => {
     beneath.registered.push(e.name)
     return { value: { command: e.name } }
@@ -135,7 +138,6 @@ const request = (over: Over): CacheRequest => ({
   sentAt: over.sentAt ?? over.at ?? 60_000,
   at: over.at ?? 60_000,
   turnId: over.turnId ?? 't1',
-  messageCount: over.messageCount ?? 1,
   ttlMin: over.ttlMin ?? 60,
   oneHour: over.oneHour ?? true,
 })
@@ -155,16 +157,22 @@ describe('context figure', () => {
     expect((await band($)).hud).toContain('ctx 40%')
   })
 
-  test('X2 a compaction replaces the old ctx with the size the engine reports', async ($, on) => {
+  test('X2 a compaction shows no ctx until the next reply: neither the old value nor the size the engine reports', async ($, on) => {
+    // Probe, 2026-10-13: a prompt of 87_220 compacted; the engine reported tokensAfter 17_863; the next prompt was 90_501.
     world(on)
     await start($)
-    await step($, { input: 2, read: 300_000, write: 60_000 })
-    beneath.tokensAfter = 133_800
+    await step($, { input: 2, read: 84_758, write: 2_460 })
+    expect((await band($)).hud).toContain('ctx 9%')
+    beneath.tokensAfter = 17_863
     await compact($, 'manual')
-    expect((await band($)).hud).toContain('ctx 13%')
+    expect((await band($)).hud).not.toContain('ctx')
+    await step($, { input: 2, read: 17_951, write: 72_548 }, { turnId: 't2' })
+    expect((await band($)).hud).toContain('ctx 9%')
+    // The rewrite is the compaction's: the size the engine reported must not hide it.
+    expect(await cacheCommand($)).toMatch(/rewrote 69k\s+compaction/)
   })
 
-  test('X2 a compaction that reports no size shows no ctx, never the old one', async ($, on) => {
+  test('X2 a compaction that reports no size shows no ctx either', async ($, on) => {
     world(on)
     await start($)
     await step($, { input: 2, read: 300_000, write: 60_000 })
@@ -253,12 +261,33 @@ describe('cache element', () => {
     expect((await band($)).hud).not.toContain('MISS')
   })
 
-  test('K2 a resumed conversation that rewrites its history is flagged; a fresh first request is not', async ($, on) => {
+  test('K2 a resumed conversation that rewrites its history is flagged', async ($, on) => {
     world(on)
     await start($)
-    await step($, { input: 0, read: 20_000, write: 340_000 }, { messageCount: 412 })
+    await $.classic.SessionStart({ source: 'resume' })
+    await step($, { input: 0, read: 20_000, write: 340_000 }, { messageCount: 60 })
     expect((await band($)).hud).toContain('MISS 340k')
-    expect(await cacheCommand($)).toContain('resume')
+    expect(await cacheCommand($)).toMatch(/rewrote 340k\s+resume/)
+  })
+
+  test('K2 a fresh session is not flagged, however many messages its first request carries', async ($, on) => {
+    // Probe, 2026-10-13: the first request of a fresh session here carried 41 messages (hook and memory context).
+    world(on)
+    await start($)
+    await $.classic.SessionStart({ source: 'startup' })
+    await step($, { input: 2, read: 32_000, write: 77_000 }, { messageCount: 41 })
+    expect((await band($)).hud).not.toContain('MISS')
+    expect(await cacheCommand($)).toMatch(/rewrote 77k\s+session start/)
+  })
+
+  test('K2 a /clear after a resume starts a fresh conversation', async ($, on) => {
+    world(on)
+    await start($)
+    await $.classic.SessionStart({ source: 'resume' })
+    await end($, 'clear')
+    await $.classic.SessionStart({ source: 'clear' })
+    await step($, { input: 2, read: 32_000, write: 77_000 })
+    expect((await band($)).hud).not.toContain('MISS')
   })
 
   test('K3 the countdown moves while idle, on a mounted band, and ends in COLD with the next cost', async ($, on) => {
@@ -276,19 +305,19 @@ describe('cache element', () => {
     await mounted.unmount()
   })
 
-  test('K9 after a compaction, the cause is named and a cold send is priced at the new size', async ($, on) => {
+  test('K9 after a compaction the cause is named, and a cold send has no price: the new prompt size is not known', async ($, on) => {
     const clock = world(on)
     await start($)
     await step($, { input: 0, read: 0, write: 360_000 })
-    beneath.tokensAfter = 133_800
+    beneath.tokensAfter = 40_000
+    await compact($, 'manual')
+    await step($, { input: 0, read: 36_000, write: 97_800 }, { turnId: 't2' })
+    expect(await cacheCommand($)).toMatch(/rewrote 98k\s+compaction/)
     await compact($, 'manual')
     await clock.advance(61 * 60_000)
-    // 133_800 × $4 × 2 ÷ 1M, not the 360k the window held before.
-    expect((await band($)).hud).toContain('cache COLD · next ≈$1.07')
-    await step($, { input: 0, read: 36_000, write: 97_800 }, { turnId: 't2' })
-    await compact($, 'manual')
-    await step($, { input: 0, read: 30_000, write: 60_000 }, { turnId: 't3' })
-    expect(await cacheCommand($)).toMatch(/rewrote 60k\s+compaction/)
+    const hud = (await band($)).hud
+    expect(hud).toContain('cache COLD')
+    expect(hud).not.toContain('next ≈')
   })
 
   test("K9 an advisor loop's cold send is priced at the window, not at the summed counts", async ($, on) => {
@@ -411,7 +440,7 @@ describe('cache model', () => {
     const cause = (state: CacheState, over: Over) => addRequest(state, request(over)).misses.at(-1)?.cause
     // A first request an hour after launch is still a start: the clock says nothing about a history.
     expect(cause(EMPTY_CACHE, { read: 0, write: 50_000, at: 3_600_000 })).toBe('start')
-    expect(cause(EMPTY_CACHE, { read: 0, write: 50_000, at: 60_000, messageCount: 40 })).toBe('resume')
+    expect(cause({ ...EMPTY_CACHE, resumed: true }, { read: 0, write: 50_000, at: 60_000 })).toBe('resume')
     expect(cause(warm(), { read: 0, write: 100_000, at: 60_000 + 61 * 60_000 })).toBe('expired')
     expect(cause({ ...warm(), compacted: true }, { read: 10_000, write: 30_000, at: 120_000 })).toBe('compaction')
     expect(cause(warm(), { read: 0, write: 100_000, at: 120_000, model: 'claude-sonnet-5-5' })).toBe('model')
@@ -435,19 +464,15 @@ describe('cache model', () => {
   test('K8 a partly cached prompt that compacts and is served whole is no miss', () => {
     // 100k prompt with 40k cached compacts to 90k; the next request reads the 40k and writes 50k of new text.
     const partly = addRequest(EMPTY_CACHE, request({ input: 60_000, read: 0, write: 40_000, at: 60_000 }))
-    const compacted = afterCompaction(partly, 90_000)
-    expect(compacted).toMatchObject({ compacted: true, contextTokens: 90_000, cachedTokens: 40_000 })
-    // Left idle past the lifetime, the next send caches the whole 90k prompt: 90_000 × $4 × 2 ÷ 1M, not the 40k price.
-    const cold = cacheView(compacted, 60_000 + 61 * 60_000)
-    expect(cold).toMatchObject({ status: 'cold' })
-    expect(cold?.status === 'cold' ? Math.round((cold.coldUsd ?? 0) * 100) : null).toBe(72)
-    expect(cacheReport(compacted, 60_000 + 61 * 60_000)).toContain('the next send rewrites 90k tokens')
+    const compacted = afterCompaction(partly)
+    // What the cache held stands: the next request's own size bounds it, not a size reported at the compaction.
+    expect(compacted).toMatchObject({ compacted: true, contextTokens: 100_000, cachedTokens: 40_000 })
+    // Left idle past the lifetime: cold, with no price, because the compacted prompt's size is not known.
+    expect(cacheView(compacted, 60_000 + 61 * 60_000)).toEqual({ status: 'cold', hitPct: 0, coldUsd: null })
+    expect(cacheReport(compacted, 60_000 + 61 * 60_000)).toContain('state         cold (keeps 60 min)\n')
     const next = addRequest(compacted, request({ input: 0, read: 40_000, write: 50_000, at: 120_000 }))
     expect(next.missCount).toBe(1) // the session start alone
-    // A cache that held more than the new prompt holds no more than the new prompt.
-    expect(afterCompaction(warm(), 30_000).cachedTokens).toBe(30_000)
-    expect(afterCompaction(warm(), undefined)).toMatchObject({ compacted: true, cachedTokens: 100_000 })
-    expect(afterCompaction(EMPTY_CACHE, 30_000)).toBe(EMPTY_CACHE)
+    expect(afterCompaction(EMPTY_CACHE)).toBe(EMPTY_CACHE)
   })
 
   test('K8 the miss list is capped and the count is not', () => {
