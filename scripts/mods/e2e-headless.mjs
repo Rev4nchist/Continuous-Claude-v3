@@ -8,8 +8,8 @@
  *   the run itself reports, and `ctx` must be set. The debug log must show
  *   exactly one ccv3-mods plugin loaded, the one under test: a second copy (say the active
  *   copy from CLAUDE_CODE_PLUGIN_DIRS) would drop one of the two by name and could hide a regression.
- * Run 1b (resume): run 1's session again by --resume. Its snapshot must hold `cache.resumed: true`, and a miss
- *   on its first request must carry the cause `resume`; run 1 itself must hold `resumed: false` and no such cause.
+ * Run 1b (resume): run 1's session again by --resume. Its snapshot must hold `cache.resumed: true` and no miss
+ *   with the cause `start`; run 1 itself must hold `resumed: false` and no miss with the cause `resume`.
  * Run 2 (CCV3_MODS_OFF=1): the same prompt. The mod must write no snapshot.
  * Run 3 (ledger): a TaskCreate, then one Agent call to the repo's `scout` agent. The snapshot must carry
  *   that run in `agentRuns` (Agent Ledger): type scout, a Sonnet model, tokens counted from its turn.step
@@ -123,11 +123,13 @@ if (onId) {
   if (existsSync(onFile)) {
     copyFileSync(onFile, join(outDir, `${date}-mods-headless-resume-snapshot.json`));
     const cache = JSON.parse(readFileSync(onFile, 'utf8')).cache ?? {};
-    const first = (cache.misses ?? [])[0];
+    // Only the first request can be a `start` or a `resume`, and in a resumed session it is never a `start`.
+    // A later miss keeps its own cause (`changed`, `model`), so the check names the one cause that must not appear.
+    const causes = (cache.misses ?? []).map(miss => miss.cause);
     check(
-      'resume: the engine named it a resume, and so does a first-request miss',
-      cache.resumed === true && (first === undefined || first.cause === 'resume'),
-      `resumed ${cache.resumed}, first miss ${first ? `${first.cause}, rewrote ${first.rewritten}` : 'none'}`,
+      'resume: the engine named it a resume, and no miss is named a start',
+      cache.resumed === true && !causes.includes('start'),
+      `resumed ${cache.resumed}, misses ${causes.join(',') || 'none'}`,
     );
     rmSync(onFile);
   } else check('resume: a snapshot named by session_id exists', false, onFile);
