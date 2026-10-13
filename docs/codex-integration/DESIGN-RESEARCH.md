@@ -993,7 +993,8 @@ a `thread_id`. The same fixture PASSED on 0.153.4 in the same hour (`hello.txt` 
 - `setup_error.json`: `helper_unknown_error`, `setup refresh had errors`.
 - `codex doctor`: `sandbox  elevated Windows sandbox provisioning recorded a
   structured failure`.
-- Cause [Speculation]: the Codex desktop app's sandbox service
+- First guess at the cause, now REFUTED (see "Write fixture re-tests with the
+  service stopped" below): the Codex desktop app's sandbox service
   (`CodexSandboxService.OpenAI.Codex`) holds that runtime file open.
 
 ### Decision (Dave, 2026-10-12): stay on 0.162.1, freeze the write lane
@@ -1002,11 +1003,11 @@ This is not a guard regression. The sandbox denies more, not less.
 `/codex --implement` and `--resume` are FROZEN until the fixture passes. The
 worker returns `CODEX IMPLEMENT FROZEN (2026-10-12): the workspace-write fixture
 fails on codex-cli 0.162.1. See docs/codex-integration/DESIGN-RESEARCH.md section
-19. ask and review still work.` Unfreeze: stop the Windows service `CodexSandboxService.OpenAI.Codex`
-from an elevated shell (or find the process that holds the file), re-run the
-fixture, and on a pass remove the freeze and add a dated note here. (The first
-version of this step said to quit the desktop app. The re-test below shows that
-is not enough.)
+19. ask and review still work.` Unfreeze: re-run the fixture after the next Codex
+CLI release, through `/harness-update codex`. On a pass remove the freeze and add
+a dated note here. Do not repeat the three fixes that failed on 2026-10-12: quit
+the desktop app, stop the service `CodexSandboxService.OpenAI.Codex`, pass
+`--disable computer_use`. The two re-test subsections below hold the evidence.
 
 ### Ground truth `~/.codex/models_cache.json` after a 0.162.1 turn
 
@@ -1086,7 +1087,47 @@ Dave quit the Codex desktop app. The same workspace-write fixture on codex-cli
 - The Windows service `CodexSandboxService.OpenAI.Codex` (process
   `codex-windows-sandbox-service.exe`, start type Automatic) was still running
   after the app closed.
-- Cause [Speculation]: that service holds the file.
+- Guess at the time: that service holds the file. The next subsection refutes it.
 
-The freeze stays. Next test: stop that service from an elevated shell, then
-re-run the fixture. On a pass, remove the freeze and add a dated note here.
+The freeze stays.
+
+### Write fixture re-tests with the service stopped, and with computer_use off (2026-10-12)
+
+Three more runs of the same fixture on codex-cli 0.162.1. All FAILED.
+
+| Change | Result |
+|---|---|
+| Service `CodexSandboxService.OpenAI.Codex` stopped by Dave from an elevated shell (status `Stopped` during the run) | `hello.txt` not created, rc 0, commit count 1, `thread_id 01a13296-50e8-7772-9f46-91ec1064875e`. Answer: `Unable to create hello.txt: the file-edit tool failed due to workspace permissions.` |
+| Service stopped, plus `--disable computer_use` | `hello.txt` not created, rc 0. Answer: `the file-edit tool failed twice.` |
+| Service stopped, plus `--disable computer_use --disable browser_use --disable code_mode_host` | `hello.txt` not created, rc 0. Answer: `the file-edit tool is disabled in this environment.` This flag set removes the edit tool. It is not a fix. |
+
+- `~/.codex/.sandbox/sandbox.2026-10-13.log` at 00:08:05Z shows the same error on
+  the same file: `... node_repl.exe: open ACL target for root-only update: The
+  process cannot access the file because it is being used by another process.
+  (os error 32)`.
+- Lock check with no Codex run active: an exclusive open of that `node_repl.exe`
+  (`FileShare.None`) succeeded. No other process holds the file then. The lock
+  exists only while a Codex run is active.
+- REFUTED: the desktop app holds the file. REFUTED: the sandbox service holds the
+  file.
+- Cause [Speculation]: codex-cli 0.162.1 holds its own runtime file open while
+  its sandbox setup helper updates that file's ACL. That is a defect in the CLI,
+  not a state of this machine.
+
+The freeze stays. Next step: re-run the fixture after the next CLI release. The
+other way out is the rollback pin (`npm i -g @openai/codex@0.153.4`), which loses
+`gpt-6.1-sol`.
+
+### Post-merge checks of the review path (2026-10-12)
+
+PR #133 landed as `main` `31b8905`. Runs from the synced copy
+`~/.claude/scripts/codex/adversary.mjs`, each on `scripts/codex/fixtures/planted.diff`:
+
+| Path | Receipt | `verify` |
+|---|---|---|
+| Lead session, direct | `status=ok run=20261012T235532Z-6314 model=gpt-6.1-sol effort=xhigh via=postmerge` | `VERIFY ok` |
+| New session, `/codex-adversary` skill | `status=ok run=20261012T235939Z-6256 model=gpt-6.1-sol effort=xhigh via=skill:codex-adversary` | `VERIFY ok` |
+| New session, `codex-adversary` envelope agent | `status=ok run=20261012T235954Z-f0aa model=gpt-5.6-luna effort=high via=agent` | `VERIFY ok` |
+
+A plan-mode `/codex-adversary` printed the deferred line and ran no command
+(Dave's report; the path writes no log row by design).
