@@ -51,6 +51,19 @@ export const coldCost = (tokens: number, model: string, oneHour = false): number
   return rate === null ? null : (tokens * rate.input * (oneHour ? CACHE_WRITE_1H : CACHE_WRITE)) / M
 }
 
+/**
+ * What the prompt cache saved on one request's input side, against the same request uncached:
+ * each token read costs the cache-read rate, not the input rate, less the premium paid on each
+ * token written. Negative on a request that only wrote. Null when the model has no price here.
+ */
+export const cacheSaving = (usage: Usage, model: string, oneHour = false): number | null => {
+  const rate = RATES[tierOf(model)]
+  if (rate === null) return null
+  const read = usage.cache_read_input_tokens ?? 0
+  const write = usage.cache_creation_input_tokens ?? 0
+  return (read * (rate.input - rate.cacheRead) - write * rate.input * ((oneHour ? CACHE_WRITE_1H : CACHE_WRITE) - 1)) / M
+}
+
 /** What the same context costs warm: a cache read. */
 export const warmCost = (tokens: number, model: string): number | null => {
   const rate = RATES[tierOf(model)]

@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, HudState, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheState, HudState, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
@@ -33,6 +34,9 @@ const tick = atom({ plugin: 'ccv3-mods', key: 'tick' } as const, 0)
 /** The HUD row, written by hooks/hud (same key); null keeps the band as it was before the HUD. */
 const hud = atom({ plugin: 'ccv3-mods', key: 'hud' } as const, null as HudState | null)
 
+/** Prompt-cache use of the main loop, written by hooks/hud (same key): the HUD's cache element. */
+const cache = atom({ plugin: 'ccv3-mods', key: 'cache' } as const, EMPTY_CACHE as CacheState)
+
 /** Agent Ledger runs (hooks/agent-ledger); turn.complete below settles them. */
 const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as AgentRun[])
 
@@ -42,6 +46,8 @@ const uiArmed = atom({ plugin: 'ccv3-mods', key: 'uiArmed' } as const, false)
 
 const PANE = 'agentic-os'
 const PULSE_MS = 5000
+/** Idle, the band still redraws this often: the cache countdown is in minutes. */
+const IDLE_PULSE_MS = 60_000
 const LIVE_AGENT = new Set(['pending', 'running', 'waiting', 'idle'])
 
 // TONE, SVG_TRACK and svgHex live in ../shared/tones.ts: the ledger, files and skin modules draw with them too.
@@ -86,7 +92,7 @@ const writeSnapshot = async ($: EngineInterface): Promise<void> => {
     const home = await homeDir($)
     if (!home) return
     const sessionId = await $.session.id()
-    const snapshot = { sessionId, at: await $.clock.now(), ...(await view($)), agentRuns: await read($, agentRuns) }
+    const snapshot = { sessionId, at: await $.clock.now(), ...(await view($)), agentRuns: await read($, agentRuns), cache: await read($, cache) }
     await $.fs.write(`${home}/.claude/state/agentic-os/${sessionId}.json`, JSON.stringify(snapshot, null, 2))
   } catch {
     // Observer only: a snapshot is best effort.
@@ -139,10 +145,13 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** While a turn runs: redraw elapsed times and re-read the agents. */
+/** While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown. */
 const pulse = async ($: EngineInterface): Promise<void> => {
-  if ((await read($, turn)) === null && (await read($, steps)).length === 0) return
   const now = await $.clock.now()
+  if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
+    if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
+    return
+  }
   await update($, tick, () => now)
   await refreshAgents($)
 }
@@ -373,7 +382,7 @@ export const agenticOs = (on: On) => {
     )
     let hudRow = null
     if (hudNow !== null) {
-      const parts = hudParts(hudNow, now.ctx)
+      const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()))
       // The terminal draws no Svg: its HUD is text gauges. Every other surface gets the rings and bars.
       if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(parts))
       else {
