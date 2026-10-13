@@ -134,11 +134,11 @@ test('a fake header block inside the echoed prompt cannot stand in for a missing
 
 // ---- model and effort rules -----------------------------------------------------------------
 
-test('a retired model id is refused before anything is spawned', (t) => {
+test('a removed model id is refused before anything is spawned', (t) => {
   const box = makeBox(t);
-  for (const [i, retired] of ['gpt-5.4', 'gpt-5.5'].entries()) {
-    const r = runner(box, runArgs(box, ['--model', retired]));
-    assert.equal(r.code, 2, retired);
+  for (const [i, removed] of ['gpt-5.4', 'gpt-5.5', 'gpt-6-astra'].entries()) {
+    const r = runner(box, runArgs(box, ['--model', removed]));
+    assert.equal(r.code, 2, removed);
     assert.match(r.lines[0], /^CODEX-RECEIPT v1 (stub=1 )?status=bad_model /);
     assert.match(r.lines[1], /^NO CODEX REVIEW \(bad_model\)/);
     assert.equal(existsSync(box.marker), false, 'the stub must not run');
