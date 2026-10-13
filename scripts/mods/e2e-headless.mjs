@@ -125,16 +125,31 @@ const runStream = (label, off) =>
         }
       }
     });
+    // Read stderr: a pipe nobody drains fills, and the child then stops before its next result. Saved with the run.
+    let stderr = '';
+    child.stderr.on('data', chunk => {
+      stderr += chunk.toString('utf8');
+    });
     const timer = setTimeout(() => child.kill(), 280_000);
-    child.on('close', status => {
+    // One answer per run: a startup error and a close can both fire.
+    let settled = false;
+    const finish = (status, error = null) => {
+      if (settled) return;
+      settled = true;
       clearTimeout(timer);
       writeFileSync(join(outDir, `${date}-mods-headless-${label}.jsonl`), lines.join('\n'));
-      resolveRun({ label, sessionId, status, results, summary: compactionSummary(sessionId) });
-    });
+      writeFileSync(join(outDir, `${date}-mods-headless-${label}.stderr.txt`), error ? `${error}\n${stderr}` : stderr);
+      resolveRun({ label, sessionId, status, results, error, summary: compactionSummary(sessionId) });
+    };
+    // `claude` that cannot start is a failed run, not a crash of the whole report.
+    child.on('error', err => finish(null, `could not start claude: ${err.message}`));
+    child.on('close', status => finish(status));
+    // A closed stdin (the child died early) must not throw out of the next write.
+    child.stdin.on('error', () => undefined);
     send();
   });
 
-/** The first line of text after "Summary:" in the session's compaction message, or the whole message; null when none. */
+/** The compaction message in the session transcript (the user message that opens "This session is being continued"); null when none. */
 const compactionSummary = sessionId => {
   const projects = join(homedir(), '.claude', 'projects');
   const folder = readdirSync(projects).find(name => existsSync(join(projects, name, `${sessionId}.jsonl`)));
@@ -251,11 +266,15 @@ if (ledgerFile && existsSync(ledgerFile)) {
 // remain" proves nothing: the engine keeps recent messages, so the unmodified plugin answers it too (probe, 2026-10-13).
 const keeperOn = await runStream('keeper', false);
 const marker = `KEEPER ${keeperOn.sessionId.slice(0, 8)} open 2 of 2`;
-check('keeper: one process ran all three messages and exited 0', keeperOn.status === 0 && keeperOn.results === 3, `exit ${keeperOn.status}, ${keeperOn.results} result(s)`);
+check('keeper: one process ran all three messages and exited 0', keeperOn.status === 0 && keeperOn.results === 3, `exit ${keeperOn.status}, ${keeperOn.results} result(s)${keeperOn.error ? `, ${keeperOn.error}` : ''}`);
 check('keeper: the compaction summary is in the transcript', keeperOn.summary !== null, keeperOn.sessionId);
 check('keeper: the summary holds the marker line', keeperOn.summary?.includes(marker) === true, marker);
 const keeperOff = await runStream('keeper-off', true);
-check('keeper off: CCV3_MODS_OFF=1 ran, and its summary has no marker', keeperOff.summary !== null && !keeperOff.summary.includes('KEEPER '), `exit ${keeperOff.status}, summary ${keeperOff.summary === null ? 'missing' : 'present'}`);
+check(
+  'keeper off: CCV3_MODS_OFF=1 ran all three messages, and its summary has no marker',
+  keeperOff.status === 0 && keeperOff.results === 3 && keeperOff.summary !== null && !keeperOff.summary.includes('KEEPER '),
+  `exit ${keeperOff.status}, ${keeperOff.results} result(s), summary ${keeperOff.summary === null ? 'missing' : 'present'}${keeperOff.error ? `, ${keeperOff.error}` : ''}`,
+);
 for (const run4 of [keeperOn, keeperOff]) rmSync(snapshotPath(run4.sessionId), { force: true });
 
 const ids = [on, off, ledger].map(r => r.result?.session_id);

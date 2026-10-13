@@ -28,6 +28,8 @@ export const keeperMarker = (sessionId: string, open: number, total: number): st
  */
 export const compactBlock = (view: KeeperView, sessionId: string, limit: number = KEEPER_LIMIT): string | null => {
   const open = view.tasks.filter(task => task.status !== 'completed')
+  // What the person is doing now comes first, so a cut never drops it for work not yet started.
+  const ordered = [...open.filter(task => task.status === 'in_progress'), ...open.filter(task => task.status !== 'in_progress')]
   const lanes = (view.lanes ?? []).slice(0, MAX_LANES)
   const prs = view.prs.slice(0, MAX_PRS)
   if (view.plan === null && open.length === 0 && lanes.length === 0 && prs.length === 0) return null
@@ -47,7 +49,7 @@ export const compactBlock = (view: KeeperView, sessionId: string, limit: number 
     const title = `Open tasks (${open.length} of ${view.tasks.length}):`
     let used = [...head, title, ...tail].join('\n').length
     const listed: string[] = []
-    for (const [i, task] of open.entries()) {
+    for (const [i, task] of ordered.entries()) {
       const line = taskLine(task)
       const more = open.length - i - 1
       // Keep room for the "+N more" line unless this is the last task.

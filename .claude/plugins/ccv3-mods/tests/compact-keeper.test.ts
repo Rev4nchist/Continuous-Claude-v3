@@ -14,6 +14,8 @@ import { KEEPER_LIMIT, compactBlock, keeperMarker } from '../hooks/compact-keepe
 // K6 either off switch still changes the compaction
 // K7 a finished task is listed as open, or the counts are wrong
 // K8 a subagent's own compaction gets this session's plan
+// K10 a long list of tasks not yet started crowds out the task in progress
+// K11 after /clear or a resume in the same process, the old conversation's tasks and plan reach the new summary
 // Not tested here: a hook that throws. The engine skips it with or without `.catch`, so a test cannot tell;
 // `node scripts/mods/validate-mods.mjs` fails a gating hook without `.catch` (shown 2026-10-13: "session.compact{trigger=manual}").
 // Not tested here: the matcher. Without it the plugin does not load (two unmatched session.compact hooks), and every test fails.
@@ -28,6 +30,17 @@ describe('compactBlock (pure)', () => {
     expect(block).toContain(keeperMarker('abcdef123456', 80, 80))
     const listed = block.split('\n').filter(line => line.startsWith('- task') || line.startsWith('- a fairly')).length
     expect(block).toContain(`- (+${80 - listed} more)`)
+  })
+
+  test('K10 the task in progress is listed first, even when it came last and the list is cut', () => {
+    const tasks = [
+      ...Array.from({ length: 80 }, (_, i) => task(i + 1, 'pending', `a fairly long task subject number ${i + 1} that takes space`)),
+      task(81, 'in_progress', 'the one being done now'),
+    ]
+    const block = compactBlock({ plan: null, tasks, lanes: null, prs: [] }, 'abcdef123456') ?? ''
+    const lines = block.split('\n')
+    expect(lines[lines.indexOf('Open tasks (81 of 81):') + 1]).toBe('- [doing] the one being done now')
+    expect(block.length).toBeLessThanOrEqual(KEEPER_LIMIT)
   })
 
   test('K1 a tiny limit still returns the marker', () => {
@@ -66,6 +79,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
   mock.clock(on, { now: 1_000 })
   mock.env(on, env)
   on('session.id', () => ({ value: 's1' }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('session.compact', (_$, e) => {
     seen.instructions = e.instructions
     return { messages: [SUMMARY] }
@@ -127,6 +141,26 @@ describe('compact keeper (engine)', () => {
   test('K6 CCV3_MOD_KEEPER_OFF leaves the compaction alone', async ($, on) => {
     world(on, { CCV3_MOD_KEEPER_OFF: '1' })
     await twoTasks($)
+    await compact($, 'manual')
+    expect(seen.instructions).toBeUndefined()
+  })
+
+  test('K11 after /clear the old tasks do not reach the new summary; tasks made afterwards do', async ($, on) => {
+    world(on)
+    await twoTasks($)
+    await $.session.end({ reason: 'clear', sessionId: 's1', resume: { id: 's1' } } as never)
+    await compact($, 'manual')
+    expect(seen.instructions).toBeUndefined()
+    await $.tool.call({ tool: 'TaskCreate', subject: 'gamma', description: 'd' })
+    await compact($, 'manual')
+    expect(seen.instructions).toContain('- gamma')
+    expect(seen.instructions).not.toContain('- beta')
+  })
+
+  test('K11 a resume in the same process clears the old tasks too', async ($, on) => {
+    world(on)
+    await twoTasks($)
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } } as never)
     await compact($, 'manual')
     expect(seen.instructions).toBeUndefined()
   })
