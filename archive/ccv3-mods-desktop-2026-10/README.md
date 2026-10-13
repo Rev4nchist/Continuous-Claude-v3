@@ -16,7 +16,7 @@ Not archived: `hooks/shared/diff.ts` (`hunksOf`, `diffLines`). Touched Files sti
 2. In `hooks/register.tsx` import `cacheGuard` and `skin` again and call them (`cacheGuard` first: its card replaces the band while a send is held).
 3. In `types/index.d.ts` bring back `CacheClock`, `CacheHold`, `ToolTime` and the atoms `cacheClock`, `cacheHold`, `cacheSurface`, `originNoted`, `skinOn`, `toolTimes`.
 4. In `hooks/agentic-os/index.tsx` bring back the `cacheClock` stamp in `turn.complete` and the `toolTimes` capture in `tool.call`.
-5. In `hooks/shared/diag.ts` bring back `isDesktop`. In `skin/model.ts` import `hunksOf` and `diffLines` from `../shared/diff`, and drop the copies.
+5. In `hooks/shared/diag.ts` bring back `isDesktop`. In `skin/model.ts` replace the copies of `hunksOf` and `diffLines` with `export { hunksOf, diffLines } from '../shared/diff'`, so `skin/index.tsx` and `skin.test.ts`, which import both names from `./model`, still compile.
 6. Run `node scripts/mods/validate-mods.mjs`. The commit that archived them (`git log -- archive/ccv3-mods-desktop-2026-10`) shows each edit.
 
 Why they stopped: desktop sessions never started the mod UI (no proof files, no `/ledger`); four diagnostic rounds (PRs #129 to #131) found the cause in the desktop app's own launch, not in the plugin.

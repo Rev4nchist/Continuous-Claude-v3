@@ -1,12 +1,12 @@
 {
   "name": "ccv3",
   "owner": { "name": "Rev4nchist" },
-  "description": "CCv3 local marketplace: installs the ccv3-mods plugin in place, for the desktop app's own Claude Code.",
+  "description": "CCv3 local marketplace: installs the ccv3-mods plugin in place, so each forward sync reaches the next session.",
   "plugins": [
     {
       "name": "ccv3-mods",
       "source": "./",
-      "description": "CCv3 mods: Agentic OS band and HUD, Agent Ledger (/ledger), Cache Guard, Touched Files (/files), CCv3 Skin (/skin), PR loop."
+      "description": "CCv3 mods: Agentic OS band and HUD, Agent Ledger (/ledger), Touched Files (/files), PR loop."
     }
   ]
 }
