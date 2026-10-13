@@ -70,4 +70,5 @@ Do not use it for:
 | `namespaceId is required...` | Call `list_knowledge_bases`, or use the exact repository name from the error's list. |
 | `Repository not found...` | Wrong name, wrong organization, or not visible to the user. Use a `namespaceId` from the list. |
 | `Knowledge base document not found` | The path is not in the current version. List the documents again. |
-| Tools unauthorized, or no `mcp__greptile__*` tools | The MCP is not signed in. Ask the user to type `/mcp`, select `greptile`, choose **Authenticate**, then restart. Do not use `! claude mcp login greptile`: it has no terminal and fails. Fallback: `claude mcp login greptile --no-browser` in a separate PowerShell window. |
+| No `mcp__greptile__*` tools, and `/mcp` does not list `greptile` | The server is not registered on this machine or project. Fall back to the code. To register it, the user runs `claude mcp add --scope user --transport http greptile https://api.greptile.com/mcp`, then signs in (next row). |
+| Tools unauthorized, or `/mcp` lists `greptile` as needing authentication | The MCP is not signed in. Ask the user to type `/mcp`, select `greptile`, choose **Authenticate**, then restart. Do not use `! claude mcp login greptile`: it has no terminal and fails. Fallback: `claude mcp login greptile --no-browser` in a separate PowerShell window. |
