@@ -18555,6 +18555,132 @@ var malicious_packages_default = {
       reason: "Malware in @ikanngeming/blubub (GHSA-4qm4-g99f-98jp)",
       date: "2026-10-12",
       advisory: "https://github.com/advisories/GHSA-4qm4-g99f-98jp"
+    },
+    "monkey-tags-ip": {
+      blocked_all: true,
+      reason: "Malicious code in monkey-tags-ip (npm) (GHSA-88vx-pphm-qg2x)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-88vx-pphm-qg2x"
+    },
+    "@user-interface-common/common-styles": {
+      blocked_all: true,
+      reason: "Malicious code in @user-interface-common/common-styles (npm) (GHSA-h9q3-2w8j-vhfr)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-h9q3-2w8j-vhfr"
+    },
+    "@newspage/libx-amount": {
+      blocked_all: true,
+      reason: "Malicious code in @newspage/libx-amount (npm) (GHSA-49j3-qrv4-xgwv)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-49j3-qrv4-xgwv"
+    },
+    "@newspage/lib-ng-async-routes-ui": {
+      blocked_all: true,
+      reason: "Malicious code in @newspage/lib-ng-async-routes-ui (npm) (GHSA-5m6v-q7rf-gh3x)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-5m6v-q7rf-gh3x"
+    },
+    "@mntv-analysis/ui-components": {
+      blocked_all: true,
+      reason: "Malicious code in @mntv-analysis/ui-components (npm) (GHSA-82g4-6666-2x5v)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-82g4-6666-2x5v"
+    },
+    "@mntv-analysis/workspaces-components": {
+      blocked_all: true,
+      reason: "Malicious code in @mntv-analysis/workspaces-components (npm) (GHSA-8qv9-76f6-8h3c)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-8qv9-76f6-8h3c"
+    },
+    "@mntv-analysis/ui": {
+      blocked_all: true,
+      reason: "Malicious code in @mntv-analysis/ui (npm) (GHSA-xrv8-6w5h-xhhf)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-xrv8-6w5h-xhhf"
+    },
+    passwordcrackv2: {
+      blocked_all: true,
+      reason: "Malicious code in passwordcrackv2 (npm) (GHSA-75f2-wpm3-2h52)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-75f2-wpm3-2h52"
+    },
+    passwordcracker: {
+      blocked_all: true,
+      reason: "Malicious code in passwordcracker (npm) (GHSA-jwr3-9ch5-2qw5)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-jwr3-9ch5-2qw5"
+    },
+    "@accenturecodefoundry/mfe-pot-shared-ui-scds-core": {
+      blocked_all: true,
+      reason: "Malicious code in @accenturecodefoundry/mfe-pot-shared-ui-scds-core (npm) (GHSA-36v8-chg8-q674)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-36v8-chg8-q674"
+    },
+    "@kre64/hello-npm-test": {
+      blocked_all: true,
+      reason: "Malware in @kre64/hello-npm-test (GHSA-c43r-xf4h-m548)",
+      date: "2026-10-14",
+      advisory: "https://github.com/advisories/GHSA-c43r-xf4h-m548"
+    },
+    "opencode2-windows-x64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-windows-x64 (GHSA-6x5j-r784-fx6j)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-6x5j-r784-fx6j"
+    },
+    "opencode2-windows-arm64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-windows-arm64 (GHSA-xr5m-85hf-27r5)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-xr5m-85hf-27r5"
+    },
+    "opencode2-linux-arm64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-linux-arm64 (GHSA-xwcq-r6hw-mc5p)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-xwcq-r6hw-mc5p"
+    },
+    opencode2: {
+      blocked_all: true,
+      reason: "Malware in opencode2 (GHSA-8w65-j2wh-mqv7)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-8w65-j2wh-mqv7"
+    },
+    "opencode2-darwin-x64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-darwin-x64 (GHSA-pmv2-r2q9-rmg9)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-pmv2-r2q9-rmg9"
+    },
+    "opencode2-linux-x64-musl": {
+      blocked_all: true,
+      reason: "Malware in opencode2-linux-x64-musl (GHSA-qx7m-vw4p-xv3j)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-qx7m-vw4p-xv3j"
+    },
+    "opencode2-darwin-arm64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-darwin-arm64 (GHSA-36mq-frp2-jc97)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-36mq-frp2-jc97"
+    },
+    "opencode2-linux-arm64-musl": {
+      blocked_all: true,
+      reason: "Malware in opencode2-linux-arm64-musl (GHSA-cm8m-24p9-hh65)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-cm8m-24p9-hh65"
+    },
+    "opencode2-linux-x64": {
+      blocked_all: true,
+      reason: "Malware in opencode2-linux-x64 (GHSA-3jr5-3qvm-r54h)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-3jr5-3qvm-r54h"
+    },
+    "yoodan-github-single-ver-pkg": {
+      blocked_all: true,
+      reason: "Malware in yoodan-github-single-ver-pkg (GHSA-2946-w5c6-hcw2)",
+      date: "2026-10-13",
+      advisory: "https://github.com/advisories/GHSA-2946-w5c6-hcw2"
     }
   }
 };
