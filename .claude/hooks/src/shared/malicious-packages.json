@@ -18024,6 +18024,42 @@
       "reason": "Malware in yoodan-github-single-ver-pkg (GHSA-2946-w5c6-hcw2)",
       "date": "2026-10-13",
       "advisory": "https://github.com/advisories/GHSA-2946-w5c6-hcw2"
+    },
+    "tailwindcss-uniform": {
+      "blocked_all": true,
+      "reason": "Malware in tailwindcss-uniform (GHSA-r7f7-6833-rxh9)",
+      "date": "2026-10-15",
+      "advisory": "https://github.com/advisories/GHSA-r7f7-6833-rxh9"
+    },
+    "util-foriepft": {
+      "blocked_all": true,
+      "reason": "Malicious code in util-foriepft (npm) (GHSA-jc4x-j69j-jf5c)",
+      "date": "2026-10-15",
+      "advisory": "https://github.com/advisories/GHSA-jc4x-j69j-jf5c"
+    },
+    "@flexmr/ui": {
+      "blocked_all": true,
+      "reason": "Malicious code in @flexmr/ui (npm) (GHSA-ccxj-49h8-hp3q)",
+      "date": "2026-10-15",
+      "advisory": "https://github.com/advisories/GHSA-ccxj-49h8-hp3q"
+    },
+    "babel-polyfill-plugin-corejs2": {
+      "blocked_all": true,
+      "reason": "Malware in babel-polyfill-plugin-corejs2 (GHSA-9g6r-83hw-6cq2)",
+      "date": "2026-10-14",
+      "advisory": "https://github.com/advisories/GHSA-9g6r-83hw-6cq2"
+    },
+    "eth-react-provider": {
+      "blocked_all": true,
+      "reason": "Malware in eth-react-provider (GHSA-rr86-r66c-qc54)",
+      "date": "2026-10-14",
+      "advisory": "https://github.com/advisories/GHSA-rr86-r66c-qc54"
+    },
+    "@xxxfnbs21/hello-demo": {
+      "blocked_all": true,
+      "reason": "Malware in @xxxfnbs21/hello-demo (GHSA-hf57-6wg3-343x)",
+      "date": "2026-10-14",
+      "advisory": "https://github.com/advisories/GHSA-hf57-6wg3-343x"
     }
   }
 }
