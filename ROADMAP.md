@@ -201,7 +201,6 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] feat(ws2): B.3b -- memory-awareness READS the bus + shared bus-focus module (2026-06-03) `0e85d49`
 - [x] feat(ws2): B.3a -- agent-recall-injector READS the context bus (2026-06-03) `8929667`
 - [x] fix(ws2): B.0/B.4/B.4a review hardening -- 5 bus findings + self-regression (2026-06-02) `dd0d24b`
-- [x] docs: verify that CLI repair, reconcile version + auth claims (2026-06-01) `11f99ca`
 - [x] docs(hardening): Phase-3 tail 1/2/3/5 done + 3rd reverse-sync vector fix; item 4 remains (2026-06-01) `cc1ec7f`
 - [x] perf(memory): text-only recall fail-fast (12s->5s) in checkDbMemory (2026-06-01) `28184c3`
 - [x] fix(hooks): deregister broken TLDR warm-cache SessionStart hook (2026-06-01) `a08014a`

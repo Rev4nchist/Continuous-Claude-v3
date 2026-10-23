@@ -72,7 +72,6 @@ Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork
                        │                    │                    │
                        ▼                    ▼                    ▼
                Claude Code            Claude Code            Other clients
-               (the wrapper)          (the wrapper)          via MCP
 ```
 
 ---
