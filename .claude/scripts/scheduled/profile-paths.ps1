@@ -3,10 +3,11 @@
 # No profile: warn and use the home directory plus this checkout.
 
 function Get-Ccv3Paths {
-  $home = $env:USERPROFILE
-  if (-not $home) { $home = $env:HOME }
+  # $HOME and $PROFILE are read-only automatic variables. Do not assign them.
+  $ccvHome = $env:USERPROFILE
+  if (-not $ccvHome) { $ccvHome = $env:HOME }
   $name = $env:CCV3_MACHINE_PROFILE
-  $state = Join-Path $home '.claude\state\machine-profile'
+  $state = Join-Path $ccvHome '.claude\state\machine-profile'
   if (-not $name -and (Test-Path -LiteralPath $state)) {
     $name = (Get-Content -LiteralPath $state -Raw).Trim()
   }
@@ -21,21 +22,21 @@ function Get-Ccv3Paths {
       $dir = $parent
     }
   }
-  if (-not $repo) { $repo = Join-Path $home 'continuous-claude' }
+  if (-not $repo) { $repo = Join-Path $ccvHome 'continuous-claude' }
 
-  $profile = $null
+  $ccvProfile = $null
   if ($name) {
     $candidates = @(
       (Join-Path $repo "machine\$name.json"),
-      (Join-Path $home ".claude\machine\$name.json")
+      (Join-Path $ccvHome ".claude\machine\$name.json")
     )
     foreach ($candidate in $candidates) {
       if (Test-Path -LiteralPath $candidate) {
-        $profile = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
+        $ccvProfile = Get-Content -LiteralPath $candidate -Raw | ConvertFrom-Json
         break
       }
     }
-    if (-not $profile) {
+    if (-not $ccvProfile) {
       Write-Warning "machine profile '$name' was selected but no JSON was found; using home-directory defaults"
     }
   } else {
@@ -43,18 +44,18 @@ function Get-Ccv3Paths {
   }
 
   $gitBash = 'C:\Program Files\Git\bin\bash.exe'
-  if ($profile -and $profile.gitBash) { $gitBash = $profile.gitBash }
-  $userHome = $home
-  if ($profile -and $profile.userHome) { $userHome = $profile.userHome }
+  if ($ccvProfile -and $ccvProfile.gitBash) { $gitBash = $ccvProfile.gitBash }
+  $userHome = $ccvHome
+  if ($ccvProfile -and $ccvProfile.userHome) { $userHome = $ccvProfile.userHome }
   $repoRoot = $repo
-  if ($profile -and $profile.repoRoot) { $repoRoot = $profile.repoRoot }
+  if ($ccvProfile -and $ccvProfile.repoRoot) { $repoRoot = $ccvProfile.repoRoot }
   $claudeHome = Join-Path $userHome '.claude'
-  if ($profile -and $profile.claudeHome) { $claudeHome = $profile.claudeHome }
+  if ($ccvProfile -and $ccvProfile.claudeHome) { $claudeHome = $ccvProfile.claudeHome }
   $opcDir = Join-Path $repoRoot 'opc'
-  if ($profile -and $profile.opcDir) { $opcDir = $profile.opcDir }
+  if ($ccvProfile -and $ccvProfile.opcDir) { $opcDir = $ccvProfile.opcDir }
 
   return [pscustomobject]@{
-    ProfileName = $(if ($profile) { $name } else { '' })
+    ProfileName = $(if ($ccvProfile) { $name } else { '' })
     UserHome = $userHome
     RepoRoot = $repoRoot
     ClaudeHome = $claudeHome

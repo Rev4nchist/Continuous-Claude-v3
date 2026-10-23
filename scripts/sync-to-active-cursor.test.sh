@@ -622,6 +622,41 @@ out="$(sync)"
 # Other dirs may show a MISMATCH left by earlier fixtures (T16's skill CLAUDE.md), so look at this line only.
 chk "(e) full sync verify: plugins/ccv3-mods OK, not MISMATCH" "$(printf '%s' "$out" | grep -q 'plugins/ccv3-mods: OK' && ! printf '%s' "$out" | grep -q 'plugins/ccv3-mods: MISMATCH' && echo 1 || echo 0)"
 
+echo "=== T18: no profile warns and syncs; a bad profile stops the sync ==="
+# The fixture copy of sync-to-active.sh warns and continues when the helper is
+# absent. These cases copy the real helper so a missing profile and a malformed
+# profile take the two different exits.
+mkdir -p "$REPO/scripts/settings"
+cp "$SCRIPT_DIR/settings/machine-profile.mjs" "$REPO/scripts/settings/machine-profile.mjs"
+rm -rf "$REPO/machine"
+rm -f "$ACT/state/machine-profile"
+g checkout -q main
+printf 't18-none\n' > "$REPO/.claude/rules-src/t18-none.md"
+commit t18-none
+out="$(env -u CCV3_MACHINE_PROFILE HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.sh" 2>&1)"; rc=$?
+chk "no profile: exit 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+chk "no profile: WARN" "$(printf '%s' "$out" | grep -q 'WARN:' && echo 1 || echo 0)"
+chk "no profile: the sync still copies" "$( [ "$(cat "$ACT/rules/t18-none.md" 2>/dev/null)" = "t18-none" ] && echo 1 || echo 0)"
+
+mkdir -p "$REPO/machine"
+printf '{\n' > "$REPO/machine/personal.json"
+printf 't18-bad\n' > "$REPO/.claude/rules-src/t18-bad.md"
+commit t18-bad
+out="$(env -u CCV3_MACHINE_PROFILE CCV3_MACHINE_PROFILE=personal HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.sh" 2>&1)"; rc=$?
+chk "malformed profile: exit 1" "$( [ "$rc" -eq 1 ] && echo 1 || echo 0)"
+chk "malformed profile: ERROR: bad machine profile" "$(printf '%s' "$out" | grep -q 'ERROR: bad machine profile' && echo 1 || echo 0)"
+chk "malformed profile: nothing from that commit is synced" "$(not "$ACT/rules/t18-bad.md")"
+
+printf '[]\n' > "$REPO/machine/personal.json"
+out="$(env -u CCV3_MACHINE_PROFILE CCV3_MACHINE_PROFILE=personal HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.sh" 2>&1)"; rc=$?
+chk "non-object profile: exit 1" "$( [ "$rc" -eq 1 ] && echo 1 || echo 0)"
+chk "non-object profile: ERROR: bad machine profile" "$(printf '%s' "$out" | grep -q 'ERROR: bad machine profile' && echo 1 || echo 0)"
+
+rm -rf "$REPO/machine"
+out="$(env -u CCV3_MACHINE_PROFILE CCV3_MACHINE_PROFILE=personal HOME="$HOMEDIR" bash "$REPO/scripts/sync-to-active.sh" 2>&1)"; rc=$?
+chk "named profile missing on disk: exit 0" "$( [ "$rc" -eq 0 ] && echo 1 || echo 0)"
+chk "named profile missing on disk: WARN" "$(printf '%s' "$out" | grep -q 'WARN:' && echo 1 || echo 0)"
+
 echo
 echo "passed=$pass failed=$fail"
 [ "$fail" -eq 0 ]

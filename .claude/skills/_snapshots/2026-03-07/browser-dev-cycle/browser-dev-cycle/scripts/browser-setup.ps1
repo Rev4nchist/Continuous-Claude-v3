@@ -12,8 +12,8 @@ $existing = Get-NetTCPConnection -LocalPort $Port -ErrorAction SilentlyContinue
 if ($existing) {
     if ($Force) {
         Write-Host "Force-killing existing process on port $Port..."
-        $pid = $existing[0].OwningProcess
-        Stop-Process -Id $pid -Force
+        $ownerPid = $existing[0].OwningProcess
+        Stop-Process -Id $ownerPid -Force
         Start-Sleep -Seconds 1
     } else {
         Write-Host "Port $Port already in use. Chrome may already be running with CDP."
@@ -52,13 +52,13 @@ Write-Host "Launching Chrome with CDP on port $Port..."
 Write-Host "  Profile: $Profile"
 
 # Launch Chrome
-$args = @(
+$chromeArgs = @(
     "--remote-debugging-port=$Port",
     "--user-data-dir=$Profile",
     "--no-first-run",
     "--no-default-browser-check"
 )
-Start-Process -FilePath $chrome -ArgumentList $args
+Start-Process -FilePath $chrome -ArgumentList $chromeArgs
 
 # Wait for CDP to be ready
 $maxWait = 10

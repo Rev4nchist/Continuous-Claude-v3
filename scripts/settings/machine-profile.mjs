@@ -71,7 +71,15 @@ export function resolveMachineProfile(opts = {}) {
       paths: base,
     };
   }
-  const raw = JSON.parse(readFileSync(file, 'utf8'));
+  let raw;
+  try {
+    raw = JSON.parse(readFileSync(file, 'utf8'));
+  } catch (err) {
+    throw new Error(`machine profile ${file} is unreadable or malformed: ${err.message}`);
+  }
+  if (!raw || typeof raw !== 'object' || Array.isArray(raw)) {
+    throw new Error(`machine profile ${file} is unreadable or malformed: expected a JSON object`);
+  }
   const paths = {
     ...base,
     userHome: slash(raw.userHome || base.userHome),

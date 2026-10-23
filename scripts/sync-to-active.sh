@@ -60,7 +60,14 @@ PROFILE_HELPER="$REPO_ROOT/scripts/settings/machine-profile.mjs"
 if [[ -f "$PROFILE_HELPER" ]] && command -v node >/dev/null 2>&1; then
     profile_args=(--repo "$REPO_ROOT" --export bash --quiet)
     [[ -n "$CLI_PROFILE" ]] && profile_args+=(--profile "$CLI_PROFILE")
-    eval "$(node "$PROFILE_HELPER" "${profile_args[@]}")"
+    # A missing profile warns and continues. A profile that exists but cannot
+    # be read, or is not a JSON object, must stop the sync: an empty eval
+    # would clear SKIP_SKILLS and copy the skills the profile meant to skip.
+    profile_out=$(node "$PROFILE_HELPER" "${profile_args[@]}") || {
+        echo "ERROR: bad machine profile" >&2
+        exit 1
+    }
+    eval "$profile_out"
 else
     PROFILE_WARN="no machine profile helper; using home-directory defaults"
 fi
