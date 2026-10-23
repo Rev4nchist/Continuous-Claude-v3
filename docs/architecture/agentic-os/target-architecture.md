@@ -77,7 +77,7 @@ flowchart TB
 
 - File-scoped Ralph/Maestro state becomes per-run database state.
 - Multiple schema bootstraps become versioned migrations and one bootstrap path.
-- `.claude`, `.`, and `.agents` drift becomes one canonical package plus generated projections.
+- `.claude` and `.agents` drift becomes one canonical package plus generated projections.
 - Direct `--dangerously-skip-permissions` jobs become scoped runner capabilities.
 - Machine-specific telemetry tasks become portable workers with a durable queue.
 - Empty/fragmented MCP catalogs become one tool registry with risk and auth metadata.

@@ -9,15 +9,27 @@
 # Idempotent: a missing path is skipped. A second run deletes nothing and
 # still reports leftovers: 0.
 # Deletes stay under $env:USERPROFILE\.claude. The backup is a sibling copy
-# ($env:USERPROFILE\.claude.bak-ccv3-2-<timestamp>), which is the backup the
-# operator asked for. skills\fourth-* is left in place (CCV3-4).
+# ($env:USERPROFILE\.claude.bak-ccv3-2-<yyyyMMdd-HHmmss>, plus -1, -2, ... if
+# that name already exists). A rerun never copies into the previous backup.
+# skills\fourth-* is left in place (CCV3-4).
+# The leftover scan covers the install folders the sync owns. It does not
+# walk projects\, plugins\, or file-history.
 
 $ErrorActionPreference = 'Stop'
 $C = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.claude'))
 if (-not (Test-Path -LiteralPath $C)) { throw "No install at $C" }
+$prefix = $C.TrimEnd('\') + '\'
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmm'
+$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
 $bak = "$C.bak-ccv3-2-$stamp"
+$n = 1
+while (Test-Path -LiteralPath $bak) {
+  $bak = "$C.bak-ccv3-2-$stamp-$n"
+  $n++
+}
+if ($bak.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+  throw "Refusing to place backup inside the install: $bak"
+}
 Copy-Item -LiteralPath $C -Destination $bak -Recurse
 "backup $bak"
 
@@ -78,10 +90,19 @@ $stale = @(
   'commands\task.md'
 ) + @($shims | ForEach-Object { "hooks\$_" })
 
+$settings = Join-Path $C 'settings.json'
+if (Test-Path -LiteralPath $settings) {
+  foreach ($shim in $shims) {
+    if (Select-String -LiteralPath $settings -Pattern $shim -SimpleMatch -Quiet) {
+      throw "settings.json still references $shim"
+    }
+  }
+}
+
 foreach ($rel in $stale) {
   $p = Join-Path $C $rel
   $fp = [System.IO.Path]::GetFullPath($p)
-  if (-not $fp.StartsWith($C, [System.StringComparison]::OrdinalIgnoreCase)) {
+  if (-not $fp.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to touch $fp"
   }
   if (Test-Path -LiteralPath $p) {
@@ -90,13 +111,29 @@ foreach ($rel in $stale) {
   }
 }
 
-$left = @(Get-ChildItem -LiteralPath $C -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
-  $full = $_.FullName
-  if ($full.Length -lt $C.Length) { return $false }
-  $tail = $full.Substring($C.Length)
-  if ($tail -match '\\skills\\fourth-') { return $false }
-  $_.Name -match 'codex' -or $full -match '\\_snapshots\\|\\_archive\\' -or $_.Name -match '\.pptx$|\.potx$'
-})
+$scanRoots = @(
+  'agents',
+  'commands',
+  'docs',
+  'hooks',
+  'rules',
+  'rules-ondemand',
+  'scripts',
+  'skills'
+)
+$left = @()
+foreach ($dir in $scanRoots) {
+  $root = Join-Path $C $dir
+  if (-not (Test-Path -LiteralPath $root)) { continue }
+  $left += @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
+    $full = $_.FullName
+    if ($full.Length -lt $prefix.Length) { return $false }
+    if (-not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
+    $tail = $full.Substring($C.Length)
+    if ($tail -match '\\skills\\fourth-') { return $false }
+    $_.Name -match 'codex' -or $full -match '\\_snapshots\\|\\_archive\\' -or $_.Name -match '\.pptx$|\.potx$'
+  })
+}
 "leftovers: $($left.Count)"
 if ($left.Count -ne 0) {
   $left | ForEach-Object { $_.FullName }

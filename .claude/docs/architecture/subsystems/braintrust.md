@@ -162,10 +162,9 @@ retired. None produced a usable score in production: `closedqa` filtered on
 a span name that never matched a live span, `plan_rubric` never scored
 either, and `factuality` compared a prompt against text derived from that
 same prompt, which is circular. The runner and its `JUDGE_REGISTRY` remain —
-a registered judge is still graded by one of two subscription-OAuth
-subprocess CLIs (`retired exec --sandbox read-only` or
-`claude -p --output-format json --model sonnet`, no API keys), preflight
-still checks only the CLIs a registered judge needs, and a subprocess
+a registered judge is still graded by the subscription CLI
+`claude -p --output-format json --model sonnet` (no API key). Preflight
+checks that CLI when a judge is registered, and a subprocess
 failure still skips only that judge. New binary judges (one failure mode
 each, pass/fail, validated against human labels) are expected with P17.
 
@@ -205,7 +204,7 @@ safe — no local state needed.
 The batch runner is scheduled as a **Windows Task Scheduler** job named
 `CCv3-Judge-Batch` (daily 06:15 local). It must run on the **local machine** —
 NOT a Braintrust UI scoring rule and NOT a Claude Code `/schedule` job —
-because the judges call local subscription CLIs (`retired` / `claude`) that a
+because the judges call the local subscription CLI (`claude -p`) that a
 remote rule cannot reach.
 
 ```bash

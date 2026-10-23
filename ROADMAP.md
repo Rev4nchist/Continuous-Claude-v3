@@ -436,7 +436,7 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 ### 2026-07-21: CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm
 **Key Decisions:**
 - Issue 1 has two compounding layers: *
-- Issue 2: the *** harness SessionStart hook
+- Issue 2: the removed harness SessionStart hook
 - Reuse the existing, tested converter:
 - iolo stop-and-test: (user's chosen first AV move). Stop `ioloTrayApp` and the iolo
 - Lever A dispatcher: (81 hooks → ~9 in-process; permissionDecision-merge risk) and

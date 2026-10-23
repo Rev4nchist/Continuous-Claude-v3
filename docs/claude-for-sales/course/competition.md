@@ -35,7 +35,7 @@ Before any timer starts, facilitators run a **5-minute setup window**:
 3. On-screen success check: **"Fresh Project open, skill installed, no account loaded — ready."**
 4. Any rep who can't get a clean Project is flagged to the IT floater and moved to the fallback (§1.5) — **before** the clock, never during.
 
-**Setup time never counts against the competition clock.** This is the -hardened fix: bundling install/auth into the timed window penalized the reps with the slowest laptops, not the weakest research.
+**Setup time never counts against the competition clock.** This is the fix that kept setup time outside the clock: bundling install/auth into the timed window penalized the reps with the slowest laptops, not the weakest research.
 
 ### 1.3 The 10-minute timer starts at the surprise-account REVEAL
 

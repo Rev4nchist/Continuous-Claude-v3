@@ -35,7 +35,7 @@ Surface critique before we commit. Eight gaps in the verbatim proposal:
 | 1 | **CLI-Anything is the wrong tool** | Designed for wrapping desktop GUI apps (GIMP, Blender). Not for Postgres APIs. | Hand-write Python argparse — same pattern as `store_learning.py`. ~300 lines total. |
 | 2 | **Claude.ai browser cannot add custom MCPs** | The web UI only allows Anthropic-vetted connectors (Notion, Linear, Slack). Hosting an MCP on Railway gives Claude Code access but Eve/Donna are still locked out. | Cowork stays in Neon as the source of truth; a Notion-relay worker mirrors active rooms to a Notion page Eve/Donna already read. |
 | 3 | **Stale claims have no TTL today** | `file_claims` has no release fn and no expiry. A crashed session blocks a file forever. Cowork without TTL inherits this bug at scale. | Every claim has a `claim_ttl` timestamp. Stale claims auto-release on every list/read query. |
-| 4 | **No persistent agent identity** | `from_agent` would be a free-form string today. No way to know whether "claude-code" on laptop is the same identity as "claude-code" on desktop. | `cowork_agents` table with stable IDs like `claude-code:dave-laptop`, `:dave-laptop`, `eve:claude-ai`. Session IDs are ephemeral and join via presence table. |
+| 4 | **No persistent agent identity** | `from_agent` would be a free-form string today. No way to know whether "claude-code" on laptop is the same identity as "claude-code" on desktop. | `cowork_agents` table with stable IDs like `claude-code:dave-laptop` and `eve:claude-ai`. Session IDs are ephemeral and join via presence table. |
 | 5 | **No idempotency on result posting** | Network blips → duplicate result rows. | Every post is content-addressed by `sha256(body)`. Same hash = same post, dedup at insert. |
 | 6 | **No realtime signal — polling is silent default** | LISTEN/NOTIFY exists in schema but nothing subscribes. Without explicit decision, agents poll. | v1 = explicit polling (5-10s) when an agent is *waiting*. v2 = LISTEN/NOTIFY upgrade. Realtime is opt-in, not assumed. |
 | 7 | **No session-resume protocol** | If Claude Code disconnects mid-task, no one knows which rooms it was in or what it was working on. | Presence table with heartbeat. >5 min stale = agent dropped. New session can `cowork agent presence --room R` to see "claude-code:dave-laptop disconnected at 14:32 with task #47 claimed." |
@@ -355,7 +355,7 @@ cowork task list --room smoke-001  # should show claimed task with claimed_by=cl
 
 1. **Room ID convention** — `review-{branch}` / `premortem-{plan-hash}` are clear. For freeform / planning / debug rooms, propose `{kind}-{slug}-{YYYY-MM-DD}` (e.g. `plan-cowork-bootstrap-2026-05-22`). Confirm naming convention before Phase 1.
 
-2. ** participation mechanic** — has no native cowork client. Options: (a) wrapper script around ` exec` that posts results back via cowork CLI from Claude Code's side; (b) eventually a -side hook if upstream supports it. Recommendation: (a) for v1 — Claude Code spawns, captures output, posts as `from_agent=':<machine>'` itself.
+2. **Second participant.** A second CLI is not on the roster. Claude Code posts its own results into the room. There is no extra client and no side hook.
 
 3. **Notion relay frequency** — 2 min poll feels right for human Eve. Confirm or specify shorter (30s for tighter loops) / longer (5 min for cost).
 

@@ -115,7 +115,7 @@ Net: a resident recall path removes ~1.5–3.5s of pure overhead per call, leavi
 
 ## Premortem-hardened refinements (adversarial pass, 2026-06-29 — v2)
 
- (gpt-5.5 @ xhigh) verdict: needs-attention, 9 findings. All folded in below;
+External review verdict: needs-attention, 9 findings. All folded in below;
 these are the BINDING implementation contract (supersede the v1 text where they conflict).
 
 **H1 — never let an error masquerade as "no matches" (silent total failure, 0.89).**

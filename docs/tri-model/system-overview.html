@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>CCv3 Tri-Model System — Functionality Overview</title>
-<meta name="description" content="Interactive overview: Claude Code orchestrates; Grok builds; reviews/fixes. Game Plan roster + disk workroom bus." />
+<meta name="description" content="Interactive overview: Claude Code orchestrates; Grok builds; Claude critic reviews. Game Plan roster + disk workroom bus." />
 <style>
   :root {
     --bg: #070b14;
@@ -20,8 +20,6 @@
     --claude-dim: rgba(245, 158, 11, 0.15);
     --grok: #22d3ee;
     --grok-dim: rgba(34, 211, 238, 0.12);
-    : #a78bfa;
-    -dim: rgba(167, 139, 250, 0.14);
     --human: #34d399;
     --human-dim: rgba(52, 211, 153, 0.12);
     --danger: #f87171;
@@ -127,11 +125,9 @@
   .card.human::before { background: var(--human); }
   .card.claude::before { background: var(--claude); }
   .card.grok::before { background: var(--grok); }
-  .card.::before { background: var; }
   .card.human:hover { border-color: rgba(52,211,153,.45); }
   .card.claude:hover { border-color: rgba(245,158,11,.5); }
   .card.grok:hover { border-color: rgba(34,211,238,.5); }
-  .card.:hover { border-color: rgba(167,139,250,.5); }
 
   .card .role {
     font-size: 10px; font-weight: 700; letter-spacing: .1em;
@@ -140,7 +136,6 @@
   .card.human .role { color: var(--human); }
   .card.claude .role { color: var(--claude); }
   .card.grok .role { color: var(--grok); }
-  .card..role { color: var; }
   .card h3 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
   .card .model { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 12px; }
   .card ul { list-style: none; font-size: 13px; color: var(--dim); }
@@ -210,7 +205,7 @@
     font-weight: 800; font-size: 14px;
   }
   .phase-head.p1 .num { background: var(--claude-dim); color: var(--claude); border: 1px solid rgba(245,158,11,.35); }
-  .phase-head.p2.num { background: var(-dim); color: var; border: 1px solid rgba(167,139,250,.35); }
+  .phase-head.p2 .num { background: var(--grok-dim); color: var(--grok); border: 1px solid rgba(34,211,238,.35); }
   .phase-head h3 { font-size: 16px; font-weight: 700; }
   .phase-head span { font-size: 12px; color: var(--faint); }
 
@@ -244,7 +239,6 @@
   }
   .who.claude { color: var(--claude); }
   .who.grok { color: var(--grok); }
-  .who. { color: var; }
   .who.human { color: var(--human); }
   .who.multi { color: #fcd34d; }
 
@@ -310,7 +304,7 @@
   .flow-chip.g1 { border-color: rgba(52,211,153,.5); color: var(--human); }
   .flow-chip.g2 { border-color: rgba(245,158,11,.5); color: var(--claude); }
   .flow-chip.g3 { border-color: rgba(34,211,238,.5); color: var(--grok); }
-  .flow-chip.g4 { border-color: rgba(167,139,250,.5); color: var; }
+  .flow-chip.g4 { border-color: rgba(245,158,11,.5); color: var(--claude); }
   .flow-arrow { color: var(--faint); font-size: 14px; opacity: .5; }
   .flow-arrow.on { opacity: 1; color: var(--text); }
 
@@ -356,10 +350,10 @@
   <!-- ========== OVERVIEW ========== -->
   <section id="view-overview" class="view active">
     <div class="hero">
-      <h2>Three training families. Fixed roles. No self-grading.</h2>
+      <h2>Two training families. Fixed roles. No self-grading.</h2>
       <p>
-        Continuous Claude v3 runs a rostered multi-model pipeline: Claude Code is the hub;
-        Grok 4.5 researches and builds in isolated worktrees; (gpt-5.6-sol) reviews and patches.
+        Continuous Claude v3 runs a rostered pipeline: Claude Code is the hub and the critic;
+        Grok 4.5 researches and builds in isolated worktrees. Claude does not grade Grok's build with Grok.
         Every cross-model handoff is a <strong style="color:var(--text)">file on disk</strong>, not chat memory.
       </p>
       <div class="pill-row">
@@ -379,7 +373,7 @@
           <li>Gate 1: approve contract / plan</li>
           <li>Review-gate: apply or discard diffs</li>
           <li>Gate 2: ship / merge authority</li>
-          <li>Quota &amp; reviewer pick (/ Grok / Both)</li>
+          <li>Quota and reviewer pick (Claude critic / Grok / Both)</li>
         </ul>
         <div class="entry">AskUserQuestion · git apply approval</div>
       </article>
@@ -410,17 +404,17 @@
         <div class="entry">/grok · /grok --implement · /grok --resume</div>
       </article>
 
-      <article class="card ">
-        <div class="role">Reviewer &amp; fixer</div>
-        <h3></h3>
-        <div class="model">gpt-5.6-sol · ChatGPT sub</div>
+      <article class="card claude">
+        <div class="role">Reviewer</div>
+        <h3>Claude critic</h3>
+        <div class="model">in-session · same subscription</div>
         <ul>
-          <li>Plan premortem &amp; code review booth</li>
-          <li>Patch generation (fix loops ≤2)</li>
-          <li>Failover builder if Grok dies</li>
-          <li>Real --sandbox; multi_agent off by default</li>
+          <li>Plan premortem and code review booth</li>
+          <li>kraken writes fix patches (loops ≤2)</li>
+          <li>Failover builder if Grok stops</li>
+          <li>The failover model never sole-grades its own build</li>
         </ul>
-        <div class="entry"> · /review · </div>
+        <div class="entry">/review · critic · kraken</div>
       </article>
     </div>
 
@@ -472,23 +466,23 @@
           <text class="lbl-xs" x="200" y="304" text-anchor="middle">.grok-worktrees/ · --tools RO · X Premium+</text>
         </g>
 
-        <!-- -->
-        <g class="box" data-id= onclick="selectNode">
-          <rect x="620" y="230" width="280" height="100" rx="14" fill="url(#gRetired)" stroke="#a78bfa" stroke-width="2"/>
-          <text class="lbl" x="760" y="262" text-anchor="middle"> 5.6 — REVIEWER</text>
-          <text class="lbl-sm" x="760" y="282" text-anchor="middle">premortem · booth · fix patches</text>
-          <text class="lbl-xs" x="760" y="304" text-anchor="middle">.-worktrees/ · sandbox · ChatGPT</text>
+        <!-- Claude critic -->
+        <g class="box" data-id="critic" onclick="selectNode('critic')">
+          <rect x="620" y="230" width="280" height="100" rx="14" fill="url(#gClaude)" stroke="#f59e0b" stroke-width="2"/>
+          <text class="lbl" x="760" y="262" text-anchor="middle">Claude critic — REVIEWER</text>
+          <text class="lbl-sm" x="760" y="282" text-anchor="middle">in-session review · kraken fixes</text>
+          <text class="lbl-xs" x="760" y="304" text-anchor="middle">same session · no second CLI</text>
         </g>
 
         <!-- failover dashed -->
         <path class="edge dash" d="M340 280 L620 280" stroke="#64748b" marker-end="url(#arr)"/>
-        <text class="lbl-xs" x="480" y="272" text-anchor="middle">failover build (if Grok expires)</text>
+        <text class="lbl-xs" x="480" y="272" text-anchor="middle">failover build (Claude kraken if Grok stops)</text>
 
         <!-- Workroom -->
         <g class="box" data-id="disk" onclick="selectNode('disk')">
           <rect x="200" y="360" width="560" height="48" rx="12" fill="#0f172a" stroke="#64748b" stroke-width="1.5"/>
           <text class="lbl" x="480" y="380" text-anchor="middle" style="font-size:12px">.workroom/rooms/&lt;id&gt;/  —  CONTRACT · status · inbox · findings · patches</text>
-          <text class="lbl-xs" x="480" y="396" text-anchor="middle">stateful file sessions — the only bus all three CLIs share</text>
+          <text class="lbl-xs" x="480" y="396" text-anchor="middle">stateful file sessions — the bus Claude and Grok share</text>
         </g>
 
         <path class="edge" d="M200 330 L300 360" stroke="#475569" marker-end="url(#arr)"/>
@@ -511,8 +505,8 @@
       <div class="callout ok">
         <strong>Correct path</strong>
         Grok implements M3 → Claude hub smoke (tests/typecheck on disk evidence) →
-         review booth writes findings → fix patches (≤2 rounds) →
-        Claude/Grok verify → human applies.
+        Claude critic writes findings → kraken fix patches (≤2 rounds) →
+        Claude verifies → human applies.
       </div>
     </div>
   </section>
@@ -571,10 +565,10 @@
 ├── <span class="dir">intake/</span>          <span class="comment"># grill-me answers</span>
 ├── <span class="dir">research/</span>        <span class="comment"># Grok dumps</span>
 ├── <span class="dir">milestones/</span>      <span class="comment"># M1-scope · M1-result</span>
-├── <span class="dir">findings/</span> <span class="comment"># /[Grok] booth</span>
+├── <span class="dir">findings/</span> <span class="comment"># Claude critic / Grok booth</span>
 ├── <span class="dir">patches/</span>         <span class="comment"># *.diff review-gate</span>
 └── <span class="dir">inbox/</span>
-    ├── <span class="file">claude/</span> <span class="file">/</span>
+    ├── <span class="file">claude/</span>
     ├── <span class="file">grok/</span>    <span class="file">human/</span></pre>
       </div>
       <div>
@@ -606,7 +600,7 @@
     </div>
 
     <h2 class="section-title" style="margin-top:28px">Harness safety (probe-backed)</h2>
-    <div class="roster" style="grid-template-columns:1fr 1fr">
+    <div class="roster" style="grid-template-columns:1fr">
       <article class="card grok">
         <div class="role">Grok CLI 0.2.93+</div>
         <h3>Read-only = tools only</h3>
@@ -615,16 +609,6 @@
           <li>--tools "read_file,list_dir,grep" blocks writes</li>
           <li>-w ignored in -p → hand-rolled worktrees</li>
           <li>Can run shell in implement — verify harder</li>
-        </ul>
-      </article>
-      <article class="card ">
-        <div class="role"> CLI 0.144.1+</div>
-        <h3>Sandbox is real</h3>
-        <ul>
-          <li>--sandbox read-only | workspace-write</li>
-          <li>--disable multi_agent default (no Ultra thrash)</li>
-          <li>Windows: no subprocess in workspace-write</li>
-          <li>Allowlist: gpt-5.6-sol/terra/luna · 5.5 · 5.4…</li>
         </ul>
       </article>
     </div>
@@ -657,23 +641,23 @@
 const NODE_INFO = {
   human: {
     title: "Human — authority layer",
-    body: "Approves the contract (Gate 1), chooses premortem reviewers (/ Grok / Both / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
+    body: "Approves the contract (Gate 1), chooses premortem reviewers (Claude critic / Grok / Both / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
   },
   claude: {
     title: "Claude Code — hub",
-    body: "Owns CONTRACT.md, status.json, THREAD, and phase advances. Runs preflight, intake, smoke checks (real tests — not agent narration), spawns /grok and, merges /[Grok] findings. Optional Maestro/Ralph for long autonomous loops."
+    body: "Owns CONTRACT.md, status.json, THREAD, and phase advances. Runs preflight, intake, smoke checks (real tests, not agent narration), spawns /grok, and merges Claude and Grok findings. Optional Maestro/Ralph for long autonomous loops."
   },
   grok: {
     title: "Grok 4.5 — builder & researcher",
     body: "Default implementer for milestones. Research role needs a widened (still write-free) tools list including web/X. Implement uses out-of-repo .grok-worktrees/. Never grades its own build. Entry: /grok, /grok --implement, --resume."
   },
-  : {
-    title: " gpt-5.6-sol — reviewer & fixer",
-    body: "Plan premortem adversary, code review booth, and fix-patch author (≤2 rounds). Failover builder if Grok session expires — but then cannot be sole grader for that same milestone. multi_agent off by default to avoid 15–25 min Ultra thrash."
+  critic: {
+    title: "Claude critic — reviewer",
+    body: "In-session premortem and code review. kraken writes fix patches (at most 2 rounds). If kraken also builds because Grok stopped, it cannot be the sole grader for that milestone."
   },
   disk: {
     title: "Workroom — shared bus",
-    body: "Filesystem protocol under .workroom/rooms/<id>/. All three CLIs read/write files. Contract is SoT; status is hub-owned; findings and patches are review artifacts. Replaces chat-memory handoffs."
+    body: "Filesystem protocol under .workroom/rooms/<id>/. Claude and Grok read and write files. Contract is SoT; status is hub-owned; findings and patches are review artifacts. Replaces chat-memory handoffs."
   }
 };
 
@@ -702,7 +686,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
 const P1 = [
   { n: 'S1', title: 'Pre-flight', who: 'claude', whoLabel: 'Claude hub',
     blurb: 'Auth + CLI + git ready',
-    detail: 'Assert login (ChatGPT), grok models (logged in + identity pin), git status, allowlists. Maps to /harness-update --dry-run + preflight helper (Track G).' },
+    detail: 'Assert grok models (logged in + identity pin), claude auth, git status, allowlists. Maps to /harness-update --dry-run + preflight helper (Track G).' },
   { n: 'S2', title: 'Grill me with docs', who: 'claude', whoLabel: 'Claude + human',
     blurb: 'Structured discovery intake',
     detail: '15+ targeted questions for complex work (schema, UX, APIs). discovery-interview skill → write intake/answers.md. Trivial tasks skip full Game Plan.' },
@@ -720,16 +704,16 @@ const P1 = [
 const P2 = [
   { n: 'S6', title: 'Milestone dispatch', who: 'grok', whoLabel: 'Grok builder',
     blurb: 'M1…Mn incremental build',
-    detail: '/grok --implement per milestone into worktree; patches/ + milestones/M*-result.md. Failover: same milestone block to --implement if Grok expires.' },
+    detail: '/grok --implement per milestone into a worktree; patches/ + milestones/M*-result.md. Failover: Claude kraken takes the same milestone block if Grok stops.' },
   { n: 'S7', title: 'Hub smoke checks', who: 'claude', whoLabel: 'Claude hub',
     blurb: 'External verify on disk',
     detail: 'Run tests/typecheck/HTTP probes. Record exit codes in milestone result. Agent “all tests pass” is never sufficient.' },
   { n: 'S8', title: 'Review booth', who: 'multi', whoLabel: 'Claude',
     blurb: 'Multi-lens audit',
-    detail: '/review: critic + plan-reviewers +. Findings to findings/ with tags. Grok does not grade its own build. Premortem Both available pre-build.' },
-  { n: 'S9', title: 'Fix & verify loops', who:, whoLabel: ' fix · hub verify',
+    detail: '/review runs the Claude critic and plan-reviewers. Findings go to findings/. Grok does not grade its own build. A Grok premortem pass is available before the build.' },
+  { n: 'S9', title: 'Fix & verify loops', who: 'claude', whoLabel: 'kraken · hub verify',
     blurb: 'Patches ≤ 2 rounds',
-    detail: ' generates discrete patches; Claude (optionally Grok) verify. Cap 2 rounds unless human raises fix_rounds_max. Human still applies diffs.' },
+    detail: 'kraken writes discrete patches; the Claude hub verifies. Cap 2 rounds unless the human raises fix_rounds_max. The human still applies diffs.' },
   { n: 'S10', title: 'Bookkeeping & ship', who: 'human', whoLabel: 'Claude + human',
     blurb: 'Lessons · commits · Gate 2',
     detail: 'THREAD decisions, optional memory store, clean commits. Gate 2: human ships. Local serve / PR as needed.' },
@@ -762,15 +746,15 @@ renderSteps(P2, 'steps-p2', 'detail-p2');
 
 /* Flow animation */
 const FLOW = [
-  { label: 'Preflight', cls: 'g2', cap: 'Claude checks + grok auth and git.' },
+  { label: 'Preflight', cls: 'g2', cap: 'Claude checks grok auth and git.' },
   { label: 'Intake', cls: 'g2', cap: 'Structured Q&A → intake/answers.md' },
   { label: 'Grok research', cls: 'g3', cap: 'Unknowns researched live → research/*.md' },
   { label: 'CONTRACT.md', cls: 'g2', cap: 'Hub writes disk blueprint (SoT).' },
   { label: 'Gate 1', cls: 'g1', cap: 'Human approves plan / scope.' },
   { label: 'Grok M1…Mn', cls: 'g3', cap: 'Incremental implement in .grok-worktrees/' },
   { label: 'Hub smoke', cls: 'g2', cap: 'Claude runs real tests; records evidence.' },
-  { label: ' booth', cls: 'g4', cap: 'Cross-model review → findings/' },
-  { label: 'Fix ≤2', cls: 'g4', cap: ' patches; hub verifies.' },
+  { label: 'Critic booth', cls: 'g4', cap: 'Claude critic writes findings/' },
+  { label: 'Fix ≤2', cls: 'g4', cap: 'kraken patches; hub verifies.' },
   { label: 'Apply · Gate 2', cls: 'g1', cap: 'Human applies diffs and ships.' },
 ];
 

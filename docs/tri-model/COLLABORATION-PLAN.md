@@ -16,7 +16,7 @@
 
 ## 1. Executive summary
 
-We already have **three execution harnesses** (Claude Code CLI, Grok CLI) with probe-backed safety. We do **not** yet have the video’s load-bearing idea: a **rostered pipeline** where roles are fixed, **builders never self-grade**, and **every cross-model handoff is a physical file** (stateful disk sessions), not chat memory.
+We already have **two execution harnesses** (Claude Code CLI and Grok CLI) with probe-backed safety. We do **not** yet have the video’s load-bearing idea: a **rostered pipeline** where roles are fixed, **builders never self-grade**, and **every cross-model handoff is a physical file** (stateful disk sessions), not chat memory.
 
 This plan unifies:
 
@@ -41,7 +41,7 @@ This plan unifies:
 | **Contract on disk** | One requirements / blueprint markdown is the source of truth | Replaces “re-explain in every Task prompt” |
 | **Phased pipeline** | Phase 1 lock plan → Phase 2 build/grade/ship | Fits premortem + implement + review we already half-have |
 | **Incremental milestones** | M1…Mn with smoke checks + clean commits | Matches Ralph-style task loops without trusting agent narrative alone |
-| **Failover** | If Grok session dies, hand milestone block to GPT | Real for headless CLIs / quota / hangs |
+| **Failover** | If Grok session dies, hand the milestone block to Claude `kraken` | Real for headless CLIs / quota / hangs |
 | **Bounded fix loops** | Max **two** fix iterations | Prevents review thrash and quota burn |
 | **Context hygiene** | Don’t run full pipeline in one 250k–300k thread; checkpoint + clean session | Aligns with CCv3 continuity/handoffs and worktree isolation |
 | **Human Gate 1** | Mandatory plan/UI sign-off before build | Stronger than silent ExitPlanMode under bypass-permissions |
@@ -52,8 +52,6 @@ This plan unifies:
 |----------------|---------------|-------------------------|--------|
 | **Hub & Orchestrator** | Claude Fable 5 | Claude Code session + hooks + Maestro/Ralph optional | State tracking, smoke checks, contract formation, command orchestration |
 | **Builder & Researcher** | Grok 4.5 | `/grok` → `grok-worker` (default `grok-4.5`) | Live web/X research; primary incremental builder; worktree implement |
-
-**Outline optimization note (adopt):** prefer **standard high-thinking GPT-5.6** (our `gpt-5.6-sol` + high/`xhigh` effort) over “Ultra / multi-agent” modes that spawn internal sub-agents and balloon 15–25 min. This matches our existing rule: **`--disable multi_agent` by default** on adversary/worker; `--complex` opt-in only.
 
 **Verified-fact footnote (landed from SESSION-REVIEW 2026-07-11):** “Grok 4.5 → live web/X research” is TRUE and probe-backed (`web_search`/`x_*` in Grok’s tool list) — but the worker’s **ask-mode `--tools` allowlist excludes web/x tools**. Research-role runs need a widened (still write-free) allowlist, e.g. `read_file,list_dir,grep,web_search,web_fetch,open_page` — a **deliberate egress expansion** documented in `grok-worker-safety.md` alongside the Track C `research` role. Never silently reuse the ask guard for research.
 
@@ -73,9 +71,9 @@ This plan unifies:
 
 | Step | Outline | CCv3 mapping today | Gap |
 |------|---------|-------------------|-----|
-| 6 Milestone dispatch | Grok builds M1…Mn | `/grok --implement` + worktrees | Need milestone files + failover to |
+| 6 Milestone dispatch | Grok builds M1…Mn | `/grok --implement` + worktrees | Need milestone files + failover to Claude `kraken` |
 | 7 Hub smoke checks | Claude verifies locally | Skill/prose only; external verify culture | Automate smoke checklist per milestone |
-| 8 Review booth | Claude + GPT multi-lens | `/review` only; premortem has Both | Align booth with Game Plan: ** grades Grok’s build** |
+| 8 Review booth | Claude critic | `/review`; premortem can add Grok | Align booth with Game Plan: **Claude critic grades Grok’s build** |
 | 10 Bookkeeping | Lessons + clean commits | memory store + git | Workroom decisions + optional learnings |
 
 ### 2.4 Where the outline diverges from what we already shipped (resolve deliberately)
@@ -89,7 +87,7 @@ This plan unifies:
 
 ### 2.5 Critique / risks in the outline itself
 
-1. **Name drift** — “Grock / Fable / Saul” must map to **verified allowlist IDs** (`grok-4.5`, `gpt-5.6-sol`, session Claude). Never bake marketing names into allowlists.
+1. **Name drift** — “Grock / Fable” must map to **verified allowlist IDs** (`grok-4.5` and the session Claude model). Never bake marketing names into allowlists.
 2. **“Automated” fix loops still need human apply** on our stack (review-gate on implement). Keep that — outline’s ship step should not mean auto-merge to main without Dave.
 3. **Failover to Saul mid-build** can reintroduce self-grade if Saul both finishes and reviews — rule: failover builder for that milestone **cannot** be the review-booth primary for the same milestone.
 4. **15+ questions every time** may be heavy for small fixes — gate discovery depth by complexity (trivial → skip Game Plan; moderate/complex → full roster).
@@ -118,12 +116,12 @@ Claude Code — HUB
    │  contract, status, smoke, synthesize, spawn CLIs
    ├──────────────► Grok 4.5 — BUILDER / RESEARCHER
    │                   /grok ask · /grok --implement (milestones)
-   └──────────────► gpt-5.6-sol — REVIEWER / FIXER
-                        · --implement (fixes, failover)
+   └──────────────► Claude critic — REVIEWER
+                        kraken fixes in-session (no second CLI)
 ```
 
 **Anti-pattern:** Grok implements M3 then Grok “reviews” M3.  
-**Correct:** Grok implements M3 → Claude smoke → review booth → fix patches → Claude and/or Grok **verify** (run tests / re-read) does not sole-grade its own fix without a second lens (Claude smoke or second pass rules).
+**Correct:** Grok implements M3, Claude runs smoke, Claude critic writes the booth, and Claude `kraken` writes the fix patches. The hub verifies by running tests. The model that wrote the fix does not sole-grade it.
 
 ### 3.3 Stateful disk layout (Workroom + Contract)
 
@@ -151,13 +149,13 @@ All multi-model feature work uses a **room** under the project:
           …
         findings/
           premortem-merged.yaml
-          booth--*.md
+          booth-claude-*.md
           booth-claude-*.md
         patches/
           grok-M2.diff
-          -fix-R1.diff
+          fix-R1.diff
         inbox/
-          claude/ / grok/ human/
+          claude/ grok/ human/
 ```
 
 **Contract.md is Step 4 of Game Plan** — the single file every session restart loads.
@@ -210,10 +208,10 @@ Workers/adversaries: if prompt includes `## Workroom`, they **must** read `CONTR
 
 | Pipeline need | Tool |
 |---------------|------|
-| Preflight CLIs | `/harness-update --dry-run`, ` login status`, `grok models` |
+| Preflight CLIs | `/harness-update --dry-run`, `grok models` |
 | Intake | `/discovery-interview` strengthened → writes `intake/` |
 | Research | `/grok` ask (web/X native tools available to Grok) |
-| Plan stress | `/premortem --reviewers \|grok\|both` → `findings/premortem-*.yaml` |
+| Plan stress | `/premortem --reviewers grok\|both` → `findings/premortem-*.yaml` |
 | Build milestone | `/grok --implement` with workroom paths + milestone id |
 | Smoke | Claude: project test/typecheck scripts; record exit codes in milestone result |
 | Review booth | `/review` (adversary + Claude critics); optional second Grok pass on **non-builder** concerns only |
@@ -271,18 +269,18 @@ Complexity gate: skip full roster for trivial tasks.
 
 ### Track E — Align defaults with roster (0.5 day)
 
-- Docs + skill copy: **default builder = Grok**, **default code reviewer/fixer = **.
+- Docs + skill copy: **default builder = Grok**, **default code reviewer = Claude critic**, **fixer = Claude `kraken`**.
 - Premortem picker stays.  
 - `/review` Grok standing pass remains **deferred** (quota); optional `--grok` later.  
 - Failover rule documented in PROTOCOL.
 
 ### Track F — Human how-to (Track 5 leftover)
 
-Evolve Notion “ in CCv3” → “Cross-Model Workers + Game Plan” linking **this** `docs/tri-model/` tree (confirm-first write).
+Evolve the Notion roster page → “Cross-Model Workers + Game Plan” linking **this** `docs/tri-model/` tree (confirm-first write).
 
 ### Track G — Preflight helper (optional, 0.5 day)
 
-`scripts/tri-model/preflight.mjs` or skill step: assert +grok auth, allowlist models, git status, print ready/not.
+`scripts/tri-model/preflight.mjs` or skill step: assert grok auth, allowlist models, git status, print ready/not.
 
 **Corrections landed (SESSION-REVIEW 2026-07-11):**
 

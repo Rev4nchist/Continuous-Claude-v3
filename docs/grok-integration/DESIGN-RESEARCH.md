@@ -64,20 +64,20 @@ xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and 
 `grok inspect` shows Grok auto-discovers and loads **Claude Code's own config**: Dave's `~/.claude/Claude.md` (~5,090 tokens), permissions from `settings.local.json`, and **292 Claude skills**. Every `/grok` run therefore ships that context (plus the prompt + any files the model reads) to xAI under Dave's account. Covered by the data-egress section of `grok-worker-safety.md` (first-use confirm, secret-scan, no `.env*`, payload awareness). `--verbatim`, `--rules`, `--system-prompt-override` exist as shaping levers; a future probe could test whether config ingestion can be disabled for worker runs.
 
 ### 2.10 Quota/billing
-Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass (mirror of : detection will be reactive — parse the rate-limit error when it first appears, then codify).
+Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass. Detection will be reactive: parse the rate-limit error when it first appears, then codify it.
 
 ## 3. Divergences from the mold (design deltas)
 
-| Topic | | Grok (verified) |
-|---|---|---|
-| Read-only enforcement | `--sandbox read-only` (real) | `--tools "read_file,list_dir,grep"` (`--sandbox` decorative) |
-| Write isolation | hand-rolled worktree | same hand-rolled worktree (`-w` ignored headless) |
-| Prompt input | `- < file` stdin | `--prompt-file <PATH>` native |
-| Clean output | `-o <file>` (startup noise on stdout) | plain stdout already clean; json for structured |
-| Session id | `thread_id` in `--json` events | `sessionId` in json output |
-| Multi-agent | `--disable multi_agent` | `--no-subagents` |
-| Auth assert | ` login status` ("Logged in using ChatGPT") | `grok models` header + `auth.json.email` identity pin |
-| Windows subprocess in write mode | BLOCKED (writes blind) | `run_terminal_command` AVAILABLE — Grok can run commands in implement mode; orchestrator verification still mandatory |
+| Topic | Grok (verified) |
+|---|---|
+| Read-only enforcement | `--tools "read_file,list_dir,grep"` (`--sandbox` decorative) |
+| Write isolation | hand-rolled worktree (`-w` ignored headless) |
+| Prompt input | `--prompt-file <PATH>` native |
+| Clean output | plain stdout already clean; json for structured |
+| Session id | `sessionId` in json output |
+| Multi-agent | `--no-subagents` |
+| Auth assert | `grok models` header + `auth.json.email` identity pin |
+| Windows subprocess in write mode | `run_terminal_command` is available, so Grok can run commands in implement mode; orchestrator verification is still mandatory |
 
 ## 4. Open items / future probes
 - `--reasoning-effort` accepted values for grok-4.5.

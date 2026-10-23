@@ -294,7 +294,7 @@ describe('appendIntelBus -- secret redaction (cross-model hardening)', () => {
 // Change 1c -- Secret redaction: session-3 review hardening (review#2/#3)
 // ===========================================================================
 describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
-  it('review#2: redacts an OPAQUE Bearer token (no shape) in an Authorization header', => {
+  it('review#2: redacts an OPAQUE Bearer token (no shape) in an Authorization header', () => {
     // ASSIGNMENT_RE used to consume "Bearer" as Authorization's value, leaving the
     // opaque token, and the Bearer SHAPE could no longer match it. Shapes now run
     // BEFORE the assignment pass so the token is caught regardless of the header.
@@ -309,7 +309,7 @@ describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
     expect(parsed.note).toContain('[REDACTED]');
   });
 
-  it('review#3: redacts opaque secrets inside an ARRAY under a credential-named field', => {
+  it('review#3: redacts opaque secrets inside an ARRAY under a credential-named field', () => {
     // redactSecretsDeep dropped keyHint when recursing into arrays, so an array of
     // opaque secrets under e.g. `tokens` survived. keyHint now threads through.
     const { lines, append } = makeCapture();

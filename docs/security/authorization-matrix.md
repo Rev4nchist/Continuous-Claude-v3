@@ -38,9 +38,6 @@ prompt for safe commands). Bash is left to the human by that hook as before, and
 
 ## Known gaps (not closed here)
 
-- ** Desktop.** CCv3 cannot gate it. Dave chooses its sandbox default (workspace-write with
-  on-request approval is the recommendation) and whether it may use the live repo as its working
-  directory. Tracked as P10.
 - **Dynamic payloads** (`iex`, `-EncodedCommand`, `bash <<<`, `printf ... | sh`): accepted limits,
   listed in the guard's header and its test file.
 - **Scheduled scripts** run their own code with no guard. A script that deletes must be reviewed

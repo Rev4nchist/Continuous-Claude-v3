@@ -109,18 +109,18 @@ The advanced-lunch HTML deck upgrade is deliberately after items 1–7 — built
 | 2 | Claude | Built-in web search may be admin-disabled | Day-1 platform gate |
 | 3 | Claude | Sarah owns training; survey not in | Step-1 sync; run-of-show is a shared doc with Sarah |
 | 4 | Claude | Schedule compression | Gates-first build order; lunch-deck deferred; fixture-driven validation shortens step 6 |
-| 5 | | Licenses-at-SKO contradicts pre-SKO dry-run | 5 named pilot licenses requested day 1; fallback = SF demoted to demo-only (decision by day 3) |
-| 6 | | No data-handling boundary for real CRM data in a training room | New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note |
-| 7 | | Competition contaminated by per-account Project context | Competition Arena Project (blank, pre-created in setup window); timer starts at account reveal |
-| 8 | | "Zero fabricated names" unjudgeable live | Pre-built answer-key packet for surprise accounts; judges spot-check 2 claims per finalist |
-| 9 | | First 5 minutes bundles install+auth+MFA | Setup Block moved out of the breakout entirely (15 min, plenary-end, IT floater) |
-| 10 | | 5-rep dry-run doesn't test concurrency | Pilot step (b): 5 reps simultaneous on room wifi; stagger-by-table plan if throttled |
-| 11 | | Fallback pack built after materials that depend on it | Example plan moved to build step 3; is the acceptance fixture for all course materials |
-| 12 | | C2 decision-maker card has no compliant source path | C2 redesigned: buying-committee mapping from public sources, role-only output where names aren't public, LinkedIn = manual rep step stated on the card |
+| 5 | Review | Licenses-at-SKO contradicts pre-SKO dry-run | 5 named pilot licenses requested day 1; fallback = SF demoted to demo-only (decision by day 3) |
+| 6 | Review | No data-handling boundary for real CRM data in a training room | New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note |
+| 7 | Review | Competition contaminated by per-account Project context | Competition Arena Project (blank, pre-created in setup window); timer starts at account reveal |
+| 8 | Review | "Zero fabricated names" unjudgeable live | Pre-built answer-key packet for surprise accounts; judges spot-check 2 claims per finalist |
+| 9 | Review | First 5 minutes bundles install+auth+MFA | Setup Block moved out of the breakout entirely (15 min, plenary-end, IT floater) |
+| 10 | Review | 5-rep dry-run doesn't test concurrency | Pilot step (b): 5 reps simultaneous on room wifi; stagger-by-table plan if throttled |
+| 11 | Review | Fallback pack built after materials that depend on it | Example plan moved to build step 3; is the acceptance fixture for all course materials |
+| 12 | Review | C2 decision-maker card has no compliant source path | C2 redesigned: buying-committee mapping from public sources, role-only output where names aren't public, LinkedIn = manual rep step stated on the card |
 
 ### Pre-Mortem Run
-- Date: 2026-07-13 · Mode: quick (plan) · Cross-model pass: **** (gpt-5.5 @ xhigh)
-- Findings: Claude-only 5· agreed 0 → lift = 8
+- Date: 2026-07-13 · Mode: quick (plan) · The cross-model pass is recorded in the session notes.
+- Findings: Claude-only 5, agreed 0, lift 8.
 
 ## Verification
 

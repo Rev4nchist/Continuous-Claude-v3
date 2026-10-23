@@ -5,7 +5,7 @@
 **Auto-snapshot:** 2026-07-12T04:43:40Z · branch `feature/fable-harvest-loop` · HEAD `36f24e8 Merge pull request #20 from Rev4nchist/feature/fable-brain-transfer`
 
 - Last tri-model change: `93c1de0 2026-07-11 docs(tri-model): hub-judgment reference — fable manual section 9 + standing trap harness pointer`
-- preflight: ready=true | =0.144.1 grok=0.2.93 (pins =0.144.1 grok=0.2.93)
+- preflight: ready=true | grok=0.2.93 (pin grok=0.2.93)
 - Surfaces present on this checkout:
   - [x] /workroom skill (`.claude/skills/workroom/SKILL.md`)
   - [x] /game-plan skill (`.claude/skills/game-plan/SKILL.md`)
@@ -43,7 +43,7 @@ _Refresh: `node scripts/tri-model/sync-current-state.mjs` (narrative below the m
 |---|---|---|
 | A | Workroom protocol + 7 templates, **gitignore-first** (`rooms/*` never committed) | `.workroom/PROTOCOL.md`, `.workroom/templates/` |
 | B | `/workroom` skill: `new / status / post / advance / resume` | `.claude/skills/workroom/SKILL.md` |
-| C | Workroom/role blocks in all 4 cross-model agents (fail-open without a `## Workroom` block); **Grok `research` role** = widened write-free `--tools` incl. `web_search` (documented egress expansion) | `.claude/agents/{grok,}-{worker,adversary}.md`, `.claude/rules/grok-worker-safety.md` |
+| C | Workroom/role blocks in the Grok worker and adversary (fail-open without a `## Workroom` block); **Grok `research` role** = widened write-free `--tools` incl. `web_search` (documented egress expansion) | `.claude/agents/grok-worker.md`, `.claude/agents/grok-adversary.md`, `.claude/rules/grok-worker-safety.md` |
 | E | Roster copy realigned: **Grok builds** | skills + rules copy |
 | G | `scripts/tri-model/preflight.mjs` — auth/identity/allowlist/version-pin gate (closes the advisory-gate gap). **Built BY Grok THROUGH the first real workroom** (`2026-07-11-tri-model-preflight`), graded by booth, HIGH finding fixed in round 1 | `scripts/tri-model/preflight.mjs` (630 lines) |
 | — | Operator docs: cockpit guide (also on Notion page `39a76fd7ac82817abc0bffdfeaec1c54`), system-overview HTML | `docs/tri-model/cockpit-guide.html`, `system-overview.html` |
@@ -52,8 +52,8 @@ _Refresh: `node scripts/tri-model/sync-current-state.mjs` (narrative below the m
 
 ## Probe-backed facts added during governance dogfood (trust these)
 
-1. ** `--sandbox read-only` on Windows can FORK-STORM** on subprocess denial (~40 orphaned `.exe`). Prompt-shape-dependent: rich checklists trigger it, compact prompts don't. Keep adversary prompts compact; after a timeout check `tasklist | findstr `; treat a 0-findings pass after storms as thin evidence and add a Claude-critic lens. Evidence: `docs-integration/DESIGN-RESEARCH.md` §14.
-   **1b. GROK CAN FORK-STORM TOO (2026-07-12, live observation)** — a `grok-adversary` plan-mode run on this host accumulated ~27 descendant `grok.exe` processes before manual `taskkill /T` cleanup; the retry succeeded cleanly. Fork-storm-on-Windows is NOT -specific. Same hygiene for Grok dispatches: compact prompts, post-timeout `tasklist | findstr grok`, check for leftover processes after any Grok run. Evidence: `docs/fable-manual/eval/LOOP-LOG.md` iteration 3.
+1. **A read-only sandbox on Windows can fork-storm** on subprocess denial (about 40 orphaned processes). Rich checklists trigger it; compact prompts do not. Keep adversary prompts compact; after a timeout, check the process list; treat a 0-findings pass after storms as thin evidence and add a Claude-critic lens. Evidence: `docs/fable-manual/eval/LOOP-LOG.md`.
+   **1b. GROK CAN FORK-STORM TOO (2026-07-12, live observation)** — a `grok-adversary` plan-mode run on this host accumulated ~27 descendant `grok.exe` processes before manual `taskkill /T` cleanup; the retry succeeded cleanly. Fork-storm-on-Windows is not limited to one family. Same hygiene for Grok dispatches: compact prompts, post-timeout `tasklist | findstr grok`, check for leftover processes after any Grok run. Evidence: `docs/fable-manual/eval/LOOP-LOG.md` iteration 3.
 2. **`$CLAUDE_PROJECT_DIR` can be EMPTY in agent shells** — workroom dispatch blocks must pass ABSOLUTE paths.
 3. **Grok cold start hit ~11–12 min once** (far past the documented 120s and even the 300s guidance) — on timeout, poll for the output file; do NOT re-invoke.
 4. **`sync-to-active.sh` deliberately excludes `hooks/src`** (dist-only by design) — active `~/.claude/hooks/src` drifts; never `npm run build` there without first mirroring `src/shared/` from the repo.
@@ -69,7 +69,7 @@ _Refresh: `node scripts/tri-model/sync-current-state.mjs` (narrative below the m
 2. `docs/tri-model/SESSION-REVIEW-2026-07-11.md` — combined build order + corrections (Tracks A/B/C/E/G now DONE per above; remaining: merge, Track F, Track D).
 3. `docs/tri-model/COLLABORATION-PLAN.md` — full governance design (roster doctrine §3.1, phase machine §3.4, open decisions §7).
 4. `.workroom/PROTOCOL.md` (on the governance branch) — the live message/phase schema.
-5. Safety rules: `.claude/rules-ondemand/{grok,}-worker-safety.md`, `harness-update.md`.
+5. Safety rules: `.claude/rules-ondemand/grok-worker-safety.md`, `harness-update.md`.
 
 ## Dogfood room disposition (2026-07-11-tri-model-preflight)
 
@@ -83,4 +83,4 @@ Worktrees removed; room retained on disk as the reference example.
 
 1. Fresh-session smoke: `/workroom resume`, `/game-plan` routing, rostered agent spawns (new agents register at session start).
 2. Watch items: read-only fork-storm recurrence (keep adversary prompts compact; §14), Grok cold-start outliers (one ~11–12 min case), telemetry-row discipline on "trivial" runs.
-3. Deferred roadmap: `--json-schema` structured output; grok-adversary as standing `/review` third reviewer (go/no-go on quota data); gpt-5.6 `max`/`ultra` effort probes; fork-storm bounding wrapper.
+3. Deferred roadmap: `--json-schema` structured output; grok-adversary as a standing `/review` reviewer (go/no-go on quota data); fork-storm bounding wrapper.

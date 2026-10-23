@@ -3,9 +3,15 @@
  * Fail when a runtime file names the removed cross-model CLI.
  * Dated history is listed in the allow file, one path with one reason.
  * Live files are not whole-file allowed. A token entry names the exact
- * strings that may remain, each with a count. A new hit, or a count
- * change, fails. A scan of zero files fails. An allow entry that does
- * not occur in its file fails (a pass on zero inputs is a fail).
+ * strings that may remain, each with a count. Counts are whole tokens:
+ * a letter, underscore, or hyphen on either side is a different token,
+ * so a longer name does not satisfy a shorter allow entry. A new hit,
+ * or a count change, fails. A scan of zero files fails. An allow entry
+ * that does not occur in its file fails (a pass on zero inputs is a fail).
+ * A file of 2 MB or more fails unless its allow entry sets "oversized"
+ * to true and gives a reason. That exemption is the size, not the
+ * contents: a listed file that shrinks under 2 MB is scanned, and a hit
+ * in it fails.
  *
  *   node scripts/ratchets/no-<token>.mjs
  */
@@ -30,6 +36,10 @@ const ALIAS = new RegExp(
     '\\.retired/',
     'retired-(?:adversar|lift|integration|worker|rollout)',
     '--retired\\b',
+    '\\bretired exec\\b',
+    '`retired`',
+    '(?<!\\*)\\*{4}(?!\\*)',
+    ' / / ',
   ].join('|'),
   'g',
 );
@@ -59,7 +69,22 @@ function gitignored(rel) {
   }
 }
 
-function walk(dir, out, oversized) {
+function classify(rel, abs, size, out, oversized, unlisted, allow, seenAllow) {
+  if (size >= SIZE_LIMIT) {
+    const row = allow.get(rel);
+    if (row?.oversized) {
+      seenAllow.add(rel);
+      oversized.push(`${rel} ${size} allowed`);
+    } else {
+      oversized.push(`${rel} ${size}`);
+      unlisted.push(rel);
+    }
+    return;
+  }
+  out.push(abs);
+}
+
+function walk(dir, out, oversized, unlisted, allow, seenAllow) {
   let entries;
   try { entries = readdirSync(dir); } catch { return; }
   for (const name of entries) {
@@ -69,11 +94,8 @@ function walk(dir, out, oversized) {
     if ((name === 'cache' || name === '.cache') && gitignored(rel)) continue;
     let st;
     try { st = statSync(abs); } catch { continue; }
-    if (st.isDirectory()) walk(abs, out, oversized);
-    else if (st.isFile()) {
-      if (st.size >= SIZE_LIMIT) oversized.push(`${rel} ${st.size}`);
-      else out.push(abs);
-    }
+    if (st.isDirectory()) walk(abs, out, oversized, unlisted, allow, seenAllow);
+    else if (st.isFile()) classify(rel, abs, st.size, out, oversized, unlisted, allow, seenAllow);
   }
 }
 
@@ -87,17 +109,37 @@ function tokenList(row) {
   });
 }
 
+function isBoundary(ch) {
+  return ch === undefined || !/[A-Za-z_-]/.test(ch);
+}
+
 function applyTokens(text, tokens) {
   const sorted = [...tokens].sort((a, b) => b.text.length - a.text.length);
   let rest = text;
   const problems = [];
   for (const tok of sorted) {
-    const parts = rest.split(tok.text);
-    const found = parts.length - 1;
-    if (found !== tok.count) {
-      problems.push(`${JSON.stringify(tok.text)} expected ${tok.count} found ${found}`);
+    const spans = [];
+    let from = 0;
+    while (from <= rest.length) {
+      const i = rest.indexOf(tok.text, from);
+      if (i < 0) break;
+      const before = i === 0 ? undefined : rest[i - 1];
+      const afterAt = i + tok.text.length;
+      const after = afterAt >= rest.length ? undefined : rest[afterAt];
+      if (isBoundary(before) && isBoundary(after)) {
+        spans.push(i);
+        from = afterAt;
+      } else {
+        from = i + 1;
+      }
     }
-    rest = parts.join('');
+    if (spans.length !== tok.count) {
+      problems.push(`${JSON.stringify(tok.text)} expected ${tok.count} found ${spans.length}`);
+    }
+    for (let s = spans.length - 1; s >= 0; s--) {
+      const i = spans[s];
+      rest = rest.slice(0, i) + rest.slice(i + tok.text.length);
+    }
   }
   return { left: scanFile(rest, NEEDLE), problems };
 }
@@ -119,27 +161,33 @@ function main() {
       process.stdout.write(`RESULT: FAIL - bad token entry ${row.path}\n`);
       process.exit(1);
     }
-    allow.set(row.path.replace(/\\/g, '/'), { reason: String(row.reason), tokens });
+    allow.set(row.path.replace(/\\/g, '/'), {
+      reason: String(row.reason),
+      tokens,
+      oversized: row.oversized === true,
+    });
   }
 
   const files = [];
   const oversized = [];
+  const unlistedOversized = [];
+  const seenAllow = new Set();
   for (const rel of ROOTS) {
     const abs = join(REPO, rel);
-    if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) walk(abs, files, oversized);
+    if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) {
+      walk(abs, files, oversized, unlistedOversized, allow, seenAllow);
+    }
   }
   for (const name of readdirSync(REPO)) {
     const abs = join(REPO, name);
     let st;
     try { st = statSync(abs); } catch { continue; }
     if (!st.isFile()) continue;
-    if (st.size >= SIZE_LIMIT) oversized.push(`${name} ${st.size}`);
-    else files.push(abs);
+    classify(name, abs, st.size, files, oversized, unlistedOversized, allow, seenAllow);
   }
 
   let hits = 0;
   const listed = [];
-  const seenAllow = new Set();
   let aliasHits = 0;
   const aliasListed = [];
   for (const file of files) {
@@ -152,9 +200,17 @@ function main() {
       aliasHits += alias.length;
       aliasListed.push(`${rel} ${alias.length}`);
     }
-    const n = scanFile(text, NEEDLE);
-    if (!n) continue;
     const row = allow.get(rel);
+    const n = scanFile(text, NEEDLE);
+    if (row?.oversized && !row.tokens) {
+      seenAllow.add(rel);
+      if (n) {
+        hits += n;
+        listed.push(`${rel} ${n} oversized allow does not cover a file under 2MB`);
+      }
+      continue;
+    }
+    if (!n) continue;
     if (row?.tokens) {
       const applied = applyTokens(text, row.tokens);
       seenAllow.add(rel);
@@ -188,6 +244,11 @@ function main() {
   if (missing.length) {
     process.stdout.write(`RESULT: FAIL - allow entries with no hit (${missing.length})\n`);
     for (const p of missing) process.stdout.write(`  ${p}\n`);
+    process.exit(1);
+  }
+  if (unlistedOversized.length) {
+    process.stdout.write(`RESULT: FAIL - oversized file without an allow entry (${unlistedOversized.length})\n`);
+    for (const p of unlistedOversized) process.stdout.write(`  ${p}\n`);
     process.exit(1);
   }
   if (hits || aliasHits) {

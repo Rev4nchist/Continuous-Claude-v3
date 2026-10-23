@@ -412,7 +412,7 @@ function valueHasImpeccableHookMarker(value) {
 
 function stripImpeccableHookEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
-  // `command`/`args`: Claude/Cursor. `bash`/`powershell`: GitHub Copilot's
+  // `command`/`args` cover Claude Code and Cursor. `bash`/`powershell` cover GitHub Copilot's
   // flat entry shape, where the marker lives under the shell-command keys.
   if (valueHasImpeccableHookMarker(entry.command) || valueHasImpeccableHookMarker(entry.args)
     || valueHasImpeccableHookMarker(entry.bash) || valueHasImpeccableHookMarker(entry.powershell)) {

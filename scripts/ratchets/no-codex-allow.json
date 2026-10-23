@@ -90,7 +90,7 @@
         "count": 5
       },
       {
-        "text": "codexhookspike",
+        "text": "codexhookspike-gFPsZy",
         "count": 2
       },
       {
@@ -492,5 +492,15 @@
         "count": 1
       }
     ]
+  },
+  {
+    "path": "opc/scripts/pageindex/tests/pdfs/2023-annual-report.pdf",
+    "reason": "PageIndex fixture PDF. It is over the 2 MB scan limit, so the ratchet allow-lists the path instead of reading the bytes.",
+    "oversized": true
+  },
+  {
+    "path": "opc/scripts/pageindex/tests/pdfs/PRML.pdf",
+    "reason": "PageIndex fixture PDF. It is over the 2 MB scan limit, so the ratchet allow-lists the path instead of reading the bytes.",
+    "oversized": true
   }
 ]

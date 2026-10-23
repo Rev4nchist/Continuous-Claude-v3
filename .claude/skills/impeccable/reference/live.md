@@ -22,7 +22,6 @@ The global bar **Impeccable mark** dims and shows a pulsing amber dot when no ag
 Harness policy:
 - **Claude Code**: run the poll as a **background task** (no short timeout). The harness notifies you when it completes, so the main conversation stays free while you generate and publish in it. Do not block the shell.
 - **Cursor**: run **one-shot** poll in a **background terminal** with notify on `"type":"(steer|generate|accept|discard|exit)"`. After each event the poll exits; handle it, `--reply`, then start `live-poll.mjs` again. Do **not** use `--stream` on Cursor: incremental stdout notify is slower in practice than exit-based notify (~5s vs sub-second in testing).
-- ****: run the default one-shot poll in a **yielded foreground exec session**. Do not suffix it with `&`, use `--stream`, or leave Live without an active foreground poll. Handle every event in the main task; after each handler/reply, restart the foreground poll.
 - **Other harnesses**: one-shot foreground unless you know stdout reliably returns to this session when a shell exits.
 
 Generation delivery policy:
