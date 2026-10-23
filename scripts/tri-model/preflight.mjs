@@ -343,7 +343,7 @@ function checkGrokAuthAndIdentity() {
 
 /**
  * R3 — version pin gate for one harness.
- * @param {"retired"|"grok"} harness
+ * @param {"grok"} harness
  * @param {string | null | undefined} pinned
  * @param {string | null} pinsError
  */

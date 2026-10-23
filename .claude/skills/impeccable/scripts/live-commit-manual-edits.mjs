@@ -1219,7 +1219,7 @@ export async function commitManualEdits({
 async function main() {
   const args = process.argv.slice(2);
   if (args.includes('--help') || args.includes('-h')) {
-    console.log('Usage: node live-commit-manual-edits.mjs [--page-url=<url>] [--provider=auto|retired|claude|mock]');
+    console.log('Usage: node live-commit-manual-edits.mjs [--page-url=<url>] [--provider=auto|claude|mock]');
     process.exit(0);
   }
 

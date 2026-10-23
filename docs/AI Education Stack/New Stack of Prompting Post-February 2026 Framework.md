@@ -4,7 +4,7 @@ Here is a hyper-detailed outline based on the transcript provided.
 
 ## I. Introduction: The Paradigm Shift
 *   **The Provocation:** If you are prompting like it is 2024/2025, you are already obsolete.
-*   **The Context (Jan 2026):** Release of Opus 4.6, Gemini 3.1 Pro, GPT-5.3 Retired.
+* **The Context (Jan 2026):** Release of Opus 4.6, Gemini 3.1 Pro, GPT-5.3.
 *   **The Core Change:** Models have shifted from **Chat Partners** to **Autonomous Agents**.
     *   Agents work autonomously for hours, days, or weeks.
     *   Traditional "chat-based" prompting (synchronous iteration) is functionally obsolete for serious work.

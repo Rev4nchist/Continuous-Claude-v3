@@ -111,7 +111,6 @@ opencli reuters top -f json                   # Top news
 | HuggingFace | `opencli hf` | public | Models, datasets, spaces |
 | ChatGPT | `opencli chatgpt` | ui | Chat interface |
 | Grok | `opencli grok` | cookie | xAI chat interface |
-| Retired | `opencli retired` | cookie | OpenAI Retired |
 
 ### HuggingFace Examples
 

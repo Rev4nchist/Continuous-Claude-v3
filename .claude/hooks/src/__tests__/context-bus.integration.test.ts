@@ -81,7 +81,7 @@ describe('context-bus real-path integration (fresh-session smoke)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FINDING 1 (HIGH, critic C-1 + Retired): the read->apply->write must be ATOMIC
+// FINDING 1 (HIGH, critic C-1): the read->apply->write must be ATOMIC
 // under ONE lock hold, so a competitor that commits in the read/write window is
 // not lost. This drives the REAL default write path (which now flows through
 // mutateStateWithLock). We inject ONLY a `read` seam that, on the victim's

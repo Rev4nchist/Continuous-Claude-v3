@@ -56,5 +56,5 @@ console.log(`Re-embedded ${results.length} files`);
 **P6** — a "safe" cleanup line in a maintenance script:
 ```bash
 # remove the stale worktree
-rm -rf "../.retired-worktrees/$REPO-$TS-$PID"
+rm -rf "../.-worktrees/$REPO-$TS-$PID"
 ```

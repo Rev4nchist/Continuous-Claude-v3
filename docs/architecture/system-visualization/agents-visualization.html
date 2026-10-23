@@ -622,7 +622,7 @@
             <tr><td><b style="color:var(--y)">Implementation</b></td><td class="mono small">kraken · spark · phoenix · agentica-agent · onboard</td><td><span class="pill y">5</span></td></tr>
             <tr><td><b style="color:var(--blue)">Investigation</b></td><td class="mono small">debug-agent · sleuth · scout</td><td><span class="pill b">3</span></td></tr>
             <tr><td><b style="color:var(--green)">Testing</b></td><td class="mono small">arbiter · atlas · sentinel</td><td><span class="pill g">3</span></td></tr>
-            <tr><td><b style="color:var(--orange)">Review</b></td><td class="mono small">critic · principal-reviewer · judge · retired-adversary · review-agent · liaison · surveyor · ui-compliance-reviewer · react-perf-reviewer · aegis</td><td><span class="pill r">10</span></td></tr>
+            <tr><td><b style="color:var(--orange)">Review</b></td><td class="mono small">critic · principal-reviewer · judge · · review-agent · liaison · surveyor · ui-compliance-reviewer · react-perf-reviewer · aegis</td><td><span class="pill r">10</span></td></tr>
             <tr><td><b style="color:var(--purple)">Planning</b></td><td class="mono small">architect · plan-agent · plan-reviewer · validate-agent</td><td><span class="pill p">4</span></td></tr>
             <tr><td><b style="color:var(--teal)">Operations</b></td><td class="mono small">deployer · herald · scribe</td><td><span class="pill b">3</span></td></tr>
             <tr><td><b style="color:var(--blue)">Specialty</b></td><td class="mono small">oracle · profiler · pathfinder · quant-analyst · paper-trader · risk-officer</td><td><span class="pill b">6</span></td></tr>
@@ -891,7 +891,7 @@
       <p class="section-eyebrow">05 · Judge &amp; shape</p>
       <h2 class="section-title">Review — <span style="color:var(--y)">ten lenses</span>, including a rival model.</h2>
       <p class="section-lede">
-        The biggest agent family. Each reviewer applies a distinct lens: <code>critic</code> on feature implementation, <code>principal-reviewer</code> on architecture and security, <code>judge</code> on refactors, <code>liaison</code> on integrations, <code>surveyor</code> on migrations, plus UI and React-perf specialists. <code>retired-adversary</code> challenges the work from a <em>different training family</em> (OpenAI Retired), and <code>review-agent</code> synthesizes everyone's findings.
+        The biggest agent family. Each reviewer applies a distinct lens: <code>critic</code> on feature implementation, <code>principal-reviewer</code> on architecture and security, <code>judge</code> on refactors, <code>liaison</code> on integrations, <code>surveyor</code> on migrations, plus UI and React-perf specialists. <code></code> challenges the work from a <em>different training family</em> (OpenAI), and <code>review-agent</code> synthesizes everyone's findings.
       </p>
 
       <div class="diagram-wrap">
@@ -914,7 +914,7 @@
             <text x="320" y="135" text-anchor="middle" class="label-sub">arch + security</text>
 
             <rect x="240" y="170" width="160" height="50" rx="8" class="node-rect" fill="#1c2236" stroke="var(--orange)" stroke-width="1.5"/>
-            <text x="320" y="192" text-anchor="middle" class="label-main" style="fill:var(--orange)">retired-adversary</text>
+            <text x="320" y="192" text-anchor="middle" class="label-main" style="fill:var(--orange)"></text>
             <text x="320" y="210" text-anchor="middle" class="label-sub">cross-model</text>
 
             <rect x="490" y="95" width="160" height="50" rx="8" class="node-rect heartbeat" fill="#1c2236" stroke="var(--green)" stroke-width="2"/>
@@ -923,7 +923,7 @@
 
             <rect x="730" y="95" width="140" height="50" rx="8" class="node-rect" fill="#1c2236" stroke="var(--y)" stroke-width="1.5"/>
             <text x="800" y="117" text-anchor="middle" class="label-main" style="fill:var(--y)">verdict</text>
-            <text x="800" y="135" text-anchor="middle" class="label-sub">[Retired] tagged</text>
+            <text x="800" y="135" text-anchor="middle" class="label-sub"> tagged</text>
 
             <path d="M170 110 C 200 70, 215 55, 240 48" class="edge"/>
             <path d="M170 120 H 240" class="edge"/>
@@ -948,12 +948,12 @@
           <p class="agent-desc">Senior/staff-engineer pass on architectural integrity, security posture, performance. For high-stakes changes — public APIs, new module boundaries, security-critical paths.</p>
         </div>
         <div class="agent-card" data-model="sonnet">
-          <div class="agent-head"><h4 class="agent-name">retired-adversary</h4><span class="model-tag sonnet">sonnet</span></div>
-          <p class="agent-desc">Cross-model adversarial reviewer. Invokes OpenAI Retired via the Retired CLI to challenge Claude's work from a different training family. Modes: code (diff) and plan.</p>
+          <div class="agent-head"><h4 class="agent-name"></h4><span class="model-tag sonnet">sonnet</span></div>
+          <p class="agent-desc">Cross-model adversarial reviewer. Invokes OpenAI via the CLI to challenge Claude's work from a different training family. Modes: code (diff) and plan.</p>
         </div>
         <div class="agent-card" data-model="opus">
           <div class="agent-head"><h4 class="agent-name">review-agent</h4><span class="model-tag opus">opus</span></div>
-          <p class="agent-desc">Compares plan (intent) vs Braintrust session (reality) vs git diff (changes). Synthesizes other reviewers' findings; tags cross-model input as [Retired].</p>
+          <p class="agent-desc">Compares plan (intent) vs Braintrust session (reality) vs git diff (changes). Synthesizes other reviewers' findings; tags cross-model input as.</p>
         </div>
         <div class="agent-card" data-model="sonnet">
           <div class="agent-head"><h4 class="agent-name">judge</h4><span class="model-tag sonnet">sonnet</span></div>
@@ -982,7 +982,7 @@
       </div>
 
       <div class="callout">
-        <strong>Cross-model lift.</strong> Findings that <em>both</em> critic and retired-adversary flag are high-confidence. The real value is what only one side catches — the <code>retired_only</code> count in <code>retired-lift.jsonl</code> measures whether the rival-model pass earns its quota cost.
+        <strong>Cross-model lift.</strong> Findings that <em>both</em> critic and flag are high-confidence. The real value is what only one side catches — the <code>retired_only</code> count in <code>.jsonl</code> measures whether the rival-model pass earns its quota cost.
       </div>
     </section>
 

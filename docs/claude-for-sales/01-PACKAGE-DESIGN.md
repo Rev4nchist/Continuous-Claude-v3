@@ -4,12 +4,12 @@
 
 Fourth's Sales Kickoff (late July 2026, ~2 weeks out) needs the two highest-leverage deliverables of the Claude for Sales Package designed and built: **#3 the Account Planning Project Kit** (a Claude.ai Project per account: instructions, context template, Salesforce recipe, worked example) and **#4 installable Claude App Skills** (account research + account planning as installed capability, not paste-text), plus the course structure that delivers them. Source review: `docs/claude-for-sales/00-SOURCE-REVIEW.md`.
 
-Two proven in-house assets anchor the design: the **EBR Builder suite** (Project instructions + orchestrator → research → presentation skill chain, 3 human checkpoints, confidence scoring, onboarding guide) and the **fourth-playwright MCP** (`Projects\fourth-playwright-mcp`, Railway). A 7-agent workflow (3 Sonnet researchers → 3 Opus designers → Opus judge) produced the merged blueprint — *"One Account, Tiered: build it, keep it, compete with it"* — reconciled with Dave's four locked decisions, then hardened by a cross-model premortem (5 Claude findings + 8 Retired findings, all folded in below).
+Two proven in-house assets anchor the design: the **EBR Builder suite** (Project instructions + orchestrator → research → presentation skill chain, 3 human checkpoints, confidence scoring, onboarding guide) and the **fourth-playwright MCP** (`Projects\fourth-playwright-mcp`, Railway). A 7-agent workflow (3 Sonnet researchers → 3 Opus designers → Opus judge) produced the merged blueprint — *"One Account, Tiered: build it, keep it, compete with it"* — reconciled with Dave's four locked decisions, then hardened by a cross-model premortem (5 Claude findings + 8 findings, all folded in below).
 
 ## Locked decisions (Dave, 2026-07-13)
 
 1. **SKO late July** → v1-lean scope; pilot before the event.
-2. **Salesforce connector IS provisioned** in the Sales Claude Enterprise workspace → primary data path for Enterprise tier, **conditional on the early-license pilot gate below** (Retired #1). Session-bound; respects sharing rules — "sparse data = check your access" callout required.
+2. **Salesforce connector IS provisioned** in the Sales Claude Enterprise workspace → primary data path for Enterprise tier, **conditional on the early-license pilot gate below** (review#1). Session-bound; respects sharing rules — "sparse data = check your access" callout required.
 3. **Account plan format: both, tiered** → living structured doc (Canvas/markdown) is the working artifact; Fourth-branded HTML deck is the optional "present to your manager" upgrade at the advanced lunch session.
 4. **Reps use built-in web search only** → fourth-playwright is OUT of the rep flow (kills the CAPTCHA-storm risk class). It remains Dave's facilitator demo, the EBR/CS tool, and the Fourth Brain teaser. The `playwright-competition` skill survives as the *pattern* (curated sources, confidence tags, brief format) re-based onto built-in search.
 
@@ -26,13 +26,13 @@ Two proven in-house assets anchor the design: the **EBR Builder suite** (Project
 
 **The five beginner prompt cards (laminated):**
 - **C1** company snapshot · **C3** buying-signal scan · **C4** incumbent-vendor check · **C5** contact-ready cold-call brief
-- **C2 buying-committee mapping** *(redesigned per Retired #8)* — maps roles and publicly stated leadership from the company site, press releases, and trade-press quotes with confidence tags; where public sources only yield the role (not the person), the card outputs "title to verify on LinkedIn" — LinkedIn verification is explicitly the rep's manual step, stated on the card itself. The skill never fabricates names from search snippets (hard rule + judged in the competition).
+- **C2 buying-committee mapping** *(redesigned per review#8)* — maps roles and publicly stated leadership from the company site, press releases, and trade-press quotes with confidence tags; where public sources only yield the role (not the person), the card outputs "title to verify on LinkedIn" — LinkedIn verification is explicitly the rep's manual step, stated on the card itself. The skill never fabricates names from search snippets (hard rule + judged in the competition).
 
 Enterprise cards map to the 5 plan phases (setup → SF pull → research → synthesize → qualification translation). Five is a hard cap.
 
 **The Tuesday Card (tool-confusion firewall, verbatim):** Claude = "my thinking partner that researches and drafts." Fourth Encyclopedia = "my phone lookup for product facts." Fourth Brain = "coming later — Claude plugged into our internal docs."
 
-### Session structure (revised per Retired #5)
+### Session structure (revised per review#5)
 
 **Setup happens BEFORE the breakout clock starts.** A 15-minute **Setup Block** at the end of the Claude 101 plenary (facilitator-led, IT floater present): device/browser check, workspace login + MFA, create Project, install skills, paste instructions, authenticate Salesforce (Enterprise tier). Success check on screen: "your account's opportunities appear." Reps who fail any step get flagged to the IT floater and use the fallback pack in the breakout — nobody debugs auth during exercise time.
 
@@ -46,7 +46,7 @@ Enterprise cards map to the 5 plan phases (setup → SF pull → research → sy
 
 Dave floats all rooms during the 0:08–0:42 failure-dense window.
 
-### Competition (revised per Retired #3, #4)
+### Competition (revised per review#3, #4)
 
 - **Fresh arena, not the rep's account Project** — a blank "Competition Arena" Project (skills installed, starter instructions, NO account context) is created by every rep during a 5-minute pre-competition setup window. The 10-minute timer starts when the surprise account is revealed. No context bleed from their real account; setup time never counts against the clock.
 - **Surprise account is pre-researched** — facilitators hold a pre-built **answer-key packet** (researched 1–2 days prior via the EBR research stack) for 2–3 candidate surprise accounts. Judges verify claims against the key, not the rep's own citations.
@@ -54,7 +54,7 @@ Dave floats all rooms during the 0:08–0:42 failure-dense window.
 
 **Reinforcement:** day-30 manager check ("built one real brief?"), day-60 refresher on least-used card, day-90 competition re-run.
 
-### Data handling (new section per Retired #2)
+### Data handling (new section per review#2)
 
 - Reps work **only accounts from their own territory** — Salesforce sharing rules are the access boundary; the kit never asks anyone to widen visibility.
 - **No bulk contact exports** in any prompt card or skill; contact data stays inside the rep's own Project.
@@ -89,7 +89,7 @@ docs/claude-for-sales/
 └── reinforcement/30-60-90.md
 ```
 
-**Build order (revised per Retired #1, #6, #7 + Claude findings — gates first, fixture early):**
+**Build order (revised per review#1, #6, #7 + Claude findings — gates first, fixture early):**
 
 1. **Day-1 platform gate (before writing anything):** verify in Fourth's Sales Claude Enterprise workspace — (a) App Skills can be published + rep-installed (or determine admin-push path), (b) built-in web search is enabled, (c) Salesforce connector object scope (opportunities/contacts/activities readable). **Ask Sarah/Jay for 5 named pilot licenses NOW** — resolves the licenses-at-SKO contradiction; if pilot licenses are refused, Salesforce demotes to facilitator-demo + hand-filled context becomes the primary Enterprise path (decide by day 3). Also: sync with Sarah on run-of-show ownership + survey results.
 2. `account-research/SKILL.md` — the workhorse; everything depends on its output shape.
@@ -109,18 +109,18 @@ The advanced-lunch HTML deck upgrade is deliberately after items 1–7 — built
 | 2 | Claude | Built-in web search may be admin-disabled | Day-1 platform gate |
 | 3 | Claude | Sarah owns training; survey not in | Step-1 sync; run-of-show is a shared doc with Sarah |
 | 4 | Claude | Schedule compression | Gates-first build order; lunch-deck deferred; fixture-driven validation shortens step 6 |
-| 5 | Retired | Licenses-at-SKO contradicts pre-SKO dry-run | 5 named pilot licenses requested day 1; fallback = SF demoted to demo-only (decision by day 3) |
-| 6 | Retired | No data-handling boundary for real CRM data in a training room | New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note |
-| 7 | Retired | Competition contaminated by per-account Project context | Competition Arena Project (blank, pre-created in setup window); timer starts at account reveal |
-| 8 | Retired | "Zero fabricated names" unjudgeable live | Pre-built answer-key packet for surprise accounts; judges spot-check 2 claims per finalist |
-| 9 | Retired | First 5 minutes bundles install+auth+MFA | Setup Block moved out of the breakout entirely (15 min, plenary-end, IT floater) |
-| 10 | Retired | 5-rep dry-run doesn't test concurrency | Pilot step (b): 5 reps simultaneous on room wifi; stagger-by-table plan if throttled |
-| 11 | Retired | Fallback pack built after materials that depend on it | Example plan moved to build step 3; is the acceptance fixture for all course materials |
-| 12 | Retired | C2 decision-maker card has no compliant source path | C2 redesigned: buying-committee mapping from public sources, role-only output where names aren't public, LinkedIn = manual rep step stated on the card |
+| 5 | | Licenses-at-SKO contradicts pre-SKO dry-run | 5 named pilot licenses requested day 1; fallback = SF demoted to demo-only (decision by day 3) |
+| 6 | | No data-handling boundary for real CRM data in a training room | New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note |
+| 7 | | Competition contaminated by per-account Project context | Competition Arena Project (blank, pre-created in setup window); timer starts at account reveal |
+| 8 | | "Zero fabricated names" unjudgeable live | Pre-built answer-key packet for surprise accounts; judges spot-check 2 claims per finalist |
+| 9 | | First 5 minutes bundles install+auth+MFA | Setup Block moved out of the breakout entirely (15 min, plenary-end, IT floater) |
+| 10 | | 5-rep dry-run doesn't test concurrency | Pilot step (b): 5 reps simultaneous on room wifi; stagger-by-table plan if throttled |
+| 11 | | Fallback pack built after materials that depend on it | Example plan moved to build step 3; is the acceptance fixture for all course materials |
+| 12 | | C2 decision-maker card has no compliant source path | C2 redesigned: buying-committee mapping from public sources, role-only output where names aren't public, LinkedIn = manual rep step stated on the card |
 
 ### Pre-Mortem Run
-- Date: 2026-07-13 · Mode: quick (plan) · Cross-model pass: **retired** (gpt-5.5 @ xhigh)
-- Findings: Claude-only 5 · Retired-only 8 · agreed 0 → Retired lift = 8
+- Date: 2026-07-13 · Mode: quick (plan) · Cross-model pass: **** (gpt-5.5 @ xhigh)
+- Findings: Claude-only 5· agreed 0 → lift = 8
 
 ## Verification
 

@@ -1,5 +1,5 @@
 /**
- * settings.json.template validation (Phase 2 / SG-02, Retired #7)
+ * settings.json.template validation (Phase 2 / SG-02, review#7)
  *
  * A broken template is invisible on the build machine but bricks every fresh
  * install (a hook command pointing at a missing .mjs throws MODULE_NOT_FOUND on

@@ -56,7 +56,7 @@ Salesforce is the **primary Enterprise data path**, conditional on this gate (lo
 
 ---
 
-## Gate D — Pilot licenses (resolves the licenses-at-SKO contradiction, Retired #1/#5)
+## Gate D — Pilot licenses (resolves the licenses-at-SKO contradiction, review#1/#5)
 
 Licenses land AT SKO by design (source review), but the pilot ladder (build step 7) needs **5 named licenses before the event**. Request them now.
 

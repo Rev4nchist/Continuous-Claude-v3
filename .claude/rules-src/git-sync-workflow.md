@@ -55,7 +55,7 @@ exactly `main`'s commit and does move the cursor; `land-pr.ps1` uses it from a t
 bash ~/continuous-claude/scripts/sync-claude.sh --to-repo
 ```
 
-**Why manual-only:** two *automatic* reverse-sync triggers used to race the background forward-sync and **clobber fresh repo edits with stale active copies** (they reverted `rules-ondemand/retired-adversarial.md` twice on 2026-06-01; the emit-only audit gate doesn't protect non-emit docs). Both were disabled at the root:
+**Why manual-only:** two *automatic* reverse-sync triggers used to race the background forward-sync and **clobber fresh repo edits with stale active copies** (they reverted a rules-ondemand file twice on 2026-06-01; the emit-only audit gate doesn't protect non-emit docs). Both were disabled at the root:
 
 | Trigger | Fix |
 |---------|-----|

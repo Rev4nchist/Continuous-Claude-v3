@@ -6,7 +6,7 @@
     --amber:#D98E2B; --amber-soft:#F7ECDA;
     --risk:#B8432E; --risk-soft:#F5E3DF;
     --ok:#3E7E5B; --ok-soft:#E2EEE7;
-    --retired:#5B4B8A; --retired-soft:#E9E4F2;
+    :#5B4B8A; :#E9E4F2;
     --shadow:0 1px 3px rgba(22,35,46,.08),0 4px 14px rgba(22,35,46,.06);
   }
   @media (prefers-color-scheme: dark){
@@ -16,7 +16,7 @@
       --amber:#E5A94F; --amber-soft:#3A2E17;
       --risk:#E0705A; --risk-soft:#3D1F18;
       --ok:#6BB58C; --ok-soft:#16301F;
-      --retired:#A899D6; --retired-soft:#2A2440;
+      :#A899D6; :#2A2440;
       --shadow:0 1px 3px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
     }
   }
@@ -26,7 +26,7 @@
     --amber:#E5A94F; --amber-soft:#3A2E17;
     --risk:#E0705A; --risk-soft:#3D1F18;
     --ok:#6BB58C; --ok-soft:#16301F;
-    --retired:#A899D6; --retired-soft:#2A2440;
+    :#A899D6; :#2A2440;
     --shadow:0 1px 3px rgba(0,0,0,.4),0 4px 14px rgba(0,0,0,.3);
   }
   :root[data-theme="light"]{
@@ -35,7 +35,7 @@
     --amber:#D98E2B; --amber-soft:#F7ECDA;
     --risk:#B8432E; --risk-soft:#F5E3DF;
     --ok:#3E7E5B; --ok-soft:#E2EEE7;
-    --retired:#5B4B8A; --retired-soft:#E9E4F2;
+    :#5B4B8A; :#E9E4F2;
     --shadow:0 1px 3px rgba(22,35,46,.08),0 4px 14px rgba(22,35,46,.06);
   }
   *{box-sizing:border-box}
@@ -59,7 +59,7 @@
   .tile{background:var(--card); border:1px solid var(--line); border-radius:10px; padding:10px 8px; text-align:center; box-shadow:var(--shadow)}
   .tile .n{font-size:22px; font-weight:800; letter-spacing:-.02em}
   .tile .l{font-size:10.5px; letter-spacing:.08em; text-transform:uppercase; color:var(--mut); font-weight:600}
-  .tile.a .n{color:var(--accent)} .tile.b .n{color:var(--amber)} .tile.c .n{color:var(--retired)}
+  .tile.a.n{color:var(--accent)}.tile.b.n{color:var(--amber)}.tile.c.n{color:var}
 
   nav.chips{position:sticky; top:0; z-index:30; background:var(--paper); padding:10px 0; margin:8px -16px 6px; overflow-x:auto; -webkit-overflow-scrolling:touch; border-bottom:1px solid var(--line)}
   nav.chips .row{display:flex; gap:8px; padding:0 16px; width:max-content}
@@ -86,7 +86,7 @@
 
   .chip{display:inline-block; font-size:11px; font-weight:700; letter-spacing:.06em; text-transform:uppercase; border-radius:999px; padding:3px 9px; vertical-align:middle}
   .chip.claude{background:var(--accent-soft); color:var(--accent)}
-  .chip.retired{background:var(--retired-soft); color:var(--retired)}
+  .chip.{background:var; color:var}
   .chip.locked{background:var(--ok-soft); color:var(--ok)}
   .chip.gate{background:var(--risk-soft); color:var(--risk)}
   .chip.amber{background:var(--amber-soft); color:var(--amber)}
@@ -112,7 +112,7 @@
   .cards5{display:grid; gap:8px; margin-top:10px}
   .pcard{background:var(--card); border:1px solid var(--line); border-left:4px solid var(--accent); border-radius:10px; padding:10px 12px; font-size:14px; box-shadow:var(--shadow)}
   .pcard b{display:block; font-size:13px; letter-spacing:.02em}
-  .pcard.redesigned{border-left-color:var(--retired)}
+  .pcard.redesigned{border-left-color:var}
   .pcard .note{color:var(--mut); font-size:13px}
 
   .fw{display:grid; gap:8px; margin-top:10px}
@@ -140,7 +140,7 @@
   .rcard .body{font-size:14px}
   .rcard .mit{background:var(--ok-soft); border-radius:8px; padding:9px 11px; margin-top:4px}
   .rcard .mit b{color:var(--ok); font-size:11px; letter-spacing:.1em; text-transform:uppercase; display:block; margin-bottom:2px}
-  .rcard[data-src="retired"] .num{background:var(--retired-soft); color:var(--retired)}
+  .rcard[data-src=].num{background:var; color:var}
 
   ol.build{list-style:none; margin:0; padding:0; counter-reset:step}
   ol.build li{counter-increment:step; display:flex; gap:12px; padding:12px 16px; border-top:1px solid var(--line); font-size:14.5px}
@@ -229,7 +229,7 @@
     <div class="body">
       <div class="cards5">
         <div class="pcard"><b>C1 · Company snapshot</b> What they do, locations, segment, recent news.</div>
-        <div class="pcard redesigned"><b>C2 · Buying-committee mapping <span class="chip retired">Redesigned</span></b> Roles + publicly stated leadership from the company site, press, and trade-press quotes — confidence-tagged. <span class="note">Where sources only yield the role, output is "title to verify on LinkedIn" — LinkedIn is the rep's manual step, printed on the card. The skill never fabricates names.</span></div>
+        <div class="pcard redesigned"><b>C2 · Buying-committee mapping <span class="chip ">Redesigned</span></b> Roles + publicly stated leadership from the company site, press, and trade-press quotes — confidence-tagged. <span class="note">Where sources only yield the role, output is "title to verify on LinkedIn" — LinkedIn is the rep's manual step, printed on the card. The skill never fabricates names.</span></div>
         <div class="pcard"><b>C3 · Buying-signal scan</b> Expansion, funding, new locations, leadership change, ops/IT job postings.</div>
         <div class="pcard"><b>C4 · Incumbent-vendor check</b> What workforce/ops tech they appear to use today — public signals only.</div>
         <div class="pcard"><b>C5 · Contact-ready brief</b> One screen to open a cold call: who to reach, the hook, one smart question.</div>
@@ -282,7 +282,7 @@
 </section>
 
 <section id="data">
-  <div class="sec-h"><h2>Data handling</h2><span class="tag">New · Retired #2</span></div>
+  <div class="sec-h"><h2>Data handling</h2><span class="tag">New · review#2</span></div>
   <div class="card pad">
     <ul class="clean" style="margin:0">
       <li><b>Own-territory rule</b> — reps work only their own accounts; Salesforce sharing rules are the boundary.</li>
@@ -341,7 +341,7 @@
   <div class="risk-filter" role="group" aria-label="Filter risks by source">
     <button aria-pressed="true" onclick="setRisk('all',this)">All 13</button>
     <button aria-pressed="false" onclick="setRisk('claude',this)">Claude 5</button>
-    <button aria-pressed="false" onclick="setRisk('retired',this)">Retired 8</button>
+    <button aria-pressed="false" onclick="setRisk(this)"> 8</button>
   </div>
 
   <details class="acc rcard" data-src="claude"><summary><span class="num">1</span>Skill-install mechanics unverified until late <span class="chip claude">Claude</span></summary><div class="body"><p>If reps can't self-serve install App Skills in the Enterprise workspace, the #4 architecture changes fundamentally.</p><div class="mit"><b>Mitigation</b>Moved to the Day-1 platform gate — verified before anything is written.</div></div></details>
@@ -350,21 +350,21 @@
   <details class="acc rcard" data-src="claude"><summary><span class="num">4</span>Schedule compression <span class="chip claude">Claude</span></summary><div class="body"><p>Pilot + SF dry-run + facilitator dry-run all land within ~1 week of build completion.</p><div class="mit"><b>Mitigation</b>Gates-first build order; lunch-deck deferred; fixture-driven validation shortens step 6.</div></div></details>
   <details class="acc rcard" data-src="claude"><summary><span class="num">5</span>Timeline realism (paper tigers cleared) <span class="chip claude">Claude</span></summary><div class="body"><p>Project duplication mechanics, SF object scope, and Project context pressure all looked scary — each already has an in-plan mitigation (create+install+paste path, day-1 scope check, presentation engine cut).</p><div class="mit"><b>Status</b>Paper tigers — verified mitigations exist.</div></div></details>
 
-  <details class="acc rcard" data-src="retired"><summary><span class="num">6</span>Licenses-at-SKO contradicts the pre-SKO dry-run <span class="chip retired">Retired</span></summary><div class="body"><p>"Licenses land AT SKO" and "5 reps dry-run a week before" can't both be true — leaving the Enterprise connector path untested until the live room.</p><div class="mit"><b>Mitigation</b>5 named pilot licenses requested day 1; if refused, Salesforce demotes to facilitator-demo (decision by day 3).</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">7</span>No data-handling boundary for real CRM data <span class="chip retired">Retired</span></summary><div class="body"><p>Reps pull real accounts/contacts into persistent Projects at a group event — no policy on account choice, PII, screen-share exposure, or retention.</p><div class="mit"><b>Mitigation</b>New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note.</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">8</span>Competition contaminated by per-account context <span class="chip retired">Retired</span></summary><div class="body"><p>Re-running "your built system" on a surprise account inside your real account's Project blends contexts — and nothing said whether setup time counts.</p><div class="mit"><b>Mitigation</b>Blank Competition Arena Project, created pre-timer; clock starts at account reveal.</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">9</span>"Zero fabricated names" unjudgeable live <span class="chip retired">Retired</span></summary><div class="body"><p>Judges can't verify fabrication against an unseen account in 10 minutes — they'd rely on the rep's own citations.</p><div class="mit"><b>Mitigation</b>Pre-built answer-key packet for surprise accounts; 2 random claims spot-checked per finalist.</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">10</span>First 5 minutes bundles install + auth + MFA <span class="chip retired">Retired</span></summary><div class="body"><p>Project creation, skill install, instruction paste, and SSO/OAuth in 5 minutes — with no allowance for MFA prompts or device readiness.</p><div class="mit"><b>Mitigation</b>15-min Setup Block moved out of the breakout entirely (plenary-end, IT floater present).</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">11</span>5-rep dry-run doesn't test concurrency <span class="chip retired">Retired</span></summary><div class="body"><p>Auth working ≠ a room of reps hitting Salesforce + web search simultaneously on shared wifi.</p><div class="mit"><b>Mitigation</b>Pilot step (b): 5 reps run simultaneously on office wifi; stagger-by-table plan if throttling appears.</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">12</span>Fallback pack built after what depends on it <span class="chip retired">Retired</span></summary><div class="body"><p>Cards and rubric should be validated against the known-good fallback pack, not bolted on after.</p><div class="mit"><b>Mitigation</b>Example plan moved to build step 3 — it's the acceptance fixture for all course materials.</div></div></details>
-  <details class="acc rcard" data-src="retired"><summary><span class="num">13</span>C2 has no compliant source path without LinkedIn <span class="chip retired">Retired</span></summary><div class="body"><p>"Decision-maker discovery" with LinkedIn cut and built-in search only risks unusable output — or fabricated names from snippets.</p><div class="mit"><b>Mitigation</b>C2 redesigned as buying-committee mapping from public sources; role-only output where names aren't public; LinkedIn = manual step printed on the card.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">6</span>Licenses-at-SKO contradicts the pre-SKO dry-run <span class="chip "></span></summary><div class="body"><p>"Licenses land AT SKO" and "5 reps dry-run a week before" can't both be true — leaving the Enterprise connector path untested until the live room.</p><div class="mit"><b>Mitigation</b>5 named pilot licenses requested day 1; if refused, Salesforce demotes to facilitator-demo (decision by day 3).</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">7</span>No data-handling boundary for real CRM data <span class="chip "></span></summary><div class="body"><p>Reps pull real accounts/contacts into persistent Projects at a group event — no policy on account choice, PII, screen-share exposure, or retention.</p><div class="mit"><b>Mitigation</b>New Data Handling section: own-territory rule, no bulk exports, screen-share rule, synthetic competition accounts, retention note.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">8</span>Competition contaminated by per-account context <span class="chip "></span></summary><div class="body"><p>Re-running "your built system" on a surprise account inside your real account's Project blends contexts — and nothing said whether setup time counts.</p><div class="mit"><b>Mitigation</b>Blank Competition Arena Project, created pre-timer; clock starts at account reveal.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">9</span>"Zero fabricated names" unjudgeable live <span class="chip "></span></summary><div class="body"><p>Judges can't verify fabrication against an unseen account in 10 minutes — they'd rely on the rep's own citations.</p><div class="mit"><b>Mitigation</b>Pre-built answer-key packet for surprise accounts; 2 random claims spot-checked per finalist.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">10</span>First 5 minutes bundles install + auth + MFA <span class="chip "></span></summary><div class="body"><p>Project creation, skill install, instruction paste, and SSO/OAuth in 5 minutes — with no allowance for MFA prompts or device readiness.</p><div class="mit"><b>Mitigation</b>15-min Setup Block moved out of the breakout entirely (plenary-end, IT floater present).</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">11</span>5-rep dry-run doesn't test concurrency <span class="chip "></span></summary><div class="body"><p>Auth working ≠ a room of reps hitting Salesforce + web search simultaneously on shared wifi.</p><div class="mit"><b>Mitigation</b>Pilot step (b): 5 reps run simultaneously on office wifi; stagger-by-table plan if throttling appears.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">12</span>Fallback pack built after what depends on it <span class="chip "></span></summary><div class="body"><p>Cards and rubric should be validated against the known-good fallback pack, not bolted on after.</p><div class="mit"><b>Mitigation</b>Example plan moved to build step 3 — it's the acceptance fixture for all course materials.</div></div></details>
+  <details class="acc rcard" data-src=><summary><span class="num">13</span>C2 has no compliant source path without LinkedIn <span class="chip "></span></summary><div class="body"><p>"Decision-maker discovery" with LinkedIn cut and built-in search only risks unusable output — or fabricated names from snippets.</p><div class="mit"><b>Mitigation</b>C2 redesigned as buying-committee mapping from public sources; role-only output where names aren't public; LinkedIn = manual step printed on the card.</div></div></details>
 
   <div class="lift">
     <div class="tile a"><div class="n">5</div><div class="l">Claude-only</div></div>
-    <div class="tile c"><div class="n">8</div><div class="l">Retired-only</div></div>
+    <div class="tile c"><div class="n">8</div><div class="l">-only</div></div>
     <div class="tile b"><div class="n">0</div><div class="l">Overlap</div></div>
   </div>
-  <p style="color:var(--mut); font-size:13px; margin-top:8px">Zero overlap between reviewers = the cross-model pass earned its cost. Premortem run 2026-07-13, quick mode, Retired gpt-5.5 @ xhigh.</p>
+  <p style="color:var(--mut); font-size:13px; margin-top:8px">Zero overlap between reviewers = the cross-model pass earned its cost. Premortem run 2026-07-13, quick mode gpt-5.5 @ xhigh.</p>
 </section>
 
 <section id="verify">
@@ -384,7 +384,7 @@
 </section>
 
 <footer>
-  Claude for Sales Package · plan of record 2026-07-13 · sources: SKO Notion project + planning call, EBR Builder suite, fourth-playwright-mcp, 7-agent design workflow, Retired adversarial premortem. Full plan text: <span class="mono">~/.claude/plans/i-agree-i-jolly-kite.md</span>
+  Claude for Sales Package · plan of record 2026-07-13 · sources: SKO Notion project + planning call, EBR Builder suite, fourth-playwright-mcp, 7-agent design workflow adversarial premortem. Full plan text: <span class="mono">~/.claude/plans/i-agree-i-jolly-kite.md</span>
 </footer>
 </div>
 

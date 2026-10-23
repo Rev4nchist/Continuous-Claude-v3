@@ -439,46 +439,12 @@ async def prompt_devops_integration() -> dict[str, str]:
         result["linear_api_token"] = linear_token
         result["linear_workspace"] = linear_workspace
 
-        if linear_token:
-            console.print("  Installing linearis CLI...")
-            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-            try:
-                install_result = subprocess.run(
-                    [npm_cmd, "install", "-g", "linearis"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if install_result.returncode == 0:
-                    console.print("  [green]OK[/green] linearis installed")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] linearis install failed: {install_result.stderr[:100]}")
-            except (subprocess.TimeoutExpired, OSError) as e:
-                console.print(f"  [yellow]WARN[/yellow] Could not install linearis: {e}")
-
     # Sentry
     if Confirm.ask("Do you use Sentry for error monitoring?", default=False):
         sentry_token = Prompt.ask("SENTRY_AUTH_TOKEN", default="")
         sentry_org = Prompt.ask("SENTRY_ORG", default="")
         result["sentry_auth_token"] = sentry_token
         result["sentry_org"] = sentry_org
-
-        if sentry_token:
-            console.print("  Installing @sentry/cli...")
-            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-            try:
-                install_result = subprocess.run(
-                    [npm_cmd, "install", "-g", "@sentry/cli"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if install_result.returncode == 0:
-                    console.print("  [green]OK[/green] @sentry/cli installed")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] @sentry/cli install failed: {install_result.stderr[:100]}")
-            except (subprocess.TimeoutExpired, OSError) as e:
-                console.print(f"  [yellow]WARN[/yellow] Could not install @sentry/cli: {e}")
 
     # Always install @playwright/cli
     console.print("  Installing @playwright/cli...")

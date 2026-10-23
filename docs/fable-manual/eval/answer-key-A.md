@@ -1,4 +1,4 @@
-# Answer Key — Plan A (Retired Fork-Storm Bounding Wrapper)
+# Answer Key — Plan A (Fork-Storm Bounding Wrapper)
 
 **NEVER include this file (or its contents) in a reviewer's prompt.** Seeded 2026-07-12 by claude-fable-5.
 

@@ -107,7 +107,7 @@ the rest when it applies.
   maps a command, agent, skill or MCP tool to one or more rule files.
 - Mode `deny-first` refuses the first matching call and gives the rule text as the reason. The
   model then re-plans with the rule in view. This mode is for rules that must change a decision,
-  such as a Retired run or a commit message.
+  such as a run or a commit message.
 - Mode `inject` adds the rule text as context and lets the call run.
 - The router logs every fire to `~/.claude/logs/rule-router.jsonl`. It fails open: on an internal
   error, the call runs.
@@ -177,7 +177,7 @@ Guardrails stop risky actions before they run.
 - `agent-model-guard` denies a spawn of an agent that has no definition. `no-haiku-enforcer`
   denies a spawn on `haiku`, and any spawn while a global model override is set.
 - The `rule-router` `deny-first` mode puts the matching safety rule in front of the model before
-  a Retired run, a paid API run, or a commit.
+  a run, a paid API run, or a commit.
 
 Measured result: four hooks named PowerShell in their matcher but rejected it at runtime. Only
 one of the two gates was widened, so the hooks never ran. Commit `164d86a` fixed all four. The

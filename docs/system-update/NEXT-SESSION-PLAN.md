@@ -104,7 +104,7 @@ ECONNRESET). All tested, emit 4/4, LIVE-verified. Original sub-items (now done) 
 
 ## Phase 2 — ST-05 resident recall daemon ✅ SHIPPED + VERIFIED 2026-06-29
 
-Done: `/plan` → `/premortem` (Retired, 9 findings folded into v2) → implement (kraken Python
+Done: `/plan` → `/premortem` (9 findings folded into v2) → implement (kraken Python
 layer + orchestrator TS layer) → end-to-end verified on the live daemon. Commits `a9dd226`
 (Python recall op + query_vector seam), `624c876` (TS probeDaemon + recallViaDaemon +
 memory-awareness routing), `31ffd8d` (live-script import fix the e2e gate caught). Warm
@@ -129,7 +129,7 @@ Recommended approach — **extend the existing embedding daemon** (don't build a
 3. **Client:** `recallViaDaemon(query)` in the embedding/recall client; `memory-awareness`
    routes `checkDbMemory` through it when the daemon is ready. **Keep** the `uv run --text-only`
    fallback + fire-and-forget warm when the daemon is cold (no recall regression).
-4. **Premortem (Retired):** corpus staleness (daemon must see new learnings), connection leaks,
+4. **Premortem (review):** corpus staleness (daemon must see new learnings), connection leaks,
    cold-start, multi-session concurrency on one daemon, the BGE-model/dim invariant
    (`BAAI/bge-large-en-v1.5`, 1024 — never change).
 5. **Implement (kraken/TDD)** → **verify:** warm hot-path ≤3s, recall quality identical to the

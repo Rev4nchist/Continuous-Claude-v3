@@ -237,8 +237,10 @@ x-article-*
 # skills.sh universal install mirror (regenerable via 'npx skills add'); CCv3 vendors real dirs in .claude/skills/
 .agents/
 
-# Retired CLI local mirror of the hook/skill/agent library (regenerable; analogous to .agents/ above)
-
+# Codex CLI local mirror of the hook/skill/agent library (regenerable; analogous to .agents/ above)
+.codex/
+# Codex worker isolated git worktrees (throwaway per-run; created by /codex --implement)
+.codex-worktrees/
 
 # Grok worker isolated git worktrees (throwaway per-run; created by /grok --implement).
 # Both worktree dirs live OUTSIDE the repo as siblings; these entries are defensive.

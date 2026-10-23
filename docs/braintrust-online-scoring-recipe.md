@@ -9,7 +9,7 @@ doc covers the runner side: trace-level sampling, the three scorers,
 eligibility, and the CLI-auth preflight.
 
 **No API keys.** Both judge backends are subscription-billed via OAuth — the
-runner shells out to `retired exec` (ChatGPT subscription) and `claude -p`
+runner shells out to ` exec` (ChatGPT subscription) and `claude -p`
 (Claude Code subscription, Sonnet bucket). There is no `OPENAI_API_KEY` and
 no pay-per-token billing in the judge path.
 
@@ -32,7 +32,7 @@ CLIs must be authenticated:
 
 | CLI | Used by | Auth | Verify | Fix |
 |-----|---------|------|--------|-----|
-| `retired` | `plan_rubric` | ChatGPT subscription (OAuth) | `retired login status` exits 0 | `retired login` |
+| | `plan_rubric` | ChatGPT subscription (OAuth) | ` login status` exits 0 | ` login` |
 | `claude` | `factuality`, `closedqa` | Claude Code subscription (Sonnet) | `claude --version` exits 0 | `claude login` |
 
 The runner's `check_cli_preflight()` runs these two probes (only for the
@@ -44,7 +44,7 @@ logged in.
 Verify both before the first non-dry run:
 
 ```bash
-retired login status   # expect: "Logged in using ChatGPT", exit 0
+ login status # expect: "Logged in using ChatGPT", exit 0
 claude --version      # expect: a version string, exit 0
 ```
 
@@ -73,7 +73,7 @@ so the scores attach at trace level in the Braintrust UI.
 |-------|---------|-------|--------|------------------------------|
 | `factuality` | `claude -p --model sonnet` | user prompt | top recall chunk | `missing_input_or_output` / `claude_timeout` / `claude_unavailable` / `unparseable_score` |
 | `closedqa` | `claude -p --model sonnet` | orchestrator task request | sub-agent final output | `no_task_span` / `nested_subagent_no_correlation` / `missing_input_or_output` / `claude_*` |
-| `plan_rubric` | `retired exec --sandbox read-only` | user prompt | plan body from `ExitPlanMode` | `missing_input_or_output` / `retired_timeout` / `retired_unavailable` / `unparseable_score` |
+| `plan_rubric` | ` exec --sandbox read-only` | user prompt | plan body from `ExitPlanMode` | `missing_input_or_output` / `retired_timeout` / `retired_unavailable` / `unparseable_score` |
 
 Each judge prompt is a **hand-written rubric + a structured-output demand**.
 The rubric is faithful to autoevals semantics (Factuality / ClosedQA) but the
@@ -83,9 +83,9 @@ ends with: `Respond with ONLY this JSON and nothing else: {"score": <float
 block in stdout (tolerating markdown fences / preamble), clamps `score` to
 `[0.0, 1.0]`, and normalizes a missing `rationale` to `""`.
 
-### Why retired for plan_rubric (cross-model lift)
+### Why for plan_rubric (cross-model lift)
 
-`plan_rubric` is routed to `retired` (GPT) on purpose: the plans being graded
+`plan_rubric` is routed to (GPT) on purpose: the plans being graded
 were authored by Claude, so grading them with a *different* model is where
 the cross-model lift is highest. `factuality` and `closedqa` go to `claude`
 (Sonnet bucket). The judge→backend map lives in `JUDGE_BACKENDS` in
@@ -123,7 +123,7 @@ ClosedQA judge gets one shot per session at the top-level Task only.
 **Important:** With subscription-OAuth judges there is **no Braintrust UI
 online-scoring-rule path.** A UI scoring rule runs on Braintrust's servers,
 which can only call API-key-based scorers (autoevals / OpenAI / Anthropic) —
-they **cannot invoke your local `retired` / `claude` CLIs** or their OAuth
+they **cannot invoke your local / `claude` CLIs** or their OAuth
 tokens. The `factuality` / `closedqa` / `plan_rubric` judges live in
 `opc/scripts/core/judge_session.py` and only work where those CLIs are
 authenticated: your local machine.
@@ -158,7 +158,7 @@ cross-project.)
 
 Schedule the `--scan-since` batch on the **local machine only**. Claude Code
 `/schedule` routines run *remotely* (Anthropic cloud) and — like a Braintrust
-UI rule — cannot reach the local `retired` / `claude` CLIs or their OAuth tokens.
+UI rule — cannot reach the local / `claude` CLIs or their OAuth tokens.
 So the runner is scheduled via **Windows Task Scheduler** (this machine), not
 `/schedule`.
 
@@ -241,15 +241,15 @@ duplicate scores.
 ## Cost / quota notes
 
 - **No per-token API billing.** Both backends are subscription-billed via
-  OAuth: `plan_rubric` spends one Retired turn against the ChatGPT
+  OAuth: `plan_rubric` spends one turn against the ChatGPT
   subscription; `factuality` and `closedqa` each spend one Claude Code turn
   against the Sonnet bucket of the Claude subscription.
-- One fully-equipped sampled session = up to three judge calls (1 retired +
+- One fully-equipped sampled session = up to three judge calls (1 +
   2 claude).
 - At 35% sampling and ~50 sessions/day, expect ~52 sampled sessions per
-  week, ~156 judge calls per week (~52 retired + ~104 claude). Adjust the
+  week, ~156 judge calls per week (~52 + ~104 claude). Adjust the
   sample rate at the rule level if this exceeds your subscription quota.
-- Subprocess latency: budget ~10–90s per claude call and ~30–120s per retired
+- Subprocess latency: budget ~10–90s per claude call and ~30–120s per
   call. Each backend has a hard 180s timeout; a timeout skips only that
   judge (`claude_timeout` / `retired_timeout`).
 

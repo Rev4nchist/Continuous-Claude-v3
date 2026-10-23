@@ -5,11 +5,47 @@
   },
   {
     "path": ".claude/hooks/dist/package-install-guard.mjs",
-    "reason": "Built bundle of the security blocklist. It contains the same third-party package names."
+    "reason": "Built bundle of the security blocklist. Only these four package-name strings are allowed, at these counts.",
+    "tokens": [
+      {
+        "text": "h2-codex",
+        "count": 2
+      },
+      {
+        "text": "brat-codex",
+        "count": 2
+      },
+      {
+        "text": "h3-codex",
+        "count": 2
+      },
+      {
+        "text": "@rixxcodex/baileys",
+        "count": 2
+      }
+    ]
   },
   {
     "path": ".claude/hooks/src/shared/malicious-packages.json",
-    "reason": "Third-party package names on the security blocklist. Renaming them would miss the packages."
+    "reason": "Third-party package names on the security blocklist. Only these four package-name strings are allowed, at these counts.",
+    "tokens": [
+      {
+        "text": "h2-codex",
+        "count": 2
+      },
+      {
+        "text": "brat-codex",
+        "count": 2
+      },
+      {
+        "text": "h3-codex",
+        "count": 2
+      },
+      {
+        "text": "@rixxcodex/baileys",
+        "count": 2
+      }
+    ]
   },
   {
     "path": ".claude/skills/_archive/2026-10-01/workroom/SKILL.md",
@@ -18,6 +54,58 @@
   {
     "path": ".claude/skills/_vendor/skills-for-fabric/CHANGELOG.md",
     "reason": "Third-party vendor changelog. The sentence names an upstream tool, not a CCv3 route."
+  },
+  {
+    "path": ".gitignore",
+    "reason": "Ignore rules for the removed CLI's local mirror and throwaway worktrees. Exact strings and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": ".codex-worktrees/",
+        "count": 1
+      },
+      {
+        "text": ".codex/",
+        "count": 1
+      },
+      {
+        "text": "/codex",
+        "count": 1
+      },
+      {
+        "text": "Codex",
+        "count": 2
+      }
+    ]
+  },
+  {
+    "path": "apps/agentic-os/scripts/project-aliases.json",
+    "reason": "Historical session path match keys. The seeder compares these raw strings to sessions.project. Exact fragments and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": "OpenAI.Codex_",
+        "count": 8
+      },
+      {
+        "text": ".codex-worktrees",
+        "count": 5
+      },
+      {
+        "text": "codexhookspike",
+        "count": 2
+      },
+      {
+        "text": "Documents\\\\Codex\\\\",
+        "count": 2
+      },
+      {
+        "text": "Codex CLI",
+        "count": 8
+      },
+      {
+        "text": "Codex transcript",
+        "count": 2
+      }
+    ]
   },
   {
     "path": "docs/reviews/2026-06-10/CHECKPOINT.md",
@@ -354,5 +442,55 @@
   {
     "path": "opc/tests/backfill-2026-05-21-pre-rows.csv",
     "reason": "Dated 2026-05-21 backfill fixture. Historical learning text, not a live route."
+  },
+  {
+    "path": "opc/tests/recall_eval_report.json",
+    "reason": "Dated recall eval report, restored byte-exact from base e613eea4. Recorded run, not a live route."
+  },
+  {
+    "path": "opc/tests/recall_eval_set.jsonl",
+    "reason": "Dated recall eval fixture, restored byte-exact from base e613eea4. Recorded queries, not a live route."
+  },
+  {
+    "path": "scripts/prune-stale-install.ps1",
+    "reason": "Manual prune deletes these stale install paths by name. Exact path strings and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": "rules-ondemand\\codex-worker-safety.md",
+        "count": 1
+      },
+      {
+        "text": "skills\\impeccable\\reference\\codex.md",
+        "count": 1
+      },
+      {
+        "text": "rules-ondemand\\codex-adversarial.md",
+        "count": 1
+      },
+      {
+        "text": "agents\\codex-adversary.md",
+        "count": 1
+      },
+      {
+        "text": "agents\\codex-worker.md",
+        "count": 1
+      },
+      {
+        "text": "skills\\codex-adversary",
+        "count": 1
+      },
+      {
+        "text": "scripts\\codex",
+        "count": 1
+      },
+      {
+        "text": "skills\\codex",
+        "count": 1
+      },
+      {
+        "text": "'codex'",
+        "count": 1
+      }
+    ]
   }
 ]

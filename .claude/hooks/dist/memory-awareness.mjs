@@ -1579,7 +1579,7 @@ async function main() {
       focus_count: focusTerms.length,
       // The sanitized terms appended to the recall query when biased -- makes a
       // biased recall REPRODUCIBLE from local intel-bus telemetry (premortem
-      // Retired#2, 2026-06-02). Terms are already allowlist-sanitized in
+      // review#2, 2026-06-02). Terms are already allowlist-sanitized in
       // bus-focus.ts; here we additionally CAP count (<=8) and per-term length
       // (<=32) so local telemetry can't accumulate long/unbounded identifiers
       // even if upstream caps change (CodeRabbit PR#5 privacy nudge). Secret

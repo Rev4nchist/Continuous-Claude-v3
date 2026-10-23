@@ -12,11 +12,11 @@ CCv3 has accumulated rich coordination infrastructure that does *almost* what th
 - `sessions` / `file_claims` tables — single-machine, no heartbeat loop, no TTL on claims
 - `agent_messages` LISTEN/NOTIFY infra — declared in schema, **nothing subscribes**
 - `.claude/cache/agents/<name>/latest-output.md` — overwritten each run, no persistence
-- Notion bridge (Eve/Donna) — works but has documented API quirks, no Retired presence, free-form schema
+- Notion bridge (Eve/Donna) — works but has documented API quirks, free-form schema
 - `thoughts/shared/handoffs/*.md` — git-synced YAML, one-shot human readable, not structured for agent loops
 - Path C `agent_handoffs` (planned, never built) — scoped to review/premortem only, single-machine
 
-The user's vision — a shared "room" where Claude Code, Retired, Eve, and Donna claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine + browser-relay primitives the existing pieces lack.**
+The user's vision — a shared "room" where Claude Code, Eve, and Donna claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine + browser-relay primitives the existing pieces lack.**
 
 Recommended choices locked (via AskUserQuestion):
 1. **Neon** for cowork tables only. Memory stays local pgvector (548 rows, BGE-tuned, no risk).
@@ -35,7 +35,7 @@ Surface critique before we commit. Eight gaps in the verbatim proposal:
 | 1 | **CLI-Anything is the wrong tool** | Designed for wrapping desktop GUI apps (GIMP, Blender). Not for Postgres APIs. | Hand-write Python argparse — same pattern as `store_learning.py`. ~300 lines total. |
 | 2 | **Claude.ai browser cannot add custom MCPs** | The web UI only allows Anthropic-vetted connectors (Notion, Linear, Slack). Hosting an MCP on Railway gives Claude Code access but Eve/Donna are still locked out. | Cowork stays in Neon as the source of truth; a Notion-relay worker mirrors active rooms to a Notion page Eve/Donna already read. |
 | 3 | **Stale claims have no TTL today** | `file_claims` has no release fn and no expiry. A crashed session blocks a file forever. Cowork without TTL inherits this bug at scale. | Every claim has a `claim_ttl` timestamp. Stale claims auto-release on every list/read query. |
-| 4 | **No persistent agent identity** | `from_agent` would be a free-form string today. No way to know whether "claude-code" on laptop is the same identity as "claude-code" on desktop. | `cowork_agents` table with stable IDs like `claude-code:dave-laptop`, `retired:dave-laptop`, `eve:claude-ai`. Session IDs are ephemeral and join via presence table. |
+| 4 | **No persistent agent identity** | `from_agent` would be a free-form string today. No way to know whether "claude-code" on laptop is the same identity as "claude-code" on desktop. | `cowork_agents` table with stable IDs like `claude-code:dave-laptop`, `:dave-laptop`, `eve:claude-ai`. Session IDs are ephemeral and join via presence table. |
 | 5 | **No idempotency on result posting** | Network blips → duplicate result rows. | Every post is content-addressed by `sha256(body)`. Same hash = same post, dedup at insert. |
 | 6 | **No realtime signal — polling is silent default** | LISTEN/NOTIFY exists in schema but nothing subscribes. Without explicit decision, agents poll. | v1 = explicit polling (5-10s) when an agent is *waiting*. v2 = LISTEN/NOTIFY upgrade. Realtime is opt-in, not assumed. |
 | 7 | **No session-resume protocol** | If Claude Code disconnects mid-task, no one knows which rooms it was in or what it was working on. | Presence table with heartbeat. >5 min stale = agent dropped. New session can `cowork agent presence --room R` to see "claude-code:dave-laptop disconnected at 14:32 with task #47 claimed." |
@@ -50,7 +50,7 @@ Two additional considerations that aren't gaps in the proposal but matter for sh
 
 ## Architecture (single paragraph)
 
-Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code, Retired (via wrapper), and Ralph all call it the same way. Optimistic locking via `UPDATE ... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` + Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
+Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code (via wrapper), and Ralph all call it the same way. Optimistic locking via `UPDATE... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` + Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
 
 ```
    ┌─ Eve (claude.ai) ──── reads/writes ──┐
@@ -72,7 +72,7 @@ Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork
                        │                    │                    │
                        ▼                    ▼                    ▼
                Claude Code            Claude Code            Other clients
-               + Retired(wrapper)       + Retired(wrapper)       via MCP
+               (wrapper)(wrapper) via MCP
 ```
 
 ---
@@ -97,9 +97,9 @@ CREATE TABLE cowork_rooms (
 CREATE INDEX ON cowork_rooms (project, status);
 
 CREATE TABLE cowork_agents (
-  id            TEXT PRIMARY KEY,                 -- e.g. "claude-code:dave-laptop","retired:dave-laptop","eve:claude-ai"
+  id TEXT PRIMARY KEY, -- e.g. "claude-code:dave-laptop",":dave-laptop","eve:claude-ai"
   family        TEXT NOT NULL
-                  CHECK (family IN ('claude-code','retired','claude-ai','ralph','other')),
+                  CHECK (family IN ('claude-code','claude-ai','ralph','other')),
   machine       TEXT,                             -- "dave-laptop","dave-desktop","browser"
   capabilities  TEXT[] DEFAULT '{}',              -- ["code-edit","review","plan","research"]
   last_seen     TIMESTAMPTZ DEFAULT NOW(),
@@ -229,8 +229,6 @@ cowork doctor                                               # health check: db c
 - `.claude/skills/review/SKILL.md` — add `--via-cowork` branch (room kind=`review`)
 - `.claude/skills/premortem/SKILL.md` — add `--via-cowork` branch (room kind=`premortem`)
 - `.claude/agents/cowork-coordinator.md` — replaces never-built `ledger-coordinator` from Path C
-- Extend `.claude/logs/retired-lift.jsonl` schema with `via=direct|cowork`
-- Update `.claude/rules/retired-adversarial.md` — point at `--via-cowork`, remove dead `--via-ledger` references
 - Update `.claude/rules/cli-integration-strategy.md` — add cowork inventory row, mark Path C `agent_handoffs` as superseded
 
 ### Phase 3: Heartbeat + session-end claim release (1 session, ~2 hrs)
@@ -282,11 +280,9 @@ cowork doctor                                               # health check: db c
 **EDIT:**
 - `.claude/skills/review/SKILL.md` — add `--via-cowork` branch
 - `.claude/skills/premortem/SKILL.md` — add `--via-cowork` branch
-- `.claude/rules/retired-adversarial.md` — replace `--via-ledger` references
 - `.claude/rules/cli-integration-strategy.md` — cowork inventory row, mark Path C superseded
 - `.claude/rules/cross-terminal-db.md` — document cowork as cross-machine layer (Neon) on top of local coordination (Docker)
 - `.claude/skills/notion-bridge/notion-bridge/SKILL.md` — document cowork relay
-- `.claude/logs/retired-lift.README.md` — `via` field gains `cowork` value
 - `~/.claude/mcp.json` — register cowork MCP
 
 **NOT TOUCHED (still serve their purpose):**
@@ -325,12 +321,12 @@ cowork task post --room smoke-001 --kind task --title "ping" --body "hello"
 cowork task claim --id <task_id>  # should succeed
 
 # Terminal B
-cowork agent register --id retired:dave-laptop --family retired --machine dave-laptop
+cowork agent register --id :dave-laptop --family --machine dave-laptop
 cowork task claim --id <task_id>  # should return {"ok":false,"error_code":"claim_taken"}
 cowork task list --room smoke-001  # should show claimed task with claimed_by=claude-code:dave-laptop
 ```
 
-**Phase 2:** `/review --via-cowork` on a small PR. Confirm `retired-adversary` findings appear as `kind=evidence` rows in `cowork_tasks`, room kind=`review`. `cowork room show --id review-<branch>` returns the full history. `retired-lift.jsonl` shows `via=cowork`.
+**Phase 2:** `/review --via-cowork` on a small PR. Confirm findings appear as `kind=evidence` rows in `cowork_tasks`, room kind=`review`. `cowork room show --id review-<branch>` returns the full history. shows `via=cowork`.
 
 **Phase 3:** Run a long task with claim. Kill the session (Ctrl+C the terminal). Wait 31 min. `cowork task list --status open` shows the task back as open (auto-released).
 
@@ -359,7 +355,7 @@ cowork task list --room smoke-001  # should show claimed task with claimed_by=cl
 
 1. **Room ID convention** — `review-{branch}` / `premortem-{plan-hash}` are clear. For freeform / planning / debug rooms, propose `{kind}-{slug}-{YYYY-MM-DD}` (e.g. `plan-cowork-bootstrap-2026-05-22`). Confirm naming convention before Phase 1.
 
-2. **Retired participation mechanic** — Retired has no native cowork client. Options: (a) wrapper script around `retired exec` that posts results back via cowork CLI from Claude Code's side; (b) eventually a retired-side hook if upstream supports it. Recommendation: (a) for v1 — Claude Code spawns retired, captures output, posts as `from_agent='retired:<machine>'` itself.
+2. ** participation mechanic** — has no native cowork client. Options: (a) wrapper script around ` exec` that posts results back via cowork CLI from Claude Code's side; (b) eventually a -side hook if upstream supports it. Recommendation: (a) for v1 — Claude Code spawns, captures output, posts as `from_agent=':<machine>'` itself.
 
 3. **Notion relay frequency** — 2 min poll feels right for human Eve. Confirm or specify shorter (30s for tighter loops) / longer (5 min for cost).
 

@@ -33,7 +33,7 @@ Run through each phase in order. Skip phases where the artifact already exists (
 
 ### Phase 0: Git Preflight
 
-Worktree-based workers (`/retired` and `/grok` implement mode branch a worktree from HEAD) and several hooks assume a git repo with at least one commit. Verify before anything else.
+Worktree-based workers (`/grok` implement mode branch a worktree from HEAD) and several hooks assume a git repo with at least one commit. Verify before anything else.
 
 **Detect the real repo state with `git rev-parse`, never a bare `.git` directory test** (`.git` is a FILE in worktrees/submodules — a `-d .git` check misclassifies them):
 

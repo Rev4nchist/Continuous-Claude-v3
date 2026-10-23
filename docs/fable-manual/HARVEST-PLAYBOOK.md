@@ -15,7 +15,7 @@ How to extract durable value from a departing model — or calibrate an arriving
    - **Seeded-defect artifact** (`eval/plan-A.md` + sealed key): a realistic plan/diff with N planted defects across distinct classes + good decoys. Scores recall AND over-caution objectively. Much higher ceiling — and even this saturated for all four current reviewer families (47/48 aggregate).
    Rules that made these decisive: ≥2-3 reps per arm, positive controls (an artifact must not win by paranoia), production-faithful load path (headless `claude -p` with the text physically in the rules dir — prompt-prepend is NOT the shipped mechanism), sealed answer key (quarantine it OUT of the repo when reviewers have file access), pre-registered ship gate.
 
-3. **Test every tier and family that has production surface.** Opus tier ≠ Sonnet tier ≠ Retired ≠ Grok. The gap you assume lives down-tier or cross-family may not exist (it didn't: Sonnet 15/16, Retired 8/8, Grok 8/8). Each arm is cheap; the assumption is expensive.
+3. **Test every tier and family that has production surface.** Opus tier ≠ Sonnet tier ≠ ≠ Grok. The gap you assume lives down-tier or cross-family may not exist (it didn't: Sonnet 15/16 8/8, Grok 8/8). Each arm is cheap; the assumption is expensive.
 
 4. **Gate the wiring on measured lift.** Always-on rules, agent-prompt blocks, and template lines ship ONLY when arm B beats arm A on cases A fails, with no positive-control regression. No lift → docs-only ship, outcome recorded as `no_lift` with n-runs and provenance (memory type `ARCHITECTURAL_DECISION` or `FAILED_APPROACH`). Never let a contaminated or single-run A/B freeze a false "it worked" precedent.
 

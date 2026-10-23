@@ -66,7 +66,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | agent-verification | Agent | Verify agent output claims |
 | epistemic-reminder | Grep\|Read | Warn about unverified grep/read claims |
 | post-plan-roadmap | ExitPlanMode | Sync plan to ROADMAP.md after approval |
-| plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (Retired runner cross-model pass) after plan approval |
+| plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (runner cross-model pass) after plan approval |
 | roadmap-completion | TaskUpdate\|Bash | Track roadmap task completions |
 | git-commit-roadmap | Bash | Update ROADMAP.md after git commits |
 | test-run-tracker | Bash | Track test execution results |
@@ -110,7 +110,7 @@ Key blockers:
 - **no-haiku-enforcer** -- blocks haiku model selection for agents
 - **test-before-done** -- blocks task completion without test evidence
 - **package-install-guard** -- blocks malicious/typosquatted package installs
-- **rule-router** -- blocks the first Retired/Grok/CMA call and the first commit or PR create per session, once, with the rule text as the reason
+- **rule-router** -- blocks the first Grok/CMA call and the first commit or PR create per session, once, with the rule text as the reason
 
 ## File Locations
 

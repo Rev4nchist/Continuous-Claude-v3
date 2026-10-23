@@ -1248,8 +1248,8 @@ function checkHtmlPatterns(html) {
     findings.push({ id: 'repeating-stripes-gradient', snippet: 'repeating-gradient decorative stripes' });
   }
 
-  // --- Provider tells (gated): two-axis grid-line background (Retired/GPT) ---
-  // The Retired grid tell is two hairline `linear-gradient(... <color> 1px,
+  // --- Provider tells (gated): two-axis grid-line background (GPT) ---
+  // The grid tell is two hairline `linear-gradient(... <color> 1px,
   // transparent 1px)` layers (one per axis) tiled by a repeating
   // `background-size` cell. Both signals must co-occur in the SAME style block
   // (a CSS rule body or one inline `style="..."`): two hairline stops WITHOUT a

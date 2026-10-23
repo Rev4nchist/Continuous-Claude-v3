@@ -106,7 +106,7 @@
     },
     {
       "id": "OI-4",
-      "title": "Log rotation policy — intel-bus.jsonl / memory-recall.jsonl / retired-lift.jsonl / bus-wrrf.jsonl all accumulate without bound; CCv3 has no general log-rotation pattern; provisional threshold 100 MB sweeping to .claude/logs/archive/",
+      "title": "Log rotation policy — intel-bus.jsonl / memory-recall.jsonl /.jsonl / bus-wrrf.jsonl all accumulate without bound; CCv3 has no general log-rotation pattern; provisional threshold 100 MB sweeping to.claude/logs/archive/",
       "disposition": "open",
       "review_cross_check": "D2b-05 (S0 — search-context handshake files at C:\\tmp growing unbounded since January) confirms the broader unmanaged log/temp-file accumulation problem. No rotation mechanism added for intel-bus or any other JSONL log."
     },

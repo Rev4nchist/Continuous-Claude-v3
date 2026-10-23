@@ -66,11 +66,11 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
       {project.sessionCount > 0 && (
         <p className="-mt-1 font-mono text-[0.6875rem] text-muted-foreground">
           {/* Only non-zero harnesses, so a Claude-only project does not carry a
-              permanent "retired 0" implying Retired is expected there. */}
+              permanent zero for a harness that is not writing new rows. */}
           {(
             [
               ['claude', project.byHarness.claude],
-              ['retired', project.byHarness.retired],
+              ['uuidv7', project.byHarness.uuidv7],
               ['legacy', project.byHarness.legacy],
               ['other', project.byHarness.other],
             ] as const

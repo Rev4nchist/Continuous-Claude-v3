@@ -102,9 +102,9 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
               hint: 'UUIDv4 session ids — written by this repo’s own hooks.',
             },
             {
-              key: 'retired',
+              key: 'uuidv7',
               label: 'Removed CLI',
-              value: fleet.byHarness.retired,
+              value: fleet.byHarness.uuidv7,
               hint:
                 'Historical UUIDv7 thread ids from the removed cross-model CLI. ' +
                 'That hook install is deleted. These rows are not still being written.',

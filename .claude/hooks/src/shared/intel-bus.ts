@@ -54,7 +54,7 @@ export interface IntelBusEvent {
   ts?: string;
   /** Session bus id (from shared/session-bus-id.ts). Required. */
   bus_id: string;
-  /** Which agent emitted: main | kraken | retired-adversary | ... */
+  /** Which agent emitted: main | kraken | |... */
   agent?: string;
   /** Facade entry point, e.g. "/code-intel". */
   facade?: string;
@@ -193,7 +193,7 @@ function redactSecretString(s: string, keyHint?: string): string {
   let out = s;
 
   // 1. Standalone secret SHAPES first. Running these BEFORE the generic assignment
-  //    pass is what catches `Authorization: Bearer <opaque>` (session-3 Retired#2):
+  // pass is what catches `Authorization: Bearer <opaque>` (session-3 review#2):
   //    the assignment pass would otherwise consume "Bearer" as Authorization's
   //    value and leave the real token behind, defeating the Bearer shape below.
   //    All quantifiers are upper-bounded so every pattern stays linear (ReDoS-safe).
@@ -224,7 +224,7 @@ function redactSecretString(s: string, keyHint?: string): string {
  * (password/token/...) has its whole value redacted. Array elements INHERIT the
  * parent field name as `keyHint`, so an array under a credential-named field
  * (e.g. `tokens: ['opaque', ...]`) has each element redacted too (session-3
- * Retired#3 -- the keyHint used to be dropped on the array branch, leaking it).
+ * review#3 -- the keyHint used to be dropped on the array branch, leaking it).
  */
 function redactSecretsDeep(value: unknown, keyHint?: string): unknown {
   if (typeof value === 'string') {

@@ -6,7 +6,7 @@ Turns raw regex-matched thinking blocks into crisp stored lessons
 extraction run. Runs ONLY in the detached background extraction path —
 never on the hot tool-response path.
 
-Safety posture (Retired premortem 2026-07-24 findings #3/#4 + refresh brief):
+Safety posture (premortem 2026-07-24 findings #3/#4 + refresh brief):
 - Recursion sentinel: the child process gets CCV3_DISTILL_CHILD=1; extraction
   hooks check it and no-op, so a distiller session can never trigger another
   extraction -> distiller cascade.

@@ -35,7 +35,7 @@ Before any timer starts, facilitators run a **5-minute setup window**:
 3. On-screen success check: **"Fresh Project open, skill installed, no account loaded — ready."**
 4. Any rep who can't get a clean Project is flagged to the IT floater and moved to the fallback (§1.5) — **before** the clock, never during.
 
-**Setup time never counts against the competition clock.** This is the Retired-hardened fix: bundling install/auth into the timed window penalized the reps with the slowest laptops, not the weakest research.
+**Setup time never counts against the competition clock.** This is the -hardened fix: bundling install/auth into the timed window penalized the reps with the slowest laptops, not the weakest research.
 
 ### 1.3 The 10-minute timer starts at the surprise-account REVEAL
 
@@ -60,7 +60,7 @@ A rep who can't get a clean Arena Project running in the setup window does **not
 
 ## 2. The Answer-Key Packet Spec
 
-The hard problem Retired flagged: **"zero fabricated names" is unjudgeable live** — a judge can't verify a rep's citation for a surprise account in real time. The fix: facilitators pre-research the surprise accounts and judge against a **pre-built answer-key packet**, not against the rep's own citations.
+The hard problem flagged: **"zero fabricated names" is unjudgeable live** — a judge can't verify a rep's citation for a surprise account in real time. The fix: facilitators pre-research the surprise accounts and judge against a **pre-built answer-key packet**, not against the rep's own citations.
 
 ### 2.1 Who builds it, when, how
 

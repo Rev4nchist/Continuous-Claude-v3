@@ -2,7 +2,7 @@
 // publish.mjs — Publish the Self-Improvement Triage Cockpit to the ai-enablement-decks
 // GitHub Pages site, UNLISTED (no decks.json card — URL-knowledge-only, PIK precedent).
 //
-// Immutability contract (Retired premortem finding #2, 2026-07-24): each publish lands
+// Immutability contract (premortem finding #2, 2026-07-24): each publish lands
 // under a DATED folder that is never rewritten by later days' runs, plus a `latest/`
 // alias that is explicitly non-audit. Registry `artifactUrl` values must NEVER point
 // here (finding #1) — they stay on the per-run Notion child page (run-research.ps1).

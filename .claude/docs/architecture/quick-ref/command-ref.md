@@ -8,8 +8,8 @@
 | `/fix` | Bug resolution | Reproduce → Investigate → Fix → Re-run repro |
 | `/build` | Feature development | Plan → Implement → Review |
 | `/explore` | Codebase research | Understanding code |
-| `/review` | Code review | Before merge (critic + plan-reviewer + Retired runner) |
-| `/premortem` | Failure-mode analysis | Before implementing a plan (inline imagining + Retired runner cross-model pass) |
+| `/review` | Code review | Before merge (critic + plan-reviewer) |
+| `/premortem` | Failure-mode analysis | Before implementing a plan |
 | `/release` | Release prep | Audit → Test → Changelog |
 
 ## Research Commands

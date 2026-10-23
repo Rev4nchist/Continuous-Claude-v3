@@ -7,10 +7,8 @@ Where everything lives. Paths are repo-relative to `continuous-claude/` unless n
 | Artifact | Path | What |
 |----------|------|------|
 | Final report | `docs/reviews/2026-06-10/ccv3-fable5-deep-review-2026-06-10.md` | Executive verdict, confirmed ledger, elegance analysis, review-of-the-review |
-| Findings (machine) | `docs/reviews/2026-06-10/findings.json` | 190 confirmed, by-severity, retired-lift. **Trace finding IDs here.** |
 | Synthesis | `docs/reviews/2026-06-10/wf3/synthesis.json` | `ranked` (priority-scored) · `elegance` (verdict + rationale) · `backlog` (the 4 tiers) |
 | WF-2 verdicts | `docs/reviews/2026-06-10/wf2/WF2-VERDICTS.json` | Per-finding CONFIRM/DOWNGRADE/KILL with reachability evidence |
-| Retired passes | `docs/reviews/2026-06-10/wf3/retired-pass1-ledger.md`, `retired-security-scope.md` | Cross-model lift (gpt-5.5) |
 | Plan + premortem | `~/.claude/plans/we-have-been-working-starry-pony.md` | The review plan + 20-finding risk ledger |
 | v3 design baseline | `~/.claude/plans/we-have-recently-done-refactored-storm.md` | L0-L5 model, §9 cohesion metrics, §17 open issues (the target shape) |
 
@@ -41,7 +39,6 @@ Where everything lives. Paths are repo-relative to `continuous-claude/` unless n
 | /code-intel facade (ST-04, C.5) | `scripts/code-intel.mjs`, `.claude/hooks/src/code-intel-enforcer.ts` |
 | Sanitizer (ST-07) | `.claude/hooks/src/shared/memory-sanitize.ts`; injectors: `session-start-continuity.ts`, `pre-plan-memory.ts`, `git-memory-check.ts`, `memory-awareness.ts`, `agent-recall-injector.ts` |
 | Shell-injection (ST-08) | `smart-search-router.ts`, `daemon-client.ts`, the 4 `store_learning` call sites |
-| Telemetry (SG-04) | `.claude/logs/{intel-bus,memory-recall,agent-recall,retired-lift}.jsonl` |
 
 ## Resident recall daemon (the foundation)
 

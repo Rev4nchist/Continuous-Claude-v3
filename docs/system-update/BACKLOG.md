@@ -2,7 +2,7 @@
 
 > The ratified backlog from the Fable-5 deep review. **Work top-down, respect the gates.** Each item carries its finding IDs (trace to `docs/reviews/2026-06-10/findings.json`), the concrete action, and its dependency/gate. Severity legend: **S0** silent-corruption · **S1** wrong hot-path / exploitable / decision-driving false claim · **S2** measurable waste · **S3** polish.
 
-Counts: **190 confirmed** (S0:3 ✅ · S1:41 · S2:108 · S3:38). Retired cross-model: 184 corroborated, 6 retired-only, 2 S1→S2 downgrades.
+Counts: **190 confirmed** (S0:3 ✅ · S1:41 · S2:108 · S3:38). cross-model: 184 corroborated, 6 -only, 2 S1→S2 downgrades.
 
 ---
 
@@ -62,7 +62,7 @@ Emit invariant held 4/4 across all. **Remaining in Wave 1:** `QW-04` (matcher fl
 | **ST-03** | UserPromptSubmit 13-spawn serial → parallel (the 22–32s wall) | D6a-01 | after ST-05 |
 | **ST-10** | Fix `agent-recall-injector` 0-for-78 lifetime yield (**DELICATE** — Hook Source Regression history; emit-guard + post-spark verify on every edit) | D2b-03 | after ST-05 |
 | **ST-04** | codegraph facade latency 35–88s → budget (freshness-probe redesign + reindex budget) | D4b-01 | **before the C.5 deny-gate flip** |
-| **ST-06** | Permission-layer redesign — remove `permission-auto-allow`'s "auto-approve ALL" | D2g-02/GAP3-01 | **before ST-08** (precondition for injection fixes to mean anything — Retired finding) |
+| **ST-06** | Permission-layer redesign — remove `permission-auto-allow`'s "auto-approve ALL" | D2g-02/GAP3-01 | **before ST-08** (precondition for injection fixes to mean anything — finding) |
 | **ST-08** | argv-ify the remaining Grep-path shell-injection sites (`smart-search-router`, `daemon-client`) + the shared `storeLearning(content,opts)` helper | D2b-10/GAP4-01/GAP4-02 + D5a/D5b cluster | after ST-06 |
 | **ST-07** | Memory sanitizer coverage 2 → 5 injectors (route all 5 through `injectRecall()`) | D5b-01 (poison-then-inject) | after ST-02; independent otherwise |
 | **ST-09** | Bus lock + write-amplification hardening (200ms cap redesign) | D4a-02 | after ST-01 (new writer changes contention profile) |
@@ -94,7 +94,6 @@ Emit invariant held 4/4 across all. **Remaining in Wave 1:** `QW-04` (matcher fl
 | **SG-02** | 3-way settings/template drift reconciliation + source-of-truth enforcement (18 hooks live in active but absent from tracked repo, incl. `package-install-guard`, `permission-auto-allow`); extend `/sync-drift` with a drift gate; fix bootstrap template still registering the deregistered `navigator-safety` | can start **parallel with Wave 1** |
 | **SG-01** | Memory recall floor + corpus-health SLO; re-baseline the 27.4% hit rate after the math fixes + daemon | after QW-06/QW-07 + ST-05 |
 | **SG-03** | Elegance / pruning program — collapse the named duplication clusters; owns the operator-confirm deletion items | after Wave 1 hygiene stabilizes |
-| **SG-04** | Telemetry joinability + intel-bus consumer (build `intel-bus-stats.mjs`, §9 metrics, WRRF weight recalibration from 30 days of `bus-wrrf.jsonl`); re-examine retired-lift ROI with accepted/rejected disposition tracking. **+ Multi-session (SG-04+):** cross-session metrics (active sessions, conflict rate, lock waits) once ST-02 makes ids joinable; a session-start + per-edit **peer-awareness surface** ("Session B active on this branch — editing `foo.ts` 2m ago") = the WARN half of the MS hybrid posture | after ST-02 + ST-01 (terminal tier) |
 
 ---
 
@@ -135,7 +134,7 @@ tldr-context-inject git-freshness cache + code-agent narrow (`1fd155c`).
 | ID | Item | Notes |
 |----|------|-------|
 | **FH-01a/b** ✅ | **tldr daemon warm at session start + health-check no longer HIGH** | DONE (FINAL session): `session-start-init-check.warmTldrDaemon` fire-and-forget warms `tldr daemon start --project <dir>` each startup (idempotent via the daemon's pidfile lock; kill-switch `CCV3_TLDR_WARM_OFF`). `health_check.check_tldr_daemon_running` now CATCHES the `subprocess.TimeoutExpired` that made it crash → HIGH (root cause) and reports the on-demand daemon as **INFO**. Critic-approved (0 critical), 8/8 tests, emit 4/4, real warm verified (`status: ready`). **DEFERRED:** root-causing why `tldr daemon` won't stay *resident* on Windows — the per-session warm is the accepted mitigation. |
-| **FH-03** ✅ | **CCv3-Judge-Batch scheduled task failing** | Triaged (FINAL session): current `LastResult=0x800710E0` is a **missed schedule** (Event 153) — task was *Interactive-only* with no missed-start recovery, so it missed 6:15 AM on 6/29 and never ran. **FIXED:** enabled `StartWhenAvailable` (same pattern `CCv3-Blocklist-Update` uses) — verified `False → True`. **DEFERRED (one-off):** the separate `0x80070001` exit on 6/28 (transient; 6/20–6/27 all ran exit 0) — if it recurs, run `cd opc; uv run python -m scripts.core.judge_session --scan-since <yesterday> --max-sessions 10` and check retired/claude auth. |
+| **FH-03** ✅ | **CCv3-Judge-Batch scheduled task failing** | Triaged (FINAL session): current `LastResult=0x800710E0` is a **missed schedule** (Event 153) — task was *Interactive-only* with no missed-start recovery, so it missed 6:15 AM on 6/29 and never ran. **FIXED:** enabled `StartWhenAvailable` (same pattern `CCv3-Blocklist-Update` uses) — verified `False → True`. **DEFERRED (one-off):** the separate `0x80070001` exit on 6/28 (transient; 6/20–6/27 all ran exit 0) — if it recurs, run `cd opc; uv run python -m scripts.core.judge_session --scan-since <yesterday> --max-sessions 10` and check /claude auth. |
 | **FH-02** ⏳ | **SG-01 re-baseline — DATA-GATED** | Re-ran 2026-06-30: still only **2 `recall_via:daemon` events** of 395 (the `recall_via` instrumentation is new). Daemon legs 1.7 / 3.4 s, both hit; a live socket probe this session confirmed warm recall **~160-250 ms** (cold first-call ~4.7 s) — the ST-05 target holds. **Anomaly root-caused (NOT a regression):** 2 recalls today logged `daemon_ready:true` + `recall_via:uv` + ~20 s timeout — `daemon_ready` logs `probe.ready` (model loaded) while routing uses `probe.recallReady` (recall pool); the pool was cold post-restart → correct uv fallback. **Shipped this session:** added `recall_ready` to the recall log + Braintrust metadata so the next re-baseline can attribute every uv fallback. **STILL GATED:** accumulate ≥50 daemon events, confirm no `daemon_ready:true + recall_ready:true + recall_via:uv` rows, then unblock **ST-03** + **ST-10**. |
 
 ---

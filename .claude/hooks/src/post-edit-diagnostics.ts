@@ -167,7 +167,7 @@ function runPythonDiagnostics(filePath: string, projectDir: string): void {
   // WS-2 Phase B.4a (D2e-08): record the edited file on the bus with role
   // `edited` ONLY, BEFORE any early-return, so the `edited` role lands even when
   // the daemon is unavailable. (A type error is NOT a test failure -- `test_failed`
-  // is reserved for a real test runner; session-2 Retired#6.) Fail-open; does not
+  // is reserved for a real test runner; session-2 review#6.) Fail-open; does not
   // affect the diagnostics output below.
   recordBusFilesInPlay(filePath);
 
@@ -272,7 +272,7 @@ function runTscDiagnostics(filePath: string, projectDir: string): void {
   // WS-2 Phase B.4a (D2e-08): record the edited file on the bus with role
   // `edited` ONLY, BEFORE any early-return, so the `edited` role lands even when
   // tsc is unresolvable / fails to start. (A type error is NOT a test failure --
-  // `test_failed` is reserved for a real test runner; session-2 Retired#6.)
+  // `test_failed` is reserved for a real test runner; session-2 review#6.)
   // Fail-open; does not affect the diagnostics output below.
   recordBusFilesInPlay(filePath);
 

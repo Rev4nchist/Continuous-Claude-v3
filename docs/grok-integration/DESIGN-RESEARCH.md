@@ -1,17 +1,17 @@
 # Grok Integration — Design Research & Verified Capability Surface
 
-Sibling of `docs/retired-integration/DESIGN-RESEARCH.md`. Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
+Sibling of `docs-integration/DESIGN-RESEARCH.md`. Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
 
 ## 1. Executive summary
 
-xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and headless-capable on this Windows 11 machine. The `/grok` worker rides Dave's **X Premium+ subscription via OAuth (auth.x.ai, oidc)** — no API key, no per-token billing. The load-bearing question from planning ("does headless stay on OAuth?") is **answered YES by live probe**. The biggest surprises: headless mode **writes files with zero approval by default**, `--permission-mode plan` and `--sandbox` do **not** block writes, and the native `-w` worktree flag is **silently ignored** in `-p` mode — so read-only safety comes from the `--tools` allowlist and implement-mode isolation reuses the proven retired-worker hand-rolled worktree recipe.
+xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and headless-capable on this Windows 11 machine. The `/grok` worker rides Dave's **X Premium+ subscription via OAuth (auth.x.ai, oidc)** — no API key, no per-token billing. The load-bearing question from planning ("does headless stay on OAuth?") is **answered YES by live probe**. The biggest surprises: headless mode **writes files with zero approval by default**, `--permission-mode plan` and `--sandbox` do **not** block writes, and the native `-w` worktree flag is **silently ignored** in `-p` mode — so read-only safety comes from the `--tools` allowlist and implement-mode isolation reuses the proven hand-rolled worktree recipe.
 
 ## 2. Verified surface (all probed 2026-07-11, grok 0.2.93 stable, Windows 11)
 
 ### 2.1 Auth & identity
 - `grok login` (browser OAuth) done by Dave 2026-07-11. `grok models` header: "You are logged in with grok.com."
 - `~/.grok/auth.json` (keyed by `https://auth.x.ai::<uuid>`): non-secret fields `email = dkhayes44@gmail.com`, `auth_mode = "oidc"`, `principal_type = "User"`. **Preflight identity pin = `.email`** — read via jq, NEVER touch `.key` / `.refresh_token`.
-- `~/.grok/models_cache.json`: `auth_method: "session"` (subscription session, not API key). This file is the **ground-truth model cache** (Retired analog: `~/.retired/models_cache.json`).
+- `~/.grok/models_cache.json`: `auth_method: "session"` (subscription session, not API key). This file is the **ground-truth model cache** (analog: `~/`).
 - **Negative control PASS:** with `XAI_API_KEY=bogus-key-negative-control` set, `grok -p` succeeded (exit 0) — a bogus key would have failed if used, so the run stayed on OAuth. The CLI does not hijack auth from that env var. (Worker still sanitizes it defensively.)
 - Re-auth for headless environments exists: `grok login --device-auth`.
 
@@ -64,11 +64,11 @@ xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and 
 `grok inspect` shows Grok auto-discovers and loads **Claude Code's own config**: Dave's `~/.claude/Claude.md` (~5,090 tokens), permissions from `settings.local.json`, and **292 Claude skills**. Every `/grok` run therefore ships that context (plus the prompt + any files the model reads) to xAI under Dave's account. Covered by the data-egress section of `grok-worker-safety.md` (first-use confirm, secret-scan, no `.env*`, payload awareness). `--verbatim`, `--rules`, `--system-prompt-override` exist as shaping levers; a future probe could test whether config ingestion can be disabled for worker runs.
 
 ### 2.10 Quota/billing
-Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass (mirror of Retired: detection will be reactive — parse the rate-limit error when it first appears, then codify).
+Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass (mirror of : detection will be reactive — parse the rate-limit error when it first appears, then codify).
 
-## 3. Divergences from the Retired mold (design deltas)
+## 3. Divergences from the mold (design deltas)
 
-| Topic | Retired | Grok (verified) |
+| Topic | | Grok (verified) |
 |---|---|---|
 | Read-only enforcement | `--sandbox read-only` (real) | `--tools "read_file,list_dir,grep"` (`--sandbox` decorative) |
 | Write isolation | hand-rolled worktree | same hand-rolled worktree (`-w` ignored headless) |
@@ -76,8 +76,7 @@ Subscription-gated (X Premium+); no per-token invoice observed. No quota surface
 | Clean output | `-o <file>` (startup noise on stdout) | plain stdout already clean; json for structured |
 | Session id | `thread_id` in `--json` events | `sessionId` in json output |
 | Multi-agent | `--disable multi_agent` | `--no-subagents` |
-| Model ground truth | `~/.retired/models_cache.json` | `~/.grok/models_cache.json` |
-| Auth assert | `retired login status` ("Logged in using ChatGPT") | `grok models` header + `auth.json` `.email` identity pin |
+| Auth assert | ` login status` ("Logged in using ChatGPT") | `grok models` header + `auth.json.email` identity pin |
 | Windows subprocess in write mode | BLOCKED (writes blind) | `run_terminal_command` AVAILABLE — Grok can run commands in implement mode; orchestrator verification still mandatory |
 
 ## 4. Open items / future probes

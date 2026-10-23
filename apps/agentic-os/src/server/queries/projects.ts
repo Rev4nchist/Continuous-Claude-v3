@@ -16,7 +16,7 @@ import { db } from '@/db';
  * records it — and the shapes are unambiguous:
  *
  *   claude — UUIDv4. Claude Code's own session id.
- *   retired  — UUIDv7. Historical thread ids from the removed cross-model CLI.
+ *   uuidv7   — Historical thread ids from the removed cross-model CLI.
  *            Those rows were written by a separate hook install that this PR deletes.
  *            Nothing in this repo still registers or writes them. All 168 carry raw
  *            backslash paths the current canonicalProject() cannot produce, and the
@@ -31,11 +31,11 @@ import { db } from '@/db';
  * This is a CLASSIFIER OVER EXISTING DATA, not a schema change. If sessions ever gains
  * a real `harness` column, this becomes a fallback for old rows and nothing else moves.
  */
-export type Harness = 'claude' | 'retired' | 'legacy' | 'other';
+export type Harness = 'claude' | 'uuidv7' | 'legacy' | 'other';
 
 export type HarnessCounts = {
   claude: number;
-  retired: number;
+  uuidv7: number;
   legacy: number;
   other: number;
 };
@@ -127,7 +127,7 @@ type OverviewRow = {
   projects: ProjectSummary[] | null;
   duplicates: string;
   h_claude: string;
-  h_retired: string;
+  h_uuidv7: string;
   h_legacy: string;
   h_other: string;
   null_project: string;
@@ -162,7 +162,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
         -- The version nibble of a UUID is character 15 (8 hex, dash, 4 hex, dash, V).
         CASE
           WHEN s.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-4' THEN 'claude'
-          WHEN s.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7' THEN 'retired'
+          WHEN s.id ~ '^[0-9a-f]{8}-[0-9a-f]{4}-7' THEN 'uuidv7'
           WHEN s.id LIKE 's-%'                     THEN 'legacy'
           ELSE                                          'other'
         END AS harness
@@ -176,7 +176,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
       SELECT DISTINCT l.id
       FROM harnessed l
       JOIN harnessed u
-        ON u.harness IN ('claude', 'retired')
+        ON u.harness IN ('claude', 'uuidv7')
        AND u.project = l.project
        AND u.started_at BETWEEN l.started_at - interval '90 seconds'
                             AND l.started_at + interval '90 seconds'
@@ -230,7 +230,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
         count(*)                     AS session_count,
         count(DISTINCT b.project)    AS raw_spellings,
         count(*) FILTER (WHERE b.harness = 'claude') AS h_claude,
-        count(*) FILTER (WHERE b.harness = 'retired')  AS h_retired,
+        count(*) FILTER (WHERE b.harness = 'uuidv7')  AS h_uuidv7,
         count(*) FILTER (WHERE b.harness = 'legacy') AS h_legacy,
         count(*) FILTER (WHERE b.harness = 'other')  AS h_other,
         NULLIF(max(b.activity_at), '-infinity'::timestamp) AS last_activity_at
@@ -250,7 +250,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
           COALESCE(pp.session_count, 0)::int   AS "sessionCount",
           jsonb_build_object(
             'claude', COALESCE(pp.h_claude, 0)::int,
-            'retired',  COALESCE(pp.h_retired,  0)::int,
+            'uuidv7',  COALESCE(pp.h_uuidv7,  0)::int,
             'legacy', COALESCE(pp.h_legacy, 0)::int,
             'other',  COALESCE(pp.h_other,  0)::int
           )                                    AS "byHarness",
@@ -274,7 +274,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
       (SELECT payload FROM projects) AS projects,
       count(*) FILTER (WHERE bucket = 'duplicate')::text            AS duplicates,
       count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'claude')::text AS h_claude,
-      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'retired')::text  AS h_retired,
+      count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'uuidv7')::text  AS h_uuidv7,
       count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'legacy')::text AS h_legacy,
       count(*) FILTER (WHERE bucket = 'mapped' AND harness = 'other')::text  AS h_other,
       count(*) FILTER (WHERE bucket = 'null_project')::text         AS null_project,
@@ -318,7 +318,7 @@ export async function getFleetOverview(): Promise<FleetOverview> {
 
   const byHarness: HarnessCounts = {
     claude: n(r.h_claude),
-    retired: n(r.h_retired),
+    uuidv7: n(r.h_uuidv7),
     legacy: n(r.h_legacy),
     other: n(r.h_other),
   };

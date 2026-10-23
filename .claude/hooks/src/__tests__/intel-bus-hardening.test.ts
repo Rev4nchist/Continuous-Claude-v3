@@ -291,10 +291,10 @@ describe('appendIntelBus -- secret redaction (cross-model hardening)', () => {
 });
 
 // ===========================================================================
-// Change 1c -- Secret redaction: session-3 review hardening (Retired #2/#3)
+// Change 1c -- Secret redaction: session-3 review hardening (review#2/#3)
 // ===========================================================================
 describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
-  it('Retired#2: redacts an OPAQUE Bearer token (no shape) in an Authorization header', () => {
+  it('review#2: redacts an OPAQUE Bearer token (no shape) in an Authorization header', => {
     // ASSIGNMENT_RE used to consume "Bearer" as Authorization's value, leaving the
     // opaque token, and the Bearer SHAPE could no longer match it. Shapes now run
     // BEFORE the assignment pass so the token is caught regardless of the header.
@@ -309,7 +309,7 @@ describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
     expect(parsed.note).toContain('[REDACTED]');
   });
 
-  it('Retired#3: redacts opaque secrets inside an ARRAY under a credential-named field', () => {
+  it('review#3: redacts opaque secrets inside an ARRAY under a credential-named field', => {
     // redactSecretsDeep dropped keyHint when recursing into arrays, so an array of
     // opaque secrets under e.g. `tokens` survived. keyHint now threads through.
     const { lines, append } = makeCapture();
@@ -338,7 +338,7 @@ describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
   });
 
   it('fix-review: still redacts a secret assignment with MANY spaces around the separator', () => {
-    // Guards the fix-review retired finding: bounding the ASSIGNMENT_RE separator to
+    // Guards the fix-review finding: bounding the ASSIGNMENT_RE separator to
     // {0,40} would let a `KEY  :  VALUE` with 41+ spaces leak. The separator stays
     // `\s*` (it is never the ReDoS surface -- the {1,2048} VALUE bound is).
     const { lines, append } = makeCapture();
