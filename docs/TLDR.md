@@ -585,7 +585,7 @@ TLDR integrates via TypeScript hooks that query the daemon for zero-overhead cod
 
 ```typescript
 // .claude/hooks/src/any-hook.ts
-import { queryDaemonSync } from './daemon-client.js';
+import { queryDaemonSync } from './lib/daemon-client.js';
 
 // Query daemon (100ms, in-memory indexes)
 const result = queryDaemonSync(projectDir, {
