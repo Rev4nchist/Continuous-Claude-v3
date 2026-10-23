@@ -52,11 +52,16 @@ $RoutesFile    = Join-Path $HOME '.gitconfig-fourth.routes'
 $IdentityFile  = Join-Path $HOME '.gitconfig-fourth.identity'
 
 $cfg  = Get-Content $AccountsPath -Raw | ConvertFrom-Json
+$personal = $cfg.accounts.personal
+if (-not $personal) { throw "accounts.json has no personal account" }
 $work = $cfg.accounts.work
-if (-not $work -or $work.user -like 'TBD-*') { throw "accounts.json work account is not filled in" }
-
 $routes = @($cfg.routes | Where-Object { $_.commitAccount -eq 'work' })
-if (-not $routes.Count) { throw "no routes with commitAccount=work in accounts.json" }
+if (-not $work -or -not $routes.Count) {
+  Write-Host ""
+  Write-Host "apply-commit-identity   personal only ($($personal.email)); no work account"
+  Write-Host "nothing to generate. Commit identity stays the personal account."
+  exit 0
+}
 
 # Git wants forward slashes and a trailing slash; ~ is expanded by git itself but
 # we hand it absolute paths, so normalise here rather than relying on that.

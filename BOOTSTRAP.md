@@ -103,27 +103,27 @@ not: it is **machine state outside version control** --
 PowerShell profiles, and Windows Credential Manager. None of it is in the repo, and
 none of it is restored by cloning.
 
-**Why it is worth the twenty minutes.** Two GitHub accounts are in play --
-`Rev4nchist` (personal) and `david-hayes44` (Fourth work) -- across five layers that
-are configured separately and fail separately. **They fail silently, with the wrong
-identity rather than an error:**
+**Why it is worth the twenty minutes.** One GitHub account is in play --
+`Rev4nchist` (personal, dkhay). The work account was removed from
+`scripts/github/accounts.json` and must not be recreated. The layers below still
+fail silently if the personal credential is wrong:
 
 | Layer | Silent failure |
 |---|---|
 | gh CLI | the wrong account opens the PR |
 | git push credential | the wrong account is authenticated for push |
 | commit identity | the wrong email is baked into the commit, **permanently** |
-| plain `git` routing | every personal repo authenticates as the work account and 404s |
+| plain `git` routing | a bare github.com request answers as someone other than Rev4nchist and 404s |
 | gh MCP server | wrong account for everything done via MCP |
 
 Each produces a successful-looking operation attributed to the wrong person. You find
 out days later, in someone else's repo history. This was live until 2026-08-11:
 **25 of 64 remotes** were authenticating as the wrong account.
 
-**What IS in git:** `scripts/github/accounts.json` is the single source of truth for
-both accounts, the owner-to-account auth map, and the per-directory commit-identity
-routes. `accounts-lib.ps1` holds the shared resolution logic. Do not re-derive any of
-this by hand -- fill in `accounts.json` and let the scripts apply it.
+**What IS in git:** `scripts/github/accounts.json` is the single source of truth.
+It names one account, `personal`, and `authByOwner._default` points at it.
+`accounts-lib.ps1` holds the shared resolution logic. Do not re-derive any of
+this by hand.
 
 ### Setup order
 
@@ -139,18 +139,14 @@ $env:GH_CONFIG_DIR = "$HOME\.config\gh-personal"
 gh auth login --hostname github.com --git-protocol https --web
 ```
 
-**2. Authenticate the work account** into its own config dir.
-
-```
-$env:GH_CONFIG_DIR = "$HOME\.config\gh-work"
-gh auth login --hostname github.com --git-protocol https --web
-```
+**2. Do not authenticate a second account.** `accounts.json` has no work
+account. Skip any second config dir. The personal config dir from step 1 is the
+only gh credential.
 
 > **`--web` stores whichever account the BROWSER session holds, not the one you
-> intended.** Sign the browser into the target account first. This trap already put
-> the work credential in the personal config dir once. Never trust the login's own
+> intended.** Sign the browser into Rev4nchist first. Never trust the login's own
 > success message -- verify with ambient tokens cleared:
-> `$env:GH_CONFIG_DIR="$HOME\.config\gh-work"; gh api user --jq .login`
+> `$env:GH_CONFIG_DIR="$HOME\.config\gh-personal"; gh api user --jq .login`
 
 **3. Set the default account** at User scope. Without a default, bare `gh` has **no
 credential at all** -- it falls back to `%APPDATA%\GitHub CLI\`, which does not exist.
@@ -165,22 +161,19 @@ credential at all** -- it falls back to `%APPDATA%\GitHub CLI\`, which does not 
 > absolute path. Open a **new terminal** afterwards -- User-scope variables are not
 > visible in the session that set them.
 
-**4. Point plain `git` at the right account.** These two lines are the load-bearing
-fix. Without the username, Git Credential Manager cannot choose between two accounts;
-it either raises a picker or lets a second helper answer from an ambiguous entry.
+**4. Point plain `git` at the personal account.** Without the username, Git
+Credential Manager cannot choose an account. There is no second account and no
+`insteadOf` rewrite.
 
 ```
 git config --global credential.https://github.com.username Rev4nchist
-git config --global url."https://david-hayes44@github.com/fourth/".insteadOf https://github.com/fourth/
 ```
 
-**5. Apply commit identity** from `accounts.json`. Plan first, then apply. It writes
-two generated files and appends **one** include line to `~/.gitconfig`; nothing
-hand-written is parsed or rewritten.
+**5. Apply commit identity** from `accounts.json`. With no work account the script
+prints that identity stays personal and writes nothing.
 
 ```
 pwsh -File scripts/github/apply-commit-identity.ps1
-pwsh -File scripts/github/apply-commit-identity.ps1 -Apply
 ```
 
 **6. Route bare `gh` by directory.** Add this line to **both** profiles -- PowerShell 7
@@ -192,16 +185,8 @@ pwsh -File scripts/github/apply-commit-identity.ps1 -Apply
 . "$HOME\continuous-claude\scripts\github\gh-shim.ps1"   # route bare `gh` by directory
 ```
 
-**7. Prime Git Credential Manager for the work account**, in an **interactive**
-terminal -- it opens a browser prompt that blocks forever in a tool or scheduled shell.
-The `insteadOf` rule puts `david-hayes44@` in the URL, so GCM is asked for that account
-specifically and there is no picker.
-
-Any repo whose remote owner is `fourth` will do, for example:
-
-```
-git -C "C:\Users\david.hayes\Projects\fourth-salesforce-mcp" fetch origin
-```
+**7. No second credential to prime.** Step 4 makes Git Credential Manager ask for
+Rev4nchist. Do not add a rewrite that names another account.
 
 ### Verify -- both gates must pass
 
@@ -210,14 +195,10 @@ pwsh -File scripts/github/verify-github-accounts.ps1
 pwsh -File scripts/github/sweep-remotes.ps1
 ```
 
-The verifier checks all five layers independently and asks each one *who are you*,
-rather than *did it error*. Expect `PASS ... 24 checks` (the count scales with the
-number of routes in `accounts.json`). The sweep contacts every remote read-only and
-reports which account answered; on a correct machine it is **0 failures**. A dead work
-credential shows up as one failure per `fourth/*` remote -- 9 of them as of 2026-08-11,
-which is the signature to recognise rather than a fixed number.
-
-Verified on the reference machine 2026-08-12: `PASS verify-github-accounts 24 checks`.
+The verifier checks each layer independently and asks *who are you*, rather than
+*did it error*. The check count scales with the accounts and routes in
+`accounts.json` (one personal account, one personal route). The sweep contacts
+every remote read-only. On a correct machine it is **0 failures**.
 
 ### Traps that cost real sessions
 
@@ -232,7 +213,7 @@ Verified on the reference machine 2026-08-12: `PASS verify-github-accounts 24 ch
 
 **Revoking the GitHub CLI OAuth grant breaks `gh` and plain `git push` together** for
 that account, and GitHub has no reissue button. Recovery is to re-run the login flow
-for that account (steps 1-2), then step 7. Full detail:
+for that account (step 1). Full detail:
 `.claude/docs/windows/platform-notes.md`.
 
 ## What The System Provides
@@ -325,7 +306,7 @@ Manual sync: `bash scripts/sync-to-active.sh`
 | "Repository not found" on a repo you own | Wrong-account auth. Run `verify-github-accounts.ps1`; usually a missing `credential.https://github.com.username` (step 4) or a second credential helper |
 | `gh` acts as the wrong account | `Get-GhAccount` shows who `gh` would be in the current directory. If it says `ambient GH_CONFIG_DIR`, the shim is not loaded in this profile (step 6) |
 | Commits authored with the wrong email | `pwsh -File scripts/github/apply-commit-identity.ps1` to plan, `-Apply` to fix. This does **not** rewrite existing commits |
-| Push prompts for credentials, or hangs with no output | Git Credential Manager raising a GUI prompt in a non-interactive shell. Prime it once interactively (step 7) |
+| Push prompts for credentials, or hangs with no output | Git Credential Manager raising a GUI prompt in a non-interactive shell. Confirm step 4 set the personal username, then complete one interactive fetch |
 
 ## Windows-Specific Notes
 

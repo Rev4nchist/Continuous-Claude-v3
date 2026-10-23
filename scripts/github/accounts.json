@@ -1,49 +1,18 @@
 {
   "_comment": [
-    "Dual GitHub account routing. Read by scripts/github/gh-for.ps1,",
+    "GitHub account routing. Read by scripts/github/gh-for.ps1,",
     "apply-commit-identity.ps1 and verify-github-accounts.ps1.",
     "",
-    "AUTH AND COMMIT IDENTITY ARE SEPARATE QUESTIONS. Conflating them was the",
-    "first design's mistake.",
+    "personal is the only account. The work account and every work commit",
+    "route were removed and not re-homed. authByOwner._default is personal,",
+    "so an owner with no explicit mapping resolves to personal.",
     "",
-    "  AUTH follows the repo's REMOTE OWNER, and there is no choice about it. A",
-    "  repo whose remote is Rev4nchist/fourth-salesforce-mcp MUST authenticate as",
-    "  Rev4nchist -- that is who owns it; the company account would simply 404.",
-    "  So auth is derived, not configured: see authByOwner.",
+    "ROUTES are matched LONGEST PREFIX FIRST, compared case-insensitively",
+    "with forward slashes, because Windows hands you both spellings.",
     "",
-    "  COMMIT IDENTITY is a policy choice, and Dave's is: Fourth work is authored",
-    "  as david.hayes@fourth.com even when the repo happens to live in the",
-    "  personal namespace. Attribution should reflect whose work it is.",
-    "",
-    "WHY AN EXPLICIT REPO LIST AND NOT A DIRECTORY PREFIX:",
-    "  There is no directory boundary between company and personal work -- both",
-    "  are intermixed under Projects/. A prefix rule cannot separate them without",
-    "  moving ~13 working directories, which would break absolute paths in the",
-    "  project registry, dev scripts and scheduled tasks. So Fourth repos are",
-    "  listed. Verbose, but it describes what is actually on disk.",
-    "",
-    "  The one prefix that IS meaningful is Projects/fourth/ -- reserved for",
-    "  future clones from github.com/fourth, which get the right identity",
-    "  automatically without being added here.",
-    "",
-    "ROUTES are matched LONGEST PREFIX FIRST, compared case-insensitively with",
-    "forward slashes, because Windows hands you both spellings.",
-    "",
-    "EMAIL vs EMAILALIASES:",
-    "  `email` is CANONICAL-FOR-WRITING -- apply-commit-identity.ps1 writes it",
-    "  into the includeIf gitconfig, and that is the address new commits get.",
-    "",
-    "  `emailAliases` are ADDITIONALLY ACCEPTABLE when auditing what is already",
-    "  configured. GitHub's noreply form (<id>+<user>@users.noreply.github.com)",
-    "  is a deliberate privacy choice, it still attributes commits to the right",
-    "  GitHub account, and it was already in use in several places. Treating it",
-    "  as a defect produced two permanent verifier findings for a setup that was",
-    "  not actually wrong -- and a gate that can never go green stops being read.",
-    "",
-    "  An alias is NOT a wildcard. An email that is neither the canonical one nor",
-    "  a listed alias is still a finding, because THAT is the failure worth",
-    "  catching: the wrong PERSON baked into history, permanently.",
-    "fourth* checkout prefixes were removed from routes in the personal-machine port and were not re-homed onto the personal account. Work routes whose last path segment does not start with fourth stay, so a work commit identity still exists."
+    "email is the address new commits get. emailAliases are additionally",
+    "acceptable when auditing an address that is already in use. An alias",
+    "is not a wildcard."
   ],
   "accounts": {
     "personal": {
@@ -54,52 +23,12 @@
       ],
       "ghConfigDir": "~/.config/gh-personal",
       "ssoOrg": null
-    },
-    "work": {
-      "user": "david-hayes44",
-      "email": "david.hayes@fourth.com",
-      "emailAliases": [
-        "199642134+david-hayes44@users.noreply.github.com"
-      ],
-      "ghConfigDir": "~/.config/gh-work",
-      "ssoOrg": "fourth"
     }
   },
   "authByOwner": {
-    "fourth": "work",
     "_default": "personal"
   },
   "routes": [
-    {
-      "prefix": "C:/agent-arch",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/gong-mcp",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/ebr-presentations",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/ebr-presentations-plugin",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/archive/NorthStar Transformation",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/customer-ui",
-      "commitAccount": "work",
-      "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/agent-poc",
-      "commitAccount": "work",
-      "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
-    },
     {
       "prefix": "C:/Users/dkhay",
       "commitAccount": "personal"
@@ -107,11 +36,8 @@
   ],
   "_unclassified": {
     "_comment": [
-      "NOT routed to work, because I could not tell from the repo alone and",
-      "guessing an identity is the silent-failure mode this whole design exists",
-      "to avoid. They currently fall through to the personal catch-all, which is",
-      "their status quo -- so leaving them here changes nothing. Move them into",
-      "routes if they are Fourth work."
+      "These checkouts fall through to the personal catch-all. They are",
+      "not a second account."
     ],
     "C:/Users/dkhay/Projects/agent-factory": "personal account remote; topic unclear",
     "C:/Users/dkhay/Projects/ECG Lead Reactivation Engine": "ECG may be a Fourth client or a personal project"

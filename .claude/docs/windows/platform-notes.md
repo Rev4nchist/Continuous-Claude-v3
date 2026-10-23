@@ -148,8 +148,7 @@ Remove any such link before `git worktree remove --force` on a worktree that hol
 - `gh pr merge` / `gh pr create` are **interactive by default** and HANG in tool shells. Script with REST:
   `gh api repos/<O>/<R>/pulls/<N>/merge -X PUT -f merge_method=merge`; edit a PR with `gh api ... -X PATCH`.
 - **A timed-out `gh`/`git` command (exit 143) is NOT proof of failure.** Verify (`gh api .../pulls/<N>` → `merged`) before retrying.
-- Plain `git` and bare `gh` pick the right account by themselves (`~/.gitconfig` username + a `fourth/` `insteadOf`
-  rewrite; `scripts/github/gh-shim.ps1` in the PowerShell profiles). Scripts that call `gh` directly use `gh-for.ps1`.
+- Plain `git` and bare `gh` use the personal account (`credential.https://github.com.username` is Rev4nchist; `accounts.json` has only `personal`, and `authByOwner._default` is personal). Scripts that call `gh` directly use `gh-for.ps1`.
 - **Do not suggest `gh auth refresh`**: it cannot fix an env-var token. "Repository not found" on a repo you own
   means the wrong account answered. Check with `pwsh -File scripts/github/verify-github-accounts.ps1`.
 - `--web` login stores the account the BROWSER holds. Verify with the same script; it clears `GH_TOKEN`/`GITHUB_TOKEN` first.

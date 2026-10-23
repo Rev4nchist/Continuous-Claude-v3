@@ -3,6 +3,8 @@
 Moved out of the always-loaded `windows-platform` rule on 2026-09-24 (context-loading proposal, phase 1).
 The rule keeps the short version. This file keeps the history, the corrections and the re-auth procedure.
 
+Current `accounts.json` has one account, `personal` (Rev4nchist). The work account and the `fourth/` rewrite described in the history below were removed. Do not recreate them.
+
 ## `gh` CLI: interactive by default + `read:org` scope gaps → use the REST API [H:8]
 
 - `gh pr merge` / `gh pr create` are **interactive by default** → they HANG in the non-interactive tool shells. For scripted use, prefer `gh api` (REST): `gh api repos/<O>/<R>/pulls/<N>/merge -X PUT -f merge_method=merge`.
@@ -72,13 +74,12 @@ the client's own login flow, which re-prompts for authorization:
 1. Sign the browser into github.com **as the account being restored**. `--web` stores whichever
    account the BROWSER session holds, not the one you intended — this trap has already put the work
    credential in the personal config dir once.
-2. `$env:GH_CONFIG_DIR="$HOME\.config\gh-work"; gh auth login --hostname github.com --git-protocol https --web`
-3. In an **interactive** terminal, run a fetch in any work repo (`git -C <fourth repo> fetch origin`)
-   and complete GCM's browser prompt. Because the `insteadOf` rule puts `david-hayes44@` in the URL,
-   GCM is asked for that account specifically — no picker, no ambiguity.
+2. `$env:GH_CONFIG_DIR="$HOME\.config\gh-personal"; gh auth login --hostname github.com --git-protocol https --web`
+3. In an **interactive** terminal, run a fetch in the personal checkout and complete
+   GCM's browser prompt. `accounts.json` has only `personal`; there is no second
+   config dir and no `insteadOf` rewrite.
 4. Confirm with `pwsh -File scripts/github/verify-github-accounts.ps1` and
-   `pwsh -File scripts/github/sweep-remotes.ps1`. A dead work credential shows up as exactly 9
-   failures, one per `fourth/*` remote.
+   `pwsh -File scripts/github/sweep-remotes.ps1`.
 
 Rollback, credentials untouched throughout:
 `git config --global credential.helper wincred`,
