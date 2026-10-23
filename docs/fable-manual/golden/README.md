@@ -27,7 +27,7 @@ one?
   authored, the grading is authoritative *by construction* (it comes from the sealed key), not
   from blind judgment — a valid anchor, but it measures "does the judge match the key," not
   "does the judge agree with an independent expert." The single **independent** anchor is the
-  `d42eb6f` row: its verdict/findings are the actual booth outcome (booth + Claude critic),
+  `d42eb6f` row: its verdict/findings are the actual booth outcome (Codex booth + Claude critic),
   not Fable's self-grade — that's the row that tests genuine judgment, and the follow-up fix
   commit corroborates it.
 - **The APPROVE row is load-bearing.** A judge that reaches REJECT on all-REJECT anchors could

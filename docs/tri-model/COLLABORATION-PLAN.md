@@ -303,7 +303,7 @@ Evolve the Notion roster page → “Cross-Model Workers + Game Plan” linking 
 
 1. **Disk bus:** cold Claude session reconstructs next step from `CONTRACT.md` + `status.json` alone.  
 2. **Anti self-grade:** a Grok-built milestone is graded by findings on disk, not Grok self-report.
-3. **Failover:** kill/expire a Grok implement; Claude hands same milestone to ; room THREAD records failover.
+3. **Failover:** kill/expire a Grok implement; Claude hands the same milestone to `kraken`; room THREAD records failover.
 4. **Bounded fix:** second fix round then stops for human.  
 5. **No session-dir SoT:** no required read of `~/.grok/sessions/**/plan.md` for project work.  
 6. **Smoke is external:** milestone `complete` only after Claude-recorded test/typecheck evidence in `milestones/M*-result.md`.
@@ -326,7 +326,7 @@ Evolve the Notion roster page → “Cross-Model Workers + Game Plan” linking 
 |---|----------|---------------------|
 | 1 | Auto-create workroom on every non-trivial `/build`, or opt-in `/workroom new` / `/game-plan` only? | **Opt-in skill first**, then auto for `/game-plan` |
 | 2 | Gitignore room bodies vs commit contracts for team history? | **Gitignore rooms/**; allow `git add -f` CONTRACT when sharing |
-| 3 | as failover builder only, or also primary for backend-heavy milestones? | Failover + **explicit** `--builder ` override |
+| 3 | Who builds when Grok stops: failover only, or a standing second builder? | Failover to Claude `kraken`. There is no second-CLI builder. |
 | 4 | Gate 1 under `bypassPermissions`? | Still require AskUserQuestion / explicit “approve contract” message — document as model-side until hook exists |
 | 5 | Max fix rounds | **2** (video); human can set `fix_rounds_max` in ROOM.yaml |
 
@@ -334,7 +334,7 @@ Evolve the Notion roster page → “Cross-Model Workers + Game Plan” linking 
 
 ## 8. Immediate next actions (when implementing)
 
-> **Ordering superseded (2026-07-11):** the authoritative combined build order is in `SESSION-REVIEW-2026-07-11.md` — notably **Track E (roster-default copy) runs BEFORE the dogfood**, because the §5 dogfood criteria presuppose the Grok-builds-reviews defaults are already in the skill copy. The list below is kept for track content, not sequence.
+> **Ordering superseded (2026-07-11):** the authoritative combined build order is in `SESSION-REVIEW-2026-07-11.md` — notably **Track E (roster-default copy) runs BEFORE the dogfood**, because the §5 dogfood criteria presuppose the roster defaults (Grok builds, Claude reviews) are already in the skill copy. The list below is kept for track content, not sequence.
 
 1. Land Track A templates next to this doc.  
 2. Implement Track B `/workroom` skill.  

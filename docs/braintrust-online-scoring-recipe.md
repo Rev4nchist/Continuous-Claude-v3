@@ -237,18 +237,15 @@ duplicate scores.
 
 ## Cost / quota notes
 
-- **No per-token API billing.** Both backends are subscription-billed via
-  OAuth: `plan_rubric` spends one turn against the ChatGPT
-  subscription; `factuality` and `closedqa` each spend one Claude Code turn
-  against the Sonnet bucket of the Claude subscription.
-- One fully-equipped sampled session = up to three judge calls (1 +
-  2 claude).
+- **No per-token API billing.** Every judge is subscription-billed via
+  OAuth on the Claude subscription. `plan_rubric`, `factuality`, and
+  `closedqa` each spend one Claude Code turn against the Sonnet bucket.
+- One fully-equipped sampled session = up to three Claude judge calls.
 - At 35% sampling and ~50 sessions/day, expect ~52 sampled sessions per
-  week, ~156 judge calls per week (~52 + ~104 claude). Adjust the
-  sample rate at the rule level if this exceeds your subscription quota.
-- Subprocess latency: budget ~10–90s per claude call and ~30–120s per
-  call. Each backend has a hard 180s timeout; a timeout skips only that
-  judge (`claude_timeout` / `retired_timeout`).
+  week, ~156 Claude judge calls per week. Adjust the sample rate at the
+  rule level if this exceeds your subscription quota.
+- Subprocess latency: budget ~10–90s per Claude call. Each call has a
+  hard 180s timeout; a timeout skips only that judge (`claude_timeout`).
 
 ## Distribution review
 

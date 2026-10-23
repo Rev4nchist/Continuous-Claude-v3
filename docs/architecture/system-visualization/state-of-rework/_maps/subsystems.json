@@ -93,10 +93,10 @@
         "json_companion_files": 16,
         "agents_never_in_recall_rows": 30,
         "agents_active_in_recall_rows": 6,
-        "top_recall_agents": ["", "critic", "plan-reviewer"],
+        "top_recall_agents": ["codex-adversary", "critic", "plan-reviewer"],
         "json_layer_executes": false
       },
-      "notes": "D7c-01: the.json layer (16 files) is never executed — Claude Code reads.md + YAML only. 30/36 agents have never appeared in recall rows including oracle, debug-agent, sleuth, architect, phoenix, arbiter. Activity is dominated by the review pipeline (+ critic + plan-reviewer = ~50% of rows). Utilization data suggests the roster could shrink to ~15 actively routed agents. Pre-spawn guard chain (agent-model-guard, no-haiku-enforcer, maestro-enforcer) is dead per hooks matcher split-brain (D2b-01).",
+      "notes": "D7c-01: the .json layer (16 files) is never executed — Claude Code reads .md + YAML only. 30/36 agents have never appeared in recall rows including oracle, debug-agent, sleuth, architect, phoenix, arbiter. Activity is dominated by the review pipeline (codex-adversary + critic + plan-reviewer = ~50% of rows). Utilization data suggests the roster could shrink to ~15 actively routed agents. Pre-spawn guard chain (agent-model-guard, no-haiku-enforcer, maestro-enforcer) is dead per hooks matcher split-brain (D2b-01).",
       "key_findings": ["D7c-01", "D2b-01", "D10c-02"]
     },
     {

@@ -2,8 +2,8 @@
 
 ## Context
 
-The worktree GC script reclaims stale, confirmed-clean worktrees older than
-`$WT_GC_DAYS` (default 7). Operators want to preview what a run would reclaim before
+`scripts/codex/gc-worktrees.sh` reclaims stale, CONFIRMED-clean Codex worktrees older than
+`$CODEX_WT_GC_DAYS` (default 7). Operators want to preview what a run would reclaim before
 letting it act. This adds a read-only `--dry-run` flag.
 
 ## Goals

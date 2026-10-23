@@ -1,6 +1,6 @@
 # Grok Integration — Design Research & Verified Capability Surface
 
-Sibling of `docs-integration/DESIGN-RESEARCH.md`. Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
+Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
 
 ## 1. Executive summary
 

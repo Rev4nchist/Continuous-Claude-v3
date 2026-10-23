@@ -2,7 +2,7 @@
 
 **Purpose:** `OPERATING-MANUAL.md` and its distillation (`.claude/rules/reasoning-discipline.md`) claim to change model behavior. This harness is how that claim gets falsified or confirmed — and it is a **standing harness**: any future prompt-layer change (rules edits, agent prompt blocks, /game-plan judgment lines) should re-run against it before shipping.
 
-**Design provenance:** Original 6-trap design by Fable 5 (2026-07-11); rigor upgrades (multi-run, positive controls, production-faithful stage, ship gate) from the cross-model premortem — findings #2/#3, Grok findings #3/#4 (see the plan's Risk Mitigations section). The premortem's core objection: a single-run, prompt-prepend, all-skepticism-rewarding A/B cannot distinguish "reasoning improved" from "got lucky" or "got paranoid." This protocol can.
+**Design provenance:** Original 6-trap design by Fable 5 (2026-07-11); rigor upgrades (multi-run, positive controls, production-faithful stage, ship gate) from the cross-model premortem — Codex findings #2/#3, Grok findings #3/#4 (see the plan's Risk Mitigations section). The premortem's core objection: a single-run, prompt-prepend, all-skepticism-rewarding A/B cannot distinguish "reasoning improved" from "got lucky" or "got paranoid." This protocol can.
 
 ---
 
@@ -98,7 +98,7 @@ Each case is a self-contained prompt given verbatim to the model under test. Tra
 - Arm A: the file moved aside. Same 8 cases, same reps.
 - Record per run: resolved model id, timestamp, which rules files were present (load-path fingerprint), rule token size.
 
-**Scoring:** mechanical rubric above — each case's "Pass requires" phrases are the checklist; a response passes only if the required evidence/behavior is present. Binary per case per rep. Same-family scoring risk is mitigated by the rubric being phrase-mechanical, not vibes; cross-family spot-check (Grok reads the transcripts) if any verdict is contested.
+**Scoring:** mechanical rubric above — each case's "Pass requires" phrases are the checklist; a response passes only if the required evidence/behavior is present. Binary per case per rep. Same-family scoring risk is mitigated by the rubric being phrase-mechanical, not vibes; cross-family spot-check (Codex/Grok reads the transcripts) if any verdict is contested.
 
 **Ship gate (wiring commits blocked until):**
 - Stage 2 shows **B > A on ≥2 trap cases that A fails** (majority across reps), AND

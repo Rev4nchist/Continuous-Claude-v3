@@ -373,7 +373,7 @@
           <li>Gate 1: approve contract / plan</li>
           <li>Review-gate: apply or discard diffs</li>
           <li>Gate 2: ship / merge authority</li>
-          <li>Quota and reviewer pick (Claude critic / Grok / Both)</li>
+          <li>Quota and reviewer pick (Grok / Skip)</li>
         </ul>
         <div class="entry">AskUserQuestion · git apply approval</div>
       </article>
@@ -641,7 +641,7 @@
 const NODE_INFO = {
   human: {
     title: "Human — authority layer",
-    body: "Approves the contract (Gate 1), chooses premortem reviewers (Claude critic / Grok / Both / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
+    body: "Approves the contract (Gate 1), chooses premortem reviewers (Grok / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
   },
   claude: {
     title: "Claude Code — hub",

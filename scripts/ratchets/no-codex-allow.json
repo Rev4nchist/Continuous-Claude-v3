@@ -82,8 +82,36 @@
     "reason": "Historical session path match keys. The seeder compares these raw strings to sessions.project. Exact fragments and counts only, so a new hit still fails.",
     "tokens": [
       {
-        "text": "OpenAI.Codex_",
-        "count": 8
+        "text": "OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.609.4994.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.623.13972.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.715.10079.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.715.3651.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0",
+        "count": 1
       },
       {
         "text": ".codex-worktrees",
@@ -94,8 +122,12 @@
         "count": 2
       },
       {
-        "text": "Documents\\\\Codex\\\\",
-        "count": 2
+        "text": "C:\\\\Users\\\\david.hayes\\\\Documents\\\\Codex\\\\2026-06-03\\\\goal-sites-create-a-real-time",
+        "count": 1
+      },
+      {
+        "text": "C:\\\\Users\\\\david.hayes\\\\Documents\\\\Codex\\\\2026-07-16\\\\i-want-you-to-use-your",
+        "count": 1
       },
       {
         "text": "Codex CLI",
@@ -502,5 +534,65 @@
     "path": "opc/scripts/pageindex/tests/pdfs/PRML.pdf",
     "reason": "PageIndex fixture PDF. It is over the 2 MB scan limit, so the ratchet allow-lists the path instead of reading the bytes.",
     "oversized": true
+  },
+  {
+    "path": "docs/fable-manual/EXTRACTION-REPORT.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/TRAP-TESTS.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/LOOP-LOG.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-migration-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-security-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/migration-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/plan-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/security-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/README.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/good-plan-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/judgments.jsonl",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
   }
 ]

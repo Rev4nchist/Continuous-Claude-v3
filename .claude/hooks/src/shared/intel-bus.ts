@@ -54,7 +54,7 @@ export interface IntelBusEvent {
   ts?: string;
   /** Session bus id (from shared/session-bus-id.ts). Required. */
   bus_id: string;
-  /** Which agent emitted: main | kraken | |... */
+  /** Which agent emitted: main | kraken | grok-adversary | ... */
   agent?: string;
   /** Facade entry point, e.g. "/code-intel". */
   facade?: string;

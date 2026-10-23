@@ -14,6 +14,8 @@
 # skills\fourth-* is left in place (CCV3-4).
 # The leftover scan covers the install folders the sync owns. It does not
 # walk projects\, plugins\, or file-history.
+# Before any delete, settings.json and settings.local.json are read. A shim
+# name still present in either file aborts the script.
 
 $ErrorActionPreference = 'Stop'
 $C = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.claude'))
@@ -90,11 +92,13 @@ $stale = @(
   'commands\task.md'
 ) + @($shims | ForEach-Object { "hooks\$_" })
 
-$settings = Join-Path $C 'settings.json'
-if (Test-Path -LiteralPath $settings) {
-  foreach ($shim in $shims) {
-    if (Select-String -LiteralPath $settings -Pattern $shim -SimpleMatch -Quiet) {
-      throw "settings.json still references $shim"
+foreach ($settingsName in @('settings.json', 'settings.local.json')) {
+  $settings = Join-Path $C $settingsName
+  if (Test-Path -LiteralPath $settings) {
+    foreach ($shim in $shims) {
+      if (Select-String -LiteralPath $settings -Pattern $shim -SimpleMatch -Quiet) {
+        throw "$settingsName still references $shim"
+      }
     }
   }
 }

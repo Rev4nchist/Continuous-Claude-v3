@@ -31,7 +31,7 @@ We answered it with instruments, not opinions. Two eval campaigns, five loop ite
 
 **Act 2 (seeded-defect eval):** a much harder instrument — 8 unlabeled defects inside a plausible plan. Plain Opus scored **8/8 twice with zero over-caution and out-found the eval's designer** (both reviewers independently proved the plan's core mechanism impossible on Windows process semantics — a defect I did not seed). Sonnet: 15/16. The "maybe the gap lives down-tier" hypothesis died on contact with data.
 
-**Act 3 (cross-family booth):** **8/8** (plus a find no Claude reviewer made), Grok **8/8** (plus a live self-demonstration: it fork-stormed while reviewing a plan about fork-storms). The tri-model booth reviews plans at parity with the Claude tiers.
+**Act 3 (cross-family booth):** Codex **8/8** (plus a find no Claude reviewer made), Grok **8/8** (plus a live self-demonstration: it fork-stormed while reviewing a plan about fork-storms). The tri-model booth reviews plans at parity with the Claude tiers.
 
 **The conviction, stated plainly:** you should believe Fable-grade judgment is present in your Opus-run system not because I transplanted it this week, but because six independent reviewer configurations just *demonstrated* it, measurably, on the hardest eval I could design — and because the mechanism is visible: **CCv3's rules layer + gates + roster ARE the operating manual, mechanized.** Every section of my manual has a structural counterpart that fires without any model remembering to: §4 re-derivation → hub smoke + external-verification rules; §6 attack-your-conclusion → builder≠grader + cross-family booth; §8's thin-evidence instinct → the thin-approve rule (now in `/review` too); §5 known-vs-guessed → claim-verification + the epistemic-reminder hook. The article assumed intelligence must be carried in prose. Your system carries it in *architecture*. Prose transplants failed the A/B precisely because the architecture already won.
 
@@ -48,7 +48,7 @@ The tri-model system is a **hub-and-booth architecture with human gates**:
         judgment seat: decompose → contract → dispatch → smoke → grade
                     never builds, never self-grades
                     ┌───────────┴───────────┐
-             GROK (builder) (reviewer/fixer)
+             GROK (builder)          CODEX (reviewer/fixer)
              grok-4.5, worktree-     gpt-5.5, read-only booth,
              isolated implement      bounded fix rounds
                     └───────────┬───────────┘
@@ -59,7 +59,7 @@ The tri-model system is a **hub-and-booth architecture with human gates**:
 Why it's shaped this way — the fundamentals:
 
 1. **Judgment concentrates at the hub; execution distributes.** The hub's work is exactly manual §9: size milestones to one-implement-run-one-booth, write R/D tables a foreign model can't satisfy with narrative, run acceptance commands itself (narrative ≠ evidence), and decide when a clean pass is thin. Opus 4.8 demonstrably carries this (Act 2).
-2. **Cross-family review buys different blind spots, not more eyeballs.** found what four Claude reviewers missed; the reverse happens too (the dogfood's HIGH was Claude-caught after thin-approved). The booth's value is *decorrelation* — proven again this week in both directions.
+2. **Cross-family review buys different blind spots, not more eyeballs.** Codex found what four Claude reviewers missed; the reverse happens too (the dogfood's HIGH was Claude-caught after Codex thin-approved). The booth's value is *decorrelation* — proven again this week in both directions.
 3. **Structure beats memory.** Builder≠grader, gates, bounded fix loops, and the disk bus survive model swaps, context compaction, and session death — which no prompt text does. This is why the system's "intelligence" is durable.
 4. **Every model claim is probe-backed or it doesn't exist.** `--sandbox` decorative on Grok, fork-storms on both foreign families, `/harness-update` two-probe rule. The eval suite now extends this discipline from CLI flags to *reviewer judgment itself* — run it on any new roster member.
 
@@ -69,7 +69,7 @@ Why it's shaped this way — the fundamentals:
 - **/game-plan runs:** the hub consults `OPERATING-MANUAL.md` §9 when contracts get hard (it's referenced from CURRENT-STATE's reading order). The thin-approve rule now lives in `/review` synthesis as well as the booth.
 - **New model or CLI joins the roster:** `/harness-update` for the mechanical surface, then run `eval/plan-A.md` against its reviewer mode and score against the sealed key. Below 7/8 or any decoy-flagging → that model gets the compact plan-attack treatment (the distillate is the starting text), gated by the same A/B discipline.
 - **Anyone proposes a new always-on rule:** the trap harness + eval are the toll gate. The burden of proof is now mechanical.
-- **Post-Grok runs:** check `tasklist | findstr grok` (fact 1b) — same hygiene as.
+- **Post-Grok runs:** check `tasklist | findstr grok` (fact 1b) — same hygiene as Codex.
 
 ## 6. The last word from the departing model
 

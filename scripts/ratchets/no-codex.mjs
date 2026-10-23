@@ -4,14 +4,19 @@
  * Dated history is listed in the allow file, one path with one reason.
  * Live files are not whole-file allowed. A token entry names the exact
  * strings that may remain, each with a count. Counts are whole tokens:
- * a letter, underscore, or hyphen on either side is a different token,
- * so a longer name does not satisfy a shorter allow entry. A new hit,
- * or a count change, fails. A scan of zero files fails. An allow entry
- * that does not occur in its file fails (a pass on zero inputs is a fail).
+ * a letter, digit, dot, underscore, or hyphen on either side is a
+ * different token, so h2-codex2 and h2-codex.x do not satisfy h2-codex.
+ * A new hit, or a count change, fails. A scan of zero files fails. An
+ * allow entry that does not occur in its file fails (a pass on zero
+ * inputs is a fail), except a frozen entry, which is a path that must
+ * stay byte-for-byte with the base commit. Eval records are frozen.
  * A file of 2 MB or more fails unless its allow entry sets "oversized"
  * to true and gives a reason. That exemption is the size, not the
  * contents: a listed file that shrinks under 2 MB is scanned, and a hit
- * in it fails.
+ * in it fails. A leftover-damage check fails on empty name or label
+ * elements, empty name-like JSON values, a link whose name is missing
+ * (-x.html, /.ext), and a slash, dash, or plus with only spaces between
+ * two of the same mark.
  *
  *   node scripts/ratchets/no-<token>.mjs
  */
@@ -28,6 +33,23 @@ const NEEDLE = new RegExp(TOKEN, 'gi');
 const SELF = join('scripts', 'ratchets', `no-${TOKEN}.mjs`);
 const ALLOW_FILE = join('scripts', 'ratchets', `no-${TOKEN}-allow.json`);
 const SIZE_LIMIT = 2_000_000;
+const BASE = 'e613eea466cff609c04e7b879d3a9d0dcc1b365c';
+const FROZEN_SPECS = [
+  'docs/fable-manual/eval',
+  'docs/fable-manual/golden',
+  'docs/fable-manual/EXTRACTION-REPORT.md',
+  'docs/fable-manual/TRAP-TESTS.md',
+];
+
+const DAMAGE = [
+  /<(h[1-6]|span|div|p|a|label|text|td|th|li)\b[^>]*\bclass=["'][^"']*(?:agent-name|label-main|label-sub|\blbl\b|\blabel\b)[^"']*["'][^>]*>\s*<\/\1>/gi,
+  /<text\b[^>]*>\s*<\/text>/gi,
+  /"(?:agent-name|name|label|file|title|href)"\s*:\s*""/g,
+  /"[^"\\]*(?:agents|names|labels)[^"\\]*"\s*:\s*\[\s*""/g,
+  /(?:^|["'\s])-[A-Za-z0-9][\w.-]*\.html\b/gm,
+  /(?<![\w$])\/\.(?:html|jsonl|json|md|mjs|js|ts|tsx|css|pdf|txt|yml|yaml|sh|ps1)\b/g,
+  /(?<=\S)[ \t]+([/+-])[ \t]+\1[ \t]+(?=\S)/g,
+];
 
 const ALIAS = new RegExp(
   [
@@ -110,7 +132,21 @@ function tokenList(row) {
 }
 
 function isBoundary(ch) {
-  return ch === undefined || !/[A-Za-z_-]/.test(ch);
+  return ch === undefined || !/[A-Za-z0-9_.-]/.test(ch);
+}
+
+function damageCount(text) {
+  let n = 0;
+  for (const re of DAMAGE) {
+    re.lastIndex = 0;
+    const found = text.match(re);
+    if (found) n += found.length;
+  }
+  return n;
+}
+
+function underFrozen(rel) {
+  return FROZEN_SPECS.some((spec) => rel === spec || rel.startsWith(`${spec}/`));
 }
 
 function applyTokens(text, tokens) {
@@ -161,10 +197,21 @@ function main() {
       process.stdout.write(`RESULT: FAIL - bad token entry ${row.path}\n`);
       process.exit(1);
     }
-    allow.set(row.path.replace(/\\/g, '/'), {
+    const frozen = row.frozen === true;
+    if (frozen && tokens) {
+      process.stdout.write(`RESULT: FAIL - frozen entry has tokens ${row.path}\n`);
+      process.exit(1);
+    }
+    const path = row.path.replace(/\\/g, '/');
+    if (frozen && !underFrozen(path)) {
+      process.stdout.write(`RESULT: FAIL - frozen entry outside eval paths ${path}\n`);
+      process.exit(1);
+    }
+    allow.set(path, {
       reason: String(row.reason),
       tokens,
       oversized: row.oversized === true,
+      frozen,
     });
   }
 
@@ -190,6 +237,8 @@ function main() {
   const listed = [];
   let aliasHits = 0;
   const aliasListed = [];
+  let damageHits = 0;
+  const damageListed = [];
   for (const file of files) {
     const rel = relative(REPO, file).replace(/\\/g, '/');
     if (rel === SELF || rel === ALLOW_FILE) continue;
@@ -201,6 +250,18 @@ function main() {
       aliasListed.push(`${rel} ${alias.length}`);
     }
     const row = allow.get(rel);
+    const wholeFile = row && !row.tokens;
+    if (!wholeFile) {
+      const d = damageCount(text);
+      if (d) {
+        damageHits += d;
+        damageListed.push(`${rel} ${d}`);
+      }
+    }
+    if (row?.frozen) {
+      seenAllow.add(rel);
+      continue;
+    }
     const n = scanFile(text, NEEDLE);
     if (row?.oversized && !row.tokens) {
       seenAllow.add(rel);
@@ -228,15 +289,35 @@ function main() {
     listed.push(`${rel} ${n}`);
   }
 
+  for (const [path, row] of allow) {
+    if (!row.frozen) continue;
+    const abs = join(REPO, path);
+    if (statSync(abs, { throwIfNoEntry: false })?.isFile()) seenAllow.add(path);
+  }
+
+  let frozenStat = '';
+  try {
+    execFileSync('git', ['diff', '--exit-code', '--stat', BASE, '--', ...FROZEN_SPECS], {
+      cwd: REPO,
+      stdio: ['ignore', 'pipe', 'pipe'],
+    });
+  } catch (err) {
+    frozenStat = `${err.stdout || ''}${err.stderr || ''}`.trim();
+  }
+
   const missing = [...allow.keys()].filter((p) => !seenAllow.has(p));
   process.stdout.write(`files: ${files.length}\n`);
   process.stdout.write(`allow: ${allow.size}\n`);
   process.stdout.write(`hits: ${hits}\n`);
   process.stdout.write(`alias: ${aliasHits}\n`);
+  process.stdout.write(`damage: ${damageHits}\n`);
+  process.stdout.write(`frozen: ${frozenStat ? 'drift' : '0'}\n`);
   process.stdout.write(`oversized: ${oversized.length}\n`);
   for (const line of oversized) process.stdout.write(`  oversized ${line}\n`);
   for (const line of listed) process.stdout.write(`  ${line}\n`);
   for (const line of aliasListed) process.stdout.write(`  alias ${line}\n`);
+  for (const line of damageListed) process.stdout.write(`  damage ${line}\n`);
+  if (frozenStat) process.stdout.write(`  frozen\n${frozenStat}\n`);
   if (files.length === 0) {
     process.stdout.write('RESULT: FAIL - scanned 0 files\n');
     process.exit(1);
@@ -251,7 +332,11 @@ function main() {
     for (const p of unlistedOversized) process.stdout.write(`  ${p}\n`);
     process.exit(1);
   }
-  if (hits || aliasHits) {
+  if (frozenStat) {
+    process.stdout.write('RESULT: FAIL - eval bytes differ from base\n');
+    process.exit(1);
+  }
+  if (hits || aliasHits || damageHits) {
     process.stdout.write('RESULT: FAIL - removed CLI name\n');
     process.exit(1);
   }

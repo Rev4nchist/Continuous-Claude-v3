@@ -313,7 +313,6 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] RAM Recovery Plan — Minimal-Disruption Actions (2026-04-16)
 - [x] Add GTM status presentations: risk report Apr 16 (2026-04-16) `e4d65e9`
 - [x] System Resource Recovery Plan (2026-04-15)
-- [x] Integrate `openai-plugin-cc` into CCv3 (2026-04-15)
 - [x] Add CLAUDE.md with mandatory hub-update instructions for new decks (2026-04-11) `1ebae90`
 - [x] Remove enablement flag from Pages workflow (2026-04-11) `cc7d52a`
 - [x] Consolidate 6 decks into grouped landing page (2026-04-11) `3b64def`
