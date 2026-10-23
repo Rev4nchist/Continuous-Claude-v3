@@ -1,7 +1,7 @@
 # Tri-model documentation
 
-Cross-model collaboration for **Claude Code + Grok** inside Continuous Claude.
-Roster doctrine: **Grok builds · Claude is hub · human holds Gates 1 & 2.**
+Cross-model collaboration for **Claude Code + Codex + Grok** inside Continuous Claude.
+Roster doctrine: **Grok builds · Codex reviews/fixes · Claude is hub · human holds Gates 1 & 2.**
 
 **Start here → [CURRENT-STATE.md](./CURRENT-STATE.md)** — the quick system-state report
 (machine-refreshed snapshot block + hand-maintained narrative). Refresh it after any
@@ -14,6 +14,7 @@ tri-model change: `node scripts/tri-model/sync-current-state.mjs` (`--check` = s
 | [CURRENT-STATE.md](./CURRENT-STATE.md) | **Ground truth** — layer status, probe-backed facts, open items |
 | [COLLABORATION-PLAN.md](./COLLABORATION-PLAN.md) | Governance design rationale (roster + workroom + phases) — EXECUTED 2026-07-11; kept as the why |
 | [../grok-integration/DESIGN-RESEARCH.md](../grok-integration/DESIGN-RESEARCH.md) | Live-probed Grok CLI surface (safety facts source of truth) |
+| [../codex-integration/DESIGN-RESEARCH.md](../codex-integration/DESIGN-RESEARCH.md) | Live-probed Codex CLI surface (§13 = 0.144.1 + gpt-5.6; §14 = read-only fork-storm) |
 | [cockpit-guide.html](./cockpit-guide.html) | Operator cockpit guide (controls, gates, ask-moments, troubleshooting) |
 | [system-overview.html](./system-overview.html) | Interactive visual overview (roster, topology, pipeline, disk bus) |
 
@@ -35,6 +36,7 @@ tri-model change: `node scripts/tri-model/sync-current-state.mjs` (`--check` = s
 | Preflight gate (auth, identity pin, version-pin block) | `scripts/tri-model/preflight.mjs` |
 | Static consistency suite | `scripts/tri-model/tri-model-suite.sh` |
 | Grok skill / safety rule | `.claude/skills/grok/SKILL.md` · `.claude/rules-ondemand/grok-worker-safety.md` |
+| Codex skill / safety rule | `.claude/skills/codex/SKILL.md` · `.claude/rules-ondemand/codex-worker-safety.md` |
 | Harness update playbook (the ONLY model/CLI update path) | `.claude/skills/harness-update/SKILL.md` · `.claude/rules-ondemand/harness-update.md` |
 
 ## Human-facing mirrors (Notion)

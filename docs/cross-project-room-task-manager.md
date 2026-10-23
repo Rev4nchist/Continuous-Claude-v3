@@ -12,11 +12,11 @@ CCv3 has accumulated rich coordination infrastructure that does *almost* what th
 - `sessions` / `file_claims` tables — single-machine, no heartbeat loop, no TTL on claims
 - `agent_messages` LISTEN/NOTIFY infra — declared in schema, **nothing subscribes**
 - `.claude/cache/agents/<name>/latest-output.md` — overwritten each run, no persistence
-- Notion bridge (Eve/Donna) — works but has documented API quirks, free-form schema
+- Notion bridge (Eve/Donna) — works but has documented API quirks, plus a schema that is free-form
 - `thoughts/shared/handoffs/*.md` — git-synced YAML, one-shot human readable, not structured for agent loops
 - Path C `agent_handoffs` (planned, never built) — scoped to review/premortem only, single-machine
 
-The user's vision — a shared "room" where Claude Code, Eve, and Donna claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine + browser-relay primitives the existing pieces lack.**
+The user's vision — a shared "room" where Claude Code, Eve, and Donna together claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine together with browser-relay primitives the existing pieces lack.**
 
 Recommended choices locked (via AskUserQuestion):
 1. **Neon** for cowork tables only. Memory stays local pgvector (548 rows, BGE-tuned, no risk).
@@ -50,7 +50,7 @@ Two additional considerations that aren't gaps in the proposal but matter for sh
 
 ## Architecture (single paragraph)
 
-Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code (via wrapper), and Ralph all call it the same way. Optimistic locking via `UPDATE... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` + Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
+Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code and Ralph each call it the same way. Optimistic locking via `UPDATE ... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` together with Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
 
 ```
    ┌─ Eve (claude.ai) ──── reads/writes ──┐
@@ -97,7 +97,7 @@ CREATE TABLE cowork_rooms (
 CREATE INDEX ON cowork_rooms (project, status);
 
 CREATE TABLE cowork_agents (
-  id TEXT PRIMARY KEY, -- e.g. "claude-code:dave-laptop",":dave-laptop","eve:claude-ai"
+  id            TEXT PRIMARY KEY,                 -- e.g. "claude-code:dave-laptop","eve:claude-ai" as further examples
   family        TEXT NOT NULL
                   CHECK (family IN ('claude-code','claude-ai','ralph','other')),
   machine       TEXT,                             -- "dave-laptop","dave-desktop","browser"
@@ -321,12 +321,12 @@ cowork task post --room smoke-001 --kind task --title "ping" --body "hello"
 cowork task claim --id <task_id>  # should succeed
 
 # Terminal B
-cowork agent register --id :dave-laptop --family --machine dave-laptop
+cowork agent register --id ralph:dave-laptop --family ralph --machine dave-laptop
 cowork task claim --id <task_id>  # should return {"ok":false,"error_code":"claim_taken"}
 cowork task list --room smoke-001  # should show claimed task with claimed_by=claude-code:dave-laptop
 ```
 
-**Phase 2:** `/review --via-cowork` on a small PR. Confirm findings appear as `kind=evidence` rows in `cowork_tasks`, room kind=`review`. `cowork room show --id review-<branch>` returns the full history. shows `via=cowork`.
+**Phase 2:** `/review --via-cowork` on a small PR. Confirm the review findings appear as `kind=evidence` rows in `cowork_tasks`, room kind=`review`. `cowork room show --id review-<branch>` returns the full history.
 
 **Phase 3:** Run a long task with claim. Kill the session (Ctrl+C the terminal). Wait 31 min. `cowork task list --status open` shows the task back as open (auto-released).
 

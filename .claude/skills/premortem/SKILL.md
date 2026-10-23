@@ -250,7 +250,7 @@ After Claude's verified tigers/elephants/paper_tigers list is built, the user ma
 
 **Plan mode:** do not run Grok. Report `Cross-model pass: deferred (plan mode)`.
 
-**Skip if** the user chose Skip OR the target is a trivial doc-only change OR the subscription quota is exhausted this session. See `.claude/rules-ondemand/grok-worker-safety.md`.
+**Skip if** the user chose Skip OR the target is a trivial doc-only change OR that subscription quota is already exhausted this session. See `.claude/rules-ondemand/grok-worker-safety.md`.
 
 **Reviewer unavailable?** Do not silently downgrade to another Claude-family reviewer. Fallback: read `.claude/agents/grok-adversary.md`, run the documented CLI invocation yourself (same read-only tool guard, same identity pin, same output paths), and parse findings from its clean-output file.
 
@@ -286,7 +286,7 @@ tigers:
   - risk: "<description>"
     location: "file.py:42"
     severity: high|medium
-    sources: [claude, grok]
+    sources: [claude, grok] # claude or grok   # which model(s) found it
     mitigation_checked: "<what was NOT found>"
 ```
 
@@ -363,8 +363,8 @@ Append to the plan file:
 ### Pre-Mortem Run:
 - Date: {timestamp}
 - Mode: {quick|deep}
-- Cross-model pass: {grok | skipped | deferred (plan mode)}
-- Tigers: {total} (claude-only: {N}, grok-only: {N}, agreed: {N}) | Elephants: {count}
+- Cross-model pass: record one outcome, either grok, skipped, or deferred while plan mode is on.
+- Tigers: {total} (claude-only: {N}, grok-only count: {N}, agreed: {N}) | Elephants: {count}
 ```
 
 ### Step 6: Telemetry

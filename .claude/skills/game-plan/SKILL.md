@@ -16,8 +16,8 @@ through it, or a receipt line from it. A second pass is Claude `critic`.
 
 ## Step 0 — Complexity gate
 
-Trivial (<10 lines, single file, no design surface) → STOP: do it directly or via a
-one-shot `/grok`. Moderate/complex multi-milestone work proceeds. Tell the user
+Trivial (<10 lines, single file, no design surface) → STOP: do it directly or via
+one `/grok` one-shot run. Moderate/complex multi-milestone work proceeds. Tell the user
 which way you routed and why.
 
 ## Step 1 — Preflight (mechanical, blocking)
@@ -26,7 +26,7 @@ which way you routed and why.
 node scripts/tri-model/preflight.mjs        # exit 0 required
 ```
 
-Exit 1 → STOP and surface the named failures (auth → `grok login`;
+Exit 1 → STOP and surface the named failures (auth → `grok login` for the Grok harness;
 version-pin mismatch → `/harness-update grok` FIRST). Record the result in the
 room's `status.json.preflight` after Step 2.
 

@@ -8,12 +8,12 @@ Treat any approved visual direction (generated mock or stated reference) as a co
 
 ### Gates: do not compress
 
-Craft has **multiple user gates**, not one. When the harness has native image generation, the gate sequence before code is:
+Craft has **multiple user gates**, not one. When the harness has its own image generation (the harness `image_gen` tool), the gate sequence before code is:
 
 1. **Shape brief confirmed** (Step 1)
 2. **Direction questions answered** in the conversation
 3. **Palette confirmed** in the conversation
-4. **One mock direction approved or delegated**
+4. **One mock direction approved or delegated** (the chosen mock direction)
 
 You must stop at every gate. **Shape confirmation alone is NOT a green light to start coding.** It is the green light to ask the direction questions. Compressing gates 2 through 4 because the shape brief felt complete is the dominant failure mode of this flow.
 
@@ -50,7 +50,7 @@ If the user already supplied a confirmed brief or ran shape separately, use it a
 
 When the original prompt + PRODUCT.md already answer scope, content, and visual direction with no real ambiguity, the shape output can be **compact** (3-5 bullets stating what you're building and the visual lane, ending with one or two specific questions or "confirm or override"). The full 10-section structured brief is reserved for genuinely ambiguous, multi-screen, or stakeholder-heavy tasks. Don't pad a clear brief into a long one to look thorough; equally, don't skip the pause to look efficient.
 
-If the harness has native image generation, a compact shape's "confirm or override" advances to **Step 3**, not to Step 4. Phrase the closing line accordingly: "Confirm or override; once we lock direction, I'll run a couple of palette and reference questions before generating any mocks." This stops the model from reading shape confirmation as code-green.
+If the harness has its own image generation (a native image tool), a compact shape's "confirm or override" advances to **Step 3**, not to Step 4. Phrase the closing line accordingly: "Confirm or override; once we lock direction, I'll run a couple of palette and reference questions before generating any mocks." This stops the model from reading shape confirmation as code-green.
 
 ## Step 2: Load References
 

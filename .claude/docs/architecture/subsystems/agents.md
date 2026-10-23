@@ -140,8 +140,8 @@ Agents add latency. Use directly when task is simple.
 | /fix | sleuth → spark or kraken → arbiter |
 | /build | architect → kraken → critic |
 | /explore | scout (with depth control) |
-| /review | critic + plan-reviewer (parallel Phase 1, background) |
-| /premortem | inline failure-mode analysis |
+| /review | critic and plan-reviewer, in parallel during Phase 1, in the background |
+| /premortem | inline failure-mode analysis, then a Grok pass when the user picks Grok |
 | /maestro | Coordinates any specialists |
 
 ## Deep Dive

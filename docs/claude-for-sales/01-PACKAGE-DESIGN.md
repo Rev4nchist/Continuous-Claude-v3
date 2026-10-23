@@ -4,7 +4,7 @@
 
 Fourth's Sales Kickoff (late July 2026, ~2 weeks out) needs the two highest-leverage deliverables of the Claude for Sales Package designed and built: **#3 the Account Planning Project Kit** (a Claude.ai Project per account: instructions, context template, Salesforce recipe, worked example) and **#4 installable Claude App Skills** (account research + account planning as installed capability, not paste-text), plus the course structure that delivers them. Source review: `docs/claude-for-sales/00-SOURCE-REVIEW.md`.
 
-Two proven in-house assets anchor the design: the **EBR Builder suite** (Project instructions + orchestrator → research → presentation skill chain, 3 human checkpoints, confidence scoring, onboarding guide) and the **fourth-playwright MCP** (`Projects\fourth-playwright-mcp`, Railway). A 7-agent workflow (3 Sonnet researchers → 3 Opus designers → Opus judge) produced the merged blueprint — *"One Account, Tiered: build it, keep it, compete with it"* — reconciled with Dave's four locked decisions, then hardened by a cross-model premortem (5 Claude findings + 8 findings, all folded in below).
+Two proven in-house assets anchor the design: the **EBR Builder suite** (Project instructions together with orchestrator → research → presentation skill chain, 3 human checkpoints, confidence scoring, onboarding guide) and the **fourth-playwright MCP** (`Projects\fourth-playwright-mcp`, Railway). A 7-agent workflow (3 Sonnet researchers → 3 Opus designers → Opus judge) produced the merged blueprint — *"One Account, Tiered: build it, keep it, compete with it"* — reconciled with Dave's four locked decisions, then hardened by a cross-model premortem (5 Claude findings and 8 findings from the other reviewer, all folded in below).
 
 ## Locked decisions (Dave, 2026-07-13)
 
@@ -120,7 +120,7 @@ The advanced-lunch HTML deck upgrade is deliberately after items 1–7 — built
 
 ### Pre-Mortem Run
 - Date: 2026-07-13 · Mode: quick (plan) · The cross-model pass is recorded in the session notes.
-- Findings: Claude-only 5, agreed 0, lift 8.
+- Findings: Claude-only 5, other-reviewer-only 8, agreed 0. The other reviewer's lift was 8
 
 ## Verification
 

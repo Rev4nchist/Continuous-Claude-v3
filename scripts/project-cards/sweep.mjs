@@ -1312,8 +1312,8 @@ function cockpitEmbedIdentity() {
 //                  AND its identity changed vs before the publish (or there was
 //                  none before). Corrected after a live run showed the marker's
 //                  file-upload id can never match the stored attachment uuid
-// (Notion rewrites it). This still catches stale-embed
-//                  case: a failed section-replace leaves the SAME identity -> not
+//                  (Notion rewrites it). The stale-embed case remains: a failed
+//                  section-replace leaves the SAME identity -> not
 //                  verified. The caller advances state.cockpit.publishedHash ONLY
 //                  when verified (REL#1 self-heal: an unverified publish re-runs).
 //   attachmentId — the permanent embed identity now on the page (or the marker's

@@ -4,7 +4,7 @@
  *
  * The browser Save path stages edits. Apply copy edits calls
  * live-commit-manual-edits.mjs, which builds a page-scoped batch and uses this
- * helper to ask Claude to edit true source files.
+ * helper to ask the Claude agent to edit true source files.
  */
 
 import { spawn, spawnSync } from 'node:child_process';

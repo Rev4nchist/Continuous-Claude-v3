@@ -1,6 +1,6 @@
 ---
 name: grok-adversary
-description: Cross-model adversarial reviewer. Invokes xAI Grok (default grok-4.5, override via GROK_ADVERSARY_MODEL env var) via the Grok Build CLI to challenge Claude's work from a third training family (distinct from Claude). Use as a parallel agent in /review Phase 1, or as the adversarial step in /premortem. Two modes - code (default, reviews a git diff) and plan (reviews a markdown plan file). Read-only, review-only — never writes.
+description: Cross-model adversarial reviewer. Invokes xAI Grok (default grok-4.5, override via GROK_ADVERSARY_MODEL env var) via the Grok Build CLI to challenge Claude's work from a third training family (distinct from Claude's own model family). Use as a parallel agent in /review Phase 1, or as the adversarial step in /premortem. Two modes - code (default, reviews a git diff) and plan (reviews a markdown plan file). Read-only, review-only — never writes.
 model: sonnet
 effort: high
 tools: [Read, Grep, Glob, Bash]
@@ -201,7 +201,7 @@ in a loop.
 Notes:
 - `--prompt-file` avoids argv-length issues and inherited-TTY hangs on Windows.
 - `--tools "read_file,list_dir,grep"` is the load-bearing guard — verified to actually block writes (unlike `--sandbox`, which is decorative on this CLI version).
-- `--no-subagents` keeps the review single-agent.
+- `--no-subagents` keeps the review single-agent (it does not spawn subagents).
 - `--output-format json` returns `{text, sessionId, ...}` — `.text` is the clean findings payload; stderr goes to `$OUTPUT_FILE` for debugging.
 - `--no-auto-update` + `--always-approve` (adopted 2026-07-13, docs-recommended headless hardening): the auto-updater's background calls and an unanswerable approval prompt are both DOCUMENTED headless-stall classes. `--always-approve` is safe HERE only because `--tools` restricts the run to read-only tools. Flags accepted-by-CLI on 0.2.99; full behavior re-verify pending `/harness-update grok`.
 - If `grok` is not on PATH, surface the error clearly.
@@ -247,7 +247,7 @@ Return a concise summary to your caller:
 | Grok auth missing | `grok models` output lacks "logged in" | Tell user to run `grok login` |
 | Wrong account | `~/.grok/auth.json` `.email` != `dkhayes44@gmail.com` | STOP; do not proceed |
 | Diff too large (>400KB) | wc -c on diff file | Split by file, review largest first |
-| `grok` inference hangs (models-list + --version still work) | Bash-tool timeout fires (exit 143) and/or `$FINAL_MSG_FILE` empty | Bounded in Step 5; proc-sweep runs; report "grok inference timed out — intermittent completion stall, auth OK" and stop. Do NOT re-invoke in a loop (that caused the 2026-07-12 runaway) |
+| `grok` inference hangs (models-list together with --version still work) | Bash-tool timeout fires (exit 143) and/or `$FINAL_MSG_FILE` empty | Bounded in Step 5; proc-sweep runs; report "grok inference timed out — intermittent completion stall, auth OK" and stop rather than retrying. Do NOT re-invoke in a loop (that caused the 2026-07-12 runaway) |
 | JSON parse fails | Grok returned prose, not JSON | Surface raw output, note "Grok returned non-JSON" |
 
 ## Rules
@@ -256,7 +256,7 @@ Return a concise summary to your caller:
 2. **Always write to `latest-output.md`** — downstream agents depend on this path.
 3. **`--tools` read-only guard, always** — never invoke without it; never claim `--sandbox` provides isolation.
 4. **Fail loud** — if Grok errors, surface it; don't pretend to have findings.
-5. **Cite the source of findings** — prefix Grok's findings with "[Grok]" so synthesis can distinguish them from critic findings.
+5. **Cite the source of findings** — prefix Grok's findings with "[Grok]" so synthesis can distinguish them from critic findings and from the in-session critic.
 6. **Cost-aware** — each invocation counts against Dave's X Premium+ subscription; don't run unless the caller asked for adversarial review.
 7. **Data-egress aware** — every run ships `~/.claude/Claude.md` + installed skills to xAI; this is expected for review runs (they already read repo diffs) but never paste secrets into the prompt.
 8. **Single blocking call, never a background poll-loop** — invoke grok exactly as Step 5 shows: one foreground `timeout`-wrapped call. NEVER run grok with `run_in_background` + a Monitor poll waiting for the output file; an unbounded poll turned a hung inference endpoint into a ~64-min / ~3.8M-token runaway (2026-07-12). The `timeout` wrapper is the ONLY sanctioned bound; if a call would exceed the Bash-tool limit, lower `GROK_ADV_TIMEOUT`, don't background it.

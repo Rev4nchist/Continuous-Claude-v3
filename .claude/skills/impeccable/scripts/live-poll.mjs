@@ -351,7 +351,7 @@ Options:
   --help              Show this help message
 
 Harness note:
-  Default one-shot mode is the primary contract, including foreground polling.
+  Default one-shot mode is the primary contract, including polling that runs in the foreground.
   Claude Code may run it as a background task; Cursor uses a background terminal with exit notification.
   --stream is retained for harnesses with measured, reliable incremental stdout.
   Do not use --stream on Cursor.`);

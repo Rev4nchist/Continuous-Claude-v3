@@ -338,7 +338,7 @@ describe('appendIntelBus -- secret redaction (session-3 hardening)', () => {
   });
 
   it('fix-review: still redacts a secret assignment with MANY spaces around the separator', () => {
-    // Guards the fix-review finding: bounding the ASSIGNMENT_RE separator to
+    // Guards the fix-review note: bounding the ASSIGNMENT_RE separator to
     // {0,40} would let a `KEY  :  VALUE` with 41+ spaces leak. The separator stays
     // `\s*` (it is never the ReDoS surface -- the {1,2048} VALUE bound is).
     const { lines, append } = makeCapture();

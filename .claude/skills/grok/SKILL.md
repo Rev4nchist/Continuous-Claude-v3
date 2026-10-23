@@ -85,7 +85,7 @@ Task(
 - **Subscription only.** The worker asserts `grok models` shows "logged in" AND that `~/.grok/auth.json` `.email` equals `dkhayes44@gmail.com` (wrong-account guard), and strips `XAI_API_KEY` from Grok's env. Fails loud, never silently uses an API key or the wrong account.
 - **`--tools` is the ONLY working read-only boundary.** `--sandbox` is decorative on this CLI build (accepts any string, blocks nothing — live-probed) and `--permission-mode plan` does not block writes headless either. Ask mode always passes `--tools "read_file,list_dir,grep"`.
 - **Confirm-first for `implement`/`resume`** (the only approval gate — `grok` has no approval dial). `--yes` skips only the interactive pause.
-- **Worktree isolation by default** — `-w/--worktree` is silently ignored by Grok in headless mode, so write runs use a hand-rolled out-of-repo worktree (sibling `../.grok-worktrees/<repo>-<ts>-<pid>`), never in-place.
+- **Worktree isolation by default** — `-w/--worktree` is silently ignored by Grok in headless mode, so write runs use a worktree created by hand outside the repo (sibling `../.grok-worktrees/<repo>-<ts>-<pid>`), never in-place.
 - **Auto worktree GC** — before each implement run, stale *clean* worktree dirs older than `$GROK_WT_GC_DAYS` (default 7d) are reclaimed; a worktree with unreviewed (dirty) changes is never touched.
 - **Review-gate** — never auto-commits/auto-merges; produces a patch you approve first.
 - **Model allowlist** — `grok-4.5` / `grok-composer-2.5-fast` only.
@@ -127,9 +127,9 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ````markdown
 # Grok Worker Safety Rules
 
-Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. The `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. The worker behind `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
-Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x.ai (oidc). See `docs/grok-integration/DESIGN-RESEARCH.md` for the full evidence trail (all facts below are live-probed, not doc-sourced).
+Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x.ai (oidc). The facts below were live-probed. `docs/grok-integration/DESIGN-RESEARCH.md` is a dated record of that probe, not current guidance.
 
 ## The one thing to internalize
 
@@ -154,9 +154,9 @@ Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x
 
 ## Write-mode hard rules (`implement` / `resume`)
 
-1. **Worktree isolation is the default, and worktrees live OUTSIDE the repo.** `-w/--worktree` is **silently ignored** by `grok` in headless `-p` mode (live-probed: `-w grok-probe` wrote directly into the live tree; `grok worktree list` showed nothing created). Isolation uses this hand-rolled recipe: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` — a SIBLING of the repo, never inside `$PROJECT`. The `-<pid>` suffix prevents same-second collisions.
+1. **Worktree isolation is the default, and worktrees live OUTSIDE the repo.** `-w/--worktree` is **silently ignored** by `grok` in headless `-p` mode (live-probed: `-w grok-probe` wrote directly into the live tree; `grok worktree list` showed nothing created). Isolation builds this hand-rolled recipe: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` — a SIBLING of the repo, never inside `$PROJECT`. The `-<pid>` suffix prevents same-second collisions.
 2. **Git-clean note before creating a worktree.** A worktree branches from HEAD, not the working tree's uncommitted changes — if `git status --porcelain` is non-empty, warn the user those files are invisible to Grok.
-3. **Independent verification, always.** After the run, the worker itself runs `git add -A && git diff --cached HEAD` in the worktree and shows that patch. Grok's own summary is never the sole evidence of what changed — Grok **can** run terminal commands in implement mode (`run_terminal_command` is a real, available tool) and its self-report of "I ran the tests and they passed" is therefore plausible-sounding but still unverified until the orchestrator checks independently.
+3. **Independent verification, always.** After the run, the worker itself runs `git add -A && git diff --cached HEAD` in the worktree and shows that patch. The summary Grok writes is never the sole evidence of what changed — Grok **can** run terminal commands in implement mode (`run_terminal_command` is a real, available tool) and its self-report of "I ran the tests and they passed" is therefore plausible-sounding but still unverified until the orchestrator checks independently.
 4. **Review-gate — never auto-commit/auto-merge.** `implement` produces a patch the human reviews before it's applied to the working tree (`git apply --3way`). Defends against prompt-injection via any content Grok reads.
 5. **`--cwd` scoping.** `--cwd` is set to the worktree path for implement/resume; it only works on the root command, not subcommands (`inspect`, `worktree` use process cwd).
 
@@ -216,7 +216,7 @@ Both flags are accepted-by-CLI on 0.2.99 (probed) but their behavior is unverifi
 
 ## Windows / CLI hygiene
 
-- **Always feed the prompt from a file** via `--prompt-file <PATH>` — Grok's native prompt-from-file flag.
+- **Always feed the prompt from a file** via `--prompt-file <PATH>` — Grok's native prompt-from-file flag, with no stdin redirection.
 - **`grok worktree <cmd>` requires `$HOME`** — verified: errors `neither $GROK_HOME nor $HOME is set` under a shell where HOME is unset (e.g. the PowerShell tool). Worker sets `HOME="${HOME:-$USERPROFILE}"` defensively; run from Bash where HOME is normally set.
 - **`--cwd` is accepted by the root command only** — subcommands (`inspect`, `worktree`) use the process cwd regardless.
 - **Rely on an external timeout** (Bash-tool timeout), not Grok's own — no self-termination guarantee has been probed on this CLI.
@@ -227,7 +227,7 @@ Installed CLI is `0.2.93` (verified 2026-07-11). **The CLI auto-updates** — it
 
 ## Cost / quota (subscription, not dollars)
 
-Subscription-gated (X Premium+); no per-token invoice observed in this pass. No quota surface was found in the CLI (detection is reactive). On non-zero exit, grep the log/json output for `rate.?limit|usage limit|quota`; on a hit, produce no result, never fabricate one, and record `usage_limited:true` in telemetry.
+Subscription-gated (X Premium+); no per-token invoice observed in this pass. No quota surface was found in the CLI (quota detection is reactive). On non-zero exit, grep the log/json output for `rate.?limit|usage limit|quota`; on a hit, produce no result, never fabricate one, and record `usage_limited:true` in telemetry.
 
 ## Quick decision table
 
@@ -246,7 +246,7 @@ Subscription-gated (X Premium+); no per-token invoice observed in this pass. No 
 ## Safety
 
 <!-- current text of rules-src/grok-worker-safety.md, moved here on 2026-09-23 (Opus 5.5 eval, P20); the rule keeps a short summary. Supersedes the 2026-07-29 pre-split reference above. -->
-Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. Evidence trail: `docs/grok-integration/DESIGN-RESEARCH.md`.
+Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. The `/grok` command hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. `docs/grok-integration/DESIGN-RESEARCH.md` is a dated record of the evidence, not current guidance.
 
 ## The one thing to internalize
 

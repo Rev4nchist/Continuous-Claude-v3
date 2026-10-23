@@ -594,5 +594,80 @@
     "path": "docs/fable-manual/golden/judgments.jsonl",
     "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
     "frozen": true
+  },
+  {
+    "path": "docs/tri-model/cockpit-guide.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/README.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/BUILD-PLAN-2026-07-11.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/SESSION-REVIEW-2026-07-11.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/COLLABORATION-PLAN.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/system-overview.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/CURRENT-STATE.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/HARVEST-PLAYBOOK.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/OPERATING-MANUAL.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/grok-integration/DESIGN-RESEARCH.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/architecture/system-visualization/state-of-rework/state-of-rework.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/architecture/system-visualization/state-of-rework/_maps/narrative.json",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/claude-for-sales/research/sko-plan-artifact.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/redteam/plausible-wrong.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/redteam/weasel-completions.md",
+    "reason": "dated record, never edited",
+    "frozen": true
   }
 ]

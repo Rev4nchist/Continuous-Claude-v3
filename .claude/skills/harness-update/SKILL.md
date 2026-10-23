@@ -24,7 +24,7 @@ The other cross-model CLI was removed. This playbook does not upgrade it, probe 
 2. **Pin rollback before upgrading.** Record the exact installed version and its reinstall command first.
 3. **Subscription auth is asserted before AND after** — an upgrade must never silently fall to an API key.
 4. **Idempotent registry walk.** Edit points are exact-string replacements; running the procedure twice produces zero diff (`--dry-run` twice must report clean).
-5. **Evidence is dated-append** — add a new dated section to the harness's DESIGN-RESEARCH doc; never rewrite history.
+5. **Evidence goes in the session handoff.** `docs/grok-integration/DESIGN-RESEARCH.md` is a dated record. Do not append to it and do not rewrite it.
 
 ## The procedure
 
@@ -40,10 +40,10 @@ Copy the models_cache aside to `docs/grok-integration/snapshots/models_cache.<ve
 - grok: `grok update` (or let auto-update land; either way, treat any version change as requiring this playbook)
 
 ### Step 3 — Re-assert auth
-Same asserts as Step 1. FAIL → stop, tell Dave to re-login (`grok login`). Never proceed on an API-key fallback.
+Same asserts as Step 1. FAIL → stop, tell Dave to log in again (`grok login` for the Grok harness). Never proceed on an API-key fallback.
 
 ### Step 4 — Re-verify the capability surface
-Run the verification checklist and diff against `docs/grok-integration/DESIGN-RESEARCH.md`:
+Run the verification checklist. Compare the live CLI with the behavior this skill already states. `docs/grok-integration/DESIGN-RESEARCH.md` is a dated record, not the checklist target:
 
 - `grok --help` — confirm `-p`, `--prompt-file`, `--tools`, `--no-subagents`, `--output-format`, `-r` present.
 - **Re-probe the read-only guard**: `--tools "read_file,list_dir,grep"` still blocks a write attempt (this is the load-bearing safety fact; `--sandbox` was decorative on 0.2.93 — check whether it started validating).
@@ -77,9 +77,9 @@ Update every registered location with the verified allowlist + new version stamp
 `--dry-run`: grep each edit point for the current allowlist + version strings and report consistent/drifted without editing.
 
 ### Step 7 — Evidence, sync, smoke
-1. Append a dated section to `docs/grok-integration/DESIGN-RESEARCH.md`: versions, probe outputs (verbatim result lines), fixture results, new-behavior notes.
+1. Write the dated evidence (versions, probe outputs, fixture results, new-behavior notes) into the session handoff. Leave `docs/grok-integration/DESIGN-RESEARCH.md` unchanged.
 2. Commit on a branch FIRST, then `bash scripts/sync-to-active.sh` (the repo commit is the restore source; never sync uncommitted).
-3. Smoke one real run per newly enabled model through `/grok --model <id> <trivial question>` and confirm the telemetry row records the right model.
+3. Smoke one real enabled-model run per newly enabled model through `/grok --model <id> <trivial question>` and confirm the telemetry row records the right model.
 
 ## Failure modes
 

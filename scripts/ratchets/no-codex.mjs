@@ -9,14 +9,21 @@
  * A new hit, or a count change, fails. A scan of zero files fails. An
  * allow entry that does not occur in its file fails (a pass on zero
  * inputs is a fail), except a frozen entry, which is a path that must
- * stay byte-for-byte with the base commit. Eval records are frozen.
+ * stay byte-for-byte with the base commit. Dated records are frozen.
  * A file of 2 MB or more fails unless its allow entry sets "oversized"
  * to true and gives a reason. That exemption is the size, not the
  * contents: a listed file that shrinks under 2 MB is scanned, and a hit
  * in it fails. A leftover-damage check fails on empty name or label
  * elements, empty name-like JSON values, a link whose name is missing
  * (-x.html, /.ext), and a slash, dash, or plus with only spaces between
- * two of the same mark.
+ * two of the same mark, and on two not-equal signs with only spaces
+ * between them. It also fails on a nameless CSS color, an empty var(),
+ * an empty code element, an "and.**" leftover, a dangling and/or before
+ * a period, a call that lost the () it had at base, a selector whose
+ * space collapsed, and a near-copy line that only deleted the removed
+ * CLI token. Damage patterns also walk docs, skipping oversized files
+ * and whole-file allows. The name scan stays on the original roots. A
+ * planted name in a live file still fails.
  *
  *   node scripts/ratchets/no-<token>.mjs
  */
@@ -39,6 +46,14 @@ const FROZEN_SPECS = [
   'docs/fable-manual/golden',
   'docs/fable-manual/EXTRACTION-REPORT.md',
   'docs/fable-manual/TRAP-TESTS.md',
+  'docs/tri-model',
+  'docs/fable-manual/HARVEST-PLAYBOOK.md',
+  'docs/fable-manual/OPERATING-MANUAL.md',
+  'docs/grok-integration/DESIGN-RESEARCH.md',
+  'docs/architecture/system-visualization/state-of-rework/state-of-rework.html',
+  'docs/architecture/system-visualization/state-of-rework/_maps/narrative.json',
+  'docs/claude-for-sales/research/sko-plan-artifact.html',
+  'docs/fable-manual/redteam',
 ];
 
 const DAMAGE = [
@@ -49,6 +64,12 @@ const DAMAGE = [
   /(?:^|["'\s])-[A-Za-z0-9][\w.-]*\.html\b/gm,
   /(?<![\w$])\/\.(?:html|jsonl|json|md|mjs|js|ts|tsx|css|pdf|txt|yml|yaml|sh|ps1)\b/g,
   /(?<=\S)[ \t]+([/+-])[ \t]+\1[ \t]+(?=\S)/g,
+  /≠[ \t]+≠/g,
+  /(?<![\w-]):#[0-9A-Fa-f]{3,8}\b/g,
+  /:var\s*[;}]/g,
+  /<code>\s*<\/code>/gi,
+  /\band\.\*\*/g,
+  /\b(?:and|or)\.(?:\s|$)/gm,
 ];
 
 const ALIAS = new RegExp(
@@ -81,6 +102,7 @@ const ROOTS = [
 ];
 
 const SKIP_DIR = new Set(['node_modules', '.git', '.venv', '__pycache__']);
+const DAMAGE_ROOTS = ['docs'];
 
 function gitignored(rel) {
   try {
@@ -104,6 +126,21 @@ function classify(rel, abs, size, out, oversized, unlisted, allow, seenAllow) {
     return;
   }
   out.push(abs);
+}
+
+function collectDamageFiles(dir, out, seen) {
+  let entries;
+  try { entries = readdirSync(dir); } catch { return; }
+  for (const name of entries) {
+    if (SKIP_DIR.has(name)) continue;
+    const abs = join(dir, name);
+    const rel = relative(REPO, abs).replace(/\\/g, '/');
+    if ((name === 'cache' || name === '.cache') && gitignored(rel)) continue;
+    let st;
+    try { st = statSync(abs); } catch { continue; }
+    if (st.isDirectory()) collectDamageFiles(abs, out, seen);
+    else if (st.isFile() && st.size < SIZE_LIMIT && !seen.has(rel)) out.push(abs);
+  }
 }
 
 function walk(dir, out, oversized, unlisted, allow, seenAllow) {
@@ -180,6 +217,104 @@ function applyTokens(text, tokens) {
   return { left: scanFile(rest, NEEDLE), problems };
 }
 
+function blankTokenHits() {
+  let diff = '';
+  try {
+    diff = execFileSync('git', ['diff', '-U0', BASE], {
+      cwd: REPO,
+      encoding: 'utf8',
+      maxBuffer: 32 * 1024 * 1024,
+    });
+  } catch (err) {
+    diff = `${err.stdout || ''}`;
+    if (!diff) return [`blank git-diff failed`];
+  }
+  const script = [
+    'import sys, re, difflib',
+    'needle, specs = sys.argv[1], sys.argv[2].split("|")',
+    'diff = sys.stdin.read()',
+    'C = re.compile(re.escape(needle), re.I)',
+    'def frozen(path):',
+    '    return any(path == spec or path.startswith(spec + "/") for spec in specs)',
+    'skip = {"scripts/ratchets/no-" + needle + ".mjs", "scripts/ratchets/no-" + needle + "-allow.json"}',
+    'cur = None',
+    'files = {}',
+    'for line in diff.splitlines():',
+    '    if line.startswith("diff --git "):',
+    '        cur = line.split(" b/", 1)[1]',
+    '        files[cur] = []',
+    '        continue',
+    '    if cur is not None:',
+    '        files[cur].append(line)',
+    'hits = []',
+    'for path, lines in files.items():',
+    '    if frozen(path) or path in skip:',
+    '        continue',
+    '    hunks, curh = [], None',
+    '    for line in lines:',
+    '        if line.startswith("@@"):',
+    '            curh = []',
+    '            hunks.append(curh)',
+    '        elif curh is not None:',
+    '            curh.append(line)',
+    '    for hunk in hunks:',
+    '        mins = [l[1:] for l in hunk if l.startswith("-") and not l.startswith("---")]',
+    '        plus = [l[1:] for l in hunk if l.startswith("+") and not l.startswith("+++")]',
+    '        for head in plus:',
+    '            if C.search(head):',
+    '                continue',
+    '            for base in mins:',
+    '                if not C.search(base):',
+    '                    continue',
+    '                sm = difflib.SequenceMatcher(None, base, head, autojunk=False)',
+    '                if sm.ratio() < 0.6:',
+    '                    continue',
+    '                rem = "".join(base[a:b] for t,a,b,c,d in sm.get_opcodes() if t in ("delete", "replace"))',
+    '                add = "".join(head[c:d] for t,a,b,c,d in sm.get_opcodes() if t in ("insert", "replace"))',
+    '                if C.search(rem) and len(add.strip()) <= 3:',
+    '                    hits.append(f"blank {path}")',
+    '                    break',
+    '        for base in mins:',
+    '            calls = set(re.findall(r"\\b([A-Za-z_][\\w.]*)\\(\\)", base))',
+    '            for head in plus:',
+    '                sm = difflib.SequenceMatcher(None, base, head, autojunk=False)',
+    '                if sm.ratio() < 0.6:',
+    '                    continue',
+    '                for name in calls:',
+    '                    if re.search(rf"\\b{re.escape(name)}\\s*\\(\\)", head):',
+    '                        continue',
+    '                    if re.search(rf"\\b{re.escape(name)}\\b(?!\\s*\\()", head):',
+    '                        hits.append(f"paren {path} {name}")',
+    '            spaced = re.findall(r"\\.([A-Za-z0-9_-]+)\\s+\\.([A-Za-z0-9_-]+)", base)',
+    '            if not spaced:',
+    '                continue',
+    '            for head in plus:',
+    '                for left, right in spaced:',
+    '                    gap = f".{left} .{right}"',
+    '                    jam = f".{left}.{right}"',
+    '                    if gap in base and jam in head and gap not in head:',
+    '                        hits.append(f"selector {path} {jam}")',
+    'print(len(hits))',
+    'for hit in hits[:40]:',
+    '    print(hit)',
+  ].join('\n');
+  let out = '';
+  try {
+    out = execFileSync('python3', ['-c', script, TOKEN, FROZEN_SPECS.join('|')], {
+      cwd: REPO,
+      input: diff,
+      encoding: 'utf8',
+      maxBuffer: 8 * 1024 * 1024,
+    });
+  } catch (err) {
+    return [`blank detector failed ${err.stderr || err.message}`];
+  }
+  const lines = out.trim().split('\n').filter(Boolean);
+  const count = Number(lines[0] || 0);
+  if (!Number.isInteger(count)) return ['blank detector returned a bad count'];
+  return lines.slice(1);
+}
+
 function main() {
   const allowRaw = JSON.parse(readFileSync(join(REPO, ALLOW_FILE), 'utf8'));
   if (!Array.isArray(allowRaw) || allowRaw.length === 0) {
@@ -204,7 +339,7 @@ function main() {
     }
     const path = row.path.replace(/\\/g, '/');
     if (frozen && !underFrozen(path)) {
-      process.stdout.write(`RESULT: FAIL - frozen entry outside eval paths ${path}\n`);
+      process.stdout.write(`RESULT: FAIL - frozen entry outside dated paths ${path}\n`);
       process.exit(1);
     }
     allow.set(path, {
@@ -289,6 +424,34 @@ function main() {
     listed.push(`${rel} ${n}`);
   }
 
+  const seenFiles = new Set(files.map((abs) => relative(REPO, abs).replace(/\\/g, '/')));
+  const damageFiles = [];
+  for (const rel of DAMAGE_ROOTS) {
+    const abs = join(REPO, rel);
+    if (statSync(abs, { throwIfNoEntry: false })?.isDirectory()) {
+      collectDamageFiles(abs, damageFiles, seenFiles);
+    }
+  }
+  for (const file of damageFiles) {
+    const rel = relative(REPO, file).replace(/\\/g, '/');
+    if (rel === SELF || rel === ALLOW_FILE) continue;
+    const row = allow.get(rel);
+    if (row && !row.tokens) continue;
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch { continue; }
+    const d = damageCount(text);
+    if (d) {
+      damageHits += d;
+      damageListed.push(`${rel} ${d}`);
+    }
+  }
+
+  const blankListed = blankTokenHits();
+  if (blankListed.length) {
+    damageHits += blankListed.length;
+    for (const line of blankListed) damageListed.push(line);
+  }
+
   for (const [path, row] of allow) {
     if (!row.frozen) continue;
     const abs = join(REPO, path);
@@ -333,7 +496,7 @@ function main() {
     process.exit(1);
   }
   if (frozenStat) {
-    process.stdout.write('RESULT: FAIL - eval bytes differ from base\n');
+    process.stdout.write('RESULT: FAIL - dated bytes differ from base\n');
     process.exit(1);
   }
   if (hits || aliasHits || damageHits) {

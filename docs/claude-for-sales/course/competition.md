@@ -60,7 +60,7 @@ A rep who can't get a clean Arena Project running in the setup window does **not
 
 ## 2. The Answer-Key Packet Spec
 
-The hard problem flagged: **"zero fabricated names" is unjudgeable live** — a judge can't verify a rep's citation for a surprise account in real time. The fix: facilitators pre-research the surprise accounts and judge against a **pre-built answer-key packet**, not against the rep's own citations.
+The hard problem the review flagged: **"zero fabricated names" is unjudgeable live** — a judge can't verify a rep's citation for a surprise account in real time. The fix: facilitators pre-research the surprise accounts and judge against a **pre-built answer-key packet**, not against the rep's own citations.
 
 ### 2.1 Who builds it, when, how
 

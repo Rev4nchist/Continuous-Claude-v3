@@ -16,7 +16,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `design-work.md` | design, deck and chart skills; paid kie.ai images block | inject / block |
 | `browser-automation.md` | browser automation; claude-in-chrome blocks | inject / block |
 | `opencli-first.md` | web fetch and search | inject |
-| `harness-update.md` | Grok CLI or model updates | inject |
+| `harness-update.md` | updates to the Grok CLI or its models | inject |
 | `git-merge-workflow.md` | merges and branch cleanup | inject |
 | `pr-review-loop.md` | opening PRs; Greptile | inject |
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
@@ -26,7 +26,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `proactive-delegation.md` | delegating to agents | inject |
 
 Decisions these rules shape before any tool call:
-- Grok write runs, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
+- Write runs through Grok, CMA creates and sends, kie.ai generation, and any deploy or delete are confirm-first.
 - CMA bills Dave's API key, not the subscription. Grok is parked on this machine.
 - Fabric: run the project preflight first; stop all load on the first capacity error; never pause or resize a capacity.
 - Never merge a PR without Dave's explicit yes. Land CCv3 PRs with `scripts/github/land-pr.ps1`.

@@ -1,6 +1,6 @@
 ---
 name: review
-description: Runs a multi-perspective code and plan review. Use when the user says "review this code", "review my PR", "/review", or asks to check before merging.
+description: Runs a multi-perspective code and plan review with a Grok cross-model pass when the user asks for one. Use when the user says "review this code", "review my PR", "/review", or asks to check before merging.
 ---
 
 # /review - Code Review Workflow

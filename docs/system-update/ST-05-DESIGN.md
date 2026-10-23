@@ -91,7 +91,7 @@ Net: a resident recall path removes ~1.5–3.5s of pure overhead per call, leavi
 - `db`/`dbTimedOut` types unchanged → mergeResults/floor/topScoreRaw/emit/logRecallFire
   all untouched. **No recall regression, emit invariant intact.**
 
-## Premortem risk register (to harden in /premortem pass)
+## Premortem risk register (which the premortem pass still has to harden)
 
 | # | Risk | Mitigation |
 |---|------|-----------|
@@ -113,7 +113,7 @@ Net: a resident recall path removes ~1.5–3.5s of pure overhead per call, leavi
 - Daemon survives `store_learning.py` writing new rows mid-session (R8: new learning recalled without restart).
 - Fallback verified: kill daemon mid-session → recall silently falls back to uv, no error surfaced.
 
-## Premortem-hardened refinements (adversarial pass, 2026-06-29 — v2)
+## Premortem-hardened refinements (the adversarial pass on 2026-06-29, version 2)
 
 External review verdict: needs-attention, 9 findings. All folded in below;
 these are the BINDING implementation contract (supersede the v1 text where they conflict).

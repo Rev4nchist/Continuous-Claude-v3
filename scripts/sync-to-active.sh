@@ -217,7 +217,7 @@ NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.json
 #   dst != src AND != manifest (or  -> ACTIVE WAS EDITED SINCE LAST SYNC:
 #     no entry; fail-safe)             quarantine the active copy, THEN copy,
 #                                      report loudly. Never silently overwrite.
-# Sequencing is crash-safe (premortem finding): the repo version is staged
+# Sequencing is crash-safe (premortem review finding): stage the repo version
 # as dst.sync-tmp first, the quarantine copy is hash-verified, and only then is
 # the staged file atomically renamed over dst. The active file is never missing
 # or half-written; if quarantine fails the active file is left untouched.

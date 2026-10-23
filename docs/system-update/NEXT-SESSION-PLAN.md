@@ -104,7 +104,7 @@ ECONNRESET). All tested, emit 4/4, LIVE-verified. Original sub-items (now done) 
 
 ## Phase 2 — ST-05 resident recall daemon ✅ SHIPPED + VERIFIED 2026-06-29
 
-Done: `/plan` → `/premortem` (9 findings folded into v2) → implement (kraken Python
+Done: `/plan` → `/premortem` (9 findings were folded into v2) → implement (kraken Python
 layer + orchestrator TS layer) → end-to-end verified on the live daemon. Commits `a9dd226`
 (Python recall op + query_vector seam), `624c876` (TS probeDaemon + recallViaDaemon +
 memory-awareness routing), `31ffd8d` (live-script import fix the e2e gate caught). Warm

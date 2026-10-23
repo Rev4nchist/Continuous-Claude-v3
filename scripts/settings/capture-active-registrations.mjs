@@ -8,7 +8,7 @@
  * active harness stays rebuildable from the repo. The ACTIVE file is never
  * written (it stays NEVER_SYNC).
  *
- * Per-entry dispositions (premortem finding: a permission-bypass policy
+ * Per-entry dispositions (premortem review finding: the permission-bypass policy
  * must not be exported to future machines via the template):
  *   - MACHINE_LOCAL entries are never captured; they are reported instead and
  *     documented in .claude/rules-src/sync-known-gaps.md.

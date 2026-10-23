@@ -2,8 +2,8 @@
 
 **Status:** committed, canonical. Rooms under `rooms/` are runtime state and gitignored
 (`.workroom/rooms/` in the repo `.gitignore` — verify before creating the first room on a
-fresh clone). Design rationale: `docs/tri-model/COLLABORATION-PLAN.md`; combined build
-order: `docs/tri-model/SESSION-REVIEW-2026-07-11.md`.
+fresh clone). Design rationale, dated record: `docs/tri-model/COLLABORATION-PLAN.md`. Combined build
+order, dated record: `docs/tri-model/SESSION-REVIEW-2026-07-11.md`.
 
 ## Doctrine (non-negotiable)
 
@@ -77,8 +77,8 @@ preflight → intake → research → contract_draft → gate1
   research/         # Grok research dumps
   milestones/       # M<N>-scope.md / M<N>-result.md
   findings/         # premortem-merged.yaml, booth-claude-*.md
-  patches/          # grok-M<N>.diff, fix-R<N>.diff
-  inbox/claude/  inbox/grok/  inbox/human/
+  patches/          # one patch file named grok-M<N>.diff
+  inbox/claude/  inbox/grok/  inbox/human/   # one directory per participant
 ```
 
 ## Message protocol (inbox)
@@ -88,8 +88,8 @@ Filename: `inbox/<to>/<from>-<utcstamp>-<slug>.md` (utcstamp: `YYYYMMDDTHHMMSSZ`
 ```yaml
 ---
 id: msg-<utcstamp>-<slug>
-from: claude|grok|human
-to: claude|grok|human
+from: one of claude, grok, or human
+to: one of claude, grok, or human
 type: task|finding|question|answer|status|handoff|failover
 room: <room-id>
 milestone: M2        # optional
@@ -115,7 +115,7 @@ Deliverable · Done when**.
 
 Workers/adversaries: if a Task prompt includes a `## Workroom` block, read the contract +
 status + own inbox FIRST and write outputs to the room. **Fail-open**: with no workroom
-block, behave exactly as the one-shot `/grok` flow does today.
+block, behave exactly as today's one-shot `/grok` flow.
 
 ## Operational constraints (probe-backed — do not relearn these)
 
@@ -127,8 +127,8 @@ block, behave exactly as the one-shot `/grok` flow does today.
 - **Grok research role** uses a widened write-free `--tools` allowlist (see
   `.claude/rules-ondemand/grok-worker-safety.md`) — a deliberate egress expansion, distinct from
   the ask guard. Never silently reuse ask's allowlist for research or vice versa.
-- **Worktree paths** for milestones live in `status.json.worktrees` — Grok implement
-  runs happen in `../.grok-worktrees/` siblings; the room only
+- **Worktree paths** for milestones live in `status.json.worktrees`. Implement runs for Grok
+  happen in `../.grok-worktrees/` sibling directories. The room only
   stores paths and diffs, never a second working tree.
 - Smoke = hub-run commands with recorded exit codes. A worker's "tests passed" narrative
   is never smoke evidence.

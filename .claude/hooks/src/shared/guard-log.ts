@@ -7,7 +7,7 @@
  *   {ts, hook, tool, decision: 'deny'|'ask'|'override', reason, session_id, agent_id?, command?}
  *
  * 'override' = a guard let a command through because of an override (SKIP_DESTRUCTIVE_GUARD).
- * runs the same built hooks, so this log covers both harnesses.
+ * This log records the hooks this process runs.
  *
  * Secrets: the log never holds a raw command. `reason` is a rule name, and `command` is at most
  * the first 80 characters of the command after obvious tokens are masked. The mask runs on the

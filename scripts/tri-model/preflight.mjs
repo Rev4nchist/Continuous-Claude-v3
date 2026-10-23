@@ -2,7 +2,7 @@
 /**
  * scripts/tri-model/preflight.mjs
  *
- * Gate for Grok work: auth, identity pin, version pins,
+ * This gate covers Grok work only: auth, identity pin, version pins,
  * and informational git state. Plain Node >=20, zero dependencies.
  *
  * Requirements: CONTRACT.md R1-R7; design: D1-D4.
@@ -89,7 +89,7 @@ function resolveCli(cmd) {
 
 /**
  * Run a CLI; never throws to caller for missing binary / non-zero / timeout.
- * Captures stdout AND stderr.
+ * Captures stdout AND stderr (stderr is part of the captured output).
  * @returns {{ ok: boolean, stdout: string, stderr: string, error: string | null }}
  */
 function runCli(cmd, args) {
@@ -203,7 +203,7 @@ function parsePinsTable(filePath) {
   const pins = {};
   // | Grok | ... | 0.2.93, 2026-07-11 |
   for (const line of section.split(/\r?\n/)) {
-    const rowMatch = /^\|\s*(Grok)\s*\|/i.exec(line);
+    const rowMatch = /^\|\s*(Grok)\s*\|/i.exec(line); // Grok is the only harness row
     if (rowMatch === null) continue;
     const harness = rowMatch[1];
     if (harness in pins) continue;
@@ -343,7 +343,7 @@ function checkGrokAuthAndIdentity() {
 
 /**
  * R3 — version pin gate for one harness.
- * @param {"grok"} harness
+ * @param {"grok"} harness - the only harness this gate checks
  * @param {string | null | undefined} pinned
  * @param {string | null} pinsError
  */
@@ -539,9 +539,9 @@ function main() {
     process.stdout.write(
       `ready: ${ready ? "true" : "false"}\n`,
     );
-    if (versions.grok) {
+    if (versions.grok != null && versions.grok) {
       process.stdout.write(
-        `versions: grok=${versions.grok || "?"}` +
+        `grok version ${versions.grok || "?"}` +
           (versions.grok_pin ? ` (pin grok=${versions.grok_pin})` : "") +
           "\n",
       );

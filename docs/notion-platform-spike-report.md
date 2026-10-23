@@ -16,7 +16,7 @@ Dave's workspace (`David Hayes's Notion`, id `a512f781-a8e7-400d-b2e2-b76690fde8
 
 ## S1 — CLI on Windows
 
-- **Install**: `winget install Notion.ntn` (native x64; the `curl|bash` path is macOS/Linux — premortem finding confirmed by docs). Installed **ntn 0.18.1 (latest)**.
+- **Install**: `winget install Notion.ntn` (native x64; the `curl|bash` path is macOS/Linux — a premortem review finding confirmed by the docs). Installed **ntn 0.18.1 (latest)**.
 - **Absolute exe path** (for Task Scheduler actions — winget's shim was NOT added as a Links alias):
   `C:\Users\david.hayes\AppData\Local\Microsoft\WinGet\Packages\Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe\ntn-x86_64-pc-windows-msvc\ntn.exe`
 - **Auth**: `ntn login` = device-code browser flow (`ntn login` prints URL + verification code → `ntn login poll` waits). Credentials in system keychain; config at `%APPDATA%\notion` (⚠ roaming dir — if `NOTION_KEYRING=0` file auth is ever used, pin `NOTION_HOME` local + ACL per premortem S1c).

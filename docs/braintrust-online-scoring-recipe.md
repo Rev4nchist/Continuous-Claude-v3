@@ -120,7 +120,7 @@ ClosedQA judge gets one shot per session at the top-level Task only.
 **Important:** With subscription-OAuth judges there is **no Braintrust UI
 online-scoring-rule path.** A UI scoring rule runs on Braintrust's servers,
 which can only call API-key-based scorers (autoevals / OpenAI / Anthropic) —
-they **cannot invoke your local / `claude` CLIs** or their OAuth
+they **cannot invoke your local `claude` CLI** or their OAuth
 tokens. The `factuality` / `closedqa` / `plan_rubric` judges live in
 `opc/scripts/core/judge_session.py` and only work where those CLIs are
 authenticated: your local machine.
@@ -155,7 +155,7 @@ cross-project.)
 
 Schedule the `--scan-since` batch on the **local machine only**. Claude Code
 `/schedule` routines run *remotely* (Anthropic cloud) and — like a Braintrust
-UI rule — cannot reach the local / `claude` CLIs or their OAuth tokens.
+UI rule — cannot reach the local `claude` CLI or their OAuth tokens.
 So the runner is scheduled via **Windows Task Scheduler** (this machine), not
 `/schedule`.
 

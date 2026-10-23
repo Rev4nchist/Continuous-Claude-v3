@@ -23,7 +23,7 @@ The extension communicates with the opencli daemon via WebSocket on `localhost:1
 ## What Works
 
 - All 44 browser-based adapters (social, news, finance, video, etc.)
-- CDP desktop adapters (Cursor, Discord, Notion, Grok)
+- CDP desktop adapters (Cursor, Discord, Notion, and the Grok desktop app)
 - Daemon lifecycle (`opencli setup`, auto-start on command)
 - Explore/synthesize/generate pipeline
 - All output formats (`-f table|json|yaml|md|csv`)

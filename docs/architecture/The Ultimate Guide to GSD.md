@@ -1,6 +1,6 @@
 ## **The Ultimate Guide to GSD (Get Shit Done): The Experimental AI Coding Framework**
 
-GSD is a lightweight yet powerful meta-prompting, context engineering, and spec-driven development system designed to bridge the gap between "vibe coding" (coding without a plan) and over-engineered, rigid frameworks. It is optimized for **Claude Code, OpenCode, Gemini, and.**
+GSD is a lightweight yet powerful meta-prompting, context engineering, and spec-driven development system designed to bridge the gap between "vibe coding" (coding without a plan) and over-engineered, rigid frameworks. It is optimized for three harnesses: **Claude Code, OpenCode, and Gemini.**
 
 ---
 
@@ -35,7 +35,7 @@ npx get-shit-done-cc@latest
 ```
 
 **Configuration Choices:**
-1. **Runtime:** Choose your AI agent (Claude Code, OpenCode, Gemini).
+1.  **Runtime:** Choose your AI agent from Claude Code, OpenCode, or Gemini.
 2.  **Scope:** 
     *   **Global:** Available in all projects.
     *   **Local:** Specific to the current project (Recommended for varied project requirements).

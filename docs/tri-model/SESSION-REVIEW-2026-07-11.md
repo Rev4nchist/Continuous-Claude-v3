@@ -16,8 +16,6 @@
 
 The two layers are not sequential; they share edit surfaces. Track C (workroom blocks in worker prompts) patches the **same four agent files** the connection layer just shipped and tested; Track E (roster defaults) rewrites the **same skill/doc copy**; the workroom preflight overlaps `/harness-update` Step 1. Building governance separately would mean re-touching every shipped file twice and re-running the suite twice. One combined workstream, one edit pass per file.
 
-Historical record from 2026-07-11. The reviewer role named in this note was removed. Live review is the Claude critic; see `CURRENT-STATE.md`.
-
 ## What the game plan gets right (endorsed as-is)
 
 The COLLABORATION-PLAN's core doctrine is adopted without amendment: rostered roles, builder ≠ reviewer (fixes the self-grading failure class), disk-is-the-bus (`.workroom/` + `CONTRACT.md`), Claude-as-hub phase authority, human Gates 1/2, ≤2 fix loops, fresh-context checkpoints, in-repo plan placement. Its §2.5 critiques (name drift vs verified allowlist ids, no auto-merge, failover self-grade rule, complexity-gated intake) are all sound.

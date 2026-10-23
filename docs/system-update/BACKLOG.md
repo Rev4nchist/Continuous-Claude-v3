@@ -62,7 +62,7 @@ Emit invariant held 4/4 across all. **Remaining in Wave 1:** `QW-04` (matcher fl
 | **ST-03** | UserPromptSubmit 13-spawn serial → parallel (the 22–32s wall) | D6a-01 | after ST-05 |
 | **ST-10** | Fix `agent-recall-injector` 0-for-78 lifetime yield (**DELICATE** — Hook Source Regression history; emit-guard + post-spark verify on every edit) | D2b-03 | after ST-05 |
 | **ST-04** | codegraph facade latency 35–88s → budget (freshness-probe redesign + reindex budget) | D4b-01 | **before the C.5 deny-gate flip** |
-| **ST-06** | Permission-layer redesign — remove `permission-auto-allow`'s "auto-approve ALL" | D2g-02/GAP3-01 | **before ST-08** (precondition for injection fixes to mean anything — finding) |
+| **ST-06** | Permission-layer redesign — remove `permission-auto-allow`'s "auto-approve ALL" | D2g-02/GAP3-01 | **before ST-08** (precondition for injection fixes to mean anything — a review finding) |
 | **ST-08** | argv-ify the remaining Grep-path shell-injection sites (`smart-search-router`, `daemon-client`) + the shared `storeLearning(content,opts)` helper | D2b-10/GAP4-01/GAP4-02 + D5a/D5b cluster | after ST-06 |
 | **ST-07** | Memory sanitizer coverage 2 → 5 injectors (route all 5 through `injectRecall()`) | D5b-01 (poison-then-inject) | after ST-02; independent otherwise |
 | **ST-09** | Bus lock + write-amplification hardening (200ms cap redesign) | D4a-02 | after ST-01 (new writer changes contention profile) |

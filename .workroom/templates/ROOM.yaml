@@ -12,7 +12,7 @@ roster:
   research: grok                # widened write-free allowlist (grok-worker-safety.md)
   # builder stays grok unless the human names kraken as failover
 
-participants: [human, claude, grok]
+participants: [human, claude, grok] # room members
 
 fix_rounds_max: 2               # human may raise; hub never raises unilaterally
 

@@ -2,10 +2,10 @@
 
 Session: grok-integration-codex-upgrade (2026-07-11). Supersedes and absorbs `can-i-start-grok-vivid-haven.md`.
 
-> **ERRATUM (2026-07-11, post-execution).** This is the historical record of the plan **as approved**. It was executed the same day (PR #18), and several plan-era assumptions were CORRECTED by live probes — do not implement from this document. The shipped reality (source of truth: `docs/grok-integration/DESIGN-RESEARCH.md`, `docs/tri-model/CURRENT-STATE.md`, and the Grok safety rule):
+> **ERRATUM (2026-07-11, post-execution).** This is the historical record of the plan **as approved**. It was executed the same day (PR #18), and several plan-era assumptions were CORRECTED by live probes — do not implement from this document. The shipped reality (source of truth: `docs/grok-integration/DESIGN-RESEARCH.md`, `docs/codex-integration/DESIGN-RESEARCH.md` §13, and the safety rules):
 > 1. Grok's native `-w` worktree flag is **silently ignored in headless mode** — implement uses a hand-rolled out-of-repo worktree (`../.grok-worktrees/`), not "native worktrees" as Track 2 step 3b assumes.
 > 2. Grok read-only enforcement is the **`--tools "read_file,list_dir,grep"` allowlist** — `--sandbox` (referenced in Track 2 step 3a as `<read-only-profile>`) is decorative and blocks nothing.
-> 3. The 2026-07-11 probe recorded three model ids on a CLI that is no longer installed. Do not treat those ids, or that skill path, as a live route. Live review is the Claude critic.
+> 3. "gpt-5.6" shipped as **three ids**: `gpt-5.6-sol` / `gpt-5.6-terra` / `gpt-5.6-luna` (all probe-verified). The live default remains **`gpt-5.5`**; 5.6 is opt-in via `--model` (see `.claude/skills/codex/SKILL.md` for the authoritative flag line).
 
 ## Context
 

@@ -2,7 +2,7 @@
 /**
  * Coordination load probe -- does the file-claims block hold under concurrency?
  *
- * A review finding predicted that the 3-second `uv run python` subprocess
+ * Review finding number 11 predicted that the 3-second `uv run python` subprocess
  * on the claim path would make the block FAIL OPEN under load: when the subprocess
  * misses its timeout, runPgQuery returns success=false, checkFileClaim swallows it
  * as `{claimed: false}`, and the edit is permitted. A single unloaded invocation

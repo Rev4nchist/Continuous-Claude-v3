@@ -1,6 +1,6 @@
 # AGENTS.md: continuous-claude (CCv3)
 
-Read by other agents directly, and by Claude Code through `@AGENTS.md` in CLAUDE.md.
+Other agents read this file directly, and Claude Code reads it through `@AGENTS.md` in CLAUDE.md.
 Global policy: CLAUDE.md "Testing standard". This file says what it means in this repo.
 
 ## Testing

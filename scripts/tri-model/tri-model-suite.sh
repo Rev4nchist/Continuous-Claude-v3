@@ -38,8 +38,8 @@ check S24 "cli-integration has a Grok INTEGRATED row" \
   "grep -q 'Grok (xAI)' '$REPO/.claude/skills/cli-integration/SKILL.md' && grep -q 'INTEGRATED' '$REPO/.claude/skills/cli-integration/SKILL.md'"
 
 HK="$REPO/.claude/hooks/src/plan-exit-premortem-prompt.ts"
-check S25 "hook source offers Grok and Skip" \
-  "grep -q '\"Grok\"' '$HK' && grep -q 'Skip -- proceed' '$HK'"
+check S25 "hook source offers the Grok harness and Skip" \
+  "grep -q '\"Grok\"' '$HK' && grep -q 'Skip -- proceed to implementation' '$HK'"
 check S26 "hook source routes --grok" \
   "grep -q '/premortem --grok' '$HK'"
 check S27 "hook dist rebuilt with Grok content (repo)" \
@@ -51,15 +51,15 @@ check S30 "premortem skill references grok-adversary + grok-lift.jsonl" \
 
 HU="$REPO/.claude/skills/harness-update/SKILL.md"
 check S31 "harness-update skill keeps the Grok registry" \
-  "grep -q 'Grok edit points' '$HU'"
+  "grep -q 'Grok edit points' '$HU'" # heading that still ships
 check S33 "harness-update registry lists grok edit-point files" \
   "grep -q 'grok-worker.md' '$HU' && grep -q 'grok-worker-safety.md' '$HU' && grep -q 'skills/grok/SKILL.md' '$HU' && grep -q 'grok-adversary.md' '$HU'"
 check S34 "harness-update rule keeps the Grok pin" \
   "grep -q '0.2.93' '$REPO/.claude/rules-ondemand/harness-update.md'"
-check S36 "grok DESIGN-RESEARCH exists w/ guard table" \
+check S36 "dated record DESIGN-RESEARCH still has the guard table" \
   "grep -q 'read_file,list_dir,grep' '$REPO/docs/grok-integration/DESIGN-RESEARCH.md'"
 
-for f in agents/grok-worker.md agents/grok-adversary.md rules-ondemand/grok-worker-safety.md rules-ondemand/harness-update.md skills/grok/SKILL.md skills/harness-update/SKILL.md skills/premortem/SKILL.md hooks/src/plan-exit-premortem-prompt.ts; do
+for f in agents/grok-worker.md agents/grok-adversary.md rules-ondemand/grok-worker-safety.md rules-ondemand/harness-update.md skills/grok/SKILL.md skills/harness-update/SKILL.md skills/premortem/SKILL.md hooks/src/plan-exit-premortem-prompt.ts; do # files that still ship
   check "SYNC" "repo==active: $f" "cmp -s '$REPO/.claude/$f' '$ACTIVE/$f'"
 done
 

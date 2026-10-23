@@ -75,7 +75,7 @@ After the discovery interview, generate a small set of visual direction probes *
 
 - The work is **net-new** or directionally ambiguous enough that visual exploration will clarify the brief.
 - The requested fidelity is **mid-fi, high-fi, or production-ready**. Skip for sketch-only planning.
-- The current harness gives you native image generation (`image_gen`, an equivalent MCP tool, or similar). Don't ask the user to install APIs or tooling.
+- The current harness gives you its own image generation (`image_gen`, an equivalent MCP tool, or similar). Don't ask the user to install APIs or tooling.
 
 When those conditions are met, this step is mandatory. If image generation isn't natively available, do not ask the user to install APIs or tooling. State in one line that the image step is skipped because the harness lacks native image generation, then proceed. The one-line announcement is required, not optional; it forces a conscious decision instead of letting the step quietly evaporate.
 
