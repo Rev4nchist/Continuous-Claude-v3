@@ -42,7 +42,8 @@
     "",
     "  An alias is NOT a wildcard. An email that is neither the canonical one nor",
     "  a listed alias is still a finding, because THAT is the failure worth",
-    "  catching: the wrong PERSON baked into history, permanently."
+    "  catching: the wrong PERSON baked into history, permanently.",
+    "fourth* checkout prefixes were removed from routes in the personal-machine port and were not re-homed onto the personal account. Work routes whose last path segment does not start with fourth stay, so a work commit identity still exists."
   ],
   "accounts": {
     "personal": {
@@ -70,37 +71,7 @@
   },
   "routes": [
     {
-      "prefix": "C:/Users/dkhay/Projects/fourth-firecrawl-plugin",
-      "commitAccount": "work",
-      "note": "transferred to fourth org 2026-08-05"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/fourth",
-      "commitAccount": "work",
-      "note": "reserved for future github.com/fourth clones"
-    },
-    {
       "prefix": "C:/agent-arch",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/fourth-marketing-brain",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/fourth-salesforce-mcp",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/fourth-playwright-mcp",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/fourth-netsuite-mcp",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/Fourth Canvas",
       "commitAccount": "work"
     },
     {
@@ -117,14 +88,6 @@
     },
     {
       "prefix": "C:/Users/dkhay/Projects/archive/NorthStar Transformation",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/archive/Fourth Presentation Hosting Platform",
-      "commitAccount": "work"
-    },
-    {
-      "prefix": "C:/Users/dkhay/Projects/archive/fourth-workbook",
       "commitAccount": "work"
     },
     {
