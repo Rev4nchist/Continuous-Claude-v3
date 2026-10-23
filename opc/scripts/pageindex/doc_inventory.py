@@ -38,8 +38,8 @@ TIER_1_CRITICAL = [
     DocConfig("ROADMAP.md", IndexTier.CRITICAL, "ROADMAP", "Project roadmap and goals"),
     DocConfig("README.md", IndexTier.CRITICAL, "README", "Project overview"),
     DocConfig("docs/ARCHITECTURE.md", IndexTier.CRITICAL, "ARCHITECTURE", "System architecture"),
-    DocConfig(".claude/CONTINUOUS-CLAUDE-GUIDE.md", IndexTier.CRITICAL, "DOCUMENTATION", "User guide"),
-    DocConfig(".claude/CONTINUOUS-CLAUDE-CHEATSHEET.md", IndexTier.CRITICAL, "DOCUMENTATION", "Quick reference"),
+    DocConfig("docs/history/CONTINUOUS-CLAUDE-GUIDE.md", IndexTier.CRITICAL, "DOCUMENTATION", "User guide"),
+    DocConfig("docs/history/CONTINUOUS-CLAUDE-CHEATSHEET.md", IndexTier.CRITICAL, "DOCUMENTATION", "Quick reference"),
 ]
 
 TIER_2_ARCHITECTURE = [
