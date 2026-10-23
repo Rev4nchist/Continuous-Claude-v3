@@ -34,7 +34,7 @@ import { describe, expect, it } from 'vitest';
 
 const HERE = dirname(fileURLToPath(import.meta.url));
 const SRC_DIR = join(HERE, '..');
-const SETTINGS_PATH = join(HERE, '..', '..', '..', 'settings.json');
+const SETTINGS_PATH = join(HERE, '..', '..', '..', 'settings.json.template');
 
 /**
  * Tools worth guarding. Kept to the shell tools because those are the ones with

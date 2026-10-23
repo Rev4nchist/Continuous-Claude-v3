@@ -13,7 +13,7 @@
  * Usage:
  *   node scripts/hook-manifest-check.mjs            Human summary (active settings)
  *   node scripts/hook-manifest-check.mjs --json     Machine-readable JSON
- *   node scripts/hook-manifest-check.mjs --repo     Also audit repo .claude/settings.json
+ *   node scripts/hook-manifest-check.mjs --repo     Render the template and audit it
  *
  * Exit code: 1 if any registered hook file is missing, else 0.
  * ASCII only, node builtins only (fs/path/os).
@@ -22,6 +22,7 @@
 import { existsSync, readFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { join, isAbsolute, resolve } from 'node:path';
+import { renderSettings } from './settings/render-settings.mjs';
 
 const args = process.argv.slice(2);
 const asJson = args.includes('--json');
@@ -48,6 +49,12 @@ function expandHome(p) {
  *
  * Returns { runner, file } or null if no recognizable script token is found.
  */
+function commandLine(hook) {
+  if (!hook || typeof hook !== 'object') return '';
+  const args = Array.isArray(hook.args) ? hook.args : [];
+  return [hook.command, ...args].filter((part) => typeof part === 'string' && part.length > 0).join(' ');
+}
+
 function extractScript(command) {
   if (!command || typeof command !== 'string') return null;
   const tokens = command.trim().split(/\s+/);
@@ -78,14 +85,7 @@ function resolveFile(file, baseDir) {
  * Audit one settings.json file. Returns a report object.
  */
 function auditSettings(settingsPath, label) {
-  const report = {
-    label,
-    settingsPath,
-    events: {},
-    missing: [],
-    duplicates: [],
-    error: null,
-  };
+  const report = emptyReport(label, settingsPath);
 
   if (!existsSync(settingsPath)) {
     report.error = `settings.json not found at ${settingsPath}`;
@@ -100,7 +100,23 @@ function auditSettings(settingsPath, label) {
     return report;
   }
 
-  const baseDir = homedir();
+  return auditObject(settings, label, settingsPath, homedir());
+}
+
+function emptyReport(label, settingsPath) {
+  return {
+    label,
+    settingsPath,
+    events: {},
+    missing: [],
+    duplicates: [],
+    registrationCount: 0,
+    error: null,
+  };
+}
+
+function auditObject(settings, label, settingsPath, baseDir) {
+  const report = emptyReport(label, settingsPath);
   const hooks = settings.hooks || {};
 
   for (const eventName of Object.keys(hooks)) {
@@ -113,7 +129,7 @@ function auditSettings(settingsPath, label) {
       const groupHooks = Array.isArray(group?.hooks) ? group.hooks : [];
 
       for (const h of groupHooks) {
-        const command = h?.command || '';
+        const command = commandLine(h);
         const timeout = h?.timeout !== undefined ? h.timeout : null;
         const script = extractScript(command);
 
@@ -159,6 +175,7 @@ function auditSettings(settingsPath, label) {
     }
 
     report.events[eventName] = eventEntry;
+    report.registrationCount += eventEntry.count;
   }
 
   return report;
@@ -215,14 +232,36 @@ const activePath = join(homedir(), '.claude', 'settings.json');
 reports.push(auditSettings(activePath, 'active'));
 
 if (includeRepo) {
-  // Repo settings live at <cwd>/.claude/settings.json by convention.
-  const repoPath = resolve(process.cwd(), '.claude', 'settings.json');
-  reports.push(auditSettings(repoPath, 'repo'));
+  const repoRoot = resolve(process.cwd());
+  const templatePath = join(repoRoot, '.claude', 'settings.json.template');
+  const claudeHome = join(repoRoot, '.claude');
+  try {
+    const rendered = renderSettings({
+      templateText: readFileSync(templatePath, 'utf8'),
+      vars: {
+        CLAUDE_HOME: claudeHome,
+        OPC_DIR: join(repoRoot, 'opc'),
+        REPO_ROOT: repoRoot,
+        USER_HOME: homedir(),
+      },
+      overlay: {},
+    });
+    const repoReport = auditObject(rendered, 'repo', `${templatePath} (rendered)`, claudeHome);
+    if (repoReport.registrationCount === 0) {
+      repoReport.error = 'rendered template has 0 hook registrations';
+    }
+    reports.push(repoReport);
+  } catch (err) {
+    const repoReport = emptyReport('repo', templatePath);
+    repoReport.error = err.message;
+    reports.push(repoReport);
+  }
 }
 
 let anyMissing = false;
 for (const r of reports) {
   if (r.missing && r.missing.length > 0) anyMissing = true;
+  if (r.label === 'repo' && (r.error || r.registrationCount === 0)) anyMissing = true;
 }
 
 if (asJson) {

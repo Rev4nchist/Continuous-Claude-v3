@@ -42,6 +42,7 @@
 
 import { readFileSync, existsSync, writeFileSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { execFileSync } from 'node:child_process';
 
@@ -52,12 +53,11 @@ const BASELINE_PATH = join(REPO, '.claude', 'hooks', 'registration-baseline.json
 
 /** Committed sources of truth, in the order a rebuild would consult them. */
 const COMMITTED = [
-  '.claude/settings.json',
   '.claude/settings.json.template',
   'docs/reviews/2026-06-10/harvest/registrations-active.json',
 ];
 
-const LIVE = 'C:/Users/david.hayes/.claude/settings.json';
+const LIVE = join(homedir(), '.claude', 'settings.json');
 
 /** Floors. Raise deliberately; never lower one to make a red run go green. */
 // Lowered 2026-10-06 (80/75 -> 75/68), keeping the original ~4-6 of slack under the

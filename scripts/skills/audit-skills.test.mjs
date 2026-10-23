@@ -27,7 +27,8 @@ function skillText(name, { fm = {}, body = '# Title\n\nDo the thing.\n', raw } =
 // skills: { dirName: SKILL.md text | { md, files: {rel: text} } }
 function fixture(skills = {}) {
   const root = fs.mkdtempSync(path.join(os.tmpdir(), 'audit-skills-test-'));
-  write(path.join(root, '.claude', 'settings.json.template'), JSON.stringify({ skillListingMaxDescChars: 1536, mcpServers: { git: {} } }));
+  write(path.join(root, '.claude', 'settings.json.template'), JSON.stringify({ skillListingMaxDescChars: 1536 }));
+  write(path.join(root, '.claude', 'machine-config', 'mcp.json'), JSON.stringify({ mcpServers: { git: {} } }));
   write(path.join(root, '.claude', 'agents', 'scout.md'), 'agent');
   fs.mkdirSync(path.join(root, 'home'), { recursive: true });
   for (const [name, spec] of Object.entries(skills)) {

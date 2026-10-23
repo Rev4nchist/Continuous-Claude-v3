@@ -418,7 +418,7 @@ function checkMcp(s, ctx) {
     if (seen.has(server)) continue;
     seen.add(server);
     if (/^(claude_ai_|plugin_)/.test(server)) continue;
-    if (!ctx.mcpServers.has(server)) r.push(f('G28', `mcp__${server}__ names a server absent from settings.json.template and .mcp.json`));
+    if (!ctx.mcpServers.has(server)) r.push(f('G28', `mcp__${server}__ names a server absent from .claude/machine-config/mcp.json`));
   }
   for (const server of ctx.mcpServers) {
     // No `g` flag: a global RegExp keeps lastIndex between .test() calls and skips the next line.
