@@ -29,7 +29,7 @@ const ROOTS = [
   'docs/self-improvement',
 ];
 
-const SKIP_DIR = new Set(['node_modules', '.git', 'cache']);
+const SKIP_DIR = new Set(['node_modules', '.git', 'cache', '.venv', '__pycache__']);
 
 function walk(dir, out) {
   let entries;
