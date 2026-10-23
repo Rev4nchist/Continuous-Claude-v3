@@ -12,18 +12,11 @@ SCRIPT_DIR="$( cd "$( dirname "$0" )" && pwd )"
 REPO_ROOT="$(dirname "$SCRIPT_DIR")"
 REPO_CLAUDE="$REPO_ROOT/.claude"
 ACTIVE_CLAUDE="$HOME/.claude"
-
-# WSL refusal: on this machine `bash` on PATH is the WSL launcher (HOME=/home/<user>),
-# so a manual `bash scripts/sync-to-active.sh` from PowerShell syncs into the WSL
-# filesystem and prints plausible OK lines while the Windows ~/.claude is untouched
-# (proven 2026-08-14, commit 32e8d47 memory). It would also build a bogus clobber-guard
-# manifest there. Refuse outright; plain non-WSL Linux still passes.
-if [[ "$(uname -s 2>/dev/null)" == Linux* ]] && grep -qi microsoft /proc/version 2>/dev/null; then
-    echo "ERROR: running under WSL bash -- this would sync into the WSL filesystem, not the Windows ~/.claude." >&2
-    echo "       Re-run under Git Bash (it has node and the real \$HOME), e.g.:" >&2
-    echo "       \"C:\\Users\\<you>\\AppData\\Local\\Programs\\Git\\bin\\bash.exe\" scripts/sync-to-active.sh" >&2
-    exit 1
-fi
+CLI_PROFILE=""
+GIT_BASH_PROFILE=""
+SKIP_SKILLS=""
+PROFILE_NAME=""
+PROFILE_WARN=""
 
 # The clobber guard hashes every file it touches; sha256sum ships with Git Bash.
 if ! command -v sha256sum >/dev/null 2>&1; then
@@ -41,8 +34,9 @@ while [[ $# -gt 0 ]]; do
         --verbose) VERBOSE=true; shift ;;
         --changed) CHANGED=true; shift ;;
         --skip-build) shift ;;
+        --profile) CLI_PROFILE="$2"; shift 2 ;;
         --help|-h)
-            echo "Usage: $0 [--dry-run] [--verbose] [--changed] [--skip-build]"
+            echo "Usage: $0 [--dry-run] [--verbose] [--changed] [--skip-build] [--profile <name>]"
             echo ""
             echo "Syncs continuous-claude/.claude/ → ~/.claude/"
             echo ""
@@ -52,11 +46,44 @@ while [[ $# -gt 0 ]]; do
             echo "  --changed     Incremental: sync only files the latest commit"
             echo "                (HEAD diff) touched. Without it, the full mirror runs."
             echo "  --skip-build  Accepted for back-compat; no-op (build step was removed)"
+            echo "  --profile     Machine profile under machine/<name>.json"
             exit 0
             ;;
         *) echo "Unknown option: $1"; exit 1 ;;
     esac
 done
+
+# Profile: --profile > CCV3_MACHINE_PROFILE > ~/.claude/state/machine-profile > none.
+# None is today's behaviour plus a WARN. A missing helper (fixture copy of this
+# script alone) also warns and continues.
+PROFILE_HELPER="$REPO_ROOT/scripts/settings/machine-profile.mjs"
+if [[ -f "$PROFILE_HELPER" ]] && command -v node >/dev/null 2>&1; then
+    profile_args=(--repo "$REPO_ROOT" --export bash --quiet)
+    [[ -n "$CLI_PROFILE" ]] && profile_args+=(--profile "$CLI_PROFILE")
+    eval "$(node "$PROFILE_HELPER" "${profile_args[@]}")"
+else
+    PROFILE_WARN="no machine profile helper; using home-directory defaults"
+fi
+if [[ -n "$PROFILE_WARN" ]]; then
+    echo "WARN: $PROFILE_WARN" >&2
+fi
+
+# WSL refusal: on this machine `bash` on PATH is the WSL launcher (HOME=/home/<user>),
+# so a manual `bash scripts/sync-to-active.sh` from PowerShell syncs into the WSL
+# filesystem and prints plausible OK lines while the Windows ~/.claude is untouched
+# (proven 2026-08-14, commit 32e8d47 memory). It would also build a bogus clobber-guard
+# manifest there. Refuse outright; plain non-WSL Linux still passes.
+# The Git Bash path comes from the machine profile when one is selected.
+if [[ "$(uname -s 2>/dev/null)" == Linux* ]] && grep -qi microsoft /proc/version 2>/dev/null; then
+    echo "ERROR: running under WSL bash -- this would sync into the WSL filesystem, not the Windows ~/.claude." >&2
+    echo "       Re-run under Git Bash (it has node and the real \$HOME), e.g.:" >&2
+    if [[ -n "$GIT_BASH_PROFILE" ]]; then
+        echo "       \"$GIT_BASH_PROFILE\" scripts/sync-to-active.sh" >&2
+    else
+        echo "       \"C:\\Program Files\\Git\\bin\\bash.exe\" scripts/sync-to-active.sh" >&2
+    fi
+    exit 1
+fi
 
 # -----------------------------------------------------------------------------
 # Branch guard: only `main` in the primary checkout syncs to ~/.claude.
@@ -557,9 +584,30 @@ copy_dir() {
             [[ "$base" == "$skip" ]] && skip_file=true && break
         done
         $skip_file && continue
+        if [[ "$dir" == "skills" ]] && skill_is_skipped "$rel"; then
+            continue
+        fi
 
         guarded_copy "$src_file" "$dst_file"
-    done < <(find "$src_path" -type f ! -name "*.pid" ! -name "*.lock" ! -path "*/.tldr/*" ! -path "*/node_modules/*" ! -path "*/cache/*" ! -path "*/dist/*" ! -path "*/.claude-plugin/types/*" 2>/dev/null)
+    done < <(find "$src_path" -type f \
+        ! -name "*.pid" ! -name "*.lock" \
+        ! -name "_eval-progress.json" ! -name "_parse-validation.js" \
+        ! -path "*/.tldr/*" ! -path "*/node_modules/*" ! -path "*/cache/*" ! -path "*/dist/*" \
+        ! -path "*/.claude-plugin/types/*" \
+        ! -path "*/skills/_snapshots/*" ! -path "*/skills/_archive/*" ! -path "*/skills/.archive/*" \
+        ! -path "*/skills/archive/*" ! -path "*/skills/_eval/*" ! -path "*/skills/_sandbox/*" \
+        ! -path "*/hooks/archive/*" \
+        2>/dev/null)
+}
+
+# A skill named by the profile's skipSkills list is not copied. Empty list skips nothing.
+skill_is_skipped() {
+    local rel="$1" top="${1%%/*}" name
+    [[ -n "$SKIP_SKILLS" ]] || return 1
+    for name in $SKIP_SKILLS; do
+        [[ "$top" == "$name" ]] && return 0
+    done
+    return 1
 }
 
 # -----------------------------------------------------------------------------
@@ -656,6 +704,17 @@ if $CHANGED; then
         case "/$p/" in
             */.tldr/*|*/node_modules/*|*/cache/*|*/dist/*) return 0 ;;
             */.claude-plugin/types/*) return 0 ;;   # engine-written, see SYNC_SUBDIRS
+            */skills/_snapshots/*|*/skills/_archive/*|*/skills/.archive/*) return 0 ;;
+            */skills/archive/*|*/skills/_eval/*|*/skills/_sandbox/*) return 0 ;;
+            */hooks/archive/*) return 0 ;;
+        esac
+        case "$base" in
+            _eval-progress.json|_parse-validation.js) return 0 ;;
+        esac
+        case "$p" in
+            .claude/skills/*)
+                skill_is_skipped "${p#.claude/skills/}" && return 0
+                ;;
         esac
         return 1
     }
@@ -847,27 +906,6 @@ if $CHANGED; then
         done
     fi
 
-    # Conditional mcpServers merge -- mirrors the full-mode merge block, run only
-    # when .claude/settings.json changed (settings.json itself is NEVER_SYNC; only
-    # its mcpServers key is merged into the active settings.json).
-    if $SETTINGS_CHANGED && ! $DRY_RUN && command -v jq &> /dev/null; then
-        REPO_SETTINGS="$REPO_CLAUDE/settings.json"
-        ACTIVE_SETTINGS="$ACTIVE_CLAUDE/settings.json"
-        if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]] && ! link_guard_blocks "$ACTIVE_SETTINGS"; then
-            MCP_SERVERS=$(jq '.mcpServers // empty' "$REPO_SETTINGS" 2>/dev/null) || MCP_SERVERS=""
-            if [[ -n "$MCP_SERVERS" && "$MCP_SERVERS" != "null" ]]; then
-                TEMP_SETTINGS=$(mktemp)
-                if jq --argjson mcp "$MCP_SERVERS" '.mcpServers = $mcp' "$ACTIVE_SETTINGS" > "$TEMP_SETTINGS" 2>/dev/null && [[ -s "$TEMP_SETTINGS" ]]; then
-                    mv "$TEMP_SETTINGS" "$ACTIVE_SETTINGS"
-                    $VERBOSE && echo "Merged mcpServers into ~/.claude/settings.json" || true
-                else
-                    rm -f "$TEMP_SETTINGS"
-                    $VERBOSE && echo "Warning: Failed to merge mcpServers" || true
-                fi
-            fi
-        fi
-    fi
-
     $VERBOSE && echo "Incremental sync complete: continuous-claude -> ~/.claude" || true
     finish_sync "$sync_target"
 fi
@@ -974,34 +1012,16 @@ fi
 
 # Build step removed (CCv3 WS-0.3 structural fix): dist is pre-built in the repo and copied to active by the hooks/dist block above. No build-from-active-src.
 
-# Merge mcpServers from repo settings.json into active settings.json
-# This preserves machine-specific settings while syncing MCP server config
-if ! $DRY_RUN && command -v jq &> /dev/null; then
-    REPO_SETTINGS="$REPO_CLAUDE/settings.json"
-    ACTIVE_SETTINGS="$ACTIVE_CLAUDE/settings.json"
-
-    if [[ -f "$REPO_SETTINGS" && -f "$ACTIVE_SETTINGS" ]] && ! link_guard_blocks "$ACTIVE_SETTINGS"; then
-        # Extract mcpServers from repo and merge into active.
-        # Both jq calls run under `set -e`, so a malformed JSON file would
-        # abort the entire sync before reaching the cleanup paths below.
-        # The `|| MCP_SERVERS=""` and `if jq ...; then` forms keep set -e
-        # from killing the script on a non-zero jq exit -- we want a
-        # graceful skip instead.
-        MCP_SERVERS=$(jq '.mcpServers // empty' "$REPO_SETTINGS" 2>/dev/null) || MCP_SERVERS=""
-        if [[ -n "$MCP_SERVERS" && "$MCP_SERVERS" != "null" ]]; then
-            # Create temp file with merged content
-            TEMP_SETTINGS=$(mktemp)
-            if jq --argjson mcp "$MCP_SERVERS" '.mcpServers = $mcp' "$ACTIVE_SETTINGS" > "$TEMP_SETTINGS" 2>/dev/null && [[ -s "$TEMP_SETTINGS" ]]; then
-                mv "$TEMP_SETTINGS" "$ACTIVE_SETTINGS"
-                $VERBOSE && echo "Merged mcpServers into ~/.claude/settings.json" || true
-            else
-                rm -f "$TEMP_SETTINGS"
-                $VERBOSE && echo "Warning: Failed to merge mcpServers" || true
-            fi
-        fi
+# Install the selected profile next to the active tree so scheduled scripts
+# that run from ~/.claude can read it. The state file records the name.
+if [[ -n "$PROFILE_NAME" && -z "$PROFILE_WARN" && -f "$REPO_ROOT/machine/$PROFILE_NAME.json" ]]; then
+    if $DRY_RUN; then
+        echo "[DRY RUN] Would install machine/$PROFILE_NAME.json into ~/.claude/machine/"
+    else
+        mkdir -p "$ACTIVE_CLAUDE/machine" "$ACTIVE_CLAUDE/state"
+        guarded_copy "$REPO_ROOT/machine/$PROFILE_NAME.json" "$ACTIVE_CLAUDE/machine/$PROFILE_NAME.json"
+        printf '%s\n' "$PROFILE_NAME" > "$ACTIVE_CLAUDE/state/machine-profile"
     fi
-elif ! $DRY_RUN; then
-    $VERBOSE && echo "Note: jq not installed, skipping mcpServers merge" || true
 fi
 
 # Verification: compare file counts between source and target

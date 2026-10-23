@@ -283,6 +283,8 @@ mcps/
 # would commit a secret. That is not hypothetical on this branch: one session's commit
 # has already swept up another session's staged files.
 .claude/settings.json.bak-*
+# Rendered per machine. The template is the committed source.
+.claude/settings.json
 
 # SpecStory local conversation-history mirror (500+ personal session transcripts)
 .specstory/

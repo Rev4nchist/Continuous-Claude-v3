@@ -410,7 +410,7 @@ rm -f "$ACT/skills/linked" "$ACT/skills/nestparent"
 
 echo "=== T14: link guard edge cases (critic round 2) ==="
 # Failure modes: (A) the destination ITSELF is a link, so only the parent-chain check would miss it,
-# (B) a linked settings.json is replaced by the mcpServers merge, (C) a link at the top of a subtree
+# (B) a linked settings.json is left alone (sync does not write settings.json), (C) a link at the top of a subtree
 # (~/.claude/rules) or a link above a sync root (templates/, hooks/) lets mkdir or a copy create
 # files in the other tool's tree, (D) a DANGLING link at a sync root makes mkdir fail and set -e
 # abort the run before the cursor moves, (E) state/ or .sync-quarantine/ is a link and the cursor,
@@ -447,13 +447,11 @@ if MSYS=winsymlinks:nativestrict ln -s "$OUT14/real.txt" "$ACT/skills/fl.md" 2>/
     sync --changed >/dev/null
     chk "(A2) delete: the outside file and the link survive" "$( [ -e "$OUT14/real.txt" ] && [ -L "$ACT/skills/fl.md" ] && echo 1 || echo 0)"
     rm -f "$ACT/skills/fl.md"
-    if command -v jq >/dev/null 2>&1; then
-        MSYS=winsymlinks:nativestrict ln -s "$OUT14/settings-real.json" "$ACT/settings.json"
-        printf '{"mcpServers":{"x":1}}\n' > "$REPO/.claude/settings.json"; commit t14-settings
-        sync >/dev/null
-        chk "(B) full mirror: linked settings.json keeps its link and content" "$( [ -L "$ACT/settings.json" ] && [ "$(cat "$OUT14/settings-real.json")" = '{"a":1}' ] && echo 1 || echo 0)"
-        rm -f "$ACT/settings.json"
-    fi
+    MSYS=winsymlinks:nativestrict ln -s "$OUT14/settings-real.json" "$ACT/settings.json"
+    printf '{"mcpServers":{"x":1}}\n' > "$REPO/.claude/settings.json"; commit t14-settings
+    sync >/dev/null
+    chk "(B) full mirror: linked settings.json keeps its link and content" "$( [ -L "$ACT/settings.json" ] && [ "$(cat "$OUT14/settings-real.json")" = '{"a":1}' ] && echo 1 || echo 0)"
+    rm -f "$ACT/settings.json"
 else
     echo "  SKIP  (A2) and (B): this machine cannot create file symlinks (needs a privilege on Windows)"
 fi

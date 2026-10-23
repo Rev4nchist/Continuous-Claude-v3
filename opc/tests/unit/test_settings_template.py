@@ -1,7 +1,7 @@
 """Tests for settings.json template generation.
 
-Tests the generate_settings_json() function that replaces
-{{placeholders}} in settings.json.template with machine-specific paths.
+Tests render_settings_json(), which replaces {{placeholders}} in
+settings.json.template with machine-specific paths.
 """
 from __future__ import annotations
 
@@ -98,19 +98,25 @@ def full_template(tmp_path: Path) -> Path:
     return template
 
 
-# ---- Tests for generate_settings_json ----
+REPO = Path(__file__).resolve().parents[3]
+TEMPLATE = REPO / ".claude" / "settings.json.template"
+
+
+# ---- Tests for render_settings_json ----
 
 class TestGenerateSettingsJson:
     """Test the template-based settings.json generation."""
 
     def test_function_exists(self):
-        """generate_settings_json is importable from claude_integration."""
-        from scripts.setup.claude_integration import generate_settings_json
-        assert callable(generate_settings_json)
+        """render_settings_json is importable and the old name is gone."""
+        import scripts.setup.claude_integration as ci
+        from scripts.setup.claude_integration import render_settings_json
+        assert callable(render_settings_json)
+        assert not hasattr(ci, "generate_settings_json")
 
     def test_replaces_claude_home(self, sample_template: Path, tmp_path: Path):
         """{{CLAUDE_HOME}} is replaced with actual .claude path."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "output" / "settings.json"
         variables = {
@@ -119,7 +125,7 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "C:/Users/newuser/continuous-claude",
             "USER_HOME": "C:/Users/newuser",
         }
-        generate_settings_json(sample_template, target, variables)
+        render_settings_json(sample_template, target, variables)
 
         result = json.loads(target.read_text())
         # Check hook command has newuser path
@@ -129,7 +135,7 @@ class TestGenerateSettingsJson:
 
     def test_replaces_opc_dir(self, sample_template: Path, tmp_path: Path):
         """{{OPC_DIR}} is replaced with actual opc path."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "output" / "settings.json"
         variables = {
@@ -138,7 +144,7 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "C:/Users/newuser/continuous-claude",
             "USER_HOME": "C:/Users/newuser",
         }
-        generate_settings_json(sample_template, target, variables)
+        render_settings_json(sample_template, target, variables)
 
         result = json.loads(target.read_text())
         assert result["env"]["CLAUDE_OPC_DIR"] == "C:/Users/newuser/continuous-claude/opc"
@@ -146,7 +152,7 @@ class TestGenerateSettingsJson:
 
     def test_replaces_all_four_placeholders(self, full_template: Path, tmp_path: Path):
         """All four placeholder types are replaced."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "output" / "settings.json"
         variables = {
@@ -155,7 +161,7 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "/home/alice/continuous-claude",
             "USER_HOME": "/home/alice",
         }
-        generate_settings_json(full_template, target, variables)
+        render_settings_json(full_template, target, variables)
 
         content = target.read_text()
         assert "{{CLAUDE_HOME}}" not in content
@@ -169,7 +175,7 @@ class TestGenerateSettingsJson:
 
     def test_output_is_valid_json(self, full_template: Path, tmp_path: Path):
         """Generated settings.json is valid JSON."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "output" / "settings.json"
         variables = {
@@ -178,7 +184,7 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "/home/bob/cc",
             "USER_HOME": "/home/bob",
         }
-        generate_settings_json(full_template, target, variables)
+        render_settings_json(full_template, target, variables)
 
         # Should not raise
         parsed = json.loads(target.read_text())
@@ -186,7 +192,7 @@ class TestGenerateSettingsJson:
 
     def test_creates_parent_directories(self, sample_template: Path, tmp_path: Path):
         """Target parent directory is created if it doesn't exist."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "deep" / "nested" / "dir" / "settings.json"
         variables = {
@@ -195,12 +201,12 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "/home/x/cc",
             "USER_HOME": "/home/x",
         }
-        generate_settings_json(sample_template, target, variables)
+        render_settings_json(sample_template, target, variables)
         assert target.exists()
 
     def test_raises_on_missing_template(self, tmp_path: Path):
         """Raises FileNotFoundError if template doesn't exist."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         template = tmp_path / "nonexistent.template"
         target = tmp_path / "settings.json"
@@ -211,11 +217,11 @@ class TestGenerateSettingsJson:
             "USER_HOME": "/x",
         }
         with pytest.raises(FileNotFoundError):
-            generate_settings_json(template, target, variables)
+            render_settings_json(template, target, variables)
 
     def test_forward_slashes_on_windows_paths(self, sample_template: Path, tmp_path: Path):
         """Windows-style paths use forward slashes in output."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "settings.json"
         variables = {
@@ -224,14 +230,14 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "C:/Users/someone/continuous-claude",
             "USER_HOME": "C:/Users/someone",
         }
-        generate_settings_json(sample_template, target, variables)
+        render_settings_json(sample_template, target, variables)
 
         content = target.read_text()
         assert "\\" not in content  # No backslashes
 
     def test_preserves_non_path_values(self, sample_template: Path, tmp_path: Path):
         """Non-placeholder values are preserved exactly."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
         target = tmp_path / "settings.json"
         variables = {
@@ -240,7 +246,7 @@ class TestGenerateSettingsJson:
             "REPO_ROOT": "/home/z/cc",
             "USER_HOME": "/home/z",
         }
-        generate_settings_json(sample_template, target, variables)
+        render_settings_json(sample_template, target, variables)
 
         result = json.loads(target.read_text())
         # Timeout and type fields should be unchanged
@@ -254,12 +260,12 @@ class TestSettingsTemplate:
 
     def test_template_exists(self):
         """settings.json.template exists in .claude/ directory."""
-        template_path = Path("C:/Users/david.hayes/continuous-claude/.claude/settings.json.template")
+        template_path = TEMPLATE
         assert template_path.exists(), "settings.json.template must exist"
 
     def test_template_has_no_hardcoded_paths(self):
         """Template contains zero occurrences of 'david.hayes'."""
-        template_path = Path("C:/Users/david.hayes/continuous-claude/.claude/settings.json.template")
+        template_path = TEMPLATE
         if not template_path.exists():
             pytest.skip("Template not yet created")
         content = template_path.read_text()
@@ -269,7 +275,7 @@ class TestSettingsTemplate:
 
     def test_template_has_placeholders(self):
         """Template contains expected placeholder tokens."""
-        template_path = Path("C:/Users/david.hayes/continuous-claude/.claude/settings.json.template")
+        template_path = TEMPLATE
         if not template_path.exists():
             pytest.skip("Template not yet created")
         content = template_path.read_text()
@@ -278,7 +284,7 @@ class TestSettingsTemplate:
 
     def test_template_is_parseable_with_placeholders(self):
         """Template is valid JSON (placeholders are inside string values)."""
-        template_path = Path("C:/Users/david.hayes/continuous-claude/.claude/settings.json.template")
+        template_path = TEMPLATE
         if not template_path.exists():
             pytest.skip("Template not yet created")
         content = template_path.read_text()
@@ -288,9 +294,9 @@ class TestSettingsTemplate:
 
     def test_template_roundtrip_produces_valid_settings(self):
         """Generating from template produces valid settings with correct structure."""
-        from scripts.setup.claude_integration import generate_settings_json
+        from scripts.setup.claude_integration import render_settings_json
 
-        template_path = Path("C:/Users/david.hayes/continuous-claude/.claude/settings.json.template")
+        template_path = TEMPLATE
         if not template_path.exists():
             pytest.skip("Template not yet created")
 
@@ -305,13 +311,13 @@ class TestSettingsTemplate:
                 "REPO_ROOT": "C:/Users/testuser/continuous-claude",
                 "USER_HOME": "C:/Users/testuser",
             }
-            generate_settings_json(template_path, target, variables)
+            render_settings_json(template_path, target, variables)
 
             result = json.loads(target.read_text())
             # Verify key structural elements
             assert "hooks" in result
             assert "env" in result
-            assert "mcpServers" in result
+            assert "mcpServers" not in result
             assert result["env"]["CLAUDE_OPC_DIR"] == "C:/Users/testuser/continuous-claude/opc"
 
             # Verify no placeholders remain

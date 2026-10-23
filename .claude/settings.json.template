@@ -4,7 +4,8 @@
     "CONTINUOUS_CLAUDE_COORDINATION": "true",
     "ENABLE_TOOL_SEARCH": "auto:5",
     "CLAUDE_OPC_DIR": "{{OPC_DIR}}",
-    "DATABASE_URL": "postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude"
+    "DATABASE_URL": "postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude",
+    "CCV3_ROADMAP_AUTOCOMMIT": "0"
   },
   "hooks": {
     "PreToolUse": [
@@ -14,7 +15,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-plan-memory.mjs"
             ]
@@ -27,7 +28,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 3000,
+            "timeout": 3,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-model-guard.mjs"
             ]
@@ -35,7 +36,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/explore-to-scout.mjs"
             ]
@@ -43,7 +44,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/no-haiku-enforcer.mjs"
             ]
@@ -51,7 +52,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/navigator-validate.mjs"
             ]
@@ -59,7 +60,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/task-router.mjs"
             ]
@@ -67,7 +68,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/maestro-enforcer.mjs"
             ]
@@ -75,7 +76,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-tool-knowledge.mjs"
             ]
@@ -83,7 +84,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 3000,
+            "timeout": 3,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-recall-injector.mjs"
             ]
@@ -96,7 +97,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 30000,
+            "timeout": 30,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/smart-search-router.mjs"
             ]
@@ -109,7 +110,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 30000,
+            "timeout": 30,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/tldr-read-enforcer.mjs"
             ]
@@ -122,7 +123,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
             ]
@@ -130,7 +131,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
             ]
@@ -138,10 +139,18 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/commit-preflight.mjs"
+            ],
+            "timeout": 5
           }
         ]
       },
@@ -151,7 +160,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
             ]
@@ -159,7 +168,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
             ]
@@ -167,10 +176,18 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/commit-preflight.mjs"
+            ],
+            "timeout": 5
           }
         ]
       },
@@ -180,7 +197,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/file-claims.mjs"
             ]
@@ -193,7 +210,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/test-before-done.mjs"
             ]
@@ -206,7 +223,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/plan-mode-approval-gate.mjs"
             ]
@@ -219,7 +236,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/rule-router.mjs"
             ]
@@ -233,7 +250,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/heartbeat.mjs"
             ]
@@ -241,7 +258,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/maestro-state-manager.mjs"
             ]
@@ -249,7 +266,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/memory-awareness.mjs"
             ]
@@ -257,17 +274,9 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/user-confirmation-detector.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 3000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/sentry-error-context.mjs"
             ]
           },
           {
@@ -276,7 +285,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/bus-session-populator.mjs"
             ],
-            "timeout": 10000
+            "timeout": 10
           },
           {
             "type": "command",
@@ -284,7 +293,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -295,7 +304,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 30000,
+            "timeout": 30,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-docker.mjs"
             ]
@@ -303,7 +312,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-register.mjs"
             ]
@@ -311,7 +320,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-continuity.mjs"
             ]
@@ -319,7 +328,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-init-check.mjs"
             ]
@@ -327,7 +336,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-recovery.mjs"
             ]
@@ -335,7 +344,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/roadmap-reconcile.mjs"
             ]
@@ -350,7 +359,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 20000,
+            "timeout": 20,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-context-loaders.mjs"
             ]
@@ -358,7 +367,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-memory-loaders.mjs"
             ]
@@ -369,7 +378,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-intel-prune.mjs"
             ],
-            "timeout": 10000
+            "timeout": 10
           },
           {
             "type": "command",
@@ -377,7 +386,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/identity-probe.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           },
           {
             "type": "command",
@@ -385,7 +394,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -395,7 +404,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/rule-router.mjs"
             ]
@@ -409,7 +418,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-compact-extract.mjs"
             ]
@@ -417,7 +426,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-compact-continuity.mjs"
             ]
@@ -431,7 +440,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/maestro-cleanup.mjs"
             ]
@@ -439,7 +448,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-end-extract.mjs"
             ]
@@ -447,7 +456,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-outcome.mjs"
             ]
@@ -455,7 +464,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 15000,
+            "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-end-handoff-indexer.mjs"
             ]
@@ -466,7 +475,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/coordination-release.mjs"
             ],
-            "timeout": 10000
+            "timeout": 10
           }
         ]
       }
@@ -480,7 +489,15 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/mcp-activity-tracker.mjs"
             ],
-            "timeout": 3000
+            "timeout": 3
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/periodic-extract.mjs"
+            ],
+            "timeout": 2
           }
         ]
       },
@@ -490,7 +507,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-error-capture.mjs"
             ]
@@ -498,7 +515,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-verification.mjs"
             ]
@@ -511,7 +528,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/epistemic-reminder.mjs"
             ]
@@ -524,7 +541,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/post-plan-roadmap.mjs"
             ]
@@ -532,7 +549,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/plan-exit-premortem-prompt.mjs"
             ]
@@ -540,53 +557,8 @@
         ]
       },
       {
-        "matcher": "TaskUpdate|Bash",
-        "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/roadmap-completion.mjs"
-            ]
-          }
-        ]
-      },
-      {
         "matcher": "Bash",
         "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/git-commit-roadmap.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/test-run-tracker.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/sentry-deploy-release.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 3000,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/linear-branch-context.mjs"
-            ]
-          },
           {
             "type": "command",
             "command": "node",
@@ -602,7 +574,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/smarter-everyday.mjs"
             ]
@@ -615,7 +587,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/prd-roadmap-sync.mjs"
             ]
@@ -623,7 +595,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/git-auto-commit.mjs"
             ]
@@ -631,7 +603,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/tree-invalidate.mjs"
             ]
@@ -639,7 +611,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pageindex-watch.mjs"
             ]
@@ -652,7 +624,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10000,
+            "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/import-validator.mjs"
             ]
@@ -660,7 +632,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 35000,
+            "timeout": 35,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/post-edit-diagnostics.mjs"
             ]
@@ -685,7 +657,7 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5000,
+            "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/web-lookup-advisor.mjs"
             ]
@@ -701,7 +673,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/roadmap-completion.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -714,7 +686,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/git-commit-roadmap.mjs"
             ],
-            "timeout": 30000
+            "timeout": 30
           },
           {
             "type": "command",
@@ -722,7 +694,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/test-run-tracker.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           },
           {
             "type": "command",
@@ -730,6 +702,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/msys-crash-capture.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pr-opened-coderabbit-loop.mjs"
+            ],
+            "timeout": 5
           }
         ]
       },
@@ -742,7 +722,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/bus-tool-populator.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       },
@@ -755,7 +735,7 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
           }
         ]
       }
@@ -769,7 +749,22 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/coordination-notification.mjs"
             ],
-            "timeout": 5000
+            "timeout": 5
+          }
+        ]
+      }
+    ],
+    "PostToolUseFailure": [
+      {
+        "matcher": "Bash|PowerShell",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/test-run-tracker.mjs"
+            ],
+            "timeout": 5
           }
         ]
       }
@@ -794,115 +789,6 @@
   "autoCompact": false,
   "allowedTools": [],
   "warningLevel": "medium",
-  "mcpServers": {
-    "git": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": [
-        "mcp-server-git",
-        "--repository",
-        "."
-      ]
-    },
-    "fetch": {
-      "type": "stdio",
-      "command": "uvx",
-      "args": [
-        "mcp-server-fetch"
-      ]
-    },
-    "firecrawl": {
-      "type": "stdio",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "firecrawl-mcp"
-      ],
-      "env": {
-        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
-      },
-      "disabled": true
-    },
-    "morph": {
-      "type": "stdio",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@morphllm/morphmcp"
-      ],
-      "env": {
-        "MORPH_API_KEY": "${MORPH_API_KEY}"
-      },
-      "disabled": true
-    },
-    "perplexity": {
-      "type": "stdio",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@perplexity-ai/mcp-server"
-      ],
-      "env": {
-        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
-      },
-      "disabled": true
-    },
-    "nia": {
-      "type": "stdio",
-      "command": "pipx",
-      "args": [
-        "run",
-        "--no-cache",
-        "nia-mcp-server"
-      ],
-      "env": {
-        "NIA_API_KEY": "${NIA_API_KEY}",
-        "NIA_API_URL": "https://apigcp.trynia.ai/"
-      },
-      "disabled": true
-    },
-    "ast-grep": {
-      "type": "stdio",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@anthropic/mcp-ast-grep"
-      ],
-      "disabled": true
-    },
-    "repoprompt": {
-      "type": "stdio",
-      "command": "repoprompt_cli",
-      "args": [],
-      "disabled": true
-    },
-    "qlty": {
-      "type": "stdio",
-      "command": "{{CLAUDE_HOME}}/venv/bin/python",
-      "args": [
-        "{{CLAUDE_HOME}}/servers/qlty/server.py"
-      ],
-      "disabled": true
-    },
-    "pageindex": {
-      "type": "stdio",
-      "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@pageindex/mcp"
-      ]
-    }
-  },
   "effortLevel": "high",
   "advisorModel": "fable",
   "skillOverrides": {
