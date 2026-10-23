@@ -169,7 +169,7 @@ export function createManualEditRoutes({
             });
           } else {
             const timeoutMs = Number(envValue.IMPECCABLE_LIVE_COPY_AGENT_TIMEOUT_MS || 120000);
-            const provider = ['codex', 'claude', 'mock'].includes(requestedMode) ? requestedMode : undefined;
+            const provider = ['claude', 'mock'].includes(requestedMode) ? requestedMode : undefined;
             result = await commitManualEdits({
               cwd: projectCwd(),
               pageUrl,

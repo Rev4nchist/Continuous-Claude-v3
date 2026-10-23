@@ -1,24 +1,23 @@
 ---
 name: game-plan
-description: Run a feature through the tri-model Game Plan pipeline (Claude hub, Grok builder, Codex reviewer). Use when the user types "/game-plan", says "run the game plan on X", "full crew on this", or "roster this feature". Not for one-shot tasks or trivial edits.
+description: Run a feature through the Game Plan pipeline (Claude hub, Grok builder, Claude review). Use when the user types "/game-plan", says "run the game plan on X", "full crew on this", or "roster this feature". Not for one-shot tasks or trivial edits.
 disable-model-invocation: true
 ---
 
-# /game-plan — Tri-Model Roster Pipeline Orchestrator
+# /game-plan — Roster Pipeline Orchestrator
 
 Walks one feature through the Game Plan end to end: contract → Gate 1 → Grok-built
-milestones → hub smoke → Codex review booth → bounded fix loops → Gate 2. You (Claude)
+milestones → hub smoke → Claude review booth → bounded fix loops → Gate 2. You (Claude)
 are the hub for the whole run. Schema/doctrine owner: `.workroom/PROTOCOL.md`. Room
 mechanics: reuse `/workroom` (this skill orchestrates; it does not reimplement rooms).
 
-**Dogfood-calibrated:** this pipeline shipped its own first feature
-(`scripts/tri-model/preflight.mjs`, room `2026-07-11-tri-model-preflight`) — the operational
-notes below are from that run, not theory.
+The old cross-model CLI reviewer is gone. Do not offer that route, a worker failover
+through it, or a receipt line from it. A second pass is Claude `critic`.
 
 ## Step 0 — Complexity gate
 
 Trivial (<10 lines, single file, no design surface) → STOP: do it directly or via a
-one-shot `/grok`/`/codex`. Moderate/complex multi-milestone work proceeds. Tell the user
+one-shot `/grok`. Moderate/complex multi-milestone work proceeds. Tell the user
 which way you routed and why.
 
 ## Step 1 — Preflight (mechanical, blocking)
@@ -27,9 +26,9 @@ which way you routed and why.
 node scripts/tri-model/preflight.mjs        # exit 0 required
 ```
 
-Exit 1 → STOP and surface the named failures (auth → `codex login`/`grok login`;
-version-pin mismatch → `/harness-update <harness>` FIRST — the gate exists to make rule 7
-mechanical). Record the result in the room's `status.json.preflight` after Step 2.
+Exit 1 → STOP and surface the named failures (auth → `grok login`;
+version-pin mismatch → `/harness-update grok` FIRST). Record the result in the
+room's `status.json.preflight` after Step 2.
 
 ## Step 2 — Open the room
 
@@ -59,8 +58,8 @@ Write `CONTRACT.md` from the template (R/D/M tables, verification plan, mechanic
 Then **Gate 1 = AskUserQuestion**: "Approve contract for build?" with the contract
 summarized. Under bypassPermissions this question IS the gate — never self-approve. If the
 human is absent, a pre-authorization is acceptable ONLY when the feature is on an
-explicitly approved build order; record the basis verbatim in `status.json.gate1_note`
-(pattern blessed by Dave 2026-07-11). Stamp `gate1_approved_at`; advance to `building`.
+explicitly approved build order; record the basis verbatim in `status.json.gate1_note`.
+Stamp `gate1_approved_at`; advance to `building`.
 
 ## Step 6 — Milestone loop (for each M<N>)
 
@@ -70,9 +69,7 @@ explicitly approved build order; record the basis verbatim in `status.json.gate1
    (`role: builder`, `milestone: M<N>`, ABSOLUTE room path), Autonomy=yes (Gate 1 is the
    standing human approval; the worker still worktree-isolates, telemetries, and returns a
    review-gated patch). Failover: on Grok death/quota, re-dispatch the SAME scope file to
-   `codex-worker` (`role: builder-failover`) and record it in `status.json.failovers` —
-   that milestone's booth primary becomes Claude critics. `codex-worker` implement is FROZEN
-   (DESIGN-RESEARCH section 19): until it lifts, the failover builder is a Claude `kraken`.
+   a Claude `kraken` and record it in `status.json.failovers`.
 3. **Hub smoke** — run the scope file's acceptance commands YOURSELF (in the worktree or
    post-apply), record exit codes in `milestones/M<N>-result.md`. Builder narrative ≠
    evidence. Telemetry row present = part of completion evidence.
@@ -81,32 +78,19 @@ explicitly approved build order; record the basis verbatim in `status.json.gate1
 
 ## Step 7 — Review booth
 
-Plan mode: do not run Codex. Say the cross-model pass is deferred (plan mode).
+Plan mode: say the review pass is deferred (plan mode). Do not start a reviewer CLI.
 
-Run the Codex runner yourself from the main session, in the background (no subagent). Wait for
-the completion notice and never poll in a loop:
-`node "$HOME/.claude/scripts/codex/adversary.mjs" run --project <abs> --mode code --diff-file <abs milestone patch> --room <abs room path> --via skill:game-plan`
-(scope = the milestone patch, grade against CONTRACT R/D). The runner copies the receipt line
-into `findings/booth-codex-<run-id>.md`. When the run ends, read line 1. If it matches
-`^CODEX-RECEIPT v1 status=ok run=\S+ model=gpt-[\w.-]+ `, take the run id from `run=` and run
-`node "$HOME/.claude/scripts/codex/adversary.mjs" verify <run-id>` (zero quota). A finding is
-`[Codex]` only when verify prints `VERIFY ok` (exit 0). With no ok receipt, or when verify
-fails, the booth did not run Codex: say `Cross-model pass: NO CODEX REVIEW (<status or verify
-failed: <reason>>)`, show no findings as Codex's, and write no lift row. Then apply the **thin-approve rule**: if Codex returns
-approve with zero findings AND the run showed instability (storms/timeouts) or no visible
-engagement, add a supplemental `critic` (Claude) pass before trusting it — the dogfood's
-only HIGH was caught exactly this way. Findings land in `findings/booth-*.md`.
+Run Claude `critic` on the milestone patch, graded against CONTRACT R/D. If a second
+Claude pass is needed, run `plan-reviewer` on the same patch. Findings land in
+`findings/booth-*.md`. There is no receipt line and no second-CLI reviewer.
 
 ## Step 8 — Fix loop (bounded)
 
 Findings → `fix_round += 1`; when it would exceed `fix_rounds_max`, set phase `blocked`
-and hand the human the decision — never loop past the cap. `codex-worker` implement is
-FROZEN (DESIGN-RESEARCH section 19), so dispatch a Claude `kraken` as the fixer (the findings
-file as scope; fixes only, no new files). When the freeze lifts, `codex-worker`
-(mode=implement, `role: fixer`) is the fixer again.
-Hub re-verifies with the SAME smokes plus a targeted probe per HIGH finding (e.g. the
-canary-secret probe pattern), applies, commits. A fixer never grades its own fix — hub
-verification is the grade.
+and hand the human the decision — never loop past the cap. Dispatch a Claude `kraken`
+as the fixer (the findings file as scope; fixes only, no new files).
+Hub re-verifies with the SAME smokes plus a targeted probe per HIGH finding.
+A fixer never grades its own fix — hub verification is the grade.
 
 ## Step 9 — Bookkeeping
 
@@ -119,15 +103,13 @@ THREAD summary line, telemetry rows confirmed for every worker run, worktrees re
 **AskUserQuestion: "Approve ship?"** (merge/PR per `git-merge-workflow.md`). Never
 self-approve; never auto-merge. Stamp `gate2_approved_at`, phase → `done`.
 
-## Operational notes (probe-backed — do not relearn)
+## Operational notes
 
 - **Absolute paths in every dispatch block** — `$CLAUDE_PROJECT_DIR` has been observed
   empty in agent shells.
 - **Grok dispatches: ≥300s external timeout**, and one cold start ran ~11–12 min — on an
   agent timeout, poll for its output file before re-invoking (a duplicate run wastes quota).
-- **Codex prompts stay COMPACT** — rich checklist prompts fork-stormed under
-  `--sandbox read-only` on Windows (DESIGN-RESEARCH §14). The runner stops its own process
-  tree. Never stop Codex by name: that can stop a parallel run or the Codex desktop app.
+- **Keep Grok prompts specific.** A vague prompt burns the run without a usable patch.
 - **Serialize commits** — one milestone's apply+commit completes before the next wave
   (`.git/index.lock` races are real).
 - Room state is the ONLY session state: any fresh session continues via `/workroom resume`.

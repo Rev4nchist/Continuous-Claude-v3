@@ -1,7 +1,7 @@
 Agentic Software Engineering
 
 Note: this post is about building your own agents (agentic software engineering), not about using coding agents.
-By now you've probably used a few agents, or at least heard of Claude Code, Codex, or OpenClaw. Ever wondered what it takes to build your own?
+By now you've probably used a few agents, or at least heard of Claude Code, Retired, or OpenClaw. Ever wondered what it takes to build your own?
 Most people think of agents as prompts + tools in a loop. That's a reasonable assumption, but it's not production architecture. 
 The moment your agent needs to know who it's talking to, maintain state, handle concurrent requests, take sensitive actions, and survive failing tool calls, it stops being an "LLM + tools" and becomes a distributed system.
 Building agents is the easy part. There are 75 frameworks that help you do that. The hard part is the runtime: the harness around the agent that makes it work in the real world. That's what agentic software engineering is all about.

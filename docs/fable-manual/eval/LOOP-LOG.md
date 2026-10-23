@@ -18,7 +18,7 @@ Session: `fable-opus-brain-transfer`, 2026-07-12, authored live by `claude-fable
 
 ## Iteration 2 — Delta analysis + targeted extraction
 
-**Delta analysis:** the deficit is not in Opus. Remaining candidate audiences for a plan-attack artifact, in order of production relevance: (a) the **Sonnet tier** — 25 of 37 CCv3 agents (kraken, spark, scout, arbiter...) run Sonnet 5 and routinely make judgment-adjacent calls; (b) **foreign-model booth reviewers** (Codex/Grok plan mode) — a standing /game-plan role where any artifact must stay compact (fork-storm constraint). Extraction pivots from "lift Opus" (nothing to lift) to "find which tier/family actually has the gap, extract for THAT."
+**Delta analysis:** the deficit is not in Opus. Remaining candidate audiences for a plan-attack artifact, in order of production relevance: (a) the **Sonnet tier** — 25 of 37 CCv3 agents (kraken, spark, scout, arbiter...) run Sonnet 5 and routinely make judgment-adjacent calls; (b) **foreign-model booth reviewers** (Retired/Grok plan mode) — a standing /game-plan role where any artifact must stay compact (fork-storm constraint). Extraction pivots from "lift Opus" (nothing to lift) to "find which tier/family actually has the gap, extract for THAT."
 
 **Test:** 2× plain Sonnet 5 reviewers, identical prompt/conditions on Plan A. If Sonnet also saturates → the gap thesis dies down-tier too and the loop's value concentrates in the eval instrument + playbook. If Sonnet shows class-shaped misses → iteration 3 extracts a targeted card and validates on a fresh plan.
 
@@ -26,15 +26,15 @@ Session: `fable-opus-brain-transfer`, 2026-07-12, authored live by `claude-fable
 
 **Iteration-2 conclusion:** the "deficit lives down-tier" hypothesis is dead. Claude-family models in CCv3 saturate review-shaped judgment at BOTH tiers. The scaffolding + model quality, not any single always-on text, is the operative "intelligence." Remaining untested audience with real production surface: the cross-family booth.
 
-## Iteration 3 — Cross-family booth baseline (Codex + Grok on Plan A)
+## Iteration 3 — Cross-family booth baseline (Retired + Grok on Plan A)
 
-**Hypothesis:** the foreign-model reviewers (codex-adversary gpt-5.5, grok-adversary grok-4.5) — a standing /game-plan booth role — may show class-shaped recall gaps on plan review, since they lack both Claude's model behavior and (partially) the CCv3 rules context. If so, a compact plan-attack card embedded in the adversary plan-mode prompts is the evidence-backed integration (compact = fork-storm-safe by design).
+**Hypothesis:** the foreign-model reviewers (retired-adversary gpt-5.5, grok-adversary grok-4.5) — a standing /game-plan booth role — may show class-shaped recall gaps on plan review, since they lack both Claude's model behavior and (partially) the CCv3 rules context. If so, a compact plan-attack card embedded in the adversary plan-mode prompts is the evidence-backed integration (compact = fork-storm-safe by design).
 
-**Test:** codex-adversary + grok-adversary, mode=plan, on a quarantined copy of Plan A (answer key physically moved OUT of the repo for the duration — these reviewers read files). Same scoring.
+**Test:** retired-adversary + grok-adversary, mode=plan, on a quarantined copy of Plan A (answer key physically moved OUT of the repo for the duration — these reviewers read files). Same scoring.
 
-**Result (2026-07-12): FULL-STACK SATURATION.** Codex (gpt-5.5 @ xhigh): **8/8, 0/2** — sole reviewer to name BOTH lock-defect halves (TOCTOU + stale-lock) with remediations, plus a unique find no Claude reviewer made (Acceptance never tests the 10s detection SLA). Grok (grok-4.5): **8/8, 0/2** — plus per-run-lock and measurable-SLO recommendations. Every reviewer family beat the eval's designer.
+**Result (2026-07-12): FULL-STACK SATURATION.** Retired (gpt-5.5 @ xhigh): **8/8, 0/2** — sole reviewer to name BOTH lock-defect halves (TOCTOU + stale-lock) with remediations, plus a unique find no Claude reviewer made (Acceptance never tests the 10s detection SLA). Grok (grok-4.5): **8/8, 0/2** — plus per-run-lock and measurable-SLO recommendations. Every reviewer family beat the eval's designer.
 
-**Unplanned live dividend:** the Grok invocation itself FORK-STORMED (~27 `grok.exe` descendants, manual `taskkill /T` cleanup, clean retry) — empirically refuting Plan A's seeded "Grok is exempt" premise in reality, not just reasoning, and generating a NEW probe-backed fact for the tri-model docs: fork-storm is not Codex-specific. Recorded in `docs/tri-model/CURRENT-STATE.md` fact 1b.
+**Unplanned live dividend:** the Grok invocation itself FORK-STORMED (~27 `grok.exe` descendants, manual `taskkill /T` cleanup, clean retry) — empirically refuting Plan A's seeded "Grok is exempt" premise in reality, not just reasoning, and generating a NEW probe-backed fact for the tri-model docs: fork-storm is not Retired-specific. Recorded in `docs/tri-model/CURRENT-STATE.md` fact 1b.
 
 ### Final scoreboard (Plan A, 8 seeded defects + 2 decoys)
 
@@ -44,7 +44,7 @@ Session: `fable-opus-brain-transfer`, 2026-07-12, authored live by `claude-fable
 | Opus r2 | claude-opus-4-8 | 8/8 | 0/2 | orphan-reparenting impossibility; PreToolUse architecture mismatch |
 | Sonnet r1 | claude-sonnet-5 | 7/8 (missed D7) | 0/2 | PID-recycling race; hardened-flag preservation gap |
 | Sonnet r2 | claude-sonnet-5 | 8/8 | 0/2 | destructive-guard blind spot + missing audit-log path |
-| Codex | gpt-5.5 | 8/8 | 0/2 | 10s SLA never tested; Job Object recommendation |
+| Retired | gpt-5.5 | 8/8 | 0/2 | 10s SLA never tested; Job Object recommendation |
 | Grok | grok-4.5 | 8/8 | 0/2 | live fork-storm self-demonstration; per-run lock design |
 
 ## Iteration 4 — Integration per evidence (executed)

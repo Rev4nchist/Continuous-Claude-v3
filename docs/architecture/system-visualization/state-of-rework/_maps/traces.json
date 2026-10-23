@@ -335,14 +335,14 @@
           "order": 6,
           "component": "runCodegraph (npm-shim.js via process.execPath)",
           "file": "scripts/code-intel.mjs:runCodegraph",
-          "action": "Invokes: spawnSync(process.execPath, [npm-shim.js, verb, ...flags, '--', userPositional], {cwd:repoRoot, windowsHide:true, shell:false}). Option injection protected by '--' end-of-options separator (cgArgs pattern, codex finding #2). JSON-parse fail-open. 3-4s cold-start per call (Node+WASM tree-sitter tax — amortized by freshness cache, never eliminated). who-calls: cgArgs('callers', ['-p', root, '-j', '-l', '50'], fn). find-symbol: cgArgs('query', ['-p', root, '-j', '-l', '50'], name). code-context: cgArgs('query', ...) + cgArgs('impact', ...) on top symbol.",
+          "action": "Invokes: spawnSync(process.execPath, [npm-shim.js, verb, ...flags, '--', userPositional], {cwd:repoRoot, windowsHide:true, shell:false}). Option injection protected by '--' end-of-options separator (cgArgs pattern, retired finding #2). JSON-parse fail-open. 3-4s cold-start per call (Node+WASM tree-sitter tax — amortized by freshness cache, never eliminated). who-calls: cgArgs('callers', ['-p', root, '-j', '-l', '50'], fn). find-symbol: cgArgs('query', ['-p', root, '-j', '-l', '50'], name). code-context: cgArgs('query', ...) + cgArgs('impact', ...) on top symbol.",
           "health": "honing"
         },
         {
           "order": 7,
           "component": "Shape validation (validateCgShape)",
           "file": "scripts/code-intel.mjs:validateCgShape",
-          "action": "Guards status-0 but wrong-shaped codegraph response (codex finding #3). 'array' kind (find-symbol query): response MUST be top-level array — object/null is schema drift → fall to TLDR. 'callers'/'callees' kind (who-calls): response MUST be object with array at named key. Wrong shape → fall to TLDR instead of reporting fake empty result. Distinguishes: VALID_EMPTY (key present, array, len 0), VALID_DATA (non-empty array), WRONG_SHAPE (not as expected) → { ok:false }.",
+          "action": "Guards status-0 but wrong-shaped codegraph response (retired finding #3). 'array' kind (find-symbol query): response MUST be top-level array — object/null is schema drift → fall to TLDR. 'callers'/'callees' kind (who-calls): response MUST be object with array at named key. Wrong shape → fall to TLDR instead of reporting fake empty result. Distinguishes: VALID_EMPTY (key present, array, len 0), VALID_DATA (non-empty array), WRONG_SHAPE (not as expected) → { ok:false }.",
           "health": "sound"
         },
         {

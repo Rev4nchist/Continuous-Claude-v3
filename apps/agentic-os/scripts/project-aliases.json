@@ -196,20 +196,6 @@
     "note": null
   },
   {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 6,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.715.3651.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 6,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
     "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\claude\\C--Users-david-hayes-continuous-claude\\f9c53122-d7cf-44ee-8a6c-b6ee1111bf71\\scratchpad\\probe",
     "sessionCount": 6,
     "projectKey": null,
@@ -266,20 +252,6 @@
     "note": "real project, not in project-registry.json"
   },
   {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.609.4994.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 4,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 4,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
     "raw": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
     "sessionCount": 4,
     "projectKey": "fourth-playwright-mcp",
@@ -306,27 +278,6 @@
     "projectKey": "continuous-claude",
     "confidence": 1,
     "note": "subdirectory of continuous-claude"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.codex-worktrees\\20260707-081041",
-    "sessionCount": 3,
-    "projectKey": "continuous-claude",
-    "confidence": 1,
-    "note": "git worktree of continuous-claude"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\Documents\\Codex\\2026-06-03\\goal-sites-create-a-real-time",
-    "sessionCount": 3,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex transcript output directory, not a project"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\Documents\\Codex\\2026-07-16\\i-want-you-to-use-your",
-    "sessionCount": 3,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex transcript output directory, not a project"
   },
   {
     "raw": "C:/Users/david.hayes/Downloads/Claude-App-Skills/ebr-presentation suite skills",
@@ -364,34 +315,6 @@
     "note": "real project, not in project-registry.json"
   },
   {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 2,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.623.13972.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 2,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.715.10079.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 2,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
-    "raw": "C:\\Program Files\\WindowsApps\\OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0\\app",
-    "sessionCount": 2,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "Codex CLI install directory, not a project"
-  },
-  {
     "raw": "c:/users/david.hayes",
     "sessionCount": 2,
     "projectKey": null,
@@ -404,27 +327,6 @@
     "projectKey": null,
     "confidence": 0.5,
     "note": "real project, not in project-registry.json"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260707-135755-2042",
-    "sessionCount": 2,
-    "projectKey": "continuous-claude",
-    "confidence": 1,
-    "note": "git worktree of continuous-claude"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260707-142042-724",
-    "sessionCount": 2,
-    "projectKey": "continuous-claude",
-    "confidence": 1,
-    "note": "git worktree of continuous-claude"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\.codex-worktrees\\continuous-claude-20260711-155513-25436",
-    "sessionCount": 2,
-    "projectKey": "continuous-claude",
-    "confidence": 1,
-    "note": "git worktree of continuous-claude"
   },
   {
     "raw": "C:/Users/david.hayes/continuous-claude/.claude/worktrees/distracted-booth",
@@ -494,7 +396,7 @@
     "sessionCount": 2,
     "projectKey": null,
     "confidence": 0.5,
-    "note": "looks like a fourth-salesforce-mcp worktree but NOT confirmed — map it only once verified"
+    "note": "looks like a fourth-salesforce-mcp worktree but NOT confirmed \u2014 map it only once verified"
   },
   {
     "raw": "C:/Users/david.hayes/Projects/vibe-trading",
@@ -602,13 +504,6 @@
     "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
   },
   {
-    "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\codexhookspike-gFPsZy",
-    "sessionCount": 1,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
-  },
-  {
     "raw": "C:\\Users\\DAVID~1.HAY\\AppData\\Local\\Temp\\tmp.R9hz74JQTX\\wt",
     "sessionCount": 1,
     "projectKey": null,
@@ -624,13 +519,6 @@
   },
   {
     "raw": "C:/Users/david.hayes/AppData/Local/Temp/claude/C--Users-david-hayes-continuous-claude/f9c53122-d7cf-44ee-8a6c-b6ee1111bf71/scratchpad/wwfix/",
-    "sessionCount": 1,
-    "projectKey": null,
-    "confidence": 0,
-    "note": "ephemeral temp/scratchpad or synthetic stress-test directory"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\AppData\\Local\\Temp\\codexhookspike-gFPsZy",
     "sessionCount": 1,
     "projectKey": null,
     "confidence": 0,
@@ -659,13 +547,6 @@
   },
   {
     "raw": "C:\\Users\\david.hayes\\continuous-claude\\.claude\\worktrees\\lucid-hellman",
-    "sessionCount": 1,
-    "projectKey": "continuous-claude",
-    "confidence": 1,
-    "note": "git worktree of continuous-claude"
-  },
-  {
-    "raw": "C:\\Users\\david.hayes\\continuous-claude\\.codex-worktrees\\20260706-194058",
     "sessionCount": 1,
     "projectKey": "continuous-claude",
     "confidence": 1,

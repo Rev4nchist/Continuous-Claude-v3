@@ -476,7 +476,7 @@
       "verdict": "both_miss"
     },
     {
-      "query": "serena mcp context flag codex",
+      "query": "serena mcp context flag retired",
       "relevant_id": "8ce6e646-239c-41e3-a84f-a7d9a41b05e2",
       "type": "WORKING_SOLUTION",
       "scope": "GLOBAL",
@@ -519,12 +519,12 @@
       "verdict": "shuffled_no_change"
     },
     {
-      "query": "codex desktop logs windows location",
+      "query": "retired desktop logs windows location",
       "relevant_id": "be51fff0-b3ce-45be-9f50-0baf06691e07",
       "type": "WORKING_SOLUTION",
       "scope": "PROJECT",
       "confidence": "high",
-      "notes": "Codex MSIX install paths and real log location on Windows",
+      "notes": "Retired MSIX install paths and real log location on Windows",
       "baseline": {
         "top_k_ids": [
           "be51fff0-b3ce-45be-9f50-0baf06691e07",

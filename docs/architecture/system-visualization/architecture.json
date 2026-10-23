@@ -740,21 +740,21 @@
       ]
     },
     {
-      "id": "codex-adversary",
-      "label": "Codex Adversary",
-      "shortLabel": "Codex Adversary",
+      "id": "retired-adversary",
+      "label": "Retired Adversary",
+      "shortLabel": "Retired Adversary",
       "category": "orchestration",
-      "plain": "Cross-model adversarial reviewer using OpenAI Codex. Different training family finds the failure modes Claude misses.",
+      "plain": "Cross-model adversarial reviewer using OpenAI Retired. Different training family finds the failure modes Claude misses.",
       "mechanics": [
-        "gpt-5.5 @ xhigh by default, configurable via CODEX_ADVERSARY_MODEL env var.",
-        "ChatGPT subscription auth via `codex login` — no separate API key, quota counts against ChatGPT plan.",
+        "gpt-5.5 @ xhigh by default, configurable via RETIRED_ADVERSARY_MODEL env var.",
+        "ChatGPT subscription auth via `retired login` — no separate API key, quota counts against ChatGPT plan.",
         "Two modes: code (reviews git diff) and plan (reviews markdown plan).",
         "Wired into /review Phase 1 (parallel with critic) and /premortem after the inline failure-mode imagining step.",
         "Auto-prompts the user after every ExitPlanMode via the plan-exit-premortem-prompt hook.",
-        "Lift telemetry written to .claude/logs/codex-lift.jsonl with claude_only vs codex_only vs both counts — codex_only IS the cross-model lift."
+        "Lift telemetry written to .claude/logs/retired-lift.jsonl with claude_only vs retired_only vs both counts — retired_only IS the cross-model lift."
       ],
-      "summary": "Cross-model reviewer (OpenAI Codex CLI) wired into /review and /premortem.",
-      "description": "Adversarial review agent that delegates to OpenAI's Codex CLI for a cross-model second opinion. Different training family surfaces failure modes Claude's own critic agent misses. Auth runs through Dave's ChatGPT subscription via `codex login` — quota usage counts against the ChatGPT plan, not a separate API key. The agent runs in two modes: code (against a git diff) and plan (against a markdown plan). Findings are synthesized by review-agent with a [Codex] prefix so cross-model agreement is visible at a glance. The plan-exit-premortem-prompt hook automatically offers /premortem after every approved plan, which fires Codex in plan mode. Cost: typically 30-90 seconds per code review and 45-120 seconds per plan review at xhigh reasoning. Every run appends one row to codex-lift.jsonl tracking what Codex found that Claude missed.",
+      "summary": "Cross-model reviewer (OpenAI Retired CLI) wired into /review and /premortem.",
+      "description": "Adversarial review agent that delegates to OpenAI's Retired CLI for a cross-model second opinion. Different training family surfaces failure modes Claude's own critic agent misses. Auth runs through Dave's ChatGPT subscription via `retired login` — quota usage counts against the ChatGPT plan, not a separate API key. The agent runs in two modes: code (against a git diff) and plan (against a markdown plan). Findings are synthesized by review-agent with a [Retired] prefix so cross-model agreement is visible at a glance. The plan-exit-premortem-prompt hook automatically offers /premortem after every approved plan, which fires Retired in plan mode. Cost: typically 30-90 seconds per code review and 45-120 seconds per plan review at xhigh reasoning. Every run appends one row to retired-lift.jsonl tracking what Retired found that Claude missed.",
       "position": {
         "x": 1080,
         "y": 420
@@ -765,12 +765,12 @@
         "integration_points": 3
       },
       "files": [
-        ".claude/agents/codex-adversary.md",
-        ".claude/rules/codex-adversarial.md",
+        ".claude/agents/retired-adversary.md",
+        ".claude/rules/retired-adversarial.md",
         ".claude/hooks/src/plan-exit-premortem-prompt.ts",
         ".claude/skills/review/SKILL.md",
         ".claude/skills/premortem/SKILL.md",
-        ".claude/logs/codex-lift.jsonl"
+        ".claude/logs/retired-lift.jsonl"
       ]
     },
     {
@@ -1486,10 +1486,10 @@
       ]
     },
     {
-      "id": "codex-adversarial-review",
-      "label": "Codex Adversarial Review",
+      "id": "retired-adversarial-review",
+      "label": "Retired Adversarial Review",
       "category": "orchestration",
-      "description": "User invokes /premortem (or accepts the auto-prompt after ExitPlanMode); codex-adversary runs in parallel with critic for a cross-model review pass.",
+      "description": "User invokes /premortem (or accepts the auto-prompt after ExitPlanMode); retired-adversary runs in parallel with critic for a cross-model review pass.",
       "outcome": "Cross-model failure modes surfaced; lift count tracked for quota validation.",
       "steps": [
         {
@@ -1502,31 +1502,31 @@
           "n": 2,
           "node": "hooks",
           "action": "plan-exit-premortem-prompt offers /premortem",
-          "detail": "AskUserQuestion appears after ExitPlanMode — 'Run /premortem (includes Codex cross-model pass)?'"
+          "detail": "AskUserQuestion appears after ExitPlanMode — 'Run /premortem (includes Retired cross-model pass)?'"
         },
         {
           "n": 3,
           "node": "user",
           "action": "User accepts /premortem",
-          "detail": "Skill loads; inline failure-mode imagining runs first, then spawns codex-adversary in plan mode."
+          "detail": "Skill loads; inline failure-mode imagining runs first, then spawns retired-adversary in plan mode."
         },
         {
           "n": 4,
-          "node": "codex-adversary",
-          "action": "codex-adversary agent spawned in parallel with critic",
-          "detail": "Agent shells out to `codex exec` against the plan markdown using gpt-5.5 @ xhigh (or CODEX_ADVERSARY_MODEL override). Auth via ChatGPT subscription, no API key."
+          "node": "retired-adversary",
+          "action": "retired-adversary agent spawned in parallel with critic",
+          "detail": "Agent shells out to `retired exec` against the plan markdown using gpt-5.5 @ xhigh (or RETIRED_ADVERSARY_MODEL override). Auth via ChatGPT subscription, no API key."
         },
         {
           "n": 5,
           "node": "agents",
           "action": "review-agent synthesizes findings",
-          "detail": "Phase 1 results merged; Codex findings prefixed with [Codex] so cross-model agreement (findings BOTH critic and Codex caught) is visible. Pure Codex_only findings ARE the cross-model lift."
+          "detail": "Phase 1 results merged; Retired findings prefixed with [Retired] so cross-model agreement (findings BOTH critic and Retired caught) is visible. Pure Retired_only findings ARE the cross-model lift."
         },
         {
           "n": 6,
-          "node": "codex-adversary",
-          "action": "Telemetry row appended to .claude/logs/codex-lift.jsonl",
-          "detail": "{ts, skill, scope, claude_only, codex_only, both, via} — if codex_only is consistently zero, the quota cost isn't earning lift and the Codex pass should be reconsidered."
+          "node": "retired-adversary",
+          "action": "Telemetry row appended to .claude/logs/retired-lift.jsonl",
+          "detail": "{ts, skill, scope, claude_only, retired_only, both, via} — if retired_only is consistently zero, the quota cost isn't earning lift and the Retired pass should be reconsidered."
         },
         {
           "n": 7,

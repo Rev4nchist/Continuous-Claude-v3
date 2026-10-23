@@ -30,12 +30,11 @@ order: `docs/tri-model/SESSION-REVIEW-2026-07-11.md`.
 |------|-----------------|------------|
 | Hub & orchestrator | Claude (session) | this session; advances phase, runs smoke, merges findings |
 | Builder & researcher | Grok `grok-4.5` | `/grok --implement` (milestones), `/grok` ask (research) |
-| Reviewer & fixer | Reviewer: Codex `gpt-6.1-sol`; fixer: Claude `kraken` | Codex runner `adversary.mjs` (review), `kraken` (fix patches; `/codex --implement` is frozen) |
-| Failover builder | Claude `kraken` | Only on Grok failure. `/codex --implement` (`codex-worker`, `role: builder-failover`) is frozen since 2026-10-12 and returns when the freeze lifts |
+| Reviewer & fixer | Reviewer: Claude `critic`; fixer: Claude `kraken` | `critic` reviews. `kraken` fixes. There is no second-CLI reviewer. |
+| Failover builder | Claude `kraken` | Only on Grok failure. |
 
 **Failover rule:** a failover builder for milestone Mn **cannot** be the review-booth
-primary for that same milestone. If Codex built Mn, the grade comes from Claude critics
-(+ optionally a Grok pass on non-builder concerns); Codex does not sole-grade its own build.
+primary for that same milestone. Grok does not sole-grade its own build. Claude `critic` grades it.
 Record every failover as a `failover` message in the room THREAD and inbox.
 
 **Model ids are the verified allowlists**, never marketing names. Changes go through
@@ -57,10 +56,10 @@ preflight → intake → research → contract_draft → gate1
 | research | Grok | `research/*.md` |
 | contract_draft | Claude | `CONTRACT.md` |
 | gate1 | Human | `status.json` `gate1_approved_at` |
-| building | Grok (Codex failover) | `milestones/M*-result.md` + `patches/` |
+| building | Grok (Claude `kraken` failover) | `milestones/M*-result.md` + `patches/` |
 | smoke | Claude | smoke log w/ exit codes in milestone result |
-| review_booth | Codex + Claude critics | `findings/*` |
-| fix_loop | Codex fixes; Claude/Grok verify | `patches/codex-fix-R*.diff` |
+| review_booth | Claude `critic` | `findings/*` |
+| fix_loop | Claude `kraken` fixes; the hub verifies | `patches/fix-R*.diff` |
 | bookkeeping | Claude | decisions in THREAD; telemetry row; optional memory store |
 | gate2_ship | Human | merge/tag permission |
 
@@ -77,9 +76,9 @@ preflight → intake → research → contract_draft → gate1
   intake/           # grill-me Q&A answers
   research/         # Grok research dumps
   milestones/       # M<N>-scope.md / M<N>-result.md
-  findings/         # premortem-merged.yaml, booth-codex-*.md, booth-claude-*.md
-  patches/          # grok-M<N>.diff, codex-fix-R<N>.diff
-  inbox/claude/  inbox/codex/  inbox/grok/  inbox/human/
+  findings/         # premortem-merged.yaml, booth-claude-*.md
+  patches/          # grok-M<N>.diff, fix-R<N>.diff
+  inbox/claude/  inbox/grok/  inbox/human/
 ```
 
 ## Message protocol (inbox)
@@ -89,8 +88,8 @@ Filename: `inbox/<to>/<from>-<utcstamp>-<slug>.md` (utcstamp: `YYYYMMDDTHHMMSSZ`
 ```yaml
 ---
 id: msg-<utcstamp>-<slug>
-from: claude|codex|grok|human
-to: claude|codex|grok|human
+from: claude|grok|human
+to: claude|grok|human
 type: task|finding|question|answer|status|handoff|failover
 room: <room-id>
 milestone: M2        # optional
@@ -116,7 +115,7 @@ Deliverable · Done when**.
 
 Workers/adversaries: if a Task prompt includes a `## Workroom` block, read the contract +
 status + own inbox FIRST and write outputs to the room. **Fail-open**: with no workroom
-block, behave exactly as the one-shot `/codex` / `/grok` flows do today.
+block, behave exactly as the one-shot `/grok` flow does today.
 
 ## Operational constraints (probe-backed — do not relearn these)
 
@@ -128,8 +127,8 @@ block, behave exactly as the one-shot `/codex` / `/grok` flows do today.
 - **Grok research role** uses a widened write-free `--tools` allowlist (see
   `.claude/rules-ondemand/grok-worker-safety.md`) — a deliberate egress expansion, distinct from
   the ask guard. Never silently reuse ask's allowlist for research or vice versa.
-- **Worktree paths** for milestones live in `status.json.worktrees` — Grok/Codex implement
-  runs happen in `../.grok-worktrees/` / `../.codex-worktrees/` siblings; the room only
+- **Worktree paths** for milestones live in `status.json.worktrees` — Grok implement
+  runs happen in `../.grok-worktrees/` siblings; the room only
   stores paths and diffs, never a second working tree.
 - Smoke = hub-run commands with recorded exit codes. A worker's "tests passed" narrative
   is never smoke evidence.

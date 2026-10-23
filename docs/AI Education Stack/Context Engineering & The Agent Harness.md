@@ -2,7 +2,7 @@
 **Hyper-Detailed Knowledge Base Guide**  
 
 ## TL;DR (Executive Summary)
-The real differentiator in AI coding agents (Claude Code, Cursor, Codex, etc.) is **not** the model or IDE — it’s the **Agent Harness**: a deliberate system of context engineering that keeps the agent’s context window lean, relevant, and structured.  
+The real differentiator in AI coding agents (Claude Code, Cursor, Retired, etc.) is **not** the model or IDE — it’s the **Agent Harness**: a deliberate system of context engineering that keeps the agent’s context window lean, relevant, and structured.  
 
 Key insight: Treat the agent like a brilliant new hire on day one. Onboard it with rules, tools, skills, and specs instead of raw prompts. MercadoLibre is rolling this out to ~20,000 developers with massive gains in consistency.  
 

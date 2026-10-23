@@ -4,7 +4,6 @@
  *
  * Reads:
  *   .claude/logs/memory-recall.jsonl   (memory-awareness recall telemetry)
- *   .claude/logs/codex-lift.jsonl      (cross-model adversarial-review lift)
  * Maps each row to an intel-bus event tagged `backfilled: true` (design doc
  * section 13 Q15 -- backfilled rows are EXCLUDED from adoption gates) and
  * appends them to:
@@ -32,7 +31,6 @@ const outPath = join(logsDir, 'intel-bus.jsonl');
 
 const SOURCES = [
   { file: join(logsDir, 'memory-recall.jsonl'), map: mapMemoryRecall, schema: 'memory-recall-v1' },
-  { file: join(logsDir, 'codex-lift.jsonl'), map: mapCodexLift, schema: 'codex-lift-v1' },
 ];
 
 /** Strip embedded CR/LF from all string fields so one event stays one line. */
@@ -76,26 +74,6 @@ function mapMemoryRecall(row, schema) {
     top_score: typeof row.top_score === 'number' ? row.top_score : null,
     kept_after_floor: typeof row.kept_after_floor === 'number' ? row.kept_after_floor : null,
     recall_source: row.source ?? null,
-    correlation_id: null,
-    backfilled: true,
-    source_schema: schema,
-  };
-}
-
-/** codex-lift.jsonl row -> intel-bus event. */
-function mapCodexLift(row, schema) {
-  return {
-    ts: row.ts ?? new Date().toISOString(),
-    bus_id: 'backfill-codex-lift',
-    agent: 'codex-adversary',
-    facade: row.skill ? `/${row.skill}` : null,
-    specialist: 'codex-adversary',
-    query_type: 'adversarial_review',
-    subject_id: row.scope ?? null,
-    claude_only: typeof row.claude_only === 'number' ? row.claude_only : null,
-    codex_only: typeof row.codex_only === 'number' ? row.codex_only : null,
-    both: typeof row.both === 'number' ? row.both : null,
-    via: row.via ?? null,
     correlation_id: null,
     backfilled: true,
     source_schema: schema,

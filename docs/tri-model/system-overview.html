@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>CCv3 Tri-Model System — Functionality Overview</title>
-<meta name="description" content="Interactive overview: Claude Code orchestrates; Grok builds; Codex reviews/fixes. Game Plan roster + disk workroom bus." />
+<meta name="description" content="Interactive overview: Claude Code orchestrates; Grok builds; Retired reviews/fixes. Game Plan roster + disk workroom bus." />
 <style>
   :root {
     --bg: #070b14;
@@ -20,8 +20,8 @@
     --claude-dim: rgba(245, 158, 11, 0.15);
     --grok: #22d3ee;
     --grok-dim: rgba(34, 211, 238, 0.12);
-    --codex: #a78bfa;
-    --codex-dim: rgba(167, 139, 250, 0.14);
+    --retired: #a78bfa;
+    --retired-dim: rgba(167, 139, 250, 0.14);
     --human: #34d399;
     --human-dim: rgba(52, 211, 153, 0.12);
     --danger: #f87171;
@@ -127,11 +127,11 @@
   .card.human::before { background: var(--human); }
   .card.claude::before { background: var(--claude); }
   .card.grok::before { background: var(--grok); }
-  .card.codex::before { background: var(--codex); }
+  .card.retired::before { background: var(--retired); }
   .card.human:hover { border-color: rgba(52,211,153,.45); }
   .card.claude:hover { border-color: rgba(245,158,11,.5); }
   .card.grok:hover { border-color: rgba(34,211,238,.5); }
-  .card.codex:hover { border-color: rgba(167,139,250,.5); }
+  .card.retired:hover { border-color: rgba(167,139,250,.5); }
 
   .card .role {
     font-size: 10px; font-weight: 700; letter-spacing: .1em;
@@ -140,7 +140,7 @@
   .card.human .role { color: var(--human); }
   .card.claude .role { color: var(--claude); }
   .card.grok .role { color: var(--grok); }
-  .card.codex .role { color: var(--codex); }
+  .card.retired .role { color: var(--retired); }
   .card h3 { font-size: 18px; font-weight: 700; margin-bottom: 4px; }
   .card .model { font-family: var(--mono); font-size: 11px; color: var(--faint); margin-bottom: 12px; }
   .card ul { list-style: none; font-size: 13px; color: var(--dim); }
@@ -210,7 +210,7 @@
     font-weight: 800; font-size: 14px;
   }
   .phase-head.p1 .num { background: var(--claude-dim); color: var(--claude); border: 1px solid rgba(245,158,11,.35); }
-  .phase-head.p2 .num { background: var(--codex-dim); color: var(--codex); border: 1px solid rgba(167,139,250,.35); }
+  .phase-head.p2 .num { background: var(--retired-dim); color: var(--retired); border: 1px solid rgba(167,139,250,.35); }
   .phase-head h3 { font-size: 16px; font-weight: 700; }
   .phase-head span { font-size: 12px; color: var(--faint); }
 
@@ -244,7 +244,7 @@
   }
   .who.claude { color: var(--claude); }
   .who.grok { color: var(--grok); }
-  .who.codex { color: var(--codex); }
+  .who.retired { color: var(--retired); }
   .who.human { color: var(--human); }
   .who.multi { color: #fcd34d; }
 
@@ -310,7 +310,7 @@
   .flow-chip.g1 { border-color: rgba(52,211,153,.5); color: var(--human); }
   .flow-chip.g2 { border-color: rgba(245,158,11,.5); color: var(--claude); }
   .flow-chip.g3 { border-color: rgba(34,211,238,.5); color: var(--grok); }
-  .flow-chip.g4 { border-color: rgba(167,139,250,.5); color: var(--codex); }
+  .flow-chip.g4 { border-color: rgba(167,139,250,.5); color: var(--retired); }
   .flow-arrow { color: var(--faint); font-size: 14px; opacity: .5; }
   .flow-arrow.on { opacity: 1; color: var(--text); }
 
@@ -343,7 +343,7 @@
     CCv3 Tri-Model System
     <span class="badge">Game Plan</span>
   </h1>
-  <p class="sub">Claude orchestrates · Grok builds · Codex grades &amp; fixes · Disk is the bus</p>
+  <p class="sub">Claude orchestrates · Grok builds · Retired grades &amp; fixes · Disk is the bus</p>
   <nav class="tabs" role="tablist">
     <button type="button" class="active" data-view="overview">Overview</button>
     <button type="button" data-view="pipeline">Pipeline</button>
@@ -359,7 +359,7 @@
       <h2>Three training families. Fixed roles. No self-grading.</h2>
       <p>
         Continuous Claude v3 runs a rostered multi-model pipeline: Claude Code is the hub;
-        Grok 4.5 researches and builds in isolated worktrees; Codex (gpt-5.6-sol) reviews and patches.
+        Grok 4.5 researches and builds in isolated worktrees; Retired (gpt-5.6-sol) reviews and patches.
         Every cross-model handoff is a <strong style="color:var(--text)">file on disk</strong>, not chat memory.
       </p>
       <div class="pill-row">
@@ -379,7 +379,7 @@
           <li>Gate 1: approve contract / plan</li>
           <li>Review-gate: apply or discard diffs</li>
           <li>Gate 2: ship / merge authority</li>
-          <li>Quota &amp; reviewer pick (Codex / Grok / Both)</li>
+          <li>Quota &amp; reviewer pick (Retired / Grok / Both)</li>
         </ul>
         <div class="entry">AskUserQuestion · git apply approval</div>
       </article>
@@ -390,7 +390,7 @@
         <div class="model">session Claude · hooks · skills</div>
         <ul>
           <li>Contract, status, THREAD ownership</li>
-          <li>Spawn /codex and /grok workers</li>
+          <li>Spawn /retired and /grok workers</li>
           <li>Hub smoke checks (external verify)</li>
           <li>Synthesize findings · advance phases</li>
         </ul>
@@ -410,9 +410,9 @@
         <div class="entry">/grok · /grok --implement · /grok --resume</div>
       </article>
 
-      <article class="card codex">
+      <article class="card retired">
         <div class="role">Reviewer &amp; fixer</div>
-        <h3>Codex</h3>
+        <h3>Retired</h3>
         <div class="model">gpt-5.6-sol · ChatGPT sub</div>
         <ul>
           <li>Plan premortem &amp; code review booth</li>
@@ -420,7 +420,7 @@
           <li>Failover builder if Grok dies</li>
           <li>Real --sandbox; multi_agent off by default</li>
         </ul>
-        <div class="entry">/codex · /review · codex-adversary</div>
+        <div class="entry">/retired · /review · retired-adversary</div>
       </article>
     </div>
 
@@ -437,7 +437,7 @@
           <linearGradient id="gGrok" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stop-color="#0c1a1f"/><stop offset="100%" stop-color="#134e4a"/>
           </linearGradient>
-          <linearGradient id="gCodex" x1="0" y1="0" x2="1" y2="1">
+          <linearGradient id="gRetired" x1="0" y1="0" x2="1" y2="1">
             <stop offset="0%" stop-color="#1a1428"/><stop offset="100%" stop-color="#2e1065"/>
           </linearGradient>
         </defs>
@@ -472,12 +472,12 @@
           <text class="lbl-xs" x="200" y="304" text-anchor="middle">.grok-worktrees/ · --tools RO · X Premium+</text>
         </g>
 
-        <!-- Codex -->
-        <g class="box" data-id="codex" onclick="selectNode('codex')">
-          <rect x="620" y="230" width="280" height="100" rx="14" fill="url(#gCodex)" stroke="#a78bfa" stroke-width="2"/>
-          <text class="lbl" x="760" y="262" text-anchor="middle">Codex 5.6 — REVIEWER</text>
+        <!-- Retired -->
+        <g class="box" data-id="retired" onclick="selectNode('retired')">
+          <rect x="620" y="230" width="280" height="100" rx="14" fill="url(#gRetired)" stroke="#a78bfa" stroke-width="2"/>
+          <text class="lbl" x="760" y="262" text-anchor="middle">Retired 5.6 — REVIEWER</text>
           <text class="lbl-sm" x="760" y="282" text-anchor="middle">premortem · booth · fix patches</text>
-          <text class="lbl-xs" x="760" y="304" text-anchor="middle">.codex-worktrees/ · sandbox · ChatGPT</text>
+          <text class="lbl-xs" x="760" y="304" text-anchor="middle">.retired-worktrees/ · sandbox · ChatGPT</text>
         </g>
 
         <!-- failover dashed -->
@@ -511,7 +511,7 @@
       <div class="callout ok">
         <strong>Correct path</strong>
         Grok implements M3 → Claude hub smoke (tests/typecheck on disk evidence) →
-        Codex review booth writes findings → Codex fix patches (≤2 rounds) →
+        Retired review booth writes findings → Retired fix patches (≤2 rounds) →
         Claude/Grok verify → human applies.
       </div>
     </div>
@@ -554,7 +554,7 @@
     <div class="hero">
       <h2>Disk is the bus</h2>
       <p>
-        Claude, Codex, and Grok do not share process memory or CCv3 hooks.
+        Claude, Retired, and Grok do not share process memory or CCv3 hooks.
         The workroom is the shared language: <code style="color:var(--grok)">CONTRACT.md</code> is source of truth;
         <code style="color:var(--grok)">status.json</code> advances only via the hub; inboxes carry typed tasks.
       </p>
@@ -571,10 +571,10 @@
 ├── <span class="dir">intake/</span>          <span class="comment"># grill-me answers</span>
 ├── <span class="dir">research/</span>        <span class="comment"># Grok dumps</span>
 ├── <span class="dir">milestones/</span>      <span class="comment"># M1-scope · M1-result</span>
-├── <span class="dir">findings/</span>        <span class="comment"># [Codex]/[Grok] booth</span>
+├── <span class="dir">findings/</span>        <span class="comment"># [Retired]/[Grok] booth</span>
 ├── <span class="dir">patches/</span>         <span class="comment"># *.diff review-gate</span>
 └── <span class="dir">inbox/</span>
-    ├── <span class="file">claude/</span>  <span class="file">codex/</span>
+    ├── <span class="file">claude/</span>  <span class="file">retired/</span>
     ├── <span class="file">grok/</span>    <span class="file">human/</span></pre>
       </div>
       <div>
@@ -617,8 +617,8 @@
           <li>Can run shell in implement — verify harder</li>
         </ul>
       </article>
-      <article class="card codex">
-        <div class="role">Codex CLI 0.144.1+</div>
+      <article class="card retired">
+        <div class="role">Retired CLI 0.144.1+</div>
         <h3>Sandbox is real</h3>
         <ul>
           <li>--sandbox read-only | workspace-write</li>
@@ -657,18 +657,18 @@
 const NODE_INFO = {
   human: {
     title: "Human — authority layer",
-    body: "Approves the contract (Gate 1), chooses premortem reviewers (Codex / Grok / Both / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
+    body: "Approves the contract (Gate 1), chooses premortem reviewers (Retired / Grok / Both / Skip), reviews worktree diffs before apply, and owns ship/merge. No model auto-merges to main."
   },
   claude: {
     title: "Claude Code — hub",
-    body: "Owns CONTRACT.md, status.json, THREAD, and phase advances. Runs preflight, intake, smoke checks (real tests — not agent narration), spawns /grok and /codex, merges [Codex]/[Grok] findings. Optional Maestro/Ralph for long autonomous loops."
+    body: "Owns CONTRACT.md, status.json, THREAD, and phase advances. Runs preflight, intake, smoke checks (real tests — not agent narration), spawns /grok and /retired, merges [Retired]/[Grok] findings. Optional Maestro/Ralph for long autonomous loops."
   },
   grok: {
     title: "Grok 4.5 — builder & researcher",
     body: "Default implementer for milestones. Research role needs a widened (still write-free) tools list including web/X. Implement uses out-of-repo .grok-worktrees/. Never grades its own build. Entry: /grok, /grok --implement, --resume."
   },
-  codex: {
-    title: "Codex gpt-5.6-sol — reviewer & fixer",
+  retired: {
+    title: "Retired gpt-5.6-sol — reviewer & fixer",
     body: "Plan premortem adversary, code review booth, and fix-patch author (≤2 rounds). Failover builder if Grok session expires — but then cannot be sole grader for that same milestone. multi_agent off by default to avoid 15–25 min Ultra thrash."
   },
   disk: {
@@ -702,7 +702,7 @@ document.querySelectorAll('nav.tabs button').forEach(btn => {
 const P1 = [
   { n: 'S1', title: 'Pre-flight', who: 'claude', whoLabel: 'Claude hub',
     blurb: 'Auth + CLI + git ready',
-    detail: 'Assert codex login (ChatGPT), grok models (logged in + identity pin), git status, allowlists. Maps to /harness-update --dry-run + preflight helper (Track G).' },
+    detail: 'Assert retired login (ChatGPT), grok models (logged in + identity pin), git status, allowlists. Maps to /harness-update --dry-run + preflight helper (Track G).' },
   { n: 'S2', title: 'Grill me with docs', who: 'claude', whoLabel: 'Claude + human',
     blurb: 'Structured discovery intake',
     detail: '15+ targeted questions for complex work (schema, UX, APIs). discovery-interview skill → write intake/answers.md. Trivial tasks skip full Game Plan.' },
@@ -720,16 +720,16 @@ const P1 = [
 const P2 = [
   { n: 'S6', title: 'Milestone dispatch', who: 'grok', whoLabel: 'Grok builder',
     blurb: 'M1…Mn incremental build',
-    detail: '/grok --implement per milestone into worktree; patches/ + milestones/M*-result.md. Failover: same milestone block to /codex --implement if Grok expires.' },
+    detail: '/grok --implement per milestone into worktree; patches/ + milestones/M*-result.md. Failover: same milestone block to /retired --implement if Grok expires.' },
   { n: 'S7', title: 'Hub smoke checks', who: 'claude', whoLabel: 'Claude hub',
     blurb: 'External verify on disk',
     detail: 'Run tests/typecheck/HTTP probes. Record exit codes in milestone result. Agent “all tests pass” is never sufficient.' },
-  { n: 'S8', title: 'Review booth', who: 'multi', whoLabel: 'Claude + Codex',
+  { n: 'S8', title: 'Review booth', who: 'multi', whoLabel: 'Claude + Retired',
     blurb: 'Multi-lens audit',
-    detail: '/review: critic + plan-reviewers + codex-adversary. Findings to findings/ with [Codex] tags. Grok does not grade its own build. Premortem Both available pre-build.' },
-  { n: 'S9', title: 'Fix & verify loops', who: 'codex', whoLabel: 'Codex fix · hub verify',
+    detail: '/review: critic + plan-reviewers + retired-adversary. Findings to findings/ with [Retired] tags. Grok does not grade its own build. Premortem Both available pre-build.' },
+  { n: 'S9', title: 'Fix & verify loops', who: 'retired', whoLabel: 'Retired fix · hub verify',
     blurb: 'Patches ≤ 2 rounds',
-    detail: 'Codex generates discrete patches; Claude (and optionally Grok) verify. Cap 2 rounds unless human raises fix_rounds_max. Human still applies diffs.' },
+    detail: 'Retired generates discrete patches; Claude (and optionally Grok) verify. Cap 2 rounds unless human raises fix_rounds_max. Human still applies diffs.' },
   { n: 'S10', title: 'Bookkeeping & ship', who: 'human', whoLabel: 'Claude + human',
     blurb: 'Lessons · commits · Gate 2',
     detail: 'THREAD decisions, optional memory store, clean commits. Gate 2: human ships. Local serve / PR as needed.' },
@@ -762,15 +762,15 @@ renderSteps(P2, 'steps-p2', 'detail-p2');
 
 /* Flow animation */
 const FLOW = [
-  { label: 'Preflight', cls: 'g2', cap: 'Claude checks codex + grok auth and git.' },
+  { label: 'Preflight', cls: 'g2', cap: 'Claude checks retired + grok auth and git.' },
   { label: 'Intake', cls: 'g2', cap: 'Structured Q&A → intake/answers.md' },
   { label: 'Grok research', cls: 'g3', cap: 'Unknowns researched live → research/*.md' },
   { label: 'CONTRACT.md', cls: 'g2', cap: 'Hub writes disk blueprint (SoT).' },
   { label: 'Gate 1', cls: 'g1', cap: 'Human approves plan / scope.' },
   { label: 'Grok M1…Mn', cls: 'g3', cap: 'Incremental implement in .grok-worktrees/' },
   { label: 'Hub smoke', cls: 'g2', cap: 'Claude runs real tests; records evidence.' },
-  { label: 'Codex booth', cls: 'g4', cap: 'Cross-model review → findings/' },
-  { label: 'Fix ≤2', cls: 'g4', cap: 'Codex patches; hub verifies.' },
+  { label: 'Retired booth', cls: 'g4', cap: 'Cross-model review → findings/' },
+  { label: 'Fix ≤2', cls: 'g4', cap: 'Retired patches; hub verifies.' },
   { label: 'Apply · Gate 2', cls: 'g1', cap: 'Human applies diffs and ships.' },
 ];
 

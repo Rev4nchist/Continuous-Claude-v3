@@ -8,11 +8,11 @@ complexity: moderate            # trivial rooms should not exist (complexity gat
 roster:
   hub: claude                   # session Claude — phase authority, smoke, synthesis
   builder: grok                 # grok-4.5 via /grok --implement (default per Game Plan)
-  reviewer_fixer: codex         # gpt-5.6-sol via codex-adversary + /codex --implement
+  reviewer_fixer: claude-critic   # critic grades the milestone
   research: grok                # widened write-free allowlist (grok-worker-safety.md)
-  # override example: builder: codex   # requires explicit human --builder codex flag
+  # builder stays grok unless the human names kraken as failover
 
-participants: [human, claude, grok, codex]
+participants: [human, claude, grok]
 
 fix_rounds_max: 2               # human may raise; hub never raises unilaterally
 

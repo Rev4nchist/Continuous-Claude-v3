@@ -138,7 +138,7 @@
   },
 
   "deep_dive_pattern": {
-    "note": "Used by hooks, agents, braintrust, codex viz pages",
+    "note": "Used by hooks, agents, braintrust, retired viz pages",
     "layout": "sticky sidebar (300px) + scrollable main content",
     "sidebar": {
       "width": "300px",
@@ -189,7 +189,7 @@
     { "file": "hooks-visualization.html",            "role": "Hook layer deep dive — sidebar nav + section viewer" },
     { "file": "agents-visualization.html",           "role": "Agent roster deep dive" },
     { "file": "braintrust-scoring-visualization.html","role": "Braintrust scoring + invariant guard" },
-    { "file": "codex-adversarial-visualization.html","role": "Codex cross-model review integration" },
+    { "file": "retired-adversarial-visualization.html","role": "Retired cross-model review integration" },
     { "file": "architecture.json",                   "role": "Machine-readable source of truth (nodes + flows + categories)" },
     { "file": "state-of-rework/",                   "role": "New directory — state-of-rework briefing pages (this slice)" }
   ],

@@ -1027,30 +1027,6 @@
       "evalTier": "verified",
       "evalDate": "2026-03-07"
     },
-    "codex": {
-      "type": "workflow",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Hand a task to the OpenAI Codex harness (default gpt-5.6-luna @ max, ChatGPT subscription) to work through - ask/implement/resume. Cross-model execution, not review.",
-      "promptTriggers": {
-        "keywords": [
-          "/codex",
-          "hand this to codex",
-          "have codex implement",
-          "have codex do",
-          "delegate to codex",
-          "codex work through",
-          "let codex handle"
-        ],
-        "intentPatterns": [
-          "(hand|delegate|give|pass).*?to codex",
-          "(have|let|make) codex.*?(implement|do|build|write|fix|handle|work)",
-          "codex.*?(implement|work through|take a crack)"
-        ]
-      },
-      "evalTier": "unverified",
-      "evalDate": "2026-07-06"
-    },
     "security": {
       "type": "workflow",
       "enforcement": "suggest",

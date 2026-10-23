@@ -22,7 +22,7 @@ restore it after (key-quarantine discipline).** Seeded 2026-07-12 by claude-fabl
 
 | ID | Where | Why it's sound |
 |---|---|---|
-| G1 | Design 10 | `env -u ZENDESK_API_KEY` wrapping is the correct defensive pattern (matches codex/grok worker rules) — prevents a machine-level key from hijacking the OAuth path. Not dead code. |
+| G1 | Design 10 | `env -u ZENDESK_API_KEY` wrapping is the correct defensive pattern (matches retired/grok worker rules) — prevents a machine-level key from hijacking the OAuth path. Not dead code. |
 | G2 | Rollout (secret-scan) | secret-scanning the assembled prompt before send matches the grok data-egress rule; defense-in-depth is sound even with other guards present. |
 | G3 | Rollout (review-gate) | routing writes through an operator-approved review-gate patch (never auto-apply) is the correct control — the friction IS the security boundary, not a defect. |
 

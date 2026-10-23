@@ -14,32 +14,16 @@ TESTING                  REVIEW                   DEBUG
 └── profiler             ├── liaison (APIs)
                          ├── surveyor (migrations)
                          ├── plan-reviewer (plans)
-                         └── codex-adversary (cross-model)
+                         └── grok-adversary (cross-model)
 
 ORCHESTRATE              DOCS                     DEPLOY
 ├── maestro              └── scribe               └── deployer
 ```
 
-**Cross-model review** runs through one Codex runner script,
-`.claude/scripts/codex/adversary.mjs` (default `gpt-6.1-sol @ xhigh`), so a
-*different* training family challenges Claude's work. The runner checks login,
-builds the prompt, bounds the run, and prints a `CODEX-RECEIPT v1` line that
-names the reviewing GPT model. The main session calls the runner directly
-(`/codex-adversary`, `/review`, `/premortem`), in the background, in parallel
-with `critic` and `plan-reviewer`. **codex-adversary** is only an envelope for
-Workflow `agent()` stages: it runs the runner once and returns its output
-unchanged. It never reviews and never types `codex exec`. The
-`plan-exit-premortem-prompt` hook auto-offers `/premortem` after
-`ExitPlanMode`. A finding is prefixed `[Codex]` in synthesis only when the
-receipt line shows `status=ok` and a `gpt-*` model. A stub run or an overridden
-binary (`stub=1`, `bin=env`) never passes that gate.
-
-Every run appends one row to `~/.claude/logs/codex-adversary.jsonl`. Keys:
-`ts, run, status, via, mode, scope, project, model_requested, model_observed,
-effort, effort_requested, provider, cli, bin, session_id, exit_code,
-final_bytes, final_sha256, json, tokens, duration_s, prompt_bytes, framing,
-cache, usage_limited, stub, untracked_not_reviewed, cleanup, reason`. Field
-meanings: `.claude/logs/codex-lift.README.md`.
+**Cross-model review** is Grok (`grok-adversary`) plus Claude `critic`. The
+other CLI reviewer and its receipt line were removed in CCV3-2. Do not call
+that runner. The `plan-exit-premortem-prompt` hook offers `/premortem` after
+`ExitPlanMode`, with Grok or Skip.
 
 ## Agent Selection Guide
 
@@ -58,7 +42,7 @@ meanings: `.claude/logs/codex-lift.README.md`.
 | Debug issue | debug-agent | opus | All tools |
 | Root cause | sleuth | opus | Grep, Glob, Bash |
 | Code review | critic | opus | Read, Grep |
-| Cross-model review (Workflow stage) | codex-adversary | sonnet | Bash (runs `adversary.mjs`, returns a CODEX-RECEIPT line) |
+| Cross-model review | grok-adversary | sonnet | Read-only Grok review |
 | Validate a plan | plan-reviewer | sonnet | Read, Grep, Glob |
 | Security audit | aegis | opus | Read, Bash, Grep |
 | Multi-step orchestration | maestro | opus | Read, Bash, Task, Skill |
@@ -156,8 +140,8 @@ Agents add latency. Use directly when task is simple.
 | /fix | sleuth → spark or kraken → arbiter |
 | /build | architect → kraken → critic |
 | /explore | scout (with depth control) |
-| /review | critic + plan-reviewer + Codex runner (parallel Phase 1, background) |
-| /premortem | inline failure-mode analysis + Codex runner cross-model pass |
+| /review | critic + plan-reviewer + Retired runner (parallel Phase 1, background) |
+| /premortem | inline failure-mode analysis + Retired runner cross-model pass |
 | /maestro | Coordinates any specialists |
 
 ## Deep Dive

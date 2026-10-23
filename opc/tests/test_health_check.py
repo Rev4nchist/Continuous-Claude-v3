@@ -642,7 +642,7 @@ def test_get_registered_hooks_handles_split_command_args_form(tmp_path):
                     "hooks": [
                         # Quoted inline: must not resolve to a path with a
                         # leading apostrophe (a false MISSING). This shape is
-                        # live in ~/.codex/hooks.json.
+                        # a quoted inline command.
                         {
                             "type": "command",
                             "command": "node 'C:/x/dist/coordination-release.mjs'",

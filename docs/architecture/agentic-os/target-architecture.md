@@ -6,7 +6,7 @@ Continuous Claude already provides most of the kernel:
 
 - Agent taxonomy: `.claude/agents/`
 - Skills and workflows: `.claude/skills/`
-- Lifecycle policy: `.Codex/hooks.json` and `.Codex/hooks/src/`
+- Lifecycle policy: `.Retired/hooks.json` and `.Retired/hooks/src/`
 - Ralph and Maestro state machines: `.claude/skills/ralph/` and `.claude/skills/maestro/`
 - Memory: `opc/scripts/core/` with PostgreSQL + pgvector
 - Observability: `.claude/docs/architecture/subsystems/braintrust.md`
@@ -77,7 +77,7 @@ flowchart TB
 
 - File-scoped Ralph/Maestro state becomes per-run database state.
 - Multiple schema bootstraps become versioned migrations and one bootstrap path.
-- `.claude`, `.Codex`, and `.agents` drift becomes one canonical package plus generated projections.
+- `.claude`, `.Retired`, and `.agents` drift becomes one canonical package plus generated projections.
 - Direct `--dangerously-skip-permissions` jobs become scoped runner capabilities.
 - Machine-specific telemetry tasks become portable workers with a durable queue.
 - Empty/fragmented MCP catalogs become one tool registry with risk and auth metadata.

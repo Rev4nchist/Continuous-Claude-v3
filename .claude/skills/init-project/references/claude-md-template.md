@@ -101,7 +101,7 @@ This project is managed by Continuous Claude v3.
 | Memory | `/recall "<topic>"` to search past learnings |
 | Workflows | `/explore`, `/build`, `/fix`, `/maestro` for orchestrated development |
 | Code intelligence | TLDR CLI (`tldr impact`, `tldr structure`) + ast-grep for AST rewrites |
-| Cross-model workers | `/codex` (GPT) and `/grok` (xAI) execute tasks in isolated worktrees |
+| Cross-model workers | `/retired` (GPT) and `/grok` (xAI) execute tasks in isolated worktrees |
 | Tri-model features | `/game-plan <feature>` + `/workroom` for multi-milestone builds |
 | Research | Oracle agent with Nia, Exa, Context7, OpenCLI |
 | Reporting | `/log-work` when a unit of work is reportable (weekly tracker) |

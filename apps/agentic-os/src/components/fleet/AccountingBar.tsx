@@ -89,9 +89,9 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
 
       {/* WHICH HARNESS. Orthogonal to the arithmetic above, not another slice of it:
           these three sum to Attributed, and they answer a different question — not
-          "can we account for this row" but "what wrote it". Codex is broken out
+          "can we account for this row" but "what wrote it". The removed CLI is broken out
           because it was previously counted as Claude Code, silently: agent-arch was
-          41% Codex under a card that said "sessions". */}
+          41% that CLI under a card that said "sessions". */}
       <div className="grid grid-cols-3 gap-px overflow-hidden rounded-lg border bg-border">
         {(
           [
@@ -102,13 +102,12 @@ export function AccountingBar({ fleet }: { fleet: FleetOverview }) {
               hint: 'UUIDv4 session ids — written by this repo’s own hooks.',
             },
             {
-              key: 'codex',
-              label: 'Codex',
-              value: fleet.byHarness.codex,
+              key: 'retired',
+              label: 'Removed CLI',
+              value: fleet.byHarness.retired,
               hint:
-                'UUIDv7 thread ids, written into this shared table by a SEPARATE copy of ' +
-                'these hooks at ~/.codex/hooks/dist built 2026-05-04. Still registered, ' +
-                'still writing, three months behind this repo.',
+                'Historical UUIDv7 thread ids from the removed cross-model CLI. ' +
+                'That hook install is deleted. These rows are not still being written.',
             },
             {
               key: 'legacy',

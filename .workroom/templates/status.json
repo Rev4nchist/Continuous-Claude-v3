@@ -13,7 +13,7 @@
   "worktrees": {},
   "failovers": [],
   "preflight": {
-    "codex_version": null,
+    "grok_version": null,
     "grok_version": null,
     "verified_pins_match": null,
     "auth_ok": null

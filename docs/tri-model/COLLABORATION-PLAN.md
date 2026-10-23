@@ -6,7 +6,7 @@
 **Sources:**
 
 1. Dave’s video outline — *Architectural Blueprint: Multi-Model “Game Plan” Roster Framework* (from [youtu.be/zXZkuFxpwL…](https://youtu.be/zXZkuFxpwL), local notes: Downloads `Great resource here___https___youtu.be_zXZkuFxpwL....md`)
-2. CCv3 tri-model ship — plan `~/.claude/plans/we-have-worked-in-snuggly-pony.md`, commit `720430d`, skills `/codex` + `/grok` + `/premortem` dual reviewers
+2. CCv3 tri-model ship — plan `~/.claude/plans/we-have-worked-in-snuggly-pony.md`, commit `720430d`, skills `/retired` + `/grok` + `/premortem` dual reviewers
 3. Prior Grok session assessment of shared communication gaps (session plan was under `~/.grok/sessions/…` — **not** project-local; this doc is the correction)
 
 **Canonical location:** this file under `docs/tri-model/` in the continuous-claude repo.  
@@ -16,13 +16,13 @@
 
 ## 1. Executive summary
 
-We already have **three execution harnesses** (Claude Code, Codex CLI, Grok CLI) with probe-backed safety. We do **not** yet have the video’s load-bearing idea: a **rostered pipeline** where roles are fixed, **builders never self-grade**, and **every cross-model handoff is a physical file** (stateful disk sessions), not chat memory.
+We already have **three execution harnesses** (Claude Code, Retired CLI, Grok CLI) with probe-backed safety. We do **not** yet have the video’s load-bearing idea: a **rostered pipeline** where roles are fixed, **builders never self-grade**, and **every cross-model handoff is a physical file** (stateful disk sessions), not chat memory.
 
 This plan unifies:
 
 | Layer | What we have | What we add |
 |-------|----------------|-------------|
-| Harnesses | `/codex`, `/grok`, adversaries, `/harness-update` | Role **policy** (who builds vs reviews) |
+| Harnesses | `/retired`, `/grok`, adversaries, `/harness-update` | Role **policy** (who builds vs reviews) |
 | Safety | Worktrees, subscription auth, confirm-first | Unchanged; stay load-bearing |
 | Coordination | Task prompts, agent caches, telemetry jsonl | **Contract + Workroom on disk** (Game Plan core) |
 | Human gates | ExitPlanMode, premortem picker, apply-diff | Explicit Gate 1 (plan/UI) + Gate 2 (ship) |
@@ -53,9 +53,9 @@ This plan unifies:
 |----------------|---------------|-------------------------|--------|
 | **Hub & Orchestrator** | Claude Fable 5 | Claude Code session + hooks + Maestro/Ralph optional | State tracking, smoke checks, contract formation, command orchestration |
 | **Builder & Researcher** | Grok 4.5 | `/grok` → `grok-worker` (default `grok-4.5`) | Live web/X research; primary incremental builder; worktree implement |
-| **Reviewer & Fixer** | GPT 5.6 “Saul” / Saul Ultra | `/codex` → `codex-worker` / `codex-adversary` (`gpt-5.6-sol` flagship; terra/luna siblings) | Deep review + patch generation; **not** primary builder |
+| **Reviewer & Fixer** | GPT 5.6 “Saul” / Saul Ultra | `/retired` → `retired-worker` / `retired-adversary` (`gpt-5.6-sol` flagship; terra/luna siblings) | Deep review + patch generation; **not** primary builder |
 
-**Outline optimization note (adopt):** prefer **standard high-thinking GPT-5.6** (our `gpt-5.6-sol` + high/`xhigh` effort) over “Ultra / multi-agent” modes that spawn internal sub-agents and balloon 15–25 min. This matches our existing Codex rule: **`--disable multi_agent` by default** on adversary/worker; `--complex` opt-in only.
+**Outline optimization note (adopt):** prefer **standard high-thinking GPT-5.6** (our `gpt-5.6-sol` + high/`xhigh` effort) over “Ultra / multi-agent” modes that spawn internal sub-agents and balloon 15–25 min. This matches our existing Retired rule: **`--disable multi_agent` by default** on adversary/worker; `--complex` opt-in only.
 
 **Verified-fact footnote (landed from SESSION-REVIEW 2026-07-11):** “Grok 4.5 → live web/X research” is TRUE and probe-backed (`web_search`/`x_*` in Grok’s tool list) — but the worker’s **ask-mode `--tools` allowlist excludes web/x tools**. Research-role runs need a widened (still write-free) allowlist, e.g. `read_file,list_dir,grep,web_search,web_fetch,open_page` — a **deliberate egress expansion** documented in `grok-worker-safety.md` alongside the Track C `research` role. Never silently reuse the ask guard for research.
 
@@ -65,7 +65,7 @@ This plan unifies:
 
 | Step | Outline | CCv3 mapping today | Gap |
 |------|---------|-------------------|-----|
-| 1 Pre-flight | Auth, CLIs, git | Manual / partial; `/harness-update` exists | Need a single **preflight skill/script** (codex login, grok models, git clean) |
+| 1 Pre-flight | Auth, CLIs, git | Manual / partial; `/harness-update` exists | Need a single **preflight skill/script** (retired login, grok models, git clean) |
 | 2 Grill me with docs | 15+ structured questions | discovery-interview skill exists but not 15-Q contract-shaped | Strengthen into **contract intake checklist** |
 | 3 Live research | Grok researches unknowns | `/grok` ask + oracle/scout | Formalize: research artifacts land in workroom |
 | 4 Contract init | Disk blueprint markdown | Plans often in `~/.claude/plans` or chat | **Contract must live under project path** |
@@ -75,19 +75,19 @@ This plan unifies:
 
 | Step | Outline | CCv3 mapping today | Gap |
 |------|---------|-------------------|-----|
-| 6 Milestone dispatch | Grok builds M1…Mn | `/grok --implement` + worktrees | Need milestone files + failover to Codex |
+| 6 Milestone dispatch | Grok builds M1…Mn | `/grok --implement` + worktrees | Need milestone files + failover to Retired |
 | 7 Hub smoke checks | Claude verifies locally | Skill/prose only; external verify culture | Automate smoke checklist per milestone |
-| 8 Review booth | Claude + GPT multi-lens | `/review` Codex only; premortem has Both | Align booth with Game Plan: **Codex grades Grok’s build** |
-| 9 Fix loops | Saul patches; Fable/Grok verify | Possible via `/codex --implement` | Enforce **builder ≠ verifier**; max 2 rounds |
+| 8 Review booth | Claude + GPT multi-lens | `/review` Retired only; premortem has Both | Align booth with Game Plan: **Retired grades Grok’s build** |
+| 9 Fix loops | Saul patches; Fable/Grok verify | Possible via `/retired --implement` | Enforce **builder ≠ verifier**; max 2 rounds |
 | 10 Bookkeeping | Lessons + clean commits | memory store + git | Workroom decisions + optional learnings |
 
 ### 2.4 Where the outline diverges from what we already shipped (resolve deliberately)
 
 | Topic | Video Game Plan | Current CCv3 tri-model | Decision in **this** plan |
 |-------|-----------------|------------------------|---------------------------|
-| Who builds | **Grok primary** | Symmetric `/codex` and `/grok` implement | **Adopt Game Plan default:** Grok builds; Codex reviews/fixes. Codex implement remains available as **failover / specialized** tool, not default builder |
-| Who reviews plans | Not explicit | Premortem Codex/Grok/Both | **Both optional**; default Codex for deep plan stress (already recommended in picker) |
-| Who reviews code | Claude + Saul booth | `/review` = critic + plan-reviewers + codex-adversary | **Keep multi-lens Claude critics** + **Codex as cross-model grade**; Grok can research risks but does not grade its own build |
+| Who builds | **Grok primary** | Symmetric `/retired` and `/grok` implement | **Adopt Game Plan default:** Grok builds; Retired reviews/fixes. Retired implement remains available as **failover / specialized** tool, not default builder |
+| Who reviews plans | Not explicit | Premortem Retired/Grok/Both | **Both optional**; default Retired for deep plan stress (already recommended in picker) |
+| Who reviews code | Claude + Saul booth | `/review` = critic + plan-reviewers + retired-adversary | **Keep multi-lens Claude critics** + **Retired as cross-model grade**; Grok can research risks but does not grade its own build |
 | Communication bus | Implied “disk files” | No standard tree | **Specify `.workroom/` protocol** (below) |
 | UI mockups | Fable renders for Gate 1 | Optional Paper/HTML skills | Optional; Gate 1 can approve **text contract + wireframe** if no UI |
 | Headless Grok sessions | Assumed native | Headless worktrees hand-rolled; `-w` ignored | Document CCv3-specific mechanics in contract footer |
@@ -123,12 +123,12 @@ Claude Code — HUB
    │  contract, status, smoke, synthesize, spawn CLIs
    ├──────────────► Grok 4.5 — BUILDER / RESEARCHER
    │                   /grok ask · /grok --implement (milestones)
-   └──────────────► Codex gpt-5.6-sol — REVIEWER / FIXER
-                       codex-adversary · /codex --implement (fixes, failover)
+   └──────────────► Retired gpt-5.6-sol — REVIEWER / FIXER
+                       retired-adversary · /retired --implement (fixes, failover)
 ```
 
 **Anti-pattern:** Grok implements M3 then Grok “reviews” M3.  
-**Correct:** Grok implements M3 → Claude smoke → Codex review booth → Codex fix patches → Claude and/or Grok **verify** (run tests / re-read), Codex does not sole-grade its own fix without a second lens (Claude smoke or second pass rules).
+**Correct:** Grok implements M3 → Claude smoke → Retired review booth → Retired fix patches → Claude and/or Grok **verify** (run tests / re-read), Retired does not sole-grade its own fix without a second lens (Claude smoke or second pass rules).
 
 ### 3.3 Stateful disk layout (Workroom + Contract)
 
@@ -156,18 +156,18 @@ All multi-model feature work uses a **room** under the project:
           …
         findings/
           premortem-merged.yaml
-          booth-codex-*.md
+          booth-retired-*.md
           booth-claude-*.md
         patches/
           grok-M2.diff
-          codex-fix-R1.diff
+          retired-fix-R1.diff
         inbox/
-          claude/  codex/  grok/  human/
+          claude/  retired/  grok/  human/
 ```
 
 **Contract.md is Step 4 of Game Plan** — the single file every session restart loads.
 
-**Why not only Notion / Postgres:** Grok and Codex workers reliably see **files in cwd/worktree**. Notion MCP and CCv3 hooks do not run inside their sandboxes. Notion remains optional **human** mirror (tri-model Track 5 how-to page).
+**Why not only Notion / Postgres:** Grok and Retired workers reliably see **files in cwd/worktree**. Notion MCP and CCv3 hooks do not run inside their sandboxes. Notion remains optional **human** mirror (tri-model Track 5 how-to page).
 
 ### 3.4 Phase machine (`status.json`)
 
@@ -185,10 +185,10 @@ preflight → intake → research → contract_draft → gate1
 | research | Grok | `research/*.md` |
 | contract_draft | Claude | `CONTRACT.md` |
 | gate1 | Human | status `gate1_approved_at` |
-| building | Grok (Codex failover) | milestone results + patches |
+| building | Grok (Retired failover) | milestone results + patches |
 | smoke | Claude | smoke log in milestone file |
-| review_booth | Codex + Claude critics | `findings/*` |
-| fix_loop | Codex fix; Claude/Grok verify | `patches/codex-fix-R*.diff` |
+| review_booth | Retired + Claude critics | `findings/*` |
+| fix_loop | Retired fix; Claude/Grok verify | `patches/retired-fix-R*.diff` |
 | bookkeeping | Claude | decisions, optional memory store |
 | gate2_ship | Human | merge/tag permission |
 
@@ -199,8 +199,8 @@ Filename: `inbox/<to>/<from>-<utc>-<slug>.md`
 ```yaml
 # frontmatter
 id: msg-…
-from: claude|codex|grok|human
-to: claude|codex|grok|human
+from: claude|retired|grok|human
+to: claude|retired|grok|human
 type: task|finding|question|answer|status|handoff|failover
 room: <room-id>
 milestone: M2   # optional
@@ -210,21 +210,21 @@ priority: normal|high|blocker
 
 Body sections: **Intent · Context (paths only) · Deliverable · Done when**.
 
-Workers/adversaries: if prompt includes `## Workroom`, they **must** read `CONTRACT.md` + `status.json` + own inbox first; write results to `findings/` or `patches/` + one THREAD line. Fail-open if no workroom block (back-compat with today’s one-shot `/codex` `/grok`).
+Workers/adversaries: if prompt includes `## Workroom`, they **must** read `CONTRACT.md` + `status.json` + own inbox first; write results to `findings/` or `patches/` + one THREAD line. Fail-open if no workroom block (back-compat with today’s one-shot `/retired` `/grok`).
 
 ### 3.6 Mapping existing CCv3 tools into the pipeline
 
 | Pipeline need | Tool |
 |---------------|------|
-| Preflight CLIs | `/harness-update --dry-run`, `codex login status`, `grok models` |
+| Preflight CLIs | `/harness-update --dry-run`, `retired login status`, `grok models` |
 | Intake | `/discovery-interview` strengthened → writes `intake/` |
 | Research | `/grok` ask (web/X native tools available to Grok) |
-| Plan stress | `/premortem --reviewers codex\|grok\|both` → `findings/premortem-*.yaml` |
+| Plan stress | `/premortem --reviewers retired\|grok\|both` → `findings/premortem-*.yaml` |
 | Build milestone | `/grok --implement` with workroom paths + milestone id |
-| Failover build | `/codex --implement` **same milestone file**, roster notes failover |
+| Failover build | `/retired --implement` **same milestone file**, roster notes failover |
 | Smoke | Claude: project test/typecheck scripts; record exit codes in milestone result |
-| Review booth | `/review` (Codex adversary + Claude critics); optional second Grok pass on **non-builder** concerns only |
-| Fix | `/codex --implement` patches only; Claude verifies |
+| Review booth | `/review` (Retired adversary + Claude critics); optional second Grok pass on **non-builder** concerns only |
+| Fix | `/retired --implement` patches only; Claude verifies |
 | Continuity | New session: read `CONTRACT.md` + `status.json` (not prior chat) |
 
 ### 3.7 Plan and artifact placement rules (learned the hard way)
@@ -234,7 +234,7 @@ Workers/adversaries: if prompt includes `## Workroom`, they **must** read `CONTR
 | Multi-model design plans | `docs/tri-model/*.md` | `~/.grok/sessions/.../plan.md` alone |
 | Active feature contract | `.workroom/rooms/<id>/CONTRACT.md` | Chat-only summary |
 | Claude-only scratch plans | `thoughts/shared/plans/` or `~/.claude/plans/` **plus** copy into room if multi-model | Session UI only |
-| Evidence / probes | `docs/grok-integration/`, `docs/codex-integration/` | — |
+| Evidence / probes | `docs/grok-integration/`, `docs/retired-integration/` | — |
 | Telemetry | `.claude/logs/*-worker.jsonl`, `*-lift.jsonl` | Not a substitute for CONTRACT |
 
 ---
@@ -258,9 +258,9 @@ Creates room tree; prints next_actor; optional SessionStart one-liner if `active
 Patch prompts in:
 
 - `.claude/agents/grok-worker.md`
-- `.claude/agents/codex-worker.md`
+- `.claude/agents/retired-worker.md`
 - `.claude/agents/grok-adversary.md`
-- `.claude/agents/codex-adversary.md`
+- `.claude/agents/retired-adversary.md`
 
 Optional `## Workroom` / `## Milestone` / `## Role` (builder|reviewer|fixer|research) blocks.
 
@@ -274,7 +274,7 @@ Optional `## Workroom` / `## Milestone` / `## Role` (builder|reviewer|fixer|rese
 - CONTRACT write  
 - AskUserQuestion Gate 1  
 - milestone loop (Grok) + smoke  
-- review booth (Codex)  
+- review booth (Retired)  
 - fix loop ≤2  
 - bookkeeping  
 
@@ -282,18 +282,18 @@ Complexity gate: skip full roster for trivial tasks.
 
 ### Track E — Align defaults with roster (0.5 day)
 
-- Docs + skill copy: **default builder = Grok**, **default code reviewer/fixer = Codex**.  
+- Docs + skill copy: **default builder = Grok**, **default code reviewer/fixer = Retired**.  
 - Premortem picker stays.  
 - `/review` Grok standing pass remains **deferred** (quota); optional `--grok` later.  
 - Failover rule documented in PROTOCOL.
 
 ### Track F — Human how-to (Track 5 leftover)
 
-Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” linking **this** `docs/tri-model/` tree (confirm-first write).
+Evolve Notion “Retired in CCv3” → “Cross-Model Workers + Game Plan” linking **this** `docs/tri-model/` tree (confirm-first write).
 
 ### Track G — Preflight helper (optional, 0.5 day)
 
-`scripts/tri-model/preflight.mjs` or skill step: assert codex+grok auth, allowlist models, git status, print ready/not.
+`scripts/tri-model/preflight.mjs` or skill step: assert retired+grok auth, allowlist models, git status, print ready/not.
 
 **Corrections landed (SESSION-REVIEW 2026-07-11):**
 
@@ -315,8 +315,8 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 ## 5. Dogfood success criteria
 
 1. **Disk bus:** cold Claude session reconstructs next step from `CONTRACT.md` + `status.json` alone.  
-2. **Anti self-grade:** a Grok-built milestone is graded by Codex findings on disk, not Grok self-report.  
-3. **Failover:** kill/expire a Grok implement; Claude hands same milestone to Codex; room THREAD records failover.  
+2. **Anti self-grade:** a Grok-built milestone is graded by Retired findings on disk, not Grok self-report.  
+3. **Failover:** kill/expire a Grok implement; Claude hands same milestone to Retired; room THREAD records failover.  
 4. **Bounded fix:** second fix round then stops for human.  
 5. **No session-dir SoT:** no required read of `~/.grok/sessions/**/plan.md` for project work.  
 6. **Smoke is external:** milestone `complete` only after Claude-recorded test/typecheck evidence in `milestones/M*-result.md`.
@@ -329,7 +329,7 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 - CRDT shared live editing.  
 - Forcing Grok into `/review` Phase 1 by default.  
 - Auto-merge to `main`.  
-- Trusting Grok/Codex “tests passed” without hub smoke.
+- Trusting Grok/Retired “tests passed” without hub smoke.
 
 ---
 
@@ -339,7 +339,7 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 |---|----------|---------------------|
 | 1 | Auto-create workroom on every non-trivial `/build`, or opt-in `/workroom new` / `/game-plan` only? | **Opt-in skill first**, then auto for `/game-plan` |
 | 2 | Gitignore room bodies vs commit contracts for team history? | **Gitignore rooms/**; allow `git add -f` CONTRACT when sharing |
-| 3 | Codex as failover builder only, or also primary for backend-heavy milestones? | Failover + **explicit** `--builder codex` override |
+| 3 | Retired as failover builder only, or also primary for backend-heavy milestones? | Failover + **explicit** `--builder retired` override |
 | 4 | Gate 1 under `bypassPermissions`? | Still require AskUserQuestion / explicit “approve contract” message — document as model-side until hook exists |
 | 5 | Max fix rounds | **2** (video); human can set `fix_rounds_max` in ROOM.yaml |
 
@@ -347,12 +347,12 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 
 ## 8. Immediate next actions (when implementing)
 
-> **Ordering superseded (2026-07-11):** the authoritative combined build order is in `SESSION-REVIEW-2026-07-11.md` — notably **Track E (roster-default copy) runs BEFORE the dogfood**, because the §5 dogfood criteria presuppose the Grok-builds/Codex-reviews defaults are already in the skill copy. The list below is kept for track content, not sequence.
+> **Ordering superseded (2026-07-11):** the authoritative combined build order is in `SESSION-REVIEW-2026-07-11.md` — notably **Track E (roster-default copy) runs BEFORE the dogfood**, because the §5 dogfood criteria presuppose the Grok-builds/Retired-reviews defaults are already in the skill copy. The list below is kept for track content, not sequence.
 
 1. Land Track A templates next to this doc.  
 2. Implement Track B `/workroom` skill.  
 3. Wire Track C optional Workroom blocks into the four agents.  
-4. Dogfood one small feature through Phase 1 + one milestone + Codex booth.  
+4. Dogfood one small feature through Phase 1 + one milestone + Retired booth.  
 5. Only then build full `/game-plan` orchestrator (Track D).
 
 ---
@@ -363,13 +363,13 @@ Evolve Notion “Codex in CCv3” → “Cross-Model Workers + Game Plan” link
 |----------|------|
 | This plan | `docs/tri-model/COLLABORATION-PLAN.md` |
 | Grok evidence | `docs/grok-integration/DESIGN-RESEARCH.md` |
-| Codex evidence | `docs/codex-integration/DESIGN-RESEARCH.md` |
+| Retired evidence | `docs/retired-integration/DESIGN-RESEARCH.md` |
 | Original tri-model build plan | `docs/tri-model/BUILD-PLAN-2026-07-11.md` (in-repo copy w/ post-execution erratum; session-local original at `~/.claude/plans/we-have-worked-in-snuggly-pony.md`) |
 | Grok skill | `.claude/skills/grok/SKILL.md` |
-| Codex skill | `.claude/skills/codex/SKILL.md` |
+| Retired skill | `.claude/skills/retired/SKILL.md` |
 | Premortem dual reviewers | `.claude/skills/premortem/SKILL.md` |
 | Grok safety | `.claude/rules-ondemand/grok-worker-safety.md` |
-| Codex safety | `.claude/rules-ondemand/codex-worker-safety.md` |
+| Retired safety | `.claude/rules-ondemand/retired-worker-safety.md` |
 | Coordination research | `docs/self-improvement/proposals/2026-07-10-coordination.md` |
 | Video outline (Dave) | `Downloads/Great resource here___https___youtu.be_zXZkuFxpwL....md` |
 

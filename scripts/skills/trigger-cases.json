@@ -1,91 +1,541 @@
 {
   "_doc": "Trigger probe cases. Each prompt EXPECTS exactly the listed skill(s). Any other skill firing on that prompt counts as a false fire. Keep prompts in Dave's voice. Add a case when a skill is rewritten. Cases that expected a skill archived on 2026-10-01 were removed; add one back when a live skill clearly owns the prompt. A forbid list makes the case a miss when any listed skill fires, and only a forbidden skill counts as a false fire. A negative case has an empty expect list and a forbid list: it is a hit when no forbidden skill fires. A case with both lists also needs one expected skill to fire.",
   "cases": [
-    { "prompt": "commit what we have so far", "expect": ["commit"] },
-    { "prompt": "write up a handoff so the next session can pick this up", "expect": ["create_handoff"] },
-    { "prompt": "resume from the handoff in thoughts/shared/handoffs/reporting-efficiency", "expect": ["resume_handoff"] },
-    { "prompt": "is there drift between the repo and ~/.claude?", "expect": ["sync-drift"] },
-    { "prompt": "which hooks are registered but have no dist file?", "expect": ["hook-audit"] },
-    { "prompt": "scaffold a new PostToolUse hook that logs Edit calls", "expect": ["hook-scaffold"] },
-    { "prompt": "what port does NorthStar run on?", "expect": ["project-registry"] },
-    { "prompt": "what did we learn last time we touched the braintrust spool?", "expect": ["recall"] },
-    { "prompt": "show me the roadmap status", "expect": ["roadmap"] },
-    { "prompt": "run the playwright e2e tests for the login flow", "expect": ["qa-test"] },
-    { "prompt": "audit this page for accessibility issues", "expect": ["ui-audit"] },
-    { "prompt": "deploy this to vercel", "expect": ["vercel-cli"] },
-    { "prompt": "tail the railway logs for the api service", "expect": ["railway-cli"] },
-    { "prompt": "create a linear issue for the spool bug", "expect": ["linear"] },
-    { "prompt": "push a row to the weekly work tracker for this fix", "expect": ["log-work"] },
-    { "prompt": "what's in the Eve handoff queue?", "expect": ["notion-bridge"] },
-    { "prompt": "digest the last 5 videos from IndyDevDan", "expect": ["youtube-research"] },
-    { "prompt": "build the weekly FourthOS sponsor update", "expect": ["fourthos-weekly"] },
-    { "prompt": "make a Fourth-branded pptx for the QBR", "expect": ["fourth-presentation-suite"] },
-    { "prompt": "explore how the lane board works in this codebase", "expect": ["explore"] },
-    { "prompt": "hand this to codex to implement in a worktree", "expect": ["codex"] },
-    { "prompt": "run the premortem on this plan", "expect": ["premortem"] },
-    { "prompt": "review the diff on this branch", "expect": ["review"] },
-    { "prompt": "query the knowledge tree for where tests live", "expect": ["knowledge-tree"] },
-    { "prompt": "vet the skill I just installed from skills.sh", "expect": ["vet-skill"] },
-    { "prompt": "run KQL against the fabric eventhouse for yesterday's ingestion failures", "expect": ["kusto-cli"] },
-    { "prompt": "upload this html to notion as an embed on the cockpit page", "expect": ["notion-dashboard", "notion-cli"] },
-    { "prompt": "refresh the project card for iQ360", "expect": ["project-card"] },
-    { "prompt": "how is reporting doing, any stale rows?", "expect": ["reporting"] },
-    { "prompt": "set up CCv3 in this new repo", "expect": ["init-project"] },
-    { "prompt": "how do I rebind ctrl+s in claude code", "expect": ["keybindings-help"] },
-    { "prompt": "allow npm commands without prompting", "expect": ["update-config"] },
-    { "prompt": "what model ids and prices does the claude api have right now", "expect": ["claude-api"] },
-    { "prompt": "fix the failing vitest in skill-router-integration", "expect": ["systematic-debugging"], "forbid": ["fix"] },
-    { "prompt": "the rule-router hook fires on every WebFetch even when no rule matches, find out why and fix it", "expect": ["systematic-debugging"], "forbid": ["fix"] },
-    { "prompt": "sync-to-active.sh exits 1 on a fresh clone, something is broken", "expect": ["systematic-debugging"], "forbid": ["fix"] },
-    { "prompt": "add a feature flag to the agentic-os fleet grid", "expect": ["build"] },
-    { "prompt": "write a PySpark cell for the Fabric notebook that dedups the bronze sales table into silver", "expect": ["fabric"] },
-    { "prompt": "my Fabric notebook run failed with an OOM, figure out why", "expect": ["fabric"] },
-    { "prompt": "start a Livy session on the playground lakehouse and count the rows in the orders table", "expect": ["fabric"] },
-    { "prompt": "create a materialized lake view over the silver customers table", "expect": ["fabric"] },
-    { "prompt": "the MLV refresh failed last night, check its run history", "expect": ["fabric"] },
-    { "prompt": "find the lakehouse called FourthBrain_Gold, I do not know which workspace it is in", "expect": ["fabric"] },
-    { "prompt": "list every notebook across all our Fabric workspaces", "expect": ["fabric"] },
-    { "prompt": "add a %%configure cell to the notebook so it uses 8 executors", "expect": ["fabric"] },
-    { "prompt": "why is this Fabric Spark job so slow, it used to take 5 minutes", "expect": ["fabric"] },
-    { "prompt": "read the delta table from OneLake in the notebook and show its schema", "expect": ["fabric"] },
-    { "prompt": "ask our published Fabric data agent which section covers rota templates, from a python script", "expect": ["fabric"] },
-    { "prompt": "create a Fabric data agent over the orders and customers tables in kb_lakehouse and publish it", "expect": ["fabric"] },
-    { "prompt": "the Fabric data agent setup notebook runs ds.select but no tables end up selected", "expect": ["fabric"] },
-    { "prompt": "score our Fabric data agent answers against the 40 golden questions", "expect": ["fabric"] },
-    { "prompt": "our old FabricOpenAI assistants code for the data agent stopped working, port it", "expect": ["fabric"] },
-    { "prompt": "build a Copilot Studio agent that answers HR policy questions from our SharePoint site", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "add an index to the users table in Postgres, the query is slow", "expect": ["databases"] },
-    { "prompt": "design the schema for a tickets table with comments and assignees", "expect": ["databases"] },
-    { "prompt": "create a lakehouse with schemas in the playground workspace through the REST API", "expect": ["fabric"] },
-    { "prompt": "add OneLake table shortcuts from src_lh into the bronze schema of wwi_lh", "expect": ["fabric"] },
-    { "prompt": "why can a viewer read data through my lakehouse shortcut, is it passthrough or delegated", "expect": ["fabric"] },
-    { "prompt": "start the copy job cj_wwi and give it a daily schedule", "expect": ["fabric"] },
-    { "prompt": "refresh the WWI_DF Dataflow Gen2 from a script", "expect": ["fabric"] },
-    { "prompt": "add a Total Sales measure to the Direct Lake semantic model WWI_SM and run a DAX query against it", "expect": ["fabric"] },
-    { "prompt": "is our semantic model Direct Lake on OneLake or Direct Lake on SQL, check its definition", "expect": ["fabric"] },
-    { "prompt": "generate an ontology from the WWI semantic model and set the sales entity key", "expect": ["fabric"] },
-    { "prompt": "the data agent on our ontology cannot break revenue down by subcategory", "expect": ["fabric"] },
-    { "prompt": "my viewer reads every table through the lakehouse SQL analytics endpoint despite the OneLake roles", "expect": ["fabric"] },
-    { "prompt": "load the gold tables from the lakehouse into a Fabric warehouse with CTAS", "expect": ["fabric"] },
-    { "prompt": "list the tables in our schema-enabled lakehouse, the tables API gives me a 400", "expect": ["fabric"] },
-    { "prompt": "set up bronze, silver and gold lakehouses for the WWI data in Fabric", "expect": ["fabric"] },
-    { "prompt": "export the ItemJobEventLogs rows from workspace monitoring with Kusto.Cli to a CSV", "expect": ["kusto-cli"] },
-    { "prompt": "write a KQL query that counts failed sign-ins per hour in our Azure Data Explorer cluster", "expect": ["kusto-cli"], "forbid": ["fabric"] },
-    { "prompt": "this stored procedure on our on-prem SQL Server is slow, add the right index", "expect": ["databases"], "forbid": ["fabric"] },
-    { "prompt": "write a migration that adds a star schema for sales to our Postgres database", "expect": ["databases"], "forbid": ["fabric"] },
-    { "prompt": "in Power BI Desktop, how do I write a year-over-year measure on my imported Excel sheet", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "how do I merge two queries with a left outer join in Power Query in Excel", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "write a Databricks Delta Live Tables pipeline from bronze to silver", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "explain the difference between GraphQL and a REST API for my web app", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "build a star schema diagram for a slide about Kimball modelling", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "set up row-level security on my Power BI Pro report with an imported CSV", "expect": [], "forbid": ["fabric"] },
-    { "prompt": "our python script asks the Fabric data agent 40 questions over MCP and from question 14 every call fails with capacity has exceeded its limits, fix the script", "expect": ["fabric"] },
-    { "prompt": "write the TMDL for a calculated table and a measure in our Fabric Direct Lake semantic model and deploy it with updateDefinition", "expect": ["fabric"] },
-    { "prompt": "run our WWI data pipeline in Fabric once and refresh the SQL endpoint metadata after it finishes", "expect": ["fabric"] },
-    { "prompt": "run a GQL query against our Fabric graph model brain_graph that counts the Rule nodes", "expect": ["fabric"] },
-    { "prompt": "add a OneLake security role so the Viewers group only sees the gold schema of wwi_lh", "expect": ["fabric"] },
-    { "prompt": "connect to the lakehouse SQL analytics endpoint from python and count the rows in dbo.orders", "expect": ["fabric"] },
-    { "prompt": "every Fabric call now returns 429 with capacity exceeded, what should the script do", "expect": ["fabric"] },
-    { "prompt": "can our brain-runner service principal run the Fabric notebook job every night unattended", "expect": ["fabric"] }
+    {
+      "prompt": "commit what we have so far",
+      "expect": [
+        "commit"
+      ]
+    },
+    {
+      "prompt": "write up a handoff so the next session can pick this up",
+      "expect": [
+        "create_handoff"
+      ]
+    },
+    {
+      "prompt": "resume from the handoff in thoughts/shared/handoffs/reporting-efficiency",
+      "expect": [
+        "resume_handoff"
+      ]
+    },
+    {
+      "prompt": "is there drift between the repo and ~/.claude?",
+      "expect": [
+        "sync-drift"
+      ]
+    },
+    {
+      "prompt": "which hooks are registered but have no dist file?",
+      "expect": [
+        "hook-audit"
+      ]
+    },
+    {
+      "prompt": "scaffold a new PostToolUse hook that logs Edit calls",
+      "expect": [
+        "hook-scaffold"
+      ]
+    },
+    {
+      "prompt": "what port does NorthStar run on?",
+      "expect": [
+        "project-registry"
+      ]
+    },
+    {
+      "prompt": "what did we learn last time we touched the braintrust spool?",
+      "expect": [
+        "recall"
+      ]
+    },
+    {
+      "prompt": "show me the roadmap status",
+      "expect": [
+        "roadmap"
+      ]
+    },
+    {
+      "prompt": "run the playwright e2e tests for the login flow",
+      "expect": [
+        "qa-test"
+      ]
+    },
+    {
+      "prompt": "audit this page for accessibility issues",
+      "expect": [
+        "ui-audit"
+      ]
+    },
+    {
+      "prompt": "deploy this to vercel",
+      "expect": [
+        "vercel-cli"
+      ]
+    },
+    {
+      "prompt": "tail the railway logs for the api service",
+      "expect": [
+        "railway-cli"
+      ]
+    },
+    {
+      "prompt": "create a linear issue for the spool bug",
+      "expect": [
+        "linear"
+      ]
+    },
+    {
+      "prompt": "push a row to the weekly work tracker for this fix",
+      "expect": [
+        "log-work"
+      ]
+    },
+    {
+      "prompt": "what's in the Eve handoff queue?",
+      "expect": [
+        "notion-bridge"
+      ]
+    },
+    {
+      "prompt": "digest the last 5 videos from IndyDevDan",
+      "expect": [
+        "youtube-research"
+      ]
+    },
+    {
+      "prompt": "build the weekly FourthOS sponsor update",
+      "expect": [
+        "fourthos-weekly"
+      ]
+    },
+    {
+      "prompt": "make a Fourth-branded pptx for the QBR",
+      "expect": [
+        "fourth-presentation-suite"
+      ]
+    },
+    {
+      "prompt": "explore how the lane board works in this codebase",
+      "expect": [
+        "explore"
+      ]
+    },
+    {
+      "prompt": "run the premortem on this plan",
+      "expect": [
+        "premortem"
+      ]
+    },
+    {
+      "prompt": "review the diff on this branch",
+      "expect": [
+        "review"
+      ]
+    },
+    {
+      "prompt": "query the knowledge tree for where tests live",
+      "expect": [
+        "knowledge-tree"
+      ]
+    },
+    {
+      "prompt": "vet the skill I just installed from skills.sh",
+      "expect": [
+        "vet-skill"
+      ]
+    },
+    {
+      "prompt": "run KQL against the fabric eventhouse for yesterday's ingestion failures",
+      "expect": [
+        "kusto-cli"
+      ]
+    },
+    {
+      "prompt": "upload this html to notion as an embed on the cockpit page",
+      "expect": [
+        "notion-dashboard",
+        "notion-cli"
+      ]
+    },
+    {
+      "prompt": "refresh the project card for iQ360",
+      "expect": [
+        "project-card"
+      ]
+    },
+    {
+      "prompt": "how is reporting doing, any stale rows?",
+      "expect": [
+        "reporting"
+      ]
+    },
+    {
+      "prompt": "set up CCv3 in this new repo",
+      "expect": [
+        "init-project"
+      ]
+    },
+    {
+      "prompt": "how do I rebind ctrl+s in claude code",
+      "expect": [
+        "keybindings-help"
+      ]
+    },
+    {
+      "prompt": "allow npm commands without prompting",
+      "expect": [
+        "update-config"
+      ]
+    },
+    {
+      "prompt": "what model ids and prices does the claude api have right now",
+      "expect": [
+        "claude-api"
+      ]
+    },
+    {
+      "prompt": "fix the failing vitest in skill-router-integration",
+      "expect": [
+        "systematic-debugging"
+      ],
+      "forbid": [
+        "fix"
+      ]
+    },
+    {
+      "prompt": "the rule-router hook fires on every WebFetch even when no rule matches, find out why and fix it",
+      "expect": [
+        "systematic-debugging"
+      ],
+      "forbid": [
+        "fix"
+      ]
+    },
+    {
+      "prompt": "sync-to-active.sh exits 1 on a fresh clone, something is broken",
+      "expect": [
+        "systematic-debugging"
+      ],
+      "forbid": [
+        "fix"
+      ]
+    },
+    {
+      "prompt": "add a feature flag to the agentic-os fleet grid",
+      "expect": [
+        "build"
+      ]
+    },
+    {
+      "prompt": "write a PySpark cell for the Fabric notebook that dedups the bronze sales table into silver",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "my Fabric notebook run failed with an OOM, figure out why",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "start a Livy session on the playground lakehouse and count the rows in the orders table",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "create a materialized lake view over the silver customers table",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "the MLV refresh failed last night, check its run history",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "find the lakehouse called FourthBrain_Gold, I do not know which workspace it is in",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "list every notebook across all our Fabric workspaces",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "add a %%configure cell to the notebook so it uses 8 executors",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "why is this Fabric Spark job so slow, it used to take 5 minutes",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "read the delta table from OneLake in the notebook and show its schema",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "ask our published Fabric data agent which section covers rota templates, from a python script",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "create a Fabric data agent over the orders and customers tables in kb_lakehouse and publish it",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "the Fabric data agent setup notebook runs ds.select but no tables end up selected",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "score our Fabric data agent answers against the 40 golden questions",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "our old FabricOpenAI assistants code for the data agent stopped working, port it",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "build a Copilot Studio agent that answers HR policy questions from our SharePoint site",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "add an index to the users table in Postgres, the query is slow",
+      "expect": [
+        "databases"
+      ]
+    },
+    {
+      "prompt": "design the schema for a tickets table with comments and assignees",
+      "expect": [
+        "databases"
+      ]
+    },
+    {
+      "prompt": "create a lakehouse with schemas in the playground workspace through the REST API",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "add OneLake table shortcuts from src_lh into the bronze schema of wwi_lh",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "why can a viewer read data through my lakehouse shortcut, is it passthrough or delegated",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "start the copy job cj_wwi and give it a daily schedule",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "refresh the WWI_DF Dataflow Gen2 from a script",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "add a Total Sales measure to the Direct Lake semantic model WWI_SM and run a DAX query against it",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "is our semantic model Direct Lake on OneLake or Direct Lake on SQL, check its definition",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "generate an ontology from the WWI semantic model and set the sales entity key",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "the data agent on our ontology cannot break revenue down by subcategory",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "my viewer reads every table through the lakehouse SQL analytics endpoint despite the OneLake roles",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "load the gold tables from the lakehouse into a Fabric warehouse with CTAS",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "list the tables in our schema-enabled lakehouse, the tables API gives me a 400",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "set up bronze, silver and gold lakehouses for the WWI data in Fabric",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "export the ItemJobEventLogs rows from workspace monitoring with Kusto.Cli to a CSV",
+      "expect": [
+        "kusto-cli"
+      ]
+    },
+    {
+      "prompt": "write a KQL query that counts failed sign-ins per hour in our Azure Data Explorer cluster",
+      "expect": [
+        "kusto-cli"
+      ],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "this stored procedure on our on-prem SQL Server is slow, add the right index",
+      "expect": [
+        "databases"
+      ],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "write a migration that adds a star schema for sales to our Postgres database",
+      "expect": [
+        "databases"
+      ],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "in Power BI Desktop, how do I write a year-over-year measure on my imported Excel sheet",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "how do I merge two queries with a left outer join in Power Query in Excel",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "write a Databricks Delta Live Tables pipeline from bronze to silver",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "explain the difference between GraphQL and a REST API for my web app",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "build a star schema diagram for a slide about Kimball modelling",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "set up row-level security on my Power BI Pro report with an imported CSV",
+      "expect": [],
+      "forbid": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "our python script asks the Fabric data agent 40 questions over MCP and from question 14 every call fails with capacity has exceeded its limits, fix the script",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "write the TMDL for a calculated table and a measure in our Fabric Direct Lake semantic model and deploy it with updateDefinition",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "run our WWI data pipeline in Fabric once and refresh the SQL endpoint metadata after it finishes",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "run a GQL query against our Fabric graph model brain_graph that counts the Rule nodes",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "add a OneLake security role so the Viewers group only sees the gold schema of wwi_lh",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "connect to the lakehouse SQL analytics endpoint from python and count the rows in dbo.orders",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "every Fabric call now returns 429 with capacity exceeded, what should the script do",
+      "expect": [
+        "fabric"
+      ]
+    },
+    {
+      "prompt": "can our brain-runner service principal run the Fabric notebook job every night unattended",
+      "expect": [
+        "fabric"
+      ]
+    }
   ]
 }

@@ -5,7 +5,7 @@
  * model-controlled Grep pattern into an execSync shell string with naive
  * escaping (only `"` and `$`). buildRipgrepArgs returns an argv array consumed
  * by spawnSync(..., {shell:false}) so no shell ever sees the pattern — closing
- * the injection. Codex #1: `-e <pattern> -- <path>` keeps a leading-dash
+ * the injection. Retired #1: `-e <pattern> -- <path>` keeps a leading-dash
  * pattern literal and terminates flag parsing before the path operand.
  */
 import { describe, it, expect } from 'vitest';

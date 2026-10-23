@@ -2,31 +2,12 @@
   "$comment": "Read by hooks/dist/rule-router.mjs. Each entry loads its rule files the FIRST time a matching tool call happens in a session. mode 'deny-first' refuses that first call with the rule text as the reason (for rules that must change the decision); \"subagent\": \"block\" marks a spend or confirm-first gate that also blocks every fresh subagent once (without it, a subagent gets the rule as an inject after the session had the block); 'inject' adds the text as context and lets the call run. Matchers: command = regexes tested against each command segment with quoted strings removed and leading env/&/cmd /c prefixes dropped; segment = regexes tested against each executed segment with quotes KEPT (for quoted script paths; anchor them with ^ so an echo of the text never claims the rule); agent = subagent_type; skill = Skill name; tools = tool_name (MCP tools). Keep the always-loaded index rules-src/on-demand-rules.md in step with this file.",
   "rules": [
     {
-      "id": "codex",
-      "files": [
-        "codex-worker-safety.md",
-        "codex-adversarial.md"
-      ],
-      "mode": "deny-first",
-      "subagent": "block",
-      "command": [
-        "^codex(\\.cmd|\\.exe)?(\\s|$)"
-      ],
-      "agent": [
-        "^codex-"
-      ],
-      "skill": [
-        "^codex(:|$)"
-      ]
-    },
-    {
       "id": "harness-update",
       "files": [
         "harness-update.md"
       ],
       "mode": "inject",
       "command": [
-        "^(npm|pnpm)\\s+(i|install)\\s+(-g|--global)\\s+@openai/codex",
         "^grok(\\.cmd|\\.exe)?\\s+update\\b"
       ],
       "skill": [

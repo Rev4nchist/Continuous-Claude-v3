@@ -61,7 +61,6 @@ const CASES = [
   { intent: 'agent recall injector should read the context bus', focus: ['agent-recall-injector', 'handleAgentTask', 'readBus'] },
   { intent: 'knowledge tree regeneration unicode crash on windows', focus: ['knowledge_tree', 'tree_schema'] },
   { intent: 'ralph state checkpoint and scheduler', focus: ['ralph-state', 'ralph-checkpoint', 'ralph-scheduler'] },
-  { intent: 'codex adversary cross model review setup', focus: ['codex-adversary', 'review'] },
 ];
 
 // B.3.3: KNOWN-STRONG-MATCH cases. These intents target learnings ALREADY PRESENT in the live

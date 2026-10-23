@@ -112,7 +112,7 @@ async function tldrSearch(pattern: string, projectDir: string = '.'): Promise<TL
  * Build the ripgrep argv. Injection-safe by construction (ST-08 slice /
  * D2b-10 / GAP4-01): the model-controlled `pattern` is passed via `-e <pattern>`
  * so a leading-dash pattern is treated as a literal search pattern, never a flag
- * (Codex #1), and `--` terminates flag parsing before the path operand. Consumed
+ * (Retired #1), and `--` terminates flag parsing before the path operand. Consumed
  * by spawnSync(..., {shell:false}) so no shell ever interprets metacharacters.
  */
 export function buildRipgrepArgs(pattern: string, projectDir: string): string[] {

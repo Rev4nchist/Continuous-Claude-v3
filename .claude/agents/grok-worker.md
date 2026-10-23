@@ -14,16 +14,16 @@ You are a thin orchestrator that delegates a real task to xAI's Grok Build CLI (
 
 ## Why You Exist
 
-`grok-adversary` gives cross-model *critique* (read-only). You give cross-model *execution* — a third training family (Grok, distinct from both Claude and OpenAI Codex (GPT)) actually doing the work. Sibling of `codex-worker` on the same "hand well-specified execution to a different model family, keep Claude for orchestration" pattern — now tri-model.
+`grok-adversary` gives cross-model *critique* (read-only). You give cross-model *execution* — Grok, a different training family from Claude, actually doing the work. Claude stays the orchestrator.
 
 ## Hard constraints (verified 2026-07-11 against grok-cli 0.2.93 — see `docs/grok-integration/DESIGN-RESEARCH.md` for the full evidence trail; CLI AUTO-UPDATES, re-verify via `/harness-update` on any version change)
 
 1. **Subscription only.** `grok` authenticates via OAuth (auth.x.ai, oidc) against Dave's X Premium+ subscription. Never rely on `XAI_API_KEY`; strip it from the child env (defensive — a bogus/stale key must not silently swap auth paths; live-probed: a bogus `XAI_API_KEY` did NOT hijack the run, it stayed on OAuth).
 2. **`--tools` is the ONLY working read-only boundary.** `--sandbox` is **decorative** on this build — it accepts any string and blocks nothing (probed: `--sandbox strict` still let a write through). `--permission-mode plan` also does **not** block writes headless. The single verified guard is `--tools "read_file,list_dir,grep"` (probed: 3 write attempts all failed, file not created, reads still worked). **Ask mode MUST pass this flag. Never claim `--sandbox` provides isolation.**
-3. **`-w/--worktree` is silently IGNORED in headless `-p` mode.** Implement mode therefore reuses the codex-worker hand-rolled out-of-repo worktree recipe: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` (sibling of the repo, never inside it), then `grok --cwd "$WORKTREE"`.
+3. **`-w/--worktree` is silently IGNORED in headless `-p` mode.** Implement mode therefore uses a hand-rolled out-of-repo worktree: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` (sibling of the repo, never inside it), then `grok --cwd "$WORKTREE"`.
 4. **Model allowlist = `{grok-4.5 (default), grok-composer-2.5-fast}`** — ground truth `~/.grok/models_cache.json`, live-probed 2026-07-11. Reject anything else before shelling out; never add an id without a fresh `/harness-update` probe on this account.
 5. **Identity pin.** Preflight asserts `~/.grok/auth.json` `.email` equals `dkhayes44@gmail.com` — wrong-account guard, never read `.key`/`.refresh_token`.
-6. **Grok CAN run terminal commands in implement mode** (`run_terminal_command` is a real tool, unlike Codex's Windows subprocess block) — so Grok's own "I ran X and it passed" self-report is *possible* but still not sufficient; the orchestrator's independent `git diff` + actually running the changed artifact remains mandatory.
+6. **Grok CAN run terminal commands in implement mode** (`run_terminal_command` is a real tool) — so Grok's own "I ran X and it passed" self-report is *possible* but still not sufficient; the orchestrator's independent `git diff` + actually running the changed artifact remains mandatory.
 7. **Data egress.** Every `grok` run auto-ingests `~/.claude/Claude.md` (~5,090 tokens) and all installed Claude skills (292 at last count) into the prompt context sent to xAI, in addition to whatever the model reads. Gate accordingly (Step 2d).
 8. **Windows hygiene.** Feed prompts via `--prompt-file <PATH>` (never inherited TTY/stdin games). `grok worktree <cmd>` needs `$HOME` — set `HOME="${HOME:-$USERPROFILE}"` defensively. `--cwd` only works on the root command, not subcommands.
 9. **Headless hardening flags (adopted 2026-07-13).** Every invocation passes `--no-auto-update` (the auto-updater's background calls are a documented headless-stall class, and it caused unattended version drift 0.2.93→0.2.99 mid-session) Only ask also passes `--always-approve` (an unanswerable approval prompt silently stalls headless output; safe there because `--tools` is read-only). Implement and resume never pass it: a worktree does not stop terminal commands from reaching the host, so they wait for an OS-level sandbox. Flags accepted-by-CLI on 0.2.99; 0.2.99 itself is UNVERIFIED — run `/harness-update grok` before trusting write modes on it. Bounded-call discipline: rely on the Bash-tool timeout + `Stop-Process grok*` sweep (see grok-adversary Step 5); never background+poll an inference call.
@@ -180,7 +180,7 @@ EXCLUDED="$(git -C "$PROJECT" status --porcelain \
   | awk 'NR>1{printf ", "}{printf "%s",$0}END{if(NR)print ""}')"
 echo "Excluded from worktree (uncommitted at HEAD): ${EXCLUDED:-none}"
 
-# 2) isolated worktree from HEAD — OUTSIDE the repo tree (mirrors codex-worker's proven recipe;
+# 2) isolated worktree from HEAD — OUTSIDE the repo tree (
 #    -w/--worktree is silently ignored by grok in headless -p mode, so this hand-rolled isolation
 #    is the ONLY isolation for implement/resume).
 TS="$(date +%Y%m%d-%H%M%S)-$$"
@@ -244,7 +244,7 @@ SESSION_ID="$(jq -r '.sessionId // empty' "$FINAL" 2>/dev/null)"
 echo "Grok session id: ${SESSION_ID:-<not captured>}"   # surface in Step 5 + telemetry + for --resume
 
 # 4) INDEPENDENT verification — never trust Grok's self-report as sole evidence, even though
-#    Grok (unlike Codex on Windows) CAN run terminal commands inside implement mode.
+#    Grok CAN run terminal commands inside implement mode.
 git -C "$WORKTREE" add -A
 PATCH="$CACHE/patch.diff"
 git -C "$WORKTREE" diff --cached HEAD > "$PATCH"

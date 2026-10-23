@@ -38,7 +38,7 @@ function preflightSnapshot() {
     const j = JSON.parse(r.stdout);
     const fails = (j.checks || []).filter((c) => !c.ok && !/git_state/.test(c.name)).map((c) => c.name);
     const v = j.versions || {};
-    const vline = `codex=${v.codex ?? "?"} grok=${v.grok ?? "?"} (pins codex=${v.codex_pin ?? "?"} grok=${v.grok_pin ?? "?"})`;
+    const vline = `grok=${v.grok ?? "?"} (pin grok=${v.grok_pin ?? "?"})`;
     return {
       line: `preflight: ready=${j.ready} ${j.ready ? "" : "FAILING: " + fails.join(", ")} | ${vline}`.replace(/\s+\|/, " |"),
       ready: j.ready,

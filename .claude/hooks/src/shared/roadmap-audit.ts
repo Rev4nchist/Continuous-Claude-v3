@@ -3,7 +3,7 @@
  * touches ROADMAP.md (post-plan-roadmap, git-commit-roadmap, prd-roadmap-sync).
  *
  * Plan: thoughts context / `i-was-working-in-composed-manatee` (approved,
- * premortemed Claude+Codex, 2026-08-05). See plan Context section for why a
+ * premortemed Claude+Retired, 2026-08-05). See plan Context section for why a
  * "shrink floor" invariant was REJECTED: the live clobber this fixes was 24
  * insertions / 19 deletions on a 335-line file -- net +5 lines, ~101% of the
  * original. A percentage-shrink check cannot fire on a write that grows the

@@ -169,7 +169,7 @@ else
   fail "fileUri/langFromPath"
 fi
 
-echo "== codex finding #2: option injection (-- before user positional) =="
+echo "== retired finding #2: option injection (-- before user positional) =="
 # cgArgs unit test: facade flags FIRST, the commander end-of-options `--`, then the
 # user positional LAST (verified: codegraph 0.9.9 commander treats everything after
 # `--` as positional, so the user value must be the final token).
@@ -210,7 +210,7 @@ else
   fail "find-symbol --version option-injection guard"
 fi
 
-echo "== codex finding #3: wrong-shape JSON bypasses to TLDR fallback =="
+echo "== retired finding #3: wrong-shape JSON bypasses to TLDR fallback =="
 # validateCgShape unit test: distinguishes valid-empty (stay on codegraph) from
 # wrong-shape (-> fallback). Covers array-shaped (query) + object-with-key (callers).
 VSHAPE_JS='
@@ -244,7 +244,7 @@ if [ "$CG_PRESENT" -eq 1 ]; then
     "$(node "$CLI" find-symbol __codeintel_wrongshape_probe__ 2>/dev/null)"
 fi
 
-echo "== codex finding #4: who-calls honors the path constraint on the live codegraph path =="
+echo "== retired finding #4: who-calls honors the path constraint on the live codegraph path =="
 if [ "$CG_PRESENT" -eq 1 ]; then
   # who-calls appendIntelBus is called from memory-awareness.ts. Narrowing on a path
   # that does NOT contain that caller must drop it; narrowing on the real path keeps it.
@@ -258,7 +258,7 @@ if [ "$CG_PRESENT" -eq 1 ]; then
     "$(node "$CLI" who-calls appendIntelBus memory-awareness 2>/dev/null)"
 fi
 
-echo "== codex finding #5: field-sparse nodes do not collide / are not proposed to the bus =="
+echo "== retired finding #5: field-sparse nodes do not collide / are not proposed to the bus =="
 # Two distinct field-sparse codegraph nodes (no filePath, no qualifiedName) currently
 # hash to the SAME signature_hash (everything defaults). They must be flagged
 # non-persistable so they are OMITTED from the bus proposal -- preventing a merged
@@ -287,7 +287,7 @@ else
   fail "field-sparse collision guard (persistable filter)"
 fi
 
-echo "== codex finding #1: HEAD-moved-but-clean-tree triggers a codegraph sync =="
+echo "== retired finding #1: HEAD-moved-but-clean-tree triggers a codegraph sync =="
 # Simulate "DB indexed at an OLD head, tree clean, HEAD moved" by seeding the stamp
 # file with a bogus sha, then asserting the next live query refreshes the stamp to
 # the CURRENT HEAD (proof a sync ran). Fail-open: if codegraph is absent this is a

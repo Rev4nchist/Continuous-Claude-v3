@@ -1,20 +1,21 @@
 ---
 name: harness-update
-description: Upgrade a cross-model harness (Codex/Grok) and re-verify its live-probed model allowlist. Use when the user says "/harness-update", "update codex", "update grok", "enable model X", or hits a "requires a newer version" error.
+description: Upgrade the Grok harness and re-verify its live-probed model allowlist. Use when the user says "/harness-update", "update grok", "enable model X", or hits a "requires a newer version" error.
 disable-model-invocation: true
 ---
 
 # Harness Update Playbook
 
-One procedure for keeping any cross-model harness current: **snapshot → pin rollback → upgrade → re-assert auth → re-verify → two-probe models → walk the edit-point registry → record evidence → sync → smoke.** Codified from the 2026-07-11 Codex 0.131.0→0.144.1 + gpt-5.6 enablement and the Grok 0.2.93 spike.
+One procedure for keeping the Grok harness current: **snapshot → pin rollback → upgrade → re-assert auth → re-verify → two-probe models → walk the edit-point registry → record evidence → sync → smoke.**
+
+The other cross-model CLI was removed. This playbook does not upgrade it, probe it, or keep an edit-point registry for it. If someone asks to update that CLI, say it is not part of this harness.
 
 ## Usage
 
 ```
-/harness-update codex                 # upgrade + full re-verify + refresh allowlist
 /harness-update grok
-/harness-update codex --model gpt-5.7 # also probe + enable a specific new id
-/harness-update codex --dry-run       # walk the registry, report drift, change nothing
+/harness-update grok --model <id>   # also probe + enable a specific new id
+/harness-update grok --dry-run      # walk the registry, report drift, change nothing
 ```
 
 ## Iron laws
@@ -30,30 +31,20 @@ One procedure for keeping any cross-model harness current: **snapshot → pin ro
 ### Step 1 — Snapshot + rollback pin
 | Harness | Version | Auth assert | Model ground truth |
 |---|---|---|---|
-| codex | `codex --version` | `codex login status` → "Logged in using ChatGPT" | `~/.codex/models_cache.json` |
 | grok | `grok --version` | `grok models` header contains "logged in" AND `jq -r 'to_entries[0].value.email' ~/.grok/auth.json` = expected email | `~/.grok/models_cache.json` |
 
-Copy the models_cache aside to `docs/<harness>-integration/snapshots/models_cache.<version>.json`. Record the rollback command:
-- codex: `npm i -g @openai/codex@<old-version>`
+Copy the models_cache aside to `docs/grok-integration/snapshots/models_cache.<version>.json`. Record the rollback command:
 - grok: `grok update --install <old-version>` (verify the subcommand's current syntax via `grok update --help` first; grok also AUTO-updates — a version change may have already happened without you)
 
 ### Step 2 — Upgrade
-- codex: `npm i -g @openai/codex@latest`
 - grok: `grok update` (or let auto-update land; either way, treat any version change as requiring this playbook)
 
 ### Step 3 — Re-assert auth
-Same asserts as Step 1. FAIL → stop, tell Dave to re-login (`codex login` / `grok login`). Never proceed on an API-key fallback.
+Same asserts as Step 1. FAIL → stop, tell Dave to re-login (`grok login`). Never proceed on an API-key fallback.
 
-### Step 4 — Re-verify the capability surface (per-harness checklist)
-Run the harness's verification checklist and diff against its DESIGN-RESEARCH doc:
+### Step 4 — Re-verify the capability surface
+Run the verification checklist and diff against `docs/grok-integration/DESIGN-RESEARCH.md`:
 
-**codex** (`docs/codex-integration/DESIGN-RESEARCH.md` §3, §13):
-- `codex exec --help` — confirm `-o`, `--ephemeral`, `--ignore-user-config`, `--json`, `-s/--sandbox` present; confirm NO approval dial appeared (if one did, that's a design-level change — flag to Dave).
-- Regression smoke on the current default model (read-only ask).
-- Workspace-write fixture (throwaway git repo): file created, no auto-commit, `file_claims` count unchanged.
-- Resume: `--json` still emits `thread_id`.
-
-**grok** (`docs/grok-integration/DESIGN-RESEARCH.md` §2):
 - `grok --help` — confirm `-p`, `--prompt-file`, `--tools`, `--no-subagents`, `--output-format`, `-r` present.
 - **Re-probe the read-only guard**: `--tools "read_file,list_dir,grep"` still blocks a write attempt (this is the load-bearing safety fact; `--sandbox` was decorative on 0.2.93 — check whether it started validating).
 - Headless-on-OAuth smoke; json still emits `sessionId`.
@@ -64,27 +55,12 @@ Any regression → rollback (Step 1 pin) + record findings + stop.
 ### Step 5 — Two-probe model ids
 For each candidate id (from the refreshed models_cache, or `--model` argument):
 1. **Positive probe** — cheapest real call, expect success:
-   - codex: `env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec --model <id> -c model_reasoning_effort=low --sandbox read-only --skip-git-repo-check --disable multi_agent --ephemeral -C <scratch> -o <out> - < <prompt-file>`
    - grok: `env -u XAI_API_KEY grok --prompt-file <file> -m <id> --tools "read_file,list_dir,grep" --no-subagents --output-format json --cwd <scratch>`
 2. **Negative probe** — a fabricated id (e.g. `<id>-bogus`), expect the account's documented rejection shape.
 3. Read the ground-truth models_cache and reconcile.
 
-Codex 400 taxonomy: "requires a newer version of Codex" = CLI too old (go to Step 2); "not supported when using Codex with a ChatGPT account" = id not on this subscription, OR the CLI is too old. **Correction (DESIGN-RESEARCH section 19):** a version-gated id can return the "not supported" shape too (`gpt-6.1-sol` on 0.153.4 did). Upgrade the CLI before you conclude an id is off the subscription. A models cache from another CLI version is stale until the next real turn.
-
 ### Step 6 — Walk the edit-point registry
-Update every registered location with the verified allowlist + new version stamps. **These tables ARE the registry — keep them current when files move or a new harness is added.**
-
-**Codex edit points:**
-| File | What lives there |
-|---|---|
-| `.claude/agents/codex-worker.md` | the `case` gate (Step 2b) — THE mechanical enforcement; prose in constraint #3, `## Model` input contract, effort note |
-| `.claude/rules-ondemand/codex-worker-safety.md` | "Model allowlist" section + Grounding line + "Version drift" section |
-| `.claude/skills/codex/SKILL.md` | user-facing `--model`/`--effort` flags line |
-| `.claude/scripts/codex/adversary.mjs` | the `MODELS` table and `DEFAULT_MODEL` / `DEFAULT_EFFORT`: the single allowlist for review |
-| `.claude/skills/codex-adversary/SKILL.md` | the model table (default, re-check, fallbacks) |
-| `.claude/rules-ondemand/codex-adversarial.md` | header version stamp + "Supported ChatGPT-subscription models" line |
-| `.claude/skills/cli-integration/SKILL.md` | Codex inventory row |
-| `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Codex row) |
+Update every registered location with the verified allowlist + new version stamps. **This table IS the registry — keep it current when files move.**
 
 **Grok edit points:**
 | File | What lives there |
@@ -96,20 +72,19 @@ Update every registered location with the verified allowlist + new version stamp
 | `.claude/skills/cli-integration/SKILL.md` | Grok inventory row |
 | `.claude/rules-ondemand/harness-update.md` | Evidence-trail table version pin (Grok row) |
 
-**Workroom-coupled surfaces (both harnesses):** the four agents above also carry an optional `## Workroom` block (`.workroom/PROTOCOL.md` is the schema owner). A harness update does not normally touch these, but if worker prompt contracts change shape, keep the workroom blocks + `.claude/skills/workroom/SKILL.md` dispatch snippet consistent in the same pass.
+**Workroom-coupled surfaces:** the Grok agents also carry an optional `## Workroom` block (`.workroom/PROTOCOL.md` is the schema owner). A harness update does not normally touch these, but if worker prompt contracts change shape, keep the workroom blocks + `.claude/skills/workroom/SKILL.md` dispatch snippet consistent in the same pass.
 
 `--dry-run`: grep each edit point for the current allowlist + version strings and report consistent/drifted without editing.
 
 ### Step 7 — Evidence, sync, smoke
-1. Append a dated section to `docs/<harness>-integration/DESIGN-RESEARCH.md`: versions, probe outputs (verbatim result lines), fixture results, new-behavior notes.
+1. Append a dated section to `docs/grok-integration/DESIGN-RESEARCH.md`: versions, probe outputs (verbatim result lines), fixture results, new-behavior notes.
 2. Commit on a branch FIRST, then `bash scripts/sync-to-active.sh` (the repo commit is the restore source; never sync uncommitted).
-3. Smoke one real run per newly enabled model through the skill path (`/codex --model <id> <trivial question>` / `/grok --model <id> <trivial question>`) and confirm the telemetry row records the right model.
+3. Smoke one real run per newly enabled model through `/grok --model <id> <trivial question>` and confirm the telemetry row records the right model.
 
 ## Failure modes
 
 | Symptom | Meaning | Action |
 |---|---|---|
-| "requires a newer version" (codex) | CLI too old for the model | Step 2 upgrade, re-probe |
 | Auth assert fails post-upgrade | login state lost | user re-runs login; never API-key |
 | Guard probe regresses (grok --tools stops blocking) | safety boundary changed | STOP; do not ship; redesign guard; tell Dave |
 | Registry drift in --dry-run | someone edited by hand | reconcile via this playbook, not ad-hoc |

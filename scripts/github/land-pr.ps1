@@ -12,7 +12,7 @@
      mergeable clean).
      -IgnoreReview skips this; say why in the PR when you use it.
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
-     the check, so nothing unreviewed can land between check and merge (Codex, P35).
+     the check, so nothing unreviewed can land between check and merge (Retired, P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
   4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash). If the primary
      checkout is on another branch, it syncs from a temporary detached worktree of main and removes

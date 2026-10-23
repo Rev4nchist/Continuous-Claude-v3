@@ -5,9 +5,9 @@ description: Delegates a task to xAI's Grok Build CLI (grok-4.5) to execute or a
 
 # /grok — Delegate a task to the Grok Build CLI (grok-4.5)
 
-Hands an arbitrary request to xAI Grok on Dave's **X Premium+ subscription** (never an API key) to work through it. A third training family (Grok, distinct from both Claude and OpenAI Codex (GPT)) executing the task gives additional cross-model leverage on top of `/codex` — same "let the other model do well-spec'd execution, keep Claude for orchestration" pattern, now tri-model. The read-only `grok-adversary` reviewer is its sibling; this is the write-capable one.
+Hands an arbitrary request to xAI Grok on Dave's **X Premium+ subscription** (never an API key) to work through it. Grok is a different training family from Claude. The read-only `grok-adversary` reviewer is its sibling; this is the write-capable one. There is no second CLI reviewer.
 
-**Roster position (Game Plan):** Grok is the **default milestone builder and researcher** — `/grok --implement` is the first choice for building workroom milestones, and the `research` role (live web/X, widened write-free allowlist per `grok-worker-safety.md`) feeds `research/` in the room. **Codex is the rostered reviewer/fixer** — Grok never grades its own build; the review booth is Codex + Claude critics. Doctrine: `.workroom/PROTOCOL.md`.
+**Roster position (Game Plan):** Grok is the **default milestone builder and researcher** — `/grok --implement` is the first choice for building workroom milestones, and the `research` role (live web/X, widened write-free allowlist per `grok-worker-safety.md`) feeds `research/` in the room. Claude `critic` is the rostered reviewer. Grok never grades its own build. Doctrine: `.workroom/PROTOCOL.md`.
 
 **Safety contract:** `.claude/rules-ondemand/grok-worker-safety.md` (confirm-first, `--tools`-is-the-boundary, worktree isolation, review-gate, data-egress gate). **Engine:** the `grok-worker` agent.
 
@@ -85,7 +85,7 @@ Task(
 - **Subscription only.** The worker asserts `grok models` shows "logged in" AND that `~/.grok/auth.json` `.email` equals `dkhayes44@gmail.com` (wrong-account guard), and strips `XAI_API_KEY` from Grok's env. Fails loud, never silently uses an API key or the wrong account.
 - **`--tools` is the ONLY working read-only boundary.** `--sandbox` is decorative on this CLI build (accepts any string, blocks nothing — live-probed) and `--permission-mode plan` does not block writes headless either. Ask mode always passes `--tools "read_file,list_dir,grep"`.
 - **Confirm-first for `implement`/`resume`** (the only approval gate — `grok` has no approval dial). `--yes` skips only the interactive pause.
-- **Worktree isolation by default** — `-w/--worktree` is silently ignored by Grok in headless mode, so write runs use the same hand-rolled out-of-repo worktree recipe as `/codex` (sibling `../.grok-worktrees/<repo>-<ts>-<pid>`), never in-place.
+- **Worktree isolation by default** — `-w/--worktree` is silently ignored by Grok in headless mode, so write runs use a hand-rolled out-of-repo worktree (sibling `../.grok-worktrees/<repo>-<ts>-<pid>`), never in-place.
 - **Auto worktree GC** — before each implement run, stale *clean* worktree dirs older than `$GROK_WT_GC_DAYS` (default 7d) are reclaimed; a worktree with unreviewed (dirty) changes is never touched.
 - **Review-gate** — never auto-commits/auto-merges; produces a patch you approve first.
 - **Model allowlist** — `grok-4.5` / `grok-composer-2.5-fast` only.
@@ -127,7 +127,7 @@ load only once this skill does. Verbatim snapshot, so nothing that was trimmed i
 ````markdown
 # Grok Worker Safety Rules
 
-Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules-ondemand/codex-worker-safety.md` (same discipline, different verified surface) — the `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
+Companion to `.claude/skills/grok/SKILL.md` and the `grok-worker`/`grok-adversary` agents. The `/grok` worker hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — so it can write files and run commands. Treat every write mode with the same care as any destructive operation.
 
 Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x.ai (oidc). See `docs/grok-integration/DESIGN-RESEARCH.md` for the full evidence trail (all facts below are live-probed, not doc-sourced).
 
@@ -154,15 +154,15 @@ Grounding: verified 2026-07-11 against `grok-cli 0.2.93`, OAuth login via auth.x
 
 ## Write-mode hard rules (`implement` / `resume`)
 
-1. **Worktree isolation is the default, and worktrees live OUTSIDE the repo.** `-w/--worktree` is **silently ignored** by `grok` in headless `-p` mode (live-probed: `-w grok-probe` wrote directly into the live tree; `grok worktree list` showed nothing created). Isolation therefore reuses the codex-worker hand-rolled recipe: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` — a SIBLING of the repo, never inside `$PROJECT`. The `-<pid>` suffix prevents same-second collisions.
+1. **Worktree isolation is the default, and worktrees live OUTSIDE the repo.** `-w/--worktree` is **silently ignored** by `grok` in headless `-p` mode (live-probed: `-w grok-probe` wrote directly into the live tree; `grok worktree list` showed nothing created). Isolation uses this hand-rolled recipe: `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` — a SIBLING of the repo, never inside `$PROJECT`. The `-<pid>` suffix prevents same-second collisions.
 2. **Git-clean note before creating a worktree.** A worktree branches from HEAD, not the working tree's uncommitted changes — if `git status --porcelain` is non-empty, warn the user those files are invisible to Grok.
-3. **Independent verification, always.** After the run, the worker itself runs `git add -A && git diff --cached HEAD` in the worktree and shows that patch. Grok's own summary is never the sole evidence of what changed — this matters MORE for Grok than Codex, because Grok **can** run terminal commands in implement mode (`run_terminal_command` is a real, available tool) and its self-report of "I ran the tests and they passed" is therefore plausible-sounding but still unverified until the orchestrator checks independently.
+3. **Independent verification, always.** After the run, the worker itself runs `git add -A && git diff --cached HEAD` in the worktree and shows that patch. Grok's own summary is never the sole evidence of what changed — Grok **can** run terminal commands in implement mode (`run_terminal_command` is a real, available tool) and its self-report of "I ran the tests and they passed" is therefore plausible-sounding but still unverified until the orchestrator checks independently.
 4. **Review-gate — never auto-commit/auto-merge.** `implement` produces a patch the human reviews before it's applied to the working tree (`git apply --3way`). Defends against prompt-injection via any content Grok reads.
 5. **`--cwd` scoping.** `--cwd` is set to the worktree path for implement/resume; it only works on the root command, not subcommands (`inspect`, `worktree` use process cwd).
 
 ## Worktree GC — reclaims only CLEAN abandoned worktrees
 
-Before each `implement` run the worker opportunistically GCs stale worktree dirs in `../.grok-worktrees/`: `git worktree prune` + remove THIS repo's `<repo>-*` dirs older than `$GROK_WT_GC_DAYS` (default **7**). **It skips any worktree with uncommitted changes** — a dormant/awaiting-`resume` worktree holds UNREVIEWED work and is never reclaimed regardless of age. Reclaim is CONFIRMED-clean only: `git status --porcelain` must EXIT 0 AND be empty. Removal is ONLY via `git worktree remove --force` — no `rm -rf` anywhere in the auto path; an unregistered orphan is reported, never auto-deleted. Mirrors `scripts/codex/gc-worktrees.sh`'s rules exactly.
+Before each `implement` run the worker opportunistically GCs stale worktree dirs in `../.grok-worktrees/`: `git worktree prune` + remove THIS repo's `<repo>-*` dirs older than `$GROK_WT_GC_DAYS` (default **7**). **It skips any worktree with uncommitted changes** — a dormant/awaiting-`resume` worktree holds UNREVIEWED work and is never reclaimed regardless of age. Reclaim is CONFIRMED-clean only: `git status --porcelain` must EXIT 0 AND be empty. Removal is ONLY via `git worktree remove --force` — no `rm -rf` anywhere in the auto path; an unregistered orphan is reported, never auto-deleted. Skip dirty worktrees. Never `rm -rf` on the auto path.
 
 ## Research role (workroom) — deliberate egress expansion, still write-free
 
@@ -216,7 +216,7 @@ Both flags are accepted-by-CLI on 0.2.99 (probed) but their behavior is unverifi
 
 ## Windows / CLI hygiene
 
-- **Always feed the prompt from a file** via `--prompt-file <PATH>` — Grok's native prompt-from-file flag, no stdin-redirection tricks needed (unlike Codex's `- < file`).
+- **Always feed the prompt from a file** via `--prompt-file <PATH>` — Grok's native prompt-from-file flag.
 - **`grok worktree <cmd>` requires `$HOME`** — verified: errors `neither $GROK_HOME nor $HOME is set` under a shell where HOME is unset (e.g. the PowerShell tool). Worker sets `HOME="${HOME:-$USERPROFILE}"` defensively; run from Bash where HOME is normally set.
 - **`--cwd` is accepted by the root command only** — subcommands (`inspect`, `worktree`) use the process cwd regardless.
 - **Rely on an external timeout** (Bash-tool timeout), not Grok's own — no self-termination guarantee has been probed on this CLI.
@@ -227,7 +227,7 @@ Installed CLI is `0.2.93` (verified 2026-07-11). **The CLI auto-updates** — it
 
 ## Cost / quota (subscription, not dollars)
 
-Subscription-gated (X Premium+); no per-token invoice observed in this pass. No quota surface was found in the CLI (mirrors Codex: detection is reactive). On non-zero exit, grep the log/json output for `rate.?limit|usage limit|quota`; on a hit, produce no result, never fabricate one, and record `usage_limited:true` in telemetry.
+Subscription-gated (X Premium+); no per-token invoice observed in this pass. No quota surface was found in the CLI (detection is reactive). On non-zero exit, grep the log/json output for `rate.?limit|usage limit|quota`; on a hit, produce no result, never fabricate one, and record `usage_limited:true` in telemetry.
 
 ## Quick decision table
 
@@ -246,7 +246,7 @@ Subscription-gated (X Premium+); no per-token invoice observed in this pass. No 
 ## Safety
 
 <!-- current text of rules-src/grok-worker-safety.md, moved here on 2026-09-23 (Opus 5.5 eval, P20); the rule keeps a short summary. Supersedes the 2026-07-29 pre-split reference above. -->
-Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. Sibling of `.claude/rules-ondemand/codex-worker-safety.md`. `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. Evidence trail: `docs/grok-integration/DESIGN-RESEARCH.md`.
+Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, version history, CLI hygiene) and the `grok-worker`/`grok-adversary` agents. `/grok` hands a task to xAI's Grok Build CLI (`grok`, default `grok-4.5`) on Dave's **X Premium+ subscription** to actually execute — it can write files and run terminal commands. Treat every write mode with the same care as any destructive operation. Evidence trail: `docs/grok-integration/DESIGN-RESEARCH.md`.
 
 ## The one thing to internalize
 
@@ -279,7 +279,7 @@ Companion to `.claude/skills/grok/SKILL.md` (call shapes, probe evidence, versio
 
 ## Worktree GC — reclaims only CLEAN abandoned worktrees
 
-Stale `../.grok-worktrees/<repo>-*` dirs older than `$GROK_WT_GC_DAYS` (default **7**) may be reclaimed after `git worktree prune`. **Skip any worktree with uncommitted changes** — dirty means UNREVIEWED work (e.g. awaiting `resume`) and is never reclaimed regardless of age. Clean is confirmed only when `git status --porcelain` EXITS 0 AND is empty (unreadable/broken → keep). Removal is ONLY via `git worktree remove --force` — **no `rm -rf` anywhere in the auto path**; an unregistered orphan is reported, never auto-deleted. Mirrors `scripts/codex/gc-worktrees.sh`.
+Stale `../.grok-worktrees/<repo>-*` dirs older than `$GROK_WT_GC_DAYS` (default **7**) may be reclaimed after `git worktree prune`. **Skip any worktree with uncommitted changes** — dirty means UNREVIEWED work (e.g. awaiting `resume`) and is never reclaimed regardless of age. Clean is confirmed only when `git status --porcelain` EXITS 0 AND is empty (unreadable/broken → keep). Removal is ONLY via `git worktree remove --force` — **no `rm -rf` anywhere in the auto path**; an unregistered orphan is reported, never auto-deleted. Skip dirty worktrees. Never `rm -rf` on the auto path.
 
 ## Research role (workroom) — deliberate egress expansion, still write-free
 

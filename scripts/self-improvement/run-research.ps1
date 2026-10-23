@@ -244,7 +244,7 @@ Write-RunRow $siStatus "$($c.id): $verdict"
 # hosted copy reflects today's proposal set. Non-fatal; runs in THIS parent process.
 # publish.mjs lands a DATED immutable folder + latest/ alias on the decks Pages site
 # (unlisted, no card) and deliberately never touches the registry artifactUrl (which
-# stays on the Notion child page above — Codex premortem findings #1/#2).
+# stays on the Notion child page above — Retired premortem findings #1/#2).
 $prevEAP = $ErrorActionPreference
 $ErrorActionPreference = 'Continue'
 try {

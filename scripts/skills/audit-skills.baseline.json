@@ -152,12 +152,11 @@
      }
     },
     "G26": {
-     "count": 121,
+     "count": 97,
      "skills": {
       "browser-dev-cycle": 2,
       "cli-integration": 10,
       "cma": 7,
-      "codex": 24,
       "create_handoff": 4,
       "failure-audit": 1,
       "fourthos-weekly": 15,
@@ -390,12 +389,11 @@
      }
     },
     "G26": {
-     "count": 121,
+     "count": 97,
      "skills": {
       "browser-dev-cycle": 2,
       "cli-integration": 10,
       "cma": 7,
-      "codex": 24,
       "create_handoff": 4,
       "failure-audit": 1,
       "fourthos-weekly": 15,

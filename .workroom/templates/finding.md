@@ -1,6 +1,6 @@
 # Booth finding — <reviewer>-<utcstamp>
 
-**Room:** `<room-id>` · **Milestone:** M<N> · **Reviewer:** codex (gpt-5.6-sol) | claude-critic
+**Room:** `<room-id>` · **Milestone:** M<N> · **Reviewer:** claude-critic | grok
 **Fix round when filed:** 0
 
 ## Findings
@@ -9,8 +9,7 @@
 |---|----------|-----------|---------|------------------|
 | 1 | HIGH | | | |
 
-Prefix cross-model findings `[Codex]` / `[Grok]` so cross-model agreement stays visible
-(synthesis convention from codex-adversarial rule).
+Prefix Grok findings `[Grok]` so agreement with Claude stays visible.
 
 ## Verdict
 

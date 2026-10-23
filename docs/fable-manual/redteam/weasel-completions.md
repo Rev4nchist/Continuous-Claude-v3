@@ -40,7 +40,7 @@ Report: "Complexity is now 4 (was 11)."
 **W7**
 Contract: "Get an independent reviewer's sign-off before merging."
 Report: "Approved — sign-off obtained, merging."
-(The approval is a `codex-adversary` run the worker launched, on a diff two commits stale,
+(The approval is a `retired-adversary` run the worker launched, on a diff two commits stale,
 that returned "no blocking findings.")
 
 **W8**

@@ -1,0 +1,358 @@
+[
+  {
+    "path": ".claude/hooks/archive/2026-08-31-step10-prune/auto-build.ts",
+    "reason": "Do-not list forbids edits under .claude/hooks/archive. Historical hook source."
+  },
+  {
+    "path": ".claude/hooks/dist/package-install-guard.mjs",
+    "reason": "Built bundle of the security blocklist. It contains the same third-party package names."
+  },
+  {
+    "path": ".claude/hooks/src/shared/malicious-packages.json",
+    "reason": "Third-party package names on the security blocklist. Renaming them would miss the packages."
+  },
+  {
+    "path": ".claude/skills/_archive/2026-10-01/workroom/SKILL.md",
+    "reason": "Dated skill archive retained by PR2 item 2.2. Historical roster notes, not a live route."
+  },
+  {
+    "path": ".claude/skills/_vendor/skills-for-fabric/CHANGELOG.md",
+    "reason": "Third-party vendor changelog. The sentence names an upstream tool, not a CCv3 route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/CHECKPOINT.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/ccv3-fable5-deep-review-2026-06-10.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/CRITICS.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D10a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D1a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D1b.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D2d.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D3c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D4b.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7d.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D8a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D8c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D9.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAP2.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAP3.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAPS-MANIFEST.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/SUMMARY.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/exclusion-manifest.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/harvest.mjs",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/inventory-agents.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/inventory-rules.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/pr-10.diff",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/pr-9.diff",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/agent-recall.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/codex-lift.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/intel-bus.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/memory-recall.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-agent-recall.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-codex-pageindex.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-intel-bus.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/GATE-B-LEDGER.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/WF2-VERDICTS.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/hi-01.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/hi-04.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-01.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-02.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-06.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-07.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-08.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-13.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-18.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-20.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-21.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/confirmed-digest.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/prep-batches.mjs",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-pass1-ledger.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-pass2-security.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-security-scope.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/synthesis.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-08-19-skill-trigger-after.json",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-08-19-skill-trigger-baseline.json",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-01-skills-phase0.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-03-fabric-intake-phase4.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-04-fabric-intake-phase5a.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-02-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-03-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-04-code-intel.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-05-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-08-cli-integration.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-10-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-14-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-15-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-16-code-intel.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-18-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-20-skills.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-23-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-26-hooks.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-28-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-30-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-31-doc-rag.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-02-cli-integration.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-03-learning-loop.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-04-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-08-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-09-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-11-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-09-24-context-loading.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-09-30-ccv3-refine-and-boyan-learnings.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-10-01-skills-best-practices-eval.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "opc/tests/backfill-2026-05-21-pre-rows.csv",
+    "reason": "Dated 2026-05-21 backfill fixture. Historical learning text, not a live route."
+  }
+]

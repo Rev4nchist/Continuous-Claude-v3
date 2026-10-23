@@ -1,17 +1,17 @@
 # Grok Integration — Design Research & Verified Capability Surface
 
-Sibling of `docs/codex-integration/DESIGN-RESEARCH.md`. Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
+Sibling of `docs/retired-integration/DESIGN-RESEARCH.md`. Same discipline: **nothing enters a rule/agent file without a live probe on this machine + this account.** Plan: `~/.claude/plans/we-have-worked-in-snuggly-pony.md` (tri-model system).
 
 ## 1. Executive summary
 
-xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and headless-capable on this Windows 11 machine. The `/grok` worker rides Dave's **X Premium+ subscription via OAuth (auth.x.ai, oidc)** — no API key, no per-token billing. The load-bearing question from planning ("does headless stay on OAuth?") is **answered YES by live probe**. The biggest surprises: headless mode **writes files with zero approval by default**, `--permission-mode plan` and `--sandbox` do **not** block writes, and the native `-w` worktree flag is **silently ignored** in `-p` mode — so read-only safety comes from the `--tools` allowlist and implement-mode isolation reuses the proven codex-worker hand-rolled worktree recipe.
+xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and headless-capable on this Windows 11 machine. The `/grok` worker rides Dave's **X Premium+ subscription via OAuth (auth.x.ai, oidc)** — no API key, no per-token billing. The load-bearing question from planning ("does headless stay on OAuth?") is **answered YES by live probe**. The biggest surprises: headless mode **writes files with zero approval by default**, `--permission-mode plan` and `--sandbox` do **not** block writes, and the native `-w` worktree flag is **silently ignored** in `-p` mode — so read-only safety comes from the `--tools` allowlist and implement-mode isolation reuses the proven retired-worker hand-rolled worktree recipe.
 
 ## 2. Verified surface (all probed 2026-07-11, grok 0.2.93 stable, Windows 11)
 
 ### 2.1 Auth & identity
 - `grok login` (browser OAuth) done by Dave 2026-07-11. `grok models` header: "You are logged in with grok.com."
 - `~/.grok/auth.json` (keyed by `https://auth.x.ai::<uuid>`): non-secret fields `email = dkhayes44@gmail.com`, `auth_mode = "oidc"`, `principal_type = "User"`. **Preflight identity pin = `.email`** — read via jq, NEVER touch `.key` / `.refresh_token`.
-- `~/.grok/models_cache.json`: `auth_method: "session"` (subscription session, not API key). This file is the **ground-truth model cache** (Codex analog: `~/.codex/models_cache.json`).
+- `~/.grok/models_cache.json`: `auth_method: "session"` (subscription session, not API key). This file is the **ground-truth model cache** (Retired analog: `~/.retired/models_cache.json`).
 - **Negative control PASS:** with `XAI_API_KEY=bogus-key-negative-control` set, `grok -p` succeeded (exit 0) — a bogus key would have failed if used, so the run stayed on OAuth. The CLI does not hijack auth from that env var. (Worker still sanitizes it defensively.)
 - Re-auth for headless environments exists: `grok login --device-auth`.
 
@@ -45,11 +45,11 @@ xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and 
 ### 2.5 Built-in tool names (self-reported by the model, 2026-07-11)
 `web_search, open_page, open_page_with_find, x_user_search, x_semantic_search, x_keyword_search, x_thread_fetch, run_terminal_command, read_file, search_replace, list_dir, grep, kill_command_or_subagent, todo_write, get_command_or_subagent_output, spawn_subagent, scheduler_create, scheduler_delete, scheduler_list, monitor, search_tool, use_tool, update_goal, enter_plan_mode, exit_plan_mode, ask_user_question, web_fetch, image_gen, image_edit, image_to_video, reference_to_video, write`
 - Ask mode excludes `run_terminal_command` (a write path via shell), `search_replace`, `write`, `spawn_subagent`, schedulers, web/x/image tools.
-- Implement mode adds `write, search_replace, run_terminal_command` (worktree-isolated; note run_terminal_command means Grok CAN run commands — unlike Codex's Windows subprocess block — so verify accordingly and treat its self-reports with the same skepticism).
+- Implement mode adds `write, search_replace, run_terminal_command` (worktree-isolated; note run_terminal_command means Grok CAN run commands, so verify accordingly and treat its self-reports with the same skepticism).
 
 ### 2.6 Worktrees ⚠️
 - **`-w/--worktree` is silently IGNORED in headless `-p` mode** — probe: `-w grok-probe` wrote directly into the live tree; `grok worktree list` → "No worktrees found"; `git worktree list` → only the main tree. The flag appears to be a TUI-session feature ("Start the session in a new git worktree").
-- **Implement isolation therefore reuses the codex-worker recipe:** hand-rolled `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` (sibling, outside the repo), run grok with `--cwd "$WORKTREE"`, independent `git diff` after, review-gate before apply, GC mirroring `scripts/codex/gc-worktrees.sh` rules (skip-dirty, no `rm -rf`).
+- **Implement isolation therefore reuses the worker recipe:** hand-rolled `git worktree add` in `$(dirname "$PROJECT")/.grok-worktrees/<repo>-<ts>-<pid>` (sibling, outside the repo), run grok with `--cwd "$WORKTREE"`, independent `git diff` after, review-gate before apply, GC that skips dirty trees and never uses `rm -rf`.
 
 ### 2.7 Sessions / resume
 - `--output-format json` → capture `sessionId`. `grok -r <sessionId> -p "<followup>"` **verified**: recalled prior-session content exactly. `-c` = most recent for cwd. `--fork-session` exists.
@@ -64,11 +64,11 @@ xAI's **Grok Build CLI** (`grok`) is installed, subscription-authenticated, and 
 `grok inspect` shows Grok auto-discovers and loads **Claude Code's own config**: Dave's `~/.claude/Claude.md` (~5,090 tokens), permissions from `settings.local.json`, and **292 Claude skills**. Every `/grok` run therefore ships that context (plus the prompt + any files the model reads) to xAI under Dave's account. Covered by the data-egress section of `grok-worker-safety.md` (first-use confirm, secret-scan, no `.env*`, payload awareness). `--verbatim`, `--rules`, `--system-prompt-override` exist as shaping levers; a future probe could test whether config ingestion can be disabled for worker runs.
 
 ### 2.10 Quota/billing
-Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass (mirror of Codex: detection will be reactive — parse the rate-limit error when it first appears, then codify).
+Subscription-gated (X Premium+); no per-token invoice observed. No quota surface found in the CLI this pass (mirror of Retired: detection will be reactive — parse the rate-limit error when it first appears, then codify).
 
-## 3. Divergences from the Codex mold (design deltas)
+## 3. Divergences from the Retired mold (design deltas)
 
-| Topic | Codex | Grok (verified) |
+| Topic | Retired | Grok (verified) |
 |---|---|---|
 | Read-only enforcement | `--sandbox read-only` (real) | `--tools "read_file,list_dir,grep"` (`--sandbox` decorative) |
 | Write isolation | hand-rolled worktree | same hand-rolled worktree (`-w` ignored headless) |
@@ -76,8 +76,8 @@ Subscription-gated (X Premium+); no per-token invoice observed. No quota surface
 | Clean output | `-o <file>` (startup noise on stdout) | plain stdout already clean; json for structured |
 | Session id | `thread_id` in `--json` events | `sessionId` in json output |
 | Multi-agent | `--disable multi_agent` | `--no-subagents` |
-| Model ground truth | `~/.codex/models_cache.json` | `~/.grok/models_cache.json` |
-| Auth assert | `codex login status` ("Logged in using ChatGPT") | `grok models` header + `auth.json` `.email` identity pin |
+| Model ground truth | `~/.retired/models_cache.json` | `~/.grok/models_cache.json` |
+| Auth assert | `retired login status` ("Logged in using ChatGPT") | `grok models` header + `auth.json` `.email` identity pin |
 | Windows subprocess in write mode | BLOCKED (writes blind) | `run_terminal_command` AVAILABLE — Grok can run commands in implement mode; orchestrator verification still mandatory |
 
 ## 4. Open items / future probes

@@ -54,7 +54,7 @@ interface Rules {
  * month. A floor still catches the thing worth catching -- a purge or a bad
  * merge deleting live registrations -- without failing on additions.
  */
-const MIN_SKILLS = 57; // 2026-09-30: braintrust-analyze + braintrust-tracing retired
+const MIN_SKILLS = 56; // 2026-10-23: the removed cross-model skill left skill-rules.json
 const MIN_AGENTS = 18;
 
 // ── validators, extracted so they can be run against a bad fixture ─────────

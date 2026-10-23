@@ -364,7 +364,7 @@ export function handleAgentTask(
 
   // Bus-read telemetry fields known BEFORE recall runs, so the row is still
   // emitted if recall throws (the quality gate must see the bus read regardless of
-  // recall outcome -- cross-model B.3a finding Codex#3). injected/result_count are
+  // recall outcome -- cross-model B.3a finding Retired#3). injected/result_count are
   // filled in per outcome.
   const baseTel = {
     bus_id: typeof bus.bus_id === 'string' ? bus.bus_id : 'unknown',
@@ -489,7 +489,7 @@ function readStdin(): string {
 }
 
 export async function main(): Promise<void> {
-  // Emergency kill-switch (Codex #5): this hook fires on every agent spawn,
+  // Emergency kill-switch (Retired #5): this hook fires on every agent spawn,
   // so provide an escape hatch if recall ever degrades agent latency.
   // Checked before stdin is read/parsed so it can never add overhead.
   if (process.env.CCV3_AGENT_RECALL_OFF === '1') {

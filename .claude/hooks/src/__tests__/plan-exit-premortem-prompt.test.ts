@@ -125,18 +125,15 @@ describe('buildDirective', () => {
     expect(text).not.toContain('undefined');
   });
 
-  it('mentions all four reviewer options (Codex, Grok, Both, Skip)', () => {
+  it('mentions the Grok and Skip reviewer options', () => {
     const text = buildDirective(null);
-    expect(text).toContain('Codex');
     expect(text).toContain('Grok');
-    expect(text).toContain('Both');
     expect(text).toContain('Skip');
   });
 
-  it('routes each choice to the right premortem invocation', () => {
+  it('routes Grok to the premortem skill flag', () => {
     const text = buildDirective(null);
     expect(text).toContain('/premortem --grok');
-    expect(text).toContain('/premortem --reviewers both');
   });
 });
 

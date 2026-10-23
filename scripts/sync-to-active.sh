@@ -217,7 +217,7 @@ NEVER_SYNC="CLAUDE.md RULES.md .env .credentials.json settings.json history.json
 #   dst != src AND != manifest (or  -> ACTIVE WAS EDITED SINCE LAST SYNC:
 #     no entry; fail-safe)             quarantine the active copy, THEN copy,
 #                                      report loudly. Never silently overwrite.
-# Sequencing is crash-safe (Codex premortem finding): the repo version is staged
+# Sequencing is crash-safe (premortem finding): the repo version is staged
 # as dst.sync-tmp first, the quarantine copy is hash-verified, and only then is
 # the staged file atomically renamed over dst. The active file is never missing
 # or half-written; if quarantine fails the active file is left untouched.
@@ -326,7 +326,7 @@ save_manifest() {
 # Link guard (2026-10-01, PR #75 incident).
 #
 # A symlink or Windows junction inside ~/.claude points at a directory another tool owns
-# (~/.agents/skills is the `npx skills` CLI store and the Codex mirror; ~/.codegpt/skills).
+# (~/.agents/skills is the `npx skills` CLI store; ~/.codegpt/skills is another).
 # cp, mv and rm follow links, so the sync used to write and delete INSIDE those directories:
 # archiving .claude/skills/find-skills deleted SKILL.md from ~/.agents/skills. Now no write or
 # delete happens when the destination, or any parent directory of it below ~/.claude, is a link.

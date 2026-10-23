@@ -320,7 +320,7 @@ function capByTurn(arr: FileInPlay[], cap: number): FileInPlay[] {
  * the add* write helpers: bumpTurn/setIntent re-serialize the WHOLE bus without
  * going through those helpers, so a file that arrived already bloated (an older
  * version, an external writer) would otherwise persist and grow unbounded on every
- * turn-bump -- the write-slowdown feedback loop (session-3 Codex#5 / critic F5).
+ * turn-bump -- the write-slowdown feedback loop (session-3 Retired#5 / critic F5).
  */
 function coerceBus(busId: string, parsed: unknown): BusEntry {
   const base = emptyBus(busId);
@@ -647,7 +647,7 @@ function mutateViaLock(
   //      'write_error' (a pre-acquire exception -- outcomeKnown stays false).
   //   2. lock acquired but the write did not land (corrupt pre-image, throwing
   //      transform, or a failed atomicWriteSync -> wrote === false) -> 'write_error'.
-  //      This is the session-3 Codex#1 hole: the acquired-but-no-write path used to
+  //      This is the session-3 Retired#1 hole: the acquired-but-no-write path used to
   //      report dropped:false (a silent drop) -- the drop-storm rollback signal the
   //      quality gate relies on would have missed exactly these failures.
   // Only an acquired AND persisted write is a success.

@@ -91,7 +91,7 @@ Net: a resident recall path removes ~1.5–3.5s of pure overhead per call, leavi
 - `db`/`dbTimedOut` types unchanged → mergeResults/floor/topScoreRaw/emit/logRecallFire
   all untouched. **No recall regression, emit invariant intact.**
 
-## Premortem risk register (to harden in /premortem + Codex pass)
+## Premortem risk register (to harden in /premortem + Retired pass)
 
 | # | Risk | Mitigation |
 |---|------|-----------|
@@ -113,9 +113,9 @@ Net: a resident recall path removes ~1.5–3.5s of pure overhead per call, leavi
 - Daemon survives `store_learning.py` writing new rows mid-session (R8: new learning recalled without restart).
 - Fallback verified: kill daemon mid-session → recall silently falls back to uv, no error surfaced.
 
-## Premortem-hardened refinements (Codex adversarial pass, 2026-06-29 — v2)
+## Premortem-hardened refinements (Retired adversarial pass, 2026-06-29 — v2)
 
-Codex (gpt-5.5 @ xhigh) verdict: needs-attention, 9 findings. All folded in below;
+Retired (gpt-5.5 @ xhigh) verdict: needs-attention, 9 findings. All folded in below;
 these are the BINDING implementation contract (supersede the v1 text where they conflict).
 
 **H1 — never let an error masquerade as "no matches" (silent total failure, 0.89).**
@@ -172,7 +172,7 @@ hangs, never wrong). Verify with a concurrency smoke (several back-to-back recal
   session) is recalled without a daemon restart (R8 live-DB confirmation).
 
 ## Sequencing
-`/plan` (this doc) → `/premortem` (Codex) **[DONE 2026-06-29 — v2 above]** → user go/no-go
+`/plan` (this doc) → `/premortem` (Retired) **[DONE 2026-06-29 — v2 above]** → user go/no-go
 **[DONE — "premortem then implement"]** → implement (TDD, Python + TS, per v2 contract)
 **[DONE]** → verify gates **[DONE — see below]** → commit/sync/push **[DONE]**. Prereq for
 ST-03 + ST-10. After ST-05, re-baseline memory hit-rate (SG-01) — still TODO.

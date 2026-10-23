@@ -30,10 +30,12 @@ const ROOTS = [
 
 const SKIP_DIR = new Set(['node_modules', '.git']);
 
-export function scanFile(text) {
+export function scanFile(text, needle = NEEDLE) {
   const stripped = text.replace(ACCOUNT, '');
+  const flags = needle.flags.includes('g') ? needle.flags : `${needle.flags}g`;
+  const re = new RegExp(needle.source, flags);
   const hits = [];
-  for (const match of stripped.matchAll(NEEDLE)) hits.push(match.index);
+  for (const match of stripped.matchAll(re)) hits.push(match.index);
   return hits.length;
 }
 
