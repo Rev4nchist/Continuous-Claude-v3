@@ -6,7 +6,7 @@
 # Manual run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\sync-tasks-dashboard.ps1
 $ErrorActionPreference = 'Continue'
 
-$repo = 'C:\Users\david.hayes\continuous-claude'
+$repo = (Join-Path $env:USERPROFILE 'continuous-claude')
 Set-Location $repo
 
 # claude -p must auth via the claude.ai subscription login (the Notion MCP rides that OAuth), NOT a
@@ -103,7 +103,7 @@ $errFile = Join-Path $env:TEMP "ccv3-dash-err-$date.txt"
 $code = -1
 $syncTimedOut = $false
 try {
-  $proc = Start-Process -FilePath 'C:\Users\david.hayes\.local\bin\claude.exe' `
+  $proc = Start-Process -FilePath (Join-Path $env:USERPROFILE '.local\bin\claude.exe') `
     -ArgumentList '-p', '--model', $(if ($env:CCV3_HEADLESS_MODEL) { $env:CCV3_HEADLESS_MODEL } else { 'sonnet' }), '--allowedTools', 'Bash,ReadMcpResourceTool,mcp__claude_ai_Notion__notion-fetch,mcp__claude_ai_Notion__notion-update-page' `
     -RedirectStandardInput $prompt -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
     -NoNewWindow -PassThru
@@ -141,7 +141,7 @@ $verifyOk = $false
 $verifyReason = 'not-attempted'
 if ($code -eq 0) {
   try {
-    $ntnExe = 'C:/Users/david.hayes/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe'
+    $ntnExe = '$env:USERPROFILE/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe'
     $pageId = '38f76fd7ac8280478e50dd2956ba6e8a'
     if (-not (Test-Path $ntnExe)) {
       $verifyReason = "ntn.exe not found at $ntnExe"

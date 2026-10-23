@@ -10,7 +10,7 @@ REM It deliberately does NOT promote to the live sponsor URL -- that is Dave's a
 REM     node scripts\fourthos-weekly\promote.mjs
 REM Run manually: schtasks /run /tn "CCv3-FourthOS-Weekly"
 
-cd /d C:\Users\david.hayes\continuous-claude
+cd /d %USERPROFILE%\continuous-claude
 set GEN_PROMPT=scripts\fourthos-weekly\generate-prompt.md
 
 echo [%date% %time%] Starting FourthOS weekly sponsor update generation...
@@ -38,7 +38,7 @@ for /f "usebackq delims=" %%d in (`powershell -NoProfile -Command "(Get-Date).To
 REM Log capture: every headless claude -p run writes its full stdout+stderr to a
 REM dated log so a silent no-op is diagnosable after the fact (a same-day manual
 REM rerun overwrites that day's log -- accepted).
-set "LOG_DIR=C:\Users\david.hayes\.claude\logs\fourthos-weekly"
+set "LOG_DIR=%USERPROFILE%\.claude\logs\fourthos-weekly"
 if not exist "%LOG_DIR%" mkdir "%LOG_DIR%"
 if defined RUN_DATE (set "LOG_NAME=%RUN_DATE%.log") else (set "LOG_NAME=last-run.log")
 set "LOG_FILE=%LOG_DIR%\%LOG_NAME%"
@@ -138,7 +138,7 @@ REM breaks the stubbed-copy probe technique these wrappers are tested with
 REM (found by that probe, 2026-08-31) while buying nothing in production.
 set "GEN_TIMEOUT_SEC=3600"
 if defined CCV3_FOURTHOS_TIMEOUT_SEC set "GEN_TIMEOUT_SEC=%CCV3_FOURTHOS_TIMEOUT_SEC%"
-powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fourthos-weekly\run-generate.ps1" -Prompt "%GEN_PROMPT%" -Out "%LOG_FILE%" -AddDir "C:\Users\david.hayes\Projects\ai-enablement-decks" -AllowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" -TimeoutSec %GEN_TIMEOUT_SEC%
+powershell -NoProfile -ExecutionPolicy Bypass -File "scripts\fourthos-weekly\run-generate.ps1" -Prompt "%GEN_PROMPT%" -Out "%LOG_FILE%" -AddDir "%USERPROFILE%\Projects\ai-enablement-decks" -AllowedTools "%GEN_TOOLS%,Bash,Read,Write,Edit,Glob,Grep" -TimeoutSec %GEN_TIMEOUT_SEC%
 set EXIT_CODE=%ERRORLEVEL%
 
 echo [%date% %time%] FourthOS weekly generation finished. exit=%EXIT_CODE% log=%LOG_FILE%

@@ -3,7 +3,7 @@
   "projects": [
     {
       "name": "continuous-claude",
-      "path": "C:/Users/david.hayes/continuous-claude",
+      "path": "C:/Users/dkhay/continuous-claude",
       "stack": [
         "TypeScript",
         "Node.js",
@@ -25,7 +25,7 @@
     },
     {
       "name": "NorthStar Transformation",
-      "path": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
+      "path": "C:/Users/dkhay/Projects/archive/NorthStar Transformation",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -44,7 +44,7 @@
     },
     {
       "name": "Fourth Connect",
-      "path": "C:/Users/david.hayes/Projects/fourth-connect",
+      "path": "C:/Users/dkhay/Projects/fourth-connect",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -60,7 +60,7 @@
     },
     {
       "name": "agent-factory",
-      "path": "C:/Users/david.hayes/Projects/agent-factory",
+      "path": "C:/Users/dkhay/Projects/agent-factory",
       "stack": [
         "Python",
         "Agentica",
@@ -80,7 +80,7 @@
     },
     {
       "name": "ECG Lead Reactivation Engine",
-      "path": "C:/Users/david.hayes/Projects/ECG Lead Reactivation Engine",
+      "path": "C:/Users/dkhay/Projects/ECG Lead Reactivation Engine",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -99,7 +99,7 @@
     },
     {
       "name": "LinkMap",
-      "path": "C:/Users/david.hayes/Projects/linkmap",
+      "path": "C:/Users/dkhay/Projects/linkmap",
       "stack": [
         "React",
         "TypeScript"
@@ -114,7 +114,7 @@
     },
     {
       "name": "ebr-presentations-plugin",
-      "path": "C:/Users/david.hayes/Projects/ebr-presentations-plugin",
+      "path": "C:/Users/dkhay/Projects/ebr-presentations-plugin",
       "stack": [],
       "description": "EBR/QBR presentations plugin",
       "port": null,
@@ -128,7 +128,7 @@
     },
     {
       "name": "gong-mcp",
-      "path": "C:/Users/david.hayes/Projects/gong-mcp",
+      "path": "C:/Users/dkhay/Projects/gong-mcp",
       "stack": [
         "Python 3.12",
         "FastMCP v3",
@@ -149,7 +149,7 @@
     },
     {
       "name": "vibe-trading",
-      "path": "C:/Users/david.hayes/Projects/vibe-trading",
+      "path": "C:/Users/dkhay/Projects/vibe-trading",
       "stack": [
         "Python 3.12",
         "uv",
@@ -171,7 +171,7 @@
     },
     {
       "name": "fourth-salesforce-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp",
+      "path": "C:/Users/dkhay/Projects/fourth-salesforce-mcp",
       "stack": [
         "Python 3.12",
         "FastMCP v3",
@@ -192,7 +192,7 @@
     },
     {
       "name": "fourth-playwright-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
+      "path": "C:/Users/dkhay/Projects/fourth-playwright-mcp",
       "stack": [
         "Python 3.11",
         "FastMCP v3",
@@ -234,7 +234,7 @@
     },
     {
       "name": "fourth-marketing-brain",
-      "path": "C:/Users/david.hayes/fourth-marketing-brain",
+      "path": "C:/Users/dkhay/fourth-marketing-brain",
       "stack": [
         "Python 3.12",
         "FastMCP",
@@ -255,7 +255,7 @@
     },
     {
       "name": "Fourth Canvas",
-      "path": "C:/Users/david.hayes/Projects/Fourth Canvas",
+      "path": "C:/Users/dkhay/Projects/Fourth Canvas",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -272,7 +272,7 @@
     },
     {
       "name": "ebr-presentations",
-      "path": "C:/Users/david.hayes/Projects/ebr-presentations",
+      "path": "C:/Users/dkhay/Projects/ebr-presentations",
       "stack": [
         "Python (uv)",
         "pandas/polars",
@@ -290,7 +290,7 @@
     },
     {
       "name": "Fourth Presentation Hosting Platform",
-      "path": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
+      "path": "C:/Users/dkhay/Projects/archive/Fourth Presentation Hosting Platform",
       "stack": [],
       "description": "Presentation hosting platform",
       "port": null,
@@ -303,7 +303,7 @@
     },
     {
       "name": "fourth-workbook",
-      "path": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
+      "path": "C:/Users/dkhay/Projects/archive/fourth-workbook",
       "stack": [],
       "description": "Fourth workbook project",
       "port": null,
@@ -316,7 +316,7 @@
     },
     {
       "name": "fourth-netsuite-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
+      "path": "C:/Users/dkhay/Projects/fourth-netsuite-mcp",
       "stack": [
         "Python 3.12",
         "FastMCP v3",
@@ -337,7 +337,7 @@
     },
     {
       "name": "Agentic OS",
-      "path": "C:/Users/david.hayes/continuous-claude/apps/agentic-os",
+      "path": "C:/Users/dkhay/continuous-claude/apps/agentic-os",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -359,7 +359,7 @@
     },
     {
       "name": "buzz",
-      "path": "C:/Users/david.hayes/Projects/buzz",
+      "path": "C:/Users/dkhay/Projects/buzz",
       "stack": [
         "Rust",
         "Tauri",
@@ -375,7 +375,7 @@
     },
     {
       "name": "fourth-firecrawl",
-      "path": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
+      "path": "C:/Users/dkhay/Projects/fourth-firecrawl-plugin",
       "stack": [
         "Claude Code plugin",
         "Markdown skills + commands",
@@ -395,7 +395,7 @@
     },
     {
       "name": "FourthBot",
-      "path": "C:/Users/david.hayes/Projects/FourthBot",
+      "path": "C:/Users/dkhay/Projects/FourthBot",
       "stack": [
         "TypeScript",
         "Node.js",
@@ -414,7 +414,7 @@
     },
     {
       "name": "FlatClicker",
-      "path": "C:/Users/david.hayes/Projects/FlatClicker",
+      "path": "C:/Users/dkhay/Projects/FlatClicker",
       "stack": [
         "Tauri v2",
         "Rust",
@@ -432,7 +432,7 @@
     },
     {
       "name": "Minions (fourthbot-next)",
-      "path": "C:/Users/david.hayes/Projects/fourthbot-next",
+      "path": "C:/Users/dkhay/Projects/fourthbot-next",
       "stack": [
         "TypeScript",
         "pnpm",
@@ -457,7 +457,7 @@
     },
     {
       "name": "fourth-company-brain",
-      "path": "C:/Users/david.hayes/Projects/FourthCompanyBrain",
+      "path": "C:/Users/dkhay/Projects/FourthCompanyBrain",
       "stack": [
         "Markdown",
         "JSON Schema",

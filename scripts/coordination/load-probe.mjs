@@ -83,9 +83,9 @@ if (!HOOK) {
 
 // A real repo path in the real project namespace, so canonicalProject() produces
 // the same key the live hooks use. The file is never actually written.
-const PROJECT_CWD = 'C:\\Users\\david.hayes\\continuous-claude';
-const TARGET_FILE = 'C:\\Users\\david.hayes\\continuous-claude\\.claude\\hooks\\src\\__loadprobe__.ts';
-const CANONICAL_PROJECT = 'c:/users/david.hayes/continuous-claude';
+const PROJECT_CWD = 'C:\\Users\\ada.lovelace\\continuous-claude';
+const TARGET_FILE = 'C:\\Users\\ada.lovelace\\continuous-claude\\.claude\\hooks\\src\\__loadprobe__.ts';
+const CANONICAL_PROJECT = 'c:/users/ada.lovelace/continuous-claude';
 const OWNER = 'loadprobe-owner-0000-0000-000000000000';
 
 function psql(sql) {

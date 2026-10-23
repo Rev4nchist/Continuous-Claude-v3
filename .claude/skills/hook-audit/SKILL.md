@@ -19,9 +19,9 @@ Every hook with meaningful logic MUST be registered in settings.json to run. Unr
 
 | Item | Path |
 |------|------|
-| Hook source | `C:/Users/david.hayes/continuous-claude/.claude/hooks/src/*.ts` |
-| Active settings | `C:/Users/david.hayes/.claude/settings.json` |
-| Active dist | `C:/Users/david.hayes/.claude/hooks/dist/*.mjs` |
+| Hook source | `~/continuous-claude/.claude/hooks/src/*.ts` |
+| Active settings | `~/.claude/settings.json` |
+| Active dist | `~/.claude/hooks/dist/*.mjs` |
 | Full command scripts | `@references/audit-commands.md` |
 
 **Exclusions** from source inventory (not standalone hooks):
@@ -38,7 +38,7 @@ Every hook with meaningful logic MUST be registered in settings.json to run. Unr
 List all `.ts` files in hooks source directory (excluding shared/tests).
 
 ```bash
-ls C:/Users/david.hayes/continuous-claude/.claude/hooks/src/*.ts \
+ls ~/continuous-claude/.claude/hooks/src/*.ts \
   | xargs -I{} basename {} .ts | sort
 ```
 
@@ -96,7 +96,7 @@ For ready-to-wire hooks, generate settings.json entries.
   "hooks": [
     {
       "type": "command",
-      "command": "node C:/Users/david.hayes/.claude/hooks/dist/<NAME>.mjs",
+      "command": "node ~/.claude/hooks/dist/<NAME>.mjs",
       "timeout": <TIMEOUT>
     }
   ]
@@ -120,7 +120,7 @@ Run the registration generator from `@references/audit-commands.md` for bulk out
 
 | Issue | Fix |
 |-------|-----|
-| Stale/missing dist | `cd C:/Users/david.hayes/continuous-claude/.claude/hooks && npm run build` |
+| Stale/missing dist | `cd ~/continuous-claude/.claude/hooks && npm run build` |
 | Orphaned registration | Remove entry from settings.json |
 | Renamed hook | Update registration command path |
 

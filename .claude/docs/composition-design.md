@@ -319,7 +319,7 @@ The agent x skill map (`agent-skill-map.md`) was updated to reflect the new agen
 
 ## 8. References
 
-- Plan: `C:/Users/david.hayes/.claude/plans/i-have-a-new-abstract-quail.md` (Phase 5)
+- Plan: `~/.claude/plans/i-have-a-new-abstract-quail.md` (Phase 5)
 - Companion docs:
   - [`.claude/docs/agent-skill-map.md`](./agent-skill-map.md) — full pairing inventory + routing coverage gaps
   - [`.claude/docs/tool-tier-policy.md`](./tool-tier-policy.md) — hooks vs MCPs vs skills decision rules (companion to this doc's §2 decision tree)

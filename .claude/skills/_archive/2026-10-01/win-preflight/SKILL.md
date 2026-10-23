@@ -54,7 +54,7 @@ grep -rn 'python3' --include='*.sh' --include='*.ts' --include='*.js' --include=
 
 ### Check 3: Bare `/Users/` paths without drive letter
 
-Paths like `/Users/david.hayes/...` resolve to `C:\Program Files\Git\Users\...` on Git Bash.
+Paths like `/Users/ada.lovelace/...` resolve to `C:\Program Files\Git\Users\...` on Git Bash.
 
 ```bash
 grep -rn '"/Users/' --include='*.ts' --include='*.js' --include='*.sh' --include='*.json' . 2>/dev/null | grep -v node_modules | grep -v '.git/' | head -20

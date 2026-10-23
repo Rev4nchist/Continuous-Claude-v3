@@ -18,7 +18,7 @@ Opens a new terminal window and launches Claude Code in dangerously-skip-permiss
 ## Execute this command:
 
 ```bash
-start cmd /k "set CLAUDE_CODE_GIT_BASH_PATH=C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe && echo. && echo 🚨 DANGEROUS MODE ACTIVE - All operations execute without prompts && echo 📁 Working Directory: %CD% && echo. && claude --dangerously-skip-permissions"
+start cmd /k "set CLAUDE_CODE_GIT_BASH_PATH=~\AppData\Local\Programs\Git\bin\bash.exe && echo. && echo 🚨 DANGEROUS MODE ACTIVE - All operations execute without prompts && echo 📁 Working Directory: %CD% && echo. && claude --dangerously-skip-permissions"
 ```
 
 This will:

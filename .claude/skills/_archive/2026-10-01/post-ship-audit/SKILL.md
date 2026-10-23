@@ -91,8 +91,8 @@ if (issues.length) {
 Compare the continuous-claude repo against the active `~/.claude/` directory for unexpected drift. Use the sync-drift skill logic or run directly:
 
 ```bash
-REPO="C:/Users/david.hayes/continuous-claude/.claude"
-ACTIVE="C:/Users/david.hayes/.claude"
+REPO="~/continuous-claude/.claude"
+ACTIVE="~/.claude"
 
 echo "--- hooks/src/ ---"
 diff -rq "$REPO/hooks/src/" "$ACTIVE/hooks/src/" 2>/dev/null | grep -v node_modules | grep -v .tldr || echo "  In sync"

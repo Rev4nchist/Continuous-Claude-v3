@@ -21,7 +21,7 @@ Registry updates MUST be a single Node read-modify-write process with a temp-fil
 ```bash
 node -e "
 const fs = require('fs');
-const p = 'C:/Users/david.hayes/continuous-claude/.claude/project-registry.json';
+const p = require('os').homedir() + '/continuous-claude/.claude/project-registry.json';
 const reg = JSON.parse(fs.readFileSync(p, 'utf8'));
 // ... modify reg ...
 const tmp = p + '.tmp-' + process.pid;
@@ -84,7 +84,7 @@ Append a new entry to the `projects` array in `.claude/project-registry.json`:
 ```json
 {
   "name": "new-project",
-  "path": "C:/Users/david.hayes/Projects/new-project",
+  "path": "~/Projects/new-project",
   "stack": ["React", "TypeScript"],
   "description": "What this project does",
   "port": null,

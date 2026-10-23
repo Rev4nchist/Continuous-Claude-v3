@@ -415,7 +415,7 @@ function probe3_hardcoded_paths() {
       const {readdirSync, readFileSync, statSync} = require('fs');
       const {join} = require('path');
       const root = String.raw\`${REPO_ROOT}/.claude/hooks/src\`;
-      const NEEDLE = 'C:/Users/david.hayes/';
+      const NEEDLE = '~/';
       const hits = [];
       function walk(dir) {
         for (const ent of readdirSync(dir)) {
@@ -444,7 +444,7 @@ function probe3_hardcoded_paths() {
   const passed = parsed.count === 0;
   return probeResult(
     'probe3_hardcoded_paths',
-    "0 occurrences of 'C:/Users/david.hayes/' in .claude/hooks/src/**/*.ts",
+    "0 occurrences of '~/' in .claude/hooks/src/**/*.ts",
     `${parsed.count} occurrences`,
     'HARD-WRONG',
     'HIGH',
@@ -738,7 +738,7 @@ async function synthesize(state, outPath) {
               const norm = h.replace(/\\/g, '/');
               const idx = norm.indexOf('.claude/hooks/src/');
               const rel = idx >= 0 ? norm.slice(idx) : norm;
-              filesToFix.push(`${rel} -- replace literal C:/Users/david.hayes/ with HOMEPATH/USERPROFILE`);
+              filesToFix.push(`${rel} -- replace literal ~/ with HOMEPATH/USERPROFILE`);
             });
             break;
           case 'probe4_dotclaude_skip':

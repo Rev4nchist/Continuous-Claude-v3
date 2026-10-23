@@ -16,7 +16,7 @@
 import { describe, it, expect } from 'vitest';
 import { isTasksRelatedToGoal, isPathInsideProject } from '../shared/roadmap-sync-guards.js';
 
-const PROJECT = 'C:/Users/david.hayes/continuous-claude';
+const PROJECT = '~/continuous-claude';
 
 describe('D2d-09: isTasksRelatedToGoal (false-completion guard)', () => {
   it('UNRELATED tasks file does NOT relate to the current goal (no false completion)', () => {
@@ -55,11 +55,11 @@ describe('D2d-13: isPathInsideProject (path.relative containment)', () => {
 
   it('a sibling dir sharing the prefix is NOT contained (the startsWith bug)', () => {
     expect(
-      isPathInsideProject('C:/Users/david.hayes/continuous-claude-x/tasks-x.md', PROJECT),
+      isPathInsideProject('~/continuous-claude-x/tasks-x.md', PROJECT),
     ).toBe(false);
   });
 
   it('an unrelated outside path is NOT contained', () => {
-    expect(isPathInsideProject('C:/Users/david.hayes/.claude/tasks-x.md', PROJECT)).toBe(false);
+    expect(isPathInsideProject('~/.claude/tasks-x.md', PROJECT)).toBe(false);
   });
 });

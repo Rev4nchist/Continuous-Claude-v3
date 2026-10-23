@@ -13,7 +13,7 @@ const mockSessions = {
   sessions: [
     {
       id: 'sess-001',
-      project: 'C:/Users/david.hayes/continuous-claude',
+      project: '~/continuous-claude',
       working_on: 'File claims feature',
       status: 'active' as const,
       last_heartbeat: new Date().toISOString(),
@@ -29,19 +29,19 @@ const mockSessions = {
 const mockFileClaims = {
   claims: [
     {
-      file_path: 'C:/Users/david.hayes/project-alpha/src/main.ts',
+      file_path: '~/project-alpha/src/main.ts',
       session_id: 'sess-001-abcdefgh',
       project: 'project-alpha',
       claimed_at: new Date(Date.now() - 120000).toISOString(),
     },
     {
-      file_path: 'C:/Users/david.hayes/project-alpha/src/utils.ts',
+      file_path: '~/project-alpha/src/utils.ts',
       session_id: 'sess-001-abcdefgh',
       project: 'project-alpha',
       claimed_at: new Date(Date.now() - 60000).toISOString(),
     },
     {
-      file_path: 'C:/Users/david.hayes/project-beta/src/index.py',
+      file_path: '~/project-beta/src/index.py',
       session_id: 'sess-002-xxxxxxxx',
       project: 'project-beta',
       claimed_at: new Date(Date.now() - 30000).toISOString(),

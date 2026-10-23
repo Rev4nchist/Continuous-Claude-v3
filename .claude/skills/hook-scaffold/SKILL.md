@@ -44,7 +44,7 @@ Use conversation to collect these required inputs (ask if not provided):
 
 Create the hook source file at:
 ```
-C:/Users/david.hayes/continuous-claude/.claude/hooks/src/<hook-name>.ts
+.claude/hooks/src/<hook-name>.ts
 ```
 
 **Process:**
@@ -74,8 +74,8 @@ Determine the correct registration based on event type:
   "matcher": "<TOOL_PATTERN>",
   "hooks": [{
     "type": "command",
-    "command": "node C:/Users/david.hayes/.claude/hooks/dist/<hook-name>.mjs",
-    "timeout": 5000
+    "command": "node ~/.claude/hooks/dist/<hook-name>.mjs",
+    "timeout": 5
   }]
 }
 ```
@@ -85,8 +85,8 @@ Determine the correct registration based on event type:
 {
   "hooks": [{
     "type": "command",
-    "command": "node C:/Users/david.hayes/.claude/hooks/dist/<hook-name>.mjs",
-    "timeout": 5000
+    "command": "node ~/.claude/hooks/dist/<hook-name>.mjs",
+    "timeout": 5
   }]
 }
 ```
@@ -98,14 +98,14 @@ Add to the existing hooks array for that event type (these have no matcher).
 ```bash
 node -e "
 const fs = require('fs');
-const settingsPath = 'C:/Users/david.hayes/.claude/settings.json';
+const settingsPath = require('os').homedir() + '/.claude/settings.json';
 const settings = JSON.parse(fs.readFileSync(settingsPath, 'utf8'));
 
 const eventType = '<EVENT_TYPE>';
 const hookEntry = {
   type: 'command',
-  command: 'node C:/Users/david.hayes/.claude/hooks/dist/<hook-name>.mjs',
-  timeout: 5000
+  command: 'node ~/.claude/hooks/dist/<hook-name>.mjs',
+  timeout: 5
 };
 
 // For PreToolUse/PostToolUse with a matcher
@@ -144,7 +144,7 @@ Adapt the `matcher`, `eventType`, `hook-name`, and `timeout` values for the spec
 ### Step 4: Build and Verify
 
 ```bash
-cd C:/Users/david.hayes/continuous-claude/.claude/hooks && npm run build
+cd .claude/hooks && npm run build
 ```
 
 **Verify:**
@@ -171,10 +171,10 @@ Confirm to the user:
 
 | Complexity | Timeout | Examples |
 |------------|---------|----------|
-| Simple check (string match, regex) | 3000ms | no-haiku-enforcer, explore-to-scout |
-| File I/O (read config, check state) | 5000ms | auto-build, plan-exit-tracker |
-| Network/DB or subprocess spawn | 10000ms | session-register, heartbeat |
-| Heavy I/O or multi-step | 15000ms | session-start-continuity, pre-compact-extract |
+| Simple check (string match, regex) | 3 seconds | no-haiku-enforcer, explore-to-scout |
+| File I/O (read config, check state) | 5 seconds | auto-build, plan-exit-tracker |
+| Network/DB or subprocess spawn | 10 seconds | session-register, heartbeat |
+| Heavy I/O or multi-step | 15 seconds | session-start-continuity, pre-compact-extract |
 
 ---
 

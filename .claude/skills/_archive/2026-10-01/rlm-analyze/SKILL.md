@@ -98,4 +98,4 @@ JSONL trajectory of every LLM call and REPL execution lands in
 ## Reference
 
 - Architecture (4 Mermaid views + Excalidraw): `docs/architecture/rlm/rlm-architecture.md`
-- Adoption plan: `C:/Users/david.hayes/.claude/plans/i-have-a-new-abstract-quail.md`
+- Adoption plan: `~/.claude/plans/i-have-a-new-abstract-quail.md`

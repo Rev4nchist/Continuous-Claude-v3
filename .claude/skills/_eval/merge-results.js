@@ -5,7 +5,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SKILLS_DIR = 'C:/Users/david.hayes/.claude/skills';
+const SKILLS_DIR = '~/.claude/skills';
 const PROGRESS_PATH = path.join(SKILLS_DIR, '_eval-progress.json');
 const RESULTS_PATH = path.join(SKILLS_DIR, '_eval', 'eval-results.json');
 const RULES_PATH = path.join(SKILLS_DIR, 'skill-rules.json');

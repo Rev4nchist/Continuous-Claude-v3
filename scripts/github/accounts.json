@@ -70,12 +70,12 @@
   },
   "routes": [
     {
-      "prefix": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
+      "prefix": "C:/Users/dkhay/Projects/fourth-firecrawl-plugin",
       "commitAccount": "work",
       "note": "transferred to fourth org 2026-08-05"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/fourth",
+      "prefix": "C:/Users/dkhay/Projects/fourth",
       "commitAccount": "work",
       "note": "reserved for future github.com/fourth clones"
     },
@@ -84,61 +84,61 @@
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/fourth-marketing-brain",
+      "prefix": "C:/Users/dkhay/fourth-marketing-brain",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp",
+      "prefix": "C:/Users/dkhay/Projects/fourth-salesforce-mcp",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
+      "prefix": "C:/Users/dkhay/Projects/fourth-playwright-mcp",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
+      "prefix": "C:/Users/dkhay/Projects/fourth-netsuite-mcp",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/Fourth Canvas",
+      "prefix": "C:/Users/dkhay/Projects/Fourth Canvas",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/gong-mcp",
+      "prefix": "C:/Users/dkhay/Projects/gong-mcp",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/ebr-presentations",
+      "prefix": "C:/Users/dkhay/Projects/ebr-presentations",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/ebr-presentations-plugin",
+      "prefix": "C:/Users/dkhay/Projects/ebr-presentations-plugin",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
+      "prefix": "C:/Users/dkhay/Projects/archive/NorthStar Transformation",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
+      "prefix": "C:/Users/dkhay/Projects/archive/Fourth Presentation Hosting Platform",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
+      "prefix": "C:/Users/dkhay/Projects/archive/fourth-workbook",
       "commitAccount": "work"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/customer-ui",
+      "prefix": "C:/Users/dkhay/Projects/customer-ui",
       "commitAccount": "work",
       "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
     },
     {
-      "prefix": "C:/Users/david.hayes/Projects/agent-poc",
+      "prefix": "C:/Users/dkhay/Projects/agent-poc",
       "commitAccount": "work",
       "note": "remote github.com/fourth; committed as personal until 2026-09-24 (P28)"
     },
     {
-      "prefix": "C:/Users/david.hayes",
+      "prefix": "C:/Users/dkhay",
       "commitAccount": "personal"
     }
   ],
@@ -150,7 +150,7 @@
       "their status quo -- so leaving them here changes nothing. Move them into",
       "routes if they are Fourth work."
     ],
-    "C:/Users/david.hayes/Projects/agent-factory": "personal account remote; topic unclear",
-    "C:/Users/david.hayes/Projects/ECG Lead Reactivation Engine": "ECG may be a Fourth client or a personal project"
+    "C:/Users/dkhay/Projects/agent-factory": "personal account remote; topic unclear",
+    "C:/Users/dkhay/Projects/ECG Lead Reactivation Engine": "ECG may be a Fourth client or a personal project"
   }
 }

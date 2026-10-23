@@ -21,14 +21,14 @@ On this Windows system:
 
 | Label | Path |
 |-------|------|
-| Repo | `C:/Users/david.hayes/continuous-claude/.claude/` |
-| Active | `C:/Users/david.hayes/.claude/` |
+| Repo | `~/continuous-claude/.claude/` |
+| Active | `~/.claude/` |
 
 Set these variables before running commands:
 
 ```bash
-REPO="C:/Users/david.hayes/continuous-claude/.claude"
-ACTIVE="C:/Users/david.hayes/.claude"
+REPO="~/continuous-claude/.claude"
+ACTIVE="~/.claude"
 ```
 
 ## Procedure
@@ -158,9 +158,9 @@ Format the output as a table:
 - **Stale build** -- dist file is older than its source (needs rebuild)
 
 **Fix commands:**
-- For source/config drift: `bash C:/Users/david.hayes/continuous-claude/scripts/sync-to-active.sh`
-- For stale builds: `cd C:/Users/david.hayes/.claude/hooks && npm run build`
-- For missing in repo: `bash C:/Users/david.hayes/continuous-claude/scripts/sync-claude.sh --to-repo`
+- For source/config drift: `bash ~/continuous-claude/scripts/sync-to-active.sh`
+- For stale builds: `cd ~/.claude/hooks && npm run build`
+- For missing in repo: `bash ~/continuous-claude/scripts/sync-claude.sh --to-repo`
 
 ### Step 5: Summary
 
@@ -181,8 +181,8 @@ All synced directories are in sync. No drift detected.
 For a quick check, run all comparisons in sequence:
 
 ```bash
-REPO="C:/Users/david.hayes/continuous-claude/.claude"
-ACTIVE="C:/Users/david.hayes/.claude"
+REPO="~/continuous-claude/.claude"
+ACTIVE="~/.claude"
 
 # Known local-only files (do not report as drift)
 LOCAL_ONLY="settings.json|settings.local.json|CLAUDE.md|RULES.md|extraction-state.json|knowledge-tree.json|\.env|\.credentials.json|history.jsonl"

@@ -12,7 +12,7 @@ Spike evidence: `docs/notion-platform-spike-report.md` (continuous-claude repo).
 
 - Install: `winget install Notion.ntn` (native x64). NOT `curl|bash` (that's macOS/Linux). npm alt: `npm i -g ntn` (Node 22+).
 - **Absolute exe path** (scheduled tasks MUST use this; winget adds no Links alias):
-  `C:\Users\david.hayes\AppData\Local\Microsoft\WinGet\Packages\Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe\ntn-x86_64-pc-windows-msvc\ntn.exe`
+  `%LOCALAPPDATA%\Microsoft\WinGet\Packages\Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe\ntn-x86_64-pc-windows-msvc\ntn.exe`
 - Login: `ntn login` prints a URL + verification code → user approves in browser → `ntn login poll` completes. Credentials in Windows keychain; config `%APPDATA%\notion`.
 - Health: `ntn doctor` (the real auth probe). **Do NOT probe with `ntn api v1/users`** — personal access tokens get 403 on it by design.
 - Page access: the user-scoped token sees everything Dave sees — no integration-connect grants needed.

@@ -84,7 +84,7 @@ describe('extractNotesSections', () => {
 // same cross-project contamination guard, so a foreign focus is not propagated.
 // Uses the real continuous-claude registry on disk (the actual project).
 describe('extractGuardedCurrentFocus (D2F-03)', () => {
-  const CC_DIR = 'C:/Users/david.hayes/continuous-claude';
+  const CC_DIR = '~/continuous-claude';
 
   it('drops a foreign Salesforce/FastMCP Current Focus (SEED-02 regression)', () => {
     const roadmap = [

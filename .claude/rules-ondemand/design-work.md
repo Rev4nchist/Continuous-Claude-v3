@@ -67,7 +67,7 @@ Before calling a design done, look at it in a browser. A green build is not a wo
 - **The API key.** `KIE_AI_API_KEY` comes from the environment. Never write it to a `.env` inside a
   build folder or repo: `kie.mjs` searches up to 7 parent folders for one. Absent key = build from
   supplied photos and footage, which needs no key.
-- **Workspace.** `SCROLLCRAFT_HOME` points at `C:\Users\david.hayes\Projects\scrollcraft`. Without it
+- **Workspace.** `SCROLLCRAFT_HOME` points at the scrollcraft checkout. Without it
   the skill writes `<git root>/scrollcraft`, which inside `continuous-claude` puts builds in the
   harness repo. Run `node <skill>/scripts/workspace.mjs` and check the path before any build.
 - **Local server.** `serve.mjs` binds `127.0.0.1` and refuses dotfiles (CCv3 patch). State the port

@@ -28,7 +28,7 @@ import { execFileSync } from "node:child_process";
 import { fileURLToPath } from "node:url";
 import { artifactUrlForType, loadIds } from "../report-registry/artifact-url.mjs";
 
-const DEFAULT_REPO = "C:/Users/david.hayes/Projects/ai-enablement-decks";
+const DEFAULT_REPO = "~/Projects/ai-enablement-decks";
 const SECTION = "sponsor-updates";
 
 const args = process.argv.slice(2);

@@ -104,20 +104,20 @@ grep -rn 'python3' --include='*.sh' --include='*.ts' --include='*.js' --include=
 
 ### Why It Fails
 
-On Git Bash for Windows, a path like `/Users/david.hayes/project` does NOT resolve to `C:\Users\david.hayes\project`. Instead, Git Bash interprets it as relative to its install directory: `C:\Program Files\Git\Users\david.hayes\project`, which does not exist.
+On Git Bash for Windows, a path like `/Users/ada.lovelace/project` does NOT resolve to `~\project`. Instead, Git Bash interprets it as relative to its install directory: `C:\Program Files\Git\Users\ada.lovelace\project`, which does not exist.
 
 This is the #1 cause of `Exit code 1` errors across sessions. The error is confusing because the path looks correct.
 
 ### Error Message
 
 ```
-bash: cd: /Users/david.hayes/project: No such file or directory
+bash: cd: /Users/ada.lovelace/project: No such file or directory
 ```
 
 Or:
 
 ```
-ENOENT: no such file or directory, open '/Users/david.hayes/project/file.ts'
+ENOENT: no such file or directory, open '/Users/ada.lovelace/project/file.ts'
 ```
 
 ### Fix
@@ -126,21 +126,21 @@ ENOENT: no such file or directory, open '/Users/david.hayes/project/file.ts'
 
 ```bash
 # Before (fails on Git Bash)
-cd /Users/david.hayes/project
+cd /Users/ada.lovelace/project
 
 # After (Git Bash format)
-cd /c/Users/david.hayes/project
+cd /c/Users/ada.lovelace/project
 
 # After (Windows forward-slash format)
-cd C:/Users/david.hayes/project
+cd ~/project
 ```
 
 **For environment variables:** `$HOME` works when set, but literal paths MUST include the drive letter.
 
 | Wrong | Right |
 |-------|-------|
-| `/Users/david.hayes/project` | `/c/Users/david.hayes/project` |
-| `"/Users/david.hayes/file"` | `"C:/Users/david.hayes/file"` |
+| `/Users/ada.lovelace/project` | `/c/Users/ada.lovelace/project` |
+| `"/Users/ada.lovelace/file"` | `"~/file"` |
 
 ### Detection Command
 

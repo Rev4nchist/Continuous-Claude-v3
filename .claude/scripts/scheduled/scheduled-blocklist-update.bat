@@ -4,7 +4,7 @@ REM Daily package security blocklist update
 REM Runs via Windows Task Scheduler at 9am (task CCv3-Blocklist-Update, cmd.exe /c <this file>)
 REM
 REM This file lives in the repo at .claude/scripts/scheduled/ and the forward sync installs it at
-REM C:\Users\david.hayes\.claude\scripts\scheduled\. The task points at that installed copy, so the job
+REM %USERPROFILE%\.claude\scripts\scheduled\. The task points at that installed copy, so the job
 REM that runs is always main's version, whatever branch the primary checkout has. Register the task
 REM with register-blocklist-task.ps1 (same folder).
 REM
@@ -17,7 +17,7 @@ REM Optional arguments are passed to the .ps1 unchanged, e.g. -RepoPath <test cl
 
 REM Self-redirect ALL output to a durable log (Task Scheduler discards the console, which is why
 REM this task's daily exit-1 failures were undiagnosable). The re-invoke runs the real body below.
-set "LOG=C:\Users\david.hayes\continuous-claude\.claude\logs\blocklist-update.log"
+set "LOG=%USERPROFILE%\continuous-claude\.claude\logs\blocklist-update.log"
 if defined BLOCKLIST_LOG set "LOG=%BLOCKLIST_LOG%"
 
 REM GOTO, not a parenthesized block. `%ERRORLEVEL%` inside ( ... ) is expanded when

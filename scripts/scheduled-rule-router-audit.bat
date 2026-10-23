@@ -4,7 +4,7 @@ REM Writes docs\self-improvement\audits\rule-router-<date>.md from ~/.claude/log
 REM Exit 1 = a dedupe break (a rule fired twice in one session): a router defect, read the report.
 
 REM Self-redirect all output to a durable log; Task Scheduler discards the console.
-set "LOG=C:\Users\david.hayes\continuous-claude\.claude\logs\rule-router-audit.log"
+set "LOG=%USERPROFILE%\continuous-claude\.claude\logs\rule-router-audit.log"
 
 REM GOTO, not a parenthesized block: %ERRORLEVEL% inside ( ... ) expands before `call` runs
 REM (see .claude/scripts/scheduled/scheduled-blocklist-update.bat, where that hid 28 failures).
@@ -17,7 +17,7 @@ exit /b %ERRORLEVEL%
 
 :BODY
 echo [%date% %time%] rule-router audit starting
-cd /d C:\Users\david.hayes\continuous-claude
+cd /d %USERPROFILE%\continuous-claude
 "C:\Program Files\nodejs\node.exe" scripts\rules\rule-router-audit.mjs --days 7
 set "RC=%ERRORLEVEL%"
 echo [%date% %time%] rule-router audit finished, exit %RC%

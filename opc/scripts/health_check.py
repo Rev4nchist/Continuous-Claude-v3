@@ -543,7 +543,7 @@ def check_claude_opc_dir() -> CheckResult:
                  "CLAUDE_OPC_DIR not set",
                  severity="MEDIUM",
                  remediation="export CLAUDE_OPC_DIR="
-                             "C:/Users/david.hayes/continuous-claude/opc")
+                             "~/continuous-claude/opc")
 
 
 def check_opc_env_file() -> CheckResult:

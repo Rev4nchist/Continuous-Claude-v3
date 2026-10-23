@@ -185,7 +185,7 @@ describe('appendIntelBus -- secret redaction', () => {
 
   it('leaves a benign field (a file path) untouched', () => {
     const { lines, append } = makeCapture();
-    const path = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src/shared/intel-bus.ts';
+    const path = '~/continuous-claude/.claude/hooks/src/shared/intel-bus.ts';
     appendIntelBus(
       { bus_id: 'abc123', subject_id: path },
       { append, now: FIXED_NOW },

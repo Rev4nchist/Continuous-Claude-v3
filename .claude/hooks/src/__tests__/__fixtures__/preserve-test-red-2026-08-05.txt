@@ -4,7 +4,7 @@ This is the pre-fix RED test output for post-plan-roadmap-preserve.test.ts, reta
 
 ---
 
- RUN  v4.0.16 C:/Users/david.hayes/continuous-claude/.claude/hooks
+ RUN  v4.0.16 ~/continuous-claude/.claude/hooks
 
  ❯ src/__tests__/post-plan-roadmap-preserve.test.ts (11 tests | 9 failed) 25ms
      × removes NOTHING from the original -- no exemptions 6ms

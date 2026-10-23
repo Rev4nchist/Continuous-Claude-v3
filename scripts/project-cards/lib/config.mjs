@@ -27,7 +27,7 @@ export const SWEEP_LOG_PATH = join(LOGS_DIR, 'sweep.jsonl');
 // (report-registry/config.mjs re-exports it). The NTN_EXE_PATH env var overrides
 // the baked-in winget path for a different machine/install without a code edit.
 export const NTN_EXE = process.env.NTN_EXE_PATH
-  || 'C:/Users/david.hayes/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe';
+  || '~/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe';
 
 // --- FourthOS Notion data source ids (databases) ---
 export const PROJECTS_DS = '852a60e1-9fa6-4361-9b55-1a9f59d566d8';

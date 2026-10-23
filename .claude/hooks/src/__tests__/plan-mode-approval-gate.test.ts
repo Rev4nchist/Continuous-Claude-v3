@@ -127,14 +127,14 @@ describe('decideGate', () => {
 
 describe('mangleProjectDir', () => {
   it('replaces non-alphanumeric characters with dashes', () => {
-    expect(mangleProjectDir('C:/Users/david.hayes/continuous-claude')).toBe(
-      'C--Users-david-hayes-continuous-claude',
+    expect(mangleProjectDir('~/continuous-claude')).toBe(
+      'C--Users-ada-lovelace-continuous-claude',
     );
   });
 
   it('handles backslash paths', () => {
-    expect(mangleProjectDir('C:\\Users\\david.hayes\\project')).toBe(
-      'C--Users-david-hayes-project',
+    expect(mangleProjectDir('C:\\Users\\ada.lovelace\\project')).toBe(
+      'C--Users-ada-lovelace-project',
     );
   });
 

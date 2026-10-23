@@ -21,7 +21,7 @@ import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPO = 'C:/Users/david.hayes/Projects/ai-enablement-decks';
+const DEFAULT_REPO = '~/Projects/ai-enablement-decks';
 const SITE_DIR = 'self-improvement';
 
 const args = process.argv.slice(2);

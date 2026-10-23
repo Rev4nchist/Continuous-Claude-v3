@@ -313,7 +313,7 @@ def test_same_content_same_project_different_sessions_deduped(
     This is the core Phase 4C guarantee. Pre-Phase-4C the second store would
     create a duplicate row because dedup was filtered by session_id.
     """
-    project_dir = "C:/Users/david.hayes/Projects/phase4c-fake-project"
+    project_dir = "~/Projects/phase4c-fake-project"
     content = (
         "Phase 4C integration test canary content -- this string is unique "
         "enough to not collide with anything else in archival_memory, and "
@@ -399,7 +399,7 @@ def test_same_content_different_projects_both_stored(
             content=content,
             learning_type="WORKING_SOLUTION",
             scope="PROJECT",
-            project_dir="C:/Users/david.hayes/Projects/phase4c-project-X",
+            project_dir="~/Projects/phase4c-project-X",
         )
         assert result_x.get("success") is True
         assert not result_x.get("skipped"), result_x
@@ -409,7 +409,7 @@ def test_same_content_different_projects_both_stored(
             content=content,
             learning_type="WORKING_SOLUTION",
             scope="PROJECT",
-            project_dir="C:/Users/david.hayes/Projects/phase4c-project-Y",
+            project_dir="~/Projects/phase4c-project-Y",
         )
         assert result_y.get("success") is True
         assert not result_y.get("skipped"), (

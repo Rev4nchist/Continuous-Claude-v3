@@ -6,7 +6,7 @@
 # Manual run:  powershell -NoProfile -ExecutionPolicy Bypass -File scripts\self-improvement\run-research.ps1
 $ErrorActionPreference = 'Stop'
 
-$repo = 'C:\Users\david.hayes\continuous-claude'
+$repo = (Join-Path $env:USERPROFILE 'continuous-claude')
 $si   = Join-Path $repo 'scripts\self-improvement'
 Set-Location $repo
 
@@ -164,7 +164,7 @@ try {
   # Pin the model (Opus 5.5 eval, P34): unpinned, this ran on whatever the interactive session
   # model was (Opus, then Fable) and competed with Dave's quota; 8 of ~28 runs produced nothing.
   $headlessModel = if ($env:CCV3_HEADLESS_MODEL) { $env:CCV3_HEADLESS_MODEL } else { 'sonnet' }
-  $proc = Start-Process -FilePath 'C:\Users\david.hayes\.local\bin\claude.exe' `
+  $proc = Start-Process -FilePath (Join-Path $env:USERPROFILE '.local\bin\claude.exe') `
     -ArgumentList '-p', '--model', $headlessModel, '--allowedTools', 'Read,Grep,Glob,Write,Bash,WebSearch,WebFetch,Task,Skill' `
     -RedirectStandardInput $promptFile -RedirectStandardOutput $outFile -RedirectStandardError $errFile `
     -NoNewWindow -PassThru

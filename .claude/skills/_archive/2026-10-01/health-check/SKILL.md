@@ -93,7 +93,7 @@ To test the Notion update manually without waiting for Friday:
 type scripts\notion-health-prompt.md | claude -p --output-format text
 ```
 
-(run from `C:\Users\david.hayes\continuous-claude`)
+(run from `~\continuous-claude`)
 
 ## When to run it
 

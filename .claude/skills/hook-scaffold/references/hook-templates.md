@@ -439,8 +439,8 @@ Each event type has a different registration structure in `~/.claude/settings.js
   "hooks": [
     {
       "type": "command",
-      "command": "node C:/Users/david.hayes/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
-      "timeout": 5000
+      "command": "node ~/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
+      "timeout": 5
     }
   ]
 }
@@ -453,8 +453,8 @@ Each event type has a different registration structure in `~/.claude/settings.js
   "hooks": [
     {
       "type": "command",
-      "command": "node C:/Users/david.hayes/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
-      "timeout": 5000
+      "command": "node ~/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
+      "timeout": 5
     }
   ]
 }
@@ -469,8 +469,8 @@ These event types do not use matchers. Add the hook entry directly to the hooks 
   "hooks": [
     {
       "type": "command",
-      "command": "node C:/Users/david.hayes/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
-      "timeout": 5000
+      "command": "node ~/.claude/hooks/dist/{{HOOK_NAME}}.mjs",
+      "timeout": 5
     }
   ]
 }
@@ -480,13 +480,13 @@ These event types do not use matchers. Add the hook entry directly to the hooks 
 
 | Hook Type | Typical Timeout |
 |-----------|----------------|
-| PreToolUse (simple check) | 3000-5000ms |
-| PreToolUse (with file I/O) | 5000-10000ms |
-| PostToolUse (context inject) | 5000ms |
-| PostToolUse (background spawn) | 10000-15000ms |
-| SessionStart | 10000-15000ms |
-| SessionEnd | 10000-15000ms |
-| UserPromptSubmit | 5000-10000ms |
+| PreToolUse (simple check) | 3-5 seconds |
+| PreToolUse (with file I/O) | 5-10 seconds |
+| PostToolUse (context inject) | 5 seconds |
+| PostToolUse (background spawn) | 10-15 seconds |
+| SessionStart | 10-15 seconds |
+| SessionEnd | 10-15 seconds |
+| UserPromptSubmit | 5-10 seconds |
 
 ---
 

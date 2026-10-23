@@ -1,5 +1,5 @@
 const fs = require('fs');
-const r = JSON.parse(fs.readFileSync('C:/Users/david.hayes/.claude/skills/skill-rules.json','utf8'));
+const r = JSON.parse(fs.readFileSync('~/.claude/skills/skill-rules.json','utf8'));
 const skills = Object.keys(r.skills);
 const agents = r.agents ? Object.keys(r.agents) : [];
 console.log('Skills:', skills.length);

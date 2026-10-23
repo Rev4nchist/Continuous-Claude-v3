@@ -67,10 +67,10 @@ For current inventory: see [agent-skill-map.md](../agent-skill-map.md), [hook-ca
 - [Hook Audit (2026-04)](../hook-audit-2026-04.md) - Phase 2/3/5c audit decisions and open follow-ups
 
 **Comprehensive Documentation (continuous-claude/docs/):**
-- [ARCHITECTURE.md](file:///C:/Users/david.hayes/continuous-claude/docs/ARCHITECTURE.md) - Full system architecture with TLDR analysis
-- [memory-architecture.md](file:///C:/Users/david.hayes/continuous-claude/docs/memory-architecture.md) - Complete memory system with Mermaid diagrams
-- [hooks/README.md](file:///C:/Users/david.hayes/continuous-claude/docs/hooks/README.md) - Full hook reference (718 lines)
-- [agents/README.md](file:///C:/Users/david.hayes/continuous-claude/docs/agents/README.md) - Agent selection guide (750 lines)
+- [ARCHITECTURE.md](file:///~/continuous-claude/docs/ARCHITECTURE.md) - Full system architecture with TLDR analysis
+- [memory-architecture.md](file:///~/continuous-claude/docs/memory-architecture.md) - Complete memory system with Mermaid diagrams
+- [hooks/README.md](file:///~/continuous-claude/docs/hooks/README.md) - Full hook reference (718 lines)
+- [agents/README.md](file:///~/continuous-claude/docs/agents/README.md) - Agent selection guide (750 lines)
 
 **User Guides (in this dir):**
 - [user-guide.md](user-guide.md) - User guide with essential commands and auto-started capabilities

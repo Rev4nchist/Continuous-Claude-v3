@@ -112,7 +112,7 @@ describe('secrets never reach the log', () => {
   });
 
   it('keeps plain commands readable', () => {
-    expect(maskSecrets('rm -rf C:/Users/david.hayes/build')).toBe('rm -rf C:/Users/david.hayes/build');
+    expect(maskSecrets('rm -rf ~/build')).toBe('rm -rf ~/build');
   });
 
   it('keeps the user name and the command shape when it masks a password', () => {

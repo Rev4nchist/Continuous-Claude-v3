@@ -9,9 +9,9 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const DIST_DIR = 'C:/Users/david.hayes/.claude/hooks/dist';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const SRC_DIR = '~/continuous-claude/.claude/hooks/src';
+const DIST_DIR = '~/.claude/hooks/dist';
+const SETTINGS = '~/.claude/settings.json';
 
 // 1. Source hooks (exclude shared/, __tests__/)
 const srcFiles = fs.readdirSync(SRC_DIR)
@@ -89,8 +89,8 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const SRC_DIR = '~/continuous-claude/.claude/hooks/src';
+const SETTINGS = '~/.claude/settings.json';
 
 // Get registered set
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
@@ -157,9 +157,9 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
-const DIST_PREFIX = 'C:/Users/david.hayes/.claude/hooks/dist';
+const SRC_DIR = '~/continuous-claude/.claude/hooks/src';
+const SETTINGS = '~/.claude/settings.json';
+const DIST_PREFIX = '~/.claude/hooks/dist';
 
 // Build registered set
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
@@ -254,8 +254,8 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const SRC_DIR = '~/continuous-claude/.claude/hooks/src';
+const SETTINGS = '~/.claude/settings.json';
 
 const srcFiles = new Set(
   fs.readdirSync(SRC_DIR)

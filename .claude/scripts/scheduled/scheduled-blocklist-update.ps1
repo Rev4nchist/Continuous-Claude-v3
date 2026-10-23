@@ -35,14 +35,14 @@
   PowerShell 5.1 compatible (Task Scheduler runs powershell.exe), ASCII only.
 #>
 param(
-  [string]$RepoPath = 'C:\Users\david.hayes\continuous-claude',
+  [string]$RepoPath = '',
   [string]$Remote = 'fork',
   [string]$Branch = 'main',
   # Updater script, relative to the worktree. Tests point this at a stub; production keeps the default.
   [string]$UpdateScript = 'scripts/update-blocklist.mjs',
   # node_modules to link into the worktree. Default: the primary checkout's.
   [string]$NodeModules = '',
-  [string]$GitBash = 'C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe',
+  [string]$GitBash = '',
   # File sync-to-active.sh writes the last synced commit to. Tests point this into %TEMP%.
   [string]$SyncCursor = '',
   # Waives only the ~/.claude sync and its cursor check. A failed local update still returns 2.
@@ -52,6 +52,10 @@ param(
 # Continue, not Stop: in Windows PowerShell 5.1 a native command's stderr becomes a terminating
 # error under Stop when redirected. Every native call below checks $LASTEXITCODE instead.
 $ErrorActionPreference = 'Continue'
+. (Join-Path $PSScriptRoot 'profile-paths.ps1')
+$paths = Get-Ccv3Paths
+if (-not $RepoPath) { $RepoPath = $paths.RepoRoot }
+if (-not $GitBash) { $GitBash = $paths.GitBash }
 if (-not $NodeModules) { $NodeModules = Join-Path $RepoPath '.claude\hooks\node_modules' }
 if (-not $SyncCursor) { $SyncCursor = Join-Path $HOME '.claude\state\sync-cursor' }
 # Always the personal gh account, as the old .bat did: a GH_CONFIG_DIR inherited from the task's

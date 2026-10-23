@@ -4,7 +4,7 @@
 #   2. Judges this week's fires and adds false fires to ~/.claude/logs/rule-router-false-fires.jsonl.
 #   3. Creates this week's review page under Dave's Notion Scratchpad (where he looks on Mondays).
 # Exit code = 1 if the judge call or the Notion page failed (the log and the report say which).
-$R = 'C:\Users\david.hayes\continuous-claude'
+$R = (Join-Path $env:USERPROFILE 'continuous-claude')
 $node = 'C:\Program Files\nodejs\node.exe'
 $scratchpad = '1f576fd7ac82807ab8c3f03b2002d40c'   # Dave's Scratchpad; this job only CREATES one page a week
 $log = Join-Path $R '.claude\logs\rule-router-review.log'

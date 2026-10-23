@@ -20,8 +20,8 @@
 [CmdletBinding()]
 param(
   [string[]]$Roots = @(
-    'C:/Users/david.hayes/Projects',
-    'C:/Users/david.hayes',
+    '$env:USERPROFILE/Projects',
+    '$env:USERPROFILE',
     'C:/agent-arch'
   ),
   [int]$Depth = 3,

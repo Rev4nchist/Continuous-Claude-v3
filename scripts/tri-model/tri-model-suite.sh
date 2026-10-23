@@ -1,7 +1,7 @@
 #!/usr/bin/env bash
 # Tri-model integration test suite — static tier
 # PASS/FAIL per check; exit code = number of failures.
-REPO="C:/Users/david.hayes/continuous-claude"
+REPO="$HOME/continuous-claude"
 ACTIVE="$HOME/.claude"
 FAIL=0
 check() { # id, description, command

@@ -37,7 +37,7 @@ for (const block of blocks) {
   results[name] = { structural, errors, warnings, passed, errorMsgs, exitCode };
 }
 
-const tracker = JSON.parse(fs.readFileSync('C:/Users/david.hayes/.claude/skills/_eval-progress.json', 'utf8'));
+const tracker = JSON.parse(fs.readFileSync('~/.claude/skills/_eval-progress.json', 'utf8'));
 let passCount = 0, warnCount = 0, failCount = 0;
 
 for (const [name, r] of Object.entries(results)) {
@@ -52,7 +52,7 @@ for (const [name, r] of Object.entries(results)) {
 }
 
 tracker.phases_completed.push('phase-1-structural-validation');
-fs.writeFileSync('C:/Users/david.hayes/.claude/skills/_eval-progress.json', JSON.stringify(tracker, null, 2));
+fs.writeFileSync('~/.claude/skills/_eval-progress.json', JSON.stringify(tracker, null, 2));
 
 console.log('=== STRUCTURAL VALIDATION SUMMARY ===');
 console.log('PASS (no errors, no warnings): ' + passCount);

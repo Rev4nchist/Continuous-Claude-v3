@@ -6,7 +6,7 @@
 const fs = require('fs');
 const path = require('path');
 
-const SKILL_DIR = 'C:/Users/david.hayes/Downloads/Claude-App-Skills/ebr-presentation suite skills';
+const SKILL_DIR = '~/Downloads/Claude-App-Skills/ebr-presentation suite skills';
 const ASSETS_DIR = path.join(SKILL_DIR, 'assets/logos');
 const OUT_PATH = path.join(SKILL_DIR, 'html-engine/themes/fourth-executive.html');
 

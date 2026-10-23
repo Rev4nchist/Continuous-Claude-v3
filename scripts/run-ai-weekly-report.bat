@@ -9,8 +9,8 @@ REM API-KEY POLARITY: this task is the OPPOSITE of the project-cards sweep. The 
 REM REQUIRES ANTHROPIC_API_KEY to be SET (for AI-written narratives); the sweep requires it
 REM UNSET so the claude.ai Notion connector loads. Do NOT "fix" one by copying the other's
 REM env handling -- their key polarities are intentionally inverted.
-set "PY=C:\Users\david.hayes\AppData\Local\Programs\Python\Python313\python.exe"
-set "REPORT_DIR=C:\Users\david.hayes\continuous-claude\ai-report-card"
+set "PY=%USERPROFILE%\AppData\Local\Programs\Python\Python313\python.exe"
+set "REPORT_DIR=%USERPROFILE%\continuous-claude\ai-report-card"
 set "LOG=%REPORT_DIR%\logs\scheduled-run.log"
 
 cd /d "%REPORT_DIR%"
@@ -60,7 +60,7 @@ REM never touch %EC% here. node is resolved to an ABSOLUTE path because Task Sch
 REM minimal PATH does not include node (same reason %PY% is hardcoded above).
 set "NODE=C:\Program Files\nodejs\node.exe"
 if not exist "%NODE%" set "NODE=node"
-set "REGISTRY=C:\Users\david.hayes\continuous-claude\scripts\report-registry"
+set "REGISTRY=%USERPROFILE%\continuous-claude\scripts\report-registry"
 
 REM Resolve the ISO period (YYYY-Www) ONCE so the crash-path below can synthesize a Failed
 REM row even when weekly_run.py never emitted report-run.json. PowerShell is always on the

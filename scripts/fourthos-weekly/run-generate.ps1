@@ -37,7 +37,7 @@ param(
   [Parameter(Mandatory=$true)][string]$AllowedTools,
   [string]$AddDir = '',
   [int]$TimeoutSec = 3600,
-  [string]$Exe = 'C:\Users\david.hayes\.local\bin\claude.exe'
+  [string]$Exe = (Join-Path $env:USERPROFILE '.local\bin\claude.exe')
 )
 
 $ErrorActionPreference = 'Continue'

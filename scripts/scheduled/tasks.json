@@ -1,0 +1,22 @@
+{
+  "tasks": [
+    {
+      "name": "CCv3-Health-Check",
+      "script": "scripts/scheduled-health-check.bat",
+      "trigger": "weekly Friday 08:03",
+      "profile": "personal"
+    },
+    {
+      "name": "CCv3-Blocklist-Update",
+      "script": ".claude/scripts/scheduled/scheduled-blocklist-update.ps1",
+      "trigger": "daily 09:00",
+      "profile": "personal"
+    },
+    {
+      "name": "ClaudeMemoryDaemon",
+      "script": ".claude/scripts/start-memory-daemon.ps1",
+      "trigger": "at logon",
+      "profile": "personal"
+    }
+  ]
+}

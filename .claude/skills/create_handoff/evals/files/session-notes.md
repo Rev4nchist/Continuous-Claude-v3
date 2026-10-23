@@ -1,6 +1,6 @@
 # Session notes (scratch, written during the session)
 
-- Repo: C:\Users\david.hayes\continuous-claude
+- Repo: ~\continuous-claude
 - Branch: chore/skills-phase3-evals
 - Most recent handoff folder on disk: thoughts/shared/handoffs/skills-review/
 - Track: skills review, Phase 3 (behaviour evals)
