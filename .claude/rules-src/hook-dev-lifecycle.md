@@ -55,7 +55,7 @@ paths:
 ```bash
 node -e "
 const fs = require('fs');
-const p = 'C:/Users/david.hayes/.claude/settings.json';
+const p = process.env.HOME+'/.claude/settings.json';
 const s = JSON.parse(fs.readFileSync(p, 'utf8'));
 s.hooks.PostToolUse = s.hooks.PostToolUse || [];
 s.hooks.PostToolUse.push({ matcher: 'Bash', hooks: [{ type: 'command', command: 'node ~/.claude/hooks/dist/<name>.mjs' }] });

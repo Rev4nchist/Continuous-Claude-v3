@@ -246,7 +246,7 @@ Companion design doc:
 - `.claude/docs/composition-design.md` — Agent x skill pairing decisions; references this policy for the hook/MCP/skill split
 
 Plan and inventory:
-- `C:/Users/david.hayes/.claude/plans/i-have-a-new-abstract-quail.md` — Phase 5 deliverables
+- `~/.claude/plans/i-have-a-new-abstract-quail.md` — Phase 5 deliverables
 - `.claude/docs/agent-skill-map.md` — full agent x skill cross-product
 - `~/.claude/settings.json` — registered hooks
 - `~/.mcp.json`, `~/.claude/mcp.json`, `~/.claude.json` mcpServers — MCP server configs

@@ -279,7 +279,7 @@ non-engineer (Carly) reads every sentence cold; a CTO (Christian) reads for soun
 
 ## Publish target — `ai-enablement-decks` (read its CLAUDE.md before touching)
 
-- Local: `C:\Users\david.hayes\Projects\ai-enablement-decks` · remote `Rev4nchist/ai-enablement-decks`
+- Local: `~\Projects\ai-enablement-decks` · remote `Rev4nchist/ai-enablement-decks`
   (PUBLIC) · auto-deploys on push to `main` via `.github/workflows/pages.yml`.
 - A deck = a `<slug>/index.html` folder **plus** an entry in `decks.json` (the hub renders from the
   manifest, not from static cards). **A folder without a manifest entry is live-but-unlisted** — that

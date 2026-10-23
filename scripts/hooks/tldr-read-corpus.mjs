@@ -27,7 +27,7 @@ const arg = (flag, dflt) => {
   const i = argv.indexOf(flag);
   return i > -1 ? argv[i + 1] : dflt;
 };
-const PROJECT_KEY = arg('--project', 'C--Users-david-hayes-continuous-claude');
+const PROJECT_KEY = arg('--project', join(homedir(), 'continuous-claude').replace(/[^a-zA-Z0-9]/g, '-'));
 const TOP = parseInt(arg('--top', '0'), 10);
 const JSON_OUT = argv.includes('--json');
 

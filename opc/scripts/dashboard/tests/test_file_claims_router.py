@@ -44,13 +44,13 @@ class TestFileClaimsActiveEndpoint:
         now = datetime.now(timezone.utc)
         mock_rows = [
             {
-                "file_path": "/c/Users/david.hayes/project/src/main.ts",
+                "file_path": "/c/Users/ada.lovelace/project/src/main.ts",
                 "session_id": "sess-001",
                 "project": "continuous-claude",
                 "claimed_at": now - timedelta(minutes=2),
             },
             {
-                "file_path": "/c/Users/david.hayes/project/src/utils.ts",
+                "file_path": "/c/Users/ada.lovelace/project/src/utils.ts",
                 "session_id": "sess-001",
                 "project": "continuous-claude",
                 "claimed_at": now - timedelta(minutes=1),
@@ -74,7 +74,7 @@ class TestFileClaimsActiveEndpoint:
         now = datetime.now(timezone.utc)
         mock_rows = [
             {
-                "file_path": "/c/Users/david.hayes/project/src/main.ts",
+                "file_path": "/c/Users/ada.lovelace/project/src/main.ts",
                 "session_id": "sess-abc",
                 "project": "my-project",
                 "claimed_at": now,
@@ -88,7 +88,7 @@ class TestFileClaimsActiveEndpoint:
 
         assert response.status_code == 200
         claim = response.json()["claims"][0]
-        assert claim["file_path"] == "/c/Users/david.hayes/project/src/main.ts"
+        assert claim["file_path"] == "/c/Users/ada.lovelace/project/src/main.ts"
         assert claim["session_id"] == "sess-abc"
         assert claim["project"] == "my-project"
         assert "claimed_at" in claim

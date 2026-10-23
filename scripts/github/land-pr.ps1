@@ -31,7 +31,7 @@
 param(
   [Parameter(Mandatory)][int]$Pr,
   [string]$Repo = 'Rev4nchist/Continuous-Claude-v3',
-  [string]$RepoPath = 'C:\Users\david.hayes\continuous-claude',
+  [string]$RepoPath = (Join-Path $env:USERPROFILE 'continuous-claude'),
   [ValidateSet('merge', 'squash', 'rebase')][string]$Method = 'merge',
   [string]$Remote = 'fork',
   [switch]$IgnoreReview,
@@ -41,7 +41,7 @@ param(
 $ErrorActionPreference = 'Stop'
 if (-not $env:GH_CONFIG_DIR) { $env:GH_CONFIG_DIR = Join-Path $HOME '.config\gh-personal' }
 $gitSafe = Join-Path $RepoPath 'scripts\git-safe.ps1'
-$gitBash = 'C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe'
+$gitBash = (Join-Path $env:USERPROFILE 'AppData\Local\Programs\Git\bin\bash.exe')
 $done = [System.Collections.Generic.List[string]]::new()
 function Step($msg) { Write-Host "-> $msg" }
 function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done.Count) { Write-Host "Done before stopping: $($done -join '; ')" }; exit 1 }

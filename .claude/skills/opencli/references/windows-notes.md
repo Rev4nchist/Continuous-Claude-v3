@@ -15,7 +15,7 @@ The extension is NOT in the Chrome Web Store. Sideload manually:
 1. Open `chrome://extensions/`
 2. Enable "Developer mode" (top right toggle)
 3. Click "Load unpacked"
-4. Browse to: `C:/Users/david.hayes/AppData/Roaming/npm/node_modules/@jackwener/opencli/extension/`
+4. Browse to: `~/AppData/Roaming/npm/node_modules/@jackwener/opencli/extension/`
 5. Verify the extension appears and is enabled
 
 The extension communicates with the opencli daemon via WebSocket on `localhost:19825`.

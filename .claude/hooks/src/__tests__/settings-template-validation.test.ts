@@ -6,7 +6,7 @@
  * each matching tool call). This guard asserts:
  *  - the template is valid JSON
  *  - every {{CLAUDE_HOME}}/hooks/dist/<name>.mjs it registers exists in repo dist
- *  - the 5 deregistered (stale) hooks are no longer registered
+ *  - the 4 deregistered (stale) hooks are no longer registered
  *  - the universal hooks promoted in Phase 2 are present
  *  - no stray {{PLACEHOLDER}} other than {{CLAUDE_HOME}} survives
  */
@@ -83,11 +83,15 @@ describe('settings.json.template', () => {
     expect(missing).toEqual([]);
   });
 
-  it('does not register the 5 deregistered (stale) hooks', () => {
+  it('does not register the 4 deregistered (stale) hooks', () => {
     const names = new Set(templateHookNames());
-    for (const stale of ['auto-build', 'navigator-safety', 'pageindex-navigator', 'periodic-extract', 'sync-to-repo']) {
+    for (const stale of ['auto-build', 'navigator-safety', 'pageindex-navigator', 'sync-to-repo']) {
       expect(names.has(stale)).toBe(false);
     }
+  });
+
+  it('registers periodic-extract', () => {
+    expect(new Set(templateHookNames()).has('periodic-extract')).toBe(true);
   });
 
   it('registers the Phase-2 universal hooks (incl. the safety guards)', () => {

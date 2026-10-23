@@ -125,7 +125,7 @@ export function decideGate(params: GateDecisionInput): GateDecision {
  * Maps a project directory to the transcript directory name that Claude
  * Code uses under ~/.claude/projects/. Replaces every non-alphanumeric
  * character with a dash (matches the harness convention; e.g.
- * `C:/Users/david.hayes/continuous-claude` -> `C--Users-david-hayes-continuous-claude`).
+ * `/home/testuser/continuous-claude` -> `-home-testuser-continuous-claude`).
  */
 export function mangleProjectDir(projectDir: string): string {
   return projectDir.replace(/[^A-Za-z0-9]/g, '-');

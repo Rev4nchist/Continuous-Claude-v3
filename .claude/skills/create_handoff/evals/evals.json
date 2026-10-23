@@ -9,7 +9,7 @@
     ],
     "expected_behavior": [
       "The YAML marks the Notion push as pending with the line `notion: pending` (not a notion_url) and carries all four provenance fields `notion_title:`, `repo:`, `branch:` and `priority:`",
-      "The `repo:` value is the absolute path C:\\Users\\david.hayes\\continuous-claude (or the same path with forward slashes) and `branch:` is chore/skills-phase3-evals",
+      "The `repo:` value is the absolute path C:\\Users\\ada.lovelace\\continuous-claude (or the same path with forward slashes) and `branch:` is chore/skills-phase3-evals",
       "The `notion_title:` value follows the pattern `[Code→Next session] <topic> (<repo>) — YYYY-MM-DD`",
       "The YAML uses the top-level keys `goal:` and `now:` (not session_goal, objective, focus or current) and an `outcome:` that is exactly one of SUCCEEDED, PARTIAL_PLUS, PARTIAL_MINUS or FAILED",
       "The save path is under thoughts/shared/handoffs/skills-review/ and the file name has the form YYYY-MM-DD_HH-MM_<kebab-case-description>.yaml"

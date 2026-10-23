@@ -2,75 +2,56 @@
   "mcpServers": {
     "context7": {
       "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@upstash/context7-mcp@latest"
-      ],
-      "type": "stdio"
-    },
-    "shadcn": {
-      "command": "shadcn",
-      "args": [
-        "mcp"
-      ],
-      "env": {
-        "NODE_TLS_REJECT_UNAUTHORIZED": "0"
-      },
+      "args": ["/c", "npx", "-y", "@upstash/context7-mcp@4.4.4"],
       "type": "stdio"
     },
     "playwright": {
       "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "@playwright/mcp@latest"
-      ],
+      "args": ["/c", "npx", "-y", "@playwright/mcp@0.0.83"],
       "type": "stdio"
     },
-    "shadcnspace-mcp": {
+    "shadcn": {
       "command": "cmd",
-      "args": [
-        "/c",
-        "npx",
-        "-y",
-        "shadcnspace-mcp@latest"
-      ],
+      "args": ["/c", "npx", "-y", "shadcn@4.22.1", "mcp"],
       "type": "stdio"
     },
     "nia": {
       "command": "cmd",
-      "args": [
-        "/c",
-        "uv",
-        "tool",
-        "run",
-        "nia-mcp-server"
-      ],
+      "args": ["/c", "uv", "tool", "run", "nia-mcp-server@1.1.2"],
       "env": {
         "NIA_API_KEY": "${NIA_API_KEY}",
         "NIA_API_URL": "https://apigcp.trynia.ai/"
       },
       "type": "stdio"
     },
-    "ai-reporting": {
+    "firecrawl": {
+      "type": "stdio",
       "command": "cmd",
-      "args": [
-        "/c",
-        "uv",
-        "run",
-        "--directory",
-        "C:/Users/david.hayes/ai-reporting-mcp",
-        "python",
-        "server.py"
-      ],
+      "args": ["/c", "npx", "-y", "firecrawl-mcp@3.34.1"],
       "env": {
-        "NOTION_TOKEN": "${NOTION_TOKEN}",
-        "MCP_TRANSPORT": "stdio"
-      },
-      "type": "stdio"
+        "FIRECRAWL_API_KEY": "${FIRECRAWL_API_KEY}"
+      }
+    },
+    "morph": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@morphllm/morphmcp@0.8.213"],
+      "env": {
+        "MORPH_API_KEY": "${MORPH_API_KEY}"
+      }
+    },
+    "perplexity": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@perplexity-ai/mcp-server@1.3.0"],
+      "env": {
+        "PERPLEXITY_API_KEY": "${PERPLEXITY_API_KEY}"
+      }
+    },
+    "pageindex": {
+      "type": "stdio",
+      "command": "cmd",
+      "args": ["/c", "npx", "-y", "@pageindex/mcp@1.8.2"]
     }
   }
 }

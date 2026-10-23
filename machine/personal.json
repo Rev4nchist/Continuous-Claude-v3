@@ -1,0 +1,22 @@
+{
+  "id": "personal",
+  "userHome": "C:/Users/dkhay",
+  "repoRoot": "C:/Users/dkhay/continuous-claude",
+  "claudeHome": "C:/Users/dkhay/.claude",
+  "opcDir": "C:/Users/dkhay/continuous-claude/opc",
+  "gitBash": "C:/Program Files/Git/bin/bash.exe",
+  "powershellProfile": "C:/Users/dkhay/OneDrive/Documents/PowerShell/Microsoft.PowerShell_profile.ps1",
+  "skipSkills": [
+    "fourth-brand-guidelines",
+    "fourth-presentation-suite",
+    "fourthos-weekly",
+    "weekly-report",
+    "fabric",
+    "kusto-cli"
+  ],
+  "settingsOverlay": {},
+  "shellAliases": {
+    "cc": true
+  },
+  "scheduledTasks": "scripts/scheduled/tasks.json"
+}

@@ -34,7 +34,7 @@ export const REPO_ROOT = join(ROOT, '..', '..');
 // --- source locations (overridable for tests) ----------------------------------
 export const SOURCES = {
   vpArchiveDir: join(REPO_ROOT, 'ai-report-card', 'output', 'archive'),
-  decksJson: 'C:/Users/david.hayes/Projects/ai-enablement-decks/decks.json',
+  decksJson: '~/Projects/ai-enablement-decks/decks.json',
   selfImprovementIndex: join(REPO_ROOT, 'docs', 'self-improvement', 'INDEX.md'),
   healthChecksDir: join(REPO_ROOT, '.claude', 'cache', 'health-checks'),
 };

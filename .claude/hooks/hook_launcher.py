@@ -120,7 +120,7 @@ def find_python() -> str | None:
     # On Windows, check absolute paths FIRST to avoid WindowsApps stub
     if sys.platform == "win32":
         # Get user profile directory
-        user_profile = os.environ.get("USERPROFILE") or os.environ.get("HOME") or r"C:\Users\david.hayes"
+        user_profile = os.environ.get("USERPROFILE") or os.environ.get("HOME") or str(Path.home())
         local_app_data = os.environ.get("LOCALAPPDATA") or str(Path(user_profile) / "AppData" / "Local")
 
         common_paths = [
@@ -130,8 +130,6 @@ def find_python() -> str | None:
             Path(local_app_data) / "Programs" / "Python" / "Python313" / "python.exe",
             Path(local_app_data) / "Programs" / "Python" / "Python312" / "python.exe",
             Path(local_app_data) / "Programs" / "Python" / "Python311" / "python.exe",
-            # Hardcoded fallback
-            Path(r"C:\Users\david.hayes\AppData\Local\Programs\Python\Python313\python.exe"),
         ]
         for p in common_paths:
             if p.exists():

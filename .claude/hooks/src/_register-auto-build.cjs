@@ -1,5 +1,9 @@
 const fs = require('fs');
-const p = 'C:/Users/david.hayes/.claude/settings.json';
+const os = require('os');
+const path = require('path');
+const home = os.homedir();
+const p = path.join(home, '.claude', 'settings.json');
+const hookCommand = 'node ' + path.join(home, '.claude', 'hooks', 'dist', 'auto-build.mjs').replace(/\\/g, '/');
 const d = JSON.parse(fs.readFileSync(p, 'utf8'));
 if (!d.hooks) d.hooks = {};
 if (!d.hooks.PostToolUse) d.hooks.PostToolUse = [];
@@ -25,7 +29,7 @@ if (!alreadyRegistered) {
   if (writeEditIdx >= 0) {
     hooks[writeEditIdx].hooks.push({
       type: 'command',
-      command: 'node C:/Users/david.hayes/.claude/hooks/dist/auto-build.mjs',
+      command: hookCommand,
       timeout: 10000
     });
     console.log('Added auto-build to existing Write|Edit PostToolUse group');
@@ -34,7 +38,7 @@ if (!alreadyRegistered) {
       matcher: 'Write|Edit',
       hooks: [{
         type: 'command',
-        command: 'node C:/Users/david.hayes/.claude/hooks/dist/auto-build.mjs',
+        command: hookCommand,
         timeout: 10000
       }]
     });

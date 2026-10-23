@@ -25,7 +25,7 @@ This command will:
 ## Implementation:
 ```bash
 # Set git bash path for Claude Code
-set CLAUDE_CODE_GIT_BASH_PATH=C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe
+set CLAUDE_CODE_GIT_BASH_PATH=~\AppData\Local\Programs\Git\bin\bash.exe
 
 # Show warning
 echo.

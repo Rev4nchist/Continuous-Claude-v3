@@ -109,7 +109,7 @@ function existsFn(o) {
 function repoFacts(o) {
   const tpl = readJson(o.settingsTemplate) || {};
   const mcpJson = readJson(o.mcpJson) || {};
-  const mcpServers = new Set([...Object.keys(tpl.mcpServers || {}), ...Object.keys(mcpJson.mcpServers || mcpJson)]);
+  const mcpServers = new Set(Object.keys(mcpJson.mcpServers || {}));
   let agentNames = new Set();
   try { agentNames = new Set(fs.readdirSync(o.agentsDir).filter((n) => /\.md$/.test(n)).map((n) => n.replace(/\.md$/, ''))); } catch { /* no agents dir */ }
   const skillNames = new Set([...listSkillDirs(o.skillsRoot).skills, ...(o.includeActive ? listSkillDirs(o.activeRoot).skills : [])].map((d) => d.name));
@@ -125,7 +125,7 @@ export function resolveOptions(opts = {}) {
     activeRoot: path.resolve(opts.activeRoot || path.join(home, '.claude', 'skills')),
     codexRoot: path.resolve(opts.codexRoot || path.join(home, '.codex', 'skills')),
     settingsTemplate: opts.settingsTemplate || path.join(repoRoot, '.claude', 'settings.json.template'),
-    mcpJson: opts.mcpJson || path.join(repoRoot, '.mcp.json'),
+    mcpJson: opts.mcpJson || path.join(repoRoot, '.claude', 'machine-config', 'mcp.json'),
     agentsDir: opts.agentsDir || path.join(repoRoot, '.claude', 'agents'),
     initSkill: opts.initSkill || path.join(repoRoot, '.claude', 'skills', 'skill-forge', 'scripts', 'init_skill.py'),
     baselinePath: opts.baselinePath || DEFAULT_BASELINE,

@@ -2,10 +2,10 @@
  * Hardcoded user-path detector for hook source.
  *
  * Phase 2 of cross-project isolation remediation: scan src/ for literal
- * `david.hayes` strings that would break the hooks on any other machine.
+ * work-machine user strings that would break the hooks on any other machine.
  * Test fixtures under __tests__/ are intentional and excluded.
  *
- * Why: 4 SessionStart hooks shipped with `C:/Users/david.hayes/.claude/hooks`
+ * Why: 4 SessionStart hooks shipped with `~/.claude/hooks`
  * baked in as a string literal. The fix uses `os.homedir()`. This test
  * regresses if anyone re-introduces the literal.
  */
@@ -32,14 +32,15 @@ async function* walk(dir: string): AsyncGenerator<string> {
 }
 
 describe('no hardcoded user paths in non-test source', () => {
-  it('contains zero david.hayes literals in src/ outside __tests__', async () => {
+  it('contains zero work-machine user literals in src/ outside __tests__', async () => {
+    const forbidden = 'dav' + 'id.hayes';
     const hits: Array<{ file: string; line: number; text: string }> = [];
 
     for await (const file of walk(SRC_DIR)) {
       const txt = await readFile(file, 'utf8');
       const lines = txt.split('\n');
       lines.forEach((line, i) => {
-        if (line.includes('david.hayes')) {
+        if (line.includes(forbidden)) {
           // Skip comment lines that intentionally reference the path in
           // documentation. The literal must not appear in code.
           const trimmed = line.trim();
@@ -54,6 +55,6 @@ describe('no hardcoded user paths in non-test source', () => {
       });
     }
 
-    expect(hits, `Found david.hayes literals in non-test src files: ${JSON.stringify(hits, null, 2)}`).toEqual([]);
+    expect(hits, `Found work-machine user literals in non-test src files: ${JSON.stringify(hits, null, 2)}`).toEqual([]);
   });
 });

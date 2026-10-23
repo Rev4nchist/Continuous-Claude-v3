@@ -42,7 +42,7 @@ untracked.
 Check skill telemetry if available, otherwise estimate from session context:
 
 ```bash
-cat C:/Users/david.hayes/.claude/cache/skill-telemetry.jsonl 2>/dev/null | \
+cat ~/.claude/cache/skill-telemetry.jsonl 2>/dev/null | \
   node -e "
     const lines = require('fs').readFileSync('/dev/stdin','utf8').trim().split('\n').filter(Boolean);
     const today = new Date(); today.setHours(today.getHours()-8);

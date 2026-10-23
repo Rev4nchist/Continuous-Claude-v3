@@ -2,7 +2,9 @@
 # This does NOT require admin privileges for user-level tasks
 
 $taskName = "ClaudeMemoryDaemon"
-$scriptPath = "C:\Users\david.hayes\.claude\scripts\start-memory-daemon.ps1"
+. (Join-Path $PSScriptRoot 'scheduled\profile-paths.ps1')
+$paths = Get-Ccv3Paths
+$scriptPath = Join-Path $paths.ClaudeHome 'scripts\start-memory-daemon.ps1'
 
 Write-Host "Setting up Task Scheduler auto-start for Claude Memory Daemon..." -ForegroundColor Cyan
 

@@ -8,7 +8,7 @@
 # Any extra args (e.g. --target mobile-cockpit) pass straight through to sweep.mjs.
 $ErrorActionPreference = 'Stop'
 
-$repo = 'C:\Users\david.hayes\continuous-claude'
+$repo = (Join-Path $env:USERPROFILE 'continuous-claude')
 Set-Location $repo
 
 # The Notion connector is DISABLED whenever ANTHROPIC_API_KEY is set (it takes precedence

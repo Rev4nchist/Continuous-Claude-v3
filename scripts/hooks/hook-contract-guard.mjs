@@ -42,11 +42,12 @@
 
 import { readFileSync, existsSync, readdirSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
+import { homedir } from 'node:os';
 import { dirname, join } from 'node:path';
 
 const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const SRC = join(REPO, '.claude', 'hooks', 'src');
-const LIVE_SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const LIVE_SETTINGS = join(homedir(), '.claude', 'settings.json');
 const JSON_OUT = process.argv.includes('--json');
 
 /** Floors, not targets. Raise deliberately; never lower to make a run pass. */

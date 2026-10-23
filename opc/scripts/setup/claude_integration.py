@@ -17,6 +17,8 @@ import json
 import os
 import platform
 import shutil
+import subprocess
+import sys
 from dataclasses import dataclass, field
 from datetime import datetime
 from pathlib import Path
@@ -545,8 +547,10 @@ def install_opc_integration(
         opc_template_path = opc_source / "settings.json.template"
         opc_settings_path = opc_source / "settings.json"
         target_settings_path = target_dir / "settings.json"
+        profile_name = selected_profile_name()
+        remember_profile(profile_name)
         if opc_template_path.exists():
-            generate_settings_json(
+            render_settings_json(
                 opc_template_path,
                 target_settings_path,
                 {
@@ -555,6 +559,7 @@ def install_opc_integration(
                     "REPO_ROOT": str(opc_source.parent).replace("\\", "/"),
                     "USER_HOME": str(Path.home()).replace("\\", "/"),
                 },
+                profile_name=profile_name,
             )
         elif opc_settings_path.exists():
             # Fallback: copy raw settings.json if no template exists
@@ -600,17 +605,6 @@ def install_opc_integration(
                     if src.exists():
                         shutil.copy2(src, target_rules / rule_name)
                         result["merged_items"].append(f"rule:{rule_name}")
-
-                # Merge non-conflicting MCPs into settings.json
-                if conflicts.mergeable_mcps and existing.mcps:
-                    settings = json.loads(target_settings_path.read_text())
-                    if "mcpServers" not in settings:
-                        settings["mcpServers"] = {}
-                    for mcp_name in conflicts.mergeable_mcps:
-                        if mcp_name in existing.mcps:
-                            settings["mcpServers"][mcp_name] = existing.mcps[mcp_name]
-                            result["merged_items"].append(f"mcp:{mcp_name}")
-                    target_settings_path.write_text(json.dumps(settings, indent=2))
 
         result["success"] = True
 
@@ -693,8 +687,10 @@ def install_opc_integration_symlink(
         opc_template_path = opc_source / "settings.json.template"
         opc_settings_path = opc_source / "settings.json"
         target_settings_path = target_dir / "settings.json"
+        profile_name = selected_profile_name()
+        remember_profile(profile_name)
         if opc_template_path.exists():
-            generate_settings_json(
+            render_settings_json(
                 opc_template_path,
                 target_settings_path,
                 {
@@ -703,6 +699,7 @@ def install_opc_integration_symlink(
                     "REPO_ROOT": str(opc_source.parent).replace("\\", "/"),
                     "USER_HOME": str(Path.home()).replace("\\", "/"),
                 },
+                profile_name=profile_name,
             )
         elif opc_settings_path.exists():
             # Fallback: copy raw settings.json if no template exists
@@ -744,27 +741,43 @@ def install_opc_integration_symlink(
     return result
 
 
-def generate_settings_json(
+def selected_profile_name() -> str | None:
+    """--profile, then CCV3_MACHINE_PROFILE, then ~/.claude/state/machine-profile."""
+    argv = sys.argv
+    for index, arg in enumerate(argv):
+        if arg == "--profile" and index + 1 < len(argv):
+            return argv[index + 1]
+    env_name = os.environ.get("CCV3_MACHINE_PROFILE", "").strip()
+    if env_name:
+        return env_name
+    state = Path.home() / ".claude" / "state" / "machine-profile"
+    if state.exists():
+        name = state.read_text(encoding="utf-8").strip()
+        if name:
+            return name
+    return None
+
+
+def remember_profile(name: str | None) -> None:
+    """The wizard records the selected profile. No profile is a warning, not a failure."""
+    if not name:
+        print(
+            "WARN: no machine profile selected (--profile, CCV3_MACHINE_PROFILE, or ~/.claude/state/machine-profile); using home-directory defaults",
+            file=sys.stderr,
+        )
+        return
+    state = Path.home() / ".claude" / "state"
+    state.mkdir(parents=True, exist_ok=True)
+    (state / "machine-profile").write_text(name + "\n", encoding="utf-8")
+
+
+def render_settings_json(
     template_path: Path,
     target_path: Path,
     variables: dict[str, str],
+    profile_name: str | None = None,
 ) -> None:
-    """Generate settings.json from a template by replacing placeholders.
-
-    Reads a settings.json.template file containing {{PLACEHOLDER}} tokens
-    and replaces them with machine-specific paths, writing the result to
-    target_path.
-
-    Args:
-        template_path: Path to settings.json.template
-        target_path: Path where generated settings.json will be written
-        variables: Dict mapping placeholder names to values, e.g.:
-            {
-                "CLAUDE_HOME": "C:/Users/someone/.claude",
-                "OPC_DIR": "C:/Users/someone/continuous-claude/opc",
-                "REPO_ROOT": "C:/Users/someone/continuous-claude",
-                "USER_HOME": "C:/Users/someone",
-            }
+    """Render settings.json by calling scripts/settings/render-settings.mjs.
 
     Raises:
         FileNotFoundError: If template_path does not exist
@@ -772,22 +785,14 @@ def generate_settings_json(
     if not template_path.exists():
         raise FileNotFoundError(f"Template not found: {template_path}")
 
-    content = template_path.read_text(encoding="utf-8")
-
-    for name, value in variables.items():
-        # Ensure forward slashes for cross-platform compatibility
-        value = str(value).replace("\\", "/")
-        content = content.replace(f"{{{{{name}}}}}", value)
-
-    # Validate no unreplaced template variables remain
-    import re as _re
-    remaining = _re.findall(r'\{\{[A-Z_]+\}\}', content)
-    if remaining:
-        raise ValueError(f"Unresolved template variables in settings.json: {remaining}")
-
-    # Create parent directories if needed
-    target_path.parent.mkdir(parents=True, exist_ok=True)
-    target_path.write_text(content, encoding="utf-8")
+    repo = Path(__file__).resolve().parents[3]
+    script = repo / "scripts" / "settings" / "render-settings.mjs"
+    cmd = ["node", str(script), "--template", str(template_path), "--out", str(target_path)]
+    for key, value in variables.items():
+        cmd.extend(["--var", f"{key}={value}"])
+    if profile_name:
+        cmd.extend(["--profile", profile_name, "--repo", str(repo)])
+    subprocess.run(cmd, check=True)
 
 
 def generate_project_registry(
@@ -805,7 +810,7 @@ def generate_project_registry(
     Args:
         template_path: Path to project-registry.json.template
         target_path: Path where generated project-registry.json will be written
-        variables: Dict mapping placeholder names to values (same as generate_settings_json)
+        variables: Dict mapping placeholder names to values (CLAUDE_HOME, OPC_DIR, REPO_ROOT, USER_HOME)
     """
     if not template_path.exists():
         return

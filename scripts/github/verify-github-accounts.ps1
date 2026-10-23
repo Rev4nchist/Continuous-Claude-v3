@@ -289,7 +289,14 @@ try {
 # 5c -- the transport rewrite that routes work repos. Checked against a real
 # repo on disk rather than by re-reading the config we just wrote, so a rule
 # that parses but does not FIRE is caught.
-$workAcct = $cfg.accounts.($cfg.authByOwner.fourth)
+$fourthName = $null
+if ($cfg.authByOwner.PSObject.Properties.Name -contains 'fourth') {
+  $fourthName = $cfg.authByOwner.fourth
+}
+$workAcct = $null
+if ($fourthName -and $cfg.accounts.PSObject.Properties.Name -contains $fourthName) {
+  $workAcct = $cfg.accounts.$fourthName
+}
 if ($workAcct) {
   $probeRepo = @($cfg.routes | ForEach-Object { $_.prefix } | Where-Object { Test-Path $_ } |
     Where-Object { (& git -C $_ remote get-url origin 2>$null) -match 'github\.com[:/]fourth/' }) |

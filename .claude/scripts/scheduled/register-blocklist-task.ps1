@@ -4,10 +4,10 @@
 
 .DESCRIPTION
   Run this ONCE, after the forward sync has installed scheduled-blocklist-update.bat at
-  C:\Users\david.hayes\.claude\scripts\scheduled\. It
+  $env:USERPROFILE\.claude\scripts\scheduled\. It
     1. refuses (exit 1) if that .bat does not exist, so the task never points at a missing file;
-    2. exports the task's current XML to a timestamped backup under C:\Users\david.hayes\.claude\state\;
-    3. sets the task action to: cmd.exe /c "<BatPath>", working directory C:\Users\david.hayes\.claude.
+    2. exports the task's current XML to a timestamped backup under $env:USERPROFILE\.claude\state\;
+    3. sets the task action to: cmd.exe /c "<BatPath>", working directory $env:USERPROFILE\.claude.
   The trigger (daily 09:00) and the principal (current user) are not touched.
 
   -WhatIf prints what would change and changes nothing, not even the backup file.
@@ -18,12 +18,17 @@
 [CmdletBinding(SupportsShouldProcess = $true)]
 param(
   [string]$TaskName = 'CCv3-Blocklist-Update',
-  [string]$BatPath = 'C:\Users\david.hayes\.claude\scripts\scheduled\scheduled-blocklist-update.bat',
-  [string]$WorkingDirectory = 'C:\Users\david.hayes\.claude',
-  [string]$BackupDir = 'C:\Users\david.hayes\.claude\state'
+  [string]$BatPath = '',
+  [string]$WorkingDirectory = '',
+  [string]$BackupDir = ''
 )
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'profile-paths.ps1')
+$paths = Get-Ccv3Paths
+if (-not $BatPath) { $BatPath = Join-Path $paths.ClaudeHome 'scripts\scheduled\scheduled-blocklist-update.bat' }
+if (-not $WorkingDirectory) { $WorkingDirectory = $paths.ClaudeHome }
+if (-not $BackupDir) { $BackupDir = Join-Path $paths.ClaudeHome 'state' }
 
 if (-not (Test-Path -LiteralPath $BatPath -PathType Leaf)) {
   Write-Host "[REFUSED] $BatPath does not exist. Merge the change to main and run the forward sync first (scripts/sync-to-active.sh --changed). The task is unchanged."

@@ -12,12 +12,13 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const SKILLS_DIR = 'C:/Users/david.hayes/.claude/skills';
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const EVAL_DIR = path.join(SKILLS_DIR, '_eval');
-const HOOK_PATH = 'C:/Users/david.hayes/.claude/hooks/dist/skill-activation-prompt.mjs';
-const CWD = 'C:/Users/david.hayes/continuous-claude';
+const HOOK_PATH = path.join(os.homedir(), '.claude', 'hooks', 'dist', 'skill-activation-prompt.mjs');
+const CWD = path.join(os.homedir(), 'continuous-claude');
 
 const verbose = process.argv.includes('--verbose');
 
@@ -37,8 +38,8 @@ function runHook(prompt) {
     timeout: 10000,
     env: {
       ...process.env,
-      HOME: 'C:/Users/david.hayes',
-      USERPROFILE: 'C:/Users/david.hayes',
+      HOME: '~',
+      USERPROFILE: '~',
       CLAUDE_PROJECT_DIR: CWD,
     },
     stdio: ['pipe', 'pipe', 'pipe'],

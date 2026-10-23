@@ -96,7 +96,7 @@ test('buildProperties OMITS url props holding a non-URL filesystem path (T6.1 #2
   // property would 400 on that and drop the whole row, so it must be omitted.
   const p = buildProperties({
     ...baseRun,
-    artifactUrl: 'C:/Users/david.hayes/continuous-claude/ai-report-card/output/archive/2026-W27',
+    artifactUrl: '~/continuous-claude/ai-report-card/output/archive/2026-W27',
     docxUrl: 'docs/self-improvement/INDEX.md',
   });
   assert.equal(p['Artifact URL'], undefined);

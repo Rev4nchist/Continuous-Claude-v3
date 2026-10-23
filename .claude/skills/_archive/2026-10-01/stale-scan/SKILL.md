@@ -74,7 +74,7 @@ Scan these files for stale references:
 | `~/continuous-claude/.claude/skills/*/SKILL.md` | Repo skill definitions |
 | `~/continuous-claude/.claude/agents/*.yml` | Repo agent definitions |
 
-Use `$HOME` or absolute paths (e.g., `C:/Users/david.hayes`) on Windows -- never bare `/Users/`.
+Use `$HOME` or absolute paths (e.g., `~`) on Windows -- never bare `/Users/`.
 
 ### Step 3: Execute the Scan
 
@@ -165,7 +165,7 @@ Do not apply any fixes until the user explicitly confirms.
 
 - **False positives**: "Sentinel" or "Warden" might appear in legitimate contexts (e.g., documentation about the archive itself). Read the surrounding context before flagging.
 - **Partial matches**: Search for exact names. "sentinel" (lowercase) in prose may not be a reference to the agent.
-- **Cross-platform paths**: On Windows, use `C:/Users/david.hayes/.claude/` not `~/.claude/` in Bash commands. The Grep tool handles `~` expansion.
+- **Cross-platform paths**: On Windows, use `~/.claude/` not `~/.claude/` in Bash commands. The Grep tool handles `~` expansion.
 
 ## Quick Run
 

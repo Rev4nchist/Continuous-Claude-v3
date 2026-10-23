@@ -58,6 +58,9 @@ $RegistryPath = Join-Path $RepoRoot '.claude\project-registry.json'
 $LogPath      = Join-Path $RepoRoot '.claude\logs\repo-transfers.jsonl'
 
 $cfg         = Get-Content $AccountsPath -Raw | ConvertFrom-Json
+if (-not $cfg.accounts.work) {
+  throw "accounts.json has no work account. transfer-repo.ps1 moves a repo into a company org and needs that account. personal is the only account; this script does not run."
+}
 $personalDir = $cfg.accounts.personal.ghConfigDir -replace '^~', $HOME
 $workDir     = $cfg.accounts.work.ghConfigDir     -replace '^~', $HOME
 $personalUser = $cfg.accounts.personal.user

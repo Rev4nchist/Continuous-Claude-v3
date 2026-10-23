@@ -8,6 +8,7 @@
 import { describe, it, expect, beforeEach, afterEach, vi } from 'vitest';
 import * as fs from 'fs';
 import * as path from 'path';
+import { homedir } from 'node:os';
 
 // Mock fs before importing the module under test
 vi.mock('fs', async () => {
@@ -34,27 +35,27 @@ const MOCK_REGISTRY = {
   projects: [
     {
       name: 'continuous-claude',
-      path: 'C:/Users/david.hayes/continuous-claude',
+      path: '/home/testuser/continuous-claude',
       status: 'active',
     },
     {
       name: 'NorthStar Transformation',
-      path: 'C:/Users/david.hayes/Projects/northstar-transformation',
+      path: '/home/testuser/Projects/northstar-transformation',
       status: 'active',
     },
     {
       name: 'Fourth Connect',
-      path: 'C:/Users/david.hayes/Projects/fourth-connect',
+      path: '/home/testuser/Projects/fourth-connect',
       status: 'active',
     },
     {
       name: 'ECG Lead Reactivation Engine',
-      path: 'C:/Users/david.hayes/Projects/ECG Lead Reactivation Engine',
+      path: '/home/testuser/Projects/ECG Lead Reactivation Engine',
       status: 'active',
     },
     {
       name: 'agent-factory',
-      path: 'C:/Users/david.hayes/Projects/agent-factory',
+      path: '/home/testuser/Projects/agent-factory',
       status: 'active',
     },
   ],
@@ -75,7 +76,7 @@ function setupRegistryMock(projectDir: string, registry: object | null, packageJ
   mockedReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor, _options?: any) => {
     const p = String(filePath);
     const registryPath = path.join(projectDir, '.claude', 'project-registry.json');
-    const fallbackRegistryPath = 'C:/Users/david.hayes/continuous-claude/.claude/project-registry.json';
+    const fallbackRegistryPath = path.join(homedir(), 'continuous-claude', '.claude', 'project-registry.json');
     const pkgPath = path.join(projectDir, 'package.json');
 
     if (registry && (p === registryPath || p === fallbackRegistryPath)) {
@@ -106,27 +107,27 @@ afterEach(() => {
 
 describe('getProjectIdentity', () => {
   it('returns dir basename as dirName', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', null);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', null);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.dirName).toBe('continuous-claude');
   });
 
   it('extracts keywords from directory name split on hyphens', () => {
-    setupRegistryMock('C:/Users/david.hayes/Projects/northstar-transformation', null);
-    const identity = getProjectIdentity('C:/Users/david.hayes/Projects/northstar-transformation');
+    setupRegistryMock('/home/testuser/Projects/northstar-transformation', null);
+    const identity = getProjectIdentity('/home/testuser/Projects/northstar-transformation');
     expect(identity.keywords).toContain('northstar');
     expect(identity.keywords).toContain('transformation');
   });
 
   it('reads registry and finds matching project by path', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.registryName).toBe('continuous-claude');
   });
 
   it('returns other project names from registry', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.otherProjects).toContain('NorthStar Transformation');
     expect(identity.otherProjects).toContain('Fourth Connect');
     expect(identity.otherProjects).toContain('ECG Lead Reactivation Engine');
@@ -143,33 +144,36 @@ describe('getProjectIdentity', () => {
   });
 
   it('reads package.json name field', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY, MOCK_PACKAGE_JSON);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY, MOCK_PACKAGE_JSON);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.packageName).toBe('continuous-claude');
   });
 
-  it('handles Windows paths with mixed separators via path.resolve', () => {
-    // path.resolve normalizes separators, so both forward and back slashes work
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:\\Users\\david.hayes\\continuous-claude');
-    // path.resolve will normalize, so the registry match should still work
+  it.skipIf(process.platform !== 'win32')('handles Windows paths with mixed separators via path.resolve', () => {
+    // path.win32 folds slashes; the POSIX path module does not, so this case is Windows-only.
+    const forward = 'C:/Users/ada.lovelace/continuous-claude';
+    const registry = {
+      projects: MOCK_REGISTRY.projects.map((p) =>
+        p.name === 'continuous-claude' ? { ...p, path: forward } : p,
+      ),
+    };
+    setupRegistryMock(forward, registry);
+    const identity = getProjectIdentity('C:\\Users\\ada.lovelace\\continuous-claude');
     expect(identity.dirName).toBe('continuous-claude');
-    // registryName depends on path.resolve normalization matching
-    // On Windows, path.resolve('C:\\...') === path.resolve('C:/...')
     expect(identity.registryName).toBe('continuous-claude');
   });
 
   it('adds registry name as a keyword', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.keywords).toContain('continuous-claude');
     expect(identity.keywords).toContain('continuous');
     expect(identity.keywords).toContain('claude');
   });
 
   it('stopwords toxic generic tokens out of distinctiveKeywords', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     // The bare tokens "continuous" and "claude" are poisonous -- they match
     // unrelated plans ("continuous integration", any "claude" mention).
     expect(identity.distinctiveKeywords).not.toContain('continuous');
@@ -179,21 +183,21 @@ describe('getProjectIdentity', () => {
   });
 
   it('keeps distinctive single tokens (e.g. northstar) but drops stopwords', () => {
-    setupRegistryMock('C:/Users/david.hayes/Projects/northstar-transformation', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/Projects/northstar-transformation');
+    setupRegistryMock('/home/testuser/Projects/northstar-transformation', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/Projects/northstar-transformation');
     expect(identity.distinctiveKeywords).toContain('northstar');
     expect(identity.distinctiveKeywords).toContain('transformation');
   });
 
   it('records the resolved project path on the identity', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
-    expect(identity.projectPath).toBe(path.resolve('C:/Users/david.hayes/continuous-claude'));
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
+    expect(identity.projectPath).toBe(path.resolve('/home/testuser/continuous-claude'));
   });
 
   it('collects distinctive tokens of other registered projects', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     expect(identity.otherProjectTokens).toContain('northstar');
     expect(identity.otherProjectTokens).toContain('ecg');
     // Generic stopwords from sibling names must not leak in.
@@ -201,8 +205,8 @@ describe('getProjectIdentity', () => {
   });
 
   it('deduplicates keywords', () => {
-    setupRegistryMock('C:/Users/david.hayes/continuous-claude', MOCK_REGISTRY, MOCK_PACKAGE_JSON);
-    const identity = getProjectIdentity('C:/Users/david.hayes/continuous-claude');
+    setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTRY, MOCK_PACKAGE_JSON);
+    const identity = getProjectIdentity('/home/testuser/continuous-claude');
     const uniqueKeywords = [...new Set(identity.keywords)];
     expect(identity.keywords.length).toBe(uniqueKeywords.length);
   });
@@ -219,7 +223,7 @@ describe('isContentRelevantToProject', () => {
       dirName: 'continuous-claude',
       registryName: 'continuous-claude',
       packageName: 'continuous-claude',
-      projectPath: 'C:/Users/david.hayes/continuous-claude',
+      projectPath: '/home/testuser/continuous-claude',
       keywords: ['continuous', 'claude', 'continuous-claude'],
       // distinctiveKeywords drops generic stopwords (continuous, claude, code, ...)
       // and keeps multi-token identity signals.
@@ -411,7 +415,7 @@ describe('isContentRelevantToProject', () => {
     const identity = makeIdentity();
     const content =
       'Refactor the contamination guard at ' +
-      'C:/Users/david.hayes/continuous-claude/.claude/hooks/src/shared/project-relevance.ts ' +
+      '/home/testuser/continuous-claude/.claude/hooks/src/shared/project-relevance.ts ' +
       'to require positive own-project evidence before writing the ROADMAP Current Focus.';
     const result = isContentRelevantToProject(content, identity);
     expect(result.relevant).toBe(true);

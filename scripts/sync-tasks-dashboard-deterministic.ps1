@@ -35,7 +35,7 @@ $ErrorActionPreference = 'Stop'
 # --- constants ---------------------------------------------------------------
 $RepoRoot = Split-Path -Parent $PSScriptRoot
 $ModulePath = Join-Path $PSScriptRoot 'DashboardSync.psm1'
-$NtnExe = 'C:/Users/david.hayes/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe'
+$NtnExe = '$env:USERPROFILE/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe'
 $PageId = '38f76fd7ac8280478e50dd2956ba6e8a'
 $SectionHeadingSnippet = 'Scheduled tasks'   # heading_2 that opens the section
 $NtnTimeoutMs = 60000

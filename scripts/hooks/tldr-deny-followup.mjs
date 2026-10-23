@@ -26,7 +26,7 @@ import { join } from 'node:path';
 import { homedir } from 'node:os';
 import { createInterface } from 'node:readline';
 
-const PROJECT_KEY = 'C--Users-david-hayes-continuous-claude';
+const PROJECT_KEY = join(homedir(), 'continuous-claude').replace(/[^a-zA-Z0-9]/g, '-');
 const JSON_OUT = process.argv.includes('--json');
 const DENY_MARKER = 'TLDR Context';
 

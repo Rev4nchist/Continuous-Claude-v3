@@ -3,8 +3,8 @@
  * capture-active-registrations.mjs -- harness-security lane (2026-08-31).
  *
  * One-direction capture: hook registrations present in the ACTIVE
- * ~/.claude/settings.json but missing from the repo .claude/settings.json and
- * .claude/settings.json.template are appended to the repo copies, so the
+ * ~/.claude/settings.json but missing from .claude/settings.json.template are
+ * appended to the template, so the
  * active harness stays rebuildable from the repo. The ACTIVE file is never
  * written (it stays NEVER_SYNC).
  *
@@ -25,7 +25,6 @@ import { fileURLToPath } from 'url';
 
 const REPO_ROOT = resolve(dirname(fileURLToPath(import.meta.url)), '..', '..');
 const ACTIVE = join(homedir(), '.claude', 'settings.json');
-const REPO = join(REPO_ROOT, '.claude', 'settings.json');
 const TEMPLATE = join(REPO_ROOT, '.claude', 'settings.json.template');
 const DRY = process.argv.includes('--dry-run');
 
@@ -37,7 +36,6 @@ const STALE_DEREGISTERED = new Set([
   'auto-build.mjs',
   'navigator-safety.mjs',
   'pageindex-navigator.mjs',
-  'periodic-extract.mjs',
   'sync-to-repo.mjs',
 ]);
 
@@ -127,7 +125,6 @@ function atomicWrite(p, data) {
 }
 
 const active = read(ACTIVE);
-const repo = read(REPO);
 const template = read(TEMPLATE);
 
 const report = { captured: [], machineLocal: [], danglingSkipped: [], staleSkipped: [] };
@@ -139,16 +136,14 @@ const activeEvents = Object.keys(active.hooks || {});
 report.unknownEvents = activeEvents.filter((ev) => !EVENTS.includes(ev));
 
 for (const ev of activeEvents) {
-  const repoKeys = eventKeys(repo, ev);
   const tplKeys = eventKeys(template, ev);
   for (const g of active.hooks?.[ev] || []) {
     const matcher = g.matcher || '*';
     for (const h of g.hooks || []) {
       const key = matcher + ' :: ' + entryKey(h);
       const script = scriptOf(h);
-      const inRepo = repoKeys.has(key);
       const inTpl = tplKeys.has(key);
-      if (inRepo && inTpl) continue;
+      if (inTpl) continue;
       if (MACHINE_LOCAL.has(script)) {
         report.machineLocal.push(`${ev} | ${key}`);
         continue;
@@ -161,20 +156,13 @@ for (const ev of activeEvents) {
         report.danglingSkipped.push(`${ev} | ${key}`);
         continue;
       }
-      if (!inRepo) {
-        appendEntry(repo, ev, matcher, JSON.parse(JSON.stringify(h)));
-        report.captured.push(`settings.json | ${ev} | ${key}`);
-      }
-      if (!inTpl) {
-        appendEntry(template, ev, matcher, templatize(h));
-        report.captured.push(`template | ${ev} | ${key}`);
-      }
+      appendEntry(template, ev, matcher, templatize(h));
+      report.captured.push(`template | ${ev} | ${key}`);
     }
   }
 }
 
 if (!DRY && report.captured.length) {
-  atomicWrite(REPO, repo);
   atomicWrite(TEMPLATE, template);
 }
 

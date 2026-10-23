@@ -9,9 +9,12 @@ Claude Code writes to `~/.claude.json` continuously (session stats, tip counters
 ```bash
 node -e "
 const fs = require('fs');
-const data = JSON.parse(fs.readFileSync('C:/Users/david.hayes/.claude.json', 'utf8'));
+const os = require('os');
+const path = require('path');
+const claudeJson = path.join(os.homedir(), '.claude.json');
+const data = JSON.parse(fs.readFileSync(claudeJson, 'utf8'));
 // ... modify data ...
-fs.writeFileSync('C:/Users/david.hayes/.claude.json', JSON.stringify(data, null, 2) + '\n');
+fs.writeFileSync(claudeJson, JSON.stringify(data, null, 2) + '\n');
 "
 ```
 
@@ -58,16 +61,16 @@ Claude Code diagnostics will warn about this — fix immediately when seen.
 
 ## Git Bash paths require drive letter [H:9]
 
-`/Users/david.hayes/...` does NOT work on Windows Git Bash — it resolves to `C:\Program Files\Git\Users\...` which doesn't exist.
+`/Users/ada.lovelace/...` does NOT work on Windows Git Bash — it resolves to `C:\Program Files\Git\Users\...` which doesn't exist.
 
 Always use one of these formats:
-- `/c/Users/david.hayes/...` (Git Bash native)
-- `C:/Users/david.hayes/...` (Windows forward-slash)
+- `/c/Users/ada.lovelace/...` (Git Bash native)
+- `~/...` (Windows forward-slash)
 
 | Wrong | Right |
 |-------|-------|
-| `cd /Users/david.hayes/project` | `cd /c/Users/david.hayes/project` |
-| `cd "$HOME/project"` (if HOME unset) | `cd C:/Users/david.hayes/project` |
+| `cd /Users/ada.lovelace/project` | `cd /c/Users/ada.lovelace/project` |
+| `cd "$HOME/project"` (if HOME unset) | `cd ~/project` |
 
 This is the #1 cause of `Exit code 1` errors across sessions. The `$HOME` variable works when set, but literal paths MUST include the drive letter.
 
@@ -76,10 +79,10 @@ This is the #1 cause of `Exit code 1` errors across sessions. The `$HOME` variab
 When running multiple Bash commands in parallel that depend on a directory existing, verify access in a standalone command first. Otherwise one bad path cascades "Sibling tool call errored" to all parallel siblings.
 
 **Pattern:**
-1. First call: `ls C:/Users/david.hayes/project` (verify it exists)
+1. First call: `ls ~/project` (verify it exists)
 2. Then parallel calls that use that directory
 
-**Anti-pattern:** Launching 3 parallel `cd /Users/david.hayes/project && ...` commands — if the path is wrong, all 3 fail with cascade errors, tripling the noise.
+**Anti-pattern:** Launching 3 parallel `cd /Users/ada.lovelace/project && ...` commands — if the path is wrong, all 3 fail with cascade errors, tripling the noise.
 
 ## The MSYS "fork storm" — use `git-safe.ps1` for commits and pushes [H:9]
 
@@ -145,8 +148,7 @@ Remove any such link before `git worktree remove --force` on a worktree that hol
 - `gh pr merge` / `gh pr create` are **interactive by default** and HANG in tool shells. Script with REST:
   `gh api repos/<O>/<R>/pulls/<N>/merge -X PUT -f merge_method=merge`; edit a PR with `gh api ... -X PATCH`.
 - **A timed-out `gh`/`git` command (exit 143) is NOT proof of failure.** Verify (`gh api .../pulls/<N>` → `merged`) before retrying.
-- Plain `git` and bare `gh` pick the right account by themselves (`~/.gitconfig` username + a `fourth/` `insteadOf`
-  rewrite; `scripts/github/gh-shim.ps1` in the PowerShell profiles). Scripts that call `gh` directly use `gh-for.ps1`.
+- Plain `git` and bare `gh` use the personal account (`credential.https://github.com.username` is Rev4nchist; `accounts.json` has only `personal`, and `authByOwner._default` is personal). Scripts that call `gh` directly use `gh-for.ps1`.
 - **Do not suggest `gh auth refresh`**: it cannot fix an env-var token. "Repository not found" on a repo you own
   means the wrong account answered. Check with `pwsh -File scripts/github/verify-github-accounts.ps1`.
 - `--web` login stores the account the BROWSER holds. Verify with the same script; it clears `GH_TOKEN`/`GITHUB_TOKEN` first.

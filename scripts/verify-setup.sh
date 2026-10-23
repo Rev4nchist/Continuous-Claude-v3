@@ -49,7 +49,7 @@ echo ""
 echo "3. Claude Code Configuration"
 check "~/.claude directory exists" "test -d $HOME/.claude"
 check "settings.json exists" "test -f $HOME/.claude/settings.json"
-check "settings.json has no foreign paths" "! grep -qi 'david.hayes' $HOME/.claude/settings.json 2>/dev/null || whoami | grep -qi 'david.hayes'"
+check "settings.json has no foreign user path" "node -e \"const os=require('os');const fs=require('fs');const p=require('path').join(os.homedir(),'.claude','settings.json');let t;try{t=fs.readFileSync(p,'utf8')}catch(e){process.exit(0)}const me=os.userInfo().username.toLowerCase();const re=/[\\\\/]Users[\\\\/]([^\\\\/\\\\s]+)/g;let m,bad=false;while((m=re.exec(t))){if(m[1].toLowerCase()!==me)bad=true}process.exit(bad?1:0)\""
 check "CLAUDE.md exists" "test -f $HOME/.claude/CLAUDE.md"
 check "RULES.md exists" "test -f $HOME/.claude/RULES.md"
 # The skill router only sees descriptions within these limits; without them skills silently drop out (P24).

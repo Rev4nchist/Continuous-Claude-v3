@@ -1,7 +1,7 @@
 {
   "session_id": "<SESSION>",
-  "transcript_path": "C:\\Users\\david.hayes\\.claude\\projects\\C--Users-david-hayes-continuous-claude-correct\\<SESSION>.jsonl",
-  "cwd": "C:\\Users\\david.hayes\\continuous-claude-correct",
+  "transcript_path": "C:\\Users\\ada.lovelace\\.claude\\projects\\C--Users-ada-lovelace-continuous-claude-correct\\<SESSION>.jsonl",
+  "cwd": "C:\\Users\\ada.lovelace\\continuous-claude-correct",
   "prompt_id": "bbb4e9af-fcbc-44f1-9f56-1185bd39fbba",
   "permission_mode": "default",
   "effort": {

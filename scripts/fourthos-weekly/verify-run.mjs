@@ -29,7 +29,7 @@ import fs from "node:fs";
 import path from "node:path";
 import { execFileSync } from "node:child_process";
 
-const DEFAULT_REPO = "C:/Users/david.hayes/Projects/ai-enablement-decks";
+const DEFAULT_REPO = "~/Projects/ai-enablement-decks";
 const REQUIRED_FILES = ["index.html", "briefing.html", "deep-dive.html", "card.json"];
 
 function arg(name, dflt) {

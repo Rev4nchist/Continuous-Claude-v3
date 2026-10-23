@@ -37,7 +37,7 @@
   </Triggers>
   <Actions Context="Author">
     <Exec>
-      <Command>C:\Users\david.hayes\continuous-claude\scripts\run-ai-weekly-report.bat</Command>
+      <Command>C:\Users\ada.lovelace\continuous-claude\scripts\run-ai-weekly-report.bat</Command>
     </Exec>
   </Actions>
 </Task>

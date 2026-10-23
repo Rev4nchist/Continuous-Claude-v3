@@ -26,7 +26,7 @@ update the CCv3 Weekly Health Checks Notion page with the results.
 
 ## Steps
 
-1. Find the newest `health_*.json` file in `C:/Users/david.hayes/continuous-claude/.claude/cache/health-checks/` by modified time. Use Glob + Read.
+1. Find the newest `health_*.json` file in `~/continuous-claude/.claude/cache/health-checks/` by modified time. Use Glob + Read.
 2. Extract from it: `timestamp`, `overall_status`, `counts.{PASS,WARN,FAIL,SKIP}`, `duration_s`, and the `results` array. Pick out:
    - the memory canary entry (`name == "memory-canary-roundtrip"`) — its `duration_ms` and `status`
    - the three critical-path entries: `docker-daemon-running`, `postgres-container-running`, `rlm-sandbox-image-present`

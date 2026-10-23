@@ -73,7 +73,7 @@ human-maintained sections. This script instead:
 ## ntn call contract (enforced in `Invoke-Ntn`)
 
 - Absolute exe:
-  `C:/Users/david.hayes/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe`
+  `~/AppData/Local/Microsoft/WinGet/Packages/Notion.ntn_Microsoft.Winget.Source_8wekyb3d8bbwe/ntn-x86_64-pc-windows-msvc/ntn.exe`
 - **stdin closed** (EOF) so `ntn` cannot hang on open stdin.
 - Hard timeout (60s default); nonzero exit → throw (fail-loud).
 - `ntn --version` logged once per run.

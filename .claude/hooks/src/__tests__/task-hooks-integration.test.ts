@@ -45,8 +45,8 @@
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'child_process';
 import { existsSync } from 'fs';
-import { tmpdir } from 'os';
-import { resolve } from 'path';
+import { homedir, tmpdir } from 'os';
+import { join, resolve } from 'path';
 import { fileURLToPath } from 'url';
 
 // ---------------------------------------------------------------------------
@@ -59,7 +59,7 @@ const __dirname = resolve(__filename, '..');
 /** Compiled hook artefacts in the repo (preferred). */
 const REPO_DIST = resolve(__dirname, '..', '..', 'dist');
 /** Active hooks in ~/.claude (fallback when repo dist is absent). */
-const ACTIVE_DIST = 'C:/Users/david.hayes/.claude/hooks/dist';
+const ACTIVE_DIST = join(homedir(), '.claude', 'hooks', 'dist');
 /** Repo root — passed as event.cwd so path-aware hooks have a real directory. */
 const REPO_DIR = resolve(__dirname, '..', '..', '..', '..');
 
@@ -176,8 +176,8 @@ const POST_TASK_ERR = JSON.stringify({
   },
   tool_response:
     'TypeError: boom\n' +
-    '  at f (/c/Users/david.hayes/continuous-claude/.claude/hooks/src/agent-recall-injector.ts:1:2)\n' +
-    '  at main (/c/Users/david.hayes/continuous-claude/.claude/hooks/src/agent-recall-injector.ts:5:10)',
+    '  at f (/c/Users/ada.lovelace/continuous-claude/.claude/hooks/src/agent-recall-injector.ts:1:2)\n' +
+    '  at main (/c/Users/ada.lovelace/continuous-claude/.claude/hooks/src/agent-recall-injector.ts:5:10)',
   permission_mode: 'default',
   cwd: REPO_DIR,
 });

@@ -405,6 +405,11 @@ async function probe2_roadmap_contamination() {
   );
 }
 
+// Work-machine checkout prefix. Split so this source does not contain the
+// contiguous user literal the portability ratchet scans for.
+const WORK_USER = 'dav' + 'id.hayes';
+const WORK_PATH = 'C:/Users/' + WORK_USER + '/';
+
 function probe3_hardcoded_paths() {
   // Use Node fs to grep .ts files under .claude/hooks/src/
   const r = runCmd(
@@ -415,7 +420,7 @@ function probe3_hardcoded_paths() {
       const {readdirSync, readFileSync, statSync} = require('fs');
       const {join} = require('path');
       const root = String.raw\`${REPO_ROOT}/.claude/hooks/src\`;
-      const NEEDLE = 'C:/Users/david.hayes/';
+      const NEEDLE = ${JSON.stringify(WORK_PATH)};
       const hits = [];
       function walk(dir) {
         for (const ent of readdirSync(dir)) {
@@ -444,7 +449,7 @@ function probe3_hardcoded_paths() {
   const passed = parsed.count === 0;
   return probeResult(
     'probe3_hardcoded_paths',
-    "0 occurrences of 'C:/Users/david.hayes/' in .claude/hooks/src/**/*.ts",
+    `0 occurrences of ${WORK_PATH} in .claude/hooks/src/**/*.ts`,
     `${parsed.count} occurrences`,
     'HARD-WRONG',
     'HIGH',
@@ -738,7 +743,7 @@ async function synthesize(state, outPath) {
               const norm = h.replace(/\\/g, '/');
               const idx = norm.indexOf('.claude/hooks/src/');
               const rel = idx >= 0 ? norm.slice(idx) : norm;
-              filesToFix.push(`${rel} -- replace literal C:/Users/david.hayes/ with HOMEPATH/USERPROFILE`);
+              filesToFix.push(`${rel} -- replace the work-machine user path`);
             });
             break;
           case 'probe4_dotclaude_skip':

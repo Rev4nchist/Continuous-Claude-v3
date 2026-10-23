@@ -30,7 +30,7 @@ that is Dave's separate approval step (`promote.mjs`).
 (Dave, 2026-08-31). `https://rev4nchist.github.io/ai-enablement-decks/...` has been HTTP 404
 ever since. Three consecutive Wednesdays (08-12, 08-19, 08-26) failed on exactly this.
 
-- Repo (local): `C:/Users/david.hayes/Projects/ai-enablement-decks` — **PRIVATE**. It is still the
+- Repo (local): `~/Projects/ai-enablement-decks` — **PRIVATE**. It is still the
   build store and version history; **git works fine, only Pages is dead.** Push as normal.
 - **Do NOT check whether the site is live. Do NOT run `gh run list`. Do NOT curl a
   `github.io` URL.** Deploys fail by design now and are not a failure of your run. Treating a
@@ -52,7 +52,7 @@ ever since. Three consecutive Wednesdays (08-12, 08-19, 08-26) failed on exactly
    today already exists, this run must NOT rebuild over it. An interactive generate (Dave building
    the week's package by hand, often the night before) stages exactly the same artifact this task
    would, and regenerating over it would silently replace a reviewed, hand-tuned package with a
-   default one. From the decks repo, `C:/Users/david.hayes/Projects/ai-enablement-decks`:
+   default one. From the decks repo, `~/Projects/ai-enablement-decks`:
 
    ```
    git -C <decks-repo> fetch origin --quiet

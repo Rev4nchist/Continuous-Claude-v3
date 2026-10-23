@@ -3,7 +3,7 @@
   "projects": [
     {
       "name": "continuous-claude",
-      "path": "C:/Users/david.hayes/continuous-claude",
+      "path": "C:/Users/dkhay/continuous-claude",
       "stack": [
         "TypeScript",
         "Node.js",
@@ -24,43 +24,8 @@
       }
     },
     {
-      "name": "NorthStar Transformation",
-      "path": "C:/Users/david.hayes/Projects/archive/NorthStar Transformation",
-      "stack": [
-        "Next.js",
-        "TypeScript",
-        "Tailwind",
-        "Drizzle",
-        "Neon"
-      ],
-      "description": "AI transformation platform for enterprise",
-      "port": null,
-      "url": null,
-      "devCommand": null,
-      "status": "archived",
-      "notes": "Archived 2026-07-24 (5 months untouched, 49 uncommitted files preserved as-is on move). Port 3002 / northstar.localhost freed for reuse.",
-      "sentryProject": "",
-      "linearTeam": "the-lab"
-    },
-    {
-      "name": "Fourth Connect",
-      "path": "C:/Users/david.hayes/Projects/fourth-connect",
-      "stack": [
-        "Next.js",
-        "TypeScript",
-        "Tailwind"
-      ],
-      "description": "Fourth brand platform",
-      "port": 3000,
-      "url": "https://fourth-connect.localhost/",
-      "devCommand": "npm run dev",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "the-lab"
-    },
-    {
       "name": "agent-factory",
-      "path": "C:/Users/david.hayes/Projects/agent-factory",
+      "path": "C:/Users/dkhay/Projects/agent-factory",
       "stack": [
         "Python",
         "Agentica",
@@ -80,7 +45,7 @@
     },
     {
       "name": "ECG Lead Reactivation Engine",
-      "path": "C:/Users/david.hayes/Projects/ECG Lead Reactivation Engine",
+      "path": "C:/Users/dkhay/Projects/ECG Lead Reactivation Engine",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -99,7 +64,7 @@
     },
     {
       "name": "LinkMap",
-      "path": "C:/Users/david.hayes/Projects/linkmap",
+      "path": "C:/Users/dkhay/Projects/linkmap",
       "stack": [
         "React",
         "TypeScript"
@@ -113,43 +78,8 @@
       "linearTeam": ""
     },
     {
-      "name": "ebr-presentations-plugin",
-      "path": "C:/Users/david.hayes/Projects/ebr-presentations-plugin",
-      "stack": [],
-      "description": "EBR/QBR presentations plugin",
-      "port": null,
-      "url": null,
-      "devCommand": null,
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "",
-      "github": "fourth/ebr-presentations-plugin",
-      "notes": "Created directly in the fourth org 2026-08-05 (had no remote, so nothing to transfer)."
-    },
-    {
-      "name": "gong-mcp",
-      "path": "C:/Users/david.hayes/Projects/gong-mcp",
-      "stack": [
-        "Python 3.12",
-        "FastMCP v3",
-        "httpx",
-        "uv"
-      ],
-      "description": "Gong MCP server",
-      "port": 8000,
-      "url": "http://localhost:8000/mcp",
-      "devCommand": "uv run python server.py",
-      "status": "active",
-      "github": "fourth/gong-mcp",
-      "deploy": "Railway (dev) + Azure Container Apps (prod)",
-      "kind": "mcp-server",
-      "notes": "v1: list_calls, get_transcript, list_users tools against Gong v2 API. v2: FastMCP middleware + apps.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
       "name": "vibe-trading",
-      "path": "C:/Users/david.hayes/Projects/vibe-trading",
+      "path": "C:/Users/dkhay/Projects/vibe-trading",
       "stack": [
         "Python 3.12",
         "uv",
@@ -170,174 +100,8 @@
       "linearTeam": ""
     },
     {
-      "name": "fourth-salesforce-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-salesforce-mcp",
-      "stack": [
-        "Python 3.12",
-        "FastMCP v3",
-        "httpx",
-        "uv"
-      ],
-      "description": "Fourth Salesforce MCP server",
-      "port": 8001,
-      "url": "http://localhost:8001/mcp",
-      "devCommand": "uv run python server.py",
-      "status": "active",
-      "github": "fourth/fourth-salesforce-mcp",
-      "deploy": "Railway (dev) + Azure Container Apps (prod)",
-      "kind": "mcp-server",
-      "notes": "Governance proxy in front of Salesforce Hosted MCP (Headless 360). Entra-rooted per-user auth, audit, rate limiting, tool curation, custom-object schema awareness.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
-      "name": "fourth-playwright-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-playwright-mcp",
-      "stack": [
-        "Python 3.11",
-        "FastMCP v3",
-        "Playwright",
-        "uv"
-      ],
-      "description": "General-purpose web automation MCP server (navigate, extract, forms, a11y, performance)",
-      "port": 8000,
-      "url": "http://127.0.0.1:8000",
-      "devCommand": "uv run python src/server.py",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "",
-      "github": "fourth/fourth-playwright-mcp",
-      "kind": "mcp-server",
-      "deploy": "Railway (DOCKERFILE builder, healthcheck /health)",
-      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. PORT COLLISION UNRESOLVED: .env.example sets PORT=8000, already assigned to gong-mcp. Next free 8xxx is 8003. Recorded as 8000 because that is what the repo actually does - the duplicate is left VISIBLE rather than papered over with an aspirational number. Railway service is not GitHub-bound (source null), deploys by CLI, project lives in the personal Railway workspace."
-    },
-    {
-      "name": "agent-arch",
-      "path": "C:/agent-arch",
-      "stack": [
-        "Python",
-        "Dockerfile backend",
-        "Next.js 16.2.10",
-        "React 19"
-      ],
-      "description": "MSFT Agent Architecture Guide - Fourth agent architecture platform (Python backend + Next.js frontend)",
-      "port": 3008,
-      "url": "http://localhost:3008",
-      "devCommand": "cd frontend && npm run dev",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "",
-      "github": "fourth/agent-arch",
-      "kind": "web-app",
-      "deploy": "Azure via GitHub Actions (backend-deploy.yml, frontend-deploy.yml, staging-deploy.yml)",
-      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. 3008 is the frontend dev port per .env.example; with Docker the reverse proxy is 8080. security-scan.yml fires on push/PR to main only."
-    },
-    {
-      "name": "fourth-marketing-brain",
-      "path": "C:/Users/david.hayes/fourth-marketing-brain",
-      "stack": [
-        "Python 3.12",
-        "FastMCP",
-        "Cosmos + SharePoint backends",
-        "uv"
-      ],
-      "description": "AI-powered marketing knowledge MCP server for Fourth - serves the Marketing Brain KB to any AI tool",
-      "port": null,
-      "url": "stdio (MCP_TRANSPORT=stdio default)",
-      "devCommand": "uv run python app.py",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "",
-      "github": "fourth/fourth-marketing-brain",
-      "kind": "mcp-server",
-      "deploy": "GitHub Actions deploy.yml",
-      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. Defaults to stdio so claims NO port. MCP_PORT=8000 applies only when MCP_TRANSPORT=http, and that value collides with gong-mcp - reassign before running in http mode."
-    },
-    {
-      "name": "Fourth Canvas",
-      "path": "C:/Users/david.hayes/Projects/Fourth Canvas",
-      "stack": [
-        "Next.js",
-        "TypeScript",
-        "Drizzle",
-        "Neon"
-      ],
-      "description": "Fourth Canvas web app (Next.js + Drizzle + Neon, deployed to Vercel)",
-      "port": 3004,
-      "url": "https://fourth-canvas.localhost/",
-      "devCommand": "npm run dev",
-      "status": "active",
-      "github": "Rev4nchist/fourth-canvas",
-      "deploy": "Vercel"
-    },
-    {
-      "name": "ebr-presentations",
-      "path": "C:/Users/david.hayes/Projects/ebr-presentations",
-      "stack": [
-        "Python (uv)",
-        "pandas/polars",
-        "pydantic"
-      ],
-      "description": "SQL -> JSON ETL data pipeline feeding the EBR presentation builder (not a web app)",
-      "port": null,
-      "url": null,
-      "devCommand": "uv run python -m ebr_presentations",
-      "status": "active",
-      "github": null,
-      "deploy": null,
-      "kind": "data-pipeline",
-      "notes": "SQL -> JSON ETL feeding the EBR presentation builder. Not a web app."
-    },
-    {
-      "name": "Fourth Presentation Hosting Platform",
-      "path": "C:/Users/david.hayes/Projects/archive/Fourth Presentation Hosting Platform",
-      "stack": [],
-      "description": "Presentation hosting platform",
-      "port": null,
-      "url": null,
-      "devCommand": null,
-      "status": "archived",
-      "notes": "Archived 2026-07-24 (4 months untouched, 293 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
-      "name": "fourth-workbook",
-      "path": "C:/Users/david.hayes/Projects/archive/fourth-workbook",
-      "stack": [],
-      "description": "Fourth workbook project",
-      "port": null,
-      "url": null,
-      "devCommand": null,
-      "status": "archived",
-      "notes": "Archived 2026-07-24 (6 months untouched, 35 uncommitted files preserved as-is on move). Was never in this registry before; added for discoverability.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
-      "name": "fourth-netsuite-mcp",
-      "path": "C:/Users/david.hayes/Projects/fourth-netsuite-mcp",
-      "stack": [
-        "Python 3.12",
-        "FastMCP v3",
-        "httpx",
-        "uv"
-      ],
-      "description": "Fourth NetSuite MCP server — FastMCP v3 governance proxy (connector #3)",
-      "port": 8002,
-      "url": "http://localhost:8002/mcp",
-      "devCommand": "uv run python server.py",
-      "status": "active",
-      "github": "fourth/fourth-netsuite-mcp",
-      "deploy": "Azure Container Apps (Cosmos + Key Vault)",
-      "kind": "mcp-server",
-      "notes": "Governance proxy in front of NetSuite AI Connector Service MCP. Connector #3 of the FourthOS ecosystem; cloned from the fourth-salesforce-mcp mold (~95% reuse). Entra-rooted edge auth + per-user NetSuite OAuth (AuthCode+PKCE, no OBO exists), distributed rotate-on-use token lock, distributed account-concurrency governor, read-audit, SuiteQL safety. Phase 0 (spike gate) as of 2026-07-15; build not started.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
       "name": "Agentic OS",
-      "path": "C:/Users/david.hayes/continuous-claude/apps/agentic-os",
+      "path": "C:/Users/dkhay/continuous-claude/apps/agentic-os",
       "stack": [
         "Next.js",
         "TypeScript",
@@ -359,7 +123,7 @@
     },
     {
       "name": "buzz",
-      "path": "C:/Users/david.hayes/Projects/buzz",
+      "path": "C:/Users/dkhay/Projects/buzz",
       "stack": [
         "Rust",
         "Tauri",
@@ -374,47 +138,8 @@
       "status": "active"
     },
     {
-      "name": "fourth-firecrawl",
-      "path": "C:/Users/david.hayes/Projects/fourth-firecrawl-plugin",
-      "stack": [
-        "Claude Code plugin",
-        "Markdown skills + commands",
-        "Firecrawl MCP"
-      ],
-      "description": "Fourth-tailored Firecrawl Claude plugin v1.2.1 - competitor intel, hospitality market scans, staged KB ingestion",
-      "port": null,
-      "url": "",
-      "devCommand": "",
-      "status": "active",
-      "github": "fourth/fourth-firecrawl",
-      "deploy": "n/a (plugin, distributed as .claude-plugin)",
-      "kind": "claude-plugin",
-      "notes": "Transferred Rev4nchist -> fourth 2026-08-05. AGPL-3.0. Working copy dir is fourth-firecrawl-PLUGIN; the sibling fourth-firecrawl dir was the per-user output workspace and is archived at Projects/archive/fourth-firecrawl-workspace-2026-04. Superseded duplicate david-hayes44/fourth-firecrawl is archived on GitHub.",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
-      "name": "FourthBot",
-      "path": "C:/Users/david.hayes/Projects/FourthBot",
-      "stack": [
-        "TypeScript",
-        "Node.js",
-        "pnpm",
-        "Hono",
-        "PostgreSQL",
-        "AKS"
-      ],
-      "description": "Fourth Harness control plane + Agent Delivery Platform monorepo (Azure, Entra-only, Kata sandbox) (reference only since 2026-09-30; the live build is Minions in fourthbot-next)",
-      "port": 3002,
-      "url": "https://fourthbot.localhost/",
-      "devCommand": "pnpm dev",
-      "status": "reference",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
       "name": "FlatClicker",
-      "path": "C:/Users/david.hayes/Projects/FlatClicker",
+      "path": "C:/Users/dkhay/Projects/FlatClicker",
       "stack": [
         "Tauri v2",
         "Rust",
@@ -426,48 +151,6 @@
       "port": 3006,
       "url": "http://localhost:3006",
       "devCommand": "npm run tauri dev",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": ""
-    },
-    {
-      "name": "Minions (fourthbot-next)",
-      "path": "C:/Users/david.hayes/Projects/fourthbot-next",
-      "stack": [
-        "TypeScript",
-        "pnpm",
-        "Hono",
-        "PostgreSQL 17",
-        "pg-boss",
-        "React 19",
-        "Vite",
-        "Playwright"
-      ],
-      "description": "Minions: a governed team-of-bots workspace, local GrokBot-like build on a real model (plan L0-L6)",
-      "port": 5174,
-      "url": "http://127.0.0.1:5174/",
-      "devCommand": "pnpm stack:up && pnpm dev:web",
-      "status": "active",
-      "sentryProject": "",
-      "linearTeam": "",
-      "e2e": {
-        "command": "node .claude/skills/verify-minions/drive.mjs",
-        "artifact": ".claude/cache/e2e/<stamp>-verify-minions-fourthbot-next.log"
-      }
-    },
-    {
-      "name": "fourth-company-brain",
-      "path": "C:/Users/david.hayes/Projects/FourthCompanyBrain",
-      "stack": [
-        "Markdown",
-        "JSON Schema",
-        "TypeScript",
-        "Node.js"
-      ],
-      "description": "Fourth Brain product-knowledge spine + knowledge-to-content change propagation (Notion is SoT)",
-      "port": null,
-      "url": null,
-      "devCommand": null,
       "status": "active",
       "sentryProject": "",
       "linearTeam": ""

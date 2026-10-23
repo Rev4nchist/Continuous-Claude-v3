@@ -136,8 +136,8 @@ Write-Head 'DUMPS'
 '  Access-denied and returns count 0, which reads as "empty". It is not empty.'
 '  MinidumpsCount=5 with Overwrite=1, so each new crash destroys an older dump.'
 '  Rescue them from an ELEVATED shell:'
-'    Copy-Item -Path C:\Windows\Minidump\*.dmp -Destination C:\Users\david.hayes\.claude\logs\minidumps\ -Force -PassThru'
-$dest = 'C:\Users\david.hayes\.claude\logs\minidumps'
+'    Copy-Item -Path C:\Windows\Minidump\*.dmp -Destination $env:USERPROFILE\.claude\logs\minidumps\ -Force -PassThru'
+$dest = (Join-Path $env:USERPROFILE '.claude\logs\minidumps')
 if (Test-Path $dest) {
   $saved = @(Get-ChildItem $dest -Filter *.dmp -ErrorAction SilentlyContinue)
   '  rescued so far: {0} dmp file(s) in {1}' -f $saved.Count, $dest

@@ -71,7 +71,7 @@ for (const d of fs.readdirSync(ROOT, { withFileTypes: true })) {
       if (human.length < 2) continue;
       pairs.push({
         id: crypto.createHash('sha1').update(`${d.name}/${f}/${o.timestamp}`).digest('hex').slice(0, 12),
-        project: d.name.replace(/^C--Users-david-hayes-|^C--/, ''),
+        project: d.name.replace(/^C--Users-ada-lovelace-|^C--/, ''),
         session: f.slice(0, 8), ts: o.timestamp, model,
         agent: redact(clip(lastAgent, AGENT_CHARS)),
         human: redact(clip(human, HUMAN_CHARS)),

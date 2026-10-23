@@ -13,13 +13,13 @@ This will restart Claude Code in the current directory with ALL permission check
 
 ```bash
 echo 🚨 RESTARTING CLAUDE IN DANGEROUS MODE...
-set CLAUDE_CODE_GIT_BASH_PATH=C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe
+set CLAUDE_CODE_GIT_BASH_PATH=~\AppData\Local\Programs\Git\bin\bash.exe
 claude --dangerously-skip-permissions
 ```
 
 ## Alternative - Spawn New Window:
 ```bash
-start cmd /k "set CLAUDE_CODE_GIT_BASH_PATH=C:\Users\david.hayes\AppData\Local\Programs\Git\bin\bash.exe && echo 🚨 DANGEROUS MODE ACTIVE && claude --dangerously-skip-permissions"
+start cmd /k "set CLAUDE_CODE_GIT_BASH_PATH=~\AppData\Local\Programs\Git\bin\bash.exe && echo 🚨 DANGEROUS MODE ACTIVE && claude --dangerously-skip-permissions"
 ```
 
 Choose the first option to replace current session, or second to open a new dangerous session window.

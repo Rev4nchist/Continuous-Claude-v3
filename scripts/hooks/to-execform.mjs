@@ -16,10 +16,11 @@
 // path) and strips the surrounding quotes so the exec-form arg is a clean path.
 import fs from 'node:fs';
 import os from 'node:os';
+import path from 'node:path';
 
 const argv = process.argv.slice(2);
 const settingsIdx = argv.indexOf('--settings');
-const SETTINGS = settingsIdx !== -1 ? argv[settingsIdx + 1] : 'C:/Users/david.hayes/.claude/settings.json';
+const SETTINGS = settingsIdx !== -1 ? argv[settingsIdx + 1] : path.join(os.homedir(), '.claude', 'settings.json');
 const apply = argv.includes('--apply');
 const eventIdx = argv.indexOf('--event');
 const onlyEvent = eventIdx !== -1 ? argv[eventIdx + 1] : null;

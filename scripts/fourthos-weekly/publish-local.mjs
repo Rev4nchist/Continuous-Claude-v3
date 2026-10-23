@@ -38,7 +38,7 @@ import { readFileSync, writeFileSync, mkdirSync, existsSync, statSync, renameSyn
 import { join, resolve, basename } from 'node:path';
 import { pathToFileURL } from 'node:url';
 
-export const DEFAULT_SOURCE = 'C:/Users/david.hayes/Projects/ai-enablement-decks/fourthos/preview';
+export const DEFAULT_SOURCE = '~/Projects/ai-enablement-decks/fourthos/preview';
 export const BASE_PATH = '/ai-enablement-decks';
 export const DECK_FILES = ['index.html', 'briefing.html', 'deep-dive.html'];
 
@@ -46,7 +46,7 @@ export const DECK_FILES = ['index.html', 'briefing.html', 'deep-dive.html'];
 // tenant folder is ever renamed; fall back to the known path.
 export function defaultDestRoot(env = process.env) {
   const od = env.OneDrive || env.OneDriveCommercial;
-  const root = od && od.trim() ? od : 'C:/Users/david.hayes/OneDrive - Fourth Limited';
+  const root = od && od.trim() ? od : '~/OneDrive - Fourth Limited';
   return join(root, 'FourthOS Sponsor Updates');
 }
 

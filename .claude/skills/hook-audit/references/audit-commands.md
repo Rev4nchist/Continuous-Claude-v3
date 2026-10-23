@@ -9,9 +9,10 @@ node -e "
 const fs = require('fs');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const DIST_DIR = 'C:/Users/david.hayes/.claude/hooks/dist';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const os = require('os');
+const SRC_DIR = path.join(os.homedir(), 'continuous-claude', '.claude', 'hooks', 'src');
+const DIST_DIR = path.join(os.homedir(), '.claude', 'hooks', 'dist');
+const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 
 // 1. Source hooks (exclude shared/, __tests__/)
 const srcFiles = fs.readdirSync(SRC_DIR)
@@ -87,10 +88,11 @@ Classifies all unregistered hooks by event type, matcher, and readiness.
 ```bash
 node -e "
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const SRC_DIR = path.join(os.homedir(), 'continuous-claude', '.claude', 'hooks', 'src');
+const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 
 // Get registered set
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
@@ -155,11 +157,12 @@ Generates settings.json entries for all ready-to-wire hooks.
 ```bash
 node -e "
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
-const DIST_PREFIX = 'C:/Users/david.hayes/.claude/hooks/dist';
+const SRC_DIR = path.join(os.homedir(), 'continuous-claude', '.claude', 'hooks', 'src');
+const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
+const DIST_PREFIX = path.join(os.homedir(), '.claude', 'hooks', 'dist');
 
 // Build registered set
 const settings = JSON.parse(fs.readFileSync(SETTINGS, 'utf8'));
@@ -252,10 +255,11 @@ Find registrations pointing to hooks with no source file.
 ```bash
 node -e "
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const SRC_DIR = 'C:/Users/david.hayes/continuous-claude/.claude/hooks/src';
-const SETTINGS = 'C:/Users/david.hayes/.claude/settings.json';
+const SRC_DIR = path.join(os.homedir(), 'continuous-claude', '.claude', 'hooks', 'src');
+const SETTINGS = path.join(os.homedir(), '.claude', 'settings.json');
 
 const srcFiles = new Set(
   fs.readdirSync(SRC_DIR)

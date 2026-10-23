@@ -32,10 +32,13 @@
 
 import { readFileSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
 
 const ITER = Number(process.argv[2] || 3);
-const LIVE = 'C:/Users/david.hayes/.claude/settings.json';
-const REPO = 'C:/Users/david.hayes/continuous-claude';
+const REPO = join(dirname(fileURLToPath(import.meta.url)), '..', '..');
+const LIVE = join(homedir(), '.claude', 'settings.json');
 const REAL_FILE = `${REPO}/.claude/hooks/src/shared/output.ts`;
 const SID = 'step6-fanout-probe';
 

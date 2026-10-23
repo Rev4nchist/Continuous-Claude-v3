@@ -1,11 +1,11 @@
 // Test the path normalization logic from auto-build
 const paths = [
-  'C:/Users/david.hayes/.claude/hooks/src/test-hook.ts',
-  'C:\\Users\\david.hayes\\.claude\\hooks\\src\\test-hook.ts',
+  '/home/testuser/.claude/hooks/src/test-hook.ts',
+  'C:\\Users\\ada.lovelace\\.claude\\hooks\\src\\test-hook.ts',
   '/home/user/.claude/hooks/src/test-hook.ts',
-  'C:/Users/david.hayes/project/src/app.ts',
-  'C:/Users/david.hayes/.claude/hooks/src/test.js',
-  'C:/Users/david.hayes/.claude/hooks/dist/auto-build.mjs',
+  '/home/testuser/project/src/app.ts',
+  '/home/testuser/.claude/hooks/src/test.js',
+  '/home/testuser/.claude/hooks/dist/auto-build.mjs',
 ];
 
 function isHookSourceFile(filePath) {
