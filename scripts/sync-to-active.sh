@@ -171,15 +171,13 @@ $VERBOSE && echo "Syncing: $REPO_CLAUDE → $ACTIVE_CLAUDE" || true
 # Renaming the SOURCE keeps the rules version-controlled and still fed to
 # ~/.claude/rules/ (which 18 of 19 projects rely on as their ONLY copy) while
 # removing the second load. See docs/harness-strategy/.
-# `commands` added 2026-07-29. The 59 slash commands had existed ONLY in
-# ~/.claude/commands -- one untracked copy on one machine. They are now committed,
-# but a committed copy that nothing propagates is a second source of truth waiting
-# to drift, which is the exact failure the rules-src rename above was fixing.
-# Safe to add: repo and active were verified hash-identical (58/58) when the backup
-# landed, so the first forward sync copies nothing.
+# commands-src -> commands, same shape as rules-src. Claude Code loads a project's
+# .claude/commands/ at project scope on top of ~/.claude/commands/, so the repo
+# source name differs from the active name. A committed copy that nothing
+# propagates is a second source of truth. The mapping below is the propagation.
 # rules-ondemand (2026-09-24): tool-specific rules the rule-router hook loads at the action.
 # Same name in repo and active, and deliberately NOT under rules/, so nothing auto-loads them.
-SYNC_DIRS="agents skills scripts docs commands rules-ondemand"
+SYNC_DIRS="agents skills scripts docs rules-ondemand"
 
 # Nested dirs synced on their own (2026-10-01). plugins/claude-hud holds the status line launcher
 # and its config. The rest of ~/.claude/plugins is Claude Code's own state (cache, marketplaces,
@@ -193,6 +191,8 @@ SYNC_SUBDIRS="plugins/claude-hud plugins/ccv3-mods"
 # Explicit source->dest mapping for the rules tree (names differ, see above).
 RULES_SRC_DIR="rules-src"
 RULES_DST_DIR="rules"
+COMMANDS_SRC_DIR="commands-src"
+COMMANDS_DST_DIR="commands"
 
 # CLAUDE.md / RULES.md here means any copy found while mirroring a dir; the two global ones install
 # from .claude/templates/ through copy_core_templates (2026-10-03).
@@ -743,7 +743,14 @@ if $CHANGED; then
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/rules/${p#.claude/rules-src/}"
                 ;;
-            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/commands/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*|.claude/plugins/ccv3-mods/*)
+            # commands-src -> commands. Same reason as rules-src: a rename shows up
+            # as D(old)+A(new), and a .claude/commands/* case would delete the dest
+            # the add just copied. There is no .claude/commands/* case.
+            .claude/commands-src/*)
+                changed_is_excluded "$p" && return 0
+                printf '%s\n' "$ACTIVE_CLAUDE/commands/${p#.claude/commands-src/}"
+                ;;
+            .claude/agents/*|.claude/skills/*|.claude/scripts/*|.claude/docs/*|.claude/rules-ondemand/*|.claude/plugins/claude-hud/*|.claude/plugins/ccv3-mods/*)
                 changed_is_excluded "$p" && return 0
                 printf '%s\n' "$ACTIVE_CLAUDE/${p#.claude/}"
                 ;;
@@ -944,6 +951,8 @@ done
 
 # rules: repo .claude/rules-src/ -> active ~/.claude/rules/ (see SYNC_DIRS note).
 copy_dir "$RULES_SRC_DIR" "$RULES_DST_DIR"
+# commands: repo .claude/commands-src/ -> active ~/.claude/commands/.
+copy_dir "$COMMANDS_SRC_DIR" "$COMMANDS_DST_DIR"
 
 # Sync the project registry (repo canonical -> active mirror, JSON-validated)
 copy_registry
@@ -1081,6 +1090,7 @@ if ! $DRY_RUN; then
             VERIFY_FAIL=1
         fi
     done
+    verify_dir "commands" "$REPO_CLAUDE/$COMMANDS_SRC_DIR" "$ACTIVE_CLAUDE/$COMMANDS_DST_DIR"
     verify_dir "hooks/dist (*.mjs)" "$REPO_CLAUDE/hooks/dist" "$ACTIVE_CLAUDE/hooks/dist" "*.mjs"
     verify_dir "scripts/ralph (*.py)" "$REPO_CLAUDE/scripts/ralph" "$ACTIVE_CLAUDE/scripts/ralph" "*.py"
     verify_dir "templates/ralph" "$REPO_CLAUDE/templates/ralph" "$ACTIVE_CLAUDE/templates/ralph"

@@ -547,19 +547,27 @@ chk "(F) no LINK-GUARD line for a normal file" "$(printf '%s' "$out" | grep -q '
 chk "(F) a normal rule synced through the ~/.claude link" "$(has "$REAL2/rules/seed.md")"
 rm -f "$HOME2/.claude"
 
-echo "=== T15: --changed syncs .claude/commands (add, edit, delete) ==="
+echo "=== T15: --changed syncs .claude/commands-src to commands (add, edit, delete) ==="
 # Before 2026-10-02 --changed mapped no command path, so a command removed or edited through a PR
 # (land-pr syncs with --changed) stayed stale in ~/.claude/commands (ralph.md, persona.md, task.md).
-mkdir -p "$REPO/.claude/commands"
-printf 'v1\n' > "$REPO/.claude/commands/t15.md"; commit t15-add
+# The repo source is commands-src so a project session does not load the files twice.
+mkdir -p "$REPO/.claude/commands-src"
+printf 'v1\n' > "$REPO/.claude/commands-src/t15.md"; commit t15-add
 sync --changed >/dev/null
 chk "--changed adds a new command" "$( [ "$(cat "$ACT/commands/t15.md" 2>/dev/null)" = "v1" ] && echo 1 || echo 0)"
-printf 'v2\n' > "$REPO/.claude/commands/t15.md"; commit t15-edit
+printf 'v2\n' > "$REPO/.claude/commands-src/t15.md"; commit t15-edit
 sync --changed >/dev/null
 chk "--changed updates an edited command" "$( [ "$(cat "$ACT/commands/t15.md" 2>/dev/null)" = "v2" ] && echo 1 || echo 0)"
-g rm -q .claude/commands/t15.md; g commit -q -m t15-delete
+g rm -q .claude/commands-src/t15.md; g commit -q -m t15-delete
 sync --changed >/dev/null
 chk "--changed removes a deleted command" "$(not "$ACT/commands/t15.md")"
+
+echo "=== T15b: a full mirror copies commands-src onto commands ==="
+mkdir -p "$REPO/.claude/commands-src"
+printf 'mapped\n' > "$REPO/.claude/commands-src/t15b.md"
+commit t15b
+sync >/dev/null
+chk "commands-src file lands in commands" "$( [ "$(cat "$ACT/commands/t15b.md" 2>/dev/null)" = "mapped" ] && echo 1 || echo 0)"
 
 echo "=== T16: the CLAUDE.md and RULES.md templates install as ~/.claude/CLAUDE.md and RULES.md ==="
 # Before 2026-10-03 both were NEVER_SYNC: every template PR needed a hand copy, and a live-only edit
