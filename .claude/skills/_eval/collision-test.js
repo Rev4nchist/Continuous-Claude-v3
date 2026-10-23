@@ -12,12 +12,13 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
-const SKILLS_DIR = '~/.claude/skills';
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
 const EVAL_DIR = path.join(SKILLS_DIR, '_eval');
-const HOOK_PATH = '~/.claude/hooks/dist/skill-activation-prompt.mjs';
-const CWD = '~/continuous-claude';
+const HOOK_PATH = path.join(os.homedir(), '.claude', 'hooks', 'dist', 'skill-activation-prompt.mjs');
+const CWD = path.join(os.homedir(), 'continuous-claude');
 
 const verbose = process.argv.includes('--verbose');
 

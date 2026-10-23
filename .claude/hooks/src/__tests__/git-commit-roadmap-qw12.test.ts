@@ -12,18 +12,18 @@
 import { describe, it, expect } from 'vitest';
 import { commitRanInProject, extractCdTarget } from '../shared/roadmap-sync-guards.js';
 
-const PROJECT = '~/continuous-claude';
+const PROJECT = '/home/testuser/continuous-claude';
 
 describe('D2d-10: extractCdTarget', () => {
   it('extracts an absolute cd target that precedes git commit', () => {
-    expect(extractCdTarget('cd ~/.claude && git commit -m "x"')).toBe(
-      '~/.claude',
+    expect(extractCdTarget('cd /home/testuser/.claude && git commit -m "x"')).toBe(
+      '/home/testuser/.claude',
     );
   });
 
   it('extracts a quoted (spaced) cd target', () => {
-    expect(extractCdTarget('cd "~/My Repo" && git commit -m "x"')).toBe(
-      '~/My Repo',
+    expect(extractCdTarget('cd "/home/testuser/My Repo" && git commit -m "x"')).toBe(
+      '/home/testuser/My Repo',
     );
   });
 
@@ -39,14 +39,14 @@ describe('D2d-10: extractCdTarget', () => {
 describe('D2d-10: commitRanInProject', () => {
   it('BLOCKS a commit that cd-ed into another repo (~/.claude quick fix)', () => {
     expect(
-      commitRanInProject('cd ~/.claude && git commit -m "x"', PROJECT),
+      commitRanInProject('cd /home/testuser/.claude && git commit -m "x"', PROJECT),
     ).toBe(false);
   });
 
   it('BLOCKS a commit cd-ed into a sibling dir sharing the prefix', () => {
     expect(
       commitRanInProject(
-        'cd ~/continuous-claude-x && git commit -m "x"',
+        'cd /home/testuser/continuous-claude-x && git commit -m "x"',
         PROJECT,
       ),
     ).toBe(false);
@@ -59,7 +59,7 @@ describe('D2d-10: commitRanInProject', () => {
   it('ALLOWS a commit cd-ed into a subdirectory of the project', () => {
     expect(
       commitRanInProject(
-        'cd ~/continuous-claude/opc && git commit -m "x"',
+        'cd /home/testuser/continuous-claude/opc && git commit -m "x"',
         PROJECT,
       ),
     ).toBe(true);

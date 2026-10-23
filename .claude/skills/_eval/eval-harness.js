@@ -15,15 +15,16 @@
 
 const { spawnSync } = require('child_process');
 const fs = require('fs');
+const os = require('os');
 const path = require('path');
 
 // === Configuration ===
-const SKILLS_DIR = '~/.claude/skills';
-const HOOK_PATH = '~/.claude/hooks/dist/skill-activation-prompt.mjs';
+const SKILLS_DIR = path.join(os.homedir(), '.claude', 'skills');
+const HOOK_PATH = path.join(os.homedir(), '.claude', 'hooks', 'dist', 'skill-activation-prompt.mjs');
 const RULES_PATH = path.join(SKILLS_DIR, 'skill-rules.json');
 const EVAL_DIR = path.join(SKILLS_DIR, '_eval');
 const RESULTS_PATH = path.join(EVAL_DIR, 'eval-results.json');
-const CWD = '~/continuous-claude';
+const CWD = path.join(os.homedir(), 'continuous-claude');
 
 // === Helpers ===
 

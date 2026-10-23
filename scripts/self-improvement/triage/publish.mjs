@@ -16,12 +16,13 @@
 // Usage: node scripts/self-improvement/triage/publish.mjs [--dry-run] [--no-push]
 //        [--skip-build] [--date=YYYY-MM-DD] [--repo=<decks repo path>]
 import fs from 'node:fs';
+import os from 'node:os';
 import path from 'node:path';
 import { execFileSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
-const DEFAULT_REPO = '~/Projects/ai-enablement-decks';
+const DEFAULT_REPO = path.join(os.homedir(), 'Projects', 'ai-enablement-decks');
 const SITE_DIR = 'self-improvement';
 
 const args = process.argv.slice(2);

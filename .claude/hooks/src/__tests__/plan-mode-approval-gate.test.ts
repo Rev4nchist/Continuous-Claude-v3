@@ -127,8 +127,8 @@ describe('decideGate', () => {
 
 describe('mangleProjectDir', () => {
   it('replaces non-alphanumeric characters with dashes', () => {
-    expect(mangleProjectDir('~/continuous-claude')).toBe(
-      'C--Users-ada-lovelace-continuous-claude',
+    expect(mangleProjectDir('/home/testuser/continuous-claude')).toBe(
+      '-home-testuser-continuous-claude',
     );
   });
 

@@ -3,7 +3,7 @@
 Verify `.claude/` presence and sync state across all projects in the registry.
 
 ```bash
-REPO="~/continuous-claude/.claude"
+REPO="$HOME/continuous-claude/.claude"
 ```
 
 ## Step 1: List Active Projects and Check .claude/ Presence
@@ -12,7 +12,7 @@ REPO="~/continuous-claude/.claude"
 node -e "
 const fs = require('fs');
 const path = require('path');
-const reg = JSON.parse(fs.readFileSync('~/continuous-claude/.claude/project-registry.json', 'utf8'));
+const reg = JSON.parse(fs.readFileSync(require('os').homedir() + '/continuous-claude/.claude/project-registry.json', 'utf8'));
 const active = reg.projects.filter(p => p.status === 'active');
 console.log('Project'.padEnd(28) + 'Path'.padEnd(52) + '.claude/');
 console.log('-'.repeat(90));
@@ -28,9 +28,9 @@ for (const p of active) {
 
 ```bash
 for PROJECT_PATH in \
-  "~/Projects/northstar-transformation" \
-  "~/Projects/fourth-connect" \
-  "~/Projects/agent-factory"; do
+  "$HOME/Projects/northstar-transformation" \
+  "$HOME/Projects/fourth-connect" \
+  "$HOME/Projects/agent-factory"; do
 
   PROJECT_NAME=$(basename "$PROJECT_PATH")
   CLAUDE_DIR="$PROJECT_PATH/.claude"
@@ -51,9 +51,9 @@ done
 
 ```bash
 for PROJECT_PATH in \
-  "~/Projects/northstar-transformation" \
-  "~/Projects/fourth-connect" \
-  "~/Projects/agent-factory"; do
+  "$HOME/Projects/northstar-transformation" \
+  "$HOME/Projects/fourth-connect" \
+  "$HOME/Projects/agent-factory"; do
 
   PROJECT_NAME=$(basename "$PROJECT_PATH")
   CLAUDE_DIR="$PROJECT_PATH/.claude"

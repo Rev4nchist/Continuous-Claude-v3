@@ -29,7 +29,7 @@ describe('isHarnessPath', () => {
 
   it('matches the LIVE harness, not just a repo copy', () => {
     // ~/.claude is the copy every session on the machine actually executes.
-    expect(isHarnessPath('~/.claude/hooks/dist/file-claims.mjs')).toBe(true);
+    expect(isHarnessPath('/home/testuser/.claude/hooks/dist/file-claims.mjs')).toBe(true);
   });
 
   it('matches regardless of slash direction or case', () => {

@@ -9,9 +9,12 @@ Claude Code writes to `~/.claude.json` continuously (session stats, tip counters
 ```bash
 node -e "
 const fs = require('fs');
-const data = JSON.parse(fs.readFileSync('~/.claude.json', 'utf8'));
+const os = require('os');
+const path = require('path');
+const claudeJson = path.join(os.homedir(), '.claude.json');
+const data = JSON.parse(fs.readFileSync(claudeJson, 'utf8'));
 // ... modify data ...
-fs.writeFileSync('~/.claude.json', JSON.stringify(data, null, 2) + '\n');
+fs.writeFileSync(claudeJson, JSON.stringify(data, null, 2) + '\n');
 "
 ```
 

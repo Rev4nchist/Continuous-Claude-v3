@@ -18,8 +18,8 @@ from pathlib import Path
 from scripts.core.rlm_client import rlm_complete, RLMPolicy
 
 
-ROOT = Path("~/continuous-claude")
-HOME = Path("~/.claude")
+ROOT = Path.home() / "continuous-claude"
+HOME = Path.home() / ".claude"
 
 
 def gather_sources() -> list[Path]:

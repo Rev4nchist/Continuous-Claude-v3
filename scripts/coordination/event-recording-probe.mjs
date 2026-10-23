@@ -17,12 +17,13 @@
  *
  *   node scripts/coordination/event-recording-probe.mjs
  */
-import { spawn } from 'node:child_process';
-import { execFileSync } from 'node:child_process';
+import { spawn, execFileSync } from 'node:child_process';
+import { homedir } from 'node:os';
+import { join } from 'node:path';
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
 
-const REPO = '~/continuous-claude';
+const REPO = join(homedir(), 'continuous-claude');
 const CANON = 'c:/users/ada.lovelace/continuous-claude';
 const TARGET = 'C:\\Users\\ada.lovelace\\continuous-claude\\.claude\\hooks\\src\\__step4e2e__.ts';
 const HOLDER = 'step4e2e-holder-0000-0000-000000000000';

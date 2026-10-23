@@ -27,7 +27,7 @@ On this Windows system:
 Set these variables before running commands:
 
 ```bash
-REPO="~/continuous-claude/.claude"
+REPO="$HOME/continuous-claude/.claude"
 ACTIVE="~/.claude"
 ```
 
@@ -181,7 +181,7 @@ All synced directories are in sync. No drift detected.
 For a quick check, run all comparisons in sequence:
 
 ```bash
-REPO="~/continuous-claude/.claude"
+REPO="$HOME/continuous-claude/.claude"
 ACTIVE="~/.claude"
 
 # Known local-only files (do not report as drift)

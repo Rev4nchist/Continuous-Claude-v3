@@ -1,4 +1,7 @@
 const fs = require('fs');
+const os = require('os');
+const path = require('path');
+const PROGRESS = path.join(os.homedir(), '.claude', 'skills', '_eval-progress.json');
 const raw = fs.readFileSync(process.argv[2], 'utf8');
 
 const blocks = raw.split('---').filter(b => b.includes('==='));
@@ -37,7 +40,7 @@ for (const block of blocks) {
   results[name] = { structural, errors, warnings, passed, errorMsgs, exitCode };
 }
 
-const tracker = JSON.parse(fs.readFileSync('~/.claude/skills/_eval-progress.json', 'utf8'));
+const tracker = JSON.parse(fs.readFileSync(PROGRESS, 'utf8'));
 let passCount = 0, warnCount = 0, failCount = 0;
 
 for (const [name, r] of Object.entries(results)) {
@@ -52,7 +55,7 @@ for (const [name, r] of Object.entries(results)) {
 }
 
 tracker.phases_completed.push('phase-1-structural-validation');
-fs.writeFileSync('~/.claude/skills/_eval-progress.json', JSON.stringify(tracker, null, 2));
+fs.writeFileSync(PROGRESS, JSON.stringify(tracker, null, 2));
 
 console.log('=== STRUCTURAL VALIDATION SUMMARY ===');
 console.log('PASS (no errors, no warnings): ' + passCount);
