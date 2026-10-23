@@ -497,37 +497,6 @@ async def prompt_devops_integration() -> dict[str, str]:
     except (subprocess.TimeoutExpired, OSError) as e:
         console.print(f"  [yellow]WARN[/yellow] Could not install @playwright/cli: {e}")
 
-    # Register MCP servers in ~/.mcp.json
-    mcp_path = Path.home() / ".mcp.json"
-    try:
-        mcp_config: dict[str, Any] = {}
-        if mcp_path.exists():
-            try:
-                mcp_config = json.loads(mcp_path.read_text())
-            except Exception:
-                mcp_config = {}
-        if "mcpServers" not in mcp_config:
-            mcp_config["mcpServers"] = {}
-
-        if result.get("linear_api_token"):
-            mcp_config["mcpServers"]["linear"] = {
-                "type": "url",
-                "url": "https://mcp.linear.app/mcp",
-            }
-            console.print("  [green]OK[/green] Linear MCP server registered in ~/.mcp.json")
-
-        if result.get("sentry_auth_token"):
-            mcp_config["mcpServers"]["sentry"] = {
-                "type": "url",
-                "url": "https://mcp.sentry.dev/sse",
-            }
-            console.print("  [green]OK[/green] Sentry MCP server registered in ~/.mcp.json")
-
-        if result.get("linear_api_token") or result.get("sentry_auth_token"):
-            mcp_path.write_text(json.dumps(mcp_config, indent=2))
-    except Exception as e:
-        console.print(f"  [yellow]WARN[/yellow] Could not update ~/.mcp.json: {e}")
-
     return result
 
 
