@@ -10,7 +10,7 @@
 import { readFileSync, existsSync } from 'fs';
 import { spawnSync } from 'child_process';
 import { join } from 'path';
-import { queryDaemonSync, trackHookActivitySync } from './daemon-client.js';
+import { queryDaemonSync, trackHookActivitySync } from './lib/daemon-client.js';
 import { mutateBus, addFileInPlay } from './shared/context-bus.js';
 
 interface HookInput {

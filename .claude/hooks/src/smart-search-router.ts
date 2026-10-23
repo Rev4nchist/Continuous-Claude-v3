@@ -25,7 +25,7 @@ import {
   probeDaemonFast,
   isDaemonUnreachableCached,
   cacheDaemonUnreachable,
-} from './daemon-client.js';
+} from './lib/daemon-client.js';
 import { logHook } from './shared/session-activity.js';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
 

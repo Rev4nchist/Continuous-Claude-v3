@@ -4,7 +4,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 import { readFileSync as readFileSync2 } from "fs";
 import { basename } from "path";
 
-// src/daemon-client.ts
+// src/lib/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { join, resolve } from "path";

@@ -1,6 +1,6 @@
 import * as fs from 'fs';
 import * as path from 'path';
-import { parseTranscript, generateAutoHandoff } from './transcript-parser.js';
+import { parseTranscript, generateAutoHandoff } from './lib/transcript-parser.js';
 
 interface PreCompactInput {
   trigger: 'manual' | 'auto';
