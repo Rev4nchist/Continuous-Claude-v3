@@ -128,8 +128,8 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] Merge PR #25 — claude-for-sales SKO package build complete + rep-facing skill-builder (2026-07-13) `7659f1e`
 - [x] docs(rules): fix stale port-table reference in dev-server-cleanup (2026-07-15) `2fb4b2f`
 - [x] feat(init-project): harden skill + canonicalize project registry (2026-07-15) `66713e4`
-- [x] feat: worker version 1 — robust resume together with --ignore-user-config latency + telemetry cleanups (dogfood-hardened) (2026-07-07) `832ce5a`
-- [x] feat: task worker version 0 — ship together with dogfood-harden + safety-spike (PR #15) (2026-07-07) `12a21dd`
+- [x] feat: worker version 1 — robust resume + --ignore-user-config latency + telemetry cleanups (dogfood-hardened) (2026-07-07) `832ce5a`
+- [x] feat: task worker version 0 — ship + dogfood-harden + safety-spike (PR #15) (2026-07-07) `12a21dd`
 - [x] docs(self-improvement): 07-01 hooks + 07-02 agents proposals + digest queue (2026-07-03) `7c4c79c`
 - [x] feat(fourthos-weekly): Thu-cadence reschedule + v3.1 render rules (2026-07-02) `6472a4d`
 - [x] feat(ai-report-card): version-control the VP weekly-report pipeline + Week 27 narratives (2026-07-01) `5ce12d6`
@@ -146,7 +146,7 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] docs(st-05): mark ST-05 shipped + verified; record e2e + import-fix lesson; update plan (2026-06-29) `3fbdf9f`
 - [x] fix(opc): ST-05 daemon recall import -- resolve do_recall in the live script context (2026-06-29) `31ffd8d`
 - [x] feat(opc): ST-05 resident recall daemon -- Python recall op + query_vector seam (2026-06-29) `a9dd226`
-- [x] docs(st-05): fold the premortem into the design (v2 hardened) together with go-decision (2026-06-29) `b67e5c2`
+- [x] docs(st-05): fold the premortem into the design (v2 hardened) + go-decision (2026-06-29) `b67e5c2`
 - [x] docs(st-05): resident recall daemon design proposal + premortem register (2026-06-29) `aa6c982`
 - [x] fix(hooks): destructive-guard round-2 -- fix FPs + close verify-sweep holes (2026-06-29) `3707420`
 - [x] fix(hooks): destructive-guard recurses into wrapper + substitution payloads (Phase 1b) (2026-06-29) `5a9abe5`
@@ -175,7 +175,7 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] fix(hooks): close ROADMAP cross-project contamination guard — stopword + positive own-plan flip + D2F-03 (QW-03, S0) (2026-06-12) `f7f3eba`
 - [x] fix(hooks): relocate /tmp search-context handshake to os.tmpdir() (QW-02, S0; D2b-05) (2026-06-12) `89c9e5e`
 - [x] fix(security): close store_learning.py shell-injection — execSync->spawnSync argv (QW-01, S0; D5a-01/D2c-04/D2d-06/D3a-01) (2026-06-12) `1788211`
-- [x] review(wf3): Fable-5 deep review COMPLETE — 190 confirmed findings together with ratifiable 4-tier backlog + 2 cross-model review passes (2026-06-12) `f143e5b`
+- [x] review(wf3): Fable-5 deep review COMPLETE — 190 confirmed findings + ratifiable 4-tier backlog + 2 cross-model review passes (2026-06-12) `f143e5b`
 - [x] review(wf2): 248 findings verified (190 CONFIRM, 48 DOWNGRADE, 10 KILL) (2026-06-11) `c695c63`
 - [x] P1 — Bus-bias hybrid-recall lift: **KEEP ENABLED** — verified warm gate +7.3%/flat-hit (n=13, corpus 584); +33.6%/63->88% retired as a stale snapshot; tune focus-weighting deferred (2026-06-06)
 - [x] fix(memory): stop test suite from spawning real embedding daemons (herd source #2) (2026-06-05) `c1b110d`
@@ -201,7 +201,7 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [x] feat(ws2): B.3b -- memory-awareness READS the bus + shared bus-focus module (2026-06-03) `0e85d49`
 - [x] feat(ws2): B.3a -- agent-recall-injector READS the context bus (2026-06-03) `8929667`
 - [x] fix(ws2): B.0/B.4/B.4a review hardening -- 5 bus findings + self-regression (2026-06-02) `dd0d24b`
-- [x] docs: verify the CLI repair, reconcile version together with auth claims (2026-06-01) `11f99ca`
+- [x] docs: verify that CLI repair, reconcile version + auth claims (2026-06-01) `11f99ca`
 - [x] docs(hardening): Phase-3 tail 1/2/3/5 done + 3rd reverse-sync vector fix; item 4 remains (2026-06-01) `cc1ec7f`
 - [x] perf(memory): text-only recall fail-fast (12s->5s) in checkDbMemory (2026-06-01) `28184c3`
 - [x] fix(hooks): deregister broken TLDR warm-cache SessionStart hook (2026-06-01) `a08014a`
@@ -342,7 +342,7 @@ The worker, the reviewer, and their design notes were deleted in CCV3-2. Git his
 - [ ] Fleet-review residuals (post-PR #17): DEL-11 curation, Pocock 7-point deep-review pass, downgrade canary, `updatedInput` spike (low priority)
 - [ ] CCv3 system-update backlog remainder — Tier 2 structural arcs, Tier 2b multi-session coordination, Tier 3 strategic programs, 12 deletions: tracked in `docs/system-update/BACKLOG.md` (medium priority)
 - [ ] WS-2 remainder: Phase B/C RETIRED 2026-07-24 (Serena/codegraph/facade cut, `cb64d45`) → remaining scope only: D memory bridge (needs GIN index) → E observability (medium priority)
-- [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; a review flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s together with warm recall (medium priority)
+- [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; a review flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s + warm recall (medium priority)
 - [ ] P2 — Ops: full parallel `vitest run` hangs on a pre-existing Windows daemon/socket suite — add a hard per-test timeout (medium priority)
 - [ ] P3 — Ops: async post-commit forward-sync race leaves active hook dist stale — hash-verify + `cp` after every hook commit until root-fixed (low priority)
 

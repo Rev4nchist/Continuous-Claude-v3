@@ -80,7 +80,7 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 
 | Pattern | Tools |
 |---------|-------|
-| Direct Bash together with Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, the grok CLI, ntn (Notion) |
+| Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, the grok CLI, ntn (Notion) |
 | Python harness via uv run | ast-grep, morph, github-search |
 | MCP server | Playwright MCP, Notion, Paper, Exa, Neon, Vercel Cloud, Linear, Sentry |
 | Claude Code plugin | none for the removed cross-model CLI |
@@ -99,7 +99,7 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 | Kusto.Cli (ADX / Fabric Eventhouse) | INTEGRATED — Microsoft.Azure.Kusto.Tools v14.1.2 net472 staged at `C:\tools\kusto-cli\`; skill + safety rule + databases cross-ref (2026-05-04) | DONE |
 | Removed cross-model CLI | Removed in CCV3-2. Do not install it, do not call it, and do not route review through it. | REMOVED |
 | Notion CLI (ntn) | INTEGRATED — `winget install Notion.ntn` v0.18.1 + skill + safety rule (2026-07-03). Scores near-gold on the checklist: non-interactive ✓ (--yes/--json/env), per-subcommand --help ✓, JSON output ✓, flag-based ✓ (one trap: inline field values containing `:` misparse — use stdin JSON), fail-fast ✓, `--spec` OpenAPI introspection ✓. Caveats: stdin must be redirected from NUL in automation (open stdin hangs); `v1/users` 403s on personal tokens (probe with `ntn doctor`). Spike evidence: docs/notion-platform-spike-report.md. Workers runtime PARKED (no account access yet). | DONE |
-| Grok (xAI) | INTEGRATED — `grok-cli 0.2.93` together with `/grok` skill + `grok-worker` agent + `grok-adversary` agent + `grok-worker-safety` rule (2026-07-11). X Premium+ subscription auth via OAuth (auth.x.ai, oidc) — no API key. Third cross-model training family (distinct from Claude's own model family) for task execution + adversarial review. **Caveats (load-bearing, not just notes):** `--tools "read_file,list_dir,grep"` is the ONLY working read-only guard — `--sandbox` is decorative/unvalidated (accepts any string, blocks nothing) and `--permission-mode plan` does not block writes headless either; `-w/--worktree` is silently IGNORED in headless `-p` mode, so implement mode uses this worktree created by hand outside the repo (`.grok-worktrees/`). CLI auto-updates — re-verify via `/harness-update` on version change. | DONE |
+| Grok (xAI) | INTEGRATED — `grok-cli 0.2.93` + `/grok` skill + `grok-worker` agent + `grok-adversary` agent + `grok-worker-safety` rule (2026-07-11). X Premium+ subscription auth via OAuth (auth.x.ai, oidc) — no API key. Third cross-model training family (distinct from Claude's own model family) for task execution + adversarial review. **Caveats (load-bearing, not just notes):** `--tools "read_file,list_dir,grep"` is the ONLY working read-only guard — `--sandbox` is decorative/unvalidated (accepts any string, blocks nothing) and `--permission-mode plan` does not block writes headless either; `-w/--worktree` is silently IGNORED in headless `-p` mode, so implement mode uses this worktree created by hand outside the repo (`.grok-worktrees/`). CLI auto-updates — re-verify via `/harness-update` on version change. | DONE |
 | CLI-Anything | Not installed — for future desktop software control | LOW |
 
 ## Agent Compatibility Checklist

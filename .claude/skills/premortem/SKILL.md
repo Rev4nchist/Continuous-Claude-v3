@@ -286,7 +286,7 @@ tigers:
   - risk: "<description>"
     location: "file.py:42"
     severity: high|medium
-    sources: [claude, grok] # claude or grok   # which model(s) found it
+    sources: [claude, grok] # claude or grok, which model(s) found it
     mitigation_checked: "<what was NOT found>"
 ```
 

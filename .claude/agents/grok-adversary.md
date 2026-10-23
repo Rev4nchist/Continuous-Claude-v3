@@ -247,7 +247,7 @@ Return a concise summary to your caller:
 | Grok auth missing | `grok models` output lacks "logged in" | Tell user to run `grok login` |
 | Wrong account | `~/.grok/auth.json` `.email` != `dkhayes44@gmail.com` | STOP; do not proceed |
 | Diff too large (>400KB) | wc -c on diff file | Split by file, review largest first |
-| `grok` inference hangs (models-list together with --version still work) | Bash-tool timeout fires (exit 143) and/or `$FINAL_MSG_FILE` empty | Bounded in Step 5; proc-sweep runs; report "grok inference timed out — intermittent completion stall, auth OK" and stop rather than retrying. Do NOT re-invoke in a loop (that caused the 2026-07-12 runaway) |
+| `grok` inference hangs (models-list + --version still work) | Bash-tool timeout fires (exit 143) and/or `$FINAL_MSG_FILE` empty | Bounded in Step 5; proc-sweep runs; report "grok inference timed out — intermittent completion stall, auth OK" and stop rather than retrying. Do NOT re-invoke in a loop (that caused the 2026-07-12 runaway) |
 | JSON parse fails | Grok returned prose, not JSON | Surface raw output, note "Grok returned non-JSON" |
 
 ## Rules

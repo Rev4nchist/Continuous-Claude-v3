@@ -8,7 +8,7 @@
 | `/fix` | Bug resolution | Reproduce → Investigate → Fix → Re-run repro |
 | `/build` | Feature development | Plan → Implement → Review |
 | `/explore` | Codebase research | Understanding code |
-| `/review` | Code review | Before merge (critic together with plan-reviewer) |
+| `/review` | Code review | Before merge (critic + plan-reviewer, both agents) |
 | `/premortem` | Failure-mode analysis | Before implementing a plan (inline failure-mode analysis, then Grok when the user picks Grok) |
 | `/release` | Release prep | Audit → Test → Changelog |
 

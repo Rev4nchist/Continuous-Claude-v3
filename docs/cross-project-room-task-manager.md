@@ -16,7 +16,7 @@ CCv3 has accumulated rich coordination infrastructure that does *almost* what th
 - `thoughts/shared/handoffs/*.md` — git-synced YAML, one-shot human readable, not structured for agent loops
 - Path C `agent_handoffs` (planned, never built) — scoped to review/premortem only, single-machine
 
-The user's vision — a shared "room" where Claude Code, Eve, and Donna together claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine together with browser-relay primitives the existing pieces lack.**
+The user's vision — a shared "room" where Claude Code, Eve, and Donna together claim work, post results, and continue across sessions and machines — is the right consolidation. **Build it once, generalize Path C into it, give it the cross-machine + browser-relay primitives the existing pieces lack.**
 
 Recommended choices locked (via AskUserQuestion):
 1. **Neon** for cowork tables only. Memory stays local pgvector (548 rows, BGE-tuned, no risk).
@@ -50,7 +50,7 @@ Two additional considerations that aren't gaps in the proposal but matter for sh
 
 ## Architecture (single paragraph)
 
-Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code and Ralph each call it the same way. Optimistic locking via `UPDATE ... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` together with Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
+Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork_tasks`, `cowork_events`, `cowork_presence`. A hand-written Python CLI (`opc/scripts/cowork/cli.py`) is the canonical interface — Claude Code and Ralph both call it the same way. Optimistic locking via `UPDATE ... WHERE status='open'` handles claim contention. Every post is content-addressed (`sha256(body)`) for idempotency. Stale claims auto-release after a 30-minute TTL, checked on every read. A FastAPI service on Railway wraps the CLI for HTTP access; an MCP server alongside it lets Claude Code reach the room remotely (`type: http` + Bearer, gong pattern). A Notion-relay worker mirrors each open room to a structured Notion page so Eve/Donna read/write through the existing bridge with no platform changes. `/review --via-cowork` and `/premortem --via-cowork` become room types (subsumes Path C).
 
 ```
    ┌─ Eve (claude.ai) ──── reads/writes ──┐
@@ -72,7 +72,7 @@ Neon-hosted Postgres holds five tables: `cowork_rooms`, `cowork_agents`, `cowork
                        │                    │                    │
                        ▼                    ▼                    ▼
                Claude Code            Claude Code            Other clients
-               (wrapper)(wrapper) via MCP
+               (the wrapper)          (the wrapper)          via MCP
 ```
 
 ---

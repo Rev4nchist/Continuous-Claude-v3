@@ -4,6 +4,7 @@
 // Deterministic, zero-LLM, zero deps.
 //
 // Run:  node scripts/tri-model/sync-current-state.mjs
+// --check is refused. This script does not rewrite the dated record, so it cannot report staleness.
 
 import { execFileSync, spawnSync } from "node:child_process";
 import { readFileSync, existsSync, readdirSync } from "node:fs";
@@ -11,6 +12,10 @@ import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
+if (process.argv.includes("--check")) {
+  console.error("refusing --check: docs/tri-model/CURRENT-STATE.md is a dated record and this script does not rewrite it, so it cannot report staleness");
+  process.exit(2);
+}
 const BEGIN = "<!-- machine:begin (sync-current-state.mjs — do not hand-edit this block) -->";
 const END = "<!-- machine:end -->";
 
