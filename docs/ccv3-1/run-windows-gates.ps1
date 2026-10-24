@@ -37,6 +37,8 @@ New-Item -ItemType Directory -Force $E | Out-Null
 $ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Results = [System.Collections.Generic.List[object]]::new()
 
+. (Join-Path $PSScriptRoot 'lib/windows-gate-verdicts.ps1')
+
 function Save-Gate([string]$Id, [string]$Name, [string[]]$Lines, [bool]$Pass, [string]$Summary) {
   $file = Join-Path $E "$D-pr1-win-$Name.txt"
   $Lines | Set-Content -Path $file -Encoding utf8
@@ -68,17 +70,21 @@ if ($runPre) {
   $env:CCV3_GATE_HOME = $T
   $cmd = @'
 H="$(cygpath -u "$CCV3_GATE_HOME")"
-HOME="$H" CCV3_MACHINE_PROFILE=personal "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?"
+HOME="$H" CCV3_MACHINE_PROFILE=personal SYNC_ALLOW_BRANCH=1 "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?"
 echo "files=$(find "$H/.claude" -type f 2>/dev/null | wc -l)"
 echo "archive_dirs=$(find "$H/.claude" -type d \( -name _snapshots -o -name _archive -o -name .archive -o -name archive -o -name _eval -o -name _sandbox \) 2>/dev/null | wc -l)"
 for s in fourth-brand-guidelines fourth-presentation-suite fourthos-weekly weekly-report fabric kusto-cli; do test -e "$H/.claude/skills/$s" && echo "SKIPSKILL_PRESENT $s"; done
 echo "work_paths=$(grep -rIl 'david[.-]hayes' "$H/.claude" 2>/dev/null | wc -l)"
 '@
   $o = Invoke-GB $cmd
-  $num = { param($k) $m = $o | Select-String -Pattern "^$k=(\d+)" | Select-Object -First 1; if ($m) { [int]$m.Matches[0].Groups[1].Value } else { -1 } }
-  $se = & $num 'sync_exit'; $fc = & $num 'files'; $ad = & $num 'archive_dirs'; $wp = & $num 'work_paths'
+  $se = Get-GateCount -Lines $o -Key 'sync_exit'
+  $fc = Get-GateCount -Lines $o -Key 'files'
+  $ad = Get-GateCount -Lines $o -Key 'archive_dirs'
+  $wp = Get-GateCount -Lines $o -Key 'work_paths'
   $sk = @($o | Select-String 'SKIPSKILL_PRESENT').Count
-  Save-Gate 'W2' 'temp-sync' $o (($se -eq 0) -and $fc -gt 0 -and $ad -eq 0 -and $sk -eq 0 -and $wp -eq 0) "sync_exit=$se files=$fc archive_dirs=$ad skipskills_present=$sk work_paths=$wp"
+  $verdict = Get-W2SyncVerdict -SyncExit $se -Files $fc -ArchiveDirs $ad -SkipSkills $sk -WorkPaths $wp
+  if ($verdict.Summary) { $o += $verdict.Summary }
+  Save-Gate 'W2' 'temp-sync' $o $verdict.Pass "sync_exit=$se files=$fc archive_dirs=$ad skipskills_present=$sk work_paths=$wp"
   Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
   Remove-Item Env:\CCV3_GATE_HOME -ErrorAction SilentlyContinue
 

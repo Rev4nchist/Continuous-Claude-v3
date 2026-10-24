@@ -41,15 +41,17 @@ It runs the real sync in its own temp home. Pass when the exit code is 0, there 
 ```powershell
 $T=Join-Path $env:TEMP "ccv3-pr1-home-$D"; New-Item -ItemType Directory -Force $T | Out-Null
 $env:CCV3_GATE_HOME=$T
-& $GB -c 'H="$(cygpath -u "$CCV3_GATE_HOME")"; HOME="$H" CCV3_MACHINE_PROFILE=personal "$BASH" scripts/sync-to-active.sh --skip-build; echo "exit=$?";
+& $GB -c 'H="$(cygpath -u "$CCV3_GATE_HOME")"; HOME="$H" CCV3_MACHINE_PROFILE=personal SYNC_ALLOW_BRANCH=1 "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?";
   echo "files=$(find "$H/.claude" -type f | wc -l)";
   echo "archive_dirs=$(find "$H/.claude" -type d \( -name _snapshots -o -name _archive -o -name .archive -o -name archive -o -name _eval -o -name _sandbox \) | wc -l)";
   for s in fourth-brand-guidelines fourth-presentation-suite fourthos-weekly weekly-report fabric kusto-cli; do test -e "$H/.claude/skills/$s" && echo "SKIPSKILL_PRESENT $s"; done;
   echo "work_paths=$(grep -rIl "david[.-]hayes" "$H/.claude" | wc -l)"'
 ```
+`SYNC_ALLOW_BRANCH=1` is a prefix on that sync command only. It lets a non-main checkout copy into the temp HOME. It is not assigned in the parent PowerShell process, and it is not exported for any later command. Do not set it on the user's real environment or real HOME.
+
 Pass when all of these hold:
-- the output shows `exit=0`;
-- `files` > 0;
+- the output shows `sync_exit=0`;
+- `files` > 0. `files=0` prints `FAIL: W2 files=0; zero inputs is not a pass` and the gate FAILs. A count of zero is never a pass. A space-padded `wc` count is still that count;
 - `archive_dirs=0`;
 - there are no `SKIPSKILL_PRESENT` lines;
 - `work_paths=0`.
