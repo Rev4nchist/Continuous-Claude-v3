@@ -14,9 +14,9 @@
   2. Merge through the REST API with sha=<head>: GitHub refuses the merge if the head moved after
      the check, so nothing unreviewed can land between check and merge (review note P35).
   3. fetch fork --prune; fast-forward local main (never a reset; refuses if main diverged).
-  4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash). If the primary
-     checkout is on another branch, it syncs from a temporary detached worktree of main and removes
-     that worktree afterwards; the primary checkout is never switched.
+  4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash). It always syncs
+     from a temporary detached worktree of main and removes it afterwards. The primary checkout is
+     never used or switched: another session can switch it mid-sync.
   5. Clean up: remove the PR's worktree (clean worktrees only; a node_modules junction is unlinked
      first), delete the local branch with -d (merged-only), delete the remote branch on fork.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
@@ -39,12 +39,22 @@ param(
   [switch]$NoSync
 )
 $ErrorActionPreference = 'Stop'
-if (-not $env:GH_CONFIG_DIR) { $env:GH_CONFIG_DIR = Join-Path $HOME '.config\gh-personal' }
+# gh-personal routes the Rev4nchist account on machines with two GitHub logins
+# (docs/github/auth-routing.md). Where it does not exist, gh's own default login is the account.
+$ghPersonal = Join-Path $HOME '.config\gh-personal'
+if (-not $env:GH_CONFIG_DIR -and (Test-Path $ghPersonal)) { $env:GH_CONFIG_DIR = $ghPersonal }
 $gitSafe = Join-Path $RepoPath 'scripts\git-safe.ps1'
-$gitBash = (Join-Path $env:USERPROFILE 'AppData\Local\Programs\Git\bin\bash.exe')
 $done = [System.Collections.Generic.List[string]]::new()
 function Step($msg) { Write-Host "-> $msg" }
 function Fail($msg) { Write-Host "STOPPED: $msg" -ForegroundColor Red; if ($done.Count) { Write-Host "Done before stopping: $($done -join '; ')" }; exit 1 }
+
+# Git Bash, never `bash` on PATH (WSL on these machines). Per-user and machine-wide installs differ.
+$bashCandidates = @($env:CLAUDE_CODE_GIT_BASH_PATH)
+foreach ($pair in @(@($env:LOCALAPPDATA, 'Programs\Git\bin\bash.exe'), @($env:ProgramFiles, 'Git\bin\bash.exe'), @(${env:ProgramFiles(x86)}, 'Git\bin\bash.exe'))) {
+  if ($pair[0]) { $bashCandidates += Join-Path $pair[0] $pair[1] }
+}
+$gitBash = $bashCandidates | Where-Object { $_ -and (Test-Path -LiteralPath $_) } | Select-Object -First 1
+if (-not $gitBash -and -not $NoSync) { Fail 'Git Bash not found (set CLAUDE_CODE_GIT_BASH_PATH). Nothing was merged.' }
 
 $pull = gh api "repos/$Repo/pulls/$Pr" | ConvertFrom-Json
 if ($LASTEXITCODE) { Fail "cannot read PR #$Pr" }
@@ -97,7 +107,7 @@ if ($current -eq 'main') {
 }
 $done.Add("main at $((git -C $RepoPath rev-parse --short main))")
 
-# 4. Sync ~/.claude (from the primary checkout when it is on main, else from a temp worktree of main)
+# 4. Sync ~/.claude from a temp worktree of main
 # Exit 0 from sync-to-active.sh is not proof: a run that finds the sync lock held only writes
 # ~/.claude/.sync.pending and exits 0, and a run that skips also exits 0. The proof is the cursor:
 # ~/.claude/state/sync-cursor must equal main's commit.
@@ -110,18 +120,12 @@ function Confirm-Synced([string]$how) {
   Write-Host "  (A held sync lock only queues the sync; a skip also exits 0.) From a checkout of main, run in Git Bash: scripts/sync-to-active.sh --changed"
 }
 if (-not $NoSync) {
-  if ($current -eq 'main') {
-    Step "sync ~/.claude"
-    Push-Location $RepoPath
-    try {
-      & $gitBash scripts/sync-to-active.sh --changed | Out-Host
-      if ($LASTEXITCODE -eq 0) { Confirm-Synced 'synced' } else { Write-Host "  sync exited $LASTEXITCODE; run it by hand" }
-    }
-    finally { Pop-Location }
-  } else {
-    # The primary checkout is on another branch. Sync from a throwaway detached worktree of main
-    # instead of switching the checkout. SYNC_MAIN_DETACHED=1 lets the script accept a detached HEAD
-    # that sits exactly at main's commit; it then moves the sync cursor like a run on main.
+    # Always sync from a throwaway detached worktree of main, never from the primary checkout.
+    # Other sessions share the primary checkout: on 2026-10-24 one switched it to a feature branch
+    # mid-sync, and 8 of 10 synced hooks came from that branch while the cursor said main.
+    # A worktree only this run uses cannot change under the copy. SYNC_MAIN_DETACHED=1 lets the
+    # script accept a detached HEAD that sits exactly at main's commit; it then moves the sync
+    # cursor like a run on main.
     # The path is unique per run: a fixed name could be left behind by a killed run and collide.
     $syncLeaf = "land-pr-sync-$Pr-$PID"
     $syncWt = Join-Path ([System.IO.Path]::GetTempPath()) $syncLeaf
@@ -166,7 +170,6 @@ if (-not $NoSync) {
         if (Test-Path $syncWt) { Write-Host "  could not remove temp worktree $syncWt; run: git -C $RepoPath worktree remove --force $syncWt" }
       }
     }
-  }
 }
 
 # 5. Cleanup: worktree, local branch, remote branch

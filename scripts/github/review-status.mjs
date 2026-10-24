@@ -23,12 +23,13 @@
  *
  * Usage: node scripts/github/review-status.mjs <pr-number> [--repo owner/name] [--json]
  * Exit 0 = ready, 1 = not ready (reasons listed), 2 = could not determine.
- * Uses `gh api`; set GH_CONFIG_DIR for the repo's account (default: ~/.config/gh-personal).
+ * Uses `gh api`; set GH_CONFIG_DIR for the repo's account (default: ~/.config/gh-personal when it
+ * exists, else gh's own default login).
  */
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
-import { realpathSync } from 'node:fs';
+import { existsSync, realpathSync } from 'node:fs';
 import { fileURLToPath } from 'node:url';
 
 const args = process.argv.slice(2);
@@ -36,7 +37,11 @@ const opt = (k, d) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] :
 const pr = Number(args.find((a) => /^\d+$/.test(a)));
 const repo = opt('--repo', 'Rev4nchist/Continuous-Claude-v3');
 const [owner, name] = repo.split('/');
-const env = { ...process.env, GH_CONFIG_DIR: process.env.GH_CONFIG_DIR || path.join(os.homedir(), '.config', 'gh-personal') };
+// gh-personal routes the Rev4nchist account on machines with two GitHub logins
+// (docs/github/auth-routing.md). Where it does not exist, gh's own default login is the account.
+const ghPersonal = path.join(os.homedir(), '.config', 'gh-personal');
+const ghConfigDir = process.env.GH_CONFIG_DIR || (existsSync(ghPersonal) ? ghPersonal : undefined);
+const env = { ...process.env, ...(ghConfigDir ? { GH_CONFIG_DIR: ghConfigDir } : {}) };
 
 function gh(apiArgs) {
   return JSON.parse(execFileSync('gh', ['api', ...apiArgs], { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 }));
