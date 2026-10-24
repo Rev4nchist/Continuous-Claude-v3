@@ -67,4 +67,52 @@ Describe 'prune leftover scan' {
             Remove-Item -LiteralPath $tempRoot -Recurse -Force
         }
     }
+
+    It 'leaves a synced fourth copy in place and does not throw' {
+        $tempRoot = New-PruneRoot
+        try {
+            $claude = Join-Path $tempRoot '.claude'
+            Set-Content -LiteralPath (Join-Path $claude 'settings.json') -Value '{}' -Encoding utf8
+            $guid = 'aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee'
+            $synced = Join-Path $claude "skills/synced/$guid/fourth-sample/sample-deck.pptx"
+            New-Item -ItemType Directory -Path (Split-Path -Parent $synced) -Force | Out-Null
+            Set-Content -LiteralPath $synced -Value 'synced copy' -Encoding utf8
+            $fourthFile = Join-Path $claude 'skills/fourth-sample/kept.txt'
+            New-Item -ItemType Directory -Path (Split-Path -Parent $fourthFile) -Force | Out-Null
+            Set-Content -LiteralPath $fourthFile -Value 'leave' -Encoding utf8
+
+            $result = Invoke-PruneAt $tempRoot
+            $result.Code | Should -Be 0
+            $result.Out | Should -Match 'leftovers: 0'
+            $result.Out | Should -Not -Match 'leftovers \d+'
+            $managed = @($result.Out -split "`n" | Where-Object { $_ -like 'managed-sync:*' })
+            $managed.Count | Should -Be 1
+            $managed[0] | Should -Match '^managed-sync: 1 paths \(skills/synced; managed by sync, not ours\): '
+            $managed[0] | Should -Match 'skills/synced/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/fourth-sample/sample-deck\.pptx'
+            Test-Path -LiteralPath $synced | Should -BeTrue
+            Test-Path -LiteralPath $fourthFile | Should -BeTrue
+        } finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+}
+
+Describe 'managed sync path predicate' {
+    BeforeAll {
+        $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+        . (Join-Path $repo 'scripts/lib/prune-managed-sync.ps1')
+    }
+
+    It 'recognises skills/synced/<guid>/fourth-* with a slash' {
+        Test-PruneManagedSyncPath '/skills/synced/aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee/fourth-sample/sample-deck.pptx' | Should -BeTrue
+    }
+
+    It 'recognises skills\synced\<guid>\fourth-* with a backslash' {
+        Test-PruneManagedSyncPath '\skills\synced\aaaaaaaa-bbbb-cccc-dddd-eeeeeeeeeeee\fourth-sample\sample-deck.pptx' | Should -BeTrue
+    }
+
+    It 'does not treat skills/fourth-* as a synced copy' {
+        Test-PruneManagedSyncPath '/skills/fourth-sample/sample-deck.pptx' | Should -BeFalse
+        Test-PruneManagedSyncPath '\skills\fourth-sample\sample-deck.pptx' | Should -BeFalse
+    }
 }

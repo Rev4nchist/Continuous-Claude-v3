@@ -16,6 +16,9 @@
 # `backup: none (<reason>)` and creates nothing.
 # The script prints the count of existing .claude.bak-* siblings.
 # skills\fourth-* is left in place (CCV3-4).
+# skills\synced\<id>\ is the Claude app's skill sync, not the installer.
+# A leftover-shaped file there is reported as managed-sync. It is not
+# deleted and it does not fail the run.
 # The leftover scan covers the install folders the sync owns. It does not
 # walk projects\, plugins\, or file-history. It skips node_modules under every
 # scan root (rog-strix: third-party package files were false positives) and
@@ -27,6 +30,7 @@
 # the script with no backup.
 
 $ErrorActionPreference = 'Stop'
+. (Join-Path $PSScriptRoot 'lib/prune-managed-sync.ps1')
 $C = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.claude'))
 if (-not (Test-Path -LiteralPath $C)) { throw "No install at $C" }
 $sep = [System.IO.Path]::DirectorySeparatorChar
@@ -180,6 +184,7 @@ $vendorNames = @('node_modules')
 $left = @()
 $vendorTotal = 0
 $excludedMatches = @()
+$managedSync = @()
 $excludedDirs = [System.Collections.Generic.List[string]]::new()
 foreach ($dir in $scanRoots) {
   $root = Join-Path $C $dir
@@ -204,6 +209,10 @@ foreach ($dir in $scanRoots) {
       if ($matchesLeft) { $excludedMatches += $tail.TrimStart('/') }
       continue
     }
+    if (Test-PruneManagedSyncPath $tail) {
+      if ($matchesLeft) { $managedSync += $tail.TrimStart('/') }
+      continue
+    }
     if ($tail -match '/skills/fourth-') { continue }
     if ($matchesLeft) {
       $left += $item
@@ -212,7 +221,9 @@ foreach ($dir in $scanRoots) {
 }
 $dirList = if ($excludedDirs.Count -gt 0) { $excludedDirs -join ', ' } else { '' }
 $pathList = if ($excludedMatches.Count -gt 0) { $excludedMatches -join ', ' } else { '' }
+$managedList = if ($managedSync.Count -gt 0) { $managedSync -join ', ' } else { '' }
 "excluded: $($excludedMatches.Count) paths ($dirList): $pathList; vendor entries: $vendorTotal"
+"managed-sync: $($managedSync.Count) paths (skills/synced; managed by sync, not ours): $managedList"
 "leftovers: $($left.Count)"
 if ($left.Count -ne 0) {
   $left | ForEach-Object { $_.FullName }
