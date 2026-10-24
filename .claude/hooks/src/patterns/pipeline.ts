@@ -28,8 +28,8 @@
  */
 
 import { existsSync, readFileSync, writeFileSync, mkdirSync } from 'fs';
-import { spawn } from 'child_process';
 import { join, dirname } from 'path';
+import { spawnDetachedHidden } from '../lib/spawn-hidden.js';
 
 // Import shared utilities
 import { getDbPath, runPythonQuery, isValidId } from '../shared/db-utils.js';
@@ -149,13 +149,12 @@ function spawnNextStage(config: PipelineConfig, nextIndex: number): void {
   console.error(`[pipeline] Spawning stage ${nextIndex + 1}/${config.stages.length}: ${stage.agent}`);
 
   // Spawn claude with the agent
-  const child = spawn('claude', [
+  const child = spawnDetachedHidden('claude', [
     '-p', prompt,
     '--agent', stage.agent,
   ], {
     env,
     cwd: projectDir,
-    detached: true,
     stdio: 'ignore',
   });
 

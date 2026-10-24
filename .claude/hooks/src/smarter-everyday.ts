@@ -26,7 +26,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import { writeStateWithLock } from './shared/atomic-write.js';
 import { getSessionStatePath } from './shared/session-isolation.js';
 
@@ -205,7 +205,7 @@ Test: ${state.test_command || 'Unknown test command'}`;
   const tagsStr = `victory,verified,attempts:${state.attempts}`;
 
   try {
-    const child = spawn('uv', [
+    const child = spawnDetachedHidden('uv', [
       'run', 'python', 'scripts/core/store_learning.py',
       '--session-id', state.session_id,
       '--type', 'WORKING_SOLUTION',
@@ -216,7 +216,6 @@ Test: ${state.test_command || 'Unknown test command'}`;
       '--project-dir', projectDir,
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: 'ignore',
       env: { ...process.env, PYTHONPATH: '.' },
     });

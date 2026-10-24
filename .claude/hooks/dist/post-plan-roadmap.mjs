@@ -4,7 +4,19 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/post-plan-roadmap.ts
 import * as fs2 from "fs";
 import * as path2 from "path";
+
+// src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
+import { tmpdir } from "os";
+import { join } from "path";
+var RELAY_ERROR_LOG = join(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
 
 // src/shared/project-relevance.ts
 import * as fs from "fs";
@@ -359,7 +371,7 @@ function replaceLine(index, line, label) {
 import { createHash, randomBytes } from "node:crypto";
 import { appendFileSync as appendFileSync2, mkdirSync as mkdirSync2, readdirSync, unlinkSync as unlinkSync2, writeFileSync as writeFileSync2 } from "node:fs";
 import { homedir as homedir3 } from "node:os";
-import { basename as basename3, dirname as dirname3, join as join4 } from "node:path";
+import { basename as basename3, dirname as dirname3, join as join5 } from "node:path";
 
 // src/shared/atomic-write.ts
 import {
@@ -373,13 +385,13 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname as dirname2, basename as basename2, join as join3 } from "path";
+import { dirname as dirname2, basename as basename2, join as join4 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { dirname, join as join2 } from "path";
+import { dirname, join as join3 } from "path";
 import { homedir as homedir2 } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir2(), ".claude", "logs", "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join3(homedir2(), ".claude", "logs", "hooks.log");
 var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
@@ -453,7 +465,7 @@ var LOCK_RETRY_MS = 50;
 var LOCK_TIMEOUT_MS = 5e3;
 function atomicWriteSync(filePath, content) {
   const dir = dirname2(filePath);
-  const tmpFile = join3(dir, `.${basename2(filePath)}.tmp.${process.pid}`);
+  const tmpFile = join4(dir, `.${basename2(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync(tmpFile, content, "utf-8");
     renameSync2(tmpFile, filePath);
@@ -637,14 +649,14 @@ function roadmapBakPath(projectDir, when = /* @__PURE__ */ new Date()) {
   const hash = sha256Prefix16(projectDir).slice(0, 8);
   const stamp = when.toISOString().replace(/[:.]/g, "-");
   const nonce = randomBytes(3).toString("hex");
-  return join4(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}-${nonce}.md`);
+  return join5(homedir3(), ".claude", "state", "roadmap-bak", `${slug}-${hash}`, `${stamp}-${nonce}.md`);
 }
 function rotateBaks(dir) {
   try {
     const entries = readdirSync(dir).filter((f) => f.endsWith(".md")).sort();
     for (const stale of entries.slice(0, Math.max(0, entries.length - BAK_KEEP))) {
       try {
-        unlinkSync2(join4(dir, stale));
+        unlinkSync2(join5(dir, stale));
       } catch {
       }
     }
@@ -663,7 +675,7 @@ function defaultAppendLog(logPath, line) {
 }
 function appendAudit(projectDir, record, appendLogDep) {
   try {
-    const logPath = join4(projectDir, ".claude", "logs", "roadmap-sync.jsonl");
+    const logPath = join5(projectDir, ".claude", "logs", "roadmap-sync.jsonl");
     const line = JSON.stringify(record) + "\n";
     (appendLogDep ?? defaultAppendLog)(logPath, line);
   } catch {
@@ -1173,7 +1185,7 @@ function storePlanningLearnings(planInfo, projectDir) {
   const opcDir = process.env.CLAUDE_OPC_DIR || path2.join(process.env.USERPROFILE || process.env.HOME || "", "continuous-claude", "opc");
   const sessionId = `plan-${Date.now()}`;
   try {
-    const child = spawn("uv", [
+    const child = spawnDetachedHidden("uv", [
       "run",
       "python",
       "scripts/core/store_learning.py",
@@ -1191,7 +1203,6 @@ function storePlanningLearnings(planInfo, projectDir) {
       "high"
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: "." }
     });

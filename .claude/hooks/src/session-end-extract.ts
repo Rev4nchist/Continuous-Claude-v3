@@ -13,8 +13,9 @@
  * - Uses incremental_extract.py for deduplication
  */
 
-import { execSync, spawn, spawnSync } from 'child_process';
+import { execSync, spawnSync } from 'child_process';
 import * as path from 'path';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as fs from 'fs';
 
 interface SessionEndInput {
@@ -86,7 +87,7 @@ function extractWithDedup(sessionId: string, projectDir: string, transcriptPath?
     console.error(`[SessionEnd:L3] Final sweep from line ${startLine} with dedup (fire-and-forget)`);
 
     // Run incremental extraction detached (don't block session end)
-    const child = spawn('uv', [
+    const child = spawnDetachedHidden('uv', [
       'run', 'python', 'scripts/core/incremental_extract.py',
       '--transcript', transcriptPath,
       '--session-id', sessionId,
@@ -97,7 +98,6 @@ function extractWithDedup(sessionId: string, projectDir: string, transcriptPath?
       '--json'
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: 'ignore',
       env: { ...process.env, PYTHONPATH: opcDir },
     });
@@ -120,7 +120,7 @@ function extractLearningsLegacy(sessionId: string, projectDir: string): void {
   }
 
   // Run extraction in background (don't block session end)
-  const child = spawn(
+  const child = spawnDetachedHidden(
     'uv',
     ['run', 'python', 'scripts/core/lazy_memory.py', 'extract',
      '--session-id', sessionId,
@@ -128,7 +128,6 @@ function extractLearningsLegacy(sessionId: string, projectDir: string): void {
      '--max-learnings', '10'],
     {
       cwd: opcDir,
-      detached: true,
       stdio: 'ignore',
     }
   );

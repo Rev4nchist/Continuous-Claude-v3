@@ -36,7 +36,13 @@ describe('warmTldrDaemon (FH-01a)', () => {
     expect(ok).toBe(true);
     expect(spawnMock).toHaveBeenCalledTimes(1);
 
-    const [cmd, args, opts] = spawnMock.mock.calls[0];
+    const [spawnedCmd, spawnedArgs, opts] = spawnMock.mock.calls[0];
+    // On Windows the spawn goes through the spawn-hidden Node relay: a plain
+    // detached tldr.exe lets its python child open a visible console window.
+    const relayed = spawnedCmd === process.execPath && spawnedArgs[0] === '-e' && spawnedArgs[2] === '--';
+    expect(relayed).toBe(process.platform === 'win32');
+    const cmd = relayed ? spawnedArgs[3] : spawnedCmd;
+    const args = relayed ? spawnedArgs.slice(4) : spawnedArgs;
     // .exe on Windows (NOT a .cmd shim), bare name elsewhere.
     expect(cmd).toMatch(/^tldr(\.exe)?$/);
     expect(args).toEqual(['daemon', 'start', '--project', 'C:/Users/x/proj']);
