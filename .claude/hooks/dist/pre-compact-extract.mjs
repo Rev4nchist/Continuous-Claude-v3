@@ -6,7 +6,11 @@ import * as fs from "fs";
 
 // src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
-var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+import { tmpdir } from "os";
+import { join } from "path";
+var RELAY_ERROR_LOG = join(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
 function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
   const opts = { ...options, detached: true, windowsHide: true };
   if (platform !== "win32") return spawnFn(cmd, [...args], opts);
@@ -28,13 +32,13 @@ import {
   statSync as statSync2,
   constants
 } from "fs";
-import { dirname as dirname2, basename, join as join2 } from "path";
+import { dirname as dirname2, basename, join as join3 } from "path";
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync, mkdirSync, statSync, renameSync } from "fs";
-import { dirname, join } from "path";
+import { dirname, join as join2 } from "path";
 import { homedir } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join(homedir(), ".claude", "logs", "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join2(homedir(), ".claude", "logs", "hooks.log");
 var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
@@ -108,7 +112,7 @@ var LOCK_RETRY_MS = 50;
 var LOCK_TIMEOUT_MS = 5e3;
 function atomicWriteSync(filePath, content) {
   const dir = dirname2(filePath);
-  const tmpFile = join2(dir, `.${basename(filePath)}.tmp.${process.pid}`);
+  const tmpFile = join3(dir, `.${basename(filePath)}.tmp.${process.pid}`);
   try {
     writeFileSync(tmpFile, content, "utf-8");
     renameSync2(tmpFile, filePath);

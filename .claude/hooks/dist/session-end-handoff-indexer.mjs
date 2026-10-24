@@ -8,7 +8,11 @@ import { spawn as spawn2 } from "child_process";
 
 // src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
-var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+import { tmpdir } from "os";
+import { join } from "path";
+var RELAY_ERROR_LOG = join(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
 function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
   const opts = { ...options, detached: true, windowsHide: true };
   if (platform !== "win32") return spawnFn(cmd, [...args], opts);

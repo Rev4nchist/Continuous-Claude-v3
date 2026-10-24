@@ -321,7 +321,11 @@ import { execFileSync } from "child_process";
 
 // src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
-var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+import { tmpdir } from "os";
+import { join as join3 } from "path";
+var RELAY_ERROR_LOG = join3(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
 function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
   const opts = { ...options, detached: true, windowsHide: true };
   if (platform !== "win32") return spawnFn(cmd, [...args], opts);
@@ -330,19 +334,19 @@ function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform 
 
 // src/shared/embedding-client.ts
 import { homedir } from "os";
-import { join as join3, resolve } from "path";
+import { join as join4, resolve } from "path";
 import * as net from "net";
-var RUN_DIR = join3(homedir(), ".claude", "run");
+var RUN_DIR = join4(homedir(), ".claude", "run");
 function _runDir() {
   return process.env.CCV3_EMBEDDING_RUN_DIR || RUN_DIR;
 }
 function _daemonInfoPath() {
-  return join3(_runDir(), "ccv3-embedding.json");
+  return join4(_runDir(), "ccv3-embedding.json");
 }
 var DAEMON_INFO_PATH = _daemonInfoPath();
-var SPAWN_LOCK_PATH = join3(RUN_DIR, "ccv3-embedding-spawn.lock");
+var SPAWN_LOCK_PATH = join4(RUN_DIR, "ccv3-embedding-spawn.lock");
 function _spawnLockPath() {
-  return join3(_runDir(), "ccv3-embedding-spawn.lock");
+  return join4(_runDir(), "ccv3-embedding-spawn.lock");
 }
 var SPAWN_LOCK_TTL_MS = 6e4;
 var FRAME_SIZE_CAP_BYTES = 100 * 1024 * 1024;
@@ -566,7 +570,7 @@ async function recallViaDaemon(info, query, k, opts = {}) {
 }
 function resolveRepoRoot() {
   const envDir = process.env.CLAUDE_PROJECT_DIR;
-  if (envDir && existsSync3(join3(envDir, "opc"))) {
+  if (envDir && existsSync3(join4(envDir, "opc"))) {
     return resolve(envDir);
   }
   try {
@@ -577,7 +581,7 @@ function resolveRepoRoot() {
         const parent = resolve(dir, "..");
         if (parent === dir) break;
         dir = parent;
-        if (existsSync3(join3(dir, "opc", "scripts", "core", "embedding_daemon.py"))) {
+        if (existsSync3(join4(dir, "opc", "scripts", "core", "embedding_daemon.py"))) {
           return dir;
         }
       }
@@ -612,11 +616,11 @@ function _probeUvPath(isWin) {
   }
   const home = homedir();
   const candidates = isWin ? [
-    join3(home, ".local", "bin", "uv.exe"),
-    join3(home, ".cargo", "bin", "uv.exe")
+    join4(home, ".local", "bin", "uv.exe"),
+    join4(home, ".cargo", "bin", "uv.exe")
   ] : [
-    join3(home, ".local", "bin", "uv"),
-    join3(home, ".cargo", "bin", "uv")
+    join4(home, ".local", "bin", "uv"),
+    join4(home, ".cargo", "bin", "uv")
   ];
   for (const c of candidates) {
     if (existsSync3(c)) return c;
@@ -631,9 +635,9 @@ function _parseWhereOutput(out) {
 }
 function _logLauncher(msg) {
   try {
-    const logDir = join3(homedir(), ".claude", "logs");
+    const logDir = join4(homedir(), ".claude", "logs");
     mkdirSync2(logDir, { recursive: true });
-    const logFile = join3(logDir, "embedding-daemon-launcher.log");
+    const logFile = join4(logDir, "embedding-daemon-launcher.log");
     const line = `[${(/* @__PURE__ */ new Date()).toISOString()}] ${msg}
 `;
     const fd = openSync(logFile, "a");
@@ -823,7 +827,7 @@ ${body}
 
 // src/shared/context-bus.ts
 import { readFileSync as readFileSync4 } from "node:fs";
-import { dirname as dirname3, join as join7, resolve as resolve2, sep } from "node:path";
+import { dirname as dirname3, join as join8, resolve as resolve2, sep } from "node:path";
 
 // src/shared/session-bus-id.ts
 import { createHash } from "node:crypto";
@@ -832,17 +836,17 @@ import { realpathSync } from "node:fs";
 // src/shared/session-id.ts
 import { mkdirSync as mkdirSync3, readFileSync as readFileSync3, writeFileSync as writeFileSync2 } from "fs";
 import { homedir as homedir2 } from "os";
-import { join as join4 } from "path";
+import { join as join5 } from "path";
 var SESSION_ID_FILENAME = ".coordination-session-id";
 function getSessionIdFile(options = {}) {
-  const claudeDir = join4(process.env.HOME || process.env.USERPROFILE || homedir2(), ".claude");
+  const claudeDir = join5(process.env.HOME || process.env.USERPROFILE || homedir2(), ".claude");
   if (options.createDir) {
     try {
       mkdirSync3(claudeDir, { recursive: true, mode: 448 });
     } catch {
     }
   }
-  return join4(claudeDir, SESSION_ID_FILENAME);
+  return join5(claudeDir, SESSION_ID_FILENAME);
 }
 function generateSessionId() {
   const spanId = process.env.BRAINTRUST_SPAN_ID;
@@ -905,9 +909,9 @@ function getBusId(opts = {}) {
 
 // src/shared/logger.ts
 import { appendFileSync, existsSync as existsSync4, mkdirSync as mkdirSync4, statSync as statSync2, renameSync } from "fs";
-import { dirname, join as join5 } from "path";
+import { dirname, join as join6 } from "path";
 import { homedir as homedir3 } from "os";
-var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join5(homedir3(), ".claude", "logs", "hooks.log");
+var LOG_FILE = process.env.CLAUDE_HOOK_LOG_FILE || join6(homedir3(), ".claude", "logs", "hooks.log");
 var LOG_DIR = dirname(LOG_FILE);
 var MAX_LOG_SIZE = 5 * 1024 * 1024;
 var MIN_LEVEL = process.env.CLAUDE_HOOK_LOG_LEVEL || "info";
@@ -979,13 +983,13 @@ var log = createLogger("atomic-write");
 
 // src/shared/intel-bus.ts
 import { appendFileSync as appendFileSync2, existsSync as existsSync5, mkdirSync as mkdirSync5, renameSync as renameSync2, statSync as statSync3, unlinkSync as unlinkSync2 } from "node:fs";
-import { dirname as dirname2, join as join6 } from "node:path";
+import { dirname as dirname2, join as join7 } from "node:path";
 var MAX_LINE_BYTES = 4096;
 var MAX_INTEL_BUS_BYTES = 2e6;
 var DEFAULT_RETENTION_MS = 7 * 24 * 60 * 60 * 1e3;
 function intelBusPath(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join6(root, ".claude", "logs", "intel-bus.jsonl");
+  return join7(root, ".claude", "logs", "intel-bus.jsonl");
 }
 function stripNewlinesDeep(value) {
   if (typeof value === "string") {
@@ -1144,12 +1148,12 @@ function assertSafeBusId(busId) {
 }
 function sessionCacheRoot(projectDir) {
   const root = projectDir || process.env.CLAUDE_PROJECT_DIR || process.cwd();
-  return join7(root, ".claude", "cache", "session");
+  return join8(root, ".claude", "cache", "session");
 }
 function busPath(busId, projectDir) {
   assertSafeBusId(busId);
   const sessionRoot = sessionCacheRoot(projectDir);
-  const full = join7(sessionRoot, busId, "context.json");
+  const full = join8(sessionRoot, busId, "context.json");
   const resolvedRoot = resolve2(sessionRoot);
   const resolvedFull = resolve2(full);
   const rootWithSep = resolvedRoot.endsWith(sep) ? resolvedRoot : resolvedRoot + sep;
