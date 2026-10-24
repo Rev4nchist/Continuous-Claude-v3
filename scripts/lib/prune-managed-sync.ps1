@@ -5,5 +5,6 @@ function Test-PruneManagedSyncPath {
     param([Parameter(Mandatory = $false)][AllowEmptyString()][string]$Tail)
     if ([string]::IsNullOrEmpty($Tail)) { return $false }
     $norm = $Tail -replace '\\', '/'
-    return [bool]($norm -match '(^|/)skills/synced/[^/]+/')
+    # Anchored at the start so skills/kept/skills/synced/... is still a leftover.
+    return [bool]($norm -match '^/?skills/synced/[^/]+(/|$)')
 }

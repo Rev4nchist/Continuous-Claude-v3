@@ -47,7 +47,7 @@ $env:CCV3_GATE_HOME=$T
   for s in fourth-brand-guidelines fourth-presentation-suite fourthos-weekly weekly-report fabric kusto-cli; do test -e "$H/.claude/skills/$s" && echo "SKIPSKILL_PRESENT $s"; done;
   echo "work_paths=$(grep -rIl "david[.-]hayes" "$H/.claude" | wc -l)"'
 ```
-`SYNC_ALLOW_BRANCH=1` is a prefix on that sync command only. It lets a non-main checkout copy into the temp HOME. It is not assigned in the parent PowerShell process, and it is not exported for any later command. Do not set it on the user's real environment or real HOME.
+`SYNC_ALLOW_BRANCH=1` is a prefix on that sync command only. It lets a non-main checkout copy into the temp HOME. Never export or set SYNC_ALLOW_BRANCH in $env:; the only real-HOME use is the one-off step-2 prefix after the backup.
 
 Pass when all of these hold:
 - the output shows `sync_exit=0`;
@@ -78,10 +78,11 @@ Pass when all of these hold:
 Do these in order. Back up before anything writes to the live install.
 
 1. Back up `~/.claude` (a sibling copy). Do not delete the live install.
-2. Sync this head into the install with Git Bash. On a branch other than main, prefix that sync command with `SYNC_ALLOW_BRANCH=1`. Do not export it for the rest of the shell.
-3. Re-render settings onto the install: `node scripts/settings/render-settings.mjs --out` to the install `settings.json`, or the wizard render, which calls that same `--out` path. The renderer builds a new file from the template plus the profile overlay. It does not read or merge the existing env. The template env has no `DATABASE_URL`, and the personal profile overlay is empty, so a re-render drops that stale key. `render-settings.mjs --check` does not write. `scripts/sync-to-active.sh` does not write `settings.json` (it is in `NEVER_SYNC`). Neither clears the key. A later wizard step that loads `settings.json` to add semantic search writes back the object it loaded, so it keeps whatever env is already there. Run the re-render before that step.
-4. Start a Claude session from the re-rendered settings and run the R3 in-session check.
-5. Run the remaining checks (prune, dist freshness, phase post).
+2. Sync this head into the install with Git Bash. On a branch other than main, prefix that one sync command with `SYNC_ALLOW_BRANCH=1`. That prefix, after the backup, is the only real-HOME use. Do not export it and do not assign it in `$env:`.
+3. Re-render settings onto the install: `node scripts/settings/render-settings.mjs --out` to the install `settings.json`. The renderer builds a new file from the template plus the profile overlay. It does not read or merge the existing env. The template env has no `DATABASE_URL`, and the personal profile overlay is empty, so a re-render drops that stale key. `render-settings.mjs --check` does not write. `scripts/sync-to-active.sh` does not write `settings.json` (it is in `NEVER_SYNC`). Neither clears the key.
+4. Run the wizard in copy mode with `--profile personal`. A later wizard step that loads `settings.json` to add semantic search writes back the object it loaded, so it keeps whatever env is already there. The re-render in step 3 has already dropped the stale key.
+5. Start a Claude session from the re-rendered settings and run the R3 in-session check.
+6. Run the remaining checks (prune, dist freshness, phase post).
 
 A fresh install still uses the wizard in copy mode with `--profile personal`. After it, `~/.claude/state/machine-profile` should read `personal`. Record the size of `~/.claude` before and after.
 

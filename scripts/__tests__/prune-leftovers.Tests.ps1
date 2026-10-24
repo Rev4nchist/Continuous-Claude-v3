@@ -115,4 +115,10 @@ Describe 'managed sync path predicate' {
         Test-PruneManagedSyncPath '/skills/fourth-sample/sample-deck.pptx' | Should -BeFalse
         Test-PruneManagedSyncPath '\skills\fourth-sample\sample-deck.pptx' | Should -BeFalse
     }
+
+    It 'does not skip a nested leftover under skills/kept/skills/synced' {
+        Test-PruneManagedSyncPath '/skills/kept/skills/synced/zz/sample-deck.pptx' | Should -BeFalse
+        Test-PruneManagedSyncPath '\skills\kept\skills\synced\zz\sample-deck.pptx' | Should -BeFalse
+        Test-PruneManagedSyncPath 'skills/kept/skills/synced/zz/sample-deck.pptx' | Should -BeFalse
+    }
 }
