@@ -5204,6 +5204,23 @@ var Result = import_lib.default.Result;
 var TypeOverrides = import_lib.default.TypeOverrides;
 var defaults = import_lib.default.defaults;
 
+// src/shared/pg-client.ts
+var DB_URL_VARS = ["CONTINUOUS_CLAUDE_DB_URL", "DATABASE_URL", "OPC_POSTGRES_URL"];
+var warnedMissingDbUrl = false;
+function resolveDbUrl() {
+  for (const name of DB_URL_VARS) {
+    const value = process.env[name];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  if (!warnedMissingDbUrl) {
+    warnedMissingDbUrl = true;
+    console.error(
+      "WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work"
+    );
+  }
+  return null;
+}
+
 // src/lane-context.ts
 var CONNECT_TIMEOUT_MS = 1200;
 var QUERY_TIMEOUT_MS = 1500;
@@ -5233,7 +5250,7 @@ function writeDmState(sessionId, state) {
   }
 }
 function connString() {
-  return process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || "postgresql://claude:claude_dev@localhost:5432/continuous_claude";
+  return resolveDbUrl();
 }
 var short = (s) => s ? s.slice(0, 8) : "--------";
 function emit(context, eventName) {
@@ -5261,8 +5278,13 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit) {
     return;
   }
   writeDmState(me, { ts: now, lastShownDmId: state.lastShownDmId });
+  const url = connString();
+  if (!url) {
+    process.stdout.write("{}");
+    return;
+  }
   const client = new Client({
-    connectionString: connString(),
+    connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS
   });
@@ -5320,8 +5342,13 @@ async function main() {
     await deliverDirectMessages(me);
     return;
   }
+  const url = connString();
+  if (!url) {
+    process.stdout.write("{}");
+    return;
+  }
   const client = new Client({
-    connectionString: connString(),
+    connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS
   });

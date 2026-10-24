@@ -69,6 +69,12 @@ echo ""
 echo "5. Environment"
 check "CLAUDE_OPC_DIR is set" "test -n \"\$CLAUDE_OPC_DIR\""
 check "CLAUDE_OPC_DIR points to valid directory" "test -d \"\$CLAUDE_OPC_DIR\""
+# Presence only: the command must not echo the value. This is a hard check,
+# not a warn. W7 counts FAIL, and a warn would leave Failed: 0 when the
+# variable is unset, which is the silent-fallback bug this line exists to
+# catch. SQLite mode leaves the variable unset on purpose (the wizard prints
+# "skipped (sqlite mode)") and will fail this one line.
+check "CONTINUOUS_CLAUDE_DB_URL is set" "test -n \"\$CONTINUOUS_CLAUDE_DB_URL\""
 warn_check "PYTHONUTF8 is set (Windows)" "test -n '$PYTHONUTF8' || test $(uname -o 2>/dev/null) != 'Msys'"
 
 echo ""

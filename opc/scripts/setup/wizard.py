@@ -16,12 +16,14 @@ import asyncio
 import json
 import os
 import platform
+import re
+import shlex
 import shutil
 import subprocess
 import sys
 from datetime import datetime
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable, Protocol
 
 # Ensure project root is in sys.path for imports when run as a script
 # This handles both `python -m scripts.setup.wizard` and `python scripts/setup/wizard.py`
@@ -528,6 +530,241 @@ def generate_env_file(config: dict[str, Any], env_path: Path) -> None:
 
     # Write file
     env_path.write_text("\n".join(lines))
+
+
+# Status words only. Callers print these. They never include the URL value.
+DB_URL_STATUS_SET = "set"
+DB_URL_STATUS_ALREADY = "already set"
+DB_URL_STATUS_DIFFERS = "differs (kept; confirm to replace)"
+DB_URL_STATUS_SQLITE = "skipped (sqlite mode)"
+DB_URL_VAR = "CONTINUOUS_CLAUDE_DB_URL"
+# Marker for the POSIX profile line that reads opc/.env. The value stays in the file.
+DB_URL_PROFILE_MARKER = "# ccv3-db-url: CONTINUOUS_CLAUDE_DB_URL"
+
+
+class EnvWriter(Protocol):
+    def read(self, name: str) -> str | None: ...
+
+    def write(self, name: str, value: str) -> None: ...
+
+
+class RegistryView(Protocol):
+    def read(self, name: str) -> str | None: ...
+
+    def write(self, name: str, value: str) -> None: ...
+
+
+def read_dotenv_value(env_path: Path, name: str) -> str | None:
+    """Return the raw assignment from a dotenv file, or None if the key is absent.
+
+    An empty assignment is ``""`` (SQLite mode). The value is not printed.
+    """
+    if not env_path.is_file():
+        return None
+    prefix = f"{name}="
+    for raw in env_path.read_text(encoding="utf-8").splitlines():
+        line = raw.strip()
+        if not line or line.startswith("#"):
+            continue
+        if line.startswith("export "):
+            line = line[len("export "):].strip()
+        if line.startswith(prefix):
+            value = line[len(prefix):]
+            if len(value) >= 2 and value[0] == value[-1] and value[0] in {'"', "'"}:
+                value = value[1:-1]
+            return value
+    return None
+
+
+def _broadcast_environment_change() -> None:
+    """Tell Windows that HKCU\\Environment changed. The payload is the word Environment, not a value."""
+    if sys.platform != "win32":
+        return
+    import ctypes  # Windows-only call; Linux has no user32.
+
+    hwnd_broadcast = 0xFFFF
+    wm_settingchange = 0x001A
+    smto_abortifhung = 0x0002
+    result = ctypes.c_size_t()
+    ctypes.windll.user32.SendMessageTimeoutW(
+        hwnd_broadcast,
+        wm_settingchange,
+        0,
+        "Environment",
+        smto_abortifhung,
+        5000,
+        ctypes.byref(result),
+    )
+
+
+class WinRegWriter:
+    """Persistent user env var via HKCU\\Environment.
+
+    The value is written with winreg, never with ``setx`` and never as a
+    subprocess argument. ``registry`` and ``broadcaster`` are injection points
+    so tests do not touch a real hive.
+    """
+
+    def __init__(
+        self,
+        registry: RegistryView | None = None,
+        broadcaster: Callable[[], None] | None = None,
+    ) -> None:
+        self._registry = registry
+        self._broadcaster = broadcaster
+
+    def read(self, name: str) -> str | None:
+        if self._registry is not None:
+            return self._registry.read(name)
+        import winreg  # Windows-only module. A top-level import breaks Linux.
+
+        try:
+            with winreg.OpenKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                value, _typ = winreg.QueryValueEx(key, name)
+        except FileNotFoundError:
+            return None
+        except OSError:
+            return None
+        if value is None:
+            return None
+        text = str(value).strip()
+        return text or None
+
+    def write(self, name: str, value: str) -> None:
+        if self._registry is not None:
+            self._registry.write(name, value)
+        else:
+            import winreg  # Windows-only module. A top-level import breaks Linux.
+
+            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+        if self._broadcaster is not None:
+            self._broadcaster()
+        else:
+            _broadcast_environment_change()
+
+
+_PROFILE_ASSIGN_RE = re.compile(
+    r"^[ \t]*(?:export[ \t]+)?CONTINUOUS_CLAUDE_DB_URL=(.*)$"
+)
+
+
+class PosixProfileWriter:
+    """One idempotent shell-profile line that reads opc/.env. The value is not copied."""
+
+    def __init__(self, profile_path: Path, env_path: Path) -> None:
+        self.profile_path = profile_path
+        self.env_path = env_path
+
+    def read(self, name: str) -> str | None:
+        if name != DB_URL_VAR or not self.profile_path.is_file():
+            return None
+        text = self.profile_path.read_text(encoding="utf-8")
+        if DB_URL_PROFILE_MARKER in text:
+            return read_dotenv_value(self.env_path, name)
+        for line in text.splitlines():
+            match = _PROFILE_ASSIGN_RE.match(line)
+            if not match:
+                continue
+            raw = match.group(1).strip().strip('"').strip("'")
+            if raw.startswith("$"):
+                return read_dotenv_value(self.env_path, name)
+            return raw or None
+        return None
+
+    def write(self, name: str, value: str) -> None:
+        # ``value`` is the protocol argument. It is intentionally not written.
+        del name, value
+        text = self.profile_path.read_text(encoding="utf-8") if self.profile_path.is_file() else ""
+        if DB_URL_PROFILE_MARKER in text:
+            return
+        kept: list[str] = []
+        for line in text.splitlines():
+            match = _PROFILE_ASSIGN_RE.match(line)
+            if match and not match.group(1).strip().startswith("$"):
+                continue
+            kept.append(line)
+        body = "\n".join(kept)
+        if body and not body.endswith("\n"):
+            body += "\n"
+        self.profile_path.parent.mkdir(parents=True, exist_ok=True)
+        self.profile_path.write_text(body + self._source_block(), encoding="utf-8")
+
+    def _source_block(self) -> str:
+        quoted = shlex.quote(str(self.env_path))
+        return (
+            f"\n{DB_URL_PROFILE_MARKER}\n"
+            f"if [ -f {quoted} ]; then\n"
+            f"  CONTINUOUS_CLAUDE_DB_URL=$(grep -E '^CONTINUOUS_CLAUDE_DB_URL=' {quoted} | head -n 1 | cut -d= -f2-)\n"
+            f"  export CONTINUOUS_CLAUDE_DB_URL\n"
+            f"fi\n"
+        )
+
+
+def _shell_profile_path() -> Path:
+    shell = os.environ.get("SHELL", "")
+    if "zsh" in shell:
+        return Path.home() / ".zshrc"
+    return Path.home() / ".bashrc"
+
+
+def default_db_url_writer(env_path: Path) -> EnvWriter:
+    if sys.platform == "win32":
+        return WinRegWriter()
+    return PosixProfileWriter(_shell_profile_path(), env_path)
+
+
+def set_user_env_from_file(
+    name: str,
+    env_path: Path,
+    writer: EnvWriter,
+    *,
+    confirm_replace: bool | None = None,
+) -> str:
+    """Copy ``name`` from ``env_path`` into the user environment via ``writer``.
+
+    Returns a status word. Does not print the value.
+    """
+    value = read_dotenv_value(env_path, name)
+    if value is None or value.strip() == "":
+        return DB_URL_STATUS_SQLITE
+    current = writer.read(name)
+    if current is None or current.strip() == "":
+        writer.write(name, value)
+        return DB_URL_STATUS_SET
+    if current == value:
+        return DB_URL_STATUS_ALREADY
+    replace = confirm_replace
+    if replace is None:
+        replace = Confirm.ask(
+            f"{name} differs from opc/.env. Replace the user value?",
+            default=False,
+        )
+    if not replace:
+        return DB_URL_STATUS_DIFFERS
+    writer.write(name, value)
+    return DB_URL_STATUS_SET
+
+
+def apply_db_url_user_env(
+    env_path: Path,
+    writer: EnvWriter | None = None,
+    *,
+    confirm_replace: bool | None = None,
+) -> str:
+    """Export CONTINUOUS_CLAUDE_DB_URL from the generated opc/.env.
+
+    Prints a status word only (set / already set / differs / skipped).
+    """
+    chosen = writer if writer is not None else default_db_url_writer(env_path)
+    status = set_user_env_from_file(
+        DB_URL_VAR,
+        env_path,
+        chosen,
+        confirm_replace=confirm_replace,
+    )
+    console.print(f"CONTINUOUS_CLAUDE_DB_URL {status}")
+    return status
 
 
 # =============================================================================
@@ -1047,6 +1284,10 @@ async def run_setup_wizard() -> None:
     else:
         console.print("  [yellow]NOTE[/yellow] Add to your shell config:")
         console.print(f'       export CLAUDE_OPC_DIR="{opc_dir}"')
+
+    # Export the database URL generated in step 5. Status words only; the value
+    # stays in opc/.env (POSIX profile reads that file; Windows writes HKCU).
+    apply_db_url_user_env(env_path)
 
     # Step 8: Behavioral Configuration (CLAUDE.md / RULES.md)
     console.print("\n[bold]Step 9/15: Behavioral Configuration (CLAUDE.md / RULES.md)[/bold]")

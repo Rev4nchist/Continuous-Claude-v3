@@ -5205,12 +5205,37 @@ var defaults = import_lib.default.defaults;
 // src/shared/pg-client.ts
 var CONNECT_TIMEOUT_MS = 2e3;
 var QUERY_TIMEOUT_MS = 3e3;
+var DB_URL_VARS = ["CONTINUOUS_CLAUDE_DB_URL", "DATABASE_URL", "OPC_POSTGRES_URL"];
+var warnedMissingDbUrl = false;
+var MissingDbUrlError = class extends Error {
+  constructor() {
+    super("database URL unset");
+    this.name = "MissingDbUrlError";
+  }
+};
+function resolveDbUrl() {
+  for (const name of DB_URL_VARS) {
+    const value = process.env[name];
+    if (typeof value === "string" && value.trim()) return value.trim();
+  }
+  if (!warnedMissingDbUrl) {
+    warnedMissingDbUrl = true;
+    console.error(
+      "WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work"
+    );
+  }
+  return null;
+}
 function getPgConnectionString() {
-  return process.env.CONTINUOUS_CLAUDE_DB_URL || process.env.DATABASE_URL || process.env.OPC_POSTGRES_URL || "postgresql://claude:claude_dev@localhost:5432/continuous_claude";
+  return resolveDbUrl();
 }
 async function withPgClient(fn) {
+  const connectionString = getPgConnectionString();
+  if (!connectionString) {
+    throw new MissingDbUrlError();
+  }
   const client = new Client({
-    connectionString: getPgConnectionString(),
+    connectionString,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS,
     statement_timeout: QUERY_TIMEOUT_MS,
@@ -5246,6 +5271,9 @@ async function withPgClientOrFallback(fn, fallback, context) {
   try {
     return { value: await withPgClient(fn), degraded: false };
   } catch (err) {
+    if (err instanceof MissingDbUrlError) {
+      return { value: fallback, degraded: true, error: err.message };
+    }
     const message = describeError(err);
     const code = err?.code;
     const schemaFault = code === "42703" || code === "42P01" || code === "42883";
