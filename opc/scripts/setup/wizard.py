@@ -537,9 +537,15 @@ DB_URL_STATUS_SET = "set"
 DB_URL_STATUS_ALREADY = "already set"
 DB_URL_STATUS_DIFFERS = "differs (kept; confirm to replace)"
 DB_URL_STATUS_SQLITE = "skipped (sqlite mode)"
+DB_URL_STATUS_NO_ENV = "skipped (no opc/.env)"
+DB_URL_STATUS_REGISTRY = "not set (registry write failed)"
 DB_URL_VAR = "CONTINUOUS_CLAUDE_DB_URL"
 # Marker for the POSIX profile line that reads opc/.env. The value stays in the file.
 DB_URL_PROFILE_MARKER = "# ccv3-db-url: CONTINUOUS_CLAUDE_DB_URL"
+
+
+class RegistryWriteError(Exception):
+    """A registry write failed. The message is a status word and never a value."""
 
 
 class EnvWriter(Protocol):
@@ -631,13 +637,16 @@ class WinRegWriter:
         return text or None
 
     def write(self, name: str, value: str) -> None:
-        if self._registry is not None:
-            self._registry.write(name, value)
-        else:
-            import winreg  # Windows-only module. A top-level import breaks Linux.
+        try:
+            if self._registry is not None:
+                self._registry.write(name, value)
+            else:
+                import winreg  # Windows-only module. A top-level import breaks Linux.
 
-            with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
-                winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+                with winreg.CreateKey(winreg.HKEY_CURRENT_USER, "Environment") as key:
+                    winreg.SetValueEx(key, name, 0, winreg.REG_SZ, value)
+        except OSError:
+            raise RegistryWriteError(DB_URL_STATUS_REGISTRY) from None
         if self._broadcaster is not None:
             self._broadcaster()
         else:
@@ -725,13 +734,14 @@ def set_user_env_from_file(
 
     Returns a status word. Does not print the value.
     """
+    if not env_path.is_file():
+        return DB_URL_STATUS_NO_ENV
     value = read_dotenv_value(env_path, name)
     if value is None or value.strip() == "":
         return DB_URL_STATUS_SQLITE
     current = writer.read(name)
     if current is None or current.strip() == "":
-        writer.write(name, value)
-        return DB_URL_STATUS_SET
+        return _write_user_env(writer, name, value) or DB_URL_STATUS_SET
     if current == value:
         return DB_URL_STATUS_ALREADY
     replace = confirm_replace
@@ -742,8 +752,16 @@ def set_user_env_from_file(
         )
     if not replace:
         return DB_URL_STATUS_DIFFERS
-    writer.write(name, value)
-    return DB_URL_STATUS_SET
+    return _write_user_env(writer, name, value) or DB_URL_STATUS_SET
+
+
+def _write_user_env(writer: EnvWriter, name: str, value: str) -> str | None:
+    """Write the value. A registry failure returns its status and does not print the value."""
+    try:
+        writer.write(name, value)
+    except RegistryWriteError:
+        return DB_URL_STATUS_REGISTRY
+    return None
 
 
 def apply_db_url_user_env(
@@ -754,7 +772,7 @@ def apply_db_url_user_env(
 ) -> str:
     """Export CONTINUOUS_CLAUDE_DB_URL from the generated opc/.env.
 
-    Prints a status word only (set / already set / differs / skipped).
+    Prints a status word only (set / already set / differs / skipped / not set).
     """
     chosen = writer if writer is not None else default_db_url_writer(env_path)
     status = set_user_env_from_file(

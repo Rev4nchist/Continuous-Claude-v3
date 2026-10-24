@@ -155,6 +155,37 @@ def test_posix_default_writer_uses_temp_home(tmp_path: Path, monkeypatch: pytest
     assert "ccv3-db-url" in text
 
 
+def test_missing_env_file_is_not_reported_as_sqlite(tmp_path: Path, captured_console: io.StringIO, capsys: pytest.CaptureFixture[str]) -> None:
+    writer = RecordingWriter()
+    status = apply_db_url_user_env(tmp_path / ".env", writer=writer)
+    captured = captured_console.getvalue() + capsys.readouterr().out + capsys.readouterr().err
+    assert status == "skipped (no opc/.env)"
+    assert writer.writes == []
+    assert "sqlite" not in captured
+    assert "postgresql://" not in captured
+
+
+class _BoomRegistry:
+    def read(self, name: str) -> str | None:
+        return None
+
+    def write(self, name: str, value: str) -> None:
+        raise OSError("registry unavailable")
+
+
+def test_winreg_oserror_is_reported_without_the_value(tmp_path: Path, captured_console: io.StringIO, capsys: pytest.CaptureFixture[str]) -> None:
+    broadcasts: list[str] = []
+    writer = WinRegWriter(registry=_BoomRegistry(), broadcaster=lambda: broadcasts.append("Environment"))
+    status = apply_db_url_user_env(_env_file(tmp_path, PLACEHOLDER_URL), writer=writer)
+    captured = captured_console.getvalue() + capsys.readouterr().out + capsys.readouterr().err
+    assert status == "not set (registry write failed)"
+    assert broadcasts == []
+    assert "not set (registry write failed)" in captured
+    assert "PLACEHOLDER" not in captured
+    assert "postgresql://" not in captured
+    assert "registry unavailable" not in captured
+
+
 def test_verify_setup_checks_presence_only() -> None:
     text = (repo_root / "scripts" / "verify-setup.sh").read_text(encoding="utf-8")
     assert 'check "CONTINUOUS_CLAUDE_DB_URL is set"' in text
