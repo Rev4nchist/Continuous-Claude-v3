@@ -178,7 +178,8 @@ $scanRoots = @(
 # node_modules only. .venv stays in the scan until a run shows it causes false positives.
 $vendorNames = @('node_modules')
 $left = @()
-$excluded = 0
+$vendorTotal = 0
+$excludedMatches = @()
 $excludedDirs = [System.Collections.Generic.List[string]]::new()
 foreach ($dir in $scanRoots) {
   $root = Join-Path $C $dir
@@ -197,15 +198,21 @@ foreach ($dir in $scanRoots) {
         break
       }
     }
-    if ($vendorHit) { $excluded++; continue }
+    $matchesLeft = ($item.Name -match 'codex' -or $tail -match '/_snapshots/|/_archive/' -or $item.Name -match '\.pptx$|\.potx$')
+    if ($vendorHit) {
+      $vendorTotal++
+      if ($matchesLeft) { $excludedMatches += $tail.TrimStart('/') }
+      continue
+    }
     if ($tail -match '/skills/fourth-') { continue }
-    if ($item.Name -match 'codex' -or $tail -match '/_snapshots/|/_archive/' -or $item.Name -match '\.pptx$|\.potx$') {
+    if ($matchesLeft) {
       $left += $item
     }
   }
 }
 $dirList = if ($excludedDirs.Count -gt 0) { $excludedDirs -join ', ' } else { '' }
-"excluded: $excluded paths ($dirList)"
+$pathList = if ($excludedMatches.Count -gt 0) { $excludedMatches -join ', ' } else { '' }
+"excluded: $($excludedMatches.Count) paths ($dirList): $pathList; vendor entries: $vendorTotal"
 "leftovers: $($left.Count)"
 if ($left.Count -ne 0) {
   $left | ForEach-Object { $_.FullName }

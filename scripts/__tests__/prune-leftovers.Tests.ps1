@@ -36,6 +36,8 @@ Describe 'prune leftover scan' {
             $vendorFile = Join-Path $claude "hooks/node_modules/pkg/$($script:Planted)-file.js"
             New-Item -ItemType Directory -Path (Split-Path -Parent $vendorFile) -Force | Out-Null
             Set-Content -LiteralPath $vendorFile -Value 'third party' -Encoding utf8
+            $plainVendor = Join-Path $claude 'hooks/node_modules/pkg/readme.js'
+            Set-Content -LiteralPath $plainVendor -Value 'not a leftover' -Encoding utf8
             $fourthFile = Join-Path $claude "skills/fourth-brand/$($script:Planted).md"
             New-Item -ItemType Directory -Path (Split-Path -Parent $fourthFile) -Force | Out-Null
             Set-Content -LiteralPath $fourthFile -Value 'leave' -Encoding utf8
@@ -45,7 +47,15 @@ Describe 'prune leftover scan' {
 
             $result = Invoke-PruneAt $tempRoot
             $result.Code | Should -Not -Be 0
-            $result.Out | Should -Match 'excluded: [1-9][0-9]* paths \(node_modules\)'
+            $excludedLine = @($result.Out -split "`n" | Where-Object { $_ -like 'excluded:*' })
+            $excludedLine.Count | Should -Be 1
+            $excludedLine[0] | Should -Match '^excluded: 1 paths \(node_modules\): '
+            $plantedNeedle = [regex]::Escape("$($script:Planted)-file.js")
+            $excludedLine[0] | Should -Match $plantedNeedle
+            $excludedLine[0] | Should -Not -Match 'readme\.js'
+            $vendorTotal = 0
+            if ($excludedLine[0] -match 'vendor entries: (\d+)') { $vendorTotal = [int]$Matches[1] }
+            $vendorTotal | Should -BeGreaterThan 1
             $result.Out | Should -Match 'leftovers: 1'
             $result.Out | Should -Match 'leftovers 1'
             $result.Out | Should -Match 'backup: none \(nothing to remove\)'
