@@ -11,8 +11,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
 import * as os from 'os';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import { getProjectIdentity, isContentRelevantToProject } from './shared/project-relevance.js';
 import {
   parseRoadmap,
@@ -732,7 +732,7 @@ function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
 
   // Store plan learning in background (detached so hook doesn't block)
   try {
-    const child = spawn('uv', ['run', 'python', 'scripts/core/store_learning.py',
+    const child = spawnDetachedHidden('uv', ['run', 'python', 'scripts/core/store_learning.py',
       '--session-id', sessionId,
       '--type', 'ARCHITECTURAL_DECISION',
       '--content', content,
@@ -741,7 +741,6 @@ function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
       '--confidence', 'high',
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: 'ignore',
       env: { ...process.env, PYTHONPATH: '.' },
     });

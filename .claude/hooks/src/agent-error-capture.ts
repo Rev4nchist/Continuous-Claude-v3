@@ -24,6 +24,7 @@ import { readFileSync, existsSync } from 'fs';
 import { spawn } from 'child_process';
 import { join } from 'path';
 import { scoreExtraction } from './shared/memory-quality-scorer.js';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
 interface PostToolUseInput {
   session_id: string;
@@ -304,7 +305,8 @@ export function storeLearning(
       `Failed agent invocation: ${agentType}`,
       tags.join(','),
     );
-    const child = spawnFn(cmd, args, options);
+    // Through the relay: a plain detached uv opens a visible console for python.
+    const child = spawnDetachedHidden(cmd, args, options, spawnFn);
     releaseWhenRunning(child);
     console.error(`[AgentErrorCapture] Dispatched (detached) failure learning for agent '${agentType}'`);
   } catch (err) {
