@@ -28,7 +28,10 @@ const files = [];
 list(srcRoot, files);
 const inputs = {};
 for (const file of files) {
-  inputs[relative(srcRoot, file).split('\\').join('/')] = createHash('sha256').update(readFileSync(file)).digest('hex');
+  // Same CR strip as sha256() in src/shared/dist-freshness.ts. LF and CRLF
+  // copies of one source record one hash.
+  const text = readFileSync(file).toString('utf8').replace(/\r/g, '');
+  inputs[relative(srcRoot, file).split('\\').join('/')] = createHash('sha256').update(text).digest('hex');
 }
 if (!existsSync(distDir)) mkdirSync(distDir, { recursive: true });
 writeFileSync(

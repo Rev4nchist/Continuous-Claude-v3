@@ -262,6 +262,27 @@ describe('session-start-init-check: hook build freshness', () => {
     expect(out).toContain('nested.ts');
   }, 30000);
 
+  it('reads a CRLF copy of a hashed source as fresh', () => {
+    // Windows autocrlf checks sources out as CRLF. The manifest records the
+    // LF bytes. Those two must compare equal, or every session warns.
+    const proj = makeHookTree();
+    const src = join(proj, '.claude', 'hooks', 'src');
+    const top = join(src, 'top.ts');
+    const nested = join(src, 'shared', 'nested.ts');
+    const topLf = readFileSync(top, 'utf8').replace(/\r/g, '');
+    const nestedLf = readFileSync(nested, 'utf8').replace(/\r/g, '');
+    writeManifest(proj, {
+      'top.ts': createHash('sha256').update(topLf).digest('hex'),
+      'shared/nested.ts': createHash('sha256').update(nestedLf).digest('hex'),
+    });
+    writeFileSync(top, topLf.replace(/\n/g, '\r\n'));
+    writeFileSync(nested, nestedLf.replace(/\n/g, '\r\n'));
+
+    const result = runHook(proj);
+    const out = result.stderr + result.stdout;
+    expect(out).not.toContain('is stale');
+  }, 30000);
+
   it('fires for a source under src/shared/ and names it', () => {
     // Positive control: the manifest records different bytes for nested.ts,
     // so the warning is a content mismatch. Mtime alone is not the signal.

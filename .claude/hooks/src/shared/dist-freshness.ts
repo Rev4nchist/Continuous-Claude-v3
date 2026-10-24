@@ -41,8 +41,14 @@ export interface FileFreshness {
   info?: string;
 }
 
+/**
+ * Hash the LF form of the text. A Windows checkout with core.autocrlf=true
+ * stores the same source with CR bytes; those must not look stale.
+ * write-build-inputs.mjs strips CR the same way before it records the manifest.
+ */
 export function sha256(content: Buffer | string): string {
-  return createHash('sha256').update(content).digest('hex');
+  const text = (typeof content === 'string' ? content : content.toString('utf8')).replace(/\r/g, '');
+  return createHash('sha256').update(text).digest('hex');
 }
 
 /** Relative posix path from the hooks src root. The build script uses the same key. */

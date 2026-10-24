@@ -330,6 +330,23 @@ describe('hook-health-monitor', () => {
       expect(result.status).toBe('healthy');
     });
 
+    it('reads a CRLF copy of a hashed source as fresh', () => {
+      const distFile = path.join(distDir, 'crlf-hook.mjs');
+      const srcFile = path.join(srcDir, 'crlf-hook.ts');
+      const lf = 'export const crlf = 1;\n';
+      fs.writeFileSync(srcFile, lf.replace(/\n/g, '\r\n'));
+      fs.writeFileSync(distFile, '// bundle');
+      manifest({ 'crlf-hook.ts': sha(lf) });
+
+      const result = checkHookHealth({
+        distPath: distFile,
+        srcPath: srcFile,
+        hookEvent: 'SessionStart',
+        hookName: 'crlf-hook',
+      });
+      expect(result.status).toBe('healthy');
+    });
+
     it('reports stale when src content differs from the manifest even if dist is newer', () => {
       const distFile = path.join(distDir, 'changed-hook.mjs');
       const srcFile = path.join(srcDir, 'changed-hook.ts');
