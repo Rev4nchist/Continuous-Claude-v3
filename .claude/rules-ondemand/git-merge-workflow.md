@@ -27,11 +27,12 @@ Best-practice flow for merging a feature branch into `main` (fork workflow) plus
 **For CCv3 PRs, steps 4-5 are one command** (after Dave says merge): `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`.
 It refuses unless `scripts/github/review-status.mjs` reports READY for the current head, merges
 with `sha=<head>`, fast-forwards `main`, and removes the worktree and branches. It syncs `~/.claude`
-itself. On `main` it syncs from the primary checkout. On any other branch it syncs from a temporary
-detached worktree of `main` (`%TEMP%\land-pr-sync-<N>`, removed afterwards) and leaves the primary
-checkout alone. If it prints "skipped", check out `main` and run `scripts/sync-to-active.sh --changed`
-with Git Bash (`C:\Program Files\Git\bin\bash.exe`; `bash` on PATH is
-WSL). Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
+itself, always from a temporary detached worktree of `main` (`%TEMP%\land-pr-sync-<N>-<pid>`,
+removed afterwards), and leaves the primary checkout alone: another session can switch it mid-sync.
+If it prints "skipped" or "NOT confirmed synced", sync by hand from a detached worktree of `main`
+with `SYNC_MAIN_DETACHED=1` and Git Bash (`C:\Program Files\Git\bin\bash.exe`; `bash` on PATH is
+WSL), never from the primary checkout. Never hand-copy a synced file into `~/.claude`: the next sync
+quarantines it.
 
 ## Gotchas (all real, all hit 2026-07-06)
 

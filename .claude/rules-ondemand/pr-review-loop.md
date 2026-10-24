@@ -70,10 +70,12 @@ the new head.
 
 When Dave says merge for a reviewed PR, land it with `pwsh -File scripts/github/land-pr.ps1 -Pr <N>`. It re-checks, merges
 through REST pinned to the head SHA (GitHub refuses if the head moved), fast-forwards `main`, and
-removes the worktree and branches. It syncs `~/.claude` itself: from the primary checkout on `main`,
-else from a temporary detached worktree of `main` (the primary checkout stays on its branch). If it
-prints "skipped", check out `main` and run `scripts/sync-to-active.sh --changed` with Git Bash
-(`C:\Program Files\Git\bin\bash.exe`; `bash` on PATH is WSL).
+removes the worktree and branches. It syncs `~/.claude` itself, always from a temporary detached
+worktree of `main`: other sessions share the primary checkout and can switch it mid-sync. If it
+prints "skipped" or "NOT confirmed synced", sync by hand the same way, never from the primary
+checkout: `git worktree add --detach <tmp> main`, then in `<tmp>` run
+`scripts/sync-to-active.sh --changed` with Git Bash and `SYNC_MAIN_DETACHED=1`
+(`C:\Program Files\Git\bin\bash.exe`; `bash` on PATH is WSL), then `git worktree remove <tmp>`.
 Never hand-copy a synced file into `~/.claude`: the next sync quarantines it.
 Every step is idempotent; re-run after a partial failure.
 
