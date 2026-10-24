@@ -101,7 +101,7 @@ setup_fixture() {
     mkdir -p "$FAKE_REPO/scripts"
     mkdir -p "$FAKE_REPO/.claude/hooks/src"
     mkdir -p "$FAKE_REPO/.claude/hooks/dist"
-    mkdir -p "$FAKE_REPO/.claude/rules"
+    mkdir -p "$FAKE_REPO/.claude/rules-src"
     mkdir -p "$FAKE_REPO/.claude/agents"
     mkdir -p "$FAKE_REPO/.claude/skills"
     mkdir -p "$FAKE_REPO/.claude/scripts/ralph"
@@ -118,7 +118,7 @@ setup_fixture() {
     echo "// hook src" > "$FAKE_REPO/.claude/hooks/src/test-hook.ts"
     echo "// dist bundle 1" > "$FAKE_REPO/.claude/hooks/dist/hook-a.mjs"
     echo "// dist bundle 2" > "$FAKE_REPO/.claude/hooks/dist/hook-b.mjs"
-    echo "# rule" > "$FAKE_REPO/.claude/rules/test-rule.md"
+    echo "# rule" > "$FAKE_REPO/.claude/rules-src/test-rule.md"
     echo "# agent" > "$FAKE_REPO/.claude/agents/test-agent.md"
     echo "# skill" > "$FAKE_REPO/.claude/skills/test-skill.md"
     echo "# ralph script" > "$FAKE_REPO/.claude/scripts/ralph/ralph-state-v2.py"
@@ -145,7 +145,7 @@ teardown_fixture() {
 }
 
 # ============================================================
-# Test: Existing directories sync (hooks/src, rules, agents, skills)
+# Test: Existing directories sync (agents, skills, rules-src -> rules). hooks/src stays in the repo.
 # ============================================================
 
 test_existing_dirs_sync() {
@@ -155,8 +155,8 @@ test_existing_dirs_sync() {
 
     bash "$FAKE_SYNC" --skip-build 2>&1
 
-    assert_file_exists "hooks/src synced" "$FAKE_ACTIVE/hooks/src/test-hook.ts"
-    assert_file_exists "rules synced" "$FAKE_ACTIVE/rules/test-rule.md"
+    assert_file_not_exists "hooks/src not synced" "$FAKE_ACTIVE/hooks/src/test-hook.ts"
+    assert_file_exists "rules-src synced to rules" "$FAKE_ACTIVE/rules/test-rule.md"
     assert_file_exists "agents synced" "$FAKE_ACTIVE/agents/test-agent.md"
     assert_file_exists "skills synced" "$FAKE_ACTIVE/skills/test-skill.md"
 
@@ -205,22 +205,22 @@ test_ralph_scripts_sync() {
 }
 
 # ============================================================
-# Test: scripts/ralph skipped when target dir doesn't exist
+# Test: scripts/ralph is created for a fresh install (sync_root_ok mkdir -p)
 # ============================================================
 
 test_ralph_scripts_skip_no_target() {
     echo ""
-    echo "=== Test: scripts/ralph skipped when target absent ==="
+    echo "=== Test: scripts/ralph created when target absent ==="
     setup_fixture
 
-    # Remove the target ralph directory
+    # A fresh install has no scripts directory yet.
     rm -rf "$FAKE_ACTIVE/scripts/ralph"
     rm -rf "$FAKE_ACTIVE/scripts"
 
     bash "$FAKE_SYNC" --skip-build 2>&1
 
-    # The script should NOT create the directory or copy files
-    assert_file_not_exists "ralph dir not created" "$FAKE_ACTIVE/scripts/ralph/ralph-state-v2.py"
+    # sync_root_ok creates the destination so a new machine gets the ralph scripts.
+    assert_file_exists "ralph dir created for fresh install" "$FAKE_ACTIVE/scripts/ralph/ralph-state-v2.py"
 
     teardown_fixture
 }
@@ -306,8 +306,8 @@ test_verification_mismatch() {
 
     # Now add an extra file to source that wasn't synced
     # (add to a NEVER_SYNC file to create a mismatch if verification counts all files)
-    # Actually, add a regular file to rules/ in source after sync
-    echo "# extra rule" > "$FAKE_REPO/.claude/rules/extra-rule.md"
+    # Actually, add a regular file to rules-src/ in source after sync
+    echo "# extra rule" > "$FAKE_REPO/.claude/rules-src/extra-rule.md"
 
     # Run again to sync the new file
     local output

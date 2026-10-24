@@ -16,7 +16,7 @@ import { writeFileSync, mkdirSync, rmSync, existsSync } from 'fs';
 import { resolve } from 'path';
 import { tmpdir } from 'os';
 import * as crypto from 'crypto';
-import { tryStartDaemon, isListenerAlive } from '../daemon-client.js';
+import { tryStartDaemon, isListenerAlive } from '../lib/daemon-client.js';
 
 // Mirrors daemon-client's getTldrTmpDir/getPidPath (both module-private).
 function pidPathFor(projectDir: string): string {

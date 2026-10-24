@@ -156,7 +156,7 @@ These spend money, mutate cloud state, or are irreversible:
   but a `running` outcome loop and an un-ended session are not — always end/archive sessions you're done with.
 - Keep `max_iterations: 3` (max 20). Never raise without an explicit confirm + cost note.
 - **Spend ledger:** append one row per billable create/send to `.claude/logs/cma-spend.jsonl`
-  (schema mirrors `codex-lift.jsonl`): `{ts, op, agent_id, session_id, model, est_session_hours, max_iterations, via}`.
+  Each row is `{ts, op, agent_id, session_id, model, est_session_hours, max_iterations, via}`.
 - Optional soft cap: if `CMA_MONTHLY_BUDGET_USD` env var is set, surface the running ledger total before confirming.
 - Spend caps are also settable at the **workspace level in the Console** — recommend setting one before standing up a cron deployment.
 

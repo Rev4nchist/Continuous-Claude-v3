@@ -4,7 +4,7 @@
 > block at Fourth's Sales Kickoff (late July 2026). Timing is authoritative from
 > `01-PACKAGE-DESIGN.md` §Session structure — do not re-invent it.
 >
-> **Ownership:** This run-of-show is a **shared doc** (Codex #3 / risk-register #3). **Sarah owns
+> **Ownership:** This run-of-show is a **shared doc** (review#3 / risk-register #3). **Sarah owns
 > training delivery** — the sections marked **[SARAH OWNS]** are hers to run and revise; Dave owns
 > the platform, the Fourth Brain teaser, the floating-support role, and the competition mechanics.
 > Sarah reviews the full doc before SKO.
@@ -73,7 +73,7 @@ never suggests reps should scrape or use Playwright themselves.
 ## PART 2 — The Setup Block (15 min) · Facilitator-led, IT floater present
 
 > **[SARAH CO-OWNS with Dave]** — runs at the **end of the plenary, BEFORE any breakout clock**
-> (Codex #5 / #9). Nobody debugs auth during exercise time. Same script in every room-to-be.
+> (review#5 / #9). Nobody debugs auth during exercise time. Same script in every room-to-be.
 
 **Purpose:** get every rep from zero to "your account's opportunities appear" — login, MFA, Project,
 skills, instructions, Salesforce — with IT standing by to catch failures.
@@ -166,7 +166,7 @@ data-handling rules as 3A / 3B apply unchanged.
 
 ## PART 4 — Competition Arena Setup Window (5 min) · Facilitators · all rooms
 
-> **Fresh arena — NOT the rep's account Project** (Codex #7). Prevents context bleed and keeps setup
+> **Fresh arena — NOT the rep's account Project** (review#7). Prevents context bleed and keeps setup
 > off the competition clock.
 
 | Time | Step |
@@ -180,7 +180,7 @@ The 10-minute clock does **not** start here. Setup never counts against the time
 
 ## PART 5 — The Competition (~20 min) · Dave MCs + head-judges
 
-> **Surprise account is pre-researched** (Codex #8). Facilitators hold a pre-built **answer-key
+> **Surprise account is pre-researched** (review#8). Facilitators hold a pre-built **answer-key
 > packet** for 2–3 candidate accounts (researched 1–2 days prior via the EBR research stack). Surprise
 > accounts are **public-web prospects or synthetic composites — NEVER another rep's live pipeline
 > account** (data-handling rule).

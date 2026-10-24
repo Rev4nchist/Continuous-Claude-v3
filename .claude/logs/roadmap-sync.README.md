@@ -2,7 +2,7 @@
 
 One row per `writeRoadmapGuarded` (and follow-up `appendRoadmapAuditRecord`) call from any of the three hooks that touch `ROADMAP.md`: `post-plan-roadmap.ts`, `git-commit-roadmap.ts`, `prd-roadmap-sync.ts`. The `.jsonl` is gitignored (`.claude/logs/*.jsonl`) — machine-local runtime data; this README is committed.
 
-Plan: `i-was-working-in-composed-manatee` (approved, premortemed Claude+Codex, 2026-08-05), section 5. Built to close a real gap: no `.bak`, no audit log for any ROADMAP write existed before this, which is why the recurring clobber only ever surfaced as anecdote rather than evidence.
+Plan: `i-was-working-in-composed-manatee` (approved, premortemed with Claude on 2026-08-05), section 5. Built to close a real gap: no `.bak`, no audit log for any ROADMAP write existed before this, which is why the recurring clobber only ever surfaced as anecdote rather than evidence.
 
 ## If a commit you expected is missing from `## Completed`
 
@@ -199,4 +199,4 @@ jq -s 'map(select(.wait_ms != null) | .wait_ms) | sort' .claude/logs/roadmap-syn
 - Underlying primitive: `.claude/hooks/src/shared/atomic-write.ts` (`mutateStateWithLock`, `MutateLockOptions`)
 - Tests: `.claude/hooks/src/__tests__/roadmap-audit.test.ts`
 - Plan: `i-was-working-in-composed-manatee` (§5 "New `shared/roadmap-audit.ts`")
-- Sibling READMEs: `.claude/logs/codex-lift.README.md`, `.claude/logs/grok-worker.README.md`
+- Related READMEs: `.claude/logs/grok-worker.README.md`

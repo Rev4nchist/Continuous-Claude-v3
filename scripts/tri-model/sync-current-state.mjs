@@ -1,24 +1,23 @@
 #!/usr/bin/env node
-// sync-current-state.mjs — refresh the machine-owned snapshot block in
-// docs/tri-model/CURRENT-STATE.md. Deterministic, zero-LLM, zero deps.
-//
-// Ownership contract (mirrors the Notion dashboard pattern): everything between
-// the BEGIN/END markers is machine-owned and REPLACED on every run; everything
-// outside the markers is human/narrative and never touched.
+// sync-current-state.mjs — print a machine snapshot.
+// docs/tri-model/CURRENT-STATE.md is a dated record and this script does not rewrite it.
+// Deterministic, zero-LLM, zero deps.
 //
 // Run:  node scripts/tri-model/sync-current-state.mjs
-//       node scripts/tri-model/sync-current-state.mjs --check   (exit 2 if stale, writes nothing)
+// --check is refused. This script does not rewrite the dated record, so it cannot report staleness.
 
 import { execFileSync, spawnSync } from "node:child_process";
-import { readFileSync, writeFileSync, existsSync, readdirSync } from "node:fs";
+import { readFileSync, existsSync, readdirSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import path from "node:path";
 
 const ROOT = path.resolve(path.dirname(fileURLToPath(import.meta.url)), "..", "..");
-const DOC = path.join(ROOT, "docs", "tri-model", "CURRENT-STATE.md");
+if (process.argv.includes("--check")) {
+  console.error("refusing --check: docs/tri-model/CURRENT-STATE.md is a dated record and this script does not rewrite it, so it cannot report staleness");
+  process.exit(2);
+}
 const BEGIN = "<!-- machine:begin (sync-current-state.mjs — do not hand-edit this block) -->";
 const END = "<!-- machine:end -->";
-const CHECK = process.argv.includes("--check");
 
 function git(...args) {
   try {
@@ -38,9 +37,9 @@ function preflightSnapshot() {
     const j = JSON.parse(r.stdout);
     const fails = (j.checks || []).filter((c) => !c.ok && !/git_state/.test(c.name)).map((c) => c.name);
     const v = j.versions || {};
-    const vline = `codex=${v.codex ?? "?"} grok=${v.grok ?? "?"} (pins codex=${v.codex_pin ?? "?"} grok=${v.grok_pin ?? "?"})`;
+    const versionLine = `grok=${v.grok ?? "?"} (pin ${v.grok_pin ?? "?"})`;
     return {
-      line: `preflight: ready=${j.ready} ${j.ready ? "" : "FAILING: " + fails.join(", ")} | ${vline}`.replace(/\s+\|/, " |"),
+      line: `preflight: ready=${j.ready} ${j.ready ? "" : "FAILING: " + fails.join(", ")} | ${versionLine}`.replace(/\s+\|/, " |"),
       ready: j.ready,
     };
   } catch {
@@ -100,37 +99,10 @@ const block = [
   "|---|---|---|---|",
   ...(roomRows.length ? roomRows : ["| (none) | - | - | - |"]),
   "",
-  `_Refresh: \`node scripts/tri-model/sync-current-state.mjs\` (narrative below the marker is hand-maintained)._`,
+  `_Printed by \`node scripts/tri-model/sync-current-state.mjs\`. docs/tri-model/CURRENT-STATE.md is a dated record and is not rewritten._`,
   "",
   END,
 ].join("\n");
 
-const doc = readFileSync(DOC, "utf8");
-const re = new RegExp(
-  BEGIN.replace(/[.*+?^${}()|[\]\\]/g, "\\$&") + "[\\s\\S]*?" + END.replace(/[.*+?^${}()|[\]\\]/g, "\\$&")
-);
-let next;
-if (re.test(doc)) {
-  next = doc.replace(re, block);
-} else {
-  // First run: insert after the H1 + its snapshot line (first blank-line gap after the title).
-  const lines = doc.split("\n");
-  const h1 = lines.findIndex((l) => l.startsWith("# "));
-  const insertAt = h1 >= 0 ? h1 + 1 : 0;
-  lines.splice(insertAt, 0, "", block);
-  next = lines.join("\n");
-}
-
-if (CHECK) {
-  // Stale iff anything other than the timestamp line differs.
-  const strip = (s) => s.replace(/\*\*Auto-snapshot:\*\* [^\n]*/g, "");
-  if (strip(next) !== strip(doc)) {
-    console.log("STALE: CURRENT-STATE.md machine block differs from live state");
-    process.exit(2);
-  }
-  console.log("OK: CURRENT-STATE.md machine block is current");
-  process.exit(0);
-}
-
-writeFileSync(DOC, next);
-console.log(`updated ${path.relative(ROOT, DOC)} (branch ${branch}, ${roomRows.length} room(s), preflight ready=${pf.ready})`);
+console.log("docs/tri-model/CURRENT-STATE.md is a dated record. This script does not rewrite it.");
+console.log(block);

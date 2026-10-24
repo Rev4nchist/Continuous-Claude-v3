@@ -2,7 +2,7 @@
 /**
  * Coordination load probe -- does the file-claims block hold under concurrency?
  *
- * Codex review finding #11 predicted that the 3-second `uv run python` subprocess
+ * Review finding number 11 predicted that the 3-second `uv run python` subprocess
  * on the claim path would make the block FAIL OPEN under load: when the subprocess
  * misses its timeout, runPgQuery returns success=false, checkFileClaim swallows it
  * as `{claimed: false}`, and the edit is permitted. A single unloaded invocation
@@ -55,11 +55,12 @@
  * Exit codes: 0 HOLDS | 1 FAILS OPEN | 2 usage error | 3 INCONCLUSIVE
  */
 
-import { spawn } from 'child_process';
-import { execFileSync } from 'child_process';
+import { execFileSync, spawn } from 'child_process';
+import { writeFileSync } from 'fs';
+import { join } from 'node:path';
+import { canonProject, repoPath } from './canon-home.mjs';
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
-import { writeFileSync } from 'fs';
 
 const args = process.argv.slice(2);
 function arg(name, fallback) {
@@ -83,9 +84,10 @@ if (!HOOK) {
 
 // A real repo path in the real project namespace, so canonicalProject() produces
 // the same key the live hooks use. The file is never actually written.
-const PROJECT_CWD = 'C:\\Users\\ada.lovelace\\continuous-claude';
-const TARGET_FILE = 'C:\\Users\\ada.lovelace\\continuous-claude\\.claude\\hooks\\src\\__loadprobe__.ts';
-const CANONICAL_PROJECT = 'c:/users/ada.lovelace/continuous-claude';
+const PROJECT_CWD = repoPath();
+const CANONICAL_PROJECT = canonProject();
+console.log(`canonical project: ${CANONICAL_PROJECT}`);
+const TARGET_FILE = join(PROJECT_CWD, '.claude', 'hooks', 'src', '__loadprobe__.ts');
 const OWNER = 'loadprobe-owner-0000-0000-000000000000';
 
 function psql(sql) {

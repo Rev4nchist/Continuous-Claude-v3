@@ -12,7 +12,7 @@ answer was yes for all 85 hook registrations and 18/18 live-only hooks — but
 
 | capture | source | what it is |
 |---|---|---|
-| `commands/` (59 files) | `~/.claude/commands/` | user-scope slash commands (28 `.md`, 30 `.yml`, 1 `.bak` — see below) |
+| `commands/` (inert snapshot) | was `~/.claude/commands/` | old capture. Live commands now sync from `.claude/commands-src/` |
 | `mcp.json` | `~/.mcp.json` | 7 MCP servers |
 | `settings.local.json` | `~/.claude/settings.local.json` | user-scope permissions, incl. the `rm`/`neonctl` deny rules |
 
@@ -21,13 +21,11 @@ answer was yes for all 85 hook registrations and 18/18 live-only hooks — but
 Each of the three would have caused a live behaviour change if committed where
 it appears to belong. That is the whole reason for this directory.
 
-- **`.claude/commands/`** — a project's `.claude/commands/` **is a live command
-  source**. Committing 59 files there would load every one of them a SECOND time
-  at project scope, on top of the user-scope copies already loaded. Same
-  duplicate-load hazard `codex-worker-safety.md` records for skills in an
-  in-repo worktree (~150 duplicate path-scoped skills). Also moot for
-  propagation: `sync-to-active.sh` has `SYNC_DIRS="rules agents skills scripts
-  docs"` — `commands` is not synced in either direction.
+- **`.claude/commands-src/`** — the live slash-command source. Forward sync
+  copies it to `~/.claude/commands/`. The source name is not `commands/`
+  because a project's `.claude/commands/` loads at project scope on top of
+  the user-scope copies. Commands do sync. This directory's `commands/`
+  folder is only the old inert snapshot.
 - **`.mcp.json`** — the repo already tracks a 23-byte stub at the root.
   Overwriting it with the 7-server user config would add 7 **project-scoped**
   MCP servers duplicating user scope.

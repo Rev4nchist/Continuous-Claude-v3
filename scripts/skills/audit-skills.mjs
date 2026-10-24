@@ -123,7 +123,6 @@ export function resolveOptions(opts = {}) {
     repoRoot, home,
     skillsRoot: path.resolve(opts.skillsRoot || path.join(repoRoot, '.claude', 'skills')),
     activeRoot: path.resolve(opts.activeRoot || path.join(home, '.claude', 'skills')),
-    codexRoot: path.resolve(opts.codexRoot || path.join(home, '.codex', 'skills')),
     settingsTemplate: opts.settingsTemplate || path.join(repoRoot, '.claude', 'settings.json.template'),
     mcpJson: opts.mcpJson || path.join(repoRoot, '.claude', 'machine-config', 'mcp.json'),
     agentsDir: opts.agentsDir || path.join(repoRoot, '.claude', 'agents'),
@@ -147,14 +146,6 @@ function crossSkillFindings(skills, o, add) {
   for (const s of skills.filter((x) => x.modelVisible)) {
     if (!byName.has(s.name)) byName.set(s.name, []);
     byName.get(s.name).push({ skill: s.dirName, hash: s.hash, src: s.source });
-  }
-  if (o.includeActive) {
-    for (const { dir, name } of listSkillDirs(o.codexRoot).skills) {
-      const s = safeLoad(dir);
-      if (!s || !s.modelVisible) continue;
-      if (!byName.has(s.name)) byName.set(s.name, []);
-      byName.get(s.name).push({ skill: `codex:${name}`, hash: s.hash, src: 'codex' });
-    }
   }
   for (const [name, list] of byName) {
     if (list.length > 1 && new Set(list.map((x) => x.hash)).size > 1) {

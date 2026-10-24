@@ -287,9 +287,16 @@ export function isIndexing(projectDir: string): boolean {
  * @param projectDir - Project directory path
  * @returns true if daemon is reachable
  */
-function isDaemonReachable(projectDir: string): boolean {
+/**
+ * STRICT listener probe: is something actually accepting connections on this
+ * project's daemon endpoint? Unlike isDaemonReachable, there is NO live-PID
+ * fallback — a merely-alive process with a dead listener is `false`. This is
+ * the probe zombie detection must use: the reachability check's "process
+ * exists, socket might just be busy → true" heuristic (kept below to prevent
+ * duplicate spawns) is exactly what let zombies pass as reachable.
+ */
+export function isListenerAlive(projectDir: string): boolean {
   const connInfo = getConnectionInfo(projectDir);
-
   if (connInfo.type === 'tcp') {
     // On Windows, use a subprocess to test TCP reachability.
     // Spin-loop with async net.Socket doesn't work (event loop blocked).
@@ -303,6 +310,37 @@ function isDaemonReachable(projectDir: string): boolean {
     } catch {
       return false;
     }
+  }
+  // Unix socket: a ping that fails is a dead listener, full stop.
+  if (!existsSync(connInfo.path!)) return false;
+  return ncPing(connInfo.path!, 1000);
+}
+
+/**
+ * Ping a Unix daemon socket via nc with an argv spawn — NO shell (GAP4-02
+ * posture): interpolating the tmpdir-derived socket path into an execSync
+ * string let a hostile TMPDIR (`$(...)`) execute as the hook user.
+ */
+function ncPing(socketPath: string, timeoutMs: number): boolean {
+  try {
+    const r = spawnSync('nc', ['-U', socketPath], {
+      input: '{"cmd":"ping"}\n',
+      encoding: 'utf-8',
+      timeout: timeoutMs,
+      shell: false,
+      stdio: ['pipe', 'pipe', 'pipe'],
+    });
+    return !r.error && !r.signal && r.status === 0;
+  } catch {
+    return false;
+  }
+}
+
+function isDaemonReachable(projectDir: string): boolean {
+  const connInfo = getConnectionInfo(projectDir);
+
+  if (connInfo.type === 'tcp') {
+    return isListenerAlive(projectDir);
   } else {
     // Unix socket - check file exists AND daemon is actually listening
     if (!existsSync(connInfo.path!)) {
@@ -312,39 +350,26 @@ function isDaemonReachable(projectDir: string): boolean {
     // First check if daemon process is running via PID file
     // This is more reliable than socket ping which can timeout when busy
     if (isDaemonProcessRunning(projectDir)) {
-      // Process exists - socket might just be busy, don't delete it
-      // Try a quick ping but don't delete socket on failure
-      try {
-        execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-          encoding: 'utf-8',
-          timeout: 1000,  // Increased from 500ms
-          stdio: ['pipe', 'pipe', 'pipe'],
-        });
-        return true;
-      } catch {
-        // Ping failed but process exists - daemon is starting or busy
-        // Return true to prevent spawning duplicates
-        return true;
-      }
+      // Process exists - socket might just be busy, don't delete it.
+      // Ping failed but process exists -> daemon is starting or busy;
+      // still return true to prevent spawning duplicates. (Zombie detection
+      // must NOT rely on this function for exactly that reason — it uses
+      // the strict isListenerAlive above.)
+      ncPing(connInfo.path!, 1000);
+      return true;
     }
 
     // No daemon process running - try ping to verify socket isn't stale
-    try {
-      execSync(`echo '{"cmd":"ping"}' | nc -U "${connInfo.path}"`, {
-        encoding: 'utf-8',
-        timeout: 500,
-        stdio: ['pipe', 'pipe', 'pipe'],
-      });
+    if (ncPing(connInfo.path!, 500)) {
       return true;
-    } catch {
-      // Connection failed AND no daemon process - socket is stale, safe to remove
-      try {
-        unlinkSync(connInfo.path!);
-      } catch {
-        // Ignore unlink errors
-      }
-      return false;
     }
+    // Connection failed AND no daemon process - socket is stale, safe to remove
+    try {
+      unlinkSync(connInfo.path!);
+    } catch {
+      // Ignore unlink errors
+    }
+    return false;
   }
 }
 
@@ -360,13 +385,50 @@ export function tryStartDaemon(projectDir: string): boolean {
     // FAST CHECK: Is daemon process running? (checks PID file + kill -0)
     // This is faster and more reliable than socket ping
     if (isDaemonProcessRunning(projectDir)) {
-      return true;  // Process exists, even if socket not ready yet
+      // ZOMBIE DETECTION (remediation §6, 2026-08-30): callers only reach
+      // tryStartDaemon when the daemon was NOT reachable. A live pid with a
+      // dead listener is stale-but-locked — the pid-file lock blocks any
+      // replacement from starting, and returning true here sent callers into
+      // a 31s socket timeout. Verify the listener; if it's dead, surface the
+      // state and give up fast. Side-effect-free by design: no taskkill, no
+      // pid-file mutation — killing a process the harness doesn't own needs
+      // its own decision, and the enforcer's fail-open already removes the
+      // harm (the read proceeds either way).
+      //
+      // MUST be the STRICT probe: isDaemonReachable's Unix branch returns
+      // true for a live PID whose ping fails ("socket might just be busy"),
+      // which is indistinguishable from the zombie this branch exists to
+      // catch — it would return true here and send the caller into a query
+      // timeout (CodeRabbit, PR #30).
+      if (isListenerAlive(projectDir)) {
+        return true;
+      }
+      console.error(
+        '[daemon-client] tldr daemon pid is alive but its socket is unreachable ' +
+        '(zombie: stale-but-locked). Not restarting; run `tldr daemon stop && tldr daemon start` to recover.'
+      );
+      return false;
     }
 
     // SLOW CHECK: Is daemon reachable via socket?
     // Only needed if PID file doesn't exist (first start or cleaned up)
     if (isDaemonReachable(projectDir)) {
       return true;  // Already running, no need to spawn
+    }
+
+    // Escape hatch for callers that must not block on a real daemon spawn.
+    // Deliberately placed AFTER the two fast checks above, so a daemon that is
+    // genuinely running is still reported as available; this only suppresses the
+    // attempt to START one.
+    //
+    // Why it exists: the spawn path below costs ~10.4s when there is nothing to
+    // connect to (`tldr daemon start` at 5s, then up to 10s waiting for
+    // reachability). daemon-client.test.ts hits that path 6 times, so the file
+    // took ~62s and blew the suite's per-file budget -- and because the cost is
+    // inside a SYNCHRONOUS spawnSync, vitest's testTimeout cannot interrupt it,
+    // so the tests "passed" slowly rather than failing visibly.
+    if (process.env.CCV3_DAEMON_NO_AUTOSTART === '1') {
+      return false;
     }
 
     // Try to acquire lock - if another process is starting daemon, wait for it
@@ -534,66 +596,6 @@ export function queryDaemon(query: DaemonQuery, projectDir: string): Promise<Dae
 }
 
 /**
- * Build spawnSync arguments for the synchronous daemon query.
- *
- * SECURITY: this is the heart of the C1 fix. The previous implementation
- * shell-interpolated `JSON.stringify(query)` into `echo '...' | nc ...` (Unix)
- * and into a `powershell -Command "..."` string (Windows). A single quote,
- * backtick, dollar sign, or newline in any field would let an attacker
- * break out of the quoted argument and run arbitrary shell.
- *
- * The fix passes the JSON payload over stdin (`input`) and never embeds it
- * in argv or a shell-interpolated string. The PowerShell script reads the
- * payload via `[Console]::In.ReadToEnd()`, also stdin-fed.
- *
- * Exported for testing — the regression test asserts that `input` matches
- * `JSON.stringify(query)` byte-for-byte and that no argv element contains
- * a substring derived from a query field.
- */
-export function buildQueryDaemonSpawnArgs(
-  query: DaemonQuery,
-  connInfo: ConnectionInfo,
-): { command: string; args: string[]; input: string } {
-  const input = JSON.stringify(query) + '\n';
-
-  if (connInfo.type === 'tcp') {
-    // Windows: PowerShell opens a TCP connection, reads JSON from stdin,
-    // writes it to the socket, and prints the daemon response line.
-    const psScript = `
-$ErrorActionPreference = 'Stop'
-$payload = [Console]::In.ReadToEnd()
-$client = New-Object System.Net.Sockets.TcpClient('${connInfo.host}', ${connInfo.port})
-try {
-  $stream = $client.GetStream()
-  $writer = New-Object System.IO.StreamWriter($stream)
-  $reader = New-Object System.IO.StreamReader($stream)
-  $writer.Write($payload)
-  $writer.Flush()
-  $response = $reader.ReadLine()
-  Write-Output $response
-} finally {
-  $client.Close()
-}
-`.trim();
-
-    return {
-      command: 'powershell.exe',
-      args: ['-NoProfile', '-NonInteractive', '-Command', psScript],
-      input,
-    };
-  }
-
-  // Unix: nc reads stdin and writes it to the Unix socket. spawnSync
-  // passes the socket path as a discrete argv element so it cannot
-  // smuggle in shell metacharacters.
-  return {
-    command: 'nc',
-    args: ['-U', connInfo.path!],
-    input,
-  };
-}
-
-/**
  * Query the daemon synchronously using nc (netcat) or PowerShell (Windows).
  * Fallback for contexts where async is not available.
  *
@@ -601,6 +603,42 @@ try {
  * @param projectDir - Project directory path
  * @returns Daemon response
  */
+export interface DaemonInvocation {
+  file: string;
+  args: string[];
+  stdin: string;
+}
+
+/**
+ * Build the daemon spawn invocation. SECURITY (GAP4-02 / ST-08 cluster): the
+ * model-controlled query (its `pattern` etc.) is delivered via STDIN, never
+ * interpolated into a shell string — so it cannot break out into a shell the
+ * way the prior `execSync(`echo '${'$'}{input}' | nc ...`)` / `powershell
+ * -Command "...${'$'}{input}..."` forms could. Only host/port/path (from the
+ * daemon's own trusted conn file, NOT model data) are interpolated. Consumed by
+ * spawnSync(file, args, {input, shell:false}).
+ */
+export function buildDaemonInvocation(connInfo: ConnectionInfo, input: string): DaemonInvocation {
+  if (connInfo.type === 'tcp') {
+    const psScript = [
+      '$ErrorActionPreference = "Stop"',
+      '$payload = [Console]::In.ReadLine()',
+      `$client = New-Object System.Net.Sockets.TcpClient('${connInfo.host}', ${connInfo.port})`,
+      '$stream = $client.GetStream()',
+      '$writer = New-Object System.IO.StreamWriter($stream)',
+      '$reader = New-Object System.IO.StreamReader($stream)',
+      '$writer.WriteLine($payload)',
+      '$writer.Flush()',
+      '$response = $reader.ReadLine()',
+      '$client.Close()',
+      'Write-Output $response',
+    ].join('; ');
+    return { file: 'powershell', args: ['-NoProfile', '-NonInteractive', '-Command', psScript], stdin: input };
+  }
+  // Unix: nc reads the payload from stdin (was `echo '<input>' | nc`).
+  return { file: 'nc', args: ['-U', connInfo.path || ''], stdin: input };
+}
+
 export function queryDaemonSync(query: DaemonQuery, projectDir: string): DaemonResponse {
   // Check if indexing - return early with indexing flag
   if (isIndexing(projectDir)) {
@@ -622,40 +660,30 @@ export function queryDaemonSync(query: DaemonQuery, projectDir: string): DaemonR
   }
 
   try {
-    // Pipe query JSON over stdin via spawnSync — no shell interpolation, so
-    // any payload (single quotes, backticks, dollar signs, newlines) round
-    // trips intact. See buildQueryDaemonSpawnArgs() for the argv layout.
-    const { command, args, input } = buildQueryDaemonSpawnArgs(query, connInfo);
-    const proc = spawnSync(command, args, {
-      input,
+    const input = JSON.stringify(query);
+    // GAP4-02: argv spawn with the payload on STDIN (no shell). The prior
+    // execSync forms interpolated the model-controlled pattern into a shell
+    // string — a live injection on the daemon-UP path (every intercepted Grep).
+    const inv = buildDaemonInvocation(connInfo, input);
+    const r = spawnSync(inv.file, inv.args, {
+      input: inv.stdin,
       encoding: 'utf-8',
       timeout: QUERY_TIMEOUT,
+      shell: false,
     });
 
-    if (proc.error) {
-      const code = (proc.error as NodeJS.ErrnoException).code;
-      if (code === 'ETIMEDOUT' || (proc.error as any).killed) {
-        return { status: 'error', error: 'timeout' };
-      }
-      if (code === 'ENOENT') {
-        // nc / powershell.exe not on PATH -> treat as unavailable
-        return { status: 'unavailable', error: 'Daemon transport not available' };
-      }
-      return { status: 'error', error: proc.error.message };
+    if (r.error) {
+      const code = (r.error as NodeJS.ErrnoException).code;
+      if (code === 'ETIMEDOUT') return { status: 'error', error: 'timeout' };
+      if (code === 'ENOENT') return { status: 'unavailable', error: 'Daemon transport not available' };
+      return { status: 'error', error: r.error.message };
     }
-    if (proc.signal === 'SIGTERM' || (proc as any).killed) {
-      return { status: 'error', error: 'timeout' };
+    if (r.signal) return { status: 'error', error: 'timeout' }; // killed by timeout
+    const out = (r.stdout || '').trim();
+    if (r.status !== 0 || !out) {
+      return { status: 'unavailable', error: 'Daemon not running' };
     }
-    if (proc.status !== 0) {
-      const stderr = (proc.stderr || '').toString();
-      if (stderr.includes('ECONNREFUSED') || stderr.includes('ENOENT')) {
-        return { status: 'unavailable', error: 'Daemon not running' };
-      }
-      return { status: 'error', error: stderr.trim() || `exit code ${proc.status}` };
-    }
-
-    const result = (proc.stdout || '').toString();
-    return JSON.parse(result.trim());
+    return JSON.parse(out);
   } catch (err: any) {
     if (err.killed) {
       return { status: 'error', error: 'timeout' };
@@ -1038,6 +1066,104 @@ export function trackHookActivitySync(
       { cmd: 'track', hook: hookName, success, metrics },
       projectDir
     );
+  } catch {
+    // Silently ignore errors - stats tracking is best-effort
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Fast reachability probe + shared negative cache (TLDR remediation §1, 2026-08-30)
+//
+// PreToolUse hooks must never pay the tryStartDaemon spawn path (seconds) just
+// to discover the daemon is down — and must NEVER start a daemon. This probe
+// is a raw socket connect with a short timeout, and the unreachable verdict is
+// cached in a tmpdir file so N parallel subagents don't each re-pay the probe
+// (and a zombie daemon can't be stampeded by concurrent attempts).
+// ---------------------------------------------------------------------------
+
+const FAST_PROBE_TIMEOUT_MS = 250;
+const NEG_CACHE_TTL_MS = 10_000;
+
+// Keyed by project (same md5-of-resolved-path hash as getConnectionInfo):
+// each projectDir has its own daemon endpoint, so one project's unreachable
+// verdict must not make another project bypass its healthy daemon.
+function negCachePath(projectDir: string): string {
+  const hash = crypto.createHash('md5').update(resolveProjectDir(projectDir)).digest('hex').substring(0, 8);
+  return join(tmpdir(), `tldr-daemon-unreachable-${hash}.json`);
+}
+
+/** True if a recent probe already found this project's daemon unreachable. */
+export function isDaemonUnreachableCached(projectDir: string): boolean {
+  try {
+    const { ts } = JSON.parse(readFileSync(negCachePath(projectDir), 'utf-8'));
+    return typeof ts === 'number' && Date.now() - ts < NEG_CACHE_TTL_MS;
+  } catch {
+    return false;
+  }
+}
+
+export function cacheDaemonUnreachable(projectDir: string): void {
+  try {
+    writeFileSync(negCachePath(projectDir), JSON.stringify({ ts: Date.now() }));
+  } catch { /* best-effort */ }
+}
+
+/** Probe daemon reachability with a raw socket connect. Never starts anything. */
+export function probeDaemonFast(
+  projectDir: string,
+  timeoutMs: number = FAST_PROBE_TIMEOUT_MS
+): Promise<boolean> {
+  return new Promise((resolveProbe) => {
+    let connInfo: ConnectionInfo;
+    try {
+      connInfo = getConnectionInfo(projectDir);
+    } catch {
+      resolveProbe(false);
+      return;
+    }
+    const sock = new net.Socket();
+    let settled = false;
+    const done = (ok: boolean) => {
+      if (settled) return;
+      settled = true;
+      clearTimeout(timer);
+      sock.destroy();
+      resolveProbe(ok);
+    };
+    const timer = setTimeout(() => done(false), timeoutMs);
+    sock.once('connect', () => done(true));
+    sock.once('error', () => done(false));
+    try {
+      if (connInfo.type === 'tcp') {
+        sock.connect(connInfo.port!, connInfo.host!);
+      } else {
+        sock.connect(connInfo.path!);
+      }
+    } catch {
+      done(false);
+    }
+  });
+}
+
+/**
+ * Best-effort activity tracking that can never pay the daemon-spawn path.
+ * Probe first (with the negative cache); track only when the daemon answers.
+ * Await it — an un-awaited socket either keeps the hook process alive or dies
+ * un-flushed at exit.
+ */
+export async function trackHookActivityFast(
+  hookName: string,
+  projectDir: string,
+  success: boolean = true,
+  metrics: Record<string, number> = {}
+): Promise<void> {
+  try {
+    if (isDaemonUnreachableCached(projectDir)) return;
+    if (!(await probeDaemonFast(projectDir))) {
+      cacheDaemonUnreachable(projectDir);
+      return;
+    }
+    await queryDaemon({ cmd: 'track', hook: hookName, success, metrics }, projectDir);
   } catch {
     // Silently ignore errors - stats tracking is best-effort
   }

@@ -523,7 +523,7 @@ describe('bus arrays stay bounded (review F3)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// coerceBus enforces the array caps on the READ path too (session-3 Codex#5 /
+// coerceBus enforces the array caps on the READ path too (session-3 review#5 /
 // critic F5). The per-write helpers cap their slices, but bumpTurn/setIntent
 // re-serialize the whole bus WITHOUT going through them -- so a file that arrived
 // already bloated (older version, external writer) must be trimmed at coerce time
@@ -644,7 +644,7 @@ describe('current_turn counter (Phase B.4a)', () => {
 });
 
 // ---------------------------------------------------------------------------
-// FINDING 2 (Codex): mutateBus must NOT erase valid state on a transient read
+// FINDING 2 (review): mutateBus must NOT erase valid state on a transient read
 // failure. A genuinely-absent file (ENOENT) -> empty bus -> write rev 1 is fine;
 // but a file that EXISTS yet fails to read (EBUSY/EACCES/EPERM) or fails to
 // parse must NEVER be overwritten with empty-derived state.
@@ -762,7 +762,7 @@ describe('mutateBus -- transient read failure must not erase valid state (findin
 });
 
 // ---------------------------------------------------------------------------
-// FINDING 3 (Codex): path-traversal via busId. busPath/readBus/mutateBus must
+// FINDING 3 (review): path-traversal via busId. busPath/readBus/mutateBus must
 // validate busId against a strict directory-name pattern and assert the resolved
 // path stays under the session-cache root. Invalid ids fail SAFE: readBus ->
 // emptyBus, mutateBus -> no-op, and NOTHING is read or written.

@@ -8,19 +8,9 @@
 
 ## Current Focus
 
-### ▶ NEXT SESSION — PRIORITY 1: `codex-skills-budget` (set by Dave, 2026-09-03)
+### ▶ NEXT SESSION — PRIORITY 1 withdrawn
 
-**Every Codex run on this machine starts with ZERO skill descriptions visible to the model.** It cannot route to a skill at all. Found 2026-09-03 in a `--json` probe stream while investigating something else — nobody was looking for it, and nothing has been actioned.
-
-Every `codex exec` emits one error item:
-
-> `Exceeded skills context budget of 2%. All skill descriptions were removed and 921 additional skills were not included in the model-visible skills list.`
-
-Counted, not inferred: `~/.agents/skills` holds **673** `SKILL.md`, of which **527 (78%) are under `archive/` or `_snapshots/`**. `~/.claude/skills` holds 687; `~/.codex/skills` holds 6. So the bulk of what blows the 2% budget is archived snapshots, not live skills — which also explains the flood of `failed to load skill … missing YAML frontmatter` errors in every run, since those snapshots predate the frontmatter contract.
-
-Two open questions: (1) is the 2% budget configurable in `~/.codex/config.toml`, and (2) should `archive/` and `_snapshots/` be excluded or relocated so the real skills fit. Likely cheaper to move the archives than to raise a budget.
-
-Start from the lane, which carries the full evidence: `node scripts/coordination/lane.mjs next` returns `codex-skills-budget` first (state `ready`, priority 1). Scope: `~/.agents/skills/**` · `~/.codex/config.toml` · `scripts/codex`.
+The `-skills-budget` lane tracked a skill-budget failure in the removed cross-model CLI. That CLI is gone, so the lane is not a live next step. Use `node scripts/coordination/lane.mjs board` for the current queue.
 
 ### ▶ ALSO QUEUED — the CRLF trap (Dave, 2026-09-03)
 
@@ -91,11 +81,9 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - **A — Targeted per-surface Fable injection.** Encode high-leverage Fable frameworks INTO specific agents/skills where a MEASURED gap justifies it (contract-writing → game-plan/workroom/worker agents; verify-by-re-derivation → critic/review-agent/principal-reviewer; risk = cost × lateness → premortem/aegis). NOT always-on — that debate is settled by the `no_lift` data. Depends on `docs/fable-manual/HIGH-LEVERAGE.md`.
 - **B — Per-agent model + effort policy.** Agents carry explicit `model: opus|sonnet`, but effort is ONE global `settings.json effortLevel` applied uniformly. Want an agent → model → effort matrix (mechanical `spark` low-effort; deep `sleuth`/`principal-reviewer` high/xhigh). Scope: audit tiers, determine the Task-spawn mechanism (Workflow `agent({effort})` can tune per-call; Task-spawn can't natively), add a drift-guard. Anchors: `.claude/rules/agent-model-selection.md`, `check-agent-model-drift.mjs`.
 
-## Codex Integration — /codex worker (parallel track)
-- **v0 SHIPPED (2026-07-07):** `/codex` write-capable Codex task worker (ask / implement / resume, on the ChatGPT subscription, no API key). PR #15 (`feature/codex-worker`), commit `12a21dd`. Built from an 8-agent research pass, dogfood-hardened, hooks-collision safety spike RESOLVED.
-- **v1 SHIPPED (2026-07-07):** (A) session-id capture (`thread_id` → concurrency-safe `resume <id>`, live-verified vs `--last`); (B) startup latency via `--ignore-user-config` (~47s→18s, MCP-fails 6→2 — the planned `--profile-v2` overlay was empirically REFUTED); + telemetry one-row-per-turn/enum cleanups. Dogfood-hardened: a cross-model `codex-adversary` pass caught 2 real shell bugs (spaced-path/delimiter parsing + a `"last"` silent-failure), both fixed. Commit `832ce5a`. Evidence: `docs/codex-integration/DESIGN-RESEARCH.md` §11.
-- **v2 SHIPPED + MERGED to `main` (2026-07-07, PR #16, merge commit `2918259`):** approved **lean scope** built + dogfood-hardened. (1) `--complex` opt-in multi_agent (explorer.toml `gpt-5.5` pin gate, mode-scoped ask/implement; live probe: explorer spawned on gpt-5, ZERO gpt-4.1), (2) reactive usage-limit handling (preflight impossible — no quota surface; parser verified on the real error), (3) worktree GC (skip-dirty + exit-code-checked, no recursive delete, 7d default), (4) doc sweep. **Plus a CRITICAL v1 regression fix surfaced by dogfooding:** `--ignore-user-config` silently broke ALL `implement` writes on Windows (`config.toml` carries the sandbox write policy) → now `ask`-ONLY (confirming re-dogfood: implement writes again). Four review passes (Claude audit 8 + codex-adversary 4 + live probe + 2 dogfoods), every finding fixed + verified. Evidence: `DESIGN-RESEARCH.md` §12; CodeRabbit review addressed (PR #16). Enhancement candidates tracked in the v3 line below.
-- **v3 BACKLOG (deferred 2026-07-07 — address later):** none blocking — all are premortem enhancement candidates: `subagents_spawned`/`subagent_models` telemetry (today's `multi_agent` field records fan-out ENABLED, not spawned), version+hash-keyed `--complex` re-verification (guards against a Codex CLI upgrade silently reintroducing the gpt-4.1 fallback), a local burn-rate heuristic before expensive implement/`--complex` runs, split-shell fail-loud for `--complex`, and a keep/resume GC sentinel. Full detail: `docs/codex-integration/DESIGN-RESEARCH.md` §12.
+## Removed cross-model CLI
+
+The worker, the reviewer, and their design notes were deleted in CCV3-2. Git history keeps the old sections.
 
 ## Completed
 - [x] fix(github): plain `git` and bare `gh` now route themselves. ROOT CAUSE: with no `credential."https://github.com".username`, GCM could not choose between two accounts, and a second (`wincred`) helper answered from an ambiguous `git:https://github.com` entry mapping to the WORK account — so every PERSONAL repo silently authenticated as `david-hayes44` and returned "Repository not found" (a 404, not a permissions problem). Fixes: `~/.gitconfig` gains `credential."https://github.com".username = Rev4nchist` + a `url."https://david-hayes44@github.com/fourth/".insteadOf` rewrite; the global `wincred` helper is REMOVED (only the system `manager`/GCM remains). New `scripts/github/gh-shim.ps1` shadows bare `gh` with a directory-routing function, dot-sourced from BOTH PowerShell profiles (`~/Documents/PowerShell/…` created new + `~/Documents/WindowsPowerShell/…`) — EXPLICIT BEATS DIRECTORY (a `GH_CONFIG_DIR` differing from the User-scope default passes through untouched), never throws, works on pwsh 7 and PS 5.1. New `scripts/github/accounts-lib.ps1` holds the shared resolution (`Get-AccountsConfig`, `Expand-HomePath`, `Get-OwnerFromUrl`, `Get-AccountByName`, `Get-AccountNameForOwner`, `Get-AccountNameForPath`, `Resolve-AccountByPath`, `Resolve-AccountByRemote`), dot-sourced by `gh-for.ps1`, `git-for.ps1` and `gh-shim.ps1` — what stays split is WHICH remote to read (gh uses origin + route fallback; git uses a specific remote). New `audit-remotes.ps1` (insteadOf-rewrite coverage) and `sweep-remotes.ps1` (probes every remote read-only with prompts disabled — THE gate). **`gh-for.ps1` was broken in both of its documented forms until this commit**: `[CmdletBinding()]` with `[string]$Path` first made `$Path` positional 0, so `gh-for.ps1 api …` bound `api` to `-Path` and died with "cannot determine an account for 'api'" (a `--` separator does NOT help — `pwsh -File` hands `--` to its own binder); fixed with `[CmdletBinding(PositionalBinding = $false)]`, which `git-for.ps1` had all along — so the 2026-08-05 entry below overstated the prior state of `gh-for.ps1`. MEASURED: sweep 25 FAILURES / 64 remotes → **0 FAILURES / 63 remotes**. `verify-github-accounts.ps1` gained LAYER 5 (21 → 24 checks: bare probe resolves to the DEFAULT account, exactly one credential helper, URL rewrite actually fires against a real repo) and PASSES all 24. `accounts.json` gained per-account `emailAliases` (GitHub noreply addresses accepted when AUDITING; `email` stays canonical-for-WRITING because `apply-commit-identity.ps1` writes it — an alias is NOT a wildcard). `~/fourth-brain-demo` origin removed (404 under both accounts; its 2 local commits intact). Corrections to previously-documented beliefs: `git remote -v` does NOT stay clean under `insteadOf` (it prints the REWRITTEN url; the STORED config is untouched — `git config --get remote.origin.url`); deleting the ambiguous `git:https://github.com` credential does NOT stay done (GCM recreates it on the next successful auth — `credential.<url>.username` is the load-bearing fix, the deletion is hygiene only); a no-username `git credential fill` DOES still return a credential and should (the default account) — the invariant is WHICH account answers; `git-for.ps1`'s empty `-c credential.helper=` token now has no second helper to clear, but STAYS as defence (layer 5 catches a second helper); revoking the "GitHub CLI" OAuth grant breaks `gh` AND plain `git push` together for that account (both held the same `gho_` token) and there is NO reissue button in the GitHub UI — re-run the client login flow (2026-08-11) `65d1444` + `351a377` + `fd9c179` + `3779045`
@@ -140,8 +128,8 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] Merge PR #25 — claude-for-sales SKO package build complete + rep-facing skill-builder (2026-07-13) `7659f1e`
 - [x] docs(rules): fix stale port-table reference in dev-server-cleanup (2026-07-15) `2fb4b2f`
 - [x] feat(init-project): harden skill + canonicalize project registry (2026-07-15) `66713e4`
-- [x] feat(codex): /codex worker v1 — robust resume + --ignore-user-config latency + telemetry cleanups (dogfood-hardened) (2026-07-07) `832ce5a`
-- [x] feat(codex): /codex Codex task worker v0 — ship + dogfood-harden + safety-spike (PR #15) (2026-07-07) `12a21dd`
+- [x] feat: worker version 1 — robust resume + --ignore-user-config latency + telemetry cleanups (dogfood-hardened) (2026-07-07) `832ce5a`
+- [x] feat: task worker version 0 — ship + dogfood-harden + safety-spike (PR #15) (2026-07-07) `12a21dd`
 - [x] docs(self-improvement): 07-01 hooks + 07-02 agents proposals + digest queue (2026-07-03) `7c4c79c`
 - [x] feat(fourthos-weekly): Thu-cadence reschedule + v3.1 render rules (2026-07-02) `6472a4d`
 - [x] feat(ai-report-card): version-control the VP weekly-report pipeline + Week 27 narratives (2026-07-01) `5ce12d6`
@@ -158,7 +146,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] docs(st-05): mark ST-05 shipped + verified; record e2e + import-fix lesson; update plan (2026-06-29) `3fbdf9f`
 - [x] fix(opc): ST-05 daemon recall import -- resolve do_recall in the live script context (2026-06-29) `31ffd8d`
 - [x] feat(opc): ST-05 resident recall daemon -- Python recall op + query_vector seam (2026-06-29) `a9dd226`
-- [x] docs(st-05): fold Codex premortem into design (v2 hardened) + go-decision (2026-06-29) `b67e5c2`
+- [x] docs(st-05): fold the premortem into the design (v2 hardened) + go-decision (2026-06-29) `b67e5c2`
 - [x] docs(st-05): resident recall daemon design proposal + premortem register (2026-06-29) `aa6c982`
 - [x] fix(hooks): destructive-guard round-2 -- fix FPs + close verify-sweep holes (2026-06-29) `3707420`
 - [x] fix(hooks): destructive-guard recurses into wrapper + substitution payloads (Phase 1b) (2026-06-29) `5a9abe5`
@@ -187,7 +175,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] fix(hooks): close ROADMAP cross-project contamination guard — stopword + positive own-plan flip + D2F-03 (QW-03, S0) (2026-06-12) `f7f3eba`
 - [x] fix(hooks): relocate /tmp search-context handshake to os.tmpdir() (QW-02, S0; D2b-05) (2026-06-12) `89c9e5e`
 - [x] fix(security): close store_learning.py shell-injection — execSync->spawnSync argv (QW-01, S0; D5a-01/D2c-04/D2d-06/D3a-01) (2026-06-12) `1788211`
-- [x] review(wf3): Fable-5 deep review COMPLETE — 190 confirmed findings + ratifiable 4-tier backlog + 2 Codex cross-model passes (2026-06-12) `f143e5b`
+- [x] review(wf3): Fable-5 deep review COMPLETE — 190 confirmed findings + ratifiable 4-tier backlog + 2 cross-model review passes (2026-06-12) `f143e5b`
 - [x] review(wf2): 248 findings verified (190 CONFIRM, 48 DOWNGRADE, 10 KILL) (2026-06-11) `c695c63`
 - [x] P1 — Bus-bias hybrid-recall lift: **KEEP ENABLED** — verified warm gate +7.3%/flat-hit (n=13, corpus 584); +33.6%/63->88% retired as a stale snapshot; tune focus-weighting deferred (2026-06-06)
 - [x] fix(memory): stop test suite from spawning real embedding daemons (herd source #2) (2026-06-05) `c1b110d`
@@ -213,8 +201,6 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] feat(ws2): B.3b -- memory-awareness READS the bus + shared bus-focus module (2026-06-03) `0e85d49`
 - [x] feat(ws2): B.3a -- agent-recall-injector READS the context bus (2026-06-03) `8929667`
 - [x] fix(ws2): B.0/B.4/B.4a review hardening -- 5 bus findings + self-regression (2026-06-02) `dd0d24b`
-- [x] fix(codex-adversary): clean findings capture via -o; silence config noise (2026-06-01) `4febb8d`
-- [x] docs(codex): verify CLI repair, reconcile version + auth claims (2026-06-01) `11f99ca`
 - [x] docs(hardening): Phase-3 tail 1/2/3/5 done + 3rd reverse-sync vector fix; item 4 remains (2026-06-01) `cc1ec7f`
 - [x] perf(memory): text-only recall fail-fast (12s->5s) in checkDbMemory (2026-06-01) `28184c3`
 - [x] fix(hooks): deregister broken TLDR warm-cache SessionStart hook (2026-06-01) `a08014a`
@@ -246,7 +232,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] fix(braintrust): await remaining 2 score emits so subprocess exit doesn't kill POSTs (2026-05-23) `faa99da`
 - [x] fix(braintrust): await skill_trigger_accuracy emit so process.exit doesn't kill POST (2026-05-23) `7edea3c`
 - [x] Phase 3b Pickup — Verify, Harden, Then Autoevals (2026-05-22)
-- [x] Deeper Claude+Codex Adversarial Collaboration (Repair → Envoy Pilot) (2026-05-22)
+- [x] Deeper Claude adversarial collaboration work (Repair → Envoy Pilot) (2026-05-22)
 - [x] Braintrust Review & Scoring Strategy for CCv3 (2026-05-21)
 - [x] fix(memory): confidence-firming pass — sync project_memory, backfill 244 rows, tighten L0 gate (2026-05-21) `48a2157`
 - [x] docs(memory): add animated HTML visualization of the memory system (2026-05-21) `4379630`
@@ -326,7 +312,6 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [x] RAM Recovery Plan — Minimal-Disruption Actions (2026-04-16)
 - [x] Add GTM status presentations: risk report Apr 16 (2026-04-16) `e4d65e9`
 - [x] System Resource Recovery Plan (2026-04-15)
-- [x] Integrate `openai/codex-plugin-cc` into CCv3 (2026-04-15)
 - [x] Add CLAUDE.md with mandatory hub-update instructions for new decks (2026-04-11) `1ebae90`
 - [x] Remove enablement flag from Pages workflow (2026-04-11) `cc7d52a`
 - [x] Consolidate 6 decks into grouped landing page (2026-04-11) `3b64def`
@@ -341,7 +326,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 ## Planned
 - [ ] **Coordination repair — ST-02 identity + claim hardening (THE GATE for multi-session work)** (high priority). Verified 2026-07-26: `sessions` = 1,476 `s-*` + 894 uuid rows (two per real session); `file_claims` = 8,170 rows, **0 owned by a live session**, 3,168 orphaned, 5,002 stale-owner. Cause: `SessionStart` has no matcher so it fires for subagents; `session-register.ts:34` discards the payload `session_id` and stomps the machine-global `~/.claude/.coordination-session-id`, while `heartbeat.ts:62` uses the payload id. Fix = payload-first identity + per-terminal cache + `CC_TERMINAL_ID` sibling rule **in one commit** (splitting them makes subagent fan-out hard-block itself). Then `file_claims` lease/TTL/fence + the G5 migration (`DELETE … WHERE session_id LIKE 's-%'` wipes all 8,170 — `pg_dump` first). Plan: `~/.claude/plans/we-have-been-working-jolly-token.md` (medium priority)
 - [ ] **Agentic OS — local-first Mission Control (Slice 1 of 4)** (high priority). **Supersedes this entry's earlier "psql for two weeks before any UI" scoping** — the plan approved 2026-07-25 (`~/.claude/plans/i-am-ready-to-noble-wilkinson.md`) deliberately inverts the documented phase order and makes the read-first dashboard Slice 1, not Phase 4. Localhost, single user, **writes nothing**: no auth/OIDC/RLS/`workspace_id`. Hybrid interface — fleet grid is home, click a project for its Canvas. Reads `agentic_os.*` joined to read-only `public.sessions`/`file_claims`/`archival_memory`. Port 3010 (registered). **Two plans are on disk and only this one is in force** — `docs/architecture/agentic-os/` (2026-07-18) describes a governed multi-tenant service and is the destination, not the spec; the five ADRs in `docs/architecture/agentic-os/adr/` record every departure. Lanes: `aos-scaffold` (prerequisite) → `aos-project-identity` (**the gate** — 111 raw `sessions.project` values hand-seeded into `project_alias`; get it wrong and Slice 1 is actively misleading, which is worse than shipping nothing) → `aos-fleet-grid`, `aos-project-canvas`. Counting hazards that must reach the UI: only **887 of 2,352** `sessions` rows are real (1,465 are `s-*` heartbeats), and only **342 of 494** transcripts join. Never `drizzle-kit push` (shared DB, 40 `public` tables belonging to 3 other apps); `schemaFilter: ['agentic_os']` + private `agentic_os.__migrations` journal, both already in `drizzle.config.ts`. (medium priority)
-- [ ] **Harness supply-chain integrity (R1/R2)** (high priority). Verified live: `scripts/sync-to-active.sh:283,443` run `jq '.mcpServers = $mcp'` — a wholesale **replace** of the global `~/.claude/settings.json` MCP server set from a repo-tracked file, unvalidated, on post-commit. With `origin` = third-party upstream and `git pull` in the documented workflow this is the CVE-2025-59536 primitive. **The allowlist/hash manifest must be anchored OUTSIDE the synced repo** (Codex premortem: a manifest inside the repo is shipped by the same malicious commit and passes itself). Also: 75 active hook registrations vs 59 in repo — 16 execute undescribed by VCS; `dist/*.mjs` verified by file *count*, never hash. Source: `docs/self-improvement/proposals/2026-07-26-hooks.md` (medium priority)
+- [ ] **Harness supply-chain integrity (R1/R2)** (high priority). Verified live: `scripts/sync-to-active.sh:283,443` run `jq '.mcpServers = $mcp'` — a wholesale **replace** of the global `~/.claude/settings.json` MCP server set from a repo-tracked file, unvalidated, on post-commit. With `origin` = third-party upstream and `git pull` in the documented workflow this is the CVE-2025-59536 primitive. **The allowlist/hash manifest must be anchored OUTSIDE the synced repo** (a manifest inside the repo is shipped with the tree by the same malicious commit and passes itself). Also: 75 active hook registrations vs 59 in repo — 16 execute undescribed by VCS; `dist/*.mjs` verified by file *count*, never hash. Source: `docs/self-improvement/proposals/2026-07-26-hooks.md` (medium priority)
 - [ ] **Root-cause the headless `claude -p` hang** (high priority). 3 of 13 scheduled pipelines (Dashboard-Sync, Project-Cards, Self-Improvement-Research) exit `0xC000013A`. Identical signature: the always-emit registry row lands, then the process dies at the `claude -p` step, leaving every row `Failed`. The always-emit contract works; what it records is genuinely broken. Handoff: `thoughts/shared/handoffs/reporting-watchdog/2026-07-25-always-emit-shipped-verification-pending.md` (medium priority)
 - [ ] CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm (high priority)
 - [ ] Plan — Make the Reports Hub "Report pages" table trustworthy + root-cause the live failures (high priority)
@@ -356,14 +341,13 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 - [ ] Fleet-review residuals (post-PR #17): DEL-11 curation, Pocock 7-point deep-review pass, downgrade canary, `updatedInput` spike (low priority)
 - [ ] CCv3 system-update backlog remainder — Tier 2 structural arcs, Tier 2b multi-session coordination, Tier 3 strategic programs, 12 deletions: tracked in `docs/system-update/BACKLOG.md` (medium priority)
 - [ ] WS-2 remainder: Phase B/C RETIRED 2026-07-24 (Serena/codegraph/facade cut, `cb64d45`) → remaining scope only: D memory bridge (needs GIN index) → E observability (medium priority)
-- [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; Codex flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s + warm recall (medium priority)
+- [ ] P2 — Verify embedding daemon survives a REAL reboot (scheduled task only ad-hoc-verified; a review flagged job-object detach). After next restart confirm `~/.claude/run/ccv3-embedding.json` appears <60s + warm recall (medium priority)
 - [ ] P2 — Ops: full parallel `vitest run` hangs on a pre-existing Windows daemon/socket suite — add a hard per-test timeout (medium priority)
 - [ ] P3 — Ops: async post-commit forward-sync race leaves active hook dist stale — hash-verify + `cp` after every hook commit until root-fixed (low priority)
 
 ## Notes
 **CCv3 Hardening — durable pointers (preserved across planning per `bf91c19`):**
 - Full handoff for the implementing session: `docs/ccv3-hardening-handoff-2026-05-30.md`
-- Lean audit: `docs/ccv3-lean-audit-2026-05-30.md` · v3 design: `~/.claude/plans/we-have-recently-done-refactored-storm.md` · Codex raw: `.claude/cache/agents/codex-adversary/latest-output.md`
 - **The 6 hard gates (do not violate):** G1 sync-fix-structural-before-WS2-hooks · G2 finish-UPS-prune-before-Phase-A · G3 injection-fix-before-agent-recall · G4 never-parallel-edit-the-same-memory-files (the May-2026 regression pattern) · G5 session-id-consolidation-needs-file_claims-migration · G6 skill-archive-cross-check-vs-Phase-B.5.
 - Data note: use `count(*)` not `pg_stat` for usage calls (the latter mis-reported memory/PageIndex as empty). Live counts: archival_memory 569, pageindex_nodes 2418, file_claims 6720, sessions 1117.
 
@@ -450,7 +434,7 @@ Not started; the organized parking spot so they aren't lost. Both build on the F
 ### 2026-07-21: CCv3 Harness Hardening — Fix the Git-Bash Fork Storm + tldr daemon-warm
 **Key Decisions:**
 - Issue 1 has two compounding layers: *
-- Issue 2: the **Codex* harness SessionStart hook
+- Issue 2: the removed harness SessionStart hook
 - Reuse the existing, tested converter:
 - iolo stop-and-test: (user's chosen first AV move). Stop `ioloTrayApp` and the iolo
 - Lever A dispatcher: (81 hooks → ~9 in-process; permissionDecision-merge risk) and

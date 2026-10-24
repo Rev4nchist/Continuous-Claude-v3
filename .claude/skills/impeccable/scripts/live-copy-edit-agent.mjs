@@ -4,7 +4,7 @@
  *
  * The browser Save path stages edits. Apply copy edits calls
  * live-commit-manual-edits.mjs, which builds a page-scoped batch and uses this
- * helper to ask Codex/Claude to edit true source files.
+ * helper to ask the Claude agent to edit true source files.
  */
 
 import { spawn, spawnSync } from 'node:child_process';
@@ -118,9 +118,7 @@ export async function runCopyEditBatchAgent(batch, opts = {}) {
   const resultPath = path.join(outDir, 'result.json');
   const logPath = path.join(outDir, 'agent.log');
 
-  if (provider === 'codex') {
-    await runCodex(prompt, { cwd, env, resultPath, logPath, timeoutMs: opts.timeoutMs });
-  } else if (provider === 'claude') {
+  if (provider === 'claude') {
     await runClaude(prompt, { cwd, env, resultPath, logPath, timeoutMs: opts.timeoutMs });
   } else {
     throw new Error(`Unsupported live copy-edit AI runner: ${provider}`);
@@ -436,29 +434,11 @@ export function chooseCopyEditAgent({
   if (mode === '0' || mode === 'false' || mode === 'off' || mode === 'none') return null;
   if (mode === 'mock') return 'mock';
   if (mode === 'chat') return chatAvailable() ? 'chat' : null;
-  if (mode === 'codex') return commandExists('codex') ? 'codex' : null;
   if (mode === 'claude') return commandExists('claude') ? 'claude' : null;
   if (mode !== 'auto') return null;
-  if (authCheck('codex')) return 'codex';
   if (authCheck('claude')) return 'claude';
   if (chatAvailable()) return 'chat';
   return null;
-}
-
-function runCodex(prompt, { cwd, env, resultPath, logPath, timeoutMs = DEFAULT_TIMEOUT_MS }) {
-  const args = [
-    'exec',
-    '--cd', cwd,
-    '--dangerously-bypass-approvals-and-sandbox',
-    '--ephemeral',
-    '--output-last-message', resultPath,
-    '-c', `model_reasoning_effort="${env.IMPECCABLE_LIVE_COPY_AGENT_EFFORT || 'low'}"`,
-  ];
-  if (env.IMPECCABLE_LIVE_COPY_AGENT_MODEL) {
-    args.push('--model', env.IMPECCABLE_LIVE_COPY_AGENT_MODEL);
-  }
-  args.push('-');
-  return runAgentProcess('codex', args, prompt, { cwd, env, logPath, timeoutMs });
 }
 
 function runClaude(prompt, { cwd, env, resultPath, logPath, timeoutMs = DEFAULT_TIMEOUT_MS }) {
@@ -555,7 +535,7 @@ function commandExists(command) {
 
 /**
  * Build a diagnostic error message explaining why no AI runner is usable.
- * Splits the previous "Install/authenticate Codex or Claude" lump into a
+ * Explains which Claude or chat path is missing.
  * per-provider summary so the user knows exactly which step unblocks them.
  */
 export function describeNoProviderError({
@@ -574,11 +554,6 @@ export function describeNoProviderError({
     }
   } else {
     lines.push('  • Claude CLI: not installed.');
-  }
-  if (exists('codex')) {
-    lines.push('  • Codex CLI: installed. If Apply still fails, run `codex login` to authenticate.');
-  } else {
-    lines.push('  • Codex CLI: not installed.');
   }
   if (chatAvailable()) {
     lines.push('  • Chat: an Impeccable live session is polling but selection chose another provider — unexpected; please report.');
@@ -638,10 +613,7 @@ export function extractRunnerErrorMessage(output, command) {
  * For claude we run the same `--print --output-format json` invocation we use
  * for real batches; an unauthenticated CLI fails in ~36 ms with
  * { is_error: true, result: "Not logged in · ..." }.
- * For codex we only confirm the binary exists — `codex exec` always burns a
- * real LLM call, so checking auth without spending tokens is not possible
- * here; if the user has codex installed but unauthed, the runtime error from
- * runCodex (now improved by extractRunnerErrorMessage) will surface clearly.
+ * Claude is probed with a short print. Other commands are not treated as authed.
  */
 const COMMAND_AUTH_CACHE = new Map();
 
@@ -654,7 +626,6 @@ function commandAuthed(command) {
 
 function computeCommandAuthed(command) {
   if (!commandExists(command)) return false;
-  if (command === 'codex') return true;
   if (command !== 'claude') return false;
   let result;
   try {

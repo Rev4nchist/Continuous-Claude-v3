@@ -27,18 +27,19 @@
  *   node scripts/coordination/lease-probe.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { canonProject, repoPath } from './canon-home.mjs';
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
 
-const REPO = join(homedir(), 'continuous-claude');
-const CANON = 'c:/users/ada.lovelace/continuous-claude';
+const REPO = repoPath();
+const CANON = canonProject();
+console.log(`canonical project: ${CANON}`);
 
 // One harness-class path and one ordinary path, so the class distinction is
 // exercised rather than assumed. Neither file exists; the hook never opens it.
-const HARNESS_FILE = 'C:\\Users\\ada.lovelace\\continuous-claude\\.claude\\hooks\\src\\__step5probe__.ts';
-const PLAIN_FILE = 'C:\\Users\\ada.lovelace\\continuous-claude\\docs\\__step5probe__.md';
+const HARNESS_FILE = join(REPO, '.claude', 'hooks', 'src', '__step5probe__.ts');
+const PLAIN_FILE = join(REPO, 'docs', '__step5probe__.md');
 
 const HOLDER = 'step5-holder-0000-0000-000000000000';
 const INTRUDER = 'step5-intruder-0000-0000-00000000000';

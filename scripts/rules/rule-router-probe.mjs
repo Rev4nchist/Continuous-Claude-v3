@@ -57,21 +57,21 @@ const ps = (session, command) => ({ session_id: session, tool_name: 'PowerShell'
 
 // [name, payload, expected kind, rule ids that must appear, ids that must NOT appear, rulesDir]
 const CASES = [
-  ['codex exec blocks first time', bash('s1', 'codex exec --sandbox read-only - < p.txt'), 'deny', ['codex'], ['pr-and-commit-style']],
-  ['same rule, same session: passes', bash('s1', 'codex exec --sandbox read-only - < p.txt'), 'none', [], []],
-  ['env -u prefix still matches', bash('s2', 'env -u OPENAI_API_KEY -u CODEX_API_KEY codex exec -'), 'deny', ['codex'], []],
-  ['quoted "codex" in a commit message is not codex', bash('s3', 'git commit -m "hand this to codex exec later"'), 'deny', ['pr-and-commit-style'], ['codex']],
-  ['a ; inside a quoted message does not start a codex segment', bash('s3b', 'git commit -m "step 1; codex exec later"'), 'deny', ['pr-and-commit-style'], ['codex']],
-  ['codex as an argument is not a command', bash('s4', 'ls codex/ && cat notes/codex.md'), 'none', [], []],
-  ['echo of a codex command does not fire', bash('s4', 'echo "codex exec"'), 'none', [], []],
+  ['grok exec blocks first time', bash('s1', 'grok exec --sandbox read-only - < p.txt'), 'deny', ['grok'], ['pr-and-commit-style']],
+  ['same rule, same session: passes', bash('s1', 'grok exec --sandbox read-only - < p.txt'), 'none', [], []],
+  ['env -u prefix still matches', bash('s2', 'env -u OPENAI_API_KEY -u GROK_API_KEY grok exec -'), 'deny', ['grok'], []],
+  ['quoted "grok" in a commit message is not grok', bash('s3', 'git commit -m "hand this to grok exec later"'), 'deny', ['pr-and-commit-style'], ['grok']],
+  ['a ; inside a quoted message does not start a grok segment', bash('s3b', 'git commit -m "step 1; grok exec later"'), 'deny', ['pr-and-commit-style'], ['grok']],
+  ['grok as an argument is not a command', bash('s4', 'ls grok/ && cat notes/grok.md'), 'none', [], []],
+  ['echo of a grok command does not fire', bash('s4', 'echo "grok exec"'), 'none', [], []],
   ['commit through git-safe.ps1 with quoted paths', ps('s5', 'pwsh -File "C:\\r\\scripts\\git-safe.ps1" -C C:\\r -c "core.hooksPath=x" commit -F "C:\\m.txt"'), 'deny', ['pr-and-commit-style'], []],
   ['git -C repo commit', bash('s6', 'git -C /c/repo commit -F msg.txt'), 'deny', ['pr-and-commit-style'], []],
   ['PR create via REST: block for style, plus the review loop', bash('s7', 'gh api repos/o/r/pulls -X POST -f title=x -f head=b'), 'deny', ['pr-and-commit-style', 'pr-review-loop'], []],
   ['REST merge injects the merge workflow', bash('s8', 'gh api repos/o/r/pulls/57/merge -X PUT -f merge_method=merge'), 'inject', ['git-merge'], ['pr-and-commit-style']],
   ['land-pr injects merge + review loop rules', ps('s9', 'pwsh -File scripts/github/land-pr.ps1 -Pr 57'), 'inject', ['git-merge', 'pr-review-loop'], []],
-  ['codex-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'codex-adversary' } }, 'deny', ['codex'], []],
+  ['grok-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'grok-adversary' } }, 'deny', ['grok'], []],
   ['Task tool name works too', { session_id: 's10b', tool_name: 'Task', tool_input: { subagent_type: 'grok-worker' } }, 'deny', ['grok'], []],
-  ['a gate rule (codex) still blocks a subagent after the session had the block', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
+  ['a gate rule (grok) still blocks a subagent after the session had the block', bash('s10', 'grok exec -', { agent_id: 'sub-1' }), 'deny', ['grok'], []],
   ['an ordinary block rule (commit style) blocks the main thread once', bash('s10d', 'git -C /c/repo commit -F msg.txt'), 'deny', ['pr-and-commit-style'], []],
   ['...then a subagent of that session gets it injected, not blocked again', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-1' }), 'inject', ['pr-and-commit-style'], []],
   ['...and the next subagent gets the inject too', bash('s10d', 'git -C /c/repo commit -F msg.txt', { agent_id: 'sub-2' }), 'inject', ['pr-and-commit-style'], []],
@@ -79,11 +79,11 @@ const CASES = [
   ['...a later subagent running the paid call is blocked too, not injected', bash('s10e', 'node scripts/kie.mjs still --prompt hero', { agent_id: 'sub-1' }), 'deny', ['kie-spend'], []],
   ['CMA gate: main thread blocked first', bash('s10f', 'ant sessions list'), 'deny', ['cma'], []],
   ['...a later subagent running a CMA call is blocked too, not injected', bash('s10f', 'ant sessions list', { agent_id: 'sub-1' }), 'deny', ['cma'], []],
-  ['...and sees it once, not on every call', bash('s10', 'codex exec -', { agent_id: 'sub-1' }), 'none', [], []],
-  ['a subagent that is first in its session still takes the block', bash('s10c', 'codex exec -', { agent_id: 'sub-1' }), 'deny', ['codex'], []],
-  ['...the next subagent of that session is blocked too (gate rule)', bash('s10c', 'codex exec -', { agent_id: 'sub-2' }), 'deny', ['codex'], []],
-  ['...and the main thread of that session is still blocked once', bash('s10c', 'codex exec -'), 'deny', ['codex'], []],
-  ['any Agent spawn injects the delegation rule once', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'scout' } }, 'inject', ['delegation'], ['codex']],
+  ['...and sees it once, not on every call', bash('s10', 'grok exec -', { agent_id: 'sub-1' }), 'none', [], []],
+  ['a subagent that is first in its session still takes the block', bash('s10c', 'grok exec -', { agent_id: 'sub-1' }), 'deny', ['grok'], []],
+  ['...the next subagent of that session is blocked too (gate rule)', bash('s10c', 'grok exec -', { agent_id: 'sub-2' }), 'deny', ['grok'], []],
+  ['...and the main thread of that session is still blocked once', bash('s10c', 'grok exec -'), 'deny', ['grok'], []],
+  ['any Agent spawn injects the delegation rule once', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'scout' } }, 'inject', ['delegation'], ['grok']],
   ['...and not again in the same session', { session_id: 's36', tool_name: 'Agent', tool_input: { subagent_type: 'kraken' } }, 'none', [], []],
   ['harness-update skill injects', { session_id: 's11', tool_name: 'Skill', tool_input: { skill: 'harness-update' } }, 'inject', ['harness-update'], []],
   ['Neon MCP tool injects neonctl rule', { session_id: 's12', tool_name: 'mcp__Neon__delete_branch', tool_input: {} }, 'inject', ['neonctl'], []],
@@ -91,8 +91,8 @@ const CASES = [
   ['headless claude -p injects', bash('s14', 'claude -p "hi" --output-format json'), 'inject', ['headless-claude'], []],
   ['CMA API URL blocks', bash('s15', 'curl -s https://api.anthropic.com/v1/sessions -H "x"'), 'deny', ['cma'], []],
   ['CMA call with a key in its header blocks (log checked below)', bash('s15b', 'curl -s -H x-api-key:SECRET-PROBE-123 https://api.anthropic.com/v1/sessions'), 'deny', ['cma'], []],
-  ['a rule file that cannot be read: fail open', bash('s18', 'codex exec -'), 'none', [], [], brokenDir],
-  ['...and the claim is released, so the rule still shows later', bash('s18', 'codex exec -'), 'deny', ['codex'], []],
+  ['a rule file that cannot be read: fail open', bash('s18', 'grok exec -'), 'none', [], [], brokenDir],
+  ['...and the claim is released, so the rule still shows later', bash('s18', 'grok exec -'), 'deny', ['grok'], []],
   ['design skill injects design-work', { session_id: 's20', tool_name: 'Skill', tool_input: { skill: 'frontend-design:frontend-design' } }, 'inject', ['design'], ['kie-spend']],
   ['paid kie.ai still blocks', bash('s20', 'node "C:/x/scroll-craft/scripts/kie.mjs" still --prompt hero'), 'deny', ['kie-spend'], []],
   ['an echo of a kie command does not claim the spend rule', bash('s25', 'echo "kie.mjs still"'), 'none', [], []],
@@ -112,17 +112,17 @@ const CASES = [
   ['psql with a credential in its URL injects (log checked below)', bash('s37-full-session-id', 'psql postgresql://claude:PWPROBE@localhost:5432/db -c "select 1"'), 'inject', ['cross-terminal-db'], []],
   // Re-arm (2026-10-03): /compact drops the rule texts from context, so SessionStart with source
   // compact or clear must let the main agent's rules fire again. Subagents and other sessions keep theirs.
-  ['re-arm: codex blocks in session r1', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
-  ['re-arm: a subagent of r1 is blocked too (gate rule)', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'deny', ['codex'], []],
-  ['re-arm: codex blocks in session r2', bash('r2', 'codex exec -'), 'deny', ['codex'], []],
+  ['re-arm: grok blocks in session r1', bash('r1', 'grok exec -'), 'deny', ['grok'], []],
+  ['re-arm: a subagent of r1 is blocked too (gate rule)', bash('r1', 'grok exec -', { agent_id: 'sub-r1' }), 'deny', ['grok'], []],
+  ['re-arm: grok blocks in session r2', bash('r2', 'grok exec -'), 'deny', ['grok'], []],
   ['re-arm: SessionStart startup emits nothing', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'startup' }, 'none', [], []],
-  ['...and does not re-arm', bash('r1', 'codex exec -'), 'none', [], []],
+  ['...and does not re-arm', bash('r1', 'grok exec -'), 'none', [], []],
   ['re-arm: SessionStart compact emits nothing', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'compact' }, 'none', [], []],
-  ['...then codex blocks again after /compact', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
-  ['...but the subagent of r1 keeps its markers', bash('r1', 'codex exec -', { agent_id: 'sub-r1' }), 'none', [], []],
-  ['...and session r2 keeps its markers', bash('r2', 'codex exec -'), 'none', [], []],
+  ['...then grok blocks again after /compact', bash('r1', 'grok exec -'), 'deny', ['grok'], []],
+  ['...but the subagent of r1 keeps its markers', bash('r1', 'grok exec -', { agent_id: 'sub-r1' }), 'none', [], []],
+  ['...and session r2 keeps its markers', bash('r2', 'grok exec -'), 'none', [], []],
   ['re-arm: SessionStart clear re-arms too', { session_id: 'r1', hook_event_name: 'SessionStart', source: 'clear' }, 'none', [], []],
-  ['...then codex blocks again after /clear', bash('r1', 'codex exec -'), 'deny', ['codex'], []],
+  ['...then grok blocks again after /clear', bash('r1', 'grok exec -'), 'deny', ['grok'], []],
   ['free kie.ai probe does not block', bash('s21', 'node scripts/kie.mjs probe'), 'none', [], []],
   ['a claude-in-chrome tool blocks (deprecated)', { session_id: 's22', tool_name: 'mcp__claude-in-chrome__navigate', tool_input: {} }, 'deny', ['browser-deprecated'], ['browser']],
   ['Playwright MCP injects the browser rule', { session_id: 's23', tool_name: 'mcp__playwright__browser_navigate', tool_input: {} }, 'inject', ['browser'], []],
@@ -189,7 +189,7 @@ const CASES = [
   ['python -u on deploy.py injects', bash('s92', 'python -u docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
   ['Python in capitals on deploy.py injects', ps('s93', 'Python docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
-  ['missing manifest fails open', bash('s17', 'codex exec -'), 'none', [], [], join(state, 'no-such-dir')],
+  ['missing manifest fails open', bash('s17', 'grok exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];
 
 const results = CASES.map(([name, payload, kind, must, mustNot, dir]) => {
@@ -201,7 +201,7 @@ const results = CASES.map(([name, payload, kind, must, mustNot, dir]) => {
 });
 
 // Parallel tool calls: 6 processes race for the same unseen rule; exactly one may emit it.
-const race = await fireParallel(bash('race', 'codex exec -'), 6);
+const race = await fireParallel(bash('race', 'grok exec -'), 6);
 const raceDenies = race.filter((r) => r.kind === 'deny').length;
 results.push({ name: '6 parallel calls for one unseen rule: exactly 1 deny', ok: raceDenies === 1, expected: '1 deny', got: `${raceDenies} deny`, ids: '' });
 // The fire log must never hold the raw command (it can carry a credential).

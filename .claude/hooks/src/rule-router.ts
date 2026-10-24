@@ -10,12 +10,12 @@
  * Per matched rule, once per session (and per subagent):
  *   - mode 'deny-first': refuse the call, with the rule text as the reason. The model re-plans
  *     with the rule in view and re-issues the call if it still fits. Used for rules that must
- *     change the DECISION (confirm-first Codex/Grok/CMA runs, commit and PR text), because
+ *     change the DECISION (confirm-first runs of Grok and of CMA, commit and PR text), because
  *     context injected at PreToolUse arrives after the command was already chosen.
  *     The block happens once per SESSION. A subagent is a fresh context and still needs the rule
  *     text, but once the session has had the block, a subagent gets the rule as additionalContext
  *     instead of a second block (about 302 of 339 denies were such repeats). The main thread
- *     always keeps its own block-once. A gate rule (manifest `"subagent": "block"`: codex, grok, cma,
+ *     always keeps its own block-once. A gate rule (manifest `"subagent": "block"`: the grok gate and the cma gate,
  *     kie-spend, browser-deprecated) is exempt: each fresh subagent is blocked once for it.
  *   - mode 'inject': add the rule text as additionalContext and let the call run.
  *

@@ -45,7 +45,7 @@ describe('isFresh', () => {
   it('treats a FAR-future turn_added as stale (poisoned / clock-skew bound)', () => {
     expect(isFresh(5, 100)).toBe(false); // age -95 -> rejected
   });
-  it('treats a MISSING turn_added as stale (Codex#2)', () => {
+  it('treats a MISSING turn_added as stale (review#2)', () => {
     expect(isFresh(2, undefined)).toBe(false);
   });
   it('treats a non-finite turn_added as stale', () => {
@@ -104,7 +104,7 @@ describe('extractBusFocus', () => {
     expect(terms.length).toBe(MAX_FOCUS_TERMS);
   });
 
-  it('strips control chars (incl. NUL) from a term (Codex#1)', () => {
+  it('strips control chars (incl. NUL) from a term (review#1)', () => {
     const NUL = String.fromCharCode(0);
     const bus = busWith({ current_turn: 1, focus: [focusSym(`a${NUL}b`, 1)] });
     const { terms } = extractBusFocus(bus);
@@ -119,7 +119,7 @@ describe('extractBusFocus', () => {
     expect(terms.join('')).not.toMatch(/[|:*&!()'"]/);
   });
 
-  it('strips Unicode bidi / zero-width / format chars from a term (premortem Codex#3)', () => {
+  it('strips Unicode bidi / zero-width / format chars from a term (premortem review#3)', () => {
     const RLO = String.fromCharCode(0x202e); // right-to-left override (bidi)
     const ZWSP = String.fromCharCode(0x200b); // zero-width space
     const bus = busWith({ current_turn: 1, focus: [focusSym(`a${RLO}b${ZWSP}c`, 1)] });
@@ -141,7 +141,7 @@ describe('extractBusFocus', () => {
     expect(terms).toContain('$scope_v2.helper-fn');
   });
 
-  it('treats a focus symbol with missing turn_added as stale (Codex#2)', () => {
+  it('treats a focus symbol with missing turn_added as stale (review#2)', () => {
     const bus = busWith({ current_turn: 2, focus: [focusSym('noTurn', undefined)] });
     const { terms, staleSymbolsCount } = extractBusFocus(bus);
     expect(terms).not.toContain('noTurn');

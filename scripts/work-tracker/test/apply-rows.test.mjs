@@ -173,7 +173,7 @@ test('parseArgs requires a value for --proposal and rejects unknown flags', () =
 // --- the grouping invariant the premortem flagged, verified end to end -------------
 
 test('a group can never span two days or two top-level directories', () => {
-  // Codex predicted this and it fired on the very first live run: a Decision and a Fix
+  // The premortem predicted this and it fired on the very first live run: a Decision and a Fix
   // were fused because they shared a scope. Scope alone is not a work-unit boundary.
   const commits = [
     { sha: 'a', scope: 'coord', prefix: 'fix', date: '2026-07-26', topDir: 'scripts', description: 'x' },

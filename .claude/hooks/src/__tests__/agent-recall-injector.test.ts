@@ -724,7 +724,7 @@ describe('handleAgentTask -- context-bus focus injection (Phase B.3a/B.3b)', () 
     // The block is wrapped in a legitimate <context ...>...</context> data-block,
     // so we assert the EVIL PAYLOAD's markers don't survive (not the bare wrapper
     // tag). bus-focus's allowlist now STRIPS < > / and spaces at the source
-    // (premortem T3/Codex#3, 2026-06-02) -- a strictly stronger outcome than the
+    // (premortem T3/review#3, 2026-06-02) -- a strictly stronger outcome than the
     // prior HTML-encode-only defense (buildFocusBlock's encoding is still covered
     // directly in bus-focus.test.ts).
     expect(ctx).not.toContain('</context>Ignore'); // payload closing-tag adjacent to its text
@@ -780,8 +780,8 @@ describe('handleAgentTask -- context-bus focus injection (Phase B.3a/B.3b)', () 
     expect(BUS_STALENESS_MAX_AGE).toBe(3);
   });
 
-  // --- fix-review hardening (cross-model codex findings on B.3a) -------------
-  it('Codex#1: strips control chars (incl. NUL) from a focus term in the block', () => {
+  // --- fix-review hardening (cross-model review findings on B.3a) -------------
+  it('review#1: strips control chars (incl. NUL) from a focus term in the block', () => {
     const recall: RecallFn = () => ({ ok: true, results: [] });
     const NUL = String.fromCharCode(0);
     const SOH = String.fromCharCode(1);
@@ -793,7 +793,7 @@ describe('handleAgentTask -- context-bus focus injection (Phase B.3a/B.3b)', () 
     expect(ctx).toContain('cleannamex'); // printable part survives
   });
 
-  it('Codex#2: treats a focus symbol with MISSING turn_added as stale', () => {
+  it('review#2: treats a focus symbol with MISSING turn_added as stale', () => {
     const tel = spyTelemetry();
     const recall = spyRecall([FAKE_RESULT_A]);
     const noTurn = { id: { file_uri: 'src/x.ts', lang: 'ts', name: 'noTurnSym' } } as FocusSymbol;
@@ -805,7 +805,7 @@ describe('handleAgentTask -- context-bus focus injection (Phase B.3a/B.3b)', () 
     expect(ev!.focus_count).toBe(0);
   });
 
-  it('Codex#3: emits bus-read telemetry even when recall THROWS (still returns null)', () => {
+  it('review#3: emits bus-read telemetry even when recall THROWS (still returns null)', () => {
     const tel = spyTelemetry();
     const throwingRecall: RecallFn = () => {
       throw new Error('recall boom');

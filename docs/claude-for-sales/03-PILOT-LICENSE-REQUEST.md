@@ -1,6 +1,6 @@
 # Pilot-License + Run-of-Show Request — draft for Dave to send
 
-Resolves Gate D of `02-DAY1-PLATFORM-GATE.md` and Codex risk #1/#5 (licenses land at SKO, but the pilot ladder needs licenses *before* the event). Send to **Sarah Kirkland** (training owner), cc/loop in **Jay** (license approval path). Plain text, paste-ready.
+Resolves Gate D of `02-DAY1-PLATFORM-GATE.md` and review risk #1/#5 (licenses land at SKO, but the pilot ladder needs licenses *before* the event). Send to **Sarah Kirkland** (training owner), cc/loop in **Jay** (license approval path). Plain text, paste-ready.
 
 ---
 

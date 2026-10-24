@@ -24,7 +24,7 @@ import {
   buildDaemonInvocation,
   DaemonQuery,
   DaemonResponse,
-} from '../daemon-client.js';
+} from '../lib/daemon-client.js';
 
 // Do NOT let the socket-missing tests try to start a REAL daemon. Six of them
 // reach tryStartDaemon's spawn path, which costs ~10.4s each against a temp

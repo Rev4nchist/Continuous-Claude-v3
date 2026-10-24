@@ -514,7 +514,7 @@ const ANTIPATTERNS = [
     skillGuideline: 'repeating-gradient decorative stripes',
   },
   {
-    id: 'codex-grid-background',
+    id: 'grid-line-background',
     category: 'slop',
     severity: 'advisory',
     gated: 'gpt',
@@ -1248,8 +1248,8 @@ function checkHtmlPatterns(html) {
     findings.push({ id: 'repeating-stripes-gradient', snippet: 'repeating-gradient decorative stripes' });
   }
 
-  // --- Provider tells (gated): two-axis grid-line background (Codex/GPT) ---
-  // The Codex grid tell is two hairline `linear-gradient(... <color> 1px,
+  // --- Provider tells (gated): two-axis grid-line background (the GPT grid) ---
+  // The two-axis grid tell is two hairline `linear-gradient(... <color> 1px,
   // transparent 1px)` layers (one per axis) tiled by a repeating
   // `background-size` cell. Both signals must co-occur in the SAME style block
   // (a CSS rule body or one inline `style="..."`): two hairline stops WITHOUT a
@@ -1278,7 +1278,7 @@ function checkHtmlPatterns(html) {
         if (stops) hairlineCount += stops.length;
       }
       if (hairlineCount >= 2) {
-        findings.push({ id: 'codex-grid-background', snippet: 'two-axis grid-line gradient background' });
+        findings.push({ id: 'grid-line-background', snippet: 'two-axis grid-line gradient background' });
         break;
       }
     }

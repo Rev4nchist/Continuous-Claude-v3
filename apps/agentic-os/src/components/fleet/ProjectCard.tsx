@@ -9,7 +9,7 @@ import { formatAgo, formatCount, plural, statusClasses } from './format';
  *
  * Three numbers, and the two smaller ones keep the big one honest:
  *   sessionCount — EVERY session attributed here, across every harness
- *   byHarness    — which harness wrote them (Claude Code / Codex / legacy)
+ *   byHarness    — which harness wrote them (Claude Code / removed CLI / legacy)
  *   rawSpellings — how many distinct `sessions.project` strings collapsed to get there
  *
  * `continuous-claude` shows 1,456 sessions from 23 spellings. Without the spelling
@@ -17,7 +17,7 @@ import { formatAgo, formatCount, plural, statusClasses } from './format';
  * subdirectories, worktrees, slash-direction and case variants of one path.
  *
  * The harness split is not decoration. Until 2026-07-28 this card said "sessions"
- * and meant "Claude Code sessions", while 41% of agent-arch's were actually Codex
+ * and meant "Claude Code sessions", while 41% of agent-arch's were actually the removed CLI
  * and 1,483 legacy registrations were excluded entirely. A single number could not
  * be both totals at once, so it silently was neither.
  *
@@ -66,11 +66,11 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
       {project.sessionCount > 0 && (
         <p className="-mt-1 font-mono text-[0.6875rem] text-muted-foreground">
           {/* Only non-zero harnesses, so a Claude-only project does not carry a
-              permanent "codex 0" implying Codex is expected there. */}
+              permanent zero for a harness that is not writing new rows. */}
           {(
             [
               ['claude', project.byHarness.claude],
-              ['codex', project.byHarness.codex],
+              ['uuidv7', project.byHarness.uuidv7],
               ['legacy', project.byHarness.legacy],
               ['other', project.byHarness.other],
             ] as const

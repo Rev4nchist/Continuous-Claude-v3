@@ -23,14 +23,15 @@
  *   node scripts/coordination/degradation-probe.mjs
  */
 import { spawn, execFileSync } from 'node:child_process';
-import { homedir } from 'node:os';
 import { join } from 'node:path';
+import { canonProject, repoPath } from './canon-home.mjs';
 // The hooks spawned here log their denies. Send that log to a temp file, never the real ~/.claude/logs one.
 process.env.CCV3_GUARD_DECISIONS_LOG ??= (process.env.TEMP || process.env.TMPDIR || '/tmp') + '/ccv3-probe-guard-decisions.jsonl';
 
-const REPO = join(homedir(), 'continuous-claude');
-const CANON = 'c:/users/ada.lovelace/continuous-claude';
-const TARGET = 'C:\\Users\\ada.lovelace\\continuous-claude\\.claude\\hooks\\src\\__step4guard__.ts';
+const REPO = repoPath();
+const CANON = canonProject();
+console.log(`canonical project: ${CANON}`);
+const TARGET = join(REPO, '.claude', 'hooks', 'src', '__step4guard__.ts');
 const HOLDER = 'step4guard-holder-0000-0000-0000000';
 const ME = 'step4guard-me-0000-0000-00000000000';
 

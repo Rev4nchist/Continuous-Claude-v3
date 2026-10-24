@@ -152,7 +152,7 @@ describe('mutateBus -- a write that fails INSIDE an acquired lock is also a logg
   it('corrupt pre-image: dropped:true + one write_error row, no clobber (never silent)', () => {
     // Lock is FREE (acquire succeeds) but the existing file is unparseable, so the
     // transform classifies it failed and returns null -> no write lands. This must
-    // be surfaced as a DROP, not silently reported as a success (session-3 Codex#1).
+    // be surfaced as a DROP, not silently reported as a success (session-3 review#1).
     writeFileSync(busFile, '{ this is not valid json at all', 'utf-8');
 
     const outcomes: Array<{ dropped: boolean; wait_ms: number }> = [];

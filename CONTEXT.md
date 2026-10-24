@@ -42,7 +42,7 @@
 ## Work products
 
 - **Plan**: a file in `~/.claude/plans/` approved through plan mode. **Premortem**: the risk pass on a
-  plan (Claude + Codex/Grok). **Tiger / paper tiger / elephant**: real risk / looks scary but fine / unspoken.
+  plan (Claude + Grok harnesses). **Tiger / paper tiger / elephant**: real risk / looks scary but fine / unspoken.
 - **Digest**: a cited research brief in `docs/research/youtube/_digests/`. **Corpus**: the transcripts it cites.
 - **Proposal**: a dated file in `docs/self-improvement/proposals/` with an ADOPT / WATCH / SKIP verdict.
 - **Audit**: a repo-local file in `docs/self-improvement/audits/` built from session history. Never published.

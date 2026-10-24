@@ -83,6 +83,6 @@ project plan from the referenced proposal; `deferred` become lower-priority ROAD
 - **Loop regen:** `run-research.ps1` calls `triage/publish.mjs` non-fatally after each
   research run, so the hosted copy always reflects the current proposal set.
 - **Registry `artifactUrl` deliberately does NOT point here** — it stays on the per-run
-  Notion Self-Improvement child page (immutable per-run contract; Codex premortem
-  findings #1/#2, 2026-07-24). The old "feed the cockpit URL into --artifactUrl" idea
+  Notion Self-Improvement child page. Premortem findings #1 and #2 from 2026-07-24
+  keep that page as the immutable per-run contract. The old "feed the cockpit URL into --artifactUrl" idea
   from `we-had-been-working-quirky-planet.md` is superseded.

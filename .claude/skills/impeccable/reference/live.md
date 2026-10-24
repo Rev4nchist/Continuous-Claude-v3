@@ -10,7 +10,7 @@ Execute in order. No step skipped, no step reordered.
 
 1. `live.mjs`: boot. If the request names or implies a file, route, or app inside a monorepo, infer the concrete path and run `node .claude/skills/impeccable/scripts/live.mjs --target <path>` instead; then run the rest of this live session from the returned `projectRoot`.
 2. Open the app URL that serves `pageFile` (infer from `package.json`, docs, terminal output, or an open tab). Never use `serverPort`; it's the helper, not the app. **Cursor:** `browser_navigate` to that URL before polling; do not skip. **Other harnesses:** use the available browser tool; if the URL is uncertain, ask the user once.
-3. Poll loop with the default long timeout (600000 ms). Run `live-poll.mjs` again immediately after every event or `--reply`; Codex runs this one-shot poll in the foreground. Never pass a short `--timeout=`.
+3. Poll loop with the default long timeout (600000 ms). Run `live-poll.mjs` again immediately after every event or `--reply`. The poll runs in the foreground. Never pass a short `--timeout=`.
 
 The global bar **Impeccable mark** dims and shows a pulsing amber dot when no agent is long-polling `/poll`. Hover the mark for the hint; restart `live-poll.mjs` to reconnect.
 4. On `generate`: reuse `event.scaffold` when present; read the screenshot if present; load the action's reference; deliver variants using the delivery policy below; `--reply done`; poll again. Generate in this thread. You already hold the project's tokens, conventions, and file layout; that context is the job, not overhead.
@@ -22,7 +22,6 @@ The global bar **Impeccable mark** dims and shows a pulsing amber dot when no ag
 Harness policy:
 - **Claude Code**: run the poll as a **background task** (no short timeout). The harness notifies you when it completes, so the main conversation stays free while you generate and publish in it. Do not block the shell.
 - **Cursor**: run **one-shot** poll in a **background terminal** with notify on `"type":"(steer|generate|accept|discard|exit)"`. After each event the poll exits; handle it, `--reply`, then start `live-poll.mjs` again. Do **not** use `--stream` on Cursor: incremental stdout notify is slower in practice than exit-based notify (~5s vs sub-second in testing).
-- **Codex**: run the default one-shot poll in a **yielded foreground exec session**. Do not suffix it with `&`, use `--stream`, or leave Live without an active foreground poll. Handle every event in the main task; after each handler/reply, restart the foreground poll.
 - **Other harnesses**: one-shot foreground unless you know stdout reliably returns to this session when a shell exits.
 
 Generation delivery policy:
@@ -469,7 +468,7 @@ Event: `{id, variantId, _acceptResult, _completionAck}`. The poll script already
 - The accept event includes `pageUrl`; the poll script must forward it to `live-accept.mjs --page-url PAGE_URL` so accept-time cleanup only scrubs staged copy edits for the current page.
 - `_completionAck.ok !== true`: do not poll yet. Run `live-status.mjs` / `live-resume.mjs`, complete the cleanup manually if needed, then run `live-complete.mjs --id EVENT_ID`.
 - `_acceptResult.handled: true` and `carbonize: false`: nothing to do. Poll again.
-- `_acceptResult.handled: true` and `carbonize: true`: post-accept cleanup is required, but it must not stall Codex's control lane. See "Required after accept (carbonize)" below. The `event._acceptResult.todo` field, `_completionAck.requiresComplete`, and stderr banner all point at this required follow-up; none are decorative.
+- `_acceptResult.handled: true` and `carbonize: true`: post-accept cleanup is required, but it must not stall the control lane. See "Required after accept (carbonize)" below. The `event._acceptResult.todo` field, `_completionAck.requiresComplete`, and stderr banner all point at this required follow-up; none are decorative.
 - `_acceptResult.handled: false, mode: "fallback"`: the session lived in a generated file and the script refused to persist there. You've already written the accepted variant into true source during Handle fallback Step 3; just clean up the temporary wrapper in the served file if any, and poll again.
 - `_acceptResult.handled: false, mode: "error"`: the operation genuinely failed. **Do not hand-edit the file**; the source was not touched and editing it yourself would either double-apply or race whoever holds it.
   - `error: "source_locked"`: a generation publish holds the file. Run the same `live-accept.mjs` command again; it is idempotent and will succeed once the publisher releases. Do not poll past it.

@@ -2,7 +2,7 @@
 /**
  * scripts/tri-model/preflight.mjs
  *
- * Gate for tri-model (Codex + Grok) work: auth, identity pin, version pins,
+ * This gate covers Grok work only: auth, identity pin, version pins,
  * and informational git state. Plain Node >=20, zero dependencies.
  *
  * Requirements: CONTRACT.md R1-R7; design: D1-D4.
@@ -34,7 +34,6 @@ const GROK_AUTH_EMAIL_PIN = "dkhayes44@gmail.com";
 const EXEC_TIMEOUT_MS = 20_000;
 const CLEAN_ENV = { ...process.env };
 delete CLEAN_ENV.OPENAI_API_KEY;
-delete CLEAN_ENV.CODEX_API_KEY;
 delete CLEAN_ENV.XAI_API_KEY;
 const WANT_JSON = process.argv.includes("--json");
 // git_state reports the project the caller works in (/game-plan runs from that project), not this
@@ -90,7 +89,7 @@ function resolveCli(cmd) {
 
 /**
  * Run a CLI; never throws to caller for missing binary / non-zero / timeout.
- * Captures stdout AND stderr (codex login status writes to stderr).
+ * Captures stdout AND stderr (stderr is part of the captured output).
  * @returns {{ ok: boolean, stdout: string, stderr: string, error: string | null }}
  */
 function runCli(cmd, args) {
@@ -171,7 +170,7 @@ function runCli(cmd, args) {
 
 /**
  * Parse verified version pins from harness-update.md Evidence trail table.
- * Rows look like: | Codex | `docs/...` | 0.144.1, 2026-07-11 |
+ * Rows look like: | Grok | `docs/...` | 0.2.93, 2026-07-11 |
  * @returns {{ pins: Record<string, string> | null, error: string | null }}
  */
 function parsePinsTable(filePath) {
@@ -202,10 +201,9 @@ function parsePinsTable(filePath) {
 
   /** @type {Record<string, string>} */
   const pins = {};
-  // | Codex | ... | 0.144.1, 2026-07-11 |
   // | Grok | ... | 0.2.93, 2026-07-11 |
   for (const line of section.split(/\r?\n/)) {
-    const rowMatch = /^\|\s*(Codex|Grok)\s*\|/i.exec(line);
+    const rowMatch = /^\|\s*(Grok)\s*\|/i.exec(line); // Grok is the only harness row
     if (rowMatch === null) continue;
     const harness = rowMatch[1];
     if (harness in pins) continue;
@@ -215,18 +213,6 @@ function parsePinsTable(filePath) {
     }
   }
 
-  if (!pins.Codex && !pins.Grok) {
-    return {
-      pins: null,
-      error: `pins table unparseable (no Codex/Grok version rows) in ${filePath}`,
-    };
-  }
-  if (!pins.Codex) {
-    return {
-      pins: null,
-      error: `pins table missing Codex version row in ${filePath}`,
-    };
-  }
   if (!pins.Grok) {
     return {
       pins: null,
@@ -238,52 +224,11 @@ function parsePinsTable(filePath) {
 
 /**
  * Extract a semver X.Y.Z from CLI version output.
- * codex-cli 0.144.1
  * grok 0.2.93 (<hash>) [stable]
  */
 function extractSemver(text) {
   const m = String(text).match(/\b(\d+\.\d+\.\d+)\b/);
   return m ? m[1] : null;
-}
-
-/** R1 — Codex auth */
-function checkCodexAuth() {
-  const r = runCli("codex", ["login", "status"]);
-  const combined = `${r.stdout}\n${r.stderr}`;
-  if (r.error && r.error.startsWith("CLI not found")) {
-    return {
-      name: "codex_auth",
-      ok: false,
-      detail: r.error,
-    };
-  }
-  if (r.error && r.error.startsWith("timeout")) {
-    return {
-      name: "codex_auth",
-      ok: false,
-      detail: r.error,
-    };
-  }
-  // Prefer stdout/stderr content even on non-zero exit.
-  if (combined.includes("Logged in using ChatGPT")) {
-    return {
-      name: "codex_auth",
-      ok: true,
-      detail: "Logged in using ChatGPT",
-    };
-  }
-  if (r.error) {
-    return {
-      name: "codex_auth",
-      ok: false,
-      detail: `codex login status failed: ${r.error}`,
-    };
-  }
-  return {
-    name: "codex_auth",
-    ok: false,
-    detail: 'output missing "Logged in using ChatGPT"',
-  };
 }
 
 /**
@@ -398,7 +343,7 @@ function checkGrokAuthAndIdentity() {
 
 /**
  * R3 — version pin gate for one harness.
- * @param {"codex"|"grok"} harness
+ * @param {"grok"} harness - the only harness this gate checks
  * @param {string | null | undefined} pinned
  * @param {string | null} pinsError
  */
@@ -499,10 +444,7 @@ function main() {
   /** @type {Record<string, string>} */
   const versions = {};
 
-  // R1
-  checks.push(checkCodexAuth());
-
-  // R2 (auth + identity as two checks when possible)
+  // Auth + identity as two checks when possible
   const grokResult = checkGrokAuthAndIdentity();
   if (
     /** @type {{ _split?: boolean, identity?: Check }} */ (grokResult)._split
@@ -539,19 +481,7 @@ function main() {
     process.env.PREFLIGHT_PINS_FILE || DEFAULT_PINS_FILE;
   const { pins, error: pinsError } = parsePinsTable(pinsFile);
   if (pins) {
-    versions.codex_pin = pins.Codex;
     versions.grok_pin = pins.Grok;
-  }
-
-  const codexVer = checkVersionPin("codex", pins?.Codex, pinsError);
-  checks.push(codexVer);
-  if (codexVer.ok) {
-    versions.codex = pins?.Codex || "";
-  } else {
-    // try capture live even on fail
-    const live = runCli("codex", ["--version"]);
-    const v = extractSemver(`${live.stdout}\n${live.stderr}`);
-    if (v) versions.codex = v;
   }
 
   const grokVer = checkVersionPin("grok", pins?.Grok, pinsError);
@@ -565,11 +495,6 @@ function main() {
   }
 
   // Always attach live versions when available and not set
-  if (!versions.codex) {
-    const live = runCli("codex", ["--version"]);
-    const v = extractSemver(`${live.stdout}\n${live.stderr}`);
-    if (v) versions.codex = v;
-  }
   if (!versions.grok) {
     const live = runCli("grok", ["--version"]);
     const v = extractSemver(`${live.stdout}\n${live.stderr}`);
@@ -614,12 +539,10 @@ function main() {
     process.stdout.write(
       `ready: ${ready ? "true" : "false"}\n`,
     );
-    if (versions.codex || versions.grok) {
+    if (versions.grok != null && versions.grok) {
       process.stdout.write(
-        `versions: codex=${versions.codex || "?"} grok=${versions.grok || "?"}` +
-          (versions.codex_pin
-            ? ` (pins codex=${versions.codex_pin} grok=${versions.grok_pin})`
-            : "") +
+        `grok version ${versions.grok || "?"}` +
+          (versions.grok_pin ? ` (pin grok=${versions.grok_pin})` : "") +
           "\n",
       );
     }

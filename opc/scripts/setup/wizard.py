@@ -422,63 +422,12 @@ async def prompt_api_keys() -> dict[str, str]:
 
 
 async def prompt_devops_integration() -> dict[str, str]:
-    """Prompt user for optional DevOps integration settings.
+    """Install the global Playwright CLI.
 
     Returns:
-        dict with keys: linear_api_token, linear_workspace, sentry_auth_token, sentry_org
+        An empty dict. This step does not collect tokens.
     """
-    console.print("\n[bold]DevOps Integration (optional)[/bold]")
-    console.print("Press Enter to skip any tool you don't use.\n")
-
     result: dict[str, str] = {}
-
-    # Linear
-    if Confirm.ask("Do you use Linear for issue tracking?", default=False):
-        linear_token = Prompt.ask("LINEAR_API_TOKEN", default="")
-        linear_workspace = Prompt.ask("LINEAR_WORKSPACE", default="minions-lab")
-        result["linear_api_token"] = linear_token
-        result["linear_workspace"] = linear_workspace
-
-        if linear_token:
-            console.print("  Installing linearis CLI...")
-            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-            try:
-                install_result = subprocess.run(
-                    [npm_cmd, "install", "-g", "linearis"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if install_result.returncode == 0:
-                    console.print("  [green]OK[/green] linearis installed")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] linearis install failed: {install_result.stderr[:100]}")
-            except (subprocess.TimeoutExpired, OSError) as e:
-                console.print(f"  [yellow]WARN[/yellow] Could not install linearis: {e}")
-
-    # Sentry
-    if Confirm.ask("Do you use Sentry for error monitoring?", default=False):
-        sentry_token = Prompt.ask("SENTRY_AUTH_TOKEN", default="")
-        sentry_org = Prompt.ask("SENTRY_ORG", default="")
-        result["sentry_auth_token"] = sentry_token
-        result["sentry_org"] = sentry_org
-
-        if sentry_token:
-            console.print("  Installing @sentry/cli...")
-            npm_cmd = "npm.cmd" if sys.platform == "win32" else "npm"
-            try:
-                install_result = subprocess.run(
-                    [npm_cmd, "install", "-g", "@sentry/cli"],
-                    capture_output=True,
-                    text=True,
-                    timeout=120,
-                )
-                if install_result.returncode == 0:
-                    console.print("  [green]OK[/green] @sentry/cli installed")
-                else:
-                    console.print(f"  [yellow]WARN[/yellow] @sentry/cli install failed: {install_result.stderr[:100]}")
-            except (subprocess.TimeoutExpired, OSError) as e:
-                console.print(f"  [yellow]WARN[/yellow] Could not install @sentry/cli: {e}")
 
     # Always install @playwright/cli
     console.print("  Installing @playwright/cli...")
@@ -496,37 +445,6 @@ async def prompt_devops_integration() -> dict[str, str]:
             console.print(f"  [yellow]WARN[/yellow] @playwright/cli install failed: {playwright_result.stderr[:100]}")
     except (subprocess.TimeoutExpired, OSError) as e:
         console.print(f"  [yellow]WARN[/yellow] Could not install @playwright/cli: {e}")
-
-    # Register MCP servers in ~/.mcp.json
-    mcp_path = Path.home() / ".mcp.json"
-    try:
-        mcp_config: dict[str, Any] = {}
-        if mcp_path.exists():
-            try:
-                mcp_config = json.loads(mcp_path.read_text())
-            except Exception:
-                mcp_config = {}
-        if "mcpServers" not in mcp_config:
-            mcp_config["mcpServers"] = {}
-
-        if result.get("linear_api_token"):
-            mcp_config["mcpServers"]["linear"] = {
-                "type": "url",
-                "url": "https://mcp.linear.app/mcp",
-            }
-            console.print("  [green]OK[/green] Linear MCP server registered in ~/.mcp.json")
-
-        if result.get("sentry_auth_token"):
-            mcp_config["mcpServers"]["sentry"] = {
-                "type": "url",
-                "url": "https://mcp.sentry.dev/sse",
-            }
-            console.print("  [green]OK[/green] Sentry MCP server registered in ~/.mcp.json")
-
-        if result.get("linear_api_token") or result.get("sentry_auth_token"):
-            mcp_path.write_text(json.dumps(mcp_config, indent=2))
-    except Exception as e:
-        console.print(f"  [yellow]WARN[/yellow] Could not update ~/.mcp.json: {e}")
 
     return result
 
@@ -606,22 +524,6 @@ def generate_env_file(config: dict[str, Any], env_path: Path) -> None:
                 lines.append(f"PERPLEXITY_API_KEY={api_keys['perplexity']}")
             if api_keys.get("nia"):
                 lines.append(f"NIA_API_KEY={api_keys['nia']}")
-            lines.append("")
-
-    # DevOps integration keys (only write non-empty keys)
-    devops = config.get("devops", {})
-    if devops:
-        has_devops = any(v for v in devops.values())
-        if has_devops:
-            lines.append("# DevOps Integration")
-            if devops.get("linear_api_token"):
-                lines.append(f"LINEAR_API_TOKEN={devops['linear_api_token']}")
-            if devops.get("linear_workspace"):
-                lines.append(f"LINEAR_WORKSPACE={devops['linear_workspace']}")
-            if devops.get("sentry_auth_token"):
-                lines.append(f"SENTRY_AUTH_TOKEN={devops['sentry_auth_token']}")
-            if devops.get("sentry_org"):
-                lines.append(f"SENTRY_ORG={devops['sentry_org']}")
             lines.append("")
 
     # Write file
@@ -870,16 +772,13 @@ async def run_setup_wizard() -> None:
     else:
         api_keys = {"perplexity": "", "nia": ""}
 
-    # Step 4b: DevOps integration
-    console.print("\n[bold]Step 4b: DevOps Integration (Optional)[/bold]")
-    if Confirm.ask("Configure DevOps integrations (Linear, Sentry)?", default=False):
-        devops = await prompt_devops_integration()
-    else:
-        devops = {}
+    # Step 4b: Playwright CLI
+    console.print("\n[bold]Step 4b: Playwright CLI[/bold]")
+    await prompt_devops_integration()
 
     # Step 5: Generate .env
     console.print("\n[bold]Step 5/15: Generating configuration...[/bold]")
-    config = {"database": db_config, "embeddings": embeddings, "api_keys": api_keys, "devops": devops}
+    config = {"database": db_config, "embeddings": embeddings, "api_keys": api_keys}
     env_path = Path.cwd() / ".env"
     generate_env_file(config, env_path)
     console.print(f"  [green]OK[/green] Generated {env_path}")

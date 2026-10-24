@@ -1,0 +1,673 @@
+[
+  {
+    "path": ".claude/hooks/archive/2026-08-31-step10-prune/auto-build.ts",
+    "reason": "Do-not list forbids edits under .claude/hooks/archive. Historical hook source."
+  },
+  {
+    "path": ".claude/hooks/dist/package-install-guard.mjs",
+    "reason": "Built bundle of the security blocklist. Only these four package-name strings are allowed, at these counts.",
+    "tokens": [
+      {
+        "text": "h2-codex",
+        "count": 2
+      },
+      {
+        "text": "brat-codex",
+        "count": 2
+      },
+      {
+        "text": "h3-codex",
+        "count": 2
+      },
+      {
+        "text": "@rixxcodex/baileys",
+        "count": 2
+      }
+    ]
+  },
+  {
+    "path": ".claude/hooks/src/shared/malicious-packages.json",
+    "reason": "Third-party package names on the security blocklist. Only these four package-name strings are allowed, at these counts.",
+    "tokens": [
+      {
+        "text": "h2-codex",
+        "count": 2
+      },
+      {
+        "text": "brat-codex",
+        "count": 2
+      },
+      {
+        "text": "h3-codex",
+        "count": 2
+      },
+      {
+        "text": "@rixxcodex/baileys",
+        "count": 2
+      }
+    ]
+  },
+  {
+    "path": ".claude/skills/_archive/2026-10-01/workroom/SKILL.md",
+    "reason": "Dated skill archive retained by PR2 item 2.2. Historical roster notes, not a live route."
+  },
+  {
+    "path": ".claude/skills/_vendor/skills-for-fabric/CHANGELOG.md",
+    "reason": "Third-party vendor changelog. The sentence names an upstream tool, not a CCv3 route."
+  },
+  {
+    "path": ".gitignore",
+    "reason": "Ignore rules for the removed CLI's local mirror and throwaway worktrees. Exact strings and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": ".codex-worktrees/",
+        "count": 1
+      },
+      {
+        "text": ".codex/",
+        "count": 1
+      },
+      {
+        "text": "/codex",
+        "count": 1
+      },
+      {
+        "text": "Codex",
+        "count": 2
+      }
+    ]
+  },
+  {
+    "path": "apps/agentic-os/scripts/project-aliases.json",
+    "reason": "Historical session path match keys. The seeder compares these raw strings to sessions.project. Exact fragments and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": "OpenAI.Codex_26.601.2237.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.609.4994.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.623.13972.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.707.3748.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.707.9981.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.715.10079.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.715.3651.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": "OpenAI.Codex_26.721.4979.0_x64__2p2nqsd0c76g0",
+        "count": 1
+      },
+      {
+        "text": ".codex-worktrees",
+        "count": 5
+      },
+      {
+        "text": "codexhookspike-gFPsZy",
+        "count": 2
+      },
+      {
+        "text": "Documents\\\\Codex\\\\2026-06-03\\\\goal-sites-create-a-real-time",
+        "count": 1
+      },
+      {
+        "text": "Documents\\\\Codex\\\\2026-07-16\\\\i-want-you-to-use-your",
+        "count": 1
+      },
+      {
+        "text": "Codex CLI",
+        "count": 8
+      },
+      {
+        "text": "Codex transcript",
+        "count": 2
+      }
+    ]
+  },
+  {
+    "path": "docs/reviews/2026-06-10/CHECKPOINT.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/ccv3-fable5-deep-review-2026-06-10.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/CRITICS.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D10a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D1a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D1b.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D2d.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D3c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D4b.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D7d.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D8a.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D8c.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/D9.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAP2.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAP3.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/findings/GAPS-MANIFEST.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/SUMMARY.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/exclusion-manifest.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/harvest.mjs",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/inventory-agents.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/inventory-rules.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/pr-10.diff",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/pr-9.diff",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/agent-recall.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/codex-lift.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/intel-bus.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/snapshot/memory-recall.jsonl",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-agent-recall.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-codex-pageindex.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/harvest/table-intel-bus.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/GATE-B-LEDGER.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/WF2-VERDICTS.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/hi-01.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/hi-04.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-01.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-02.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-06.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-07.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-08.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-13.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-18.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-20.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/batches/lo-21.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/confirmed-digest.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf2/prep-batches.mjs",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-pass1-ledger.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-pass2-security.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/codex-security-scope.md",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/reviews/2026-06-10/wf3/synthesis.json",
+    "reason": "Dated review record from the 2026-06-10 review. Historical finding, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-08-19-skill-trigger-after.json",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-08-19-skill-trigger-baseline.json",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-01-skills-phase0.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-03-fabric-intake-phase4.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/audits/2026-10-04-fabric-intake-phase5a.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-02-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-03-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-04-code-intel.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-05-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-08-cli-integration.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-10-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-14-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-15-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-16-code-intel.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-18-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-20-skills.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-23-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-26-hooks.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-28-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-30-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-07-31-doc-rag.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-02-cli-integration.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-03-learning-loop.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-04-coordination.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-08-agents.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-09-workflows.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-08-11-observability.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-09-24-context-loading.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-09-30-ccv3-refine-and-boyan-learnings.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-10-01-skills-best-practices-eval.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md",
+    "reason": "Dated self-improvement record. Historical proposal or audit, not a live route."
+  },
+  {
+    "path": "opc/tests/backfill-2026-05-21-pre-rows.csv",
+    "reason": "Dated 2026-05-21 backfill fixture. Historical learning text, not a live route."
+  },
+  {
+    "path": "opc/tests/recall_eval_report.json",
+    "reason": "Dated recall eval report, restored byte-exact from base e613eea4. Recorded run, not a live route."
+  },
+  {
+    "path": "opc/tests/recall_eval_set.jsonl",
+    "reason": "Dated recall eval fixture, restored byte-exact from base e613eea4. Recorded queries, not a live route."
+  },
+  {
+    "path": "scripts/prune-stale-install.ps1",
+    "reason": "Manual prune deletes these stale install paths by name. Exact path strings and counts only, so a new hit still fails.",
+    "tokens": [
+      {
+        "text": "rules-ondemand\\codex-worker-safety.md",
+        "count": 1
+      },
+      {
+        "text": "skills\\impeccable\\reference\\codex.md",
+        "count": 1
+      },
+      {
+        "text": "rules-ondemand\\codex-adversarial.md",
+        "count": 1
+      },
+      {
+        "text": "agents\\codex-adversary.md",
+        "count": 1
+      },
+      {
+        "text": "agents\\codex-worker.md",
+        "count": 1
+      },
+      {
+        "text": "skills\\codex-adversary",
+        "count": 1
+      },
+      {
+        "text": "scripts\\codex",
+        "count": 1
+      },
+      {
+        "text": "skills\\codex",
+        "count": 1
+      },
+      {
+        "text": "'codex'",
+        "count": 1
+      }
+    ]
+  },
+  {
+    "path": "opc/scripts/pageindex/tests/pdfs/2023-annual-report.pdf",
+    "reason": "PageIndex fixture PDF. It is over the 2 MB scan limit, so the ratchet allow-lists the path instead of reading the bytes.",
+    "oversized": true
+  },
+  {
+    "path": "opc/scripts/pageindex/tests/pdfs/PRML.pdf",
+    "reason": "PageIndex fixture PDF. It is over the 2 MB scan limit, so the ratchet allow-lists the path instead of reading the bytes.",
+    "oversized": true
+  },
+  {
+    "path": "docs/fable-manual/EXTRACTION-REPORT.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/TRAP-TESTS.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/LOOP-LOG.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-migration-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/answer-key-security-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/migration-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/plan-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/eval/security-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/README.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/good-plan-A.md",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/golden/judgments.jsonl",
+    "reason": "Dated eval record. Bytes must match base e613eea4. Eval data is not edited, so a historical name stays on this path.",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/cockpit-guide.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/README.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/BUILD-PLAN-2026-07-11.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/SESSION-REVIEW-2026-07-11.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/COLLABORATION-PLAN.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/system-overview.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/tri-model/CURRENT-STATE.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/HARVEST-PLAYBOOK.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/OPERATING-MANUAL.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/grok-integration/DESIGN-RESEARCH.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/architecture/system-visualization/state-of-rework/state-of-rework.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/architecture/system-visualization/state-of-rework/_maps/narrative.json",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/claude-for-sales/research/sko-plan-artifact.html",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/redteam/plausible-wrong.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  },
+  {
+    "path": "docs/fable-manual/redteam/weasel-completions.md",
+    "reason": "dated record, never edited",
+    "frozen": true
+  }
+]

@@ -47,8 +47,8 @@ Paths milestones may touch (mirror of ROOM.yaml `file_scopes`).
 
 ## 8. CCv3 mechanics footer (do not delete)
 
-- Builder implement runs are worktree-isolated: `../.grok-worktrees/` (Grok) or
-  `../.codex-worktrees/` (Codex failover). Worktree paths recorded in `status.json.worktrees`.
-- Grok dispatches: ≥300s external timeout. Prompts via `--prompt-file`; Codex via `- < file`.
+- Builder implement runs are worktree-isolated under `../.grok-worktrees/` for Grok.
+  Record those worktree paths in `status.json.worktrees`.
+- Grok dispatches: ≥300s external timeout. Send prompts with `--prompt-file`.
 - Patches are review-gated: human applies via `git apply --3way` — never auto-merged.
 - Telemetry jsonl row per run is part of milestone completion evidence.

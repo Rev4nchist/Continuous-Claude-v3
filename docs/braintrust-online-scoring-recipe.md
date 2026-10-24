@@ -8,9 +8,9 @@ server-side UI rule cannot reach (see "How to run the judges" below). This
 doc covers the runner side: trace-level sampling, the three scorers,
 eligibility, and the CLI-auth preflight.
 
-**No API keys.** Both judge backends are subscription-billed via OAuth — the
-runner shells out to `codex exec` (ChatGPT subscription) and `claude -p`
-(Claude Code subscription, Sonnet bucket). There is no `OPENAI_API_KEY` and
+**No API keys.** The judge backend is the Claude Code subscription — the
+runner shells out to `claude -p`
+(Sonnet bucket). There is no API key and
 no pay-per-token billing in the judge path.
 
 ## Why trace level, not span level
@@ -27,24 +27,22 @@ Sample decisions are stable per session, not per span.
 ## Required setup — CLI auth (no API keys)
 
 The judges do **not** use an LLM API key. Each judge prompt is graded by a
-subscription-OAuth CLI subprocess. Before the runner can do real work, both
-CLIs must be authenticated:
+subscription CLI subprocess. Before the runner can do real work, `claude`
+must be authenticated:
 
 | CLI | Used by | Auth | Verify | Fix |
 |-----|---------|------|--------|-----|
-| `codex` | `plan_rubric` | ChatGPT subscription (OAuth) | `codex login status` exits 0 | `codex login` |
-| `claude` | `factuality`, `closedqa` | Claude Code subscription (Sonnet) | `claude --version` exits 0 | `claude login` |
+| `claude` | `factuality`, `closedqa`, `plan_rubric` | Claude Code subscription (Sonnet) | `claude --version` exits 0 | `claude login` |
 
-The runner's `check_cli_preflight()` runs these two probes (only for the
-backends actually in use) and **fails fast naming which CLI isn't ready**
-plus the fix command. A `--dry-run` skips the auth check entirely (it makes
-no backend calls), so quota audits work even on a box where the CLIs aren't
+The runner's `check_cli_preflight()` runs that probe when a judge is
+registered and **fails fast naming the fix command** when `claude` is not
+ready. A `--dry-run` skips the auth check entirely (it makes
+no backend calls), so quota audits work even on a box where `claude` is not
 logged in.
 
-Verify both before the first non-dry run:
+Verify before the first non-dry run:
 
 ```bash
-codex login status   # expect: "Logged in using ChatGPT", exit 0
 claude --version      # expect: a version string, exit 0
 ```
 
@@ -73,7 +71,7 @@ so the scores attach at trace level in the Braintrust UI.
 |-------|---------|-------|--------|------------------------------|
 | `factuality` | `claude -p --model sonnet` | user prompt | top recall chunk | `missing_input_or_output` / `claude_timeout` / `claude_unavailable` / `unparseable_score` |
 | `closedqa` | `claude -p --model sonnet` | orchestrator task request | sub-agent final output | `no_task_span` / `nested_subagent_no_correlation` / `missing_input_or_output` / `claude_*` |
-| `plan_rubric` | `codex exec --sandbox read-only` | user prompt | plan body from `ExitPlanMode` | `missing_input_or_output` / `codex_timeout` / `codex_unavailable` / `unparseable_score` |
+| `plan_rubric` | `claude -p --model sonnet` | user prompt | plan body from `ExitPlanMode` | `missing_input_or_output` / `claude_timeout` / `claude_unavailable` / `unparseable_score` |
 
 Each judge prompt is a **hand-written rubric + a structured-output demand**.
 The rubric is faithful to autoevals semantics (Factuality / ClosedQA) but the
@@ -83,12 +81,11 @@ ends with: `Respond with ONLY this JSON and nothing else: {"score": <float
 block in stdout (tolerating markdown fences / preamble), clamps `score` to
 `[0.0, 1.0]`, and normalizes a missing `rationale` to `""`.
 
-### Why codex for plan_rubric (cross-model lift)
+### Why plan_rubric uses claude -p
 
-`plan_rubric` is routed to `codex` (GPT) on purpose: the plans being graded
-were authored by Claude, so grading them with a *different* model is where
-the cross-model lift is highest. `factuality` and `closedqa` go to `claude`
-(Sonnet bucket). The judge→backend map lives in `JUDGE_BACKENDS` in
+`plan_rubric` is graded by `claude -p --model sonnet`, the same subscription
+CLI as `factuality` and `closedqa`. The second-CLI backend was removed.
+The judge→backend map lives in `JUDGE_BACKENDS` in
 `judge_session.py` and is echoed in the runner's JSON output (`backends`
 key) so a `--dry-run` shows exactly which backend each judge uses.
 
@@ -123,7 +120,7 @@ ClosedQA judge gets one shot per session at the top-level Task only.
 **Important:** With subscription-OAuth judges there is **no Braintrust UI
 online-scoring-rule path.** A UI scoring rule runs on Braintrust's servers,
 which can only call API-key-based scorers (autoevals / OpenAI / Anthropic) —
-they **cannot invoke your local `codex` / `claude` CLIs** or their OAuth
+they **cannot invoke your local `claude` CLI** or their OAuth
 tokens. The `factuality` / `closedqa` / `plan_rubric` judges live in
 `opc/scripts/core/judge_session.py` and only work where those CLIs are
 authenticated: your local machine.
@@ -158,7 +155,7 @@ cross-project.)
 
 Schedule the `--scan-since` batch on the **local machine only**. Claude Code
 `/schedule` routines run *remotely* (Anthropic cloud) and — like a Braintrust
-UI rule — cannot reach the local `codex` / `claude` CLIs or their OAuth tokens.
+UI rule — cannot reach the local `claude` CLI or their OAuth tokens.
 So the runner is scheduled via **Windows Task Scheduler** (this machine), not
 `/schedule`.
 
@@ -240,18 +237,15 @@ duplicate scores.
 
 ## Cost / quota notes
 
-- **No per-token API billing.** Both backends are subscription-billed via
-  OAuth: `plan_rubric` spends one Codex turn against the ChatGPT
-  subscription; `factuality` and `closedqa` each spend one Claude Code turn
-  against the Sonnet bucket of the Claude subscription.
-- One fully-equipped sampled session = up to three judge calls (1 codex +
-  2 claude).
+- **No per-token API billing.** Every judge is subscription-billed via
+  OAuth on the Claude subscription. `plan_rubric`, `factuality`, and
+  `closedqa` each spend one Claude Code turn against the Sonnet bucket.
+- One fully-equipped sampled session = up to three Claude judge calls.
 - At 35% sampling and ~50 sessions/day, expect ~52 sampled sessions per
-  week, ~156 judge calls per week (~52 codex + ~104 claude). Adjust the
-  sample rate at the rule level if this exceeds your subscription quota.
-- Subprocess latency: budget ~10–90s per claude call and ~30–120s per codex
-  call. Each backend has a hard 180s timeout; a timeout skips only that
-  judge (`claude_timeout` / `codex_timeout`).
+  week, ~156 Claude judge calls per week. Adjust the sample rate at the
+  rule level if this exceeds your subscription quota.
+- Subprocess latency: budget ~10–90s per Claude call. Each call has a
+  hard 180s timeout; a timeout skips only that judge (`claude_timeout`).
 
 ## Distribution review
 

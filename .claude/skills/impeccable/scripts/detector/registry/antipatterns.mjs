@@ -412,7 +412,7 @@ const ANTIPATTERNS = [
     skillGuideline: 'repeating-gradient decorative stripes',
   },
   {
-    id: 'codex-grid-background',
+    id: 'grid-line-background',
     category: 'slop',
     severity: 'advisory',
     gated: 'gpt',

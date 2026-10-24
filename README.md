@@ -38,7 +38,7 @@ flowchart TB
 
     subgraph engines["Model engines"]
         claude["Claude: opus for judgment, sonnet for execution"]
-        codex["OpenAI Codex: cross-model review"]
+        grok["Grok: cross-model build and review"]
     end
 
     subgraph harness["CCv3 harness"]
@@ -60,7 +60,7 @@ flowchart TB
     hooks -->|"added context"| loop
     hooks -->|"outcomes, fire logs"| traces
     loop -->|"spawn"| agents
-    agents -->|"adversarial review"| codex
+    agents -->|"adversarial review"| grok
 ```
 
 The model proposes and the harness decides. Each tool call goes through the hook layer before it
@@ -107,7 +107,7 @@ the rest when it applies.
   maps a command, agent, skill or MCP tool to one or more rule files.
 - Mode `deny-first` refuses the first matching call and gives the rule text as the reason. The
   model then re-plans with the rule in view. This mode is for rules that must change a decision,
-  such as a Codex run or a commit message.
+  for example a commit message.
 - Mode `inject` adds the rule text as context and lets the call run.
 - The router logs every fire to `~/.claude/logs/rule-router.jsonl`. It fails open: on an internal
   error, the call runs.
@@ -177,7 +177,7 @@ Guardrails stop risky actions before they run.
 - `agent-model-guard` denies a spawn of an agent that has no definition. `no-haiku-enforcer`
   denies a spawn on `haiku`, and any spawn while a global model override is set.
 - The `rule-router` `deny-first` mode puts the matching safety rule in front of the model before
-  a Codex run, a paid API run, or a commit.
+  a paid API run, or a commit message.
 
 Measured result: four hooks named PowerShell in their matcher but rejected it at runtime. Only
 one of the two gates was widened, so the hooks never ran. Commit `164d86a` fixed all four. The
@@ -234,7 +234,7 @@ Agents and sessions exchange work through typed channels, not chat copy-paste.
 | Workflows | An orchestrator and its workers | Parallel research, synthesis, adversarial check | `/maestro`, `/build`, `/premortem` skills |
 | Lanes and messages | Parallel sessions | Lanes, leases and direct messages in PostgreSQL | `scripts/coordination/lane.mjs` |
 | File claims | Parallel sessions | A lock checked before each edit | `file-claims` hook |
-| Cross-model review | Claude and OpenAI Codex | A second model family reviews diffs and plans | `/codex-adversary` skill (Codex runner), `codex-worker` agent |
+| Cross-model review | Claude and Grok | A second model family reviews diffs and plans | `grok-adversary` agent, `/premortem --grok` |
 | Handoffs | A session and the next session | Typed record with an outcome | `/create_handoff`, `/resume_handoff` skills |
 | Assistant bridge | A Claude.ai work assistant and Claude Code | Rows in a shared Notion database | `notion-bridge` skill |
 
@@ -253,10 +253,9 @@ claims a lane before it starts work. `lane.mjs` identifies a session by `CLAUDE_
 so two sessions never share one identity. `lane.mjs say` and `lane.mjs inbox` carry direct
 messages between live sessions. The `file-claims` hook blocks edits that collide.
 
-**Cross-model review.** The Codex runner sends a diff or a plan to OpenAI Codex (GPT) for review
-and prints a `CODEX-RECEIPT` line that names the GPT model. A
-second model family has different blind spots. `codex-worker` hands a task to Codex. Its write
-modes are frozen since 2026-10-12. The `/premortem` skill includes a Codex pass by default.
+**Cross-model review.** Grok reviews a diff or a plan from a different training family.
+`grok-worker` builds. `/premortem --grok` is the optional adversarial pass. The other
+cross-model CLI was removed.
 
 **Typed handoffs.** A session that cannot finish writes a handoff. Each handoff records an
 outcome: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED`. `/resume_handoff` restores the
@@ -292,7 +291,7 @@ before it overwrites it.
 | `.claude/rules-src/` | Path-scoped rules and the always-loaded index of on-demand rules |
 | `.claude/rules-ondemand/` | 20 tool rules and the `manifest.json` that routes them |
 | `.claude/templates/` | The core `CLAUDE.md` template and other install templates |
-| `.claude/agents/` | 37 subagent definitions, each as `.md` plus a `.json` sidecar |
+| `.claude/agents/` | 35 subagent definitions, each as `.md` plus a `.json` sidecar |
 | `.claude/skills/` | 145 skills, each in its own folder with a `SKILL.md` |
 | `.claude/settings.json` | Hook registrations, the repo copy |
 | `opc/` | Python: the setup wizard (`opc/scripts/setup/`), memory scripts (`opc/scripts/core/`) and their tests |
@@ -302,7 +301,7 @@ before it overwrites it.
 | `docs/` | Architecture notes, harness strategy, research and self-improvement proposals |
 | `tests/workflow-tests/` | Checks for new workflows, skills and integrations |
 | `e2e/` | A Playwright placeholder. It does not test this repo. |
-| `ai-report-card/`, `proofs/`, `tasks/`, `vendor/` | A weekly report generator, Lean proofs for the optional math tools, task lists, and a vendored Codex review prompt |
+| `ai-report-card/`, `proofs/`, `tasks/`, `vendor/` | A weekly report generator, Lean proofs for the optional math tools, and the task lists |
 
 Start with these root files: `CLAUDE.md` (repo rules), `AGENTS.md` (testing), `CONTEXT.md` (the
 glossary) and `BOOTSTRAP.md` (full setup).

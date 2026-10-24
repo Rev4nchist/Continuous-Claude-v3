@@ -30,7 +30,7 @@ import {
   probeDaemonFast,
   isDaemonUnreachableCached,
   cacheDaemonUnreachable,
-} from './daemon-client';
+} from './lib/daemon-client';
 import { CONTEXT_DIR } from './shared/search-context-path.js';
 import { logGuardDecision } from './shared/guard-log.js';
 

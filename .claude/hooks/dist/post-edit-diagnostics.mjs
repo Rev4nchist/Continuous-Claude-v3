@@ -5,7 +5,7 @@ import { readFileSync as readFileSync5, existsSync as existsSync6 } from "fs";
 import { spawnSync as spawnSync2 } from "child_process";
 import { join as join7 } from "path";
 
-// src/daemon-client.ts
+// src/lib/daemon-client.ts
 import { existsSync, readFileSync, writeFileSync, unlinkSync, mkdirSync } from "fs";
 import { spawnSync } from "child_process";
 import { join, resolve } from "path";

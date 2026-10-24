@@ -4,7 +4,7 @@
 <meta charset="utf-8" />
 <meta name="viewport" content="width=device-width, initial-scale=1" />
 <title>Continuous Claude v3 — System Map</title>
-<meta name="description" content="Landing hub for the Continuous Claude v3 (CCv3) interactive architecture visualizations. Links every view: overview, memory, hooks, agents, Braintrust scoring, Codex adversarial review, and the machine-readable architecture.json." />
+<meta name="description" content="Landing hub for the Continuous Claude v3 (CCv3) interactive architecture visualizations. Links every view: overview, memory, hooks, agents, Braintrust scoring, along with the machine-readable architecture.json." />
 <style>
   :root {
     --bg: #0b1020;
@@ -236,19 +236,7 @@
         </div>
       </a>
 
-      <!-- 6. Codex Adversarial Review -->
-      <a class="card" href="./codex-adversarial-visualization.html" style="--stripe:#f97316;">
-        <div class="stripe"></div>
-        <div class="body">
-          <span class="arrow">&rarr;</span>
-          <span class="icon" aria-hidden="true">&#9876;&#65039;</span>
-          <h2 class="title">Codex Adversarial Review</h2>
-          <p class="desc">Cross-model review via OpenAI Codex. Different training family, different blind spots.</p>
-          <div class="stats" data-stat="codex"><span class="num" id="stat-codex-model">gpt-5.5</span> &middot; <span class="num" id="stat-codex-int">3</span> integration points</div>
-        </div>
-      </a>
-
-      <!-- 7. Architecture Data (JSON) -->
+      <!-- 6. Architecture Data (JSON) -->
       <a class="card" href="./architecture.json" style="--stripe:#6b7280;">
         <div class="stripe"></div>
         <div class="body">
@@ -305,9 +293,7 @@
         memoryTables: 4,
         embeddingDim: 1024,
         braintrustDimensions: 4,
-        braintrustInvariant: 4,
-        codexModel: "gpt-5.5",
-        codexIntegrationPoints: 3
+        braintrustInvariant: 4
       }
     };
 
@@ -333,7 +319,6 @@
       var agents = node("agents");
       var memory = node("memory");
       var bt = node("braintrust-scoring");
-      var codex = node("codex-adversary");
       var flows = Array.isArray(data.flows) ? data.flows.length : undefined;
       var subsystems = nodes.length || undefined;
       return {
@@ -346,9 +331,7 @@
         memoryTables: s.memoryTables || nodeStat("memory", "tables"),
         embeddingDim: s.embeddingDim || nodeStat("memory", "embeddingDim"),
         braintrustDimensions: s.braintrustDimensions || nodeStat("braintrust-scoring", "dimensions"),
-        braintrustInvariant: s.braintrustInvariant || nodeStat("braintrust-scoring", "invariant"),
-        codexModel: s.codexModel || nodeStat("codex-adversary", "default_model"),
-        codexIntegrationPoints: s.codexIntegrationPoints || nodeStat("codex-adversary", "integration_points")
+        braintrustInvariant: s.braintrustInvariant || nodeStat("braintrust-scoring", "invariant")
       };
     }
 
@@ -373,8 +356,6 @@
       num("stat-mem-dims", s.embeddingDim);
       num("stat-bt-dims", s.braintrustDimensions);
       num("stat-bt-inv", s.braintrustInvariant);
-      num("stat-codex-model", s.codexModel);
-      num("stat-codex-int", s.codexIntegrationPoints);
     }
 
     // Paint the fallback immediately so cards are never blank, then try to refresh

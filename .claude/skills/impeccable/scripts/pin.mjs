@@ -21,11 +21,11 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 
 // All known harness directories
 const HARNESS_DIRS = [
-  '.claude', '.cursor', '.gemini', '.codex', '.agents',
+  '.claude', '.cursor', '.gemini', '.agents', /* harness directories */
   '.trae', '.trae-cn', '.pi', '.opencode', '.kiro', '.rovodev',
 ];
 
-const CODEX_HARNESSES = new Set(['.codex', '.agents']);
+const DOLLAR_PREFIX_HARNESSES = new Set(['.agents']);
 
 // Valid sub-command names
 const VALID_COMMANDS = [
@@ -90,7 +90,7 @@ function loadCommandMetadata() {
  * Generate a pinned skill's SKILL.md content.
  */
 function commandPrefixForSkillsDir(skillsDir) {
-  return CODEX_HARNESSES.has(basename(dirname(skillsDir))) ? '$' : '/';
+  return DOLLAR_PREFIX_HARNESSES.has(basename(dirname(skillsDir))) ? '$' : '/';
 }
 
 function generatePinnedSkill(command, metadata, commandPrefix) {

@@ -120,7 +120,7 @@ History only: [Braintrust Subsystem](subsystems/braintrust.md).
 │ scout  ││architect│ │ kraken  │ │debug-   ││ critic ││deployer│
 │ oracle ││ phoenix │ │ spark   │ │ agent   ││principal│└────────┘
 └────────┘└────────┘ └─────────┘ │ sleuth  ││-reviewer│
-                                 └─────────┘│ codex- │
+                                 └─────────┘│ grok-    │
                           ┌────────┐        │adversary│
                           │  TEST  │        └────────┘
                           │arbiter │
@@ -133,7 +133,7 @@ Agent Selection Rule:
   Implement → kraken (TDD) / spark (quick fix)
   Debug → debug-agent / sleuth
   Test  → arbiter / atlas (test execution)
-  Review → critic / principal-reviewer / Codex runner script (cross-model; codex-adversary agent only in a Workflow stage)
+  Review → critic / principal-reviewer / grok-adversary (cross-model)
   Deploy → deployer (Vercel / Railway / Sentry / Linear)
 ```
 

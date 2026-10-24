@@ -19,7 +19,7 @@ and lives below:
 - **The current inventory** — which tools are integrated, under which pattern, with the
   per-tool caveats that matter when you compare a new candidate against them.
 - **Known gaps** — what is integrated, when, with what auth and what load-bearing caveats
-  (Codex, Grok, ntn, Kusto all carry traps that cost time if rediscovered).
+  (The Grok CLI, ntn, and Kusto all carry traps that cost time if rediscovered).
 - **The agent-compatibility checklist** — ten criteria for scoring a candidate CLI before
   committing to it, from "Building CLIs for agents" by @ericzakariasson.
 - **The integration checklist** — the seven steps for wiring a new tool in.
@@ -80,11 +80,11 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 
 | Pattern | Tools |
 |---------|-------|
-| Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, codex, grok, ntn (Notion) |
+| Direct Bash + Skill + Rule | tldr, opencli, gh, vercel, railway, neonctl, qlty, git, playwright, playwright-cli, cdp.mjs, linearis, sentry-cli, kusto-cli\*, the grok CLI, ntn (Notion) |
 | Python harness via uv run | ast-grep, morph, github-search |
 | MCP server | Playwright MCP, Notion, Paper, Exa, Neon, Vercel Cloud, Linear, Sentry |
-| Claude Code plugin | none for Codex (no Codex plugin is installed; there are no `/codex:*` commands) |
-| Agent delegation | deployer (Vercel + Railway + Sentry + Linear), arbiter/atlas (tests), codex-adversary (envelope for Workflow stages; runs the Codex runner `adversary.mjs`, returns a CODEX-RECEIPT line) |
+| Claude Code plugin | none for the removed cross-model CLI |
+| Agent delegation | deployer (Vercel + Railway + Sentry + Linear), arbiter/atlas (tests), grok-adversary (read-only cross-model review) |
 
 \* `kusto-cli` is Pattern 1 with notable agent-friendliness gaps — REPL-first (needs `-keepRunning:false`), positional connection string, no native JSON output (CSV via `#save` only). Score it low on the Agent Compatibility Checklist when comparing to gold-standard tools like `gh` or `vercel`.
 
@@ -97,9 +97,9 @@ Highest friction, lowest reliability — only for truly GUI-only workflows.
 | Linear | INTEGRATED — MCP (remote) + linearis CLI + linear-cli + skill + rule + deployer (2026-03-25) | DONE |
 | Sentry | INTEGRATED — MCP (remote) + sentry-cli + skill + rule + deployer + 3 hooks (2026-03-25) | DONE |
 | Kusto.Cli (ADX / Fabric Eventhouse) | INTEGRATED — Microsoft.Azure.Kusto.Tools v14.1.2 net472 staged at `C:\tools\kusto-cli\`; skill + safety rule + databases cross-ref (2026-05-04) | DONE |
-| Codex (OpenAI) | INTEGRATED — `codex-cli 0.162.1` (upgraded from 0.153.4 + re-verified 2026-10-12; gpt-6.1-sol + gpt-5.6-sol/terra/luna enabled, gpt-5.5 removed, gpt-6-astra removed 2026-10-12 by Dave's rule (only ids he names); the workspace-write fixture fails on 0.162.1, so `/codex --implement` and `--resume` are FROZEN) + the Codex runner (`.claude/scripts/codex/adversary.mjs`, default `gpt-6.1-sol @ xhigh`, CODEX-RECEIPT line on every review) + `/codex-adversary` skill + `codex-adversary` envelope agent + `codex-adversarial` rule + `/review` and `/premortem` skill wiring + `plan-exit-premortem-prompt` hook (2026-05-18; CLI 0.104.0 -> 0.131.0, end-to-end verified 2026-06-01). ChatGPT subscription auth via `codex login` — verified `codex exec` runs on the subscription with no `OPENAI_API_KEY`. Used for cross-model adversarial review. | DONE |
+| Removed cross-model CLI | Removed in CCV3-2. Do not install it, do not call it, and do not route review through it. | REMOVED |
 | Notion CLI (ntn) | INTEGRATED — `winget install Notion.ntn` v0.18.1 + skill + safety rule (2026-07-03). Scores near-gold on the checklist: non-interactive ✓ (--yes/--json/env), per-subcommand --help ✓, JSON output ✓, flag-based ✓ (one trap: inline field values containing `:` misparse — use stdin JSON), fail-fast ✓, `--spec` OpenAPI introspection ✓. Caveats: stdin must be redirected from NUL in automation (open stdin hangs); `v1/users` 403s on personal tokens (probe with `ntn doctor`). Spike evidence: docs/notion-platform-spike-report.md. Workers runtime PARKED (no account access yet). | DONE |
-| Grok (xAI) | INTEGRATED — `grok-cli 0.2.93` + `/grok` skill + `grok-worker` agent + `grok-adversary` agent + `grok-worker-safety` rule (2026-07-11). X Premium+ subscription auth via OAuth (auth.x.ai, oidc) — no API key. Third cross-model training family (distinct from Claude and OpenAI Codex (GPT)) for task execution + adversarial review. **Caveats (load-bearing, not just notes):** `--tools "read_file,list_dir,grep"` is the ONLY working read-only guard — `--sandbox` is decorative/unvalidated (accepts any string, blocks nothing) and `--permission-mode plan` does not block writes headless either; `-w/--worktree` is silently IGNORED in headless `-p` mode, so implement mode reuses the codex-worker hand-rolled out-of-repo worktree recipe (`.grok-worktrees/`). CLI auto-updates — re-verify via `/harness-update` on version change. | DONE |
+| Grok (xAI) | INTEGRATED — `grok-cli 0.2.93` + `/grok` skill + `grok-worker` agent + `grok-adversary` agent + `grok-worker-safety` rule (2026-07-11). X Premium+ subscription auth via OAuth (auth.x.ai, oidc) — no API key. Third cross-model training family (distinct from Claude's own model family) for task execution + adversarial review. **Caveats (load-bearing, not just notes):** `--tools "read_file,list_dir,grep"` is the ONLY working read-only guard — `--sandbox` is decorative/unvalidated (accepts any string, blocks nothing) and `--permission-mode plan` does not block writes headless either; `-w/--worktree` is silently IGNORED in headless `-p` mode, so implement mode uses this worktree created by hand outside the repo (`.grok-worktrees/`). CLI auto-updates — re-verify via `/harness-update` on version change. | DONE |
 | CLI-Anything | Not installed — for future desktop software control | LOW |
 
 ## Agent Compatibility Checklist

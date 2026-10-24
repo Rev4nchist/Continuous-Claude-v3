@@ -789,7 +789,7 @@ def _hook_entry_mjs_path(h: dict) -> str | None:
     Quotes are stripped because a quoted inline command
     ("node 'C:/.../foo.mjs'") would otherwise resolve to a path with a leading
     apostrophe and be reported as MISSING -- a false alarm in the opposite
-    direction. That form is live in ~/.codex/hooks.json today.
+    direction. A quoted inline command is the shape this strips.
     """
     candidates: list[str] = []
     cmd = h.get("command")

@@ -31,6 +31,8 @@ history.jsonl
 # Claude runtime artifacts (machine-specific, auto-regenerated)
 .claude/extraction-state.json
 .claude/knowledge-tree.json
+# Written by hooks/src/smarter-everyday.ts
+.claude/smarter-everyday-state.json
 # Memory hardening runtime observability logs (Phase 1, 2026-05-16)
 .claude/logs/*.jsonl
 
@@ -237,7 +239,6 @@ x-article-*
 
 # Codex CLI local mirror of the hook/skill/agent library (regenerable; analogous to .agents/ above)
 .codex/
-
 # Codex worker isolated git worktrees (throwaway per-run; created by /codex --implement)
 .codex-worktrees/
 

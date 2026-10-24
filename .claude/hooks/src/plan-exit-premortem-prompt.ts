@@ -87,12 +87,10 @@ export function buildDirective(planPath: string | null): string {
     '  Question: "Run a cross-model /premortem on this plan before implementation? Pick the adversarial reviewer(s)."',
     '  Header: "Premortem"',
     '  Options:',
-    '    - "Codex (Recommended)" (description: "GPT-family adversarial pass on the plan (ChatGPT subscription). The proven default.")',
-    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Codex AND Claude. PARKED on this machine since 2026-07-13: corp egress stalls completions.")',
-    '    - "Both -- Codex + Grok in parallel" (description: "Maximum cross-model coverage; two parallel passes, findings merged with [Codex]/[Grok] source tags. Double quota burn.")',
+    '    - "Grok" (description: "Grok adversarial pass on the plan (X Premium+ subscription). A third training family, distinct from Claude. PARKED on this machine since 2026-07-13: corp egress stalls completions.")',
     '    - "Skip -- proceed to implementation" (description: "Move directly to implementation without an explicit risk pass. Use when the plan is trivial or already heavily vetted.")',
     '',
-    'After the user answers: Codex -> invoke the `/premortem` skill on the plan file (default Codex pass); Grok -> invoke `/premortem --grok`; Both -> invoke `/premortem --reviewers both`; Skip -> continue with whatever next step the workflow calls for.',
+    'After the user answers: Grok -> invoke `/premortem --grok`; Skip -> continue with whatever next step the workflow calls for. There is no second-CLI reviewer.',
   ].join('\n');
 }
 

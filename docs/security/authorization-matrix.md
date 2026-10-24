@@ -16,13 +16,12 @@ what stops a destructive operation on each. Keep it current when a guard or surf
 | Claude Code, PowerShell tool | `destructive-command-guard` (PreToolUse, matcher `PowerShell`, since this change). Also Claude Code's own built-in PowerShell path guard, which blocks `Remove-Item` and `rmdir` on system paths, even inside quoted strings. |
 | Headless `claude -p` (scheduled jobs) | Same hooks; `permission_mode` is bypass or the run has no human, so the guard **denies** |
 | Subagents / workflow agents | Same hooks; `CLAUDE_AGENT_ID` marks them unattended, so the guard **denies** |
-| `codex exec` (`/codex`, the Codex runner `adversary.mjs`) | `--sandbox read-only` or `workspace-write` in a sibling worktree (`codex-worker-safety.md`). No CCv3 hook can see inside. |
-| Codex Desktop app | **Nothing in CCv3.** Its own sandbox setting only. 47 of its sessions ran with the live repo as the working directory, 21+ with full access. |
+| Removed cross-model CLI | Not installed. Do not route work through it. |
 | Git hooks, Task Scheduler scripts | None at run time. They are code; review happens at commit and PR time. |
 
 ## Operations x surfaces (after this change)
 
-| Operation | Bash tool (interactive) | PowerShell tool (interactive) | Unattended (bypass, `claude -p`, subagent) | codex exec | Codex Desktop |
+| Operation | Bash tool (interactive) | PowerShell tool (interactive) | Unattended (bypass, `claude -p`, subagent) | removed CLI (do not use) | removed desktop app (do not use) |
 |---|---|---|---|---|---|
 | `git stash -u` / `--include-untracked` / `--all` | ask | ask | deny | sandbox | allow |
 | `git reset --hard` (incl. `git -C repo reset --hard`) | ask | ask | deny | sandbox | allow |
@@ -39,9 +38,6 @@ prompt for safe commands). Bash is left to the human by that hook as before, and
 
 ## Known gaps (not closed here)
 
-- **Codex Desktop.** CCv3 cannot gate it. Dave chooses its sandbox default (workspace-write with
-  on-request approval is the recommendation) and whether it may use the live repo as its working
-  directory. Tracked as P10.
 - **Dynamic payloads** (`iex`, `-EncodedCommand`, `bash <<<`, `printf ... | sh`): accepted limits,
   listed in the guard's header and its test file.
 - **Scheduled scripts** run their own code with no guard. A script that deletes must be reviewed

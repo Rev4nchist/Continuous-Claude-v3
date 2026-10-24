@@ -8,10 +8,10 @@
  * throws on well-typed input.
  *
  * Cross-model hardening baked in from the B.3a review:
- *  - Codex#1: control chars (incl. NUL) are stripped + each term length-capped
+ * - review#1: control chars (incl. NUL) are stripped + each term length-capped
  *    BEFORE it can reach a recall query argv (spawnSync --query) or an injection
  *    surface.
- *  - Codex#2: a missing/non-numeric turn_added is treated as STALE (a malformed
+ * - review#2: a missing/non-numeric turn_added is treated as STALE (a malformed
  *    bus must not bypass staleness filtering by omitting the field).
  */
 
@@ -45,12 +45,12 @@ export interface BusFocus {
 export function isFresh(currentTurn: number, turnAdded: number | undefined): boolean {
   // A missing/non-numeric turn_added means freshness cannot be established -> treat
   // as STALE so a malformed/poisoned bus can't bypass staleness filtering by
-  // omitting the field (cross-model B.3a finding Codex#2).
+  // omitting the field (cross-model B.3a finding review#2).
   if (typeof turnAdded !== 'number' || !Number.isFinite(turnAdded)) return false;
   const age = currentTurn - turnAdded;
   // age in [-1, MAX] is fresh. The lower bound (-1) tolerates a same-turn write
   // that landed just after the turn bump, but REJECTS a far-future turn_added so a
-  // poisoned / clock-skewed bus can't pin a term as "fresh" forever (B.3b Codex#2).
+  // poisoned / clock-skewed bus can't pin a term as "fresh" forever (B.3b review#2).
   return age >= -1 && age <= BUS_STALENESS_MAX_AGE;
 }
 
@@ -81,12 +81,12 @@ export function extractBusFocus(bus: BusEntry): BusFocus {
     // Two-stage sanitize BEFORE the term can reach the recall query argv
     // (spawnSync --query -> to_tsquery) or the SESSION FOCUS injection block:
     //   1. strip C0/C1 control chars incl. NUL (a poisoned bus symbol with a NUL
-    //      would truncate the query argv on POSIX -- B.3a finding Codex#1);
+    // would truncate the query argv on POSIX -- B.3a finding review#1);
     //   2. allowlist to identifier/path-safe chars. This drops FTS tsquery
     //      operators (| & ! : * ( ) ' " etc.) so a poisoned symbol can't inject
     //      tsquery syntax / fail the query open, AND Unicode bidi / zero-width /
     //      format (\p{Cf}) chars so a term can't be visually spoofed in the
-    //      injected block (premortem T3 + Codex#3, 2026-06-02). \p{L}\p{N}_.$#-
+    // injected block (premortem T3 + review#3, 2026-06-02). \p{L}\p{N}_.$#-
     //      preserves real symbol names and file basenames.
     const t = raw
       .replace(/[\x00-\x1f\x7f-\x9f]/g, '')
@@ -102,7 +102,7 @@ export function extractBusFocus(bus: BusEntry): BusFocus {
 
   // Defensive input bound: production readers cap bus arrays at 50 (coerceBus),
   // but this EXPORTED helper could be called with an uncapped bus -> never scan an
-  // unbounded untrusted array (B.3b Codex#3). A generous window keeps stale counts
+  // unbounded untrusted array (B.3b review#3). A generous window keeps stale counts
   // meaningful while bounding the loop regardless of caller.
   const SCAN_CAP = 200;
   const focusSymbols = (Array.isArray(bus.focus_symbols) ? bus.focus_symbols : []).slice(0, SCAN_CAP);

@@ -46,7 +46,7 @@ if [[ "$DIRECTION" == "to-repo" ]]; then
     # (2026-06-01): refuse reverse-sync if the REPO has uncommitted
     # changes in the synced dirs. Reverse-sync (active -> repo) would overwrite
     # fresh repo edits with the active copy -- the exact clobber that reverted
-    # rules/codex-adversarial.md twice on 2026-06-01. The repo is the source of truth: commit
+    # an on-demand rules file twice on 2026-06-01. The repo is the source of truth: commit
     # or stash repo edits first, or let the forward-sync handle repo -> active.
     # This makes an accidental or re-introduced automatic reverse-sync safe.
     if git -C "$REPO_ROOT" rev-parse --git-dir >/dev/null 2>&1; then

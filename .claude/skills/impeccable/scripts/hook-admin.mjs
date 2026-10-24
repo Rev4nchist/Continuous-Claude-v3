@@ -74,28 +74,6 @@ const HOOK_MANIFEST_TARGETS = [
     }),
   },
   {
-    provider: '.agents',
-    skillRel: '.agents/skills/impeccable',
-    destRel: '.codex/hooks.json',
-    manifest: () => ({
-      hooks: {
-        PostToolUse: [
-          {
-            matcher: 'Edit|Write|apply_patch',
-            hooks: [
-              {
-                type: 'command',
-                command: 'node ".agents/skills/impeccable/scripts/hook.mjs"',
-                timeout: TIMEOUT_SECONDS,
-                statusMessage: STATUS_MESSAGE,
-              },
-            ],
-          },
-        ],
-      },
-    }),
-  },
-  {
     provider: '.cursor',
     skillRel: '.cursor/skills/impeccable',
     destRel: '.cursor/hooks.json',
@@ -434,7 +412,7 @@ function valueHasImpeccableHookMarker(value) {
 
 function stripImpeccableHookEntry(entry) {
   if (!entry || typeof entry !== 'object') return entry;
-  // `command`/`args`: Claude/Codex/Cursor. `bash`/`powershell`: GitHub Copilot's
+  // `command`/`args` cover Claude Code and Cursor. `bash`/`powershell` cover GitHub Copilot's
   // flat entry shape, where the marker lives under the shell-command keys.
   if (valueHasImpeccableHookMarker(entry.command) || valueHasImpeccableHookMarker(entry.args)
     || valueHasImpeccableHookMarker(entry.bash) || valueHasImpeccableHookMarker(entry.powershell)) {

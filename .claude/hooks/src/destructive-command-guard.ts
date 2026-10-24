@@ -14,7 +14,7 @@
  *     return permissionDecision to override an allow rule. This is the ONLY
  *     mechanism that gates destructive Bash everywhere.
  *
- * Posture (Codex T1 + #3 — fail-CLOSED, never hang):
+ * Posture (review T1 + #3 — fail-CLOSED, never hang):
  *   - destructive + interactive (default/acceptEdits/plan) → 'ask'  (prompt the human)
  *   - destructive + unattended (bypassPermissions / CLAUDE_AGENT_ID / CI) → 'deny'
  *     (structured denial; an interactive prompt in a headless loop would hang forever)

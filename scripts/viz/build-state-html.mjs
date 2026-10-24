@@ -5,6 +5,7 @@
 
 import fs from 'node:fs'
 import path from 'node:path'
+import { fileURLToPath } from 'node:url'
 
 const args = process.argv.slice(2)
 const dir = args[0]
@@ -13,6 +14,14 @@ const SITE = siteIdx >= 0 ? args[siteIdx + 1] : 'cc'
 const outArg = args[1] && !args[1].startsWith('--') ? args[1] : null
 if (!dir) { console.error('usage: node build-state-html.mjs <dir> [outFile] [--site cc|decks]'); process.exit(1) }
 const OUT = outArg || path.join(dir, 'state-of-rework.html')
+const frozenHtml = path.resolve(
+  path.dirname(fileURLToPath(import.meta.url)),
+  '../../docs/architecture/system-visualization/state-of-rework/state-of-rework.html',
+)
+if (path.resolve(OUT) === frozenHtml) {
+  console.error('refusing to rewrite the dated record state-of-rework.html')
+  process.exit(2)
+}
 const DECKS = SITE === 'decks'
 const N = JSON.parse(fs.readFileSync(path.join(dir, '_maps', 'narrative.json'), 'utf8'))
 const svg = (f) => fs.readFileSync(path.join(dir, f + '.svg'), 'utf8')

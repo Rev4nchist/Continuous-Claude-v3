@@ -1,6 +1,6 @@
 # M<N> result
 
-**Builder:** grok | codex-failover · **Run:** <utcstamp> · **Worktree:** ../.grok-worktrees/<dir>
+**Builder:** grok | kraken-failover · **Run:** <utcstamp> · **Worktree:** ../.grok-worktrees/<dir>
 
 ## Builder summary
 
