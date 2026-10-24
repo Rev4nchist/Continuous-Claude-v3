@@ -17,7 +17,11 @@
 # The script prints the count of existing .claude.bak-* siblings.
 # skills\fourth-* is left in place (CCV3-4).
 # The leftover scan covers the install folders the sync owns. It does not
-# walk projects\, plugins\, or file-history.
+# walk projects\, plugins\, or file-history. It skips node_modules under every
+# scan root (rog-strix: third-party package files were false positives) and
+# prints `excluded: <n> paths (<dirs>)`. Other vendor directories are not
+# skipped: this install had no evidence for them. Paths outside those trees
+# still fail the run.
 # Planned removals and the settings shim pre-check run before any backup.
 # A shim name still present in settings.json or settings.local.json aborts
 # the script with no backup.
@@ -171,19 +175,37 @@ $scanRoots = @(
   'scripts',
   'skills'
 )
+# node_modules only. .venv stays in the scan until a run shows it causes false positives.
+$vendorNames = @('node_modules')
 $left = @()
+$excluded = 0
+$excludedDirs = [System.Collections.Generic.List[string]]::new()
 foreach ($dir in $scanRoots) {
   $root = Join-Path $C $dir
   if (-not (Test-Path -LiteralPath $root)) { continue }
-  $left += @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue | Where-Object {
-    $full = $_.FullName
-    if ($full.Length -lt $prefix.Length) { return $false }
-    if (-not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { return $false }
-    $tail = $full.Substring($C.Length)
-    if ($tail -match '\\skills\\fourth-') { return $false }
-    $_.Name -match 'codex' -or $full -match '\\_snapshots\\|\\_archive\\' -or $_.Name -match '\.pptx$|\.potx$'
-  })
+  foreach ($item in @(Get-ChildItem -LiteralPath $root -Recurse -Force -ErrorAction SilentlyContinue)) {
+    $full = $item.FullName
+    if ($full.Length -lt $prefix.Length) { continue }
+    if (-not $full.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) { continue }
+    $tail = $full.Substring($C.Length) -replace '\\', '/'
+    $vendorHit = $false
+    foreach ($vendor in $vendorNames) {
+      $vendorPattern = '/' + [regex]::Escape($vendor) + '(/|$)'
+      if ($tail -match $vendorPattern) {
+        $vendorHit = $true
+        if (-not $excludedDirs.Contains($vendor)) { $excludedDirs.Add($vendor) }
+        break
+      }
+    }
+    if ($vendorHit) { $excluded++; continue }
+    if ($tail -match '/skills/fourth-') { continue }
+    if ($item.Name -match 'codex' -or $tail -match '/_snapshots/|/_archive/' -or $item.Name -match '\.pptx$|\.potx$') {
+      $left += $item
+    }
+  }
 }
+$dirList = if ($excludedDirs.Count -gt 0) { $excludedDirs -join ', ' } else { '' }
+"excluded: $excluded paths ($dirList)"
 "leftovers: $($left.Count)"
 if ($left.Count -ne 0) {
   $left | ForEach-Object { $_.FullName }

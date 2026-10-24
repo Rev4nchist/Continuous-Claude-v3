@@ -1,0 +1,60 @@
+# Pester tests for the prune leftover scan.
+# Run: pwsh -NoProfile -Command "Invoke-Pester scripts/__tests__/prune-leftovers.Tests.ps1"
+# Uses a temp USERPROFILE. The planted name is built at runtime so this file
+# does not carry the stale-install token the ratchet counts.
+
+BeforeAll {
+    $repo = Split-Path -Parent (Split-Path -Parent $PSScriptRoot)
+    $script:Prune = Join-Path $repo 'scripts/prune-stale-install.ps1'
+    $script:Planted = -join @('co', 'dex')
+
+    function script:New-PruneRoot {
+        $tempRoot = Join-Path ([System.IO.Path]::GetTempPath()) ('prune-left-' + [guid]::NewGuid().ToString('n'))
+        New-Item -ItemType Directory -Path (Join-Path $tempRoot '.claude') -Force | Out-Null
+        return $tempRoot
+    }
+
+    function script:Invoke-PruneAt([string]$Root) {
+        $prev = $env:USERPROFILE
+        try {
+            $env:USERPROFILE = $Root
+            $lines = @(& pwsh -NoProfile -File $script:Prune 2>&1 | ForEach-Object { "$_" })
+            return @{ Code = $LASTEXITCODE; Out = ($lines -join "`n") }
+        } finally {
+            if ($null -eq $prev) { Remove-Item Env:USERPROFILE -ErrorAction SilentlyContinue }
+            else { $env:USERPROFILE = $prev }
+        }
+    }
+}
+
+Describe 'prune leftover scan' {
+    It 'skips vendor trees, reports them, and still fails on a non-vendor leftover' {
+        $tempRoot = New-PruneRoot
+        try {
+            $claude = Join-Path $tempRoot '.claude'
+            Set-Content -LiteralPath (Join-Path $claude 'settings.json') -Value '{}' -Encoding utf8
+            $vendorFile = Join-Path $claude "hooks/node_modules/pkg/$($script:Planted)-file.js"
+            New-Item -ItemType Directory -Path (Split-Path -Parent $vendorFile) -Force | Out-Null
+            Set-Content -LiteralPath $vendorFile -Value 'third party' -Encoding utf8
+            $fourthFile = Join-Path $claude "skills/fourth-brand/$($script:Planted).md"
+            New-Item -ItemType Directory -Path (Split-Path -Parent $fourthFile) -Force | Out-Null
+            Set-Content -LiteralPath $fourthFile -Value 'leave' -Encoding utf8
+            $staleFile = Join-Path $claude "skills/kept/$($script:Planted)-leftover.txt"
+            New-Item -ItemType Directory -Path (Split-Path -Parent $staleFile) -Force | Out-Null
+            Set-Content -LiteralPath $staleFile -Value 'real leftover' -Encoding utf8
+
+            $result = Invoke-PruneAt $tempRoot
+            $result.Code | Should -Not -Be 0
+            $result.Out | Should -Match 'excluded: [1-9][0-9]* paths \(node_modules\)'
+            $result.Out | Should -Match 'leftovers: 1'
+            $result.Out | Should -Match 'leftovers 1'
+            $result.Out | Should -Match 'backup: none \(nothing to remove\)'
+            $listed = @($result.Out -split "`n" | Where-Object { $_ -like '*node_modules*' -and $_ -notlike 'excluded:*' })
+            $listed.Count | Should -Be 0
+            Test-Path -LiteralPath $vendorFile | Should -BeTrue
+            Test-Path -LiteralPath $fourthFile | Should -BeTrue
+        } finally {
+            Remove-Item -LiteralPath $tempRoot -Recurse -Force
+        }
+    }
+}
