@@ -227,17 +227,11 @@ for that account (step 1). Full detail:
 
 ## DevOps Integration (Step 4b)
 
-The wizard will prompt for optional DevOps tool setup:
+The wizard does not prompt for Linear or Sentry. Step 4b does not collect `LINEAR_API_TOKEN`, `LINEAR_WORKSPACE`, `SENTRY_AUTH_TOKEN`, or `SENTRY_ORG`, and it does not write those names into `.env`.
 
-**Linear** (issue tracking):
-- CLI: `linearis` for scripted automation, `linear-cli` for interactive
-- MCP: Remote server at `https://mcp.linear.app/mcp` (OAuth)
-- Env vars: `LINEAR_API_TOKEN`, `LINEAR_WORKSPACE`
+Linear issue tracking stays available through `linearis`, `linear-cli`, and the remote server at `https://mcp.linear.app/mcp`. The wizard does not register that server and does not ask for a Linear token.
 
-**Sentry** (error monitoring):
-- CLI: `sentry-cli` for releases, source maps, error queries
-- MCP: Remote server at `https://mcp.sentry.dev/sse` (OAuth)
-- Env vars: `SENTRY_AUTH_TOKEN`, `SENTRY_ORG`
+Sentry error monitoring stays available through `sentry-cli` and the remote server at `https://mcp.sentry.dev/sse`. The wizard does not register that server and does not ask for a Sentry token.
 
 **Playwright CLI** (E2E testing):
 - CLI: `@playwright/cli` for token-efficient browser automation
