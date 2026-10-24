@@ -8,6 +8,7 @@
  */
 
 import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+import { createHash } from 'crypto';
 import * as fs from 'fs';
 import * as path from 'path';
 import { tmpdir } from 'os';
@@ -260,6 +261,11 @@ describe('hook-health-monitor', () => {
       const futureTime = new Date(distStat.mtime.getTime() + 2000);
       fs.writeFileSync(srcFile, '// src updated');
       fs.utimesSync(srcFile, futureTime, futureTime);
+      fs.writeFileSync(path.join(distDir, '.build-inputs.json'), JSON.stringify({
+        version: 1,
+        algorithm: 'sha256',
+        inputs: { 'stale-hook.ts': createHash('sha256').update('// built content').digest('hex') },
+      }));
 
       const hookInfo: HookFileInfo = {
         distPath: distFile,
@@ -269,6 +275,78 @@ describe('hook-health-monitor', () => {
       };
 
       const result = checkHookHealth(hookInfo);
+      expect(result.status).toBe('stale');
+    });
+
+    function manifest(inputs: Record<string, string>): void {
+      fs.writeFileSync(path.join(distDir, '.build-inputs.json'), JSON.stringify({
+        version: 1,
+        algorithm: 'sha256',
+        inputs,
+      }));
+    }
+
+    function sha(content: string): string {
+      return createHash('sha256').update(content).digest('hex');
+    }
+
+    it('reports healthy when dist is newer and the build manifest matches', () => {
+      const distFile = path.join(distDir, 'fresh-hook.mjs');
+      const srcFile = path.join(srcDir, 'fresh-hook.ts');
+      const content = 'export const fresh = 1;\n';
+      fs.writeFileSync(srcFile, content);
+      fs.writeFileSync(distFile, '// bundle');
+      manifest({ 'fresh-hook.ts': sha(content) });
+      const future = new Date(fs.statSync(srcFile).mtime.getTime() + 5000);
+      fs.utimesSync(distFile, future, future);
+
+      const result = checkHookHealth({
+        distPath: distFile,
+        srcPath: srcFile,
+        hookEvent: 'SessionStart',
+        hookName: 'fresh-hook',
+      });
+      expect(result.status).toBe('healthy');
+    });
+
+    it('does not report stale when checkout order makes src newer but the manifest matches', () => {
+      // Reproduced false positive: git checkout and copy-sync set mtimes by
+      // write order, so src can be newer than a bundle built from those bytes.
+      const distFile = path.join(distDir, 'fp-hook.mjs');
+      const srcFile = path.join(srcDir, 'fp-hook.ts');
+      const content = 'export const same = 1;\n';
+      fs.writeFileSync(srcFile, content);
+      fs.writeFileSync(distFile, '// bundle');
+      manifest({ 'fp-hook.ts': sha(content) });
+      const future = new Date(fs.statSync(distFile).mtime.getTime() + 5000);
+      fs.utimesSync(srcFile, future, future);
+
+      const result = checkHookHealth({
+        distPath: distFile,
+        srcPath: srcFile,
+        hookEvent: 'SessionStart',
+        hookName: 'fp-hook',
+      });
+      expect(result.status).toBe('healthy');
+    });
+
+    it('reports stale when src content differs from the manifest even if dist is newer', () => {
+      const distFile = path.join(distDir, 'changed-hook.mjs');
+      const srcFile = path.join(srcDir, 'changed-hook.ts');
+      const built = 'export const v = 1;\n';
+      const edited = 'export const v = 2;\n';
+      fs.writeFileSync(srcFile, edited);
+      fs.writeFileSync(distFile, '// bundle');
+      manifest({ 'changed-hook.ts': sha(built) });
+      const future = new Date(fs.statSync(srcFile).mtime.getTime() + 5000);
+      fs.utimesSync(distFile, future, future);
+
+      const result = checkHookHealth({
+        distPath: distFile,
+        srcPath: srcFile,
+        hookEvent: 'PostToolUse',
+        hookName: 'changed-hook',
+      });
       expect(result.status).toBe('stale');
     });
 
@@ -325,7 +403,7 @@ describe('hook-health-monitor', () => {
       const report = formatHealthReport(results);
       expect(report).toContain('Hook Health: 1/2 healthy, 1 issue');
       expect(report).toContain('STALE: stale-hook.mjs');
-      expect(report).toContain('src newer than dist');
+      expect(report).toContain('content differs from the build manifest');
       expect(report).toContain('npm run build');
     });
 

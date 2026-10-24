@@ -2,12 +2,86 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/session-start-init-check.ts
+import * as fs2 from "fs";
+import * as path2 from "path";
+import { execSync, spawn } from "child_process";
+
+// src/shared/dist-freshness.ts
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import { execSync, spawn } from "child_process";
+var BUILD_INPUTS_NAME = ".build-inputs.json";
+var MANIFEST_MISSING_INFO = "[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/.claude/hooks && npm run build";
+function sha256(content) {
+  return createHash("sha256").update(content).digest("hex");
+}
+function srcKey(srcRoot, filePath) {
+  return path.relative(srcRoot, filePath).split(path.sep).join("/");
+}
+function listSrcFiles(srcRoot) {
+  const out = [];
+  const walk = (dir) => {
+    if (!fs.existsSync(dir)) return;
+    for (const entry of fs.readdirSync(dir, { withFileTypes: true })) {
+      if (entry.name === "__tests__" || entry.name === "node_modules") continue;
+      const full = path.join(dir, entry.name);
+      if (entry.isDirectory()) walk(full);
+      else if (entry.name.endsWith(".ts")) out.push(full);
+    }
+  };
+  walk(srcRoot);
+  return out;
+}
+function loadBuildInputs(distDir) {
+  const manifestPath = path.join(distDir, BUILD_INPUTS_NAME);
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (parsed.version !== 1 || parsed.algorithm !== "sha256" || !parsed.inputs || typeof parsed.inputs !== "object") {
+      return null;
+    }
+    return { version: 1, algorithm: "sha256", inputs: parsed.inputs };
+  } catch {
+    return null;
+  }
+}
+function assessFileFreshness(srcPath, srcRoot, manifest) {
+  if (!manifest) return { state: "unknown", info: MANIFEST_MISSING_INFO };
+  let current;
+  try {
+    current = sha256(fs.readFileSync(srcPath));
+  } catch {
+    return { state: "stale" };
+  }
+  const recorded = manifest.inputs[srcKey(srcRoot, srcPath)];
+  if (!recorded || recorded !== current) return { state: "stale" };
+  return { state: "fresh" };
+}
+function assessTreeFreshness(srcRoot, distDir) {
+  const srcFiles = listSrcFiles(srcRoot);
+  const manifest = loadBuildInputs(distDir);
+  if (!manifest) {
+    return { state: "unknown", staleFiles: [], srcCount: srcFiles.length, info: MANIFEST_MISSING_INFO };
+  }
+  const staleFiles = srcFiles.filter((file) => assessFileFreshness(file, srcRoot, manifest).state === "stale");
+  return {
+    state: staleFiles.length > 0 ? "stale" : "fresh",
+    staleFiles,
+    srcCount: srcFiles.length
+  };
+}
+function formatStaleDistWarning(srcRoot, result) {
+  if (result.state === "unknown") return result.info ?? MANIFEST_MISSING_INFO;
+  if (result.state !== "stale") return null;
+  const names = result.staleFiles.slice(0, 3).map((file) => srcKey(srcRoot, file)).join(", ");
+  const more = result.staleFiles.length > 3 ? `, +${result.staleFiles.length - 3} more` : "";
+  return `[!] Hook dist/ is stale -- ${result.staleFiles.length} of ${result.srcCount} sources differ from the build manifest (${names}${more}). Run: cd ~/.claude/hooks && npm run build`;
+}
+
+// src/session-start-init-check.ts
 var TREE_MAX_AGE_SECONDS = 300;
 function getOpcDir() {
-  return process.env.CLAUDE_OPC_DIR || path.join(process.env.HOME || process.env.USERPROFILE || "", "continuous-claude", "opc");
+  return process.env.CLAUDE_OPC_DIR || path2.join(process.env.HOME || process.env.USERPROFILE || "", "continuous-claude", "opc");
 }
 function warmTldrDaemon(projectDir) {
   if (process.env.CCV3_TLDR_WARM_OFF) return false;
@@ -27,14 +101,14 @@ function warmTldrDaemon(projectDir) {
   }
 }
 function isTreeStale(projectDir) {
-  const treePath = path.join(projectDir, ".claude", "knowledge-tree.json");
-  if (!fs.existsSync(treePath)) {
+  const treePath = path2.join(projectDir, ".claude", "knowledge-tree.json");
+  if (!fs2.existsSync(treePath)) {
     return true;
   }
   try {
-    const content = JSON.parse(fs.readFileSync(treePath, "utf-8"));
+    const content = JSON.parse(fs2.readFileSync(treePath, "utf-8"));
     if (content._stale) return true;
-    const stats = fs.statSync(treePath);
+    const stats = fs2.statSync(treePath);
     const ageSeconds = (Date.now() - stats.mtimeMs) / 1e3;
     return ageSeconds >= TREE_MAX_AGE_SECONDS;
   } catch {
@@ -43,10 +117,10 @@ function isTreeStale(projectDir) {
 }
 function generateTree(projectDir) {
   const opcDir = getOpcDir();
-  const lazyTreePath = path.join(opcDir, "scripts", "core", "lazy_tree.py");
-  if (!fs.existsSync(lazyTreePath)) {
-    const knowledgeTreePath = path.join(opcDir, "scripts", "core", "knowledge_tree.py");
-    if (!fs.existsSync(knowledgeTreePath)) {
+  const lazyTreePath = path2.join(opcDir, "scripts", "core", "lazy_tree.py");
+  if (!fs2.existsSync(lazyTreePath)) {
+    const knowledgeTreePath = path2.join(opcDir, "scripts", "core", "knowledge_tree.py");
+    if (!fs2.existsSync(knowledgeTreePath)) {
       return false;
     }
     try {
@@ -70,11 +144,11 @@ function generateTree(projectDir) {
   }
 }
 function isInitialized(projectDir) {
-  const treePath = path.join(projectDir, ".claude", "knowledge-tree.json");
-  const roadmapPath = path.join(projectDir, "ROADMAP.md");
+  const treePath = path2.join(projectDir, ".claude", "knowledge-tree.json");
+  const roadmapPath = path2.join(projectDir, "ROADMAP.md");
   return {
-    tree: fs.existsSync(treePath),
-    roadmap: fs.existsSync(roadmapPath)
+    tree: fs2.existsSync(treePath),
+    roadmap: fs2.existsSync(roadmapPath)
   };
 }
 function hasCodeFiles(projectDir) {
@@ -92,7 +166,7 @@ function hasCodeFiles(projectDir) {
     ".git"
   ];
   for (const indicator of codeIndicators) {
-    if (fs.existsSync(path.join(projectDir, indicator))) {
+    if (fs2.existsSync(path2.join(projectDir, indicator))) {
       return true;
     }
   }
@@ -114,10 +188,10 @@ function hasCodeFiles(projectDir) {
     ".swift"
   ]);
   try {
-    const entries = fs.readdirSync(projectDir, { withFileTypes: true });
+    const entries = fs2.readdirSync(projectDir, { withFileTypes: true });
     for (const entry of entries) {
       if (entry.isFile()) {
-        const ext = path.extname(entry.name).toLowerCase();
+        const ext = path2.extname(entry.name).toLowerCase();
         if (codeExtensions.has(ext)) {
           return true;
         }
@@ -130,16 +204,16 @@ function hasCodeFiles(projectDir) {
 function checkExternalSkillStaleness() {
   const result = { needsRevetting: [], stale: [] };
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const rulesPath = path.join(homeDir, ".claude", "skills", "skill-rules.json");
-  const lockPath = path.join(homeDir, ".agents", ".skill-lock.json");
-  if (!fs.existsSync(rulesPath)) return result;
+  const rulesPath = path2.join(homeDir, ".claude", "skills", "skill-rules.json");
+  const lockPath = path2.join(homeDir, ".agents", ".skill-lock.json");
+  if (!fs2.existsSync(rulesPath)) return result;
   try {
-    const rules = JSON.parse(fs.readFileSync(rulesPath, "utf-8"));
+    const rules = JSON.parse(fs2.readFileSync(rulesPath, "utf-8"));
     const skills = rules.skills || {};
     let lockData = {};
-    if (fs.existsSync(lockPath)) {
+    if (fs2.existsSync(lockPath)) {
       try {
-        const lock = JSON.parse(fs.readFileSync(lockPath, "utf-8"));
+        const lock = JSON.parse(fs2.readFileSync(lockPath, "utf-8"));
         lockData = lock.skills || {};
       } catch {
       }
@@ -167,19 +241,19 @@ function checkExternalSkillStaleness() {
 }
 function detectProjectStack(projectDir) {
   const stack = [];
-  const pkgPath = path.join(projectDir, "package.json");
-  if (fs.existsSync(pkgPath)) {
+  const pkgPath = path2.join(projectDir, "package.json");
+  if (fs2.existsSync(pkgPath)) {
     try {
-      const pkg = JSON.parse(fs.readFileSync(pkgPath, "utf-8"));
+      const pkg = JSON.parse(fs2.readFileSync(pkgPath, "utf-8"));
       const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
       stack.push(...Object.keys(allDeps));
     } catch {
     }
   }
-  const pyprojectPath = path.join(projectDir, "pyproject.toml");
-  if (fs.existsSync(pyprojectPath)) {
+  const pyprojectPath = path2.join(projectDir, "pyproject.toml");
+  if (fs2.existsSync(pyprojectPath)) {
     try {
-      const content = fs.readFileSync(pyprojectPath, "utf-8");
+      const content = fs2.readFileSync(pyprojectPath, "utf-8");
       const depMatches = content.match(/^\s*"?([a-zA-Z0-9_-]+)"?\s*[>=<~^]/gm);
       if (depMatches) {
         stack.push(...depMatches.map((m) => m.trim().replace(/[">=<~^ ]/g, "")));
@@ -188,7 +262,7 @@ function detectProjectStack(projectDir) {
     }
   }
   try {
-    const topLevelFiles = fs.readdirSync(projectDir);
+    const topLevelFiles = fs2.readdirSync(projectDir);
     if (topLevelFiles.some((f) => f.endsWith(".bicep") || f.endsWith(".bicepparam"))) {
       stack.push("@azure/bicep-indicator");
     }
@@ -200,13 +274,13 @@ function detectProjectStack(projectDir) {
     }
     for (const entry of topLevelFiles) {
       try {
-        const subPath = path.join(projectDir, entry);
-        const stat = fs.statSync(subPath);
+        const subPath = path2.join(projectDir, entry);
+        const stat = fs2.statSync(subPath);
         if (!stat.isDirectory() || entry.startsWith(".") || entry === "node_modules") continue;
-        const subFiles = fs.readdirSync(subPath);
+        const subFiles = fs2.readdirSync(subPath);
         if (subFiles.includes("package.json")) {
           try {
-            const pkg = JSON.parse(fs.readFileSync(path.join(subPath, "package.json"), "utf-8"));
+            const pkg = JSON.parse(fs2.readFileSync(path2.join(subPath, "package.json"), "utf-8"));
             const allDeps = { ...pkg.dependencies, ...pkg.devDependencies };
             stack.push(...Object.keys(allDeps));
           } catch {
@@ -214,7 +288,7 @@ function detectProjectStack(projectDir) {
         }
         if (subFiles.includes("pyproject.toml")) {
           try {
-            const content = fs.readFileSync(path.join(subPath, "pyproject.toml"), "utf-8");
+            const content = fs2.readFileSync(path2.join(subPath, "pyproject.toml"), "utf-8");
             const depMatches = content.match(/^\s*"?([a-zA-Z0-9_-]+)"?\s*[>=<~^]/gm);
             if (depMatches) {
               stack.push(...depMatches.map((m) => m.trim().replace(/[">=<~^ ]/g, "")));
@@ -236,11 +310,11 @@ function detectProjectStack(projectDir) {
 }
 function findRecommendedSkills(projectStack, installedSkills) {
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const catalogPath = path.join(homeDir, ".claude", "skills", "skill-catalog.json");
-  if (!fs.existsSync(catalogPath)) return [];
+  const catalogPath = path2.join(homeDir, ".claude", "skills", "skill-catalog.json");
+  if (!fs2.existsSync(catalogPath)) return [];
   let catalog;
   try {
-    catalog = JSON.parse(fs.readFileSync(catalogPath, "utf-8"));
+    catalog = JSON.parse(fs2.readFileSync(catalogPath, "utf-8"));
   } catch {
     return [];
   }
@@ -312,11 +386,11 @@ async function main() {
   let skillRecommendations = [];
   try {
     const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-    const rulesPath = path.join(homeDir, ".claude", "skills", "skill-rules.json");
+    const rulesPath = path2.join(homeDir, ".claude", "skills", "skill-rules.json");
     const installedSkills = /* @__PURE__ */ new Set();
-    if (fs.existsSync(rulesPath)) {
+    if (fs2.existsSync(rulesPath)) {
       try {
-        const rules = JSON.parse(fs.readFileSync(rulesPath, "utf-8"));
+        const rules = JSON.parse(fs2.readFileSync(rulesPath, "utf-8"));
         for (const name of Object.keys(rules.skills || {})) {
           installedSkills.add(name);
         }
@@ -330,7 +404,18 @@ async function main() {
   } catch {
   }
   const hasRecommendations = skillRecommendations.length > 0;
-  if (status.tree && status.roadmap && !treeGenFailed && !hasSkillIssues && !hasRecommendations) {
+  let hookDistLine = null;
+  if (projectDir.includes("continuous-claude")) {
+    const hookSrcDir = path2.join(projectDir, ".claude", "hooks", "src");
+    const hookDistDir = path2.join(projectDir, ".claude", "hooks", "dist");
+    if (fs2.existsSync(hookSrcDir) && fs2.existsSync(hookDistDir)) {
+      try {
+        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir));
+      } catch {
+      }
+    }
+  }
+  if (status.tree && status.roadmap && !treeGenFailed && !hasSkillIssues && !hasRecommendations && !hookDistLine) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
@@ -360,10 +445,10 @@ Install relevant skills to enhance your work on this project.`
     );
   }
   const maintenanceWarnings = [];
-  const roadmapPath = path.join(projectDir, "ROADMAP.md");
-  if (fs.existsSync(roadmapPath)) {
+  const roadmapPath = path2.join(projectDir, "ROADMAP.md");
+  if (fs2.existsSync(roadmapPath)) {
     try {
-      const roadmapContent = fs.readFileSync(roadmapPath, "utf-8");
+      const roadmapContent = fs2.readFileSync(roadmapPath, "utf-8");
       const completedCount = (roadmapContent.match(/^- \[x\]/gm) || []).length;
       if (completedCount > 50) {
         maintenanceWarnings.push(`[i] ROADMAP has ${completedCount} completed items (threshold: 50). Consider archiving old entries.`);
@@ -371,45 +456,7 @@ Install relevant skills to enhance your work on this project.`
     } catch {
     }
   }
-  if (projectDir.includes("continuous-claude")) {
-    const hookSrcDir = path.join(projectDir, ".claude", "hooks", "src");
-    const hookDistDir = path.join(projectDir, ".claude", "hooks", "dist");
-    if (fs.existsSync(hookSrcDir) && fs.existsSync(hookDistDir)) {
-      try {
-        const bundles = fs.readdirSync(hookDistDir).filter((f) => f.endsWith(".mjs"));
-        const newestBundleMtime = bundles.reduce((max, f) => {
-          try {
-            return Math.max(max, fs.statSync(path.join(hookDistDir, f)).mtimeMs);
-          } catch {
-            return max;
-          }
-        }, 0);
-        const srcFiles = [];
-        const walk = (dir) => {
-          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-            if (e.name === "__tests__" || e.name === "node_modules") continue;
-            const full = path.join(dir, e.name);
-            if (e.isDirectory()) walk(full);
-            else if (e.name.endsWith(".ts")) srcFiles.push(full);
-          }
-        };
-        walk(hookSrcDir);
-        const staleFiles = newestBundleMtime === 0 ? srcFiles : srcFiles.filter((f) => {
-          try {
-            return fs.statSync(f).mtimeMs > newestBundleMtime;
-          } catch {
-            return false;
-          }
-        });
-        if (staleFiles.length > 0) {
-          const names = staleFiles.slice(0, 3).map((f) => path.relative(hookSrcDir, f)).join(", ");
-          const more = staleFiles.length > 3 ? `, +${staleFiles.length - 3} more` : "";
-          maintenanceWarnings.push(`[!] Hook dist/ is stale -- ${staleFiles.length} of ${srcFiles.length} sources newer than the newest bundle (${names}${more}). Run: cd ~/.claude/hooks && npm run build`);
-        }
-      } catch {
-      }
-    }
-  }
+  if (hookDistLine) maintenanceWarnings.push(hookDistLine);
   if (missing.length === 0 && skillWarnings.length === 0 && skillRecommendationMessages.length === 0 && maintenanceWarnings.length === 0) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
