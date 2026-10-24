@@ -20,7 +20,8 @@
  *     score, so it is not part of the audit invariant count.
  */
 
-import { spawn, spawnSync } from 'node:child_process';
+import { spawnSync } from 'node:child_process';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import { openSync, mkdirSync, existsSync } from 'node:fs';
 import * as path from 'node:path';
 
@@ -152,9 +153,8 @@ function fireBackgroundSync(repoRoot: string): void {
     const err = openSync(logFile, 'a');
 
     const scriptPath = path.join(repoRoot, 'scripts', 'sync-architecture-stats.mjs');
-    const child = spawn('node', [scriptPath, '--apply'], {
+    const child = spawnDetachedHidden('node', [scriptPath, '--apply'], {
       cwd: repoRoot,
-      detached: true,
       stdio: ['ignore', out, err],
     });
     child.unref();

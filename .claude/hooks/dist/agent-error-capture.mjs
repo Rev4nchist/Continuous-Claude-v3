@@ -3,7 +3,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 
 // src/agent-error-capture.ts
 import { readFileSync, existsSync } from "fs";
-import { spawn } from "child_process";
+import { spawn as spawn2 } from "child_process";
 import { join } from "path";
 
 // src/shared/memory-quality-scorer.ts
@@ -143,6 +143,15 @@ function scoreExtraction(content, context) {
   return { score, confidence, classification, reasons };
 }
 
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
 // src/agent-error-capture.ts
 var STRUCTURED_ERROR_PATTERNS = [
   /\bTraceback\s+\(most recent/i,
@@ -250,7 +259,7 @@ function releaseWhenRunning(child) {
   child.once("error", release);
 }
 function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
-  const spawnFn = deps.spawnFn ?? spawn;
+  const spawnFn = deps.spawnFn ?? spawn2;
   const scoreFn = deps.scoreFn ?? scoreExtraction;
   const existsFn = deps.existsFn ?? existsSync;
   const opcDir = getOpcDir();
@@ -284,7 +293,7 @@ function storeLearning(sessionId, agentType, prompt, errorContext, deps = {}) {
       `Failed agent invocation: ${agentType}`,
       tags.join(",")
     );
-    const child = spawnFn(cmd, args, options);
+    const child = spawnDetachedHidden(cmd, args, options, spawnFn);
     releaseWhenRunning(child);
     console.error(`[AgentErrorCapture] Dispatched (detached) failure learning for agent '${agentType}'`);
   } catch (err) {

@@ -23,6 +23,7 @@
 import * as fs from 'fs';
 import * as path from 'path';
 import { spawn } from 'child_process';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
 interface SessionEndInput {
   session_id?: string;
@@ -176,7 +177,7 @@ export interface SpawnIndexerInput {
 
 export function spawnIndexer(input: SpawnIndexerInput): void {
   const spawner = input.spawnFn ?? spawn;
-  const child = spawner(
+  const child = spawnDetachedHidden(
     'uv',
     [
       'run',
@@ -188,10 +189,10 @@ export function spawnIndexer(input: SpawnIndexerInput): void {
     ],
     {
       cwd: input.opcDir,
-      detached: true,
       stdio: 'ignore',
       env: { ...process.env, PYTHONPATH: input.opcDir },
     },
+    spawner,
   );
   child.unref?.();
 }

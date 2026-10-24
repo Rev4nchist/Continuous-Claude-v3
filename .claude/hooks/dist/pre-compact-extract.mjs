@@ -2,8 +2,18 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/pre-compact-extract.ts
-import { spawn } from "child_process";
 import * as fs from "fs";
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/pre-compact-extract.ts
 import * as path from "path";
 
 // src/shared/atomic-write.ts
@@ -198,7 +208,7 @@ function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile
     return false;
   }
   try {
-    const child = spawn("uv", [
+    const child = spawnDetachedHidden("uv", [
       "run",
       "python",
       "scripts/core/incremental_extract.py",
@@ -217,7 +227,6 @@ function runBackgroundExtraction(transcriptPath, sessionId, startLine, stateFile
       "--json"
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: opcDir }
     });

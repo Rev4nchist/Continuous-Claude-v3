@@ -4,7 +4,17 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/pageindex-watch.ts
 import * as fs from "fs";
 import * as path from "path";
+
+// src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/pageindex-watch.ts
 var INDEXED_PATTERNS = [
   /ROADMAP\.md$/i,
   /README\.md$/i,
@@ -63,11 +73,9 @@ function triggerReindex(projectDir, files) {
     "--quiet"
   ];
   try {
-    const proc = spawn(pythonPath, args, {
+    const proc = spawnDetachedHidden(pythonPath, args, {
       cwd: opcDir,
       stdio: "ignore",
-      detached: true,
-      windowsHide: true,
       env: {
         ...process.env,
         PYTHONPATH: opcDir

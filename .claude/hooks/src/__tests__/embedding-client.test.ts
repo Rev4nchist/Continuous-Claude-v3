@@ -179,6 +179,17 @@ afterAll(() => {
 // Get a typed reference to the mocked spawn for use in lockfile-mutex tests.
 const mockedSpawn = vi.mocked(spawn);
 
+/**
+ * On Windows the daemon spawn goes through the spawn-hidden Node relay
+ * (`node -e <relay> -- <cmd> ...args`). Return the real command and args, and
+ * whether the call was relayed.
+ */
+function spawnTarget(call: unknown[]): { cmd: unknown; args: unknown[]; relayed: boolean } {
+  const [cmd, args] = call as [unknown, unknown[]];
+  const relayed = cmd === process.execPath && args[0] === '-e' && args[2] === '--';
+  return relayed ? { cmd: args[3], args: args.slice(4), relayed } : { cmd, args, relayed };
+}
+
 beforeEach(() => {
   if (existsSync(DISCOVERY_PATH)) {
     try { unlinkSync(DISCOVERY_PATH); } catch { /* ignore */ }
@@ -731,11 +742,11 @@ describe('ensureDaemonRunning: cross-process spawn lockfile mutex', () => {
 
     // Spawn should have been attempted exactly once (stale lock → reclaim → proceed).
     expect(mockedSpawn).toHaveBeenCalledOnce();
-    expect(mockedSpawn).toHaveBeenCalledWith(
-      EXPECTED_UV_ARG,
-      ['run', '--project', 'opc', 'python', 'opc/scripts/core/embedding_daemon.py', '--daemon'],
-      expect.objectContaining({ detached: true }),
-    );
+    expect(spawnTarget(mockedSpawn.mock.calls[0])).toMatchObject({
+      cmd: EXPECTED_UV_ARG,
+      args: ['run', '--project', 'opc', 'python', 'opc/scripts/core/embedding_daemon.py', '--daemon'],
+    });
+    expect(mockedSpawn.mock.calls[0][2]).toMatchObject({ detached: true });
   });
 
   it('writes lockfile with current pid and fresh timestamp on first call', () => {
@@ -755,11 +766,11 @@ describe('ensureDaemonRunning: cross-process spawn lockfile mutex', () => {
 
     // Spawn should have been attempted exactly once.
     expect(mockedSpawn).toHaveBeenCalledOnce();
-    expect(mockedSpawn).toHaveBeenCalledWith(
-      EXPECTED_UV_ARG,
-      ['run', '--project', 'opc', 'python', 'opc/scripts/core/embedding_daemon.py', '--daemon'],
-      expect.objectContaining({ detached: true }),
-    );
+    expect(spawnTarget(mockedSpawn.mock.calls[0])).toMatchObject({
+      cmd: EXPECTED_UV_ARG,
+      args: ['run', '--project', 'opc', 'python', 'opc/scripts/core/embedding_daemon.py', '--daemon'],
+    });
+    expect(mockedSpawn.mock.calls[0][2]).toMatchObject({ detached: true });
   });
 
   it('_spawnAttempted fast-path: second call in same process skips lockfile check', () => {
@@ -792,8 +803,11 @@ describe('ensureDaemonRunning: cross-process spawn lockfile mutex', () => {
     expect(opts.windowsHide).toBe(true);
     expect(opts.detached).toBe(true);
     expect(opts.stdio).toBe('ignore');
-    // argv[0] is the RESOLVED absolute uv path, not the bare 'uv' shim.
-    expect(mockedSpawn.mock.calls[0][0]).toBe(EXPECTED_UV_ARG);
+    // Windows: through the relay, else uv's python child gets a visible console.
+    const target = spawnTarget(mockedSpawn.mock.calls[0]);
+    expect(target.relayed).toBe(process.platform === 'win32');
+    // The command is the RESOLVED absolute uv path, not the bare 'uv' shim.
+    expect(target.cmd).toBe(EXPECTED_UV_ARG);
   });
 
   it('does NOT write a lock when uv is unresolvable (F4 pre-validation)', () => {

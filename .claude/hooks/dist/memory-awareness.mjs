@@ -317,7 +317,18 @@ import {
   unlinkSync,
   writeSync
 } from "fs";
-import { spawn, execFileSync } from "child_process";
+import { execFileSync } from "child_process";
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/shared/embedding-client.ts
 import { homedir } from "os";
 import { join as join3, resolve } from "path";
 import * as net from "net";
@@ -666,14 +677,12 @@ function ensureDaemonRunning() {
     return;
   }
   try {
-    const child = spawn(
+    const child = spawnDetachedHidden(
       uvPath,
       ["run", "--project", "opc", "python", "opc/scripts/core/embedding_daemon.py", "--daemon"],
       {
         cwd: repoRoot,
-        detached: true,
-        stdio: "ignore",
-        windowsHide: true
+        stdio: "ignore"
       }
     );
     child.on("error", (err) => {

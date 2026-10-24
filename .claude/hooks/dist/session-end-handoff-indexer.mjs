@@ -4,7 +4,18 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/session-end-handoff-indexer.ts
 import * as fs from "fs";
 import * as path from "path";
+import { spawn as spawn2 } from "child_process";
+
+// src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/session-end-handoff-indexer.ts
 var RECENT_WINDOW_MS = 3e4;
 var HANDOFF_EXTS = [".yaml", ".yml", ".md"];
 function findRecentHandoff(input) {
@@ -82,8 +93,8 @@ function appendLog(logPath, message) {
   }
 }
 function spawnIndexer(input) {
-  const spawner = input.spawnFn ?? spawn;
-  const child = spawner(
+  const spawner = input.spawnFn ?? spawn2;
+  const child = spawnDetachedHidden(
     "uv",
     [
       "run",
@@ -95,10 +106,10 @@ function spawnIndexer(input) {
     ],
     {
       cwd: input.opcDir,
-      detached: true,
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: input.opcDir }
-    }
+    },
+    spawner
   );
   child.unref?.();
 }

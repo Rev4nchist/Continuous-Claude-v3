@@ -11,7 +11,7 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { spawn } from 'child_process';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
 interface PostToolUseInput {
   tool_name: string;
@@ -102,11 +102,9 @@ function triggerReindex(projectDir: string, files: string[]): void {
   ];
 
   try {
-    const proc = spawn(pythonPath, args, {
+    const proc = spawnDetachedHidden(pythonPath, args, {
       cwd: opcDir,
       stdio: 'ignore',
-      detached: true,
-      windowsHide: true,
       env: {
         ...process.env,
         PYTHONPATH: opcDir

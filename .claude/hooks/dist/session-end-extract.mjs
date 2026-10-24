@@ -2,8 +2,19 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/session-end-extract.ts
-import { execSync, spawn } from "child_process";
+import { execSync } from "child_process";
 import * as path from "path";
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/session-end-extract.ts
 import * as fs from "fs";
 var MIN_TURNS = 10;
 function getOpcDir() {
@@ -46,7 +57,7 @@ function extractWithDedup(sessionId, projectDir, transcriptPath) {
   if (transcriptPath && fs.existsSync(transcriptPath) && fs.existsSync(incrementalScript)) {
     const startLine = state?.last_extracted_line || 0;
     console.error(`[SessionEnd:L3] Final sweep from line ${startLine} with dedup (fire-and-forget)`);
-    const child = spawn("uv", [
+    const child = spawnDetachedHidden("uv", [
       "run",
       "python",
       "scripts/core/incremental_extract.py",
@@ -65,7 +76,6 @@ function extractWithDedup(sessionId, projectDir, transcriptPath) {
       "--json"
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: opcDir }
     });
@@ -81,7 +91,7 @@ function extractLearningsLegacy(sessionId, projectDir) {
     console.error("lazy_memory.py not found, skipping extraction");
     return;
   }
-  const child = spawn(
+  const child = spawnDetachedHidden(
     "uv",
     [
       "run",
@@ -97,7 +107,6 @@ function extractLearningsLegacy(sessionId, projectDir) {
     ],
     {
       cwd: opcDir,
-      detached: true,
       stdio: "ignore"
     }
   );

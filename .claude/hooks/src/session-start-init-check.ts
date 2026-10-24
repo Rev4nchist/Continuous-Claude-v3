@@ -11,7 +11,8 @@
 
 import * as fs from 'fs';
 import * as path from 'path';
-import { execSync, spawn } from 'child_process';
+import { execSync } from 'child_process';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';
@@ -79,10 +80,9 @@ export function warmTldrDaemon(projectDir: string): boolean {
   if (process.env.CCV3_TLDR_WARM_OFF) return false;
   try {
     const cmd = process.platform === 'win32' ? 'tldr.exe' : 'tldr';
-    const child = spawn(cmd, ['daemon', 'start', '--project', projectDir], {
-      detached: true,
+    // spawnDetachedHidden: a plain detached spawn can let a child of tldr.exe open a visible window.
+    const child = spawnDetachedHidden(cmd, ['daemon', 'start', '--project', projectDir], {
       stdio: 'ignore',
-      windowsHide: true,
     });
     // Without an 'error' handler a missing `tldr` throws asynchronously and
     // could crash the hook process. Swallow it — warming is best-effort.

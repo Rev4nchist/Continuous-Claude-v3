@@ -4,7 +4,15 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/post-plan-roadmap.ts
 import * as fs2 from "fs";
 import * as path2 from "path";
+
+// src/lib/spawn-hidden.ts
 import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
 
 // src/shared/project-relevance.ts
 import * as fs from "fs";
@@ -1173,7 +1181,7 @@ function storePlanningLearnings(planInfo, projectDir) {
   const opcDir = process.env.CLAUDE_OPC_DIR || path2.join(process.env.USERPROFILE || process.env.HOME || "", "continuous-claude", "opc");
   const sessionId = `plan-${Date.now()}`;
   try {
-    const child = spawn("uv", [
+    const child = spawnDetachedHidden("uv", [
       "run",
       "python",
       "scripts/core/store_learning.py",
@@ -1191,7 +1199,6 @@ function storePlanningLearnings(planInfo, projectDir) {
       "high"
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: "ignore",
       env: { ...process.env, PYTHONPATH: "." }
     });

@@ -4,7 +4,18 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/session-start-init-check.ts
 import * as fs from "fs";
 import * as path from "path";
-import { execSync, spawn } from "child_process";
+import { execSync } from "child_process";
+
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+var RELAY_SCRIPT = "const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',()=>process.exit(1));p.on('exit',(code)=>process.exit(code??1));";
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
+// src/session-start-init-check.ts
 var TREE_MAX_AGE_SECONDS = 300;
 function getOpcDir() {
   return process.env.CLAUDE_OPC_DIR || path.join(process.env.HOME || process.env.USERPROFILE || "", "continuous-claude", "opc");
@@ -13,10 +24,8 @@ function warmTldrDaemon(projectDir) {
   if (process.env.CCV3_TLDR_WARM_OFF) return false;
   try {
     const cmd = process.platform === "win32" ? "tldr.exe" : "tldr";
-    const child = spawn(cmd, ["daemon", "start", "--project", projectDir], {
-      detached: true,
-      stdio: "ignore",
-      windowsHide: true
+    const child = spawnDetachedHidden(cmd, ["daemon", "start", "--project", projectDir], {
+      stdio: "ignore"
     });
     child.on("error", () => {
     });

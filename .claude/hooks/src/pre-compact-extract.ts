@@ -14,8 +14,8 @@
  * State tracked in: .claude/extraction-state.json
  */
 
-import { spawn } from 'child_process';
 import * as fs from 'fs';
+import { spawnDetachedHidden } from './lib/spawn-hidden.js';
 import * as path from 'path';
 import { writeStateWithLock } from './shared/atomic-write.js';
 
@@ -81,7 +81,7 @@ function runBackgroundExtraction(
   }
 
   try {
-    const child = spawn('uv', [
+    const child = spawnDetachedHidden('uv', [
       'run', 'python', 'scripts/core/incremental_extract.py',
       '--transcript', transcriptPath,
       '--session-id', sessionId,
@@ -92,7 +92,6 @@ function runBackgroundExtraction(
       '--json'
     ], {
       cwd: opcDir,
-      detached: true,
       stdio: 'ignore',
       env: { ...process.env, PYTHONPATH: opcDir },
     });

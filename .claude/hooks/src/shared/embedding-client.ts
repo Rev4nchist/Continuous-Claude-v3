@@ -39,7 +39,8 @@ import {
   unlinkSync,
   writeSync,
 } from 'fs';
-import { spawn, execFileSync } from 'child_process';
+import { execFileSync } from 'child_process';
+import { spawnDetachedHidden } from '../lib/spawn-hidden.js';
 import { homedir } from 'os';
 import { join, resolve } from 'path';
 import * as net from 'net';
@@ -971,15 +972,15 @@ export function ensureDaemonRunning(): void {
   // herd symptom). windowsHide:true + no shell mirrors the proven
   // scripts/start-embedding-daemon.ps1 launcher (UseShellExecute=$false +
   // CreateNoWindow=$true). uv with cwd=repoRoot resolves `--project opc`.
+  // spawnDetachedHidden: a plain detached uv leaves the daemon's python with a
+  // visible console window. The relay stays alive while the daemon runs.
   try {
-    const child = spawn(
+    const child = spawnDetachedHidden(
       uvPath,
       ['run', '--project', 'opc', 'python', 'opc/scripts/core/embedding_daemon.py', '--daemon'],
       {
         cwd: repoRoot,
-        detached: true,
         stdio: 'ignore',
-        windowsHide: true,
       },
     );
     child.on('error', (err) => {
