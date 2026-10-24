@@ -13,6 +13,38 @@ function Get-GateCount {
     return -1
 }
 
+function Get-W0TreeVerdict {
+    param(
+        [Parameter(Mandatory = $false)][AllowEmptyCollection()][string[]]$Porcelain
+    )
+    $tracked = [System.Collections.Generic.List[string]]::new()
+    $untracked = [System.Collections.Generic.List[string]]::new()
+    foreach ($line in @($Porcelain)) {
+        if ([string]::IsNullOrWhiteSpace($line)) { continue }
+        $row = $line.TrimEnd()
+        if ($row -match '^\?\?\s+(.*)$') {
+            $untracked.Add($Matches[1].Trim())
+        } else {
+            $tracked.Add($row)
+        }
+    }
+    $pass = $tracked.Count -eq 0
+    $warn = $pass -and $untracked.Count -gt 0
+    $summary = ''
+    if (-not $pass) {
+        $summary = "FAIL: tracked changes: $($tracked -join ' | ')"
+    } elseif ($warn) {
+        $summary = "WARN: untracked only (does not fail): $($untracked -join ', ')"
+    }
+    [pscustomobject]@{
+        Pass      = [bool]$pass
+        Warn      = [bool]$warn
+        Tracked   = @($tracked)
+        Untracked = @($untracked)
+        Summary   = $summary
+    }
+}
+
 function Get-W2SyncVerdict {
     param(
         [Parameter(Mandatory = $true)][int]$SyncExit,

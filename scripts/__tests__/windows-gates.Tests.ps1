@@ -45,6 +45,47 @@ Describe 'W2 sync verdict' {
     }
 }
 
+Describe 'W0 tree verdict' {
+    BeforeAll {
+        . $script:Lib
+    }
+
+    It 'untracked files warn and do not fail' {
+        $verdict = Get-W0TreeVerdict -Porcelain @('?? .claudedocs/')
+        $verdict.Pass | Should -BeTrue
+        $verdict.Warn | Should -BeTrue
+        @($verdict.Untracked) | Should -Contain '.claudedocs/'
+        $verdict.Summary | Should -Be 'WARN: untracked only (does not fail): .claudedocs/'
+    }
+
+    It 'a modified tracked file fails' {
+        $verdict = Get-W0TreeVerdict -Porcelain @(' M scripts/foo.ps1')
+        $verdict.Pass | Should -BeFalse
+        $verdict.Warn | Should -BeFalse
+        $verdict.Summary | Should -Be 'FAIL: tracked changes:  M scripts/foo.ps1'
+    }
+
+    It 'a staged tracked file fails' {
+        $verdict = Get-W0TreeVerdict -Porcelain @('M  scripts/foo.ps1')
+        $verdict.Pass | Should -BeFalse
+        $verdict.Summary | Should -Match '^FAIL: tracked changes:'
+    }
+
+    It 'a clean tree does not warn' {
+        $verdict = Get-W0TreeVerdict -Porcelain @()
+        $verdict.Pass | Should -BeTrue
+        $verdict.Warn | Should -BeFalse
+        $verdict.Summary | Should -Be ''
+    }
+
+    It 'the driver and the doc classify porcelain' {
+        $gates = Get-Content -LiteralPath $script:Gates -Raw
+        $gates.Contains('Get-W0TreeVerdict') | Should -BeTrue
+        $doc = Get-Content -LiteralPath $script:Doc -Raw
+        $doc.Contains('Untracked-only paths WARN and list the paths. They do not fail the gate.') | Should -BeTrue
+    }
+}
+
 Describe 'W2 child override' {
     It 'sets SYNC_ALLOW_BRANCH only on the temp-HOME sync command' {
         $gates = Get-Content -LiteralPath $script:Gates -Raw

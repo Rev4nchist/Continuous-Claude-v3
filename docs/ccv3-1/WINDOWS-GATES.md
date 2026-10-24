@@ -28,7 +28,7 @@ Pass when all of these hold:
 - `uname` prints `MINGW64…` or `MSYS…`, never `Linux`;
 - node and sha256sum both resolve;
 - HEAD is the PR1 branch tip (`fix/ccv3-install-blockers`) or the PR1 merge commit;
-- the working tree is clean;
+- `git status --porcelain` is classified. A modified, staged, renamed, or deleted tracked path FAILs and the paths are listed. Untracked-only paths WARN and list the paths. They do not fail the gate. A clean tree has neither warning nor failure from this check. An untracked directory such as `.claudedocs/` is a warning;
 - remotes are listed. If `origin` is parcadei, note it. Nothing is pushed.
 
 **W1 Sync cursor test (Git Bash)** → `$D-pr1-win-sync-cursor-test.txt`

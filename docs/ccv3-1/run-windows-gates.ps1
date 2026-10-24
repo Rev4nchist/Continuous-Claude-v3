@@ -52,11 +52,17 @@ $runPre  = $Phase -in 'pre','all'
 $runPost = $Phase -in 'post','all'
 
 # ---------- W0 preflight ----------
+$porcelain = @(git status --porcelain)
 $o = Invoke-GB 'uname -s; command -v node; command -v sha256sum'
-$o += "HEAD=$(git rev-parse HEAD)"; $o += "porcelain:"; $o += @(git status --porcelain); $o += @(git remote -v)
+$o += "HEAD=$(git rev-parse HEAD)"; $o += "porcelain:"; $o += $porcelain; $o += @(git remote -v)
 $uname = ($o | Select-Object -First 1)
-$ok = ($uname -match '^(MINGW|MSYS)') -and ($o -match 'node') -and ($o -match 'sha256sum')
-Save-Gate 'W0' 'preflight' $o $ok "uname=$uname"
+$tree = Get-W0TreeVerdict -Porcelain $porcelain
+if ($tree.Summary) { $o += $tree.Summary }
+$ok = ($uname -match '^(MINGW|MSYS)') -and ($o -match 'node') -and ($o -match 'sha256sum') -and $tree.Pass
+$w0Summary = "uname=$uname"
+if (-not $tree.Pass) { $w0Summary += " FAIL tracked=$($tree.Tracked.Count)" }
+elseif ($tree.Warn) { $w0Summary += " WARN untracked=$($tree.Untracked.Count)" }
+Save-Gate 'W0' 'preflight' $o $ok $w0Summary
 if ($uname -match 'Linux') { throw 'Git Bash resolved to a Linux/WSL shell; aborting.' }
 
 if ($runPre) {
