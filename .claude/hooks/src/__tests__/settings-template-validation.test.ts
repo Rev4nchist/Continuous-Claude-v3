@@ -12,7 +12,7 @@
  */
 import { describe, it, expect } from 'vitest';
 import { spawnSync } from 'child_process';
-import { existsSync, mkdtempSync, readFileSync } from 'fs';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
@@ -156,6 +156,37 @@ describe('settings.json.template', () => {
     expect(result.stderr ?? '').toContain('WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset');
     expect(result.stderr ?? '').not.toContain('postgresql://');
     expect(result.stdout ?? '').toContain('{}');
+  });
+
+  it('re-render --out replaces a settings file and drops a stale DATABASE_URL key', () => {
+    // The renderer does not read the existing file. --out writes a new document
+    // from the template plus the profile overlay, so a retired env key is gone.
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccv3-settings-replace-'));
+    const out = path.join(dir, 'settings.json');
+    writeFileSync(out, JSON.stringify({
+      env: {
+        DATABASE_URL: 'postgresql://user:PLACEHOLDER@localhost:5432/db',
+        CONTINUOUS_CLAUDE_COORDINATION: 'true',
+      },
+    }));
+    const script = path.resolve(here, '../../../../scripts/settings/render-settings.mjs');
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.CCV3_MACHINE_PROFILE;
+    const result = spawnSync(process.execPath, [
+      script,
+      '--template', tplPath,
+      '--out', out,
+      '--var', 'CLAUDE_HOME=/tmp/claude-home',
+      '--var', 'OPC_DIR=/tmp/opc',
+      '--var', 'REPO_ROOT=/tmp/repo',
+      '--var', 'USER_HOME=/tmp/user',
+    ], { encoding: 'utf8', env });
+    expect(result.status).toBe(0);
+    expect(result.stdout ?? '').not.toContain('postgresql://');
+    expect(result.stderr ?? '').not.toContain('postgresql://');
+    const written = JSON.parse(readFileSync(out, 'utf8')) as { env?: Record<string, unknown> };
+    expect(Object.keys(written.env ?? {})).not.toContain('DATABASE_URL');
+    expect(JSON.stringify(written)).not.toContain('postgresql://');
   });
 
   it('stays consistent with the verify-setup DB-mode rule', () => {

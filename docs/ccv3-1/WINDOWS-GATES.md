@@ -73,8 +73,17 @@ Pass when all of these hold:
 
 **Do not register tasks here.** That happens in runbook §3.9.
 
-## Install (not part of this checklist)
-Run `03-MACHINE-STATE-AND-RUNBOOK.md` §3.4 onward: the wizard in copy mode with `--profile personal`. After it, `~/.claude/state/machine-profile` should read `personal`. Record the size of `~/.claude` before and after (AC3).
+## Install on an existing machine (rog-strix)
+
+Do these in order. Back up before anything writes to the live install.
+
+1. Back up `~/.claude` (a sibling copy). Do not delete the live install.
+2. Sync this head into the install with Git Bash. On a branch other than main, prefix that sync command with `SYNC_ALLOW_BRANCH=1`. Do not export it for the rest of the shell.
+3. Re-render settings onto the install: `node scripts/settings/render-settings.mjs --out` to the install `settings.json`, or the wizard render, which calls that same `--out` path. The renderer builds a new file from the template plus the profile overlay. It does not read or merge the existing env. The template env has no `DATABASE_URL`, and the personal profile overlay is empty, so a re-render drops that stale key. `render-settings.mjs --check` does not write. `scripts/sync-to-active.sh` does not write `settings.json` (it is in `NEVER_SYNC`). Neither clears the key. A later wizard step that loads `settings.json` to add semantic search writes back the object it loaded, so it keeps whatever env is already there. Run the re-render before that step.
+4. Start a Claude session from the re-rendered settings and run the R3 in-session check.
+5. Run the remaining checks (prune, dist freshness, phase post).
+
+A fresh install still uses the wizard in copy mode with `--profile personal`. After it, `~/.claude/state/machine-profile` should read `personal`. Record the size of `~/.claude` before and after.
 
 ## Phase post (after the install)
 
