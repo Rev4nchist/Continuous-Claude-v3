@@ -8,32 +8,40 @@
 #
 # Idempotent: a missing path is skipped. A second run deletes nothing and
 # still reports leftovers: 0.
-# Deletes stay under $env:USERPROFILE\.claude. The backup is a sibling copy
-# ($env:USERPROFILE\.claude.bak-ccv3-2-<yyyyMMdd-HHmmss>, plus -1, -2, ... if
-# that name already exists). A rerun never copies into the previous backup.
+# Deletes stay under $env:USERPROFILE\.claude.
+# Backup name: $env:USERPROFILE\.claude.bak-prune-<yyyyMMdd-HHmmss>[-n]
+# (a sibling of the install, never inside it). Backups are never auto-deleted.
+# A backup is created only when at least one path will be removed and every
+# settings shim pre-check passed. Otherwise the script prints
+# `backup: none (<reason>)` and creates nothing.
+# The script prints the count of existing .claude.bak-* siblings.
 # skills\fourth-* is left in place (CCV3-4).
 # The leftover scan covers the install folders the sync owns. It does not
 # walk projects\, plugins\, or file-history.
-# Before any delete, settings.json and settings.local.json are read. A shim
-# name still present in either file aborts the script.
+# Planned removals and the settings shim pre-check run before any backup.
+# A shim name still present in settings.json or settings.local.json aborts
+# the script with no backup.
 
 $ErrorActionPreference = 'Stop'
 $C = [System.IO.Path]::GetFullPath((Join-Path $env:USERPROFILE '.claude'))
 if (-not (Test-Path -LiteralPath $C)) { throw "No install at $C" }
-$prefix = $C.TrimEnd('\') + '\'
+$sep = [System.IO.Path]::DirectorySeparatorChar
+$prefix = $C.TrimEnd('\', '/') + $sep
 
-$stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
-$bak = "$C.bak-ccv3-2-$stamp"
-$n = 1
-while (Test-Path -LiteralPath $bak) {
-  $bak = "$C.bak-ccv3-2-$stamp-$n"
-  $n++
+function Resolve-InstallPath([string]$Rel) {
+  $p = $C
+  foreach ($part in ($Rel -split '[\\/]')) {
+    if ($part -eq '') { continue }
+    $p = Join-Path $p $part
+  }
+  return $p
 }
-if ($bak.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
-  throw "Refusing to place backup inside the install: $bak"
+
+function Get-BackupSiblingCount {
+  $parent = Split-Path -Parent $C
+  return @(Get-ChildItem -LiteralPath $parent -Force -ErrorAction SilentlyContinue |
+    Where-Object { $_.Name -like '.claude.bak-*' }).Count
 }
-Copy-Item -LiteralPath $C -Destination $bak -Recurse
-"backup $bak"
 
 $shims = @(
   'arch-context-inject.sh',
@@ -92,19 +100,57 @@ $stale = @(
   'commands\task.md'
 ) + @($shims | ForEach-Object { "hooks\$_" })
 
+$toRemove = @()
+foreach ($rel in $stale) {
+  $p = Resolve-InstallPath $rel
+  $fp = [System.IO.Path]::GetFullPath($p)
+  if (-not $fp.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to touch $fp"
+  }
+  if (Test-Path -LiteralPath $p) { $toRemove += $rel }
+}
+
+$precheckFailed = $null
 foreach ($settingsName in @('settings.json', 'settings.local.json')) {
   $settings = Join-Path $C $settingsName
   if (Test-Path -LiteralPath $settings) {
     foreach ($shim in $shims) {
       if (Select-String -LiteralPath $settings -Pattern $shim -SimpleMatch -Quiet) {
-        throw "$settingsName still references $shim"
+        $precheckFailed = "$settingsName still references $shim"
+        break
       }
     }
   }
+  if ($precheckFailed) { break }
 }
 
-foreach ($rel in $stale) {
-  $p = Join-Path $C $rel
+if ($precheckFailed) {
+  "existing .claude.bak-*: $(Get-BackupSiblingCount)"
+  "backup: none ($precheckFailed)"
+  throw $precheckFailed
+}
+
+if ($toRemove.Count -lt 1) {
+  "existing .claude.bak-*: $(Get-BackupSiblingCount)"
+  "backup: none (nothing to remove)"
+} else {
+  $stamp = Get-Date -Format 'yyyyMMdd-HHmmss'
+  $bak = "$C.bak-prune-$stamp"
+  $n = 1
+  while (Test-Path -LiteralPath $bak) {
+    $bak = "$C.bak-prune-$stamp-$n"
+    $n++
+  }
+  if ($bak.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
+    throw "Refusing to place backup inside the install: $bak"
+  }
+  Copy-Item -LiteralPath $C -Destination $bak -Recurse
+  "existing .claude.bak-*: $(Get-BackupSiblingCount)"
+  "backup $bak"
+}
+
+foreach ($rel in $toRemove) {
+  $p = Resolve-InstallPath $rel
   $fp = [System.IO.Path]::GetFullPath($p)
   if (-not $fp.StartsWith($prefix, [System.StringComparison]::OrdinalIgnoreCase)) {
     throw "Refusing to touch $fp"
