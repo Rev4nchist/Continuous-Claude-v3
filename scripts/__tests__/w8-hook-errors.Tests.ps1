@@ -16,6 +16,7 @@ Describe 'W8 hook-error matcher (synthetic fixture)' {
     It 'the fixture is labelled synthetic and has both kinds of line' {
         $raw = Get-Content -LiteralPath $script:Fixture
         $raw[0] | Should -Match 'SYNTHETIC'
+        $raw[0] | Should -Match 'documented'
         @($raw | Where-Object { $_ -match '^SUCCESS ' }).Count | Should -BeGreaterThan 0
         @($raw | Where-Object { $_ -match '^ERROR ' }).Count | Should -BeGreaterThan 0
     }

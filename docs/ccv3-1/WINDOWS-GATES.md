@@ -129,7 +129,7 @@ claude --debug -p "Reply OK" --permission-mode plan
 ```
 Then match the newest two files in `~\.claude\debug\` with the shared matcher (`docs/ccv3-1/lib/w8-hook-errors.ps1`, `Test-HookErrorLine`). The pattern text is identical to `$script:W8HookErrorPattern`:
 
-`(?i)(\[ERROR\][^\r\n]*\bhook\b[^\r\n]*\b(fail(ed|ure)?|timed out|ENOENT|non-zero|exit code (?!0\b)\d+)\b|(?<![\w-])(Hook error:|Hook failed\b|Failed to run hook\b|Error running hook\b|Hook timed out\b|Hook command timed out\b)|spawn\S*\s+ENOENT)`
+`(?i)(\[ERROR\][^\r\n]*\bhook\b[^\r\n]*\b(fail(ed|ure)?|timed out|ENOENT|non-zero|exit code (?!0\b)\d+)\b|(?<!Hook stdout:[^\r\n]*)(?<![\w-])(Hook error:|Hook failed\b|Failed to run hook\b|Error running hook\b|Hook timed out\b|Hook command timed out\b)|completed with status (?!0\b)\d+|status code (?!0\b)\d+|spawn\S*\s+ENOENT)`
 
 ```powershell
 . docs/ccv3-1/lib/w8-hook-errors.ps1
