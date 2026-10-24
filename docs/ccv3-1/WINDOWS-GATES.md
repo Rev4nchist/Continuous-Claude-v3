@@ -127,11 +127,15 @@ Run one prompt in `~` and one in the repo:
 ```powershell
 claude --debug -p "Reply OK" --permission-mode plan
 ```
-Then grep the newest two files in `~\.claude\debug\`:
+Then match the newest two files in `~\.claude\debug\` with the shared matcher (`docs/ccv3-1/lib/w8-hook-errors.ps1`, `Test-HookErrorLine`). The pattern text is identical to `$script:W8HookErrorPattern`:
+
+`(?i)(\[ERROR\][^\r\n]*\bhook\b[^\r\n]*\b(fail(ed|ure)?|timed out|ENOENT|non-zero|exit code (?!0\b)\d+)\b|(?<![\w-])(Hook error:|Hook failed\b|Failed to run hook\b|Error running hook\b|Hook timed out\b|Hook command timed out\b)|spawn\S*\s+ENOENT)`
+
 ```powershell
-Get-ChildItem ~\.claude\debug | sort LastWriteTime -desc | select -First 2 | Select-String -Pattern 'hook.*(error|fail|timed out|ENOENT)'
+. docs/ccv3-1/lib/w8-hook-errors.ps1
+Get-ChildItem ~\.claude\debug | Sort-Object LastWriteTime -Descending | Select-Object -First 2 | ForEach-Object { Get-Content -LiteralPath $_.FullName } | Where-Object { Test-HookErrorLine $_ }
 ```
-Pass when there are 0 matches. Save the grep output along with the file names.
+Pass when there are 0 matches. Save the matcher output along with the file names.
 
 ## Report back
 For each W-step, paste one line into the PR in the form `W# · file · result line · PASS/FAIL` (the driver writes `<date>-pr1-win-summary-<phase>.md` for this). `.claude/cache/` is gitignored: do not commit the outputs unless David explicitly asks (then `git add -f` on the PR branch, normal push to Rev4nchist, never force). On any FAIL, stop and report it. Do not patch `~/.claude` by hand.

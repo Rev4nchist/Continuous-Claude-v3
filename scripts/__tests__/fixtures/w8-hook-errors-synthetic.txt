@@ -1,0 +1,13 @@
+# SYNTHETIC fixture. Not a rog-strix debug log. The 12 noise lines live only on that machine.
+# Lines tagged SUCCESS must produce 0 matches. Lines tagged ERROR must each match.
+SUCCESS [DEBUG] Hook stdout: [i] ROADMAP has 60 completed items (threshold: 50). Consider archiving old entries.
+SUCCESS [DEBUG] Hook stdout: [!] Hook dist/ is stale -- 3 of 10 sources newer than the newest bundle. The previous failure mode was a false positive.
+SUCCESS [DEBUG] Executing hook command: node session-start-init-check.mjs completed successfully
+SUCCESS additionalContext: do not fail the hook when the roadmap says error handling improved and a doc mentioned ENOENT
+SUCCESS [DEBUG] Hook output: ROADMAP item mentions hook error handling and a failed sync that timed out in the docs, plus ENOENT in a comment
+SUCCESS Hook session-start-init-check completed with exit code 0
+ERROR 2026-10-23T01:02:03.000Z [ERROR] Hook failed with non-zero exit code 1
+ERROR 2026-10-23T01:02:03.000Z [ERROR] Error running hook: spawn node ENOENT
+ERROR 2026-10-23T01:02:03.000Z [ERROR] Hook timed out after 30000ms
+ERROR 2026-10-23T01:02:03.000Z [ERROR] Failed to run hook: ENOENT
+ERROR [ERROR] Hook session-start exited with exit code 2

@@ -173,7 +173,13 @@ if ($runPost) {
     Push-Location $env:USERPROFILE; & claude --debug -p 'Reply OK' --permission-mode plan *> $null; Pop-Location
     Push-Location $RepoPath;        & claude --debug -p 'Reply OK' --permission-mode plan *> $null; Pop-Location
     $logs = @(Get-ChildItem $dbg -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $before | Sort-Object LastWriteTime -Descending | Select-Object -First 2)
-    $hits = @($logs | Select-String -Pattern 'hook.*(error|fail|timed out|ENOENT)')
+    . (Join-Path $PSScriptRoot 'lib/w8-hook-errors.ps1')
+    $hits = [System.Collections.Generic.List[string]]::new()
+    foreach ($log in $logs) {
+      foreach ($line in @(Get-Content -LiteralPath $log.FullName -ErrorAction SilentlyContinue)) {
+        if (Test-HookErrorLine -Line $line) { $hits.Add($line) }
+      }
+    }
     $o = @("logs=$($logs.Count)") + @($logs.FullName) + "hook_error_lines=$($hits.Count)" + @($hits | ForEach-Object { "$_" })
     Save-Gate 'W8' 'debug-grep' $o ($logs.Count -ge 2 -and $hits.Count -eq 0) "logs=$($logs.Count) hook_error_lines=$($hits.Count)"
   } else { Write-Host 'W8 SKIPPED'; $Results.Add([pscustomobject]@{ gate='W8'; file=''; result='SKIPPED'; pass=$false }) }
