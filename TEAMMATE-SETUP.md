@@ -32,6 +32,8 @@ git clone <repository-url>
 cd continuous-claude
 ```
 
+Enable the repo git hooks once per clone. See [`.githooks/README.md`](.githooks/README.md).
+
 ### 2. Configure Environment
 
 ```bash

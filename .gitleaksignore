@@ -18,3 +18,12 @@ ea1b1ea2d0b0de4fb28f7feaf71b190d5b4ce036:scripts/project-cards/test/sweep.test.m
 87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/pr-9.diff:generic-api-key:1694
 87230341060a69c322c1e7169709d3f5914809f7:docs/reviews/2026-06-10/harvest/snapshot/agent-recall.jsonl:generic-api-key:21
 b9bf6e35ac80fbfdf0dc0d28e648311294a42066:docs/fastmcp-connector-playbook.md:generic-api-key:635
+
+# DW-84 FP: source sha256 in build-inputs content-hash map (not sntrys_ token)
+94a7f5a7cf35a4566007349ef33b366e9e229c48:.claude/hooks/dist/.build-inputs.json:sentry-access-token:72
+94a7f5a7cf35a4566007349ef33b366e9e229c48:.claude/hooks/dist/.build-inputs.json:sentry-access-token:73
+96703d376e3814ce0b3b5637c15b9ae8b82db07c:.claude/hooks/dist/.build-inputs.json:sentry-access-token:71
+96703d376e3814ce0b3b5637c15b9ae8b82db07c:.claude/hooks/dist/.build-inputs.json:sentry-access-token:72
+
+# DW-84 CI canary, non-functional, removed in next commit
+699d488832ba59c319d1e75026c3bf1fcb56c6c5:scripts/.ci-seed-gitleaks.txt:aws-access-token:1
