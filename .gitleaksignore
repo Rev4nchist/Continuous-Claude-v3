@@ -24,3 +24,6 @@ b9bf6e35ac80fbfdf0dc0d28e648311294a42066:docs/fastmcp-connector-playbook.md:gene
 94a7f5a7cf35a4566007349ef33b366e9e229c48:.claude/hooks/dist/.build-inputs.json:sentry-access-token:73
 96703d376e3814ce0b3b5637c15b9ae8b82db07c:.claude/hooks/dist/.build-inputs.json:sentry-access-token:71
 96703d376e3814ce0b3b5637c15b9ae8b82db07c:.claude/hooks/dist/.build-inputs.json:sentry-access-token:72
+
+# DW-84 CI canary, non-functional, removed in next commit
+699d488832ba59c319d1e75026c3bf1fcb56c6c5:scripts/.ci-seed-gitleaks.txt:aws-access-token:1
