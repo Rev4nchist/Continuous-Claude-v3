@@ -1,6 +1,6 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
-// src/pr-opened-coderabbit-loop.ts
+// src/pr-opened-review-loop.ts
 import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
@@ -44,7 +44,7 @@ function hasNumberField(responseTxt) {
 }
 function statePath(sessionId) {
   const safeSession = (sessionId || "no-session").replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession}.json`);
+  return join(tmpdir(), `pr-opened-review-loop-${safeSession}.json`);
 }
 function alreadyFired(sessionId, url) {
   try {
@@ -123,7 +123,7 @@ function main() {
     })
   );
 }
-if ((process.argv[1] || "").includes("pr-opened-coderabbit-loop")) {
+if ((process.argv[1] || "").includes("pr-opened-review-loop")) {
   try {
     main();
   } catch {

@@ -130,7 +130,7 @@ if ($runPost) {
   # ---------- W5 payloads into changed hooks ----------
   $o = @(); $bad = 0; $ran = 0
   $tmpCwd = Join-Path $env:TEMP "ccv3-pr1-hookcwd-$PID"; New-Item -ItemType Directory -Force $tmpCwd | Out-Null
-  foreach ($hk in 'commit-preflight','test-run-tracker','pr-opened-coderabbit-loop','periodic-extract') {
+  foreach ($hk in 'commit-preflight','test-run-tracker','pr-opened-review-loop','periodic-extract') {
     foreach ($ev in $s.hooks.Keys) { foreach ($m in $s.hooks[$ev]) { foreach ($h in $m.hooks) {
       $cmdline = "$($h.command) $(@($h.args) -join ' ')"
       if ($cmdline -notmatch [regex]::Escape("$hk.mjs")) { continue }

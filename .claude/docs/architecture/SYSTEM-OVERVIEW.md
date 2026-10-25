@@ -92,6 +92,7 @@ PageIndex Layer:
 │                      git-commit-roadmap                      │
 │                      telemetry-tracker:Skill|Task            │
 │                      plan-exit-premortem-prompt:ExitPlanMode │
+│                      pr-opened-review-loop:Bash|PowerShell   │
 │                                                              │
 └──────────────────────────────────────────────────────────────┘
 
@@ -120,9 +121,9 @@ History only: [Braintrust Subsystem](subsystems/braintrust.md).
 │ scout  ││architect│ │ kraken  │ │debug-   ││ critic ││deployer│
 │ oracle ││ phoenix │ │ spark   │ │ agent   ││principal│└────────┘
 └────────┘└────────┘ └─────────┘ │ sleuth  ││-reviewer│
-                                 └─────────┘│ grok-    │
-                          ┌────────┐        │adversary│
-                          │  TEST  │        └────────┘
+                                 └─────────┘│ review- │
+                          ┌────────┐        │ agent   │
+                          │  TEST  │        └─────────┘
                           │arbiter │
                           │ atlas  │
                           └────────┘
@@ -133,9 +134,28 @@ Agent Selection Rule:
   Implement → kraken (TDD) / spark (quick fix)
   Debug → debug-agent / sleuth
   Test  → arbiter / atlas (test execution)
-  Review → critic / principal-reviewer / grok-adversary (cross-model)
+  Review → critic / principal-reviewer / review-agent (in-session, Claude family;
+           opt-in self-check via /review, never grants READY)
   Deploy → deployer (Vercel / Railway / Sentry / Linear)
 ```
+
+`grok-adversary` is not a reviewer in this map. It is the optional cross-model
+(Grok CLI) pass inside `/premortem`, for plan risk. `/review` no longer spawns a
+cross-model reviewer.
+
+## Code Review (as of `main`; target per Wiring Plan 2026-10-25)
+
+| Layer | Live today | Approved target (not built) |
+|-------|------------|-----------------------------|
+| In-session | `/review` (critic, plan-reviewer, review-agent): opt-in self-check, never counts toward READY | Same (D4) |
+| Independent review | Cross-family xreview Cursor CA, launched by hand **outside CCv3** | Auto-trigger on draft PR (PR6) |
+| PR bot | Greptile, on open + every push; `pr-opened-review-loop` hook → `pr_watch` → `review-status.mjs` | Label-routed at ready: CodeRabbit (normal), Greptile (high), both for `review:deep`, plus one final-head review (DW-91, DW-80) |
+| Merge | Dave only (`/land`) | Same |
+
+Phase 0 baseline (2026-10-25) observed gaps the live column does not close, and that target READY is meant to close once it is built: merge-before-bot (#147, #150, #151; CodeRabbit often ended "Review failed - The pull request is closed."); reviewed but unanswered (#152, head `37ed7905`, 7 threads with no replies); a green Greptile check with no review object (#149). Not gated live.
+
+Sentry is runtime monitoring only (D1). CCv3 registers no Sentry hook and no Sentry MCP server; the two built Sentry hooks stay unregistered.
+Details: `.claude/rules-ondemand/pr-review-loop.md`.
 
 ## Workflow Composition
 

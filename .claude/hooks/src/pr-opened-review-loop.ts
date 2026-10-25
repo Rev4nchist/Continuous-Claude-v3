@@ -1,11 +1,11 @@
 /**
- * pr-opened-coderabbit-loop -- PostToolUse hook (matcher: Bash|PowerShell).
+ * pr-opened-review-loop -- PostToolUse hook (matcher: Bash|PowerShell).
  *
  * Detects a PR being opened (`gh pr create` or `gh api ... /pulls -X POST`)
  * and, when the tool response looks like a genuine success (a PR URL or a
  * "number" field), injects additionalContext telling the model to start the
- * PR review loop (see rules-ondemand/pr-review-loop.md) in the same turn. The file keeps
- * its old name so neither settings.json copy changes; the reviewer is now Greptile.
+ * PR review loop (see rules-ondemand/pr-review-loop.md) in the same turn.
+ * Renamed from pr-opened-coderabbit-loop (Phase 1 hygiene, 2026-10); behaviour unchanged.
  *
  * Fires at most once per PR URL per session: a small state file under
  * os.tmpdir(), keyed by session_id + url, suppresses repeats.
@@ -77,7 +77,7 @@ export function hasNumberField(responseTxt: string): boolean {
 
 function statePath(sessionId: string): string {
   const safeSession = (sessionId || 'no-session').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession}.json`);
+  return join(tmpdir(), `pr-opened-review-loop-${safeSession}.json`);
 }
 
 function alreadyFired(sessionId: string, url: string): boolean {
@@ -184,7 +184,7 @@ export function main(): void {
 }
 
 // Import guard: tests import the exported functions without running main().
-if ((process.argv[1] || '').includes('pr-opened-coderabbit-loop')) {
+if ((process.argv[1] || '').includes('pr-opened-review-loop')) {
   try {
     main();
   } catch {

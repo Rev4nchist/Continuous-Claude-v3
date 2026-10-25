@@ -1,5 +1,5 @@
 /**
- * pr-opened-coderabbit-loop -- unit + dist-integration tests.
+ * pr-opened-review-loop -- unit + dist-integration tests.
  *
  * Covers: gh pr create success fires; gh api POST pulls success fires; a GET
  * pulls call never fires; a failed create never fires; a second fire for the
@@ -15,16 +15,16 @@ import {
   extractPrInfo,
   isPrOpenCommand,
   responseText,
-} from '../pr-opened-coderabbit-loop';
+} from '../pr-opened-review-loop';
 
-const HOOK = resolve(__dirname, '../../dist/pr-opened-coderabbit-loop.mjs');
+const HOOK = resolve(__dirname, '../../dist/pr-opened-review-loop.mjs');
 
 function sessionId(): string {
   return `prlooptest-${Math.random().toString(36).slice(2)}`;
 }
 
 function statePathFor(sid: string): string {
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${sid}.json`);
+  return join(tmpdir(), `pr-opened-review-loop-${sid}.json`);
 }
 
 function runHook(input: Record<string, unknown> | string): { stdout: string; status: number | null } {
@@ -36,7 +36,7 @@ function runHook(input: Record<string, unknown> | string): { stdout: string; sta
   return { stdout: res.stdout.trim(), status: res.status };
 }
 
-describe('pr-opened-coderabbit-loop classifiers (unit)', () => {
+describe('pr-opened-review-loop classifiers (unit)', () => {
   it('detects gh pr create', () => {
     expect(isPrOpenCommand('gh pr create --title "x" --body "y"')).toBe(true);
   });
@@ -105,7 +105,7 @@ describe('pr-opened-coderabbit-loop classifiers (unit)', () => {
   });
 });
 
-describe('pr-opened-coderabbit-loop (dist integration)', () => {
+describe('pr-opened-review-loop (dist integration)', () => {
   let sid: string;
 
   beforeEach(() => {
