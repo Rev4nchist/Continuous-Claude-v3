@@ -6,3 +6,6 @@ if ! command -v gitleaks >/dev/null 2>&1; then
 fi
 gitleaks git --pre-commit --staged --redact --verbose --exit-code 1 . \
   || { echo "pre-commit: gitleaks found a potential secret in staged changes. Commit blocked." >&2; exit 1; }
+
+R="$(git rev-parse --show-toplevel)"
+[ -f "$R/scripts/precommit-build-guard.sh" ] && { bash "$R/scripts/precommit-build-guard.sh" || exit $?; }

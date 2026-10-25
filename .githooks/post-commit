@@ -1,0 +1,6 @@
+#!/usr/bin/env bash
+set -euo pipefail
+R="$(git rev-parse --show-toplevel)"
+if [ -f "$R/scripts/post-commit-hook.sh" ]; then
+  bash "$R/scripts/post-commit-hook.sh"
+fi

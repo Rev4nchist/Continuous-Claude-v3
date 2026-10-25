@@ -2,7 +2,7 @@
 
 This directory is the repo-local Git `core.hooksPath`. It is separate from Claude Code hooks under `.claude/hooks/`.
 
-The `pre-commit` hook scans staged changes with gitleaks. If the `gitleaks` binary is missing from `PATH`, the hook exits 1. That fail-closed behavior is deliberate: install gitleaks, or bypass with a stated reason (humans only; see below).
+The `pre-commit` hook scans staged changes with gitleaks, then chains the build-forget guard. If the `gitleaks` binary is missing from `PATH`, the hook exits 1 before the guard runs. That fail-closed behavior is deliberate: install gitleaks, or bypass with a stated reason (humans only; see below).
 
 ## Enable (one time per clone)
 
@@ -32,9 +32,14 @@ git config --get core.hooksPath
 
 Expected output: `.githooks`.
 
-## `core.hooksPath` replaces `.git/hooks`
+## What runs when `core.hooksPath` is `.githooks`
 
-While `core.hooksPath` is `.githooks`, Git does not run hooks installed under `.git/hooks`. That includes the build-forget pre-commit guard and the post-commit sync installed by `scripts/install-hooks.sh`. Those installers still target `.git/hooks` for clones that have not set `hooksPath`.
+Git reads hooks from `.githooks` instead of `.git/hooks`. The same checks still run from this directory:
+
+- **pre-commit:** gitleaks on staged changes, then `scripts/precommit-build-guard.sh` (build-forget) when that file is present. Gitleaks stays fail-closed. A guard failure exits with the guard's status.
+- **post-commit:** `.githooks/post-commit` calls `scripts/post-commit-hook.sh` when that file is present (sync to `~/.claude`).
+
+`scripts/install-hooks.sh` still installs copies under `.git/hooks` for clones that have not set `hooksPath`. After `core.hooksPath` is `.githooks`, use the hooks in this directory; do not expect the `.git/hooks` copies to run alongside them.
 
 ## Bypass policy
 

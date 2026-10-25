@@ -7,6 +7,7 @@
 # Git hooks in .githooks/ have no extension, so the *.sh rule above does not cover them.
 # A CRLF shebang fails with "bad interpreter" and blocks commits.
 /.githooks/pre-commit text eol=lf
+/.githooks/post-commit text eol=lf
 
 # Batch wrappers MUST stay CRLF -- the mirror image of the rule above.
 # cmd.exe reads a .bat by byte offset assuming CRLF; with LF-only endings the
