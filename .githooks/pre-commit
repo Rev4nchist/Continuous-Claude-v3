@@ -1,0 +1,8 @@
+#!/bin/sh
+# gitleaks pre-commit: scans staged changes only. See .githooks/README.md for bypass policy.
+if ! command -v gitleaks >/dev/null 2>&1; then
+  echo "pre-commit: gitleaks not found on PATH. Install it (see .githooks/README.md) or bypass per policy." >&2
+  exit 1
+fi
+gitleaks git --pre-commit --staged --redact --verbose --exit-code 1 . \
+  || { echo "pre-commit: gitleaks found a potential secret in staged changes. Commit blocked." >&2; exit 1; }
