@@ -13,7 +13,8 @@
 
 import { describe, it, expect, beforeAll, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { existsSync, mkdirSync, mkdtempSync, rmSync, utimesSync, writeFileSync } from 'fs';
+import { createHash } from 'crypto';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, rmSync, utimesSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
@@ -212,10 +213,86 @@ describe('session-start-init-check: hook build freshness', () => {
     expect(result.stdout).not.toContain('is stale');
   }, 30000);
 
+  function writeManifest(proj: string, inputs: Record<string, string>): void {
+    writeFileSync(join(proj, '.claude', 'hooks', 'dist', '.build-inputs.json'), JSON.stringify({
+      version: 1,
+      algorithm: 'sha256',
+      inputs,
+    }));
+  }
+
+  function shaFile(file: string): string {
+    return createHash('sha256').update(readFileSync(file)).digest('hex');
+  }
+
+  it('does not warn when checkout order makes src newer but the manifest matches', () => {
+    // Reproduced false positive. Copy-sync and git checkout stamp mtimes in
+    // write order, so sources land newer than a bundle built from those bytes.
+    const proj = makeHookTree(['top.ts', 'shared/nested.ts']);
+    const src = join(proj, '.claude', 'hooks', 'src');
+    writeManifest(proj, {
+      'top.ts': shaFile(join(src, 'top.ts')),
+      'shared/nested.ts': shaFile(join(src, 'shared', 'nested.ts')),
+    });
+
+    const result = runHook(proj);
+    const out = result.stderr + result.stdout;
+    expect(out).not.toContain('is stale');
+  }, 30000);
+
+  it('warns when src content differs from the manifest even if the bundle is newer', () => {
+    const proj = makeHookTree();
+    const src = join(proj, '.claude', 'hooks', 'src');
+    const nested = join(src, 'shared', 'nested.ts');
+    const top = join(src, 'top.ts');
+    const built = readFileSync(nested);
+    writeManifest(proj, {
+      'top.ts': shaFile(top),
+      'shared/nested.ts': createHash('sha256').update(built).digest('hex'),
+    });
+    writeFileSync(nested, built + '\nexport const changed = true;\n');
+    const bundle = join(proj, '.claude', 'hooks', 'dist', 'bundle.mjs');
+    const bundleSec = readFileSync(bundle) && (Date.now() / 1000);
+    utimesSync(nested, bundleSec - 100, bundleSec - 100);
+    utimesSync(bundle, bundleSec, bundleSec);
+
+    const result = runHook(proj);
+    const out = result.stderr + result.stdout;
+    expect(out).toContain('is stale');
+    expect(out).toContain('nested.ts');
+  }, 30000);
+
+  it('reads a CRLF copy of a hashed source as fresh', () => {
+    // Windows autocrlf checks sources out as CRLF. The manifest records the
+    // LF bytes. Those two must compare equal, or every session warns.
+    const proj = makeHookTree();
+    const src = join(proj, '.claude', 'hooks', 'src');
+    const top = join(src, 'top.ts');
+    const nested = join(src, 'shared', 'nested.ts');
+    const topLf = readFileSync(top, 'utf8').replace(/\r/g, '');
+    const nestedLf = readFileSync(nested, 'utf8').replace(/\r/g, '');
+    writeManifest(proj, {
+      'top.ts': createHash('sha256').update(topLf).digest('hex'),
+      'shared/nested.ts': createHash('sha256').update(nestedLf).digest('hex'),
+    });
+    writeFileSync(top, topLf.replace(/\n/g, '\r\n'));
+    writeFileSync(nested, nestedLf.replace(/\n/g, '\r\n'));
+
+    const result = runHook(proj);
+    const out = result.stderr + result.stdout;
+    expect(out).not.toContain('is stale');
+  }, 30000);
+
   it('fires for a source under src/shared/ and names it', () => {
-    // Also the positive control for the test above: same fixture, same code
-    // path, so a silent result there cannot be a block that never ran.
-    const result = runHook(makeHookTree(['shared/nested.ts']));
+    // Positive control: the manifest records different bytes for nested.ts,
+    // so the warning is a content mismatch. Mtime alone is not the signal.
+    const proj = makeHookTree(['shared/nested.ts']);
+    const src = join(proj, '.claude', 'hooks', 'src');
+    writeManifest(proj, {
+      'top.ts': shaFile(join(src, 'top.ts')),
+      'shared/nested.ts': createHash('sha256').update('not the bytes on disk').digest('hex'),
+    });
+    const result = runHook(proj);
 
     const out = result.stderr + result.stdout;
     expect(out).toContain('is stale');

@@ -5,6 +5,7 @@
 PASS=0
 FAIL=0
 WARN=0
+SKIP=0
 
 check() {
     local name="$1"
@@ -69,6 +70,29 @@ echo ""
 echo "5. Environment"
 check "CLAUDE_OPC_DIR is set" "test -n \"\$CLAUDE_OPC_DIR\""
 check "CLAUDE_OPC_DIR points to valid directory" "test -d \"\$CLAUDE_OPC_DIR\""
+# Mode comes from the comment generate_env_file writes in opc/.env
+# ("# Database Mode: docker|embedded|sqlite"). CLAUDE_OPC_DIR is that opc
+# directory. docker and embedded are Postgres. The loop matches those three
+# tokens and nothing else, so a URL on another line is never stored or printed.
+# Postgres, and a file with no mode line: missing variable is FAIL, set is PASS.
+# SQLite: SKIP/INFO, not counted in Failed.
+db_mode="postgres"
+if [ -n "${CLAUDE_OPC_DIR:-}" ] && [ -f "${CLAUDE_OPC_DIR}/.env" ]; then
+    while IFS= read -r db_mode_line || [ -n "$db_mode_line" ]; do
+        db_mode_line=${db_mode_line%$'\r'}
+        case "$db_mode_line" in
+            "# Database Mode: sqlite") db_mode="sqlite"; break ;;
+            "# Database Mode: docker"|"# Database Mode: embedded") db_mode="postgres"; break ;;
+        esac
+    done < "${CLAUDE_OPC_DIR}/.env"
+fi
+unset db_mode_line
+if [ "$db_mode" = "sqlite" ]; then
+    echo "  [SKIP] CONTINUOUS_CLAUDE_DB_URL (sqlite mode)"
+    ((SKIP++))
+else
+    check "CONTINUOUS_CLAUDE_DB_URL is set" "test -n \"\$CONTINUOUS_CLAUDE_DB_URL\""
+fi
 warn_check "PYTHONUTF8 is set (Windows)" "test -n '$PYTHONUTF8' || test $(uname -o 2>/dev/null) != 'Msys'"
 
 echo ""
@@ -120,6 +144,7 @@ echo "=== Results ==="
 echo "  Passed: $PASS"
 echo "  Failed: $FAIL"
 echo "  Warnings: $WARN"
+echo "  Skipped: $SKIP"
 echo ""
 
 if [ $FAIL -eq 0 ]; then

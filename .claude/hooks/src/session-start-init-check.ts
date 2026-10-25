@@ -13,6 +13,7 @@ import * as fs from 'fs';
 import * as path from 'path';
 import { execSync } from 'child_process';
 import { spawnDetachedHidden } from './lib/spawn-hidden.js';
+import { assessTreeFreshness, formatStaleDistWarning } from './shared/dist-freshness.js';
 
 interface SessionStartInput {
   type?: 'startup' | 'resume' | 'clear' | 'compact';
@@ -454,8 +455,22 @@ async function main() {
 
   const hasRecommendations = skillRecommendations.length > 0;
 
+  // Freshness uses the build manifest, not mtime. Computed before the silent
+  // return so a fully initialized tree still reports a real content mismatch.
+  // A missing manifest yields one info line, not a stale warning.
+  let hookDistLine: string | null = null;
+  if (projectDir.includes('continuous-claude')) {
+    const hookSrcDir = path.join(projectDir, '.claude', 'hooks', 'src');
+    const hookDistDir = path.join(projectDir, '.claude', 'hooks', 'dist');
+    if (fs.existsSync(hookSrcDir) && fs.existsSync(hookDistDir)) {
+      try {
+        hookDistLine = formatStaleDistWarning(hookSrcDir, assessTreeFreshness(hookSrcDir, hookDistDir));
+      } catch { /* fail silently */ }
+    }
+  }
+
   // If fully initialized, no failures, and no skill issues, continue silently
-  if (status.tree && status.roadmap && !treeGenFailed && !hasSkillIssues && !hasRecommendations) {
+  if (status.tree && status.roadmap && !treeGenFailed && !hasSkillIssues && !hasRecommendations && !hookDistLine) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
@@ -503,43 +518,7 @@ async function main() {
     } catch { /* fail silently */ }
   }
 
-  // Check hook build freshness (CCv3 repo only)
-  if (projectDir.includes('continuous-claude')) {
-    const hookSrcDir = path.join(projectDir, '.claude', 'hooks', 'src');
-    const hookDistDir = path.join(projectDir, '.claude', 'hooks', 'dist');
-    if (fs.existsSync(hookSrcDir) && fs.existsSync(hookDistDir)) {
-      try {
-        // Compare against the newest dist BUNDLE, not the dist DIRECTORY. A
-        // directory's mtime only moves when entries are added/removed/renamed, so
-        // a rebuild that overwrites every .mjs in place leaves it untouched — the
-        // old predicate reported "stale" on a freshly built tree, every session.
-        const bundles = fs.readdirSync(hookDistDir).filter(f => f.endsWith('.mjs'));
-        const newestBundleMtime = bundles.reduce((max, f) => {
-          try { return Math.max(max, fs.statSync(path.join(hookDistDir, f)).mtimeMs); } catch { return max; }
-        }, 0);
-        // Walk src recursively: shared/*.ts are bundled into dist too, so a
-        // non-recursive readdir cannot see the edits most likely to need a build.
-        const srcFiles: string[] = [];
-        const walk = (dir: string) => {
-          for (const e of fs.readdirSync(dir, { withFileTypes: true })) {
-            if (e.name === '__tests__' || e.name === 'node_modules') continue;
-            const full = path.join(dir, e.name);
-            if (e.isDirectory()) walk(full);
-            else if (e.name.endsWith('.ts')) srcFiles.push(full);
-          }
-        };
-        walk(hookSrcDir);
-        const staleFiles = newestBundleMtime === 0 ? srcFiles : srcFiles.filter(f => {
-          try { return fs.statSync(f).mtimeMs > newestBundleMtime; } catch { return false; }
-        });
-        if (staleFiles.length > 0) {
-          const names = staleFiles.slice(0, 3).map(f => path.relative(hookSrcDir, f)).join(', ');
-          const more = staleFiles.length > 3 ? `, +${staleFiles.length - 3} more` : '';
-          maintenanceWarnings.push(`[!] Hook dist/ is stale -- ${staleFiles.length} of ${srcFiles.length} sources newer than the newest bundle (${names}${more}). Run: cd ~/.claude/hooks && npm run build`);
-        }
-      } catch { /* fail silently */ }
-    }
-  }
+  if (hookDistLine) maintenanceWarnings.push(hookDistLine);
 
   if (missing.length === 0 && skillWarnings.length === 0 && skillRecommendationMessages.length === 0 && maintenanceWarnings.length === 0) {
     console.log(JSON.stringify({ result: 'continue' }));

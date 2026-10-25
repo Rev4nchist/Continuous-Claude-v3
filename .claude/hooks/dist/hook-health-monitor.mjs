@@ -1,9 +1,50 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/hook-health-monitor.ts
+import * as fs2 from "fs";
+import * as path2 from "path";
+import * as os from "os";
+
+// src/shared/dist-freshness.ts
+import { createHash } from "crypto";
 import * as fs from "fs";
 import * as path from "path";
-import * as os from "os";
+var BUILD_INPUTS_NAME = ".build-inputs.json";
+var MANIFEST_MISSING_INFO = "[i] Hook dist freshness manifest missing (.build-inputs.json); not using mtime, so no stale warning. Run: cd ~/.claude/hooks && npm run build";
+function sha256(content) {
+  const text = (typeof content === "string" ? content : content.toString("utf8")).replace(/\r/g, "");
+  return createHash("sha256").update(text).digest("hex");
+}
+function srcKey(srcRoot, filePath) {
+  return path.relative(srcRoot, filePath).split(path.sep).join("/");
+}
+function loadBuildInputs(distDir) {
+  const manifestPath = path.join(distDir, BUILD_INPUTS_NAME);
+  if (!fs.existsSync(manifestPath)) return null;
+  try {
+    const parsed = JSON.parse(fs.readFileSync(manifestPath, "utf8"));
+    if (parsed.version !== 1 || parsed.algorithm !== "sha256" || !parsed.inputs || typeof parsed.inputs !== "object") {
+      return null;
+    }
+    return { version: 1, algorithm: "sha256", inputs: parsed.inputs };
+  } catch {
+    return null;
+  }
+}
+function assessFileFreshness(srcPath, srcRoot, manifest) {
+  if (!manifest) return { state: "unknown", info: MANIFEST_MISSING_INFO };
+  let current;
+  try {
+    current = sha256(fs.readFileSync(srcPath));
+  } catch {
+    return { state: "stale" };
+  }
+  const recorded = manifest.inputs[srcKey(srcRoot, srcPath)];
+  if (!recorded || recorded !== current) return { state: "stale" };
+  return { state: "fresh" };
+}
+
+// src/hook-health-monitor.ts
 function parseHookCommands(settings) {
   const hooks = settings.hooks;
   if (!hooks || typeof hooks !== "object") {
@@ -22,7 +63,7 @@ function parseHookCommands(settings) {
         if (!distPath) continue;
         if (seen.has(distPath)) continue;
         seen.add(distPath);
-        const hookName = path.basename(distPath, ".mjs");
+        const hookName = path2.basename(distPath, ".mjs");
         const srcPath = deriveSrcPath(distPath);
         results.push({
           distPath,
@@ -43,7 +84,7 @@ function extractDistPath(command) {
   const normalized = filePath.replace(/\\/g, "/");
   if (!normalized.includes("hooks/dist/")) return null;
   if (filePath.startsWith("~/") || filePath.startsWith("~\\")) {
-    filePath = path.join(os.homedir(), filePath.slice(2));
+    filePath = path2.join(os.homedir(), filePath.slice(2));
   }
   return filePath;
 }
@@ -54,16 +95,20 @@ function deriveSrcPath(distPath) {
 }
 function checkHookHealth(hookInfo) {
   const { distPath, srcPath, hookEvent, hookName } = hookInfo;
-  if (!fs.existsSync(distPath)) {
+  if (!fs2.existsSync(distPath)) {
     return { hookName, status: "missing", hookEvent };
   }
-  if (!fs.existsSync(srcPath)) {
+  if (!fs2.existsSync(srcPath)) {
     return { hookName, status: "healthy", hookEvent };
   }
-  const distMtime = fs.statSync(distPath).mtime.getTime();
-  const srcMtime = fs.statSync(srcPath).mtime.getTime();
-  if (srcMtime > distMtime) {
+  const distDir = path2.dirname(distPath);
+  const srcRoot = path2.resolve(distDir, "..", "src");
+  const freshness = assessFileFreshness(srcPath, srcRoot, loadBuildInputs(distDir));
+  if (freshness.state === "stale") {
     return { hookName, status: "stale", hookEvent };
+  }
+  if (freshness.state === "unknown") {
+    return { hookName, status: "healthy", hookEvent, info: freshness.info };
   }
   return { hookName, status: "healthy", hookEvent };
 }
@@ -83,16 +128,16 @@ function formatHealthReport(results) {
     if (issue.status === "missing") {
       lines.push(`- MISSING: ${issue.hookName}.mjs (fix: npm run build)`);
     } else if (issue.status === "stale") {
-      lines.push(`- STALE: ${issue.hookName}.mjs (src newer than dist, fix: npm run build)`);
+      lines.push(`- STALE: ${issue.hookName}.mjs (content differs from the build manifest, fix: npm run build)`);
     }
   }
   return lines.join("\n");
 }
 async function readStdin() {
-  return new Promise((resolve) => {
+  return new Promise((resolve2) => {
     let data = "";
     process.stdin.on("data", (chunk) => data += chunk);
-    process.stdin.on("end", () => resolve(data));
+    process.stdin.on("end", () => resolve2(data));
   });
 }
 async function main() {
@@ -105,14 +150,14 @@ async function main() {
   }
   try {
     const userProfile = process.env.USERPROFILE || process.env.HOME || "";
-    const settingsPath = path.join(userProfile, ".claude", "settings.json");
-    if (!fs.existsSync(settingsPath)) {
+    const settingsPath = path2.join(userProfile, ".claude", "settings.json");
+    if (!fs2.existsSync(settingsPath)) {
       console.log(JSON.stringify({ result: "continue" }));
       return;
     }
     let settings;
     try {
-      const content = fs.readFileSync(settingsPath, "utf-8");
+      const content = fs2.readFileSync(settingsPath, "utf-8");
       settings = JSON.parse(content);
     } catch {
       console.error("hook-health-monitor: Could not parse settings.json");
@@ -135,7 +180,8 @@ async function main() {
       };
       console.error(report);
     } else {
-      console.error(`Hook Health: All ${results.length} hooks healthy`);
+      const info = results.find((r) => r.info)?.info;
+      console.error(info ?? `Hook Health: All ${results.length} hooks healthy`);
     }
     console.log(JSON.stringify(output));
   } catch (err) {

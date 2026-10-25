@@ -37,6 +37,14 @@ export { getPgConnectionString };
  * @returns QueryResult with success, stdout, and stderr
  */
 export function runPgQuery(pythonCode: string, args: string[] = []): QueryResult {
+  const connectionString = getPgConnectionString();
+  if (!connectionString) {
+    return {
+      success: false,
+      stdout: '',
+      stderr: 'database URL unset',
+    };
+  }
   const opcDir = requireOpcDir();
 
   // Wrap the Python code to use asyncio.run() for async queries
@@ -50,14 +58,10 @@ import json
 sys.path.insert(0, '${opcDir.replace(/\\/g, '/')}')
 os.chdir('${opcDir.replace(/\\/g, '/')}')
 
-# Single source of truth for the connection string, available to every snippet below.
-# The literal is unreachable by construction: the spawn env below always sets
-# CONTINUOUS_CLAUDE_DB_URL from getPgConnectionString(). It is kept only so this line
-# reads correctly in isolation. Snippets previously each carried their own copy and
-# they had drifted apart on the port (7 said :5432, 7 said :5434), which looked like a
-# live split-brain bug during the 2026-07-26 coordination audit. It was not one - the
-# copies were dead code - but the ambiguity cost real time, so there is now exactly one.
-pg_url = os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL") or "postgresql://claude:claude_dev@localhost:5432/continuous_claude"
+# The URL is passed in the spawn environment by the TypeScript caller.
+# There is no literal default in this string. If every variable is unset the
+# caller does not spawn; an empty pg_url means "do not connect".
+pg_url = os.environ.get("CONTINUOUS_CLAUDE_DB_URL") or os.environ.get("DATABASE_URL") or os.environ.get("OPC_POSTGRES_URL") or ""
 
 ${pythonCode}
 `;
@@ -70,7 +74,7 @@ ${pythonCode}
       cwd: opcDir,
       env: {
         ...process.env,
-        CONTINUOUS_CLAUDE_DB_URL: getPgConnectionString(),
+        CONTINUOUS_CLAUDE_DB_URL: connectionString,
       },
     });
 

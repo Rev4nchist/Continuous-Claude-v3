@@ -11,7 +11,10 @@
  * assertion is deterministic and needs no running container.
  */
 
-import { describe, it, expect, vi, beforeEach } from 'vitest';
+import { describe, it, expect, vi, beforeEach, afterEach } from 'vitest';
+
+const PLACEHOLDER_URL = 'postgresql://user:PLACEHOLDER@localhost:5432/db';
+let savedDbUrl: string | undefined;
 
 const connect = vi.fn(async () => undefined);
 const end = vi.fn(async () => undefined);
@@ -29,9 +32,16 @@ vi.mock('pg', () => ({
 const { withPgClient, withPgClientOrFallback } = await import('../shared/pg-client.js');
 
 beforeEach(() => {
+  savedDbUrl = process.env.CONTINUOUS_CLAUDE_DB_URL;
+  process.env.CONTINUOUS_CLAUDE_DB_URL = PLACEHOLDER_URL;
   connect.mockClear();
   end.mockClear();
   query.mockClear();
+});
+
+afterEach(() => {
+  if (savedDbUrl === undefined) delete process.env.CONTINUOUS_CLAUDE_DB_URL;
+  else process.env.CONTINUOUS_CLAUDE_DB_URL = savedDbUrl;
 });
 
 describe('withPgClientOrFallback on a working connection', () => {

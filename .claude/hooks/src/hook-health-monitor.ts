@@ -2,13 +2,15 @@
  * hook-health-monitor.ts — SessionStart hook
  *
  * Validates all registered hooks are healthy at session start.
- * Checks that dist files exist and are not stale (src newer than dist).
+ * Checks that dist files exist and match the build-input manifest.
+ * Mtime is not a freshness signal: checkout and copy order make src look newer.
  * Reports broken/stale hooks with specific fix commands.
  */
 
 import * as fs from 'fs';
 import * as path from 'path';
 import * as os from 'os';
+import { assessFileFreshness, loadBuildInputs } from './shared/dist-freshness.js';
 
 // ============================================
 // Types
@@ -26,6 +28,8 @@ export interface HookHealthResult {
   hookName: string;
   status: 'healthy' | 'missing' | 'stale';
   hookEvent: string;
+  /** Set when the build manifest is missing. Not a failure. */
+  info?: string;
 }
 
 interface HookEntry {
@@ -162,7 +166,7 @@ function deriveSrcPath(distPath: string): string {
  * Returns:
  * - 'healthy': dist exists and is not stale (or no src to compare)
  * - 'missing': dist file does not exist
- * - 'stale': dist exists but src is newer (needs rebuild)
+ * - 'stale': dist exists but the src sha256 differs from the build manifest
  */
 export function checkHookHealth(hookInfo: HookFileInfo): HookHealthResult {
   const { distPath, srcPath, hookEvent, hookName } = hookInfo;
@@ -178,12 +182,16 @@ export function checkHookHealth(hookInfo: HookFileInfo): HookHealthResult {
     return { hookName, status: 'healthy', hookEvent };
   }
 
-  // Compare mtimes: if src is newer than dist, build is stale
-  const distMtime = fs.statSync(distPath).mtime.getTime();
-  const srcMtime = fs.statSync(srcPath).mtime.getTime();
-
-  if (srcMtime > distMtime) {
+  // Same rule as session-start-init-check: content hash recorded at build
+  // time. A newer src mtime with a matching hash is a checkout/copy false positive.
+  const distDir = path.dirname(distPath);
+  const srcRoot = path.resolve(distDir, '..', 'src');
+  const freshness = assessFileFreshness(srcPath, srcRoot, loadBuildInputs(distDir));
+  if (freshness.state === 'stale') {
     return { hookName, status: 'stale', hookEvent };
+  }
+  if (freshness.state === 'unknown') {
+    return { hookName, status: 'healthy', hookEvent, info: freshness.info };
   }
 
   return { hookName, status: 'healthy', hookEvent };
@@ -212,7 +220,7 @@ export function formatHealthReport(results: HookHealthResult[]): string {
     if (issue.status === 'missing') {
       lines.push(`- MISSING: ${issue.hookName}.mjs (fix: npm run build)`);
     } else if (issue.status === 'stale') {
-      lines.push(`- STALE: ${issue.hookName}.mjs (src newer than dist, fix: npm run build)`);
+      lines.push(`- STALE: ${issue.hookName}.mjs (content differs from the build manifest, fix: npm run build)`);
     }
   }
 
@@ -289,8 +297,9 @@ async function main() {
       // Also log to stderr for visibility
       console.error(report);
     } else {
-      // Healthy - brief stderr note, no context injection
-      console.error(`Hook Health: All ${results.length} hooks healthy`);
+      // One info line when the manifest is missing. Otherwise the quiet healthy note.
+      const info = results.find(r => r.info)?.info;
+      console.error(info ?? `Hook Health: All ${results.length} hooks healthy`);
     }
 
     console.log(JSON.stringify(output));

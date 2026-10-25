@@ -4,7 +4,6 @@
     "CONTINUOUS_CLAUDE_COORDINATION": "true",
     "ENABLE_TOOL_SEARCH": "auto:5",
     "CLAUDE_OPC_DIR": "{{OPC_DIR}}",
-    "DATABASE_URL": "postgresql://claude:claude_dev@127.0.0.1:5432/continuous_claude",
     "CCV3_ROADMAP_AUTOCOMMIT": "0"
   },
   "hooks": {

@@ -28,7 +28,7 @@ Pass when all of these hold:
 - `uname` prints `MINGW64…` or `MSYS…`, never `Linux`;
 - node and sha256sum both resolve;
 - HEAD is the PR1 branch tip (`fix/ccv3-install-blockers`) or the PR1 merge commit;
-- the working tree is clean;
+- `git status --porcelain` is classified. A modified, staged, renamed, or deleted tracked path FAILs and the paths are listed. Untracked-only paths WARN and list the paths. They do not fail the gate. A clean tree has neither warning nor failure from this check. An untracked directory such as `.claudedocs/` is a warning;
 - remotes are listed. If `origin` is parcadei, note it. Nothing is pushed.
 
 **W1 Sync cursor test (Git Bash)** → `$D-pr1-win-sync-cursor-test.txt`
@@ -41,15 +41,17 @@ It runs the real sync in its own temp home. Pass when the exit code is 0, there 
 ```powershell
 $T=Join-Path $env:TEMP "ccv3-pr1-home-$D"; New-Item -ItemType Directory -Force $T | Out-Null
 $env:CCV3_GATE_HOME=$T
-& $GB -c 'H="$(cygpath -u "$CCV3_GATE_HOME")"; HOME="$H" CCV3_MACHINE_PROFILE=personal "$BASH" scripts/sync-to-active.sh --skip-build; echo "exit=$?";
+& $GB -c 'H="$(cygpath -u "$CCV3_GATE_HOME")"; HOME="$H" CCV3_MACHINE_PROFILE=personal SYNC_ALLOW_BRANCH=1 "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?";
   echo "files=$(find "$H/.claude" -type f | wc -l)";
   echo "archive_dirs=$(find "$H/.claude" -type d \( -name _snapshots -o -name _archive -o -name .archive -o -name archive -o -name _eval -o -name _sandbox \) | wc -l)";
   for s in fourth-brand-guidelines fourth-presentation-suite fourthos-weekly weekly-report fabric kusto-cli; do test -e "$H/.claude/skills/$s" && echo "SKIPSKILL_PRESENT $s"; done;
   echo "work_paths=$(grep -rIl "david[.-]hayes" "$H/.claude" | wc -l)"'
 ```
+`SYNC_ALLOW_BRANCH=1` is a prefix on that sync command only. It lets a non-main checkout copy into the temp HOME. Never export or set SYNC_ALLOW_BRANCH in $env:; the only real-HOME use is the one-off step-2 prefix after the backup.
+
 Pass when all of these hold:
-- the output shows `exit=0`;
-- `files` > 0;
+- the output shows `sync_exit=0`;
+- `files` > 0. `files=0` prints `FAIL: W2 files=0; zero inputs is not a pass` and the gate FAILs. A count of zero is never a pass. A space-padded `wc` count is still that count;
 - `archive_dirs=0`;
 - there are no `SKIPSKILL_PRESENT` lines;
 - `work_paths=0`.
@@ -71,8 +73,18 @@ Pass when all of these hold:
 
 **Do not register tasks here.** That happens in runbook §3.9.
 
-## Install (not part of this checklist)
-Run `03-MACHINE-STATE-AND-RUNBOOK.md` §3.4 onward: the wizard in copy mode with `--profile personal`. After it, `~/.claude/state/machine-profile` should read `personal`. Record the size of `~/.claude` before and after (AC3).
+## Install on an existing machine (rog-strix)
+
+Do these in order. Back up before anything writes to the live install.
+
+1. Back up `~/.claude` (a sibling copy). Do not delete the live install.
+2. Sync this head into the install with Git Bash. On a branch other than main, prefix that one sync command with `SYNC_ALLOW_BRANCH=1`. That prefix, after the backup, is the only real-HOME use. Do not export it and do not assign it in `$env:`.
+3. Re-render settings onto the install: `node scripts/settings/render-settings.mjs --out` to the install `settings.json`. The renderer builds a new file from the template plus the profile overlay. It does not read or merge the existing env. The template env has no `DATABASE_URL`, and the personal profile overlay is empty, so a re-render drops that stale key. `render-settings.mjs --check` does not write. `scripts/sync-to-active.sh` does not write `settings.json` (it is in `NEVER_SYNC`). Neither clears the key.
+4. Run the wizard in copy mode with `--profile personal`. A later wizard step that loads `settings.json` to add semantic search writes back the object it loaded, so it keeps whatever env is already there. The re-render in step 3 has already dropped the stale key.
+5. Start a Claude session from the re-rendered settings and run the R3 in-session check.
+6. Run the remaining checks (prune, dist freshness, phase post).
+
+A fresh install still uses the wizard in copy mode with `--profile personal`. After it, `~/.claude/state/machine-profile` should read `personal`. Record the size of `~/.claude` before and after.
 
 ## Phase post (after the install)
 
@@ -127,11 +139,15 @@ Run one prompt in `~` and one in the repo:
 ```powershell
 claude --debug -p "Reply OK" --permission-mode plan
 ```
-Then grep the newest two files in `~\.claude\debug\`:
+Then match the newest two files in `~\.claude\debug\` with the shared matcher (`docs/ccv3-1/lib/w8-hook-errors.ps1`, `Test-HookErrorLine`). The pattern text is identical to `$script:W8HookErrorPattern`:
+
+`(?i)(\[ERROR\][^\r\n]*\bhook\b[^\r\n]*\b(fail(ed|ure)?|timed out|ENOENT|non-zero|exit code (?!0\b)\d+)\b|(?<!Hook stdout:[^\r\n]*)(?<![\w-])(Hook error:|Hook failed\b|Failed to run hook\b|Error running hook\b|Hook timed out\b|Hook command timed out\b)|completed with status (?!0\b)\d+|status code (?!0\b)\d+|spawn\S*\s+ENOENT)`
+
 ```powershell
-Get-ChildItem ~\.claude\debug | sort LastWriteTime -desc | select -First 2 | Select-String -Pattern 'hook.*(error|fail|timed out|ENOENT)'
+. docs/ccv3-1/lib/w8-hook-errors.ps1
+Get-ChildItem ~\.claude\debug | Sort-Object LastWriteTime -Descending | Select-Object -First 2 | ForEach-Object { Get-Content -LiteralPath $_.FullName } | Where-Object { Test-HookErrorLine $_ }
 ```
-Pass when there are 0 matches. Save the grep output along with the file names.
+Pass when there are 0 matches. Save the matcher output along with the file names.
 
 ## Report back
 For each W-step, paste one line into the PR in the form `W# · file · result line · PASS/FAIL` (the driver writes `<date>-pr1-win-summary-<phase>.md` for this). `.claude/cache/` is gitignored: do not commit the outputs unless David explicitly asks (then `git add -f` on the PR branch, normal push to Rev4nchist, never force). On any FAIL, stop and report it. Do not patch `~/.claude` by hand.

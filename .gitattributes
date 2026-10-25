@@ -20,6 +20,10 @@
 # and break the per-file sha256 in vendor.lock.json). Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md.
 .claude/skills/_vendor/** -text
 
+# Hook sources stay LF. The freshness manifest hashes LF bytes; a CRLF checkout
+# would otherwise differ in all 149 sources (dist-freshness.ts also strips CR).
+/.claude/hooks/src/**/*.ts text eol=lf
+
 # Always-loaded instruction files stay LF: the context budget counts every \r, so CRLF costs
 # ~377 chars (scripts/rules/context-budget-guard.mjs; 2026-10-03 trim pass).
 /.claude/templates/CLAUDE.md.template text eol=lf

@@ -83,6 +83,7 @@ import { tmpdir } from 'node:os';
 import { join } from 'node:path';
 
 import { Client } from 'pg';
+import { resolveDbUrl } from './shared/pg-client.js';
 
 /**
  * The context-injection output shape.
@@ -174,11 +175,8 @@ interface EventRow {
   session_id: string; to_session_id: string | null; body: string | null;
 }
 
-function connString(): string {
-  return process.env.CONTINUOUS_CLAUDE_DB_URL
-    || process.env.DATABASE_URL
-    || process.env.OPC_POSTGRES_URL
-    || 'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+function connString(): string | null {
+  return resolveDbUrl();
 }
 
 const short = (s: string | null): string => (s ? s.slice(0, 8) : '--------');
@@ -222,8 +220,15 @@ export async function deliverDirectMessages(
   // for everyone turns into every tool call queueing its own doomed connection.
   writeDmState(me, { ts: now, lastShownDmId: state.lastShownDmId });
 
+  const url = connString();
+  if (!url) {
+    // resolveDbUrl already warned once. Skip the connection; the hook still exits 0.
+    process.stdout.write('{}');
+    return;
+  }
+
   const client = new Client({
-    connectionString: connString(),
+    connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS,
   });
@@ -293,8 +298,14 @@ async function main(): Promise<void> {
 
   if (eventName === 'PostToolUse') { await deliverDirectMessages(me); return; }
 
+  const url = connString();
+  if (!url) {
+    process.stdout.write('{}');
+    return;
+  }
+
   const client = new Client({
-    connectionString: connString(),
+    connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS,
   });

@@ -11,14 +11,32 @@
  *  - no stray {{PLACEHOLDER}} other than {{CLAUDE_HOME}} survives
  */
 import { describe, it, expect } from 'vitest';
-import { readFileSync, existsSync } from 'fs';
+import { spawnSync } from 'child_process';
+import { existsSync, mkdtempSync, readFileSync, writeFileSync } from 'fs';
+import { tmpdir } from 'os';
 import { fileURLToPath } from 'url';
 import * as path from 'path';
+import { renderSettings } from '../../../../scripts/settings/render-settings.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));      // .claude/hooks/src/__tests__
 const claudeDir = path.resolve(here, '../../../');               // .claude
 const distDir = path.resolve(here, '../../dist');                // .claude/hooks/dist
 const tplPath = path.join(claudeDir, 'settings.json.template');
+const DB_ENV_KEYS = ['DATABASE_URL', 'CONTINUOUS_CLAUDE_DB_URL', 'OPC_POSTGRES_URL'] as const;
+
+function renderedTemplateEnv(): Record<string, unknown> {
+  const rendered = renderSettings({
+    templateText: readFileSync(tplPath, 'utf8'),
+    vars: {
+      CLAUDE_HOME: '/tmp/claude-home',
+      OPC_DIR: '/tmp/opc',
+      REPO_ROOT: '/tmp/repo',
+      USER_HOME: '/tmp/user',
+    },
+    overlay: {},
+  }) as { env?: Record<string, unknown> };
+  return rendered.env ?? {};
+}
 
 /**
  * Extract the hook's dist name from EITHER form.
@@ -99,6 +117,82 @@ describe('settings.json.template', () => {
     for (const want of ['destructive-command-guard', 'package-install-guard', 'post-edit-diagnostics', 'agent-recall-injector', 'telemetry-tracker', 'session-start-memory-loaders']) {
       expect(names.has(want)).toBe(true);
     }
+  });
+
+  it('carries no database URL in the template env or the rendered env', () => {
+    const parsed = JSON.parse(readFileSync(tplPath, 'utf8')) as { env?: Record<string, unknown> };
+    const templateKeys = DB_ENV_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(parsed.env ?? {}, key));
+    expect(templateKeys).toEqual([]);
+    const env = renderedTemplateEnv();
+    const renderedKeys = DB_ENV_KEYS.filter((key) => Object.prototype.hasOwnProperty.call(env, key));
+    expect(renderedKeys).toEqual([]);
+    const urlKeys = Object.entries(env)
+      .filter(([, value]) => typeof value === 'string' && value.includes('postgresql://'))
+      .map(([key]) => key);
+    expect(urlKeys).toEqual([]);
+  });
+
+  it('a DB-using hook with the template env and no exported var warns and exits 0', () => {
+    // The template supplies no URL, matching verify-setup: Postgres with the
+    // variable missing FAILs that check, SQLite SKIPs it, and neither mode
+    // inherits a credential from the rendered settings env.
+    const home = mkdtempSync(path.join(tmpdir(), 'ccv3-tpl-env-'));
+    const env: NodeJS.ProcessEnv = { HOME: home, USERPROFILE: home };
+    for (const [key, value] of Object.entries(process.env)) {
+      if (value === undefined || key.startsWith('VITEST')) continue;
+      if ((DB_ENV_KEYS as readonly string[]).includes(key)) continue;
+      env[key] = value;
+    }
+    for (const [key, value] of Object.entries(renderedTemplateEnv())) {
+      if (typeof value === 'string') env[key] = value;
+    }
+    const result = spawnSync('node', [path.join(distDir, 'lane-context.mjs')], {
+      input: JSON.stringify({ session_id: 'tpl-env-test', hook_event_name: 'UserPromptSubmit' }),
+      encoding: 'utf-8',
+      env,
+      timeout: 15000,
+    });
+    expect(result.status).toBe(0);
+    expect(result.stderr ?? '').toContain('WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset');
+    expect(result.stderr ?? '').not.toContain('postgresql://');
+    expect(result.stdout ?? '').toContain('{}');
+  });
+
+  it('re-render --out replaces a settings file and drops a stale DATABASE_URL key', () => {
+    // The renderer does not read the existing file. --out writes a new document
+    // from the template plus the profile overlay, so a retired env key is gone.
+    const dir = mkdtempSync(path.join(tmpdir(), 'ccv3-settings-replace-'));
+    const out = path.join(dir, 'settings.json');
+    writeFileSync(out, JSON.stringify({
+      env: {
+        DATABASE_URL: 'postgresql://user:PLACEHOLDER@localhost:5432/db',
+        CONTINUOUS_CLAUDE_COORDINATION: 'true',
+      },
+    }));
+    const script = path.resolve(here, '../../../../scripts/settings/render-settings.mjs');
+    const env: NodeJS.ProcessEnv = { ...process.env };
+    delete env.CCV3_MACHINE_PROFILE;
+    const result = spawnSync(process.execPath, [
+      script,
+      '--template', tplPath,
+      '--out', out,
+      '--var', 'CLAUDE_HOME=/tmp/claude-home',
+      '--var', 'OPC_DIR=/tmp/opc',
+      '--var', 'REPO_ROOT=/tmp/repo',
+      '--var', 'USER_HOME=/tmp/user',
+    ], { encoding: 'utf8', env });
+    expect(result.status).toBe(0);
+    expect(result.stdout ?? '').not.toContain('postgresql://');
+    expect(result.stderr ?? '').not.toContain('postgresql://');
+    const written = JSON.parse(readFileSync(out, 'utf8')) as { env?: Record<string, unknown> };
+    expect(Object.keys(written.env ?? {})).not.toContain('DATABASE_URL');
+    expect(JSON.stringify(written)).not.toContain('postgresql://');
+  });
+
+  it('stays consistent with the verify-setup DB-mode rule', () => {
+    const verify = readFileSync(path.join(claudeDir, '..', 'scripts', 'verify-setup.sh'), 'utf8');
+    expect(verify).toContain('check "CONTINUOUS_CLAUDE_DB_URL is set"');
+    expect(verify).toContain('[SKIP] CONTINUOUS_CLAUDE_DB_URL (sqlite mode)');
   });
 
   it('contains only known wizard placeholders ({{CLAUDE_HOME}}, {{OPC_DIR}})', () => {

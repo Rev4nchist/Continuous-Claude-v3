@@ -40,19 +40,52 @@ const CONNECT_TIMEOUT_MS = 2000;
 const QUERY_TIMEOUT_MS = 3000;
 
 /**
- * Get the PostgreSQL connection string.
- *
- * Checks environment variables in priority order:
- * 1. CONTINUOUS_CLAUDE_DB_URL (canonical)
- * 2. DATABASE_URL (backwards compat)
- * 3. OPC_POSTGRES_URL (legacy)
- * 4. Default local development connection
+ * Database URL variables, first match wins.
+ * There is no baked-in default: a credential in source is a leak, and a
+ * silent fallback hides an install that never exported the variable.
  */
-export function getPgConnectionString(): string {
-  return process.env.CONTINUOUS_CLAUDE_DB_URL ||
-    process.env.DATABASE_URL ||
-    process.env.OPC_POSTGRES_URL ||
-    'postgresql://claude:claude_dev@localhost:5432/continuous_claude';
+const DB_URL_VARS = ['CONTINUOUS_CLAUDE_DB_URL', 'DATABASE_URL', 'OPC_POSTGRES_URL'] as const;
+
+let warnedMissingDbUrl = false;
+
+/** Test hook. The WARN is once per process; tests need a fresh process. */
+export function resetResolveDbUrlWarningForTests(): void {
+  warnedMissingDbUrl = false;
+}
+
+/** Thrown when a caller asked for a client and no URL is configured. */
+export class MissingDbUrlError extends Error {
+  constructor() {
+    super('database URL unset');
+    this.name = 'MissingDbUrlError';
+  }
+}
+
+/**
+ * Resolve the PostgreSQL URL, or null when every variable is unset.
+ *
+ * Order: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL, OPC_POSTGRES_URL.
+ * Empty and whitespace-only values count as unset (SQLite mode writes an
+ * empty CONTINUOUS_CLAUDE_DB_URL). On null, one stderr WARN per process
+ * names the variables and does not print a value.
+ */
+export function resolveDbUrl(): string | null {
+  for (const name of DB_URL_VARS) {
+    const value = process.env[name];
+    if (typeof value === 'string' && value.trim()) return value.trim();
+  }
+  if (!warnedMissingDbUrl) {
+    warnedMissingDbUrl = true;
+    console.error(
+      'WARN: CONTINUOUS_CLAUDE_DB_URL, DATABASE_URL and OPC_POSTGRES_URL are unset; skipping database work'
+    );
+  }
+  return null;
+}
+
+/** Same as resolveDbUrl. Kept so existing importers do not have to move. */
+export function getPgConnectionString(): string | null {
+  return resolveDbUrl();
 }
 
 /**
@@ -63,8 +96,13 @@ export function getPgConnectionString(): string {
  * (fail open, let the edit through) than to a heartbeat (nothing to do).
  */
 export async function withPgClient<T>(fn: (client: Client) => Promise<T>): Promise<T> {
+  const connectionString = getPgConnectionString();
+  if (!connectionString) {
+    // resolveDbUrl already wrote the one WARN. Do not connect, and do not log again.
+    throw new MissingDbUrlError();
+  }
   const client = new Client({
-    connectionString: getPgConnectionString(),
+    connectionString,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS,
     statement_timeout: QUERY_TIMEOUT_MS,
@@ -127,6 +165,11 @@ export async function withPgClientOrFallback<T>(
   try {
     return { value: await withPgClient(fn), degraded: false };
   } catch (err) {
+    if (err instanceof MissingDbUrlError) {
+      // The WARN already named the variables. A second "degraded" line would
+      // be a second message, and it must not invent a URL.
+      return { value: fallback, degraded: true, error: err.message };
+    }
     // Node's happy-eyeballs connect raises an AggregateError whose own .message
     // is EMPTY, so the obvious `err.message` logs "degraded:" and nothing else --
     // a diagnostic that tells you the thing failed but never why. Fall through

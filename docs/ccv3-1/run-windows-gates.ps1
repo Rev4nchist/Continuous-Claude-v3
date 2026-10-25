@@ -37,6 +37,8 @@ New-Item -ItemType Directory -Force $E | Out-Null
 $ClaudeHome = Join-Path $env:USERPROFILE '.claude'
 $Results = [System.Collections.Generic.List[object]]::new()
 
+. (Join-Path $PSScriptRoot 'lib/windows-gate-verdicts.ps1')
+
 function Save-Gate([string]$Id, [string]$Name, [string[]]$Lines, [bool]$Pass, [string]$Summary) {
   $file = Join-Path $E "$D-pr1-win-$Name.txt"
   $Lines | Set-Content -Path $file -Encoding utf8
@@ -50,11 +52,17 @@ $runPre  = $Phase -in 'pre','all'
 $runPost = $Phase -in 'post','all'
 
 # ---------- W0 preflight ----------
+$porcelain = @(git status --porcelain)
 $o = Invoke-GB 'uname -s; command -v node; command -v sha256sum'
-$o += "HEAD=$(git rev-parse HEAD)"; $o += "porcelain:"; $o += @(git status --porcelain); $o += @(git remote -v)
+$o += "HEAD=$(git rev-parse HEAD)"; $o += "porcelain:"; $o += $porcelain; $o += @(git remote -v)
 $uname = ($o | Select-Object -First 1)
-$ok = ($uname -match '^(MINGW|MSYS)') -and ($o -match 'node') -and ($o -match 'sha256sum')
-Save-Gate 'W0' 'preflight' $o $ok "uname=$uname"
+$tree = Get-W0TreeVerdict -Porcelain $porcelain
+if ($tree.Summary) { $o += $tree.Summary }
+$ok = ($uname -match '^(MINGW|MSYS)') -and ($o -match 'node') -and ($o -match 'sha256sum') -and $tree.Pass
+$w0Summary = "uname=$uname"
+if (-not $tree.Pass) { $w0Summary += " FAIL tracked=$($tree.Tracked.Count)" }
+elseif ($tree.Warn) { $w0Summary += " WARN untracked=$($tree.Untracked.Count)" }
+Save-Gate 'W0' 'preflight' $o $ok $w0Summary
 if ($uname -match 'Linux') { throw 'Git Bash resolved to a Linux/WSL shell; aborting.' }
 
 if ($runPre) {
@@ -68,17 +76,21 @@ if ($runPre) {
   $env:CCV3_GATE_HOME = $T
   $cmd = @'
 H="$(cygpath -u "$CCV3_GATE_HOME")"
-HOME="$H" CCV3_MACHINE_PROFILE=personal "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?"
+HOME="$H" CCV3_MACHINE_PROFILE=personal SYNC_ALLOW_BRANCH=1 "$BASH" scripts/sync-to-active.sh --skip-build; echo "sync_exit=$?"
 echo "files=$(find "$H/.claude" -type f 2>/dev/null | wc -l)"
 echo "archive_dirs=$(find "$H/.claude" -type d \( -name _snapshots -o -name _archive -o -name .archive -o -name archive -o -name _eval -o -name _sandbox \) 2>/dev/null | wc -l)"
 for s in fourth-brand-guidelines fourth-presentation-suite fourthos-weekly weekly-report fabric kusto-cli; do test -e "$H/.claude/skills/$s" && echo "SKIPSKILL_PRESENT $s"; done
 echo "work_paths=$(grep -rIl 'david[.-]hayes' "$H/.claude" 2>/dev/null | wc -l)"
 '@
   $o = Invoke-GB $cmd
-  $num = { param($k) $m = $o | Select-String -Pattern "^$k=(\d+)" | Select-Object -First 1; if ($m) { [int]$m.Matches[0].Groups[1].Value } else { -1 } }
-  $se = & $num 'sync_exit'; $fc = & $num 'files'; $ad = & $num 'archive_dirs'; $wp = & $num 'work_paths'
+  $se = Get-GateCount -Lines $o -Key 'sync_exit'
+  $fc = Get-GateCount -Lines $o -Key 'files'
+  $ad = Get-GateCount -Lines $o -Key 'archive_dirs'
+  $wp = Get-GateCount -Lines $o -Key 'work_paths'
   $sk = @($o | Select-String 'SKIPSKILL_PRESENT').Count
-  Save-Gate 'W2' 'temp-sync' $o (($se -eq 0) -and $fc -gt 0 -and $ad -eq 0 -and $sk -eq 0 -and $wp -eq 0) "sync_exit=$se files=$fc archive_dirs=$ad skipskills_present=$sk work_paths=$wp"
+  $verdict = Get-W2SyncVerdict -SyncExit $se -Files $fc -ArchiveDirs $ad -SkipSkills $sk -WorkPaths $wp
+  if ($verdict.Summary) { $o += $verdict.Summary }
+  Save-Gate 'W2' 'temp-sync' $o $verdict.Pass "sync_exit=$se files=$fc archive_dirs=$ad skipskills_present=$sk work_paths=$wp"
   Remove-Item -Recurse -Force $T -ErrorAction SilentlyContinue
   Remove-Item Env:\CCV3_GATE_HOME -ErrorAction SilentlyContinue
 
@@ -173,7 +185,13 @@ if ($runPost) {
     Push-Location $env:USERPROFILE; & claude --debug -p 'Reply OK' --permission-mode plan *> $null; Pop-Location
     Push-Location $RepoPath;        & claude --debug -p 'Reply OK' --permission-mode plan *> $null; Pop-Location
     $logs = @(Get-ChildItem $dbg -File -ErrorAction SilentlyContinue | Where-Object LastWriteTime -ge $before | Sort-Object LastWriteTime -Descending | Select-Object -First 2)
-    $hits = @($logs | Select-String -Pattern 'hook.*(error|fail|timed out|ENOENT)')
+    . (Join-Path $PSScriptRoot 'lib/w8-hook-errors.ps1')
+    $hits = [System.Collections.Generic.List[string]]::new()
+    foreach ($log in $logs) {
+      foreach ($line in @(Get-Content -LiteralPath $log.FullName -ErrorAction SilentlyContinue)) {
+        if (Test-HookErrorLine -Line $line) { $hits.Add($line) }
+      }
+    }
     $o = @("logs=$($logs.Count)") + @($logs.FullName) + "hook_error_lines=$($hits.Count)" + @($hits | ForEach-Object { "$_" })
     Save-Gate 'W8' 'debug-grep' $o ($logs.Count -ge 2 -and $hits.Count -eq 0) "logs=$($logs.Count) hook_error_lines=$($hits.Count)"
   } else { Write-Host 'W8 SKIPPED'; $Results.Add([pscustomobject]@{ gate='W8'; file=''; result='SKIPPED'; pass=$false }) }
