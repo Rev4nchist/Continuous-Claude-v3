@@ -26,8 +26,11 @@ git remote rename origin fork
 git remote add origin https://github.com/parcadei/Continuous-Claude-v3.git
 
 cd opc
-uv run python -m scripts.setup.wizard
+uv run python -m scripts.setup.wizard --profile <name>
 ```
+
+Replace `<name>` with your machine profile. Create it first, as described in
+[Machine profile](#machine-profile).
 
 > **Clone `Rev4nchist`, not `parcadei`.** `parcadei` is the upstream and it is
 > **837 commits behind**, last moved 2026-01-26. Cloning it gives you a system
@@ -42,14 +45,33 @@ uv run python -m scripts.setup.wizard
 
 The wizard handles:
 - Docker PostgreSQL + pgvector container (4 tables, idempotent schema)
-- Hook installation + TypeScript build (about 75 source hooks compiled to dist/*.mjs)
-- Skills (150+), agents (50), rules (28) installed to `~/.claude/`
+- Hook installation + TypeScript build (73 source hooks compiled to dist/*.mjs)
+- Skills (80), agents (35) and rules (20 on-demand, plus the core set) installed to `~/.claude/`
 - CLAUDE.md and RULES.md behavioral config from templates
 - Environment variables (`CLAUDE_OPC_DIR`, `PYTHONUTF8=1` on Windows)
 - Git post-commit hook for automatic repo-to-active sync
-- `settings.json` generated with correct local paths from template
+- `settings.json` rendered from `.claude/settings.json.template` plus your machine profile. The rendered file is untracked.
+- The profile name saved in `~/.claude/state/machine-profile`, so later syncs use the same profile
 
 > **Windows users**: Open a **new terminal** after the wizard completes. `setx` sets permanent environment variables but they are not available in the current terminal session.
+
+## Machine profile
+
+A machine profile is a JSON file, `machine/<name>.json`. It holds the paths that differ per machine
+(home, repo, `~/.claude`, `opc/`, Git Bash, PowerShell profile) and `skipSkills`, a list of skills
+that sync does not install. Without a profile, the wizard prints a WARN, uses home-directory
+defaults and skips no skill. It does not fail.
+
+The only shipped profile is `machine/personal.json`. It holds the repo owner's paths
+(`C:/Users/dkhay/...`). Do not use it as is on another machine.
+
+1. Copy it: `Copy-Item machine/personal.json machine/<name>.json`.
+2. Edit the copy. Set every path to your machine and set `skipSkills` to the skills you do not want.
+3. Run the wizard with `--profile <name>` (see above). The wizard saves the name.
+
+The selection order is `--profile`, then the `CCV3_MACHINE_PROFILE` environment variable, then
+`~/.claude/state/machine-profile`, then none. A name with no file on disk also warns and falls back
+to the defaults, so check the WARN line for a typo.
 
 ## Post-Setup Verification
 
@@ -315,7 +337,8 @@ Manual sync: `bash scripts/sync-to-active.sh`
 If you are Claude Code reading this after a fresh clone:
 1. Confirm the clone came from `Rev4nchist` and that remotes are named `fork` / `origin`:
    `git remote -v`. If not, fix it now -- scheduled scripts hardcode both names.
-2. Run the wizard: `cd opc && uv run python -m scripts.setup.wizard`
+2. Create your machine profile (see [Machine profile](#machine-profile)), then run the wizard:
+   `cd opc && uv run python -m scripts.setup.wizard --profile <name>`
 3. Verify with the post-setup checks above
 4. **Do the GitHub Identity steps** -- the wizard does not, and four of its five layers
    fail silently with the wrong identity rather than an error. Gate:

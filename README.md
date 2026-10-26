@@ -373,15 +373,16 @@ the harness is tested on Windows only.
 
    ```bash
    cd opc
-   uv run python -m scripts.setup.wizard --profile personal
+   uv run python -m scripts.setup.wizard --profile <name>
    ```
 
    The wizard backs up `~/.claude` first. It then starts the PostgreSQL container, builds the
    hooks, installs skills, agents and rules into `~/.claude`, and writes `settings.json`. It also
    installs the post-commit hook that runs the forward sync. Settings render from
-   `.claude/settings.json.template` plus the profile in `machine/personal.json`. Edit the profile
-   paths for your machine first. The `--profile personal` flag selects the profile and saves the
-   choice, so later syncs use it too. `BOOTSTRAP.md` does not yet cover this step.
+   `.claude/settings.json.template` plus your machine profile. Create the profile first: copy
+   `machine/personal.json` to `machine/<name>.json` and set the paths to your machine. The shipped
+   file holds the repo owner's paths. The `--profile <name>` flag selects your copy and saves the
+   choice, so later syncs use it too. `BOOTSTRAP.md` has the steps.
 
 4. Open a new terminal, so the new environment variables load.
 
