@@ -148,7 +148,8 @@ export const builderOf = (labels) => {
   return b.length === 0 ? null : b.length === 1 ? b[0] : 'multiple';
 };
 
-const STATE_RE = /<!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?\s*-->/;
+// `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
+const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?\s*-->/;
 
 /** The class and head stored in a router comment body. Unknown or missing parts are null. */
 export function stateFrom(body) {

@@ -110,7 +110,8 @@ export function needsCodeRabbitReview(labels) {
 }
 
 const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
-const ROUTER_STATE_RE = /<!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})\s*-->/;
+// `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
+const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 
 /**
