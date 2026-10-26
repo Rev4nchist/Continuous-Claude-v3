@@ -191,7 +191,7 @@
       ],
       "segment": [
         "^(cr|coderabbit)\\b",
-        "^npx\\s+skills\\s+add\\b.*coderabbit",
+        "^skills(@\\S+)?\\s+add\\b.*coderabbit",
         "^coderabbit\\s+skills\\b"
       ]
     },

@@ -138,7 +138,7 @@ function closingParen(s, from) {
   }
   return -1;
 }
-function maskQuoted(command, ps = false) {
+function maskQuoted(command, ps = false, trace) {
   const n = command.length;
   const out = command.split("");
   const esc = ps ? "`" : "\\";
@@ -157,6 +157,7 @@ function maskQuoted(command, ps = false) {
       if (expand && end >= 0 && end < to) k = end + 1;
       else {
         fill(k, k + 1);
+        trace?.bodies.add(k);
         k++;
       }
     }
@@ -193,11 +194,13 @@ function maskQuoted(command, ps = false) {
         modes.pop();
         i++;
       } else if (c === "$" && command[i + 1] === "(") {
+        trace?.dqSubs.add(i);
         modes.push("sub");
         depths.push(0);
         i += 2;
       } else if (c === "`" && !ps) {
-        modes.push("bt");
+        trace?.dqSubs.add(i);
+        modes.push("dbt");
         i++;
       } else {
         fill(i, i + 1);
@@ -240,7 +243,10 @@ ${q}@`, i + 2);
       depths.push(0);
       i += 2;
     } else if (c === "`" && !ps) {
-      if (top === "bt") modes.pop();
+      if (top === "dbt") {
+        trace?.dqSubs.add(i);
+        modes.pop();
+      } else if (top === "bt") modes.pop();
       else modes.push("bt");
       i++;
     } else if (top === "sub" && (c === "(" || c === ")")) {
@@ -254,17 +260,21 @@ ${q}@`, i + 2);
   }
   return out.join("");
 }
-function segmentize(command, ps = false) {
-  const masked = maskQuoted(command, ps);
+function segmentRanges(command, ps, trace) {
+  const masked = maskQuoted(command, ps, trace);
   const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
-  const pieces = [];
+  const ranges = [];
   let last = 0;
   for (const m of masked.matchAll(sep)) {
-    pieces.push(command.slice(last, m.index));
+    if (trace?.dqSubs.has(m.index ?? -1)) continue;
+    ranges.push([last, m.index ?? 0]);
     last = (m.index ?? 0) + m[0].length;
   }
-  pieces.push(command.slice(last));
-  return pieces.map((x) => x.trim()).filter(Boolean);
+  ranges.push([last, command.length]);
+  return ranges;
+}
+function segmentize(command, ps = false) {
+  return segmentRanges(command, ps).map(([a, b]) => command.slice(a, b).trim()).filter(Boolean);
 }
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
@@ -402,8 +412,61 @@ function classifyInvocation(inv) {
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
 }
+var CR_WORD = /(?:^|[\s"'`(\\/=,{])(?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s"'`)\\,}])/gi;
+var BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
+var REVIEW_WORD = /\breview\b/i;
+var EXECUTING_PROGRAMS = /* @__PURE__ */ new Set([
+  ...SHELLS,
+  ...EVALS,
+  ...STARTERS,
+  ...RUNNERS,
+  ...PREFIXES,
+  "cmd",
+  "timeout",
+  "watch",
+  "find",
+  "parallel",
+  "nice",
+  "setsid",
+  "wsl",
+  "foreach-object",
+  "%",
+  "start-job",
+  "sajb",
+  "start-threadjob",
+  "invoke-command",
+  "icm"
+]);
+var BILLING_REASON = "CodeRabbit guard: billing flag with a CodeRabbit CLI call";
+function leadingProgram(segment) {
+  let s = segment.trim();
+  let prev;
+  do {
+    prev = s;
+    s = s.replace(ENV_ASSIGN, "").replace(/^&\s*/, "");
+  } while (s !== prev);
+  return baseName(splitFirst(s).tok);
+}
+function rawScan(text, ps = false) {
+  const found = { billing: false, reviewSegments: [] };
+  const trace = { dqSubs: /* @__PURE__ */ new Set(), bodies: /* @__PURE__ */ new Set() };
+  for (const [a, b] of segmentRanges(text, ps, trace)) {
+    const seg = text.slice(a, b).trim();
+    const program = leadingProgram(seg);
+    if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
+    const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
+    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => trace.bodies.has(a + k) ? " " : ch).join("").trim();
+    const first = [...raw.matchAll(CR_WORD)][0];
+    if (!first) continue;
+    if (BILLING_WORD.test(raw)) found.billing = true;
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push(raw);
+  }
+  return found;
+}
 var MAX_NESTING = 4;
 function classifyCommand(text, ps = false, depth = 0) {
+  const raw = depth === 0 ? rawScan(text, ps) : { billing: false, reviewSegments: [] };
+  if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
   for (const seg of segmentize(text, ps)) {
@@ -419,6 +482,8 @@ function classifyCommand(text, ps = false, depth = 0) {
     runs += c.runs ?? 0;
   }
   if (runs > 0) return { verdict: "allow", countsRun: true, runs };
+  const hidden = raw.reviewSegments.filter((seg) => classifyCommand(seg, ps, depth + 1).verdict === "ignore").length;
+  if (hidden > 0) return { verdict: "allow", countsRun: true, runs: hidden };
   return { verdict: allowed ? "allow" : "ignore" };
 }
 function classifyShellSegment(segment, ps = false) {
@@ -427,11 +492,19 @@ function classifyShellSegment(segment, ps = false) {
 function git(args, cwd) {
   return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 }).trim();
 }
+function normalizeRemote(url) {
+  const u = url.trim().replace(/\\/g, "/");
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/]*@)?([^/:]+)(?::\d*)?\/(.+)$/i.exec(u);
+  const scp = /^(?:[^/]*@)?([^/:@]{2,}):(?!\/\/)(.+)$/.exec(u);
+  const m = scheme ?? scp;
+  const rest = m ? `${m[1]}/${m[2]}` : u;
+  return rest.replace(/\/+$/, "").replace(/\.git$/i, "").replace(/^\/+/, "").toLowerCase();
+}
 function repoId(root) {
   try {
     const url = git(["config", "--get-regexp", "^remote\\..*\\.url$"], root).split("\n")[0]?.split(/\s+/)[1] ?? "";
-    const slug = url.replace(/\.git$/, "").replace(/^.*[/:]/, "");
-    if (slug) return slug;
+    const id = normalizeRemote(url);
+    if (id) return id;
   } catch {
   }
   return root;
@@ -563,6 +636,7 @@ if (!process.env.VITEST) {
   }
 }
 export {
+  BILLING_REASON,
   checkRunCap,
   classifyCommand,
   classifyDelegate,
@@ -578,7 +652,9 @@ export {
   isReviewAgent,
   isSkillInstall,
   maskQuoted,
+  normalizeRemote,
   parseInvocation,
+  rawScan,
   readState,
   recordRun,
   repoBranchKey,

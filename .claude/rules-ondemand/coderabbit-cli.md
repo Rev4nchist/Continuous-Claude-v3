@@ -46,6 +46,16 @@ allowed. A `$( )` substitution inside double quotes is still scanned.
 A loop counts as one run, because the guard cannot see the iteration count. Never run `cr review`
 inside a loop, `xargs` or `ForEach-Object`.
 
+A raw check also blocks `--use-credits` or `--api-key` when a command that runs its text (a shell,
+`xargs`, `sudo`, `env`, `Start-Process`, `find -exec`) names `cr` or `coderabbit`, including `.cmd`,
+`.bat` and `.ps1` shims. `grep`, `rg`, `echo` and `Set-Content` only hold text and are not read.
+Known limit: the run key follows the last `cd` in a command, so the key only moves a count between
+branches; the cap never unlocks paid use.
+
+The guard stops accidents, not evasion. These are out of scope: a variable or `$( )` holding the flag,
+aliases or functions, git or gh aliases, a rebase exec step, a script file run later, quote-split
+flags, and encoded commands. Usage billing set to Off on the account is the real billing control.
+
 ## Override
 
 `SKIP_CODERABBIT_GUARD=1` is **Dave-only**. An agent never sets it, never suggests it as a fix for a

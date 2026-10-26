@@ -594,8 +594,31 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   it('uses the first remote, not only origin, and never puts credentials in the key', () => {
     const a = makeRepo('a', 'feat/x', 'https://user:secret@github.com/Rev4nchist/Continuous-Claude-v3.git');
     const key = repoBranchKey(a, {});
-    expect(key).toBe('Continuous-Claude-v3#feat/x');
+    expect(key).toBe('github.com/rev4nchist/continuous-claude-v3#feat/x');
     expect(key).not.toMatch(/secret/);
+  });
+
+  it('keeps host and owner in the key: same repo name, different owner or host, different keys', () => {
+    const a = makeRepo('a', 'feat/x', 'https://github.com/alice/tools.git');
+    const b = makeRepo('b', 'feat/x', 'https://github.com/bob/tools.git');
+    const c = makeRepo('c', 'feat/x', 'https://gitlab.example.com/alice/tools.git');
+    const keys = [a, b, c].map((p) => repoBranchKey(p, {}));
+    expect(new Set(keys).size).toBe(3);
+  });
+
+  it.each([
+    'https://github.com/alice/tools.git',
+    'https://github.com/alice/tools',
+    'https://user:s3cret@github.com/alice/tools.git',
+    'https://s3cret@github.com/alice/tools.git/',
+    'git@github.com:alice/tools.git',
+    'ssh://git@github.com/alice/tools.git',
+    'ssh://git@github.com:22/alice/tools.git',
+  ])('one repo reached by https or ssh gets one credential-free key: %s', (remote) => {
+    const a = makeRepo('a', 'feat/x', remote);
+    const key = repoBranchKey(a, {});
+    expect(key).toBe('github.com/alice/tools#feat/x');
+    expect(key).not.toMatch(/s3cret|user|@/);
   });
 
   it('keys a detached HEAD by commit, not by the shared name HEAD', () => {
@@ -666,5 +689,230 @@ describe('coderabbit-guard: override', () => {
     const lines = readFileSync(logFile, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
     expect(lines).toHaveLength(1);
     expect(lines[0]).toMatchObject({ hook: 'coderabbit-guard', decision: 'override', session_id: 's1' });
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Greptile review of PR #155 (findings 4376918017, 4376918032, 4376918039): one fail-closed billing
+// check on the RAW text of every segment that does not start with git or gh, independent of how
+// parseInvocation reads wrappers.
+// ---------------------------------------------------------------------------------------------
+describe('coderabbit-guard: raw billing check (Greptile examples)', () => {
+  const never = { CCV3_CODERABBIT_GUARD_STATE: join(tmpdir(), 'cr-guard-never.json') };
+  const REASON = /billing flag with a CodeRabbit CLI call/;
+
+  const examples: Array<[string, string]> = [
+    ['4376918017 xargs option value', 'xargs -n 1 cr review --agent --use-credits'],
+    ['4376918017 sudo option value', 'sudo -u root cr review --agent --use-credits'],
+    ['4376918032 Start-Process quoted path with spaces', 'Start-Process -FilePath "C:\\Program Files\\CodeRabbit\\cr.exe" -ArgumentList "review --agent --use-credits"'],
+    ['4376918039 nested bash -c with backticks in a PowerShell call', "bash -c 'echo `cr review --agent --use-credits`'"],
+    ['--api-key=value', 'sudo -u root cr review --agent --api-key=abc123'],
+    ['--api-key in double quotes', 'sudo -u root cr review --agent "--api-key" abc'],
+    ['--use-credits in single quotes', "xargs -n 1 coderabbit.exe review '--use-credits'"],
+    ['path prefix /usr/bin/cr', 'sudo -u root /usr/bin/cr review --agent --use-credits'],
+    ['pwsh -c payload', 'pwsh -NoProfile -c "& \'C:\\Program Files\\CodeRabbit\\cr.exe\' review --agent --use-credits"'],
+    ['command substitution inside a non-git command', 'echo $(cr review --agent --use-credits)'],
+  ];
+
+  it.each(examples)('denies on Bash and PowerShell: %s', (_name, command) => {
+    for (const tool of [bash, pwsh]) {
+      const d = decide(tool(command), never);
+      expect(d.allow, `${tool === bash ? 'Bash' : 'PowerShell'}: ${command}`).toBe(false);
+      expect(d.reason).toMatch(REASON);
+    }
+    expect(existsSync(join(tmpdir(), 'cr-guard-never.json'))).toBe(false);
+  });
+
+  it('denies a billing flag in a segment after a git segment', () => {
+    expect(decide(bash('git status && xargs -n 1 cr review --agent --use-credits'), never).allow).toBe(false);
+  });
+
+  it.each([
+    'git commit -m "docs: cr review --use-credits is banned"',
+    'gh pr comment 1 --body "never run coderabbit --api-key"',
+    'git commit -F - <<EOF\ndocs: never run cr review --use-credits or coderabbit --api-key\nEOF',
+    "git commit -m \"$(cat <<'EOF'\nfix: cr review --use-credits is banned; coderabbit --api-key too\nEOF\n)\"",
+    'echo hello',
+    'cat .coderabbit.yaml',
+    'git push fork feat/ccv3-cr-install',
+  ])('allows text that only talks about it: %s', (command) => {
+    expect(decide(bash(command), never).allow, command).toBe(true);
+    // PowerShell has no heredoc: the same text there is not a valid commit.
+    if (!command.includes('<<')) expect(decide(pwsh(command), never).allow, command).toBe(true);
+  });
+
+  it('still denies a real billing call after a heredoc commit in the same command', () => {
+    const cmd = "git commit -m \"$(cat <<'EOF'\nmsg\nEOF\n)\" && cr review --agent --use-credits";
+    expect(decide(bash(cmd), never).allow).toBe(false);
+  });
+});
+
+describe('coderabbit-guard: raw run counting when parseInvocation misses the call', () => {
+  let dir: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-raw-'));
+    env = { CCV3_CODERABBIT_GUARD_STATE: join(dir, 'state.json'), CCV3_CODERABBIT_GUARD_KEY: 'raw#main' };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['bash', 'xargs -n 1 cr review --agent'],
+    ['bash', 'sudo -u root cr review --agent'],
+    ['pwsh', 'Start-Process -FilePath "C:\\Program Files\\CodeRabbit\\cr.exe" -ArgumentList "review --agent"'],
+    ['bash', "bash -c 'echo `cr review --agent`'"],
+  ])('counts a review hidden in a wrapper (%s): %s', (tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(readState(join(dir, 'state.json')).counts['raw#main']).toBe(1);
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(decide(make(command), env).allow, 'third hidden review hits the cap').toBe(false);
+  });
+
+  it('does not double count a review that parseInvocation already found', () => {
+    expect(decide(bash('cr review --agent'), env).allow).toBe(true);
+    expect(readState(join(dir, 'state.json')).counts['raw#main']).toBe(1);
+  });
+
+  it.each([
+    'cr doctor',
+    'cr usage',
+    'git commit -m "cr review notes"',
+    'gh pr comment 1 --body "ran coderabbit review"',
+    'echo cr',
+    'cat .coderabbit.yaml',
+    'echo review',
+  ])('does not count: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(existsSync(join(dir, 'state.json'))).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Opus critic round 2 on PR #155: shims, search commands that mention "cr review", and text-only
+// commands that mention a billing flag. The raw check reads only segments that EXECUTE their text.
+// ---------------------------------------------------------------------------------------------
+describe('coderabbit-guard: raw check accepts every Windows shim extension', () => {
+  const never = { CCV3_CODERABBIT_GUARD_STATE: join(tmpdir(), 'cr-guard-never-shim.json') };
+  const exts = ['exe', 'cmd', 'bat', 'ps1'];
+  const names = ['cr', 'coderabbit'];
+
+  const cases: Array<[string, string]> = [];
+  for (const name of names) {
+    for (const ext of exts) {
+      cases.push([`xargs ${name}.${ext}`, `xargs -n 1 ${name}.${ext} review --agent --use-credits`]);
+      cases.push([
+        `Start-Process ${name}.${ext}`,
+        `Start-Process -FilePath "C:\\Program Files\\CodeRabbit\\${name}.${ext}" -ArgumentList "review --agent --use-credits"`,
+      ]);
+    }
+  }
+
+  it.each(cases)('denies on Bash and PowerShell: %s', (_name, command) => {
+    for (const tool of [bash, pwsh]) {
+      const d = decide(tool(command), never);
+      expect(d.allow, `${tool === bash ? 'Bash' : 'PowerShell'}: ${command}`).toBe(false);
+      expect(d.reason).toMatch(/billing flag with a CodeRabbit CLI call/);
+    }
+  });
+
+  it('counts a hidden review through a shim', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'cr-guard-shim-'));
+    const env = { CCV3_CODERABBIT_GUARD_STATE: join(dir, 'state.json'), CCV3_CODERABBIT_GUARD_KEY: 'shim#main' };
+    try {
+      expect(decide(bash('xargs -n 1 cr.cmd review --agent'), env).allow).toBe(true);
+      expect(readState(join(dir, 'state.json')).counts['shim#main']).toBe(1);
+    } finally {
+      rmSync(dir, { recursive: true, force: true });
+    }
+  });
+});
+
+describe('coderabbit-guard: search commands that mention "cr review" do not use a slot', () => {
+  let dir: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-search-'));
+    env = { CCV3_CODERABBIT_GUARD_STATE: join(dir, 'state.json'), CCV3_CODERABBIT_GUARD_KEY: 'search#main' };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it.each([
+    ['bash', 'grep -rn "cr review" docs'],
+    ['bash', 'git log --oneline | grep "cr review"'],
+    ['bash', 'rg "cr review"'],
+    ['pwsh', 'Select-String -Pattern "cr review"'],
+  ])('allows 3 repeats and counts 0 runs (%s): %s', (tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    for (let i = 0; i < 3; i++) expect(decide(make(command), env).allow, `run ${i + 1}`).toBe(true);
+    expect(existsSync(join(dir, 'state.json'))).toBe(false);
+  });
+
+  it('still counts xargs -n 1 cr review --agent', () => {
+    expect(decide(bash('xargs -n 1 cr review --agent'), env).allow).toBe(true);
+    expect(readState(join(dir, 'state.json')).counts['search#main']).toBe(1);
+  });
+
+  it.each([
+    ['bash', 'time cr review --agent'],
+    ['bash', 'nohup sh -c "cr review --agent"'],
+    ['bash', 'find . -maxdepth 0 -exec cr review --agent {} ;'],
+    ['bash', 'watch -n 5 cr review --agent'],
+    ['pwsh', 'Start-Job -ScriptBlock { cr review --agent }'],
+    ['pwsh', 'Invoke-Expression "cr review --agent"'],
+  ])('still counts an executing wrapper (%s): %s', (tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(readState(join(dir, 'state.json')).counts['search#main']).toBeGreaterThanOrEqual(1);
+  });
+});
+
+describe('coderabbit-guard: text-only commands that mention a billing flag are allowed', () => {
+  const never = { CCV3_CODERABBIT_GUARD_STATE: join(tmpdir(), 'cr-guard-never-text.json') };
+
+  it.each([
+    'rg "cr review --use-credits" .claude',
+    'grep -n "coderabbit --api-key" file',
+    'Select-String -Pattern "coderabbit --api-key"',
+    'Set-Content notes.md "never run cr review --use-credits"',
+    `echo '{"tool_input":{"command":"cr review --use-credits"}}' > payload.json`,
+    'Write-Output "cr review --use-credits is banned"',
+    'printf "%s" "coderabbit --api-key"',
+    'cat docs/never-use-credits.md "cr review --use-credits"',
+    'Get-Content notes.md | Select-String "cr review --use-credits"',
+    'Out-File -FilePath n.txt -InputObject "cr review --use-credits"',
+    'Add-Content notes.md "coderabbit --api-key"',
+  ])('allows on Bash and PowerShell: %s', (command) => {
+    for (const tool of [bash, pwsh]) {
+      const d = decide(tool(command), never);
+      expect(d.allow, `${tool === bash ? 'Bash' : 'PowerShell'}: ${command}`).toBe(true);
+    }
+    expect(existsSync(join(tmpdir(), 'cr-guard-never-text.json'))).toBe(false);
+  });
+
+  it('still denies an executing wrapper after a text-only command', () => {
+    expect(decide(bash('echo hi && sudo -u root cr review --agent --use-credits'), never).allow).toBe(false);
+  });
+
+  it('still denies env, nohup, timeout and find -exec wrappers with a billing flag', () => {
+    for (const cmd of [
+      'env FOO=1 cr review --agent --use-credits',
+      'nohup cr review --agent --use-credits',
+      'timeout 60 cr review --agent --use-credits',
+      'find . -maxdepth 0 -exec cr review --use-credits {} ;',
+      'time coderabbit.cmd review --api-key abc',
+    ]) {
+      expect(decide(bash(cmd), never).allow, cmd).toBe(false);
+    }
+    expect(decide(pwsh('Start-Job -ScriptBlock { cr review --agent --use-credits }'), never).allow).toBe(false);
+    expect(decide(pwsh('1..3 | ForEach-Object { cr.cmd review --agent --use-credits }'), never).allow).toBe(false);
   });
 });

@@ -413,16 +413,62 @@ const CR_REVIEWED_154 = {
     `Reviewing files that changed from the base of the PR and between ${BASE154} and ${HEAD154}.\n\n` +
     `<!-- final_review_risk_coverage:{"sourceCommitId":"${HEAD154}","coveredCommitId":"${HEAD154}","kind":"reviewed"} -->\n`,
 };
-const HEAD155 = '1ef385ad5ccb870e880d16173658432da505839b';
+// One fixture, trimmed from the live coderabbitai[bot] comment 6406282914 on PR #155 (head af41b70):
+// the picture markup and the autofix footer are cut; the notice text, Run configuration and both
+// commit links are verbatim. Only id and updated_at are set here so the timestamp tests stay relative to HEAD_DATE.
+const HEAD155 = 'af41b70318f8d7591a27bd16a66e1d65697c2e3d';
 const CR_SKIPPED_155 = {
   id: 11,
   updated_at: '2026-10-26T01:00:00Z',
   user: CR_BOT,
-  body:
-    '<!-- coderabbit-ai-generated:v1 -->\n\n<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n' +
-    '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->\n\n> [!IMPORTANT]\n> ## Review skipped\n> \n' +
-    '> Auto reviews are limited based on label configuration.\n> \n> * review:coderabbit\n> * review:deep\n> \n' +
-    `> - **Commit**: [1ef385a](<https://github.com/Rev4nchist/Continuous-Claude-v3/commit/${HEAD155}>)\n`,
+  body: [
+    '<!-- coderabbit-ai-generated:v1 -->',
+    '',
+    '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->',
+    '<!-- This is an auto-generated comment: skip review by coderabbit.ai -->',
+    '',
+    '> [!IMPORTANT]',
+    '> ## Review skipped',
+    '> ',
+    '> Auto reviews are limited based on label configuration.',
+    '> ',
+    '> <details>',
+    '> <summary><strong>:label: Required labels (at least one): 2</strong></summary>',
+    '> <dl>',
+    '> <dd>',
+    '> ',
+    '> * review:coderabbit',
+    '> * review:deep',
+    '> ',
+    '> </dd>',
+    '> </dl>',
+    '> </details>',
+    '> ',
+    '> Please check the settings in the CodeRabbit UI or the `.coderabbit.yaml` file in this repository. To trigger a single review, invoke the `@coderabbitai review` command.',
+    '> ',
+    '> <details>',
+    '> <summary><strong>Run configuration</strong></summary>',
+    '> <dl>',
+    '> <dd>',
+    '> ',
+    '> - **Source mode**: Auto',
+    '> - **Repository**: [Rev4nchist/Continuous-Claude-v3](<https://github.com/Rev4nchist/Continuous-Claude-v3>)',
+    '> - **Branch**: [feat/ccv3-cr-install](<https://github.com/Rev4nchist/Continuous-Claude-v3/tree/feat%2Fccv3-cr-install>)',
+    `> - **File**: [.coderabbit.yaml](<https://github.com/Rev4nchist/Continuous-Claude-v3/blob/${HEAD155}/.coderabbit.yaml>)`,
+    `> - **Commit**: [${HEAD155.slice(0, 7)}](<https://github.com/Rev4nchist/Continuous-Claude-v3/commit/${HEAD155}>)`,
+    '> - **Layers**: Repository YAML',
+    '> - **Review profile**: CHILL',
+    '> - **Plan**: Essentials',
+    '> ',
+    '> </dd>',
+    '> </dl>',
+    '> </details>',
+    '> ',
+    '> You can disable this status message by setting the `reviews.review_status` to `false` in the CodeRabbit configuration file.',
+    '',
+    '<!-- end of auto-generated comment: skip review by coderabbit.ai -->',
+    '',
+  ].join('\n'),
 };
 const crInput = (head, comments, reviews = [], over = {}) => {
   const i = input();
@@ -498,8 +544,11 @@ test('CodeRabbit: an unlabelled PR reports coderabbitLimited null', () => {
 // comment (marker "summarize by coderabbit.ai"), the notice only when newer than the head commit,
 // and the coverage only when nobody but an app edited the comment.
 // ---------------------------------------------------------------------------------------------
-test('CodeRabbit: a notice from before the head commit is stale and does not report LIMITED', () => {
-  const stale = { ...CR_SKIPPED_155, updated_at: '2026-10-26T00:10:00Z' };
+// A notice with its commit line removed: only the date can tie it to the head.
+const NO_SHA_SKIPPED = { ...CR_SKIPPED_155, body: CR_SKIPPED_155.body.replace(/\n> - \*\*(?:File|Commit)\*\*:.*(?=\n)/g, '') };
+
+test('CodeRabbit: a notice with no commit, from before the head commit, is stale and does not report LIMITED', () => {
+  const stale = { ...NO_SHA_SKIPPED, updated_at: '2026-10-26T00:10:00Z' };
   const r = evaluate(crInput(HEAD155, [stale]));
   assert.equal(r.coderabbitReviewedHead, false);
   assert.equal(r.coderabbitLimited, false);
@@ -518,8 +567,8 @@ test('CodeRabbit: only the NEWEST summary comment decides the notice', () => {
   assert.equal(r.coderabbitLimited, false);
 });
 
-test('CodeRabbit: with no head commit date the notice cannot be tied to the head, so it does not count', () => {
-  const r = evaluate(crInput(HEAD155, [CR_SKIPPED_155], [], { headCommittedAt: undefined }));
+test('CodeRabbit: with no head commit date a notice with no commit cannot be tied to the head, so it does not count', () => {
+  const r = evaluate(crInput(HEAD155, [NO_SHA_SKIPPED], [], { headCommittedAt: undefined }));
   assert.equal(r.coderabbitLimited, false);
   assert.equal(r.ready, false);
 });
@@ -548,4 +597,42 @@ test('CodeRabbit: a missing review tells the agent to post @coderabbitai review 
   assert.ok(!limited.reasons.some((x) => /@coderabbitai review/.test(x)), limited.reasons.join('; '));
   const skipped = evaluate(crInput(HEAD155, [CR_SKIPPED_155]));
   assert.ok(!skipped.reasons.some((x) => /@coderabbitai review/.test(x)), skipped.reasons.join('; '));
+});
+
+// ---------------------------------------------------------------------------------------------
+// Greptile finding 4376918068: a commit can exist locally before CodeRabbit posts a notice for the
+// PREVIOUS head, then be pushed. The commit date alone would tie that old notice to the new head.
+// When the notice names a commit (link or SHA), that commit decides; the date is only a fallback.
+// ---------------------------------------------------------------------------------------------
+test('CodeRabbit: a notice naming the previous head, posted after the new head was committed, does not count for the new head', () => {
+  const NEW_HEAD = 'c'.repeat(40);
+  const OLD_HEAD = HEAD155; // the notice names this commit
+  // Notice posted 01:00, new head committed 00:30 (earlier), pushed after the notice.
+  const r = evaluate(crInput(NEW_HEAD, [CR_SKIPPED_155]));
+  assert.equal(r.coderabbitLimited, false, r.reasons.join('; '));
+  assert.equal(r.coderabbitReviewedHead, false);
+  assert.ok(r.reasons.some((x) => /no CodeRabbit PR-bot review of the head/.test(x) && /@coderabbitai review/.test(x)), r.reasons.join('; '));
+  assert.ok(OLD_HEAD !== NEW_HEAD);
+});
+
+test('CodeRabbit: a notice naming the head by a 7 character prefix counts; a different 7 character prefix does not', () => {
+  const bare = (sha) => ({ ...CR_SKIPPED_155, body: CR_SKIPPED_155.body.replaceAll(HEAD155, sha) });
+  assert.equal(evaluate(crInput(HEAD155, [bare(HEAD155.slice(0, 7))])).coderabbitLimited, true);
+  assert.equal(evaluate(crInput(HEAD155, [bare('af41b7f')])).coderabbitLimited, false);
+});
+
+test('CodeRabbit: the real #155 notice names its head in the Commit line and File link; it is for that head only', () => {
+  assert.equal((CR_SKIPPED_155.body.match(/- \*\*Commit\*\*:/g) ?? []).length, 1, 'one Commit line');
+  const other = HEAD155.replace(/^af41b70/, '0000000');
+  assert.equal(evaluate(crInput(HEAD155, [CR_SKIPPED_155])).coderabbitLimited, true);
+  assert.equal(evaluate(crInput(other, [CR_SKIPPED_155])).coderabbitLimited, false);
+});
+
+test('CodeRabbit: a notice that names no commit still falls back to the timestamp', () => {
+  const noSha = NO_SHA_SKIPPED;
+  assert.ok(!/\/(?:commit|blob)\//.test(noSha.body), 'fixture names no commit in a Commit line or File link');
+  const after = evaluate(crInput(HEAD, [noSha]));
+  assert.equal(after.coderabbitLimited, true, 'newer than the head commit: counts');
+  const before = evaluate(crInput(HEAD, [{ ...noSha, updated_at: '2026-10-26T00:10:00Z' }]));
+  assert.equal(before.coderabbitLimited, false, 'older than the head commit: stale');
 });

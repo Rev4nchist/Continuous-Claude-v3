@@ -18,7 +18,23 @@
  * command that receives it, so `bash <<EOF` is read as a script. A wrapper that takes a command
  * string (bash -c, eval, iex) is unwrapped and its inner string is split and classified again.
  *
+ * A raw check runs first and does not depend on that parsing. It reads only a segment whose leading
+ * program runs its text (a shell, eval, iex, Start-Process, Start-Job, xargs, sudo, env, nohup, time,
+ * timeout, watch, find, ForEach-Object) or is cr or coderabbit. If that raw text (quotes, backticks,
+ * $( ), wrapper strings; .exe, .cmd, .bat and .ps1 shims) names cr or coderabbit with --use-credits or
+ * --api-key, the call is denied. If it names cr and later review, and parsing found no call, it
+ * counts one run. A segment that starts with grep, rg, echo, cat, Set-Content, Select-String, git or
+ * gh only holds text and is not read. The raw check over-reports inside an executing program on
+ * purpose, so a wrapper the parser does not know cannot hide a call.
+ *
+ * Out of scope (adversarial evasion, not accidents): a variable or $( ) that holds the flag, aliases
+ * and functions, git or gh aliases and `git -c alias.x=...`, a rebase exec step, a script file run
+ * later, a quote-split flag (`--use-"credits"`), and encoded commands. The real billing control is
+ * usage billing set to Off on the CodeRabbit account (AC1). This guard only stops accidents.
+ *
  * Known limits (best effort, not a sandbox):
+ * - The run key follows the last `cd` in the command, not the directory of each review. It only
+ *   moves a count between branches; the cap can get stricter or shift and never unlocks paid use.
  * - A script piped into a shell (`echo cr review | bash`) is not read.
  * - A loop body is counted once. `for i in 1 2 3; do cr review --agent; done` uses one slot.
  * - The run counter is a read-modify-write without a lock. Two sessions on one branch that start
@@ -131,16 +147,22 @@ function closingParen(s: string, from: number): number {
   return -1;
 }
 
+/** What maskQuoted saw, by index: separators opened or closed by a substitution inside double quotes, and heredoc or here-string body characters. */
+export interface MaskTrace {
+  dqSubs: Set<number>;
+  bodies: Set<number>;
+}
+
 /**
  * Same length as `command`, with data replaced by FILL: single-quoted and double-quoted text,
  * heredoc bodies and PowerShell here-strings. Command substitutions inside double quotes (and in
  * an unquoted heredoc body) stay readable, because the shell runs them.
  */
-export function maskQuoted(command: string, ps = false): string {
+export function maskQuoted(command: string, ps = false, trace?: MaskTrace): string {
   const n = command.length;
   const out = command.split('');
   const esc = ps ? '`' : '\\';
-  const modes: Array<'dq' | 'sub' | 'bt'> = [];
+  const modes: Array<'dq' | 'sub' | 'bt' | 'dbt'> = [];
   const depths: number[] = [];
   const heredocs: Heredoc[] = [];
   const fill = (from: number, to: number): void => {
@@ -156,6 +178,7 @@ export function maskQuoted(command: string, ps = false): string {
       if (expand && end >= 0 && end < to) k = end + 1;
       else {
         fill(k, k + 1);
+        trace?.bodies.add(k);
         k++;
       }
     }
@@ -194,11 +217,13 @@ export function maskQuoted(command: string, ps = false): string {
         modes.pop();
         i++;
       } else if (c === '$' && command[i + 1] === '(') {
+        trace?.dqSubs.add(i);
         modes.push('sub');
         depths.push(0);
         i += 2;
       } else if (c === '`' && !ps) {
-        modes.push('bt');
+        trace?.dqSubs.add(i);
+        modes.push('dbt');
         i++;
       } else {
         fill(i, i + 1);
@@ -240,7 +265,10 @@ export function maskQuoted(command: string, ps = false): string {
       depths.push(0);
       i += 2;
     } else if (c === '`' && !ps) {
-      if (top === 'bt') modes.pop();
+      if (top === 'dbt') {
+        trace?.dqSubs.add(i);
+        modes.pop();
+      } else if (top === 'bt') modes.pop();
       else modes.push('bt');
       i++;
     } else if (top === 'sub' && (c === '(' || c === ')')) {
@@ -255,18 +283,26 @@ export function maskQuoted(command: string, ps = false): string {
   return out.join('');
 }
 
-/** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. */
-export function segmentize(command: string, ps = false): string[] {
-  const masked = maskQuoted(command, ps);
+/** Start and end index of each command segment, untrimmed. A trace turns on `wholeQuotes` mode. */
+function segmentRanges(command: string, ps: boolean, trace?: MaskTrace): Array<[number, number]> {
+  const masked = maskQuoted(command, ps, trace);
   const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
-  const pieces: string[] = [];
+  const ranges: Array<[number, number]> = [];
   let last = 0;
   for (const m of masked.matchAll(sep)) {
-    pieces.push(command.slice(last, m.index));
+    if (trace?.dqSubs.has(m.index ?? -1)) continue;
+    ranges.push([last, m.index ?? 0]);
     last = (m.index ?? 0) + m[0].length;
   }
-  pieces.push(command.slice(last));
-  return pieces.map((x) => x.trim()).filter(Boolean);
+  ranges.push([last, command.length]);
+  return ranges;
+}
+
+/** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. */
+export function segmentize(command: string, ps = false): string[] {
+  return segmentRanges(command, ps)
+    .map(([a, b]) => command.slice(a, b).trim())
+    .filter(Boolean);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -452,10 +488,75 @@ function classifyInvocation(inv: Invocation): SegmentClass {
   return { verdict: 'block', reason: NOT_ALLOWED };
 }
 
+// ---------------------------------------------------------------------------------------------
+// Raw check: billing flags and hidden reviews, independent of how wrappers are parsed
+// ---------------------------------------------------------------------------------------------
+
+/** A standalone cr or coderabbit word: after a space, quote, path separator or bracket; not `.coderabbit.yaml`. */
+const CR_WORD = /(?:^|[\s"'`(\\/=,{])(?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s"'`)\\,}])/gi;
+const BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
+const REVIEW_WORD = /\breview\b/i;
+/**
+ * Programs that run the text they receive. The raw check reads only a segment that starts with one
+ * of these (or with cr or coderabbit). A segment that starts with grep, rg, echo, cat, Set-Content,
+ * Select-String and the like only holds text, so a mention of `cr review --use-credits` there is data.
+ */
+const EXECUTING_PROGRAMS = new Set([
+  ...SHELLS, ...EVALS, ...STARTERS, ...RUNNERS, ...PREFIXES,
+  'cmd', 'timeout', 'watch', 'find', 'parallel', 'nice', 'setsid', 'wsl',
+  'foreach-object', '%', 'start-job', 'sajb', 'start-threadjob', 'invoke-command', 'icm',
+]);
+
+export const BILLING_REASON = 'CodeRabbit guard: billing flag with a CodeRabbit CLI call';
+
+function leadingProgram(segment: string): string {
+  let s = segment.trim();
+  let prev: string;
+  do {
+    prev = s;
+    s = s.replace(ENV_ASSIGN, '').replace(/^&\s*/, '');
+  } while (s !== prev);
+  return baseName(splitFirst(s).tok);
+}
+
+export interface RawScan {
+  /** A cr or coderabbit word and a billing flag in one non-git, non-gh segment. */
+  billing: boolean;
+  /** The segments with a cr or coderabbit word followed later by the word review. */
+  reviewSegments: string[];
+}
+
+/**
+ * Read the RAW text of each segment whose leading program runs its text (EXECUTING_PROGRAMS) or is
+ * cr or coderabbit: quotes, backticks, `$( )`, -ArgumentList strings and `bash -c` payloads
+ * included. It does not parse wrappers, so an unknown wrapper option cannot hide a call. It
+ * over-reports inside an executing program (`sh -c "grep 'cr review'"`) on purpose.
+ */
+export function rawScan(text: string, ps = false): RawScan {
+  const found: RawScan = { billing: false, reviewSegments: [] };
+  // A `$( )` inside double quotes does not split, so a commit message built with a heredoc stays one git segment.
+  const trace: MaskTrace = { dqSubs: new Set(), bodies: new Set() };
+  for (const [a, b] of segmentRanges(text, ps, trace)) {
+    const seg = text.slice(a, b).trim();
+    const program = leadingProgram(seg);
+    if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
+    // A heredoc body is data unless a shell, eval or wrapper receives it. `cat <<EOF` prose is not a call.
+    const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === 'cmd';
+    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => (trace.bodies.has(a + k) ? ' ' : ch)).join('').trim();
+    const first = [...raw.matchAll(CR_WORD)][0];
+    if (!first) continue;
+    if (BILLING_WORD.test(raw)) found.billing = true;
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push(raw);
+  }
+  return found;
+}
+
 const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
 export function classifyCommand(text: string, ps = false, depth = 0): SegmentClass {
+  const raw = depth === 0 ? rawScan(text, ps) : { billing: false, reviewSegments: [] as string[] };
+  if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
   for (const seg of segmentize(text, ps)) {
@@ -471,6 +572,9 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
     runs += c.runs ?? 0;
   }
   if (runs > 0) return { verdict: 'allow', countsRun: true, runs };
+  // A segment that names cr and later review, where the parser found no CodeRabbit call (`--help` is a call it found): count one run.
+  const hidden = raw.reviewSegments.filter((seg) => classifyCommand(seg, ps, depth + 1).verdict === 'ignore').length;
+  if (hidden > 0) return { verdict: 'allow', countsRun: true, runs: hidden };
   return { verdict: allowed ? 'allow' : 'ignore' };
 }
 
@@ -487,12 +591,26 @@ function git(args: string[], cwd: string): string {
   return execFileSync('git', args, { cwd, encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'], timeout: 10000 }).trim();
 }
 
-/** Repo name from the first remote (any name), else the repo's top-level path. Never a URL with credentials. */
+/**
+ * `host/owner/repo` (lowercase) for https, ssh://, scp-style and local remotes. Credentials, port,
+ * a `.git` suffix and a trailing slash are dropped, so https and ssh of one repo share one key and
+ * a secret never reaches the state file.
+ */
+export function normalizeRemote(url: string): string {
+  const u = url.trim().replace(/\\/g, '/');
+  const scheme = /^[a-z][a-z0-9+.-]*:\/\/(?:[^/]*@)?([^/:]+)(?::\d*)?\/(.+)$/i.exec(u);
+  const scp = /^(?:[^/]*@)?([^/:@]{2,}):(?!\/\/)(.+)$/.exec(u);
+  const m = scheme ?? scp;
+  const rest = m ? `${m[1]}/${m[2]}` : u;
+  return rest.replace(/\/+$/, '').replace(/\.git$/i, '').replace(/^\/+/, '').toLowerCase();
+}
+
+/** Repo identity from the first remote (any name), else the repo's top-level path. Never a URL with credentials. */
 function repoId(root: string): string {
   try {
     const url = git(['config', '--get-regexp', '^remote\\..*\\.url$'], root).split('\n')[0]?.split(/\s+/)[1] ?? '';
-    const slug = url.replace(/\.git$/, '').replace(/^.*[/:]/, '');
-    if (slug) return slug;
+    const id = normalizeRemote(url);
+    if (id) return id;
   } catch {
     /* no remote */
   }

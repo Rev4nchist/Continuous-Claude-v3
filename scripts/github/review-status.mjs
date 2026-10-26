@@ -24,7 +24,9 @@
  * when the PR carries `review:coderabbit` or `review:deep`. "Review skipped", "Review failed" and
  * rate-limit notices, and CLI/plugin output, never count. The summary comment is read only from the
  * newest comment with the "summarize by coderabbit.ai" marker, and counts only if no person edited it.
- * A notice counts only from that comment and only when it is newer than the head commit. A labelled
+ * A notice counts only from that comment and only for the head: when it names a commit (link or SHA,
+ * 7 or more characters) that commit must be the head, and only a notice with no commit falls back to
+ * "newer than the head commit". A labelled
  * PR whose CodeRabbit review is missing because of such a notice reports coderabbitLimited (the
  * pr-loop mod maps it to LIMITED). A leftover CodeRabbit commit status alone does not grant READY.
  * Any review thread, from any reviewer, still counts as unresolved.
@@ -116,8 +118,27 @@ export function latestCodeRabbitSummary(comments) {
     .reduce((best, c) => (best === null || commentStamp(c) >= commentStamp(best) ? c : best), null);
 }
 
-/** A notice speaks for the head only when CodeRabbit wrote it after the head commit existed. */
-const noticeIsAfterHead = (comment, headCommittedAt) => {
+/**
+ * Commits a CodeRabbit comment names: `/commit/<sha>` links (the "Commit" line of a notice), the
+ * `/blob/<sha>/` link of the run configuration, and a "between <sha> and <sha>" range. 7 to 40 hex.
+ */
+export function commitsNamed(body) {
+  const text = String(body ?? '');
+  const found = [];
+  for (const m of text.matchAll(/\/commit\/([0-9a-f]{7,40})\b/gi)) found.push(m[1]);
+  for (const m of text.matchAll(/\/blob\/([0-9a-f]{40})\//gi)) found.push(m[1]);
+  for (const m of text.matchAll(/between\s+([0-9a-f]{40})\s+and\s+([0-9a-f]{40})/gi)) found.push(m[1], m[2]);
+  return found.map((sha) => sha.toLowerCase());
+}
+
+/**
+ * A notice speaks for the head when it names the head commit (a prefix of 7 or more characters).
+ * A notice that names only other commits is for an older head, whatever its date. Only a notice
+ * that names no commit falls back to the date: CodeRabbit wrote it after the head commit existed.
+ */
+const noticeIsAfterHead = (comment, headCommittedAt, head) => {
+  const named = commitsNamed(comment?.body);
+  if (named.length > 0) return named.some((sha) => shaIsHead(sha, head));
   const committed = Date.parse(headCommittedAt || '');
   return Number.isFinite(committed) && commentStamp(comment) > committed;
 };
@@ -139,7 +160,7 @@ export function codeRabbitHeadReview({ head, reviews = [], comments = [], status
   // "Rate limit exceeded") that explains why no review exists. Chat replies and old notices do not count.
   const notice = reviewedHead ? null
     : statusLimited ? 'rate limited'
-    : summary !== null && noticeIsAfterHead(summary, headCommittedAt) ? codeRabbitNotice(summary.body)
+    : summary !== null && noticeIsAfterHead(summary, headCommittedAt, head) ? codeRabbitNotice(summary.body)
     : null;
   return {
     reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice,
