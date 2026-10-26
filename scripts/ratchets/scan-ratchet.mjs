@@ -11,7 +11,7 @@
  *   node scripts/ratchets/scan-ratchet.mjs --tool trivy   --report trivy.json   --baseline scripts/ratchets/trivy-baseline.json
  *   node scripts/ratchets/scan-ratchet.mjs --tool semgrep --report semgrep.json --baseline scripts/ratchets/semgrep-baseline.json
  *   add --update to write the current findings as the new baseline (needs a reason: --reason "<text>").
- *   add --changed <file> (one repo path per line, e.g. `git diff --name-only`) on a PR: a new finding
+ *   add --changed <file> (NUL-separated from `git diff --name-only -z`, or one path per line) on a PR: a new finding
  *   in a file the PR did not change is DRIFT (new CVE or rule against old code), printed, not blocking.
  *
  * Exit: 0 no regression, 1 regression, 2 bad input (unreadable or malformed report or baseline).
@@ -51,7 +51,12 @@ export function trivyCounts(report) {
   return counts;
 }
 
-/** Semgrep JSON -> { key: count } for ERROR-level results. Line numbers are left out on purpose. */
+/**
+ * Semgrep JSON -> { key: count } for ERROR-level results. Line numbers are left out on purpose.
+ * A file Semgrep could not fully scan (parse error, timeout) gets one `scan-error|<path>` key, so a
+ * partial report cannot look clean: a NEW scan error in a changed file blocks like a new finding.
+ * Presence only (count 1 per file): timeout counts vary with machine speed.
+ */
 export function semgrepCounts(report) {
   if (!report || typeof report !== 'object' || !Array.isArray(report.results)) {
     throw new InputError('not a Semgrep JSON report (no results array)');
@@ -60,6 +65,9 @@ export function semgrepCounts(report) {
   for (const r of report.results) {
     const sev = String(r.extra?.severity || '').toUpperCase();
     if (SEMGREP_LEVELS.has(sev)) bump(counts, `${r.check_id}|${r.path}`);
+  }
+  for (const e of report.errors || []) {
+    if (e?.path) counts[`scan-error|${e.path}`] = 1;
   }
   return counts;
 }
@@ -94,8 +102,11 @@ export function compare(current, baseline, changed = null) {
 
 function readChanged(path) {
   if (!existsSync(path)) throw new InputError(`changed-files list not found: ${path}`);
-  const lines = readFileSync(path, 'utf8').split(/\r?\n/).map((l) => l.trim()).filter(Boolean);
-  return new Set(lines);
+  const text = readFileSync(path, 'utf8');
+  // `git diff --name-only -z` (CI) is NUL-separated and never quotes non-ASCII names: keep bytes as-is.
+  // A hand-written list is one path per line.
+  const paths = text.includes('\0') ? text.split('\0') : text.split(/\r?\n/).map((l) => l.trim());
+  return new Set(paths.filter(Boolean));
 }
 
 function readJson(path, what) {

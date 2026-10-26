@@ -59,6 +59,38 @@ test('semgrep: keeps ERROR, drops WARNING and INFO', () => {
   assert.deepEqual(c, { 'r.a|x.js': 1 });
 });
 
+test('semgrep: a file that failed to scan gets one scan-error key, however many errors it had', () => {
+  const rep = { results: [], errors: [
+    { level: 'warn', type: 'Timeout', path: 'a.js' },
+    { level: 'warn', type: 'Timeout', path: 'a.js' },
+    { level: 'warn', type: 'Syntax error', path: 'b.yml' },
+    { level: 'error', type: 'Network', message: 'no path' },
+  ] };
+  assert.deepEqual(semgrepCounts(rep), { 'scan-error|a.js': 1, 'scan-error|b.yml': 1 });
+});
+
+test('cli: a partial Semgrep report (scan error, no findings) on a changed file fails', () => {
+  const dir = tmp({
+    'base.json': { tool: 'semgrep', total: 0, counts: {} },
+    'r.json': { results: [], errors: [{ level: 'warn', type: 'Syntax error', path: 'new.js' }] },
+    'changed.txt': 'new.js\0',
+  });
+  const res = cli(['--tool', 'semgrep', '--report', join(dir, 'r.json'), '--baseline', join(dir, 'base.json'), '--changed', join(dir, 'changed.txt')]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /NEW {2}scan-error\|new\.js/);
+});
+
+test('cli: NUL-separated changed list keeps non-ASCII names, so their new findings block', () => {
+  const dir = tmp({
+    'base.json': { tool: 'semgrep', total: 0, counts: {} },
+    'r.json': sg([sgr('r.a', 'scripts/café.js')]),
+    'changed.txt': 'docs/x.md\0scripts/café.js\0',
+  });
+  const res = cli(['--tool', 'semgrep', '--report', join(dir, 'r.json'), '--baseline', join(dir, 'base.json'), '--changed', join(dir, 'changed.txt')]);
+  assert.equal(res.status, 1);
+  assert.match(res.stdout, /NEW {2}r\.a\|scripts\/café\.js/);
+});
+
 test('semgrep: a report without a results array is rejected', () => {
   assert.throws(() => semgrepCounts({ errors: [] }), InputError);
 });
