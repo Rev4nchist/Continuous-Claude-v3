@@ -1,0 +1,63 @@
+{
+  "_doc": [
+    "Config for scripts/github/review-router.mjs (P3c, DW-80). Spec: artifacts/ccv3-review-economy/router-spec.md.",
+    "classes: path globs per risk class. Only ** (any number of whole path segments, also zero), * (inside one segment) and ? are special.",
+    "A glob that starts with ! is an exclusion for that class. Each path gets the first class that matches it, in this order: r3, infra, steering, docs.",
+    "A path that matches no class is normal. The PR class is the highest class of any path. risk:high is never set from paths: a person adds it.",
+    "deep_enabled false: steering, infra, high and r3 PRs get review:coderabbit + review:deep-held, not review:deep (spec 4.1, Apex billing D3).",
+    "greptile.credits_used_manual: Greptile credits used this period, an integer you edit by hand. null means unknown: the router skips the u1 and u2 steps and the ledger says so.",
+    "greptile.u1_used: at or above this count, a review:deep PR gets a warning in the router comment.",
+    "greptile.u2_used: at or above this count, only r3 PRs get review:deep. Other deep classes get the held labels. Needs deep_enabled true.",
+    "greptile.u3_date: on or after this date, a deep-class PR gets one credit-check line in the router comment.",
+    "greptile.notify_login: GitHub login named in the u1 and u3 lines. null means nobody is pinged."
+  ],
+  "deep_enabled": false,
+  "classes": {
+    "r3": [
+      "**/*.sql",
+      "**/drizzle/**",
+      "**/migrations/**"
+    ],
+    "infra": [
+      ".github/**",
+      ".githooks/**",
+      ".claude/settings.json.template",
+      "scripts/sync-to-active*",
+      "scripts/github/**",
+      "scripts/git-safe.ps1",
+      ".greptile/**",
+      ".coderabbit.yaml",
+      "**/Dockerfile*",
+      ".claude/docker/**",
+      "review-router.config.json"
+    ],
+    "steering": [
+      ".claude/hooks/src/**",
+      ".claude/rules-src/**",
+      ".claude/rules-ondemand/**",
+      ".claude/agents/**",
+      ".claude/skills/**",
+      "!.claude/skills/_vendor/**",
+      "CLAUDE.md",
+      "AGENTS.md",
+      "CONTEXT.md",
+      ".claude/commands-src/**"
+    ],
+    "docs": [
+      "docs/**",
+      "thoughts/**",
+      "artifacts/**",
+      "archive/**",
+      "**/*.md"
+    ]
+  },
+  "greptile": {
+    "period_start": "2026-10-24",
+    "monthly_credits": 50,
+    "credits_used_manual": null,
+    "u1_used": 35,
+    "u2_used": 45,
+    "u3_date": "2026-11-03",
+    "notify_login": null
+  }
+}

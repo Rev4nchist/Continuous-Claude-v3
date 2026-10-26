@@ -1,0 +1,346 @@
+#!/usr/bin/env node
+/**
+ * review-router.mjs: label a ready PR with its risk class and the PR bots that must review it (P3c, DW-80).
+ * Spec: artifacts/ccv3-review-economy/router-spec.md. Config: review-router.config.json.
+ * It spends no LLM credits. It never reviews, never merges, never removes a label.
+ *
+ * Usage: node scripts/github/review-router.mjs [<pr-number>] [--dry-run] [--repo owner/name]
+ *          [--event opened|reopened|ready_for_review|synchronize] [--assume-ready] [--fixture file.json] [--config file.json]
+ *   In GitHub Actions the PR number and event come from GITHUB_EVENT_PATH. Writes need GH_TOKEN.
+ *   --dry-run     read-only gh calls, prints the planned writes. Always use it on a laptop first.
+ *   --assume-ready  (dry run only) treat a draft or closed PR as an open ready one, to see what it would get.
+ *   --fixture     read the PR, its files and its comments from a JSON file, not from gh (tests). Implies dry run.
+ * Exit 0 = decision made, 2 = could not determine (nothing written).
+ *
+ * Which earlier decision the router remembers: the highest risk:* label on the PR, and the class stored in the
+ * router comment (<!-- review-router-state class=x -->). Actions keeps no state between runs.
+ *   - first run (no earlier class): add the risk labels and the review labels. A review:* label a person set wins:
+ *     only the risk labels are added.
+ *   - a later run adds labels only when the class went UP. Lower or equal class: nothing added, nothing removed.
+ *   - an expected label that is missing with no rise means a person removed it: the router leaves it and writes
+ *     held_reason "person_override" in the ledger. It cannot tell that from a label it never added.
+ * Not covered: a person who removes risk:r3 but keeps risk:high (previous class reads "high") sees r3 added again.
+ */
+import { execFileSync } from 'node:child_process';
+import os from 'node:os';
+import path from 'node:path';
+import { appendFileSync, existsSync, readFileSync, realpathSync } from 'node:fs';
+import { fileURLToPath } from 'node:url';
+import { pullLabelNames, latestCodeRabbitSummary, codeRabbitNotice, commitsNamed, shaIsHead } from './review-status.mjs';
+
+const HERE = path.dirname(fileURLToPath(import.meta.url));
+export const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
+
+// ---------- glob: ** (whole segments, zero or more), * (one segment), ? (one char). Nothing else is special. ----------
+
+const escapeRe = (s) => s.replace(/[.+^${}()|[\]\\]/g, '\\$&');
+const segmentToRe = (seg) => escapeRe(seg).replace(/\*+/g, '[^/]*').replace(/\?/g, '[^/]');
+
+export function globToRegExp(glob) {
+  if (typeof glob !== 'string' || glob === '') throw new Error('empty glob');
+  const segs = glob.split('/');
+  let re = '';
+  segs.forEach((seg, i) => {
+    const last = i === segs.length - 1;
+    if (seg === '**') re += last ? '.+' : '(?:[^/]+/)*';
+    else re += segmentToRe(seg) + (last ? '' : '/');
+  });
+  return new RegExp(`^${re}$`);
+}
+
+export const matchGlob = (glob, p) => globToRegExp(glob).test(p);
+
+// ---------- classes ----------
+
+/** Higher number = higher risk. high is never set from paths. */
+export const RANK = { docs: 0, normal: 1, high: 2, steering: 3, infra: 4, r3: 5 };
+const PATH_CLASSES = ['r3', 'infra', 'steering', 'docs'];
+const DEEP_CLASSES = new Set(['r3', 'infra', 'steering', 'high']);
+const rank = (c) => RANK[c] ?? -1;
+
+const normalizePath = (p) => String(p).replace(/\\/g, '/').replace(/^\.\//, '');
+
+function compileClass(globs = []) {
+  const pos = globs.filter((g) => !g.startsWith('!')).map(globToRegExp);
+  const neg = globs.filter((g) => g.startsWith('!')).map((g) => globToRegExp(g.slice(1)));
+  return (p) => pos.some((re) => re.test(p)) && !neg.some((re) => re.test(p));
+}
+
+/** The PR class is the highest class of any path. A path that matches no class is normal. */
+export function classify(paths, config) {
+  const tests = PATH_CLASSES.map((c) => [c, compileClass(config.classes?.[c])]);
+  const matched = {};
+  let top = null;
+  for (const raw of paths) {
+    const p = normalizePath(raw);
+    const c = tests.find(([, test]) => test(p))?.[0] ?? 'normal';
+    matched[c] = (matched[c] ?? 0) + 1;
+    if (top === null || rank(c) > rank(top)) top = c;
+  }
+  return { class: top ?? 'normal', matched };
+}
+
+// ---------- credits ----------
+
+/** credits_used_manual: a non-negative integer, else unknown. Unknown skips the u1 and u2 steps. */
+export function creditsState(config, now = new Date()) {
+  const g = config.greptile ?? {};
+  const v = g.credits_used_manual;
+  const used = typeof v === 'number' && Number.isInteger(v) && v >= 0 ? v : null;
+  const status = used === null ? 'unknown' : used >= g.u2_used ? 'u2' : used >= g.u1_used ? 'u1' : 'ok';
+  const u3_due = Boolean(g.u3_date) && now.toISOString().slice(0, 10) >= g.u3_date;
+  return { used, source: 'manual', status, u3_due };
+}
+
+// ---------- route: which labels and notes a class gets ----------
+
+const HELD_APEX = 'High-risk PR. Greptile deep review is held (Apex billing, D3). Dave decides: wait, or land on CodeRabbit + xreview.';
+const mention = (config) => (config.greptile?.notify_login ? ` @${config.greptile.notify_login}` : '');
+
+function creditNotes(config, credits, held) {
+  const g = config.greptile ?? {};
+  const out = [];
+  const count = `Greptile credits used: ${credits.used} of ${g.monthly_credits ?? '?'}`;
+  if (held === 'apex_d3') out.push(HELD_APEX);
+  else if (held === 'credits_u2') {
+    out.push(`High-risk PR. ${count} (hold at ${g.u2_used}). Only r3 PRs get deep review now. Deep review is held. Dave decides: wait, or land on CodeRabbit + xreview.${mention(config)}`);
+  } else if (credits.used !== null && credits.used >= g.u1_used) {
+    out.push(`Warning: ${count} (warning at ${g.u1_used}, hold at ${g.u2_used}).${mention(config)}`);
+  }
+  return out;
+}
+
+/**
+ * route(cls, labelsNow, config, credits) -> { add, wanted, comment, held }
+ *   wanted: every label the class asks for. add: the ones not on the PR yet.
+ *   held: 'apex_d3' (deep_enabled false) or 'credits_u2', else null.
+ */
+export function route(cls, labelsNow, config, credits) {
+  const wanted = [`risk:${cls}`];
+  if (cls === 'r3') wanted.push('risk:high');
+  let held = null;
+  const notes = [];
+  if (cls === 'normal') wanted.push('review:coderabbit');
+  if (DEEP_CLASSES.has(cls)) {
+    if (!config.deep_enabled) held = 'apex_d3';
+    else if (credits.status === 'u2' && cls !== 'r3') held = 'credits_u2';
+    wanted.push(...(held ? ['review:coderabbit', 'review:deep-held'] : ['review:deep']));
+    notes.push(...creditNotes(config, credits, held));
+    if (credits.u3_due) {
+      notes.push(`Credit check due (U3, ${config.greptile.u3_date}): read the Greptile dashboard and set greptile.credits_used_manual in review-router.config.json.${mention(config)}`);
+    }
+  }
+  const add = wanted.filter((l) => !labelsNow.includes(l));
+  return { add, wanted, comment: notes.length ? notes.join('\n\n') : null, held };
+}
+
+// ---------- decide ----------
+
+export const builderOf = (labels) => {
+  const b = labels.filter((l) => l.startsWith('builder:')).map((l) => l.slice('builder:'.length));
+  return b.length === 0 ? null : b.length === 1 ? b[0] : 'multiple';
+};
+
+export function previousClassFrom(labels, commentBody = '') {
+  const found = labels.filter((l) => l.startsWith('risk:')).map((l) => l.slice(5)).filter((c) => Object.hasOwn(RANK, c));
+  const m = /<!--\s*review-router-state class=(\w+)\s*-->/.exec(String(commentBody ?? ''));
+  if (m && Object.hasOwn(RANK, m[1])) found.push(m[1]);
+  return found.reduce((best, c) => (best === null || rank(c) > rank(best) ? c : best), null);
+}
+
+const READY_EVENTS = new Set(['opened', 'reopened', 'ready_for_review']);
+const CR_LABELS = ['review:coderabbit', 'review:deep', 'review:deep-held'];
+const hasReview = (labels) => labels.some((l) => l.startsWith('review:'));
+
+function sideNotes({ builder, labelsNow, wanted, pr: p }) {
+  const out = [];
+  if ([...wanted, ...labelsNow].some((l) => CR_LABELS.includes(l)) && p.codeRabbitRateLimited) {
+    out.push('CodeRabbit is rate limited on the current head. Greptile does not take its place. Dave decides: wait, or land with -IgnoreReview.');
+  }
+  if (builder === null) out.push('No builder label. Add `builder:claude` or `builder:grok` so the cross-family reviewer can be chosen. Nothing is blocked.');
+  if (builder === 'multiple') out.push('More than one builder label. Keep exactly one of `builder:claude` or `builder:grok`. Nothing is blocked.');
+  return out;
+}
+
+/**
+ * decide(event, pr, labelsNow, previousClass, config, { now }) -> a decision
+ *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
+ *   -> { reason, class, effective, matched, previousClass, add, comment, held, builder, credits, noop }
+ * reason: draft | not_open | event_ignored | not_routed | routed | raised | person_override | no_change.
+ * noop true = touch nothing, not even the comment. The decision never has a "remove".
+ */
+export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
+  const credits = creditsState(config, opts.now ?? new Date());
+  const { class: cls, matched } = classify(pr.paths ?? [], config);
+  const builder = builderOf(labelsNow);
+  const out = { reason: null, class: cls, effective: cls, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
+  const stop = (reason) => ({ ...out, reason });
+  if (pr.draft) return stop('draft');
+  if (pr.state !== 'open') return stop('not_open');
+  const push = event === 'synchronize';
+  if (!push && !READY_EVENTS.has(event)) return stop('event_ignored');
+  if (push && previousClass === null) return stop('not_routed');
+
+  const effective = previousClass !== null && rank(previousClass) >= rank(cls) ? previousClass : cls;
+  const r = route(effective, labelsNow, config, credits);
+  let { add } = r;
+  let reason;
+  if (previousClass === null) {
+    reason = hasReview(labelsNow) ? 'person_override' : 'routed';
+    if (reason === 'person_override') add = add.filter((l) => l.startsWith('risk:'));
+  } else if (rank(cls) > rank(previousClass)) {
+    reason = 'raised';
+  } else {
+    add = [];
+    reason = r.wanted.some((l) => !labelsNow.includes(l)) ? 'person_override' : 'no_change';
+  }
+  const personChose = previousClass === null && reason === 'person_override';
+  const notes = [...(personChose ? [] : [r.comment].filter(Boolean)), ...sideNotes({ builder, labelsNow, wanted: r.wanted, pr })];
+  return { ...out, reason, effective, add, held: personChose ? null : r.held, comment: notes.length ? notes.join('\n\n') : null, noop: false };
+}
+
+// ---------- the one router comment ----------
+
+export const ROUTER_MARKER = '<!-- review-router -->';
+export const renderComment = (text, cls) => `${ROUTER_MARKER}\n<!-- review-router-state class=${cls} -->\n${text}`;
+const RESOLVED_TEXT = 'No open router notes.';
+
+/** The newest comment with the marker, whoever wrote it. */
+export function findRouterComment(comments) {
+  return (comments || [])
+    .filter((c) => String(c?.body ?? '').includes(ROUTER_MARKER))
+    .reduce((best, c) => (best === null || (c.id ?? 0) >= (best.id ?? 0) ? c : best), null);
+}
+
+/** What to write: labels in one call, and the router comment created once then updated in place. */
+export function planOps(d, existing) {
+  if (d.noop) return [];
+  const ops = [];
+  if (d.add.length > 0) ops.push({ op: 'labels', labels: d.add });
+  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective);
+  if (d.comment !== null && !existing) ops.push({ op: 'comment-create', body });
+  else if (existing && existing.body !== body && (d.comment !== null || !String(existing.body).includes(RESOLVED_TEXT))) {
+    ops.push({ op: 'comment-update', id: existing.id, body });
+  }
+  return ops;
+}
+
+export function applyOps(ops, { repo, pr, dryRun, gh }) {
+  const done = [];
+  for (const o of ops) {
+    if (o.op === 'labels') {
+      done.push(`add labels: ${o.labels.join(', ')}`);
+      if (!dryRun) gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/labels`, ...o.labels.flatMap((l) => ['-f', `labels[]=${l}`])]);
+    } else if (o.op === 'comment-create') {
+      done.push(`create the router comment:\n${o.body}`);
+      if (!dryRun) gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '-f', `body=${o.body}`]);
+    } else if (o.op === 'comment-update') {
+      done.push(`update router comment ${o.id}:\n${o.body}`);
+      if (!dryRun) gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${o.id}`, '-f', `body=${o.body}`]);
+    }
+  }
+  return done;
+}
+
+// ---------- inputs ----------
+
+/** Paths of the PR, with the old name of a rename. A truncated list is an error, never a smaller PR. */
+export function changedPaths(files, pull) {
+  if (files.length < (pull.changed_files ?? 0)) throw new Error(`file list incomplete (${files.length} of ${pull.changed_files}); cannot classify`);
+  return [...new Set(files.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)))];
+}
+
+/** CodeRabbit's newest summary is a rate-limit notice for the head. Chat replies and other authors do not count. */
+export function codeRabbitRateLimited(comments, head) {
+  const s = latestCodeRabbitSummary(comments);
+  if (!s || codeRabbitNotice(s.body) !== 'rate limited') return false;
+  return commitsNamed(s.body).some((sha) => shaIsHead(sha, head));
+}
+
+// ---------- ledger ----------
+
+const NOT_DONE = new Set(['draft', 'not_open', 'not_routed', 'event_ignored', 'person_override']);
+
+export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
+  const c = ops.find((o) => o.op.startsWith('comment'));
+  return JSON.stringify({
+    ts: now.toISOString(), tool: 'router', pr: pr.number, head: pr.head, event, class: d.class, decision: d.reason,
+    paths_matched: d.matched, labels_added: d.add, held_reason: NOT_DONE.has(d.reason) ? d.reason : d.held,
+    builder: d.builder, credits: d.credits, comment: c ? c.op.slice('comment-'.length) : 'none',
+    ...(pr.assumedReady ? { assumed_ready: true } : {}),
+  });
+}
+
+// ---------- main ----------
+
+function makeGh() {
+  const ghPersonal = path.join(os.homedir(), '.config', 'gh-personal');
+  const dir = process.env.GH_CONFIG_DIR || (existsSync(ghPersonal) ? ghPersonal : undefined);
+  const env = { ...process.env, ...(dir ? { GH_CONFIG_DIR: dir } : {}) };
+  return (args) => {
+    const out = execFileSync('gh', args, { encoding: 'utf8', env, maxBuffer: 32 * 1024 * 1024 });
+    return out.trim() ? JSON.parse(out) : {};
+  };
+}
+
+const flag = (args, k) => args.includes(k);
+const opt = (args, k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
+
+function load(args, gh, repo, number) {
+  const fixture = opt(args, '--fixture');
+  if (fixture) return JSON.parse(readFileSync(fixture, 'utf8'));
+  const pull = gh(['api', `repos/${repo}/pulls/${number}`]);
+  const files = gh(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files?per_page=100`]).flat();
+  const comments = gh(['api', '--paginate', '--slurp', `repos/${repo}/issues/${number}/comments?per_page=100`]).flat();
+  return { pull, files, comments };
+}
+
+function origin(args) {
+  const eventPath = process.env.GITHUB_EVENT_PATH;
+  const payload = eventPath && existsSync(eventPath) ? JSON.parse(readFileSync(eventPath, 'utf8')) : null;
+  const number = Number(args.find((a) => /^\d+$/.test(a)) ?? payload?.pull_request?.number);
+  return { number, event: opt(args, '--event') ?? payload?.action ?? 'ready_for_review' };
+}
+
+function main() {
+  const args = process.argv.slice(2);
+  const { number, event } = origin(args);
+  const fixture = opt(args, '--fixture');
+  const dryRun = flag(args, '--dry-run') || Boolean(fixture);
+  try {
+    if (!number) throw new Error('usage: review-router.mjs <pr-number> [--dry-run] [--event name]');
+    if (flag(args, '--assume-ready') && !dryRun) throw new Error('--assume-ready needs --dry-run');
+    const repo = opt(args, '--repo') ?? process.env.GITHUB_REPOSITORY ?? DEFAULT_REPO;
+    const config = JSON.parse(readFileSync(opt(args, '--config') ?? path.join(HERE, '..', '..', 'review-router.config.json'), 'utf8'));
+    const gh = fixture ? null : makeGh();
+    const { pull, files, comments } = load(args, gh, repo, number);
+    const assumed = flag(args, '--assume-ready');
+    const labels = pullLabelNames(pull);
+    const prState = {
+      number: pull.number ?? number, head: pull.head.sha, draft: assumed ? false : pull.draft === true,
+      state: assumed ? 'open' : pull.state, paths: changedPaths(files, pull), assumedReady: assumed,
+      codeRabbitRateLimited: codeRabbitRateLimited(comments, pull.head.sha),
+    };
+    const existing = findRouterComment(comments);
+    const now = new Date();
+    const d = decide(event, prState, labels, previousClassFrom(labels, existing?.body), config, { now });
+    const ops = planOps(d, existing);
+    const done = applyOps(ops, { repo, pr: number, dryRun, gh });
+    const line = ledgerLine({ d, pr: prState, event, ops, now });
+    console.log(line);
+    if (dryRun) {
+      for (const text of done.length ? done : ['no writes planned']) console.log(`# DRY RUN: ${text.replace(/\n/g, '\n# ')}`);
+    }
+    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\`\`\`json\n${line}\n\`\`\`\n`);
+  } catch (err) {
+    console.error(`review-router: could not determine (${String(err.message).split('\n')[0]})`);
+    process.exit(2);
+  }
+}
+
+function isDirectRun() {
+  if (!process.argv[1]) return false;
+  try { return realpathSync(process.argv[1]) === realpathSync(fileURLToPath(import.meta.url)); }
+  catch { return path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url)); }
+}
+if (isDirectRun()) main();

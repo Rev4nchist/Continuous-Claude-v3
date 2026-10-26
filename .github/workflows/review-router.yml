@@ -1,0 +1,39 @@
+# .github/workflows/review-router.yml
+# P3c (DW-80): label a ready PR with its risk class and the PR bots that must review it.
+# Spec: artifacts/ccv3-review-economy/router-spec.md. Config: review-router.config.json.
+# The router spends no LLM credits and never removes a label. A draft PR is skipped at the job level.
+# pull_request_target: the workflow, script and config come from the BASE branch (main), so a PR
+# cannot lower its own risk class by editing the router. Checkout uses the default ref (the base
+# commit). NEVER check out the PR head here: this job holds a write token. The router reads the
+# PR's changed files through the GitHub API only and runs no PR code.
+# Actions are pinned by commit SHA (same pins as ccv3-checks.yml). No third-party action tags.
+name: review-router
+on:
+  pull_request_target:
+    types: [opened, reopened, ready_for_review, synchronize]
+    branches: [main]
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+# Two quick pushes would race on the labels and the one router comment. Run them one after another.
+concurrency:
+  group: review-router-${{ github.event.pull_request.number }}
+  cancel-in-progress: false
+
+jobs:
+  route:
+    if: github.event.pull_request.draft == false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Route the PR (labels, one comment, one ledger line)
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/github/review-router.mjs

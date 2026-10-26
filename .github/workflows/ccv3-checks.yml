@@ -41,6 +41,8 @@ jobs:
         run: node scripts/ratchets/review-skip-sync.mjs
       - name: review-skip-sync unit tests
         run: node --test scripts/ratchets/review-skip-sync.test.mjs
+      - name: review-router unit tests
+        run: node --test scripts/github/review-router.test.mjs
 
   trivy:
     runs-on: ubuntu-latest
