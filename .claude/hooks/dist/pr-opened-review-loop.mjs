@@ -10,14 +10,17 @@ var GH_API_RE = /\bgh\s+api\b/i;
 var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
 var ANY_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))\w/i;
-var FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*\S|--(?:raw-field|field|input)[\s=])/;
+var FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*["']?[\w.[\]-]+=|--(?:raw-field|field|input)[\s=])/;
+var GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 function isPrOpenCommand(command) {
   const cmd = command || "";
   if (PR_CREATE_RE.test(cmd)) return true;
-  if (!GH_API_RE.test(cmd) || !PULLS_PATH_RE.test(cmd)) return false;
-  if (POST_METHOD_RE.test(cmd)) return true;
-  return FIELD_FLAG_RE.test(cmd) && !ANY_METHOD_RE.test(cmd);
+  if (!GH_API_RE.test(cmd)) return false;
+  const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";
+  if (!PULLS_PATH_RE.test(api)) return false;
+  if (POST_METHOD_RE.test(api)) return true;
+  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(api);
 }
 function responseText(resp) {
   if (resp === null || resp === void 0) return "";

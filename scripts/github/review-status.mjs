@@ -409,8 +409,26 @@ function greptileState(run) {
  * blocks only when `required` (the labels need Greptile). A review of the head that scored under the bar, or a
  * check that ended failure although the summary names the head, blocks whatever the labels say.
  */
-function greptileReasons({ required, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence }) {
+/**
+ * A Greptile check on the head ended failure (Greptile reviewed and scored under the bar) and no later
+ * Greptile run on the head succeeded. A re-run that is still pending does not clear it.
+ */
+export function greptileFailedOnHead(checkRuns) {
+  let failed = false;
+  for (const r of (checkRuns || []).filter(isGreptileRun).sort((a, b) => a.id - b.id)) {
+    if (r.status !== 'completed') continue;
+    if (r.conclusion === 'failure') failed = true;
+    else if (r.conclusion === 'success') failed = false;
+  }
+  return failed;
+}
+
+export const FAILED_UNREQUIRED_REASON = `Greptile check ended failure on the head (a review under ${MIN_CONFIDENCE}/5); a failed review blocks even when the labels do not require Greptile`;
+
+function greptileReasons({ required, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence, failedOnHead }) {
   const out = [];
+  // A failed review blocks whatever the labels say, even when its summary is unusable or a re-run is pending.
+  if (!required && failedOnHead && !lowConfidence && !(reviewedHead && run?.conclusion === 'failure')) out.push(FAILED_UNREQUIRED_REASON);
   if (required) {
     if (greptile === 'absent') out.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
     if (greptile === 'pending') out.push(`Greptile review of the head is ${run.status}`);
@@ -456,6 +474,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
   reasons.push(...greptileReasons({
     required: need.greptile, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
+    failedOnHead: greptileFailedOnHead(checkRuns),
   }));
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);

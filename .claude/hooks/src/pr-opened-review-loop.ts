@@ -28,17 +28,22 @@ const PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
 const POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
 // Any explicit method (GET, PATCH, ...) switches off gh's default below.
 const ANY_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))\w/i;
-// With no method, gh api sends POST as soon as a field or an input file is given.
-const FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*\S|--(?:raw-field|field|input)[\s=])/;
+// With no method, gh api sends POST as soon as a field or an input file is given. A field is
+// `key=value`, so `Select-Object -First 1` or `grep -F` does not count.
+const FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*["']?[\w.[\]-]+=|--(?:raw-field|field|input)[\s=])/;
+// Only the `gh api` command itself counts, not what a pipe or a chained command does after it.
+const GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
 
 const PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 
 export function isPrOpenCommand(command: string): boolean {
   const cmd = command || '';
   if (PR_CREATE_RE.test(cmd)) return true;
-  if (!GH_API_RE.test(cmd) || !PULLS_PATH_RE.test(cmd)) return false;
-  if (POST_METHOD_RE.test(cmd)) return true;
-  return FIELD_FLAG_RE.test(cmd) && !ANY_METHOD_RE.test(cmd);
+  if (!GH_API_RE.test(cmd)) return false;
+  const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? '';
+  if (!PULLS_PATH_RE.test(api)) return false;
+  if (POST_METHOD_RE.test(api)) return true;
+  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(api);
 }
 
 export function responseText(resp: unknown): string {

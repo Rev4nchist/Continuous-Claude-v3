@@ -408,6 +408,32 @@ describe('pr-loop watcher', () => {
     expect(seen.submits.length).toBe(2)
   })
 
+  test('W31 a shrink of the reviewing bots (a same-head re-run) is not news, and growing back to a known set is not either', async ($, on) => {
+    const both = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 2, reasons: ['2 review thread(s) unresolved'] })
+    const crOnly = status(9, { routing: DEEP, reviewedHead: false, coderabbitReviewedHead: true, routedReviewed: false, unresolved: 2, reasons: ['2 review thread(s) unresolved', 'Greptile review of the head is in_progress'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [both, crOnly, both] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('W31 a watch stored with the old REVIEWED marker alerts once when CodeRabbit is new, not when Greptile alone is still in', async ($, on) => {
+    const greptileOnly = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: false, routedReviewed: false, unresolved: 1, reasons: ['1 review thread(s) unresolved'] })
+    const both = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'REVIEWED', head: HEAD_A, since: NOW - MIN, alerted: `REVIEWED:${HEAD_A}` }]), script: { 9: [greptileOnly, both, both] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(0)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
   test('W30 a Greptile check that ended failure at 5/5 alerts at once, not PENDING then STALLED', async ($, on) => {
     const failed = status(9, { routing: { required: ['greptile'], held: null, source: 'default' }, reviewedHead: true, routedReviewed: true, reasons: [GREPTILE_FAILED] })
     const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [failed] } })
