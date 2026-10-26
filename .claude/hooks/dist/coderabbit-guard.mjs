@@ -138,15 +138,25 @@ function closingParen(s, from) {
   }
   return -1;
 }
-function maskQuoted(command, ps = false, trace) {
+function startsWord(command, i) {
+  return i === 0 || /[\s;|&(]/.test(command[i - 1]);
+}
+function lexShell(command, ps = false) {
   const n = command.length;
+  const text = command.split("");
   const out = command.split("");
+  const dqSubs = /* @__PURE__ */ new Set();
+  const bodies = /* @__PURE__ */ new Set();
   const esc = ps ? "`" : "\\";
   const modes = [];
   const depths = [];
   const heredocs = [];
+  let escEnd = -1;
   const fill = (from, to) => {
     for (let k = Math.max(from, 0); k < Math.min(to, n); k++) out[k] = FILL;
+  };
+  const blank = (from, to) => {
+    for (let k = from; k < to; k++) text[k] = out[k] = " ";
   };
   const maskBody = (from, to, expand) => {
     let k = from;
@@ -157,15 +167,15 @@ function maskQuoted(command, ps = false, trace) {
       if (expand && end >= 0 && end < to) k = end + 1;
       else {
         fill(k, k + 1);
-        trace?.bodies.add(k);
+        bodies.add(k);
         k++;
       }
     }
   };
   const consumeHeredocs = (from) => {
     let start = from;
-    const bodies = heredocs.splice(0);
-    for (const [at, h] of bodies.entries()) {
+    const pending = heredocs.splice(0);
+    for (const [at, h] of pending.entries()) {
       let end = start;
       let eol = start;
       while (end < n) {
@@ -177,7 +187,7 @@ function maskQuoted(command, ps = false, trace) {
       }
       const stop = Math.min(eol, n);
       maskBody(start, stop, h.expand);
-      if (at < bodies.length - 1) fill(stop, stop + 1);
+      if (at < pending.length - 1) fill(stop, stop + 1);
       start = stop + 1;
     }
     return Math.min(start - 1, n);
@@ -194,12 +204,12 @@ function maskQuoted(command, ps = false, trace) {
         modes.pop();
         i++;
       } else if (c === "$" && command[i + 1] === "(") {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.push("sub");
         depths.push(0);
         i += 2;
       } else if (c === "`" && !ps) {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.push("dbt");
         i++;
       } else {
@@ -208,9 +218,21 @@ function maskQuoted(command, ps = false, trace) {
       }
       continue;
     }
-    if (c === esc) {
+    if (c === "#" && escEnd !== i && startsWord(command, i)) {
+      let eol = command.indexOf("\n", i);
+      if (eol < 0) eol = n;
+      else if (command[eol - 1] === "\r") eol--;
+      blank(i, eol);
+      i = eol;
+    } else if (ps && c === "<" && command[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      const stop = close < 0 ? n : close + 2;
+      blank(i, stop);
+      i = stop;
+    } else if (c === esc) {
       fill(i + 1, i + 2);
       i += 2;
+      escEnd = i;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
       if (j > 0) {
@@ -244,7 +266,7 @@ ${q}@`, i + 2);
       i += 2;
     } else if (c === "`" && !ps) {
       if (top === "dbt") {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.pop();
       } else if (top === "bt") modes.pop();
       else modes.push("bt");
@@ -258,48 +280,25 @@ ${q}@`, i + 2);
       i++;
     } else i++;
   }
-  return out.join("");
+  return { text: text.join(""), masked: out.join(""), dqSubs, bodies };
 }
-function segmentRanges(command, ps, trace) {
-  const masked = maskQuoted(command, ps, trace);
+function segmentRanges(lexed, ps, wholeQuotes = false) {
   const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
   const ranges = [];
   let last = 0;
-  for (const m of masked.matchAll(sep)) {
-    if (trace?.dqSubs.has(m.index ?? -1)) continue;
+  for (const m of lexed.masked.matchAll(sep)) {
+    if (wholeQuotes && lexed.dqSubs.has(m.index ?? -1)) continue;
     ranges.push([last, m.index ?? 0]);
     last = (m.index ?? 0) + m[0].length;
   }
-  ranges.push([last, command.length]);
+  ranges.push([last, lexed.text.length]);
   return ranges;
 }
-function segmentSpans(command, ps) {
-  return segmentRanges(command, ps).map(([start, end]) => ({ start, end, text: command.slice(start, end).trim() })).filter((s) => s.text);
+function segmentSpans(lexed, ps) {
+  return segmentRanges(lexed, ps).map(([start, end]) => ({ start, end, text: lexed.text.slice(start, end).trim() })).filter((s) => s.text);
 }
 function segmentize(command, ps = false) {
-  return segmentSpans(command, ps).map((s) => s.text);
-}
-function startsWord(command, i) {
-  return i === 0 || /[\s;|&]/.test(command[i - 1]);
-}
-function stripComments(command, ps = false) {
-  if (!command.includes("#")) return command;
-  const masked = maskQuoted(command, ps);
-  let out = "";
-  let i = 0;
-  while (i < command.length) {
-    if (ps && masked[i] === "<" && masked[i + 1] === "#") {
-      const close = command.indexOf("#>", i + 2);
-      i = close < 0 ? command.length : close + 2;
-      out += " ";
-    } else if (masked[i] === "#" && startsWord(command, i)) {
-      let eol = command.indexOf("\n", i);
-      if (eol < 0) eol = command.length;
-      else if (command[eol - 1] === "\r") eol--;
-      i = eol;
-    } else out += command[i++];
-  }
-  return out;
+  return segmentSpans(lexShell(command, ps), ps).map((s) => s.text);
 }
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
@@ -476,16 +475,16 @@ function leadingProgram(segment) {
   } while (s !== prev);
   return baseName(splitFirst(s).tok);
 }
-function rawScan(text, ps = false) {
+function rawScan(lexed, ps = false) {
   const found = { billing: false, reviewSegments: [] };
-  const trace = { dqSubs: /* @__PURE__ */ new Set(), bodies: /* @__PURE__ */ new Set() };
-  for (const [a, b] of segmentRanges(text, ps, trace)) {
+  const text = lexed.text;
+  for (const [a, b] of segmentRanges(lexed, ps, true)) {
     const seg = text.slice(a, b).trim();
     if (!seg) continue;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
-    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => trace.bodies.has(a + k) ? " " : ch).join("").trim();
+    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => lexed.bodies.has(a + k) ? " " : ch).join("").trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
@@ -495,13 +494,14 @@ function rawScan(text, ps = false) {
 }
 var MAX_NESTING = 4;
 function classifyCommand(source, ps = false, depth = 0) {
-  const text = stripComments(source, ps);
-  const raw = rawScan(text, ps);
+  const lexed = lexShell(source, ps);
+  const text = lexed.text;
+  const raw = rawScan(lexed, ps);
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
-  for (const { start, end, text: seg } of segmentSpans(text, ps)) {
+  for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
     if (!inv) continue;
@@ -687,7 +687,7 @@ export {
   isReadOnlySubcommand,
   isReviewAgent,
   isSkillInstall,
-  maskQuoted,
+  lexShell,
   normalizeRemote,
   parseInvocation,
   rawScan,
@@ -696,6 +696,5 @@ export {
   repoBranchKey,
   segmentize,
   statePath,
-  stripComments,
   writeState
 };

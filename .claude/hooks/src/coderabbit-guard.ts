@@ -18,8 +18,8 @@
  * command that receives it, so `bash <<EOF` is read as a script. A wrapper that takes a command
  * string (bash -c, eval, iex) is unwrapped and its inner string is split and classified again.
  *
- * Shell comments are removed before any scan (see stripComments): a `#` that starts a word outside
- * quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
+ * Shell comments are removed before any scan, by the same lexer pass that finds quotes (lexShell): a
+ * `#` that starts a word outside quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
  * nothing, so `cr review --agent # --version` is a review and `cr doctor # before review` is not.
  * Help and version are info-only from the call's own options before a bare `--`, never from text
  * after `--`, from a quoted argument, or from a comment.
@@ -153,26 +153,54 @@ function closingParen(s: string, from: number): number {
   return -1;
 }
 
-/** What maskQuoted saw, by index: separators opened or closed by a substitution inside double quotes, and heredoc or here-string body characters. */
-export interface MaskTrace {
+/** The result of one lexer pass over a command. All three texts have the length of the source. */
+export interface Lexed {
+  /** The source with every comment replaced by spaces. Newlines stay. Quoted text is intact. */
+  text: string;
+  /** `text` with data replaced by FILL: quoted text, heredoc bodies, here-strings. */
+  masked: string;
+  /** Indexes of separators opened or closed by a substitution inside double quotes. */
   dqSubs: Set<number>;
+  /** Indexes of heredoc and here-string body characters. */
   bodies: Set<number>;
 }
 
+/** True when a `#` at `i` starts a word: the start of the text, or after whitespace, `;`, `|`, `&` or `(`. */
+function startsWord(command: string, i: number): boolean {
+  return i === 0 || /[\s;|&(]/.test(command[i - 1]);
+}
+
 /**
- * Same length as `command`, with data replaced by FILL: single-quoted and double-quoted text,
- * heredoc bodies and PowerShell here-strings. Command substitutions inside double quotes (and in
- * an unquoted heredoc body) stay readable, because the shell runs them.
+ * ONE left-to-right pass that tracks every state together: normal, single-quoted, double-quoted
+ * (with escapes), `$( )` and backtick substitutions, heredoc bodies, PowerShell here-strings and
+ * comments. Two separate passes cannot agree: an apostrophe in a comment would pair with a later
+ * quote, and a quoted `#` would then look like a comment start.
+ *
+ * Comments: a `#` starts one only in normal state at the start of a word. It runs to the end of the
+ * line and the newline stays. Quotes and `<<` inside it mean nothing. In PowerShell `<# ... #>` is a
+ * block comment, again only in normal state. A `#` inside a word (`a#b`, `$#`, `url#anchor`) stays.
+ * Comment text is data: a `--version` or the word `review` there must change nothing.
+ *
+ * Quoted text, heredoc bodies and here-strings become FILL in `masked`. Command substitutions inside
+ * double quotes (and in an unquoted heredoc body) stay readable, because the shell runs them.
  */
-export function maskQuoted(command: string, ps = false, trace?: MaskTrace): string {
+export function lexShell(command: string, ps = false): Lexed {
   const n = command.length;
+  const text = command.split('');
   const out = command.split('');
+  const dqSubs = new Set<number>();
+  const bodies = new Set<number>();
   const esc = ps ? '`' : '\\';
   const modes: Array<'dq' | 'sub' | 'bt' | 'dbt'> = [];
   const depths: number[] = [];
   const heredocs: Heredoc[] = [];
+  let escEnd = -1;
   const fill = (from: number, to: number): void => {
     for (let k = Math.max(from, 0); k < Math.min(to, n); k++) out[k] = FILL;
+  };
+  /** Turn a comment into spaces in both outputs. */
+  const blank = (from: number, to: number): void => {
+    for (let k = from; k < to; k++) text[k] = out[k] = ' ';
   };
   /** Mask a body but keep its command substitutions when the shell would run them. */
   const maskBody = (from: number, to: number, expand: boolean): void => {
@@ -184,7 +212,7 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
       if (expand && end >= 0 && end < to) k = end + 1;
       else {
         fill(k, k + 1);
-        trace?.bodies.add(k);
+        bodies.add(k);
         k++;
       }
     }
@@ -192,8 +220,8 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
   /** Mask every pending heredoc body, starting after the newline at `from - 1`. Returns the index of the last delimiter line's end. */
   const consumeHeredocs = (from: number): number => {
     let start = from;
-    const bodies = heredocs.splice(0);
-    for (const [at, h] of bodies.entries()) {
+    const pending = heredocs.splice(0);
+    for (const [at, h] of pending.entries()) {
       let end = start;
       let eol = start;
       while (end < n) {
@@ -205,7 +233,7 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
       }
       const stop = Math.min(eol, n);
       maskBody(start, stop, h.expand);
-      if (at < bodies.length - 1) fill(stop, stop + 1);
+      if (at < pending.length - 1) fill(stop, stop + 1);
       start = stop + 1;
     }
     return Math.min(start - 1, n);
@@ -223,12 +251,12 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
         modes.pop();
         i++;
       } else if (c === '$' && command[i + 1] === '(') {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.push('sub');
         depths.push(0);
         i += 2;
       } else if (c === '`' && !ps) {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.push('dbt');
         i++;
       } else {
@@ -237,9 +265,21 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
       }
       continue;
     }
-    if (c === esc) {
+    if (c === '#' && escEnd !== i && startsWord(command, i)) {
+      let eol = command.indexOf('\n', i);
+      if (eol < 0) eol = n;
+      else if (command[eol - 1] === '\r') eol--;
+      blank(i, eol);
+      i = eol;
+    } else if (ps && c === '<' && command[i + 1] === '#') {
+      const close = command.indexOf('#>', i + 2);
+      const stop = close < 0 ? n : close + 2;
+      blank(i, stop);
+      i = stop;
+    } else if (c === esc) {
       fill(i + 1, i + 2);
       i += 2;
+      escEnd = i;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
       if (j > 0) {
@@ -272,7 +312,7 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
       i += 2;
     } else if (c === '`' && !ps) {
       if (top === 'dbt') {
-        trace?.dqSubs.add(i);
+        dqSubs.add(i);
         modes.pop();
       } else if (top === 'bt') modes.pop();
       else modes.push('bt');
@@ -286,66 +326,36 @@ export function maskQuoted(command: string, ps = false, trace?: MaskTrace): stri
       i++;
     } else i++;
   }
-  return out.join('');
-}
-
-/** Start and end index of each command segment, untrimmed. A trace turns on `wholeQuotes` mode. */
-function segmentRanges(command: string, ps: boolean, trace?: MaskTrace): Array<[number, number]> {
-  const masked = maskQuoted(command, ps, trace);
-  const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
-  const ranges: Array<[number, number]> = [];
-  let last = 0;
-  for (const m of masked.matchAll(sep)) {
-    if (trace?.dqSubs.has(m.index ?? -1)) continue;
-    ranges.push([last, m.index ?? 0]);
-    last = (m.index ?? 0) + m[0].length;
-  }
-  ranges.push([last, command.length]);
-  return ranges;
-}
-
-/** The non-empty segments with their source offsets [start, end) and trimmed text. */
-function segmentSpans(command: string, ps: boolean): Array<{ start: number; end: number; text: string }> {
-  return segmentRanges(command, ps)
-    .map(([start, end]) => ({ start, end, text: command.slice(start, end).trim() }))
-    .filter((s) => s.text);
-}
-
-/** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. */
-export function segmentize(command: string, ps = false): string[] {
-  return segmentSpans(command, ps).map((s) => s.text);
-}
-
-/** True when a `#` at `i` starts a word: the start of the text, after whitespace, or after `;`, `|` or `&`. */
-function startsWord(command: string, i: number): boolean {
-  return i === 0 || /[\s;|&]/.test(command[i - 1]);
+  return { text: text.join(''), masked: out.join(''), dqSubs, bodies };
 }
 
 /**
- * Remove shell comments. A `#` that starts a word and is not inside quotes, a heredoc body or a
- * here-string runs to the end of the line. In PowerShell `<# ... #>` is a block comment too. A `#`
- * inside a word (`a#b`, `$#`, `url#anchor`) stays. Comment text is data: a `--version` or the word
- * `review` there must change nothing. Removed text becomes a space, and the newline stays, so the
- * next line still runs.
+ * Start and end index of each command segment in `lexed.text`, untrimmed. With `wholeQuotes` a
+ * `$( )` or backtick inside double quotes does not split.
  */
-export function stripComments(command: string, ps = false): string {
-  if (!command.includes('#')) return command;
-  const masked = maskQuoted(command, ps);
-  let out = '';
-  let i = 0;
-  while (i < command.length) {
-    if (ps && masked[i] === '<' && masked[i + 1] === '#') {
-      const close = command.indexOf('#>', i + 2);
-      i = close < 0 ? command.length : close + 2;
-      out += ' ';
-    } else if (masked[i] === '#' && startsWord(command, i)) {
-      let eol = command.indexOf('\n', i);
-      if (eol < 0) eol = command.length;
-      else if (command[eol - 1] === '\r') eol--;
-      i = eol;
-    } else out += command[i++];
+function segmentRanges(lexed: Lexed, ps: boolean, wholeQuotes = false): Array<[number, number]> {
+  const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
+  const ranges: Array<[number, number]> = [];
+  let last = 0;
+  for (const m of lexed.masked.matchAll(sep)) {
+    if (wholeQuotes && lexed.dqSubs.has(m.index ?? -1)) continue;
+    ranges.push([last, m.index ?? 0]);
+    last = (m.index ?? 0) + m[0].length;
   }
-  return out;
+  ranges.push([last, lexed.text.length]);
+  return ranges;
+}
+
+/** The non-empty segments with their offsets [start, end) in the comment-free text and trimmed text. */
+function segmentSpans(lexed: Lexed, ps: boolean): Array<{ start: number; end: number; text: string }> {
+  return segmentRanges(lexed, ps)
+    .map(([start, end]) => ({ start, end, text: lexed.text.slice(start, end).trim() }))
+    .filter((s) => s.text);
+}
+
+/** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. Comments are dropped. */
+export function segmentize(command: string, ps = false): string[] {
+  return segmentSpans(lexShell(command, ps), ps).map((s) => s.text);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -588,18 +598,18 @@ export interface RawScan {
  * included. It does not parse wrappers, so an unknown wrapper option cannot hide a call. It
  * over-reports inside an executing program (`sh -c "grep 'cr review'"`) on purpose.
  */
-export function rawScan(text: string, ps = false): RawScan {
+export function rawScan(lexed: Lexed, ps = false): RawScan {
   const found: RawScan = { billing: false, reviewSegments: [] };
+  const text = lexed.text;
   // A `$( )` inside double quotes does not split, so a commit message built with a heredoc stays one git segment.
-  const trace: MaskTrace = { dqSubs: new Set(), bodies: new Set() };
-  for (const [a, b] of segmentRanges(text, ps, trace)) {
+  for (const [a, b] of segmentRanges(lexed, ps, true)) {
     const seg = text.slice(a, b).trim();
     if (!seg) continue;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     // A heredoc body is data unless a shell, eval or wrapper receives it. `cat <<EOF` prose is not a call.
     const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === 'cmd';
-    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => (trace.bodies.has(a + k) ? ' ' : ch)).join('').trim();
+    const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => (lexed.bodies.has(a + k) ? ' ' : ch)).join('').trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
@@ -612,9 +622,11 @@ const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
 export function classifyCommand(source: string, ps = false, depth = 0): SegmentClass {
-  const text = stripComments(source, ps);
+  // One lexer pass gives the comment-free text and the quote mask, so both always agree.
+  const lexed = lexShell(source, ps);
+  const text = lexed.text;
   // A wrapper string is scanned again, so a mix inside `bash -c "..."` counts per segment too.
-  const raw = rawScan(text, ps);
+  const raw = rawScan(lexed, ps);
   if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
@@ -623,7 +635,7 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
   // by source offsets. A raw segment that names a review counts the parsed runs inside it, or one
   // hidden run if the parser found no CodeRabbit call there. It never counts twice.
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
-  for (const { start, end, text: seg } of segmentSpans(text, ps)) {
+  for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
     if (!inv) continue;

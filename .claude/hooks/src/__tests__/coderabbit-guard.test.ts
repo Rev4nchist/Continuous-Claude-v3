@@ -1268,3 +1268,70 @@ describe('coderabbit-guard: comments and arguments after -- never mark a review 
     expect(used()).toBe(2);
   });
 });
+
+describe('coderabbit-guard: one lexer pass tracks quotes and comments together (Greptile r7)', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'lexer#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-lexer-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  it('Bash: an apostrophe in a comment does not pair with a later quote and hide a billed review', () => {
+    const r = decide(bash("# don't retry\necho 'review # status'; cr review --agent --use-credits"), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/billing/i);
+    expect(used()).toBe(0);
+  });
+
+  it('Bash: the same two lines without the billing flag count 1 run', () => {
+    expect(decide(bash("# don't retry\necho 'review # status'; cr review --agent"), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('PowerShell: an apostrophe in a comment does not hide a review', () => {
+    expect(decide(pwsh("# don't retry\nWrite-Output 'review # status'; cr review --agent"), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('PowerShell: the same two lines with a billing flag are denied', () => {
+    const r = decide(pwsh("# don't retry\nWrite-Output 'review # status'; cr review --agent --use-credits"), env);
+    expect(r.allow).toBe(false);
+    expect(used()).toBe(0);
+  });
+
+  it.each([
+    ['Bash', '# say "hi\ncr review --agent', bash],
+    ['PowerShell', '# say "hi\ncr review --agent', pwsh],
+  ])('%s: an unbalanced double quote in a comment counts 1', (_tool, command, make) => {
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('Bash: a comment that holds <<EOF does not start a heredoc', () => {
+    expect(decide(bash('echo hi # cat <<EOF\ncr review --agent\nEOF'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it("PowerShell: a <# it's #> block comment before a review counts 1", () => {
+    expect(decide(pwsh("<# it's #> cr review --agent"), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it("Bash: a real heredoc body holding # ' does not change the next line", () => {
+    expect(decide(bash("cat <<EOF\n# '\nEOF\ncr review --agent"), env).allow).toBe(true);
+    expect(used()).toBe(1);
+    expect(decide(bash("cat <<EOF\n# '\nEOF\ncr review --agent --use-credits"), env).allow).toBe(false);
+  });
+
+});
