@@ -58,10 +58,10 @@ Claude Code still does the work. CCv3 sits between Claude and your machine. Each
 Here is the real output of the destructive-command guard for that command:
 
 <p align="center">
-  <img alt="Real output of the destructive-command guard. At the keyboard the guard asks. In an unattended run it denies with BLOCKED, fail-closed." src="docs/assets/readme/guard-demo.svg" width="100%">
+  <img alt="Real output of the destructive-command guard. At the keyboard the guard asks. In a bypassPermissions run it denies with BLOCKED, fail-closed." src="docs/assets/readme/guard-demo.svg" width="100%">
 </p>
 
-*Unattended run: BLOCKED. When you are at the keyboard, the guard asks first.*
+*Unattended run (bypassPermissions): BLOCKED. When you are at the keyboard, the guard asks first.*
 
 <details>
 <summary>Reproduce this output</summary>
@@ -73,6 +73,8 @@ echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command"
 ```
 
 You should see a JSON reply with `"permissionDecision":"ask"`. Add `"permission_mode":"bypassPermissions"` to the payload to see the unattended `deny`. Source: [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts).
+
+The guard counts bypass mode, subagent runs (`CLAUDE_AGENT_ID`) and CI as unattended. A plain headless `claude -p` run is not detected, so it gets `ask`. The guard also lets a call through if it hits a parse error. It is a backstop, not a sandbox.
 
 </details>
 
@@ -91,7 +93,7 @@ You should see a JSON reply with `"permissionDecision":"ask"`. Add `"permission_
 
 | You get | Because | Evidence |
 |---|---|---|
-| **Safer sessions** | Guards run outside the model and fail closed when no one is watching | [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts), [hook-contract-guard.mjs](scripts/hooks/hook-contract-guard.mjs) |
+| **Safer sessions** | Guards run outside the model. In bypass mode, in a subagent or in CI, the destructive-command guard denies instead of asking | [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts), [hook-contract-guard.mjs](scripts/hooks/hook-contract-guard.mjs) |
 | **Lean context** | A small core loads every time. Tool rules load on demand. | [context-budget-guard.mjs](scripts/rules/context-budget-guard.mjs), chart below |
 | **"Done" means proven** | Each change needs an end-to-end check with saved output | [AGENTS.md](AGENTS.md) |
 | **Reviewed changes** | Greptile reviews every pull request. CodeRabbit joins when a label asks for it. | [review-status.mjs](scripts/github/review-status.mjs), [.greptile/config.json](.greptile/config.json), [.coderabbit.yaml](.coderabbit.yaml) |

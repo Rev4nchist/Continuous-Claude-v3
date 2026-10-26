@@ -1,6 +1,6 @@
 <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 346" width="960" height="346" role="img" aria-labelledby="t d">
 <title id="t">The destructive-command guard, captured from a real run</title>
-<desc id="d">Claude proposes git reset --hard origin/main. When you are at the keyboard the guard asks for confirmation. In an unattended run it denies with BLOCKED fail-closed.</desc>
+<desc id="d">Claude proposes git reset --hard origin/main. When you are at the keyboard the guard asks for confirmation. In a bypassPermissions run it denies with BLOCKED fail-closed.</desc>
 <defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#07101b"/><stop offset="1" stop-color="#0c1d2e"/></linearGradient></defs>
 <style>text{font-family:ui-monospace,SFMono-Regular,Consolas,Menlo,monospace;font-size:15px;fill:#d7e4f5}.m{fill:#7f93a8;font-size:13px}.c{fill:#e8fff6;font-size:17px}.ask{fill:#ffc979}.deny{fill:#ff8d97}.ok{fill:#5af2bd}.sans{font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,sans-serif}</style>
 <rect width="960" height="346" rx="16" fill="url(#bg)" stroke="#24415a"/>
