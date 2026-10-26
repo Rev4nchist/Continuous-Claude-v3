@@ -55,6 +55,67 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     ).toBe(true);
   });
 
+  // P3b: only the collection endpoint opens a PR. Reply and review POSTs share the /pulls prefix.
+  it('does not detect a thread-reply or review-comment POST under a pull', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments/9/replies -X POST -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments -X POST -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/reviews -X POST -f event=COMMENT')).toBe(false);
+  });
+
+  it('detects a POST to the quoted, query-suffixed or end-of-string pulls collection', () => {
+    expect(isPrOpenCommand('gh api "repos/o/r/pulls" --method POST -f title=x')).toBe(true);
+    expect(isPrOpenCommand("gh api 'repos/o/r/pulls' -X POST")).toBe(true);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls?draft=true -X POST')).toBe(true);
+    expect(isPrOpenCommand('gh api -X POST repos/o/r/pulls')).toBe(true);
+  });
+
+  it('does not detect a longer path that only starts with pulls', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pullsfoo -X POST')).toBe(false);
+  });
+
+  // Critic round: every spelling gh accepts for the method, a trailing slash, and gh's default POST when fields are given.
+  it('detects every spelling of the POST method', () => {
+    for (const method of ['-X POST', '-XPOST', '--method POST', '--method=POST', '-X post']) {
+      expect(isPrOpenCommand(`gh api repos/o/r/pulls ${method} -f title=x`), method).toBe(true);
+    }
+  });
+
+  it('detects the pulls collection with a trailing slash', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/ -X POST -f title=x')).toBe(true);
+    expect(isPrOpenCommand('gh api "repos/o/r/pulls/" --method=POST')).toBe(true);
+  });
+
+  it('treats fields with no method as a POST, because gh defaults to POST then', () => {
+    for (const flag of ['-f title=x', '-F draft=true', '--raw-field title=x', '--field draft=true', '--input body.json', '-ftitle=x']) {
+      expect(isPrOpenCommand(`gh api repos/o/r/pulls ${flag}`), flag).toBe(true);
+    }
+  });
+
+  it('does not read flags from a pipe or a chained command as gh fields (a PR list is not a PR open)', () => {
+    const lists = [
+      'gh api repos/o/r/pulls | ConvertFrom-Json | Select-Object -First 1',
+      'gh api repos/o/r/pulls | Where-Object -FilterScript { $_.draft }',
+      'gh api repos/o/r/pulls | grep -F "html_url"',
+      'gh api repos/o/r/pulls; Get-ChildItem -Force x',
+      'gh api repos/o/r/pulls && echo -f=1',
+    ];
+    for (const cmd of lists) expect(isPrOpenCommand(cmd), cmd).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -F "body=@pr.md" | ConvertFrom-Json'), 'a real field before the pipe still counts').toBe(true);
+  });
+
+  it('does not treat fields as a POST when the method is GET', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -X GET -f state=open')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls --method=GET -F per_page=5')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls --method GET --field state=open')).toBe(false);
+  });
+
+  it('does not treat a longer path or a non-POST method as a PR open', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5 -f state=closed')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -X PATCH -f title=x')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls')).toBe(false);
+  });
+
   it('does not detect a GET to a pulls endpoint', () => {
     expect(isPrOpenCommand('gh api repos/o/r/pulls')).toBe(false);
     expect(isPrOpenCommand('gh api repos/o/r/pulls/5')).toBe(false);

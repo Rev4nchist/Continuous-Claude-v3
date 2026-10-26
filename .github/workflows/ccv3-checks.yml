@@ -37,6 +37,10 @@ jobs:
         run: node scripts/hook-manifest-check.mjs --repo
       - name: scan-ratchet unit tests
         run: node --test scripts/ratchets/scan-ratchet.test.mjs
+      - name: Reviewer skip-list in sync (REVIEW.md vs Greptile + CodeRabbit)
+        run: node scripts/ratchets/review-skip-sync.mjs
+      - name: review-skip-sync unit tests
+        run: node --test scripts/ratchets/review-skip-sync.test.mjs
 
   trivy:
     runs-on: ubuntu-latest
