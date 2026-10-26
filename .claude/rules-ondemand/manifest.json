@@ -181,6 +181,21 @@
       ]
     },
     {
+      "id": "coderabbit-cli",
+      "files": [
+        "coderabbit-cli.md"
+      ],
+      "mode": "inject",
+      "command": [
+        "^(cr|coderabbit)\\b"
+      ],
+      "segment": [
+        "^(cr|coderabbit)\\b",
+        "^skills(@\\S+)?\\s+add\\b.*coderabbit",
+        "^coderabbit\\s+skills\\b"
+      ]
+    },
+    {
       "id": "cross-terminal-db",
       "files": [
         "cross-terminal-db.md"

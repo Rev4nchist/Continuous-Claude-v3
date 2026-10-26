@@ -188,6 +188,10 @@ const CASES = [
   ['uv run --with x python on deploy.py injects', bash('s91', 'uv run --with httpx python docs/playground/deploy.py status'), 'inject', ['fabric'], []],
   ['python -u on deploy.py injects', bash('s92', 'python -u docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
   ['Python in capitals on deploy.py injects', ps('s93', 'Python docs/playground/deploy.py preflight'), 'inject', ['fabric'], []],
+  // Greptile #155: the router strips npx before it matches, so the install trigger must match the rest.
+  ['npx skills add coderabbitai/skills injects the CodeRabbit rule', bash('s94', 'npx skills add coderabbitai/skills'), 'inject', ['coderabbit-cli'], []],
+  ['skills add coderabbitai/skills (no npx) injects the CodeRabbit rule', bash('s95', 'skills add coderabbitai/skills -g'), 'inject', ['coderabbit-cli'], []],
+  ['npx skills add of another package does not claim the CodeRabbit rule', bash('s96', 'npx skills add vercel-labs/skills'), 'none', [], ['coderabbit-cli']],
   ['unrelated command: nothing', bash('s16', 'git status --short'), 'none', [], []],
   ['missing manifest fails open', bash('s17', 'grok exec -'), 'none', [], [], join(state, 'no-such-dir')],
 ];

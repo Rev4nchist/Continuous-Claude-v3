@@ -1,0 +1,18 @@
+CodeRabbit Doctor
+
+Version: 0.9.0
+Machine ID: [redacted]
+Last doctor run: 2026-10-26T14:00:13.657Z
+
+[pass] CLI runtime          0.9.0 on win32-x64
+[pass] Storage              C:\Users\dkhay\AppData\Local\coderabbit is writable
+[pass] Service URLs         Required service URLs are configured.
+[pass] Authentication       Signed in.
+[pass] Auth environment     Browser sign-in is available.
+[pass] Update policy        Auto-update is eligible.
+[pass] Backend reachable    https://app.coderabbit.ai reachable.
+[pass] WebSocket reachable  wss://ide.coderabbit.ai/ws reachable.
+[warn] Git repository       Git repository was found, but some local metadata could not be read.
+       Run `git status` in this repository and fix any local Git errors.
+
+Summary: 8 passed, 1 warnings, 0 failed

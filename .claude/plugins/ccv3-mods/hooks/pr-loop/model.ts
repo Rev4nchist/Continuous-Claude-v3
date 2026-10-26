@@ -15,6 +15,8 @@ export type PrStatus = {
   reviewedHead: boolean
   unresolved: number
   rateLimited: boolean
+  /** A labelled PR whose CodeRabbit review is missing: rate limited, skipped or failed. Null when unlabelled. Absent from older scripts. */
+  coderabbitLimited?: boolean | null
   prState: string
   merged: boolean
 }
@@ -106,11 +108,16 @@ const needsAction = (status: PrStatus): boolean =>
   status.reviewedHead &&
   (status.unresolved > 0 || status.lowConfidence === true || status.reasons.some(reason => FAILED_CHECK.test(reason)))
 
+/** The reviewer app (Greptile, or CodeRabbit on a labelled PR) will not review this head without a nudge. */
+const reviewMissing = (status: PrStatus): boolean => status.rateLimited || status.coderabbitLimited === true
+
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
+  // Findings on a reviewed head come first: a skipped CodeRabbit review must not hide an open thread to fix.
   if (status.rateLimited) return 'LIMITED'
-  return needsAction(status) ? 'REVIEWED' : 'PENDING'
+  if (needsAction(status)) return 'REVIEWED'
+  return reviewMissing(status) ? 'LIMITED' : 'PENDING'
 }
 
 /** The 60 minute clock belongs to the head: a push starts it again, and the last alert no longer applies. */
@@ -151,7 +158,7 @@ const WORDS: Record<PrState, string> = {
   READY: 'READY',
   PENDING: 'pending',
   CLOSED: 'closed',
-  LIMITED: 'Greptile did not finish the review',
+  LIMITED: 'a review did not finish (Greptile or CodeRabbit)',
   REVIEWED: 'reviewed, not READY',
   STALLED: 'no Greptile review after 60 minutes',
 }
@@ -164,7 +171,7 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
   if (alert.state === 'LIMITED') {
-    return `${lead} has no finished Greptile review (cancelled, failed or skipped). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
+    return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'STALLED') {
     return `${lead} has no Greptile review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
