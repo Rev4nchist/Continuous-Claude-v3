@@ -9,6 +9,7 @@ import {
   needsCodeRabbitReview,
   summaryCoversHead,
   mergeGraphqlComments,
+  requiredBots,
 } from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -790,4 +791,207 @@ test('mergeGraphqlComments keeps the REST fields and takes the body, stamp and e
   assert.equal(comments[0].lastEditedAt, EDITED_AT);
   assert.deepEqual(comments[0].user, rest.user);
   assert.deepEqual(commentEdits[rest.id], [BOT_EDIT]);
+});
+
+// ---------------------------------------------------------------------------------------------
+// P3b READY v2: the labels decide which bots must have reviewed the head. A PR with no review: and
+// no risk: label keeps today's rule exactly (Greptile required, CodeRabbit not).
+// ---------------------------------------------------------------------------------------------
+const HELD_NOTE = 'deep review held (Apex billing, D3)';
+const routed = (labels, over = {}) => {
+  const i = input(over.input);
+  i.pull.labels = labels.map((name) => ({ name }));
+  if (over.draft !== undefined) i.pull.draft = over.draft;
+  return { ...i, reviews: [], comments: [], ...(over.eval ?? {}) };
+};
+const CR_REVIEW = { user: CR_BOT, commit_id: HEAD, body: 'Actionable comments posted: 1' };
+const NO_GREPTILE = { runs: [] };
+
+test('requiredBots: the label table', () => {
+  const only = (r) => [r.greptile, r.coderabbit, r.held, r.source];
+  assert.deepEqual(only(requiredBots([])), [true, false, null, 'default']);
+  assert.deepEqual(only(requiredBots(['unrelated'])), [true, false, null, 'default']);
+  assert.deepEqual(only(requiredBots(['risk:normal'])), [true, false, null, 'labels'], 'a risk label alone keeps Greptile');
+  assert.deepEqual(only(requiredBots(['risk:docs'])), [false, false, null, 'labels']);
+  assert.deepEqual(only(requiredBots(['review:coderabbit'])), [false, true, null, 'labels']);
+  assert.deepEqual(only(requiredBots(['review:deep'])), [true, true, null, 'labels']);
+  assert.deepEqual(only(requiredBots(['review:deep-held'])), [false, true, HELD_NOTE, 'labels']);
+  assert.deepEqual(only(requiredBots(['review:deep-held', 'review:coderabbit'])), [false, true, HELD_NOTE, 'labels']);
+  assert.deepEqual(only(requiredBots(['review:deep', 'review:deep-held'])), [true, true, null, 'labels'], 'review:deep wins');
+  assert.deepEqual(only(requiredBots(['risk:docs', 'review:coderabbit'])), [false, true, null, 'labels']);
+});
+
+test('requiredBots: risk:docs skips review only when no heavier risk label is present', () => {
+  for (const heavier of ['risk:normal', 'risk:steering', 'risk:infra', 'risk:high', 'risk:r3']) {
+    const r = requiredBots(['risk:docs', heavier]);
+    assert.equal(r.greptile, true, heavier);
+    assert.equal(r.coderabbit, false, heavier);
+  }
+});
+
+test('routing: review:deep needs CodeRabbit AND Greptile on the head', () => {
+  const both = evaluate(routed(['review:deep'], { eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(both.ready, true, both.reasons.join('; '));
+  const noCr = evaluate(routed(['review:deep']));
+  assert.equal(noCr.ready, false);
+  assert.ok(noCr.reasons.some((x) => /no CodeRabbit PR-bot review/.test(x)), noCr.reasons.join('; '));
+  const noGr = evaluate(routed(['review:deep'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(noGr.ready, false);
+  assert.equal(noGr.greptile, 'absent');
+  assert.deepEqual(noGr.routing.required, ['greptile', 'coderabbit']);
+});
+
+test('routing: review:deep-held needs CodeRabbit only and carries the held note, not a reason', () => {
+  const r = evaluate(routed(['review:deep-held'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.deepEqual(r.routing, { required: ['coderabbit'], held: HELD_NOTE, source: 'labels' });
+  assert.equal(r.greptile, 'absent', 'Greptile state is still reported');
+  assert.ok(!r.reasons.some((x) => /held|Greptile/.test(x)), r.reasons.join('; '));
+  const lowGreptile = evaluate(routed(['review:deep-held'], { input: { prBody: body(HEAD, 2) }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(lowGreptile.ready, true, 'low Greptile confidence does not block when Greptile is not required');
+  assert.equal(lowGreptile.confidence, 2, 'but it is still reported');
+  const noCr = evaluate(routed(['review:deep-held']));
+  assert.equal(noCr.ready, false, 'CodeRabbit is still required');
+  const upgraded = evaluate(routed(['review:deep', 'review:deep-held'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(upgraded.ready, false, 'review:deep wins: Greptile is required again');
+  assert.equal(upgraded.routing.held, null);
+});
+
+test('routing: review:coderabbit alone needs CodeRabbit; a cancelled Greptile does not block or read as LIMITED', () => {
+  const r = evaluate(routed(['review:coderabbit'], { input: { runs: [run('neutral')] }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.greptile, 'cancelled', 'raw Greptile state is reported');
+  assert.equal(r.rateLimited, false, 'the mod must not alert LIMITED for a bot that does not block');
+  assert.deepEqual(r.routing.required, ['coderabbit']);
+});
+
+test('routing: risk:docs with no review label needs no bot review', () => {
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE }));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.coderabbit, null);
+  assert.deepEqual(r.routing, { required: [], held: null, source: 'labels' });
+  const failing = evaluate(routed(['risk:docs'], { input: { runs: [], threads: [{ isResolved: false }] } }));
+  assert.equal(failing.ready, false, 'threads still block');
+});
+
+test('routing: no review or risk label is the old rule (Greptile required, CodeRabbit not)', () => {
+  const none = evaluate(routed([], { input: NO_GREPTILE }));
+  assert.equal(none.ready, false);
+  assert.equal(none.greptile, 'absent');
+  assert.deepEqual(none.routing, { required: ['greptile'], held: null, source: 'default' });
+  assert.equal(none.coderabbit, null);
+  const withRisk = evaluate(routed(['risk:high'], { input: NO_GREPTILE }));
+  assert.equal(withRisk.ready, false, 'risk:high alone still needs Greptile');
+});
+
+test('G-R1: a draft PR is never READY, whatever the labels', () => {
+  const msg = 'PR is a draft (no bot review on drafts)';
+  assert.ok(evaluate(routed([], { draft: true })).reasons.includes(msg));
+  assert.equal(evaluate(routed([], { draft: true })).ready, false);
+  const docs = evaluate(routed(['risk:docs'], { input: NO_GREPTILE, draft: true }));
+  assert.equal(docs.ready, false);
+  assert.ok(docs.reasons.includes(msg));
+  assert.equal(evaluate(routed([], { draft: false })).ready, true);
+});
+
+test('G-R4: Greptile summary names an older SHA than the final head: not READY', () => {
+  const r = evaluate(withComments([greptileComment(OLD, 5)]));
+  assert.equal(r.ready, false);
+  assert.equal(r.reviewedHead, false);
+  assert.ok(r.reasons.some((x) => /not the head/.test(x)), r.reasons.join('; '));
+});
+
+test('G-R5: confidence 3/5 is not READY, and one unresolved thread at 5/5 is not READY', () => {
+  const low = evaluate(input({ prBody: body(HEAD, 3) }));
+  assert.equal(low.ready, false);
+  assert.ok(low.reasons.some((x) => /confidence 3\/5 is below 4/.test(x)), low.reasons.join('; '));
+  const thread = evaluate(input({ threads: [{ isResolved: false }, { isResolved: true }] }));
+  assert.equal(thread.ready, false);
+  assert.equal(thread.unresolved, 1);
+});
+
+test('G-R8: a CodeRabbit rate-limit notice on a review:coderabbit PR is not READY and reports limited', () => {
+  const notice = { id: 20, updated_at: '2026-10-26T01:00:00Z', user: CR_BOT, body: `${SUMMARY_MARKER}\n> [!WARNING]\n> ## Rate limit exceeded\n> Please wait 12 minutes.` };
+  const r = evaluate(crInput(HEAD, [notice]));
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitLimited, true);
+  assert.ok(r.reasons.some((x) => /CodeRabbit rate limited/.test(x)), r.reasons.join('; '));
+});
+
+// A Greptile check that ends "failure" DID review: the score is under the repo bar (4/5).
+test('Greptile failure with a summary on the head: reviewed, low confidence blocks, not "did not finish"', () => {
+  const r = evaluate(input({ runs: [run('failure')], prBody: body(HEAD, 3) }));
+  assert.equal(r.ready, false);
+  assert.equal(r.reviewedHead, true);
+  assert.equal(r.lowConfidence, true);
+  assert.equal(r.unavailable, false);
+  assert.equal(r.rateLimited, false);
+  assert.ok(r.reasons.some((x) => /Greptile confidence 3\/5 is below 4/.test(x)), r.reasons.join('; '));
+  assert.ok(!r.reasons.some((x) => /did not finish/.test(x)), r.reasons.join('; '));
+});
+
+test('Greptile failure reads the comment summary too', () => {
+  const r = evaluate(withComments([greptileComment(HEAD, 2)], { runs: [run('failure')] }));
+  assert.equal(r.reviewedHead, true);
+  assert.equal(r.confidence, 2);
+  assert.equal(r.ready, false);
+});
+
+test('Greptile failure with no usable summary stays unavailable', () => {
+  const r = evaluate(input({ runs: [run('failure')], prBody: body(OLD, 3) }));
+  assert.equal(r.reviewedHead, false);
+  assert.equal(r.unavailable, true);
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => /did not finish a review of the head \(completed\/failure/.test(x)), r.reasons.join('; '));
+});
+
+test('Greptile failure never reads READY, even when the summary scores 5/5', () => {
+  const r = evaluate(input({ runs: [run('failure')], prBody: body(HEAD, 5) }));
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => /ended failure/.test(x)), r.reasons.join('; '));
+});
+
+test('Greptile neutral (cancelled by a newer push) gets its own reason, keeps unavailable for older mod copies', () => {
+  const r = evaluate(input({ runs: [run('neutral')] }));
+  assert.equal(r.ready, false);
+  assert.equal(r.greptile, 'cancelled');
+  assert.equal(r.unavailable, true);
+  assert.equal(r.rateLimited, true);
+  assert.ok(r.reasons.includes('Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head'), r.reasons.join('; '));
+  assert.ok(!r.reasons.some((x) => /did not finish/.test(x)), r.reasons.join('; '));
+});
+
+// ---------------------------------------------------------------------------------------------
+// routedReviewed: every bot in routing.required has reviewed the head. The mod keys on it.
+// ---------------------------------------------------------------------------------------------
+test('routedReviewed: a review:coderabbit PR counts CodeRabbit, not Greptile', () => {
+  const reviewed = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(reviewed.routedReviewed, true);
+  assert.equal(reviewed.reviewedHead, false, 'the Greptile field keeps its meaning');
+  const notYet = evaluate(routed(['review:coderabbit'], { eval: { reviews: [] } }));
+  assert.equal(notYet.routedReviewed, false, 'Greptile reviewed the head, CodeRabbit did not');
+  assert.equal(notYet.reviewedHead, true);
+});
+
+test('routedReviewed: review:deep-held counts CodeRabbit only', () => {
+  assert.equal(evaluate(routed(['review:deep-held'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } })).routedReviewed, true);
+  assert.equal(evaluate(routed(['review:deep-held'], { input: NO_GREPTILE })).routedReviewed, false);
+});
+
+test('routedReviewed: review:deep needs both bots', () => {
+  assert.equal(evaluate(routed(['review:deep'], { eval: { reviews: [CR_REVIEW] } })).routedReviewed, true);
+  assert.equal(evaluate(routed(['review:deep'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } })).routedReviewed, false, 'no Greptile review');
+  assert.equal(evaluate(routed(['review:deep'])).routedReviewed, false, 'no CodeRabbit review');
+});
+
+test('routedReviewed: risk:docs alone requires no bot, so it is true', () => {
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE }));
+  assert.equal(r.routedReviewed, true);
+  assert.equal(r.reviewedHead, false);
+});
+
+test('routedReviewed: a PR with no router label follows Greptile exactly', () => {
+  assert.equal(evaluate(routed([])).routedReviewed, true);
+  assert.equal(evaluate(routed([], { input: NO_GREPTILE })).routedReviewed, false);
+  assert.equal(evaluate(routed([], { input: { prBody: body(HEAD, 2) } })).routedReviewed, true, 'a low score is still a review');
 });

@@ -21,7 +21,9 @@ const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 
 const PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
 const GH_API_RE = /\bgh\s+api\b/i;
-const PULLS_PATH_RE = /\/pulls\b/i;
+// Only the collection endpoint `.../pulls` opens a PR. `/pulls/5/reviews` and thread replies do not:
+// the path must end at "pulls" (whitespace, a quote, `?` or end of string follows).
+const PULLS_PATH_RE = /\/pulls(?=[\s"'?]|$)/i;
 const POST_METHOD_RE = /(-X\s*POST|--method\s*POST)/i;
 
 const PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;

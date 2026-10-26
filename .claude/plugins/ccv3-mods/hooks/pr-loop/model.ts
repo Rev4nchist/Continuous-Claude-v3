@@ -17,6 +17,12 @@ export type PrStatus = {
   rateLimited: boolean
   /** A labelled PR whose CodeRabbit review is missing: rate limited, skipped or failed. Null when unlabelled. Absent from older scripts. */
   coderabbitLimited?: boolean | null
+  /** Every bot in `routing.required` reviewed the head. Absent from older scripts: `reviewedHead` decides then. */
+  routedReviewed?: boolean
+  /** CodeRabbit PR-bot review on the head. Null when the labels do not require CodeRabbit. */
+  coderabbitReviewedHead?: boolean | null
+  /** The bots the PR labels require. Absent from older scripts: Greptile is the reviewer then. */
+  routing?: { required: string[]; held: string | null; source: string }
   prState: string
   merged: boolean
 }
@@ -25,7 +31,7 @@ export type PrStatus = {
 export type Probe = { kind: 'ok'; status: PrStatus } | { kind: 'error'; text: string; perPr: boolean }
 
 /** What the watcher tells Dave and the model about one PR. */
-export type Alert = { pr: number; state: PrState; headShort: string; merged: boolean; whenReady: boolean; reasons: string[] }
+export type Alert = { pr: number; state: PrState; headShort: string; merged: boolean; whenReady: boolean; reasons: string[]; bots?: string[]; reviewedBy?: string[] }
 
 export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
 
@@ -103,9 +109,30 @@ export const isClosed = (status: PrStatus): boolean => status.merged || status.p
 /** A check that ended badly: a status in failure or error, or a run that completed without success. A running check is not one. */
 const FAILED_CHECK = /^status ".*" is (failure|error)$|^check ".*" is completed\//
 
-/** The head was reviewed and something needs a fix: open threads, a low confidence score or a failed check. */
+/** The required bots reviewed the head. An older status has no `routedReviewed`: Greptile's `reviewedHead` is the answer. */
+const reviewedByRequired = (status: PrStatus): boolean => status.routedReviewed ?? status.reviewedHead
+
+/**
+ * At least one required bot reviewed the head, so its findings can be acted on now: on a
+ * review:deep PR, Greptile findings must not wait for CodeRabbit. READY still needs all of them.
+ */
+const someRequiredReviewed = (status: PrStatus): boolean => {
+  const required = status.routing?.required
+  if (!required) return status.reviewedHead
+  if (required.length === 0) return true
+  return (required.includes('greptile') && status.reviewedHead) ||
+    (required.includes('coderabbit') && status.coderabbitReviewedHead === true) ||
+    reviewedByRequired(status)
+}
+
+/** The required bots that reviewed the head, for the REVIEWED text. */
+const reviewedBots = (status: PrStatus): string[] =>
+  (status.routing?.required ?? []).filter(bot =>
+    bot === 'greptile' ? status.reviewedHead : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false)
+
+/** A required bot reviewed the head and something needs a fix: open threads, a low confidence score or a failed check. */
 const needsAction = (status: PrStatus): boolean =>
-  status.reviewedHead &&
+  someRequiredReviewed(status) &&
   (status.unresolved > 0 || status.lowConfidence === true || status.reasons.some(reason => FAILED_CHECK.test(reason)))
 
 /** The reviewer app (Greptile, or CodeRabbit on a labelled PR) will not review this head without a nudge. */
@@ -139,7 +166,10 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
   const base = forHead(watch, status.head, now)
   const found = stateOf(status)
   const state = found === 'PENDING' && now - (base.since ?? now) >= STALL_MS ? 'STALLED' : found
-  const alert: Alert = { pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons }
+  const alert: Alert = {
+    pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons,
+    ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
+  }
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
   if (state === 'LIMITED' && watch.state !== 'LIMITED') return { watch: next, alert }
@@ -154,6 +184,16 @@ export const noteFailure = (watch: PrWatch): PrWatch | null => {
   return fails >= MAX_FAILS ? null : { ...watch, fails }
 }
 
+/** The bots the labels required, as words. No routing (older script): Greptile. A docs-only PR: null. */
+const BOT_NAMES: Record<string, string> = { greptile: 'Greptile', coderabbit: 'CodeRabbit' }
+const botWords = (bots: string[] | undefined): string | null =>
+  bots === undefined ? 'Greptile' : bots.length === 0 ? null : bots.map(bot => BOT_NAMES[bot] ?? bot).join(' and ')
+
+const stalledWords = (alert: Alert): string => {
+  const bots = botWords(alert.bots)
+  return bots ? `no ${bots} review after 60 minutes` : 'not READY after 60 minutes'
+}
+
 const WORDS: Record<PrState, string> = {
   READY: 'READY',
   PENDING: 'pending',
@@ -163,30 +203,48 @@ const WORDS: Record<PrState, string> = {
   STALLED: 'no Greptile review after 60 minutes',
 }
 
-const word = (alert: Alert): string => (alert.state === 'CLOSED' && alert.merged ? 'merged' : WORDS[alert.state])
+const word = (alert: Alert): string =>
+  alert.state === 'CLOSED' && alert.merged ? 'merged' : alert.state === 'STALLED' ? stalledWords(alert) : WORDS[alert.state]
 
 export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(alert)}`
+
+/** The status script's reason for a Greptile run that a newer push cancelled (review-status.mjs CANCELLED_REASON). */
+const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
+
+/** What READY rests on. With Greptile in the list (or no list) the old words stay. */
+const readyWords = (bots: string[] | undefined): string => {
+  const named = botWords(bots)
+  const parts = [named ? `${named} reviewed it` : 'no bot review was required']
+  if (bots === undefined || bots.includes('greptile')) parts.push('confidence at least 4/5')
+  return [...parts, '0 threads unresolved', 'checks green'].join(', ')
+}
 
 /** The one line the model gets. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
+  if (alert.state === 'LIMITED' && alert.reasons.some(reason => CANCELLED_REVIEW.test(reason))) {
+    return `${lead} had its Greptile review cancelled: a newer push superseded it. Wait for the review of the new head; if none appears, act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
+  }
   if (alert.state === 'LIMITED') {
     return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'STALLED') {
-    return `${lead} has no Greptile review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
+    const bots = botWords(alert.bots)
+    if (!bots) return `${lead} is not READY after 60 minutes and needs no bot review: check CI, threads and mergeable state, then report to Dave. Do not merge it.`
+    return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'REVIEWED') {
-    return `${lead} was reviewed by Greptile but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave. Do not merge it. The watch continues.`
+    const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
+    return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave. Do not merge it. The watch continues.`
   }
-  return `${lead} is READY (Greptile reviewed it, confidence at least 4/5, 0 threads unresolved, checks green). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
+  return `${lead} is READY (${readyWords(alert.bots)}). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
 }
 
 export const statusText = (status: PrStatus): string => {
   const state = stateOf(status)
   const head = `PR #${status.pr} head ${status.headShort} (${status.branch}): ${state === 'CLOSED' ? (status.merged ? 'MERGED' : 'CLOSED') : state === 'READY' ? 'READY' : 'NOT READY'}`
   const rows = [
-    `  Greptile reviewed the head: ${status.reviewedHead ? 'yes' : 'NO'}`,
+    botWords(status.routing?.required) ? `  ${botWords(status.routing?.required)} reviewed the head: ${reviewedByRequired(status) ? 'yes' : 'NO'}` : '  Bot review: not required',
     `  Confidence: ${typeof status.confidence === 'number' ? `${status.confidence}/5` : 'unknown'}`,
     `  Threads unresolved: ${status.unresolved}`,
     `  Mergeable state: ${status.mergeable_state ?? 'unknown'}`,

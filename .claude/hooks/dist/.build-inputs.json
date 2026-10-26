@@ -60,7 +60,7 @@
     "plan-mode-approval-gate.ts": "59fa06b59f4b98d820d2cee35dd3fb7b1a50065b29ea45fd9fe9d32d9b150ba0",
     "post-edit-diagnostics.ts": "ec654265a2e970568e5c524911fde7ddaff67e4a5e335adfa429ccfca99ee054",
     "post-plan-roadmap.ts": "3a0f53b830dbd53e473687ba46f4950fc0c98765c50b48b2a5f1c71704abcc4c",
-    "pr-opened-review-loop.ts": "7930ed5282673cec7b1e4fd0601e84c58b91f0c075afc42d5f01b07932fa6c85",
+    "pr-opened-review-loop.ts": "1e3beabd73785ec51ed34990ad867661a5f82a76d5e6b749890e4f4f69ada8c1",
     "prd-roadmap-sync.ts": "b1a91a378e106f0000632965adb343b6049efb187f9bf568ccb58dc735789e44",
     "pre-compact-continuity.ts": "c9a07a9e8d3bb54aac7dd3ad3548e3a967104065963a2c06a264672a2a3fedb1",
     "pre-compact-extract.ts": "13ae3d39c2ed791a3357084f78f40ab06570ba05149ccb20d2cdb580b22431c6",

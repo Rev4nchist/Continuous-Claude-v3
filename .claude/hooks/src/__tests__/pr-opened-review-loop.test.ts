@@ -55,6 +55,24 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     ).toBe(true);
   });
 
+  // P3b: only the collection endpoint opens a PR. Reply and review POSTs share the /pulls prefix.
+  it('does not detect a thread-reply or review-comment POST under a pull', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments/9/replies -X POST -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments -X POST -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/reviews -X POST -f event=COMMENT')).toBe(false);
+  });
+
+  it('detects a POST to the quoted, query-suffixed or end-of-string pulls collection', () => {
+    expect(isPrOpenCommand('gh api "repos/o/r/pulls" --method POST -f title=x')).toBe(true);
+    expect(isPrOpenCommand("gh api 'repos/o/r/pulls' -X POST")).toBe(true);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls?draft=true -X POST')).toBe(true);
+    expect(isPrOpenCommand('gh api -X POST repos/o/r/pulls')).toBe(true);
+  });
+
+  it('does not detect a longer path that only starts with pulls', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pullsfoo -X POST')).toBe(false);
+  });
+
   it('does not detect a GET to a pulls endpoint', () => {
     expect(isPrOpenCommand('gh api repos/o/r/pulls')).toBe(false);
     expect(isPrOpenCommand('gh api repos/o/r/pulls/5')).toBe(false);

@@ -23,8 +23,14 @@
  *   - mergeable:  GitHub's mergeable_state
  * ready = reviewed && confidence >= 4 && unresolved == 0 && checks green && mergeable "clean".
  *
+ * READY v2 (P3b): the labels pick the bots that must have reviewed the head (see requiredBots):
+ * review:deep = both; review:deep-held and review:coderabbit = CodeRabbit only; risk:docs alone = none;
+ * no review:* and no risk:* label = Greptile only, as before. A draft PR is never READY.
+ * A Greptile check that ended "failure" DID review (score under the bar): its summary is read and a
+ * low score blocks. A check that ended "neutral" was cancelled by a newer push.
+ *
  * CodeRabbit PR-bot reviews (`coderabbitai[bot]` on the head, with review content) count toward READY
- * when the PR carries `review:coderabbit` or `review:deep`. "Review skipped", "Review failed" and
+ * when the labels require CodeRabbit (`review:coderabbit`, `review:deep` or `review:deep-held`). "Review skipped", "Review failed" and
  * rate-limit notices, and CLI/plugin output, never count. The summary comment is read only from the
  * newest comment with the "summarize by coderabbit.ai" marker, and counts only if no person edited it.
  * A notice counts only from that comment and only for the head: when it names a commit (link or SHA,
@@ -68,14 +74,39 @@ const isCodeRabbitStatus = (s) => /coderabbit/i.test(s?.context || '');
 
 /** The CodeRabbit GitHub App login. CLI output cannot forge this identity. */
 export const CODERABBIT_LOGIN = 'coderabbitai[bot]';
-export const CODERABBIT_REVIEW_LABELS = new Set(['review:coderabbit', 'review:deep']);
-
 export function pullLabelNames(pull) {
   return (pull?.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
 }
 
+/** Shown in `routing.held` while a PR carries review:deep-held. Not a blocking reason. */
+export const DEEP_HELD_NOTE = 'deep review held (Apex billing, D3)';
+
+/**
+ * READY v2: which bots must have reviewed the head, from the PR labels. First match wins:
+ *   review:deep          Greptile AND CodeRabbit (a person upgrading a held PR wins over review:deep-held)
+ *   review:deep-held     CodeRabbit only; `held` carries the note
+ *   review:coderabbit    CodeRabbit only
+ *   risk:docs, alone     no bot review (any other risk:* label next to it keeps Greptile)
+ *   anything else        Greptile only: the rule every PR had before the router labels existed
+ * `source` is 'default' only when the PR has no review:* and no risk:* label at all. A risk:* label
+ * with no review:* label (for example risk:normal) is not specified by the router; Greptile stays
+ * required there, so a half-labelled PR can never become READY with less review than before.
+ */
+export function requiredBots(labels) {
+  const names = labels || [];
+  const has = (n) => names.includes(n);
+  const risks = names.filter((n) => n.startsWith('risk:'));
+  const routed = names.some((n) => n.startsWith('review:') || n.startsWith('risk:'));
+  const pick = (greptile, coderabbit, held = null) => ({ greptile, coderabbit, held, source: 'labels' });
+  if (has('review:deep')) return pick(true, true);
+  if (has('review:deep-held')) return pick(false, true, DEEP_HELD_NOTE);
+  if (has('review:coderabbit')) return pick(false, true);
+  if (risks.length > 0 && risks.every((n) => n === 'risk:docs')) return pick(false, false);
+  return { ...pick(true, false), source: routed ? 'labels' : 'default' };
+}
+
 export function needsCodeRabbitReview(labels) {
-  return labels.some((n) => CODERABBIT_REVIEW_LABELS.has(n));
+  return requiredBots(labels).coderabbit;
 }
 
 const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
@@ -330,23 +361,53 @@ export function mergeGraphqlComments(restComments, nodes) {
   return { comments, commentEdits };
 }
 
+export const CANCELLED_REASON = 'Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head';
+
+/**
+ * The Greptile check run as a state: absent, pending, reviewed, cancelled or unavailable.
+ * "failure" counts as reviewed: Greptile ends its check failure when it DID review but scored below the
+ * repo bar (4/5). The summary then decides (see evaluate). "neutral" is a review a newer push superseded.
+ */
+function greptileState(run) {
+  if (!run) return 'absent';
+  if (run.status !== 'completed') return 'pending';
+  if (run.conclusion === 'success' || run.conclusion === 'failure') return 'reviewed';
+  if (run.conclusion === 'neutral') return 'cancelled';
+  return 'unavailable';
+}
+
+/** Why Greptile blocks. The caller adds these only when the labels require Greptile. */
+function greptileReasons({ greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence }) {
+  const out = [];
+  if (greptile === 'absent') out.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
+  if (greptile === 'pending') out.push(`Greptile review of the head is ${run.status}`);
+  if (greptile === 'cancelled') out.push(CANCELLED_REASON);
+  else if (unavailable) out.push(`Greptile did not finish a review of the head (${run.status}/${run.conclusion}${greptileSummary ? `: "${String(greptileSummary).split('\n')[0]}"` : ''}). ${UNAVAILABLE_TAIL}`);
+  if (summaryProblem) out.push(`${summaryProblem}. ${UNAVAILABLE_TAIL}`);
+  if (lowConfidence) out.push(`Greptile confidence ${confidence}/5 is below ${MIN_CONFIDENCE}`);
+  else if (reviewedHead && run.conclusion === 'failure') out.push(`Greptile check ended failure on the head although its summary scores ${confidence}/5. ${UNAVAILABLE_TAIL}`);
+  return out;
+}
+
 export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt }) {
   const head = pull.head.sha;
+  const labels = pullLabelNames(pull);
+  const need = requiredBots(labels);
   const run = latestGreptileRun(checkRuns);
-  let greptile;
-  if (!run) greptile = 'absent';
-  else if (run.status !== 'completed') greptile = 'pending';
-  else if (run.conclusion === 'success') greptile = 'reviewed';
-  else greptile = 'unavailable';
+  const greptile = greptileState(run);
   const greptileSummary = run?.output?.summary ?? null;
 
   // reviewedHead needs the check run (check-only state stays in `greptile`) AND a usable summary.
-  // After a passed check, any summary problem is UNAVAILABLE with its own reason: one @greptileai
-  // comment makes Greptile rewrite its summary.
+  // After a passed (or failed-but-scored) check, any summary problem is UNAVAILABLE with its own
+  // reason: one @greptileai comment makes Greptile rewrite its summary.
+  // A cancelled run (neutral) keeps `unavailable` true for older mod copies that read `unavailable` and
+  // `rateLimited`; only its reason text says cancelled. When the labels do not require Greptile, the
+  // raw state stays in `greptile`, `confidence`, `reviewedHead` and `unavailable`, but `rateLimited`
+  // and `lowConfidence` (the two fields that make the mod alert) follow the requirement.
   const summary = greptile === 'reviewed' ? resolveSummary({ pull, comments, commentEdits, bodyEdits, head }) : null;
   const summaryProblem = summary ? summary.problem : null;
   const reviewedHead = greptile === 'reviewed' && summaryProblem === null;
-  const unavailable = greptile === 'unavailable' || summaryProblem !== null;
+  const unavailable = greptile === 'unavailable' || greptile === 'cancelled' || summaryProblem !== null;
   const lowConfidence = reviewedHead && summary.confidence < MIN_CONFIDENCE;
 
   const otherStatuses = (combined.statuses || []).filter((s) => !isCodeRabbitStatus(s));
@@ -358,21 +419,21 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const reasons = [];
   if (pull.merged) reasons.push('already merged');
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
-  if (greptile === 'absent') reasons.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
-  if (greptile === 'pending') reasons.push(`Greptile review of the head is ${run.status}`);
-  if (unavailable) reasons.push(`Greptile did not finish a review of the head (${run.status}/${run.conclusion}${greptileSummary ? `: "${String(greptileSummary).split('\n')[0]}"` : ''}). ${UNAVAILABLE_TAIL}`);
-  if (summaryProblem) reasons.push(`${summaryProblem}. ${UNAVAILABLE_TAIL}`);
-  if (lowConfidence) reasons.push(`Greptile confidence ${summary.confidence}/5 is below ${MIN_CONFIDENCE}`);
+  if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
+  if (need.greptile) {
+    reasons.push(...greptileReasons({
+      greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
+    }));
+  }
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
 
-  const labels = pullLabelNames(pull);
   let coderabbit = null;
   let coderabbitReviewedHead = null;
   let coderabbitLimited = null;
-  if (needsCodeRabbitReview(labels)) {
+  if (need.coderabbit) {
     const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt });
     coderabbit = cr.status;
     coderabbitReviewedHead = cr.reviewedHead;
@@ -389,7 +450,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
 
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref, reviewer: 'greptile',
-    greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
+    greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence: lowConfidence && need.greptile,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
@@ -397,7 +458,12 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // 'comment' or 'body': where the usable Greptile summary came from. null when none was used.
     summarySource: reviewedHead ? summary.source : null,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
-    rateLimited: unavailable,
+    rateLimited: unavailable && need.greptile,
+    // Every bot in `routing.required` reviewed the head (Greptile: reviewedHead; CodeRabbit: coderabbitReviewedHead).
+    // True when no bot is required. The pr-loop mod keys on this, not on the Greptile-only `reviewedHead`.
+    routedReviewed: (!need.greptile || reviewedHead) && (!need.coderabbit || coderabbitReviewedHead === true),
+    // Which bots the labels require. `held` is a note, never a reason. `source` is 'default' with no review:* or risk:* label.
+    routing: { required: [...(need.greptile ? ['greptile'] : []), ...(need.coderabbit ? ['coderabbit'] : [])], held: need.held, source: need.source },
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
     ready: reasons.length === 0, reasons,
   };

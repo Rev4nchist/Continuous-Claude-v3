@@ -7,7 +7,7 @@ import { tmpdir } from "os";
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
 var GH_API_RE = /\bgh\s+api\b/i;
-var PULLS_PATH_RE = /\/pulls\b/i;
+var PULLS_PATH_RE = /\/pulls(?=[\s"'?]|$)/i;
 var POST_METHOD_RE = /(-X\s*POST|--method\s*POST)/i;
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 function isPrOpenCommand(command) {
