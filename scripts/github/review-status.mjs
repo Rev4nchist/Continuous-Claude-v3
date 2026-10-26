@@ -129,12 +129,19 @@ export function routerState(comments) {
  * Labels may only RELAX review (drop Greptile) when the router classified the current head. A
  * stale label (a raise that failed after a push) or a label with no router state keeps Greptile.
  */
+// Same order as review-router.mjs RANK. A risk:* label above the router's saved class was added by a
+// person after the router ran; the router has not routed it yet.
+const RISK_RANK = { docs: 0, normal: 1, high: 2, steering: 3, infra: 4, r3: 5 };
+export const ROUTER_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the review router saved; Greptile stays required until the router routes it';
+
 export function verifiedBots(labels, comments, head) {
   const need = requiredBots(labels);
   if (need.greptile) return need;
   const state = routerState(comments);
-  if (state && state.head === head) return need;
-  return { ...need, greptile: true, unverified: ROUTER_UNVERIFIED_NOTE };
+  if (!state || state.head !== head) return { ...need, greptile: true, unverified: ROUTER_UNVERIFIED_NOTE };
+  const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => RISK_RANK[n.slice(5)] ?? -1));
+  if (top > (RISK_RANK[state.class] ?? -1)) return { ...need, greptile: true, unverified: ROUTER_BEHIND_LABEL_NOTE };
+  return need;
 }
 
 const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
@@ -472,10 +479,13 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   if (pull.merged) reasons.push('already merged');
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
   if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
-  reasons.push(...greptileReasons({
+  const greptileBlocks = greptileReasons({
     required: need.greptile, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
     failedOnHead: greptileFailedOnHead(checkRuns),
-  }));
+  });
+  reasons.push(...greptileBlocks);
+  // Say WHY Greptile is needed when the labels alone would not need it (the router check kept it).
+  if (need.unverified && greptileBlocks.length > 0) reasons.push(`Greptile is required because ${need.unverified}`);
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);

@@ -13,18 +13,28 @@ on:
     # edited counts only when the base branch changed (a stacked PR retargeted to main): see the job condition.
     types: [opened, reopened, ready_for_review, synchronize, edited]
     branches: [main]
+  # Manual re-run for one PR (for example after a failed run). Runs as a push event would.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to route
+        required: true
+        type: number
 permissions:
   contents: read
   pull-requests: write
   issues: write
-# Two quick pushes would race on the labels and the one router comment. Run them one after another.
-concurrency:
-  group: review-router-${{ github.event.pull_request.number }}
-  cancel-in-progress: false
 
 jobs:
   route:
-    if: github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base != null)
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base != null))
+    # Job-level, so a skipped run (a bot editing the PR body fires `edited`) never joins the group and
+    # never cancels a queued push run. Two quick pushes still run one after another.
+    concurrency:
+      group: review-router-${{ github.event.pull_request.number || inputs.pr }}
+      cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -35,9 +45,16 @@ jobs:
         with:
           node-version: "22"
       - name: Route the PR (labels, one comment, one ledger line)
+        if: github.event_name != 'workflow_dispatch'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/github/review-router.mjs
+      - name: Route the PR (manual re-run)
+        if: github.event_name == 'workflow_dispatch'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr }}
+        run: node scripts/github/review-router.mjs "$PR" --event synchronize
       # The script appends one JSON line per run to $RUNNER_TEMP/review-ledger.jsonl (spec 7). Keep it with the run.
       - name: Upload the ledger line
         if: always()

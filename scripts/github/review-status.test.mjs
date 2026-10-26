@@ -840,6 +840,29 @@ test('router check: a person-authored or pasted router marker is ignored', () =>
   assert.equal(evaluate(routed(['risk:docs'], { input: NO_GREPTILE, router: false, eval: { comments: [bot] } })).ready, false, 'the marker must start the body');
 });
 
+test('router check: the lowest-id bot comment is the state; a later bot comment cannot override it', () => {
+  const first = routerComment(OLD, { id: 10 });
+  const later = routerComment(HEAD, { id: 20 });
+  const r = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [later, first] } }));
+  assert.equal(r.ready, false, 'the router\'s own (first) comment names an older head');
+  assert.match(r.routing.unverified, /has not classified this head/);
+});
+
+test('router check: a comment from a User account named github-actions[bot] is not the router', () => {
+  const fake = routerComment(HEAD, { id: 1, user: { login: 'github-actions[bot]', type: 'User' } });
+  const r = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [fake] } }));
+  assert.equal(r.ready, false);
+});
+
+test('router check: a person risk label above the saved class keeps Greptile until the router routes it', () => {
+  const r = evaluate(routed(['review:coderabbit', 'risk:r3'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, false, 'the saved class is infra; risk:r3 was added after the router ran');
+  assert.match(r.routing.unverified, /higher than the class the review router saved/);
+  assert.ok(r.reasons.some((x) => /^Greptile is required because a risk label is higher/.test(x)), r.reasons.join('; '));
+  const same = evaluate(routed(['review:coderabbit', 'risk:infra'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(same.ready, true, `a label at the saved class is fine: ${same.reasons.join('; ')}`);
+});
+
 test('router check: labels that already require Greptile are untouched by the router check', () => {
   const r = evaluate(routed(['review:deep'], { router: false, eval: { reviews: [CR_REVIEW] } }));
   assert.equal(r.ready, true, r.reasons.join('; '));

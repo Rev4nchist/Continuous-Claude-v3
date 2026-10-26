@@ -148,8 +148,10 @@ It also reads the pre-rename state file, so a session open across the rename doe
 
 ## Label routing at ready (live, P3c)
 
-The `review-router` workflow labels a PR when it opens, reopens or becomes ready. It runs
-`scripts/github/review-router.mjs` with `review-router.config.json`. It spends no LLM credits.
+The `review-router` workflow labels a PR when it opens, reopens, becomes ready, gets a push, or
+moves to a new base. It runs `scripts/github/review-router.mjs` with `review-router.config.json`
+from `main`. It spends no LLM credits. To route one PR again, run the workflow by hand with its
+number (Actions, `review-router`, Run workflow).
 
 - A draft PR gets no label and no bot review.
 - The router reads the changed paths and sets one class. The highest class of any path wins.
@@ -166,9 +168,14 @@ The `review-router` workflow labels a PR when it opens, reopens or becomes ready
   `builder:*` label and a CodeRabbit rate limit. A missing builder label never blocks.
 - That comment is the router's only memory. It holds the class and the full head SHA the router last saw.
   Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
+- READY trusts a label that drops Greptile only when that comment names the current head and no
+  `risk:*` label is above its class. Otherwise Greptile stays required, and READY says why.
+- Known limit: anyone who can push a branch can run a workflow as `github-actions[bot]`. That person
+  can already change labels, so the comment is not a defence against them.
 - Each decision is one JSON line in the job summary (tool `router`).
 - To test by hand, run `node scripts/github/review-router.mjs <PR> --dry-run`. Add `--assume-ready`
-  to see a draft PR as a ready one.
+  to see a draft PR as a ready one. Never run it without `--dry-run` on this machine: a live local
+  run posts a comment as you, which the router ignores.
 
 ## Target (approved, not built)
 
