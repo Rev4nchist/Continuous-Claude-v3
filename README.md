@@ -1,4 +1,114 @@
-# CCv3: a governed agent harness for Claude Code
+<h1 align="center">
+  <picture>
+    <source media="(prefers-color-scheme: dark)" srcset="docs/assets/readme/banner-dark.svg">
+    <img alt="CCv3: Claude proposes. The harness decides." src="docs/assets/readme/banner-light.svg" width="100%">
+  </picture>
+</h1>
+
+<p align="center">
+  <a href="#why-a-harness">Why</a> ·
+  <a href="#see-it-work">How it works</a> ·
+  <a href="#the-six-parts">The six parts</a> ·
+  <a href="#what-you-gain">What you gain</a> ·
+  <a href="#getting-started">Install</a> ·
+  <a href="#reference">Reference</a>
+</p>
+
+<p align="center">
+  <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
+  <img alt="73 hook programs" src="https://img.shields.io/badge/hooks-73-6b5bff">
+  <img alt="35 subagents" src="https://img.shields.io/badge/agents-35-12a594">
+  <img alt="80 skills" src="https://img.shields.io/badge/skills-80-2f6fed">
+</p>
+
+**An AI coding agent is fast, and it acts without asking.** CCv3 puts a checkpoint around every action Claude Code takes. The checkpoint stops dangerous commands. It loads only the rules a task needs. It records every decision.
+
+> [!NOTE]
+> CCv3 is a development harness built for one operator on Windows 11. The install path was verified on a second machine on 2026-10-24 (PR #147). It is not a multi-user product.
+
+## Why a harness
+
+An agent that works well in one session can still fail in the next three ways.
+
+- **It repeats mistakes.** A 30-day audit of this repository found 38 corrections in four classes that came back again and again: skipped verification (12), wrong format (6), wrong target (5) and misread request (3). About 85% of the audited turns were automated prompts. For interactive turns the rate is nearer 6 corrections per 100 ([audit](docs/self-improvement/audits/2026-08-19-failure-modes.md)).
+- **It over-reaches.** One wrong `git reset --hard` or recursive delete can erase hours of work in a single call.
+- **It claims success.** "Done" arrives with no test run and no output. Skipped verification was the top correction class: 12 of the 38.
+
+> [!TIP]
+> The fix is not a smarter prompt. It is a checkpoint that runs outside the model, so the model cannot talk its way past it.
+
+## The one idea
+
+**The model proposes. The harness decides.**
+
+Claude Code still does the work. CCv3 sits between Claude and your machine. Each tool call goes through a **hook**: a small program that runs before the call. The hook can allow the call, ask you, or deny it with a reason. After the call, hooks record what happened.
+
+## See it work
+
+<p align="center">
+  <img alt="The life of one tool call: Claude proposes, the hook layer checks, a verdict is allow, ask or deny, the tool runs, the outcome is recorded." src="docs/assets/readme/tool-call-flow.svg" width="100%">
+</p>
+
+1. **Claude proposes** an action, for example `git reset --hard origin/main`.
+2. **The hook layer** checks the command against the rules. A rule loads only when a call needs it.
+3. **A verdict comes back:** allow, ask or deny.
+4. **The tool runs** only if the verdict allows it. On a deny, Claude gets the reason and picks another way.
+5. **The outcome is recorded.** Hook logs show how often each guard fires.
+
+Here is the real output of the destructive-command guard for that command:
+
+<p align="center">
+  <img alt="Real output of the destructive-command guard. At the keyboard the guard asks. In a bypassPermissions run it denies with BLOCKED, fail-closed." src="docs/assets/readme/guard-demo.svg" width="100%">
+</p>
+
+*Unattended run (bypassPermissions): BLOCKED. When you are at the keyboard, the guard asks first.*
+
+<details>
+<summary>Reproduce this output</summary>
+
+Build the hooks first (`npm run build` in `.claude/hooks`). Then feed the guard a real tool-call payload:
+
+```bash
+echo '{"hook_event_name":"PreToolUse","tool_name":"Bash","tool_input":{"command":"git reset --hard origin/main"}}' | node .claude/hooks/dist/destructive-command-guard.mjs
+```
+
+You should see a JSON reply with `"permissionDecision":"ask"`. Add `"permission_mode":"bypassPermissions"` to the payload to see the unattended `deny`. Source: [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts).
+
+The guard counts bypass mode, subagent runs (`CLAUDE_AGENT_ID`) and CI as unattended. A plain headless `claude -p` run is not detected, so it gets `ask`. The guard also lets a call through if it hits a parse error. It is a backstop, not a sandbox.
+
+</details>
+
+## The six parts
+
+| Part | Its job | Example | What you gain |
+|---|---|---|---|
+| **Hooks** (73 programs) | Run code before and after every tool call | Ask before `git reset --hard` | Unsafe actions stop before they run |
+| **Rules** (20 on demand) | Tell the model how to behave, in small pieces | A commit-style rule loads only when you commit | A small always-loaded core |
+| **Memory** | Keep lessons and session state in PostgreSQL, outside the chat | A stored lesson survives a restart | Work does not vanish with the session |
+| **Agents** (35 subagents) | Hand work to specialists. Judgment runs on opus, execution on sonnet. | A scout reads many files so the main chat stays short | Parallel work without a crowded context |
+| **Guardrails** | Scan for secrets, check package installs, run CI | gitleaks runs before each commit and again in CI | Secrets and risky installs are caught early |
+| **Observability** | Log hook decisions and rule loads | A log shows a rule that fired when it should not | The harness can be measured and fixed |
+
+## What you gain
+
+| You get | Because | Evidence |
+|---|---|---|
+| **Safer sessions** | Guards run outside the model. In bypass mode, in a subagent or in CI, the destructive-command guard denies instead of asking | [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts), [hook-contract-guard.mjs](scripts/hooks/hook-contract-guard.mjs) |
+| **Lean context** | A small core loads every time. Tool rules load on demand. | [context-budget-guard.mjs](scripts/rules/context-budget-guard.mjs), chart below |
+| **"Done" means proven** | Each change needs an end-to-end check with saved output | [AGENTS.md](AGENTS.md) |
+| **Reviewed changes** | Greptile reviews every pull request. CodeRabbit joins when a label asks for it. | [review-status.mjs](scripts/github/review-status.mjs), [.greptile/config.json](.greptile/config.json), [.coderabbit.yaml](.coderabbit.yaml) |
+
+<p align="center">
+  <img alt="Bar chart of always-loaded instructions in characters: 153,689 before PR 57, 18,275 for the core after PR 57, 23,502 measured on 2026-10-26." src="docs/assets/readme/context-cut.svg" width="100%">
+</p>
+
+New to the terms here? [CONTEXT.md](CONTEXT.md) defines them. To set up a machine, start with [BOOTSTRAP.md](BOOTSTRAP.md).
+
+---
+
+## Reference
+
+The sections below are the full previous README, unchanged apart from the title. They hold the layer details, measured results, counts and install steps. A later change moves them into `docs/`.
 
 CCv3 is a harness that wraps every Claude Code session. It adds hooks, rules, memory, agents,
 guardrails and observability around the model. The model proposes each action. The harness
