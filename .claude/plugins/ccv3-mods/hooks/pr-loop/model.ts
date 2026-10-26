@@ -127,14 +127,16 @@ const someRequiredReviewed = (status: PrStatus): boolean => {
 
 /** Greptile reviewed the head and the result needs action: a score under the bar, or a check that ended failure. Whatever the labels. */
 const GREPTILE_FAILED = /^Greptile check ended failure/
+// A failure reason needs action even with no usable summary (reviewedHead false): Greptile ends its
+// check failure only when it reviewed and scored under the bar (review-status FAILED_UNREQUIRED_REASON).
 const greptileFindings = (status: PrStatus): boolean =>
-  status.reviewedHead && (status.lowConfidence === true || status.reasons.some(reason => GREPTILE_FAILED.test(reason)))
+  (status.reviewedHead && status.lowConfidence === true) || status.reasons.some(reason => GREPTILE_FAILED.test(reason))
 
 /** The bots that reviewed the head: the required ones, plus Greptile when its own result needs action. */
 const reviewedBots = (status: PrStatus): string[] => {
   const required = status.routing?.required ?? []
   const bots = greptileFindings(status) && !required.includes('greptile') ? ['greptile', ...required] : required
-  return bots.filter(bot => (bot === 'greptile' ? status.reviewedHead : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false))
+  return bots.filter(bot => (bot === 'greptile' ? status.reviewedHead || greptileFindings(status) : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false))
 }
 
 /**

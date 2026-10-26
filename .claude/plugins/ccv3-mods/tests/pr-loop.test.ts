@@ -408,6 +408,20 @@ describe('pr-loop watcher', () => {
     expect(seen.submits.length).toBe(2)
   })
 
+  test('W32 a failed Greptile check with an unusable summary on a CodeRabbit-only PR alerts REVIEWED, not PENDING', async ($, on) => {
+    const failedNoSummary = status(9, {
+      routing: CR_ONLY, reviewedHead: false, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 0,
+      reasons: ['Greptile check ended failure on the head (a review under 4/5); a failed review blocks even when the labels do not require Greptile'],
+    })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [failedNoSummary] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by .*Greptile.* but is not READY/)
+    expect(seen.submits[0]).toMatch(/ended failure/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
   test('W31 a shrink of the reviewing bots (a same-head re-run) is not news, and growing back to a known set is not either', async ($, on) => {
     const both = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 2, reasons: ['2 review thread(s) unresolved'] })
     const crOnly = status(9, { routing: DEEP, reviewedHead: false, coderabbitReviewedHead: true, routedReviewed: false, unresolved: 2, reasons: ['2 review thread(s) unresolved', 'Greptile review of the head is in_progress'] })
