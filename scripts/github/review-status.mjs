@@ -14,6 +14,9 @@
  *                 body. People with write access can edit the comment and the body, and REST still
  *                 names the app as the comment author. So each counts only when every edit after
  *                 Greptile's newest one came from an app (GitHub Bot); a comment nobody edited counts.
+ *                 The comment body and its edit history are read in ONE GraphQL query (REST only
+ *                 finds candidates), so an edit between two requests cannot pair a new body with a
+ *                 stale history. An edited Greptile comment counts only when EVERY editor is greptile-apps (Bot).
  *                 A usable summary names the head and has a score; anything else is UNAVAILABLE.
  *   - unresolved: review threads still open from any reviewer, from GraphQL isResolved
  *   - checks:     every other status and check run on the head SHA
@@ -223,7 +226,9 @@ export const shaIsHead = (sha, head) => Boolean(sha) && sha.length >= 7 && Strin
 function resolveSummary({ pull, comments, commentEdits, bodyEdits, head }) {
   const comment = latestGreptileComment(comments);
   const cs = comment ? parseCommentSummary(comment.body) : null;
-  const commentEditor = comment ? commentEditedAfterApp(commentEdits, comment.id, GREPTILE_EDITOR) : null;
+  const commentEditor = comment
+    ? commentEditedAfterApp(commentEdits, comment.id, GREPTILE_EDITOR) ?? greptileCommentForeignEditor(comment, commentEdits?.[comment.id])
+    : null;
   if (cs && !commentEditor && shaIsHead(cs.sha, head) && cs.confidence !== null) return { source: 'comment', confidence: cs.confidence, problem: null };
   const body = parseSummary(pull.body);
   if (body.present) {
@@ -281,6 +286,42 @@ export function commentEditedAfterApp(editsById, id, appLogin) {
   const at = edits.findIndex((e) => e?.editor?.login === appLogin);
   const later = (at < 0 ? edits : edits.slice(0, at)).find((e) => e?.editor?.__typename !== 'Bot');
   return later ? (later.editor?.login ?? 'a deleted account') : null;
+}
+
+/**
+ * Stricter rule for the Greptile comment. Once the comment was edited, every editor in the history
+ * must be the Greptile app (GraphQL login greptile-apps, type Bot). Returns the first other editor's
+ * login (or a description), else null. A comment with no edits has an empty history and passes.
+ */
+export function greptileCommentForeignEditor(comment, edits) {
+  const edited = Boolean(comment?.lastEditedAt) || (Array.isArray(edits) && edits.length > 0);
+  if (!edited || !Array.isArray(edits)) return null;
+  const other = edits.find((e) => !(e?.editor?.login === GREPTILE_EDITOR && e?.editor?.__typename === 'Bot'));
+  return other ? (other.editor?.login ?? 'a deleted account') : null;
+}
+
+/**
+ * Pair each REST comment with the GraphQL node of the same id. The body, the update stamp and the
+ * edit history all come from that one node, which GitHub returned in one response, so an edit
+ * between two requests cannot pair a new body with an old history. REST only finds the candidates.
+ * A comment with no node, or whose GraphQL author differs from its REST author, keeps its REST
+ * fields but gets no edit history, so it is untrusted.
+ */
+export function mergeGraphqlComments(restComments, nodes) {
+  const byId = new Map((nodes || []).map((n) => [n?.databaseId, n]));
+  const comments = [];
+  const commentEdits = {};
+  for (const c of restComments || []) {
+    const n = byId.get(c?.id);
+    const restLogin = String(c?.user?.login ?? '').replace(/\[bot\]$/, '');
+    if (!n || typeof n.body !== 'string' || n.author?.login !== restLogin || n.author?.__typename !== c?.user?.type) {
+      comments.push(c);
+      continue;
+    }
+    comments.push({ ...c, body: n.body, updated_at: n.updatedAt ?? c.updated_at, lastEditedAt: n.lastEditedAt ?? null });
+    commentEdits[c.id] = n.userContentEdits?.nodes ?? [];
+  }
+  return { comments, commentEdits };
 }
 
 export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt }) {
@@ -369,9 +410,10 @@ function main() {
     const checkRuns = runsDoc.check_runs;
     if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
     // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
-    // Comment edits: the first 100 comments, 20 edits each; more than 100 is "cannot determine", like threads.
+    // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
+    // history cannot come from different moments. More than 100 is "cannot determine", like threads.
     // commits(last:1) is the head commit, for the CodeRabbit notice date.
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId userContentEdits(first:20){nodes{editor{__typename login}}}}} commits(last:1){nodes{commit{oid committedDate}}}}}}';
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
     const prq = g.data.repository.pullRequest;
     const rt = prq.reviewThreads;
@@ -380,11 +422,12 @@ function main() {
     const labels = pullLabelNames(pull);
     let reviews = [];
     // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
-    const comments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+    const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+    // REST finds the candidates; only the GraphQL body is parsed.
+    const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
     if (needsCodeRabbitReview(labels)) {
       reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
     }
-    const commentEdits = Object.fromEntries(prq.comments.nodes.map((n) => [n.databaseId, n.userContentEdits?.nodes ?? []]));
     const headCommit = prq.commits.nodes[0]?.commit;
     const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
     result = evaluate({

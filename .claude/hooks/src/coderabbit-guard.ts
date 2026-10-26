@@ -522,8 +522,8 @@ function leadingProgram(segment: string): string {
 export interface RawScan {
   /** A cr or coderabbit word and a billing flag in one non-git, non-gh segment. */
   billing: boolean;
-  /** The segments with a cr or coderabbit word followed later by the word review. */
-  reviewSegments: string[];
+  /** The segments with a cr or coderabbit word followed later by the word review. `index` is the position in segmentize(). */
+  reviewSegments: Array<{ index: number; raw: string }>;
 }
 
 /**
@@ -536,8 +536,11 @@ export function rawScan(text: string, ps = false): RawScan {
   const found: RawScan = { billing: false, reviewSegments: [] };
   // A `$( )` inside double quotes does not split, so a commit message built with a heredoc stays one git segment.
   const trace: MaskTrace = { dqSubs: new Set(), bodies: new Set() };
+  let index = -1;
   for (const [a, b] of segmentRanges(text, ps, trace)) {
     const seg = text.slice(a, b).trim();
+    if (!seg) continue; // segmentize() drops empty segments, so the index skips them too
+    index++;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     // A heredoc body is data unless a shell, eval or wrapper receives it. `cat <<EOF` prose is not a call.
@@ -546,7 +549,7 @@ export function rawScan(text: string, ps = false): RawScan {
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
-    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push(raw);
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ index, raw });
   }
   return found;
 }
@@ -555,13 +558,20 @@ const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
 export function classifyCommand(text: string, ps = false, depth = 0): SegmentClass {
-  const raw = depth === 0 ? rawScan(text, ps) : { billing: false, reviewSegments: [] as string[] };
+  // A wrapper string is scanned again, so a mix inside `bash -c "..."` counts per segment too.
+  const raw = rawScan(text, ps);
   if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  for (const seg of segmentize(text, ps)) {
+  // Count per segment: the parsed runs if the parser found a CodeRabbit call there, else the raw
+  // scan's one hidden run. A segment never counts twice, and a parsed run never hides a raw one.
+  const hiddenAt = new Set(raw.reviewSegments.map((r) => r.index));
+  for (const [index, seg] of segmentize(text, ps).entries()) {
     const inv = parseInvocation(seg);
-    if (!inv) continue;
+    if (!inv) {
+      if (hiddenAt.has(index)) runs++;
+      continue;
+    }
     let c: SegmentClass;
     if (inv.nested === undefined) c = classifyInvocation(inv);
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
@@ -569,12 +579,10 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
     else c = { verdict: 'ignore' };
     if (c.verdict === 'block') return c;
     if (c.verdict === 'allow') allowed = true;
-    runs += c.runs ?? 0;
+    // A segment that names cr and later review, where the parser found no CodeRabbit call (`--help` is a call it found): one run.
+    runs += c.verdict === 'ignore' && hiddenAt.has(index) ? 1 : c.runs ?? 0;
   }
   if (runs > 0) return { verdict: 'allow', countsRun: true, runs };
-  // A segment that names cr and later review, where the parser found no CodeRabbit call (`--help` is a call it found): count one run.
-  const hidden = raw.reviewSegments.filter((seg) => classifyCommand(seg, ps, depth + 1).verdict === 'ignore').length;
-  if (hidden > 0) return { verdict: 'allow', countsRun: true, runs: hidden };
   return { verdict: allowed ? 'allow' : 'ignore' };
 }
 

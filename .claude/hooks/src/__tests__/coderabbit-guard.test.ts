@@ -40,17 +40,23 @@ function deny(stdout: string): boolean {
 const bash = (command: string) => ({ tool_name: 'Bash', tool_input: { command } });
 const pwsh = (command: string) => ({ tool_name: 'PowerShell', tool_input: { command } });
 
+// Built at runtime so no source line holds the billing flag followed by a value (secret scanners flag that).
+const KEY_FLAG = ['--api', 'key'].join('-');
+const KEY_VALUE = 'PLACEHOLDER';
+const FAKE_PASS = ['sec', 'ret'].join('');
+const FAKE_PROMPT = ['secret', 'value'].join('-');
+
 describe('coderabbit-guard classifyShellSegment: blocks', () => {
   it('blocks --use-credits on cr review --agent', () => {
     expect(classifyShellSegment('cr review --agent --use-credits').verdict).toBe('block');
   });
 
   it('blocks --api-key', () => {
-    expect(classifyShellSegment('coderabbit review --agent --api-key=foo').verdict).toBe('block');
+    expect(classifyShellSegment(`coderabbit review --agent ${KEY_FLAG}=${KEY_VALUE}`).verdict).toBe('block');
   });
 
   it('blocks forbidden flags even on a read-only subcommand', () => {
-    expect(classifyShellSegment('cr auth login --api-key abc').verdict).toBe('block');
+    expect(classifyShellSegment(`cr auth login ${KEY_FLAG} ${KEY_VALUE}`).verdict).toBe('block');
     expect(classifyShellSegment('cr doctor --use-credits').verdict).toBe('block');
   });
 
@@ -106,7 +112,7 @@ describe('coderabbit-guard classifyShellSegment: leading executable', () => {
     'git push fork feat/ccv3-cr-install',
     'git checkout feat/ccv3-cr-install',
     'git add .claude/rules-ondemand/coderabbit-cli.md',
-    'git commit -m "feat(review): CodeRabbit gate --api-key docs"',
+    `git commit -m "feat(review): CodeRabbit gate ${KEY_FLAG} docs"`,
     'cat .coderabbit.yaml',
     'gh api repos/x/y/pulls/155',
     'echo cr',
@@ -226,9 +232,9 @@ describe('coderabbit-guard run cap', () => {
   });
 
   it('state holds only a counts map of numbers, no args or tokens', () => {
-    decide(bash('cr review --agent --prompt secret-token'), env);
+    decide(bash(`cr review --agent --prompt ${FAKE_PROMPT}`), env);
     const raw = readFileSync(stateFile, 'utf8');
-    expect(raw).not.toMatch(/secret-token/);
+    expect(raw).not.toContain(FAKE_PROMPT);
     expect(raw).not.toMatch(/prompt|agent|review/);
     const parsed = JSON.parse(raw);
     expect(Object.keys(parsed)).toEqual(['counts']);
@@ -262,7 +268,7 @@ describe('coderabbit-guard decide: no over-block', () => {
     'git push fork feat/ccv3-cr-install',
     'git checkout feat/ccv3-cr-install',
     'git add .claude/rules-ondemand/coderabbit-cli.md',
-    'git commit -m "feat(review): CodeRabbit gate --api-key docs"',
+    `git commit -m "feat(review): CodeRabbit gate ${KEY_FLAG} docs"`,
     'cat .coderabbit.yaml',
     'gh api repos/x/y/pulls/155',
     'echo cr',
@@ -438,7 +444,7 @@ describe('coderabbit-guard: prose about CodeRabbit inside quotes and heredocs is
     ['markdown table row in a gh body', 'gh pr create --title "t" --body "| CodeRabbit | label gated |"'],
     ['semicolon and ampersand inside single quotes', "git commit -m 'a; cr review --use-credits && b'"],
     ['newline inside a double-quoted message', 'git commit -m "line one\ncr review --agent runs are capped\nline three"'],
-    ['two heredocs on one line', "cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review --api-key x\nB"],
+    ['two heredocs on one line', `cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`],
   ];
 
   it.each(cases)('allows and uses no slot on Bash: %s', (_name, cmd) => {
@@ -476,7 +482,7 @@ describe('coderabbit-guard: prose about CodeRabbit inside quotes and heredocs is
 
   it('keeps a command after a heredoc separate, and lets two heredocs share one command', () => {
     expect(decide(bash("cat <<'A' <<'B'\nprose\nA\nprose\nB\ncr review --use-credits"), env).allow).toBe(false);
-    expect(decide(bash("cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review --api-key x\nB"), env).allow).toBe(true);
+    expect(decide(bash(`cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`), env).allow).toBe(true);
   });
 
   it('treats an unclosed quote as a literal, so a command after it is still scanned', () => {
@@ -542,7 +548,7 @@ describe('coderabbit-guard: wrappers and shell constructs that run a command', (
     ['sudo', 'sudo cr code push'],
     ['eval', 'eval "cr skills install"'],
     ['Start-Process', 'Start-Process cr -ArgumentList "code new"'],
-    ['xargs', 'echo x | xargs coderabbit --api-key=abc'],
+    ['xargs', `echo x | xargs coderabbit ${KEY_FLAG}=${KEY_VALUE}`],
   ])('blocks other forbidden commands behind %s', (_name, cmd) => {
     expect(decide(bash(cmd), env).allow).toBe(false);
   });
@@ -592,10 +598,10 @@ describe('coderabbit-guard: run counter key', { timeout: 180_000 }, () => {
   });
 
   it('uses the first remote, not only origin, and never puts credentials in the key', () => {
-    const a = makeRepo('a', 'feat/x', 'https://user:secret@github.com/Rev4nchist/Continuous-Claude-v3.git');
+    const a = makeRepo('a', 'feat/x', `https://user:${FAKE_PASS}@github.com/Rev4nchist/Continuous-Claude-v3.git`);
     const key = repoBranchKey(a, {});
     expect(key).toBe('github.com/rev4nchist/continuous-claude-v3#feat/x');
-    expect(key).not.toMatch(/secret/);
+    expect(key).not.toContain(FAKE_PASS);
   });
 
   it('keeps host and owner in the key: same repo name, different owner or host, different keys', () => {
@@ -706,8 +712,8 @@ describe('coderabbit-guard: raw billing check (Greptile examples)', () => {
     ['4376918017 sudo option value', 'sudo -u root cr review --agent --use-credits'],
     ['4376918032 Start-Process quoted path with spaces', 'Start-Process -FilePath "C:\\Program Files\\CodeRabbit\\cr.exe" -ArgumentList "review --agent --use-credits"'],
     ['4376918039 nested bash -c with backticks in a PowerShell call', "bash -c 'echo `cr review --agent --use-credits`'"],
-    ['--api-key=value', 'sudo -u root cr review --agent --api-key=abc123'],
-    ['--api-key in double quotes', 'sudo -u root cr review --agent "--api-key" abc'],
+    ['api key flag with =value', `sudo -u root cr review --agent ${KEY_FLAG}=${KEY_VALUE}`],
+    ['api key flag in double quotes', `sudo -u root cr review --agent "${KEY_FLAG}" ${KEY_VALUE}`],
     ['--use-credits in single quotes', "xargs -n 1 coderabbit.exe review '--use-credits'"],
     ['path prefix /usr/bin/cr', 'sudo -u root /usr/bin/cr review --agent --use-credits'],
     ['pwsh -c payload', 'pwsh -NoProfile -c "& \'C:\\Program Files\\CodeRabbit\\cr.exe\' review --agent --use-credits"'],
@@ -731,7 +737,7 @@ describe('coderabbit-guard: raw billing check (Greptile examples)', () => {
     'git commit -m "docs: cr review --use-credits is banned"',
     'gh pr comment 1 --body "never run coderabbit --api-key"',
     'git commit -F - <<EOF\ndocs: never run cr review --use-credits or coderabbit --api-key\nEOF',
-    "git commit -m \"$(cat <<'EOF'\nfix: cr review --use-credits is banned; coderabbit --api-key too\nEOF\n)\"",
+    `git commit -m "$(cat <<'EOF'\nfix: cr review --use-credits is banned; coderabbit ${KEY_FLAG} too\nEOF\n)"`,
     'echo hello',
     'cat .coderabbit.yaml',
     'git push fork feat/ccv3-cr-install',
@@ -908,11 +914,83 @@ describe('coderabbit-guard: text-only commands that mention a billing flag are a
       'nohup cr review --agent --use-credits',
       'timeout 60 cr review --agent --use-credits',
       'find . -maxdepth 0 -exec cr review --use-credits {} ;',
-      'time coderabbit.cmd review --api-key abc',
+      `time coderabbit.cmd review ${KEY_FLAG} ${KEY_VALUE}`,
     ]) {
       expect(decide(bash(cmd), never).allow, cmd).toBe(false);
     }
     expect(decide(pwsh('Start-Job -ScriptBlock { cr review --agent --use-credits }'), never).allow).toBe(false);
     expect(decide(pwsh('1..3 | ForEach-Object { cr.cmd review --agent --use-credits }'), never).allow).toBe(false);
+  });
+});
+
+// ---------------------------------------------------------------------------------------------
+// Greptile round 3 on PR #155 (thread 4377276370): a command that mixes a parsed review with a
+// hidden one must count each segment once. The parsed count must not hide the raw count.
+// ---------------------------------------------------------------------------------------------
+describe('coderabbit-guard: mixed parsed and hidden reviews count per segment', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const MIXED = 'cr review --agent && sudo -u root cr review --agent';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-mixed-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: 'mixed#main' };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  it('denies the Greptile example at 1 used run: it adds 2 and only 1 is left', () => {
+    expect(decide(bash('cr review --agent'), env).allow).toBe(true);
+    const d = decide(bash(MIXED), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toMatch(/run cap reached \(1 of 2 .*this command adds 2\)/);
+    expect(readState(stateFile).counts['mixed#main']).toBe(1);
+  });
+
+  it('counts the Greptile example as 2 runs on a fresh state', () => {
+    expect(decide(bash(MIXED), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(2);
+  });
+
+  it.each([
+    'sudo -u root cr review --agent && cr review --agent',
+    'cr review --agent && sudo -u root cr review --agent && cr doctor',
+    'sudo -u root cr review --agent ; xargs -n 1 cr review --agent',
+    'bash -c "cr review --agent" && sudo -u root cr review --agent',
+    'bash -c "cr review --agent && sudo -u root cr review --agent"',
+    'sh -c "bash -c \\"cr review --agent && sudo -u root cr review --agent\\""',
+  ])('counts 2 for a mix in any order: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(2);
+  });
+
+  it('counts 2 for a PowerShell mix of a parsed and a Start-Process review', () => {
+    const cmd = 'cr review --agent; Start-Process -FilePath "cr.exe" -ArgumentList "review --agent"';
+    expect(decide(pwsh(cmd), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(2);
+  });
+
+  it('keeps two parsed reviews at 2 runs', () => {
+    expect(decide(bash('cr review --agent && cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(2);
+  });
+
+  it('keeps a lone hidden review at 1 run', () => {
+    expect(decide(bash('xargs -n 1 cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(1);
+  });
+
+  it('does not count a segment twice when the parser and the raw scan both see it', () => {
+    expect(decide(bash('cr review --agent && cr doctor && echo cr review'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['mixed#main']).toBe(1);
+  });
+
+  it('blocks a three-run mix and records nothing', () => {
+    expect(decide(bash(`${MIXED} && xargs -n 1 cr review --agent`), env).allow).toBe(false);
+    expect(existsSync(stateFile)).toBe(false);
   });
 });

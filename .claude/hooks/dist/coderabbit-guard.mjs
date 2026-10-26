@@ -450,8 +450,11 @@ function leadingProgram(segment) {
 function rawScan(text, ps = false) {
   const found = { billing: false, reviewSegments: [] };
   const trace = { dqSubs: /* @__PURE__ */ new Set(), bodies: /* @__PURE__ */ new Set() };
+  let index = -1;
   for (const [a, b] of segmentRanges(text, ps, trace)) {
     const seg = text.slice(a, b).trim();
+    if (!seg) continue;
+    index++;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
@@ -459,19 +462,23 @@ function rawScan(text, ps = false) {
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
-    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push(raw);
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ index, raw });
   }
   return found;
 }
 var MAX_NESTING = 4;
 function classifyCommand(text, ps = false, depth = 0) {
-  const raw = depth === 0 ? rawScan(text, ps) : { billing: false, reviewSegments: [] };
+  const raw = rawScan(text, ps);
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  for (const seg of segmentize(text, ps)) {
+  const hiddenAt = new Set(raw.reviewSegments.map((r) => r.index));
+  for (const [index, seg] of segmentize(text, ps).entries()) {
     const inv = parseInvocation(seg);
-    if (!inv) continue;
+    if (!inv) {
+      if (hiddenAt.has(index)) runs++;
+      continue;
+    }
     let c;
     if (inv.nested === void 0) c = classifyInvocation(inv);
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
@@ -479,11 +486,9 @@ function classifyCommand(text, ps = false, depth = 0) {
     else c = { verdict: "ignore" };
     if (c.verdict === "block") return c;
     if (c.verdict === "allow") allowed = true;
-    runs += c.runs ?? 0;
+    runs += c.verdict === "ignore" && hiddenAt.has(index) ? 1 : c.runs ?? 0;
   }
   if (runs > 0) return { verdict: "allow", countsRun: true, runs };
-  const hidden = raw.reviewSegments.filter((seg) => classifyCommand(seg, ps, depth + 1).verdict === "ignore").length;
-  if (hidden > 0) return { verdict: "allow", countsRun: true, runs: hidden };
   return { verdict: allowed ? "allow" : "ignore" };
 }
 function classifyShellSegment(segment, ps = false) {

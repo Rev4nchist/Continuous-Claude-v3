@@ -8,6 +8,7 @@ import {
   codeRabbitHeadReview,
   needsCodeRabbitReview,
   summaryCoversHead,
+  mergeGraphqlComments,
 } from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -380,11 +381,14 @@ test('Greptile comment: no edit history for the comment is untrusted', () => {
   assert.equal(evaluate(none).ready, false);
 });
 
-test('Greptile comment: app edits only, or Greptile editing after a person, stay READY', () => {
+// Round 3 tightened this: once edited, EVERY editor must be the Greptile app. Before, another app's
+// edit, or Greptile editing after a person, stayed READY.
+test('Greptile comment: only Greptile edits stay READY; another app, or a person anywhere in the history, does not', () => {
   const c = greptileComment(HEAD, 5);
   const other = { editor: { __typename: 'Bot', login: 'coderabbitai' } };
-  assert.equal(evaluate(withComments([c], { commentEdits: { [c.id]: [other, BOT_EDIT] } })).ready, true);
-  assert.equal(evaluate(withComments([c], { commentEdits: { [c.id]: [BOT_EDIT, USER_EDIT] } })).ready, true, 'Greptile rewrote it after the person');
+  assert.equal(evaluate(withComments([c], { commentEdits: { [c.id]: [BOT_EDIT, BOT_EDIT] } })).ready, true);
+  assert.equal(evaluate(withComments([c], { commentEdits: { [c.id]: [other, BOT_EDIT] } })).ready, false);
+  assert.equal(evaluate(withComments([c], { commentEdits: { [c.id]: [BOT_EDIT, USER_EDIT] } })).ready, false, 'a person edited it earlier');
 });
 
 test('Greptile comment: an edited comment falls back to a body block that names the head', () => {
@@ -635,4 +639,105 @@ test('CodeRabbit: a notice that names no commit still falls back to the timestam
   assert.equal(after.coderabbitLimited, true, 'newer than the head commit: counts');
   const before = evaluate(crInput(HEAD, [{ ...noSha, updated_at: '2026-10-26T00:10:00Z' }]));
   assert.equal(before.coderabbitLimited, false, 'older than the head commit: stale');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Greptile round 3 (thread 4377276379): the REST body and the GraphQL edit history come from two
+// requests. An edit between them pairs a new body with a stale history. The body that is parsed
+// must be the body GraphQL returned in the same response as the edit history.
+// ---------------------------------------------------------------------------------------------
+const gqlNode = (c, { body = c.body, edits = [], lastEditedAt = null, author = { login: 'greptile-apps', __typename: 'Bot' } } = {}) => ({
+  databaseId: c.id,
+  body,
+  author,
+  lastEditedAt,
+  updatedAt: c.updated_at,
+  userContentEdits: { nodes: edits },
+});
+const fromGraphql = (rest, node) => ({ ...input({ prBody: 'A plain body.' }), ...mergeGraphqlComments([rest], [node]) });
+const EDITED_AT = '2026-10-26T01:10:00Z';
+
+test('Greptile GraphQL: the GraphQL body wins over a stale REST body that names the head', () => {
+  const rest = greptileComment(HEAD, 5);
+  const edited = greptileComment(OLD, 5).body;
+  const r = evaluate(fromGraphql(rest, gqlNode(rest, { body: edited, edits: [BOT_EDIT], lastEditedAt: EDITED_AT })));
+  assert.equal(r.ready, false, 'the newer GraphQL text names an older commit');
+  assert.ok(r.reasons.some((x) => /names commit bbbbbbb, not the head/.test(x)), r.reasons.join('; '));
+});
+
+test('Greptile GraphQL: the GraphQL body is used when it is the one that names the head', () => {
+  const rest = greptileComment(OLD, 3);
+  const r = evaluate(fromGraphql(rest, gqlNode(rest, { body: greptileComment(HEAD, 5).body, edits: [BOT_EDIT], lastEditedAt: EDITED_AT })));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.summarySource, 'comment');
+  assert.equal(r.confidence, 5);
+});
+
+test('Greptile GraphQL: a score raised in the GraphQL body is read from GraphQL, not REST', () => {
+  const rest = greptileComment(HEAD, 5);
+  const r = evaluate(fromGraphql(rest, gqlNode(rest, { body: greptileComment(HEAD, 2).body, edits: [BOT_EDIT], lastEditedAt: EDITED_AT })));
+  assert.equal(r.confidence, 2, 'the score comes from the GraphQL body');
+  assert.equal(r.lowConfidence, true);
+  assert.equal(r.ready, false);
+});
+
+test('Greptile GraphQL: a person in the edit history of an edited comment is not trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  for (const edits of [[USER_EDIT], [USER_EDIT, BOT_EDIT], [BOT_EDIT, USER_EDIT]]) {
+    const r = evaluate(fromGraphql(rest, gqlNode(rest, { edits, lastEditedAt: EDITED_AT })));
+    assert.equal(r.ready, false, JSON.stringify(edits));
+    assert.equal(r.unavailable, true);
+    assert.ok(r.reasons.some((x) => /edited by Rev4nchist/.test(x)), r.reasons.join('; '));
+  }
+});
+
+test('Greptile GraphQL: another app in the edit history of an edited comment is not trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const other = { editor: { __typename: 'Bot', login: 'coderabbitai' } };
+  assert.equal(evaluate(fromGraphql(rest, gqlNode(rest, { edits: [other, BOT_EDIT], lastEditedAt: EDITED_AT }))).ready, false);
+});
+
+test('Greptile GraphQL: a greptile-apps editor that is a User, not a Bot, is not trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const lookalike = { editor: { __typename: 'User', login: 'greptile-apps' } };
+  assert.equal(evaluate(fromGraphql(rest, gqlNode(rest, { edits: [lookalike], lastEditedAt: EDITED_AT }))).ready, false);
+});
+
+test('Greptile GraphQL: Greptile-only edits are trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const r = evaluate(fromGraphql(rest, gqlNode(rest, { edits: [BOT_EDIT, BOT_EDIT], lastEditedAt: EDITED_AT })));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.summarySource, 'comment');
+});
+
+test('Greptile GraphQL: a fresh comment with no edits is trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const r = evaluate(fromGraphql(rest, gqlNode(rest)));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.confidence, 5);
+});
+
+test('Greptile GraphQL: a comment missing from the GraphQL page is not trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const r = evaluate({ ...input({ prBody: 'A plain body.' }), ...mergeGraphqlComments([rest], []) });
+  assert.equal(r.ready, false);
+  assert.equal(r.unavailable, true);
+});
+
+test('Greptile GraphQL: a GraphQL author that is not the REST author is not trusted', () => {
+  const rest = greptileComment(HEAD, 5);
+  const r = evaluate(fromGraphql(rest, gqlNode(rest, { author: { login: 'Rev4nchist', __typename: 'User' } })));
+  assert.equal(r.ready, false);
+});
+
+test('mergeGraphqlComments keeps the REST fields and takes the body, stamp and edits from GraphQL', () => {
+  const rest = greptileComment(HEAD, 5);
+  const node = { ...gqlNode(rest, { body: 'new text', edits: [BOT_EDIT], lastEditedAt: EDITED_AT }), updatedAt: EDITED_AT };
+  const { comments, commentEdits } = mergeGraphqlComments([rest], [node]);
+  assert.equal(comments.length, 1);
+  assert.equal(comments[0].body, 'new text');
+  assert.equal(comments[0].updated_at, EDITED_AT);
+  assert.equal(comments[0].lastEditedAt, EDITED_AT);
+  assert.deepEqual(comments[0].user, rest.user);
+  assert.deepEqual(commentEdits[rest.id], [BOT_EDIT]);
 });
