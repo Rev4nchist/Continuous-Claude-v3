@@ -3,18 +3,23 @@
  *
  * Covers: gh pr create success fires; gh api POST pulls success fires; a GET
  * pulls call never fires; a failed create never fires; a second fire for the
- * same PR URL within a session is suppressed.
+ * same PR URL within a session is suppressed; pre-rename state files still
+ * suppress repeats and are migrated on the next write.
  */
 import { describe, it, expect, beforeEach, afterEach } from 'vitest';
 import { spawnSync } from 'child_process';
-import { existsSync, rmSync } from 'fs';
+import { existsSync, readFileSync, rmSync, writeFileSync } from 'fs';
 import { join, resolve } from 'path';
 import { tmpdir } from 'os';
 import {
+  alreadyFired,
   buildContext,
   extractPrInfo,
   isPrOpenCommand,
+  legacyStatePath,
+  markFired,
   responseText,
+  statePath,
 } from '../pr-opened-review-loop';
 
 const HOOK = resolve(__dirname, '../../dist/pr-opened-review-loop.mjs');
@@ -204,5 +209,78 @@ describe('pr-opened-review-loop (dist integration)', () => {
     const { stdout, status } = runHook('not json');
     expect(status).toBe(0);
     expect(stdout).toBe('{}');
+  });
+
+  it('honours pre-rename state: a URL in the legacy file does not fire again', () => {
+    const url = 'https://github.com/acme/widgets/pull/42';
+    writeFileSync(legacyStatePath(sid), JSON.stringify([url]), 'utf8');
+    const { stdout } = runHook({
+      session_id: sid,
+      tool_name: 'Bash',
+      tool_input: { command: 'gh pr create --title "feat" --body "body"' },
+      tool_response: { stdout: `${url}\n`, exit_code: 0 },
+    });
+    expect(stdout).toBe('{}');
+    rmSync(legacyStatePath(sid), { force: true });
+  });
+});
+
+// Rename migration (PR #154 review): sessions open across the rename keep
+// their dedup state in the pre-rename file name.
+describe('pr-opened-review-loop legacy state migration (unit)', () => {
+  const URL_A = 'https://github.com/acme/widgets/pull/1';
+  const URL_B = 'https://github.com/acme/widgets/pull/2';
+  let sid: string;
+
+  beforeEach(() => {
+    sid = sessionId();
+  });
+
+  afterEach(() => {
+    rmSync(statePath(sid), { force: true });
+    rmSync(legacyStatePath(sid), { force: true });
+  });
+
+  it('legacy file name is the pre-rename prefix', () => {
+    expect(legacyStatePath(sid)).toBe(join(tmpdir(), `pr-opened-coderabbit-loop-${sid}.json`));
+    expect(statePath(sid)).toBe(statePathFor(sid));
+  });
+
+  it('legacy only: a URL seen there counts as fired', () => {
+    writeFileSync(legacyStatePath(sid), JSON.stringify([URL_A]), 'utf8');
+    expect(alreadyFired(sid, URL_A)).toBe(true);
+    expect(alreadyFired(sid, URL_B)).toBe(false);
+  });
+
+  it('new only: a URL seen there counts as fired', () => {
+    writeFileSync(statePath(sid), JSON.stringify([URL_A]), 'utf8');
+    expect(alreadyFired(sid, URL_A)).toBe(true);
+  });
+
+  it('both files: a URL in either one counts as fired', () => {
+    writeFileSync(statePath(sid), JSON.stringify([URL_A]), 'utf8');
+    writeFileSync(legacyStatePath(sid), JSON.stringify([URL_B]), 'utf8');
+    expect(alreadyFired(sid, URL_A)).toBe(true);
+    expect(alreadyFired(sid, URL_B)).toBe(true);
+  });
+
+  it('neither file: nothing has fired', () => {
+    expect(alreadyFired(sid, URL_A)).toBe(false);
+  });
+
+  it('markFired merges legacy URLs into the new file and deletes the legacy file', () => {
+    writeFileSync(legacyStatePath(sid), JSON.stringify([URL_A]), 'utf8');
+    markFired(sid, URL_B);
+    const seen = JSON.parse(readFileSync(statePath(sid), 'utf8'));
+    expect(seen).toEqual(expect.arrayContaining([URL_A, URL_B]));
+    expect(existsSync(legacyStatePath(sid))).toBe(false);
+    expect(alreadyFired(sid, URL_A)).toBe(true);
+  });
+
+  it('a corrupt legacy file is ignored, not fatal', () => {
+    writeFileSync(legacyStatePath(sid), 'not json', 'utf8');
+    expect(alreadyFired(sid, URL_A)).toBe(false);
+    markFired(sid, URL_A);
+    expect(alreadyFired(sid, URL_A)).toBe(true);
   });
 });

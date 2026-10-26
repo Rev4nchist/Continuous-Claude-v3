@@ -77,8 +77,9 @@ Never merge the PR. That is a separate, confirmed decision.
 
 Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. Today READY
 means: Greptile reviewed the CURRENT head commit (check run `success` and a summary naming that head),
-confidence at least 4/5, 0 threads unresolved from any reviewer, every other check green,
-`mergeable_state` clean. A merge was once called safe 92 s before a reviewer found a real defect on
+confidence at least 4/5, 0 threads unresolved from any reviewer, every commit status other than
+CodeRabbit's is `success`, every check run other than Greptile's is completed with `success`,
+`neutral` or `skipped`, and `mergeable_state` is clean. A merge was once called safe 92 s before a reviewer found a real defect on
 the new head.
 
 That sentence is what `review-status.mjs` implements today. It does not close three gaps observed on
@@ -137,7 +138,8 @@ and `gh api .../pulls -X POST` call. When the response carries a PR URL, it inje
 that names the PR and points back at this rule. For a CCv3 PR it says to call `pr_watch` first; for
 any other repo it gives the `/loop` fallback. Starting the loop therefore does not depend on remembering
 to. It fires once per PR URL per session (a small state file under `os.tmpdir()` dedupes) and fails
-open on any error. (Renamed from `pr-opened-coderabbit-loop` in Phase 1 hygiene; behaviour unchanged.)
+open on any error. (Renamed from `pr-opened-coderabbit-loop` in Phase 1 hygiene; behaviour unchanged.
+It also reads the pre-rename state file, so a session open across the rename does not fire twice.)
 
 ## Target (approved, not built)
 
@@ -158,10 +160,11 @@ phase that builds it. Until then the live steps above apply.
 - **Target READY (not built).** Meant to close the three Phase 0 gaps above. Every item holds on the
   current head SHA, and that SHA is the merge SHA: CI green (tests, gitleaks, and Semgrep/Trivy
   at HIGH/CRIT 0 or dismissed with a reason); the cross-family xreview CA verdict is SHIP, pinned to that
-  SHA (a later commit voids it); a Greptile review object on that SHA (a check run ending `success` is
-  not enough); when `review:coderabbit` is set, a CodeRabbit review on that head (a comment that says
-  "Review failed - The pull request is closed." does not count); every bot the router chose has reviewed
-  that head (CodeRabbit for normal, Greptile with confidence ≥ 4/5 for high, both for `review:deep`),
-  with no unresolved P0/P1; zero unreplied or unresolved bot threads, or an explicit ack; mergeable.
+  SHA (a later commit voids it); every bot the router chose has reviewed that head, with no unresolved
+  P0/P1. The router's labels decide which bots: `review:coderabbit` needs a CodeRabbit review on that
+  head (a comment that says "Review failed - The pull request is closed." does not count);
+  `review:deep` needs that CodeRabbit review and a Greptile review object on that SHA with confidence
+  ≥ 4/5 (a check run ending `success` is not enough); no review label (docs) needs no bot review. Then:
+  zero unreplied or unresolved bot threads, or an explicit ack; mergeable.
   Then Dave gets a toast. Only Dave merges. `/review`, CodeRabbit CLI or plugin output and DevWork
   Gate 17 notes never grant READY.

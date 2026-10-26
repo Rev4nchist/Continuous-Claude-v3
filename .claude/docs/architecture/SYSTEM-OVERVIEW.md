@@ -119,8 +119,8 @@ History only: [Braintrust Subsystem](subsystems/braintrust.md).
 ┌────────┐┌────────┐ ┌─────────┐ ┌─────────┐┌────────┐┌────────┐
 │RESEARCH││ DESIGN │ │IMPLEMENT│ │  DEBUG  ││ REVIEW ││ DEPLOY │
 │ scout  ││architect│ │ kraken  │ │debug-   ││ critic ││deployer│
-│ oracle ││ phoenix │ │ spark   │ │ agent   ││principal│└────────┘
-└────────┘└────────┘ └─────────┘ │ sleuth  ││-reviewer│
+│ oracle ││ phoenix │ │ spark   │ │ agent   ││ plan-   │└────────┘
+└────────┘└────────┘ └─────────┘ │ sleuth  ││ reviewer│
                                  └─────────┘│ review- │
                           ┌────────┐        │ agent   │
                           │  TEST  │        └─────────┘
@@ -134,8 +134,9 @@ Agent Selection Rule:
   Implement → kraken (TDD) / spark (quick fix)
   Debug → debug-agent / sleuth
   Test  → arbiter / atlas (test execution)
-  Review → critic / principal-reviewer / review-agent (in-session, Claude family;
-           opt-in self-check via /review, never grants READY)
+  Review → critic / plan-reviewer / review-agent (principal-reviewer optional for
+           high-stakes; in-session, Claude family; opt-in self-check via /review,
+           never grants READY)
   Deploy → deployer (Vercel / Railway / Sentry / Linear)
 ```
 
