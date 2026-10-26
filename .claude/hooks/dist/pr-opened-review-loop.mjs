@@ -1,7 +1,7 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
-// src/pr-opened-coderabbit-loop.ts
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from "fs";
+// src/pr-opened-review-loop.ts
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from "fs";
 import { join } from "path";
 import { tmpdir } from "os";
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
@@ -42,35 +42,34 @@ function extractPrInfo(responseTxt) {
 function hasNumberField(responseTxt) {
   return /"number"\s*:\s*\d+/.test(responseTxt);
 }
+function safeSession(sessionId) {
+  return (sessionId || "no-session").replace(/[^a-zA-Z0-9_-]/g, "_");
+}
 function statePath(sessionId) {
-  const safeSession = (sessionId || "no-session").replace(/[^a-zA-Z0-9_-]/g, "_");
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession}.json`);
+  return join(tmpdir(), `pr-opened-review-loop-${safeSession(sessionId)}.json`);
+}
+function legacyStatePath(sessionId) {
+  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
+}
+function readSeen(p) {
+  try {
+    if (!existsSync(p)) return [];
+    const parsed = JSON.parse(readFileSync(p, "utf8"));
+    return Array.isArray(parsed) ? parsed.filter((v) => typeof v === "string") : [];
+  } catch {
+    return [];
+  }
 }
 function alreadyFired(sessionId, url) {
-  try {
-    const p = statePath(sessionId);
-    if (!existsSync(p)) return false;
-    const seen = JSON.parse(readFileSync(p, "utf8"));
-    return Array.isArray(seen) && seen.includes(url);
-  } catch {
-    return false;
-  }
+  return readSeen(statePath(sessionId)).includes(url) || readSeen(legacyStatePath(sessionId)).includes(url);
 }
 function markFired(sessionId, url) {
   try {
-    const p = statePath(sessionId);
-    let seen = [];
-    if (existsSync(p)) {
-      try {
-        const parsed = JSON.parse(readFileSync(p, "utf8"));
-        if (Array.isArray(parsed)) seen = parsed;
-      } catch {
-        seen = [];
-      }
-    }
-    if (!seen.includes(url)) seen.push(url);
+    const legacy = legacyStatePath(sessionId);
+    const seen = [.../* @__PURE__ */ new Set([...readSeen(statePath(sessionId)), ...readSeen(legacy), url])];
     mkdirSync(tmpdir(), { recursive: true });
-    writeFileSync(p, JSON.stringify(seen), "utf8");
+    writeFileSync(statePath(sessionId), JSON.stringify(seen), "utf8");
+    if (existsSync(legacy)) unlinkSync(legacy);
   } catch {
   }
 }
@@ -123,7 +122,7 @@ function main() {
     })
   );
 }
-if ((process.argv[1] || "").includes("pr-opened-coderabbit-loop")) {
+if ((process.argv[1] || "").includes("pr-opened-review-loop")) {
   try {
     main();
   } catch {
@@ -131,10 +130,14 @@ if ((process.argv[1] || "").includes("pr-opened-coderabbit-loop")) {
   }
 }
 export {
+  alreadyFired,
   buildContext,
   extractPrInfo,
   hasNumberField,
   isPrOpenCommand,
+  legacyStatePath,
   main,
-  responseText
+  markFired,
+  responseText,
+  statePath
 };

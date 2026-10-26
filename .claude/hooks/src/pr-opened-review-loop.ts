@@ -1,18 +1,19 @@
 /**
- * pr-opened-coderabbit-loop -- PostToolUse hook (matcher: Bash|PowerShell).
+ * pr-opened-review-loop -- PostToolUse hook (matcher: Bash|PowerShell).
  *
  * Detects a PR being opened (`gh pr create` or `gh api ... /pulls -X POST`)
  * and, when the tool response looks like a genuine success (a PR URL or a
  * "number" field), injects additionalContext telling the model to start the
- * PR review loop (see rules-ondemand/pr-review-loop.md) in the same turn. The file keeps
- * its old name so neither settings.json copy changes; the reviewer is now Greptile.
+ * PR review loop (see rules-ondemand/pr-review-loop.md) in the same turn.
+ * Renamed from pr-opened-coderabbit-loop (Phase 1 hygiene, 2026-10); behaviour unchanged.
  *
  * Fires at most once per PR URL per session: a small state file under
- * os.tmpdir(), keyed by session_id + url, suppresses repeats.
+ * os.tmpdir(), keyed by session_id + url, suppresses repeats. The pre-rename
+ * state file is read too and migrated on the next write.
  *
  * Fails open on any error: exit 0, emit "{}", never block the tool call.
  */
-import { existsSync, mkdirSync, readFileSync, writeFileSync } from 'fs';
+import { existsSync, mkdirSync, readFileSync, unlinkSync, writeFileSync } from 'fs';
 import { join } from 'path';
 import { tmpdir } from 'os';
 
@@ -75,37 +76,51 @@ export function hasNumberField(responseTxt: string): boolean {
   return /"number"\s*:\s*\d+/.test(responseTxt);
 }
 
-function statePath(sessionId: string): string {
-  const safeSession = (sessionId || 'no-session').replace(/[^a-zA-Z0-9_-]/g, '_');
-  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession}.json`);
+function safeSession(sessionId: string): string {
+  return (sessionId || 'no-session').replace(/[^a-zA-Z0-9_-]/g, '_');
 }
 
-function alreadyFired(sessionId: string, url: string): boolean {
+export function statePath(sessionId: string): string {
+  return join(tmpdir(), `pr-opened-review-loop-${safeSession(sessionId)}.json`);
+}
+
+/**
+ * State file written before the rename (pr-opened-coderabbit-loop). A session
+ * open across the rename keeps its dedup state here, so it is read too.
+ */
+export function legacyStatePath(sessionId: string): string {
+  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
+}
+
+/** URLs in one state file. A missing or corrupt file gives []. */
+function readSeen(p: string): string[] {
   try {
-    const p = statePath(sessionId);
-    if (!existsSync(p)) return false;
-    const seen: string[] = JSON.parse(readFileSync(p, 'utf8'));
-    return Array.isArray(seen) && seen.includes(url);
+    if (!existsSync(p)) return [];
+    const parsed = JSON.parse(readFileSync(p, 'utf8'));
+    return Array.isArray(parsed) ? parsed.filter((v): v is string => typeof v === 'string') : [];
   } catch {
-    return false;
+    return [];
   }
 }
 
-function markFired(sessionId: string, url: string): void {
+export function alreadyFired(sessionId: string, url: string): boolean {
+  return (
+    readSeen(statePath(sessionId)).includes(url) ||
+    readSeen(legacyStatePath(sessionId)).includes(url)
+  );
+}
+
+/**
+ * Write the URL to the new state file. Legacy URLs are merged in first, and
+ * the legacy file is deleted only after the new file is written.
+ */
+export function markFired(sessionId: string, url: string): void {
   try {
-    const p = statePath(sessionId);
-    let seen: string[] = [];
-    if (existsSync(p)) {
-      try {
-        const parsed = JSON.parse(readFileSync(p, 'utf8'));
-        if (Array.isArray(parsed)) seen = parsed;
-      } catch {
-        seen = [];
-      }
-    }
-    if (!seen.includes(url)) seen.push(url);
+    const legacy = legacyStatePath(sessionId);
+    const seen = [...new Set([...readSeen(statePath(sessionId)), ...readSeen(legacy), url])];
     mkdirSync(tmpdir(), { recursive: true });
-    writeFileSync(p, JSON.stringify(seen), 'utf8');
+    writeFileSync(statePath(sessionId), JSON.stringify(seen), 'utf8');
+    if (existsSync(legacy)) unlinkSync(legacy);
   } catch {
     // Best-effort dedupe only; never break the tool call over this.
   }
@@ -184,7 +199,7 @@ export function main(): void {
 }
 
 // Import guard: tests import the exported functions without running main().
-if ((process.argv[1] || '').includes('pr-opened-coderabbit-loop')) {
+if ((process.argv[1] || '').includes('pr-opened-review-loop')) {
   try {
     main();
   } catch {

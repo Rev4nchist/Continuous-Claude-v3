@@ -106,7 +106,7 @@ Pass when it prints `over120 0` and `no mcpServers`.
 
 **W5 PowerShell payloads into changed hooks** → `$D-pr1-win-hook-payloads.txt`
 
-Do this for each of `commit-preflight`, `test-run-tracker` (PostToolUseFailure), `pr-opened-coderabbit-loop` and `periodic-extract`:
+Do this for each of `commit-preflight`, `test-run-tracker` (PostToolUseFailure), `pr-opened-review-loop` and `periodic-extract`:
 1. Read its event and matcher from `~/.claude/settings.json`.
 2. Build a payload that uses that event and the `PowerShell` tool where the matcher allows it, with the harmless command `git status`.
 3. Run it from a temp working directory:

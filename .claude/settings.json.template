@@ -706,7 +706,7 @@
             "type": "command",
             "command": "node",
             "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/pr-opened-coderabbit-loop.mjs"
+              "{{CLAUDE_HOME}}/hooks/dist/pr-opened-review-loop.mjs"
             ],
             "timeout": 5
           }

@@ -67,6 +67,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | epistemic-reminder | Grep\|Read | Warn about unverified grep/read claims |
 | post-plan-roadmap | ExitPlanMode | Sync plan to ROADMAP.md after approval |
 | plan-exit-premortem-prompt | ExitPlanMode | Offer /premortem (Grok cross-model pass when the user picks Grok) after plan approval |
+| pr-opened-review-loop | Bash\|PowerShell | After a PR opens, point the model at pr-review-loop.md (pr_watch first on CCv3) |
 | roadmap-completion | TaskUpdate\|Bash | Track roadmap task completions |
 | git-commit-roadmap | Bash | Update ROADMAP.md after git commits |
 | test-run-tracker | Bash | Track test execution results |
