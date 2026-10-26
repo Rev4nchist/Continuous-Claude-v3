@@ -273,8 +273,11 @@ function segmentRanges(command, ps, trace) {
   ranges.push([last, command.length]);
   return ranges;
 }
+function segmentSpans(command, ps) {
+  return segmentRanges(command, ps).map(([start, end]) => ({ start, end, text: command.slice(start, end).trim() })).filter((s) => s.text);
+}
 function segmentize(command, ps = false) {
-  return segmentRanges(command, ps).map(([a, b]) => command.slice(a, b).trim()).filter(Boolean);
+  return segmentSpans(command, ps).map((s) => s.text);
 }
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
@@ -450,11 +453,9 @@ function leadingProgram(segment) {
 function rawScan(text, ps = false) {
   const found = { billing: false, reviewSegments: [] };
   const trace = { dqSubs: /* @__PURE__ */ new Set(), bodies: /* @__PURE__ */ new Set() };
-  let index = -1;
   for (const [a, b] of segmentRanges(text, ps, trace)) {
     const seg = text.slice(a, b).trim();
     if (!seg) continue;
-    index++;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
@@ -462,7 +463,7 @@ function rawScan(text, ps = false) {
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
-    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ index, raw });
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ start: a, end: b, raw });
   }
   return found;
 }
@@ -472,13 +473,11 @@ function classifyCommand(text, ps = false, depth = 0) {
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  const hiddenAt = new Set(raw.reviewSegments.map((r) => r.index));
-  for (const [index, seg] of segmentize(text, ps).entries()) {
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, found: false }));
+  for (const { start, end, text: seg } of segmentSpans(text, ps)) {
+    const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
-    if (!inv) {
-      if (hiddenAt.has(index)) runs++;
-      continue;
-    }
+    if (!inv) continue;
     let c;
     if (inv.nested === void 0) c = classifyInvocation(inv);
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
@@ -486,8 +485,13 @@ function classifyCommand(text, ps = false, depth = 0) {
     else c = { verdict: "ignore" };
     if (c.verdict === "block") return c;
     if (c.verdict === "allow") allowed = true;
-    runs += c.verdict === "ignore" && hiddenAt.has(index) ? 1 : c.runs ?? 0;
+    if (!owner) runs += c.runs ?? 0;
+    else {
+      owner.parsed += c.runs ?? 0;
+      owner.found ||= c.verdict !== "ignore";
+    }
   }
+  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.found ? 0 : 1;
   if (runs > 0) return { verdict: "allow", countsRun: true, runs };
   return { verdict: allowed ? "allow" : "ignore" };
 }

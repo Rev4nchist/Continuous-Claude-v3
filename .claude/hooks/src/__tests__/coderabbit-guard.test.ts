@@ -994,3 +994,71 @@ describe('coderabbit-guard: mixed parsed and hidden reviews count per segment', 
     expect(existsSync(stateFile)).toBe(false);
   });
 });
+
+// ---------------------------------------------------------------------------------------------
+// Greptile round 4 on PR #155 (thread 4377466158): the raw scan and the parser must attribute a
+// review to the same segment. A `$( )` inside double quotes is one raw segment but several parsed
+// segments, so an index-based match charged the fragment and then the real review again.
+// ---------------------------------------------------------------------------------------------
+describe('coderabbit-guard: a substitution before a review does not cost a second slot', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-subst-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: 'subst#main' };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const cases: Array<[string, 'bash' | 'pwsh', string]> = [
+    ['quoted $( )', 'bash', 'echo "$(date)" && cr review --agent'],
+    ['quoted backticks', 'bash', 'echo "`date`" && cr review --agent'],
+    ['unquoted $( )', 'bash', 'echo $(date) && cr review --agent'],
+    ['PowerShell quoted $( )', 'pwsh', 'Write-Output "$(Get-Date)"; cr review --agent'],
+    ['bash -c with $( )', 'bash', 'bash -c "echo $(date) && cr review --agent"'],
+  ];
+
+  it.each(cases)('counts 1 on a fresh state, then allows a second review: %s', (_name, tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(1);
+    expect(decide(make('cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(2);
+  });
+
+  it.each(cases)('allows the command at 1 used run and counts 2: %s', (_name, tool, command) => {
+    const make = tool === 'bash' ? bash : pwsh;
+    expect(decide(bash('cr review --agent'), env).allow).toBe(true);
+    const d = decide(make(command), env);
+    expect(d.allow, d.reason).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(2);
+  });
+
+  it('counts two real reviews inside one quoted string as 2', () => {
+    expect(decide(bash('echo "$(cr review --agent) $(cr review --agent)"'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(2);
+  });
+
+  it('keeps counting a hidden review that follows a substitution', () => {
+    expect(decide(bash('echo "$(date)" && sudo -u root cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(1);
+  });
+
+  it('keeps the regressions: mix counts 2, xargs counts 1, text-only counts 0', () => {
+    expect(decide(bash('cr review --agent && sudo -u root cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(2);
+    rmSync(stateFile);
+    expect(decide(bash('xargs -n 1 cr review --agent'), env).allow).toBe(true);
+    expect(readState(stateFile).counts['subst#main']).toBe(1);
+    rmSync(stateFile);
+    for (const t of ['grep -rn "cr review" docs', 'echo "cr review"', 'Set-Content n.md "cr review --agent"']) {
+      expect(decide(bash(t), env).allow).toBe(true);
+    }
+    expect(existsSync(stateFile)).toBe(false);
+  });
+});

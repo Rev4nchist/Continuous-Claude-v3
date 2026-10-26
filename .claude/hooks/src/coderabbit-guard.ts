@@ -298,11 +298,16 @@ function segmentRanges(command: string, ps: boolean, trace?: MaskTrace): Array<[
   return ranges;
 }
 
+/** The non-empty segments with their source offsets [start, end) and trimmed text. */
+function segmentSpans(command: string, ps: boolean): Array<{ start: number; end: number; text: string }> {
+  return segmentRanges(command, ps)
+    .map(([start, end]) => ({ start, end, text: command.slice(start, end).trim() }))
+    .filter((s) => s.text);
+}
+
 /** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. */
 export function segmentize(command: string, ps = false): string[] {
-  return segmentRanges(command, ps)
-    .map(([a, b]) => command.slice(a, b).trim())
-    .filter(Boolean);
+  return segmentSpans(command, ps).map((s) => s.text);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -522,8 +527,12 @@ function leadingProgram(segment: string): string {
 export interface RawScan {
   /** A cr or coderabbit word and a billing flag in one non-git, non-gh segment. */
   billing: boolean;
-  /** The segments with a cr or coderabbit word followed later by the word review. `index` is the position in segmentize(). */
-  reviewSegments: Array<{ index: number; raw: string }>;
+  /**
+   * The segments with a cr or coderabbit word followed later by the word review. `start` and `end`
+   * are the segment's offsets [start, end) in the scanned text. The raw scan keeps a `$( )` inside
+   * double quotes in one segment, so it holds the parser's finer segments (see `segmentRanges`).
+   */
+  reviewSegments: Array<{ start: number; end: number; raw: string }>;
 }
 
 /**
@@ -536,11 +545,9 @@ export function rawScan(text: string, ps = false): RawScan {
   const found: RawScan = { billing: false, reviewSegments: [] };
   // A `$( )` inside double quotes does not split, so a commit message built with a heredoc stays one git segment.
   const trace: MaskTrace = { dqSubs: new Set(), bodies: new Set() };
-  let index = -1;
   for (const [a, b] of segmentRanges(text, ps, trace)) {
     const seg = text.slice(a, b).trim();
-    if (!seg) continue; // segmentize() drops empty segments, so the index skips them too
-    index++;
+    if (!seg) continue;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     // A heredoc body is data unless a shell, eval or wrapper receives it. `cat <<EOF` prose is not a call.
@@ -549,7 +556,7 @@ export function rawScan(text: string, ps = false): RawScan {
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
     if (BILLING_WORD.test(raw)) found.billing = true;
-    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ index, raw });
+    if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ start: a, end: b, raw });
   }
   return found;
 }
@@ -563,15 +570,15 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
   if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  // Count per segment: the parsed runs if the parser found a CodeRabbit call there, else the raw
-  // scan's one hidden run. A segment never counts twice, and a parsed run never hides a raw one.
-  const hiddenAt = new Set(raw.reviewSegments.map((r) => r.index));
-  for (const [index, seg] of segmentize(text, ps).entries()) {
+  // The raw scan and the parser split the text differently: a quoted `$( )` stays whole in the raw
+  // scan and splits for the parser. Each parsed segment sits inside exactly one raw segment, found
+  // by source offsets. A raw segment that names a review counts the parsed runs inside it, or one
+  // hidden run if the parser found no CodeRabbit call there. It never counts twice.
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, found: false }));
+  for (const { start, end, text: seg } of segmentSpans(text, ps)) {
+    const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
-    if (!inv) {
-      if (hiddenAt.has(index)) runs++;
-      continue;
-    }
+    if (!inv) continue;
     let c: SegmentClass;
     if (inv.nested === undefined) c = classifyInvocation(inv);
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
@@ -579,9 +586,13 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
     else c = { verdict: 'ignore' };
     if (c.verdict === 'block') return c;
     if (c.verdict === 'allow') allowed = true;
-    // A segment that names cr and later review, where the parser found no CodeRabbit call (`--help` is a call it found): one run.
-    runs += c.verdict === 'ignore' && hiddenAt.has(index) ? 1 : c.runs ?? 0;
+    if (!owner) runs += c.runs ?? 0;
+    else {
+      owner.parsed += c.runs ?? 0;
+      owner.found ||= c.verdict !== 'ignore'; // `--help` is a call the parser found
+    }
   }
+  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.found ? 0 : 1;
   if (runs > 0) return { verdict: 'allow', countsRun: true, runs };
   return { verdict: allowed ? 'allow' : 'ignore' };
 }
