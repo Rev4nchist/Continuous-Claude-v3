@@ -1157,3 +1157,114 @@ describe('coderabbit-guard: a review --help call explains the review word only w
     expect(used()).toBe(1);
   });
 });
+
+describe('coderabbit-guard: comments and arguments after -- never mark a review as help or version (xreview G17-001)', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'comment#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-comment-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  it.each([
+    ['Bash', 'cr review --agent # --version', bash],
+    ['Bash', 'cr review --agent # --help', bash],
+    ['Bash', 'cr review --agent # -h', bash],
+    ['Bash', 'cr review --agent #--version', bash],
+    ['Bash', 'cr review --agent\n# --version', bash],
+    ['PowerShell', 'cr review --agent # --version', pwsh],
+    ['PowerShell', 'cr review --agent <# --version #>', pwsh],
+    ['PowerShell', 'cr review <# note #> --agent <# --help #>', pwsh],
+  ])('%s counts 1: %s', (_tool, command, make) => {
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it.each([
+    ['Bash', 'cr review --agent # --version', bash],
+    ['Bash', 'cr review --agent # --help', bash],
+    ['PowerShell', 'cr review --agent # --version', pwsh],
+    ['PowerShell', 'cr review --agent <# --version #>', pwsh],
+  ])('%s denies at the cap: %s', (_tool, command, make) => {
+    writeState(stateFile, { counts: { [KEY]: 2 } });
+    const r = decide(make(command), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/run cap reached/);
+    expect(used()).toBe(2);
+  });
+
+  it.each([
+    ['Bash', 'cr doctor # check before review', bash],
+    ['PowerShell', 'cr doctor # check before review', pwsh],
+    ['PowerShell', 'cr doctor <# check before review #>', pwsh],
+    ['Bash', 'cr usage # cr review is next', bash],
+  ])('%s counts 0: %s', (_tool, command, make) => {
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it('counts 1 when the flag comes after --', () => {
+    expect(decide(bash('cr review --agent -- --version'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('counts 1 when the flag is inside one quoted argument', () => {
+    expect(decide(bash('cr review --agent "# --version"'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it.each(['cr --version', 'cr review --help', 'cr -h', 'cr review --agent --help'])('counts 0 for real info flag: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it.each([
+    'echo "a # b" && cr review --agent',
+    'echo $# && cr review --agent',
+    'cr doctor a#b && cr review --agent',
+    "echo 'x # y' ; cr review --agent",
+    'echo "https://x.test/p#anchor" && cr review --agent',
+    'cat <<EOF\nline # one\nEOF\ncr review --agent',
+  ])('does not strip a # that is not a comment: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('keeps a quoted # in PowerShell', () => {
+    expect(decide(pwsh('Write-Output "a # b"; cr review --agent'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('a comment line ends at the newline: the next line still runs', () => {
+    expect(decide(bash('echo hi # note\ncr review --agent'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('a git commit that quotes cr review --use-credits stays allowed with 0 runs', () => {
+    expect(decide(bash('git commit -m "fix # cr review --use-credits"'), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it('a billing flag in a comment is data, a billing flag before it is still denied', () => {
+    expect(decide(bash('cr doctor # cr review --use-credits'), env).allow).toBe(true);
+    expect(decide(bash('cr review --agent --use-credits # ok'), env).allow).toBe(false);
+    expect(used()).toBe(0);
+  });
+
+  it('keeps Greptile regressions: comment with a substitution next to a hidden review counts 1', () => {
+    expect(decide(bash('sudo -u root cr review --agent # check with "$(cr --version)"'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+    expect(decide(bash('echo "$(date)" && cr review --agent'), env).allow).toBe(true);
+    expect(used()).toBe(2);
+  });
+});

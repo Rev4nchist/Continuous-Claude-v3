@@ -279,6 +279,28 @@ function segmentSpans(command, ps) {
 function segmentize(command, ps = false) {
   return segmentSpans(command, ps).map((s) => s.text);
 }
+function startsWord(command, i) {
+  return i === 0 || /[\s;|&]/.test(command[i - 1]);
+}
+function stripComments(command, ps = false) {
+  if (!command.includes("#")) return command;
+  const masked = maskQuoted(command, ps);
+  let out = "";
+  let i = 0;
+  while (i < command.length) {
+    if (ps && masked[i] === "<" && masked[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      i = close < 0 ? command.length : close + 2;
+      out += " ";
+    } else if (masked[i] === "#" && startsWord(command, i)) {
+      let eol = command.indexOf("\n", i);
+      if (eol < 0) eol = command.length;
+      else if (command[eol - 1] === "\r") eol--;
+      i = eol;
+    } else out += command[i++];
+  }
+  return out;
+}
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
 var SHELLS = /* @__PURE__ */ new Set(["pwsh", "powershell", "bash", "sh", "zsh"]);
@@ -313,7 +335,7 @@ function cleanToken(t) {
   return t.replace(/^["'`]+|["'`)]+$/g, "");
 }
 function tokenize(s) {
-  return s.split(/\s+/).map(cleanToken).filter(Boolean);
+  return (s.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map(cleanToken).filter(Boolean);
 }
 function stripLeadingQuote(s) {
   return s.replace(/^\s*["']/, "");
@@ -388,8 +410,12 @@ function isSkillInstall(inv) {
   }
   return isCrExecutable(inv.exe) && first === "skills";
 }
+function optionArgs(args) {
+  const end = args.indexOf("--");
+  return end < 0 ? args : args.slice(0, end);
+}
 function isInfoRequest(args) {
-  return args.some((a) => /^(?:--help|-h|--version)$/i.test(a));
+  return optionArgs(args).some((a) => /^(?:--help|-h|--version)$/i.test(a));
 }
 function isReadOnlySubcommand(args) {
   const pos = args.filter((a) => !a.startsWith("-")).map((a) => a.toLowerCase());
@@ -410,7 +436,7 @@ function classifyInvocation(inv) {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: "block", reason: "CodeRabbit guard: code new/push is forbidden" };
   }
-  if (isInfoRequest(inv.args)) return { verdict: "allow", reviewHelp: inv.args.includes("review") };
+  if (isInfoRequest(inv.args)) return { verdict: "allow", reviewHelp: optionArgs(inv.args).includes("review") };
   if (isReviewAgent(inv.args)) return { verdict: "allow", countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
@@ -468,7 +494,8 @@ function rawScan(text, ps = false) {
   return found;
 }
 var MAX_NESTING = 4;
-function classifyCommand(text, ps = false, depth = 0) {
+function classifyCommand(source, ps = false, depth = 0) {
+  const text = stripComments(source, ps);
   const raw = rawScan(text, ps);
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
@@ -669,5 +696,6 @@ export {
   repoBranchKey,
   segmentize,
   statePath,
+  stripComments,
   writeState
 };

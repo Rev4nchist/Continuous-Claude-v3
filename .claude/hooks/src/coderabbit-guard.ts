@@ -18,6 +18,12 @@
  * command that receives it, so `bash <<EOF` is read as a script. A wrapper that takes a command
  * string (bash -c, eval, iex) is unwrapped and its inner string is split and classified again.
  *
+ * Shell comments are removed before any scan (see stripComments): a `#` that starts a word outside
+ * quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
+ * nothing, so `cr review --agent # --version` is a review and `cr doctor # before review` is not.
+ * Help and version are info-only from the call's own options before a bare `--`, never from text
+ * after `--`, from a quoted argument, or from a comment.
+ *
  * A raw check runs first and does not depend on that parsing. It reads only a segment whose leading
  * program runs its text (a shell, eval, iex, Start-Process, Start-Job, xargs, sudo, env, nohup, time,
  * timeout, watch, find, ForEach-Object) or is cr or coderabbit. If that raw text (quotes, backticks,
@@ -310,6 +316,38 @@ export function segmentize(command: string, ps = false): string[] {
   return segmentSpans(command, ps).map((s) => s.text);
 }
 
+/** True when a `#` at `i` starts a word: the start of the text, after whitespace, or after `;`, `|` or `&`. */
+function startsWord(command: string, i: number): boolean {
+  return i === 0 || /[\s;|&]/.test(command[i - 1]);
+}
+
+/**
+ * Remove shell comments. A `#` that starts a word and is not inside quotes, a heredoc body or a
+ * here-string runs to the end of the line. In PowerShell `<# ... #>` is a block comment too. A `#`
+ * inside a word (`a#b`, `$#`, `url#anchor`) stays. Comment text is data: a `--version` or the word
+ * `review` there must change nothing. Removed text becomes a space, and the newline stays, so the
+ * next line still runs.
+ */
+export function stripComments(command: string, ps = false): string {
+  if (!command.includes('#')) return command;
+  const masked = maskQuoted(command, ps);
+  let out = '';
+  let i = 0;
+  while (i < command.length) {
+    if (ps && masked[i] === '<' && masked[i + 1] === '#') {
+      const close = command.indexOf('#>', i + 2);
+      i = close < 0 ? command.length : close + 2;
+      out += ' ';
+    } else if (masked[i] === '#' && startsWord(command, i)) {
+      let eol = command.indexOf('\n', i);
+      if (eol < 0) eol = command.length;
+      else if (command[eol - 1] === '\r') eol--;
+      i = eol;
+    } else out += command[i++];
+  }
+  return out;
+}
+
 // ---------------------------------------------------------------------------------------------
 // Finding the program a segment runs
 // ---------------------------------------------------------------------------------------------
@@ -353,8 +391,9 @@ function cleanToken(t: string): string {
   return t.replace(/^["'`]+|["'`)]+$/g, '');
 }
 
+/** Split on whitespace outside quotes: `"# --version"` is one argument, not a flag. */
 function tokenize(s: string): string[] {
-  return s.split(/\s+/).map(cleanToken).filter(Boolean);
+  return (s.match(/(?:"[^"]*"|'[^']*'|[^\s"'])+/g) ?? []).map(cleanToken).filter(Boolean);
 }
 
 function stripLeadingQuote(s: string): string {
@@ -447,8 +486,14 @@ export function isSkillInstall(inv: Invocation): boolean {
   return isCrExecutable(inv.exe) && first === 'skills';
 }
 
+/** The arguments before a bare `--`. Whatever follows it is data for the program, never an option. */
+function optionArgs(args: string[]): string[] {
+  const end = args.indexOf('--');
+  return end < 0 ? args : args.slice(0, end);
+}
+
 function isInfoRequest(args: string[]): boolean {
-  return args.some((a) => /^(?:--help|-h|--version)$/i.test(a));
+  return optionArgs(args).some((a) => /^(?:--help|-h|--version)$/i.test(a));
 }
 
 /** Read-only subcommands: doctor, usage, auth login, auth status. They never cost a run. */
@@ -489,7 +534,7 @@ function classifyInvocation(inv: Invocation): SegmentClass {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: 'block', reason: 'CodeRabbit guard: code new/push is forbidden' };
   }
-  if (isInfoRequest(inv.args)) return { verdict: 'allow', reviewHelp: inv.args.includes('review') };
+  if (isInfoRequest(inv.args)) return { verdict: 'allow', reviewHelp: optionArgs(inv.args).includes('review') };
   if (isReviewAgent(inv.args)) return { verdict: 'allow', countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: 'allow' };
   return { verdict: 'block', reason: NOT_ALLOWED };
@@ -566,7 +611,8 @@ export function rawScan(text: string, ps = false): RawScan {
 const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
-export function classifyCommand(text: string, ps = false, depth = 0): SegmentClass {
+export function classifyCommand(source: string, ps = false, depth = 0): SegmentClass {
+  const text = stripComments(source, ps);
   // A wrapper string is scanned again, so a mix inside `bash -c "..."` counts per segment too.
   const raw = rawScan(text, ps);
   if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };

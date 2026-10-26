@@ -153,7 +153,11 @@ const noticeIsAfterHead = (comment, headCommittedAt, head) => {
 export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [], commentEdits, headCommittedAt }) {
   const cr = (statuses || []).find((s) => /coderabbit/i.test(s?.context || ''));
   const summary = latestCodeRabbitSummary(comments);
-  const summaryTrusted = summary !== null && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null;
+  // Same rule as the Greptile comment: no edit history is untrusted, and once the comment has edits
+  // every editor must be the CodeRabbit app (a person or another app makes it untrusted).
+  const summaryTrusted = summary !== null
+    && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null
+    && appCommentForeignEditor(summary, commentEdits?.[summary.id], CODERABBIT_EDITOR) === null;
   const reviewedHead =
     reviews.some(
       (r) => isCodeRabbitUser(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''),
@@ -289,16 +293,18 @@ export function commentEditedAfterApp(editsById, id, appLogin) {
 }
 
 /**
- * Stricter rule for the Greptile comment. Once the comment was edited, every editor in the history
- * must be the Greptile app (GraphQL login greptile-apps, type Bot). Returns the first other editor's
- * login (or a description), else null. A comment with no edits has an empty history and passes.
+ * Stricter rule for an app's comment. Once the comment was edited, every editor in the history must
+ * be that app (GraphQL login `appLogin`, type Bot). Returns the first other editor's login (or a
+ * description), else null. A comment with no edits has an empty history and passes.
  */
-export function greptileCommentForeignEditor(comment, edits) {
+export function appCommentForeignEditor(comment, edits, appLogin) {
   const edited = Boolean(comment?.lastEditedAt) || (Array.isArray(edits) && edits.length > 0);
   if (!edited || !Array.isArray(edits)) return null;
-  const other = edits.find((e) => !(e?.editor?.login === GREPTILE_EDITOR && e?.editor?.__typename === 'Bot'));
+  const other = edits.find((e) => !(e?.editor?.login === appLogin && e?.editor?.__typename === 'Bot'));
   return other ? (other.editor?.login ?? 'a deleted account') : null;
 }
+
+export const greptileCommentForeignEditor = (comment, edits) => appCommentForeignEditor(comment, edits, GREPTILE_EDITOR);
 
 /**
  * Pair each REST comment with the GraphQL node of the same id. The body, the update stamp and the

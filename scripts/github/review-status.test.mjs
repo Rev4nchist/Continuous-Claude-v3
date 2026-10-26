@@ -587,10 +587,60 @@ test('CodeRabbit: a person editing the summary comment after CodeRabbit voids it
   const person = { editor: { __typename: 'User', login: 'Rev4nchist' } };
   const edited = evaluate(crInput(HEAD154, [CR_REVIEWED_154], [], { commentEdits: { 10: [person, cr] } }));
   assert.equal(edited.coderabbitReviewedHead, false);
-  const clean = evaluate(crInput(HEAD154, [CR_REVIEWED_154], [], { commentEdits: { 10: [cr, person] } }));
-  assert.equal(clean.coderabbitReviewedHead, true, 'CodeRabbit rewrote it after the person');
+  const earlier = evaluate(crInput(HEAD154, [CR_REVIEWED_154], [], { commentEdits: { 10: [cr, person] } }));
+  assert.equal(earlier.coderabbitReviewedHead, false, 'a person edited it earlier: the history is no longer app-only');
   const unknown = evaluate(crInput(HEAD154, [CR_REVIEWED_154], [], { commentEdits: {} }));
   assert.equal(unknown.coderabbitReviewedHead, false);
+});
+
+// XR-b7e03c4-2: once the summary comment has edits, every editor must be the CodeRabbit app
+// (GraphQL login coderabbitai, type Bot), the same rule as the Greptile comment.
+const CR_EDIT = { editor: { __typename: 'Bot', login: 'coderabbitai' } };
+const crEdits = (edits) => evaluate(crInput(HEAD154, [CR_REVIEWED_154], [], { commentEdits: { 10: edits } }));
+
+test('CodeRabbit comment editors: a human anywhere in the edit history of an edited summary is not counted', () => {
+  const person = { editor: { __typename: 'User', login: 'Rev4nchist' } };
+  for (const edits of [[person], [person, CR_EDIT], [CR_EDIT, person], [CR_EDIT, person, CR_EDIT]]) {
+    assert.equal(crEdits(edits).coderabbitReviewedHead, false, JSON.stringify(edits));
+  }
+});
+
+test('CodeRabbit comment editors: another app in the edit history is not counted', () => {
+  const other = { editor: { __typename: 'Bot', login: 'greptile-apps' } };
+  for (const edits of [[other], [other, CR_EDIT], [CR_EDIT, other]]) {
+    assert.equal(crEdits(edits).coderabbitReviewedHead, false, JSON.stringify(edits));
+  }
+});
+
+test('CodeRabbit comment editors: a coderabbitai editor that is a User, not a Bot, and a deleted editor are not counted', () => {
+  const lookalike = { editor: { __typename: 'User', login: 'coderabbitai' } };
+  const deleted = { editor: null };
+  assert.equal(crEdits([lookalike]).coderabbitReviewedHead, false);
+  assert.equal(crEdits([CR_EDIT, deleted]).coderabbitReviewedHead, false);
+});
+
+test('CodeRabbit comment editors: coderabbitai Bot-only edits are counted', () => {
+  assert.equal(crEdits([CR_EDIT, CR_EDIT]).coderabbitReviewedHead, true);
+  assert.equal(crEdits([CR_EDIT]).coderabbitReviewedHead, true);
+});
+
+test('CodeRabbit comment editors: a summary with no edits is counted', () => {
+  assert.equal(crEdits([]).coderabbitReviewedHead, true);
+});
+
+test('CodeRabbit comment editors: the rule also holds through mergeGraphqlComments (one GraphQL node)', () => {
+  const node = (edits) => ({
+    databaseId: 10, body: CR_REVIEWED_154.body, author: { login: 'coderabbitai', __typename: 'Bot' },
+    lastEditedAt: edits.length ? '2026-10-26T01:10:00Z' : null, updatedAt: CR_REVIEWED_154.updated_at,
+    userContentEdits: { nodes: edits },
+  });
+  const reviewed = (edits) => {
+    const { comments, commentEdits } = mergeGraphqlComments([CR_REVIEWED_154], [node(edits)]);
+    return evaluate({ ...crInput(HEAD154, comments), commentEdits }).coderabbitReviewedHead;
+  };
+  assert.equal(reviewed([]), true);
+  assert.equal(reviewed([CR_EDIT]), true);
+  assert.equal(reviewed([{ editor: { __typename: 'User', login: 'Rev4nchist' } }, CR_EDIT]), false);
 });
 
 test('CodeRabbit: a missing review tells the agent to post @coderabbitai review after a push; a rate limit does not', () => {
