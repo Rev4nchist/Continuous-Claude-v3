@@ -50,7 +50,8 @@ A raw check also blocks `--use-credits` or `--api-key` when a command that runs 
 `xargs`, `sudo`, `env`, `Start-Process`, `find -exec`) names `cr` or `coderabbit`, including `.cmd`,
 `.bat` and `.ps1` shims. `grep`, `rg`, `echo` and `Set-Content` only hold text and are not read.
 Known limit: the run key follows the last `cd` in a command, so the key only moves a count between
-branches; the cap never unlocks paid use.
+branches; the cap never unlocks paid use. Help and version are free only for a plain one-line call;
+any wrapped, commented, continued or embedded review call counts as a run.
 
 The guard stops accidents, not evasion. These are out of scope: a variable or `$( )` holding the flag,
 aliases or functions, git or gh aliases, a rebase exec step, a script file run later, quote-split

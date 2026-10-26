@@ -231,8 +231,8 @@ function lexShell(command, ps = false) {
       i = stop;
     } else if (c === esc) {
       fill(i + 1, i + 2);
+      escEnd = command[i + 1] === "\n" || command[i + 1] === "\r" ? -1 : i + 2;
       i += 2;
-      escEnd = i;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
       if (j > 0) {
@@ -425,7 +425,7 @@ function isReviewAgent(args) {
   return args.includes("review") && args.some((a) => a.toLowerCase() === "--agent");
 }
 var NOT_ALLOWED = "CodeRabbit guard: allowed are `cr review --agent` (<=2 runs per PR), cr doctor, cr usage, cr auth login|status, --help, --version";
-function classifyInvocation(inv) {
+function classifyInvocation(inv, plain) {
   if (isSkillInstall(inv)) {
     return { verdict: "block", reason: "CodeRabbit guard: CodeRabbit skill installs are forbidden" };
   }
@@ -435,7 +435,11 @@ function classifyInvocation(inv) {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: "block", reason: "CodeRabbit guard: code new/push is forbidden" };
   }
-  if (isInfoRequest(inv.args)) return { verdict: "allow", reviewHelp: optionArgs(inv.args).includes("review") };
+  if (isInfoRequest(inv.args)) {
+    const names = optionArgs(inv.args).some((a) => a.toLowerCase() === "review");
+    if (names && !plain) return { verdict: "allow", countsRun: true, runs: 1 };
+    return { verdict: "allow", reviewHelp: names };
+  }
   if (isReviewAgent(inv.args)) return { verdict: "allow", countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
@@ -492,6 +496,15 @@ function rawScan(lexed, ps = false) {
   }
   return found;
 }
+function leadsWithCr(segment) {
+  return isCrExecutable(baseName(splitFirst(segment.trim()).tok)) && !segment.includes("\n");
+}
+function isPlainCommand(source, lexed, ps) {
+  if (lexed.text !== source) return false;
+  if (lexed.bodies.size > 0) return false;
+  if (ps ? /`\r?\n|@["']/.test(source) : /\\\r?\n|<</.test(source)) return false;
+  return !/[(){}`]/.test(lexed.masked);
+}
 var MAX_NESTING = 4;
 function classifyCommand(source, ps = false, depth = 0) {
   const lexed = lexShell(source, ps);
@@ -500,13 +513,14 @@ function classifyCommand(source, ps = false, depth = 0) {
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
+  const plainCall = depth === 0 && isPlainCommand(source, lexed, ps);
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
     if (!inv) continue;
     let c;
-    if (inv.nested === void 0) c = classifyInvocation(inv);
+    if (inv.nested === void 0) c = classifyInvocation(inv, plainCall && leadsWithCr(seg));
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
     else if (/\b(?:cr|coderabbit)\b/i.test(inv.nested)) c = { verdict: "block", reason: "CodeRabbit guard: wrapper nesting is too deep to check" };
     else c = { verdict: "ignore" };

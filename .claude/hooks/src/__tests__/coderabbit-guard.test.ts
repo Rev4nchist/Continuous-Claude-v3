@@ -12,6 +12,7 @@ import {
   writeState,
   checkRunCap,
   repoBranchKey,
+  lexShell,
 } from '../coderabbit-guard.js';
 
 const HOOK = resolve(__dirname, '../../dist/coderabbit-guard.mjs');
@@ -1145,11 +1146,18 @@ describe('coderabbit-guard: a review --help call explains the review word only w
   it.each([
     'cr review --help',
     'cr review --agent --help',
-    'bash -c "cr review --help"',
-    'sudo cr review --help',
-  ])('counts 0: %s', (command) => {
+  ])('counts 0 for a plain call: %s', (command) => {
     expect(decide(bash(command), env).allow).toBe(true);
     expect(used()).toBe(0);
+  });
+
+  // Flipped in round 8: a wrapped help call is not plain, so it counts as a review.
+  it.each([
+    'bash -c "cr review --help"',
+    'sudo cr review --help',
+  ])('counts 1 for a wrapped call: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
   });
 
   it('counts 1 when a review --help call in a comment sits next to a hidden review', () => {
@@ -1334,4 +1342,107 @@ describe('coderabbit-guard: one lexer pass tracks quotes and comments together (
     expect(decide(bash("cat <<EOF\n# '\nEOF\ncr review --agent --use-credits"), env).allow).toBe(false);
   });
 
+});
+
+describe('coderabbit-guard: help and version are free only for a plain one-line call (Greptile r8)', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'plain#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-plain-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  const G1 = 'cr review --agent \\\n# --version';
+  const G2 = 'cat <<EOF\n$(cr review --agent # --version\n)\nEOF';
+  const G3 = '@"\n$(cr review --agent # --version)\n"@';
+
+  const SMUGGLED: Array<[string, string, (c: string) => Record<string, unknown>]> = [
+    ['Bash line continuation then comment (thread 4379197493)', G1, bash],
+    ['Bash substitution with a comment in a heredoc (thread 4379197510)', G2, bash],
+    ['PowerShell expandable here-string with a comment', G3, pwsh],
+    ['PowerShell single-quote here-string earlier in the command', "@'\nnote\n'@; cr review --agent # --version", pwsh],
+    ['Bash continuation then --version', 'cr review --agent \\\n--version', bash],
+    ['PowerShell backtick continuation then --version', 'cr review --agent `\n--version', pwsh],
+    ['Bash comment holds --help', 'cr review --agent # --help', bash],
+    ['bash -c wrapper', 'bash -c "cr review --help"', bash],
+    ['quoted substitution', 'echo "$(cr review --version)"', bash],
+    ['sudo wrapper', 'sudo cr review --help', bash],
+    ['plain help but a comment elsewhere in the command', 'cr review --help; echo hi # note', bash],
+    ['plain help but a heredoc elsewhere in the command', 'cr review --help; cat <<EOF\nx\nEOF', bash],
+    ['plain help but a newline inside a quoted argument', 'cr review --help "a\nb"', bash],
+    ['PowerShell -ArgumentList payload', 'Start-Process cr -ArgumentList review,--help', pwsh],
+    ['PowerShell block comment', 'cr review --help <# n #>', pwsh],
+  ];
+
+  it.each(SMUGGLED)('counts 1: %s', (_name, command, make) => {
+    expect(decide(make(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it.each(SMUGGLED.slice(0, 3))('denies at 2 used runs: %s', (_name, command, make) => {
+    writeState(stateFile, { counts: { [KEY]: 2 } });
+    const r = decide(make(command), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/run cap reached/);
+    expect(used()).toBe(2);
+  });
+
+  it.each([
+    'cr review --help',
+    'cr review --agent --help',
+    'cr --version',
+    'cr -h',
+    'cr doctor',
+    'cr usage --agent',
+    'cr auth status',
+    'echo hi && cr review --help',
+  ])('a plain call counts 0: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it('a plain PowerShell call counts 0', () => {
+    expect(decide(pwsh('cr review --help'), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it.each(['cr doctor # check', 'sudo cr doctor', 'bash -c "cr --version"', 'cr --version # x'])(
+    'a read-only call with no review word counts 0 even when not plain: %s',
+    (command) => {
+      expect(decide(bash(command), env).allow).toBe(true);
+      expect(used()).toBe(0);
+    },
+  );
+
+  it.each(['sudo cr --version review', 'bash -c "cr usage review"', 'cr --help "review"; echo hi # x'])(
+    'a read-only call that is not plain and holds a review word counts 1: %s',
+    (command) => {
+      expect(decide(bash(command), env).allow).toBe(true);
+      expect(used()).toBe(1);
+    },
+  );
+});
+
+describe('coderabbit-guard: lexShell comment after an escaped newline (Greptile r8)', () => {
+  it('Bash: a # after a backslash-newline starts a comment', () => {
+    expect(lexShell('cr review --agent \\\n# --version').text).not.toContain('--version');
+  });
+
+  it('PowerShell: a # after a backtick-newline starts a comment', () => {
+    expect(lexShell('cr review --agent `\n# --version', true).text).not.toContain('--version');
+  });
+
+  it('an escaped # is not a comment', () => {
+    expect(lexShell('echo \\# --version').text).toContain('--version');
+  });
 });

@@ -22,7 +22,11 @@
  * `#` that starts a word outside quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
  * nothing, so `cr review --agent # --version` is a review and `cr doctor # before review` is not.
  * Help and version are info-only from the call's own options before a bare `--`, never from text
- * after `--`, from a quoted argument, or from a comment.
+ * after `--`, from a quoted argument, or from a comment. They are free ONLY for a plain call: cr or
+ * coderabbit leads its own top-level segment, and the whole command has no comment, line continuation,
+ * heredoc, here-string, substitution, subshell, brace or backtick, and the segment holds no newline.
+ * Any other call that names `review` counts one run even with --help or --version (when unsure, count).
+ * A non-plain read-only call (`sudo cr doctor`) still counts 0 unless its text holds the word review.
  *
  * A raw check runs first and does not depend on that parsing. It reads only a segment whose leading
  * program runs its text (a shell, eval, iex, Start-Process, Start-Job, xargs, sudo, env, nohup, time,
@@ -278,8 +282,9 @@ export function lexShell(command: string, ps = false): Lexed {
       i = stop;
     } else if (c === esc) {
       fill(i + 1, i + 2);
+      // An escaped newline is a line continuation: a `#` after it starts a word and is a comment.
+      escEnd = command[i + 1] === '\n' || command[i + 1] === '\r' ? -1 : i + 2;
       i += 2;
-      escEnd = i;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
       if (j > 0) {
@@ -533,7 +538,7 @@ export interface SegmentClass {
 const NOT_ALLOWED =
   'CodeRabbit guard: allowed are `cr review --agent` (<=2 runs per PR), cr doctor, cr usage, cr auth login|status, --help, --version';
 
-function classifyInvocation(inv: Invocation): SegmentClass {
+function classifyInvocation(inv: Invocation, plain: boolean): SegmentClass {
   if (isSkillInstall(inv)) {
     return { verdict: 'block', reason: 'CodeRabbit guard: CodeRabbit skill installs are forbidden' };
   }
@@ -544,7 +549,12 @@ function classifyInvocation(inv: Invocation): SegmentClass {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: 'block', reason: 'CodeRabbit guard: code new/push is forbidden' };
   }
-  if (isInfoRequest(inv.args)) return { verdict: 'allow', reviewHelp: optionArgs(inv.args).includes('review') };
+  if (isInfoRequest(inv.args)) {
+    const names = optionArgs(inv.args).some((a) => a.toLowerCase() === 'review');
+    // Only a plain call is info-only. Any other call that names review counts one run: when unsure, count.
+    if (names && !plain) return { verdict: 'allow', countsRun: true, runs: 1 };
+    return { verdict: 'allow', reviewHelp: names };
+  }
   if (isReviewAgent(inv.args)) return { verdict: 'allow', countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: 'allow' };
   return { verdict: 'block', reason: NOT_ALLOWED };
@@ -618,6 +628,24 @@ export function rawScan(lexed: Lexed, ps = false): RawScan {
   return found;
 }
 
+/** True when the segment's first token is cr or coderabbit itself: no env assignment, wrapper or keyword before it. */
+function leadsWithCr(segment: string): boolean {
+  return isCrExecutable(baseName(splitFirst(segment.trim()).tok)) && !segment.includes('\n');
+}
+
+/**
+ * A "plain" command is the only one whose --help, -h or --version can make a review free. It has no
+ * comment, no line continuation, no heredoc or here-string, and no substitution, subshell, brace or
+ * backtick that could hide a call. The caller also checks that the call leads its own segment, holds
+ * no newline and is not a wrapper payload. Any doubt means not plain, and a review then counts.
+ */
+function isPlainCommand(source: string, lexed: Lexed, ps: boolean): boolean {
+  if (lexed.text !== source) return false;
+  if (lexed.bodies.size > 0) return false;
+  if (ps ? /`\r?\n|@["']/.test(source) : /\\\r?\n|<</.test(source)) return false;
+  return !/[(){}`]/.test(lexed.masked);
+}
+
 const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
@@ -634,13 +662,14 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
   // scan and splits for the parser. Each parsed segment sits inside exactly one raw segment, found
   // by source offsets. A raw segment that names a review counts the parsed runs inside it, or one
   // hidden run if the parser found no CodeRabbit call there. It never counts twice.
+  const plainCall = depth === 0 && isPlainCommand(source, lexed, ps);
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
     if (!inv) continue;
     let c: SegmentClass;
-    if (inv.nested === undefined) c = classifyInvocation(inv);
+    if (inv.nested === undefined) c = classifyInvocation(inv, plainCall && leadsWithCr(seg));
     else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
     else if (/\b(?:cr|coderabbit)\b/i.test(inv.nested)) c = { verdict: 'block', reason: 'CodeRabbit guard: wrapper nesting is too deep to check' };
     else c = { verdict: 'ignore' };
