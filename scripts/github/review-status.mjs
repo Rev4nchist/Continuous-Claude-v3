@@ -7,10 +7,13 @@
  *   - reviewed:   a check run from the Greptile GitHub App on the head SHA ended "success".
  *                 The app identity is the trust anchor: only Greptile can create that run.
  *                 A superseded review ends "neutral" ("Review was cancelled"): NOT a review.
- *   - summary:    Greptile writes a block into the PR body with the last reviewed commit and a
- *                 confidence score. People with write access can also edit the body, so the block
- *                 counts only when every body edit after Greptile's newest one came from an app
- *                 (GitHub Bot). Otherwise the review is UNAVAILABLE until Greptile rewrites it.
+ *   - summary:    Greptile now posts its summary as an ISSUE COMMENT (<!-- greptile_summary -->)
+ *                 with the last reviewed commit and a confidence score. It counts only from the
+ *                 author greptile-apps[bot] (type Bot) and only when its commit is the head (full
+ *                 SHA, or a prefix of 7 or more characters). Fallback: the older block in the PR
+ *                 body. People with write access can edit the comment and the body, and REST still
+ *                 names the app as the comment author. So each counts only when every edit after
+ *                 Greptile's newest one came from an app (GitHub Bot); a comment nobody edited counts.
  *                 A usable summary names the head and has a score; anything else is UNAVAILABLE.
  *   - unresolved: review threads still open from any reviewer, from GraphQL isResolved
  *   - checks:     every other status and check run on the head SHA
@@ -18,9 +21,13 @@
  * ready = reviewed && confidence >= 4 && unresolved == 0 && checks green && mergeable "clean".
  *
  * CodeRabbit PR-bot reviews (`coderabbitai[bot]` on the head, with review content) count toward READY
- * when the PR carries `review:coderabbit` or `review:deep`. Rate-limit notices and CLI/plugin output
- * never count. A leftover CodeRabbit commit status alone does not grant READY. Any review thread,
- * from any reviewer, still counts as unresolved.
+ * when the PR carries `review:coderabbit` or `review:deep`. "Review skipped", "Review failed" and
+ * rate-limit notices, and CLI/plugin output, never count. The summary comment is read only from the
+ * newest comment with the "summarize by coderabbit.ai" marker, and counts only if no person edited it.
+ * A notice counts only from that comment and only when it is newer than the head commit. A labelled
+ * PR whose CodeRabbit review is missing because of such a notice reports coderabbitLimited (the
+ * pr-loop mod maps it to LIMITED). A leftover CodeRabbit commit status alone does not grant READY.
+ * Any review thread, from any reviewer, still counts as unresolved.
  *
  * Usage: node scripts/github/review-status.mjs <pr-number> [--repo owner/name] [--json]
  * Exit 0 = ready, 1 = not ready (reasons listed), 2 = could not determine.
@@ -69,12 +76,26 @@ export function needsCodeRabbitReview(labels) {
 const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
 
 const LIMIT_WARNING = /Review limit reached/i;
+/** Notice headings seen on live PRs, e.g. "> ## Review skipped" (#155). A notice is never a review. */
+const NOTICE_HEADING = /^[>\s]*#{1,6}\s*(Review skipped|Review failed|Rate limit(?:ed| exceeded)?|Review limit reached)\b/im;
+const NOTICE_PLAIN = /^[>\s]*(Review failed)\s*[-\u2013:]/im;
+
+/** 'skipped', 'failed' or 'rate limited' when the CodeRabbit comment is a notice, else null. */
+export function codeRabbitNotice(body) {
+  const text = String(body ?? '');
+  const m = NOTICE_HEADING.exec(text) || NOTICE_PLAIN.exec(text);
+  if (m) {
+    const w = m[1].toLowerCase();
+    return w.includes('skipped') ? 'skipped' : w.includes('failed') ? 'failed' : 'rate limited';
+  }
+  return LIMIT_WARNING.test(text) ? 'rate limited' : null;
+}
+
 /** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
 export function summaryCoversHead(body, head) {
   const text = String(body ?? '');
-  if (!LIMIT_WARNING.test(text)) {
-    for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
-  }
+  if (codeRabbitNotice(text)) return false;
+  for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
   for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
     try {
       const c = JSON.parse(m[1]);
@@ -84,15 +105,46 @@ export function summaryCoversHead(body, head) {
   return false;
 }
 
-/** PR-bot review on the head only; rate-limit text on the status never counts as reviewed. */
-export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [] }) {
+/** GraphQL login of the CodeRabbit app as a comment editor (no "[bot]" suffix there). */
+const CODERABBIT_EDITOR = 'coderabbitai';
+const CODERABBIT_SUMMARY_MARKER = /<!--\s*This is an auto-generated comment: summarize by coderabbit\.ai\s*-->/;
+
+/** The newest summary comment from the CodeRabbit app. Chat replies do not carry the marker. */
+export function latestCodeRabbitSummary(comments) {
+  return (comments || [])
+    .filter((c) => isCodeRabbitUser(c?.user) && CODERABBIT_SUMMARY_MARKER.test(String(c.body ?? '')))
+    .reduce((best, c) => (best === null || commentStamp(c) >= commentStamp(best) ? c : best), null);
+}
+
+/** A notice speaks for the head only when CodeRabbit wrote it after the head commit existed. */
+const noticeIsAfterHead = (comment, headCommittedAt) => {
+  const committed = Date.parse(headCommittedAt || '');
+  return Number.isFinite(committed) && commentStamp(comment) > committed;
+};
+
+/**
+ * PR-bot review on the head only; rate-limit text on the status never counts as reviewed.
+ * `commentEdits` (comment id -> GraphQL edits) and `headCommittedAt` (ISO date) tie the summary comment to the head.
+ */
+export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [], commentEdits, headCommittedAt }) {
   const cr = (statuses || []).find((s) => /coderabbit/i.test(s?.context || ''));
+  const summary = latestCodeRabbitSummary(comments);
+  const summaryTrusted = summary !== null && commentEditedAfterApp(commentEdits, summary.id, CODERABBIT_EDITOR) === null;
   const reviewedHead =
     reviews.some(
       (r) => isCodeRabbitUser(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''),
-    ) || comments.some((c) => isCodeRabbitUser(c.user) && summaryCoversHead(c.body, head));
-  const rateLimited = !reviewedHead && /rate limit|limit reached/i.test(cr?.description || '');
-  return { reviewedHead, rateLimited, status: cr?.state ?? 'absent', description: cr?.description ?? null };
+    ) || (summaryTrusted && summaryCoversHead(summary.body, head));
+  const statusLimited = !reviewedHead && /rate limit|limit reached/i.test(cr?.description || '');
+  // The summary comment from the CodeRabbit app holds the notice ("Review skipped", "Review failed",
+  // "Rate limit exceeded") that explains why no review exists. Chat replies and old notices do not count.
+  const notice = reviewedHead ? null
+    : statusLimited ? 'rate limited'
+    : summary !== null && noticeIsAfterHead(summary, headCommittedAt) ? codeRabbitNotice(summary.body)
+    : null;
+  return {
+    reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice,
+    status: cr?.state ?? 'absent', description: cr?.description ?? null,
+  };
 }
 
 /**
@@ -107,6 +159,68 @@ export function parseSummary(body) {
   const sha = /Last reviewed commit:[\s\S]*?\/commit\/([0-9a-f]{40})\b/i.exec(block[1]);
   const score = /<!--\s*greptile_confidence_score:(\d+)\s*-->/.exec(block[1]);
   return { present: true, sha: sha ? sha[1].toLowerCase() : null, confidence: score ? Number(score[1]) : null };
+}
+
+/** The Greptile App as a REST comment author: the login carries "[bot]" (the GraphQL editor login does not). */
+export const GREPTILE_COMMENT_LOGIN = 'greptile-apps[bot]';
+const GREPTILE_SUMMARY_MARKER = /<!--\s*greptile_summary\s*-->/;
+const isGreptileCommentUser = (u) => u?.login === GREPTILE_COMMENT_LOGIN && u?.type === 'Bot';
+
+const lastMatch = (text, re) => { let last = null; for (const m of text.matchAll(re)) last = m; return last; };
+
+/**
+ * The Greptile summary issue comment (live PRs #152, #154, 2026-10-25): it opens with
+ *   <!-- greptile_summary --> ... Confidence Score: 5/5 ... <!-- greptile_confidence_score:5 -->
+ *   <sub>... Last reviewed commit: ["..."](https://github.com/<o>/<r>/commit/<sha>) ...</sub>
+ * and has no closing marker. The sha is 7 to 40 hex characters. Unknown shapes give nulls.
+ */
+export function parseCommentSummary(text) {
+  const t = String(text ?? '');
+  if (!GREPTILE_SUMMARY_MARKER.test(t)) return { present: false, sha: null, confidence: null };
+  const sha = lastMatch(t, /Last reviewed commit:[\s\S]*?\/commit\/([0-9a-f]{7,40})\b/gi);
+  const score = lastMatch(t, /<!--\s*greptile_confidence_score:(\d+)\s*-->/g);
+  return { present: true, sha: sha ? sha[1].toLowerCase() : null, confidence: score ? Number(score[1]) : null };
+}
+
+const commentStamp = (c) => Date.parse(c?.updated_at || c?.created_at || '') || 0;
+
+/** The newest summary comment from the Greptile app. Anyone else's copy of the marker is ignored. */
+export function latestGreptileComment(comments) {
+  return (comments || [])
+    .filter((c) => isGreptileCommentUser(c?.user) && GREPTILE_SUMMARY_MARKER.test(String(c.body ?? '')))
+    .reduce((best, c) => (best === null || commentStamp(c) >= commentStamp(best) ? c : best), null);
+}
+
+/** A full SHA must equal the head; a prefix of 7 or more characters must start it. */
+export const shaIsHead = (sha, head) => Boolean(sha) && sha.length >= 7 && String(head).toLowerCase().startsWith(sha);
+
+/**
+ * Where the confidence comes from, and what is wrong when it cannot be used. The comment wins when
+ * it names the head and nobody but an app edited it: REST names the app as author even after a
+ * person with write access rewrote the text. The body block is the fallback and has the same check.
+ */
+function resolveSummary({ pull, comments, commentEdits, bodyEdits, head }) {
+  const comment = latestGreptileComment(comments);
+  const cs = comment ? parseCommentSummary(comment.body) : null;
+  const commentEditor = comment ? commentEditedAfterApp(commentEdits, comment.id, GREPTILE_EDITOR) : null;
+  if (cs && !commentEditor && shaIsHead(cs.sha, head) && cs.confidence !== null) return { source: 'comment', confidence: cs.confidence, problem: null };
+  const body = parseSummary(pull.body);
+  if (body.present) {
+    const editor = bodyEditedAfterGreptile(bodyEdits);
+    let problem = null;
+    if (editor) problem = `PR body was edited by ${editor} after Greptile's summary, so its score cannot be confirmed`;
+    else if (body.sha !== head) problem = `Greptile summary names ${body.sha ? `commit ${body.sha.slice(0, 7)}` : 'no commit'}, not the head`;
+    else if (body.confidence === null) problem = 'Greptile summary has no confidence score';
+    return { source: 'body', confidence: body.confidence, problem };
+  }
+  let problem = 'Greptile summary block is missing from the PR body (was the PR body overwritten?)';
+  if (cs) {
+    if (commentEditor) problem = `Greptile summary comment was edited by ${commentEditor} after Greptile, so its score cannot be confirmed`;
+    else if (!cs.sha) problem = 'Greptile summary comment names no commit';
+    else if (!shaIsHead(cs.sha, head)) problem = `Greptile summary comment names commit ${cs.sha.slice(0, 7)}, not the head`;
+    else problem = 'Greptile summary comment has no confidence score';
+  }
+  return { source: null, confidence: null, problem };
 }
 
 /** The newest Greptile run on the head: a re-review adds a run, so the latest one decides. */
@@ -133,7 +247,22 @@ export function bodyEditedAfterGreptile(edits) {
   return later ? (later.editor?.login ?? 'a deleted account') : null;
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [] }) {
+/**
+ * Who edited a COMMENT after the app that wrote it. `editsById` maps a comment id (REST id =
+ * GraphQL databaseId) to its userContentEdits, newest first. Returns null when the comment is
+ * trusted, else the login (or a description) of the problem. A comment never edited has an empty
+ * list: its REST author, already checked as the app, wrote all of it. A comment with no entry
+ * (missing from the page read) is untrusted.
+ */
+export function commentEditedAfterApp(editsById, id, appLogin) {
+  const edits = editsById?.[id];
+  if (!Array.isArray(edits)) return 'unknown (no edit history)';
+  const at = edits.findIndex((e) => e?.editor?.login === appLogin);
+  const later = (at < 0 ? edits : edits.slice(0, at)).find((e) => e?.editor?.__typename !== 'Bot');
+  return later ? (later.editor?.login ?? 'a deleted account') : null;
+}
+
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt }) {
   const head = pull.head.sha;
   const run = latestGreptileRun(checkRuns);
   let greptile;
@@ -143,18 +272,11 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   else greptile = 'unavailable';
   const greptileSummary = run?.output?.summary ?? null;
 
-  const summary = parseSummary(pull.body);
   // reviewedHead needs the check run (check-only state stays in `greptile`) AND a usable summary.
   // After a passed check, any summary problem is UNAVAILABLE with its own reason: one @greptileai
-  // comment makes Greptile rewrite the block.
-  let summaryProblem = null;
-  if (greptile === 'reviewed') {
-    const editor = bodyEditedAfterGreptile(bodyEdits);
-    if (!summary.present) summaryProblem = 'Greptile summary block is missing from the PR body (was the PR body overwritten?)';
-    else if (editor) summaryProblem = `PR body was edited by ${editor} after Greptile's summary, so its score cannot be confirmed`;
-    else if (summary.sha !== head) summaryProblem = `Greptile summary names ${summary.sha ? `commit ${summary.sha.slice(0, 7)}` : 'no commit'}, not the head`;
-    else if (summary.confidence === null) summaryProblem = 'Greptile summary has no confidence score';
-  }
+  // comment makes Greptile rewrite its summary.
+  const summary = greptile === 'reviewed' ? resolveSummary({ pull, comments, commentEdits, bodyEdits, head }) : null;
+  const summaryProblem = summary ? summary.problem : null;
   const reviewedHead = greptile === 'reviewed' && summaryProblem === null;
   const unavailable = greptile === 'unavailable' || summaryProblem !== null;
   const lowConfidence = reviewedHead && summary.confidence < MIN_CONFIDENCE;
@@ -181,14 +303,19 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const labels = pullLabelNames(pull);
   let coderabbit = null;
   let coderabbitReviewedHead = null;
+  let coderabbitLimited = null;
   if (needsCodeRabbitReview(labels)) {
-    const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [] });
+    const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt });
     coderabbit = cr.status;
     coderabbitReviewedHead = cr.reviewedHead;
+    coderabbitLimited = cr.limited;
     if (cr.rateLimited) {
       reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
+    } else if (cr.limited) {
+      reasons.push(`CodeRabbit ${cr.notice === 'skipped' ? 'skipped the review of' : 'review failed on'} the head (PR-bot review did not run; CLI/plugin output does not count)`);
     } else if (!cr.reviewedHead) {
-      reasons.push('no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count)');
+      // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
+      reasons.push('no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one');
     }
   }
 
@@ -197,6 +324,10 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
+    // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
+    coderabbitLimited,
+    // 'comment' or 'body': where the usable Greptile summary came from. null when none was used.
+    summarySource: reviewedHead ? summary.source : null,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
     rateLimited: unavailable,
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
@@ -217,20 +348,26 @@ function main() {
     const checkRuns = runsDoc.check_runs;
     if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
     // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}}}}}';
+    // Comment edits: the first 100 comments, 20 edits each; more than 100 is "cannot determine", like threads.
+    // commits(last:1) is the head commit, for the CodeRabbit notice date.
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId userContentEdits(first:20){nodes{editor{__typename login}}}}} commits(last:1){nodes{commit{oid committedDate}}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
     const prq = g.data.repository.pullRequest;
     const rt = prq.reviewThreads;
     if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
+    if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
     const labels = pullLabelNames(pull);
     let reviews = [];
-    let comments = [];
+    // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
+    const comments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
     if (needsCodeRabbitReview(labels)) {
       reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
-      comments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
     }
+    const commentEdits = Object.fromEntries(prq.comments.nodes.map((n) => [n.databaseId, n.userContentEdits?.nodes ?? []]));
+    const headCommit = prq.commits.nodes[0]?.commit;
+    const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
     result = evaluate({
-      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments,
+      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt,
     });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);

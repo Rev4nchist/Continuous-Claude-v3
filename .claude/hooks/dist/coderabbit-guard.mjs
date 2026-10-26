@@ -2,10 +2,10 @@
 import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);
 
 // src/coderabbit-guard.ts
-import { execSync } from "child_process";
-import { existsSync, mkdirSync as mkdirSync2, readFileSync, writeFileSync } from "fs";
+import { execFileSync } from "child_process";
+import { existsSync, mkdirSync as mkdirSync2, readFileSync, renameSync, unlinkSync, writeFileSync } from "fs";
 import { tmpdir } from "os";
-import { dirname as dirname2, join as join2 } from "path";
+import { dirname as dirname2, join as join2, resolve } from "path";
 
 // src/shared/output.ts
 function outputContinue() {
@@ -95,7 +95,7 @@ var BASH_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var DELEGATE_TOOLS = /* @__PURE__ */ new Set(["Task", "Agent", "Skill"]);
 var STATE_BASENAME = "coderabbit-guard-runs.json";
 var MAX_RUNS = 2;
-var OVERRIDE = "SKIP_CODERABBIT_GUARD=1";
+var OVERRIDE = /^\s*(?:SKIP_CODERABBIT_GUARD=1\s|\$env:SKIP_CODERABBIT_GUARD\s*=\s*1\s*[;\n])/;
 function statePath(env = process.env) {
   const base = env.CCV3_CODERABBIT_GUARD_STATE || join2(tmpdir(), STATE_BASENAME);
   return base;
@@ -110,95 +110,370 @@ function readState(path) {
   }
 }
 function writeState(path, state) {
+  const tmp = `${path}.${process.pid}.tmp`;
   try {
     mkdirSync2(dirname2(path), { recursive: true });
-    writeFileSync(path, JSON.stringify(state), "utf8");
+    writeFileSync(tmp, JSON.stringify(state), "utf8");
+    renameSync(tmp, path);
   } catch {
+    try {
+      unlinkSync(tmp);
+    } catch {
+    }
   }
 }
-function segmentize(command) {
-  return command.split(/\|\||&&|[;|&\n(]|\$\(|`/).map((p) => p.trim()).filter(Boolean);
+var FILL = "\0";
+function hasClosing(s, from, quote, esc) {
+  for (let k = from; k < s.length; k++) {
+    if (quote === '"' && s[k] === esc) k++;
+    else if (s[k] === quote) return true;
+  }
+  return false;
 }
-function leadingExe(segment) {
+function closingParen(s, from) {
+  let depth = 0;
+  for (let k = from; k < s.length; k++) {
+    if (s[k] === "(") depth++;
+    else if (s[k] === ")" && depth-- === 0) return k;
+  }
+  return -1;
+}
+function maskQuoted(command, ps = false) {
+  const n = command.length;
+  const out = command.split("");
+  const esc = ps ? "`" : "\\";
+  const modes = [];
+  const depths = [];
+  const heredocs = [];
+  const fill = (from, to) => {
+    for (let k = Math.max(from, 0); k < Math.min(to, n); k++) out[k] = FILL;
+  };
+  const maskBody = (from, to, expand) => {
+    let k = from;
+    while (k < to) {
+      const sub = command.startsWith("$(", k) ? closingParen(command, k + 2) : -1;
+      const bt = !ps && command[k] === "`" ? command.indexOf("`", k + 1) : -1;
+      const end = sub >= 0 ? sub : bt;
+      if (expand && end >= 0 && end < to) k = end + 1;
+      else {
+        fill(k, k + 1);
+        k++;
+      }
+    }
+  };
+  const consumeHeredocs = (from) => {
+    let start = from;
+    const bodies = heredocs.splice(0);
+    for (const [at, h] of bodies.entries()) {
+      let end = start;
+      let eol = start;
+      while (end < n) {
+        eol = command.indexOf("\n", end);
+        if (eol < 0) eol = n;
+        const line = command.slice(end, eol).replace(/\r$/, "");
+        if ((h.strip ? line.replace(/^\t+/, "") : line) === h.delim) break;
+        end = eol + 1;
+      }
+      const stop = Math.min(eol, n);
+      maskBody(start, stop, h.expand);
+      if (at < bodies.length - 1) fill(stop, stop + 1);
+      start = stop + 1;
+    }
+    return Math.min(start - 1, n);
+  };
+  let i = 0;
+  while (i < n) {
+    const c = command[i];
+    const top = modes[modes.length - 1];
+    if (top === "dq") {
+      if (c === esc) {
+        fill(i, i + 2);
+        i += 2;
+      } else if (c === '"') {
+        modes.pop();
+        i++;
+      } else if (c === "$" && command[i + 1] === "(") {
+        modes.push("sub");
+        depths.push(0);
+        i += 2;
+      } else if (c === "`" && !ps) {
+        modes.push("bt");
+        i++;
+      } else {
+        fill(i, i + 1);
+        i++;
+      }
+      continue;
+    }
+    if (c === esc) {
+      fill(i + 1, i + 2);
+      i += 2;
+    } else if (c === "'") {
+      const j = command.indexOf("'", i + 1);
+      if (j > 0) {
+        fill(i + 1, j);
+        i = j + 1;
+      } else i++;
+    } else if (c === '"') {
+      if (hasClosing(command, i + 1, '"', esc)) modes.push("dq");
+      i++;
+    } else if (c === "@" && (command[i + 1] === "'" || command[i + 1] === '"') && /^[ \t]*\r?\n/.test(command.slice(i + 2))) {
+      const q = command[i + 1];
+      const close = command.indexOf(`
+${q}@`, i + 2);
+      if (close < 0) i++;
+      else {
+        maskBody(i + 2, close, q === '"');
+        i = close + 3;
+      }
+    } else if (!ps && c === "<" && command[i + 1] === "<" && command[i + 2] !== "<" && command[i - 1] !== "<") {
+      const m = /^<<(-?)[ \t]*(?:'([^'\n]+)'|"([^"\n]+)"|\\?([A-Za-z_][\w.-]*))/.exec(command.slice(i, i + 200));
+      if (m) {
+        heredocs.push({ delim: m[2] ?? m[3] ?? m[4], strip: m[1] === "-", expand: m[2] === void 0 && m[3] === void 0 && !m[0].includes("\\") });
+        i += m[0].length;
+      } else i++;
+    } else if (c === "\n" && heredocs.length) {
+      fill(i, i + 1);
+      i = consumeHeredocs(i + 1);
+    } else if (c === "$" && command[i + 1] === "(") {
+      modes.push("sub");
+      depths.push(0);
+      i += 2;
+    } else if (c === "`" && !ps) {
+      if (top === "bt") modes.pop();
+      else modes.push("bt");
+      i++;
+    } else if (top === "sub" && (c === "(" || c === ")")) {
+      if (c === "(") depths[depths.length - 1]++;
+      else if (depths[depths.length - 1] === 0) {
+        modes.pop();
+        depths.pop();
+      } else depths[depths.length - 1]--;
+      i++;
+    } else i++;
+  }
+  return out.join("");
+}
+function segmentize(command, ps = false) {
+  const masked = maskQuoted(command, ps);
+  const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
+  const pieces = [];
+  let last = 0;
+  for (const m of masked.matchAll(sep)) {
+    pieces.push(command.slice(last, m.index));
+    last = (m.index ?? 0) + m[0].length;
+  }
+  pieces.push(command.slice(last));
+  return pieces.map((x) => x.trim()).filter(Boolean);
+}
+var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
+var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
+var SHELLS = /* @__PURE__ */ new Set(["pwsh", "powershell", "bash", "sh", "zsh"]);
+var EVALS = /* @__PURE__ */ new Set(["eval", "iex", "invoke-expression"]);
+var STARTERS = /* @__PURE__ */ new Set(["start-process", "saps", "start"]);
+var PREFIXES = /* @__PURE__ */ new Set([
+  "env",
+  "command",
+  "exec",
+  "nohup",
+  "time",
+  "call",
+  "if",
+  "then",
+  "else",
+  "elif",
+  "while",
+  "until",
+  "do",
+  "!"
+]);
+function splitFirst(s) {
+  const m = s.match(/^(?:"([^"]*)"|'([^']*)'|(\S+))\s*([\s\S]*)$/);
+  if (!m) return { tok: "", rest: "" };
+  return { tok: m[1] ?? m[2] ?? m[3] ?? "", rest: m[4] ?? "" };
+}
+function baseName(tok) {
+  const norm = tok.replace(/\\/g, "/");
+  return norm.slice(norm.lastIndexOf("/") + 1).toLowerCase().replace(/\.(exe|cmd|bat|ps1)$/, "");
+}
+function cleanToken(t) {
+  return t.replace(/^["'`]+|["'`)]+$/g, "");
+}
+function tokenize(s) {
+  return s.split(/\s+/).map(cleanToken).filter(Boolean);
+}
+function stripLeadingQuote(s) {
+  return s.replace(/^\s*["']/, "");
+}
+function unquoteOuter(s) {
+  const t = s.trim();
+  const m = t.match(/^"((?:\\.|[^"\\])*)"|^'([^']*)'/);
+  return m ? m[1] ?? m[2] ?? "" : stripLeadingQuote(t);
+}
+function parseStarter(rest) {
+  const toks = rest.split(/[\s,]+/).map(cleanToken).filter(Boolean);
+  const fp = toks.findIndex((t) => /^-filepath$/i.test(t));
+  const at = fp >= 0 ? fp + 1 : toks.findIndex((t) => !/^(?:-\S+|\/[a-z]+)$/i.test(t));
+  if (at < 0 || !toks[at]) return { exe: "start-process", args: toks };
+  return { exe: baseName(toks[at]), args: toks.filter((_, k) => k !== at) };
+}
+function parseInvocation(segment) {
   let s = segment.trim();
-  let prev;
-  do {
-    prev = s;
-    s = s.replace(/^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/, "");
-  } while (s !== prev);
-  const m = s.match(/^(?:"([^"]+)"|'([^']+)'|(\S+))/);
-  if (!m) return "";
-  let tok = m[1] || m[2] || m[3] || "";
-  tok = tok.replace(/\\/g, "/");
-  const base = tok.slice(tok.lastIndexOf("/") + 1).toLowerCase();
-  return base.replace(/\.(exe|cmd|bat|ps1)$/, "");
+  for (let depth = 0; depth < 8; depth++) {
+    let prev;
+    do {
+      prev = s;
+      s = s.replace(ENV_ASSIGN, "");
+    } while (s !== prev);
+    s = s.replace(/^&\s*/, "");
+    const { tok, rest } = splitFirst(s);
+    if (!tok) return null;
+    const exe = baseName(tok);
+    if (RUNNERS.has(exe)) {
+      s = rest.replace(/^(?:-\S+\s+)+/, "");
+    } else if (exe === "cmd") {
+      return { exe, args: [], nested: unquoteOuter(rest.replace(/^(?:\/[a-z]\s+)+/i, "")) };
+    } else if (SHELLS.has(exe)) {
+      const m = rest.match(/(?:^|\s)-(?:c|command|lc)\s+([\s\S]*)$/i);
+      if (m) return { exe, args: [], nested: unquoteOuter(m[1]) };
+      const doc = rest.match(/<<-?[ \t]*(?:'[^'\n]*'|"[^"\n]*"|\\?[\w.-]+)[ \t]*\r?\n([\s\S]*)$/);
+      const here = rest.match(/<<<\s*([\s\S]*)$/);
+      if (doc || here) return { exe, args: [], nested: doc ? doc[1] : unquoteOuter(here[1]) };
+      return { exe, args: tokenize(rest) };
+    } else if (EVALS.has(exe)) {
+      return { exe, args: [], nested: unquoteOuter(rest.replace(/^-command\s+/i, "")) };
+    } else if (STARTERS.has(exe)) {
+      return parseStarter(rest);
+    } else if (PREFIXES.has(exe)) {
+      s = rest;
+    } else if (exe === "timeout") {
+      s = rest.replace(/^(?:-\S+\s+)*\S+\s+/, "");
+    } else {
+      return { exe, args: tokenize(rest) };
+    }
+  }
+  return null;
 }
 function isCrExecutable(exe) {
   return exe === "cr" || exe === "coderabbit";
 }
-function hasForbiddenFlags(segment) {
-  if (/(?:^|\s)--use-credits\b/i.test(segment)) return "--use-credits";
-  if (/(?:^|\s)--api-key\b/i.test(segment)) return "--api-key";
+function hasForbiddenFlags(args) {
+  for (const a of args) {
+    if (/^--use-credits(?:=|$)/i.test(a)) return "--use-credits";
+    if (/^--api-key(?:=|$)/i.test(a)) return "--api-key";
+  }
   return null;
 }
-function isCodeWorkspace(segment) {
-  return /\b(?:cr|coderabbit)\b[^&|;]*\bcode\s+(?:new|push)\b/i.test(segment);
+function isCodeWorkspace(args) {
+  const i = args.findIndex((a) => a.toLowerCase() === "code");
+  return i >= 0 && /^(?:new|push)$/i.test(args[i + 1] ?? "");
 }
-function isAllowedReviewAgent(segment) {
-  if (!/\breview\b/i.test(segment)) return false;
-  if (!/--agent\b/i.test(segment)) return false;
-  if (hasForbiddenFlags(segment)) return false;
-  if (isCodeWorkspace(segment)) return false;
-  const exe = leadingExe(segment);
-  if (!isCrExecutable(exe)) return false;
-  return true;
-}
-function isSkillInstall(segment) {
-  if (/\bnpx\s+skills\s+add\b/i.test(segment) && /coderabbit/i.test(segment)) return true;
-  if (/\bcoderabbit\s+skills\b/i.test(segment)) return true;
-  return false;
-}
-function classifyShellSegment(segment) {
-  const exe = leadingExe(segment);
-  const touchesCr = isCrExecutable(exe) || /\b(?:cr|coderabbit)\b/i.test(segment) || isSkillInstall(segment);
-  if (!touchesCr) return { verdict: "ignore" };
-  const forbidden = hasForbiddenFlags(segment);
-  if (forbidden) return { verdict: "block", reason: `CodeRabbit guard: ${forbidden} is forbidden` };
-  if (isCodeWorkspace(segment)) {
-    return { verdict: "block", reason: "CodeRabbit guard: code new/push is forbidden" };
+function isSkillInstall(inv) {
+  const first = inv.args[0]?.toLowerCase();
+  if (/^skills(?:@\S+)?$/.test(inv.exe) && first === "add") {
+    return inv.args.some((a) => /coderabbit/i.test(a));
   }
-  if (isSkillInstall(segment)) {
+  return isCrExecutable(inv.exe) && first === "skills";
+}
+function isInfoRequest(args) {
+  return args.some((a) => /^(?:--help|-h|--version)$/i.test(a));
+}
+function isReadOnlySubcommand(args) {
+  const pos = args.filter((a) => !a.startsWith("-")).map((a) => a.toLowerCase());
+  if (pos[0] === "doctor" || pos[0] === "usage") return true;
+  return pos[0] === "auth" && (pos[1] === "login" || pos[1] === "status");
+}
+function isReviewAgent(args) {
+  return args.includes("review") && args.some((a) => a.toLowerCase() === "--agent");
+}
+var NOT_ALLOWED = "CodeRabbit guard: allowed are `cr review --agent` (<=2 runs per PR), cr doctor, cr usage, cr auth login|status, --help, --version";
+function classifyInvocation(inv) {
+  if (isSkillInstall(inv)) {
     return { verdict: "block", reason: "CodeRabbit guard: CodeRabbit skill installs are forbidden" };
   }
-  if (isAllowedReviewAgent(segment)) return { verdict: "allow" };
-  if (isCrExecutable(exe) || /\b(?:cr|coderabbit)\b/i.test(segment)) {
-    return { verdict: "block", reason: "CodeRabbit guard: only plain `cr review --agent` is allowed (\u22642 runs/PR)" };
+  if (!isCrExecutable(inv.exe)) return { verdict: "ignore" };
+  const forbidden = hasForbiddenFlags(inv.args);
+  if (forbidden) return { verdict: "block", reason: `CodeRabbit guard: ${forbidden} is forbidden` };
+  if (isCodeWorkspace(inv.args)) {
+    return { verdict: "block", reason: "CodeRabbit guard: code new/push is forbidden" };
   }
-  return { verdict: "ignore" };
+  if (isInfoRequest(inv.args)) return { verdict: "allow" };
+  if (isReviewAgent(inv.args)) return { verdict: "allow", countsRun: true, runs: 1 };
+  if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
+  return { verdict: "block", reason: NOT_ALLOWED };
+}
+var MAX_NESTING = 4;
+function classifyCommand(text, ps = false, depth = 0) {
+  let runs = 0;
+  let allowed = false;
+  for (const seg of segmentize(text, ps)) {
+    const inv = parseInvocation(seg);
+    if (!inv) continue;
+    let c;
+    if (inv.nested === void 0) c = classifyInvocation(inv);
+    else if (depth < MAX_NESTING) c = classifyCommand(inv.nested, ps, depth + 1);
+    else if (/\b(?:cr|coderabbit)\b/i.test(inv.nested)) c = { verdict: "block", reason: "CodeRabbit guard: wrapper nesting is too deep to check" };
+    else c = { verdict: "ignore" };
+    if (c.verdict === "block") return c;
+    if (c.verdict === "allow") allowed = true;
+    runs += c.runs ?? 0;
+  }
+  if (runs > 0) return { verdict: "allow", countsRun: true, runs };
+  return { verdict: allowed ? "allow" : "ignore" };
+}
+function classifyShellSegment(segment, ps = false) {
+  return classifyCommand(segment, ps);
+}
+function git(args, cwd) {
+  return execFileSync("git", args, { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"], timeout: 1e4 }).trim();
+}
+function repoId(root) {
+  try {
+    const url = git(["config", "--get-regexp", "^remote\\..*\\.url$"], root).split("\n")[0]?.split(/\s+/)[1] ?? "";
+    const slug = url.replace(/\.git$/, "").replace(/^.*[/:]/, "");
+    if (slug) return slug;
+  } catch {
+  }
+  return root;
+}
+function branchId(root) {
+  try {
+    const branch = git(["symbolic-ref", "--short", "-q", "HEAD"], root);
+    if (branch) return branch;
+  } catch {
+  }
+  try {
+    return `detached@${git(["rev-parse", "--short=12", "HEAD"], root)}`;
+  } catch {
+    return "detached";
+  }
 }
 function repoBranchKey(cwd = process.cwd(), env = process.env) {
   const fromEnv = env.CCV3_CODERABBIT_GUARD_KEY;
   if (fromEnv) return fromEnv;
   try {
-    const root = execSync("git rev-parse --show-toplevel", { cwd, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    const branch = execSync("git rev-parse --abbrev-ref HEAD", { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    let remote = "local";
-    try {
-      remote = execSync("git remote get-url origin", { cwd: root, encoding: "utf8", stdio: ["ignore", "pipe", "ignore"] }).trim();
-    } catch {
-    }
-    const slug = remote.replace(/\.git$/, "").replace(/^.*[/:]/, "");
-    return `${slug || "local"}#${branch}`;
+    const root = git(["rev-parse", "--show-toplevel"], cwd);
+    return `${repoId(root)}#${branchId(root)}`;
   } catch {
     return `cwd#${cwd}`;
   }
 }
-function checkRunCap(state, key) {
-  const count = state.counts[key] ?? 0;
-  return { ok: count < MAX_RUNS, count };
+var CD_SEGMENT = /^(?:cd|chdir|pushd|set-location|sl)\s+(?:(?:-\w+|\/d)\s+)*(?:"([^"]+)"|'([^']+)'|(\S+))/i;
+function effectiveCwd(command, cwd, ps = false) {
+  let dir = cwd;
+  for (const seg of segmentize(command, ps)) {
+    const m = CD_SEGMENT.exec(seg);
+    const target = m?.[1] ?? m?.[2] ?? m?.[3];
+    if (target && target !== "-") dir = resolve(dir, target.replace(/^\/([a-zA-Z])(?=\/|$)/, "$1:"));
+  }
+  return dir;
 }
-function recordRun(state, key) {
-  const count = (state.counts[key] ?? 0) + 1;
+function checkRunCap(state, key, runs = 1) {
+  const count = state.counts[key] ?? 0;
+  return { ok: count + runs <= MAX_RUNS, count };
+}
+function recordRun(state, key, runs = 1) {
+  const count = (state.counts[key] ?? 0) + runs;
   return { counts: { ...state.counts, [key]: count } };
 }
 function isReadOnlyAutofixDelegate(input) {
@@ -220,18 +495,16 @@ function classifyDelegate(input) {
   if (skill.verdict === "block") return skill;
   if (isReadOnlyAutofixDelegate(input)) return { verdict: "allow" };
   const cmd = input.tool_input?.command;
-  if (cmd) {
-    for (const seg of segmentize(cmd)) {
-      const c = classifyShellSegment(seg);
-      if (c.verdict !== "ignore") return c;
-    }
-  }
+  if (cmd) return classifyCommand(cmd);
   return { verdict: "ignore" };
 }
 function decide(input, env = process.env) {
   const tool = input.tool_name || "";
   const command = input.tool_input?.command || "";
-  if (command.includes(OVERRIDE)) return { allow: true };
+  if (OVERRIDE.test(command)) {
+    logGuardDecision("coderabbit-guard", input, "override", "SKIP_CODERABBIT_GUARD=1", { command, env });
+    return { allow: true };
+  }
   if (tool === "Skill") {
     const s = classifySkill(input);
     if (s.verdict === "block") return { allow: false, reason: s.reason };
@@ -240,28 +513,25 @@ function decide(input, env = process.env) {
   if (DELEGATE_TOOLS.has(tool)) {
     const d = classifyDelegate(input);
     if (d.verdict === "block") return { allow: false, reason: d.reason };
-    if (d.verdict === "allow") return { allow: true };
     return { allow: true };
   }
   if (!BASH_TOOLS.has(tool)) return { allow: true };
-  let needsIncrement = false;
-  for (const seg of segmentize(command)) {
-    const c = classifyShellSegment(seg);
-    if (c.verdict === "block") return { allow: false, reason: c.reason };
-    if (c.verdict === "allow") needsIncrement = true;
-  }
-  if (!needsIncrement) return { allow: true };
+  const ps = tool === "PowerShell";
+  const verdict = classifyCommand(command, ps);
+  if (verdict.verdict === "block") return { allow: false, reason: verdict.reason };
+  const runs = verdict.runs ?? 0;
+  if (runs === 0) return { allow: true };
   const path = statePath(env);
   const state = readState(path);
-  const key = repoBranchKey(process.cwd(), env);
-  const cap = checkRunCap(state, key);
+  const key = repoBranchKey(effectiveCwd(command, input.cwd || process.cwd(), ps), env);
+  const cap = checkRunCap(state, key, runs);
   if (!cap.ok) {
     return {
       allow: false,
-      reason: `CodeRabbit guard: run cap reached (${MAX_RUNS} cr review --agent runs for ${key})`
+      reason: `CodeRabbit guard: run cap reached (${cap.count} of ${MAX_RUNS} cr review --agent runs used for ${key}; this command adds ${runs})`
     };
   }
-  writeState(path, recordRun(state, key));
+  writeState(path, recordRun(state, key, runs));
   return { allow: true, increment: true };
 }
 function readStdin() {
@@ -294,16 +564,21 @@ if (!process.env.VITEST) {
 }
 export {
   checkRunCap,
+  classifyCommand,
   classifyDelegate,
   classifyShellSegment,
   classifySkill,
   decide,
+  effectiveCwd,
   hasForbiddenFlags,
-  isAllowedReviewAgent,
   isCodeWorkspace,
   isCrExecutable,
   isReadOnlyAutofixDelegate,
+  isReadOnlySubcommand,
+  isReviewAgent,
   isSkillInstall,
+  maskQuoted,
+  parseInvocation,
   readState,
   recordRun,
   repoBranchKey,

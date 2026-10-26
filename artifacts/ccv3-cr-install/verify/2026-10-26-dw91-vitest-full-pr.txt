@@ -1,0 +1,215 @@
+
+ RUN  v4.1.11 C:/Users/dkhay/cc-wt/dw91/.claude/hooks
+
+ ❯ src/__tests__/settings-template-validation.test.ts (0 test)
+ ❯ src/__tests__/project-relevance.test.ts (32 tests | 1 failed) 17ms
+     × reads package.json name field 4ms
+ ❯ src/__tests__/git-head.test.ts (12 tests | 1 failed) 2550ms
+     × returns null outside any repo 16ms
+ ❯ src/__tests__/spawn-hidden.test.ts (6 tests | 1 failed) 12532ms
+     × relay exits with the command exit code (real processes) 5005ms
+ ❯ src/__tests__/msys-crash-capture.test.ts (11 tests | 1 failed) 17482ms
+     × writes a full ok:0 row for an MSYS crash 7845ms
+ ❯ src/__tests__/daemon-client.test.ts (22 tests | 1 failed) 20143ms
+     × should connect to daemon and receive response 4684ms
+ ❯ src/__tests__/pr-opened-review-loop.test.ts (26 tests | 1 failed) 23389ms
+     × suppresses a second fire for the same PR URL in the same session 5398ms
+ ❯ src/__tests__/tldr-read-enforcer-log.test.ts (14 tests | 1 failed) 26154ms
+     × rolls the journal up into one row per key past the size threshold, losing nothing 23929ms
+ ❯ src/__tests__/commit-preflight.test.ts (115 tests | 2 failed) 51608ms
+     × returns null when cwd is not a git repo 994ms
+     × the first commit of a session: rule-router denies with the rule, preflight adds its context 5010ms
+ ❯ src/__tests__/coderabbit-guard.test.ts (156 tests | 2 failed) 64717ms
+     × allows review --agent twice then blocks third via dist 7778ms
+     × counts a chained pair as two runs via dist 5611ms
+
+⎯⎯⎯⎯⎯⎯ Failed Suites 1 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__tests__/settings-template-validation.test.ts [ src/__tests__/settings-template-validation.test.ts ]
+SyntaxError: Invalid or unexpected token
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[1/12]⎯
+
+
+⎯⎯⎯⎯⎯⎯ Failed Tests 11 ⎯⎯⎯⎯⎯⎯⎯
+
+ FAIL  src/__tests__/coderabbit-guard.test.ts > coderabbit-guard dist e2e > allows review --agent twice then blocks third via dist
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/coderabbit-guard.test.ts:355:3
+    353|   });
+    354|
+    355|   it('allows review --agent twice then blocks third via dist', () => {
+       |   ^
+    356|     const base = { session_id: 'g1', ...bash('cr review --agent') };
+    357|     expect(deny(runHook(base, childEnv).stdout)).toBe(false);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[2/12]⎯
+
+ FAIL  src/__tests__/coderabbit-guard.test.ts > coderabbit-guard dist e2e > counts a chained pair as two runs via dist
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/coderabbit-guard.test.ts:362:3
+    360|   });
+    361|
+    362|   it('counts a chained pair as two runs via dist', () => {
+       |   ^
+    363|     const chain = { session_id: 'g1', ...bash('cr review --agent && cr…
+    364|     expect(deny(runHook(chain, childEnv).stdout)).toBe(false);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[3/12]⎯
+
+ FAIL  src/__tests__/commit-preflight.test.ts > fail-open > returns null when cwd is not a git repo
+AssertionError: expected { hookSpecificOutput: { …(3) } } to be null
+
+- Expected:
+null
+
++ Received:
+{
+  "hookSpecificOutput": {
+    "hookEventName": "PreToolUse",
+    "permissionDecision": "ask",
+    "permissionDecisionReason": "On branch main in C:\\Users\\dkhay. Rule: no feature work on main. Create a branch first: git switch -c <type>/<name>. Approve only for a sync or release commit.",
+  },
+}
+
+ ❯ src/__tests__/commit-preflight.test.ts:324:45
+    322|     const c = ctx('main', true);
+    323|     const input = loadFixture('commit-on-main', { REPO: tempDir('nogit…
+    324|     expect(preflight(input as any, c.opts)).toBeNull();
+       |                                             ^
+    325|   });
+    326|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[4/12]⎯
+
+ FAIL  src/__tests__/commit-preflight.test.ts > the built hook (stdin to stdout) > the first commit of a session: rule-router denies with the rule, preflight adds its context
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/commit-preflight.test.ts:611:3
+    609|   // combined-first-commit: breaks when the two outputs conflict (two …
+    610|   // loses the rule text).
+    611|   it('the first commit of a session: rule-router denies with the rule,…
+       |   ^
+    612|     const home = tempDir('home');
+    613|     mkdirSync(join(home, '.claude'), { recursive: true });
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[5/12]⎯
+
+ FAIL  src/__tests__/daemon-client.test.ts > queryDaemon async > should connect to daemon and receive response
+AssertionError: expected 'unavailable' to be 'ok' // Object.is equality
+
+Expected: "ok"
+Received: "unavailable"
+
+ ❯ src/__tests__/daemon-client.test.ts:312:27
+    310|
+    311|     const result = await queryDaemon({ cmd: 'ping' }, TEST_PROJECT_DIR…
+    312|     expect(result.status).toBe('ok');
+       |                           ^
+    313|   });
+    314|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[6/12]⎯
+
+ FAIL  src/__tests__/git-head.test.ts > resolveHead > returns null outside any repo
+AssertionError: expected { repoRoot: 'C:\Users\dkhay', …(3) } to be null
+
+- Expected:
+null
+
++ Received:
+{
+  "branch": "main",
+  "mainRoot": "C:\\Users\\dkhay",
+  "repoRoot": "C:\\Users\\dkhay",
+  "sha": null,
+}
+
+ ❯ src/__tests__/git-head.test.ts:83:43
+     81|   // fail-open: every one of these must return null, never throw.
+     82|   it('returns null outside any repo', () => {
+     83|     expect(resolveHead(tempDir('nogit'))).toBeNull();
+       |                                           ^
+     84|   });
+     85|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[7/12]⎯
+
+ FAIL  src/__tests__/msys-crash-capture.test.ts > msys-crash-capture (dist integration) > writes a full ok:0 row for an MSYS crash
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/msys-crash-capture.test.ts:112:3
+    110|   });
+    111|
+    112|   it('writes a full ok:0 row for an MSYS crash', () => {
+       |   ^
+    113|     runHook({
+    114|       session_id: SESSION_ID,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[8/12]⎯
+
+ FAIL  src/__tests__/pr-opened-review-loop.test.ts > pr-opened-review-loop (dist integration) > suppresses a second fire for the same PR URL in the same session
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/pr-opened-review-loop.test.ts:179:3
+    177|   });
+    178|
+    179|   it('suppresses a second fire for the same PR URL in the same session…
+       |   ^
+    180|     const input = {
+    181|       session_id: sid,
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[9/12]⎯
+
+ FAIL  src/__tests__/project-relevance.test.ts > getProjectIdentity > reads package.json name field
+AssertionError: expected null to be 'continuous-claude' // Object.is equality
+
+- Expected:
+"continuous-claude"
+
++ Received:
+null
+
+ ❯ src/__tests__/project-relevance.test.ts:149:34
+    147|     setupRegistryMock('/home/testuser/continuous-claude', MOCK_REGISTR…
+    148|     const identity = getProjectIdentity('/home/testuser/continuous-cla…
+    149|     expect(identity.packageName).toBe('continuous-claude');
+       |                                  ^
+    150|   });
+    151|
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[10/12]⎯
+
+ FAIL  src/__tests__/spawn-hidden.test.ts > spawnDetachedHidden > relay exits with the command exit code (real processes)
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/spawn-hidden.test.ts:67:3
+     65|   });
+     66|
+     67|   it('relay exits with the command exit code (real processes)', async …
+       |   ^
+     68|     const child = viaRelay(process.execPath, ['-e', 'process.exit(7)']…
+     69|     expect(await exitCode(child)).toBe(7);
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[11/12]⎯
+
+ FAIL  src/__tests__/tldr-read-enforcer-log.test.ts > recordRead > rolls the journal up into one row per key past the size threshold, losing nothing
+Error: Test timed out in 5000ms.
+If this is a long-running test, pass a timeout value as the last argument or configure it globally with "testTimeout".
+ ❯ src/__tests__/tldr-read-enforcer-log.test.ts:150:3
+    148|   });
+    149|
+    150|   it('rolls the journal up into one row per key past the size threshol…
+       |   ^
+    151|     mkdirSync(join(dir, '.tldr'));
+    152|     const total = 400;
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[12/12]⎯
+
+
+ Test Files  10 failed | 90 passed (100)
+      Tests  11 failed | 2424 passed (2435)
+   Start at  00:23:18
+   Duration  67.55s (transform 70.21s, setup 0ms, import 121.31s, tests 574.73s, environment 10ms)
+

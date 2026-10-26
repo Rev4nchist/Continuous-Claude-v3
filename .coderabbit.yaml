@@ -9,6 +9,8 @@ reviews:
     labels:
       - "review:coderabbit"
       - "review:deep"
+    # Off: a push does not start a review, so after a push on a labelled PR post "@coderabbitai review"
+    # once. review-status.mjs says so in its reason. Do not post it after a rate-limit notice.
     auto_incremental_review: false
     drafts: false
     base_branches:
@@ -24,6 +26,11 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: true
+  # Advisory only: no CodeRabbit-authored commits. Key verified in docs.coderabbit.ai/reference/configuration
+  # (Fix comments finishing touch). The ongoing "Autofix"/autopilot mode has no documented YAML key.
+  finishing_touches:
+    autofix:
+      enabled: false
 
 knowledge_base:
   mcp:

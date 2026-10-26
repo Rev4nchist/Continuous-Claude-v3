@@ -31,6 +31,7 @@ import type { Engine } from 'claude-code/testing'
 // W25 pr_watch and /watch refuse a PR whose status cannot be read; the tool names its repo
 // W12 (again) a READY alert answered No or dismissed still gives the model its report line
 // W26 a reviewed head below the confidence bar alerts REVIEWED, not STALLED
+// W27 a labelled PR whose CodeRabbit review was rate limited or skipped is LIMITED, not PENDING for 60 minutes
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -54,6 +55,7 @@ type Status = {
   merged: boolean
   lowConfidence?: boolean
   confidence?: number | null
+  coderabbitLimited?: boolean | null
 }
 
 const status = (pr: number, over: Partial<Status> = {}): Status => ({
@@ -627,6 +629,37 @@ describe('pr-loop review alerts', () => {
     expect(seen.submits[0]).toMatch(/reviewed by Greptile but is not READY/)
     expect(seen.submits[0]).toContain('confidence 3/5')
     expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W27 a CodeRabbit review that was skipped or rate limited is reported once as LIMITED, not left PENDING', async ($, on) => {
+    const skipped = status(8, { coderabbitLimited: true, reasons: ['CodeRabbit skipped the review of the head (label gate or rate limit)'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [skipped] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toMatch(/did not finish/i)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/CodeRabbit/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['LIMITED'])
+  })
+
+  test('W27 a CodeRabbit limit does not hide a reviewed head that needs a fix', async ($, on) => {
+    const both = status(8, { coderabbitLimited: true, reviewedHead: true, unresolved: 2, reasons: ['2 review thread(s) unresolved', 'CodeRabbit skipped the review of the head'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [both] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by Greptile but is not READY/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W27 coderabbitLimited false stays PENDING and quiet', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [status(8, { coderabbitLimited: false })] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
   })
 
   test('W22 30 minutes without a review is still quiet', async ($, on) => {
