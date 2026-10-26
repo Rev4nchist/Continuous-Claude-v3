@@ -1,0 +1,28 @@
+{
+  "tool": "semgrep",
+  "reason": "Pre-existing ERROR-level p/default findings on main 1db5a6c7 (semgrep 1.179.0, 2026-10-26). Accepted to start the ratchet (P3a, DW-80); triage tracked in DW-80.",
+  "total": 33,
+  "counts": {
+    "generic.secrets.security.detected-jwt-token.detected-jwt-token|.claude/hooks/src/__tests__/intel-bus-hardening.test.ts": 1,
+    "generic.secrets.security.detected-ssh-password.detected-ssh-password|.claude/hooks/src/__tests__/guard-log.test.ts": 5,
+    "javascript.lang.security.audit.spawn-shell-true.spawn-shell-true|.claude/scripts/security/scoped-scan.mjs": 1,
+    "javascript.lang.security.audit.spawn-shell-true.spawn-shell-true|.claude/scripts/verify.mjs": 1,
+    "javascript.lang.security.audit.spawn-shell-true.spawn-shell-true|.claude/skills/impeccable/scripts/live-copy-edit-agent.mjs": 1,
+    "javascript.lang.security.audit.spawn-shell-true.spawn-shell-true|scripts/hooks/tsc-error-ratchet.mjs": 1,
+    "javascript.lang.security.audit.spawn-shell-true.spawn-shell-true|scripts/system-coherence-stress.mjs": 1,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/archive/2026-08-31-step10-prune/compiler-in-the-loop.ts": 2,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/archive/2026-08-31-step10-prune/handoff-index.ts": 2,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/archive/2026-08-31-step10-prune/session-start-parallel.ts": 1,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/git-auto-commit.ts": 1,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/lib/daemon-client.ts": 2,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/lib/run-command.ts": 1,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/post-edit-diagnostics.ts": 1,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/session-end-extract.ts": 2,
+    "javascript.lang.security.detect-child-process.detect-child-process|.claude/hooks/src/session-start-init-check.ts": 2,
+    "javascript.lang.security.detect-child-process.detect-child-process|scripts/update-blocklist.mjs": 1,
+    "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true|.claude/scripts/core/repoprompt_async.py": 1,
+    "python.lang.security.audit.subprocess-shell-true.subprocess-shell-true|opc/scripts/repoprompt_async.py": 1,
+    "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query|opc/scripts/core/cleanup_sessions.py": 2,
+    "python.sqlalchemy.security.sqlalchemy-execute-raw-query.sqlalchemy-execute-raw-query|opc/scripts/pageindex/pageindex_service.py": 3
+  }
+}
