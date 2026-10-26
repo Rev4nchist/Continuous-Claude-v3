@@ -387,6 +387,14 @@ test('R-6: a push that lowers the class removes and adds nothing', () => {
   assert.equal(d.effective, 'steering');
 });
 
+test('a raise keeps a review label the person removed removed, and still adds the new class labels', () => {
+  const labels = ['risk:normal', B]; // the router added review:coderabbit for normal; a person removed it
+  const d = dec('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal');
+  assert.equal(d.reason, 'raised');
+  assert.ok(!d.add.includes('review:coderabbit'), `person removal undone: ${d.add.join(', ')}`);
+  assert.deepEqual(d.add, ['risk:infra', 'review:deep-held']);
+});
+
 test('a push that raises the class adds the new labels and keeps the old ones', () => {
   const labels = ['risk:normal', 'review:coderabbit', B];
   const d = dec('synchronize', pr(['scripts/a.mjs', '.github/workflows/x.yml']), labels, 'normal');

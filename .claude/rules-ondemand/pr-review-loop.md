@@ -149,7 +149,7 @@ It also reads the pre-rename state file, so a session open across the rename doe
 ## Label routing at ready (live, P3c)
 
 The `review-router` workflow labels a PR when it opens, reopens, becomes ready, gets a push, or
-moves to a new base. It runs `scripts/github/review-router.mjs` with `review-router.config.json`
+moves to a new base. It also runs when CodeRabbit posts a rate-limit notice, to update its note. It runs `scripts/github/review-router.mjs` with `review-router.config.json`
 from `main`. It spends no LLM credits. To route one PR again, run the workflow by hand with its
 number (Actions, `review-router`, Run workflow).
 

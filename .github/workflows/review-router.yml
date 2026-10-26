@@ -13,6 +13,10 @@ on:
     # edited counts only when the base branch changed (a stacked PR retargeted to main): see the job condition.
     types: [opened, reopened, ready_for_review, synchronize, edited]
     branches: [main]
+  # CodeRabbit posts its rate-limit notice as a PR comment after routing. Re-route then so the router
+  # comment shows the note (the job filter below keeps only that bot and that notice). Runs from main.
+  issue_comment:
+    types: [created, edited]
   # Manual re-run for one PR (for example after a failed run). Runs as a push event would.
   workflow_dispatch:
     inputs:
@@ -27,13 +31,18 @@ permissions:
 
 jobs:
   route:
+    # contains() is case-insensitive.
     if: >-
       github.event_name == 'workflow_dispatch' ||
-      (github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base != null))
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
+        github.event.comment.user.login == 'coderabbitai[bot]' && github.event.comment.user.type == 'Bot' &&
+        (contains(github.event.comment.body, 'rate limit') || contains(github.event.comment.body, 'limit reached'))) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false &&
+        (github.event.action != 'edited' || github.event.changes.base != null))
     # Job-level, so a skipped run (a bot editing the PR body fires `edited`) never joins the group and
     # never cancels a queued push run. Two quick pushes still run one after another.
     concurrency:
-      group: review-router-${{ github.event.pull_request.number || inputs.pr }}
+      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
@@ -45,15 +54,16 @@ jobs:
         with:
           node-version: "22"
       - name: Route the PR (labels, one comment, one ledger line)
-        if: github.event_name != 'workflow_dispatch'
+        if: github.event_name == 'pull_request_target'
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/github/review-router.mjs
-      - name: Route the PR (manual re-run)
-        if: github.event_name == 'workflow_dispatch'
+      # A manual re-run or a CodeRabbit limit notice routes like a push (a draft PR is still skipped by the script).
+      - name: Route the PR (manual re-run or CodeRabbit limit notice)
+        if: github.event_name != 'pull_request_target'
         env:
           GH_TOKEN: ${{ github.token }}
-          PR: ${{ inputs.pr }}
+          PR: ${{ inputs.pr || github.event.issue.number }}
         run: node scripts/github/review-router.mjs "$PR" --event synchronize
       # The script appends one JSON line per run to $RUNNER_TEMP/review-ledger.jsonl (spec 7). Keep it with the run.
       - name: Upload the ledger line
