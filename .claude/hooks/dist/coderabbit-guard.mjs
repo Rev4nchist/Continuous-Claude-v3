@@ -141,6 +141,50 @@ function closingParen(s, from) {
 function startsWord(command, i) {
   return i === 0 || /[\s;|&(]/.test(command[i - 1]);
 }
+function joinContinuations(command, ps = false) {
+  const esc = ps ? "`" : "\\";
+  if (!command.includes(`${esc}
+`) && !command.includes(`${esc}\r
+`)) return command;
+  const n = command.length;
+  let out = "";
+  let quote = "";
+  let i = 0;
+  while (i < n) {
+    const c = command[i];
+    if (quote === "'") {
+      if (c === "'") quote = "";
+      out += c;
+      i++;
+    } else if (c === esc) {
+      const pair = command.startsWith("\n", i + 1) ? 2 : command.startsWith("\r\n", i + 1) ? 3 : 0;
+      if (pair) i += pair;
+      else {
+        out += command.slice(i, i + 2);
+        i += 2;
+      }
+    } else if (quote === '"') {
+      if (c === '"') quote = "";
+      out += c;
+      i++;
+    } else if (c === "#" && startsWord(out, out.length)) {
+      const eol = command.indexOf("\n", i);
+      const stop = eol < 0 ? n : eol;
+      out += command.slice(i, stop);
+      i = stop;
+    } else if (ps && c === "<" && command[i + 1] === "#") {
+      const close = command.indexOf("#>", i + 2);
+      const stop = close < 0 ? n : close + 2;
+      out += command.slice(i, stop);
+      i = stop;
+    } else {
+      if (c === "'" && command.indexOf("'", i + 1) > 0 || c === '"' && hasClosing(command, i + 1, '"', esc)) quote = c;
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
 function lexShell(command, ps = false) {
   const n = command.length;
   const text = command.split("");
@@ -231,7 +275,7 @@ function lexShell(command, ps = false) {
       i = stop;
     } else if (c === esc) {
       fill(i + 1, i + 2);
-      escEnd = command[i + 1] === "\n" || command[i + 1] === "\r" ? -1 : i + 2;
+      escEnd = i + 2;
       i += 2;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
@@ -298,7 +342,7 @@ function segmentSpans(lexed, ps) {
   return segmentRanges(lexed, ps).map(([start, end]) => ({ start, end, text: lexed.text.slice(start, end).trim() })).filter((s) => s.text);
 }
 function segmentize(command, ps = false) {
-  return segmentSpans(lexShell(command, ps), ps).map((s) => s.text);
+  return segmentSpans(lexShell(joinContinuations(command, ps), ps), ps).map((s) => s.text);
 }
 var ENV_ASSIGN = /^[A-Za-z_][A-Za-z0-9_]*=(?:"[^"]*"|'[^']*'|\S+)\s+/;
 var RUNNERS = /* @__PURE__ */ new Set(["npx", "bunx", "pnpx", "sudo", "doas", "xargs"]);
@@ -444,7 +488,7 @@ function classifyInvocation(inv, plain) {
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
 }
-var CR_WORD = /(?:^|[\s"'`(\\/=,{])(?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s"'`)\\,}])/gi;
+var CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}])/gi;
 var BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 var REVIEW_WORD = /\breview\b/i;
 var EXECUTING_PROGRAMS = /* @__PURE__ */ new Set([
@@ -479,8 +523,22 @@ function leadingProgram(segment) {
   } while (s !== prev);
   return baseName(splitFirst(s).tok);
 }
+var TEXT_COMMANDS = /* @__PURE__ */ new Set(["git", "gh"]);
+function rawBilling(text, ps = false) {
+  if (!BILLING_WORD.test(text)) return false;
+  const lexed = lexShell(text, ps);
+  const ranges = segmentRanges(lexed, ps, true);
+  for (const m of text.matchAll(CR_WORD)) {
+    const at = (m.index ?? 0) + m[0].length - m[1].length;
+    const inComment = lexed.text[at] !== text[at];
+    const owner = ranges.find(([a, b]) => a <= at && at < b);
+    const exempt = !inComment && owner !== void 0 && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    if (!exempt) return true;
+  }
+  return false;
+}
 function rawScan(lexed, ps = false) {
-  const found = { billing: false, reviewSegments: [] };
+  const found = { reviewSegments: [] };
   const text = lexed.text;
   for (const [a, b] of segmentRanges(lexed, ps, true)) {
     const seg = text.slice(a, b).trim();
@@ -491,7 +549,6 @@ function rawScan(lexed, ps = false) {
     const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => lexed.bodies.has(a + k) ? " " : ch).join("").trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
-    if (BILLING_WORD.test(raw)) found.billing = true;
     if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ start: a, end: b, raw });
   }
   return found;
@@ -499,21 +556,24 @@ function rawScan(lexed, ps = false) {
 function leadsWithCr(segment) {
   return isCrExecutable(baseName(splitFirst(segment.trim()).tok)) && !segment.includes("\n");
 }
-function isPlainCommand(source, lexed, ps) {
-  if (lexed.text !== source) return false;
+function isPlainCommand(source, joined, lexed, ps) {
+  if (lexed.text !== joined) return false;
   if (lexed.bodies.size > 0) return false;
   if (ps ? /`\r?\n|@["']/.test(source) : /\\\r?\n|<</.test(source)) return false;
   return !/[(){}`]/.test(lexed.masked);
 }
 var MAX_NESTING = 4;
 function classifyCommand(source, ps = false, depth = 0) {
-  const lexed = lexShell(source, ps);
+  const joined = joinContinuations(source, ps);
+  if (depth === 0 && (rawBilling(joined, ps) || joined !== source && rawBilling(source, ps))) {
+    return { verdict: "block", reason: BILLING_REASON };
+  }
+  const lexed = lexShell(joined, ps);
   const text = lexed.text;
   const raw = rawScan(lexed, ps);
-  if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  const plainCall = depth === 0 && isPlainCommand(source, lexed, ps);
+  const plainCall = depth === 0 && isPlainCommand(source, joined, lexed, ps);
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
@@ -701,9 +761,11 @@ export {
   isReadOnlySubcommand,
   isReviewAgent,
   isSkillInstall,
+  joinContinuations,
   lexShell,
   normalizeRemote,
   parseInvocation,
+  rawBilling,
   rawScan,
   readState,
   recordRun,

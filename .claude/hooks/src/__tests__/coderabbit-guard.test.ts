@@ -13,6 +13,7 @@ import {
   checkRunCap,
   repoBranchKey,
   lexShell,
+  joinContinuations,
 } from '../coderabbit-guard.js';
 
 const HOOK = resolve(__dirname, '../../dist/coderabbit-guard.mjs');
@@ -441,15 +442,23 @@ describe('coderabbit-guard: prose about CodeRabbit inside quotes and heredocs is
       'quoted-delimiter heredoc body',
       "git commit -F - <<'EOF'\nfeat: gate\n\nCodeRabbit reviews are advisory.\ncr review --agent runs are capped at 2.\ncr review --use-credits is blocked.\nEOF",
     ],
-    ['dash heredoc with tab-indented delimiter', 'cat <<-EOF\n\tcr review --agent --use-credits\n\tEOF'],
     ['markdown table row in a gh body', 'gh pr create --title "t" --body "| CodeRabbit | label gated |"'],
     ['semicolon and ampersand inside single quotes', "git commit -m 'a; cr review --use-credits && b'"],
     ['newline inside a double-quoted message', 'git commit -m "line one\ncr review --agent runs are capped\nline three"'],
-    ['two heredocs on one line', `cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`],
   ];
 
   it.each(cases)('allows and uses no slot on Bash: %s', (_name, cmd) => {
     expect(decide(bash(cmd), env).allow).toBe(true);
+    expect(existsSync(stateFile)).toBe(false);
+  });
+
+  // FLIPPED in round 9: these two were allowed. A cat heredoc is not a leading git or gh, so a cr word
+  // with a billing flag in its body is denied by the raw check.
+  it.each([
+    ['dash heredoc with tab-indented delimiter (flipped r9)', 'cat <<-EOF\n\tcr review --agent --use-credits\n\tEOF'],
+    ['two heredocs on one line (flipped r9)', `cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`],
+  ])('denies a cat heredoc that names cr and a billing flag: %s', (_name, cmd) => {
+    expect(decide(bash(cmd), env).allow).toBe(false);
     expect(existsSync(stateFile)).toBe(false);
   });
 
@@ -483,7 +492,10 @@ describe('coderabbit-guard: prose about CodeRabbit inside quotes and heredocs is
 
   it('keeps a command after a heredoc separate, and lets two heredocs share one command', () => {
     expect(decide(bash("cat <<'A' <<'B'\nprose\nA\nprose\nB\ncr review --use-credits"), env).allow).toBe(false);
-    expect(decide(bash(`cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`), env).allow).toBe(true);
+    // Flipped in round 9: was allowed. Two cat heredocs with cr and a billing flag are now denied.
+    expect(decide(bash(`cat <<'A' <<'B'\ncr review --use-credits\nA\ncr review ${KEY_FLAG} ${KEY_VALUE}\nB`), env).allow).toBe(false);
+    // Two git heredoc messages stay allowed.
+    expect(decide(bash("git commit -F - <<'A' <<'B'\ncr review --use-credits\nA\nprose\nB"), env).allow).toBe(true);
   });
 
   it('treats an unclosed quote as a literal, so a command after it is still scanned', () => {
@@ -882,7 +894,10 @@ describe('coderabbit-guard: search commands that mention "cr review" do not use 
   });
 });
 
-describe('coderabbit-guard: text-only commands that mention a billing flag are allowed', () => {
+// FLIPPED in round 9 (Dave): the billing check reads the raw, unstripped command. A cr word with a
+// billing flag is denied in any command that is not a leading git or gh. Every command below was
+// allowed before; all 11 are now denied.
+describe('coderabbit-guard: text-only commands that mention a billing flag are denied (flipped r9)', () => {
   const never = { CCV3_CODERABBIT_GUARD_STATE: join(tmpdir(), 'cr-guard-never-text.json') };
 
   it.each([
@@ -897,10 +912,11 @@ describe('coderabbit-guard: text-only commands that mention a billing flag are a
     'Get-Content notes.md | Select-String "cr review --use-credits"',
     'Out-File -FilePath n.txt -InputObject "cr review --use-credits"',
     'Add-Content notes.md "coderabbit --api-key"',
-  ])('allows on Bash and PowerShell: %s', (command) => {
+  ])('denies on Bash and PowerShell: %s', (command) => {
     for (const tool of [bash, pwsh]) {
       const d = decide(tool(command), never);
-      expect(d.allow, `${tool === bash ? 'Bash' : 'PowerShell'}: ${command}`).toBe(true);
+      expect(d.allow, `${tool === bash ? 'Bash' : 'PowerShell'}: ${command}`).toBe(false);
+      expect(d.reason).toMatch(/billing flag with a CodeRabbit CLI call/);
     }
     expect(existsSync(join(tmpdir(), 'cr-guard-never-text.json'))).toBe(false);
   });
@@ -1263,8 +1279,9 @@ describe('coderabbit-guard: comments and arguments after -- never mark a review 
     expect(used()).toBe(0);
   });
 
-  it('a billing flag in a comment is data, a billing flag before it is still denied', () => {
-    expect(decide(bash('cr doctor # cr review --use-credits'), env).allow).toBe(true);
+  // FLIPPED in round 9: a comment that names cr next to a billing flag is denied (raw fail-closed check).
+  it('a billing flag next to cr in a comment is denied (flipped r9), and so is one before it', () => {
+    expect(decide(bash('cr doctor # cr review --use-credits'), env).allow).toBe(false);
     expect(decide(bash('cr review --agent --use-credits # ok'), env).allow).toBe(false);
     expect(used()).toBe(0);
   });
@@ -1433,16 +1450,166 @@ describe('coderabbit-guard: help and version are free only for a plain one-line 
   );
 });
 
-describe('coderabbit-guard: lexShell comment after an escaped newline (Greptile r8)', () => {
-  it('Bash: a # after a backslash-newline starts a comment', () => {
-    expect(lexShell('cr review --agent \\\n# --version').text).not.toContain('--version');
+// ---------------------------------------------------------------------------------------------
+// Round 9 (Dave, Greptile thread 4379473171): join line continuations BEFORE lexing, as the shell
+// does, and run the billing check on the raw, unstripped command. The r8 lexShell rule "a # after an
+// escaped newline starts a comment" is gone: after the join no escaped newline is left.
+// ---------------------------------------------------------------------------------------------
+describe('coderabbit-guard: joinContinuations works like the shell', () => {
+  it('Bash: removes a backslash-newline outside quotes and inside double quotes', () => {
+    expect(joinContinuations('echo foo\\\nbar')).toBe('echo foobar');
+    expect(joinContinuations('echo "a\\\nb"')).toBe('echo "ab"');
   });
 
-  it('PowerShell: a # after a backtick-newline starts a comment', () => {
-    expect(lexShell('cr review --agent `\n# --version', true).text).not.toContain('--version');
+  it('Bash: removes a backslash CRLF pair', () => {
+    expect(joinContinuations('echo foo\\\r\nbar')).toBe('echo foobar');
+  });
+
+  it('Bash: keeps a backslash-newline inside single quotes', () => {
+    expect(joinContinuations("echo 'a\\\nb'")).toBe("echo 'a\\\nb'");
+  });
+
+  it('Bash: an escaped backslash before a newline is not a continuation', () => {
+    expect(joinContinuations('echo \\\\\nnext')).toBe('echo \\\\\nnext');
+  });
+
+  it('Bash: a comment ends at its newline even after a backslash', () => {
+    expect(joinContinuations('echo hi # note \\\necho two')).toBe('echo hi # note \\\necho two');
+  });
+
+  it('Bash: a # that follows a removed continuation joins its word and is not a comment start', () => {
+    expect(joinContinuations('echo foo\\\n# note')).toBe('echo foo# note');
+  });
+
+  it('PowerShell: removes a backtick-newline outside single quotes, keeps it inside', () => {
+    expect(joinContinuations('echo foo`\nbar', true)).toBe('echo foobar');
+    expect(joinContinuations("echo 'a`\nb'", true)).toBe("echo 'a`\nb'");
+    expect(joinContinuations('echo foo`\r\nbar', true)).toBe('echo foobar');
+  });
+
+  it('PowerShell: a backslash-newline is not a continuation', () => {
+    expect(joinContinuations('echo foo\\\nbar', true)).toBe('echo foo\\\nbar');
+  });
+
+  it('returns the text unchanged when it holds no continuation', () => {
+    expect(joinContinuations('cr review --agent')).toBe('cr review --agent');
+  });
+});
+
+describe('coderabbit-guard: a continued word cannot hide a review (Greptile r9, thread 4379473171)', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'join#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-join-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  const GREPTILE = 'echo foo\\\n# note; cr review --agent --use-credits';
+  const GREPTILE_FREE = 'echo foo\\\n# note; cr review --agent';
+  const GREPTILE_PS = 'echo foo`\n# note; cr review --agent --use-credits';
+  const GREPTILE_PS_FREE = 'echo foo`\n# note; cr review --agent';
+
+  it('Bash: the exact Greptile example is denied', () => {
+    const r = decide(bash(GREPTILE), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/billing/i);
+    expect(used()).toBe(0);
+  });
+
+  it('Bash: the same text without the billing flag counts 1', () => {
+    expect(decide(bash(GREPTILE_FREE), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('Bash: the joined review is denied at the cap', () => {
+    writeState(stateFile, { counts: { [KEY]: 2 } });
+    const r = decide(bash(GREPTILE_FREE), env);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/run cap reached/);
+  });
+
+  it('PowerShell: the backtick analogue is denied', () => {
+    expect(decide(pwsh(GREPTILE_PS), env).allow).toBe(false);
+    expect(used()).toBe(0);
+  });
+
+  it('PowerShell: the backtick analogue without the billing flag counts 1', () => {
+    expect(decide(pwsh(GREPTILE_PS_FREE), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('Bash: CRLF line endings give the same result', () => {
+    expect(decide(bash(GREPTILE.replace(/\n/g, '\r\n')), env).allow).toBe(false);
+    expect(decide(bash(GREPTILE_FREE.replace(/\n/g, '\r\n')), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it("Bash: a continuation inside single quotes is not joined, the review after it counts 1", () => {
+    expect(decide(bash("echo 'a\\\nb'; cr review --agent"), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('Bash: a comment before a continued line does not swallow the next line', () => {
+    expect(decide(bash('cr doctor # note \\\ncr review --agent'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('Bash: a billing flag split by a continuation is denied', () => {
+    expect(decide(bash('cr review --agent --use-\\\ncredits'), env).allow).toBe(false);
+    expect(used()).toBe(0);
+  });
+
+  it('Bash: a continued call is not plain, so --version after it still counts 1', () => {
+    expect(decide(bash('cr review --agent \\\n--version'), env).allow).toBe(true);
+    expect(used()).toBe(1);
   });
 
   it('an escaped # is not a comment', () => {
     expect(lexShell('echo \\# --version').text).toContain('--version');
+  });
+});
+
+describe('coderabbit-guard: the billing check reads the raw command (Dave r9)', () => {
+  const never = { CCV3_CODERABBIT_GUARD_STATE: join(tmpdir(), 'cr-guard-never-raw9.json') };
+
+  it('denies a comment that names cr next to a billing flag', () => {
+    const r = decide(bash('# never run cr review --use-credits'), never);
+    expect(r.allow).toBe(false);
+    expect(r.reason).toMatch(/billing flag with a CodeRabbit CLI call/);
+  });
+
+  it('denies a comment after a git command that names cr next to a billing flag', () => {
+    expect(decide(bash('git commit -m ok # never run cr review --use-credits'), never).allow).toBe(false);
+  });
+
+  it('denies a PowerShell block comment that names cr next to a billing flag', () => {
+    expect(decide(pwsh('<# never run coderabbit review --use-credits #> git status'), never).allow).toBe(false);
+  });
+
+  it.each([
+    'git commit -m "docs: cr review --use-credits is banned"',
+    'gh pr comment 1 --body "never run coderabbit --api-key"',
+    'git commit -m "docs: coderabbit.exe review --use-credits is banned"',
+  ])('allows a leading git or gh command that only quotes it, with 0 runs: %s', (command) => {
+    for (const tool of [bash, pwsh]) expect(decide(tool(command), never).allow, command).toBe(true);
+    expect(existsSync(join(tmpdir(), 'cr-guard-never-raw9.json'))).toBe(false);
+  });
+
+  it('denies when one cr word is in a git commit and another leads a real call', () => {
+    expect(decide(bash('git commit -m "cr notes" && cr review --agent --use-credits'), never).allow).toBe(false);
+  });
+
+  it('denies a git word that is only an argument of another program', () => {
+    expect(decide(bash('echo git commit -m "cr review --use-credits"'), never).allow).toBe(false);
   });
 });

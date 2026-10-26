@@ -20,7 +20,8 @@
  *
  * Shell comments are removed before any scan, by the same lexer pass that finds quotes (lexShell): a
  * `#` that starts a word outside quotes runs to the end of the line, and PowerShell `<# ... #>` too. Comment text counts for
- * nothing, so `cr review --agent # --version` is a review and `cr doctor # before review` is not.
+ * nothing for parsing and run counting, so `cr review --agent # --version` is a review and `cr doctor # before
+ * review` is not. The raw billing check below is the one exception: it reads comments.
  * Help and version are info-only from the call's own options before a bare `--`, never from text
  * after `--`, from a quoted argument, or from a comment. They are free ONLY for a plain call: cr or
  * coderabbit leads its own top-level segment, and the whole command has no comment, line continuation,
@@ -28,14 +29,23 @@
  * Any other call that names `review` counts one run even with --help or --version (when unsure, count).
  * A non-plain read-only call (`sudo cr doctor`) still counts 0 unless its text holds the word review.
  *
- * A raw check runs first and does not depend on that parsing. It reads only a segment whose leading
- * program runs its text (a shell, eval, iex, Start-Process, Start-Job, xargs, sudo, env, nohup, time,
- * timeout, watch, find, ForEach-Object) or is cr or coderabbit. If that raw text (quotes, backticks,
- * $( ), wrapper strings; .exe, .cmd, .bat and .ps1 shims) names cr or coderabbit with --use-credits or
- * --api-key, the call is denied. If it names cr and later review, and parsing found no call, it
- * counts one run. A segment that starts with grep, rg, echo, cat, Set-Content, Select-String, git or
- * gh only holds text and is not read. The raw check over-reports inside an executing program on
- * purpose, so a wrapper the parser does not know cannot hide a call.
+ * Line continuations are joined before anything else, as the shell does (joinContinuations): Bash
+ * removes backslash-newline outside single quotes, PowerShell does the same for backtick-newline. The
+ * joined text goes to the lexer and every later stage. A command that had a continuation is never plain.
+ *
+ * A raw billing check runs first, on the unstripped text, and does not depend on parsing or comment
+ * stripping (rawBilling). If the command holds a cr or coderabbit word (.exe, .cmd, .bat, .ps1 shims
+ * too) and --use-credits or the api-key flag in any quoting, the call is denied. The only exemption: every cr
+ * word sits in the argument text of a segment that leads with git or gh (commit and PR text). A cr
+ * word in a comment is never exempt, and text-only commands (grep, echo, cat, Set-Content) are denied
+ * too. To write a test payload that names these flags, use the Write tool, not a shell command.
+ *
+ * A second raw scan reads only a segment whose leading program runs its text (a shell, eval, iex,
+ * Start-Process, Start-Job, xargs, sudo, env, nohup, time, timeout, watch, find, ForEach-Object) or is
+ * cr or coderabbit. If that raw text names cr and later review, and parsing found no call, it counts
+ * one run. A segment that starts with grep, rg, echo, cat, git or gh only holds text and is not
+ * counted. This scan over-reports inside an executing program on purpose, so a wrapper the parser
+ * does not know cannot hide a call.
  *
  * Out of scope (adversarial evasion, not accidents): a variable or $( ) that holds the flag, aliases
  * and functions, git or gh aliases and `git -c alias.x=...`, a rebase exec step, a script file run
@@ -175,6 +185,58 @@ function startsWord(command: string, i: number): boolean {
 }
 
 /**
+ * Join line continuations the way the shell does, BEFORE lexing: Bash removes every backslash-newline
+ * (also backslash CRLF) outside single quotes, PowerShell does the same for backtick-newline. The
+ * join is quote-aware: a single-quoted string keeps its pair, an escaped escape character (`\\`) is
+ * not the start of a pair, and a comment ends at its own newline (the shell does not continue a
+ * comment). After the join `foo\` + newline + `# x` is the one word `foo# x`, so the `#` is no
+ * comment. Any doubt (an unclosed quote) leaves the text as it is: a pair that stays makes the lexer
+ * read more text, never less.
+ */
+export function joinContinuations(command: string, ps = false): string {
+  const esc = ps ? '`' : '\\';
+  if (!command.includes(`${esc}\n`) && !command.includes(`${esc}\r\n`)) return command;
+  const n = command.length;
+  let out = '';
+  let quote = '';
+  let i = 0;
+  while (i < n) {
+    const c = command[i];
+    if (quote === "'") {
+      if (c === "'") quote = '';
+      out += c;
+      i++;
+    } else if (c === esc) {
+      const pair = command.startsWith('\n', i + 1) ? 2 : command.startsWith('\r\n', i + 1) ? 3 : 0;
+      if (pair) i += pair;
+      else {
+        out += command.slice(i, i + 2);
+        i += 2;
+      }
+    } else if (quote === '"') {
+      if (c === '"') quote = '';
+      out += c;
+      i++;
+    } else if (c === '#' && startsWord(out, out.length)) {
+      const eol = command.indexOf('\n', i);
+      const stop = eol < 0 ? n : eol;
+      out += command.slice(i, stop);
+      i = stop;
+    } else if (ps && c === '<' && command[i + 1] === '#') {
+      const close = command.indexOf('#>', i + 2);
+      const stop = close < 0 ? n : close + 2;
+      out += command.slice(i, stop);
+      i = stop;
+    } else {
+      if ((c === "'" && command.indexOf("'", i + 1) > 0) || (c === '"' && hasClosing(command, i + 1, '"', esc))) quote = c;
+      out += c;
+      i++;
+    }
+  }
+  return out;
+}
+
+/**
  * ONE left-to-right pass that tracks every state together: normal, single-quoted, double-quoted
  * (with escapes), `$( )` and backtick substitutions, heredoc bodies, PowerShell here-strings and
  * comments. Two separate passes cannot agree: an apostrophe in a comment would pair with a later
@@ -282,8 +344,7 @@ export function lexShell(command: string, ps = false): Lexed {
       i = stop;
     } else if (c === esc) {
       fill(i + 1, i + 2);
-      // An escaped newline is a line continuation: a `#` after it starts a word and is a comment.
-      escEnd = command[i + 1] === '\n' || command[i + 1] === '\r' ? -1 : i + 2;
+      escEnd = i + 2;
       i += 2;
     } else if (c === "'") {
       const j = command.indexOf("'", i + 1);
@@ -360,7 +421,7 @@ function segmentSpans(lexed: Lexed, ps: boolean): Array<{ start: number; end: nu
 
 /** Split on shell separators and braces. Quoted text and heredoc bodies stay inside their segment. Comments are dropped. */
 export function segmentize(command: string, ps = false): string[] {
-  return segmentSpans(lexShell(command, ps), ps).map((s) => s.text);
+  return segmentSpans(lexShell(joinContinuations(command, ps), ps), ps).map((s) => s.text);
 }
 
 // ---------------------------------------------------------------------------------------------
@@ -565,7 +626,7 @@ function classifyInvocation(inv: Invocation, plain: boolean): SegmentClass {
 // ---------------------------------------------------------------------------------------------
 
 /** A standalone cr or coderabbit word: after a space, quote, path separator or bracket; not `.coderabbit.yaml`. */
-const CR_WORD = /(?:^|[\s"'`(\\/=,{])(?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?(?=$|[\s"'`)\\,}])/gi;
+const CR_WORD = /(?:^|[\s"'`(\\/=,{])((?:cr|coderabbit)(?:\.(?:exe|cmd|bat|ps1))?)(?=$|[\s"'`)\\,}])/gi;
 const BILLING_WORD = /(?:^|[\s"'`(=,])--(?:use-credits|api-key)(?=$|[\s"'`)=,])/i;
 const REVIEW_WORD = /\breview\b/i;
 /**
@@ -591,9 +652,31 @@ function leadingProgram(segment: string): string {
   return baseName(splitFirst(s).tok);
 }
 
+/** Programs whose arguments are commit or PR text: a cr word there is data, not a call. */
+const TEXT_COMMANDS = new Set(['git', 'gh']);
+
+/**
+ * Fail-closed billing check on the RAW command: no comment stripping, no wrapper parsing. True when
+ * the text holds a billing flag and a standalone cr or coderabbit word, unless EVERY cr word sits in
+ * the argument text of a segment that leads with git or gh (commit and PR text). A cr word inside a
+ * comment is never exempt, even after a git command. The segments are the lexer's, with a `$( )`
+ * inside double quotes kept whole, so a commit message built with a heredoc stays one git segment.
+ */
+export function rawBilling(text: string, ps = false): boolean {
+  if (!BILLING_WORD.test(text)) return false;
+  const lexed = lexShell(text, ps);
+  const ranges = segmentRanges(lexed, ps, true);
+  for (const m of text.matchAll(CR_WORD)) {
+    const at = (m.index ?? 0) + m[0].length - m[1].length;
+    const inComment = lexed.text[at] !== text[at];
+    const owner = ranges.find(([a, b]) => a <= at && at < b);
+    const exempt = !inComment && owner !== undefined && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    if (!exempt) return true;
+  }
+  return false;
+}
+
 export interface RawScan {
-  /** A cr or coderabbit word and a billing flag in one non-git, non-gh segment. */
-  billing: boolean;
   /**
    * The segments with a cr or coderabbit word followed later by the word review. `start` and `end`
    * are the segment's offsets [start, end) in the scanned text. The raw scan keeps a `$( )` inside
@@ -609,7 +692,7 @@ export interface RawScan {
  * over-reports inside an executing program (`sh -c "grep 'cr review'"`) on purpose.
  */
 export function rawScan(lexed: Lexed, ps = false): RawScan {
-  const found: RawScan = { billing: false, reviewSegments: [] };
+  const found: RawScan = { reviewSegments: [] };
   const text = lexed.text;
   // A `$( )` inside double quotes does not split, so a commit message built with a heredoc stays one git segment.
   for (const [a, b] of segmentRanges(lexed, ps, true)) {
@@ -622,7 +705,6 @@ export function rawScan(lexed: Lexed, ps = false): RawScan {
     const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => (lexed.bodies.has(a + k) ? ' ' : ch)).join('').trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
-    if (BILLING_WORD.test(raw)) found.billing = true;
     if (REVIEW_WORD.test(raw.slice((first.index ?? 0) + first[0].length))) found.reviewSegments.push({ start: a, end: b, raw });
   }
   return found;
@@ -639,8 +721,9 @@ function leadsWithCr(segment: string): boolean {
  * backtick that could hide a call. The caller also checks that the call leads its own segment, holds
  * no newline and is not a wrapper payload. Any doubt means not plain, and a review then counts.
  */
-function isPlainCommand(source: string, lexed: Lexed, ps: boolean): boolean {
-  if (lexed.text !== source) return false;
+function isPlainCommand(source: string, joined: string, lexed: Lexed, ps: boolean): boolean {
+  // `source` is the ORIGINAL text: a command that had a continuation is never plain, even once joined.
+  if (lexed.text !== joined) return false;
   if (lexed.bodies.size > 0) return false;
   if (ps ? /`\r?\n|@["']/.test(source) : /\\\r?\n|<</.test(source)) return false;
   return !/[(){}`]/.test(lexed.masked);
@@ -650,19 +733,24 @@ const MAX_NESTING = 4;
 
 /** Classify every command in `text`: a block wins, runs add up, wrapper strings are classified again. */
 export function classifyCommand(source: string, ps = false, depth = 0): SegmentClass {
+  // Billing first, on the raw text as written and as the shell reads it (continuations joined). It
+  // needs no lexing of comments or wrappers. Nested wrapper strings sit inside the outer text.
+  const joined = joinContinuations(source, ps);
+  if (depth === 0 && (rawBilling(joined, ps) || (joined !== source && rawBilling(source, ps)))) {
+    return { verdict: 'block', reason: BILLING_REASON };
+  }
   // One lexer pass gives the comment-free text and the quote mask, so both always agree.
-  const lexed = lexShell(source, ps);
+  const lexed = lexShell(joined, ps);
   const text = lexed.text;
   // A wrapper string is scanned again, so a mix inside `bash -c "..."` counts per segment too.
   const raw = rawScan(lexed, ps);
-  if (raw.billing) return { verdict: 'block', reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
   // The raw scan and the parser split the text differently: a quoted `$( )` stays whole in the raw
   // scan and splits for the parser. Each parsed segment sits inside exactly one raw segment, found
   // by source offsets. A raw segment that names a review counts the parsed runs inside it, or one
   // hidden run if the parser found no CodeRabbit call there. It never counts twice.
-  const plainCall = depth === 0 && isPlainCommand(source, lexed, ps);
+  const plainCall = depth === 0 && isPlainCommand(source, joined, lexed, ps);
   const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(lexed, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);

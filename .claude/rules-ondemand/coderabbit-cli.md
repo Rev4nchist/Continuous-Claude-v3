@@ -46,9 +46,10 @@ allowed. A `$( )` substitution inside double quotes is still scanned.
 A loop counts as one run, because the guard cannot see the iteration count. Never run `cr review`
 inside a loop, `xargs` or `ForEach-Object`.
 
-A raw check also blocks `--use-credits` or `--api-key` when a command that runs its text (a shell,
-`xargs`, `sudo`, `env`, `Start-Process`, `find -exec`) names `cr` or `coderabbit`, including `.cmd`,
-`.bat` and `.ps1` shims. `grep`, `rg`, `echo` and `Set-Content` only hold text and are not read.
+A raw check on the unstripped command denies `--use-credits` or `--api-key` next to a `cr` or
+`coderabbit` word (also `.cmd`, `.bat`, `.ps1` shims), in comments and in `grep`, `echo` or
+`Set-Content` text too, unless every `cr` word is inside a leading `git` or `gh` command's commit or PR
+text. To build a test payload that names these flags, write it with the Write tool, not a shell command.
 Known limit: the run key follows the last `cd` in a command, so the key only moves a count between
 branches; the cap never unlocks paid use. Help and version are free only for a plain one-line call;
 any wrapped, commented, continued or embedded review call counts as a run.
