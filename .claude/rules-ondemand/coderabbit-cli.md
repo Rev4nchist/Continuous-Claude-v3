@@ -6,8 +6,9 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 
 ## Run budget and timeouts
 
-- At most **2** `cr review --agent` runs per PR (per repo + branch). Run 3 is blocked by
-  `coderabbit-guard`. Failed, rate-limited, or incomplete runs **still consume** a slot.
+- At most **2** `cr review --agent` runs per PR (per repo + branch). Failed, rate-limited, or
+  incomplete runs **still consume** a slot. `coderabbit-guard` is **not registered** (live settings or
+  template) until DW-80 brings a vetted shell parser. Until then, you enforce every rule in this file.
 - Background review timeout: **≥15 minutes** (team default **35 minutes** on long PRs).
 - Treat incomplete outcomes as incomplete: do not claim the PR was reviewed.
 - Stop and report when the CLI ends in `awaiting_confirmation` or `action_required`; do not
@@ -18,7 +19,7 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 CLI/plugin output is for the agent's own triage. Fix real issues on the branch, but **never** call a
 PR ready based on CLI output alone. READY comes only from `review-status.mjs` (PR bots on the head).
 
-## Forbidden (hard block via coderabbit-guard)
+## Forbidden (coderabbit-guard blocks these once registered)
 
 - `--use-credits` and `--api-key` on any CodeRabbit command.
 - `cr code new`, `cr code push`, `coderabbit code new`, `coderabbit code push`.
@@ -55,7 +56,8 @@ branches; the cap never unlocks paid use. Help and version are free only for a p
 any wrapped, commented, continued or embedded review call counts as a run. The `git` and `gh` text
 exemption holds only for text that is not executed: `$( )`, backticks and shell payloads are always
 checked. Run-cap counting inside quoted heredocs is a known best-effort limit, and the guard stays
-unregistered in live settings until a vetted shell parser replaces the hand lexer (DW-80).
+unregistered in live settings and in `settings.json.template` until a vetted shell parser replaces the
+hand lexer (DW-80).
 
 The guard stops accidents, not evasion. These are out of scope: a variable or `$( )` holding the flag,
 aliases or functions, git or gh aliases, a rebase exec step, a script file run later, quote-split

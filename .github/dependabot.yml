@@ -1,0 +1,30 @@
+# .github/dependabot.yml (P3a, DW-80)
+# Every PR here gets a Greptile review (autoReview open+push), which costs a credit.
+# So: monthly, one grouped PR per ecosystem, at most 1 open PR each, and no automatic rebase
+# (a rebase is a push, and a push is another review).
+version: 2
+updates:
+  - package-ecosystem: github-actions
+    directory: "/"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    cooldown: { default-days: 7 }
+    groups: { actions: { patterns: ["*"] } }
+  # One npm entry for all three folders: one shared open-PR limit, so at most one npm PR
+  # (one paid review) is open at a time. (group-by: dependency-name would only merge the same
+  # package across folders, not all updates, so it is not used.)
+  - package-ecosystem: npm
+    directories: ["/.claude/hooks", "/apps/agentic-os", "/opc/scripts/dashboard/frontend"]
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    cooldown: { default-days: 7 }
+    groups: { npm-all: { patterns: ["*"] } }
+  - package-ecosystem: uv
+    directory: "/opc"
+    schedule: { interval: monthly }
+    open-pull-requests-limit: 1
+    rebase-strategy: disabled
+    cooldown: { default-days: 7 }
+    groups: { opc-uv: { patterns: ["*"] } }
