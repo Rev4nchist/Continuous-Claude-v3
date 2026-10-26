@@ -177,6 +177,8 @@ export interface Lexed {
   dqSubs: Set<number>;
   /** Indexes of heredoc and here-string body characters. */
   bodies: Set<number>;
+  /** Spans [start, end) the shell RUNS: `$( )` and backtick substitutions in every state, also in an expanded heredoc. */
+  execs: Array<[number, number]>;
 }
 
 /** True when a `#` at `i` starts a word: the start of the text, or after whitespace, `;`, `|`, `&` or `(`. */
@@ -256,6 +258,13 @@ export function lexShell(command: string, ps = false): Lexed {
   const out = command.split('');
   const dqSubs = new Set<number>();
   const bodies = new Set<number>();
+  const execs: Array<[number, number]> = [];
+  /** Start of each open mode in `modes`, or -1 for a double-quoted string (it runs nothing itself). */
+  const starts: number[] = [];
+  const closeMode = (end: number): void => {
+    const from = starts.pop() ?? -1;
+    if (from >= 0) execs.push([from, end]);
+  };
   const esc = ps ? '`' : '\\';
   const modes: Array<'dq' | 'sub' | 'bt' | 'dbt'> = [];
   const depths: number[] = [];
@@ -275,8 +284,10 @@ export function lexShell(command: string, ps = false): Lexed {
       const sub = command.startsWith('$(', k) ? closingParen(command, k + 2) : -1;
       const bt = !ps && command[k] === '`' ? command.indexOf('`', k + 1) : -1;
       const end = sub >= 0 ? sub : bt;
-      if (expand && end >= 0 && end < to) k = end + 1;
-      else {
+      if (expand && end >= 0 && end < to) {
+        execs.push([k, end + 1]);
+        k = end + 1;
+      } else {
         fill(k, k + 1);
         bodies.add(k);
         k++;
@@ -315,15 +326,18 @@ export function lexShell(command: string, ps = false): Lexed {
         i += 2;
       } else if (c === '"') {
         modes.pop();
+        closeMode(i + 1);
         i++;
       } else if (c === '$' && command[i + 1] === '(') {
         dqSubs.add(i);
         modes.push('sub');
+        starts.push(i);
         depths.push(0);
         i += 2;
       } else if (c === '`' && !ps) {
         dqSubs.add(i);
         modes.push('dbt');
+        starts.push(i);
         i++;
       } else {
         fill(i, i + 1);
@@ -353,7 +367,10 @@ export function lexShell(command: string, ps = false): Lexed {
         i = j + 1;
       } else i++;
     } else if (c === '"') {
-      if (hasClosing(command, i + 1, '"', esc)) modes.push('dq');
+      if (hasClosing(command, i + 1, '"', esc)) {
+        modes.push('dq');
+        starts.push(-1);
+      }
       i++;
     } else if (c === '@' && (command[i + 1] === "'" || command[i + 1] === '"') && /^[ \t]*\r?\n/.test(command.slice(i + 2))) {
       const q = command[i + 1];
@@ -374,25 +391,34 @@ export function lexShell(command: string, ps = false): Lexed {
       i = consumeHeredocs(i + 1);
     } else if (c === '$' && command[i + 1] === '(') {
       modes.push('sub');
+      starts.push(i);
       depths.push(0);
       i += 2;
     } else if (c === '`' && !ps) {
       if (top === 'dbt') {
         dqSubs.add(i);
         modes.pop();
-      } else if (top === 'bt') modes.pop();
-      else modes.push('bt');
+        closeMode(i + 1);
+      } else if (top === 'bt') {
+        modes.pop();
+        closeMode(i + 1);
+      } else {
+        modes.push('bt');
+        starts.push(i);
+      }
       i++;
     } else if (top === 'sub' && (c === '(' || c === ')')) {
       if (c === '(') depths[depths.length - 1]++;
       else if (depths[depths.length - 1] === 0) {
         modes.pop();
         depths.pop();
+        closeMode(i + 1);
       } else depths[depths.length - 1]--;
       i++;
     } else i++;
   }
-  return { text: text.join(''), masked: out.join(''), dqSubs, bodies };
+  while (starts.length) closeMode(n);
+  return { text: text.join(''), masked: out.join(''), dqSubs, bodies, execs };
 }
 
 /**
@@ -658,22 +684,43 @@ const TEXT_COMMANDS = new Set(['git', 'gh']);
 /**
  * Fail-closed billing check on the RAW command: no comment stripping, no wrapper parsing. True when
  * the text holds a billing flag and a standalone cr or coderabbit word, unless EVERY cr word sits in
- * the argument text of a segment that leads with git or gh (commit and PR text). A cr word inside a
- * comment is never exempt, even after a git command. The segments are the lexer's, with a `$( )`
+ * the argument text of a segment that leads with git or gh (commit and PR text) and is not executed.
+ * A cr word inside a comment, a `$( )` or backtick substitution, or a shell payload is never exempt. The segments are the lexer's, with a `$( )`
  * inside double quotes kept whole, so a commit message built with a heredoc stays one git segment.
  */
 export function rawBilling(text: string, ps = false): boolean {
   if (!BILLING_WORD.test(text)) return false;
   const lexed = lexShell(text, ps);
   const ranges = segmentRanges(lexed, ps, true);
+  const fine = segmentRanges(lexed, ps);
   for (const m of text.matchAll(CR_WORD)) {
     const at = (m.index ?? 0) + m[0].length - m[1].length;
     const inComment = lexed.text[at] !== text[at];
     const owner = ranges.find(([a, b]) => a <= at && at < b);
-    const exempt = !inComment && owner !== undefined && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    const git = owner !== undefined && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    const exempt = !inComment && git && !isExecuted(lexed, fine, at);
     if (!exempt) return true;
   }
   return false;
+}
+
+/** Programs that run the text they read: a shell, eval, starter, runner or `cmd`. */
+function readsText(program: string): boolean {
+  return SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === 'cmd';
+}
+
+/**
+ * True when the shell RUNS the text at offset `at`. The text sits in a `$( )` or backtick
+ * substitution (any state), or in the part of a finer segment led by a shell, eval or wrapper (a
+ * `bash -c` payload or a heredoc such a program reads). A heredoc body inside a substitution is data
+ * (`$(cat <<'EOF' ... EOF)`) unless such a program reads it. Single-quoted and plain double-quoted
+ * text is data.
+ */
+function isExecuted(lexed: Lexed, fine: Array<[number, number]>, at: number): boolean {
+  const seg = fine.find(([a, b]) => a <= at && at < b);
+  if (seg !== undefined && readsText(leadingProgram(lexed.text.slice(seg[0], seg[1])))) return true;
+  if (lexed.bodies.has(at)) return false;
+  return lexed.execs.some(([a, b]) => a <= at && at < b);
 }
 
 export interface RawScan {
@@ -701,7 +748,7 @@ export function rawScan(lexed: Lexed, ps = false): RawScan {
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
     // A heredoc body is data unless a shell, eval or wrapper receives it. `cat <<EOF` prose is not a call.
-    const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === 'cmd';
+    const reads = readsText(program);
     const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => (lexed.bodies.has(a + k) ? ' ' : ch)).join('').trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
@@ -736,7 +783,7 @@ export function classifyCommand(source: string, ps = false, depth = 0): SegmentC
   // Billing first, on the raw text as written and as the shell reads it (continuations joined). It
   // needs no lexing of comments or wrappers. Nested wrapper strings sit inside the outer text.
   const joined = joinContinuations(source, ps);
-  if (depth === 0 && (rawBilling(joined, ps) || (joined !== source && rawBilling(source, ps)))) {
+  if (rawBilling(joined, ps) || (joined !== source && rawBilling(source, ps))) {
     return { verdict: 'block', reason: BILLING_REASON };
   }
   // One lexer pass gives the comment-free text and the quote mask, so both always agree.

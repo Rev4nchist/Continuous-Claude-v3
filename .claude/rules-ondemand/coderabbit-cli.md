@@ -52,7 +52,10 @@ A raw check on the unstripped command denies `--use-credits` or `--api-key` next
 text. To build a test payload that names these flags, write it with the Write tool, not a shell command.
 Known limit: the run key follows the last `cd` in a command, so the key only moves a count between
 branches; the cap never unlocks paid use. Help and version are free only for a plain one-line call;
-any wrapped, commented, continued or embedded review call counts as a run.
+any wrapped, commented, continued or embedded review call counts as a run. The `git` and `gh` text
+exemption holds only for text that is not executed: `$( )`, backticks and shell payloads are always
+checked. Run-cap counting inside quoted heredocs is a known best-effort limit, and the guard stays
+unregistered in live settings until a vetted shell parser replaces the hand lexer (DW-80).
 
 The guard stops accidents, not evasion. These are out of scope: a variable or `$( )` holding the flag,
 aliases or functions, git or gh aliases, a rebase exec step, a script file run later, quote-split

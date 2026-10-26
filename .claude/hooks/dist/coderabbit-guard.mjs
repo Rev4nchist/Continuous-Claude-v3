@@ -191,6 +191,12 @@ function lexShell(command, ps = false) {
   const out = command.split("");
   const dqSubs = /* @__PURE__ */ new Set();
   const bodies = /* @__PURE__ */ new Set();
+  const execs = [];
+  const starts = [];
+  const closeMode = (end) => {
+    const from = starts.pop() ?? -1;
+    if (from >= 0) execs.push([from, end]);
+  };
   const esc = ps ? "`" : "\\";
   const modes = [];
   const depths = [];
@@ -208,8 +214,10 @@ function lexShell(command, ps = false) {
       const sub = command.startsWith("$(", k) ? closingParen(command, k + 2) : -1;
       const bt = !ps && command[k] === "`" ? command.indexOf("`", k + 1) : -1;
       const end = sub >= 0 ? sub : bt;
-      if (expand && end >= 0 && end < to) k = end + 1;
-      else {
+      if (expand && end >= 0 && end < to) {
+        execs.push([k, end + 1]);
+        k = end + 1;
+      } else {
         fill(k, k + 1);
         bodies.add(k);
         k++;
@@ -246,15 +254,18 @@ function lexShell(command, ps = false) {
         i += 2;
       } else if (c === '"') {
         modes.pop();
+        closeMode(i + 1);
         i++;
       } else if (c === "$" && command[i + 1] === "(") {
         dqSubs.add(i);
         modes.push("sub");
+        starts.push(i);
         depths.push(0);
         i += 2;
       } else if (c === "`" && !ps) {
         dqSubs.add(i);
         modes.push("dbt");
+        starts.push(i);
         i++;
       } else {
         fill(i, i + 1);
@@ -284,7 +295,10 @@ function lexShell(command, ps = false) {
         i = j + 1;
       } else i++;
     } else if (c === '"') {
-      if (hasClosing(command, i + 1, '"', esc)) modes.push("dq");
+      if (hasClosing(command, i + 1, '"', esc)) {
+        modes.push("dq");
+        starts.push(-1);
+      }
       i++;
     } else if (c === "@" && (command[i + 1] === "'" || command[i + 1] === '"') && /^[ \t]*\r?\n/.test(command.slice(i + 2))) {
       const q = command[i + 1];
@@ -306,25 +320,34 @@ ${q}@`, i + 2);
       i = consumeHeredocs(i + 1);
     } else if (c === "$" && command[i + 1] === "(") {
       modes.push("sub");
+      starts.push(i);
       depths.push(0);
       i += 2;
     } else if (c === "`" && !ps) {
       if (top === "dbt") {
         dqSubs.add(i);
         modes.pop();
-      } else if (top === "bt") modes.pop();
-      else modes.push("bt");
+        closeMode(i + 1);
+      } else if (top === "bt") {
+        modes.pop();
+        closeMode(i + 1);
+      } else {
+        modes.push("bt");
+        starts.push(i);
+      }
       i++;
     } else if (top === "sub" && (c === "(" || c === ")")) {
       if (c === "(") depths[depths.length - 1]++;
       else if (depths[depths.length - 1] === 0) {
         modes.pop();
         depths.pop();
+        closeMode(i + 1);
       } else depths[depths.length - 1]--;
       i++;
     } else i++;
   }
-  return { text: text.join(""), masked: out.join(""), dqSubs, bodies };
+  while (starts.length) closeMode(n);
+  return { text: text.join(""), masked: out.join(""), dqSubs, bodies, execs };
 }
 function segmentRanges(lexed, ps, wholeQuotes = false) {
   const sep = ps ? /\|\||&&|[;|&\n({}]|\$\(/g : /\|\||&&|[;|&\n({}]|\$\(|`/g;
@@ -528,14 +551,25 @@ function rawBilling(text, ps = false) {
   if (!BILLING_WORD.test(text)) return false;
   const lexed = lexShell(text, ps);
   const ranges = segmentRanges(lexed, ps, true);
+  const fine = segmentRanges(lexed, ps);
   for (const m of text.matchAll(CR_WORD)) {
     const at = (m.index ?? 0) + m[0].length - m[1].length;
     const inComment = lexed.text[at] !== text[at];
     const owner = ranges.find(([a, b]) => a <= at && at < b);
-    const exempt = !inComment && owner !== void 0 && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    const git2 = owner !== void 0 && TEXT_COMMANDS.has(leadingProgram(lexed.text.slice(owner[0], owner[1])));
+    const exempt = !inComment && git2 && !isExecuted(lexed, fine, at);
     if (!exempt) return true;
   }
   return false;
+}
+function readsText(program) {
+  return SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
+}
+function isExecuted(lexed, fine, at) {
+  const seg = fine.find(([a, b]) => a <= at && at < b);
+  if (seg !== void 0 && readsText(leadingProgram(lexed.text.slice(seg[0], seg[1])))) return true;
+  if (lexed.bodies.has(at)) return false;
+  return lexed.execs.some(([a, b]) => a <= at && at < b);
 }
 function rawScan(lexed, ps = false) {
   const found = { reviewSegments: [] };
@@ -545,7 +579,7 @@ function rawScan(lexed, ps = false) {
     if (!seg) continue;
     const program = leadingProgram(seg);
     if (!EXECUTING_PROGRAMS.has(program) && !isCrExecutable(program)) continue;
-    const reads = SHELLS.has(program) || EVALS.has(program) || STARTERS.has(program) || RUNNERS.has(program) || program === "cmd";
+    const reads = readsText(program);
     const raw = reads ? seg : [...text.slice(a, b)].map((ch, k) => lexed.bodies.has(a + k) ? " " : ch).join("").trim();
     const first = [...raw.matchAll(CR_WORD)][0];
     if (!first) continue;
@@ -565,7 +599,7 @@ function isPlainCommand(source, joined, lexed, ps) {
 var MAX_NESTING = 4;
 function classifyCommand(source, ps = false, depth = 0) {
   const joined = joinContinuations(source, ps);
-  if (depth === 0 && (rawBilling(joined, ps) || joined !== source && rawBilling(source, ps))) {
+  if (rawBilling(joined, ps) || joined !== source && rawBilling(source, ps)) {
     return { verdict: "block", reason: BILLING_REASON };
   }
   const lexed = lexShell(joined, ps);

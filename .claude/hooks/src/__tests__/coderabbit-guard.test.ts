@@ -1613,3 +1613,49 @@ describe('coderabbit-guard: the billing check reads the raw command (Dave r9)', 
     expect(decide(bash('echo git commit -m "cr review --use-credits"'), never).allow).toBe(false);
   });
 });
+
+describe('coderabbit-guard: the git and gh exemption covers only text that is not executed (Greptile r10, thread 4379851518)', () => {
+  const stateFile = join(tmpdir(), 'cr-guard-never-r10.json');
+  const never = { CCV3_CODERABBIT_GUARD_STATE: stateFile };
+  const BT = '`';
+  beforeEach(() => rmSync(stateFile, { force: true }));
+  afterEach(() => rmSync(stateFile, { force: true }));
+
+  const executed: Array<[string, string, boolean]> = [
+    ['Greptile example: bash -c in a double-quoted $( )', `git commit -m "$(bash -c 'sudo -u root cr review --agent --use-credits')"`, false],
+    ['backtick substitution in double quotes', `git commit -m "${BT}bash -c 'cr review --use-credits'${BT}"`, false],
+    ['gh body with a $( ) in double quotes', 'gh pr comment 1 --body "$(cr review --agent --use-credits)"', false],
+    ['PowerShell $( ) in double quotes', 'git commit -m "$(cr review --agent --use-credits)"', true],
+    ['PowerShell $( ) in an expandable here-string', 'git commit -m @"\n$(cr review --agent --use-credits)\n"@', true],
+    ['Bash unquoted heredoc with a $( )', 'git commit -F - <<EOF\n$(cr review --agent --use-credits)\nEOF', false],
+    ['bash reads a quoted heredoc inside a double-quoted $( )', `git commit -m "$(bash <<'EOF'\ncr review --agent --use-credits\nEOF\n)"`, false],
+    ['a $( ) next to quoted prose', 'git commit -m "docs: ok $(cr review --use-credits) done"', false],
+  ];
+
+  it.each(executed)('denies when the cr call runs: %s', (_name, command, ps) => {
+    const r = decide(ps ? pwsh(command) : bash(command), never);
+    expect(r.allow, command).toBe(false);
+    expect(r.reason).toMatch(/billing flag with a CodeRabbit CLI call/);
+  });
+
+  it('denies the gh $( ) example in the PowerShell tool too', () => {
+    expect(decide(pwsh('gh pr comment 1 --body "$(cr review --agent --use-credits)"'), never).allow).toBe(false);
+  });
+
+  it.each([
+    `git commit -m 'docs: $(cr review --use-credits) is banned'`,
+    'git commit -m "docs: cr review --use-credits is banned"',
+    `gh pr comment 1 --body "never run coderabbit ${KEY_FLAG}"`,
+  ])('allows text that is not executed, with 0 runs, in both tools: %s', (command) => {
+    for (const tool of [bash, pwsh]) expect(decide(tool(command), never).allow, command).toBe(true);
+    expect(existsSync(stateFile)).toBe(false);
+  });
+
+  it.each([
+    `git commit -m "$(cat <<'EOF'\nfix: cr review --use-credits is banned\nEOF\n)"`,
+    'git commit -m "docs: \\$(cr review --use-credits) is banned"',
+  ])('allows Bash text that is not executed (data heredoc, escaped $): %s', (command) => {
+    expect(decide(bash(command), never).allow, command).toBe(true);
+    expect(existsSync(stateFile)).toBe(false);
+  });
+});
