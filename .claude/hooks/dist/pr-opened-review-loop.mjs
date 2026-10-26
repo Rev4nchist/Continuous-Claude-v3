@@ -7,14 +7,17 @@ import { tmpdir } from "os";
 var COMMAND_TOOLS = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
 var GH_API_RE = /\bgh\s+api\b/i;
-var PULLS_PATH_RE = /\/pulls(?=[\s"'?]|$)/i;
-var POST_METHOD_RE = /(-X\s*POST|--method\s*POST)/i;
+var PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
+var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
+var ANY_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))\w/i;
+var FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*\S|--(?:raw-field|field|input)[\s=])/;
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 function isPrOpenCommand(command) {
   const cmd = command || "";
   if (PR_CREATE_RE.test(cmd)) return true;
-  if (GH_API_RE.test(cmd) && PULLS_PATH_RE.test(cmd) && POST_METHOD_RE.test(cmd)) return true;
-  return false;
+  if (!GH_API_RE.test(cmd) || !PULLS_PATH_RE.test(cmd)) return false;
+  if (POST_METHOD_RE.test(cmd)) return true;
+  return FIELD_FLAG_RE.test(cmd) && !ANY_METHOD_RE.test(cmd);
 }
 function responseText(resp) {
   if (resp === null || resp === void 0) return "";

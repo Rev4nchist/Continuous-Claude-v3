@@ -23,16 +23,22 @@ const PR_CREATE_RE = /\bgh\s+pr\s+create\b/i;
 const GH_API_RE = /\bgh\s+api\b/i;
 // Only the collection endpoint `.../pulls` opens a PR. `/pulls/5/reviews` and thread replies do not:
 // the path must end at "pulls" (whitespace, a quote, `?` or end of string follows).
-const PULLS_PATH_RE = /\/pulls(?=[\s"'?]|$)/i;
-const POST_METHOD_RE = /(-X\s*POST|--method\s*POST)/i;
+const PULLS_PATH_RE = /\/pulls\/?(?=[\s"'?]|$)/i;
+// gh accepts `-X POST`, `-XPOST`, `--method POST` and `--method=POST`.
+const POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
+// Any explicit method (GET, PATCH, ...) switches off gh's default below.
+const ANY_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))\w/i;
+// With no method, gh api sends POST as soon as a field or an input file is given.
+const FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*\S|--(?:raw-field|field|input)[\s=])/;
 
 const PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 
 export function isPrOpenCommand(command: string): boolean {
   const cmd = command || '';
   if (PR_CREATE_RE.test(cmd)) return true;
-  if (GH_API_RE.test(cmd) && PULLS_PATH_RE.test(cmd) && POST_METHOD_RE.test(cmd)) return true;
-  return false;
+  if (!GH_API_RE.test(cmd) || !PULLS_PATH_RE.test(cmd)) return false;
+  if (POST_METHOD_RE.test(cmd)) return true;
+  return FIELD_FLAG_RE.test(cmd) && !ANY_METHOD_RE.test(cmd);
 }
 
 export function responseText(resp: unknown): string {

@@ -73,6 +73,37 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     expect(isPrOpenCommand('gh api repos/o/r/pullsfoo -X POST')).toBe(false);
   });
 
+  // Critic round: every spelling gh accepts for the method, a trailing slash, and gh's default POST when fields are given.
+  it('detects every spelling of the POST method', () => {
+    for (const method of ['-X POST', '-XPOST', '--method POST', '--method=POST', '-X post']) {
+      expect(isPrOpenCommand(`gh api repos/o/r/pulls ${method} -f title=x`), method).toBe(true);
+    }
+  });
+
+  it('detects the pulls collection with a trailing slash', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/ -X POST -f title=x')).toBe(true);
+    expect(isPrOpenCommand('gh api "repos/o/r/pulls/" --method=POST')).toBe(true);
+  });
+
+  it('treats fields with no method as a POST, because gh defaults to POST then', () => {
+    for (const flag of ['-f title=x', '-F draft=true', '--raw-field title=x', '--field draft=true', '--input body.json', '-ftitle=x']) {
+      expect(isPrOpenCommand(`gh api repos/o/r/pulls ${flag}`), flag).toBe(true);
+    }
+  });
+
+  it('does not treat fields as a POST when the method is GET', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -X GET -f state=open')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls --method=GET -F per_page=5')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls --method GET --field state=open')).toBe(false);
+  });
+
+  it('does not treat a longer path or a non-POST method as a PR open', () => {
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5 -f state=closed')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls/5/comments -f body=ok')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -X PATCH -f title=x')).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls')).toBe(false);
+  });
+
   it('does not detect a GET to a pulls endpoint', () => {
     expect(isPrOpenCommand('gh api repos/o/r/pulls')).toBe(false);
     expect(isPrOpenCommand('gh api repos/o/r/pulls/5')).toBe(false);
