@@ -1062,3 +1062,98 @@ describe('coderabbit-guard: a substitution before a review does not cost a secon
     expect(existsSync(stateFile)).toBe(false);
   });
 });
+
+describe('coderabbit-guard: an allowed non-review call never cancels a hidden review (Greptile r5)', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'hidden#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-hidden-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  const GREPTILE = 'sudo -u root cr review --agent # check with "$(cr --version)"';
+
+  it.each([
+    ['the Greptile example (comment holds an allowed call)', GREPTILE],
+    ['hidden review then --version', 'sudo -u root cr review --agent && cr --version'],
+    ['xargs review then doctor', 'xargs -n 1 cr review --agent; cr doctor'],
+    ['--version then a hidden review inside bash -c', 'bash -c "cr --version; sudo cr review --agent"'],
+  ])('counts 1 on a fresh state: %s', (_name, command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+
+  it('denies the Greptile example at 2 used runs with the cap reason', () => {
+    expect(decide(bash('cr review --agent'), env).allow).toBe(true);
+    expect(decide(bash('cr review --agent'), env).allow).toBe(true);
+    const d = decide(bash(GREPTILE), env);
+    expect(d.allow).toBe(false);
+    expect(d.reason).toContain('run cap reached');
+    expect(used()).toBe(2);
+  });
+
+  it.each([
+    ['plain mix', 'cr review --agent && sudo -u root cr review --agent', 2],
+    ['two plain reviews', 'cr review --agent && cr review --agent', 2],
+    ['two reviews in one quoted string', 'echo "$(cr review --agent) $(cr review --agent)"', 2],
+    ['substitution before a review', 'echo "$(date)" && cr review --agent', 1],
+    ['parsed review plus allowed call in one span keeps 1', 'cr review --agent "$(cr --version)"', 1],
+    ['--version alone', 'cr --version', 0],
+    ['doctor then usage', 'cr doctor && cr usage --agent', 0],
+    ['text only', 'echo "cr review"', 0],
+    ['grep for the phrase', 'grep -rn "cr review" docs', 0],
+  ])('keeps the count: %s', (_name, command, runs) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(runs);
+  });
+
+  it('still denies Greptile billing examples', () => {
+    expect(decide(bash(`sudo -u root cr review --agent ${KEY_FLAG}=${KEY_VALUE}`), env).allow).toBe(false);
+    expect(decide(bash(`sudo -u root cr review --agent "${KEY_FLAG}" ${KEY_VALUE}`), env).allow).toBe(false);
+    expect(used()).toBe(0);
+  });
+});
+
+describe('coderabbit-guard: a review --help call explains the review word only when it fills the span', () => {
+  let dir: string;
+  let stateFile: string;
+  let env: NodeJS.ProcessEnv;
+  const KEY = 'helpspan#main';
+
+  beforeEach(() => {
+    dir = mkdtempSync(join(tmpdir(), 'cr-guard-helpspan-'));
+    stateFile = join(dir, 'state.json');
+    env = { CCV3_CODERABBIT_GUARD_STATE: stateFile, CCV3_CODERABBIT_GUARD_KEY: KEY };
+  });
+
+  afterEach(() => {
+    rmSync(dir, { recursive: true, force: true });
+  });
+
+  const used = (): number => (existsSync(stateFile) ? (readState(stateFile).counts[KEY] ?? 0) : 0);
+
+  it.each([
+    'cr review --help',
+    'cr review --agent --help',
+    'bash -c "cr review --help"',
+    'sudo cr review --help',
+  ])('counts 0: %s', (command) => {
+    expect(decide(bash(command), env).allow).toBe(true);
+    expect(used()).toBe(0);
+  });
+
+  it('counts 1 when a review --help call in a comment sits next to a hidden review', () => {
+    expect(decide(bash('sudo -u root cr review --agent # see "$(cr review --help)"'), env).allow).toBe(true);
+    expect(used()).toBe(1);
+  });
+});

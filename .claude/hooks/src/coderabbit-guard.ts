@@ -471,6 +471,8 @@ export interface SegmentClass {
   countsRun?: boolean;
   /** How many `cr review --agent` runs the text holds (a wrapper string can hold several). */
   runs?: number;
+  /** True for an allowed `--help` call that names `review` (`cr review --help`): it explains the raw review word and costs no run. */
+  reviewHelp?: boolean;
 }
 
 const NOT_ALLOWED =
@@ -487,7 +489,7 @@ function classifyInvocation(inv: Invocation): SegmentClass {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: 'block', reason: 'CodeRabbit guard: code new/push is forbidden' };
   }
-  if (isInfoRequest(inv.args)) return { verdict: 'allow' };
+  if (isInfoRequest(inv.args)) return { verdict: 'allow', reviewHelp: inv.args.includes('review') };
   if (isReviewAgent(inv.args)) return { verdict: 'allow', countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: 'allow' };
   return { verdict: 'block', reason: NOT_ALLOWED };
@@ -574,7 +576,7 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
   // scan and splits for the parser. Each parsed segment sits inside exactly one raw segment, found
   // by source offsets. A raw segment that names a review counts the parsed runs inside it, or one
   // hidden run if the parser found no CodeRabbit call there. It never counts twice.
-  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, found: false }));
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(text, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
@@ -589,12 +591,17 @@ export function classifyCommand(text: string, ps = false, depth = 0): SegmentCla
     if (!owner) runs += c.runs ?? 0;
     else {
       owner.parsed += c.runs ?? 0;
-      owner.found ||= c.verdict !== 'ignore'; // `--help` is a call the parser found
+      // Only a help call that fills the whole raw span explains its review word. A help call inside a
+      // quoted substitution next to other text can hide a real review in the same span.
+      owner.covered ||= c.reviewHelp === true && seg.trim() === text.slice(owner.start, owner.end).trim();
     }
   }
-  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.found ? 0 : 1;
+  // The raw scan saw a review in every `hidden` span, so each span counts max(parsed runs, 1). An
+  // allowed call that does not name review (`cr --version`) never cancels it. Only `cr review --help`
+  // explains the raw review word and lets the span count 0.
+  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
   if (runs > 0) return { verdict: 'allow', countsRun: true, runs };
-  return { verdict: allowed ? 'allow' : 'ignore' };
+  return { verdict: allowed ? 'allow' : 'ignore', reviewHelp: hidden.some((h) => h.covered) };
 }
 
 /** Classify one command line (kept for callers that think in segments). */

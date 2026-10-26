@@ -410,7 +410,7 @@ function classifyInvocation(inv) {
   if (isCodeWorkspace(inv.args)) {
     return { verdict: "block", reason: "CodeRabbit guard: code new/push is forbidden" };
   }
-  if (isInfoRequest(inv.args)) return { verdict: "allow" };
+  if (isInfoRequest(inv.args)) return { verdict: "allow", reviewHelp: inv.args.includes("review") };
   if (isReviewAgent(inv.args)) return { verdict: "allow", countsRun: true, runs: 1 };
   if (isReadOnlySubcommand(inv.args)) return { verdict: "allow" };
   return { verdict: "block", reason: NOT_ALLOWED };
@@ -473,7 +473,7 @@ function classifyCommand(text, ps = false, depth = 0) {
   if (raw.billing) return { verdict: "block", reason: BILLING_REASON };
   let runs = 0;
   let allowed = false;
-  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, found: false }));
+  const hidden = raw.reviewSegments.map((r) => ({ ...r, parsed: 0, covered: false }));
   for (const { start, end, text: seg } of segmentSpans(text, ps)) {
     const owner = hidden.find((h) => h.start <= start && end <= h.end);
     const inv = parseInvocation(seg);
@@ -488,12 +488,12 @@ function classifyCommand(text, ps = false, depth = 0) {
     if (!owner) runs += c.runs ?? 0;
     else {
       owner.parsed += c.runs ?? 0;
-      owner.found ||= c.verdict !== "ignore";
+      owner.covered ||= c.reviewHelp === true && seg.trim() === text.slice(owner.start, owner.end).trim();
     }
   }
-  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.found ? 0 : 1;
+  for (const h of hidden) runs += h.parsed > 0 ? h.parsed : h.covered ? 0 : 1;
   if (runs > 0) return { verdict: "allow", countsRun: true, runs };
-  return { verdict: allowed ? "allow" : "ignore" };
+  return { verdict: allowed ? "allow" : "ignore", reviewHelp: hidden.some((h) => h.covered) };
 }
 function classifyShellSegment(segment, ps = false) {
   return classifyCommand(segment, ps);
