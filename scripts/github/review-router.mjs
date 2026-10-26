@@ -210,11 +210,13 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
     if (reason === 'person_override') add = add.filter((l) => l.startsWith('risk:'));
   } else if (rank(seen) > rank(previousClass)) {
     reason = 'raised';
-    // Person wins on a raise too: a review label the router added for the old class and a person then
-    // removed stays removed. The new class still gets its own labels (READY reads review:deep-held as
-    // needing CodeRabbit, so dropping review:coderabbit never lowers review).
-    const removed = route(previousClass, labelsNow, config, credits).wanted.filter((l) => l.startsWith('review:') && !labelsNow.includes(l));
-    add = add.filter((l) => !removed.includes(l));
+    // Person wins on a raise only where it can never lower review: a removed review:coderabbit stays
+    // removed when the new class gets review:deep or review:deep-held, because READY reads both as
+    // needing CodeRabbit. Every other label the new class wants is added, even if it looks removed:
+    // the router keeps no history of what an earlier run added under an earlier config.
+    const deepLabel = add.includes('review:deep') || add.includes('review:deep-held') || labelsNow.includes('review:deep') || labelsNow.includes('review:deep-held');
+    const crRemoved = previousClass !== null && route(previousClass, [], config, credits).wanted.includes('review:coderabbit') && !labelsNow.includes('review:coderabbit');
+    if (deepLabel && crRemoved) add = add.filter((l) => l !== 'review:coderabbit');
   } else {
     add = [];
     reason = r.wanted.some((l) => !labelsNow.includes(l)) ? 'person_override' : 'no_change';

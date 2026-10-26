@@ -395,6 +395,13 @@ test('a raise keeps a review label the person removed removed, and still adds th
   assert.deepEqual(d.add, ['risk:infra', 'review:deep-held']);
 });
 
+test('a raise after deep_enabled flips on adds review:deep (it was never added, so it is not a person removal)', () => {
+  const labels = ['risk:steering', 'review:coderabbit', 'review:deep-held', B]; // routed while deep was off
+  const d = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'steering', cfg({ deep_enabled: true }));
+  assert.equal(d.reason, 'raised');
+  assert.ok(d.add.includes('review:deep'), `review:deep must be added: ${d.add.join(', ')}`);
+});
+
 test('a push that raises the class adds the new labels and keeps the old ones', () => {
   const labels = ['risk:normal', 'review:coderabbit', B];
   const d = dec('synchronize', pr(['scripts/a.mjs', '.github/workflows/x.yml']), labels, 'normal');
