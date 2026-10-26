@@ -6,28 +6,29 @@ decides if the action runs, gives the model only the context it needs, and recor
 
 CCv3 started from the MIT-licensed
 [parcadei/Continuous-Claude-v3](https://github.com/parcadei/Continuous-Claude-v3). Of the
-1,147 commits on `main`, 92 come from the upstream author and 973 are authored as Rev4nchist.
+1,441 commits on `main`, 92 come from the upstream author and 1,177 are authored as Rev4nchist.
 
-Status: one operator uses CCv3 every day on a Windows 11 machine. It is a development harness
-for one person. It is not a multi-user product.
+Status: one operator uses CCv3 every day on a Windows 11 machine. The install path was verified
+on a second machine on 2026-10-24 (PR #147). It is a development harness for one person. It is
+not a multi-user product.
 
 ## At a glance
 
-All counts were measured on 2026-09-24.
+All counts were measured on 2026-10-26 at commit `1db5a6c7`.
 
 | Count | Value | What it counts |
 |---|---|---|
-| Commits on `main` | 1,147 | All commits since the first commit on 2026-01-10 |
-| Commits authored as Rev4nchist | 973 | `git log --author=Rev4nchist` |
+| Commits on `main` | 1,441 | All commits since the first commit on 2026-01-10 |
+| Commits authored as Rev4nchist | 1,177 | `git log --author=Rev4nchist` |
 | Commits from the upstream base | 92 | `git log --author=parcadei` |
-| Merged pull requests | 69 | "Merge pull request" commits on `main` |
+| Merged pull requests | 147 | "Merge pull request" commits on `main` |
 | Hook programs | 73 | TypeScript files at the top level of `.claude/hooks/src/` |
-| Live hook registrations | 80 | Entries in `~/.claude/settings.json`, across 9 lifecycle events |
-| Hook test files | 90 | `.claude/hooks/src/__tests__/*.test.ts` |
-| Subagent definitions | 37 | `.claude/agents/*.md`: 12 on `opus`, 25 on `sonnet` |
-| Skills | 145 | Folders in `.claude/skills/` that hold a `SKILL.md` |
+| Live hook registrations | 75 | Entries across 67 hook names, counted by `hook-contract-guard.mjs` |
+| Hook test files | 101 | `.claude/hooks/src/__tests__/*.test.ts` |
+| Subagent definitions | 35 | `.claude/agents/*.md`: 12 on `opus`, 23 on `sonnet` |
+| Skills | 80 | Folders in `.claude/skills/` that hold a `SKILL.md` |
 | On-demand rules | 20 | `.claude/rules-ondemand/*.md`, loaded by the `rule-router` hook |
-| Always-loaded instructions | 18,275 chars | Text every session loads. It was 153,689 chars before PR #57. |
+| Always-loaded instructions | 23,502 chars | Core plus this repo's `CLAUDE.md` chain. Core alone was 18,275 after PR #57, down from 153,689. |
 
 ## The harness shape
 
@@ -90,7 +91,7 @@ context and record state.
 Measured result: 16 hooks exited 0 and never reached the model. They wrote `result` or `message`
 fields, which Claude Code does not read. Commit `fd906dd` fixed them.
 `scripts/hooks/hook-contract-guard.mjs` now fails on any discarded output. Its current output:
-`80 live entries / 71 names, 71 sources scanned, 48 speak the contract, 0 discarded-output`.
+`75 live entries / 67 names, 67 sources scanned, 45 speak the contract, 0 discarded-output`.
 
 ### 2. Rules
 
@@ -144,7 +145,7 @@ first.
 Subagents take delegated work. A coordination layer in PostgreSQL stops parallel sessions from
 colliding.
 
-- `.claude/agents/` holds 37 agent definitions, each with a `.json` sidecar. Each pins its model:
+- `.claude/agents/` holds 35 agent definitions, each with a `.json` sidecar. Each pins its model:
   `opus` for judgment (planning, review, orchestration) or `sonnet` for execution.
 - `scripts/check-agent-model-drift.mjs` fails on a missing model, on `haiku` or `inherit`, or on
   a sidecar that disagrees with its `.md` file.
@@ -170,6 +171,9 @@ Guardrails stop risky actions before they run.
   `.claude/hooks/src/shared/destructive-classifier.ts` classifies the command after it removes
   quoted text. An interactive session gets `ask`. An
   unattended session gets `deny`, because a prompt would hang a headless run.
+- `coderabbit-guard` checks the CodeRabbit CLI. It caps runs at 2 per branch and blocks billing,
+  key, autofix and install commands. It is built and tested but not registered in live settings
+  yet (DW-80).
 - `package-install-guard` checks each install command. It checks a typosquat list, a
   known-malicious list that a scheduled job updates, OSV.dev advisories and package age. A package
   under 24 hours old is blocked.
@@ -224,6 +228,29 @@ then audited all 109 hook test files. It deleted 11 files and 290 tests that cou
 bug, which left 98 files. For each deletion, the audit broke the target code and saw the test
 stay green, or it confirmed the target was dead code.
 
+### Pull request review and CI
+
+Each pull request to `main` passes automated checks before the operator merges it.
+
+- Greptile reviews every pull request (`.greptile/config.json`).
+- CodeRabbit reviews a pull request only when it carries the `review:coderabbit` or
+  `review:deep` label (`.coderabbit.yaml`). The `coderabbit-guard` hook, not yet registered live,
+  caps CLI runs at 2 per branch.
+- `scripts/github/review-status.mjs` prints READY only when Greptile reviewed the current head,
+  any required CodeRabbit review is on that head, no review thread is open and all checks pass
+  (`.claude/rules-ondemand/pr-review-loop.md`).
+- `scripts/github/land-pr.ps1` merges a ready pull request and syncs `~/.claude` from a
+  temporary worktree of `main`, so another session's branch cannot leak into the sync.
+- GitHub Actions run two checks: a full-history gitleaks scan and the no-work-user ratchet.
+  A gitleaks pre-commit hook (`.githooks/pre-commit`) catches secrets before the commit.
+
+The operator merges. No tool merges without the operator's yes.
+
+Measured result: Windows hook spawns opened a visible terminal and took keyboard focus. With
+`detached: true`, Windows ignores `windowsHide`. PR #148 added `lib/spawn-hidden.ts`, a small
+relay that runs the command under a hidden console. A WinEvent trace showed the old shape created
+and focused a Windows Terminal window, and the new shape created only a hidden console.
+
 ## Multi-agent communication
 
 Agents and sessions exchange work through typed channels, not chat copy-paste.
@@ -254,8 +281,8 @@ so two sessions never share one identity. `lane.mjs say` and `lane.mjs inbox` ca
 messages between live sessions. The `file-claims` hook blocks edits that collide.
 
 **Cross-model review.** Grok reviews a diff or a plan from a different training family.
-`grok-worker` builds. `/premortem --grok` is the optional adversarial pass. The other
-cross-model CLI was removed.
+`grok-worker` builds. `/premortem --grok` is the optional adversarial pass. The Codex
+integration was removed in PR #146 (2026-10-23).
 
 **Typed handoffs.** A session that cannot finish writes a handoff. Each handoff records an
 outcome: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED`. `/resume_handoff` restores the
@@ -277,7 +304,8 @@ handoff depends on a manual step.
 | A hook block is a finding | A block names a real problem. Sessions do not route around it with another tool or a wrapper. |
 | Confirm first | Deletes, history rewrites, schema changes, deploys, sends and paid runs need the operator's approval. |
 | One canonical source | The repo is the source. `scripts/sync-to-active.sh` copies it to `~/.claude` after each commit. |
-| Review every change | Each pull request gets an automated Greptile review (`.greptile/config.json`), gated by `scripts/github/review-status.mjs`. Fixes cite the review, for example `(Greptile #113)`. |
+| Review every change | Each pull request gets an automated Greptile review (`.greptile/config.json`). A review label adds CodeRabbit. `scripts/github/review-status.mjs` gates READY. Fixes cite the review, for example `(Greptile #113)`. |
+| Portable by profile | Machine paths and the skill skip list live in `machine/personal.json`. A ratchet and a CI job fail if a work-machine path returns. |
 
 The forward sync has a clobber guard. It keeps a sha256 manifest of each file it wrote. If the
 active copy changed since the last sync, the script moves that copy to a quarantine folder
@@ -292,19 +320,22 @@ before it overwrites it.
 | `.claude/rules-ondemand/` | 20 tool rules and the `manifest.json` that routes them |
 | `.claude/templates/` | The core `CLAUDE.md` template and other install templates |
 | `.claude/agents/` | 35 subagent definitions, each as `.md` plus a `.json` sidecar |
-| `.claude/skills/` | 145 skills, each in its own folder with a `SKILL.md` |
+| `.claude/skills/` | 80 skills, each in its own folder with a `SKILL.md` |
 | `.claude/settings.json` | Hook registrations, the repo copy |
 | `opc/` | Python: the setup wizard (`opc/scripts/setup/`), memory scripts (`opc/scripts/core/`) and their tests |
 | `scripts/` | Gates, probes, sync, coordination, self-improvement and scheduled jobs |
+| `machine/` | The personal machine profile. Settings render from it and the settings template. |
+| `.github/workflows/`, `.githooks/` | CI checks (gitleaks, no-work-user) and the commit hooks |
 | `docker/` | PostgreSQL + pgvector compose file and schema |
 | `apps/agentic-os/` | Next.js dashboard over session and lane data |
 | `docs/` | Architecture notes, harness strategy, research and self-improvement proposals |
 | `tests/workflow-tests/` | Checks for new workflows, skills and integrations |
 | `e2e/` | A Playwright placeholder. It does not test this repo. |
-| `ai-report-card/`, `proofs/`, `tasks/`, `vendor/` | A weekly report generator, Lean proofs for the optional math tools, and the task lists |
+| `ai-report-card/`, `proofs/`, `tasks/` | A weekly report generator, Lean proofs for the optional math tools, and the task lists |
 
 Start with these root files: `CLAUDE.md` (repo rules), `AGENTS.md` (testing), `CONTEXT.md` (the
-glossary) and `BOOTSTRAP.md` (full setup).
+glossary) and `BOOTSTRAP.md` (full setup). `.coderabbit.yaml` configures the label-gated
+CodeRabbit review.
 
 ## Getting started
 
@@ -347,7 +378,9 @@ the harness is tested on Windows only.
 
    The wizard backs up `~/.claude` first. It then starts the PostgreSQL container, builds the
    hooks, installs skills, agents and rules into `~/.claude`, and writes `settings.json`. It also
-   installs the post-commit hook that runs the forward sync.
+   installs the post-commit hook that runs the forward sync. Settings render from
+   `.claude/settings.json.template` plus the profile in `machine/personal.json`. Set the profile
+   paths for your machine first. `BOOTSTRAP.md` does not yet cover this step.
 
 4. Open a new terminal, so the new environment variables load.
 
@@ -390,14 +423,15 @@ pytest in `opc/`. A bug fix starts with a test that reproduces the bug.
 
 Static gates:
 
-| Gate | Command | Output on 2026-09-24 |
+| Gate | Command | Output on 2026-10-26 |
 |---|---|---|
-| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23216 chars (budget 23516, Claude Code limit 150000) [repo]` (2026-10-04) |
-| Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 80 live entries / 71 names ... 0 discarded-output, 8/8 timers safe` |
-| Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 37 \| opus: 12 sonnet: 25 \| OK` |
-| Skills | `node scripts/skills/audit-skills.mjs` | Gate and ratchet for every SKILL.md (rules G01-G32) |
+| Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23502 chars (budget 23516, Claude Code limit 150000) [repo]` |
+| Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 75 live entries / 67 names ... 0 discarded-output, 2 known-debt, 8/8 timers safe` |
+| Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 35 \| opus: 12 sonnet: 23 \| OK` |
+| Skills | `node scripts/skills/audit-skills.mjs` | `80 skills, 0 hard failures, 0 ratchet regressions` (rules G01-G32) |
 | Test suite size | `node scripts/hooks/suite-count-ratchet.mjs` | Fails if passed or collected tests drop below the baseline |
 
+The context budget has 14 characters of headroom, so the next rule edit needs a deliberate budget change.
 The `--repo` budget counts more files than a normal session loads. It adds this repo's own
 `CLAUDE.md` chain, because sessions that work on the harness load both sets.
 
