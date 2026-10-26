@@ -1,7 +1,11 @@
 // Tests for review-status.mjs. Run: node --test scripts/github/review-status.test.mjs
 // READY and NOT READY outcomes, plus the fields the pr-loop mod reads.
 import { test } from 'node:test';
-import { readFileSync } from 'node:fs';
+import { readFileSync, symlinkSync, unlinkSync, rmdirSync, mkdtempSync, rmSync } from 'node:fs';
+import { spawnSync } from 'node:child_process';
+import { tmpdir } from 'node:os';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import assert from 'node:assert/strict';
 import {
   evaluate,
@@ -11,6 +15,7 @@ import {
   summaryCoversHead,
   mergeGraphqlComments,
   requiredBots,
+  FAILED_UNREQUIRED_REASON,
 } from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -1028,10 +1033,39 @@ test('Greptile check failure with a head summary blocks on a PR that does not re
 });
 
 test('a MISSING or unusable Greptile review still does not block a PR that does not require it', () => {
-  for (const input of [{ runs: [] }, { runs: [run('neutral')] }, { runs: [run('failure')], prBody: body(OLD, 3) }, { prBody: body(OLD, 5) }]) {
+  for (const input of [{ runs: [] }, { runs: [run('neutral')] }, { prBody: body(OLD, 5) }]) {
     const r = evaluate(routed(['review:coderabbit'], { input, eval: { reviews: [CR_REVIEW] } }));
     assert.equal(r.ready, true, r.reasons.join('; '));
   }
+});
+
+test('run through a junction, the script still runs main (a plain path compare would skip it and exit 0)', () => {
+  const dir = mkdtempSync(path.join(tmpdir(), 'rs-junction-'));
+  const link = path.join(dir, 'github-link');
+  try {
+    symlinkSync(path.dirname(fileURLToPath(import.meta.url)), link, 'junction');
+    const r = spawnSync(process.execPath, [path.join(link, 'review-status.mjs')], { encoding: 'utf8' });
+    assert.equal(r.status, 2, `${r.stdout}${r.stderr}`);
+    assert.match(r.stderr, /usage: review-status\.mjs/);
+  } finally {
+    // Remove the link itself first, so the recursive remove never follows it into the repo.
+    try { unlinkSync(link); } catch { try { rmdirSync(link); } catch { /* no link was made */ } }
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test('a Greptile check that ended failure on the head blocks even when its summary is unusable or a re-run is pending', () => {
+  const cases = {
+    'summary names an older SHA': { runs: [run('failure')], prBody: body(OLD, 3) },
+    'a re-run is pending after the failure': { runs: [run('failure', 'completed', 2), run(null, 'in_progress', 3)], prBody: body(OLD, 3) },
+  };
+  for (const [name, input] of Object.entries(cases)) {
+    const r = evaluate(routed(['review:coderabbit'], { input, eval: { reviews: [CR_REVIEW] } }));
+    assert.equal(r.ready, false, name);
+    assert.ok(r.reasons.includes(FAILED_UNREQUIRED_REASON), `${name}: ${r.reasons.join('; ')}`);
+  }
+  const cleared = evaluate(routed(['review:coderabbit'], { input: { runs: [run('failure', 'completed', 2), run('success', 'completed', 3)] }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(cleared.ready, true, `a later successful review clears it: ${cleared.reasons.join('; ')}`);
 });
 
 test('REVIEW.md labels: .coderabbit.yaml auto_review.labels lists every label that requires CodeRabbit', () => {

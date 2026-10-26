@@ -173,6 +173,17 @@ const cleared = ({ fails: _fails, ...rest }: PrWatch): PrWatch => rest
  * LIMITED alerts once and stays. REVIEWED and STALLED alert once per head and stay.
  * PENDING never alerts: waiting is the normal state.
  */
+/**
+ * The bots a REVIEWED alert already covered for this head, from the stored marker. null: no REVIEWED
+ * alert for this head yet. A marker from before routing (`REVIEWED:<head>`) covered Greptile only.
+ */
+const reviewedSeen = (alerted: string | undefined, head: string): string[] | null => {
+  const prefix = `REVIEWED:${head}`
+  if (!alerted || !alerted.startsWith(prefix)) return null
+  const rest = alerted.slice(prefix.length)
+  return rest.startsWith(':') ? rest.slice(1).split('+').filter(Boolean) : ['greptile']
+}
+
 export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: PrWatch | null; alert: Alert | null } => {
   const base = forHead(watch, status.head, now)
   const found = stateOf(status)
@@ -184,9 +195,17 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
   if (state === 'LIMITED' && watch.state !== 'LIMITED') return { watch: next, alert }
-  // A second bot reviewing the same head is news: REVIEWED alerts again when the set of reviewing bots grows.
-  const marker = `${state}:${status.head}${state === 'REVIEWED' && alert.reviewedBy?.length ? `:${[...alert.reviewedBy].sort().join('+')}` : ''}`
-  if ((state === 'REVIEWED' || state === 'STALLED') && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
+  if (state === 'REVIEWED') {
+    // A second bot reviewing the same head is news: alert again only when a bot is NEW for this head.
+    // A shrink (a same-head re-run in progress) is not news. The stored marker keeps the union.
+    const seen = reviewedSeen(base.alerted, status.head)
+    const now = alert.reviewedBy ?? []
+    if (seen !== null && now.every(bot => seen.includes(bot))) return { watch: next, alert: null }
+    const union = [...new Set([...(seen ?? []), ...now])].sort()
+    return { watch: { ...next, alerted: `REVIEWED:${status.head}${union.length ? `:${union.join('+')}` : ''}` }, alert }
+  }
+  const marker = `${state}:${status.head}`
+  if (state === 'STALLED' && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
   return { watch: next, alert: null }
 }
 

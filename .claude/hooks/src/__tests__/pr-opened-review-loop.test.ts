@@ -91,6 +91,18 @@ describe('pr-opened-review-loop classifiers (unit)', () => {
     }
   });
 
+  it('does not read flags from a pipe or a chained command as gh fields (a PR list is not a PR open)', () => {
+    const lists = [
+      'gh api repos/o/r/pulls | ConvertFrom-Json | Select-Object -First 1',
+      'gh api repos/o/r/pulls | Where-Object -FilterScript { $_.draft }',
+      'gh api repos/o/r/pulls | grep -F "html_url"',
+      'gh api repos/o/r/pulls; Get-ChildItem -Force x',
+      'gh api repos/o/r/pulls && echo -f=1',
+    ];
+    for (const cmd of lists) expect(isPrOpenCommand(cmd), cmd).toBe(false);
+    expect(isPrOpenCommand('gh api repos/o/r/pulls -F "body=@pr.md" | ConvertFrom-Json'), 'a real field before the pipe still counts').toBe(true);
+  });
+
   it('does not treat fields as a POST when the method is GET', () => {
     expect(isPrOpenCommand('gh api repos/o/r/pulls -X GET -f state=open')).toBe(false);
     expect(isPrOpenCommand('gh api repos/o/r/pulls --method=GET -F per_page=5')).toBe(false);
