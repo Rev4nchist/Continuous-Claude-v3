@@ -1,0 +1,95 @@
+# .github/workflows/ccv3-checks.yml
+# P3a (DW-80): repo ratchets + Trivy + Semgrep on every PR to main and every push to main.
+# Scanner tools are pinned binaries/images with checksums or digests. No third-party action tags:
+# the trivy-action tags were hijacked in March 2026 (GHSA-69fq-xp46-6x23).
+# Scanner findings are a ratchet (scripts/ratchets/scan-ratchet.mjs): only NEW high-severity
+# findings in files this change touched fail; new findings in untouched files print as DRIFT.
+name: ccv3-checks
+on:
+  pull_request:
+    branches: [main]
+  push:
+    branches: [main]
+permissions:
+  contents: read
+concurrency:
+  group: ccv3-checks-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  ratchets:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Always-loaded context budget
+        run: node scripts/rules/context-budget-guard.mjs --repo
+      - name: Skill audit (G01-G33 ratchet)
+        run: node scripts/skills/audit-skills.mjs
+      - name: Agent model drift
+        run: node scripts/check-agent-model-drift.mjs .
+      - name: Agent body check
+        run: node scripts/agents/check-agent-body.mjs
+      - name: Hook manifest (rendered template)
+        run: node scripts/hook-manifest-check.mjs --repo
+      - name: scan-ratchet unit tests
+        run: node --test scripts/ratchets/scan-ratchet.test.mjs
+
+  trivy:
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    env:
+      TRIVY_VERSION: "0.75.0"            # immutable release, published 2026-10-01
+      TRIVY_SHA256: "c6e65abddb348e25f10549df887045629cf28cc72453cd1c63acb717316b3f3f"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Install trivy (official release binary, pinned + checksum)
+        run: |
+          set -euo pipefail
+          f="trivy_${TRIVY_VERSION}_Linux-64bit.tar.gz"
+          curl -sSfL -o "$f" "https://github.com/aquasecurity/trivy/releases/download/v${TRIVY_VERSION}/$f"
+          echo "${TRIVY_SHA256}  $f" | sha256sum -c -
+          tar -xzf "$f" trivy && sudo install trivy /usr/local/bin/trivy
+          trivy --version
+      - name: Changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ratchets/changed-files.sh "$BASE_SHA" > "$RUNNER_TEMP/changed.txt"
+      - name: trivy fs (HIGH/CRITICAL)
+        run: trivy fs --scanners vuln,misconfig,secret --severity HIGH,CRITICAL --format json --output "$RUNNER_TEMP/trivy.json" --quiet .
+      - name: Trivy ratchet
+        run: node scripts/ratchets/scan-ratchet.mjs --tool trivy --report "$RUNNER_TEMP/trivy.json" --baseline scripts/ratchets/trivy-baseline.json --changed "$RUNNER_TEMP/changed.txt"
+
+  semgrep:
+    runs-on: ubuntu-latest
+    timeout-minutes: 20
+    env:
+      # semgrep/semgrep:1.179.0 (published 2026-10-02), pinned by index digest.
+      SEMGREP_IMAGE: "semgrep/semgrep@sha256:93963d9295a366f59e4850127b1550400ee7b388f04fe144e4a1f6325d96e01b"
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Changed files
+        env:
+          BASE_SHA: ${{ github.event.pull_request.base.sha || github.event.before }}
+        run: bash scripts/ratchets/changed-files.sh "$BASE_SHA" > "$RUNNER_TEMP/changed.txt"
+      - name: semgrep scan (p/default)
+        run: |
+          set -euo pipefail
+          docker run --rm -v "$PWD:/src" -w /src "$SEMGREP_IMAGE" \
+            semgrep scan --config p/default --metrics=off --json --output /src/.semgrep.json --quiet
+          mv .semgrep.json "$RUNNER_TEMP/semgrep.json"
+      - name: Semgrep ratchet
+        run: node scripts/ratchets/scan-ratchet.mjs --tool semgrep --report "$RUNNER_TEMP/semgrep.json" --baseline scripts/ratchets/semgrep-baseline.json --changed "$RUNNER_TEMP/changed.txt"
