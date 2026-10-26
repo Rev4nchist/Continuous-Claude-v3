@@ -1,0 +1,18 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 300" width="960" height="300" role="img" aria-labelledby="t d">
+<title id="t">Always-loaded instructions, in characters</title>
+<desc id="d">Bar chart. Before PR 57: 153,689 characters. Core after PR 57: 18,275. Measured on 2026-10-26 with this repository's CLAUDE.md chain included: 23,502 of a 23,516 budget.</desc>
+<defs><linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0f1e"/><stop offset="1" stop-color="#14224a"/></linearGradient>
+<linearGradient id="b1" x1="0" x2="1"><stop offset="0" stop-color="#ff8a5c"/><stop offset="1" stop-color="#ffb454"/></linearGradient>
+<linearGradient id="b2" x1="0" x2="1"><stop offset="0" stop-color="#5b8cff"/><stop offset="1" stop-color="#3fe0c5"/></linearGradient></defs>
+<style>text{font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif}.l{font-size:14px;fill:#c9d4ee}.v{font-size:15px;font-weight:700;fill:#fff}.c{font-size:12.5px;fill:#8ea0c6}</style>
+<rect width="960" height="300" rx="18" fill="url(#bg)"/>
+<text x="36" y="44" font-size="19" font-weight="700" fill="#f1f5ff">Always-loaded instructions, in characters</text>
+<text class="l" x="36" y="96">Before PR #57</text>
+<rect x="230" y="78" width="640" height="26" rx="7" fill="url(#b1)"/><text class="v" x="856" y="97" text-anchor="end" style="fill:#1a1205">153,689</text>
+<text class="l" x="36" y="150">Core, after PR #57</text>
+<rect x="230" y="132" width="76" height="26" rx="7" fill="url(#b2)"/><text class="v" x="316" y="151">18,275</text>
+<text class="l" x="36" y="204">Measured 2026-10-26</text>
+<rect x="230" y="186" width="98" height="26" rx="7" fill="url(#b2)"/><text class="v" x="338" y="205">23,502</text>
+<text class="c" x="230" y="236">Budget 23,516. The last row includes this repository's own CLAUDE.md chain.</text>
+<text class="c" x="36" y="270">First two rows: PR #57 figures. Last row: node scripts/rules/context-budget-guard.mjs --repo</text>
+</svg>
