@@ -1,0 +1,76 @@
+# .github/workflows/review-router.yml
+# P3c (DW-80): label a ready PR with its risk class and the PR bots that must review it.
+# Spec: artifacts/ccv3-review-economy/router-spec.md. Config: review-router.config.json.
+# The router spends no LLM credits and never removes a label. A draft PR is skipped at the job level.
+# pull_request_target: the workflow, script and config come from the BASE branch (main), so a PR
+# cannot lower its own risk class by editing the router. Checkout uses the default ref (the base
+# commit). NEVER check out the PR head here: this job holds a write token. The router reads the
+# PR's changed files through the GitHub API only and runs no PR code.
+# Actions are pinned by commit SHA (same pins as ccv3-checks.yml). No third-party action tags.
+name: review-router
+on:
+  pull_request_target:
+    # edited counts only when the base branch changed (a stacked PR retargeted to main): see the job condition.
+    types: [opened, reopened, ready_for_review, synchronize, edited]
+    branches: [main]
+  # CodeRabbit posts its rate-limit notice as a PR comment after routing. Re-route then so the router
+  # comment shows the note (the job filter below keeps only that bot and that notice). Runs from main.
+  issue_comment:
+    types: [created, edited]
+  # Manual re-run for one PR (for example after a failed run). Runs as a push event would.
+  workflow_dispatch:
+    inputs:
+      pr:
+        description: PR number to route
+        required: true
+        type: number
+permissions:
+  contents: read
+  pull-requests: write
+  issues: write
+
+jobs:
+  route:
+    # contains() is case-insensitive.
+    if: >-
+      github.event_name == 'workflow_dispatch' ||
+      (github.event_name == 'issue_comment' && github.event.issue.pull_request != null &&
+        github.event.comment.user.login == 'coderabbitai[bot]' && github.event.comment.user.type == 'Bot' &&
+        (contains(github.event.comment.body, 'rate limit') || contains(github.event.comment.body, 'limit reached'))) ||
+      (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false &&
+        (github.event.action != 'edited' || github.event.changes.base != null))
+    # Job-level, so a skipped run (a bot editing the PR body fires `edited`) never joins the group and
+    # never cancels a queued push run. Two quick pushes still run one after another.
+    concurrency:
+      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      cancel-in-progress: false
+    runs-on: ubuntu-latest
+    timeout-minutes: 5
+    steps:
+      - uses: actions/checkout@11d5960a326750d5838078e36cf38b85af677262 # v4.4.0
+        with:
+          persist-credentials: false
+      - uses: actions/setup-node@49933ea5288caeca8642d1e84afbd3f7d6820020 # v4.4.0
+        with:
+          node-version: "22"
+      - name: Route the PR (labels, one comment, one ledger line)
+        if: github.event_name == 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: node scripts/github/review-router.mjs
+      # A manual re-run or a CodeRabbit limit notice routes like a push (a draft PR is still skipped by the script).
+      - name: Route the PR (manual re-run or CodeRabbit limit notice)
+        if: github.event_name != 'pull_request_target'
+        env:
+          GH_TOKEN: ${{ github.token }}
+          PR: ${{ inputs.pr || github.event.issue.number }}
+        run: node scripts/github/review-router.mjs "$PR" --event synchronize
+      # The script appends one JSON line per run to $RUNNER_TEMP/review-ledger.jsonl (spec 7). Keep it with the run.
+      - name: Upload the ledger line
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: review-ledger-pr${{ github.event.pull_request.number }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-ledger.jsonl
+          if-no-files-found: ignore
+          retention-days: 90

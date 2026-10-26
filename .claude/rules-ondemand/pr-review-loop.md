@@ -6,9 +6,9 @@ every push (`.greptile/config.json`), and **CodeRabbit** (`coderabbitai[bot]`) w
 reviews on the current head count toward READY. `pr_watch` / `review-status.mjs` decide READY; only
 Dave merges (`/land`). Follow the live steps below.
 
-**Approved target (Wiring Plan 2026-10-25, D2–D4): partially built.** Label-gated CodeRabbit and READY
-counting are live (DW-91). Remaining router and Greptile-at-ready items stay under "Target (approved,
-not built)" at the end.
+**Approved target (Wiring Plan 2026-10-25, D2–D4): partially built.** Label-gated CodeRabbit, READY
+counting (DW-91) and label routing at ready (P3c) are live. Greptile-at-ready stays under "Target
+(approved, not built)" at the end.
 
 The in-session `/review` skill (Claude subagents) is an opt-in self-check. It **never** counts toward
 READY (D4). Neither does a CodeRabbit CLI or plugin run (see `coderabbit-cli.md`; at most 2
@@ -146,15 +146,42 @@ to. It fires once per PR URL per session (a small state file under `os.tmpdir()`
 open on any error. (Renamed from `pr-opened-coderabbit-loop` in Phase 1 hygiene; behaviour unchanged.
 It also reads the pre-rename state file, so a session open across the rename does not fire twice.)
 
+## Label routing at ready (live, P3c)
+
+The `review-router` workflow labels a PR when it opens, reopens, becomes ready, gets a push, or
+moves to a new base. It also runs when CodeRabbit posts a rate-limit notice, to update its note. It runs `scripts/github/review-router.mjs` with `review-router.config.json`
+from `main`. It spends no LLM credits. To route one PR again, run the workflow by hand with its
+number (Actions, `review-router`, Run workflow).
+
+- A draft PR gets no label and no bot review.
+- The router reads the changed paths and sets one class. The highest class of any path wins.
+  Order: r3, infra, steering, normal, docs.
+- It adds `risk:<class>`. An r3 PR also gets `risk:high`.
+- docs gets no review label. normal gets `review:coderabbit`.
+- r3, infra, steering and high get `review:deep`. While `deep_enabled` is false, they get
+  `review:coderabbit` and `review:deep-held` instead.
+- At or above `u2_used` Greptile credits, only r3 keeps `review:deep`. Dave sets the credit count by
+  hand in the config. A null count means unknown, and the router skips that step.
+- A push can only raise the class. The router never removes a label and never lowers a class.
+- A label that a person removed stays removed. The ledger line says `person_override`.
+- The router keeps one comment on the PR and updates it. It names a held deep review, a missing
+  `builder:*` label and a CodeRabbit rate limit. A missing builder label never blocks.
+- That comment is the router's only memory. It holds the class and the full head SHA the router last saw.
+  Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
+- READY trusts a label that drops Greptile only when that comment names the current head and no
+  `risk:*` label is above its class. Otherwise Greptile stays required, and READY says why.
+- Known limit: anyone who can push a branch can run a workflow as `github-actions[bot]`. That person
+  can already change labels, so the comment is not a defence against them.
+- Each decision is one JSON line in the job summary (tool `router`).
+- To test by hand, run `node scripts/github/review-router.mjs <PR> --dry-run`. Add `--assume-ready`
+  to see a draft PR as a ready one. Never run it without `--dry-run` on this machine: a live local
+  run posts a comment as you, which the router ignores.
+
 ## Target (approved, not built)
 
 Approved in the Wiring Plan on 2026-10-25 (D2, D3, D4). **None of this is live.** Each item names the
 phase that builds it. Until then the live steps above apply.
 
-- **Label routing at ready (Phase 3, DW-80).** A draft PR gets no bot review. At `gh pr ready` a
-  classifier sets `risk:*` and a router adds labels: normal → `review:coderabbit`; high, steering or
-  infra → `review:deep` (CodeRabbit + Greptile); docs → none. (CodeRabbit yaml + READY counting are
-  live in DW-91; automatic label routing is not.)
 - **Greptile at ready, not on every push (Phase 3, DW-80; D3).** `autoReview` moves from open + push to
   ready/label. Greptile stays ON. `review:deep` bills Plus, never Apex, and stays blocked until the
   Apex-billing root cause is known.

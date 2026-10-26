@@ -804,12 +804,72 @@ test('mergeGraphqlComments keeps the REST fields and takes the body, stamp and e
 // no risk: label keeps today's rule exactly (Greptile required, CodeRabbit not).
 // ---------------------------------------------------------------------------------------------
 const HELD_NOTE = 'deep review held (Apex billing, D3)';
+// The review router's own comment for a head (P3c). `routed` adds one for HEAD unless `router: false`
+// or `router: <sha>`, so the routing tests describe a PR the router has classified.
+const routerComment = (sha, { id = 900, user = { login: 'github-actions[bot]', type: 'Bot' } } = {}) => ({
+  id, user, body: `<!-- review-router -->\n<!-- review-router-state class=infra head=${sha} -->\nNo open router notes.`,
+});
 const routed = (labels, over = {}) => {
   const i = input(over.input);
   i.pull.labels = labels.map((name) => ({ name }));
   if (over.draft !== undefined) i.pull.draft = over.draft;
-  return { ...i, reviews: [], comments: [], ...(over.eval ?? {}) };
+  const router = over.router === false ? [] : [routerComment(over.router ?? HEAD)];
+  const { comments = [], ...rest } = over.eval ?? {};
+  return { ...i, reviews: [], ...rest, comments: [...router, ...comments] };
 };
+
+test('router check: relaxing labels count only when the router classified the current head', () => {
+  const crOnly = (o) => evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] }, ...o }));
+  assert.equal(crOnly({}).ready, true, crOnly({}).reasons.join('; '));
+  for (const [name, o] of [['no router comment', { router: false }], ['router saw an older head', { router: OLD }]]) {
+    const r = crOnly(o);
+    assert.equal(r.ready, false, `${name}: a stale or unrouted label must not drop Greptile`);
+    assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], name);
+    assert.match(r.routing.unverified, /has not classified this head/, name);
+  }
+  const docs = evaluate(routed(['risk:docs'], { input: NO_GREPTILE, router: false }));
+  assert.equal(docs.ready, false, 'a code push after a docs routing that failed to re-route keeps Greptile');
+});
+
+test('router check: a person-authored or pasted router marker is ignored', () => {
+  const forged = routerComment(HEAD, { id: 1, user: { login: 'someone', type: 'User' } });
+  const r = evaluate(routed(['risk:docs'], { input: NO_GREPTILE, router: false, eval: { comments: [forged] } }));
+  assert.equal(r.ready, false);
+  assert.deepEqual(r.routing.required, ['greptile']);
+  const bot = { ...routerComment(HEAD, { id: 5 }), body: 'quoted: <!-- review-router -->\n<!-- review-router-state class=docs head=' + HEAD + ' -->' };
+  assert.equal(evaluate(routed(['risk:docs'], { input: NO_GREPTILE, router: false, eval: { comments: [bot] } })).ready, false, 'the marker must start the body');
+});
+
+test('router check: the lowest-id bot comment is the state; a later bot comment cannot override it', () => {
+  const first = routerComment(OLD, { id: 10 });
+  const later = routerComment(HEAD, { id: 20 });
+  const r = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [later, first] } }));
+  assert.equal(r.ready, false, 'the router\'s own (first) comment names an older head');
+  assert.match(r.routing.unverified, /has not classified this head/);
+});
+
+test('router check: a comment from a User account named github-actions[bot] is not the router', () => {
+  const fake = routerComment(HEAD, { id: 1, user: { login: 'github-actions[bot]', type: 'User' } });
+  const r = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [fake] } }));
+  assert.equal(r.ready, false);
+});
+
+test('router check: a person risk label above the saved class keeps Greptile until the router routes it', () => {
+  const r = evaluate(routed(['review:coderabbit', 'risk:r3'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, false, 'the saved class is infra; risk:r3 was added after the router ran');
+  assert.match(r.routing.unverified, /higher than the class the review router saved/);
+  assert.ok(r.reasons.some((x) => /^Greptile is required because a risk label is higher/.test(x)), r.reasons.join('; '));
+  const same = evaluate(routed(['review:coderabbit', 'risk:infra'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(same.ready, true, `a label at the saved class is fine: ${same.reasons.join('; ')}`);
+});
+
+test('router check: labels that already require Greptile are untouched by the router check', () => {
+  const r = evaluate(routed(['review:deep'], { router: false, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.routing.unverified, undefined);
+  const plain = evaluate(routed([], { router: false }));
+  assert.equal(plain.ready, true, 'a no-label PR is evaluated exactly as before');
+});
 const CR_REVIEW = { user: CR_BOT, commit_id: HEAD, body: 'Actionable comments posted: 1' };
 const NO_GREPTILE = { runs: [] };
 
