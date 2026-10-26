@@ -54,6 +54,7 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | tldr-read-enforcer | Read | Suggest TLDR structure before reading large files |
 | navigator-safety | Bash | Safety checks for bash commands |
 | package-install-guard | Bash, PowerShell | Supply-chain check on every install segment (typosquat, blocklist, exact pip pin, OSV.dev, age); blocks malicious or unpinned installs |
+| coderabbit-guard | Bash, PowerShell, Task, Skill, Agent | Blocks CodeRabbit billing/API keys, code workspace commands, autofix skill, skill installs, and a 3rd `cr review --agent` per repo+branch; allows read-only autofix delegate |
 | file-claims | Edit\|Write | Distributed file locking across sessions |
 | test-before-done | TaskUpdate | Require test evidence before marking task complete |
 | rule-router | Bash\|PowerShell\|Agent\|Skill\|Neon/linear/sentry MCP | Load a tool-specific rule from `rules-ondemand/` at the first matching call; `deny-first` rules block once with the rule as the reason |

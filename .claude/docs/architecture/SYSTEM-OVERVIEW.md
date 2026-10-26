@@ -150,7 +150,7 @@ cross-model reviewer.
 |-------|------------|-----------------------------|
 | In-session | `/review` (critic, plan-reviewer, review-agent): opt-in self-check, never counts toward READY | Same (D4) |
 | Independent review | Cross-family xreview Cursor CA, launched by hand **outside CCv3** | Auto-trigger on draft PR (PR6) |
-| PR bot | Greptile, on open + every push; `pr-opened-review-loop` hook → `pr_watch` → `review-status.mjs` | Label-routed at ready: CodeRabbit (normal), Greptile (high), both for `review:deep`, plus one final-head review (DW-91, DW-80) |
+| PR bot | Greptile on open + every push; CodeRabbit label-gated (`review:coderabbit`, `review:deep`); `pr-opened-review-loop` → `pr_watch` → `review-status.mjs` | Label router at ready + Greptile-at-ready + one final-head review (DW-80) |
 | Merge | Dave only (`/land`) | Same |
 
 Phase 0 baseline (2026-10-25) observed gaps the live column does not close, and that target READY is meant to close once it is built: merge-before-bot (#147, #150, #151; CodeRabbit often ended "Review failed - The pull request is closed."); reviewed but unanswered (#152, head `37ed7905`, 7 threads with no replies); a green Greptile check with no review object (#149). Not gated live.

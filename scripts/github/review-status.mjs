@@ -17,9 +17,10 @@
  *   - mergeable:  GitHub's mergeable_state
  * ready = reviewed && confidence >= 4 && unresolved == 0 && checks green && mergeable "clean".
  *
- * CodeRabbit was uninstalled from this repo on 2026-10-09 (proposal 2026-10-09-greptile.md, decision
- * D2). A leftover CodeRabbit commit status on an older PR neither blocks nor grants READY; any review
- * thread, from any reviewer, still counts as unresolved.
+ * CodeRabbit PR-bot reviews (`coderabbitai[bot]` on the head, with review content) count toward READY
+ * when the PR carries `review:coderabbit` or `review:deep`. Rate-limit notices and CLI/plugin output
+ * never count. A leftover CodeRabbit commit status alone does not grant READY. Any review thread,
+ * from any reviewer, still counts as unresolved.
  *
  * Usage: node scripts/github/review-status.mjs <pr-number> [--repo owner/name] [--json]
  * Exit 0 = ready, 1 = not ready (reasons listed), 2 = could not determine.
@@ -52,6 +53,47 @@ export const GREPTILE_APP = 'greptile-apps';
 export const MIN_CONFIDENCE = 4;
 const isGreptileRun = (c) => c?.app?.slug === GREPTILE_APP;
 const isCodeRabbitStatus = (s) => /coderabbit/i.test(s?.context || '');
+
+/** The CodeRabbit GitHub App login. CLI output cannot forge this identity. */
+export const CODERABBIT_LOGIN = 'coderabbitai[bot]';
+export const CODERABBIT_REVIEW_LABELS = new Set(['review:coderabbit', 'review:deep']);
+
+export function pullLabelNames(pull) {
+  return (pull?.labels || []).map((l) => (typeof l === 'string' ? l : l?.name)).filter(Boolean);
+}
+
+export function needsCodeRabbitReview(labels) {
+  return labels.some((n) => CODERABBIT_REVIEW_LABELS.has(n));
+}
+
+const isCodeRabbitUser = (u) => u?.login === CODERABBIT_LOGIN && u?.type === 'Bot';
+
+const LIMIT_WARNING = /Review limit reached/i;
+/** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
+export function summaryCoversHead(body, head) {
+  const text = String(body ?? '');
+  if (!LIMIT_WARNING.test(text)) {
+    for (const m of text.matchAll(/between\s+[0-9a-f]{40}\s+and\s+([0-9a-f]{40})/g)) if (m[1] === head) return true;
+  }
+  for (const m of text.matchAll(/final_review_risk_coverage:(\{[^}]*\})/g)) {
+    try {
+      const c = JSON.parse(m[1]);
+      if (c.coveredCommitId === head && c.kind === 'reviewed') return true;
+    } catch { /* not a marker */ }
+  }
+  return false;
+}
+
+/** PR-bot review on the head only; rate-limit text on the status never counts as reviewed. */
+export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [] }) {
+  const cr = (statuses || []).find((s) => /coderabbit/i.test(s?.context || ''));
+  const reviewedHead =
+    reviews.some(
+      (r) => isCodeRabbitUser(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''),
+    ) || comments.some((c) => isCodeRabbitUser(c.user) && summaryCoversHead(c.body, head));
+  const rateLimited = !reviewedHead && /rate limit|limit reached/i.test(cr?.description || '');
+  return { reviewedHead, rateLimited, status: cr?.state ?? 'absent', description: cr?.description ?? null };
+}
 
 /**
  * The Greptile block in the PR body (live PR #111, 2026-10-09):
@@ -91,7 +133,7 @@ export function bodyEditedAfterGreptile(edits) {
   return later ? (later.editor?.login ?? 'a deleted account') : null;
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits }) {
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [] }) {
   const head = pull.head.sha;
   const run = latestGreptileRun(checkRuns);
   let greptile;
@@ -135,10 +177,26 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits }) {
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
+
+  const labels = pullLabelNames(pull);
+  let coderabbit = null;
+  let coderabbitReviewedHead = null;
+  if (needsCodeRabbitReview(labels)) {
+    const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [] });
+    coderabbit = cr.status;
+    coderabbitReviewedHead = cr.reviewedHead;
+    if (cr.rateLimited) {
+      reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
+    } else if (!cr.reviewedHead) {
+      reasons.push('no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count)');
+    }
+  }
+
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref, reviewer: 'greptile',
     greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
+    coderabbit, coderabbitReviewedHead,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
     rateLimited: unavailable,
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
@@ -164,7 +222,16 @@ function main() {
     const prq = g.data.repository.pullRequest;
     const rt = prq.reviewThreads;
     if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
-    result = evaluate({ pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes });
+    const labels = pullLabelNames(pull);
+    let reviews = [];
+    let comments = [];
+    if (needsCodeRabbitReview(labels)) {
+      reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
+      comments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+    }
+    result = evaluate({
+      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments,
+    });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);
     process.exit(2);

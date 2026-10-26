@@ -2,7 +2,13 @@
 // READY and NOT READY outcomes, plus the fields the pr-loop mod reads.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { evaluate, parseSummary } from './review-status.mjs';
+import {
+  evaluate,
+  parseSummary,
+  codeRabbitHeadReview,
+  needsCodeRabbitReview,
+  summaryCoversHead,
+} from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
@@ -144,4 +150,66 @@ test('the result carries prState and merged for the watcher', () => {
 test('parseSummary reads the head SHA and score, and returns nulls without a block', () => {
   assert.deepEqual(parseSummary(body(HEAD, 5)), { present: true, sha: HEAD, confidence: 5 });
   assert.deepEqual(parseSummary('no block'), { present: false, sha: null, confidence: null });
+});
+
+test('Greptile-only input unchanged when no CodeRabbit labels', () => {
+  const r = evaluate(input());
+  assert.equal(r.coderabbit, null);
+  assert.equal(r.ready, true);
+});
+
+test('CodeRabbit: head review object counts when label review:coderabbit', () => {
+  const reviews = [{
+    user: { login: 'coderabbitai[bot]', type: 'Bot' },
+    commit_id: HEAD,
+    body: 'Actionable comments posted: 2',
+  }];
+  const i = input();
+  i.pull.labels = [{ name: 'review:coderabbit' }];
+  const r = evaluate({ ...i, reviews, comments: [] });
+  assert.equal(r.coderabbitReviewedHead, true);
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
+test('CodeRabbit: stale commit review does not count', () => {
+  const reviews = [{
+    user: { login: 'coderabbitai[bot]', type: 'Bot' },
+    commit_id: OLD,
+    body: 'Actionable comments posted: 1',
+  }];
+  const i = input();
+  i.pull.labels = [{ name: 'review:coderabbit' }];
+  const r = evaluate({ ...i, reviews, comments: [] });
+  assert.equal(r.coderabbitReviewedHead, false);
+  assert.equal(r.ready, false);
+});
+
+test('CodeRabbit: rate limit on status does not count as reviewed', () => {
+  const i = input({
+    statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited' }],
+  });
+  i.pull.labels = [{ name: 'review:deep' }];
+  const r = evaluate({ ...i, reviews: [], comments: [] });
+  assert.equal(r.ready, false);
+  assert.ok(r.reasons.some((x) => /rate limited/i.test(x)));
+});
+
+test('CodeRabbit: CLI-shaped user review never counts', () => {
+  const reviews = [{
+    user: { login: 'Rev4nchist', type: 'User' },
+    commit_id: HEAD,
+    body: 'Actionable comments posted: 9',
+  }];
+  const i = input();
+  i.pull.labels = [{ name: 'review:coderabbit' }];
+  const r = evaluate({ ...i, reviews, comments: [] });
+  assert.equal(r.coderabbitReviewedHead, false);
+  assert.equal(r.ready, false);
+});
+
+test('summaryCoversHead respects limit warning', () => {
+  const limited = `Review limit reached\nbetween ${OLD} and ${HEAD}`;
+  assert.equal(summaryCoversHead(limited, HEAD), false);
+  assert.equal(needsCodeRabbitReview(['review:coderabbit']), true);
+  assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [], comments: [], statuses: [] }).reviewedHead, false);
 });

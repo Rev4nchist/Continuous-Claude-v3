@@ -1,0 +1,127 @@
+=== DW-91 verify 2026-10-26T01:34:03Z ===
+
+added 101 packages, and audited 102 packages in 3s
+
+23 packages are looking for funding
+  run `npm fund` for details
+
+3 vulnerabilities (2 moderate, 1 high)
+
+To address all issues, run:
+  npm audit fix
+
+Run `npm audit` for details.
+
+> claude-hooks@1.0.0 build
+> esbuild src/*.ts --bundle --platform=node --format=esm --outdir=dist --out-extension:.js=.mjs --external:better-sqlite3 --banner:js="import{createRequire as __hookCreateRequire}from'module';const require=__hookCreateRequire(import.meta.url);" && node scripts/write-build-inputs.mjs
+
+
+  dist/package-install-guard.mjs      727.8kb
+  dist/file-claims.mjs                196.4kb
+  dist/session-register.mjs           182.7kb
+  dist/lane-context.mjs               181.6kb
+  dist/coordination-release.mjs       180.9kb
+  dist/coordination-notification.mjs  179.5kb
+  dist/heartbeat.mjs                  179.4kb
+  dist/periodic-extract.mjs           178.8kb
+  dist/memory-awareness.mjs            48.5kb
+  dist/post-plan-roadmap.mjs           44.8kb
+  dist/post-edit-diagnostics.mjs       37.5kb
+  dist/prd-roadmap-sync.mjs            33.2kb
+  dist/tldr-read-enforcer.mjs          31.7kb
+  dist/session-start-continuity.mjs    31.2kb
+  dist/git-commit-roadmap.mjs          29.8kb
+  dist/agent-recall-injector.mjs       28.1kb
+  dist/bus-tool-populator.mjs          25.9kb
+  dist/smart-search-router.mjs         24.0kb
+  dist/bus-session-populator.mjs       22.9kb
+  dist/destructive-command-guard.mjs   22.4kb
+  ...and 53 more output files...
+
+⚡ Done in 87ms
+src/shared/index.ts(70,3): error TS2300: Duplicate identifier 'selectPattern'.
+src/shared/index.ts(71,3): error TS2300: Duplicate identifier 'validateComposition'.
+src/shared/index.ts(93,3): error TS2300: Duplicate identifier 'validateComposition'.
+src/shared/index.ts(94,3): error TS2300: Duplicate identifier 'selectPattern'.
+src/tldr-read-enforcer.ts(33,8): error TS2835: Relative import paths need explicit file extensions in ECMAScript imports when '--moduleResolution' is 'node16' or 'nodenext'. Did you mean './lib/daemon-client.js'?
+ RUN  v4.1.11 /workspace/.claude/hooks
+
+
+ Test Files  3 passed (3)
+      Tests  53 passed (53)
+   Start at  01:34:11
+   Duration  721ms (transform 336ms, setup 0ms, import 434ms, tests 750ms, environment 0ms)
+
+⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯⎯[21/21]⎯
+
+
+ Test Files  5 failed | 95 passed (100)
+      Tests  21 failed | 2275 passed | 10 skipped (2306)
+   Start at  01:34:12
+   Duration  9.44s (transform 2.51s, setup 0ms, import 4.36s, tests 11.14s, environment 9ms)
+
+# tests 27
+# suites 0
+# pass 27
+# fail 0
+# cancelled 0
+# skipped 0
+# todo 0
+# duration_ms 84.710184
+[suite-count-ratchet] baseline 2172 passed / 2172 collected (recorded 2026-10-06)
+[suite-count-ratchet] actual   2289 passed / 2306 collected / 7 failed
+[suite-count-ratchet] FAIL: 7 failing test(s).
+files: 2541
+allow: 123
+hits: 0
+alias: 0
+damage: 0
+frozen: 0
+oversized: 2
+  oversized opc/scripts/pageindex/tests/pdfs/2023-annual-report.pdf 2255266 allowed
+  oversized opc/scripts/pageindex/tests/pdfs/PRML.pdf 18090775 allowed
+RESULT: OK
+files: 1687
+hits: 0
+RESULT: OK
+ondemand-index-check: OK (22 manifest entries, 20 rule files, all indexed)
+always-loaded: 5 files, 23502 chars (budget 23516, Claude Code limit 150000) [repo]
+registrations: 79
+overlaps: 0
+RESULT: OK
+=== active (/home/ubuntu/.claude/settings.json) ===
+  ERROR: settings.json not found at /home/ubuntu/.claude/settings.json
+=== repo (/workspace/.claude/settings.json.template (rendered)) ===
+  PreToolUse: 27 hook(s)
+  UserPromptSubmit: 6 hook(s)
+  SessionStart: 13 hook(s)
+  PreCompact: 2 hook(s)
+  SessionEnd: 5 hook(s)
+  PostToolUse: 24 hook(s)
+  Notification: 1 hook(s)
+  PostToolUseFailure: 1 hook(s)
+
+  MISSING: none
+  DUPLICATES (5):
+    [PreToolUse] /workspace/.claude/hooks/dist/coderabbit-guard.mjs (x4)
+    [PreToolUse] /workspace/.claude/hooks/dist/package-install-guard.mjs (x2)
+    [PreToolUse] /workspace/.claude/hooks/dist/destructive-command-guard.mjs (x2)
+    [PreToolUse] /workspace/.claude/hooks/dist/scan-scope-guard.mjs (x2)
+    [PreToolUse] /workspace/.claude/hooks/dist/commit-preflight.mjs (x2)
+
+RESULT: OK - all registered hook files exist.
+.claude/hooks/dist/pr-opened-review-loop.mjs:52:  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
+.claude/hooks/src/__tests__/pr-opened-review-loop.test.ts:245:    expect(legacyStatePath(sid)).toBe(join(tmpdir(), `pr-opened-coderabbit-loop-${sid}.json`));
+.claude/hooks/src/pr-opened-review-loop.ts:8: * Renamed from pr-opened-coderabbit-loop (Phase 1 hygiene, 2026-10); behaviour unchanged.
+.claude/hooks/src/pr-opened-review-loop.ts:88: * State file written before the rename (pr-opened-coderabbit-loop). A session
+.claude/hooks/src/pr-opened-review-loop.ts:92:  return join(tmpdir(), `pr-opened-coderabbit-loop-${safeSession(sessionId)}.json`);
+.claude/rules-ondemand/pr-review-loop.md:146:open on any error. (Renamed from `pr-opened-coderabbit-loop` in Phase 1 hygiene; behaviour unchanged.
+docs/self-improvement/proposals/2026-10-09-greptile.md:14:deleted. The hook keeps its old file name `pr-opened-coderabbit-loop` so `settings.json` does not change.
+docs/self-improvement/proposals/2026-10-09-greptile.md:124:- Hook `pr-opened-coderabbit-loop.ts`: change the injected text and the rule path. Keep the file name
+docs/self-improvement/proposals/2026-10-09-greptile.md:204:  `.claude/plugins/ccv3-mods/hooks/pr-loop/`, `.claude/hooks/src/pr-opened-coderabbit-loop.ts`,
+(empty .coderabbit.yaml grep OK)
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"CodeRabbit guard: --use-credits is forbidden"}}
+{"result":"continue"}
+{"result":"continue"}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"CodeRabbit guard: run cap reached (2 cr review --agent runs for verify#main)"}}
+{"hookSpecificOutput":{"hookEventName":"PreToolUse","permissionDecision":"deny","permissionDecisionReason":"CodeRabbit guard: coderabbit:autofix skill is forbidden"}}

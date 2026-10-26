@@ -1,19 +1,18 @@
 # PR submitted → review loop
 
-**Live today (CCv3 `main`):** Greptile (`greptile-apps[bot]`) is the only review gate. It reviews on
-open and on every push (`.greptile/config.json`). `pr_watch` / `review-status.mjs` decide READY, and
-only Dave merges (`/land`). Follow the live steps below.
+**Live today (CCv3 `main`):** Two label-gated PR bots: **Greptile** (`greptile-apps[bot]`) on open and
+every push (`.greptile/config.json`), and **CodeRabbit** (`coderabbitai[bot]`) when the PR carries
+`review:coderabbit` or `review:deep` (`.coderabbit.yaml`, `auto_incremental_review: false`). Only PR-bot
+reviews on the current head count toward READY. `pr_watch` / `review-status.mjs` decide READY; only
+Dave merges (`/land`). Follow the live steps below.
 
-**Approved target (Wiring Plan 2026-10-25, D2–D4): NOT built.** It is described under "Target (approved,
-not built)" at the end. Do not act on a target step until this file marks it live.
-
-CodeRabbit was uninstalled from this repo's config on 2026-10-09 (`.coderabbit.yaml` and its status
-script were deleted). The CodeRabbit App may still post advisory comments on CCv3 PRs (seen on #150–#152).
-Those comments are not a review gate: a CodeRabbit status never blocks or grants READY. Any open thread
-from any reviewer still counts as unresolved. Plan: `docs/self-improvement/proposals/2026-10-09-greptile.md`.
+**Approved target (Wiring Plan 2026-10-25, D2–D4): partially built.** Label-gated CodeRabbit and READY
+counting are live (DW-91). Remaining router and Greptile-at-ready items stay under "Target (approved,
+not built)" at the end.
 
 The in-session `/review` skill (Claude subagents) is an opt-in self-check. It **never** counts toward
-READY (D4). Neither does a CodeRabbit CLI or plugin run.
+READY (D4). Neither does a CodeRabbit CLI or plugin run (see `coderabbit-cli.md`; at most 2
+`cr review --agent` runs per PR, guarded by `coderabbit-guard`).
 
 When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool with the PR number
 (`pr: <N>`) in the same turn. Do not wait to be asked. Only if that tool does not exist, or the PR is
@@ -28,10 +27,15 @@ and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
 ## Waiting for the review
 
-- Today Greptile reviews on open and on every push (`.greptile/config.json`). Wait for the review of
-  the exact head. Use `pr_status` or `review-status.mjs`, not a 👍 emoji or a bot comment.
-- Proof of a review is a `greptile-apps` check run on the head that ended `success`. A check that
-  ended `neutral` with "Review was cancelled" was superseded by a push: it is not a review.
+- Greptile reviews on open and on every push (`.greptile/config.json`). CodeRabbit reviews only when
+  the PR has `review:coderabbit` or `review:deep` (no automatic review on every push). Wait for each
+  routed bot's review of the exact head. Use `pr_status` or `review-status.mjs`, not a 👍 emoji or a
+  bot comment.
+- Proof of a Greptile review is a `greptile-apps` check run on the head that ended `success`. A check
+  that ended `neutral` with "Review was cancelled" was superseded by a push: it is not a review.
+- Proof of a CodeRabbit review is a `coderabbitai[bot]` review object on the head whose body includes
+  "Actionable comments posted: N", or its summary comment naming the head. A green `CodeRabbit` commit
+  status or rate-limit notice alone is not a review.
 - Greptile also writes a summary block into the PR body: the last reviewed commit and a confidence
   score. When you edit a PR body, keep the `<!-- greptile_comment -->` ... `<!-- /greptile_comment -->`
   block byte for byte. Any edit by a person after Greptile's summary makes the gate report
@@ -75,12 +79,13 @@ Never merge the PR. That is a separate, confirmed decision.
 
 ## Before you call a PR ready, or land it
 
-Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. Today READY
-means: Greptile reviewed the CURRENT head commit (check run `success` and a summary naming that head),
-confidence at least 4/5, 0 threads unresolved from any reviewer, every commit status other than
-CodeRabbit's is `success`, every check run other than Greptile's is completed with `success`,
-`neutral` or `skipped`, and `mergeable_state` is clean. A merge was once called safe 92 s before a reviewer found a real defect on
-the new head.
+Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. READY means:
+Greptile reviewed the CURRENT head commit (check run `success` and a summary naming that head),
+confidence at least 4/5; when the PR has `review:coderabbit` or `review:deep`, a CodeRabbit PR-bot
+review on that head (not CLI output); 0 threads unresolved from any reviewer; every commit status other
+than CodeRabbit's is `success`; every check run other than Greptile's is completed with `success`,
+`neutral` or `skipped`; and `mergeable_state` is clean. A merge was once called safe 92 s before a
+reviewer found a real defect on the new head.
 
 That sentence is what `review-status.mjs` implements today. It does not close three gaps observed on
 2026-10-25 (Phase 0 baseline). They are not gated live. The target READY definition at the end of this
@@ -146,12 +151,10 @@ It also reads the pre-rename state file, so a session open across the rename doe
 Approved in the Wiring Plan on 2026-10-25 (D2, D3, D4). **None of this is live.** Each item names the
 phase that builds it. Until then the live steps above apply.
 
-- **Label routing at ready (Phase 2–3, DW-91 + DW-80).** A draft PR gets no bot review. At
-  `gh pr ready` a classifier sets `risk:*` and a router adds labels: normal → `review:coderabbit`;
-  high, steering or infra → `review:deep` (CodeRabbit + Greptile); docs → none.
-- **CodeRabbit returns label-gated (Phase 2, DW-91).** A label-gated `.coderabbit.yaml`. A CodeRabbit
-  PR-bot review on the head will count toward READY once `review-status.mjs` learns it. CodeRabbit CLI
-  output stays advisory (at most 2 runs) and never counts.
+- **Label routing at ready (Phase 3, DW-80).** A draft PR gets no bot review. At `gh pr ready` a
+  classifier sets `risk:*` and a router adds labels: normal → `review:coderabbit`; high, steering or
+  infra → `review:deep` (CodeRabbit + Greptile); docs → none. (CodeRabbit yaml + READY counting are
+  live in DW-91; automatic label routing is not.)
 - **Greptile at ready, not on every push (Phase 3, DW-80; D3).** `autoReview` moves from open + push to
   ready/label. Greptile stays ON. `review:deep` bills Plus, never Apex, and stays blocked until the
   Apex-billing root cause is known.

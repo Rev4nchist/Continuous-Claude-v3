@@ -87,6 +87,14 @@
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/agent-recall-injector.mjs"
             ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coderabbit-guard.mjs"
+            ]
           }
         ]
       },
@@ -125,6 +133,14 @@
             "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/package-install-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coderabbit-guard.mjs"
             ]
           },
           {
@@ -177,6 +193,14 @@
             "command": "node",
             "timeout": 5,
             "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coderabbit-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
               "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
             ]
           },
@@ -187,6 +211,19 @@
               "{{CLAUDE_HOME}}/hooks/dist/commit-preflight.mjs"
             ],
             "timeout": 5
+          }
+        ]
+      },
+      {
+        "matcher": "Skill|Agent",
+        "hooks": [
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 5,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/coderabbit-guard.mjs"
+            ]
           }
         ]
       },

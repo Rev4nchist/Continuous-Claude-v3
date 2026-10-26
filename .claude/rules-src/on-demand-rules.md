@@ -19,6 +19,7 @@ commit message, design a page, or plan a CMA job). The hook fires at the tool ca
 | `harness-update.md` | updates to the Grok CLI or its models | inject |
 | `git-merge-workflow.md` | merges and branch cleanup | inject |
 | `pr-review-loop.md` | opening PRs; Greptile | inject |
+| `coderabbit-cli.md` | CodeRabbit CLI (`cr`, `coderabbit`) | inject |
 | `cross-terminal-db.md` | local Postgres (sessions, claims) | inject |
 | `headless-claude-mcp.md` | headless `claude -p` | inject |
 | `notion-cli-safety.md`, `railway-deploy.md`, `neonctl-safety.md`, `kusto-cli-safety.md`, `sentry-safety.md`, `linear-safety.md` | that CLI, its MCP or its skill | inject |
