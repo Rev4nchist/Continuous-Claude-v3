@@ -125,15 +125,25 @@ const someRequiredReviewed = (status: PrStatus): boolean => {
     reviewedByRequired(status)
 }
 
-/** The required bots that reviewed the head, for the REVIEWED text. */
-const reviewedBots = (status: PrStatus): string[] =>
-  (status.routing?.required ?? []).filter(bot =>
-    bot === 'greptile' ? status.reviewedHead : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false)
+/** Greptile reviewed the head and the result needs action: a score under the bar, or a check that ended failure. Whatever the labels. */
+const GREPTILE_FAILED = /^Greptile check ended failure/
+const greptileFindings = (status: PrStatus): boolean =>
+  status.reviewedHead && (status.lowConfidence === true || status.reasons.some(reason => GREPTILE_FAILED.test(reason)))
 
-/** A required bot reviewed the head and something needs a fix: open threads, a low confidence score or a failed check. */
+/** The bots that reviewed the head: the required ones, plus Greptile when its own result needs action. */
+const reviewedBots = (status: PrStatus): string[] => {
+  const required = status.routing?.required ?? []
+  const bots = greptileFindings(status) && !required.includes('greptile') ? ['greptile', ...required] : required
+  return bots.filter(bot => (bot === 'greptile' ? status.reviewedHead : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false))
+}
+
+/**
+ * A bot reviewed the head and something needs a fix: open threads or a failed check (from a required bot),
+ * or a Greptile result that needs action (low score, failed check), which counts even when Greptile is not required.
+ */
 const needsAction = (status: PrStatus): boolean =>
-  someRequiredReviewed(status) &&
-  (status.unresolved > 0 || status.lowConfidence === true || status.reasons.some(reason => FAILED_CHECK.test(reason)))
+  greptileFindings(status) ||
+  (someRequiredReviewed(status) && (status.unresolved > 0 || status.reasons.some(reason => FAILED_CHECK.test(reason))))
 
 /** The reviewer app (Greptile, or CodeRabbit on a labelled PR) will not review this head without a nudge. */
 const reviewMissing = (status: PrStatus): boolean => status.rateLimited || status.coderabbitLimited === true
@@ -141,9 +151,10 @@ const reviewMissing = (status: PrStatus): boolean => status.rateLimited || statu
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
-  // Findings on a reviewed head come first: a skipped CodeRabbit review must not hide an open thread to fix.
-  if (status.rateLimited) return 'LIMITED'
+  // Findings on a reviewed head come first: a skipped CodeRabbit review, or a cancelled Greptile run on a
+  // review:deep PR, must not hide a finding to fix. Nothing to fix and a review that did not finish is LIMITED.
   if (needsAction(status)) return 'REVIEWED'
+  if (status.rateLimited) return 'LIMITED'
   return reviewMissing(status) ? 'LIMITED' : 'PENDING'
 }
 
@@ -173,7 +184,8 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
   if (state === 'LIMITED' && watch.state !== 'LIMITED') return { watch: next, alert }
-  const marker = `${state}:${status.head}`
+  // A second bot reviewing the same head is news: REVIEWED alerts again when the set of reviewing bots grows.
+  const marker = `${state}:${status.head}${state === 'REVIEWED' && alert.reviewedBy?.length ? `:${[...alert.reviewedBy].sort().join('+')}` : ''}`
   if ((state === 'REVIEWED' || state === 'STALLED') && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
   return { watch: next, alert: null }
 }
@@ -189,8 +201,12 @@ const BOT_NAMES: Record<string, string> = { greptile: 'Greptile', coderabbit: 'C
 const botWords = (bots: string[] | undefined): string | null =>
   bots === undefined ? 'Greptile' : bots.length === 0 ? null : bots.map(bot => BOT_NAMES[bot] ?? bot).join(' and ')
 
+/** The required bots that have not reviewed the head. No routing (older script): Greptile. */
+const missingBots = (alert: Alert): string[] | undefined =>
+  alert.bots === undefined ? undefined : alert.bots.filter(bot => !(alert.reviewedBy ?? []).includes(bot))
+
 const stalledWords = (alert: Alert): string => {
-  const bots = botWords(alert.bots)
+  const bots = botWords(missingBots(alert))
   return bots ? `no ${bots} review after 60 minutes` : 'not READY after 60 minutes'
 }
 
@@ -229,8 +245,8 @@ export const reportLine = (alert: Alert): string => {
     return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'STALLED') {
-    const bots = botWords(alert.bots)
-    if (!bots) return `${lead} is not READY after 60 minutes and needs no bot review: check CI, threads and mergeable state, then report to Dave. Do not merge it.`
+    const bots = botWords(missingBots(alert))
+    if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave. Do not merge it.`
     return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'REVIEWED') {

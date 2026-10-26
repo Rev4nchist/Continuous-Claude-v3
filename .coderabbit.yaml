@@ -9,6 +9,7 @@ reviews:
     labels:
       - "review:coderabbit"
       - "review:deep"
+      - "review:deep-held"
     # Off: a push does not start a review, so after a push on a labelled PR post "@coderabbitai review"
     # once. review-status.mjs says so in its reason. Do not post it after a rate-limit notice.
     auto_incremental_review: false

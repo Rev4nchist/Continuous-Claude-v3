@@ -376,14 +376,20 @@ function greptileState(run) {
   return 'unavailable';
 }
 
-/** Why Greptile blocks. The caller adds these only when the labels require Greptile. */
-function greptileReasons({ greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence }) {
+/**
+ * Why Greptile blocks. A MISSING or unusable review (absent, pending, cancelled, unavailable, summary problem)
+ * blocks only when `required` (the labels need Greptile). A review of the head that scored under the bar, or a
+ * check that ended failure although the summary names the head, blocks whatever the labels say.
+ */
+function greptileReasons({ required, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence }) {
   const out = [];
-  if (greptile === 'absent') out.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
-  if (greptile === 'pending') out.push(`Greptile review of the head is ${run.status}`);
-  if (greptile === 'cancelled') out.push(CANCELLED_REASON);
-  else if (unavailable) out.push(`Greptile did not finish a review of the head (${run.status}/${run.conclusion}${greptileSummary ? `: "${String(greptileSummary).split('\n')[0]}"` : ''}). ${UNAVAILABLE_TAIL}`);
-  if (summaryProblem) out.push(`${summaryProblem}. ${UNAVAILABLE_TAIL}`);
+  if (required) {
+    if (greptile === 'absent') out.push('no Greptile check on the head commit yet (review pending; if none appears, see pr-review-loop.md "No review on the head")');
+    if (greptile === 'pending') out.push(`Greptile review of the head is ${run.status}`);
+    if (greptile === 'cancelled') out.push(CANCELLED_REASON);
+    else if (unavailable) out.push(`Greptile did not finish a review of the head (${run.status}/${run.conclusion}${greptileSummary ? `: "${String(greptileSummary).split('\n')[0]}"` : ''}). ${UNAVAILABLE_TAIL}`);
+    if (summaryProblem) out.push(`${summaryProblem}. ${UNAVAILABLE_TAIL}`);
+  }
   if (lowConfidence) out.push(`Greptile confidence ${confidence}/5 is below ${MIN_CONFIDENCE}`);
   else if (reviewedHead && run.conclusion === 'failure') out.push(`Greptile check ended failure on the head although its summary scores ${confidence}/5. ${UNAVAILABLE_TAIL}`);
   return out;
@@ -402,8 +408,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   // reason: one @greptileai comment makes Greptile rewrite its summary.
   // A cancelled run (neutral) keeps `unavailable` true for older mod copies that read `unavailable` and
   // `rateLimited`; only its reason text says cancelled. When the labels do not require Greptile, the
-  // raw state stays in `greptile`, `confidence`, `reviewedHead` and `unavailable`, but `rateLimited`
-  // and `lowConfidence` (the two fields that make the mod alert) follow the requirement.
+  // raw state stays in `greptile`, `confidence`, `reviewedHead`, `lowConfidence` and `unavailable`, and a
+  // reviewed head under the bar still blocks. Only `rateLimited` (a MISSING review) follows the requirement.
   const summary = greptile === 'reviewed' ? resolveSummary({ pull, comments, commentEdits, bodyEdits, head }) : null;
   const summaryProblem = summary ? summary.problem : null;
   const reviewedHead = greptile === 'reviewed' && summaryProblem === null;
@@ -420,11 +426,9 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   if (pull.merged) reasons.push('already merged');
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
   if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
-  if (need.greptile) {
-    reasons.push(...greptileReasons({
-      greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
-    }));
-  }
+  reasons.push(...greptileReasons({
+    required: need.greptile, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
+  }));
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
@@ -450,7 +454,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
 
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref, reviewer: 'greptile',
-    greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence: lowConfidence && need.greptile,
+    greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.

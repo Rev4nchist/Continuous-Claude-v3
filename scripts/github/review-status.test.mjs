@@ -1,6 +1,7 @@
 // Tests for review-status.mjs. Run: node --test scripts/github/review-status.test.mjs
 // READY and NOT READY outcomes, plus the fields the pr-loop mod reads.
 import { test } from 'node:test';
+import { readFileSync } from 'node:fs';
 import assert from 'node:assert/strict';
 import {
   evaluate,
@@ -848,8 +849,8 @@ test('routing: review:deep-held needs CodeRabbit only and carries the held note,
   assert.equal(r.greptile, 'absent', 'Greptile state is still reported');
   assert.ok(!r.reasons.some((x) => /held|Greptile/.test(x)), r.reasons.join('; '));
   const lowGreptile = evaluate(routed(['review:deep-held'], { input: { prBody: body(HEAD, 2) }, eval: { reviews: [CR_REVIEW] } }));
-  assert.equal(lowGreptile.ready, true, 'low Greptile confidence does not block when Greptile is not required');
-  assert.equal(lowGreptile.confidence, 2, 'but it is still reported');
+  assert.equal(lowGreptile.ready, false, 'a Greptile review of the head under the bar blocks even when Greptile is not required');
+  assert.equal(lowGreptile.confidence, 2);
   const noCr = evaluate(routed(['review:deep-held']));
   assert.equal(noCr.ready, false, 'CodeRabbit is still required');
   const upgraded = evaluate(routed(['review:deep', 'review:deep-held'], { input: NO_GREPTILE, eval: { reviews: [CR_REVIEW] } }));
@@ -994,4 +995,52 @@ test('routedReviewed: a PR with no router label follows Greptile exactly', () =>
   assert.equal(evaluate(routed([])).routedReviewed, true);
   assert.equal(evaluate(routed([], { input: NO_GREPTILE })).routedReviewed, false);
   assert.equal(evaluate(routed([], { input: { prBody: body(HEAD, 2) } })).routedReviewed, true, 'a low score is still a review');
+});
+
+// ---------------------------------------------------------------------------------------------
+// Critic round: "Greptile not required" means a MISSING Greptile review does not block. A Greptile review
+// of the head that scored under the bar, or a check that ended failure, blocks whatever the labels say.
+// ---------------------------------------------------------------------------------------------
+test('Greptile reviewed the head at 2/5 on a review:coderabbit PR: blocks, lowConfidence stays true', () => {
+  const r = evaluate(routed(['review:coderabbit'], { input: { prBody: body(HEAD, 2) }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(r.ready, false);
+  assert.equal(r.lowConfidence, true);
+  assert.equal(r.confidence, 2);
+  assert.ok(r.reasons.some((x) => /Greptile confidence 2\/5 is below 4/.test(x)), r.reasons.join('; '));
+  assert.equal(r.rateLimited, false, 'it did review: not a missing review');
+});
+
+test('Greptile reviewed at 3/5 on risk:docs and on review:deep-held: blocks too', () => {
+  for (const labels of [['risk:docs'], ['review:deep-held']]) {
+    const r = evaluate(routed(labels, { input: { prBody: body(HEAD, 3) }, eval: { reviews: [CR_REVIEW] } }));
+    assert.equal(r.ready, false, labels.join());
+    assert.equal(r.lowConfidence, true, labels.join());
+  }
+});
+
+test('Greptile check failure with a head summary blocks on a PR that does not require Greptile', () => {
+  const low = evaluate(routed(['review:coderabbit'], { input: { runs: [run('failure')], prBody: body(HEAD, 3) }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(low.ready, false);
+  assert.equal(low.lowConfidence, true);
+  const high = evaluate(routed(['review:coderabbit'], { input: { runs: [run('failure')], prBody: body(HEAD, 5) }, eval: { reviews: [CR_REVIEW] } }));
+  assert.equal(high.ready, false);
+  assert.ok(high.reasons.some((x) => /^Greptile check ended failure/.test(x)), high.reasons.join('; '));
+});
+
+test('a MISSING or unusable Greptile review still does not block a PR that does not require it', () => {
+  for (const input of [{ runs: [] }, { runs: [run('neutral')] }, { runs: [run('failure')], prBody: body(OLD, 3) }, { prBody: body(OLD, 5) }]) {
+    const r = evaluate(routed(['review:coderabbit'], { input, eval: { reviews: [CR_REVIEW] } }));
+    assert.equal(r.ready, true, r.reasons.join('; '));
+  }
+});
+
+test('REVIEW.md labels: .coderabbit.yaml auto_review.labels lists every label that requires CodeRabbit', () => {
+  const yamlText = readFileSync(new URL('../../.coderabbit.yaml', import.meta.url), 'utf8');
+  const block = /auto_review:[\s\S]*?labels:\s*\r?\n((?:\s+-\s*"[^"]+"\s*\r?\n)+)/.exec(yamlText);
+  assert.ok(block, 'auto_review.labels list found');
+  const listed = [...block[1].matchAll(/"([^"]+)"/g)].map((m) => m[1]);
+  for (const label of ['review:coderabbit', 'review:deep', 'review:deep-held']) {
+    assert.equal(requiredBots([label]).coderabbit, true, label);
+    assert.ok(listed.includes(label), `${label} is missing from .coderabbit.yaml auto_review.labels (${listed.join(', ')})`);
+  }
 });

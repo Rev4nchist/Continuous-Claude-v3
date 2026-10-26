@@ -34,6 +34,7 @@ import type { Engine } from 'claude-code/testing'
 // W27 a labelled PR whose CodeRabbit review was rate limited or skipped is LIMITED, not PENDING for 60 minutes
 // W28 a Greptile review a push cancelled says cancelled; a reviewed head below the bar is REVIEWED
 // W29 the labels pick the bots: routedReviewed and routing.required drive REVIEWED, STALLED and the texts
+// W30 a second bot's findings on the same head alert again; a failed Greptile check alerts at once; REVIEWED beats LIMITED
 
 const SESSION = 'test-session'
 const KEY = `pr-watch:${SESSION}`
@@ -59,6 +60,7 @@ type Status = {
   confidence?: number | null
   coderabbitLimited?: boolean | null
   routedReviewed?: boolean
+  coderabbitReviewedHead?: boolean | null
   routing?: { required: string[]; held: string | null; source: string }
 }
 
@@ -383,6 +385,89 @@ describe('pr-loop watcher', () => {
     await clock.advance(TICK)
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).not.toMatch(/Greptile|CodeRabbit/)
+  })
+
+  // Critic round: markers, ordering and texts for PRs that need more than one bot.
+  const DEEP = { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }
+  const GREPTILE_FAILED = 'Greptile check ended failure on the head although its summary scores 5/5. Post one @greptileai comment to re-run it'
+
+  test('W30 a review:deep PR alerts REVIEWED again when the second bot reviews the same head', async ($, on) => {
+    const first = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: false, routedReviewed: false, unresolved: 2, reasons: ['2 review thread(s) unresolved', 'no CodeRabbit PR-bot review of the head commit'] })
+    const second = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, unresolved: 3, reasons: ['3 review thread(s) unresolved'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [first, first, second, second] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by Greptile but is not READY/)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(2)
+    expect(seen.submits[1]).toMatch(/reviewed by Greptile and CodeRabbit but is not READY/)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(2)
+  })
+
+  test('W30 a Greptile check that ended failure at 5/5 alerts at once, not PENDING then STALLED', async ($, on) => {
+    const failed = status(9, { routing: { required: ['greptile'], held: null, source: 'default' }, reviewedHead: true, routedReviewed: true, reasons: [GREPTILE_FAILED] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [failed] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/ended failure/)
+    expect(seen.submits[0]).not.toMatch(/no Greptile review/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W30 a Greptile score under the bar alerts even when the labels do not require Greptile', async ($, on) => {
+    const low = status(9, { routing: CR_ONLY, reviewedHead: true, lowConfidence: true, confidence: 2, coderabbitReviewedHead: false, routedReviewed: false, reasons: ['Greptile confidence 2/5 is below 4', 'no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [low] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/confidence 2\/5/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W30 a cancelled Greptile run on a review:deep PR does not hide CodeRabbit findings', async ($, on) => {
+    const cancelled = 'Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head'
+    const s = status(9, { routing: DEEP, rateLimited: true, reviewedHead: false, coderabbitReviewedHead: true, routedReviewed: false, unresolved: 1, reasons: [cancelled, '1 review thread(s) unresolved'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by CodeRabbit but is not READY/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W30 a cancelled Greptile run with nothing to fix is still LIMITED', async ($, on) => {
+    const cancelled = 'Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head'
+    const s = status(9, { routing: DEEP, rateLimited: true, reviewedHead: false, coderabbitReviewedHead: true, routedReviewed: false, reasons: [cancelled] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9 }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/cancelled/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['LIMITED'])
+  })
+
+  test('W30 STALLED on a review:deep PR names only the bots that have not reviewed', async ($, on) => {
+    const s = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: false, routedReviewed: false, reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/no CodeRabbit review after 60 minutes/)
+    expect(seen.submits[0]).not.toMatch(/Greptile/)
+    expect(seen.toasts[0]).toMatch(/no CodeRabbit review after 60 minutes/)
+    expect(seen.toasts[0]).not.toMatch(/Greptile/)
+  })
+
+  test('W30 STALLED with every required review in (CI still pending) does not blame a bot', async ($, on) => {
+    const s = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, reasons: ['check "ci" is in_progress/null'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/not READY after 60 minutes/)
+    expect(seen.submits[0]).not.toMatch(/no (Greptile|CodeRabbit)/)
   })
 
   test('W16 another session\'s list is not watched', async ($, on) => {
