@@ -12,14 +12,19 @@
  *   --fixture     read the PR, its files and its comments from a JSON file, not from gh (tests). Implies dry run.
  * Exit 0 = decision made, 2 = could not determine (nothing written).
  *
- * Which earlier decision the router remembers: the highest risk:* label on the PR, and the class stored in the
- * router comment (<!-- review-router-state class=x -->). Actions keeps no state between runs.
- *   - first run (no earlier class): add the risk labels and the review labels. A review:* label a person set wins:
- *     only the risk labels are added.
- *   - a later run adds labels only when the class went UP. Lower or equal class: nothing added, nothing removed.
- *   - an expected label that is missing with no rise means a person removed it: the router leaves it and writes
- *     held_reason "person_override" in the ledger. It cannot tell that from a label it never added.
- * Not covered: a person who removes risk:r3 but keeps risk:high (previous class reads "high") sees r3 added again.
+ * Memory: the router comment is the ONLY state. Actions keeps nothing between runs, and a label can be set by anyone.
+ * The comment must be written by github-actions[bot] (type Bot) and start with the marker; a person's copy is ignored
+ * and never edited. It holds <!-- review-router-state class=<x> head=<full sha> -->. No such comment = a first run.
+ *   - first run: add the risk labels and the review labels. A review:* label a person set wins: only risk labels are added.
+ *     A risk:* label a person set counts toward the class (it can only raise it).
+ *   - later run: labels are added only when the class went UP. That includes a person's risk:* label above the comment
+ *     class: it is a raise, and the router adds that class's review label.
+ *   - an expected label that is missing with no rise means a person removed it. The router leaves it and writes
+ *     held_reason "person_override". It never re-adds a risk:* or review:* label a person removed.
+ *   - every run on an open ready PR rewrites the comment when its class or head changed, so READY can read
+ *     which head the router has seen. A local run (no github-actions[bot] comment) must be --dry-run.
+ * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
+ * it). On an error the line has decision "error" and the exit code is 2.
  */
 import { execFileSync } from 'node:child_process';
 import os from 'node:os';
@@ -122,11 +127,13 @@ export function route(cls, labelsNow, config, credits) {
   const notes = [];
   if (cls === 'normal') wanted.push('review:coderabbit');
   if (DEEP_CLASSES.has(cls)) {
-    if (!config.deep_enabled) held = 'apex_d3';
+    // A person who set review:deep upgraded the PR on purpose: no hold, no held note, no second review label.
+    if (labelsNow.includes('review:deep')) held = null;
+    else if (!config.deep_enabled) held = 'apex_d3';
     else if (credits.status === 'u2' && cls !== 'r3') held = 'credits_u2';
     wanted.push(...(held ? ['review:coderabbit', 'review:deep-held'] : ['review:deep']));
     notes.push(...creditNotes(config, credits, held));
-    if (credits.u3_due) {
+    if (credits.u3_due && credits.used === null) {
       notes.push(`Credit check due (U3, ${config.greptile.u3_date}): read the Greptile dashboard and set greptile.credits_used_manual in review-router.config.json.${mention(config)}`);
     }
   }
@@ -141,12 +148,23 @@ export const builderOf = (labels) => {
   return b.length === 0 ? null : b.length === 1 ? b[0] : 'multiple';
 };
 
-export function previousClassFrom(labels, commentBody = '') {
-  const found = labels.filter((l) => l.startsWith('risk:')).map((l) => l.slice(5)).filter((c) => Object.hasOwn(RANK, c));
-  const m = /<!--\s*review-router-state class=(\w+)\s*-->/.exec(String(commentBody ?? ''));
-  if (m && Object.hasOwn(RANK, m[1])) found.push(m[1]);
-  return found.reduce((best, c) => (best === null || rank(c) > rank(best) ? c : best), null);
+const STATE_RE = /<!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?\s*-->/;
+
+/** The class and head stored in a router comment body. Unknown or missing parts are null. */
+export function stateFrom(body) {
+  const m = STATE_RE.exec(String(body ?? ''));
+  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null };
+  return { class: m[1], head: m[2] ?? null };
 }
+
+/** The class the router decided before: from the router comment only. Labels are not memory. */
+export const previousClassFrom = (body) => stateFrom(body).class;
+
+/** The highest risk:* label on the PR (a person may have set it). */
+const labelClassOf = (labels) => labels.filter((l) => l.startsWith('risk:')).map((l) => l.slice(5))
+  .filter((c) => Object.hasOwn(RANK, c)).reduce((best, c) => (best === null || rank(c) > rank(best) ? c : best), null);
+
+const higher = (a, b) => (a === null ? b : b === null ? a : rank(b) > rank(a) ? b : a);
 
 const READY_EVENTS = new Set(['opened', 'reopened', 'ready_for_review']);
 const CR_LABELS = ['review:coderabbit', 'review:deep', 'review:deep-held'];
@@ -166,29 +184,30 @@ function sideNotes({ builder, labelsNow, wanted, pr: p }) {
  * decide(event, pr, labelsNow, previousClass, config, { now }) -> a decision
  *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
  *   -> { reason, class, effective, matched, previousClass, add, comment, held, builder, credits, noop }
- * reason: draft | not_open | event_ignored | not_routed | routed | raised | person_override | no_change.
+ * reason: draft | not_open | event_ignored | routed | raised | person_override | no_change.
  * noop true = touch nothing, not even the comment. The decision never has a "remove".
  */
 export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const credits = creditsState(config, opts.now ?? new Date());
   const { class: cls, matched } = classify(pr.paths ?? [], config);
   const builder = builderOf(labelsNow);
-  const out = { reason: null, class: cls, effective: cls, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
+  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
   const stop = (reason) => ({ ...out, reason });
   if (pr.draft) return stop('draft');
   if (pr.state !== 'open') return stop('not_open');
-  const push = event === 'synchronize';
-  if (!push && !READY_EVENTS.has(event)) return stop('event_ignored');
-  if (push && previousClass === null) return stop('not_routed');
+  // edited counts only when the base branch changed (a stacked PR retargeted to main). A title edit does nothing.
+  const routable = event === 'synchronize' || READY_EVENTS.has(event) || (event === 'edited' && pr.baseChanged === true);
+  if (!routable) return stop('event_ignored');
 
-  const effective = previousClass !== null && rank(previousClass) >= rank(cls) ? previousClass : cls;
+  const seen = higher(cls, labelClassOf(labelsNow));
+  const effective = higher(previousClass, seen);
   const r = route(effective, labelsNow, config, credits);
   let { add } = r;
   let reason;
   if (previousClass === null) {
     reason = hasReview(labelsNow) ? 'person_override' : 'routed';
     if (reason === 'person_override') add = add.filter((l) => l.startsWith('risk:'));
-  } else if (rank(cls) > rank(previousClass)) {
+  } else if (rank(seen) > rank(previousClass)) {
     reason = 'raised';
   } else {
     add = [];
@@ -202,26 +221,35 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
 // ---------- the one router comment ----------
 
 export const ROUTER_MARKER = '<!-- review-router -->';
-export const renderComment = (text, cls) => `${ROUTER_MARKER}\n<!-- review-router-state class=${cls} -->\n${text}`;
+export const renderComment = (text, cls, head = null) =>
+  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''} -->\n${text}`;
 const RESOLVED_TEXT = 'No open router notes.';
+const ROUTER_BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
-/** The newest comment with the marker, whoever wrote it. */
+/**
+ * The router's own comment: written by github-actions[bot] (type Bot) and starting with the marker. The lowest id
+ * wins, so a later copy cannot take its place. A person's comment that quotes the marker is ignored and never edited.
+ */
 export function findRouterComment(comments) {
   return (comments || [])
-    .filter((c) => String(c?.body ?? '').includes(ROUTER_MARKER))
-    .reduce((best, c) => (best === null || (c.id ?? 0) >= (best.id ?? 0) ? c : best), null);
+    .filter((c) => c?.user?.login === ROUTER_BOT.login && c?.user?.type === ROUTER_BOT.type && String(c?.body ?? '').startsWith(ROUTER_MARKER))
+    .reduce((best, c) => (best === null || (c.id ?? Infinity) < (best.id ?? Infinity) ? c : best), null);
 }
 
-/** What to write: labels in one call, and the router comment created once then updated in place. */
+/** A dry-run print must not carry a live marker: someone could paste it into a comment. */
+export const maskMarker = (text) => String(text).replaceAll('<!-- review-router', '<!-- [dry-run] review-router');
+
+/**
+ * What to write: labels in one call; the router comment created once, then updated in place whenever its text,
+ * class or head differs. It is written on every open ready run (resolved text when there are no notes).
+ */
 export function planOps(d, existing) {
   if (d.noop) return [];
   const ops = [];
   if (d.add.length > 0) ops.push({ op: 'labels', labels: d.add });
-  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective);
-  if (d.comment !== null && !existing) ops.push({ op: 'comment-create', body });
-  else if (existing && existing.body !== body && (d.comment !== null || !String(existing.body).includes(RESOLVED_TEXT))) {
-    ops.push({ op: 'comment-update', id: existing.id, body });
-  }
+  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head);
+  if (!existing) ops.push({ op: 'comment-create', body });
+  else if (existing.body !== body) ops.push({ op: 'comment-update', id: existing.id, body });
   return ops;
 }
 
@@ -232,10 +260,10 @@ export function applyOps(ops, { repo, pr, dryRun, gh }) {
       done.push(`add labels: ${o.labels.join(', ')}`);
       if (!dryRun) gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/labels`, ...o.labels.flatMap((l) => ['-f', `labels[]=${l}`])]);
     } else if (o.op === 'comment-create') {
-      done.push(`create the router comment:\n${o.body}`);
+      done.push(`create the router comment:\n${dryRun ? maskMarker(o.body) : o.body}`);
       if (!dryRun) gh(['api', '-X', 'POST', `repos/${repo}/issues/${pr}/comments`, '-f', `body=${o.body}`]);
     } else if (o.op === 'comment-update') {
-      done.push(`update router comment ${o.id}:\n${o.body}`);
+      done.push(`update router comment ${o.id}:\n${dryRun ? maskMarker(o.body) : o.body}`);
       if (!dryRun) gh(['api', '-X', 'PATCH', `repos/${repo}/issues/comments/${o.id}`, '-f', `body=${o.body}`]);
     }
   }
@@ -259,7 +287,7 @@ export function codeRabbitRateLimited(comments, head) {
 
 // ---------- ledger ----------
 
-const NOT_DONE = new Set(['draft', 'not_open', 'not_routed', 'event_ignored', 'person_override']);
+const NOT_DONE = new Set(['draft', 'not_open', 'event_ignored', 'person_override']);
 
 export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
   const c = ops.find((o) => o.op.startsWith('comment'));
@@ -269,6 +297,16 @@ export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
     builder: d.builder, credits: d.credits, comment: c ? c.op.slice('comment-'.length) : 'none',
     ...(pr.assumedReady ? { assumed_ready: true } : {}),
   });
+}
+
+/** The ledger line for a run that could not decide. Nothing was written. */
+export const ledgerErrorLine = ({ number = null, head = null, event = null, message, now = new Date() }) =>
+  JSON.stringify({ ts: now.toISOString(), tool: 'router', pr: number, head, event, decision: 'error', error: message });
+
+function emitLedger(line) {
+  console.log(line);
+  if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\`\`\`json\n${line}\n\`\`\`\n`);
+  if (process.env.RUNNER_TEMP) appendFileSync(path.join(process.env.RUNNER_TEMP, 'review-ledger.jsonl'), `${line}\n`);
 }
 
 // ---------- main ----------
@@ -299,14 +337,15 @@ function origin(args) {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   const payload = eventPath && existsSync(eventPath) ? JSON.parse(readFileSync(eventPath, 'utf8')) : null;
   const number = Number(args.find((a) => /^\d+$/.test(a)) ?? payload?.pull_request?.number);
-  return { number, event: opt(args, '--event') ?? payload?.action ?? 'ready_for_review' };
+  return { number, event: opt(args, '--event') ?? payload?.action ?? 'ready_for_review', baseChanged: Boolean(payload?.changes?.base) };
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const { number, event } = origin(args);
+  const { number, event, baseChanged } = origin(args);
   const fixture = opt(args, '--fixture');
   const dryRun = flag(args, '--dry-run') || Boolean(fixture);
+  let head = null;
   try {
     if (!number) throw new Error('usage: review-router.mjs <pr-number> [--dry-run] [--event name]');
     if (flag(args, '--assume-ready') && !dryRun) throw new Error('--assume-ready needs --dry-run');
@@ -314,26 +353,27 @@ function main() {
     const config = JSON.parse(readFileSync(opt(args, '--config') ?? path.join(HERE, '..', '..', 'review-router.config.json'), 'utf8'));
     const gh = fixture ? null : makeGh();
     const { pull, files, comments } = load(args, gh, repo, number);
+    head = pull.head.sha;
     const assumed = flag(args, '--assume-ready');
     const labels = pullLabelNames(pull);
     const prState = {
-      number: pull.number ?? number, head: pull.head.sha, draft: assumed ? false : pull.draft === true,
+      number: pull.number ?? number, head, draft: assumed ? false : pull.draft === true, baseChanged,
       state: assumed ? 'open' : pull.state, paths: changedPaths(files, pull), assumedReady: assumed,
-      codeRabbitRateLimited: codeRabbitRateLimited(comments, pull.head.sha),
+      codeRabbitRateLimited: codeRabbitRateLimited(comments, head),
     };
     const existing = findRouterComment(comments);
     const now = new Date();
-    const d = decide(event, prState, labels, previousClassFrom(labels, existing?.body), config, { now });
+    const d = decide(event, prState, labels, previousClassFrom(existing?.body), config, { now });
     const ops = planOps(d, existing);
     const done = applyOps(ops, { repo, pr: number, dryRun, gh });
-    const line = ledgerLine({ d, pr: prState, event, ops, now });
-    console.log(line);
+    emitLedger(ledgerLine({ d, pr: prState, event, ops, now }));
     if (dryRun) {
       for (const text of done.length ? done : ['no writes planned']) console.log(`# DRY RUN: ${text.replace(/\n/g, '\n# ')}`);
     }
-    if (process.env.GITHUB_STEP_SUMMARY) appendFileSync(process.env.GITHUB_STEP_SUMMARY, `\`\`\`json\n${line}\n\`\`\`\n`);
   } catch (err) {
-    console.error(`review-router: could not determine (${String(err.message).split('\n')[0]})`);
+    const message = String(err.message).split('\n')[0];
+    emitLedger(ledgerErrorLine({ number: number || null, head, event, message }));
+    console.error(`review-router: could not determine (${message})`);
     process.exit(2);
   }
 }

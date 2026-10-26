@@ -164,6 +164,8 @@ The `review-router` workflow labels a PR when it opens, reopens or becomes ready
 - A label that a person removed stays removed. The ledger line says `person_override`.
 - The router keeps one comment on the PR and updates it. It names a held deep review, a missing
   `builder:*` label and a CodeRabbit rate limit. A missing builder label never blocks.
+- That comment is the router's only memory. It holds the class and the full head SHA the router last saw.
+  Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
 - Each decision is one JSON line in the job summary (tool `router`).
 - To test by hand, run `node scripts/github/review-router.mjs <PR> --dry-run`. Add `--assume-ready`
   to see a draft PR as a ready one.

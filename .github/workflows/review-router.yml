@@ -10,7 +10,8 @@
 name: review-router
 on:
   pull_request_target:
-    types: [opened, reopened, ready_for_review, synchronize]
+    # edited counts only when the base branch changed (a stacked PR retargeted to main): see the job condition.
+    types: [opened, reopened, ready_for_review, synchronize, edited]
     branches: [main]
 permissions:
   contents: read
@@ -23,7 +24,7 @@ concurrency:
 
 jobs:
   route:
-    if: github.event.pull_request.draft == false
+    if: github.event.pull_request.draft == false && (github.event.action != 'edited' || github.event.changes.base != null)
     runs-on: ubuntu-latest
     timeout-minutes: 5
     steps:
@@ -37,3 +38,12 @@ jobs:
         env:
           GH_TOKEN: ${{ github.token }}
         run: node scripts/github/review-router.mjs
+      # The script appends one JSON line per run to $RUNNER_TEMP/review-ledger.jsonl (spec 7). Keep it with the run.
+      - name: Upload the ledger line
+        if: always()
+        uses: actions/upload-artifact@ea165f8d65b6e75b540449e92b4886f43607fa02 # v4.6.2
+        with:
+          name: review-ledger-pr${{ github.event.pull_request.number }}-run${{ github.run_id }}-${{ github.run_attempt }}
+          path: ${{ runner.temp }}/review-ledger.jsonl
+          if-no-files-found: ignore
+          retention-days: 90
