@@ -1,7 +1,7 @@
 # .github/dependabot.yml (P3a, DW-80)
-# Every PR here gets a Greptile review (autoReview open+push), which costs a credit.
-# So: monthly, one grouped PR per ecosystem, at most 1 open PR each, and no automatic rebase
-# (a rebase is a push, and a push is another review).
+# Greptile no longer reviews automatically (autoReview [], 2026-10-26), but each PR still runs CI
+# and the router. So: monthly, one grouped PR per ecosystem, at most 1 open PR each, and no
+# automatic rebase (a rebase is a push, and a push reruns CI).
 version: 2
 updates:
   - package-ecosystem: github-actions
