@@ -148,16 +148,18 @@ function mapDbResults(rawResults: any[], useHybrid: boolean): LearningResult[] {
  * When ``useHybrid`` is false (daemon not ready), runs ``--text-only``.
  * This preserves the Phase 1 fallback path byte-for-byte.
  *
- * Returns a tuple: [results, timedOut]. timedOut=true when the subprocess
+ * Returns a tuple: [results, timedOut, error]. timedOut=true when the subprocess
  * was SIGKILLed before returning output (used by caller for MEDIUM-2 log).
+ * error is a short string when the recall itself failed (non-zero exit, a JSON
+ * {"error": ...} body, spawn failure, unparseable output); null otherwise.
  */
 function checkDbMemory(
   intent: string,
   _projectDir: string,
   useHybrid: boolean,
-): [LearningResult[], boolean] {
+): [LearningResult[], boolean, string | null] {
   const opcDir = getOpcDir();
-  if (!opcDir) return [[], false];
+  if (!opcDir) return [[], false, 'opc dir not found'];
 
   const searchTerm = cleanSearchTerm(intent);
 
@@ -192,25 +194,61 @@ function checkDbMemory(
     killSignal: 'SIGKILL',
   });
 
-  // Detect timeout: spawnSync sets signal='SIGKILL' when the timeout fires.
-  const timedOut = result.signal === 'SIGKILL';
+  return interpretRecallProcess(result, useHybrid);
+}
 
-  if (result.status !== 0 || !result.stdout) {
-    return [[], timedOut];
-  }
+interface RecallProcess {
+  status: number | null;
+  signal: NodeJS.Signals | null;
+  stdout: string | null;
+  error?: Error;
+}
+
+/** Short, URL-free error text for the recall log. */
+function shortRecallError(raw: unknown): string {
+  return String(raw).replace(/postgres(?:ql)?(?:\+\w+)?:\/\/\S+/gi, '<db-url>').split('\n')[0].slice(0, 200);
+}
+
+/**
+ * Turn the recall subprocess result into [results, timedOut, error].
+ *
+ * Before memory phase 1 a non-zero exit and a JSON {"error": ...} body both became
+ * "no results", so a dead database looked like an empty one (2026-10-24 outage).
+ * A timeout is not an error: it has its own outcome code.
+ */
+function interpretRecallProcess(
+  result: RecallProcess,
+  useHybrid: boolean,
+): [LearningResult[], boolean, string | null] {
+  // Detect timeout: spawnSync sets signal='SIGKILL' when the timeout fires.
+  if (result.signal === 'SIGKILL') return [[], true, null];
+  if (result.error) return [[], false, shortRecallError(result.error.message || (result.error as any).code)];
+  if (result.status !== 0) return [[], false, `exit ${result.status}`];
+  if (!result.stdout) return [[], false, 'empty output'];
 
   try {
     const data = JSON.parse(result.stdout);
-
-    if (!data.results || data.results.length === 0) {
-      return [[], false];
-    }
-
-    const results = mapDbResults(data.results, useHybrid);
-    return [results, false];
+    if (data.error) return [[], false, shortRecallError(data.error)];
+    if (!data.results || data.results.length === 0) return [[], false, null];
+    return [mapDbResults(data.results, useHybrid), false, null];
   } catch {
-    return [[], false];
+    return [[], false, 'unparseable output'];
   }
+}
+
+export type RecallOutcome = 'no-db' | 'timeout' | 'miss' | 'below-floor' | 'hit';
+
+/** One code per recall: an error beats a timeout, a timeout beats the counts. */
+function classifyRecallOutcome(input: {
+  error: string | null;
+  timedOut: boolean;
+  resultsCount: number;
+  keptCount: number;
+}): RecallOutcome {
+  if (input.error) return 'no-db';
+  if (input.timedOut) return 'timeout';
+  if (input.resultsCount === 0) return 'miss';
+  return input.keptCount === 0 ? 'below-floor' : 'hit';
 }
 
 /**
@@ -377,6 +415,11 @@ interface RecallLogEntry {
   host_memory_pressure: boolean;
   free_ram_bytes: number;
   embed_fallback_reason: string | null;
+  // Memory phase 1 (2026-10-27): one outcome code per recall, so a dead database
+  // is distinguishable from an empty one. ADDED fields only; /memory-stats reads the rest.
+  outcome: RecallOutcome;
+  // Short URL-free reason when outcome is 'no-db'; null otherwise.
+  recall_error: string | null;
 }
 
 function getRecallLogPath(projectDir: string): string {
@@ -525,6 +568,7 @@ async function main() {
   // (no recall regression). The cleaned search term is shared so both query alike.
   let db: LearningResult[];
   let dbTimedOut: boolean;
+  let recallError: string | null = null;
   let recallVia: 'daemon' | 'uv' = 'uv';
   let daemonRows: any[] | null = null;
   // Proposal 07-12 R1 (2026-07-24): reason-coded daemon failures. reasonRef is
@@ -554,7 +598,7 @@ async function main() {
     recallVia = 'daemon';
   } else {
     uvUsedHybrid = daemonAttempted ? false : daemonReady;
-    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
+    [db, dbTimedOut, recallError] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
   // Floor must match the SCORE TYPE actually produced (RRF ~0.01-0.03 vs FTS
@@ -597,6 +641,13 @@ async function main() {
     host_memory_pressure: hostMemoryPressured,
     free_ram_bytes: freeRamBytes,
     embed_fallback_reason: hostMemoryPressured ? 'host_memory_pressure' : null,
+    outcome: classifyRecallOutcome({
+      error: recallError,
+      timedOut: dbTimedOut,
+      resultsCount: mergedRaw ? mergedRaw.count : 0,
+      keptCount: match ? match.results.length : 0,
+    }),
+    recall_error: recallError,
   };
   logRecallFire(logEntry, projectDir);
 
@@ -684,6 +735,8 @@ if (!process.env.VITEST) {
 export {
   mergeResults,
   applyFloor,
+  classifyRecallOutcome,
+  interpretRecallProcess,
   TEXT_ONLY_FLOOR,
   HYBRID_FLOOR,
 };

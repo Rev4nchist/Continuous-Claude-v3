@@ -1349,7 +1349,7 @@ function mapDbResults(rawResults, useHybrid) {
 }
 function checkDbMemory(intent, _projectDir, useHybrid) {
   const opcDir = getOpcDir();
-  if (!opcDir) return [[], false];
+  if (!opcDir) return [[], false, "opc dir not found"];
   const searchTerm = cleanSearchTerm(intent);
   const args = [
     "run",
@@ -1380,20 +1380,30 @@ function checkDbMemory(intent, _projectDir, useHybrid) {
     timeout: useHybrid ? 12e3 : 5e3,
     killSignal: "SIGKILL"
   });
-  const timedOut = result.signal === "SIGKILL";
-  if (result.status !== 0 || !result.stdout) {
-    return [[], timedOut];
-  }
+  return interpretRecallProcess(result, useHybrid);
+}
+function shortRecallError(raw) {
+  return String(raw).replace(/postgres(?:ql)?(?:\+\w+)?:\/\/\S+/gi, "<db-url>").split("\n")[0].slice(0, 200);
+}
+function interpretRecallProcess(result, useHybrid) {
+  if (result.signal === "SIGKILL") return [[], true, null];
+  if (result.error) return [[], false, shortRecallError(result.error.message || result.error.code)];
+  if (result.status !== 0) return [[], false, `exit ${result.status}`];
+  if (!result.stdout) return [[], false, "empty output"];
   try {
     const data = JSON.parse(result.stdout);
-    if (!data.results || data.results.length === 0) {
-      return [[], false];
-    }
-    const results = mapDbResults(data.results, useHybrid);
-    return [results, false];
+    if (data.error) return [[], false, shortRecallError(data.error)];
+    if (!data.results || data.results.length === 0) return [[], false, null];
+    return [mapDbResults(data.results, useHybrid), false, null];
   } catch {
-    return [[], false];
+    return [[], false, "unparseable output"];
   }
+}
+function classifyRecallOutcome(input) {
+  if (input.error) return "no-db";
+  if (input.timedOut) return "timeout";
+  if (input.resultsCount === 0) return "miss";
+  return input.keptCount === 0 ? "below-floor" : "hit";
 }
 function mergeResults(local, db) {
   if ((!local || local.length === 0) && (!db || db.length === 0)) {
@@ -1526,6 +1536,7 @@ async function main() {
   const local = [];
   let db;
   let dbTimedOut;
+  let recallError = null;
   let recallVia = "uv";
   let daemonRows = null;
   const daemonFail = {};
@@ -1547,7 +1558,7 @@ async function main() {
     recallVia = "daemon";
   } else {
     uvUsedHybrid = daemonAttempted ? false : daemonReady;
-    [db, dbTimedOut] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
+    [db, dbTimedOut, recallError] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
   const usedHybridScores = recallVia === "daemon" || uvUsedHybrid;
@@ -1579,7 +1590,14 @@ async function main() {
     // we forced text-only + skipped the daemon to avoid thrashing the model.
     host_memory_pressure: hostMemoryPressured,
     free_ram_bytes: freeRamBytes,
-    embed_fallback_reason: hostMemoryPressured ? "host_memory_pressure" : null
+    embed_fallback_reason: hostMemoryPressured ? "host_memory_pressure" : null,
+    outcome: classifyRecallOutcome({
+      error: recallError,
+      timedOut: dbTimedOut,
+      resultsCount: mergedRaw ? mergedRaw.count : 0,
+      keptCount: match ? match.results.length : 0
+    }),
+    recall_error: recallError
   };
   logRecallFire(logEntry, projectDir);
   try {
@@ -1645,7 +1663,9 @@ export {
   HYBRID_FLOOR,
   TEXT_ONLY_FLOOR,
   applyFloor,
+  classifyRecallOutcome,
   extractIntent,
   extractKeywords,
+  interpretRecallProcess,
   mergeResults
 };
