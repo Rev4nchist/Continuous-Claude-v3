@@ -474,20 +474,23 @@ function greptileReasons({ required, greptile, run, greptileSummary, unavailable
 /**
  * CodeRabbit refuses bot-authored PRs (no seat for the bot), so a Dependabot PR needs no bot review
  * (Dave, 2026-10-26). Only when the PR author is the dependabot[bot] Bot account AND every commit is
- * authored by it: a person's commit pushed onto the branch ends the exemption. An empty or unknown
- * commit list never counts. CI, threads and mergeable still gate.
+ * authored by it AND carries a valid signature made by GitHub. The author alone can be spoofed (a local
+ * commit with Dependabot's email links to the account); a GitHub signature cannot be made locally.
+ * A person's commit, an unsigned commit, or an empty or unknown commit list ends the exemption.
+ * commits: [{ author: login|null, githubSigned: boolean }]. CI, threads and mergeable still gate.
  */
 const DEPENDABOT_LOGIN = 'dependabot[bot]';
-export function isDependabotPr(pull, commitAuthors) {
+export function isDependabotPr(pull, commits) {
   return pull?.user?.login === DEPENDABOT_LOGIN && pull?.user?.type === 'Bot' &&
-    Array.isArray(commitAuthors) && commitAuthors.length > 0 && commitAuthors.every((a) => a === DEPENDABOT_LOGIN);
+    Array.isArray(commits) && commits.length > 0 &&
+    commits.every((c) => c?.author === DEPENDABOT_LOGIN && c?.githubSigned === true);
 }
 const DEPENDABOT_NEED = { greptile: false, coderabbit: false, held: null, source: 'dependabot' };
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commitAuthors = [] }) {
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [] }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
-  const need = isDependabotPr(pull, commitAuthors) ? DEPENDABOT_NEED : verifiedBots(labels, comments, head, greptileAuto);
+  const need = isDependabotPr(pull, commits) ? DEPENDABOT_NEED : verifiedBots(labels, comments, head, greptileAuto);
   const run = latestGreptileRun(checkRuns);
   const greptile = greptileState(run);
   const greptileSummary = run?.output?.summary ?? null;
@@ -600,7 +603,7 @@ function main() {
     // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
     // history cannot come from different moments. More than 100 is "cannot determine", like threads.
     // commits(last:1) is the head commit, for the CodeRabbit notice date.
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}}}}}}}}';
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
     const prq = g.data.repository.pullRequest;
     const rt = prq.reviewThreads;
@@ -619,11 +622,16 @@ function main() {
     }
     const headCommit = prq.commits.nodes[0]?.commit;
     const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
-    // Every commit's author account, for the Dependabot rule. More than 100 commits = unknown (no exemption).
+    // The GraphQL commit list must describe the head the REST read saw; a push in between is "cannot determine".
+    if (headCommit?.oid !== pull.head.sha) throw new Error(`head moved during the read (${String(headCommit?.oid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
+    // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
     const ac = prq.allCommits;
-    const commitAuthors = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => n.commit.author?.user?.login ?? null);
+    const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
+      author: n.commit.author?.user?.login ?? null,
+      githubSigned: n.commit.signature?.isValid === true && n.commit.signature?.wasSignedByGitHub === true,
+    }));
     result = evaluate({
-      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commitAuthors,
+      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
     });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);

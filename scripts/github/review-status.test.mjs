@@ -1213,8 +1213,9 @@ test('Greptile on (default input): the old rule is unchanged', () => {
 const DEPENDABOT = { login: 'dependabot[bot]', type: 'Bot' };
 const DEP = (over = {}) => {
   const base = OFF(['risk:infra', 'review:coderabbit', 'review:deep-held', 'dependencies']);
-  return { ...base, pull: { ...base.pull, user: over.user ?? DEPENDABOT }, commitAuthors: over.commitAuthors ?? ['dependabot[bot]'], ...(over.extra ?? {}) };
+  return { ...base, pull: { ...base.pull, user: over.user ?? DEPENDABOT }, commits: over.commits ?? [DEP_COMMIT], ...(over.extra ?? {}) };
 };
+const DEP_COMMIT = { author: 'dependabot[bot]', githubSigned: true };
 
 test('Dependabot: a PR opened and only committed by dependabot[bot] needs no bot review', () => {
   const r = evaluate(DEP());
@@ -1225,11 +1226,13 @@ test('Dependabot: a PR opened and only committed by dependabot[bot] needs no bot
 
 test('Dependabot: a person commit, an unknown commit list, or a User account named dependabot[bot] gets no exemption', () => {
   for (const [name, over] of [
-    ['person commit on the branch', { commitAuthors: ['dependabot[bot]', 'Rev4nchist'] }],
-    ['no commit authors read', { commitAuthors: [] }],
-    ['commit with no linked account', { commitAuthors: [null] }],
+    ['person commit on the branch', { commits: [DEP_COMMIT, { author: 'Rev4nchist', githubSigned: true }] }],
+    ['spoofed author, not signed by GitHub', { commits: [{ author: 'dependabot[bot]', githubSigned: false }] }],
+    ['signature missing', { commits: [{ author: 'dependabot[bot]' }] }],
+    ['no commits read', { commits: [] }],
+    ['commit with no linked account', { commits: [{ author: null, githubSigned: true }] }],
     ['User account named dependabot[bot]', { user: { login: 'dependabot[bot]', type: 'User' } }],
-    ['another bot', { user: { login: 'renovate[bot]', type: 'Bot' }, commitAuthors: ['renovate[bot]'] }],
+    ['another bot', { user: { login: 'renovate[bot]', type: 'Bot' }, commits: [{ author: 'renovate[bot]', githubSigned: true }] }],
   ]) {
     const r = evaluate(DEP(over));
     assert.deepEqual(r.routing.required, ['coderabbit'], name);
