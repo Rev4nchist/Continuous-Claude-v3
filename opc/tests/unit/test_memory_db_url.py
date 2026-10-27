@@ -62,9 +62,11 @@ def test_store_uses_postgres_with_wizard_variable(monkeypatch):
 
 def test_schema_has_memory_columns():
     sql = (OPC.parent / "docker" / "init-schema.sql").read_text(encoding="utf-8")
-    columns = ("project_id TEXT", "scope TEXT", "valid_from TIMESTAMPTZ", "valid_until TIMESTAMPTZ")
-    for column in columns:
+    for column in ("project_id TEXT", "scope TEXT", "valid_until TIMESTAMPTZ"):
         assert f"ADD COLUMN IF NOT EXISTS {column}" in sql, column
+    # valid_from is added in a guarded block that copies created_at for old rows.
+    assert "ADD COLUMN valid_from TIMESTAMPTZ" in sql
+    assert "SET valid_from = created_at" in sql
 
 
 def test_single_schema_copy():
