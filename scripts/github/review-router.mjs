@@ -213,10 +213,10 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const builder = builderOf(labelsNow);
   const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
   const stop = (reason) => ({ ...out, reason });
+  // A label event reads no files, so it reports no class, on any PR state.
+  if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
   if (pr.draft) return stop('draft');
   if (pr.state !== 'open') return stop('not_open');
-  // A label event reads no files, so it reports no class.
-  if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
   // edited counts only when the base branch changed (a stacked PR retargeted to main). A title edit does nothing.
   const routable = event === 'synchronize' || READY_EVENTS.has(event) || (event === 'edited' && pr.baseChanged === true);
   if (!routable) return stop('event_ignored');

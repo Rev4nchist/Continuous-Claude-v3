@@ -951,9 +951,18 @@ test('labeled: the ledger row reports no class (no files were read)', () => {
   assert.equal(JSON.parse(ledgerLine({ d, pr: pr([]), event: 'labeled', now: NOW })).class, null);
 });
 
-test('workflow: label runs use their own concurrency group', () => {
+test('workflow: each label run has its own concurrency group (never replaces a push run or another label run)', () => {
   const yml = readFileSync(path.join(HERE, '..', '..', '.github', 'workflows', 'review-router.yml'), 'utf8');
-  assert.match(yml, /group: review-router-\$\{\{[^\n]*\}\}-\$\{\{ \(github\.event\.action == 'labeled' \|\| github\.event\.action == 'unlabeled'\) && 'label' \|\| 'route' \}\}/);
+  assert.match(yml, /group: review-router-\$\{\{[^\n]*\}\}-\$\{\{ \(github\.event\.action == 'labeled' \|\| github\.event\.action == 'unlabeled'\) && format\('label-\{0\}', github\.run_id\) \|\| 'route' \}\}/);
+});
+
+test('labeled on a closed or draft PR: still a person_label row with no class', () => {
+  for (const extra of [{ state: 'closed' }, { draft: true }]) {
+    const d = dec('labeled', pr([], extra), ['risk:high', B], 'normal');
+    assert.equal(d.reason, 'person_label', JSON.stringify(extra));
+    assert.equal(d.class, null, JSON.stringify(extra));
+    assert.deepEqual(d.add, []);
+  }
 });
 
 test('changedPaths: more files than the PR has is refused too (compare against a moved base)', () => {

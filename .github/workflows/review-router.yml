@@ -46,10 +46,10 @@ jobs:
             (startsWith(github.event.label.name, 'risk:') || startsWith(github.event.label.name, 'review:')))))
     # Job-level, so a skipped run (a bot editing the PR body fires `edited`) never joins the group and
     # never cancels a queued push run. Two quick pushes still run one after another.
-    # Label runs (they write only a ledger row) use their own group, so a label change never replaces a
-    # pending push run in the routing group.
+    # Each label run (it writes only a ledger row) gets its own group, so a label change never replaces a
+    # pending push run, and two quick label changes never replace each other (one ledger row each).
     concurrency:
-      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'route' }}
+      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && format('label-{0}', github.run_id) || 'route' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
