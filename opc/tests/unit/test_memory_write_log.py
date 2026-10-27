@@ -33,6 +33,28 @@ def _home(monkeypatch, tmp_path):
     return tmp_path / ".claude" / "state" / "memory-write-failures.jsonl"
 
 
+def test_index_handoffs_logs_a_setup_failure_and_still_raises(monkeypatch, tmp_path):
+    """A database that is down before the first store must still leave a line."""
+    import index_handoffs
+    import pytest
+
+    log = tmp_path / "failures.jsonl"
+    monkeypatch.setenv("CCV3_MEMORY_FAILURE_LOG", str(log))
+
+    async def down():
+        raise ConnectionRefusedError(f"connect failed for {SECRET_URL}")
+
+    monkeypatch.setattr(index_handoffs, "archival_count", down)
+    handoff = tmp_path / "h.yaml"
+    text = "goal: g\nnow: n\ndecisions:\n  - d: a decision long enough to keep\n"
+    handoff.write_text(text, encoding="utf-8")
+    with pytest.raises(ConnectionRefusedError):
+        asyncio.run(index_handoffs.index_handoffs([handoff], repo_root=tmp_path, apply=True))
+    lines = _lines(log)
+    assert lines and lines[-1]["source"] == "index_handoffs"
+    assert "setup failed" in lines[-1]["error"] and "hunter2" not in lines[-1]["error"]
+
+
 def _lines(path: Path) -> list[dict]:
     return [json.loads(x) for x in path.read_text(encoding="utf-8").splitlines()]
 

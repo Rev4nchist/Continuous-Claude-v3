@@ -40,14 +40,16 @@ def record_write_failure(source: str, error: object, session_id: str | None) -> 
     """Append one failure line. Never raises."""
     try:
         path = failure_log_path()
-        path.parent.mkdir(parents=True, exist_ok=True)
+        # Owner-only, like shared/guard-log.ts: driver errors can quote row values.
+        path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
         entry = {
             "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "source": source,
             "error": mask_urls(str(error))[:MAX_ERROR_CHARS],
             "session_id": session_id or "unknown",
         }
-        with path.open("a", encoding="utf-8") as handle:
+        fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)
+        with os.fdopen(fd, "a", encoding="utf-8") as handle:
             handle.write(json.dumps(entry) + "\n")
     except Exception:  # noqa: BLE001 - a log must never break a store
         pass

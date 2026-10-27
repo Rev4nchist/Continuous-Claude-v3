@@ -5744,11 +5744,14 @@ async function main() {
   const message = [result.output ?? "", health.line].filter(Boolean).join("\n");
   const output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } };
   if (health.warn) output.systemMessage = health.line;
-  console.log(JSON.stringify(output));
+  emitAndExit(output);
+}
+function emitAndExit(output) {
+  process.stdout.write(JSON.stringify(output) + "\n", () => process.exit(0));
 }
 main().catch((err) => {
   console.error("memory-loaders failed:", err);
-  console.log(JSON.stringify({ result: "continue" }));
+  emitAndExit({ result: "continue" });
 });
 export {
   main

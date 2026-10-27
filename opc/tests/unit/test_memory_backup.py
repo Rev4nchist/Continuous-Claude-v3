@@ -61,14 +61,19 @@ class FakeConn:
         self.executed = []
         self.tx_open = 0
         self.tx_failed = False
+        self.events = []
 
     async def fetchval(self, sql, *args):
+        self.events.append(("count", self.tx_open > 0))
         return self.existing
 
     def transaction(self):
         return FakeTx(self)
 
     async def execute(self, sql, *args):
+        if sql.startswith("LOCK TABLE"):
+            self.events.append(("lock", self.tx_open > 0))
+            return "LOCK TABLE"
         self.executed.append(args)
         return "INSERT 0 0" if args[0] in self.conflict_ids else "INSERT 0 1"
 
@@ -105,6 +110,23 @@ def test_restore_refuses_nonempty_without_yes():
     with pytest.raises(memory_backup.RestoreRefusedError):
         asyncio.run(memory_backup.restore(conn, [ROW], yes=False))
     assert conn.executed == []
+
+
+def test_restore_locks_before_the_empty_check_inside_the_transaction():
+    """A writer must not slip a row in between the empty check and the inserts."""
+    conn = FakeConn(existing=0)
+    asyncio.run(memory_backup.restore(conn, [ROW], yes=False))
+    assert conn.events[:2] == [("lock", True), ("count", True)]
+
+
+def test_backup_uses_a_unique_temp_file_and_leaves_none_behind(tmp_path):
+    class Conn:
+        async def fetch(self, sql, *args):
+            return [{**ROW, "embedding": "[0.1]", "metadata": json.dumps(ROW["metadata"])}]
+
+    count, target = asyncio.run(memory_backup.backup(Conn(), tmp_path, day="20261027"))
+    assert count == 1 and target.exists()
+    assert list(tmp_path.glob("*.tmp")) == []
 
 
 def test_restore_into_empty_table_needs_no_yes():

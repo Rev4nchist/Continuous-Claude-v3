@@ -23,6 +23,7 @@ import asyncio
 import json
 import os
 import sys
+import tempfile
 from datetime import date, datetime
 from pathlib import Path
 
@@ -90,13 +91,20 @@ async def backup(conn, folder: Path, day: str | None = None) -> tuple[int, Path 
     records = await conn.fetch(EXPORT_SQL)
     if not records:
         return 0, None
-    folder.mkdir(parents=True, exist_ok=True)
+    # Owner-only: the backup holds every lesson in plain text.
+    folder.mkdir(mode=0o700, parents=True, exist_ok=True)
     target = folder / f"archival_memory-{day or datetime.now().strftime('%Y%m%d')}.jsonl"
-    partial = target.with_suffix(".tmp")
-    with partial.open("w", encoding="utf-8", newline="\n") as handle:
-        for record in records:
-            handle.write(_to_line(record) + "\n")
-    os.replace(partial, target)
+    # A unique temp file per run (mkstemp creates it 0600), so two sessions that
+    # back up on the same day never write into one file; os.replace is atomic.
+    fd, partial = tempfile.mkstemp(prefix=f"{target.stem}.", suffix=".tmp", dir=folder)
+    try:
+        with os.fdopen(fd, "w", encoding="utf-8", newline="\n") as handle:
+            for record in records:
+                handle.write(_to_line(record) + "\n")
+        os.replace(partial, target)
+    except BaseException:
+        Path(partial).unlink(missing_ok=True)
+        raise
     rotate(folder)
     return len(records), target
 
@@ -134,14 +142,19 @@ def _args(row: dict) -> tuple:
 
 
 async def restore(conn, rows: list[dict], yes: bool) -> tuple[int, int]:
-    """Insert rows in one transaction. Returns (inserted, skipped)."""
-    existing = await conn.fetchval("SELECT count(*) FROM archival_memory")
-    if existing and not yes:
-        raise RestoreRefusedError(
-            f"archival_memory has {existing} rows; pass --yes to restore into it"
-        )
+    """Insert rows in one transaction. Returns (inserted, skipped).
+
+    The table is locked against writers before the empty check, and the lock
+    holds through the inserts, so no row can slip in between check and restore.
+    """
     inserted = 0
     async with conn.transaction():
+        await conn.execute("LOCK TABLE archival_memory IN SHARE ROW EXCLUSIVE MODE")
+        existing = await conn.fetchval("SELECT count(*) FROM archival_memory")
+        if existing and not yes:
+            raise RestoreRefusedError(
+                f"archival_memory has {existing} rows; pass --yes to restore into it"
+            )
         for row in rows:
             status = await conn.execute(INSERT_SQL, *_args(row))
             inserted += 1 if status.endswith(" 1") else 0

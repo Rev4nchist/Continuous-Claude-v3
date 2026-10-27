@@ -60,10 +60,20 @@ export async function main(): Promise<void> {
   const message = [result.output ?? '', health.line].filter(Boolean).join('\n');
   const output: ContextInjectionHookOutput = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: message } };
   if (health.warn) output.systemMessage = health.line;
-  console.log(JSON.stringify(output));
+  emitAndExit(output);
+}
+
+/**
+ * Write the hook output, then exit. The health probe gives up after 3 s, but a
+ * pg client it started can still be connecting or waiting on a query; exiting
+ * here keeps that client from holding the session start open. The backup child
+ * is detached, so it survives the exit.
+ */
+function emitAndExit(output: unknown): void {
+  process.stdout.write(JSON.stringify(output) + '\n', () => process.exit(0));
 }
 
 main().catch((err) => {
   console.error('memory-loaders failed:', err);
-  console.log(JSON.stringify({ result: 'continue' }));
+  emitAndExit({ result: 'continue' });
 });

@@ -625,15 +625,19 @@ async def index_handoffs(
         summary["errors"].append(f"memory factory import failed: {exc}")
         return summary
 
-    summary["before_count"] = await archival_count()
-
-    backend = "postgres"
-    memory = await create_memory_service(
-        backend=backend,
-        session_id="handoff-indexer",
-        agent_id="handoff-indexer",
-    )
-    project_id = await get_project_id(repo_root)
+    # A database that is down at setup must leave a trace too, not only a
+    # per-entry store failure. The error is still raised as before.
+    try:
+        summary["before_count"] = await archival_count()
+        memory = await create_memory_service(
+            backend="postgres",
+            session_id="handoff-indexer",
+            agent_id="handoff-indexer",
+        )
+        project_id = await get_project_id(repo_root)
+    except Exception as exc:
+        record_write_failure("index_handoffs", f"setup failed: {exc}", "handoff-indexer")
+        raise
 
     try:
         existing = await existing_handoff_keys(memory)
