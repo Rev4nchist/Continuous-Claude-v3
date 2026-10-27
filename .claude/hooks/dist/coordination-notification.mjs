@@ -1041,7 +1041,14 @@ var require_utils = __commonJS({
   "node_modules/pg/lib/utils.js"(exports, module) {
     "use strict";
     var defaults2 = require_defaults();
+    var nodeUtils = __require("util");
     var { isDate } = __require("util/types");
+    var invalidDateDeprecationNotice = nodeUtils.deprecate(
+      () => {
+      },
+      "Sending an invalid date to Postgres is deprecated and will throw an error in the next major version of pg. Ensure any Date object passed as a query parameter is valid.",
+      "PG_INVALID_DATE"
+    );
     function escapeElement(elementRepresentation) {
       const escaped = elementRepresentation.replace(/\\/g, "\\\\").replace(/"/g, '\\"');
       return '"' + escaped + '"';
@@ -1081,6 +1088,9 @@ var require_utils = __commonJS({
           return Buffer.from(val.buffer, val.byteOffset, val.byteLength);
         }
         if (isDate(val)) {
+          if (isNaN(val.getTime())) {
+            invalidDateDeprecationNotice();
+          }
           if (defaults2.parseInputDatesAsUTC) {
             return dateToStringUTC(val);
           } else {
@@ -1131,7 +1141,7 @@ var require_utils = __commonJS({
       return ret;
     }
     function normalizeQueryConfig(config, values, callback) {
-      config = typeof config === "string" ? { text: config } : config;
+      config = typeof config === "string" ? { text: config } : cloneQueryConfig(config);
       if (values) {
         if (typeof values === "function") {
           config.callback = values;
@@ -1143,6 +1153,12 @@ var require_utils = __commonJS({
         config.callback = callback;
       }
       return config;
+    }
+    function cloneQueryConfig(config) {
+      if (config == null) {
+        return config;
+      }
+      return Object.defineProperties(Object.create(Object.getPrototypeOf(config)), Object.getOwnPropertyDescriptors(config));
     }
     var escapeIdentifier2 = function(str) {
       return '"' + str.replace(/"/g, '""') + '"';
@@ -1333,7 +1349,7 @@ var require_cert_signatures = __commonJS({
           }
           throw x509Error("unknown hash OID " + hashOID, data);
         }
-        // Ed25519 -- see https: return//github.com/openssl/openssl/issues/15477
+        // Ed25519 -- see https://github.com/openssl/openssl/issues/15477
         case "1.3.101.110":
         case "1.3.101.112":
           return "SHA-512";
@@ -1605,7 +1621,7 @@ var require_pg_connection_string = __commonJS({
         config.client_encoding = result.searchParams.get("encoding");
         return config;
       }
-      const hostname = dummyHost ? "" : result.hostname;
+      const hostname = (dummyHost ? "" : result.hostname).replace(/^\[(.+)\]$/, "$1");
       if (!config.host) {
         config.host = decodeURIComponent(hostname);
       } else if (hostname && /^%2f/i.test(hostname)) {
@@ -2122,7 +2138,7 @@ var require_query = __commonJS({
         if (typeof this.text !== "string" && typeof this.name !== "string") {
           return new Error("A query must have either text or a name. Supplying neither is unsupported.");
         }
-        const previous = connection.parsedStatements[this.name];
+        const previous = connection.parsedStatements[this.name] || connection.submittedNamedStatements[this.name];
         if (this.text && previous && this.text !== previous) {
           return new Error(`Prepared statements must be unique - '${this.name}' was used for a different statement`);
         }
@@ -2142,7 +2158,7 @@ var require_query = __commonJS({
         return null;
       }
       hasBeenParsed(connection) {
-        return this.name && connection.parsedStatements[this.name];
+        return this.name && (connection.parsedStatements[this.name] !== void 0 || connection.submittedNamedStatements[this.name] !== void 0);
       }
       handlePortalSuspended(connection) {
         this._getRows(connection, this.rows);
@@ -2166,6 +2182,9 @@ var require_query = __commonJS({
             name: this.name,
             types: this.types
           });
+          if (this.name) {
+            connection.submittedNamedStatements[this.name] = this.text;
+          }
         }
         try {
           connection.bind({
@@ -2381,7 +2400,7 @@ var require_buffer_writer = __commonJS({
           const oldBuffer = this.buffer;
           const newSize = oldBuffer.length + (oldBuffer.length >> 1) + size;
           this.buffer = Buffer.allocUnsafe(newSize);
-          oldBuffer.copy(this.buffer);
+          oldBuffer.copy(this.buffer, 0, 0, this.offset);
         }
       }
       addInt32(num) {
@@ -2441,6 +2460,15 @@ var require_buffer_writer = __commonJS({
         otherBuffer.copy(this.buffer, this.offset);
         this.offset += otherBuffer.length;
         return this;
+      }
+      /**
+       * Appends an uninitialized block of {@link size} bytes to the buffer and returns its offset.
+       */
+      reserveUnsafe(size) {
+        const offset = this.offset;
+        this.ensure(size);
+        this.offset += size;
+        return offset;
       }
       join(code) {
         if (code) {
@@ -2534,30 +2562,23 @@ var require_serializer = __commonJS({
         /* code.parse */
       );
     };
-    var paramWriter = new buffer_writer_1.Writer();
-    var writeValues = function(values, valueMapper) {
-      for (let i = 0; i < values.length; i++) {
+    var writeValues = function(values, valueMapper, formatsOffset) {
+      const len = values.length;
+      for (let i = 0; i < len; i++) {
         const mappedVal = valueMapper ? valueMapper(values[i], i) : values[i];
+        let formatByte = 0;
         if (mappedVal == null) {
-          writer.addInt16(
-            0
-            /* ParamType.STRING */
-          );
-          paramWriter.addInt32(-1);
+          writer.addInt32(-1);
         } else if (mappedVal instanceof Buffer) {
-          writer.addInt16(
-            1
-            /* ParamType.BINARY */
-          );
-          paramWriter.addInt32(mappedVal.length);
-          paramWriter.add(mappedVal);
+          formatByte = 1;
+          writer.addInt32(mappedVal.length);
+          writer.add(mappedVal);
         } else {
-          writer.addInt16(
-            0
-            /* ParamType.STRING */
-          );
-          paramWriter.addInt32PrefixedString(mappedVal);
+          writer.addInt32PrefixedString(mappedVal);
         }
+        const buf = writer.buffer;
+        buf[formatsOffset++] = 0;
+        buf[formatsOffset++] = formatByte;
       }
     };
     var bind = (config = {}) => {
@@ -2568,15 +2589,14 @@ var require_serializer = __commonJS({
       const len = values.length;
       writer.addCString(portal).addCString(statement);
       writer.addInt16(len);
+      const formatsOffset = writer.reserveUnsafe(len * 2);
+      writer.addInt16(len);
       try {
-        writeValues(values, config.valueMapper);
+        writeValues(values, config.valueMapper, formatsOffset);
       } catch (err) {
         writer.clear();
-        paramWriter.clear();
         throw err;
       }
-      writer.addInt16(len);
-      writer.add(paramWriter.flush());
       writer.addInt16(1);
       writer.addInt16(
         binary ? 1 : 0
@@ -2954,7 +2974,7 @@ var require_parser = __commonJS({
       const parameterCount = reader.int16();
       const message = new messages_1.ParameterDescriptionMessage(LATEINIT_LENGTH, parameterCount);
       for (let i = 0; i < parameterCount; i++) {
-        message.dataTypeIDs[i] = reader.int32();
+        message.dataTypeIDs[i] = reader.uint32();
       }
       return message;
     };
@@ -3175,6 +3195,7 @@ var require_connection = __commonJS({
         this._keepAlive = config.keepAlive;
         this._keepAliveInitialDelayMillis = config.keepAliveInitialDelayMillis;
         this.parsedStatements = {};
+        this.submittedNamedStatements = {};
         this.ssl = config.ssl || false;
         this.sslNegotiation = config.sslNegotiation || "postgres";
         this._ending = false;
@@ -3233,7 +3254,12 @@ var require_connection = __commonJS({
       upgradeToSSL(host, reportStreamError) {
         const self = this;
         const options = {
-          socket: self.stream
+          socket: self.stream,
+          // tls.connect checks the server identity against `servername`, falling
+          // back to `host` and then to 'localhost'. `servername` must stay unset
+          // for IP addresses (see below), so `host` is needed to keep certificate
+          // validation working when connecting to an IP address.
+          host
         };
         if (self.ssl !== true) {
           Object.assign(options, self.ssl);
@@ -3311,7 +3337,6 @@ var require_connection = __commonJS({
         }
       }
       sync() {
-        this._ending = true;
         this._send(syncBuffer);
       }
       ref() {
@@ -3731,6 +3756,8 @@ var require_client = __commonJS({
           encoding: this.connectionParameters.client_encoding || "utf8"
         });
         this._queryQueue = [];
+        this._sentQueryQueue = [];
+        this.pipeline = Boolean(c.pipeline);
         this.binary = c.binary || defaults2.binary;
         this.processID = null;
         this.secretKey = null;
@@ -3765,6 +3792,8 @@ var require_client = __commonJS({
           enqueueError(activeQuery);
           this._activeQuery = null;
         }
+        this._sentQueryQueue.forEach(enqueueError);
+        this._sentQueryQueue.length = 0;
         this._queryQueue.forEach(enqueueError);
         this._queryQueue.length = 0;
       }
@@ -4007,6 +4036,9 @@ var require_client = __commonJS({
           return;
         }
         this._activeQuery = null;
+        if (activeQuery.name) {
+          delete this.connection.submittedNamedStatements[activeQuery.name];
+        }
         activeQuery.handleError(msg, this.connection);
       }
       _handleRowDescription(msg) {
@@ -4063,6 +4095,7 @@ var require_client = __commonJS({
         }
         if (activeQuery.name) {
           this.connection.parsedStatements[activeQuery.name] = activeQuery.text;
+          delete this.connection.submittedNamedStatements[activeQuery.name];
         }
       }
       _handleCopyInResponse(msg) {
@@ -4129,6 +4162,9 @@ var require_client = __commonJS({
           });
         } else if (client._queryQueue.indexOf(query) !== -1) {
           client._queryQueue.splice(client._queryQueue.indexOf(query), 1);
+        } else if (client._sentQueryQueue.indexOf(query) !== -1) {
+          query.callback = () => {
+          };
         }
       }
       setTypeParser(oid, format, parseFn) {
@@ -4147,6 +4183,10 @@ var require_client = __commonJS({
         return utils.escapeLiteral(str);
       }
       _pulseQueryQueue() {
+        if (this.pipeline) {
+          this._pulsePipelinedQueryQueue();
+          return;
+        }
         if (this.readyForQuery === true) {
           this._activeQuery = this._queryQueue.shift();
           const activeQuery = this._getActiveQuery();
@@ -4165,6 +4205,30 @@ var require_client = __commonJS({
             this._activeQuery = null;
             this.emit("drain");
           }
+        }
+      }
+      _pulsePipelinedQueryQueue() {
+        if (!this._connected || !this._queryable) {
+          return;
+        }
+        while (this._queryQueue.length > 0) {
+          const query = this._queryQueue.shift();
+          this.hasExecuted = true;
+          const queryError = query.submit(this.connection);
+          if (queryError) {
+            process.nextTick(() => {
+              query.handleError(queryError, this.connection);
+            });
+            continue;
+          }
+          this._sentQueryQueue.push(query);
+        }
+        if (this.readyForQuery && !this._activeQuery && this._sentQueryQueue.length > 0) {
+          this._activeQuery = this._sentQueryQueue.shift();
+          this.readyForQuery = false;
+        }
+        if (!this._activeQuery && this._sentQueryQueue.length === 0 && this._queryQueue.length === 0 && this.hasExecuted) {
+          this.emit("drain");
         }
       }
       query(config, values, callback) {
@@ -4210,6 +4274,9 @@ var require_client = __commonJS({
             const index = this._queryQueue.indexOf(query);
             if (index > -1) {
               this._queryQueue.splice(index, 1);
+            } else if (this.pipeline) {
+              this.connection.stream.destroy();
+              return;
             }
             this._pulseQueryQueue();
           }, readTimeout);
@@ -4224,6 +4291,15 @@ var require_client = __commonJS({
         if (query._result && !query._result._types) {
           query._result._types = this._types;
         }
+        if (this.pipeline) {
+          const portalQuery = typeof config.submit === "function" && !(query instanceof Query2) ? "Custom query classes such as pg-cursor and pg-query-stream are" : query.rows ? "The `rows` option is" : null;
+          if (portalQuery) {
+            process.nextTick(() => {
+              query.handleError(new Error(`${portalQuery} not supported in pipeline mode`), this.connection);
+            });
+            return result;
+          }
+        }
         if (!this._queryable) {
           process.nextTick(() => {
             query.handleError(new Error("Client has encountered a connection error and is not queryable"), this.connection);
@@ -4236,7 +4312,7 @@ var require_client = __commonJS({
           });
           return result;
         }
-        if (this._queryQueue.length > 0) {
+        if (this._queryQueue.length > 0 && !this.pipeline) {
           queryQueueLengthDeprecationNotice();
         }
         this._queryQueue.push(query);
@@ -4262,7 +4338,11 @@ var require_client = __commonJS({
             return this._Promise.resolve();
           }
         }
-        if (this._getActiveQuery() || !this._queryable) {
+        if (!this._queryable) {
+          this.connection.stream.destroy();
+        } else if (this.pipeline && (this._getActiveQuery() || this._sentQueryQueue.length > 0 || this._queryQueue.length > 0)) {
+          this.once("drain", () => this.connection.end());
+        } else if (this._getActiveQuery()) {
           this.connection.stream.destroy();
         } else {
           this.connection.end();
@@ -4741,6 +4821,8 @@ var require_query2 = __commonJS({
       sqlState: "code",
       statementPosition: "position",
       messagePrimary: "message",
+      messageDetail: "detail",
+      messageHint: "hint",
       context: "where",
       schemaName: "schema",
       tableName: "table",
@@ -4752,7 +4834,7 @@ var require_query2 = __commonJS({
       sourceFunction: "routine"
     };
     NativeQuery.prototype.handleError = function(err) {
-      const fields = this.native.pq.resultErrorFields();
+      const fields = this.native && this.native.pq.resultErrorFields();
       if (fields) {
         for (const key in fields) {
           const normalizedFieldName = errorFieldMap[key] || key;
@@ -4824,7 +4906,7 @@ var require_query2 = __commonJS({
           console.error("This can cause conflicts and silent errors executing queries");
         }
         const values = (this.values || []).map(utils.prepareValue);
-        if (client.namedQueries[this.name]) {
+        if (client.namedQueries[this.name] !== void 0) {
           if (this.text && client.namedQueries[this.name] !== this.text) {
             const err = new Error(`Prepared statements must be unique - '${this.name}' was used for a different statement`);
             return after(err);
@@ -4885,6 +4967,8 @@ var require_client2 = __commonJS({
       this._connecting = false;
       this._connected = false;
       this._queryable = true;
+      this.pipeline = Boolean(config.pipeline);
+      this._pipelineInFlight = false;
       const cp = this.connectionParameters = new ConnectionParameters(config);
       if (config.nativeConnectionString) cp.nativeConnectionString = config.nativeConnectionString;
       this.user = cp.user;
@@ -5028,7 +5112,7 @@ var require_client2 = __commonJS({
         });
         return result;
       }
-      if (this._queryQueue.length > 0) {
+      if (this._queryQueue.length > 0 && !this.pipeline) {
         queryQueueLengthDeprecationNotice();
       }
       this._queryQueue.push(query);
@@ -5050,14 +5134,21 @@ var require_client2 = __commonJS({
           cb = (err) => err ? reject(err) : resolve();
         });
       }
-      this.native.end(function() {
-        self._connected = false;
-        self._errorAllQueries(new Error("Connection terminated"));
-        process.nextTick(() => {
-          self.emit("end");
-          if (cb) cb();
+      const doEnd = function() {
+        self.native.end(function() {
+          self._connected = false;
+          self._errorAllQueries(new Error("Connection terminated"));
+          process.nextTick(() => {
+            self.emit("end");
+            if (cb) cb();
+          });
         });
-      });
+      };
+      if (this.pipeline && (this._pipelineInFlight || this._queryQueue.length > 0)) {
+        this.once("drain", doEnd);
+      } else {
+        doEnd();
+      }
       return result;
     };
     Client2.prototype._hasActiveQuery = function() {
@@ -5066,6 +5157,9 @@ var require_client2 = __commonJS({
     Client2.prototype._pulseQueryQueue = function(initialConnection) {
       if (!this._connected) {
         return;
+      }
+      if (this.pipeline && !initialConnection) {
+        return this._pulsePipelinedQueryQueue();
       }
       if (this._hasActiveQuery()) {
         return;
@@ -5082,6 +5176,73 @@ var require_client2 = __commonJS({
       const self = this;
       query.once("_done", function() {
         self._pulseQueryQueue();
+      });
+    };
+    Client2.prototype._pulsePipelinedQueryQueue = function() {
+      if (!this._connected || this._pipelineInFlight) {
+        return;
+      }
+      if (this._queryQueue.length === 0) {
+        if (this.hasExecuted) {
+          this.emit("drain");
+        }
+        return;
+      }
+      this._pipelineInFlight = true;
+      const self = this;
+      const queries = [];
+      const nativeQueries = [];
+      const utils = require_utils();
+      while (this._queryQueue.length > 0) {
+        const query = this._queryQueue.shift();
+        this.hasExecuted = true;
+        nativeQueries.push(query);
+        const values = query.values ? query.values.map(utils.prepareValue) : null;
+        const pipelineEntry = { text: query.text, name: query.name, arrayMode: query._arrayMode };
+        if (values) {
+          pipelineEntry.values = values;
+        }
+        if (query.name && this.namedQueries[query.name]) {
+          pipelineEntry._alreadyPrepared = true;
+        }
+        queries.push(pipelineEntry);
+      }
+      this.native.pipeline(queries, function(err, results) {
+        self._pipelineInFlight = false;
+        if (err) {
+          self._connected = false;
+          self._queryable = false;
+          for (let i = 0; i < nativeQueries.length; i++) {
+            const q = nativeQueries[i];
+            q.native = self.native;
+            q.handleError(err);
+          }
+          self._errorAllQueries(err);
+          self.emit("error", err);
+          self.emit("end");
+          return;
+        }
+        for (let i = 0; i < nativeQueries.length; i++) {
+          const q = nativeQueries[i];
+          const r = results[i];
+          q.native = self.native;
+          if (r.err) {
+            q.handleError(r.err);
+          } else {
+            if (q.name) {
+              self.namedQueries[q.name] = q.text;
+            }
+            q.state = "end";
+            q.emit("end", r.result);
+            if (q.callback) {
+              q.callback(null, r.result);
+            }
+          }
+          setImmediate(function() {
+            q.emit("_done");
+          });
+        }
+        self._pulsePipelinedQueryQueue();
       });
     };
     Client2.prototype.cancel = function(query) {
