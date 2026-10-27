@@ -141,6 +141,19 @@
   "max_hits": 1
  },
  {
+  "topic": "skill-tool-call",
+  "pattern": "Mode reference for the `spark-cli` skill",
+  "files": [
+   "skills/spark-cli/references/authoring.md",
+   "skills/spark-cli/references/consumption.md",
+   "skills/spark-cli/references/mlv.md",
+   "skills/spark-cli/references/operations.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Line 1 of each file is an HTML comment that names the parent skill of the file. It is not a call. The fabric hub routes by file link.",
+  "max_hits": 4
+ },
+ {
   "topic": "system-package-install",
   "pattern": "brew install sqlcmd",
   "files": "common/COMMON-CLI.md",

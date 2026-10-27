@@ -37,6 +37,27 @@ export const SEEDS = [
     ccv3_rule: 'T-SQL on this machine goes through mssql-python, not ODBC Driver 18.' },
   { topic: 'FabricOpenAI', pattern: String.raw`FabricOpenAI\(`,
     ccv3_rule: 'Use the Responses API path in the playbook, not FabricOpenAI(.' },
+  // P4 (Pocock and pstack). The seeds below are NOT checked by patternProblem: its 200-character limit and
+  // catch-all checks run on overlay patterns only, and instruction-file-edit is longer than 200 characters.
+  // The audit-skills.test.mjs seed tests are the only guard: one positive line per branch, plus near-misses.
+  { topic: 'git-commit', pattern: String.raw`\bgit\s+commit\b|\bcommit\s+(?:it|them|this|that|the\s+\w+)\b|\bits\s+own\s+commit\b`,
+    ccv3_rule: 'Never commit. The main session commits after Dave says yes.' },
+  { topic: 'git-push', pattern: String.raw`\bgit\s+push\b|\bgh\s+pr\s+create\b|\bopen\s+(?:a\s+)?(?:separate\s+|new\s+)?(?:PR|pull\s+request)\b`,
+    ccv3_rule: 'Never push or open a PR. The main session pushes after Dave says yes.' },
+  { topic: 'force-push', pattern: String.raw`\bgit\s+push\b.*\s(?:-f|--force(?:-with-lease)?)\b|\bforce[- ]push`,
+    ccv3_rule: 'Never force push.' },
+  { topic: 'pr-merge', pattern: String.raw`\bgh\s+pr\s+merge\b|\bmerge\s+(?:the|this|your)\s+(?:PR|pull\s+request|branch)\b|\bauto-?merge\b`,
+    ccv3_rule: 'Never merge a PR without Dave saying yes.' },
+  { topic: 'gh-issue-write', pattern: String.raw`\bissue[- ]tracker\b|\bgh\s+(?:issue|label)\s+(?:create|edit|comment|close|delete)\b|\btriage\s+label\b`,
+    ccv3_rule: 'No tracker writes: no issue, label or comment. Write the spec to a file.' },
+  { topic: 'reset-hard-rm-rf', pattern: String.raw`\bgit\s+reset\s+--hard\b|\brm\s+-[a-z]*(?:rf|fr)\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+checkout\s+--\s`,
+    ccv3_rule: "Destructive commands need Dave's yes (destructive-command-guard)." },
+  // \x60 is a backtick: the pattern holds no literal backtick.
+  { topic: 'skill-tool-call', pattern: String.raw`\bSkill\s+tool\b|\*\*[\w-]+\*\*\s+(?:principle\s+)?skills?\b|\x60[\w-]+\x60\s+skills?\b|/setup-[\w-]+`,
+    ccv3_rule: 'A vendored skill is not listed. The wrapper names the file to read.' },
+  // Needs a write verb near the file name, so "read GLOSSARY.md" does not fire. A bare settings.json does not fire either.
+  { topic: 'instruction-file-edit', pattern: String.raw`\b(?:update|edit|create|write|modify|append)\w*\b[^.]{0,60}\b(?:CLAUDE|AGENTS|CONTEXT|GLOSSARY(?:-MAP)?)\.md\b|\b(?:CLAUDE|AGENTS|CONTEXT|GLOSSARY)\.md\b[^.]{0,60}\b(?:create|update|edit)\b|\.claude[\\/](?:settings(?:\.local)?\.json|rules)\b|settings\.json\.template`,
+    ccv3_rule: 'Never edit an instruction file (CLAUDE.md, AGENTS.md, CONTEXT.md, a rule) or settings.json. Propose the diff to Dave.' },
 ];
 
 // Only instruction-bearing folders and text files are scanned. overlay.json, CHANGELOG.md,
