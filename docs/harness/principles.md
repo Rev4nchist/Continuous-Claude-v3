@@ -2,7 +2,7 @@
 
 [Back to the README](../../README.md) · [All harness pages](README.md)
 
-*Moved from the README on 2026-10-26. The text is unchanged except where a line starts with "Status on 2026-10-26" or names PR #165.*
+*Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 | Principle | What it means here |
 |---|---|
@@ -12,7 +12,7 @@
 | Fail closed on risk | Destructive and unattended actions get `ask` or `deny`. A guard's own internal error fails open, so one guard bug cannot stop all work. |
 | A hook block is a finding | A block names a real problem. Sessions do not route around it with another tool or a wrapper. |
 | Confirm first | Deletes, history rewrites, schema changes, deploys, sends and paid runs need the operator's approval. |
-| One canonical source | The repo is the source. `scripts/sync-to-active.sh` copies it to `~/.claude` after each commit. |
+| One canonical source | The repo is the source. `scripts/sync-to-active.sh` copies it to `~/.claude` after each commit to `main` in the primary checkout. |
 | Review every change | Each pull request passes CI. Greptile reviews on request only (`.greptile/config.json`, `autoReview: []`). A review label adds CodeRabbit. `scripts/github/review-status.mjs` gates READY. Fixes cite the review, for example `(Greptile #113)`. |
 | Portable by profile | Machine paths and the skill skip list live in `machine/personal.json`. A ratchet and a CI job fail if a work-machine path returns. |
 

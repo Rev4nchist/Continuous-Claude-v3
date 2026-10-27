@@ -2,7 +2,7 @@
 
 [Back to the README](../../README.md) · [All harness pages](README.md)
 
-*Moved from the README on 2026-10-26. The text is unchanged except where a line starts with "Status on 2026-10-26" or names PR #165.*
+*Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 A change is done when its end-to-end check passes and the output is saved. The check depends on
 what you changed (`AGENTS.md`).
@@ -12,7 +12,7 @@ what you changed (`AGENTS.md`).
 | A hook | `npm run build` in `.claude/hooks`. Then, from the repository root, pipe a real payload into the bundle: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` |
 | The sync script | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temporary home) |
 | Coordination | The matching `scripts/coordination/*-probe.mjs` |
-| A rule, skill or agent | After the sync, `claude -p "<prompt>" --output-format json`, then confirm the new behaviour |
+| A rule, skill or agent | After the sync, `claude -p "<prompt>" --output-format json`, then confirm the new behaviour. Then run the four static ratchets: `context-budget-guard.mjs --repo`, `audit-skills.mjs`, `check-agent-model-drift.mjs .` and `node scripts/agents/check-agent-body.mjs`. For an agent, confirm `"effort":"high"` in the subagent transcript. |
 
 Save each artifact to `.claude/cache/e2e/<YYYY-MM-DD>-<name>.<ext>`. That folder is gitignored.
 Name the file in the pull request's Evidence section.
@@ -28,8 +28,8 @@ Static gates:
 | Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23502 chars (budget 23516, Claude Code limit 150000) [repo]` |
 | Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 75 live entries / 67 names ... 0 discarded-output, 2 known-debt, 8/8 timers safe` |
 | Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 35 \| opus: 12 sonnet: 23 \| OK` |
-| Skills | `node scripts/skills/audit-skills.mjs` | `80 skills, 0 hard failures, 0 ratchet regressions` (rules G01-G32) |
-| Test suite size | `node scripts/hooks/suite-count-ratchet.mjs` | Fails if passed or collected tests drop below the baseline |
+| Skills | `node scripts/skills/audit-skills.mjs` | `80 skills, 0 hard failures, 0 ratchet regressions` (rules G01-G33) |
+| Test suite size | `node scripts/hooks/suite-count-ratchet.mjs` | Fails if passed or collected tests drop below the baseline in `scripts/hooks/suite-baseline.json` |
 
 The context budget has 14 characters of headroom, so the next rule edit needs a deliberate budget change.
 The `--repo` budget counts more files than a normal session loads. It adds this repo's own

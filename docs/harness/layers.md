@@ -2,7 +2,7 @@
 
 [Back to the README](../../README.md) · [All harness pages](README.md)
 
-*Moved from the README on 2026-10-26. The text is unchanged except where a line starts with "Status on 2026-10-26" or names PR #165.*
+*Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 ## The harness shape
 
@@ -67,6 +67,10 @@ fields, which Claude Code does not read. Commit `fd906dd` fixed them.
 `scripts/hooks/hook-contract-guard.mjs` now fails on any discarded output. Its current output:
 `75 live entries / 67 names, 67 sources scanned, 45 speak the contract, 0 discarded-output`.
 
+Known gap on 2026-10-26: `file-claims.ts` still writes `result` and `message` on its takeover and
+degraded-coordination paths (lines 169 to 183), and the guard still reports 0 discarded-output. Those
+two warnings may not reach the model.
+
 ### 2. Rules
 
 Rules are the instruction text the model reads. CCv3 keeps the always-loaded part small and loads
@@ -119,7 +123,7 @@ first.
 Subagents take delegated work. A coordination layer in PostgreSQL stops parallel sessions from
 colliding.
 
-- `.claude/agents/` holds 35 agent definitions, each with a `.json` sidecar. Each pins its model:
+- `.claude/agents/` holds 35 agent definitions (`.md`) and 17 `.json` sidecars. Each definition pins its model:
   `opus` for judgment (planning, review, orchestration) or `sonnet` for execution.
 - `scripts/check-agent-model-drift.mjs` fails on a missing model, on `haiku` or `inherit`, or on
   a sidecar that disagrees with its `.md` file.

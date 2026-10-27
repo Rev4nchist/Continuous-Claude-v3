@@ -2,11 +2,11 @@
 
 [Back to the README](../../README.md) · [All harness pages](README.md)
 
-*Moved from the README on 2026-10-26. The text is unchanged except where a line starts with "Status on 2026-10-26" or names PR #165.*
+*Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 The harness reviews itself on a schedule and turns findings into pull requests.
 
-- `scripts/self-improvement/run-research.ps1` runs each day. It picks the next of 12 components
+- `scripts/self-improvement/run-research.ps1` runs each day. It picks the next of 11 components
   from `scripts/self-improvement/components-manifest.json`. A headless session researches it and never edits code. It
   writes a cited proposal to `docs/self-improvement/proposals/` with an ADOPT, WATCH or SKIP
   verdict. The loop started in

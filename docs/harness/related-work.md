@@ -2,7 +2,7 @@
 
 [Back to the README](../../README.md) · [All harness pages](README.md)
 
-*Moved from the README on 2026-10-26. The text is unchanged except where a line starts with "Status on 2026-10-26" or names PR #165.*
+*Moved from the README on 2026-10-26. The text moved word for word. Edits made while PR 168 was reviewed fix facts that were stale or wrong, and lines that start with "Status on 2026-10-26" are dated notes.*
 
 FourthBot is a separate repository. It applies the same harness shape to agents for Fourth's
 business teams. It has a policy gateway that fails closed with allow, ask and deny. It has an
