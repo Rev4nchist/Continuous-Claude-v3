@@ -603,7 +603,7 @@ function main() {
     // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
     // history cannot come from different moments. More than 100 is "cannot determine", like threads.
     // commits(last:1) is the head commit, for the CodeRabbit notice date.
-    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+    const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
     const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
     const prq = g.data.repository.pullRequest;
     const rt = prq.reviewThreads;
@@ -622,8 +622,9 @@ function main() {
     }
     const headCommit = prq.commits.nodes[0]?.commit;
     const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
-    // The GraphQL commit list must describe the head the REST read saw; a push in between is "cannot determine".
-    if (headCommit?.oid !== pull.head.sha) throw new Error(`head moved during the read (${String(headCommit?.oid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
+    // The GraphQL read must describe the head the REST read saw; a push in between is "cannot determine".
+    // headRefOid, not the commit list: an empty list must still reach evaluate, which then denies the exemption.
+    if (prq.headRefOid !== pull.head.sha) throw new Error(`head moved during the read (${String(prq.headRefOid).slice(0, 7)} vs ${pull.head.sha.slice(0, 7)})`);
     // Every commit's author account and GitHub signature, for the Dependabot rule. More than 100 commits = unknown.
     const ac = prq.allCommits;
     const commits = ac.totalCount > ac.nodes.length ? [] : ac.nodes.map((n) => ({
