@@ -5718,7 +5718,7 @@ async function runSessionHealth(opts) {
 function isClaudeHomeProject(project, home) {
   if (!home) return false;
   const p = project.replace(/\\/g, "/").toLowerCase();
-  const h = home.replace(/\\/g, "/").toLowerCase();
+  const h = home.replace(/\\/g, "/").toLowerCase().replace(/\/+$/, "");
   return p === `${h}/.claude` || p.startsWith(`${h}/.claude/`);
 }
 function buildSessionStartOutput(daemonOutput, health) {

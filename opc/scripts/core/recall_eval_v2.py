@@ -312,7 +312,8 @@ def run_arm_query(
                 "error": f"oserror:{type(exc).__name__}"}
     latency_ms = (time.perf_counter() - t0) * 1000.0
     if proc.returncode != 0:
-        tail = re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "<db-url>", (proc.stderr or "")[-200:])
+        # Redact before the cut: a cut inside the scheme would leave user:password@host.
+        tail = re.sub(r"postgres(?:ql)?(?:\+\w+)?://\S+", "<db-url>", proc.stderr or "")[-200:]
         return {**empty, "latency_ms": latency_ms, "error": f"exit {proc.returncode}: {tail!r}"}
     doc = _parse_recall_stdout(proc.stdout or "")
     if doc is None:
@@ -740,9 +741,12 @@ def _load_baseline(path: Path) -> dict[str, Any]:
     if not path.exists():
         raise SetupError(f"baseline not found: {path.name} (write it with --write-baseline)")
     try:
-        return json.loads(path.read_text(encoding="utf-8"))
-    except json.JSONDecodeError as exc:
+        data = json.loads(path.read_text(encoding="utf-8"))
+    except (OSError, json.JSONDecodeError) as exc:
         raise SetupError(f"baseline is not valid JSON: {exc}") from exc
+    if not isinstance(data, dict) or not isinstance(data.get("arms"), dict):
+        raise SetupError("baseline has invalid structure: no 'arms' object")
+    return data
 
 
 def _lowered(new_arm: dict[str, Any], old_arm: dict[str, Any]) -> list[str]:
@@ -805,7 +809,14 @@ def _run_v2(args: Any) -> int:
               f"{missing}", file=sys.stderr)
         return 2
 
-    project_id = None if args.scope == "all" else resolve_hook_project_id(repo_root)
+    project_id = None
+    if args.scope != "all":
+        try:
+            project_id = resolve_hook_project_id(repo_root)
+        except SetupError:
+            raise
+        except Exception as exc:  # setup boundary: report as a setup error (exit 2)
+            raise SetupError(f"cannot resolve hook project ({type(exc).__name__})") from exc
     live_by_id = {r["id"]: r for r in live}
     records = _build_records(rows, found, live_by_id, project_id, args.scope)
     reach = _print_reachability(records, live, project_id, args.scope)
@@ -911,8 +922,11 @@ def _do_check(arm_blocks, errors, eval_sha, n_pairs, n_none, baseline) -> int:
         "eval_set_sha256": eval_sha, "n_pairs": n_pairs, "n_none": n_none,
         "arms": {a: b["summary"] for a, b in arm_blocks.items()},
     }
-    ok, reasons = compare_to_baseline(current, baseline)
-    gate = current["arms"][baseline.get("default_arm", GATED_ARM)]
+    try:
+        ok, reasons = compare_to_baseline(current, baseline)
+        gate = current["arms"][baseline.get("default_arm", GATED_ARM)]
+    except (AttributeError, KeyError, TypeError) as exc:
+        raise SetupError(f"baseline has invalid structure ({type(exc).__name__})") from exc
     print(f"CHECK {'PASS' if ok else 'FAIL'}: ndcg_at_5={gate['ndcg_at_5']:.3f} "
           f"none_precision={gate['none_precision']:.3f} at floor {gate['floor']}")
     for reason in reasons:
@@ -932,8 +946,11 @@ def _do_write_baseline(args, arm_blocks, report, errors, eval_sha, eval_set, n_p
     # A write run never has a baseline loaded, so every summary is at the sweep-chosen floor.
     new_arms = {arm: block["summary"] for arm, block in arm_blocks.items()}
     if path.exists() and not args.allow_lower:
-        old = json.loads(path.read_text(encoding="utf-8"))
-        worse = _lowered(new_arms[GATED_ARM], old["arms"].get(GATED_ARM, new_arms[GATED_ARM]))
+        old = _load_baseline(path)
+        try:
+            worse = _lowered(new_arms[GATED_ARM], old["arms"].get(GATED_ARM, new_arms[GATED_ARM]))
+        except (AttributeError, KeyError, TypeError) as exc:
+            raise SetupError(f"baseline has invalid structure ({type(exc).__name__})") from exc
         if worse:
             print("[eval] refusing to lower the baseline without --allow-lower: "
                   + "; ".join(worse), file=sys.stderr)

@@ -631,3 +631,45 @@ def test_write_baseline_refuses_when_an_arm_has_errors(stub_world, monkeypatch):
     monkeypatch.setattr(v2, "run_arm_query", broken)
     assert v2.run_v2(_args(tmp_path, eval_set, write_baseline=True)) == 2
     assert not (tmp_path / "baseline.json").exists()
+
+
+# --------------------------------------------------------------------------- CodeRabbit #180
+
+
+def test_cr180_stderr_tail_hides_credentials_when_cut_lands_in_scheme(monkeypatch, tmp_path):
+    pw = "hun" + "ter2"
+    url = "postgresql://claude:" + pw + "@localhost:5432/db"
+    stderr = "boom " + url + " " * (200 - len(url) + 5)  # the 200-char cut starts inside the scheme
+
+    class P:
+        returncode = 1
+        stdout = ""
+
+    P.stderr = stderr
+    monkeypatch.setattr(v2.subprocess, "run", lambda *a, **k: P())
+    res = v2.run_arm_query(tmp_path, "q", "hybrid", 3)
+    assert res["error"] and pw not in res["error"]
+
+
+@pytest.mark.parametrize("text", ["[]", '{"arms": 3}', "{}"])
+def test_cr180_malformed_baseline_is_a_setup_error(tmp_path, text):
+    path = tmp_path / "baseline.json"
+    path.write_text(text, encoding="utf-8")
+    with pytest.raises(v2.SetupError):
+        v2._load_baseline(path)
+
+
+def test_cr180_project_resolver_failure_exits_2(stub_world, monkeypatch):
+    tmp_path, eval_set = stub_world
+
+    def broken(repo_root):
+        raise RuntimeError("resolver down")
+
+    monkeypatch.setattr(v2, "resolve_hook_project_id", broken)
+    assert v2.run_v2(_args(tmp_path, eval_set)) == 2
+
+
+def test_cr180_write_baseline_over_a_malformed_baseline_exits_2(stub_world):
+    tmp_path, eval_set = stub_world
+    (tmp_path / "baseline.json").write_text('{"arms": []}', encoding="utf-8")
+    assert v2.run_v2(_args(tmp_path, eval_set, write_baseline=True)) == 2
