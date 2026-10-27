@@ -1,0 +1,76 @@
+[
+ {
+  "topic": "retry-on-429",
+  "pattern": "Retry logic that hides a broken contract",
+  "files": [
+   "skills/interrogate/references/rubric.md"
+  ],
+  "ccv3_rule": "Fabric capacity error: stop all load on the first one; never retry through it.",
+  "resolution": "A review-rubric smell. It tells a reviewer to flag retry logic. Not a retry instruction. Allowed.",
+  "max_hits": 1
+ },
+ {
+  "topic": "git-commit",
+  "pattern": "ship as its own commit|Commit it only|commit it when a reviewer",
+  "files": [
+   "skills/architect/SKILL.md",
+   "skills/principle-prove-it-works/SKILL.md",
+   "skills/show-me-your-work/SKILL.md"
+  ],
+  "ccv3_rule": "Never commit. The main session commits after Dave says yes.",
+  "resolution": "REAL CONFLICT. Never commit, push, open a PR or merge. The main session does this after Dave says yes. Proof artifacts go to .claude/cache/e2e/ (AGENTS.md \"Testing\").",
+  "max_hits": 4
+ },
+ {
+  "topic": "git-push",
+  "pattern": "open a separate PR to update the default table",
+  "files": [
+   "skills/interrogate/SKILL.md"
+  ],
+  "ccv3_rule": "Never push or open a PR. The main session pushes after Dave says yes.",
+  "resolution": "REAL CONFLICT. Never commit, push, open a PR or merge. The main session does this after Dave says yes. Report the bad slug in the brief output. Use the vendored Pocock code-review, interrogate, blast-radius and show-me-your-work only inside the cross-family review brief. Never use one as a Claude reviewer.",
+  "max_hits": 1
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "[*][*][A-Za-z0-9_-]+[*][*] (?:principle )?skills?",
+  "files": [
+   "skills/architect/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. The sketch-first wrapper maps how and why to CCv3 steps and reads arena by file link. A principle name is prose: apply the plain rule in the sentence.",
+  "max_hits": 8
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "[*][*][A-Za-z0-9_-]+[*][*] (?:principle )?skills?",
+  "files": [
+   "skills/architect/references/runner-prompt.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. A principle name is prose. The architect skill is the vendored file the wrapper names.",
+  "max_hits": 6
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "[*][*][A-Za-z0-9_-]+[*][*] (?:principle )?skills?|`arena runners` line",
+  "files": [
+   "skills/arena/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. poteto-mode is not vendored: pick subagent tiers per CLAUDE.md. Never use Grok. Runners and judges are Claude subagents at the CLAUDE.md model tiers.",
+  "max_hits": 4
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "[*][*][A-Za-z0-9_-]+[*][*] (?:principle )?skills?",
+  "files": [
+   "skills/interrogate/SKILL.md",
+   "skills/principle-prove-it-works/SKILL.md",
+   "skills/show-me-your-work/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Brief-only skills. Use the vendored Pocock code-review, interrogate, blast-radius and show-me-your-work only inside the cross-family review brief. Never use one as a Claude reviewer. Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. The brief sets the reviewer model. Never use Grok. Runners and judges are Claude subagents at the CLAUDE.md model tiers.",
+  "max_hits": 5
+ }
+]

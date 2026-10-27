@@ -34,6 +34,15 @@ Heuristic (incident-proven, 2026-05-24 hook regression):
     repeatedly after "fixes" means something is regenerating it.
 ```
 
+### Hard or performance bugs
+
+This skill stays the entry point. For a hard bug or a performance regression, also follow
+[diagnosing-bugs](../_vendor/pocock-skills/skills/diagnosing-bugs/SKILL.md).
+Build a tight loop that goes red before any hypothesis. Use its perf branch for a performance regression.
+To use [its HITL script](../_vendor/pocock-skills/skills/diagnosing-bugs/scripts/hitl-loop.template.sh), copy it to the scratchpad and edit the copy.
+Never edit or run the vendored file. The script waits for keyboard input, so ask Dave to run the copy in his terminal with Git Bash.
+CCv3 rules win on conflict.
+
 ### Phase 2: Pattern Analysis
 ```yaml
 Steps:

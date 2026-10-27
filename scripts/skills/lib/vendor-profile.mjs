@@ -11,6 +11,9 @@
 // A conflict scan (conflict-scan.mjs) adds hard finding X01 for a CCv3 "never" hit that no overlay
 // entry covers. CCv3-authored skills keep every rule in the default scan.
 //
+// name_shadows (vendor.lock.json, per source): a LISTED name collision passes G06 or G07, any other still
+// fails. See readShadows. A stale or malformed list is a hard X02.
+//
 // Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md section 3(a).
 
 import crypto from 'node:crypto';
@@ -71,36 +74,119 @@ export function auditVendor(skillsRoot, ctx, { repoSkills = [], required = false
   });
   if (!sources.length && !required) return null;
 
-  const vendored = []; let expected = 0; const overlay = {};
+  const vendored = []; let expected = 0; const overlay = {}; const shadows = new Map();
   for (const { source, dir } of sources) {
     const { skills, dirs } = listSourceSkills(dir);
     expected += dirs;
     if (!skills.length) add('G30', source, `vendor source "${source}" has no skills/*/SKILL.md: the gate is vacuous for it`);
     else if (skills.length < dirs) add('G30', source, `audited ${skills.length} of ${dirs} skill dirs in vendor source "${source}"`);
     const sctx = { ...ctx, vendorRoot: dir };
+    const lockRead = readLock(dir);
+    const sh = readShadows(lockRead.lock);
+    shadows.set(source, sh.map);
+    for (const p of sh.problems) add(LOCK_RULE, source, p);
     for (const d of skills) {
       const s = safeLoad(d.dir);
       if (!s) continue;
       const label = `${source}/${s.dirName}`;
-      vendored.push({ s, label });
-      for (const x of checkSkillAll(s, sctx)) add(x.rule, label, x.msg, x.line, x.warn);
+      vendored.push({ s, label, source });
+      for (const x of checkSkillAll(s, sctx)) {
+        if (x.rule === 'G06' && bundledExcused(sh.map, s, x.msg)) continue;
+        add(x.rule, label, x.msg, x.line, x.warn);
+      }
     }
+    addStaleShadowFindings(source, sh.map, vendored.filter((v) => v.source === source), repoSkills, add);
     overlay[source] = addConflictFindings(dir, source, add);
-    addLockFindings(dir, source, add);
+    addLockFindings(dir, source, add, lockRead);
   }
   if (!sources.length) add('G30', '(gate)', `no vendor source under ${vendorDir(skillsRoot)}: the vendor profile audited 0 skills`);
 
   // G07: a vendored name that resolves to a CCv3 skill, or to another vendored skill, with other content.
   const byName = new Map();
-  for (const { s, label } of vendored) byName.set(s.name, [...(byName.get(s.name) || []), { label, hash: s.hash }]);
+  for (const { s, label, source } of vendored) byName.set(s.name, [...(byName.get(s.name) || []), { label, hash: s.hash, source }]);
   for (const s of repoSkills.filter((x) => x.modelVisible)) byName.set(s.name, [...(byName.get(s.name) || []), { label: s.dirName, hash: s.hash }]);
   for (const [name, list] of byName) {
     if (list.length < 2 || new Set(list.map((x) => x.hash)).size < 2) continue;
-    for (const x of list.filter((y) => vendored.some((v) => v.label === y.label))) {
+    if (ccv3Excused(shadows, name, list)) continue;
+    for (const x of list.filter((y) => y.source)) {
       add('G07', x.label, `name "${name}" resolves to ${list.length} skills with different content (${list.map((y) => y.label).join(', ')})`);
     }
   }
   return buildVendorReport({ sources, vendored, expected, findings, overlay });
+}
+
+// <source>/vendor.lock.json, read once per source. Returns {lock} or {error} (the X02 message).
+function readLock(dir) {
+  try { return { lock: JSON.parse(fs.readFileSync(path.join(dir, 'vendor.lock.json'), 'utf8')) }; } catch (e) {
+    if (e.code === 'ENOENT') return { error: 'no vendor.lock.json: the vendored bytes are not pinned' };
+    return { error: `vendor.lock.json is not valid JSON: ${e.message}` };
+  }
+}
+
+// name_shadows: the lock lists the names a vendored skill is ALLOWED to share, so a listed collision passes
+// and any unlisted one still fails hard.
+//   [{"name": "tdd", "shadows": ["ccv3:tdd"], "reason": "..."}]
+//   name     the frontmatter name of a vendored skill in this source (the G07 key)
+//   ccv3:<dir>      excuses G07 against the model-visible CCv3 skill in .claude/skills/<dir>
+//   bundled:<name>  excuses G06 for this vendored skill; <name> must equal `name`
+// An entry with any problem is dropped whole, so a typo never excuses anything.
+// Returns {map: Map(name -> {ccv3: Set, bundled: Set}), problems: [X02 message]}. No field means no shadows.
+function readShadows(lock) {
+  const map = new Map(); const problems = [];
+  const raw = lock?.name_shadows;
+  if (raw === undefined) return { map, problems };
+  if (!Array.isArray(raw)) return { map, problems: ['vendor.lock.json name_shadows must be an array of {name, shadows, reason}'] };
+  raw.forEach((e, i) => {
+    const at = `vendor.lock.json name_shadows entry ${i + 1}`;
+    if (!e || typeof e !== 'object' || Array.isArray(e)) { problems.push(`${at} is not an object`); return; }
+    const name = typeof e.name === 'string' ? e.name.trim() : '';
+    const bad = [];
+    if (!name) bad.push('has no "name"');
+    if (typeof e.reason !== 'string' || !e.reason.trim()) bad.push('has no "reason"');
+    const list = Array.isArray(e.shadows) ? e.shadows : [];
+    if (!list.length) bad.push('has no "shadows" list');
+    const ccv3 = new Set(); const bundled = new Set();
+    for (const t of list) {
+      const m = typeof t === 'string' ? t.match(/^(ccv3|bundled):(.+)$/) : null;
+      if (!m || !m[2].trim()) bad.push(`lists ${JSON.stringify(t)}: use "ccv3:<skill dir>" or "bundled:<name>"`);
+      else if (m[1] === 'ccv3') ccv3.add(m[2]);
+      else if (m[2] !== name) bad.push(`lists "${t}": a bundled shadow must name the entry's own "name"`);
+      else bundled.add(m[2]);
+    }
+    if (bad.length) { for (const b of bad) problems.push(`${at} (${name || 'no name'}) ${b}`); return; }
+    const have = map.get(name) || { ccv3: new Set(), bundled: new Set() };
+    ccv3.forEach((x) => have.ccv3.add(x)); bundled.forEach((x) => have.bundled.add(x));
+    map.set(name, have);
+  });
+  return { map, problems };
+}
+
+// A G06 finding for this vendored skill is excused when the source lists bundled:<that name>. The finding's
+// quoted name is the frontmatter name or the folder name (rules G06 checks both).
+function bundledExcused(map, s, msg) {
+  const quoted = msg.match(/^"([^"]+)"/)?.[1];
+  return quoted !== undefined && !!map.get(s.name)?.bundled.has(quoted);
+}
+
+// A G07 group passes only with exactly one vendored member whose source lists every CCv3 member as ccv3:<dir>.
+// Two vendored sources never excuse each other, and one source's entry never covers another source.
+function ccv3Excused(shadows, name, list) {
+  const vendoredMembers = list.filter((x) => x.source);
+  if (vendoredMembers.length !== 1) return false;
+  const listed = shadows.get(vendoredMembers[0].source)?.get(name);
+  return !!listed && list.filter((x) => !x.source).every((x) => listed.ccv3.has(x.label));
+}
+
+// Stale entry: the name is not a vendored skill of this source, or a ccv3 target is not a model-visible CCv3 skill.
+function addStaleShadowFindings(source, map, own, repoSkills, add) {
+  for (const [name, sh] of map) {
+    if (!own.some((v) => v.s.name === name)) add(LOCK_RULE, source, `vendor.lock.json name_shadows lists "${name}", but no skill in ${source} has that name: stale entry`);
+    for (const dir of sh.ccv3) {
+      const r = repoSkills.find((x) => x.dirName === dir);
+      if (!r) add(LOCK_RULE, source, `vendor.lock.json name_shadows "${name}" lists ccv3:${dir}, but no CCv3 skill has that folder: stale entry`);
+      else if (!r.modelVisible) add(LOCK_RULE, source, `vendor.lock.json name_shadows "${name}" lists ccv3:${dir}, which is not model-visible: stale entry`);
+    }
+  }
 }
 
 function addConflictFindings(dir, source, add) {
@@ -136,12 +222,8 @@ function lockedFiles(dir) {
 // A regular file, checked without following a link.
 function isRegularFile(p) { try { return fs.lstatSync(p).isFile(); } catch { return null; } }
 
-function addLockFindings(dir, source, add) {
-  let lock;
-  try { lock = JSON.parse(fs.readFileSync(path.join(dir, 'vendor.lock.json'), 'utf8')); } catch (e) {
-    if (e.code === 'ENOENT') return add(LOCK_RULE, source, 'no vendor.lock.json: the vendored bytes are not pinned');
-    return add(LOCK_RULE, source, `vendor.lock.json is not valid JSON: ${e.message}`);
-  }
+function addLockFindings(dir, source, add, { lock, error }) {
+  if (error) return add(LOCK_RULE, source, error);
   const files = Array.isArray(lock?.files) ? lock.files : [];
   if (!files.length) return add(LOCK_RULE, source, 'vendor.lock.json lists no files');
   const listed = new Set();

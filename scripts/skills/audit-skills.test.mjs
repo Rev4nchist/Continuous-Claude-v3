@@ -9,6 +9,7 @@ import path from 'node:path';
 import { spawnSync } from 'node:child_process';
 import { fileURLToPath } from 'node:url';
 import { auditSkills, resolveOptions, writeBaseline } from './audit-skills.mjs';
+import { scanSource } from './lib/conflict-scan.mjs';
 
 const here = path.dirname(fileURLToPath(import.meta.url));
 const CLI = path.join(here, 'audit-skills.mjs');
@@ -967,21 +968,22 @@ for (const [name, rule] of [['Bad_Name', 'G05'], ['has_underscore', 'G05'], ['cl
 // <source>/common/ folder. The default scan skips every _ folder, so the vendor profile audits them.
 
 const SRC = 'skills-for-fabric';
-const vroot = (root) => path.join(root, '.claude', 'skills', '_vendor', SRC);
+const vroot = (root, source = SRC) => path.join(root, '.claude', 'skills', '_vendor', source);
 // Writes a vendor.lock.json over what it wrote (X02 needs one), unless lock is false.
-function addVendored(root, skills = {}, { common = {}, overlay, lock = true } = {}) {
+function addVendored(root, skills = {}, { common = {}, overlay, lock = true, source = SRC, lockExtra = {} } = {}) {
+  const dir = vroot(root, source);
   for (const [name, spec] of Object.entries(skills)) {
     const md = typeof spec === 'string' ? spec : spec.md;
-    write(path.join(vroot(root), 'skills', name, 'SKILL.md'), md);
-    for (const [rel, text] of Object.entries(spec.files || {})) write(path.join(vroot(root), 'skills', name, rel), text);
+    write(path.join(dir, 'skills', name, 'SKILL.md'), md);
+    for (const [rel, text] of Object.entries(spec.files || {})) write(path.join(dir, 'skills', name, rel), text);
   }
-  for (const [rel, text] of Object.entries(common)) write(path.join(vroot(root), 'common', rel), text);
-  if (overlay) write(path.join(vroot(root), 'overlay.json'), JSON.stringify(overlay));
-  if (lock && fs.existsSync(vroot(root))) writeLock(root);
+  for (const [rel, text] of Object.entries(common)) write(path.join(dir, 'common', rel), text);
+  if (overlay) write(path.join(dir, 'overlay.json'), JSON.stringify(overlay));
+  if (lock && fs.existsSync(dir)) writeLock(root, lockExtra, source);
   return root;
 }
 const vrun = (root, extra) => run(root, { profile: 'vendor', ...extra });
-const vhit = (rep, id, skill) => rep.findings.some((x) => x.rule === id && (!skill || x.skill === `${SRC}/${skill}`));
+const vhit = (rep, id, skill, source = SRC) => rep.findings.some((x) => x.rule === id && (!skill || x.skill === `${source}/${skill}`));
 const OVERLAY_429 = { topic: 'retry-on-429', pattern: '429', files: 'common/**', ccv3_rule: 'stop on capacity error', resolution: 'the hub says stop' };
 
 test('vendor profile audits _vendor/<source>/skills/* and counts each skill', () => {
@@ -1060,8 +1062,9 @@ test('vendor profile: a vendored name that is a bundled name is G06', () => {
 // X02: vendor.lock.json pins every vendored byte. Without the check, "never edit a vendored file"
 // had no gate (critic finding on PR #84).
 // Pins every file in the source except the three CCv3 owns, the way the real lock does.
-function writeLock(root) {
-  const dir = vroot(root); const files = [];
+// `extra` is spread into the lock (for example name_shadows).
+function writeLock(root, extra = {}, source = SRC) {
+  const dir = vroot(root, source); const files = [];
   const owned = new Set(['PROVENANCE.md', 'vendor.lock.json', 'overlay.json']);
   const walk = (d) => {
     for (const e of fs.readdirSync(d, { withFileTypes: true })) {
@@ -1071,7 +1074,7 @@ function writeLock(root) {
     }
   };
   walk(dir);
-  const lock = { files: files.map((rel) => ({ path: rel, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex') })) };
+  const lock = { ...extra, files: files.map((rel) => ({ path: rel, sha256: crypto.createHash('sha256').update(fs.readFileSync(path.join(dir, rel))).digest('hex') })) };
   write(path.join(dir, 'vendor.lock.json'), JSON.stringify(lock));
 }
 const lockHits = (rep) => rep.findings.filter((x) => x.rule === 'X02');
@@ -1358,6 +1361,213 @@ test('vendor-conflict-scan CLI: a source with no scannable files fails instead o
   const r = spawnSync('node', [SCAN, '--source', empty], { encoding: 'utf8' });
   assert.equal(r.status, 1, r.stdout + r.stderr);
   assert.match(r.stdout, /scanned 0 files/);
+});
+
+// ------------------------------------------------- P4 gate fixes: new seeds and name_shadows
+// Step A of CCv3-P4-VENDOR. Plan: thoughts/shared/plans/p4-vendor-skills-plan.md sections 4 and 8.
+
+// The destructive-command guard reads Bash text. Build the forbidden commands from parts at runtime,
+// the way commit d78b3ba6 builds a fake password.
+const J = (...parts) => parts.join('');
+
+function seedSource(lines) {
+  const dir = fs.mkdtempSync(path.join(os.tmpdir(), 'seed-test-'));
+  write(path.join(dir, 'common', 'x.md'), lines.join('\n') + '\n');
+  return dir;
+}
+
+// One positive line per alternation branch, then the near-misses. The positives sit on lines 1..n, so the
+// assertion fails when a branch is narrowed away (a missing line) and when a negative starts to hit.
+// An unused overlay entry never fails the gate, so the seed itself is the only place a branch can be lost.
+function seedCase(topic, positives, negatives) {
+  test(`conflict scan seed ${topic}: every branch fires on its own line and the near-misses do not`, () => {
+    const res = scanSource(seedSource([...positives, ...negatives]));
+    const got = res.hits.filter((h) => h.topic === topic).map((h) => h.line);
+    assert.deepEqual(got, positives.map((_, i) => i + 1), `${topic}: expected hits on lines 1-${positives.length}, got ${JSON.stringify(res.hits.filter((h) => h.topic === topic))}`);
+  });
+}
+
+seedCase('git-commit', [
+  J('Then run git ', 'commit -m "x".'),
+  'Then commit it to the branch.',
+  'Then commit the changes.',
+  'The synthesis can ship as its own commit either way.',
+], ['Issue references in the commit messages (#123).', 'Show the commit SHA and the commit list.']);
+
+seedCase('git-push', [
+  'Then git push origin main.',
+  'Then gh pr create --fill.',
+  'Then open a PR for it.',
+  'Then open a separate pull request.',
+], ['Push on type and boundary cleanliness.', 'The PR description is open to edits.']);
+
+seedCase('force-push', [
+  J('Then git push origin main --force', '-with-lease.'),
+  J('Then git push origin main -', 'f'),
+  J('A force', ' push is wrong.'),
+  J('Never force', '-push.'),
+], ['Use a forceful tone.', 'Then git push origin main.']);
+
+seedCase('pr-merge', [
+  J('Run gh pr ', 'merge 12 --squash.'),
+  J('Then ', 'merge the PR when it is green.'),
+  J('Then ', 'merge this pull request.'),
+  'Turn on auto-merge for it.',
+], ['Do not merge or rerank findings.', 'Merge conflicts need a human.']);
+
+seedCase('gh-issue-write', [
+  'Publish it to the project issue tracker.',
+  'Run gh issue create --title x.',
+  'Run gh label edit bug.',
+  'Apply the triage label needs-info.',
+], ['Issues that would block a real PR.', 'Run gh issue view 12.']);
+
+seedCase('reset-hard-rm-rf', [
+  J('Run git ', 'reset ', '--hard HEAD.'),
+  J('Run rm ', '-rf', ' build.'),
+  J('Run rm ', '-fr', ' build.'),
+  J('Run rm ', '-rfv', ' build.'),
+  J('Run rm ', '-r -f', ' build.'),
+  J('Run git ', 'clean ', '-fd.'),
+  J('Run git ', 'checkout ', '-- src/x.ts.'),
+], ['Run git reset HEAD~1 --soft.', 'Run git checkout main.', 'Run rm old.txt.']);
+
+seedCase('skill-tool-call', [
+  'Call the Skill tool twice, for grilling.',
+  'Load the **grilling** skill first.',
+  'Apply the **principle-prove-it-works** principle skill.',
+  'Load the `domain-modeling` skill.',
+  'Run /setup-matt-pocock-skills once.',
+], ['This skill is a reference to consult.', 'See the skill folder.']);
+
+seedCase('instruction-file-edit', [
+  'When a term is resolved, update GLOSSARY.md right there.',
+  'Create CONTEXT.md lazily.',
+  'AGENTS.md is where you edit the rules.',
+  'Write the hook into .claude/settings.json.',
+  J('Write the hook into .claude', '\\', 'settings.local.json.'),
+  'Add a line to .claude/rules/x.md.',
+  J('Add a line to .claude', '\\', 'rules', '\\', 'x.md.'),
+  'Copy settings.json.template over.',
+], ['Add valueSetsOrder to settings.json.', 'Read `GLOSSARY.md` (if it exists).', 'See the CLAUDE.md in the repo.', 'Update the README.md.']);
+
+test('conflict scan: an overlay entry for each new seed topic loads, and one covers a new-seed hit', () => {
+  const topics = ['git-commit', 'git-push', 'force-push', 'pr-merge', 'gh-issue-write', 'reset-hard-rm-rf', 'skill-tool-call', 'instruction-file-edit'];
+  const overlay = topics.map((topic) => ({ topic, pattern: `probe-${topic}`, files: 'common/x.md', ccv3_rule: 'r', resolution: 'r' }));
+  overlay.push({ topic: 'git-push', pattern: 'git push origin main', files: 'common/x.md', ccv3_rule: 'r', resolution: 'r' });
+  const root = addVendored(fixture(), { v: skillText('v') }, { common: { 'x.md': 'Then git push origin main.\n' }, overlay });
+  const rep = vrun(root);
+  assert.deepEqual(scanOnly(root).filter((x) => /unknown topic/.test(x.msg)), []);
+  assert.deepEqual(scanOnly(root), [], JSON.stringify(rep.findings));
+});
+
+// name_shadows: a LISTED collision passes, any unlisted one still fails hard.
+const shadowEntry = (shadows, over = {}) => ({ name: 'shared', shadows, reason: 'test reason', ...over });
+const ours = () => skillText('shared', { body: 'ours\n' });
+const theirs = () => skillText('shared', { body: 'theirs\n' });
+const shadowMsgs = (rep) => lockHits(rep).filter((x) => /name_shadows/.test(x.msg));
+
+test('name_shadows S1: a ccv3 shadow excuses G07 for the listed skill only', () => {
+  const root = addVendored(fixture({ shared: ours() }), { shared: theirs() }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:shared'])] } });
+  const rep = vrun(root);
+  assert.ok(!vhit(rep, 'G07', 'shared'), JSON.stringify(rep.findings));
+  assert.deepEqual(lockHits(rep), []);
+  assert.equal(rep.failed, false);
+});
+
+test('name_shadows S2: a collision with a CCv3 skill that is not listed still fails G07', () => {
+  const root = addVendored(fixture({ shared: ours(), other: skillText('other') }), { shared: theirs() }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:other'])] } });
+  assert.ok(vhit(vrun(root), 'G07', 'shared'));
+});
+
+test('name_shadows S3: a bundled shadow excuses G06 for a bundled name', () => {
+  const root = addVendored(fixture(), { debug: skillText('debug') }, { lockExtra: { name_shadows: [shadowEntry(['bundled:debug'], { name: 'debug' })] } });
+  const rep = vrun(root);
+  assert.ok(!vhit(rep, 'G06', 'debug'), JSON.stringify(rep.findings));
+  assert.equal(rep.failed, false, JSON.stringify(rep.findings));
+});
+
+test('name_shadows S4: a ccv3 shadow does not excuse G06', () => {
+  const root = addVendored(fixture({ debug: skillText('debug', { body: 'ours\n' }) }), { debug: skillText('debug') }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:debug'], { name: 'debug' })] } });
+  assert.ok(vhit(vrun(root), 'G06', 'debug'));
+});
+
+test('name_shadows S5: a bundled shadow does not excuse a collision with a CCv3 skill', () => {
+  const root = addVendored(fixture({ shared: ours() }), { shared: theirs() }, { lockExtra: { name_shadows: [shadowEntry(['bundled:shared'])] } });
+  assert.ok(vhit(vrun(root), 'G07', 'shared'));
+});
+
+test('name_shadows S6: a collision between two vendored sources is never excused', () => {
+  const root = fixture({ shared: ours() });
+  const lockExtra = { name_shadows: [shadowEntry(['ccv3:shared'])] };
+  addVendored(root, { shared: skillText('shared', { body: 'from a\n' }) }, { source: 'src-a', lockExtra });
+  addVendored(root, { shared: skillText('shared', { body: 'from b\n' }) }, { source: 'src-b', lockExtra });
+  const rep = vrun(root);
+  assert.ok(vhit(rep, 'G07', 'shared', 'src-a'), JSON.stringify(rep.findings));
+  assert.ok(vhit(rep, 'G07', 'shared', 'src-b'), JSON.stringify(rep.findings));
+});
+
+test('name_shadows S7: a shadow in source A does not excuse source B', () => {
+  const root = fixture({ shared: ours() });
+  addVendored(root, { shared: theirs() }, { source: 'src-a', lockExtra: { name_shadows: [shadowEntry(['ccv3:shared'])] } });
+  addVendored(root, { shared: skillText('shared', { body: 'from b\n' }) }, { source: 'src-b' });
+  assert.ok(vhit(vrun(root), 'G07', 'shared', 'src-b'));
+});
+
+test('name_shadows S8: an entry for a name the source does not vendor is a hard X02 that names it', () => {
+  const root = addVendored(fixture({ shared: ours() }), { one: skillText('one') }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:shared'], { name: 'ghost' })] } });
+  const rep = vrun(root);
+  const x = shadowMsgs(rep);
+  assert.equal(x.length, 1, JSON.stringify(rep.findings));
+  assert.match(x[0].msg, /ghost/);
+  assert.equal(x[0].class, 'hard');
+  assert.equal(rep.failed, true);
+});
+
+test('name_shadows S9: a ccv3 target that is absent or not model-visible is a hard X02', () => {
+  const absent = addVendored(fixture(), { shared: theirs() }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:shared'])] } });
+  const hidden = addVendored(fixture({ shared: skillText('shared', { fm: { 'disable-model-invocation': true }, body: 'ours\n' }) }), { shared: theirs() }, { lockExtra: { name_shadows: [shadowEntry(['ccv3:shared'])] } });
+  for (const root of [absent, hidden]) {
+    const rep = vrun(root);
+    const x = shadowMsgs(rep);
+    assert.equal(x.length, 1, JSON.stringify(rep.findings));
+    assert.match(x[0].msg, /ccv3:shared/);
+    assert.equal(x[0].class, 'hard');
+    assert.equal(rep.failed, true);
+  }
+});
+
+test('name_shadows S10: a malformed list is a hard X02, one finding per problem, and excuses nothing', () => {
+  const cases = {
+    'not an array': { name: 'shared', shadows: ['ccv3:shared'], reason: 'r' },
+    'unknown kind': [shadowEntry(['repo:shared'])],
+    'empty reason': [shadowEntry(['ccv3:shared'], { reason: '  ' })],
+    'empty shadows': [shadowEntry([])],
+    'no name': [shadowEntry(['ccv3:shared'], { name: undefined })],
+    'bundled target is not the name': [shadowEntry(['bundled:debug'])],
+    'entry is not an object': ['shared'],
+  };
+  for (const [label, name_shadows] of Object.entries(cases)) {
+    const root = addVendored(fixture({ shared: ours() }), { shared: theirs() }, { lockExtra: { name_shadows } });
+    const rep = vrun(root);
+    assert.equal(shadowMsgs(rep).length, 1, `${label}: ${JSON.stringify(rep.findings)}`);
+    assert.ok(shadowMsgs(rep).every((x) => x.class === 'hard'), label);
+    assert.ok(vhit(rep, 'G07', 'shared'), `${label}: a malformed entry must not excuse the collision`);
+  }
+});
+
+test('name_shadows S11: a bundled shadow for one vendored skill does not excuse another bundled name in the same source', () => {
+  const root = addVendored(fixture(), { debug: skillText('debug'), review: skillText('review') }, { lockExtra: { name_shadows: [shadowEntry(['bundled:debug'], { name: 'debug' })] } });
+  const rep = vrun(root);
+  assert.ok(!vhit(rep, 'G06', 'debug'), JSON.stringify(rep.findings));
+  assert.ok(vhit(rep, 'G06', 'review'), JSON.stringify(rep.findings));
+});
+
+test('name_shadows: a lock with no name_shadows field behaves as before', () => {
+  const root = addVendored(fixture({ shared: ours() }), { shared: theirs() });
+  const rep = vrun(root);
+  assert.ok(vhit(rep, 'G07', 'shared'));
+  assert.deepEqual(shadowMsgs(rep), []);
 });
 
 // ------------------------------------------- vendor files are covered by --staged and the guard

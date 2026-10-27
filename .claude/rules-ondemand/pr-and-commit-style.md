@@ -25,6 +25,9 @@ Then: **Evidence** (the command and its output, or the test count), **Scope not 
 you deliberately left out), **Model + harness** one-liner at the end (`claude-fable-5 via Claude
 Code`), because Dave runs several harnesses and tracks which produced what.
 
+For a Summary visual and a Merge Danger block, use the vendored Pocock template
+(`~/.claude/skills/_vendor/pocock-skills/skills/pr/SKILL.md`) inside this structure. This file wins on conflict.
+
 ## Keep the PR the size of the ask
 
 Review-bot comments and side-findings do not grow the PR. Fix real findings and CI failures; reply
