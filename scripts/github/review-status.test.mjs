@@ -16,6 +16,7 @@ import {
   mergeGraphqlComments,
   requiredBots,
   FAILED_UNREQUIRED_REASON,
+  greptileAutoFrom,
 } from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
@@ -848,6 +849,14 @@ test('router check: the lowest-id bot comment is the state; a later bot comment 
   assert.match(r.routing.unverified, /has not classified this head/);
 });
 
+test('router check: a saved hold after the head (held=apex_d3) still verifies the head', () => {
+  const heldState = { ...routerComment(HEAD, { id: 3 }), body: `<!-- review-router -->\n<!-- review-router-state class=steering head=${HEAD} held=apex_d3 -->\nHeld.` };
+  const r = evaluate(routed(['risk:steering', 'review:coderabbit', 'review:deep-held'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [heldState] } }));
+  assert.equal(r.routing.unverified, undefined, 'the trailing held attribute must not hide the state');
+  assert.deepEqual(r.routing.required, ['coderabbit']);
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
 test('router check: a comment from a User account named github-actions[bot] is not the router', () => {
   const fake = routerComment(HEAD, { id: 1, user: { login: 'github-actions[bot]', type: 'User' } });
   const r = evaluate(routed(['review:coderabbit'], { input: NO_GREPTILE, router: false, eval: { reviews: [CR_REVIEW], comments: [fake] } }));
@@ -1137,4 +1146,60 @@ test('REVIEW.md labels: .coderabbit.yaml auto_review.labels lists every label th
     assert.equal(requiredBots([label]).coderabbit, true, label);
     assert.ok(listed.includes(label), `${label} is missing from .coderabbit.yaml auto_review.labels (${listed.join(', ')})`);
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Greptile off (Dave, 2026-10-26): main's .greptile/config.json has autoReview []. Every path that
+// required Greptile requires CodeRabbit instead. CI, threads and a failed manual Greptile run still block.
+// Failure modes: an unrouted, stale, review:deep or person-raised PR still waits for Greptile forever;
+// a PR with autoReview [] on its own branch lowers its bar; CI stops gating; a config read error is READY.
+// ---------------------------------------------------------------------------------------------
+const OFF = (labels, over = {}) => ({ ...routed(labels, { input: NO_GREPTILE, ...over }), greptileAuto: false });
+
+test('greptileAutoFrom: only an empty autoReview list turns Greptile off', () => {
+  assert.equal(greptileAutoFrom({ autoReview: [] }), false);
+  assert.equal(greptileAutoFrom({ autoReview: ['open', 'push'] }), true);
+  assert.equal(greptileAutoFrom({ autoReview: ['open'] }), true);
+  assert.equal(greptileAutoFrom({}), true, 'no key: the dashboard default reviews');
+  assert.equal(greptileAutoFrom(null), true, 'no file: the dashboard default reviews');
+  assert.equal(greptileAutoFrom({ autoReview: 'never' }), true, 'junk keeps the stricter rule');
+});
+
+test('Greptile off: every path that needed Greptile needs CodeRabbit instead', () => {
+  const cases = [
+    ['no labels at all', [], { router: false }],
+    ['risk label without review label', ['risk:normal'], {}],
+    ['review:deep', ['risk:infra', 'review:deep'], {}],
+    ['no router comment on a docs PR', ['risk:docs'], { router: false }],
+    ['router saw an older head', ['risk:normal', 'review:coderabbit'], { router: OLD }],
+    ['person risk label above the saved class', ['risk:r3', 'review:coderabbit'], {}],
+  ];
+  for (const [name, labels, over] of cases) {
+    const waiting = evaluate(OFF(labels, over));
+    assert.deepEqual(waiting.routing.required, ['coderabbit'], name);
+    assert.equal(waiting.ready, false, `${name}: no CodeRabbit review yet`);
+    assert.ok(!waiting.reasons.some((x) => /Greptile/.test(x)), `${name}: no Greptile reason: ${waiting.reasons.join('; ')}`);
+    const done = evaluate(OFF(labels, { ...over, eval: { reviews: [CR_REVIEW] } }));
+    assert.equal(done.ready, true, `${name}: ${done.reasons.join('; ')}`);
+  }
+});
+
+test('Greptile off: a docs PR the router classified on this head needs no bot', () => {
+  const r = evaluate(OFF(['risk:docs']));
+  assert.deepEqual(r.routing.required, []);
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
+test('Greptile off: CI and threads still gate, and a failed manual Greptile run still blocks', () => {
+  const semgrep = { name: 'semgrep', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } };
+  const ci = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [semgrep] });
+  assert.equal(ci.ready, false);
+  assert.ok(ci.reasons.some((x) => /semgrep/.test(x)), ci.reasons.join('; '));
+  const failed = evaluate({ ...OFF(['review:coderabbit'], { eval: { reviews: [CR_REVIEW] } }), checkRuns: [run('failure')] });
+  assert.equal(failed.ready, false, 'a low or failed manual Greptile review is still a finding');
+});
+
+test('Greptile on (default input): the old rule is unchanged', () => {
+  assert.deepEqual(evaluate(routed([], { router: false })).routing.required, ['greptile']);
+  assert.deepEqual(evaluate(routed(['review:deep'])).routing.required, ['greptile', 'coderabbit']);
 });

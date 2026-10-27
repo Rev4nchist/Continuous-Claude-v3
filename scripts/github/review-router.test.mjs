@@ -39,6 +39,14 @@
 //   - a person's risk label above the comment class is ignored                       -> raise tests
 // ledger / CLI
 //   - the ledger line is not one line of valid JSON, or hides unknown credits -> R-9
+// follow-ups (2026-10-26)
+//   - a held PR stays CodeRabbit-only after deep review is switched on         -> release tests
+//   - the release re-adds review:deep a person removed after an earlier release -> release-once test
+//   - the hold is not saved, so a release cannot tell config from a person     -> held state tests
+//   - a person's label change writes labels, or writes no ledger row           -> labeled/unlabeled tests
+//   - the file list is read from an endpoint that can lag the head             -> loadLive compare test
+//   - a PR above the compare cap (300 files) can never be routed               -> loadLive fallback test
+//   - compare returns more files than the PR has (base moved) and is trusted   -> changedPaths strict test
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { readFileSync, writeFileSync, mkdtempSync } from 'node:fs';
@@ -49,6 +57,7 @@ import { fileURLToPath } from 'node:url';
 import {
   globToRegExp, matchGlob, classify, creditsState, route, decide, previousClassFrom, stateFrom, builderOf,
   ROUTER_MARKER, renderComment, findRouterComment, planOps, applyOps, maskMarker, changedPaths, codeRabbitRateLimited, ledgerLine,
+  loadLive, COMPARE_FILE_CAP,
 } from './review-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -335,7 +344,7 @@ test('decide: a closed PR gets nothing', () => {
 });
 
 test('decide: ignored events do nothing', () => {
-  const d = dec('labeled', pr(['docs/a.md']), [], null);
+  const d = dec('assigned', pr(['docs/a.md']), [], null);
   assert.equal(d.noop, true);
   assert.equal(d.reason, 'event_ignored');
 });
@@ -514,9 +523,9 @@ test('previousClassFrom reads only the comment state; labels never count', () =>
 test('state carries the class and the full head', () => {
   const body = renderComment('x', 'infra', HEAD);
   assert.match(body, new RegExp(`<!-- review-router-state class=infra head=${HEAD} -->`));
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD });
-  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null });
-  assert.deepEqual(stateFrom('nothing'), { class: null, head: null });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null });
+  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null, held: null });
+  assert.deepEqual(stateFrom('nothing'), { class: null, head: null, held: null });
 });
 
 test('renderComment: the marker appears once and the body starts with it', () => {
@@ -748,4 +757,211 @@ test('CLI: the ledger line is appended to $RUNNER_TEMP/review-ledger.jsonl', () 
   const file = readFileSync(path.join(tmp, 'review-ledger.jsonl'), 'utf8').trim().split('\n');
   assert.equal(file.length, 1);
   assert.equal(file[0], out.split('\n').find((l) => l.startsWith('{')));
+});
+
+// ---------- follow-ups: held release, person label rows, files pinned to the head ----------
+
+const ON = cfg({ deep_enabled: true });
+const HELD_LABELS = ['risk:steering', 'review:coderabbit', 'review:deep-held', B];
+const decH = (labels, prevHeld, over = ON, event = 'synchronize') =>
+  decide(event, pr(['.claude/agents/x.md']), labels, 'steering', over, { now: NOW, previousHeld: prevHeld });
+
+test('release: a PR held while deep was off gets review:deep once deep is on (only that label)', () => {
+  const d = decH(HELD_LABELS, 'apex_d3');
+  assert.equal(d.reason, 'released');
+  assert.deepEqual(d.add, ['review:deep']);
+  assert.equal(d.held, null, 'the saved state no longer says held');
+  assert.ok(!('remove' in d), 'review:deep-held is never removed');
+});
+
+test('release: only review:deep is added, even when a person removed the risk label meanwhile', () => {
+  const d = decH(['review:coderabbit', 'review:deep-held', B], 'apex_d3');
+  assert.equal(d.reason, 'released');
+  assert.deepEqual(d.add, ['review:deep']);
+});
+
+test('release: a saved credit hold is released when credits drop back under u2', () => {
+  const d = decH(HELD_LABELS, 'credits_u2', cfg({ deep_enabled: true }, { credits_used_manual: 3 }));
+  assert.equal(d.reason, 'released');
+  assert.deepEqual(d.add, ['review:deep']);
+});
+
+test('release: no saved hold means review:deep missing is a person removal (state, not labels, decides)', () => {
+  const d = decH(HELD_LABELS, null);
+  assert.equal(d.reason, 'person_override');
+  assert.deepEqual(d.add, []);
+});
+
+test('release: while deep is still off nothing is added and the hold stays saved', () => {
+  const d = decH(HELD_LABELS, 'apex_d3', BASE);
+  assert.equal(d.reason, 'no_change');
+  assert.deepEqual(d.add, []);
+  assert.equal(d.held, 'apex_d3');
+  assert.match(renderComment('x', d.effective, HEAD, d.held), /held=apex_d3/);
+});
+
+test('release: a person who removed review:deep-held during the hold opted out; nothing is added', () => {
+  const d = decH(['risk:steering', 'review:coderabbit', B], 'apex_d3');
+  assert.deepEqual(d.add, []);
+  assert.equal(d.reason, 'person_override');
+});
+
+test('release once: after the release a person removing review:deep is not undone', () => {
+  const first = decH(HELD_LABELS, 'apex_d3');
+  const saved = stateFrom(renderComment('x', first.effective, HEAD, first.held)).held;
+  assert.equal(saved, null);
+  const later = decH(HELD_LABELS, saved); // a person removed review:deep after the release
+  assert.deepEqual(later.add, []);
+  assert.equal(later.reason, 'person_override');
+});
+
+test('held state: renderComment writes held only when set; stateFrom reads it; old comments still parse', () => {
+  assert.equal(renderComment('x', 'infra', HEAD), `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} -->\nx`);
+  const body = renderComment('x', 'infra', HEAD, 'apex_d3');
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: 'apex_d3' });
+  assert.deepEqual(stateFrom(renderComment('x', 'infra', HEAD)), { class: 'infra', head: HEAD, held: null });
+  assert.equal(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} held=junk -->`).held, null);
+});
+
+test('held state: planOps saves the hold, and a release rewrites the comment without it', () => {
+  const held = dec(READY, pr(['.github/x.yml']), [B], null);
+  const [, create] = planOps(held, null);
+  assert.match(create.body, /class=infra head=a{40} held=apex_d3 -->/);
+  const rel = decide('synchronize', pr(['.github/x.yml']), ['risk:infra', 'review:coderabbit', 'review:deep-held', B], 'infra', ON,
+    { now: NOW, previousHeld: 'apex_d3' });
+  const ops = planOps(rel, { id: 9, body: create.body });
+  assert.deepEqual(ops[0], { op: 'labels', labels: ['review:deep'] });
+  assert.doesNotMatch(ops[1].body, /held=/);
+});
+
+test('labeled / unlabeled: a person label change writes a ledger row and nothing else', () => {
+  for (const ev of ['labeled', 'unlabeled']) {
+    const d = dec(ev, pr(['.github/x.yml']), ['review:deep', B], 'infra');
+    assert.equal(d.noop, true, ev);
+    assert.deepEqual(d.add, [], ev);
+    assert.equal(d.reason, 'person_label', ev);
+    assert.deepEqual(planOps(d, null), [], ev);
+    const j = JSON.parse(ledgerLine({ d, pr: pr(['.github/x.yml'], { labelChange: { name: 'review:deep', by: 'dave' } }), event: ev, now: NOW }));
+    assert.equal(j.decision, 'person_label');
+    assert.equal(j.held_reason, 'person_label');
+    assert.equal(j.label, 'review:deep');
+    assert.equal(j.by, 'dave');
+  }
+});
+
+test('CLI: a labeled event payload gives one ledger row with the label and the person, and no writes', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'router-ev-'));
+  const ev = path.join(dir, 'event.json');
+  writeFileSync(ev, JSON.stringify({ action: 'unlabeled', label: { name: 'review:coderabbit' }, sender: { login: 'dave', type: 'User' }, pull_request: { number: 7 } }));
+  const out = runCli(FIX(), [], { GITHUB_EVENT_PATH: ev });
+  const j = ledgerOf(out);
+  assert.equal(j.event, 'unlabeled');
+  assert.equal(j.decision, 'person_label');
+  assert.equal(j.label, 'review:coderabbit');
+  assert.equal(j.by, 'dave');
+  assert.deepEqual(j.labels_added, []);
+  assert.match(out, /no writes planned/);
+});
+
+const fakeGh = (pull, { compareFiles = [], pullFiles = [], comments = [] } = {}) => {
+  const calls = [];
+  const gh = (args) => {
+    const url = args.find((a) => a.startsWith('repos/'));
+    calls.push(url);
+    if (/\/compare\//.test(url)) return { files: compareFiles };
+    if (/\/pulls\/\d+\/files/.test(url)) return [pullFiles];
+    if (/\/issues\/\d+\/comments/.test(url)) return [comments];
+    if (/\/pulls\/\d+$/.test(url)) return pull;
+    throw new Error(`unexpected call ${url}`);
+  };
+  return { gh, calls };
+};
+const LIVE_PULL = { number: 7, changed_files: 1, head: { sha: HEAD }, base: { ref: 'main', sha: 'c'.repeat(40) } };
+
+test('loadLive (N5): files come from compare pinned to the head SHA, not the lagging PR files list', () => {
+  const { gh, calls } = fakeGh(LIVE_PULL, { compareFiles: [{ filename: '.github/x.yml' }], pullFiles: [{ filename: 'docs/stale.md' }] });
+  const got = loadLive(gh, 'o/r', 7);
+  assert.deepEqual(got.files.map((f) => f.filename), ['.github/x.yml']);
+  assert.equal(got.filesSource, 'compare');
+  assert.ok(calls.includes(`repos/o/r/compare/${'c'.repeat(40)}...${HEAD}`), `pinned to base.sha and head.sha: ${calls.join(' | ')}`);
+  assert.ok(!calls.some((c) => /\/pulls\/7\/files/.test(c)));
+});
+
+test('loadLive: above the compare cap the paginated PR files list is used and the ledger says so', () => {
+  const big = { ...LIVE_PULL, changed_files: COMPARE_FILE_CAP + 1 };
+  const many = Array.from({ length: COMPARE_FILE_CAP + 1 }, (_, i) => ({ filename: `docs/${i}.md` }));
+  const { gh, calls } = fakeGh(big, { pullFiles: many });
+  const got = loadLive(gh, 'o/r', 7);
+  assert.equal(got.filesSource, 'pulls');
+  assert.equal(got.files.length, COMPARE_FILE_CAP + 1);
+  assert.ok(!calls.some((c) => /\/compare\//.test(c)));
+  assert.equal(COMPARE_FILE_CAP, 300, 'GitHub compare returns at most 300 files, all on page 1 (measured 2026-10-26)');
+});
+
+const seqGh = (pulls, compareFiles) => {
+  const calls = [];
+  let p = 0;
+  const gh = (args) => {
+    const url = args.find((a) => a.startsWith('repos/'));
+    calls.push(url);
+    if (/\/compare\//.test(url)) return { files: compareFiles };
+    if (/\/issues\/\d+\/comments/.test(url)) return [[]];
+    if (/\/pulls\/\d+$/.test(url)) return pulls[Math.min(p++, pulls.length - 1)];
+    throw new Error(`unexpected call ${url}`);
+  };
+  return { gh, calls };
+};
+
+test('loadLive: a changed_files count that lags the push is re-read before giving up', () => {
+  const two = [{ filename: 'a.mjs' }, { filename: 'b.mjs' }];
+  const { gh, calls } = seqGh([{ ...LIVE_PULL, changed_files: 1 }, { ...LIVE_PULL, changed_files: 2 }], two);
+  let slept = 0;
+  const got = loadLive(gh, 'o/r', 7, { sleep: () => { slept++; }, waitMs: 0 });
+  assert.equal(slept, 1);
+  assert.equal(got.pull.changed_files, 2);
+  assert.deepEqual(changedPaths(got.files, got.pull), ['a.mjs', 'b.mjs']);
+  assert.equal(calls.filter((c) => /\/pulls\/7$/.test(c)).length, 2);
+});
+
+test('loadLive: a mismatch that never settles stops after 3 reads and changedPaths refuses it', () => {
+  const { gh, calls } = seqGh([{ ...LIVE_PULL, changed_files: 1 }], [{ filename: 'a' }, { filename: 'b' }]);
+  const got = loadLive(gh, 'o/r', 7, { sleep: () => {}, waitMs: 0 });
+  assert.equal(calls.filter((c) => /\/compare\//.test(c)).length, 3);
+  assert.throws(() => changedPaths(got.files, got.pull), /2 of 1/);
+});
+
+test('loadLive: a label event reads no files', () => {
+  const { gh, calls } = seqGh([LIVE_PULL], []);
+  const got = loadLive(gh, 'o/r', 7, { filesNeeded: false });
+  assert.equal(got.files, null);
+  assert.ok(!calls.some((c) => /\/compare\/|\/files/.test(c)), calls.join(' | '));
+});
+
+test('release: an unknown credit count never ends a credit hold (a config typo spends no credits)', () => {
+  for (const v of [null, 'forty', -1]) {
+    const d = decH(HELD_LABELS, 'credits_u2', cfg({ deep_enabled: true }, { credits_used_manual: v }));
+    assert.deepEqual(d.add, [], String(v));
+    assert.notEqual(d.reason, 'released', String(v));
+  }
+});
+
+test('labeled: the ledger row reports no class (no files were read)', () => {
+  const d = dec('labeled', pr([]), ['review:deep', B], 'infra');
+  assert.equal(d.class, null);
+  assert.equal(JSON.parse(ledgerLine({ d, pr: pr([]), event: 'labeled', now: NOW })).class, null);
+});
+
+test('workflow: label runs use their own concurrency group', () => {
+  const yml = readFileSync(path.join(HERE, '..', '..', '.github', 'workflows', 'review-router.yml'), 'utf8');
+  assert.match(yml, /group: review-router-\$\{\{[^\n]*\}\}-\$\{\{ \(github\.event\.action == 'labeled' \|\| github\.event\.action == 'unlabeled'\) && 'label' \|\| 'route' \}\}/);
+});
+
+test('changedPaths: more files than the PR has is refused too (compare against a moved base)', () => {
+  assert.throws(() => changedPaths([{ filename: 'a' }, { filename: 'b' }], { changed_files: 1 }), /2 of 1/);
+});
+
+test('ledger: files_source is written when known', () => {
+  const d = dec(READY, pr(['docs/a.md']), [B], null);
+  const j = JSON.parse(ledgerLine({ d, pr: pr(['docs/a.md'], { filesSource: 'compare' }), event: READY, ops: [], now: NOW }));
+  assert.equal(j.files_source, 'compare');
 });

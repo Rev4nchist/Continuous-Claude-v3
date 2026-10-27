@@ -11,7 +11,9 @@ name: review-router
 on:
   pull_request_target:
     # edited counts only when the base branch changed (a stacked PR retargeted to main): see the job condition.
-    types: [opened, reopened, ready_for_review, synchronize, edited]
+    # labeled/unlabeled: a person changing a risk:* or review:* label gets one ledger row; the router writes nothing.
+    # The router's own label writes use GITHUB_TOKEN, which starts no workflow run.
+    types: [opened, reopened, ready_for_review, synchronize, edited, labeled, unlabeled]
     branches: [main]
   # CodeRabbit posts its rate-limit notice as a PR comment after routing. Re-route then so the router
   # comment shows the note (the job filter below keeps only that bot and that notice). Runs from main.
@@ -38,11 +40,16 @@ jobs:
         github.event.comment.user.login == 'coderabbitai[bot]' && github.event.comment.user.type == 'Bot' &&
         (contains(github.event.comment.body, 'rate limit') || contains(github.event.comment.body, 'limit reached'))) ||
       (github.event_name == 'pull_request_target' && github.event.pull_request.draft == false &&
-        (github.event.action != 'edited' || github.event.changes.base != null))
+        (github.event.action != 'edited' || github.event.changes.base != null) &&
+        ((github.event.action != 'labeled' && github.event.action != 'unlabeled') ||
+          (github.event.sender.type == 'User' &&
+            (startsWith(github.event.label.name, 'risk:') || startsWith(github.event.label.name, 'review:')))))
     # Job-level, so a skipped run (a bot editing the PR body fires `edited`) never joins the group and
     # never cancels a queued push run. Two quick pushes still run one after another.
+    # Label runs (they write only a ledger row) use their own group, so a label change never replaces a
+    # pending push run in the routing group.
     concurrency:
-      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}
+      group: review-router-${{ github.event.pull_request.number || github.event.issue.number || inputs.pr }}-${{ (github.event.action == 'labeled' || github.event.action == 'unlabeled') && 'label' || 'route' }}
       cancel-in-progress: false
     runs-on: ubuntu-latest
     timeout-minutes: 5
