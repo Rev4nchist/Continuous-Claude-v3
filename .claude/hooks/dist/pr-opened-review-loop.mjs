@@ -80,7 +80,7 @@ function markFired(sessionId, url) {
   }
 }
 var WATCH_REPO = "rev4nchist/continuous-claude-v3";
-var loopText = (info) => `/loop 5m Check the label-gated PR review bots (CodeRabbit when review:coderabbit or review:deep; Greptile when its config reviews automatically) on ${info.owner}/${info.repo} PR #${info.number} (stop when reviews of the head land or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
+var loopText = (info) => `/loop 5m Check the PR review bots that must review the head (in CCv3, the bots \`node scripts/github/review-status.mjs ${info.number}\` requires; elsewhere, the repo's configured bots) on ${info.owner}/${info.repo} PR #${info.number} (stop when reviews of the head land or after 60 minutes; fix real findings; dismiss false positives with a reason; verify thread isResolved via GraphQL; never merge)`;
 function buildContext(info) {
   const head = `PR OPENED: ${info.url}. Per ~/.claude/rules-ondemand/pr-review-loop.md, `;
   if (`${info.owner}/${info.repo}`.toLowerCase() === WATCH_REPO) {
