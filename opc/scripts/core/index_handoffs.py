@@ -69,6 +69,8 @@ load_dotenv()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from memory_write_log import record_write_failure  # noqa: E402
+
 # Re-use the canonical auto-type heuristic so handoff entries get the same
 # type labels as the rest of the memory pipeline. Imported lazily so
 # --dry-run on a machine without the full deps still runs.
@@ -672,6 +674,7 @@ async def index_handoffs(
                 summary["errors"].append(
                     f"store failed for {key[0]}#{key[1]}: {exc}"
                 )
+                record_write_failure("index_handoffs", exc, entry["session_id"])
                 continue
     finally:
         await memory.close()

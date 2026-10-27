@@ -56,6 +56,9 @@ load_dotenv()
 
 # Add parent directory to path (for imports like 'from db.memory_factory')
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from memory_write_log import record_write_failure  # noqa: E402
 
 # Valid learning types for --type parameter
 LEARNING_TYPES = [
@@ -350,6 +353,7 @@ async def store_learning_v2(
         )
         from db.embedding_service import EmbeddingService
     except ImportError as e:
+        record_write_failure("store_learning", f"Memory service not available: {e}", session_id)
         return {"success": False, "error": f"Memory service not available: {e}"}
 
     if not content or not content.strip():
@@ -463,6 +467,7 @@ async def store_learning_v2(
         }
 
     except Exception as e:
+        record_write_failure("store_learning", e, session_id)
         return {"success": False, "error": str(e)}
 
 
