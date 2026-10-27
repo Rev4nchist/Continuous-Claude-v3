@@ -61,6 +61,7 @@ import asyncio
 import json
 import math
 import os
+import re
 import sys
 import time
 from datetime import datetime, timezone
@@ -584,9 +585,14 @@ async def search_learnings_text_only_postgres(
 
         # Build OR-based query: "session affinity terminal" -> 'session' | 'affinity' | 'terminal'
         # This matches documents containing ANY of the terms, ranked by how many match
-        words = [w for w in clean_query.split() if len(w) > 2]
+        # Split on non-word characters first: to_tsquery treats ( ) : & | ! ' = , as
+        # operators, so a raw term like "body=(...)" is a syntax error.
+        tokens = [t for t in re.split(r"\W+", clean_query) if t]
+        words = [w for w in tokens if len(w) > 2]
         if not words:
-            words = clean_query.split()[:1] or [query.split()[0]]
+            words = tokens[:1] or [w for w in re.split(r"\W+", query) if w][:1]
+        if not words:
+            return []
         or_query = ' | '.join(words)
 
         scope_sql = f" AND {scope_clause}" if scope_clause else ""

@@ -242,7 +242,7 @@ describe('runSessionHealth', () => {
   }) as never;
   beforeEach(() => { spawns.length = 0; });
 
-  it('healthy + no backup yet: spawns the backup via uv in the opc dir, no systemMessage', async () => {
+  it('healthy + no backup yet: spawns the backup via uv in the opc dir, warn false', async () => {
     const out = await runSessionHealth({ stateDir: state, opcDir: '/opc', now: NOW, runner: runnerWith(5, hoursAgo(1)), spawnFn });
     expect(out.warn).toBe(false);
     expect(spawns).toHaveLength(1);

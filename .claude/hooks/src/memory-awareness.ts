@@ -26,8 +26,11 @@
  *  - Daemon-routed hybrid recall when the BGE embedding daemon is hot.
  *  - Fallback path is byte-identical to Phase 1 behavior.
  *  - Task 1.3a: PROACTIVE_INJECTION_FLOOR split into two mode-aware floors.
- *    TEXT_ONLY_FLOOR=0.05 preserves Phase 1 behavior when daemon is down.
- *    HYBRID_FLOOR=0.01 lets RRF scores (0.01-0.03 typical) pass through.
+ *    TEXT_ONLY_FLOOR gates the daemon-down path, HYBRID_FLOOR the daemon path.
+ *    Both gate the pre-decay base score (memory phase 2). Measured ranges, not
+ *    guesses: RRF base scores run 1/61 to 2/61 (0.0164 to 0.0328) for a row that is
+ *    rank 1 in one or both arms, and fall to about 0.005 for deep ranks; text-only
+ *    ts_rank base scores of relevant lessons sit around 0.02-0.06.
  */
 
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
@@ -36,7 +39,7 @@ import { spawnSync } from 'child_process';
 import { getOpcDir } from './shared/opc-path.js';
 import { outputContinue } from './shared/output.js';
 import { logHook } from './shared/session-activity.js';
-import { extractIntent, extractKeywords, expandGitQuery, isMachineGeneratedPrompt } from './shared/intent-extractor.js';
+import { extractIntent, extractKeywords, deriveRecallIntent, cleanSearchTerm, isMachineGeneratedPrompt } from './shared/intent-extractor.js';
 import { probeDaemon, recallViaDaemon, ensureDaemonRunning } from './shared/embedding-client.js';
 import { getFreeRamBytes, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
@@ -44,8 +47,22 @@ import { readBus } from './shared/context-bus.js';
 import { appendIntelBus } from './shared/intel-bus.js';
 import { extractBusFocus, buildFocusBlock } from './shared/bus-focus.js';
 
-const TEXT_ONLY_FLOOR = 0.05;  // FTS ts_rank scores: 0.05-0.5 typical
-const HYBRID_FLOOR = 0.01;     // RRF fused scores: 0.01-0.03 typical
+// Floors gate base_score (pre-decay). Measured on the 48-pair gold set v2
+// (2026-10-27, 130 live rows, hook scope). Report: opc/tests/recall_eval_v2_report.md.
+// Rule: highest hit rate on reachable pairs with false injections on <= 2 of 10 none
+// prompts, ties to the higher floor; a floor that injects nothing never qualifies.
+//  - text 0.0225: rule met (hit 0.750, false injections 1 of 10).
+//  - hybrid 0.03275: rule met (hit 0.750, false injections 1 of 10). RRF is
+//    1/(60+rank_fts) + 1/(60+rank_vec), ranks start at 1 (memory_service_pg.py). So
+//    (1,1) = 2/61 = 0.03279 passes, (1,2) = 1/61 + 1/62 = 0.03252 and (2,2) = 2/62 = 0.03226
+//    do not: 0.03275 keeps only a row that is rank 1 in BOTH arms. A row in one arm
+//    only scores at most 1/61 = 0.01639 and is dropped. 0.0325 (rank 1 and rank <= 2)
+//    gave hit 0.786 but 3 of 10 false injections. Rank-1-in-both is tight: a new row that
+//    outranks the right one in either arm silences recall, so re-run the eval after big
+//    corpus changes.
+// Pinned to opc/tests/recall_eval_baseline.json by memory-awareness-floor-qw06.test.ts.
+const TEXT_ONLY_FLOOR = 0.0225;  // FTS ts_rank base score
+const HYBRID_FLOOR = 0.03275;    // RRF base score: rank 1 in both the text and the vector arm
 
 interface UserPromptSubmitInput {
   session_id: string;
@@ -86,26 +103,19 @@ function readStdin(): string {
 // The implementations there are byte-identical to the previous inline
 // versions; behavior is unchanged.
 
-/**
- * Normalize a raw intent into the DB search term: drop underscores/slashes,
- * strip 1-2 char noise words, collapse whitespace. Extracted (ST-05) so the
- * resident daemon recall path and the uv fallback query with the IDENTICAL term.
- */
-function cleanSearchTerm(intent: string): string {
-  return intent
-    .replace(/[_\/]/g, ' ')
-    .replace(/\b\w{1,2}\b/g, '')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
+// Note: cleanSearchTerm now imported from './shared/intent-extractor.js' (memory phase 2),
+// so the recall eval builds its query with the same function.
 
 /**
  * Map a recall_learnings.py --json ``results[]`` array into LearningResult[].
  * Extracted (ST-05) so the uv path (checkDbMemory) and the resident daemon recall
- * path produce byte-identical rows. In hybrid mode the score is the PRE-decay base
- * RRF score (QW-06 Fix A / D3b-01); text-only keeps the freshness-discounted score.
+ * path produce byte-identical rows. The score is the PRE-decay base score in BOTH modes
+ * (hybrid: QW-06 Fix A / D3b-01; text-only: memory phase 2). A floor on the decayed
+ * ts_rank would rise in effect as rows age: a floor tuned on 0-day-old rows drops about
+ * half the text-only hits once the rows are about 35 days old. ``useHybrid`` is kept so
+ * the two call sites stay unchanged.
  */
-function mapDbResults(rawResults: any[], useHybrid: boolean): LearningResult[] {
+function mapDbResults(rawResults: any[], _useHybrid: boolean): LearningResult[] {
   return (rawResults || []).map((r: any) => {
     const content = r.content || '';
     const preview = content
@@ -130,7 +140,7 @@ function mapDbResults(rawResults: any[], useHybrid: boolean): LearningResult[] {
       id: (r.id || 'unknown').slice(0, 8),
       type: r.learning_type || r.type || 'UNKNOWN',
       content: preview + (content.length > 120 ? '...' : ''),
-      score: (useHybrid ? (r.base_score ?? r.score) : r.score) || 0,
+      score: (r.base_score ?? r.score) || 0,
       storedDate,
     };
   });
@@ -324,8 +334,8 @@ function mergeResults(
  * Returns null if nothing survives.
  *
  * ``floor`` must be selected by the caller based on recall mode:
- *   hybrid    → HYBRID_FLOOR (0.01)   — RRF scores sit in 0.01-0.03 range
- *   text-only → TEXT_ONLY_FLOOR (0.05) — FTS ts_rank scores sit in 0.05-0.5 range
+ *   hybrid    → HYBRID_FLOOR    — RRF base scores sit in 0.005-0.0328
+ *   text-only → TEXT_ONLY_FLOOR — FTS ts_rank base scores sit in 0.0-0.1 for this corpus
  */
 function applyFloor(match: MemoryMatch | null, floor: number): MemoryMatch | null {
   if (!match) return null;
@@ -468,11 +478,9 @@ async function main() {
     return;
   }
 
-  // Check for git operations first - expand query for better matching
-  const gitExpanded = expandGitQuery(input.prompt);
-
-  // Extract intent (semantic query, not just keywords)
-  const intent = gitExpanded || extractIntent(input.prompt);
+  // Git expansion first (better matching), else the extracted intent. One shared
+  // function: the recall eval builds the same query through it.
+  const intent = deriveRecallIntent(input.prompt);
 
   // Skip if no meaningful intent
   if (intent.length < 3) {
@@ -552,9 +560,9 @@ async function main() {
   const recallQuery = queryBiased ? `${intent} ${focusTerms.join(' ')}` : intent;
 
   // Run both sources, merge, apply mode-appropriate floor.
-  // Hybrid RRF scores (0.01-0.03) require a lower floor than text-only
-  // FTS ts_rank scores (0.05-0.5); using the wrong floor silently drops
-  // all daemon-returned matches.
+  // Hybrid RRF base scores (0.005-0.0328) and text-only FTS ts_rank base scores
+  // (0.0-0.1 here) live on different scales; using the wrong floor silently drops
+  // all daemon-returned matches or admits every text hit.
   // Phase 3 / D3b-04: checkLocalMemory removed from the hot path. Its 2000ms
   // spawn cap is BELOW `uv run` cold-start (~2.2s on Windows), so it near-always
   // SIGKILLs and returns [] — ~2s of guaranteed-wasted latency per prompt for
@@ -601,8 +609,8 @@ async function main() {
     [db, dbTimedOut, recallError] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
-  // Floor must match the SCORE TYPE actually produced (RRF ~0.01-0.03 vs FTS
-  // ts_rank ~0.05-0.5), which since the text-only fallback above is no longer
+  // Floor must match the SCORE TYPE actually produced (RRF 0.005-0.0328 vs FTS
+  // ts_rank 0.0-0.1), which since the text-only fallback above is no longer
   // implied by daemonReady alone.
   const usedHybridScores = recallVia === 'daemon' || uvUsedHybrid;
   const floorApplied = usedHybridScores ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
@@ -737,6 +745,7 @@ export {
   applyFloor,
   classifyRecallOutcome,
   interpretRecallProcess,
+  mapDbResults,
   TEXT_ONLY_FLOOR,
   HYBRID_FLOOR,
 };

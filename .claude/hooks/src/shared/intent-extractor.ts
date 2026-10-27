@@ -176,3 +176,27 @@ export function expandGitQuery(prompt: string): string | null {
 
   return null;
 }
+
+/**
+ * The recall intent the memory-awareness hook builds from a prompt: the git
+ * expansion when the prompt is git-related, else the extracted intent.
+ * Shared so the recall eval (opc/scripts/core/recall_eval_v2.py, through
+ * scripts/hook-query-terms.mjs) builds the identical query and cannot drift.
+ */
+export function deriveRecallIntent(prompt: string): string {
+  return expandGitQuery(prompt) || extractIntent(prompt);
+}
+
+/**
+ * Normalize a raw intent into the DB search term: drop underscores/slashes,
+ * strip 1-2 char noise words, collapse whitespace. (ST-05) the resident daemon
+ * recall path and the uv fallback query with the IDENTICAL term. Moved here from
+ * memory-awareness.ts so the recall eval imports the real function.
+ */
+export function cleanSearchTerm(intent: string): string {
+  return intent
+    .replace(/[_\/]/g, ' ')
+    .replace(/\b\w{1,2}\b/g, '')
+    .replace(/\s+/g, ' ')
+    .trim();
+}

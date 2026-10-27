@@ -175,6 +175,29 @@ class TestSearchLearningsTextOnlyPostgres:
         assert "|" in query_arg
 
     @pytest.mark.asyncio
+    async def test_tsquery_terms_carry_no_operator_characters(self, mock_db_pool):
+        """A prompt with punctuation must not reach to_tsquery as a syntax error.
+
+        Gold query 1 of the v2 eval set ("body=(...)") raised a tsquery syntax error and
+        the text-only arm returned nothing.
+        """
+        pool, conn = mock_db_pool
+        conn.fetch = AsyncMock(return_value=[])
+
+        async def mock_get_pool():
+            return pool
+
+        query = "api body=(...) PowerShell splits two arguments, how pass a:b comment! (x) 'q'"
+        with patch("db.postgres_pool.get_pool", mock_get_pool):
+            from scripts.core.recall_learnings import search_learnings_text_only_postgres
+            await search_learnings_text_only_postgres(query, k=5)
+
+        tsquery_arg = conn.fetch.call_args_list[0][0][1]
+        terms = tsquery_arg.split(" | ")
+        assert all(t and t.isalnum() for t in terms), tsquery_arg
+        assert "body" in terms and "arguments" in terms and "PowerShell".lower() in terms
+
+    @pytest.mark.asyncio
     async def test_stopword_removal(self, mock_db_pool, sample_learnings):
         """Verify meta-words are stripped from query."""
         pool, conn = mock_db_pool
