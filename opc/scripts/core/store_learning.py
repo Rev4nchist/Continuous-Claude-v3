@@ -373,8 +373,11 @@ async def store_learning_v2(
     if not quality["passes"]:
         return {"success": True, "skipped": True, "reason": quality["reason"]}
 
-    # Get backend - prefer postgres if DATABASE_URL is set
-    if os.environ.get("DATABASE_URL"):
+    # Postgres when any database URL is configured (the wizard writes only
+    # CONTINUOUS_CLAUDE_DB_URL; the sqlite backend module does not exist).
+    from db.postgres_pool import configured_url
+
+    if configured_url():
         backend = "postgres"
     else:
         backend = get_default_backend()

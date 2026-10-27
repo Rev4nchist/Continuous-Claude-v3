@@ -116,27 +116,39 @@ def _get_pool_config() -> dict:
     }
 
 
+URL_VARS = ("OPC_POSTGRES_URL", "AGENTICA_POSTGRES_URL", "DATABASE_URL", "CONTINUOUS_CLAUDE_DB_URL")
+
+
+def configured_url() -> str | None:
+    """The first database URL set in the environment, or None.
+
+    The wizard writes only CONTINUOUS_CLAUDE_DB_URL. Without it in this list, the
+    memory scripts fell back to the development default (port 5434) on a machine
+    whose database listens on 5432, and every store and recall failed.
+    """
+    for name in URL_VARS:
+        value = os.environ.get(name)
+        if value:
+            return value
+    return None
+
+
 def get_connection_string() -> str:
     """Get PostgreSQL connection string from environment or defaults.
 
     Checks env vars in order (single source of truth pattern):
-    1. OPC_POSTGRES_URL - primary config used by wizard/docker-compose
+    1. OPC_POSTGRES_URL - explicit override
     2. AGENTICA_POSTGRES_URL - legacy/alternative name
-    3. DATABASE_URL - standard convention (used by settings.json)
-    4. Development default if none set
+    3. DATABASE_URL - standard convention
+    4. CONTINUOUS_CLAUDE_DB_URL - the variable the setup wizard writes and the hooks read
+    5. Development default if none set
 
     In production mode, one of these must be explicitly set.
 
     Raises:
         ValueError: If no URL is set in production mode.
     """
-    # Check env vars in priority order
-    url = (
-        os.environ.get("OPC_POSTGRES_URL")
-        or os.environ.get("AGENTICA_POSTGRES_URL")
-        or os.environ.get("DATABASE_URL")
-    )
-
+    url = configured_url()
     if url:
         return url
 

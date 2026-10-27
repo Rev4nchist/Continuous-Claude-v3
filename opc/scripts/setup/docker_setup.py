@@ -173,8 +173,10 @@ async def run_migrations(
     migrations_path = migrations_dir or MIGRATIONS_DIR
     compose_path = compose_file or DOCKER_COMPOSE_FILE
 
-    # First, try to run init-schema.sql if it exists
-    init_sql = PROJECT_ROOT / "init-schema.sql"
+    # First, re-run the canonical init-schema.sql (the file docker-compose mounts).
+    # Every statement is idempotent, so this also upgrades an older database.
+    # (It used to look for opc/init-schema.sql, which does not exist, so it never ran.)
+    init_sql = DOCKER_DIR / "init-schema.sql"
 
     try:
         if init_sql.exists():
@@ -187,6 +189,8 @@ async def run_migrations(
                 "-T",
                 "postgres",
                 "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
                 "-U",
                 "claude",
                 "-d",
@@ -209,6 +213,8 @@ async def run_migrations(
                     "-T",
                     "postgres",
                     "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
                     "-U",
                     "claude",
                     "-d",
@@ -235,6 +241,8 @@ async def run_migrations(
                     "-T",
                     "postgres",
                     "psql",
+                "-v",
+                "ON_ERROR_STOP=1",
                     "-U",
                     "claude",
                     "-d",
