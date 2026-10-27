@@ -8,6 +8,7 @@
 <p align="center">
   <a href="#why-a-harness">Why</a> ·
   <a href="#see-it-work">How it works</a> ·
+  <a href="#from-idea-to-merge">Lifecycle</a> ·
   <a href="#the-six-parts">The six parts</a> ·
   <a href="#what-you-gain">What you gain</a> ·
   <a href="#proof">Proof</a> ·
@@ -78,6 +79,23 @@ You should see a JSON reply with `"permissionDecision":"ask"`. Add `"permission_
 The guard counts bypass mode, subagent runs (`CLAUDE_AGENT_ID`) and CI as unattended. A plain headless `claude -p` run is not detected, so it gets `ask`. The guard also lets a call through if it hits a parse error. It is a backstop, not a sandbox.
 
 </details>
+
+## From idea to merge
+
+CCv3 carries a full software lifecycle, and the harness enforces each stage. A stage cannot be skipped by accident. The harness is the enforcement layer. The lifecycle is the process it enforces.
+
+<p align="center">
+  <img alt="From idea to merge: plan, build, verify, review, land and learn, each with its gate." src="docs/assets/readme/idea-to-merge.svg" width="100%">
+</p>
+
+| Stage | What runs | The gate that guards it |
+|---|---|---|
+| **1. Plan** | `/discovery-interview` turns an idea into a spec. `/plan-agent` writes the plan. `/premortem` attacks it. | `plan-mode-approval-gate` asks for your approval before the session leaves plan mode. |
+| **2. Build** | `/build` and `/tdd` chain the work. `kraken` implements across files. `spark` makes one small edit. | `file-claims` denies an edit that another live session holds. `package-install-guard` checks each install. `destructive-command-guard` asks before a wipe. |
+| **3. Verify** | An end-to-end check for each surface you changed, with its output saved. | "Done" needs that saved output ([AGENTS.md](AGENTS.md)). Static gates: context budget, hook contract, model policy and skills audit ([Testing and gates](docs/harness/gates.md)). |
+| **4. Review** | `/review` is an opt-in self-check and does not count toward READY. Pull-request bots review on request. | `review-status.mjs` prints READY only when CI is green, no review thread is open and the required bot reviews are in ([review and CI](docs/harness/review-and-ci.md)). |
+| **5. Land** | `land-pr.ps1` merges the reviewed head and syncs `~/.claude`. | Secret scans and CI ratchets run first. No tool merges without your yes. |
+| **6. Learn** | `/create_handoff` saves state for the next session. The self-improvement loop turns findings into proposals. | Each handoff records an outcome: `SUCCEEDED`, `PARTIAL_PLUS`, `PARTIAL_MINUS` or `FAILED`. |
 
 ## The six parts
 
