@@ -5750,8 +5750,9 @@ function emitAndExit(output) {
   process.stdout.write(JSON.stringify(output) + "\n", () => process.exit(0));
 }
 main().catch((err) => {
-  console.error("memory-loaders failed:", err);
-  emitAndExit({ result: "continue" });
+  const text = `memory-loaders failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}
+`;
+  process.stderr.write(text, () => emitAndExit({ result: "continue" }));
 });
 export {
   main

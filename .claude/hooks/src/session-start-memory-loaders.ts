@@ -74,6 +74,7 @@ function emitAndExit(output: unknown): void {
 }
 
 main().catch((err) => {
-  console.error('memory-loaders failed:', err);
-  emitAndExit({ result: 'continue' });
+  // Flush the diagnostic before the forced exit, or Node can drop it.
+  const text = `memory-loaders failed: ${err instanceof Error ? err.stack ?? err.message : String(err)}\n`;
+  process.stderr.write(text, () => emitAndExit({ result: 'continue' }));
 });
