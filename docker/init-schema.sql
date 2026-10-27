@@ -229,3 +229,12 @@ CREATE INDEX IF NOT EXISTS idx_nodes_fts ON pageindex_nodes USING GIN (fts_vecto
 CREATE INDEX IF NOT EXISTS idx_nodes_embedding ON pageindex_nodes USING hnsw (embedding vector_cosine_ops);
 CREATE INDEX IF NOT EXISTS idx_nodes_project ON pageindex_nodes (project_id);
 CREATE INDEX IF NOT EXISTS idx_nodes_doc ON pageindex_nodes (project_id, doc_path);
+
+-- =============================================================================
+-- SCHEMA VERSION
+-- =============================================================================
+
+-- The SessionStart health line compares this value with EXPECTED_SCHEMA_VERSION in
+-- .claude/hooks/src/shared/memory-health.ts. Change both together when the schema changes.
+CREATE TABLE IF NOT EXISTS schema_meta (key TEXT PRIMARY KEY, value TEXT NOT NULL, updated_at TIMESTAMPTZ DEFAULT NOW());
+INSERT INTO schema_meta (key, value) VALUES ('schema_version', '2026-10-27.1') ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value, updated_at = NOW();

@@ -103,6 +103,8 @@ export interface ContextInjectionHookOutput {
     hookEventName: 'UserPromptSubmit' | 'PostToolUse' | 'SessionStart';
     additionalContext: string;
   };
+  /** Shown to the user in the terminal (top-level Claude Code hook field, valid for every event). */
+  systemMessage?: string;
 }
 
 /**
