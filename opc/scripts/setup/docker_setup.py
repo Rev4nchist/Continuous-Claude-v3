@@ -14,6 +14,11 @@ USAGE:
 """
 
 import asyncio
+import os
+import platform
+import shutil
+import subprocess
+from collections.abc import Callable
 from pathlib import Path
 from typing import Any
 
@@ -36,6 +41,8 @@ PROJECT_ROOT = Path(__file__).parent.parent.parent
 DOCKER_DIR = PROJECT_ROOT.parent / "docker"
 DOCKER_COMPOSE_FILE = DOCKER_DIR / "docker-compose.yml"
 MIGRATIONS_DIR = PROJECT_ROOT / "scripts" / "migrations"
+# The agentic_os schema (lanes, coordination events) has its own drizzle migrations.
+AGENTIC_OS_DIR = PROJECT_ROOT.parent / "apps" / "agentic-os"
 
 # Container runtime - "docker" or "podman" (set by wizard after detection)
 _CONTAINER_RUNTIME = "docker"
@@ -250,6 +257,60 @@ async def run_migrations(
 
     except Exception as e:
         return {"success": False, "error": str(e)}
+
+
+def _find_npm() -> str | None:
+    npm = shutil.which("npm")
+    if npm is None and platform.system() == "Windows":
+        npm = shutil.which("npm.cmd")
+    return npm
+
+
+def _masked(text: str, secret: str) -> str:
+    """Short error text with the database URL removed (it holds the password)."""
+    return text.replace(secret, "<db-url>")[-400:] if secret else text[-400:]
+
+
+def run_agentic_os_migrations(
+    db_url: str | None,
+    app_dir: Path | None = None,
+    run: Callable[..., subprocess.CompletedProcess] = subprocess.run,
+    npm: str | None = None,
+) -> dict[str, Any]:
+    """Create or update the agentic_os schema (lanes, coordination events).
+
+    init-schema.sql builds only the public tables. Without this step a new
+    database has no agentic_os schema: the lane board fails and coordination
+    events are dropped. Order: install packages if drizzle-kit is missing,
+    db:check (all DDL stays in agentic_os), then db:migrate. Safe to re-run.
+
+    Returns:
+        dict with keys: success, skipped (no database URL), error (if failed)
+    """
+    if not db_url:
+        return {"success": True, "skipped": True}
+    app = app_dir or AGENTIC_OS_DIR
+    if not (app / "package.json").exists():
+        return {"success": False, "error": f"agentic-os app not found: {app}"}
+    npm = npm or _find_npm()
+    if npm is None:
+        return {"success": False, "error": "npm not found in PATH"}
+
+    env = {**os.environ, "AGENTIC_OS_DATABASE_URL": db_url}
+    steps = [["run", "db:check"], ["run", "db:migrate"]]
+    if not (app / "node_modules" / "drizzle-kit").exists():
+        steps.insert(0, ["ci"])
+    for step in steps:
+        try:
+            result = run(
+                [npm, *step], cwd=app, env=env, capture_output=True, text=True, timeout=300
+            )
+        except (OSError, subprocess.TimeoutExpired) as e:
+            return {"success": False, "error": f"npm {' '.join(step)}: {_masked(str(e), db_url)}"}
+        if result.returncode != 0:
+            detail = _masked((result.stderr or "") + (result.stdout or ""), db_url)
+            return {"success": False, "error": f"npm {' '.join(step)} failed: {detail}"}
+    return {"success": True, "skipped": False}
 
 
 async def verify_stack_health(compose_file: Path | None = None) -> dict[str, Any]:

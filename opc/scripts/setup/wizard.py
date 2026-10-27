@@ -1080,6 +1080,18 @@ async def run_setup_wizard() -> None:
         else:
             console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
 
+        # The agentic_os schema (lane board, coordination events) has its own migrations.
+        from scripts.setup.docker_setup import run_agentic_os_migrations
+
+        aos = run_agentic_os_migrations(read_dotenv_value(env_path, "CONTINUOUS_CLAUDE_DB_URL"))
+        if aos.get("skipped"):
+            console.print("  [dim]agentic_os schema skipped (no database URL)[/dim]")
+        elif aos["success"]:
+            console.print("  [green]OK[/green] agentic_os schema up to date")
+        else:
+            console.print(f"  [red]ERROR[/red] agentic_os schema: {aos.get('error', 'Unknown error')}")
+            console.print("  Fix, then run in apps/agentic-os: npm run db:check, then npm run db:migrate")
+
     # Step 7: Claude Code Integration
     console.print("\n[bold]Step 8/15: Claude Code Integration[/bold]")
     from scripts.setup.claude_integration import (
