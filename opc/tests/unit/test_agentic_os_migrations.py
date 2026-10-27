@@ -84,6 +84,21 @@ def test_migrate_gets_the_url_in_env(tmp_path):
         assert kwargs["env"]["AGENTIC_OS_DATABASE_URL"] == URL
 
 
+def test_wizard_retry_text_sets_the_url_var_without_the_secret(tmp_path, monkeypatch, capsys):
+    """7. The retry text omits AGENTIC_OS_DATABASE_URL, or prints the password."""
+    from scripts.setup import docker_setup, wizard
+
+    env = tmp_path / ".env"
+    env.write_text(f"CONTINUOUS_CLAUDE_DB_URL={URL}\n", encoding="utf-8")
+    monkeypatch.setattr(docker_setup, "run_agentic_os_migrations",
+                        lambda _url: {"success": False, "error": "boom"})
+    monkeypatch.setattr(wizard.console, "print", lambda *a, **k: print(*a))
+    wizard._run_agentic_os_step(env)
+    out = capsys.readouterr().out
+    assert "AGENTIC_OS_DATABASE_URL" in out
+    assert "s3cret" not in out
+
+
 def test_missing_npm_is_a_failure(tmp_path, monkeypatch):
     monkeypatch.setattr("scripts.setup.docker_setup.shutil.which", lambda _name: None)
     result = run_agentic_os_migrations(URL, app_dir=_app(tmp_path, True), run=Recorder())

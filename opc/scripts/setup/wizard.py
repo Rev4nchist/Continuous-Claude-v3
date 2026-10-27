@@ -914,6 +914,26 @@ def _install_plugins(settings_path: Path) -> None:
         tag = "[green]OK[/green]" if ok else "[yellow]WARN[/yellow]"
         console.print(f"  {tag} {step}: {message}")
 
+def _run_agentic_os_step(env_path: Path) -> None:
+    """Create the agentic_os schema (lane board, coordination events), after base migrations."""
+    from scripts.setup.docker_setup import run_agentic_os_migrations
+
+    aos = run_agentic_os_migrations(read_dotenv_value(env_path, "CONTINUOUS_CLAUDE_DB_URL"))
+    if aos.get("skipped"):
+        console.print("  [dim]agentic_os schema skipped (no database URL)[/dim]")
+    elif aos["success"]:
+        console.print("  [green]OK[/green] agentic_os schema up to date")
+    else:
+        console.print(f"  [red]ERROR[/red] agentic_os schema: {aos.get('error', 'Unknown error')}")
+        console.print("  To retry, in PowerShell from apps/agentic-os:")
+        console.print(f"    $env:AGENTIC_OS_DATABASE_URL = (Select-String -Path '{env_path}' "
+                      "-Pattern '^CONTINUOUS_CLAUDE_DB_URL=(.*)').Matches[0].Groups[1].Value")
+        console.print("    npm run db:check; npm run db:migrate")
+        console.print("  In bash: export AGENTIC_OS_DATABASE_URL=\"$(grep -E "
+                      f"'^CONTINUOUS_CLAUDE_DB_URL=' '{env_path}' | cut -d= -f2-)\" "
+                      "&& npm run db:check && npm run db:migrate")
+
+
 async def run_setup_wizard() -> None:
     """Run the interactive setup wizard.
 
@@ -1077,20 +1097,10 @@ async def run_setup_wizard() -> None:
         result = await run_migrations()
         if result["success"]:
             console.print("  [green]OK[/green] Migrations complete")
+            _run_agentic_os_step(env_path)
         else:
             console.print(f"  [red]ERROR[/red] {result.get('error', 'Unknown error')}")
-
-        # The agentic_os schema (lane board, coordination events) has its own migrations.
-        from scripts.setup.docker_setup import run_agentic_os_migrations
-
-        aos = run_agentic_os_migrations(read_dotenv_value(env_path, "CONTINUOUS_CLAUDE_DB_URL"))
-        if aos.get("skipped"):
-            console.print("  [dim]agentic_os schema skipped (no database URL)[/dim]")
-        elif aos["success"]:
-            console.print("  [green]OK[/green] agentic_os schema up to date")
-        else:
-            console.print(f"  [red]ERROR[/red] agentic_os schema: {aos.get('error', 'Unknown error')}")
-            console.print("  Fix, then run in apps/agentic-os: npm run db:check, then npm run db:migrate")
+            console.print("  [dim]agentic_os schema skipped: fix the base migrations first[/dim]")
 
     # Step 7: Claude Code Integration
     console.print("\n[bold]Step 8/15: Claude Code Integration[/bold]")
