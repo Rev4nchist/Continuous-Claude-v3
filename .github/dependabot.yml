@@ -12,8 +12,11 @@ updates:
     cooldown: { default-days: 7 }
     groups: { actions: { patterns: ["*"] } }
   # One npm entry for all three folders: one shared open-PR limit, so at most one npm PR
-  # (one paid review) is open at a time. (group-by: dependency-name would only merge the same
+  # is open at a time. (group-by: dependency-name would only merge the same
   # package across folders, not all updates, so it is not used.)
+  # npm and uv: minor and patch only (Dave, 2026-10-26). Grouped majors broke both PRs
+  # (#160: TypeScript 7 breaks typescript-eslint; #161: mcp 2 renamed an import). A major
+  # version update is a deliberate task, done by hand, one package at a time.
   - package-ecosystem: npm
     directories: ["/.claude/hooks", "/apps/agentic-os", "/opc/scripts/dashboard/frontend"]
     schedule: { interval: monthly }
@@ -21,6 +24,9 @@ updates:
     rebase-strategy: disabled
     cooldown: { default-days: 7 }
     groups: { npm-all: { patterns: ["*"] } }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
   - package-ecosystem: uv
     directory: "/opc"
     schedule: { interval: monthly }
@@ -28,3 +34,6 @@ updates:
     rebase-strategy: disabled
     cooldown: { default-days: 7 }
     groups: { opc-uv: { patterns: ["*"] } }
+    ignore:
+      - dependency-name: "*"
+        update-types: ["version-update:semver-major"]
