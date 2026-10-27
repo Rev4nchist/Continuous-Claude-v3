@@ -23,6 +23,13 @@
  *     held_reason "person_override". It never re-adds a risk:* or review:* label a person removed.
  *   - every run on an open ready PR rewrites the comment when its class or head changed, so READY can read
  *     which head the router has seen. A local run (no github-actions[bot] comment) must be --dry-run.
+ *   - a hold in force is saved as held=<reason>. When the hold ends (deep_enabled on, credits under u2), the next
+ *     run adds review:deep once ("released") and saves the state without the hold. After a config flip, re-run held
+ *     PRs with workflow_dispatch; otherwise the release waits for the next push. A PR held by the router before
+ *     held= existed (before 2026-10-27) has no saved hold: re-run it with workflow_dispatch BEFORE the flip, or a
+ *     person adds review:deep by hand.
+ *   - labeled / unlabeled by a person (risk:* or review:*): one ledger row with the label and the person, no writes.
+ * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
  * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
  * it). On an error the line has decision "error" and the exit code is 2.
  */
@@ -149,13 +156,14 @@ export const builderOf = (labels) => {
 };
 
 // `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
-const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?\s*-->/;
+const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?(?: held=(\w+))?\s*-->/;
+const HOLDS = new Set(['apex_d3', 'credits_u2']);
 
-/** The class and head stored in a router comment body. Unknown or missing parts are null. */
+/** The class, head and hold stored in a router comment body. Unknown or missing parts are null. */
 export function stateFrom(body) {
   const m = STATE_RE.exec(String(body ?? ''));
-  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null };
-  return { class: m[1], head: m[2] ?? null };
+  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null, held: null };
+  return { class: m[1], head: m[2] ?? null, held: HOLDS.has(m[3]) ? m[3] : null };
 }
 
 /** The class the router decided before: from the router comment only. Labels are not memory. */
@@ -168,6 +176,8 @@ const labelClassOf = (labels) => labels.filter((l) => l.startsWith('risk:')).map
 const higher = (a, b) => (a === null ? b : b === null ? a : rank(b) > rank(a) ? b : a);
 
 const READY_EVENTS = new Set(['opened', 'reopened', 'ready_for_review']);
+// A person adding or removing a risk:* or review:* label: the person wins, the router only writes a ledger row (spec 2).
+const LABEL_EVENTS = new Set(['labeled', 'unlabeled']);
 const CR_LABELS = ['review:coderabbit', 'review:deep', 'review:deep-held'];
 const hasReview = (labels) => labels.some((l) => l.startsWith('review:'));
 
@@ -182,10 +192,19 @@ function sideNotes({ builder, labelsNow, wanted, pr: p }) {
 }
 
 /**
- * decide(event, pr, labelsNow, previousClass, config, { now }) -> a decision
+ * A saved hold, no hold now, review:deep wanted and missing, review:deep-held still on (a person who removed it opted out).
+ * A credit hold ends only on a known count: an unknown or mistyped credits_used_manual never spends credits.
+ */
+const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld) && r.held === null &&
+  !(previousHeld === 'credits_u2' && credits.used === null) &&
+  r.wanted.includes('review:deep') && !labelsNow.includes('review:deep') && labelsNow.includes('review:deep-held');
+
+/**
+ * decide(event, pr, labelsNow, previousClass, config, { now, previousHeld }) -> a decision
+ *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
  *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
  *   -> { reason, class, effective, matched, previousClass, add, comment, held, builder, credits, noop }
- * reason: draft | not_open | event_ignored | routed | raised | person_override | no_change.
+ * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
  * noop true = touch nothing, not even the comment. The decision never has a "remove".
  */
 export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
@@ -194,6 +213,8 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const builder = builderOf(labelsNow);
   const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
   const stop = (reason) => ({ ...out, reason });
+  // A label event reads no files, so it reports no class, on any PR state.
+  if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
   if (pr.draft) return stop('draft');
   if (pr.state !== 'open') return stop('not_open');
   // edited counts only when the base branch changed (a stacked PR retargeted to main). A title edit does nothing.
@@ -217,6 +238,12 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
     const deepLabel = add.includes('review:deep') || add.includes('review:deep-held') || labelsNow.includes('review:deep') || labelsNow.includes('review:deep-held');
     const crRemoved = previousClass !== null && route(previousClass, [], config, credits).wanted.includes('review:coderabbit') && !labelsNow.includes('review:coderabbit');
     if (deepLabel && crRemoved) add = add.filter((l) => l !== 'review:coderabbit');
+  } else if (releasable(opts.previousHeld, r, labelsNow, credits)) {
+    // The saved state says the router held this PR, and the hold is gone (deep review switched on, or
+    // credits back under u2). review:deep was never added, so it is not a person removal. Add only it.
+    // The state is saved without the hold, so a later removal of review:deep by a person is not undone.
+    add = ['review:deep'];
+    reason = 'released';
   } else {
     add = [];
     reason = r.wanted.some((l) => !labelsNow.includes(l)) ? 'person_override' : 'no_change';
@@ -229,8 +256,9 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
 // ---------- the one router comment ----------
 
 export const ROUTER_MARKER = '<!-- review-router -->';
-export const renderComment = (text, cls, head = null) =>
-  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''} -->\n${text}`;
+/** held is written only while a hold is in force, so a comment without a hold is byte-identical to before. */
+export const renderComment = (text, cls, head = null, held = null) =>
+  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''}${held ? ` held=${held}` : ''} -->\n${text}`;
 const RESOLVED_TEXT = 'No open router notes.';
 const ROUTER_BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
@@ -255,7 +283,7 @@ export function planOps(d, existing) {
   if (d.noop) return [];
   const ops = [];
   if (d.add.length > 0) ops.push({ op: 'labels', labels: d.add });
-  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head);
+  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head, d.held);
   if (!existing) ops.push({ op: 'comment-create', body });
   else if (existing.body !== body) ops.push({ op: 'comment-update', id: existing.id, body });
   return ops;
@@ -280,9 +308,12 @@ export function applyOps(ops, { repo, pr, dryRun, gh }) {
 
 // ---------- inputs ----------
 
-/** Paths of the PR, with the old name of a rename. A truncated list is an error, never a smaller PR. */
+/**
+ * Paths of the PR, with the old name of a rename. A count that differs from changed_files is an error:
+ * fewer = truncated, more = compared against a base the PR does not use. Never a smaller or larger PR.
+ */
 export function changedPaths(files, pull) {
-  if (files.length < (pull.changed_files ?? 0)) throw new Error(`file list incomplete (${files.length} of ${pull.changed_files}); cannot classify`);
+  if (files.length !== (pull.changed_files ?? 0)) throw new Error(`file list incomplete or stale (${files.length} of ${pull.changed_files}); cannot classify`);
   return [...new Set(files.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)))];
 }
 
@@ -295,7 +326,7 @@ export function codeRabbitRateLimited(comments, head) {
 
 // ---------- ledger ----------
 
-const NOT_DONE = new Set(['draft', 'not_open', 'event_ignored', 'person_override']);
+const NOT_DONE = new Set(['draft', 'not_open', 'event_ignored', 'person_label', 'person_override']);
 
 export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
   const c = ops.find((o) => o.op.startsWith('comment'));
@@ -303,6 +334,8 @@ export function ledgerLine({ d, pr, event, ops = [], now = new Date() }) {
     ts: now.toISOString(), tool: 'router', pr: pr.number, head: pr.head, event, class: d.class, decision: d.reason,
     paths_matched: d.matched, labels_added: d.add, held_reason: NOT_DONE.has(d.reason) ? d.reason : d.held,
     builder: d.builder, credits: d.credits, comment: c ? c.op.slice('comment-'.length) : 'none',
+    ...(pr.labelChange ? { label: pr.labelChange.name, by: pr.labelChange.by } : {}),
+    ...(pr.filesSource ? { files_source: pr.filesSource } : {}),
     ...(pr.assumedReady ? { assumed_ready: true } : {}),
   });
 }
@@ -332,25 +365,62 @@ function makeGh() {
 const flag = (args, k) => args.includes(k);
 const opt = (args, k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
 
-function load(args, gh, repo, number) {
+/** GitHub compare returns at most 300 changed files, all on the first page (measured 2026-10-26). */
+export const COMPARE_FILE_CAP = 300;
+
+/**
+ * Read the PR, its files and its comments. The files come from compare/<base>...<head sha>, pinned to the head
+ * the router records, so a files list that lags a push cannot be saved under the new head (N5). Above the compare
+ * cap the paginated PR files list is used (filesSource 'pulls'); changedPaths still refuses a count mismatch.
+ */
+const sleepSync = (ms) => Atomics.wait(new Int32Array(new SharedArrayBuffer(4)), 0, 0, ms);
+export const FILE_READ_ATTEMPTS = 3;
+
+function readFiles(gh, repo, number, pull) {
+  if ((pull.changed_files ?? 0) <= COMPARE_FILE_CAP) {
+    // base.sha, not base.ref: after a merge, main...head is empty (measured on #164, 0 of 6 files).
+    return { files: gh(['api', `repos/${repo}/compare/${pull.base.sha}...${pull.head.sha}`]).files ?? [], filesSource: 'compare' };
+  }
+  return { files: gh(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files?per_page=100`]).flat(), filesSource: 'pulls' };
+}
+
+/**
+ * opts.filesNeeded false (a label event) skips the file reads. Right after a push, changed_files or base.sha can
+ * lag the head; a count mismatch re-reads the PR (up to FILE_READ_ATTEMPTS, opts.sleep between) before
+ * changedPaths refuses it.
+ */
+export function loadLive(gh, repo, number, opts = {}) {
+  const { filesNeeded = true, sleep = sleepSync, waitMs = 3000 } = opts;
+  let pull = gh(['api', `repos/${repo}/pulls/${number}`]);
+  let read = { files: null, filesSource: null };
+  for (let attempt = 1; filesNeeded; attempt++) {
+    read = readFiles(gh, repo, number, pull);
+    if (read.files.length === (pull.changed_files ?? 0) || attempt >= FILE_READ_ATTEMPTS) break;
+    sleep(waitMs);
+    pull = gh(['api', `repos/${repo}/pulls/${number}`]);
+  }
+  const comments = gh(['api', '--paginate', '--slurp', `repos/${repo}/issues/${number}/comments?per_page=100`]).flat();
+  return { pull, files: read.files, comments, filesSource: read.filesSource };
+}
+
+function load(args, gh, repo, number, filesNeeded) {
   const fixture = opt(args, '--fixture');
   if (fixture) return JSON.parse(readFileSync(fixture, 'utf8'));
-  const pull = gh(['api', `repos/${repo}/pulls/${number}`]);
-  const files = gh(['api', '--paginate', '--slurp', `repos/${repo}/pulls/${number}/files?per_page=100`]).flat();
-  const comments = gh(['api', '--paginate', '--slurp', `repos/${repo}/issues/${number}/comments?per_page=100`]).flat();
-  return { pull, files, comments };
+  return loadLive(gh, repo, number, { filesNeeded });
 }
 
 function origin(args) {
   const eventPath = process.env.GITHUB_EVENT_PATH;
   const payload = eventPath && existsSync(eventPath) ? JSON.parse(readFileSync(eventPath, 'utf8')) : null;
   const number = Number(args.find((a) => /^\d+$/.test(a)) ?? payload?.pull_request?.number);
-  return { number, event: opt(args, '--event') ?? payload?.action ?? 'ready_for_review', baseChanged: Boolean(payload?.changes?.base) };
+  const event = opt(args, '--event') ?? payload?.action ?? 'ready_for_review';
+  const labelChange = LABEL_EVENTS.has(event) && payload?.label ? { name: payload.label.name ?? null, by: payload.sender?.login ?? null } : null;
+  return { number, event, baseChanged: Boolean(payload?.changes?.base), labelChange };
 }
 
 function main() {
   const args = process.argv.slice(2);
-  const { number, event, baseChanged } = origin(args);
+  const { number, event, baseChanged, labelChange } = origin(args);
   const fixture = opt(args, '--fixture');
   const dryRun = flag(args, '--dry-run') || Boolean(fixture);
   let head = null;
@@ -360,18 +430,20 @@ function main() {
     const repo = opt(args, '--repo') ?? process.env.GITHUB_REPOSITORY ?? DEFAULT_REPO;
     const config = JSON.parse(readFileSync(opt(args, '--config') ?? path.join(HERE, '..', '..', 'review-router.config.json'), 'utf8'));
     const gh = fixture ? null : makeGh();
-    const { pull, files, comments } = load(args, gh, repo, number);
+    const labelEvent = LABEL_EVENTS.has(event);
+    const { pull, files, comments, filesSource = null } = load(args, gh, repo, number, !labelEvent);
     head = pull.head.sha;
     const assumed = flag(args, '--assume-ready');
     const labels = pullLabelNames(pull);
     const prState = {
       number: pull.number ?? number, head, draft: assumed ? false : pull.draft === true, baseChanged,
-      state: assumed ? 'open' : pull.state, paths: changedPaths(files, pull), assumedReady: assumed,
-      codeRabbitRateLimited: codeRabbitRateLimited(comments, head),
+      state: assumed ? 'open' : pull.state, paths: labelEvent ? [] : changedPaths(files, pull), assumedReady: assumed,
+      codeRabbitRateLimited: codeRabbitRateLimited(comments, head), labelChange, filesSource,
     };
     const existing = findRouterComment(comments);
+    const saved = stateFrom(existing?.body);
     const now = new Date();
-    const d = decide(event, prState, labels, previousClassFrom(existing?.body), config, { now });
+    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held });
     const ops = planOps(d, existing);
     const done = applyOps(ops, { repo, pr: number, dryRun, gh });
     emitLedger(ledgerLine({ d, pr: prState, event, ops, now }));

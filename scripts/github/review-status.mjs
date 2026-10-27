@@ -92,7 +92,24 @@ export const DEEP_HELD_NOTE = 'deep review held (Apex billing, D3)';
  * with no review:* label (for example risk:normal) is not specified by the router; Greptile stays
  * required there, so a half-labelled PR can never become READY with less review than before.
  */
-export function requiredBots(labels) {
+export function requiredBots(labels, greptileAuto = true) {
+  const need = labelBots(labels);
+  // Greptile off (main's .greptile/config.json has autoReview []): Greptile never reviews by itself, so a
+  // path that would wait for it needs CodeRabbit instead (Dave, 2026-10-26).
+  if (greptileAuto || !need.greptile) return need;
+  return { ...need, greptile: false, coderabbit: true };
+}
+
+/**
+ * Greptile reviews by itself unless autoReview is an empty list. A missing file or key means the
+ * dashboard default (it reviews); anything that is not an array keeps the stricter rule.
+ */
+export function greptileAutoFrom(config) {
+  const v = config?.autoReview;
+  return !(Array.isArray(v) && v.length === 0);
+}
+
+function labelBots(labels) {
   const names = labels || [];
   const has = (n) => names.includes(n);
   const risks = names.filter((n) => n.startsWith('risk:'));
@@ -111,7 +128,8 @@ export function needsCodeRabbitReview(labels) {
 
 const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
 // `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
-const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})\s*-->/;
+// Attributes after the head (for example `held=apex_d3`) are allowed and ignored here.
+const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})(?:\s+\w+=\w+)*\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 
 /**
@@ -135,13 +153,17 @@ export function routerState(comments) {
 const RISK_RANK = { docs: 0, normal: 1, high: 2, steering: 3, infra: 4, r3: 5 };
 export const ROUTER_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the review router saved; Greptile stays required until the router routes it';
 
-export function verifiedBots(labels, comments, head) {
-  const need = requiredBots(labels);
+export function verifiedBots(labels, comments, head, greptileAuto = true) {
+  const need = requiredBots(labels, greptileAuto);
   if (need.greptile) return need;
+  // Greptile on: the fallback is Greptile. Greptile off: CodeRabbit, with the note naming it.
+  const keep = (note) => (greptileAuto
+    ? { ...need, greptile: true, unverified: note }
+    : { ...need, coderabbit: true, unverified: note.replace('Greptile stays required', 'CodeRabbit is required') });
   const state = routerState(comments);
-  if (!state || state.head !== head) return { ...need, greptile: true, unverified: ROUTER_UNVERIFIED_NOTE };
+  if (!state || state.head !== head) return keep(ROUTER_UNVERIFIED_NOTE);
   const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => RISK_RANK[n.slice(5)] ?? -1));
-  if (top > (RISK_RANK[state.class] ?? -1)) return { ...need, greptile: true, unverified: ROUTER_BEHIND_LABEL_NOTE };
+  if (top > (RISK_RANK[state.class] ?? -1)) return keep(ROUTER_BEHIND_LABEL_NOTE);
   return need;
 }
 
@@ -449,10 +471,10 @@ function greptileReasons({ required, greptile, run, greptileSummary, unavailable
   return out;
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt }) {
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
-  const need = verifiedBots(labels, comments, head);
+  const need = verifiedBots(labels, comments, head, greptileAuto);
   const run = latestGreptileRun(checkRuns);
   const greptile = greptileState(run);
   const greptileSummary = run?.output?.summary ?? null;
@@ -508,10 +530,13 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
       reasons.push('no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one');
     }
+    if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);
   }
 
   return {
     pr: pull.number, head, headShort: head.slice(0, 7), branch: pull.head.ref, reviewer: 'greptile',
+    // false when main's .greptile/config.json turns automatic Greptile reviews off (autoReview []).
+    greptileAuto,
     greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
@@ -529,6 +554,21 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
     ready: reasons.length === 0, reasons,
   };
+}
+
+/**
+ * Read .greptile/config.json from the BASE branch, never the PR head: a PR must not lower its own bar.
+ * No file (404) = the dashboard default (Greptile reviews). Any other error is "cannot determine".
+ */
+function readGreptileAuto(baseRef) {
+  let doc;
+  try {
+    doc = gh([`repos/${owner}/${name}/contents/.greptile/config.json?ref=${encodeURIComponent(baseRef)}`]);
+  } catch (err) {
+    if (/HTTP 404|Not Found/i.test(`${err.message}\n${err.stderr ?? ''}\n${err.stdout ?? ''}`)) return true;
+    throw err;
+  }
+  return greptileAutoFrom(JSON.parse(Buffer.from(doc.content ?? '', 'base64').toString('utf8')));
 }
 
 function main() {
@@ -559,13 +599,15 @@ function main() {
     const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
     // REST finds the candidates; only the GraphQL body is parsed.
     const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
-    if (needsCodeRabbitReview(labels)) {
+    const greptileAuto = readGreptileAuto(pull.base.ref);
+    // With Greptile off, an unrouted PR needs CodeRabbit too, so read the reviews whenever they can count.
+    if (needsCodeRabbitReview(labels) || !greptileAuto) {
       reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
     }
     const headCommit = prq.commits.nodes[0]?.commit;
     const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
     result = evaluate({
-      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt,
+      pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto,
     });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);
