@@ -115,7 +115,21 @@ CREATE TABLE IF NOT EXISTS archival_memory (
 ALTER TABLE archival_memory ADD COLUMN IF NOT EXISTS project_id TEXT;
 ALTER TABLE archival_memory ADD COLUMN IF NOT EXISTS scope TEXT
     CHECK(scope IN ('PROJECT', 'GLOBAL')) DEFAULT 'PROJECT';
-ALTER TABLE archival_memory ADD COLUMN IF NOT EXISTS valid_from TIMESTAMPTZ NOT NULL DEFAULT NOW();
+-- valid_from on an existing table must start at each row's created_at, not at the
+-- moment of the upgrade, or point-in-time recall (--valid-at) hides every old row.
+DO $$
+BEGIN
+    IF NOT EXISTS (
+        SELECT 1 FROM information_schema.columns
+        WHERE table_schema = current_schema() AND table_name = 'archival_memory'
+          AND column_name = 'valid_from'
+    ) THEN
+        ALTER TABLE archival_memory ADD COLUMN valid_from TIMESTAMPTZ;
+        UPDATE archival_memory SET valid_from = created_at;
+        ALTER TABLE archival_memory ALTER COLUMN valid_from SET DEFAULT NOW();
+        ALTER TABLE archival_memory ALTER COLUMN valid_from SET NOT NULL;
+    END IF;
+END $$;
 ALTER TABLE archival_memory ADD COLUMN IF NOT EXISTS valid_until TIMESTAMPTZ;
 
 CREATE INDEX IF NOT EXISTS idx_archival_session ON archival_memory(session_id);
