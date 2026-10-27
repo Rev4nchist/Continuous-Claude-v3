@@ -949,7 +949,7 @@ def render_markdown(report: dict[str, Any]) -> str:
 # Main eval loop
 # ---------------------------------------------------------------------------
 
-def main() -> int:
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(
         description="NDCG@5 + latency eval harness for the Phase 2 reranker.",
         formatter_class=argparse.RawDescriptionHelpFormatter,
@@ -959,10 +959,14 @@ def main() -> int:
                         help="Path to recall_eval_set.jsonl")
     parser.add_argument("--k", type=int, default=5,
                         help="Top-K to evaluate (default: 5)")
-    parser.add_argument("--report-json", required=True, type=Path,
-                        help="Output path for machine-readable JSON report")
-    parser.add_argument("--report-md", required=True, type=Path,
-                        help="Output path for human-readable Markdown report")
+    parser.add_argument("--report-json", type=Path, default=None,
+                        help="Output path for machine-readable JSON report "
+                             "(required for v1 sets; v2 defaults to "
+                             "opc/tests/recall_eval_v2_report.json)")
+    parser.add_argument("--report-md", type=Path, default=None,
+                        help="Output path for human-readable Markdown report "
+                             "(required for v1 sets; v2 defaults to "
+                             "opc/tests/recall_eval_v2_report.md)")
     parser.add_argument("--daemon-mode", action="store_true",
                         help="Ensure rerank daemon is running for --rerank arm; clean up at end")
     parser.add_argument("--baseline-only", action="store_true",
@@ -991,7 +995,59 @@ def main() -> int:
         ),
     )
 
+    # v2 eval flags (recall_eval_v2.py). Ignored by the v1 path.
+    v2 = parser.add_argument_group("v2 eval set (header version 2)")
+    v2.add_argument("--arms", default="hybrid,text",
+                    help="Comma list of hybrid,text,rerank (default hybrid,text; "
+                         "rerank is opt-in and starts the rerank daemon)")
+    v2.add_argument("--scope", choices=("hook", "all"), default="hook",
+                    help="hook = the scope the UserPromptSubmit hook recalls in (default); "
+                         "all = pass --all-projects")
+    v2.add_argument("--allow-cold-embed", action="store_true",
+                    help="Run the hybrid arm without the embed daemon (about 31 s per query)")
+    mode = v2.add_mutually_exclusive_group()
+    mode.add_argument("--check", action="store_true",
+                      help="Ratchet: compare to the baseline, exit 1 on regression. "
+                           "Never writes it.")
+    mode.add_argument("--write-baseline", action="store_true",
+                      help="Write the baseline at the sweep-chosen floors")
+    v2.add_argument("--allow-lower", action="store_true",
+                    help="Let --write-baseline lower a gated number")
+    v2.add_argument("--baseline", type=Path, default=None,
+                    help="Baseline path (default opc/tests/recall_eval_baseline.json)")
+    v2.add_argument("--timeout", type=float, default=120.0,
+                    help="Per-call timeout in seconds for v2 recall calls (default 120)")
+    return parser
+
+
+def _eval_set_version(path: Path) -> int:
+    """The ``_header.version`` of an eval set file, or 1 when it has no v2 header."""
+    try:
+        with path.open("r", encoding="utf-8") as fh:
+            for raw in fh:
+                if raw.strip():
+                    header = json.loads(raw).get("_header") or {}
+                    return int(header.get("version", 1))
+    except (OSError, ValueError, AttributeError, TypeError):
+        pass
+    return 1
+
+
+def main() -> int:
+    parser = build_parser()
     args = parser.parse_args()
+
+    if _eval_set_version(args.eval_set) == 2:
+        from core.recall_eval_v2 import run_v2  # noqa: PLC0415
+
+        return run_v2(args)
+
+    if args.check or args.write_baseline or args.allow_lower:
+        parser.error("--check, --write-baseline and --allow-lower need an eval set with "
+                     "a version 2 header")
+
+    if args.report_json is None or args.report_md is None:
+        parser.error("--report-json and --report-md are required for v1 eval sets")
 
     if args.baseline_only and args.rerank_only:
         print("[eval] --baseline-only and --rerank-only are mutually exclusive",

@@ -5347,7 +5347,7 @@ var require_lib2 = __commonJS({
 });
 
 // src/session-start-memory-loaders.ts
-import { readFileSync as readFileSync2 } from "fs";
+import { existsSync as existsSync2, readFileSync as readFileSync2 } from "fs";
 import { homedir as homedir2 } from "node:os";
 import { join as join5 } from "node:path";
 
@@ -5714,13 +5714,26 @@ async function runSessionHealth(opts) {
   }
 }
 
+// src/shared/session-start-output.ts
+function isClaudeHomeProject(project, home) {
+  if (!home) return false;
+  const p = project.replace(/\\/g, "/").toLowerCase();
+  const h = home.replace(/\\/g, "/").toLowerCase();
+  return p === `${h}/.claude` || p.startsWith(`${h}/.claude/`);
+}
+function buildSessionStartOutput(daemonOutput, health) {
+  const additionalContext = [daemonOutput, health.line].filter(Boolean).join("\n");
+  return {
+    hookSpecificOutput: { hookEventName: "SessionStart", additionalContext },
+    systemMessage: health.line
+  };
+}
+
 // src/session-start-memory-loaders.ts
 async function main() {
   const project = getProject();
   const homeDir = process.env.HOME || process.env.USERPROFILE || "";
-  const claudeDir = homeDir ? `${homeDir}/.claude`.replace(/\\/g, "/") : "";
-  const normalizedProject = project.replace(/\\/g, "/");
-  if (claudeDir && (normalizedProject === claudeDir || normalizedProject.includes("/.claude"))) {
+  if (isClaudeHomeProject(project, homeDir)) {
     console.log(JSON.stringify({ result: "continue" }));
     return;
   }
@@ -5731,20 +5744,18 @@ async function main() {
   } catch {
   }
   const hooksDir = join5(homedir2(), ".claude", "hooks").replace(/\\/g, "/");
+  const daemonScript = `${hooksDir}/session-start-memory-daemon.ps1`;
   const [result, health] = await Promise.all([
-    runCommand(
+    existsSync2(daemonScript) ? runCommand(
       "memory-daemon",
       "powershell",
-      ["-ExecutionPolicy", "Bypass", "-File", `${hooksDir}/session-start-memory-daemon.ps1`],
+      ["-NoLogo", "-NoProfile", "-NonInteractive", "-ExecutionPolicy", "Bypass", "-File", daemonScript],
       stdinContent,
       1e4
-    ),
+    ) : Promise.resolve({ name: "memory-daemon", success: true, output: void 0, duration: 0 }),
     runSessionHealth({ opcDir: getOpcDir() })
   ]);
-  const message = [result.output ?? "", health.line].filter(Boolean).join("\n");
-  const output = { hookSpecificOutput: { hookEventName: "SessionStart", additionalContext: message } };
-  if (health.warn) output.systemMessage = health.line;
-  emitAndExit(output);
+  emitAndExit(buildSessionStartOutput(result.output ?? "", health));
 }
 function emitAndExit(output) {
   process.stdout.write(JSON.stringify(output) + "\n", () => process.exit(0));

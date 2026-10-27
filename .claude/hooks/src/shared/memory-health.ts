@@ -36,7 +36,7 @@ export interface HealthContext {
 
 export interface HealthLine {
   line: string;
-  /** True for EMPTY, UNKNOWN, schema MISMATCH and failed writes. The hook sets systemMessage for these. */
+  /** Marks a degraded state (EMPTY, UNKNOWN, schema MISMATCH, failed writes); the hook shows every line. */
   warn: boolean;
 }
 

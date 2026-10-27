@@ -305,6 +305,12 @@ function expandGitQuery(prompt) {
   }
   return null;
 }
+function deriveRecallIntent(prompt) {
+  return expandGitQuery(prompt) || extractIntent(prompt);
+}
+function cleanSearchTerm(intent) {
+  return intent.replace(/[_\/]/g, " ").replace(/\b\w{1,2}\b/g, "").replace(/\s+/g, " ").trim();
+}
 
 // src/shared/embedding-client.ts
 import {
@@ -1317,15 +1323,12 @@ function buildFocusBlock(terms) {
 }
 
 // src/memory-awareness.ts
-var TEXT_ONLY_FLOOR = 0.05;
-var HYBRID_FLOOR = 0.01;
+var TEXT_ONLY_FLOOR = 0.0225;
+var HYBRID_FLOOR = 0.03275;
 function readStdin() {
   return readFileSync5(0, "utf-8");
 }
-function cleanSearchTerm(intent) {
-  return intent.replace(/[_\/]/g, " ").replace(/\b\w{1,2}\b/g, "").replace(/\s+/g, " ").trim();
-}
-function mapDbResults(rawResults, useHybrid) {
+function mapDbResults(rawResults, _useHybrid) {
   return (rawResults || []).map((r) => {
     const content = r.content || "";
     const preview = content.split("\n").filter((l) => l.trim().length > 0).map((l) => l.trim()).join(" ").slice(0, 120);
@@ -1342,7 +1345,7 @@ function mapDbResults(rawResults, useHybrid) {
       id: (r.id || "unknown").slice(0, 8),
       type: r.learning_type || r.type || "UNKNOWN",
       content: preview + (content.length > 120 ? "..." : ""),
-      score: (useHybrid ? r.base_score ?? r.score : r.score) || 0,
+      score: (r.base_score ?? r.score) || 0,
       storedDate
     };
   });
@@ -1489,8 +1492,7 @@ async function main() {
     outputContinue();
     return;
   }
-  const gitExpanded = expandGitQuery(input.prompt);
-  const intent = gitExpanded || extractIntent(input.prompt);
+  const intent = deriveRecallIntent(input.prompt);
   if (intent.length < 3) {
     outputContinue();
     return;
@@ -1667,5 +1669,6 @@ export {
   extractIntent,
   extractKeywords,
   interpretRecallProcess,
+  mapDbResults,
   mergeResults
 };

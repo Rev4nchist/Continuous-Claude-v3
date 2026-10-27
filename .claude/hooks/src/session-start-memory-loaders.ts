@@ -12,26 +12,26 @@
  * orphaned because session-start-parallel.ts was never registered.
  *
  * Also reports memory health (shared/memory-health.ts): one line appended to
- * additionalContext, and a systemMessage for the warning states so Dave sees it.
+ * additionalContext, and the same line as systemMessage in every state, so Dave
+ * sees it at the start of each session.
  * Starts a background backup (shared/memory-backup.ts) when the newest one is stale.
  */
 
-import { readFileSync } from 'fs';
+import { existsSync, readFileSync } from 'fs';
 import { homedir } from 'node:os';
 import { join } from 'node:path';
 import { getProject } from './shared/session-id.js';
-import type { SessionStartInput, ContextInjectionHookOutput } from './shared/types.js';
+import type { SessionStartInput } from './shared/types.js';
 import { runCommand } from './lib/run-command.js';
 import { getOpcDir } from './shared/opc-path.js';
 import { runSessionHealth } from './shared/memory-health.js';
+import { buildSessionStartOutput, isClaudeHomeProject } from './shared/session-start-output.js';
 
 export async function main(): Promise<void> {
   const project = getProject();
   const homeDir = process.env.HOME || process.env.USERPROFILE || '';
-  const claudeDir = homeDir ? `${homeDir}/.claude`.replace(/\\/g, '/') : '';
-  const normalizedProject = project.replace(/\\/g, '/');
 
-  if (claudeDir && (normalizedProject === claudeDir || normalizedProject.includes('/.claude'))) {
+  if (isClaudeHomeProject(project, homeDir)) {
     console.log(JSON.stringify({ result: 'continue' }));
     return;
   }
@@ -45,22 +45,25 @@ export async function main(): Promise<void> {
   }
 
   const hooksDir = join(homedir(), '.claude', 'hooks').replace(/\\/g, '/');
+  const daemonScript = `${hooksDir}/session-start-memory-daemon.ps1`;
 
+  // The daemon launcher was archived (lazy on-demand daemons replaced it). With the
+  // file gone, `powershell -File <missing>` prints the "Windows PowerShell Copyright"
+  // banner on stdout and that landed in additionalContext. Run it only when it exists.
   const [result, health] = await Promise.all([
-    runCommand(
-      'memory-daemon',
-      'powershell',
-      ['-ExecutionPolicy', 'Bypass', '-File', `${hooksDir}/session-start-memory-daemon.ps1`],
-      stdinContent,
-      10000
-    ),
+    existsSync(daemonScript)
+      ? runCommand(
+          'memory-daemon',
+          'powershell',
+          ['-NoLogo', '-NoProfile', '-NonInteractive', '-ExecutionPolicy', 'Bypass', '-File', daemonScript],
+          stdinContent,
+          10000
+        )
+      : Promise.resolve({ name: 'memory-daemon', success: true, output: undefined, duration: 0 }),
     runSessionHealth({ opcDir: getOpcDir() }),
   ]);
 
-  const message = [result.output ?? '', health.line].filter(Boolean).join('\n');
-  const output: ContextInjectionHookOutput = { hookSpecificOutput: { hookEventName: 'SessionStart', additionalContext: message } };
-  if (health.warn) output.systemMessage = health.line;
-  emitAndExit(output);
+  emitAndExit(buildSessionStartOutput(result.output ?? '', health));
 }
 
 /**

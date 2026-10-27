@@ -1,0 +1,57 @@
+{
+  "_comment": "Written only by eval_recall.py --write-baseline",
+  "eval_set": "tests/recall_eval_set_v2.jsonl",
+  "eval_set_sha256": "3f84d599edd82283651c38755756d688fc3bf9657ed1276bfd131f7da54f0d17",
+  "scope": "hook",
+  "project_id": "b09dfcecfaf609fb",
+  "default_arm": "hybrid",
+  "floors": {
+    "hybrid": 0.03275,
+    "text": 0.0225
+  },
+  "tolerance": {
+    "ndcg_at_5": 0.03,
+    "none_precision": 0.1
+  },
+  "arms": {
+    "hybrid": {
+      "floor": 0.03275,
+      "ndcg_at_5": 0.5794093503153855,
+      "recall_at_3": 0.5482456140350876,
+      "hit_rate_at_floor": 0.5526315789473685,
+      "hit_rate_reachable": 0.75,
+      "none_precision": 0.9,
+      "p50_ms": 878.3520000288263,
+      "p95_ms": 1075.383099989267,
+      "latency_label": "uv subprocess, hook fallback path",
+      "mean_tokens_all": 35.75,
+      "mean_tokens_injected": 68.64,
+      "n_answerable": 38,
+      "n_reachable": 28,
+      "n_partial": 8,
+      "n_none": 10,
+      "n_errors": 0
+    },
+    "text": {
+      "floor": 0.0225,
+      "ndcg_at_5": 0.5702680185515325,
+      "recall_at_3": 0.5219298245614035,
+      "hit_rate_at_floor": 0.5526315789473685,
+      "hit_rate_reachable": 0.75,
+      "none_precision": 0.9,
+      "p50_ms": 595.3381000144873,
+      "p95_ms": 859.5427999971434,
+      "latency_label": "uv subprocess, hook fallback path",
+      "mean_tokens_all": 54.625,
+      "mean_tokens_injected": 97.11111111111111,
+      "n_answerable": 38,
+      "n_reachable": 28,
+      "n_partial": 8,
+      "n_none": 10,
+      "n_errors": 0
+    }
+  },
+  "n_pairs": 48,
+  "live_rows": 130,
+  "recorded": "2026-10-27"
+}
