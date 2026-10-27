@@ -1203,3 +1203,45 @@ test('Greptile on (default input): the old rule is unchanged', () => {
   assert.deepEqual(evaluate(routed([], { router: false })).routing.required, ['greptile']);
   assert.deepEqual(evaluate(routed(['review:deep'])).routing.required, ['greptile', 'coderabbit']);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Dependabot (Dave, 2026-10-26): CodeRabbit refuses bot-authored PRs (no seat), so a Dependabot PR
+// needs no bot review. CI, threads and mergeable still gate. Failure modes: a person's commit on a
+// Dependabot branch rides the exemption; a User account named dependabot[bot] gets it; CI stops
+// gating; an unknown commit list (no authors read) counts as all-Dependabot.
+// ---------------------------------------------------------------------------------------------
+const DEPENDABOT = { login: 'dependabot[bot]', type: 'Bot' };
+const DEP = (over = {}) => {
+  const base = OFF(['risk:infra', 'review:coderabbit', 'review:deep-held', 'dependencies']);
+  return { ...base, pull: { ...base.pull, user: over.user ?? DEPENDABOT }, commitAuthors: over.commitAuthors ?? ['dependabot[bot]'], ...(over.extra ?? {}) };
+};
+
+test('Dependabot: a PR opened and only committed by dependabot[bot] needs no bot review', () => {
+  const r = evaluate(DEP());
+  assert.deepEqual(r.routing.required, []);
+  assert.equal(r.routing.source, 'dependabot');
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
+test('Dependabot: a person commit, an unknown commit list, or a User account named dependabot[bot] gets no exemption', () => {
+  for (const [name, over] of [
+    ['person commit on the branch', { commitAuthors: ['dependabot[bot]', 'Rev4nchist'] }],
+    ['no commit authors read', { commitAuthors: [] }],
+    ['commit with no linked account', { commitAuthors: [null] }],
+    ['User account named dependabot[bot]', { user: { login: 'dependabot[bot]', type: 'User' } }],
+    ['another bot', { user: { login: 'renovate[bot]', type: 'Bot' }, commitAuthors: ['renovate[bot]'] }],
+  ]) {
+    const r = evaluate(DEP(over));
+    assert.deepEqual(r.routing.required, ['coderabbit'], name);
+    assert.equal(r.ready, false, name);
+  }
+});
+
+test('Dependabot: CI and threads still gate', () => {
+  const semgrep = { name: 'semgrep', status: 'completed', conclusion: 'failure', app: { slug: 'github-actions' } };
+  const ci = evaluate(DEP({ extra: { checkRuns: [semgrep] } }));
+  assert.equal(ci.ready, false);
+  assert.ok(ci.reasons.some((x) => /semgrep/.test(x)), ci.reasons.join('; '));
+  const thread = evaluate(DEP({ extra: { threads: [{ isResolved: false }] } }));
+  assert.equal(thread.ready, false);
+});
