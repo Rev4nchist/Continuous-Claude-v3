@@ -1,0 +1,20 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 960 230" width="960" height="230" role="img" aria-labelledby="t d">
+<title id="t">The life of one tool call in CCv3</title>
+<desc id="d">Five steps: Claude proposes an action, the hook layer checks rules and memory, a verdict is allow, ask or deny, the tool runs if allowed, and the outcome is recorded. A denial returns a reason to Claude.</desc>
+<defs>
+<linearGradient id="bg" x1="0" y1="0" x2="1" y2="1"><stop offset="0" stop-color="#0a0f1e"/><stop offset="1" stop-color="#14224a"/></linearGradient>
+<marker id="a" viewBox="0 0 10 10" refX="9" refY="5" markerWidth="7" markerHeight="7" orient="auto"><path d="M0 0L10 5L0 10z" fill="#7f93bd"/></marker>
+</defs>
+<style>text{font-family:ui-sans-serif,system-ui,"Segoe UI",Roboto,Helvetica,Arial,sans-serif;text-anchor:middle}.h{font-size:15px;font-weight:700;fill:#fff}.s{font-size:12px;fill:#e8eefc;fill-opacity:.9}.n{font-size:12px;font-weight:800;fill:#fff;fill-opacity:.75}</style>
+<rect width="960" height="230" rx="18" fill="url(#bg)"/>
+<g>
+<rect x="24" y="60" width="148" height="84" rx="14" fill="#2f6fed"/><text class="n" x="98" y="84">STEP 1</text><text class="h" x="98" y="106">Claude</text><text class="s" x="98" y="126">proposes an action</text>
+<rect x="212" y="60" width="160" height="84" rx="14" fill="#7a5af8"/><text class="n" x="292" y="84">STEP 2</text><text class="h" x="292" y="106">Hook layer</text><text class="s" x="292" y="126">checks rules + memory</text>
+<rect x="412" y="60" width="148" height="84" rx="14" fill="#0e9d86"/><text class="n" x="486" y="84">STEP 3</text><text class="h" x="486" y="106">Verdict</text><text class="s" x="486" y="126">allow · ask · deny</text>
+<rect x="600" y="60" width="148" height="84" rx="14" fill="#c2610c"/><text class="n" x="674" y="84">STEP 4</text><text class="h" x="674" y="106">Tool runs</text><text class="s" x="674" y="126">shell · files · git</text>
+<rect x="788" y="60" width="148" height="84" rx="14" fill="#475569"/><text class="n" x="862" y="84">STEP 5</text><text class="h" x="862" y="106">Record</text><text class="s" x="862" y="126">log the outcome</text>
+</g>
+<g stroke="#7f93bd" stroke-width="2" marker-end="url(#a)"><line x1="172" y1="102" x2="208" y2="102"/><line x1="372" y1="102" x2="408" y2="102"/><line x1="560" y1="102" x2="596" y2="102"/><line x1="748" y1="102" x2="784" y2="102"/></g>
+<path d="M486 148 V190 H98 V150" fill="none" stroke="#ffb454" stroke-width="2" stroke-dasharray="5 6" marker-end="url(#a)"/>
+<text x="292" y="184" font-size="12.5" fill="#ffd9a0" style="font-size:12.5px;fill:#ffd9a0">a deny sends the reason back to Claude, which tries another way</text>
+</svg>

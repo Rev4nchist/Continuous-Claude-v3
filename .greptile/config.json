@@ -1,5 +1,5 @@
 {
-  "autoReview": ["open", "push"],
+  "autoReview": [],
   "statusCheck": true,
   "strictness": 2,
   "ignorePatterns": "**/*.min.js\n**/*.lock\n**/package-lock.json\n**/dist/**\n.claude/hooks/dist/**\n.claude/cache/**\ndocs/reviews/**",
