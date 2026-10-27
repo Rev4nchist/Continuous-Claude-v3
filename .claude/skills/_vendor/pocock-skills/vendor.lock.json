@@ -1,0 +1,133 @@
+{
+ "source": "https://github.com/mattpocock/skills",
+ "tag": "v1.3.1",
+ "tag_object": "0b6cee10f260a2e048279cf737bfd3e37b1fce0b",
+ "commit": "24fe0ef7737efae15c87225755e9f6f5965e4888",
+ "licence": "MIT",
+ "allowlist": [
+  "grill-with-docs",
+  "to-spec",
+  "tdd",
+  "diagnosing-bugs",
+  "pr",
+  "code-review"
+ ],
+ "closure": {
+  "grilling": "grill-with-docs/SKILL.md:7 Skill-tool call",
+  "domain-modeling": "grill-with-docs/SKILL.md:7 Skill-tool call"
+ },
+ "not_vendored": {
+  "codebase-design": "tdd/SKILL.md:26 Skill-tool call; routed to CCv3 tdd/references/deep-modules.md",
+  "agents/openai.yaml": "no skill links it"
+ },
+ "name_shadows": [
+  {
+   "name": "tdd",
+   "shadows": [
+    "ccv3:tdd"
+   ],
+   "reason": "ADR-C: Pocock tdd owns the name. .claude/skills/tdd is its wrapper."
+  },
+  {
+   "name": "code-review",
+   "shadows": [
+    "ccv3:code-review",
+    "bundled:code-review"
+   ],
+   "reason": "Hidden. Cross-family brief only. CCv3 code-review stays the verification gate."
+  }
+ ],
+ "files": [
+  {
+   "path": "LICENSE",
+   "upstream_path": "LICENSE",
+   "bytes": 1068,
+   "sha256": "0e7ac423bf2c6e223b7c5b156f8cf72da49d748e56a1641402c31f22ad07dbb5"
+  },
+  {
+   "path": "skills/code-review/SKILL.md",
+   "upstream_path": "skills/engineering/code-review/SKILL.md",
+   "bytes": 6589,
+   "sha256": "47f4e52c21694def9c7c11cbfbf891ca35eac7a93e395797515be3c8a409ae50"
+  },
+  {
+   "path": "skills/diagnosing-bugs/SKILL.md",
+   "upstream_path": "skills/engineering/diagnosing-bugs/SKILL.md",
+   "bytes": 8530,
+   "sha256": "9168404abda0967a5d32977e3498cd95fda6807018852f3de736a78357c82b40"
+  },
+  {
+   "path": "skills/diagnosing-bugs/scripts/hitl-loop.template.sh",
+   "upstream_path": "skills/engineering/diagnosing-bugs/scripts/hitl-loop.template.sh",
+   "bytes": 1316,
+   "sha256": "35103539fc36873eea36074769ad454f9379d6fc8b2dc0e26ce987fd3bfe5503"
+  },
+  {
+   "path": "skills/domain-modeling/ADR-FORMAT.md",
+   "upstream_path": "skills/engineering/domain-modeling/ADR-FORMAT.md",
+   "bytes": 2733,
+   "sha256": "944c92aa790e8fbdc9199640b170979abb8a34ba8d0fe18c2a01a63bce140ca0"
+  },
+  {
+   "path": "skills/domain-modeling/GLOSSARY-FORMAT.md",
+   "upstream_path": "skills/engineering/domain-modeling/GLOSSARY-FORMAT.md",
+   "bytes": 2300,
+   "sha256": "21dcc40cdec8e151a829b98ab1517c1867bc444e3665134a98c6983411996801"
+  },
+  {
+   "path": "skills/domain-modeling/SKILL.md",
+   "upstream_path": "skills/engineering/domain-modeling/SKILL.md",
+   "bytes": 3346,
+   "sha256": "7b925d7b1e341a2eeae33ad68a8a8c0ab889a38ddd22a7598e4c240e5a7556a3"
+  },
+  {
+   "path": "skills/grill-with-docs/SKILL.md",
+   "upstream_path": "skills/engineering/grill-with-docs/SKILL.md",
+   "bytes": 247,
+   "sha256": "7de372c13488f1ee96cc11cd8907b56b6809cc93eef776eeddd37de6b6cbe3fe"
+  },
+  {
+   "path": "skills/grilling/SKILL.md",
+   "upstream_path": "skills/productivity/grilling/SKILL.md",
+   "bytes": 1987,
+   "sha256": "10ff989e7498b23b5acb49d5048f11dcd906757d2f79c5cdf8a00001381296f2"
+  },
+  {
+   "path": "skills/pr/CREDITS.md",
+   "upstream_path": "skills/engineering/pr/CREDITS.md",
+   "bytes": 604,
+   "sha256": "a7a087127665d7298a72280ef6e19c41ad8404523712a788c8dc3ab414bc2497"
+  },
+  {
+   "path": "skills/pr/SKILL.md",
+   "upstream_path": "skills/engineering/pr/SKILL.md",
+   "bytes": 4169,
+   "sha256": "ab63f1cf78647389edcd386c9427c5dfca27ed2836930c24773ffee834c19bcd"
+  },
+  {
+   "path": "skills/tdd/SKILL.md",
+   "upstream_path": "skills/engineering/tdd/SKILL.md",
+   "bytes": 3550,
+   "sha256": "93ea419b76e9caaf26153b828e984f7c3fb136f4caa67b14af95f32ea965a1cc"
+  },
+  {
+   "path": "skills/tdd/mocking.md",
+   "upstream_path": "skills/engineering/tdd/mocking.md",
+   "bytes": 1481,
+   "sha256": "3ceb807fdf4a47d6a93d4d9a891e5ba6d362a6247bd08adc451feebfc17361ef"
+  },
+  {
+   "path": "skills/tdd/tests.md",
+   "upstream_path": "skills/engineering/tdd/tests.md",
+   "bytes": 2214,
+   "sha256": "859f9e592c188fda4fc7277dd180e4ce9c7a2e13f6efe1f6f29eccc9d28c106a"
+  },
+  {
+   "path": "skills/to-spec/SKILL.md",
+   "upstream_path": "skills/engineering/to-spec/SKILL.md",
+   "bytes": 3043,
+   "sha256": "43ad9cf318e5e7d3d1fa360253a37021796dc87a0c2e595ad262661a10f85088"
+  }
+ ],
+ "date": "2026-10-27"
+}

@@ -1,0 +1,125 @@
+{
+ "source": "https://github.com/cursor/plugins",
+ "subdir": "pstack",
+ "tag": null,
+ "commit": "519d36aa98955bf680db01bcde5fdfba686dc901",
+ "licence": "MIT",
+ "allowlist": [
+  "architect",
+  "interrogate",
+  "blast-radius",
+  "show-me-your-work",
+  "principle-prove-it-works"
+ ],
+ "closure": {
+  "arena": "architect/references/rationale-template.md:19 markdown link"
+ },
+ "not_vendored": {
+  "how": "architect/SKILL.md names it as a skill; the sketch-first wrapper maps it to a scout subagent or tldr-code",
+  "why": "architect/SKILL.md names it as a skill; the sketch-first wrapper maps it to git log and git blame",
+  "poteto-mode": "arena/SKILL.md names it; subagent tiers follow CLAUDE.md",
+  "unslop": "blast-radius and interrogate name it as prose",
+  "principle-* (10, except principle-prove-it-works)": "named as prose; apply the plain rule in the sentence",
+  "pstack-models.mdc": "out of scope for P4; model names in the vendored text are ignored"
+ },
+ "name_shadows": [],
+ "files": [
+  {
+   "path": "LICENSE",
+   "upstream_path": "pstack/LICENSE",
+   "bytes": 1067,
+   "sha256": "bc957ca6bee02792566a1a028d105e02e247c6e77cf057061674273da77b200e"
+  },
+  {
+   "path": "skills/architect/SKILL.md",
+   "upstream_path": "pstack/skills/architect/SKILL.md",
+   "bytes": 5469,
+   "sha256": "31f8e97a52bfa5432edd61f68ade2a8632ef0bacbc2d2a6802d7a0e6821944ac"
+  },
+  {
+   "path": "skills/architect/references/design-red-flags.md",
+   "upstream_path": "pstack/skills/architect/references/design-red-flags.md",
+   "bytes": 3009,
+   "sha256": "d0e639e4cc588ec865f930d3a4111faad60987ae36925917e319d7ceca7c69ce"
+  },
+  {
+   "path": "skills/architect/references/rationale-template.md",
+   "upstream_path": "pstack/skills/architect/references/rationale-template.md",
+   "bytes": 3050,
+   "sha256": "0cedfccdc7b47fc881febd5a8293eecbc542c20f8df825639904a8102d2eb5d3"
+  },
+  {
+   "path": "skills/architect/references/runner-prompt.md",
+   "upstream_path": "pstack/skills/architect/references/runner-prompt.md",
+   "bytes": 3092,
+   "sha256": "21dd5314aab778c5007228027a4591d97693fbec6ab86524037772b63f40948e"
+  },
+  {
+   "path": "skills/arena/SKILL.md",
+   "upstream_path": "pstack/skills/arena/SKILL.md",
+   "bytes": 4511,
+   "sha256": "ed72f6c132b1ce3974d949581d0adc5dade424fe20793ac3b4c4fae22ecb9354"
+  },
+  {
+   "path": "skills/blast-radius/SKILL.md",
+   "upstream_path": "pstack/skills/blast-radius/SKILL.md",
+   "bytes": 3856,
+   "sha256": "2e10745b97f5862323dcda3b29ca60d56b5c3c98e37020085d26b48efbe0a436"
+  },
+  {
+   "path": "skills/interrogate/SKILL.md",
+   "upstream_path": "pstack/skills/interrogate/SKILL.md",
+   "bytes": 4548,
+   "sha256": "a16dfe179005abc22a4651b82f25b0c8ab953284276efe4e6dc341958fb63647"
+  },
+  {
+   "path": "skills/interrogate/references/code-quality-review.md",
+   "upstream_path": "pstack/skills/interrogate/references/code-quality-review.md",
+   "bytes": 5217,
+   "sha256": "79162fda183eafd40d51661fbb5e151c7ba250f89e506ba17f5bd135dcbd50a8"
+  },
+  {
+   "path": "skills/interrogate/references/lead-judgment.md",
+   "upstream_path": "pstack/skills/interrogate/references/lead-judgment.md",
+   "bytes": 2283,
+   "sha256": "355f5195a76bc75a655125292369f2a8231a2b61fabe5188d8f1386060922b87"
+  },
+  {
+   "path": "skills/interrogate/references/reviewer-prompt.md",
+   "upstream_path": "pstack/skills/interrogate/references/reviewer-prompt.md",
+   "bytes": 2275,
+   "sha256": "f6005cc2b535006fca97a96c5bfda49df57312eedf1ffd8d1aaaf3eb33817c25"
+  },
+  {
+   "path": "skills/interrogate/references/rubric.md",
+   "upstream_path": "pstack/skills/interrogate/references/rubric.md",
+   "bytes": 4772,
+   "sha256": "0f9c6bdb0b96e26dbde5f6407f417e0c02f54080e7a1268d8994f3c3ec6c5ac0"
+  },
+  {
+   "path": "skills/principle-prove-it-works/SKILL.md",
+   "upstream_path": "pstack/skills/principle-prove-it-works/SKILL.md",
+   "bytes": 1371,
+   "sha256": "ec79a15025bac8d33d62011c54f3b612733fd2a024e623b531b3637aa75070e2"
+  },
+  {
+   "path": "skills/show-me-your-work/SKILL.md",
+   "upstream_path": "pstack/skills/show-me-your-work/SKILL.md",
+   "bytes": 6551,
+   "sha256": "920a8217cbb62f92a2222fb81fc9eab17ecd554a0277e444a95a927195139bd1"
+  },
+  {
+   "path": "skills/show-me-your-work/references/decision-log-template.tsv",
+   "upstream_path": "pstack/skills/show-me-your-work/references/decision-log-template.tsv",
+   "bytes": 38,
+   "sha256": "6779378006a2f5225e8c06deb84f1d913fb532041ebbb6e50d94600bfe3f4b76"
+  },
+  {
+   "path": "skills/show-me-your-work/scripts/log.sh",
+   "upstream_path": "pstack/skills/show-me-your-work/scripts/log.sh",
+   "bytes": 1377,
+   "sha256": "a65a4bc5fb7cdeadbdb7b7ff1ca4682f4d9c42420942b2977cd17b46c4ac338e"
+  }
+ ],
+ "date": "2026-10-27"
+}

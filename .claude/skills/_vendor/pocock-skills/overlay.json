@@ -1,0 +1,64 @@
+[
+ {
+  "topic": "gh-issue-write",
+  "pattern": "publish it to the project issue tracker|triage label|issue tracker and triage",
+  "files": [
+   "skills/to-spec/SKILL.md"
+  ],
+  "ccv3_rule": "No tracker writes: no issue, label or comment. Write the spec to a file.",
+  "resolution": "REAL CONFLICT. Never write to an issue tracker: no issue, label or comment. Never run `/setup-matt-pocock-skills`. The to-spec wrapper writes thoughts/shared/plans/<name>-spec.md only.",
+  "max_hits": 3
+ },
+ {
+  "topic": "gh-issue-write",
+  "pattern": "issue tracker should have been provided|docs/agents/issue-tracker[.]md",
+  "files": [
+   "skills/code-review/SKILL.md"
+  ],
+  "ccv3_rule": "No tracker writes: no issue, label or comment. Write the spec to a file.",
+  "resolution": "REAL CONFLICT for any write. Never write to an issue tracker: no issue, label or comment. Never run `/setup-matt-pocock-skills`. Reading a linked issue is allowed only inside the cross-family brief. Use the vendored Pocock code-review, interrogate, blast-radius and show-me-your-work only inside the cross-family review brief. Never use one as a Claude reviewer.",
+  "max_hits": 2
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "/setup-matt-pocock-skills",
+  "files": [
+   "skills/to-spec/SKILL.md",
+   "skills/code-review/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "REAL CONFLICT. Never write to an issue tracker: no issue, label or comment. Never run `/setup-matt-pocock-skills`. It edits CLAUDE.md and AGENTS.md and is not vendored. Skip the line.",
+  "max_hits": 2
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "Call the Skill tool twice, for \"grilling\" and \"domain-modeling\"",
+  "files": [
+   "skills/grill-with-docs/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. The grill-with-docs wrapper names skills/grilling/SKILL.md and skills/domain-modeling/SKILL.md to Read.",
+  "max_hits": 1
+ },
+ {
+  "topic": "skill-tool-call",
+  "pattern": "codebase-design|see the `code-review` skill",
+  "files": [
+   "skills/tdd/SKILL.md"
+  ],
+  "ccv3_rule": "A vendored skill is not listed. The wrapper names the file to read.",
+  "resolution": "Never call the Skill tool for a name that only the vendored text uses (grilling, domain-modeling, codebase-design, how, why, arena, poteto-mode, unslop, principle-*). Read the file the wrapper names. codebase-design: Read CCv3 tdd/references/deep-modules.md. The code-review skill named here is CCv3 code-review (verification gates). Use the vendored Pocock code-review, interrogate, blast-radius and show-me-your-work only inside the cross-family review brief. Never use one as a Claude reviewer.",
+  "max_hits": 2
+ },
+ {
+  "topic": "instruction-file-edit",
+  "pattern": "GLOSSARY[.]md",
+  "files": [
+   "skills/domain-modeling/SKILL.md",
+   "skills/domain-modeling/GLOSSARY-FORMAT.md"
+  ],
+  "ccv3_rule": "Never edit an instruction file (CLAUDE.md, AGENTS.md, CONTEXT.md, a rule) or settings.json. Propose the diff to Dave.",
+  "resolution": "REAL CONFLICT. Never edit CLAUDE.md, AGENTS.md, CONTEXT.md, GLOSSARY.md, a rule file or settings.json. Propose the diff to Dave. CCv3 keeps its glossary in CONTEXT.md. The grill-with-docs wrapper records terms in thoughts/shared/plans/<topic>-grill.md under \"Glossary proposals\". Dave applies them.",
+  "max_hits": 5
+ }
+]
