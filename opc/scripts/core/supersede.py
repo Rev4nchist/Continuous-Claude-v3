@@ -34,6 +34,7 @@ import os
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
+from typing import Any
 
 from dotenv import load_dotenv
 
@@ -52,6 +53,8 @@ load_dotenv()
 # Add scripts to path for imports like `from db.embedding_service import ...`
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 
+from db.memory_provenance import prepare_write  # noqa: E402
+from db.memory_redact import redact, redact_obj  # noqa: E402
 
 # Valid learning types (mirrors store_learning.py + incremental_extract.py).
 LEARNING_TYPES = {
@@ -96,6 +99,53 @@ def _infer_type_safely(content: str) -> str:
     if "pattern" in lowered or "convention" in lowered:
         return "CODEBASE_PATTERN"
     return "WORKING_SOLUTION"
+
+
+def build_successor(
+    old_id: str,
+    old_meta: dict[str, Any],
+    old_session_id: str | None,
+    new_content: str,
+    reason: str | None,
+    learning_type: str,
+    now: datetime,
+) -> tuple[str, dict[str, Any], str | None]:
+    """Build the successor row: ``(content, metadata, session_id)``. Pure, no I/O.
+
+    Provenance: source "manual" (a deliberate CLI correction), is_inference False. The
+    old row's source goes to ``supersedes_source``. The session id is inherited from the
+    old row. content and reason are redacted.
+    """
+    content = redact(new_content)
+    reason_r = redact(reason) if reason else None
+    session_id = old_meta.get("session_id") or old_session_id
+    metadata: dict[str, Any] = {
+        "type": "session_learning",
+        "session_id": session_id,
+        "timestamp": now.isoformat(),
+        "learning_type": learning_type,
+        "supersedes": str(old_id),
+        "source": "manual",
+        "is_inference": False,
+    }
+    if old_meta.get("source"):
+        metadata["supersedes_source"] = old_meta["source"]
+    if reason_r:
+        metadata["supersede_reason"] = reason_r.text
+    # Carry forward tags / context / confidence when present so the
+    # successor inherits prior categorisation.
+    # Rows written before phase 3 can hold raw secrets here, so redact what is inherited.
+    inherited_hits: tuple[str, ...] = ()
+    for key in ("tags", "context", "confidence"):
+        if key in old_meta:
+            metadata[key], hits = redact_obj(old_meta[key])
+            inherited_hits += hits
+    kinds = sorted(
+        set(content.hits) | set(reason_r.hits if reason_r else ()) | set(inherited_hits)
+    )
+    if kinds:
+        metadata["redacted_kinds"] = kinds
+    return content.text, metadata, session_id
 
 
 async def supersede(
@@ -149,7 +199,7 @@ async def supersede(
     # embedding service can be closed promptly.
     embedder = EmbeddingService(provider=provider)
     try:
-        embedding = await embedder.embed(new_content)
+        embedding = await embedder.embed(redact(new_content).text)
     finally:
         await embedder.aclose()
 
@@ -203,24 +253,18 @@ async def supersede(
             else:
                 old_meta = dict(old_meta_raw or {})
 
-            new_metadata = {
-                "type": "session_learning",
-                "session_id": old_meta.get("session_id") or row["session_id"],
-                "timestamp": now.isoformat(),
-                "learning_type": learning_type,
-                "supersedes": str(old_id),
-            }
-            if reason:
-                new_metadata["supersede_reason"] = reason
-            # Carry forward tags / context / confidence when present so the
-            # successor inherits prior categorisation.
-            for key in ("tags", "context", "confidence"):
-                if key in old_meta:
-                    new_metadata[key] = old_meta[key]
+            new_content_r, new_metadata, new_session_id = build_successor(
+                old_id, old_meta, row["session_id"], new_content, reason, learning_type, now
+            )
 
             insert_scope = scope or row["scope"] or "PROJECT"
             insert_project_id = project_id or row["project_id"]
-            new_session_id = old_meta.get("session_id") or row["session_id"]
+
+            # Raw INSERT: prepare_write is the redaction backstop plus the provenance
+            # check that MemoryServicePG.store() applies on its own path.
+            new_content_r, new_metadata, new_session_id = prepare_write(
+                new_content_r, new_metadata, new_session_id
+            )
 
             # 4. Insert the successor. The DB default for valid_from = now()
             # (and valid_until stays NULL = currently valid).
@@ -233,7 +277,7 @@ async def supersede(
                 RETURNING id, valid_from
                 """,
                 new_session_id,
-                new_content,
+                new_content_r,
                 json.dumps(new_metadata),
                 str(embedding),
                 insert_scope,

@@ -231,6 +231,10 @@ def test_storage_failure_is_visible_not_silent(monkeypatch, fake_session_jsonl, 
         canary_session_id, str(fake_session_jsonl.parent), store=True
     )
 
+    # Phase 3 provenance: regex extraction of reasoning on a hook trigger.
+    assert boom_calls and boom_calls[0]["source"] == "hook"
+    assert boom_calls[0]["is_inference"] is True
+
     assert len(boom_calls) >= 1, (
         "Storage call was never attempted -- silent skip regression detected"
     )

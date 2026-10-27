@@ -439,7 +439,7 @@ class TestDatabaseIntegration:
             # Store with scope
             memory_id = await memory.store(
                 "Integration test: Windows hook pattern",
-                metadata={"test": True},
+                metadata={"test": True, "source": "manual"},
                 embedding=embedding,
                 scope="GLOBAL",
                 project_id="test-project-id",

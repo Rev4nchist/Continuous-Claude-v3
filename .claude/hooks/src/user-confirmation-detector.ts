@@ -143,6 +143,7 @@ export async function storeUserConfirmedLearning(
         '--context', 'user confirmation',
         '--tags', 'user_confirmed,verified',
         '--confidence', 'high',
+        '--source', 'hook',
         '--project-dir', projectDir,
       ],
       {
@@ -198,6 +199,7 @@ ${failedApproaches ? `Failed approaches: ${failedApproaches}` : ''}`;
         '--context', contextStr,
         '--tags', tagsStr,
         '--confidence', 'high',
+        '--source', 'hook',
         '--project-dir', projectDir,
       ],
       {

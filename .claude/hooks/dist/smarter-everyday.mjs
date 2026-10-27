@@ -324,6 +324,8 @@ Test: ${state.test_command || "Unknown test command"}`;
       tagsStr,
       "--confidence",
       "high",
+      "--source",
+      "hook",
       "--project-dir",
       projectDir
     ], {

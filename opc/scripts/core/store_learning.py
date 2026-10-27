@@ -58,18 +58,11 @@ load_dotenv()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from db.memory_provenance import SENTINEL_CLI, SENTINEL_UNKNOWN, SOURCES  # noqa: E402
+from db.memory_redact import redact, redact_obj  # noqa: E402
+from memory_candidate import LEARNING_TYPES, clip_fields, validate_candidate  # noqa: E402
+from memory_reject_log import content_hash, record_reject  # noqa: E402
 from memory_write_log import record_write_failure  # noqa: E402
-
-# Valid learning types for --type parameter
-LEARNING_TYPES = [
-    "FAILED_APPROACH",
-    "WORKING_SOLUTION",
-    "USER_PREFERENCE",
-    "CODEBASE_PATTERN",
-    "ARCHITECTURAL_DECISION",
-    "ERROR_FIX",
-    "OPEN_THREAD",
-]
 
 # Valid confidence levels
 CONFIDENCE_LEVELS = ["high", "medium", "low"]
@@ -323,8 +316,15 @@ async def store_learning_v2(
     project_dir: str | None = None,
     scope: str | None = None,
     agent_id: str | None = None,
+    source: str | None = None,
+    is_inference: bool = False,
+    candidate_hash: str | None = None,
+    evidence: dict | None = None,
 ) -> dict:
     """Store learning with v2 metadata schema, deduplication, and scope classification.
+
+    Every write is redacted (content, context, tags) BEFORE the embedding, checked
+    against the MemoryCandidate schema, and stamped with provenance.
 
     Args:
         session_id: Session identifier
@@ -342,6 +342,13 @@ async def store_learning_v2(
         agent_id: Optional agent identifier (e.g., "kraken", "spark"). When
             set, written to ``archival_memory.agent_id`` so per-agent recall
             works (G12 follow-up).
+        source: Required. One of hook, manual, handoff, llm. A missing value is a
+            failure (logged for the health line). A value outside the set is a
+            schema reject.
+        is_inference: True when the content is a model conclusion, not an observed fact.
+        candidate_hash: content_hash of the RAW candidate, for the reject log. Without
+            it the hash is taken from the redacted content.
+        evidence: Extractor rows only: {kind, line, hash}.
 
     Returns:
         dict with success status, memory_id, or skipped info for duplicates
@@ -359,6 +366,24 @@ async def store_learning_v2(
     if not content or not content.strip():
         return {"success": False, "error": "No content provided"}
 
+    if source is None:
+        # A caller that forgot provenance is a bug. Make it visible on the health line.
+        record_write_failure("store_learning", "missing metadata.source", session_id)
+        return {"success": False, "error": "source is required (hook, manual, handoff, llm)"}
+
+    if not session_id or not session_id.strip() or session_id.strip() == "default":
+        session_id = SENTINEL_UNKNOWN
+
+    # Redact BEFORE anything else sees the text: the embedder, scope classifier,
+    # dedup search and the row all get the redacted values.
+    redacted = redact(content)
+    content = redacted.text
+    context, context_hits = redact_obj(context)
+    tags, tag_hits = redact_obj(tags)
+    redacted_kinds = sorted(set(redacted.hits) | set(context_hits) | set(tag_hits))
+    reject_hash = candidate_hash or content_hash(content)
+    content, context, tags = clip_fields(content, context, tags)
+
     # Infer learning_type when caller passes None. This runs BEFORE the
     # quality gate so the gate sees a non-NULL type and the NULL-type guard
     # in validate_learning_quality only fires for external callers that
@@ -366,6 +391,25 @@ async def store_learning_v2(
     # _internal_caller flag below makes that explicit).
     if learning_type is None:
         learning_type = _infer_learning_type(content)
+
+    # Schema check: field types, lengths and enums, before the quality gate.
+    candidate, schema_reasons = validate_candidate(
+        {
+            "content": content,
+            "learning_type": learning_type,
+            "source": source,
+            "is_inference": is_inference,
+            "session_id": session_id,
+            "context": context,
+            "tags": tags or [],
+            "confidence": confidence,
+            "evidence": evidence,
+        }
+    )
+    if candidate is None:
+        reason = ",".join(schema_reasons[:3])
+        record_reject(reject_hash, "schema", reason, source, session_id)
+        return {"success": True, "skipped": True, "reason": reason}
 
     # Quality gate -- reject noise before expensive embedding.
     # We pass _internal_caller=True because we just inferred a type above;
@@ -375,6 +419,7 @@ async def store_learning_v2(
         content, learning_type, _internal_caller=True, session_id=session_id
     )
     if not quality["passes"]:
+        record_reject(reject_hash, "gate_a", quality["reason"], source, session_id)
         return {"success": True, "skipped": True, "reason": quality["reason"]}
 
     # Postgres when any database URL is configured (the wizard writes only
@@ -444,6 +489,12 @@ async def store_learning_v2(
             metadata["tags"] = tags
         if confidence:
             metadata["confidence"] = confidence
+        metadata["source"] = source
+        metadata["is_inference"] = is_inference
+        if evidence:
+            metadata["evidence"] = evidence
+        if redacted_kinds:
+            metadata["redacted_kinds"] = redacted_kinds
 
         # Store with embedding, scope, and project_id
         memory_id = await memory.store(
@@ -488,6 +539,8 @@ async def store_learning(
     failed: str,
     decisions: str,
     patterns: str,
+    source: str = "manual",
+    is_inference: bool = False,
 ) -> dict:
     """[DEPRECATED] Legacy v1 entrypoint -- routes through store_learning_v2.
 
@@ -505,6 +558,8 @@ async def store_learning(
         failed: What failed or was tricky -> FAILED_APPROACH
         decisions: Key decisions made -> ARCHITECTURAL_DECISION
         patterns: Reusable patterns -> CODEBASE_PATTERN
+        source: Provenance source passed to every v2 call (default "manual")
+        is_inference: True when the content is a model conclusion
 
     Returns:
         Aggregated dict with per-category results. Top-level ``success`` is
@@ -552,7 +607,9 @@ async def store_learning(
             content=value,
             learning_type=learning_type,
             context=f"v1_legacy:{category}",
-            tags=[f"v1_legacy", category],
+            tags=["v1_legacy", category],
+            source=source,
+            is_inference=is_inference,
         )
         results[category] = result
         if result.get("success") and not result.get("skipped"):
@@ -595,9 +652,16 @@ async def store_learning(
     return aggregated
 
 
-async def main():
+def build_parser() -> argparse.ArgumentParser:
     parser = argparse.ArgumentParser(description="Store session learnings in memory")
-    parser.add_argument("--session-id", required=True, help="Session identifier")
+    parser.add_argument(
+        "--session-id",
+        default=os.environ.get("CLAUDE_SESSION_ID") or SENTINEL_CLI,
+        help=(
+            "Session identifier (default: $CLAUDE_SESSION_ID, else "
+            f"'{SENTINEL_CLI}' for a manual store with no session)"
+        ),
+    )
 
     # Legacy parameters (v1)
     parser.add_argument("--worked", default="None", help="What worked well (legacy)")
@@ -635,10 +699,26 @@ async def main():
         help="Optional agent identifier (defaults to $CLAUDE_AGENT_ID)",
     )
 
+    # Provenance (phase 3)
+    parser.add_argument(
+        "--source",
+        choices=list(SOURCES),
+        default="manual",
+        help="Where the learning came from (default: manual, a deliberate store)",
+    )
+    parser.add_argument(
+        "--inferred",
+        action="store_true",
+        help="Mark the content as a model conclusion, not an observed fact",
+    )
+
     # Output options
     parser.add_argument("--json", action="store_true", help="Output as JSON")
+    return parser
 
-    args = parser.parse_args()
+
+async def main():
+    args = build_parser().parse_args()
 
     # Determine which mode to use: v2 if --content is provided, else legacy
     if args.content:
@@ -657,6 +737,8 @@ async def main():
             project_dir=args.project_dir,
             scope=args.scope,
             agent_id=args.agent_id,
+            source=args.source,
+            is_inference=args.inferred,
         )
     else:
         # Legacy mode
@@ -666,6 +748,8 @@ async def main():
             failed=args.failed,
             decisions=args.decisions,
             patterns=args.patterns,
+            source=args.source,
+            is_inference=args.inferred,
         )
 
     if args.json:

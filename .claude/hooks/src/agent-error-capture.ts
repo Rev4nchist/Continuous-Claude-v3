@@ -166,6 +166,7 @@ export function buildStoreInvocation(
       '--context', contextStr,
       '--tags', tagsStr,
       '--confidence', 'medium',
+      '--source', 'hook',
     ],
     options: { cwd: opcDir, shell: false, detached: true, stdio: 'ignore', windowsHide: true },
   };

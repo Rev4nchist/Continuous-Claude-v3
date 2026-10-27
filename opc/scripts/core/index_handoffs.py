@@ -69,6 +69,9 @@ load_dotenv()
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
 sys.path.insert(0, os.path.dirname(__file__))
 
+from db.memory_redact import redact  # noqa: E402
+from memory_candidate import MAX_CONTENT_CHARS, validate_candidate  # noqa: E402
+from memory_reject_log import content_hash, record_reject  # noqa: E402
 from memory_write_log import record_write_failure  # noqa: E402
 
 # Re-use the canonical auto-type heuristic so handoff entries get the same
@@ -304,6 +307,7 @@ def parse_yaml_handoff(path: Path, content: str) -> dict[str, Any] | None:
     )
     outcome = _detect_outcome(content, data.get("outcome") or data.get("status"))
 
+    session = data.get("session") or data.get("session_id")
     return {
         "goal": data.get("goal", ""),
         "done": done,
@@ -311,6 +315,7 @@ def parse_yaml_handoff(path: Path, content: str) -> dict[str, Any] | None:
         "blockers": blockers,
         "decisions": decisions,
         "outcome": outcome,
+        "session": session if isinstance(session, str) else None,
     }
 
 
@@ -470,8 +475,17 @@ def build_entries(
     path: Path,
     parsed: dict[str, Any],
     repo_root: Path,
+    rejects: list[dict[str, Any]] | None = None,
 ) -> list[dict[str, Any]]:
-    """Convert a parsed handoff into per-field archival_memory rows."""
+    """Convert a parsed handoff into per-field archival_memory rows.
+
+    Provenance: source "handoff", session_id = the file stem (also the row column),
+    is_inference False (a user-authored document). A front-matter ``session`` goes to
+    ``metadata.handoff_session``. The body is redacted here, before the embedding. The
+    dedup key (handoff_path, handoff_field) is never touched. A field over 4000 chars is
+    cut to the schema limit. An entry the schema rejects is dropped, logged by hash and
+    appended to ``rejects``.
+    """
     rel_path = relative_handoff_path(path, repo_root)
     outcome = parsed.get("outcome", "UNKNOWN")
     session_id = path.stem  # filename without extension
@@ -484,17 +498,41 @@ def build_entries(
             continue
 
         prefix = FIELD_PREFIXES[field]
-        content = f"{prefix}: {body}"
+        redacted = redact(f"{prefix}: {body}")
+        content = redacted.text[:MAX_CONTENT_CHARS]
         learning_type = infer_learning_type(content)
 
         metadata = {
             "source": "handoff",
+            "session_id": session_id,
+            "is_inference": False,
             "handoff_path": rel_path,
             "handoff_field": field,
             "outcome": outcome,
             "type": learning_type,
             "indexed_at": datetime.now(timezone.utc).isoformat(),
         }
+        if parsed.get("session"):
+            metadata["handoff_session"] = parsed["session"]
+        if redacted.hits:
+            metadata["redacted_kinds"] = sorted(set(redacted.hits))
+
+        candidate, reasons = validate_candidate(
+            {
+                "content": content,
+                "learning_type": learning_type,
+                "source": "handoff",
+                "is_inference": False,
+                "session_id": session_id,
+            }
+        )
+        if candidate is None:
+            reason = ",".join(reasons[:3])
+            raw_hash = content_hash(f"{prefix}: {body}")
+            record_reject(raw_hash, "schema", reason, "handoff", session_id)
+            if rejects is not None:
+                rejects.append({"path": rel_path, "field": field, "reason": reason})
+            continue
 
         entries.append(
             {
@@ -583,6 +621,7 @@ async def index_handoffs(
         "parsed": 0,
         "parse_failures": 0,
         "candidate_entries": 0,
+        "schema_rejects": 0,
         "skipped_existing": 0,
         "inserted": 0,
         "by_field": {f: 0 for f in HANDOFF_FIELDS},
@@ -600,7 +639,10 @@ async def index_handoffs(
             summary["parse_failures"] += 1
             continue
         summary["parsed"] += 1
-        for entry in build_entries(f, parsed, repo_root):
+        schema_rejects: list[dict[str, Any]] = []
+        built = build_entries(f, parsed, repo_root, rejects=schema_rejects)
+        summary["schema_rejects"] += len(schema_rejects)
+        for entry in built:
             parsed_entries.append(entry)
             summary["candidate_entries"] += 1
             summary["by_field"][entry["metadata"]["handoff_field"]] += 1

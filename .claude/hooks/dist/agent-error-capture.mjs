@@ -243,7 +243,9 @@ function buildStoreInvocation(opcDir, sessionId, content, contextStr, tagsStr) {
       "--tags",
       tagsStr,
       "--confidence",
-      "medium"
+      "medium",
+      "--source",
+      "hook"
     ],
     options: { cwd: opcDir, shell: false, detached: true, stdio: "ignore", windowsHide: true }
   };

@@ -92,6 +92,7 @@ def test_v2_dedup_uses_search_vector_for_dedup_not_search_vector(
                             "computation BEFORE the dedup search."
                         ),
                         learning_type="WORKING_SOLUTION",
+                        source="manual",
                         scope="PROJECT",
                         project_dir="C:/some/project/path",
                     )
@@ -121,6 +122,7 @@ def test_v2_dedup_passes_project_scope_and_project_id(
                             "within the same project, but not across different projects."
                         ),
                         learning_type="WORKING_SOLUTION",
+                        source="manual",
                         scope="PROJECT",
                         project_dir="C:/some/project/path",
                     )
@@ -151,6 +153,7 @@ def test_v2_dedup_passes_global_scope(stubbed_memory_service, preserve_database_
                             "and sessions because it's a cross-cutting Windows pattern."
                         ),
                         learning_type="CODEBASE_PATTERN",
+                        source="manual",
                         scope="GLOBAL",
                     )
 
@@ -191,6 +194,7 @@ def test_v2_skips_when_dedup_returns_high_similarity(
                             "this should be deduplicated against the project's existing rows."
                         ),
                         learning_type="WORKING_SOLUTION",
+                        source="manual",
                         scope="PROJECT",
                         project_dir="C:/some/project",
                     )
@@ -327,6 +331,7 @@ def test_same_content_same_project_different_sessions_deduped(
             session_id=f"{canary_prefix}-A",
             content=content,
             learning_type="WORKING_SOLUTION",
+            source="manual",
             scope="PROJECT",
             project_dir=project_dir,
         )
@@ -340,6 +345,7 @@ def test_same_content_same_project_different_sessions_deduped(
             session_id=f"{canary_prefix}-B",
             content=content,
             learning_type="WORKING_SOLUTION",
+            source="manual",
             scope="PROJECT",
             project_dir=project_dir,
         )
@@ -398,6 +404,7 @@ def test_same_content_different_projects_both_stored(
             session_id=f"{canary_prefix}-X",
             content=content,
             learning_type="WORKING_SOLUTION",
+            source="manual",
             scope="PROJECT",
             project_dir="/home/testuser/Projects/phase4c-project-X",
         )
@@ -408,6 +415,7 @@ def test_same_content_different_projects_both_stored(
             session_id=f"{canary_prefix}-Y",
             content=content,
             learning_type="WORKING_SOLUTION",
+            source="manual",
             scope="PROJECT",
             project_dir="/home/testuser/Projects/phase4c-project-Y",
         )

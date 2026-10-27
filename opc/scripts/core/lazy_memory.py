@@ -417,6 +417,10 @@ def extract_session_learnings(
                         tags=learning['tags'],
                         confidence=learning['confidence'],
                         project_dir=project_dir,
+                        # Regex extraction of reasoning on a hook trigger: not an
+                        # observed fact, so it is an inference.
+                        source="hook",
+                        is_inference=True,
                     )
 
             tasks = [_bounded(learning) for learning in learnings]
