@@ -17,7 +17,7 @@ Usage:
     await memory.set_core("persona", "You are a helpful assistant")
 
     # Archival memory
-    await memory.store("User prefers Python")
+    await memory.store("User prefers Python", metadata={"source": "manual"})
 
     # Recall (cross-source query)
     result = await memory.recall("What language?")
@@ -36,6 +36,8 @@ from uuid import uuid4
 import asyncpg
 import numpy as np
 
+from .memory_provenance import flag_late_redaction, prepare_write
+from .memory_redact import redact, redact_obj
 from .postgres_pool import get_connection, get_pool, get_transaction, init_pgvector
 
 
@@ -448,7 +450,19 @@ class MemoryServicePG:
 
         Returns:
             Memory ID
+
+        Raises:
+            ValueError: metadata.source is missing or not one of hook, manual,
+                handoff, llm. This runs before the transaction opens.
+
+        Content and metadata strings are redacted here as a backstop (callers redact
+        before they embed). The session id for the row column and metadata.session_id
+        come from prepare_write, so both always match.
         """
+        content, metadata, session_id = prepare_write(content, metadata, self.session_id)
+        tags, tag_hits = redact_obj(tags)
+        if tag_hits:
+            metadata = flag_late_redaction(metadata, tag_hits)
         memory_id = generate_memory_id()
 
         # Normalize embedding to 1024 dims if provided
@@ -469,7 +483,7 @@ class MemoryServicePG:
                     VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
                 """,
                     memory_id,
-                    self.session_id,
+                    session_id,
                     self.agent_id,
                     content,
                     json.dumps(metadata or {}),
@@ -485,7 +499,7 @@ class MemoryServicePG:
                     VALUES ($1, $2, $3, $4, $5, $6, $7)
                 """,
                     memory_id,
-                    self.session_id,
+                    session_id,
                     self.agent_id,
                     content,
                     json.dumps(metadata or {}),
@@ -505,7 +519,7 @@ class MemoryServicePG:
                         """,
                         memory_id,
                         tag,
-                        self.session_id,
+                        session_id,
                     )
 
         return memory_id
@@ -1059,6 +1073,16 @@ class MemoryServicePG:
             Memory ID
         """
         embedding = None
+
+        # Redact BEFORE the embed, so the vector never encodes a secret. store() then
+        # finds nothing late; the kinds are recorded here.
+        redacted = redact(content)
+        content = redacted.text
+        if redacted.hits:
+            metadata = dict(metadata or {})
+            metadata["redacted_kinds"] = sorted(
+                set(metadata.get("redacted_kinds", [])) | set(redacted.hits)
+            )
 
         if embedder is not None:
             embedding = await embedder.embed(content)

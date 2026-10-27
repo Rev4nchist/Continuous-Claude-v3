@@ -213,6 +213,7 @@ Test: ${state.test_command || 'Unknown test command'}`;
       '--context', contextStr,
       '--tags', tagsStr,
       '--confidence', 'high',
+      '--source', 'hook',
       '--project-dir', projectDir,
     ], {
       cwd: opcDir,

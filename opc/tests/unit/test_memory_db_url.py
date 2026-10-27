@@ -56,7 +56,9 @@ def test_store_uses_postgres_with_wizard_variable(monkeypatch):
 
     monkeypatch.setattr(factory, "create_memory_service", fake_create)
     content = "Fabric capacity throttling: fail fast and cap throttle waits at 15 minutes."
-    result = asyncio.run(store_learning.store_learning_v2("t", content, "WORKING_SOLUTION"))
+    result = asyncio.run(
+        store_learning.store_learning_v2("t", content, "WORKING_SOLUTION", source="manual")
+    )
     assert seen.get("backend") == "postgres", result
 
 

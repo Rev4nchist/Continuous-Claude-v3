@@ -10,8 +10,9 @@ Safety posture (premortem 2026-07-24 findings #3 and #4, plus the refresh brief)
 - Recursion sentinel: the child process gets CCV3_DISTILL_CHILD=1; extraction
   hooks check it and no-op, so a distiller session can never trigger another
   extraction -> distiller cascade.
-- Data egress: candidates matching SECRET_RE are never sent to the model —
-  the caller stores them via the legacy verbatim path (or drops them).
+- Data egress: the caller redacts every candidate (db/memory_redact.py) before
+  it reaches the model. distill() refuses any candidate that still holds a secret
+  after redaction.
 - Memory injection: model output is schema-validated JSON; lessons that look
   like prompt-injection payloads (INJECTION_RE) or that fail the existing
   keyword NOISE gate post-distillation are rejected.
@@ -32,12 +33,9 @@ import shutil
 import subprocess
 import sys
 
-# Secret shapes: never ship these to a model call (mirrors the harness's
-# standing secret-scan regex used for cross-model prompt files).
-SECRET_RE = re.compile(
-    r"(?i)api[_-]?key|access[_-]?token|refresh[_-]?token|client[_-]?secret"
-    r"|\bsecret\b\s*[:=]|BEGIN[A-Z ]*PRIVATE KEY|sk-ant-|ghp_[A-Za-z0-9]{20,}",
-)
+sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+
+from db.memory_redact import contains_secret  # noqa: E402
 
 # Prompt-injection shapes a stored "lesson" must never carry (these become
 # always-trusted context in future sessions).
@@ -66,7 +64,8 @@ Input candidates (JSON):
 
 
 def is_secret_bearing(text: str) -> bool:
-    return bool(SECRET_RE.search(text))
+    """True when the text holds a secret VALUE. Redacted text is not secret-bearing."""
+    return contains_secret(text)
 
 
 def looks_injected(text: str) -> bool:
@@ -90,8 +89,20 @@ def _claude_argv() -> list[str] | None:
     return [exe]
 
 
-def _parse_output(raw: str, n_candidates: int) -> list[dict] | None:
-    """Parse + schema-validate the model output. None on any failure."""
+def _parse_output(
+    raw: str, n_candidates: int, rejects: list[dict] | None = None
+) -> list[dict] | None:
+    """Parse + schema-validate the model output. None on any failure.
+
+    Every item that is dropped appends ``{"index": <int|None>, "reason": <code>}`` to
+    ``rejects`` when it is given. Codes: distill:not_object, distill:bad_index,
+    distill:bad_action, distill:empty_lesson, distill:injected, distill:secret.
+    """
+
+    def _reject(index: int | None, reason: str) -> None:
+        if rejects is not None:
+            rejects.append({"index": index, "reason": reason})
+
     text = raw.strip()
     # Tolerate accidental code fences despite the instruction.
     fence = re.search(r"```(?:json)?\s*([\s\S]*?)```", text)
@@ -110,22 +121,30 @@ def _parse_output(raw: str, n_candidates: int) -> list[dict] | None:
     out: list[dict] = []
     for item in data:
         if not isinstance(item, dict):
+            _reject(None, "distill:not_object")
             continue
         idx = item.get("index")
         action = item.get("action")
-        if not isinstance(idx, int) or not (0 <= idx < n_candidates):
+        if not isinstance(idx, int) or isinstance(idx, bool) or not (0 <= idx < n_candidates):
+            _reject(None, "distill:bad_index")
             continue
         if action not in ("add", "skip"):
+            _reject(idx, "distill:bad_action")
             continue
         lesson = str(item.get("lesson", "")).strip()
         why = str(item.get("why", "")).strip()
         how = str(item.get("how_to_apply", "")).strip()
         if action == "add":
             if not lesson:
+                _reject(idx, "distill:empty_lesson")
                 continue
             combined = " ".join([lesson, why, how])
             # Memory-injection + secret belt-and-suspenders on the OUTPUT side.
-            if looks_injected(combined) or is_secret_bearing(combined):
+            if looks_injected(combined):
+                _reject(idx, "distill:injected")
+                continue
+            if is_secret_bearing(combined):
+                _reject(idx, "distill:secret")
                 continue
         out.append(
             {"index": idx, "action": action, "lesson": lesson, "why": why, "how_to_apply": how}
@@ -133,12 +152,18 @@ def _parse_output(raw: str, n_candidates: int) -> list[dict] | None:
     return out
 
 
-def distill(candidates: list[str], timeout_s: int = DISTILL_TIMEOUT_S) -> list[dict] | None:
+def distill(
+    candidates: list[str],
+    timeout_s: int = DISTILL_TIMEOUT_S,
+    rejects: list[dict] | None = None,
+) -> list[dict] | None:
     """One batched headless distillation call. Returns validated entries or None.
 
-    Caller contract: candidates must already be secret-scanned
-    (is_secret_bearing) — this function refuses secret-bearing input as a
-    second line of defense.
+    Caller contract: candidates must already be redacted
+    (db.memory_redact.redact). This function refuses any candidate that still
+    holds a secret as a second line of defense.
+
+    ``rejects`` collects one ``{"index", "reason"}`` per dropped model item.
     """
     if not candidates:
         return []
@@ -171,7 +196,7 @@ def distill(candidates: list[str], timeout_s: int = DISTILL_TIMEOUT_S) -> list[d
         return None
     if proc.returncode != 0 or not proc.stdout:
         return None
-    return _parse_output(proc.stdout, len(candidates))
+    return _parse_output(proc.stdout, len(candidates), rejects)
 
 
 if __name__ == "__main__":

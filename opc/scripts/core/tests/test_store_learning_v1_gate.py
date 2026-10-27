@@ -131,6 +131,8 @@ def test_v1_skips_none_categories():
         assert v2_mock.call_count == 1
         kwargs = v2_mock.call_args.kwargs
         assert kwargs["learning_type"] == "WORKING_SOLUTION"
+        # Phase 3: the legacy bundle is a deliberate manual store, not an inference.
+        assert kwargs["source"] == "manual" and kwargs["is_inference"] is False
 
     asyncio.run(_run())
 
@@ -342,3 +344,48 @@ def test_repetition_check_skipped_for_short_content():
         assert result.get("reason") != "repetition", (
             "Short content must not be rejected for repetition"
         )
+
+
+def test_legacy_cli_passes_source_and_inferred_to_v2(monkeypatch):
+    """Breaks if main() drops --source/--inferred in legacy mode (no --content)."""
+    v2_mock = mock.AsyncMock(return_value={"success": True, "memory_id": "uuid-stub"})
+    monkeypatch.setattr(store_learning, "store_learning_v2", v2_mock)
+    monkeypatch.setattr(
+        sys,
+        "argv",
+        [
+            "store_learning.py",
+            "--session-id", "legacy-cli",
+            "--worked", "A high-quality WORKING_SOLUTION with enough characters to pass the gate.",
+            "--source", "llm",
+            "--inferred",
+            "--json",
+        ],
+    )
+    with warnings.catch_warnings():
+        warnings.simplefilter("ignore", DeprecationWarning)
+        asyncio.run(store_learning.main())
+    assert v2_mock.await_count == 1
+    kwargs = v2_mock.await_args.kwargs
+    assert kwargs["source"] == "llm"
+    assert kwargs["is_inference"] is True
+
+
+def test_legacy_store_defaults_stay_manual_and_observed():
+    """Breaks if the new kwargs change the defaults of direct store_learning() calls."""
+    v2_mock = mock.AsyncMock(return_value={"success": True, "memory_id": "uuid-stub"})
+    with mock.patch.object(store_learning, "store_learning_v2", new=v2_mock):
+        with warnings.catch_warnings():
+            warnings.simplefilter("ignore", DeprecationWarning)
+            asyncio.run(
+                store_learning.store_learning(
+                    session_id="legacy-default",
+                    worked="A high-quality WORKING_SOLUTION that passes the gate.",
+                    failed="None",
+                    decisions="None",
+                    patterns="None",
+                )
+            )
+    kwargs = v2_mock.await_args.kwargs
+    assert kwargs["source"] == "manual"
+    assert kwargs["is_inference"] is False

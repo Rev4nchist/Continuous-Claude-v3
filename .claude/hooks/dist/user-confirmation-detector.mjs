@@ -255,6 +255,8 @@ async function storeUserConfirmedLearning(sessionId, prompt, context, projectDir
         "user_confirmed,verified",
         "--confidence",
         "high",
+        "--source",
+        "hook",
         "--project-dir",
         projectDir
       ],
@@ -301,6 +303,8 @@ ${failedApproaches ? `Failed approaches: ${failedApproaches}` : ""}`;
         tagsStr,
         "--confidence",
         "high",
+        "--source",
+        "hook",
         "--project-dir",
         projectDir
       ],

@@ -236,8 +236,11 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
   --content "<what you learned>" \
   --context "<what it relates to>" \
   --tags "tag1,tag2,scope:global|scope:project" \
-  --confidence high|medium|low
+  --confidence high|medium|low \
+  --source manual
 ```
+
+Provenance: `--source` is one of `hook`, `manual`, `handoff`, `llm` (default `manual`: a deliberate store). Add `--inferred` when the learning is your own conclusion, not an observed fact. Without `--session-id` the CLI uses `$CLAUDE_SESSION_ID`, else the sentinel `cli-manual`. Secrets in the text are redacted before storage.
 
 **IMPORTANT:** Use `cd <absolute-path>` — not the subshell form `(cd opc && ...)`. The subshell form can cause path-doubling errors.
 
@@ -289,7 +292,7 @@ With explicit type:
 /remember --type FAILED_APPROACH Don't use subshell for store_learning command
 ```
 
-`/remember` wraps the store command, sets `session-id` to `manual-$(date +%Y%m%d-%H%M)`, and annotates context as `manual entry via /remember`.
+`/remember` wraps the store command, sets `session-id` to `manual-$(date +%Y%m%d-%H%M)`, passes `--source manual`, and annotates context as `manual entry via /remember`.
 
 Use `/memory-curate` to audit and prune low-value entries.
 
@@ -337,7 +340,8 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
   --content "TypeScript hooks fail silently if dist/ doesn't exist. Always run npm run build after editing src/." \
   --context "hook development" \
   --tags "hooks,typescript,build,scope:global" \
-  --confidence high
+  --confidence high \
+  --source manual
 ```
 
 **Example 3: Store a codebase pattern**
@@ -349,7 +353,8 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
   --content "All session hooks use shared/types.ts for input/output interfaces. Import from './shared/types.js' in dist." \
   --context "hook development patterns" \
   --tags "hooks,patterns,scope:project" \
-  --confidence high
+  --confidence high \
+  --source manual --inferred
 ```
 
 **Example 4: Search artifact index for successful auth work**

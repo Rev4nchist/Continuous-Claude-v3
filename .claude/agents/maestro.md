@@ -238,7 +238,8 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
   --content "[What worked, key decisions, patterns used]" \
   --context "[Task type and domain]" \
   --tags "maestro,orchestration,[task-type]" \
-  --confidence high
+  --confidence high \
+  --source manual --inferred
 ```
 
 ---

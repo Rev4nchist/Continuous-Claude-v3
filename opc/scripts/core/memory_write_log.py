@@ -6,7 +6,7 @@ On 2026-10-24 every store failed for 3 days and nothing recorded it.
 File: ~/.claude/state/memory-write-failures.jsonl
 Line: {"ts", "source", "error", "session_id"}
 
-Rules: the URL is masked, the error is cut to 300 characters, and nothing here
+Rules: the URL is masked, secrets are redacted, the error is cut to 300 characters, and nothing here
 ever raises. The TypeScript reader is .claude/hooks/src/shared/memory-health.ts.
 """
 
@@ -15,8 +15,15 @@ from __future__ import annotations
 import json
 import os
 import re
+import sys
 from datetime import UTC, datetime
 from pathlib import Path
+
+try:
+    from db.memory_redact import redact
+except ImportError:  # imported without scripts/ on the path
+    sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+    from db.memory_redact import redact
 
 MAX_ERROR_CHARS = 300
 _URL_RE = re.compile(r"postgres(?:ql)?(?:\+\w+)?://\S+", re.IGNORECASE)
@@ -45,7 +52,7 @@ def record_write_failure(source: str, error: object, session_id: str | None) -> 
         entry = {
             "ts": datetime.now(UTC).isoformat().replace("+00:00", "Z"),
             "source": source,
-            "error": mask_urls(str(error))[:MAX_ERROR_CHARS],
+            "error": redact(mask_urls(str(error))).text[:MAX_ERROR_CHARS],
             "session_id": session_id or "unknown",
         }
         fd = os.open(path, os.O_WRONLY | os.O_APPEND | os.O_CREAT, 0o600)

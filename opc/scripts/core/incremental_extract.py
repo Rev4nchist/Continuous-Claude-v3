@@ -35,11 +35,11 @@ from __future__ import annotations
 
 import argparse
 import asyncio
-import hashlib
 import json
 import os
 import re
 import sys
+from dataclasses import dataclass
 from datetime import datetime, timezone
 from pathlib import Path
 from typing import TypedDict
@@ -55,8 +55,17 @@ except ImportError:
     # python-dotenv not available; rely on env vars already set in environment.
     pass
 
-# Add parent directory to path
+# Add parent directory to path (db.*) and this directory (sibling modules, also when
+# this file is imported as core.incremental_extract)
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), ".."))
+sys.path.insert(0, os.path.dirname(__file__))
+
+from db.memory_redact import redact  # noqa: E402
+from memory_reject_log import (  # noqa: E402
+    content_hash,  # noqa: F401 - re-exported, tests and callers import it from here
+    load_rejected_hashes,
+    record_reject,
+)
 
 # Perception signal patterns (from lazy_memory.py)
 PERCEPTION_SIGNALS = [
@@ -236,16 +245,10 @@ class ExtractionResult(TypedDict):
     learnings_stored: int
     learnings_skipped: int
     learnings_deduped: int
+    learnings_rejected_before: int
     new_last_line: int
     hashes: list[str]
     errors: list[str]
-
-
-def content_hash(content: str) -> str:
-    """Generate hash of normalized content for deduplication."""
-    normalized = content.lower().strip()
-    normalized = re.sub(r"\s+", " ", normalized)
-    return hashlib.sha256(normalized.encode()).hexdigest()[:16]
 
 
 def has_perception_signal(text: str) -> bool:
@@ -368,14 +371,52 @@ def save_state(state_file: str, state: ExtractionState) -> None:
         json.dump(state, f, indent=2)
 
 
+_UNSAFE_DISTILL_REASONS = frozenset({"distill:injected", "distill:secret"})
+
+
+@dataclass
+class _Candidate:
+    """One extraction candidate. ``text`` is already redacted; ``raw_hash`` is the hash
+    of the RAW text (the reject log and the dedup state key on it)."""
+
+    text: str
+    raw_hash: str
+    line: int
+    kind: str  # thinking_block | tool_error
+    error_info: dict | None = None
+
+    @property
+    def evidence(self) -> dict:
+        return {"kind": self.kind, "line": self.line, "hash": self.raw_hash}
+
+
+@dataclass
+class _StoreItem:
+    content: str
+    candidate: _Candidate
+    context: str | None = None
+    extra_tags: list[str] | None = None
+    source: str = "hook"
+    is_inference: bool = True
+
+
 async def store_thinking_learning(
     content: str,
     session_id: str,
     project_dir: str | None,
     context: str | None = None,
     extra_tags: list[str] | None = None,
+    source: str = "hook",
+    is_inference: bool = True,
+    candidate_hash: str | None = None,
+    evidence: dict | None = None,
 ) -> dict:
-    """Store a thinking block (or its distilled lesson) as a learning."""
+    """Store a thinking block (or its distilled lesson) as a learning.
+
+    Provenance: a verbatim thinking block is source "hook" (mechanical extraction of
+    model reasoning); a distilled lesson is source "llm" (the model wrote it). Both are
+    inferences, because reasoning is not an observed fact.
+    """
     try:
         from store_learning import store_learning_v2
     except ImportError:
@@ -412,6 +453,10 @@ async def store_thinking_learning(
         tags=tags,
         confidence="medium",
         project_dir=project_dir,
+        source=source,
+        is_inference=is_inference,
+        candidate_hash=candidate_hash,
+        evidence=evidence,
     )
 
     return result
@@ -421,8 +466,10 @@ async def store_tool_error_learning(
     error_info: dict,
     session_id: str,
     project_dir: str | None,
+    candidate_hash: str | None = None,
+    evidence: dict | None = None,
 ) -> dict:
-    """Store a tool error as a FAILED_APPROACH learning."""
+    """Store a tool error as an ERROR_FIX learning (source hook, not an inference)."""
     try:
         from store_learning import store_learning_v2
     except ImportError:
@@ -457,6 +504,10 @@ async def store_tool_error_learning(
         tags=tags,
         confidence="medium",
         project_dir=project_dir,
+        source="hook",
+        is_inference=False,
+        candidate_hash=candidate_hash,
+        evidence=evidence,
     )
 
     return result
@@ -471,6 +522,11 @@ async def extract_incremental(
     max_learnings: int = 10,
 ) -> ExtractionResult:
     """Extract learnings from JSONL transcript incrementally.
+
+    Every candidate is redacted as soon as it is collected, so nothing downstream
+    (quality gate, distiller, embedder, store) sees a secret. The raw hash is taken
+    first. A candidate any gate rejects goes into the reject log by that hash, and the
+    next run skips it.
 
     Args:
         transcript_path: Path to session JSONL file
@@ -487,6 +543,7 @@ async def extract_incremental(
         learnings_stored=0,
         learnings_skipped=0,
         learnings_deduped=0,
+        learnings_rejected_before=0,
         new_last_line=start_line,
         hashes=[],
         errors=[]
@@ -499,6 +556,7 @@ async def extract_incremental(
     # Load existing state for dedup hashes
     state = load_state(state_file)
     existing_hashes = set(state.get("recent_hashes", []))
+    rejected_hashes = load_rejected_hashes()
 
     # Read and process transcript
     try:
@@ -510,11 +568,20 @@ async def extract_incremental(
 
     # Process lines from start_line
     new_hashes: list[str] = []
-    learnings_to_store: list[str] = []
-    tool_errors_to_store: list[dict] = []
+    thinking_cands: list[_Candidate] = []
+    error_cands: list[_Candidate] = []
+
+    def _skip_known(h: str) -> bool:
+        if h in existing_hashes or h in new_hashes:
+            result["learnings_deduped"] += 1
+            return True
+        if h in rejected_hashes:
+            result["learnings_rejected_before"] += 1
+            return True
+        return False
 
     for line_num, line in enumerate(lines[start_line:], start=start_line):
-        if len(learnings_to_store) + len(tool_errors_to_store) >= max_learnings:
+        if len(thinking_cands) + len(error_cands) >= max_learnings:
             break
 
         result["new_last_line"] = line_num + 1
@@ -528,94 +595,92 @@ async def extract_incremental(
             continue
 
         # Extract thinking blocks (existing logic)
-        thinking_blocks = extract_thinking_blocks(line_data)
-
-        for thinking in thinking_blocks:
-            h = content_hash(thinking)
-
-            # Skip if already processed
-            if h in existing_hashes or h in new_hashes:
-                result["learnings_deduped"] += 1
+        for thinking in extract_thinking_blocks(line_data):
+            h = content_hash(thinking)  # hash the RAW text first
+            if _skip_known(h):
                 continue
-
             new_hashes.append(h)
-            learnings_to_store.append(thinking)
+            thinking_cands.append(_Candidate(redact(thinking).text, h, line_num, "thinking_block"))
 
         # Extract tool errors (new logic)
-        tool_errors = extract_tool_errors(line_data)
-
-        for error_info in tool_errors:
-            h = content_hash(error_info.get("error_context", ""))
-
-            # Skip if already processed
-            if h in existing_hashes or h in new_hashes:
-                result["learnings_deduped"] += 1
+        for error_info in extract_tool_errors(line_data):
+            raw_ctx = error_info.get("error_context", "")
+            h = content_hash(raw_ctx)
+            if _skip_known(h):
                 continue
-
             new_hashes.append(h)
-            tool_errors_to_store.append(error_info)
+            safe_info = {
+                **error_info,
+                "error_context": redact(raw_ctx).text,
+                "tool_name": redact(str(error_info.get("tool_name", "unknown"))).text,
+            }
+            error_cands.append(
+                _Candidate(safe_info["error_context"], h, line_num, "tool_error", safe_info)
+            )
 
-    # Quality gate: filter NOISE before storing
-    quality_filtered: list[str] = []
-    quality_skipped = 0
-    for thinking in learnings_to_store:
-        qr = score_extraction(thinking)
-        if qr["classification"] == "NOISE":
-            quality_skipped += 1
-            print(f"  [QUALITY] NOISE (score={qr['score']}): {thinking[:60]}...", file=sys.stderr)
-            continue
-        quality_filtered.append(thinking)
+    # Quality gate (gate B): filter NOISE before storing
+    def _passes_gate_b(cand: _Candidate, label: str) -> bool:
+        qr = score_extraction(cand.text)
+        if qr["classification"] != "NOISE":
+            return True
+        record_reject(
+            cand.raw_hash, "gate_b_noise", f"NOISE score={qr['score']}", "hook", session_id
+        )
+        print(f"  [QUALITY] {label} (score={qr['score']}): {cand.text[:60]}...", file=sys.stderr)
+        return False
 
-    quality_filtered_errors: list[dict] = []
-    for error_info in tool_errors_to_store:
-        ctx = error_info.get("error_context", "")
-        qr = score_extraction(ctx)
-        if qr["classification"] == "NOISE":
-            quality_skipped += 1
-            print(f"  [QUALITY] NOISE error (score={qr['score']}): {ctx[:60]}...", file=sys.stderr)
-            continue
-        quality_filtered_errors.append(error_info)
-
-    learnings_to_store = quality_filtered
-    tool_errors_to_store = quality_filtered_errors
-    result["learnings_skipped"] += quality_skipped
+    kept_thinking = [c for c in thinking_cands if _passes_gate_b(c, "NOISE")]
+    kept_errors = [c for c in error_cands if _passes_gate_b(c, "NOISE error")]
+    result["learnings_skipped"] += (len(thinking_cands) - len(kept_thinking)) + (
+        len(error_cands) - len(kept_errors)
+    )
+    thinking_cands = kept_thinking
+    error_cands = kept_errors
 
     # --- LLM distillation before store (proposal 07-09 R2, 2026-07-24) ---
     # One batched headless `claude -p` call turns raw thinking blocks into
-    # crisp lessons. Secret-bearing candidates never reach the model (egress
-    # guard) and take the legacy verbatim path. Any distiller failure falls
-    # back to verbatim for ALL candidates — extraction is never lost to a
-    # broken distiller. Kill switch: CCV3_DISTILL=0. The distiller child
-    # carries CCV3_DISTILL_CHILD=1 so extraction hooks can never cascade.
-    # store_items: (content, context, extra_tags) triples.
-    store_items: list[tuple[str, str | None, list[str] | None]] = []
+    # crisp lessons. Candidates are already redacted, so no secret reaches the
+    # model (distill() re-checks as a second line of defense). Any distiller
+    # failure falls back to verbatim for ALL candidates -- extraction is never
+    # lost to a broken distiller. Kill switch: CCV3_DISTILL=0. The distiller
+    # child carries CCV3_DISTILL_CHILD=1 so extraction hooks can never cascade.
+    store_items: list[_StoreItem] = []
     distill_enabled = os.environ.get("CCV3_DISTILL", "1") != "0"
-    if distill_enabled and learnings_to_store:
+    if distill_enabled and thinking_cands:
         try:
-            from distill_learning import distill, is_secret_bearing, looks_injected
+            from distill_learning import distill, looks_injected
         except ImportError:
             sys.path.insert(0, os.path.dirname(__file__))
-            from distill_learning import distill, is_secret_bearing, looks_injected
+            from distill_learning import distill, looks_injected
 
-        secretful = [t for t in learnings_to_store if is_secret_bearing(t)]
-        clean = [t for t in learnings_to_store if not is_secret_bearing(t)]
-        for t in secretful:  # non-LLM path only (egress guard)
-            store_items.append((t, None, None))
-
-        distilled = distill(clean) if clean else []
+        distill_rejects: list[dict] = []
+        distilled = distill([c.text for c in thinking_cands], rejects=distill_rejects)
         if distilled is None:
             # Distiller failure -> verbatim fallback, nothing lost.
-            for t in clean:
-                store_items.append((t, None, None))
+            store_items.extend(_StoreItem(c.text, c) for c in thinking_cands)
         else:
             by_index = {d["index"]: d for d in distilled}
-            for i, raw in enumerate(clean):
+            # Only unsafe model output (injected, secret) drops the candidate for good.
+            # A formatting glitch (bad action, empty lesson) falls back to verbatim, so
+            # one bad model reply never costs a candidate in every later run.
+            bad_index = {
+                r["index"]: r["reason"]
+                for r in distill_rejects
+                if r.get("index") is not None and r.get("reason") in _UNSAFE_DISTILL_REASONS
+            }
+            for i, cand in enumerate(thinking_cands):
                 d = by_index.get(i)
+                if d is None and i in bad_index:
+                    # The model's item for this candidate failed the output schema.
+                    record_reject(cand.raw_hash, "distill_schema", bad_index[i], "llm", session_id)
+                    result["learnings_skipped"] += 1
+                    continue
                 if d is None:
                     # Model omitted this candidate -> verbatim fallback.
-                    store_items.append((raw, None, None))
+                    store_items.append(_StoreItem(cand.text, cand))
                     continue
                 if d["action"] == "skip":
+                    record_reject(cand.raw_hash, "distill_skip", "model_skip", "llm", session_id)
                     result["learnings_skipped"] += 1
                     continue
                 lesson = f"{d['lesson']}"
@@ -624,58 +689,65 @@ async def extract_incremental(
                 if d["how_to_apply"]:
                     lesson += f"\nApply: {d['how_to_apply']}"
                 # Post-distillation gates: NOISE re-score + injection shape
-                # (memory-injection defense — distilled text becomes trusted
+                # (memory-injection defense -- distilled text becomes trusted
                 # context in future sessions).
-                if looks_injected(lesson) or score_extraction(lesson)["classification"] == "NOISE":
+                if looks_injected(lesson):
+                    reason = "injected"
+                elif score_extraction(lesson)["classification"] == "NOISE":
+                    reason = "NOISE"
+                else:
+                    reason = ""
+                if reason:
+                    record_reject(cand.raw_hash, "post_distill", reason, "llm", session_id)
                     result["learnings_skipped"] += 1
                     continue
                 # Verbatim companion (ablations favor keeping the source):
                 # carried in context, truncated, for traceability.
-                ctx = f"distilled from thinking block; verbatim excerpt: {raw[:400]}"
-                store_items.append((lesson, ctx, ["distilled"]))
+                ctx = f"distilled from thinking block; verbatim excerpt: {cand.text[:400]}"
+                store_items.append(_StoreItem(lesson, cand, ctx, ["distilled"], "llm", True))
     else:
-        for t in learnings_to_store:
-            store_items.append((t, None, None))
+        store_items.extend(_StoreItem(c.text, c) for c in thinking_cands)
+
+    async def _tally(coro) -> None:
+        try:
+            store_result = await coro
+            if store_result.get("success"):
+                if store_result.get("skipped"):
+                    result["learnings_skipped"] += 1
+                else:
+                    result["learnings_stored"] += 1
+            else:
+                result["errors"].append(store_result.get("error", "Unknown error"))
+        except Exception as e:
+            result["errors"].append(str(e))
 
     # Store thinking learnings (distilled or verbatim)
-    for content_item, ctx_item, tags_item in store_items:
-        try:
-            store_result = await store_thinking_learning(
-                content=content_item,
+    for item in store_items:
+        await _tally(
+            store_thinking_learning(
+                content=item.content,
                 session_id=session_id,
                 project_dir=project_dir,
-                context=ctx_item,
-                extra_tags=tags_item,
+                context=item.context,
+                extra_tags=item.extra_tags,
+                source=item.source,
+                is_inference=item.is_inference,
+                candidate_hash=item.candidate.raw_hash,
+                evidence=item.candidate.evidence,
             )
-
-            if store_result.get("success"):
-                if store_result.get("skipped"):
-                    result["learnings_skipped"] += 1
-                else:
-                    result["learnings_stored"] += 1
-            else:
-                result["errors"].append(store_result.get("error", "Unknown error"))
-        except Exception as e:
-            result["errors"].append(str(e))
+        )
 
     # Store tool error learnings
-    for error_info in tool_errors_to_store:
-        try:
-            store_result = await store_tool_error_learning(
-                error_info=error_info,
+    for cand in error_cands:
+        await _tally(
+            store_tool_error_learning(
+                error_info=cand.error_info or {},
                 session_id=session_id,
                 project_dir=project_dir,
+                candidate_hash=cand.raw_hash,
+                evidence=cand.evidence,
             )
-
-            if store_result.get("success"):
-                if store_result.get("skipped"):
-                    result["learnings_skipped"] += 1
-                else:
-                    result["learnings_stored"] += 1
-            else:
-                result["errors"].append(store_result.get("error", "Unknown error"))
-        except Exception as e:
-            result["errors"].append(str(e))
+        )
 
     result["hashes"] = new_hashes
 

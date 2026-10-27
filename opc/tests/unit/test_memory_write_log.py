@@ -20,6 +20,7 @@ sys.path.insert(0, str(OPC))
 sys.path.insert(0, str(OPC / "scripts" / "core"))
 
 import memory_write_log  # noqa: E402
+from tests.unit import fake_secrets as fs  # noqa: E402
 
 SECRET_URL = "postgresql://claude:hunter2@localhost:5432/continuous_claude"
 CONTENT = "Fabric capacity throttling: fail fast and cap throttle waits at 15 minutes."
@@ -100,7 +101,9 @@ def test_store_learning_failure_is_logged_and_masked(monkeypatch, tmp_path):
         raise RuntimeError(f"could not connect to {SECRET_URL}")
 
     monkeypatch.setattr(factory, "create_memory_service", fake_create)
-    result = asyncio.run(store_learning.store_learning_v2("sess-9", CONTENT, "WORKING_SOLUTION"))
+    result = asyncio.run(store_learning.store_learning_v2(
+        "sess-9", CONTENT, "WORKING_SOLUTION", source="manual"
+    ))
     assert result["success"] is False
     (row,) = _lines(path)
     assert row["source"] == "store_learning" and row["session_id"] == "sess-9"
@@ -121,8 +124,20 @@ def test_store_learning_service_unavailable_is_logged(monkeypatch, tmp_path):
         return real_import(name, *args, **kwargs)
 
     monkeypatch.setattr(builtins, "__import__", fake_import)
-    result = asyncio.run(store_learning.store_learning_v2("sess-3", CONTENT, "WORKING_SOLUTION"))
+    result = asyncio.run(store_learning.store_learning_v2(
+        "sess-3", CONTENT, "WORKING_SOLUTION", source="manual"
+    ))
     monkeypatch.setattr(builtins, "__import__", real_import)
     assert "Memory service not available" in result["error"]
     (row,) = _lines(path)
     assert row["session_id"] == "sess-3" and "Memory service not available" in row["error"]
+
+
+def test_record_masks_a_secret_in_the_error_text(monkeypatch, tmp_path):
+    """A driver error can quote a row value. The log must hold the marker, not the key."""
+    path = _home(monkeypatch, tmp_path)
+    memory_write_log.record_write_failure(
+        "store_learning", "insert failed for value " + fs.anthropic_key(), "s"
+    )
+    (row,) = _lines(path)
+    assert "aaaa" not in row["error"] and "[REDACTED:provider_token]" in row["error"]

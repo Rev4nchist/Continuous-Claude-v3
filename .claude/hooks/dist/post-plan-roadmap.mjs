@@ -1166,7 +1166,7 @@ function extractPlanInfo(rawPlanContent, filePath) {
     affectedFiles: affectedFiles.slice(0, 10)
   };
 }
-function storePlanningLearnings(planInfo, projectDir) {
+function storePlanningLearnings(planInfo, projectDir, hookSessionId) {
   const decisions = planInfo.decisions.slice(0, 5);
   if (decisions.length === 0) {
     console.error("No decisions to store in memory");
@@ -1183,7 +1183,7 @@ function storePlanningLearnings(planInfo, projectDir) {
   }
   const content = contentLines.join("\n");
   const opcDir = process.env.CLAUDE_OPC_DIR || path2.join(process.env.USERPROFILE || process.env.HOME || "", "continuous-claude", "opc");
-  const sessionId = `plan-${Date.now()}`;
+  const sessionId = hookSessionId || `plan-${Date.now()}`;
   try {
     const child = spawnDetachedHidden("uv", [
       "run",
@@ -1200,7 +1200,9 @@ function storePlanningLearnings(planInfo, projectDir) {
       "--tags",
       "planning,decisions,architecture",
       "--confidence",
-      "high"
+      "high",
+      "--source",
+      "hook"
     ], {
       cwd: opcDir,
       stdio: "ignore",
@@ -1323,7 +1325,7 @@ async function main() {
     allowFullRewrite: wasFreshFile,
     sessionId: data.session_id ?? null
   });
-  storePlanningLearnings(planInfo, projectDir);
+  storePlanningLearnings(planInfo, projectDir, data.session_id);
   console.error(`[post-plan-roadmap] ROADMAP.md ${outcome}: ${planInfo.title}`);
   const stats = [
     `Goal: ${planInfo.title}`,

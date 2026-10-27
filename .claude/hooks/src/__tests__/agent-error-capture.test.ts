@@ -36,6 +36,7 @@ describe('buildStoreInvocation — argv shape + fire-and-forget options', () => 
       '--context', 'Failed agent invocation: kraken',
       '--tags', 'auto_captured,agent:kraken',
       '--confidence', 'medium',
+      '--source', 'hook',
     ]);
   });
 

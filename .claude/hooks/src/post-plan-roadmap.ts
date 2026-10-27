@@ -706,7 +706,7 @@ export function extractPlanInfo(rawPlanContent: string, filePath?: string): Plan
   };
 }
 
-function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
+function storePlanningLearnings(planInfo: PlanInfo, projectDir: string, hookSessionId?: string | null): void {
   const decisions = planInfo.decisions.slice(0, 5);
   if (decisions.length === 0) {
     console.error('No decisions to store in memory');
@@ -728,7 +728,8 @@ function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
   const opcDir = process.env.CLAUDE_OPC_DIR ||
     path.join(process.env.USERPROFILE || process.env.HOME || '', 'continuous-claude', 'opc');
 
-  const sessionId = `plan-${Date.now()}`;
+  // Real session id from the hook payload; the synthetic id is only a fallback.
+  const sessionId = hookSessionId || `plan-${Date.now()}`;
 
   // Store plan learning in background (detached so hook doesn't block)
   try {
@@ -739,6 +740,7 @@ function storePlanningLearnings(planInfo: PlanInfo, projectDir: string): void {
       '--context', `planning: ${planInfo.title}`,
       '--tags', 'planning,decisions,architecture',
       '--confidence', 'high',
+      '--source', 'hook',
     ], {
       cwd: opcDir,
       stdio: 'ignore',
@@ -913,7 +915,7 @@ async function main() {
 
   // Store planning decisions in archival_memory regardless of write outcome
   // -- the plan itself happened even if the ROADMAP entry was skipped/noop.
-  storePlanningLearnings(planInfo, projectDir);
+  storePlanningLearnings(planInfo, projectDir, data.session_id);
 
   console.error(`[post-plan-roadmap] ROADMAP.md ${outcome}: ${planInfo.title}`);
 

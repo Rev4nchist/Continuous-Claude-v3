@@ -1643,6 +1643,7 @@ def check_memory_canary_roundtrip() -> CheckResult:
         rc, stdout, stderr = _run_python_script([
             "scripts/core/store_learning.py",
             "--session-id", "health-check",
+            "--source", "hook",  # automated canary, not a deliberate manual store
             "--type", "WORKING_SOLUTION",
             "--content", content,
             "--context", "health check canary",
