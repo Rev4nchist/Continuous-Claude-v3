@@ -57,5 +57,8 @@ def db_url(password: str = "pw" + "Hunter99") -> str:
     return "postgres" + "://" + "admin" + ":" + password + "@db.internal:5432/app"
 
 
-def password_assignment(value: str = "q" + "9x7Lm2Zp4Rt") -> str:
+PASSWORD_BODY = "9x7" + "Lm2" + "Zp4" + "Rt"
+
+
+def password_assignment(value: str = "q" + PASSWORD_BODY) -> str:
     return "DB_" + "PASSWORD" + "=" + value

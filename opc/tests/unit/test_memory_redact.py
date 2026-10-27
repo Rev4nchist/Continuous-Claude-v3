@@ -28,7 +28,7 @@ from tests.unit import fake_secrets as fs  # noqa: E402
 CASES = [
     ("private_key", fs.pem_block(), "MIIEow"),
     ("url_credentials", "connect " + fs.db_url() + " now", "Hunter99"),
-    ("credential", fs.password_assignment(), "9x7Lm2Zp4Rt"),
+    ("credential", fs.password_assignment(), fs.PASSWORD_BODY),
     ("credential", "OPENAI_" + "API_KEY" + ": " + "zz" * 10, "zzzzzz"),
     ("credential", '{"client_' + 'secret": "' + "w" * 20 + '"}', "wwwwww"),
     ("bearer_token", "Authorization: Bear" + "er " + "t" * 30, "tttttt"),
@@ -227,7 +227,7 @@ def test_secret_key_family_names_are_redacted(name):
     assert "8Lm2Xp4Rt9" not in result.text
 
 
-@pytest.mark.parametrize("pw", ["pass" + "word99", "Zq" + "8Lm2Xp4Rt"])
+@pytest.mark.parametrize("pw", ["pass" + "word99", "Zq" + "8Lm2" + "Xp4Rt"])
 def test_url_with_empty_user_is_redacted(pw):
     """Breaks if the url_credentials user group needs 1+ chars (redis://:pw@host)."""
     result = mr.redact("cache " + "redis" + "://" + ":" + pw + "@cache.internal:6379 up")
