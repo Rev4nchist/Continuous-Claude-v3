@@ -50,7 +50,7 @@ export const SEEDS = [
     ccv3_rule: 'Never merge a PR without Dave saying yes.' },
   { topic: 'gh-issue-write', pattern: String.raw`\bissue[- ]tracker\b|\bgh\s+(?:issue|label)\s+(?:create|edit|comment|close|delete)\b|\btriage\s+label\b`,
     ccv3_rule: 'No tracker writes: no issue, label or comment. Write the spec to a file.' },
-  { topic: 'reset-hard-rm-rf', pattern: String.raw`\bgit\s+reset\s+--hard\b|\brm\s+-[a-z]*(?:rf|fr)\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+checkout\s+--\s`,
+  { topic: 'reset-hard-rm-rf', pattern: String.raw`\bgit\s+reset\s+--hard\b|\brm\s+-[a-z]*(?:rf|fr)[a-z]*\b|\brm\s+-[a-z]*(?:r\s+-[a-z]*f|f\s+-[a-z]*r)[a-z]*\b|\bgit\s+clean\s+-[a-z]*f|\bgit\s+checkout\s+--\s`,
     ccv3_rule: "Destructive commands need Dave's yes (destructive-command-guard)." },
   // \x60 is a backtick: the pattern holds no literal backtick.
   { topic: 'skill-tool-call', pattern: String.raw`\bSkill\s+tool\b|\*\*[\w-]+\*\*\s+(?:principle\s+)?skills?\b|\x60[\w-]+\x60\s+skills?\b|/setup-[\w-]+`,

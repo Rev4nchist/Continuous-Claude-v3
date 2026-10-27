@@ -1426,6 +1426,8 @@ seedCase('reset-hard-rm-rf', [
   J('Run git ', 'reset ', '--hard HEAD.'),
   J('Run rm ', '-rf', ' build.'),
   J('Run rm ', '-fr', ' build.'),
+  J('Run rm ', '-rfv', ' build.'),
+  J('Run rm ', '-r -f', ' build.'),
   J('Run git ', 'clean ', '-fd.'),
   J('Run git ', 'checkout ', '-- src/x.ts.'),
 ], ['Run git reset HEAD~1 --soft.', 'Run git checkout main.', 'Run rm old.txt.']);
