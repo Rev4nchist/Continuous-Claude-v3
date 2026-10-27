@@ -1,14 +1,19 @@
 # PR submitted → review loop
 
-**Live today (CCv3 `main`):** Two label-gated PR bots: **Greptile** (`greptile-apps[bot]`) on open and
-every push (`.greptile/config.json`), and **CodeRabbit** (`coderabbitai[bot]`) when the PR carries
-`review:coderabbit` or `review:deep` (`.coderabbit.yaml`, `auto_incremental_review: false`). Only PR-bot
+**Live today (CCv3 `main`):** **CodeRabbit** (`coderabbitai[bot]`) reviews a PR that carries
+`review:coderabbit` or `review:deep` (`.coderabbit.yaml`, `auto_incremental_review: false`: a push
+does not start a review). **Greptile** (`greptile-apps[bot]`) stays installed, but its automatic
+review is off (`.greptile/config.json` `"autoReview": []`, Dave, 2026-10-26). While it is off,
+`review-status.mjs` requires CodeRabbit wherever the labels would require Greptile. Only PR-bot
 reviews on the current head count toward READY. `pr_watch` / `review-status.mjs` decide READY; only
 Dave merges (`/land`). Follow the live steps below.
 
+**Dependabot PRs** need no bot review (CodeRabbit refuses bot-authored PRs). This holds only when
+the PR author is the `dependabot[bot]` Bot account and every commit is by `dependabot[bot]` and
+signed by GitHub. A person's commit on that branch ends the exception. All other READY items apply.
+
 **Approved target (Wiring Plan 2026-10-25, D2–D4): partially built.** Label-gated CodeRabbit, READY
-counting (DW-91) and label routing at ready (P3c) are live. Greptile-at-ready stays under "Target
-(approved, not built)" at the end.
+counting (DW-91) and label routing at ready (P3c) are live. See "Target" at the end.
 
 The in-session `/review` skill (Claude subagents) is an opt-in self-check. It **never** counts toward
 READY (D4). Neither does a CodeRabbit CLI or plugin run (see `coderabbit-cli.md`; at most 2
@@ -21,58 +26,63 @@ not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 mi
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
 `scripts/github/review-status.mjs`, tells Dave with a toast, and tells you with one report line at
 READY, merged or closed; when a reviewed head has findings, a confidence below 4/5 or a failed check
-(act per "When the review lands"); when Greptile did not finish a review; and when no review comes in
+(act per "When the review lands"); when a bot did not finish a review; and when no review comes in
 60 minutes. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
 ## Waiting for the review
 
-- Greptile reviews on open and on every push (`.greptile/config.json`). CodeRabbit reviews only when
-  the PR has `review:coderabbit` or `review:deep` (no automatic review on every push). Wait for each
-  routed bot's review of the exact head. Use `pr_status` or `review-status.mjs`, not a 👍 emoji or a
-  bot comment.
-- Proof of a Greptile review is a `greptile-apps` check run on the head that ended `success`. A check
-  that ended `neutral` with "Review was cancelled" was superseded by a push: it is not a review.
+- CodeRabbit reviews when the PR has `review:coderabbit` or `review:deep`. A push does not start a
+  new review: after a fix push, post one `@coderabbitai review` for the new head. Greptile does not
+  review by itself while its `autoReview` is `[]`. Wait for each required bot's review of the exact
+  head. Use `pr_status` or `review-status.mjs`, not a 👍 emoji or a bot comment.
 - Proof of a CodeRabbit review is a `coderabbitai[bot]` review object on the head whose body includes
   "Actionable comments posted: N", or its summary comment naming the head. A green `CodeRabbit` commit
   status or rate-limit notice alone is not a review.
-- Greptile also writes a summary block into the PR body: the last reviewed commit and a confidence
-  score. When you edit a PR body, keep the `<!-- greptile_comment -->` ... `<!-- /greptile_comment -->`
-  block byte for byte. Any edit by a person after Greptile's summary makes the gate report
-  UNAVAILABLE until Greptile rewrites it (one `@greptileai` comment). Edits by apps are fine.
-- Batch fixes into one push. Every push is a new review and costs a credit. After 5 fix rounds
+- When Greptile does review (auto review on, or on request): proof is a `greptile-apps` check run on
+  the head that ended `success`. A check that ended `neutral` with "Review was cancelled" was
+  superseded by a push: it is not a review.
+- Greptile writes its summary in a `<!-- greptile_summary -->` comment, or in a
+  `<!-- greptile_comment -->` block in the PR body. When you edit a PR body, keep that block byte
+  for byte. An edit by a person after a body summary makes the gate report UNAVAILABLE until
+  Greptile rewrites it. Edits by apps are fine.
+- Batch fixes into one push. Every review uses a bot allowance or credit. After 5 fix rounds
   without READY, stop and report to Dave.
 
 ## No review on the head
 
-If no Greptile check appears on the head after 15 minutes, or the last one was cancelled, failed or
-skipped: post ONE comment `@greptileai` on the PR, then wait again. If that also produces no review,
-report to Dave. With his merge yes, post the reason on the PR, then run
-`land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
+If no review from a required bot appears on the head after 15 minutes, or the last one was
+cancelled, failed or skipped: post ONE review request for that bot (`@coderabbitai review`), then
+wait again. After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
+the request; report to Dave. If the request also produces no review, report to Dave. With his merge
+yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
-Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's yes. Do not
-use `review:deep` until the Apex-billing root cause is found (D3).
+While Greptile auto review is off, post `@greptileai` only when Dave asks: each review bills a
+credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
+yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 
 ## When the review lands
 
-1. Read every finding. Greptile marks each with a severity badge:
+1. Read every finding. Greptile marks each with a severity badge (P0-P2); for a CodeRabbit finding,
+   use its own severity as the nearest level:
    - P0: must fix before merge. Never dismiss a P0 without Dave's yes.
    - P1: fix, or dismiss with a one-line reason.
    - P2: fix if cheap, or dismiss with a reason.
    - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
      fix or dismiss it.
 2. Fix real findings on the PR branch. Commit and push once.
-3. For each real finding you fixed, reply `@greptileai Fixed in <sha>: <what changed>` and add a 👍
-   reaction to the finding. Then resolve the thread through GraphQL `resolveReviewThread`. Greptile
-   never resolves GitHub threads itself.
-4. For each false positive, reply `@greptileai <reason>` and add a 👎 reaction to the finding.
-   Then resolve the thread.
-   Greptile learns from tagged replies and from 👍 and 👎 reactions. React only on a finding you
+3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
+   the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
+   resolve GitHub threads themselves. On a Greptile finding, start the reply with `@greptileai`.
+4. For each false positive, reply `<reason>` (with `@greptileai` on a Greptile finding) and add a
+   👎 reaction to the finding. Then resolve the thread.
+   The bots learn from replies and from 👍 and 👎 reactions. React only on a finding you
    judged: 👍 means real and fixed, 👎 means false positive. Add a reaction with
    `gh api repos/<O>/<R>/pulls/comments/<comment_id>/reactions -f content='+1'` (`-1` for 👎).
 5. Never resolve a thread you did not act on.
-6. Wait for the review of the new head (today the push triggers it).
-7. Post the outcome to the user: finding count, fixed count, dismissed count, confidence, CI status.
+6. Request the review of the new head (`@coderabbitai review`; a push does not start one) and wait.
+7. Post the outcome to the user: finding count, fixed count, dismissed count, Greptile confidence
+   (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.
 
 Never merge the PR. That is a separate, confirmed decision.
@@ -80,9 +90,10 @@ Never merge the PR. That is a separate, confirmed decision.
 ## Before you call a PR ready, or land it
 
 Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. READY means:
-Greptile reviewed the CURRENT head commit (check run `success` and a summary naming that head),
-confidence at least 4/5; when the PR has `review:coderabbit` or `review:deep`, a CodeRabbit PR-bot
-review on that head (not CLI output); 0 threads unresolved from any reviewer; every commit status other
+every bot the labels require reviewed the CURRENT head commit (a CodeRabbit PR-bot review, not CLI
+output; while Greptile auto review is off, CodeRabbit replaces Greptile in that list; a Dependabot PR
+as defined above needs none); a Greptile review, when required, has a check run `success`, a summary
+naming that head and confidence at least 4/5; 0 threads unresolved from any reviewer; every commit status other
 than CodeRabbit's is `success`; every check run other than Greptile's is completed with `success`,
 `neutral` or `skipped`; and `mergeable_state` is clean. A merge was once called safe 92 s before a
 reviewer found a real defect on the new head.
@@ -169,7 +180,8 @@ number (Actions, `review-router`, Run workflow).
 - That comment is the router's only memory. It holds the class and the full head SHA the router last saw.
   Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
 - READY trusts a label that drops Greptile only when that comment names the current head and no
-  `risk:*` label is above its class. Otherwise Greptile stays required, and READY says why.
+  `risk:*` label is above its class. Otherwise Greptile stays required (CodeRabbit instead while
+  Greptile auto review is off), and READY says why.
 - Known limit: anyone who can push a branch can run a workflow as `github-actions[bot]`. That person
   can already change labels, so the comment is not a defence against them.
 - Each decision is one JSON line in the job summary (tool `router`).
@@ -182,9 +194,9 @@ number (Actions, `review-router`, Run workflow).
 Approved in the Wiring Plan on 2026-10-25 (D2, D3, D4). **None of this is live.** Each item names the
 phase that builds it. Until then the live steps above apply.
 
-- **Greptile at ready, not on every push (Phase 3, DW-80; D3).** `autoReview` moves from open + push to
-  ready/label. Greptile stays ON. `review:deep` bills Plus, never Apex, and stays blocked until the
-  Apex-billing root cause is known.
+- **Greptile at ready, not on every push (Phase 3, DW-80; D3).** Superseded on 2026-10-26: Dave
+  turned Greptile's automatic review off (`autoReview: []`). Greptile stays installed.
+  `review:deep` bills Plus, never Apex, and stays blocked until the Apex-billing root cause is known.
 - **One final-head review.** After the fix rounds, one explicit review of the final head by each
   routed bot. A fix push no longer triggers an automatic re-review.
 - **Target READY (not built).** Meant to close the three Phase 0 gaps above. Every item holds on the
