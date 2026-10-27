@@ -928,7 +928,7 @@ def _run_agentic_os_step(env_path: Path) -> None:
         console.print("  To retry, in PowerShell from apps/agentic-os:")
         console.print(f"    $env:AGENTIC_OS_DATABASE_URL = (Select-String -Path '{env_path}' "
                       "-Pattern '^CONTINUOUS_CLAUDE_DB_URL=(.*)').Matches[0].Groups[1].Value")
-        console.print("    npm run db:check; npm run db:migrate")
+        console.print("    npm run db:check; if ($LASTEXITCODE -eq 0) { npm run db:migrate }")
         console.print("  In bash: export AGENTIC_OS_DATABASE_URL=\"$(grep -E "
                       f"'^CONTINUOUS_CLAUDE_DB_URL=' '{env_path}' | cut -d= -f2-)\" "
                       "&& npm run db:check && npm run db:migrate")

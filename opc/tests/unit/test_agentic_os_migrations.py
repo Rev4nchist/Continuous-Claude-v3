@@ -97,6 +97,9 @@ def test_wizard_retry_text_sets_the_url_var_without_the_secret(tmp_path, monkeyp
     out = capsys.readouterr().out
     assert "AGENTIC_OS_DATABASE_URL" in out
     assert "s3cret" not in out
+    # db:migrate must not run after a failed db:check in either shell.
+    assert "if ($LASTEXITCODE -eq 0) { npm run db:migrate }" in out
+    assert "npm run db:check && npm run db:migrate" in out
 
 
 def test_missing_npm_is_a_failure(tmp_path, monkeypatch):
