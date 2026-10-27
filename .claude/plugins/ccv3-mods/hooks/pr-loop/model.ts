@@ -237,7 +237,8 @@ const WORDS: Record<PrState, string> = {
   CLOSED: 'closed',
   LIMITED: 'a review did not finish (Greptile or CodeRabbit)',
   REVIEWED: 'reviewed, not READY',
-  STALLED: 'no Greptile review after 60 minutes',
+  // Not used for text: word() builds STALLED from the bots that have not reviewed (stalledWords).
+  STALLED: 'not READY after 60 minutes',
 }
 
 const word = (alert: Alert): string =>
