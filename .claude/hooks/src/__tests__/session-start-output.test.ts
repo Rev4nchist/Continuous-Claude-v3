@@ -57,6 +57,11 @@ describe('isClaudeHomeProject', () => {
     expect(isClaudeHomeProject('C:/Users/x/.claude-other', 'C:/Users/x')).toBe(false);
   });
 
+  it('a home with a trailing separator still matches', () => {
+    expect(isClaudeHomeProject('C:/Users/x/.claude', 'C:/Users/x/')).toBe(true);
+    expect(isClaudeHomeProject('C:\\Users\\x\\.claude\\sub', 'C:\\Users\\x\\')).toBe(true);
+  });
+
   it('an empty home never matches', () => {
     expect(isClaudeHomeProject('C:/Users/x/.claude', '')).toBe(false);
   });

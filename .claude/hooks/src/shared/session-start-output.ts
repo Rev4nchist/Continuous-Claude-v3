@@ -16,7 +16,7 @@ import type { HealthLine } from './memory-health.js';
 export function isClaudeHomeProject(project: string, home: string): boolean {
   if (!home) return false;
   const p = project.replace(/\\/g, '/').toLowerCase();
-  const h = home.replace(/\\/g, '/').toLowerCase();
+  const h = home.replace(/\\/g, '/').toLowerCase().replace(/\/+$/, '');
   return p === `${h}/.claude` || p.startsWith(`${h}/.claude/`);
 }
 
