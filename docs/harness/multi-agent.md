@@ -27,8 +27,9 @@ adversary before the plan shipped (`docs/harness-strategy/2026-07-28-plan-repair
 from the handoff in commit `b8f24d3`).
 
 **Lanes and file claims.** Several Claude Code sessions work on one branch at once. Each session
-claims a lane before it starts work. `lane.mjs` identifies a session by `CLAUDE_CODE_SESSION_ID`,
-so two sessions never share one identity. `lane.mjs say` and `lane.mjs inbox` carry direct
+claims a lane before it starts work. `lane.mjs` takes the session identity from `--as`, or else from `CLAUDE_CODE_SESSION_ID`. Each
+session has its own `CLAUDE_CODE_SESSION_ID`, so identities stay separate unless two sessions pass the
+same `--as` value. An `--as` override must be unique across live sessions. `lane.mjs say` and `lane.mjs inbox` carry direct
 messages between live sessions. The `file-claims` hook blocks edits that collide.
 
 **Cross-model review.** Grok reviews a diff or a plan from a different training family.

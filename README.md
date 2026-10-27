@@ -97,7 +97,7 @@ The guard counts bypass mode, subagent runs (`CLAUDE_AGENT_ID`) and CI as unatte
 | **Safer sessions** | Guards run outside the model. In bypass mode, in a subagent or in CI, the destructive-command guard denies instead of asking | [destructive-command-guard.ts](.claude/hooks/src/destructive-command-guard.ts), [hook-contract-guard.mjs](scripts/hooks/hook-contract-guard.mjs) |
 | **Lean context** | A small core loads every time. Tool rules load on demand. | [context-budget-guard.mjs](scripts/rules/context-budget-guard.mjs), chart below |
 | **"Done" means proven** | Each change needs an end-to-end check with saved output | [AGENTS.md](AGENTS.md) |
-| **Reviewed changes** | Every pull request passes CI: semgrep, trivy, gitleaks and the ratchets. Greptile reviews only on request. CodeRabbit joins when a label asks for it. | [review-status.mjs](scripts/github/review-status.mjs), [.greptile/config.json](.greptile/config.json), [.coderabbit.yaml](.coderabbit.yaml) |
+| **Reviewed changes** | Every pull request passes CI: semgrep, trivy, gitleaks and the ratchets. Greptile reviews only on request. CodeRabbit joins when a label asks for it. The current READY rule is in [Pull request review and CI](docs/harness/review-and-ci.md). | [review-status.mjs](scripts/github/review-status.mjs), [.greptile/config.json](.greptile/config.json), [.coderabbit.yaml](.coderabbit.yaml) |
 
 <p align="center">
   <img alt="Bar chart of always-loaded instructions in characters: 153,689 before PR 57, 18,275 for the core after PR 57, 23,502 measured on 2026-10-26." src="docs/assets/readme/context-cut.svg" width="100%">
@@ -119,7 +119,7 @@ New to the terms here? [CONTEXT.md](CONTEXT.md) defines them. For the details be
 | Commits on `main` | 1,480 | All commits since the first commit on 2026-01-10 |
 | Commits authored as Rev4nchist | 1,209 | `git log --author=Rev4nchist` |
 | Commits from the upstream base | 92 | `git log --author=parcadei` |
-| Merged pull requests | 154 | "Merge pull request" commits on `main` |
+| Pull request merge commits | 154 | "Merge pull request" commits on `main` at this commit. GitHub lists 158 merged pull requests on 2026-10-26, so the count by commit differs. |
 | Hook programs | 73 | TypeScript files at the top level of `.claude/hooks/src/` |
 | Live hook registrations | 75 | Entries across 67 hook names, counted by `hook-contract-guard.mjs` |
 | Hook test files | 101 | `.claude/hooks/src/__tests__/*.test.ts` |

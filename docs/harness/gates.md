@@ -9,7 +9,7 @@ what you changed (`AGENTS.md`).
 
 | You changed | Run this |
 |---|---|
-| A hook | `npm run build` in `.claude/hooks`, then pipe a real payload into the bundle: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` |
+| A hook | `npm run build` in `.claude/hooks`. Then, from the repository root, pipe a real payload into the bundle: `Get-Content payload.json -Raw \| node .claude/hooks/dist/<hook>.mjs` |
 | The sync script | `bash scripts/sync-to-active-cursor.test.sh` (runs the real script in a temporary home) |
 | Coordination | The matching `scripts/coordination/*-probe.mjs` |
 | A rule, skill or agent | After the sync, `claude -p "<prompt>" --output-format json`, then confirm the new behaviour |
