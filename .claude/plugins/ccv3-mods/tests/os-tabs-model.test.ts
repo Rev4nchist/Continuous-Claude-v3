@@ -25,22 +25,29 @@ import type { OsBrief, OsTask } from '../types'
 // O15 Overview loses the stale mark on ASK, or draws it in the amber of a fresh ask
 // O16 Overview loses "[parsed]" on GOAL or STOP AT, or draws it on a goal that brief_set wrote
 // O17 Proof lists several proofs oldest first
+// O18 PR 3 (Dave: no ctx, cost or limits outside the status line): Overview draws a ctx gauge, a dollar cost, a limit or a percent,
+//     at any width or height; its rows change when ctx or cost change; the old ctx and cost row key is still there
 
 const NOW = 100 * 3600_000
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
 const TABS_LIVE: TabId[] = ['overview', 'plan', 'proof', 'decisions']
 
-const empty = (over: Partial<TabState> = {}): TabState => ({
-  view: { tasks: [], plan: null, turn: null, step: null, ctx: null, agents: [], lanes: null, prs: [] },
-  chip: 'idle',
-  brief: null,
-  repo: null,
-  branch: null,
-  worktree: null,
-  costUsd: null,
-  activeAt: null,
-  ...over,
-})
+// costUsd is still fed by the caller; the tests prove Overview does not draw it. Typed loose so the helpers compile
+// whether or not TabState keeps the field.
+type Fed = Partial<TabState> & { costUsd?: number | null }
+
+const empty = (over: Fed = {}): TabState =>
+  ({
+    view: { tasks: [], plan: null, turn: null, step: null, ctx: null, agents: [], lanes: null, prs: [] },
+    chip: 'idle',
+    brief: null,
+    repo: null,
+    branch: null,
+    worktree: null,
+    costUsd: null,
+    activeAt: null,
+    ...over,
+  }) as TabState
 
 const task = (id: string, subject: string, status: OsTask['status']): OsTask => ({ id, subject, status })
 
@@ -144,22 +151,49 @@ describe('os overview', () => {
     expect(text).toMatch(/Bash\s+npm test/)
     expect(text).toContain('1:05')
     expect(text).toMatch(/scout\s+map hooks/)
-    expect(text).toContain('41%')
-    expect(text).toContain('$1.84')
     expect(text).toMatch(/#194\s+● READY/)
   })
 
-  test('O2 GOAL not set stays visible, and unknown repo, branch, worktree, cost and ctx read as a dash, not as a value', () => {
+  test('O2 GOAL not set stays visible, and unknown repo, branch and worktree read as a dash, not as a value', () => {
     const rows = tabRows('overview', empty(), NOW, 100, 60)
     const text = all(rows)
     expect(text).toContain('GOAL not set')
     expect(rows.flatMap(one => one.left).find(one => one.text.includes('not set'))?.tone).toBe('warn')
     expect(text).toContain('IDLE')
     expect(text).toMatch(/repo\s+-/)
-    expect(text).toContain('$-')
     expect(text).not.toContain('NaN')
     expect(text).not.toContain('undefined')
     expect(text).not.toContain('null')
+  })
+})
+
+describe('os overview without ctx, cost or limits (PR 3)', () => {
+  // The words and shapes the status line owns. Nothing of them may reach an Overview row.
+  const OWNED = /ctx|\$|\bcost\b|limit|\b[57][hd]\b|\d\s*%/i
+
+  const withGauges = (ctx: number | null, costUsd: number | null): TabState => {
+    const state = rich()
+    return { ...state, costUsd, view: { ...state.view, ctx } } as TabState
+  }
+
+  test('O18 no Overview row draws ctx, a dollar cost, a limit or a percent, at every width from 20 to 200 and at 10, 13 and 60 rows', () => {
+    for (const state of [rich(), withGauges(97, 120.5), withGauges(0, 0), withGauges(null, null)]) {
+      for (const rows of [10, 13, 60]) {
+        for (let columns = 20; columns <= 200; columns++) expect(all(tabRows('overview', state, NOW, columns, rows))).not.toMatch(OWNED)
+      }
+    }
+  })
+
+  test('O18 the Overview rows are the same whatever ctx and cost the caller feeds, in a roomy and in a short pane', () => {
+    for (const rows of [60, 13, 12, 10]) {
+      const calm = lines(tabRows('overview', withGauges(5, 0.01), NOW, 58, rows))
+      expect(lines(tabRows('overview', withGauges(99, 250), NOW, 58, rows))).toEqual(calm)
+      expect(lines(tabRows('overview', withGauges(null, null), NOW, 58, rows))).toEqual(calm)
+    }
+  })
+
+  test('O18 the ctx and cost row is gone: no row keyed ov-health', () => {
+    expect(tabRows('overview', rich(), NOW, 100, 60).map(row => row.key)).not.toContain('ov-health')
   })
 })
 
@@ -403,7 +437,7 @@ describe('os overview in a short pane', () => {
         expect(built.length).toBeLessThanOrEqual(rows)
         expect(text).toContain('AGENTS')
         expect(text).toContain('PRS')
-        const complete = ['LANE', 'NOW', 'STOP AT', 'worktree', 'ctx'].every(word => text.includes(word))
+        const complete = ['LANE', 'NOW', 'STOP AT', 'worktree'].every(word => text.includes(word))
         if (!complete) expect(rowText(built[built.length - 1]!)).toMatch(/^\s*\+\d+ more$/)
       }
     }
