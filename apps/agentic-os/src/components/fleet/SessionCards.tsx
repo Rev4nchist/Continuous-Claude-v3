@@ -29,10 +29,14 @@ export function SessionCards({
   cards,
   filter,
   onClear,
+  selectedId,
+  onSelect,
 }: {
   cards: SessionCard[];
   filter: SessionFilter | null;
   onClear: () => void;
+  selectedId: string | null;
+  onSelect: (id: string) => void;
 }) {
   return (
     <section data-testid="session-cards" className="space-y-3">
@@ -67,7 +71,12 @@ export function SessionCards({
       ) : (
         <ul className="grid grid-cols-1 gap-2 lg:grid-cols-2">
           {cards.map((card) => (
-            <SessionCardItem key={card.id} card={card} />
+            <SessionCardItem
+              key={card.id}
+              card={card}
+              selected={card.id === selectedId}
+              onSelect={onSelect}
+            />
           ))}
         </ul>
       )}
@@ -75,7 +84,15 @@ export function SessionCards({
   );
 }
 
-function SessionCardItem({ card }: { card: SessionCard }) {
+function SessionCardItem({
+  card,
+  selected,
+  onSelect,
+}: {
+  card: SessionCard;
+  selected: boolean;
+  onSelect: (id: string) => void;
+}) {
   const pct = card.planTotal > 0 ? Math.round((card.planDone / card.planTotal) * 100) : 0;
   const stateStale = card.stateAgeSeconds !== null && card.stateAgeSeconds > STATE_STALE_SECONDS;
   // With a brief the plan and the counts always show. Without one they show only when the task
@@ -87,9 +104,18 @@ function SessionCardItem({ card }: { card: SessionCard }) {
     <li
       data-testid="session-card"
       data-session-id={card.id}
-      className="min-w-0 space-y-2 rounded-lg border bg-card p-3"
+      className={cn(
+        'min-w-0 rounded-lg border bg-card',
+        selected && 'ring-2 ring-primary',
+      )}
     >
-      <div className="flex items-start gap-2">
+      <button
+        type="button"
+        aria-pressed={selected ? 'true' : 'false'}
+        onClick={() => onSelect(card.id)}
+        className="block w-full min-w-0 space-y-2 rounded-lg p-3 text-left transition-colors hover:bg-accent/40"
+      >
+      <span className="flex items-start gap-2">
         <span
           aria-hidden
           title={card.liveColour === 'green' ? 'active in the last 2 minutes' : 'quiet for over 2 minutes'}
@@ -114,36 +140,36 @@ function SessionCardItem({ card }: { card: SessionCard }) {
             {card.chip}
           </span>
         )}
-      </div>{' '}
+      </span>{' '}
 
       {card.hasBrief && card.title !== null && (
-        <p className="text-sm font-medium [overflow-wrap:anywhere]">{card.title}</p>
+        <span className="block text-sm font-medium [overflow-wrap:anywhere]">{card.title}</span>
       )}{' '}
       {card.hasBrief && card.goal !== null && (
-        <p className="text-xs text-muted-foreground [overflow-wrap:anywhere]">{card.goal}</p>
+        <span className="block text-xs text-muted-foreground [overflow-wrap:anywhere]">{card.goal}</span>
       )}{' '}
       {!card.hasBrief && (
-        <p className="text-xs text-muted-foreground">
+        <span className="block text-xs text-muted-foreground">
           No brief yet{' '}
           {!showCounts && card.ctxPct !== null && (
             <span className="ml-2 font-mono">{`ctx ${card.ctxPct}%`}</span>
           )}
-        </p>
+        </span>
       )}{' '}
 
       {card.planTotal > 0 ? (
-        <div className="flex items-center gap-2 text-xs">
+        <span className="flex items-center gap-2 text-xs">
           <span aria-hidden className="h-1.5 min-w-0 flex-1 overflow-hidden rounded-full bg-muted">
             <span className="block h-full rounded-full bg-done" style={{ width: `${pct}%` }} />
           </span>{' '}
           <span className="shrink-0 tabular-nums">{`${card.planDone} of ${card.planTotal}`}</span>
-        </div>
+        </span>
       ) : (
-        card.hasBrief && <p className="text-xs text-muted-foreground">No plan steps yet.</p>
+        card.hasBrief && <span className="block text-xs text-muted-foreground">No plan steps yet.</span>
       )}{' '}
 
       {showCounts && (
-        <div className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[0.6875rem]">
+        <span className="flex flex-wrap gap-x-3 gap-y-1 font-mono text-[0.6875rem]">
           {/* The {' '} text nodes keep the words apart in the page text: a screen reader
               and a text search read "ASK 1 UNPROVEN 1", not "ASK 1UNPROVEN 1". */}
           <span className={card.askOpen > 0 ? 'text-warn' : 'text-muted-foreground'}>
@@ -160,16 +186,17 @@ function SessionCardItem({ card }: { card: SessionCard }) {
           {card.ctxPct !== null && (
             <span className="text-muted-foreground">{`ctx ${card.ctxPct}%`}</span>
           )}
-        </div>
+        </span>
       )}{' '}
 
       {card.stateAgeSeconds !== null && (
-        <p className={cn('text-[0.6875rem]', stateStale ? 'text-warn' : 'text-muted-foreground')}>
+        <span className={cn('block text-[0.6875rem]', stateStale ? 'text-warn' : 'text-muted-foreground')}>
           {stateStale
             ? `state file stale: written ${formatAgo(card.stateAgeSeconds)}`
             : `state written ${formatAgo(card.stateAgeSeconds)}`}
-        </p>
+        </span>
       )}
+      </button>
     </li>
   );
 }

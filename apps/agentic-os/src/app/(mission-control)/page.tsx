@@ -1,5 +1,6 @@
-import { MissionControl } from '@/components/fleet/MissionControl';
+import { MissionControl, type ViewId } from '@/components/fleet/MissionControl';
 import { getMissionControlSnapshot } from '@/server/queries/mission-control';
+import { parseSessionId } from '@/server/queries/session-detail';
 
 /**
  * Mission Control — the fleet is home (ADR-0004).
@@ -13,11 +14,34 @@ import { getMissionControlSnapshot } from '@/server/queries/mission-control';
  * The data is fetched HERE, on the server, and handed to a client component as
  * `initial`. So the first paint is real data with no loading skeleton and no
  * client round-trip, and polling only ever refreshes something already correct.
+ *
+ * `?view=sessions&session=<id>` selects the view and the session. `searchParams` is a
+ * Promise in Next 16. A `view` that is not a known value and a `session` of the wrong
+ * format are ignored.
  */
 export const dynamic = 'force-dynamic';
 
-export default async function MissionControlPage() {
-  const snapshot = await getMissionControlSnapshot();
+const VIEWS: readonly ViewId[] = ['overview', 'sessions'];
 
-  return <MissionControl initial={snapshot} />;
+function parseView(value: string | string[] | undefined): ViewId {
+  const first = Array.isArray(value) ? value[0] : value;
+  return VIEWS.find((view) => view === first) ?? 'overview';
+}
+
+export default async function MissionControlPage({
+  searchParams,
+}: {
+  searchParams: Promise<Record<string, string | string[] | undefined>>;
+}) {
+  const params = await searchParams;
+  const initialSession = parseSessionId(params.session);
+  const snapshot = await getMissionControlSnapshot(initialSession);
+
+  return (
+    <MissionControl
+      initial={snapshot}
+      initialView={parseView(params.view)}
+      initialSession={initialSession}
+    />
+  );
 }

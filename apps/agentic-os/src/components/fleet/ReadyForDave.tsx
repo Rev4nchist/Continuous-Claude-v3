@@ -9,8 +9,15 @@ import { formatAge } from './format';
  * Amber is the colour for "a person is needed". The strip sits at the very top of the page.
  * The server already dropped answered asks, asks older than 24 h, and asks of sessions that
  * ended or were quiet for over 24 h, so this component only draws what it is given.
+ * The session name is a button: it opens that session's detail (the only button of an item).
  */
-export function ReadyForDave({ items }: { items: ReadyItem[] }) {
+export function ReadyForDave({
+  items,
+  onSelect,
+}: {
+  items: ReadyItem[];
+  onSelect: (sessionId: string) => void;
+}) {
   return (
     <section
       data-testid="ready-for-dave"
@@ -35,9 +42,14 @@ export function ReadyForDave({ items }: { items: ReadyItem[] }) {
               className="min-w-0 rounded-md border border-warn/30 bg-card p-3"
             >
               <div className="flex flex-wrap items-baseline justify-between gap-x-3 gap-y-1">
-                <span className="min-w-0 font-mono text-xs text-muted-foreground [overflow-wrap:anywhere]">
+                <button
+                  type="button"
+                  onClick={() => onSelect(item.sessionId)}
+                  title="Open the session detail"
+                  className="min-w-0 text-left font-mono text-xs text-muted-foreground underline-offset-2 transition-colors hover:text-foreground hover:underline [overflow-wrap:anywhere]"
+                >
                   {item.name}
-                </span>
+                </button>
                 <span className="shrink-0 text-[0.6875rem] text-muted-foreground tabular-nums">
                   <span className="mr-2 rounded-full border border-warn/40 px-2 py-0.5 text-warn">
                     {item.kind}

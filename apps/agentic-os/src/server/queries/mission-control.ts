@@ -5,11 +5,17 @@ import { checkDatabaseReady } from '@/db';
 import {
   getActiveLaneCount,
   getFleetSessions,
+  getHeldLanes,
   type FleetSessions,
   type ReadyItem,
   type SessionCard,
 } from '@/server/queries/fleet-sessions';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
+import {
+  getSessionDetail,
+  type DetailUnavailable,
+  type SessionDetail,
+} from '@/server/queries/session-detail';
 import { getActiveSessions, type ActiveSessions } from '@/server/queries/sessions';
 import { safeMessage } from '@/server/sources/safe-message';
 import { readStateFiles, type StateFiles } from '@/server/sources/state-files';
@@ -41,7 +47,7 @@ export type StatTiles = {
   openPrs: number;
 };
 
-export type { ReadyItem, SessionCard };
+export type { DetailUnavailable, ReadyItem, SessionCard, SessionDetail };
 
 export type MissionControlSnapshot = {
   fleet: FleetOverview;
@@ -53,6 +59,10 @@ export type MissionControlSnapshot = {
   cards: SessionCard[];
   tiles: StatTiles;
   sources: DataSource[];
+  /** The asked session (`?session=<id>`), or null. Non-null only when it passes the availability rules. */
+  detail: SessionDetail | null;
+  /** Set when a valid-format id was asked for and `detail` is null. */
+  detailUnavailable: DetailUnavailable | null;
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -107,20 +117,32 @@ function stateFilesSource(
   return { ...base, status: bad > 0 ? 'degraded' : 'ok', detail: parts.join(', ') };
 }
 
-export async function getMissionControlSnapshot(): Promise<MissionControlSnapshot> {
-  const [databaseRaw, fleet, active, files, lanes] = await Promise.all([
+/** `sessionId` must already pass parseSessionId(); the caller validates it. */
+export async function getMissionControlSnapshot(
+  sessionId: string | null = null,
+): Promise<MissionControlSnapshot> {
+  const [databaseRaw, fleet, active, files, lanes, heldLanes] = await Promise.all([
     checkDatabaseReady(),
     getFleetOverview(),
     getActiveSessions(),
     settle(readStateFiles),
     settle(getActiveLaneCount),
+    settle(getHeldLanes),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
     ? databaseRaw
     : { ok: false, error: safeMessage(databaseRaw.error) };
 
-  const joined = await settle(() => getFleetSessions(active, files.ok ? files.value : NO_FILES));
+  const heldByOwner = heldLanes.ok ? heldLanes.value : new Map<string, string[]>();
+  const stateFiles = files.ok ? files.value : NO_FILES;
+  const nowMs = Date.now();
+  const [joined, detailResult] = await Promise.all([
+    settle(() => getFleetSessions(active, stateFiles, nowMs, heldByOwner)),
+    sessionId === null
+      ? Promise.resolve(null)
+      : settle(() => getSessionDetail(sessionId, stateFiles, heldByOwner, nowMs)),
+  ]);
   const sessions = joined.ok ? joined.value : NO_FLEET;
 
   const tiles: StatTiles = {
@@ -157,6 +179,13 @@ export async function getMissionControlSnapshot(): Promise<MissionControlSnapsho
     cards: sessions.cards,
     tiles,
     sources,
+    detail: detailResult?.ok ? detailResult.value.detail : null,
+    // A detail read that throws shows as "unknown id", so the panel never waits on it forever.
+    detailUnavailable: !detailResult
+      ? null
+      : detailResult.ok
+        ? detailResult.value.unavailable
+        : { id: sessionId as string, reason: 'unknown id' },
     generatedAt: new Date().toISOString(),
   };
 }
