@@ -15,6 +15,7 @@
  *   --skip-cr  do not run the CodeRabbit CLI review. The stamp records cr_skipped and cr_skip_reason "flag",
  *              and the pre-pr-gate hook denies such a stamp. Use it to test this script, not to open a PR.
  *   --cr-timeout-min N  the hard time limit of the CodeRabbit review in minutes (default 30; env PRE_PR_CR_TIMEOUT_MIN).
+ *              The floor is 15: a lower value is ignored with a warning and the limit stays 30.
  *   --json     print one JSON document, not lines.
  * Steps, one PASS / FAIL / SKIP / NOTE line each: git:branch, git:clean, git:behind, changes, evidence,
  * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit. NOTE lines follow the
@@ -43,7 +44,8 @@
  * Files (all under the gitignored .claude/cache/):
  *   pre-pr/stamp.json                      read by the pre-pr-gate hook: { head, branch, at, body_sha256,
  *                                          cr_skipped, cr_skip_reason, cr_retry_minutes, cr_finished_runs, results }
- *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2, coderabbit-cli.md)
+ *   pre-pr/cr-runs-<branch>.json           the CLI runs used on this branch (cap 2, coderabbit-cli.md). Keyed on the branch
+ *                                          name and its first own commit: a merge of main keeps the count, a rebase starts a new one.
  *   pre-pr/cr-lock-<branch>.json           { pid, head, at }, held for the whole CodeRabbit step; a second step on the
  *                                          branch FAILs while it is held; a lock whose pid is dead is replaced.
  *   The counter and the lock sit in the primary checkout's cache (git's common dir), so every worktree shares them.
@@ -357,10 +359,31 @@ export function assertSafeCrArgs(args) {
   if (bad || args[0] !== 'review') throw new Error(`forbidden CodeRabbit argument: ${bad ?? args[0]}`);
 }
 
-/** The review time limit in ms: --cr-timeout-min, else PRE_PR_CR_TIMEOUT_MIN, else 30 minutes. Bad values give 30. */
+/** coderabbit-cli.md: a review needs a time limit of at least 15 minutes, or a normal review is cut off and a run is wasted. */
+export const CR_TIMEOUT_MIN_FLOOR = 15;
+
+const timeoutSetting = (argv, env) => {
+  const fromFlag = option(argv, '--cr-timeout-min');
+  return fromFlag !== null ? { name: '--cr-timeout-min', raw: fromFlag } : { name: 'PRE_PR_CR_TIMEOUT_MIN', raw: env.PRE_PR_CR_TIMEOUT_MIN };
+};
+
+/**
+ * The review time limit in ms: --cr-timeout-min, else PRE_PR_CR_TIMEOUT_MIN, else 30 minutes. A value under 15 (or not a number)
+ * is not used: the limit falls back to 30. It is not a usage error, so a run is never refused over this; crTimeoutProblem says so.
+ * A test that needs a short limit passes timeoutMs to runCodeRabbit or defaultCrRunner, not the flag.
+ */
 export function crTimeoutMs(argv, env = process.env) {
-  const n = Number(option(argv, '--cr-timeout-min') ?? env.PRE_PR_CR_TIMEOUT_MIN);
-  return (Number.isFinite(n) && n >= 1 ? n : CR_TIMEOUT_MIN_DEFAULT) * MIN;
+  const n = Number(timeoutSetting(argv, env).raw);
+  return (Number.isFinite(n) && n >= CR_TIMEOUT_MIN_FLOOR ? n : CR_TIMEOUT_MIN_DEFAULT) * MIN;
+}
+
+/** A warning text when a time limit was given and is not used, else null. */
+export function crTimeoutProblem(argv, env = process.env) {
+  const { name, raw } = timeoutSetting(argv, env);
+  if (raw === undefined || raw === null) return null;
+  const n = Number(raw);
+  if (Number.isFinite(n) && n >= CR_TIMEOUT_MIN_FLOOR) return null;
+  return `${name}=${raw} is not used: the time limit must be a number of at least ${CR_TIMEOUT_MIN_FLOOR} minutes. Using ${CR_TIMEOUT_MIN_DEFAULT}.`;
 }
 
 /**
@@ -594,22 +617,26 @@ export function sharedPrDir(root) {
 }
 
 /**
- * The merge-base SHA of the branch and the base, or '' when git cannot tell (not a checkout, no such ref). It makes a branch name that
- * is reused for new work start with an empty count. Note: merging the base into the branch moves the merge-base and so starts a new count.
+ * The branch's first own commit: the oldest commit of `git rev-list --reverse --first-parent <base>..<branch>`, or '' when the branch has
+ * none or git cannot tell (not a checkout). It makes a branch name that is reused for new work start with an empty count. A merge of the base
+ * into the branch leaves it unchanged (the first-parent line stays), so the cap holds across a merge of main. A rebase or an amend of
+ * that commit rewrites it and so starts a new count. HEAD is read only when the branch ref does not exist.
  */
-function mergeBaseOf(root, branch, base) {
+function firstOwnCommitOf(root, branch, base) {
   for (const tip of [`refs/heads/${branch}`, 'HEAD']) {
-    const r = spawnSync('git', ['merge-base', base, tip], { cwd: root, encoding: 'utf8', windowsHide: true });
-    if (r.status === 0 && /^[0-9a-f]{40}$/.test(r.stdout.trim())) return r.stdout.trim();
+    const r = spawnSync('git', ['rev-list', '--reverse', '--first-parent', `${base}..${tip}`], { cwd: root, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+    if (r.status !== 0) continue;
+    const first = r.stdout.split(/\r?\n/)[0].trim();
+    return /^[0-9a-f]{40}$/.test(first) ? first : '';
   }
   return '';
 }
 
-/** { dir, counter, lock } for a branch, in the shared folder. The key is the branch name plus its merge-base with the base. */
+/** { dir, counter, lock } for a branch, in the shared folder. The key is the branch name plus its first own commit (see firstOwnCommitOf). */
 export function crPaths(root, branch, base = 'main') {
   const dir = sharedPrDir(root);
-  const mergeBase = mergeBaseOf(root, branch, base);
-  const name = safeName(mergeBase ? `${branch}@${mergeBase}` : branch);
+  const firstCommit = firstOwnCommitOf(root, branch, base);
+  const name = safeName(firstCommit ? `${branch}@${firstCommit}` : branch);
   return { dir, counter: path.join(dir, `cr-runs-${name}.json`), lock: path.join(dir, `cr-lock-${name}.json`) };
 }
 
@@ -819,6 +846,8 @@ async function main() {
     console.error(`pre-pr: cannot read the body file ${bodyPath} (${String(err.message).split('\n')[0]})\n${USAGE}`);
     process.exit(2);
   }
+  const timeoutProblem = crTimeoutProblem(args);
+  if (timeoutProblem) console.error(`pre-pr: ${timeoutProblem}`);
   const run = await runPrePr({
     root: repoRoot(), base: option(args, '--base') ?? 'main', bodyText, skipCr: args.includes('--skip-cr'),
     crTimeout: crTimeoutMs(args), log: (line) => console.error(line),

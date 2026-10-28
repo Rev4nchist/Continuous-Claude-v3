@@ -593,6 +593,19 @@ describe('pr-loop watcher', () => {
     expect(seen.submits[1]).toContain('bbbbbbb')
   })
 
+  test('W34 a proof problem only in status.proof.problems is listed in the author line', async ($, on) => {
+    const s = status(8, { reasons: [], proof: { required: true, type: 'feature', status: 'invalid', problems: [PROOF_REASON, GREEN_REASON] } })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    const line = seen.submits[0] as string
+    expect(line).toContain('no "Proof type:" line')
+    expect(line).toContain('GREEN names commit aaaaaaa')
+    expect(line).not.toMatch(/wrong: \./)
+    expect(line).toMatch(/Author action/)
+  })
+
   test('W32 findings on a reviewed head come before the proof problem', async ($, on) => {
     const s = status(8, { routing: CR_ONLY, routedReviewed: true, coderabbitReviewedHead: true, reviewedHead: true, unresolved: 2, reasons: [PROOF_REASON, '2 review thread(s) unresolved'] })
     const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })

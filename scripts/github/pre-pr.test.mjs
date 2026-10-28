@@ -47,7 +47,7 @@ import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
-  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, runGate,
+  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate,
 } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -615,11 +615,27 @@ test('P5: a slow review prints a heartbeat line through log', async () => {
   assert.ok(lines.some((m) => /still running/.test(m) && /60/.test(m) && /heartbeat/.test(m)), lines.join('\n'));
 });
 
-test('T1: the review time limit is 30 minutes, set by --cr-timeout-min or PRE_PR_CR_TIMEOUT_MIN; the flag wins; bad values fall back', () => {
+test('T1: the review time limit is 30 minutes, set by --cr-timeout-min or PRE_PR_CR_TIMEOUT_MIN; the flag wins; the floor is 15; bad values fall back to 30', () => {
   assert.equal(crTimeoutMs([], {}), 30 * 60_000);
   assert.equal(crTimeoutMs([], { PRE_PR_CR_TIMEOUT_MIN: '45' }), 45 * 60_000);
   assert.equal(crTimeoutMs(['--cr-timeout-min', '20'], { PRE_PR_CR_TIMEOUT_MIN: '45' }), 20 * 60_000);
+  assert.equal(crTimeoutMs(['--cr-timeout-min', '15'], {}), 15 * 60_000, '15 is the floor and is allowed');
+  for (const low of ['1', '5', '14', '14.9']) {
+    assert.equal(crTimeoutMs(['--cr-timeout-min', low], {}), 30 * 60_000, `flag ${low}`);
+    assert.equal(crTimeoutMs([], { PRE_PR_CR_TIMEOUT_MIN: low }), 30 * 60_000, `env ${low}`);
+  }
   for (const bad of ['0', '-3', 'abc', '']) assert.equal(crTimeoutMs([], { PRE_PR_CR_TIMEOUT_MIN: bad }), 30 * 60_000, bad);
+});
+
+test('T1b: a value under 15 is named in a warning, so the fallback is not silent; a good or absent value gives none', () => {
+  assert.match(crTimeoutProblem(['--cr-timeout-min', '5'], {}), /at least 15/);
+  assert.match(crTimeoutProblem(['--cr-timeout-min', '5'], {}), /30/);
+  assert.match(crTimeoutProblem([], { PRE_PR_CR_TIMEOUT_MIN: 'abc' }), /PRE_PR_CR_TIMEOUT_MIN/);
+  assert.equal(crTimeoutProblem([], {}), null);
+  assert.equal(crTimeoutProblem(['--cr-timeout-min', '15'], {}), null);
+  assert.equal(crTimeoutProblem([], { PRE_PR_CR_TIMEOUT_MIN: '45' }), null);
+  // The flag wins, so a bad env value behind a good flag is not reported.
+  assert.equal(crTimeoutProblem(['--cr-timeout-min', '20'], { PRE_PR_CR_TIMEOUT_MIN: '3' }), null);
 });
 
 function fakeCr(source) {
@@ -849,7 +865,44 @@ test('L5: a lock older than the time limit plus 10 minutes is stale even when it
   assert.equal((await runCodeRabbit(crOpts(short, { timeoutMs: 5 * 60_000 }))).status, 'PASS');
 });
 
-test('Q1: the run counter is keyed on the branch name and its merge-base with the base: a reused branch name starts with an empty count', async () => {
+test('Q2: merging main into the branch keeps the run count and the cap; a rebase rewrites the first own commit and starts a new count', async () => {
+  const repo = makeRepo();
+  const f = crFixture();
+  const run = (head) => runCodeRabbit({ root: repo.dir, branch: 'feat/x', head, base: 'main', now: f.now, runner: f.runner });
+  await run('1'.repeat(40));
+  await run('2'.repeat(40));
+  const before = crPaths(repo.dir, 'feat/x');
+  assert.equal(finishedRuns(repo.dir, 'feat/x'), 2);
+  git(repo.dir, 'checkout', '-q', 'main');
+  writeFileSync(path.join(repo.dir, 'later.txt'), 'later\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'main moved on');
+  git(repo.dir, 'checkout', '-q', 'feat/x');
+  git(repo.dir, 'merge', '-q', '--no-edit', 'main');
+  assert.equal(crPaths(repo.dir, 'feat/x').counter, before.counter, 'a merge of main keeps the counter');
+  assert.equal(crPaths(repo.dir, 'feat/x').lock, before.lock, 'and the lock');
+  assert.equal(finishedRuns(repo.dir, 'feat/x'), 2);
+  assert.equal((await run('3'.repeat(40))).skipReason, 'cap', 'the cap still holds after the merge');
+  writeFileSync(path.join(repo.dir, 'more.txt'), 'more\n');
+  git(repo.dir, 'add', '.');
+  git(repo.dir, 'commit', '-q', '-m', 'more work');
+  assert.equal(crPaths(repo.dir, 'feat/x').counter, before.counter, 'more own commits keep it too');
+  // A side branch with a much older commit, merged in: the first-parent line decides, so the key does not move.
+  const old = { ...process.env, GIT_AUTHOR_DATE: '2001-01-01T00:00:00', GIT_COMMITTER_DATE: '2001-01-01T00:00:00' };
+  const gitOld = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: repo.dir, env: old, encoding: 'utf8', windowsHide: true });
+  gitOld('checkout', '-q', '-b', 'side', 'feat/x~2');
+  writeFileSync(path.join(repo.dir, 'side.txt'), 'side\n');
+  gitOld('add', '.');
+  gitOld('commit', '-q', '-m', 'old side work');
+  gitOld('checkout', '-q', 'feat/x');
+  gitOld('merge', '-q', '--no-edit', 'side');
+  assert.equal(crPaths(repo.dir, 'feat/x').counter, before.counter, 'a merge of an older side branch keeps it too');
+  git(repo.dir, 'rebase', '-q', 'main');
+  assert.notEqual(crPaths(repo.dir, 'feat/x').counter, before.counter, 'a rebase rewrites the first own commit: a new count');
+  assert.equal(finishedRuns(repo.dir, 'feat/x'), 0);
+});
+
+test('Q1: the run counter is keyed on the branch name and its first own commit: a reused branch name starts with an empty count', async () => {
   const repo = makeRepo();
   const f = crFixture();
   const run = (head) => runCodeRabbit({ root: repo.dir, branch: 'feat/x', head, base: 'main', now: f.now, runner: f.runner });

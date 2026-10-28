@@ -266,7 +266,7 @@ Run this from the repo root, then open the PR again:
 }
 function isCcv3Checkout(deps, dir) {
   const r = deps.git(dir, ["remote", "-v"]);
-  if (r.status !== 0) return null;
+  if (r.status !== 0) throw new Error(`git remote -v failed in ${dir} (exit ${r.status})`);
   return r.stdout.split(/\r?\n/).some((line) => {
     const url = line.split(/\s+/)[1];
     return url !== void 0 && isCcv3Remote(url);
@@ -351,22 +351,36 @@ function gate(input, command, deps) {
 }
 var sha256Of = (text) => text === null ? null : createHash("sha256").update(text).digest("hex");
 function handle(raw, deps) {
+  let input = {};
+  let command = "";
+  let prCreate = false;
   try {
-    const input = JSON.parse(raw.trim() || "{}");
+    input = JSON.parse(raw.trim() || "{}");
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
-    const command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+    command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
+    prCreate = isPrOpenCommand(command);
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
     if (d.action !== "deny") return "{}";
     logGuardDecision(HOOK, input, "deny", d.pattern, { command });
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } });
   } catch (err) {
+    const message = String(err?.message ?? err);
     try {
-      deps.logError?.(String(err?.message ?? err));
+      deps.logError?.(message);
     } catch {
     }
-    return "{}";
+    if (!prCreate) return "{}";
+    if (hasOverride(joinContinuations(command), deps.env)) {
+      logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
+      return "{}";
+    }
+    logGuardDecision(HOOK, input, "deny", "verify-error", { command });
+    const reason = `BLOCKED (pre-pr-gate): could not verify the pre-PR stamp (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.
+
+The stamp comes from: ${RUN}`;
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
   }
 }
 function makeGit(spawn = spawnSync) {

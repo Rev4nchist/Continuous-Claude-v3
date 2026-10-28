@@ -12,8 +12,10 @@
  * hand lexers in guards never converge. Known false positive: a command that only quotes the text
  * `gh pr create` in this repo. Write commit messages with `commit -F <file>` to avoid it.
  *
- * Posture: fail CLOSED only for a matched shape in the CCv3 repo (a missing, stale or unreadable stamp
- * denies). Everything else is allowed. Any internal error is allowed and logged.
+ * Posture: fail CLOSED for a matched PR-create shape: a missing, stale or unreadable stamp denies, and so does an internal
+ * error while the stamp is checked (git timeout, git or spawn error, remotes that cannot be listed). The error is logged.
+ * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
+ * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
  * Dave only. The deny text does not mention it. Each use writes an `override` line to guard-decisions.jsonl.
  */
@@ -108,9 +110,10 @@ function deny(pattern: string, why: string): Decision {
   };
 }
 
-function isCcv3Checkout(deps: Deps, dir: string): boolean | null {
+/** True when a remote of the checkout is the CCv3 fork. Throws when git cannot list the remotes: the repo is then not known, and handle() denies. */
+function isCcv3Checkout(deps: Deps, dir: string): boolean {
   const r = deps.git(dir, ['remote', '-v']);
-  if (r.status !== 0) return null;
+  if (r.status !== 0) throw new Error(`git remote -v failed in ${dir} (exit ${r.status})`);
   return r.stdout.split(/\r?\n/).some((line) => {
     const url = line.split(/\s+/)[1];
     return url !== undefined && isCcv3Remote(url);
@@ -206,19 +209,34 @@ const sha256Of = (text: string | null): string | null => (text === null ? null :
 
 /** The whole hook: raw stdin text in, stdout text out. Never throws. */
 export function handle(raw: string, deps: Deps): string {
+  let input: HookInput = {};
+  let command = '';
+  let prCreate = false;
   try {
-    const input = JSON.parse(raw.trim() || '{}') as HookInput;
+    input = JSON.parse(raw.trim() || '{}') as HookInput;
     const tool = input.tool_name || input.tool || '';
     if (!COMMAND_TOOLS.has(tool)) return '{}';
-    const command = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
+    command = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
+    // Known before anything can throw: an error on a PR create must not open the PR unchecked.
+    prCreate = isPrOpenCommand(command);
     const d = decide(input, deps);
     if (d.action === 'override') logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
     if (d.action !== 'deny') return '{}';
     logGuardDecision(HOOK, input, 'deny', d.pattern, { command });
     return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: d.reason } });
   } catch (err) {
-    try { deps.logError?.(String((err as Error)?.message ?? err)); } catch { /* the log never blocks */ }
-    return '{}';
+    const message = String((err as Error)?.message ?? err);
+    try { deps.logError?.(message); } catch { /* the log never blocks */ }
+    // Unparsable input, another tool, or a command that is not a PR create: nothing to guard, so allow.
+    if (!prCreate) return '{}';
+    // A PR create whose stamp could not be checked (git timeout, git error, unreadable stamp): the leading override allows it, else deny.
+    if (hasOverride(joinContinuations(command), deps.env)) {
+      logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
+      return '{}';
+    }
+    logGuardDecision(HOOK, input, 'deny', 'verify-error', { command });
+    const reason = `BLOCKED (pre-pr-gate): could not verify the pre-PR stamp (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}`;
+    return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: reason } });
   }
 }
 

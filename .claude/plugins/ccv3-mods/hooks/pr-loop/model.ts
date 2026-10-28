@@ -48,6 +48,8 @@ export type Alert = {
   reviewedBy?: string[]
   /** Set when the missing CodeRabbit review is a rate limit. `minutes` is CodeRabbit's own figure, or null. */
   rateLimit?: { minutes: number | null }
+  /** Set for a PROOF alert: the PR body proof problems (status.proof.problems, else the reasons that carry the prefix). */
+  proofProblems?: string[]
 }
 
 export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
@@ -228,6 +230,7 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
     pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons,
     ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
     ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
+    ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
   }
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
@@ -307,7 +310,7 @@ export const reportLine = (alert: Alert): string => {
     return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
   if (alert.state === 'PROOF') {
-    const problems = alert.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
+    const problems = alert.proofProblems ?? alert.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
     return `${lead} is not READY because its PR body proof is missing or wrong: ${problems.slice(0, 5).join('; ')}. Author action: add or fix the Evidence block in the PR body (pr-and-commit-style.md "Evidence block"), run the GREEN check on head ${alert.headShort} and update the GREEN line to that head. Keep the CodeRabbit and Greptile blocks in the body byte for byte. Do not merge it. The watch continues.`
   }
   if (alert.state === 'STALLED') {

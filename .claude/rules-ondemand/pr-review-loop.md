@@ -38,23 +38,37 @@ per hour as the 7-day count passes 40, 50, 60 and 70. Each opening review and ea
 costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-review-budget.md`.
 
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
-   draft body with the Evidence block. The script runs the gates for the files you changed, checks the
-   Evidence against the head, and runs one `cr review --agent`. Fix the findings, commit, and run it again.
-   The review takes 10 to 30 minutes. Run the script in the background (Bash `run_in_background`) and read
-   its log when the exit notice arrives. A foreground call can be cut off. The script runs
-   `cr review --agent --committed --base <base>` and first runs the free `cr usage --agent`. The time limit is
-   30 minutes (`--cr-timeout-min` or `PRE_PR_CR_TIMEOUT_MIN`). A review passes only when its stream ends with a
-   `complete` event. An unfinished stream, a failed outcome or unreviewed files fail the step. The findings
-   stay in the log.
-   The stamp records `cr_skipped`, `cr_skip_reason` and `cr_finished_runs`. The hook accepts a skip for three
-   reasons only: `cli-missing` (`cr` cannot start: not installed; no run is spent), `cap` (the 2 CLI runs of the
-   branch are used) when `cr_finished_runs` (runs that finished with a PASS) is at least 1, and `rate-limited`
-   (no included review is left) when
-   the stamp holds a positive `cr_retry_minutes`. It denies `cli-error` (`cr usage` or `cr` failed with an exit
-   code, a timeout or an auth error: a retry costs nothing, so fix the CLI and run again), `flag`
-   (`--skip-cr`), `no-changes` (the CLI saw an empty scope: check `--base` and commit your work) and any other
-   reason. Use `--skip-cr` to test the script, not to open a PR. Only one CodeRabbit step runs per branch at a
-   time, across all worktrees: a second run fails while the first holds the lock.
+   draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
+   Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
+
+   The review takes 10 to 30 minutes. Run the script in the background (Bash `run_in_background`). Read
+   its log when the exit notice arrives. A foreground call can be cut off.
+
+   The script runs `cr review --agent --committed --base <base>`. It first runs the free `cr usage --agent`.
+   The time limit is 30 minutes. Set it with `--cr-timeout-min` or `PRE_PR_CR_TIMEOUT_MIN`. The floor is
+   15 minutes. A lower value is ignored with a warning.
+
+   A review passes only when its stream ends with a `complete` event. An unfinished stream, a failed
+   outcome or unreviewed files fail the step. The findings stay in the log.
+
+   The stamp records `cr_skipped`, `cr_skip_reason` and `cr_finished_runs`. The hook accepts a skip for
+   these reasons only:
+
+   - `cli-missing`: `cr` cannot start because it is not installed. No run is spent.
+   - `cap`: the 2 CLI runs of the branch are used. It needs `cr_finished_runs` of at least 1.
+     That count holds only runs that finished with a PASS.
+   - `rate-limited`: no included review is left. It needs a positive `cr_retry_minutes` in the stamp.
+
+   The hook denies every other reason:
+
+   - `cli-error`: `cr usage` or `cr` failed with an exit code, a timeout or an auth error.
+     A retry costs nothing. Fix the CLI and run again.
+   - `flag`: you used `--skip-cr`. Use that flag to test the script, not to open a PR.
+   - `no-changes`: the CLI saw an empty scope. Check `--base` and commit your work.
+
+   Only one CodeRabbit step runs per branch at a time, across all worktrees. A second run fails while
+   the first holds the lock. The run count is keyed on the branch name and its first own commit.
+   A merge of main keeps the count. A rebase rewrites that commit and starts a new count.
 2. Open the PR ready, not as a draft. Never add `review:coderabbit` by hand. The review router adds the
    label, and it adds none to a docs-only PR.
 3. Batch every fix into one push. Then post one `@coderabbitai review`. Never push while a review runs:
@@ -78,19 +92,26 @@ The review router sets the class. This budget counts CodeRabbit PR reviews: the 
 - A PR at its budget gets no more `@coderabbitai review` without Dave's yes. Ask him instead.
 
 The `pre-pr-gate` PreToolUse hook enforces step 1. It denies `gh pr create` and `gh api .../pulls` with
-POST in `Rev4nchist/Continuous-Claude-v3` unless `.claude/cache/pre-pr/stamp.json` names the head and is
-under 24 hours old. It also denies a stamp that skipped the CLI review for any reason but `cli-missing`,
-`cap` with `cr_finished_runs` of at least 1, or `rate-limited` with a positive `cr_retry_minutes`. When the
-command names a body file (`-F body=@<file>` or `--body-file <file>`), the
-file must hash to the stamp's `body_sha256`. When `refs/remotes/fork/<branch>` exists, it must equal the
-stamped head. The hook reads the command text with its continuation lines joined. A git timeout in the
-hook allows the call. The deny text names the command to run. `SKIP_PRE_PR_GATE=1` is Dave-only. An agent
-never sets it, never suggests it, and never copies it from a deny message. It works only as a leading
-assignment. Each use writes an `override` line to the guard decision log.
+POST in `Rev4nchist/Continuous-Claude-v3`. It allows the call only when `.claude/cache/pre-pr/stamp.json`
+names the head and is under 24 hours old. It denies a stamp that skipped the CLI review for a reason that
+step 1 does not list.
 
-The gate stops accidents, not evasion. It cannot see a `gh` alias, `hub`, `curl`, a GraphQL
-`createPullRequest` call, a GitHub MCP tool call, a script that wraps `gh`, or a forged stamp. A PR
-opened one of those ways skips the checks, and so wastes the reviews this section protects.
+- A command can name a body file (`-F body=@<file>` or `--body-file <file>`). The file must hash to the
+  stamp's `body_sha256`.
+- When `refs/remotes/fork/<branch>` exists, it must equal the stamped head.
+- The hook reads the command text with its continuation lines joined.
+- If the hook cannot check the stamp, it denies a PR-create command. A git timeout, a git error or an
+  unreadable remote causes this. The deny text says so. Run the command again.
+- The deny text names the command to run.
+- `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
+  from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
+  guard decision log.
+
+The gate stops accidents, not evasion. It cannot see a `gh` alias, `hub`, `curl` or a GraphQL
+`createPullRequest` call. It cannot see a GitHub MCP tool call, a script that wraps `gh`, or a forged
+stamp. A PR opened one of those ways skips the checks. It wastes the reviews this section protects.
+
+
 
 ## Waiting for the review
 

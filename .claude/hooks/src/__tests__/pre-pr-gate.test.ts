@@ -197,8 +197,11 @@ describe('A: only PR-create shapes are looked at', () => {
     expect(decide(input('gh pr create --fill'), deps({ remotes: both })).action).toBe('deny');
   });
 
-  it('A4: a checkout that git cannot read is allowed (the repo is not known)', () => {
-    expect(decide(input('gh pr create --fill'), deps({ gitFail: true })).action).toBe('allow');
+  it('A4: a checkout that git cannot read is an internal error: decide throws and handle denies; the named CCv3 repo with no checkout is a plain deny', () => {
+    expect(() => decide(input('gh pr create --fill'), deps({ gitFail: true }))).toThrow(/git remote/);
+    const out = JSON.parse(handle(JSON.stringify(input('gh pr create --fill')), deps({ gitFail: true })));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/could not verify the pre-PR stamp/);
     // The command names the CCv3 repo, so the repo is known; with no checkout there is no stamp to find.
     const named = decide(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t'), deps({ gitFail: true }));
     expect(named.action).toBe('deny');
@@ -408,10 +411,10 @@ describe('T: the git runner', () => {
     expect(GIT_TIMEOUT_MS).toBe(2000);
     expect(GIT_TIMEOUT_MS * 6).toBeLessThan(15_000);
     expect(seen[0].cwd).toBe('/x');
-    // A git that times out on a PR create: allowed (fail open), and logged.
+    // A git that times out on a PR create: denied (the stamp could not be checked), and logged.
     const errors: string[] = [];
     const timing: Deps = { ...deps(), git: slow, logError: (m) => errors.push(m) };
-    expect(handle(JSON.stringify(input(CREATE[0])), timing)).toBe('{}');
+    expect(JSON.parse(handle(JSON.stringify(input(CREATE[0])), timing)).hookSpecificOutput.permissionDecision).toBe('deny');
     expect(errors.length).toBe(1);
   });
 });
@@ -435,7 +438,65 @@ describe('O: the override', () => {
 describe('F: fail open', () => {
   const noLog = (): { errors: string[] } & Partial<Deps> => { const errors: string[] = []; return { errors, logError: (m: string) => { errors.push(m); } }; };
 
-  it('F1: bad input, other tools and a git crash give {} and never block', () => {
+  it('F3: an internal error on a command that is a PR create DENIES, one reason per error kind; the deny does not teach the override', () => {
+    const create = JSON.stringify(input(CREATE[0]));
+    const named = JSON.stringify(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t'));
+    const errors: string[] = [];
+    const base = (over: Partial<Deps>): Deps => ({ ...deps({ stamp: stampJson() }), logError: (m) => errors.push(m), ...over });
+    const timeout = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
+    const spawnErr = Object.assign(new Error('spawn git ENOENT'), { code: 'ENOENT' });
+    const kinds: Array<[string, Deps, string, RegExp]> = [
+      ['git timeout', base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout })) }), create, /ETIMEDOUT/],
+      ['git spawn error', base({ git: makeGit(() => ({ status: null, stdout: '', error: spawnErr })) }), create, /ENOENT/],
+      ['git remote fails', base({ git: (_cwd, args) => (args[0] === 'remote' ? { status: 128, stdout: '' } : { status: 0, stdout: `${ROOT}\n` }) }), create, /git remote/],
+      ['stamp unreadable', base({ readFile: () => { throw new Error('EACCES: permission denied'); } }), create, /EACCES/],
+      ['worktree list throws', base({ git: (cwd, args) => { if (args[0] === 'worktree') throw new Error('worktree boom'); return deps({ stamp: stampJson() }).git(cwd, args); } }), named, /worktree boom/],
+    ];
+    for (const [kind, d, payload, why] of kinds) {
+      errors.length = 0;
+      const out = JSON.parse(handle(payload, d));
+      expect(out.hookSpecificOutput.permissionDecision, kind).toBe('deny');
+      const reason: string = out.hookSpecificOutput.permissionDecisionReason;
+      expect(reason, kind).toMatch(/could not verify the pre-PR stamp/);
+      expect(reason, kind).toMatch(why);
+      expect(reason, kind).not.toMatch(/SKIP_PRE_PR_GATE/);
+      expect(errors.length, kind).toBe(1);
+    }
+    // PowerShell is gated the same way.
+    const ps = JSON.parse(handle(JSON.stringify(input(CREATE[0], { tool_name: 'PowerShell' })), base({ git: makeGit(() => ({ status: null, stdout: '', error: timeout })) })));
+    expect(ps.hookSpecificOutput.permissionDecision).toBe('deny');
+  });
+
+  it('F4: an unparsable payload, another tool, and a command that is not a PR create still allow, even when git is broken', () => {
+    const errors: string[] = [];
+    const broken: Deps = { ...deps({ stamp: null }), git: () => { throw new Error('git is broken'); }, logError: (m) => errors.push(m) };
+    expect(handle('{not json', broken)).toBe('{}');
+    expect(errors.length).toBe(1);
+    expect(handle(JSON.stringify(input('ls -la')), broken)).toBe('{}');
+    expect(handle(JSON.stringify(input('gh pr view 5')), broken)).toBe('{}');
+    expect(handle(JSON.stringify({ tool_name: 'Write', tool_input: { command: CREATE[0] } }), broken)).toBe('{}');
+    expect(errors.length).toBe(1);
+  });
+
+  it('F5: the leading override still lets a PR create through when the check itself failed, and is logged', () => {
+    const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-f5-'));
+    const file = join(dir, 'guard-decisions.jsonl');
+    const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = file;
+    try {
+      const broken: Deps = { ...deps({ stamp: null }), git: () => { throw new Error('git is broken'); } };
+      expect(handle(JSON.stringify(input('SKIP_PRE_PR_GATE=1 gh pr create --fill')), broken)).toBe('{}');
+      const denied = JSON.parse(handle(JSON.stringify(input('echo SKIP_PRE_PR_GATE=1 && gh pr create --fill')), broken));
+      expect(denied.hookSpecificOutput.permissionDecision).toBe('deny');
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG;
+      else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    }
+    const rows = readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l));
+    expect(rows.map((r) => r.decision)).toEqual(['override', 'deny']);
+  });
+
+  it('F1: bad input, other tools and a git crash on a command that is not a PR create give {} and never block', () => {
     const base = deps({ stamp: null });
     const log = noLog();
     const d: Deps = { ...base, logError: log.logError };
@@ -447,7 +508,10 @@ describe('F: fail open', () => {
     expect(log.errors.length).toBe(1);
     log.errors.length = 0;
     const boom: Deps = { ...base, git: () => { throw new Error('spawn failed'); }, logError: log.logError };
-    expect(handle(JSON.stringify(input(CREATE[0])), boom)).toBe('{}');
+    expect(handle(JSON.stringify(input('ls -la')), boom)).toBe('{}');
+    expect(log.errors.length).toBe(0);
+    const create = JSON.parse(handle(JSON.stringify(input(CREATE[0])), boom));
+    expect(create.hookSpecificOutput.permissionDecision).toBe('deny');
     expect(log.errors.length).toBe(1);
     expect(log.errors[0]).toMatch(/spawn failed/);
   });
