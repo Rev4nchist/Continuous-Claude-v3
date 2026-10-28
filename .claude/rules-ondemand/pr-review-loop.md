@@ -159,6 +159,7 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
      A push does not clear them. READY fails while that total is above the number of handled bullets.
    - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
      top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
+     If a later review lists the same finding again, write one more bullet for it.
 2. Fix real findings on the PR branch. Commit and push once.
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
