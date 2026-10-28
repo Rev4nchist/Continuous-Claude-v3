@@ -1008,6 +1008,44 @@ test('G-R8: a CodeRabbit rate-limit notice on a review:coderabbit PR is not READ
   assert.ok(r.reasons.some((x) => /CodeRabbit rate limited/.test(x)), r.reasons.join('; '));
 });
 
+test('G-R9: the rate-limit notice gives coderabbitRateLimited and the minutes CodeRabbit names', () => {
+  const notice = { id: 20, updated_at: '2026-10-26T01:00:00Z', user: CR_BOT, body: `${SUMMARY_MARKER}\n> [!WARNING]\n> ## Rate limit exceeded\n> Please wait 12 minutes.` };
+  const r = evaluate(crInput(HEAD, [notice]));
+  assert.equal(r.coderabbitRateLimited, true);
+  assert.equal(r.coderabbitRetryMinutes, 12);
+});
+
+test('G-R9: a notice with no figure gives null minutes; a skipped notice is not a rate limit', () => {
+  const bare = { id: 21, updated_at: '2026-10-26T01:00:00Z', user: CR_BOT, body: `${SUMMARY_MARKER}\n> [!WARNING]\n> ## Review limit reached` };
+  const a = evaluate(crInput(HEAD, [bare]));
+  assert.equal(a.coderabbitRateLimited, true);
+  assert.equal(a.coderabbitRetryMinutes, null);
+  const skipped = { id: 22, updated_at: '2026-10-26T01:00:00Z', user: CR_BOT, body: `${SUMMARY_MARKER}\n> ## Review skipped\n> Please wait 12 minutes.` };
+  const b = evaluate(crInput(HEAD, [skipped]));
+  assert.equal(b.coderabbitLimited, true);
+  assert.equal(b.coderabbitRateLimited, false);
+  assert.equal(b.coderabbitRetryMinutes, null);
+});
+
+test('G-R9: a PR that does not need CodeRabbit reports null for both fields', () => {
+  const r = evaluate(input());
+  assert.equal(r.coderabbitRateLimited, null);
+  assert.equal(r.coderabbitRetryMinutes, null);
+});
+
+test('G-R9: codeRabbitRetryMinutes reads the wordings and folds hours and seconds', () => {
+  assert.equal(RS.codeRabbitRetryMinutes('Next included review available in 12 minutes'), 12);
+  assert.equal(RS.codeRabbitRetryMinutes('> Please wait 12 minutes.'), 12);
+  assert.equal(RS.codeRabbitRetryMinutes('Please wait for 1 minute.'), 1);
+  assert.equal(RS.codeRabbitRetryMinutes('available in 7 minutes and 30 seconds.'), 8);
+  assert.equal(RS.codeRabbitRetryMinutes('available in 1 hour and 5 minutes'), 65);
+  assert.equal(RS.codeRabbitRetryMinutes('available in 45 seconds'), 1);
+  assert.equal(RS.codeRabbitRetryMinutes('Review limit reached'), null);
+  assert.equal(RS.codeRabbitRetryMinutes('please wait a while'), null);
+  assert.equal(RS.codeRabbitRetryMinutes(undefined), null);
+  assert.equal(RS.codeRabbitRetryMinutes(null), null);
+});
+
 // A Greptile check that ends "failure" DID review: the score is under the repo bar (4/5).
 test('Greptile failure with a summary on the head: reviewed, low confidence blocks, not "did not finish"', () => {
   const r = evaluate(input({ runs: [run('failure')], prBody: body(HEAD, 3) }));
