@@ -3,6 +3,8 @@ import 'server-only';
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
+import { redact } from '@/server/sources/redact';
+import { scrubPathsInText } from '@/server/sources/safe-message';
 
 /**
  * The live half of the fleet view — who is working right now.
@@ -36,6 +38,22 @@ const DEFAULT_WINDOW_MINUTES = 15;
  *  truncates and says so rather than rendering an unbounded list. */
 const MAX_SESSIONS = 50;
 
+const MAX_PROJECT_LABEL = 60;
+const HOME_ROOTS = new Set(['users', 'home']);
+
+/** `sessions.project` holds an absolute working directory. Send only its last folder, and `~`
+ *  for a home folder, whose last folder is the user name. Secrets and any path left inside the
+ *  folder name are removed too. */
+function projectLabel(raw: string): string {
+  const parts = raw.split(/[\\/]/).filter((part) => part !== '');
+  const isHome =
+    (parts.length === 2 && HOME_ROOTS.has(parts[0].toLowerCase())) ||
+    (parts.length === 3 && /^[A-Za-z]:$/.test(parts[0]) && HOME_ROOTS.has(parts[1].toLowerCase()));
+  if (isHome) return '~';
+  const leaf = scrubPathsInText(redact(parts.pop() ?? '').text);
+  return leaf === '' ? 'unknown' : leaf.slice(0, MAX_PROJECT_LABEL);
+}
+
 export type ActiveSession = {
   id: string;
   /** First 8 chars — what the lane bus and hook logs actually print. */
@@ -45,8 +63,8 @@ export type ActiveSession = {
    *  unmatched bucket keeps: a session you cannot attribute is still a session. */
   projectKey: string | null;
   projectDisplayName: string | null;
-  /** The raw `sessions.project` string, always present. Shown when unmapped so
-   *  the fix (add an alias row) is visible without opening psql. */
+  /** The `sessions.project` folder name (last path segment, `~` for a home folder), always
+   *  present. Shown when unmapped so the fix (add an alias row) is visible without opening psql. */
   rawProject: string;
   /** Truncated in SQL, not in the browser — this is the user's prompt text and
    *  there is no reason to ship 4KB of it over the wire every 5 seconds. */
@@ -214,7 +232,7 @@ export async function getActiveSessions(
       shortId: r.id.slice(0, 8),
       projectKey: r.project_key,
       projectDisplayName: r.display_name,
-      rawProject: r.raw_project,
+      rawProject: projectLabel(r.raw_project),
       workingOn: r.working_on,
       heartbeatSecondsAgo: Number(r.heartbeat_seconds_ago ?? 0),
       // NOT `?? 0`: zero would render as "active this second" for every row that

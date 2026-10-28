@@ -64,7 +64,7 @@ test.describe('rawProject holds no absolute path', () => {
 
   test('page: the strip shows no absolute path', async ({ page }) => {
     await page.goto('/');
-    await expect(page.locator('main')).toBeVisible();
+    await expect(page.getByRole('heading', { level: 1, name: 'Agentic OS' })).toBeVisible();
     const text = (await page.locator('body').innerText()).toLowerCase();
     const user = (process.env.USERNAME ?? process.env.USER ?? '').toLowerCase();
     expect(text).not.toContain(`/users/${user}`);
