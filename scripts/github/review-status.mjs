@@ -40,6 +40,12 @@
  * pr-loop mod maps it to LIMITED). A leftover CodeRabbit commit status alone does not grant READY.
  * Any review thread, from any reviewer, still counts as unresolved.
  *
+ * P4b proof gate (DW-102): the PR BODY must name one proof type and show RED and GREEN evidence, and the
+ * GREEN line must name the head (see PROOF_TYPES and pr-review-loop.md "Proof in the PR body"). Missing,
+ * unknown or incomplete proof is a reason. Exempt: a Dependabot PR (the signed-bot rule above) and a
+ * `docs` PR that the review router classed docs on this head. Runs only for the repos in PROOF_REPOS.
+ * Result field `proof`: { required, type, status, problems }.
+ *
  * Usage: node scripts/github/review-status.mjs <pr-number> [--repo owner/name] [--json]
  * Exit 0 = ready, 1 = not ready (reasons listed), 2 = could not determine.
  * Uses `gh api`; set GH_CONFIG_DIR for the repo's account (default: ~/.config/gh-personal when it
@@ -487,10 +493,186 @@ export function isDependabotPr(pull, commits) {
 }
 const DEPENDABOT_NEED = { greptile: false, coderabbit: false, held: null, source: 'dependabot' };
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [] }) {
+/**
+ * P4b proof gate (DW-102). A PR body names one proof type and shows its evidence (pr-review-loop.md
+ * "Proof in the PR body"). Each type lists the fields it needs: RED (the check fails), GREEN (it passes on
+ * the head) or, for a refactor, BEFORE (the suite passes before the change) and GREEN. `docs` needs none.
+ * Only the PR body counts, never a comment. This checks the shape and the head, not whether RED failed.
+ */
+export const PROOF_TYPES = Object.freeze({
+  bugfix: ['RED', 'GREEN'], feature: ['RED', 'GREEN'], refactor: ['BEFORE', 'GREEN'], ui: ['RED', 'GREEN'], harness: ['RED', 'GREEN'], docs: [],
+});
+export const PROOF_REASON_PREFIX = 'PR body proof:';
+/** The gate runs only for these repos (lower case). Other repos use this script without it. */
+export const PROOF_REPOS = new Set(['rev4nchist/continuous-claude-v3']);
+const PROOF_TYPE_LIST = Object.keys(PROOF_TYPES).join(', ');
+
+// `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (see ROUTER_STATE_RE).
+const COMMENT_OPEN = '\x3C!--';
+// Bot blocks the apps write into the PR body. Their text is not the author's proof.
+const BOT_BLOCKS = [
+  { start: /\x3C!--\s*greptile_comment\s*-->/, end: /\x3C!--\s*\/greptile_comment\s*-->/ },
+  { start: /\x3C!--\s*This is an auto-generated comment:/, end: /\x3C!--\s*end of auto-generated comment:/ },
+];
+const KEY_HEAD = '^\\s*(?:[-*+]\\s+)?(?:\\*\\*|__)?';
+const KEY_TAIL = '(?:\\*\\*|__)?\\s*:\\s*(?:\\*\\*|__)?\\s*(.*)$';
+const TYPE_LINE = new RegExp(`${KEY_HEAD}proof\\s+type${KEY_TAIL}`, 'i');
+// Field keys are case-sensitive: the Pocock template's "**Before:**" line must not count as BEFORE.
+const FIELD_LINE = new RegExp(`${KEY_HEAD}(RED|GREEN|BEFORE)${KEY_TAIL}`);
+const FENCE_OPEN = /^\s*(`{3,}|~{3,})/;
+const FENCE_CLOSE = /^\s*(`{3,}|~{3,})\s*$/;
+
+/** Remove HTML comments from one line. `state.inComment` carries an open comment to the next line. */
+function stripComments(line, state) {
+  let out = '';
+  let rest = line;
+  for (;;) {
+    if (state.inComment) {
+      const end = rest.indexOf('-->');
+      if (end < 0) return out;
+      rest = rest.slice(end + 3);
+      state.inComment = false;
+    }
+    const open = rest.indexOf(COMMENT_OPEN);
+    if (open < 0) return out + rest;
+    out += rest.slice(0, open);
+    rest = rest.slice(open + COMMENT_OPEN.length);
+    state.inComment = true;
+  }
+}
+
+const trimValue = (v) => v.trim().replace(/(?:\*\*|__)\s*$/, '').trim();
+
+/** One RED, GREEN or BEFORE line: its backticked command, the commit after @ (lower case), and later its output. */
+function parseField(value) {
+  const v = trimValue(value);
+  const cmd = /^`([^`]+)`/.exec(v);
+  const rest = cmd ? v.slice(cmd[0].length) : v;
+  const sha = /(?:^|\s)(?:@|at\s)\s*`?([0-9a-fA-F]{7,40})`?(?=[\s.,;)]|$)/.exec(rest);
+  return { command: cmd ? cmd[1].trim() : null, sha: sha ? sha[1].toLowerCase() : null, output: null };
+}
+
+/**
+ * Pure, never throws. Reads the proof block from a PR body: { types: string[], fields: { RED, GREEN, BEFORE } }.
+ * One pass over the lines. Inside a code fence nothing is a field (the fence after a field line is its
+ * output). Outside a fence, HTML comments and the Greptile and CodeRabbit blocks are removed first.
+ */
+export function parseProof(body) {
+  const types = [];
+  const fields = { RED: [], GREEN: [], BEFORE: [] };
+  const state = { inComment: false };
+  let fence = null;
+  let skipUntil = null;
+  let pending = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    if (fence) {
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      else if (fence.entry) fence.entry.output += `${line}\n`;
+      continue;
+    }
+    if (skipUntil) {
+      if (skipUntil.test(line)) skipUntil = null;
+      continue;
+    }
+    if (!state.inComment) {
+      const bot = BOT_BLOCKS.find((b) => b.start.test(line));
+      if (bot) {
+        const m = bot.start.exec(line);
+        if (!bot.end.test(line.slice(m.index + m[0].length))) skipUntil = bot.end;
+        continue;
+      }
+    }
+    const clean = stripComments(line, state);
+    const open = FENCE_OPEN.exec(clean);
+    if (open) {
+      fence = { ch: open[1][0], len: open[1].length, entry: pending };
+      if (pending) pending.output = '';
+      pending = null;
+      continue;
+    }
+    if (clean.trim() === '') continue;
+    pending = null;
+    const t = TYPE_LINE.exec(clean);
+    if (t) { types.push(trimValue(t[1])); continue; }
+    const f = FIELD_LINE.exec(clean);
+    if (f) { pending = parseField(f[2]); fields[f[1]].push(pending); }
+  }
+  return { types, fields };
+}
+
+/** The proof type a "Proof type:" value names: { type } when it is one known type, else { problem }. */
+function readProofType(raw) {
+  if (raw === '' || raw.startsWith('<')) return { problem: `the "Proof type:" line has no type. Write one of: ${PROOF_TYPE_LIST}` };
+  const m = /^`?([A-Za-z-]+)`?\s*(?:\([^)]*\))?$/.exec(raw);
+  if (!m) return { problem: `the "Proof type:" line must hold one type, not "${raw.slice(0, 60)}". Name one type of: ${PROOF_TYPE_LIST}` };
+  const type = m[1].toLowerCase();
+  if (!Object.hasOwn(PROOF_TYPES, type)) return { problem: `unknown proof type "${type}". Use one of: ${PROOF_TYPE_LIST}` };
+  return { type };
+}
+
+function fieldProblems(key, list, type, head, say) {
+  if (list.length !== 1) {
+    say(list.length === 0 ? `a ${type} proof needs a ${key} line: ${key}: \`<command>\` @ <sha>, then a fenced output block` : `${list.length} ${key} lines. Keep one`);
+    return;
+  }
+  const ev = list[0];
+  if (!ev.command) say(`the ${key} line has no command in backticks`);
+  else if (/^<.*>$/.test(ev.command)) say(`the ${key} line has a placeholder command`);
+  if (!ev.sha) say(`the ${key} line names no commit (7 to 40 hex characters after @)`);
+  else if (key === 'GREEN' && !shaIsHead(ev.sha, head)) say(`GREEN names commit ${ev.sha.slice(0, 7)}, not the head ${String(head).slice(0, 7)}. Run the check on the head and update the GREEN line`);
+  if (ev.output === null) say(`the ${key} line has no fenced output block under it`);
+  else if (ev.output.trim() === '') say(`the ${key} output block is empty`);
+  else if (/^<[^>]*>$/.test(ev.output.trim())) say(`the ${key} output block is a placeholder`);
+}
+
+/**
+ * The reasons this head has no valid proof; [] when the proof is valid. Pure.
+ * `docsVerified`: the review router classed this head docs (see docsHeadVerified).
+ */
+export function proofProblems(parsed, { head, docsVerified = false }) {
+  const out = [];
+  const say = (text) => out.push(`${PROOF_REASON_PREFIX} ${text}`);
+  const { types, fields } = parsed;
+  if (types.length === 0) { say(`no "Proof type:" line. Add the Evidence block from pr-and-commit-style.md (types: ${PROOF_TYPE_LIST})`); return out; }
+  if (types.length > 1) { say(`${types.length} "Proof type:" lines (${types.map((t) => t || 'empty').join(', ')}). Name one type`); return out; }
+  const { type, problem } = readProofType(types[0]);
+  if (problem) { say(problem); return out; }
+  if (type === 'docs') {
+    if (!docsVerified) say('proof type docs needs the review router to class this head as docs, with risk:docs as the only risk label');
+    return out;
+  }
+  for (const key of PROOF_TYPES[type]) fieldProblems(key, fields[key], type, head, say);
+  return out;
+}
+
+/**
+ * The review router classed THIS head docs, and every risk:* label is risk:docs (at least one is present).
+ * Same trust rule as verifiedBots: only the github-actions[bot] router comment counts.
+ */
+export function docsHeadVerified(labels, comments, head) {
+  const state = routerState(comments);
+  const risks = (labels || []).filter((n) => n.startsWith('risk:'));
+  return state !== null && state.head === head && state.class === 'docs' && risks.length > 0 && risks.every((n) => n === 'risk:docs');
+}
+
+/** The `proof` field of the result. `gate` false = a repo without the gate; `dependabot` = the signed-bot exemption. */
+function proofResult({ gate, dependabot, body, head, labels, comments }) {
+  if (!gate) return { required: false, type: null, status: 'off', problems: [] };
+  if (dependabot) return { required: false, type: null, status: 'exempt', exemption: 'dependabot', problems: [] };
+  const parsed = parseProof(body);
+  const problems = proofProblems(parsed, { head, docsVerified: docsHeadVerified(labels, comments, head) });
+  const type = parsed.types.length === 1 ? readProofType(parsed.types[0]).type ?? null : null;
+  const status = problems.length === 0 ? 'ok' : parsed.types.length === 0 ? 'missing' : 'invalid';
+  return { required: true, type, status, problems };
+}
+
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
-  const need = isDependabotPr(pull, commits) ? DEPENDABOT_NEED : verifiedBots(labels, comments, head, greptileAuto);
+  const dependabot = isDependabotPr(pull, commits);
+  const need = dependabot ? DEPENDABOT_NEED : verifiedBots(labels, comments, head, greptileAuto);
+  const proof = proofResult({ gate: proofGate, dependabot, body: pull.body, head, labels, comments });
   const run = latestGreptileRun(checkRuns);
   const greptile = greptileState(run);
   const greptileSummary = run?.output?.summary ?? null;
@@ -518,6 +700,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   if (pull.merged) reasons.push('already merged');
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
   if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
+  reasons.push(...proof.problems);
   const greptileBlocks = greptileReasons({
     required: need.greptile, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
     failedOnHead: greptileFailedOnHead(checkRuns),
@@ -567,6 +750,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     routedReviewed: (!need.greptile || reviewedHead) && (!need.coderabbit || coderabbitReviewedHead === true),
     // Which bots the labels require. `held` is a note, never a reason. `source` is 'default' with no review:* or risk:* label.
     routing: { required: [...(need.greptile ? ['greptile'] : []), ...(need.coderabbit ? ['coderabbit'] : [])], held: need.held, source: need.source, ...(need.unverified ? { unverified: need.unverified } : {}) },
+    // P4b: the PR body proof. status is 'ok', 'missing' (no Proof type line), 'invalid', 'exempt' (Dependabot) or 'off' (other repos).
+    proof: { required: proof.required, type: proof.type, status: proof.status, ...(proof.exemption ? { exemption: proof.exemption } : {}), problems: proof.problems },
     unresolved, totalThreads: threads.length, mergeable_state: pull.mergeable_state, prState: pull.state, merged: Boolean(pull.merged),
     ready: reasons.length === 0, reasons,
   };
@@ -633,6 +818,7 @@ function main() {
     }));
     result = evaluate({
       pull, combined, checkRuns, threads: rt.nodes, bodyEdits: prq.userContentEdits.nodes, reviews, comments, commentEdits, headCommittedAt, greptileAuto, commits,
+      proofGate: PROOF_REPOS.has(repo.toLowerCase()),
     });
   } catch (err) {
     console.error(`review-status: could not determine (${String(err.message).split('\n')[0]})`);
@@ -642,6 +828,7 @@ function main() {
   else {
     console.log(`PR #${result.pr} head ${result.headShort} (${result.branch}): ${result.ready ? 'READY' : 'NOT READY'}`);
     console.log(`  Greptile: ${result.greptile} | review of head: ${result.reviewedHead ? 'yes' : 'NO'} | confidence: ${result.confidence === null ? 'n/a' : `${result.confidence}/5`} | unresolved threads: ${result.unresolved}/${result.totalThreads} | mergeable: ${result.mergeable_state}`);
+    console.log(`  Proof: ${result.proof.type ?? 'none'} (${result.proof.status})`);
     for (const r of result.reasons) console.log(`  - ${r}`);
   }
   process.exit(result.ready ? 0 : 1);
