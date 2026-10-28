@@ -8,3 +8,6 @@ next-env.d.ts
 # Holds the real connection strings for all three database roles.
 .env.local
 .env*.local
+
+# next dev re-creates this agent-rules file on every start; it is not ours to track.
+/AGENTS.md
