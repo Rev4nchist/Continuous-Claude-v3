@@ -105,8 +105,10 @@ export const SURFACES = [
           failText: 'dist is stale: the build changed these files. Commit them with the source',
         },
       },
-      // --retry: several dist-integration tests use real timers and fail only when the machine is busy.
-      { id: 'hooks-vitest', cmd: 'npx', args: ['vitest', 'run', '--retry=2'], cwd: '.claude/hooks', timeoutMs: 20 * MIN },
+      // Several dist-integration tests spawn node and use real timers. Alone they take about 3 s; in the full parallel
+      // suite on a busy machine they pass vitest's 5 s default (msys-crash-capture, 2026-10-28). --testTimeout gives
+      // them room, and --retry covers a rare timer race.
+      { id: 'hooks-vitest', cmd: 'npx', args: ['vitest', 'run', '--retry=2', '--testTimeout=30000'], cwd: '.claude/hooks', timeoutMs: 20 * MIN },
     ],
   },
   {

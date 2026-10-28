@@ -1265,6 +1265,11 @@ test('RR2: the hooks-vitest gate retries a test that fails only under load', () 
   assert.ok(gateById('hooks-vitest').args.some((a) => /^--retry=[1-9]$/.test(a)), gateById('hooks-vitest').args.join(' '));
 });
 
+test('RR6: the hooks-vitest gate gives each test at least 20 s (dist-integration tests spawn node under load)', () => {
+  const t = gateById('hooks-vitest').args.map((a) => /^--testTimeout=(\d+)$/.exec(a)).find(Boolean);
+  assert.ok(t && Number(t[1]) >= 20_000, gateById('hooks-vitest').args.join(' '));
+});
+
 test('RR3: mods-validate PASSes with a NOTE when only the typecheck could not run', () => {
   const r = runGate(gateById('mods-validate'), { root: REPO_ROOT, exec: execOut(1, MODS_SUMMARY('test 215 pass 0 fail')), git: fakeGit({}) });
   assert.equal(r.status, 'PASS');
