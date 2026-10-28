@@ -10,7 +10,9 @@ import { cn } from '@/lib/utils';
 import { AccountingBar } from './AccountingBar';
 import { ActiveSessionsStrip } from './ActiveSessionsStrip';
 import { FleetGrid } from './FleetGrid';
+import { LaneBoard } from './LaneBoard';
 import { NavTabs, type ViewId } from './NavTabs';
+import { PrPanel } from './PrPanel';
 import { ReadyForDave } from './ReadyForDave';
 import { SessionCards } from './SessionCards';
 import { SessionDetail, SessionUnavailable } from './SessionDetail';
@@ -41,6 +43,15 @@ export type { ViewId } from './NavTabs';
 
 const BASE_ENDPOINT = '/api/mission-control';
 
+/** The one endpoint. The Board is asked for only while the Board tab is active. */
+function endpointFor(view: ViewId, session: string | null): string {
+  const params = new URLSearchParams();
+  if (view === 'board') params.set('view', 'board');
+  if (session !== null) params.set('session', session);
+  const query = params.toString();
+  return query === '' ? BASE_ENDPOINT : `${BASE_ENDPOINT}?${query}`;
+}
+
 /** Mirror the view and the selection in the address bar. replaceState: no navigation, no history entry. */
 function mirrorUrl(view: ViewId, session: string | null): void {
   const params = new URLSearchParams();
@@ -66,12 +77,11 @@ export function MissionControl({
 
   const { data, status, error, ageMs, consecutiveFailures, refresh } =
     useLiveData<MissionControlSnapshot>({
-      endpoint:
-        selected === null ? BASE_ENDPOINT : `${BASE_ENDPOINT}?session=${encodeURIComponent(selected)}`,
+      endpoint: endpointFor(view, selected),
       initialData: initial,
     });
 
-  const { fleet, active, database, ready, cards, tiles, sources } = data;
+  const { fleet, active, database, ready, cards, tiles, sources, prs } = data;
 
   // After an endpoint change the hook keeps the old data until the new answer lands, so the detail
   // is shown only when it belongs to the selection.
@@ -150,7 +160,19 @@ export function MissionControl({
 
       <StatTiles tiles={tiles} />
 
-      {view === 'sessions' ? (
+      {view === 'board' ? (
+        // The hook keeps old data after an endpoint change, so the Board shows only once it arrives.
+        data.board !== null ? (
+          <LaneBoard board={data.board} />
+        ) : (
+          <p
+            data-testid="board-loading"
+            className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground"
+          >
+            Loading board
+          </p>
+        )
+      ) : view === 'sessions' ? (
         <div className="space-y-6">
           <SessionsTable
             cards={shownCards}
@@ -163,7 +185,7 @@ export function MissionControl({
         </div>
       ) : (
         <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
-          <div className="order-2 min-w-0 space-y-8 lg:order-1 lg:row-span-2">
+          <div className="order-2 min-w-0 space-y-8 lg:order-1 lg:row-span-3">
             <SessionCards
               cards={shownCards}
               filter={filter}
@@ -197,7 +219,11 @@ export function MissionControl({
             )}
           </div>
 
-          <div className="order-3 min-w-0">
+          <div className="order-3 min-w-0 lg:order-3">
+            <PrPanel prs={prs} onSelect={(id) => choose(id)} />
+          </div>
+
+          <div className="order-4 min-w-0 lg:order-4">
             <SourceHealth sources={sources} />
           </div>
         </div>

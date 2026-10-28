@@ -135,14 +135,17 @@ function strScrubbed(value: unknown, max: number): string | null {
   return clip(scrubPathsInText(redact(trimmed).text), max);
 }
 
-const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/;
-
-/** A name that may arrive as an absolute path (a worktree): keep the last segment, never the path. */
+/**
+ * A name that may arrive as a path (a repo, a worktree): keep the last segment, never the path.
+ * Absolute, home-relative and relative inputs all reduce the same way, so one repo written as
+ * "owner/name" and as "name" is one value. The leaf is scrubbed again, then clipped.
+ */
 function strLeaf(value: unknown, max: number): string | null {
   const text = str(value, PRE_REDACT_CAP);
-  if (text === null || !ABSOLUTE_PATH.test(text)) return text === null ? null : clip(text, max);
+  if (text === null) return null;
   const leaf = text.split(/[\\/]/).filter((part) => part !== '').pop() ?? '';
-  return leaf === '' ? null : clip(leaf, max);
+  const scrubbed = scrubPathsInText(leaf);
+  return scrubbed === '' ? null : clip(scrubbed, max);
 }
 
 const num = (value: unknown): number | null =>
