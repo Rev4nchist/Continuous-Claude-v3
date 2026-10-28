@@ -1028,3 +1028,20 @@ def test_git_remote_sync_uses_rev_list_against_fork_main():
                  if "status" in c and "-sb" in c]
     assert not status_sb, (
         "must not use 'git status -sb' for fork backup delta: " + str(captured))
+
+
+# ---------------------------------------------------------------------------
+# Postgres container remediation points at this checkout's docker/ dir
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_postgres_remediation_uses_repo_docker_dir(returncode):
+    """Both failure paths name REPO_ROOT/docker, not a fixed home path."""
+    from scripts import health_check as hc
+
+    fake = SimpleNamespace(returncode=returncode, stdout="", stderr="boom")
+    with patch("scripts.health_check._run", return_value=fake):
+        r = hc.check_postgres_container()
+    assert r.status == "FAIL"
+    assert (hc.REPO_ROOT / "docker").as_posix() in r.remediation
