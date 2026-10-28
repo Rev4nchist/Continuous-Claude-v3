@@ -24,7 +24,16 @@ import { formatAgo, formatCount, plural, statusClasses } from './format';
  * The mapping behind all of it is hand-authored, so the count proves nothing was
  * DROPPED and nothing here can prove a row went to the RIGHT project.
  */
-export function ProjectCard({ project }: { project: ProjectSummary }) {
+export function ProjectCard({
+  project,
+  onSelect,
+  selected = false,
+}: {
+  project: ProjectSummary;
+  /** When set, the title is a button that selects this project (the session-card filter). */
+  onSelect?: (key: string) => void;
+  selected?: boolean;
+}) {
   const idle = project.sessionCount === 0;
 
   return (
@@ -33,12 +42,26 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
         'group relative flex flex-col gap-3 rounded-lg border bg-card p-4 transition-colors',
         'hover:border-foreground/20',
         idle && 'opacity-60',
+        selected && 'border-doing ring-1 ring-doing/60',
       )}
     >
       <header className="flex items-start justify-between gap-3">
         <div className="min-w-0">
           <h3 className="truncate font-medium tracking-tight" title={project.displayName}>
-            {project.displayName}
+            {onSelect ? (
+              // The button holds ONLY the name, so its accessible name is the display name.
+              // The pseudo-element stretches the click target over the whole card.
+              <button
+                type="button"
+                aria-pressed={selected}
+                onClick={() => onSelect(project.key)}
+                className="block max-w-full truncate text-left after:absolute after:inset-0 after:content-['']"
+              >
+                {project.displayName}
+              </button>
+            ) : (
+              project.displayName
+            )}
           </h3>
           {project.displayName !== project.key && (
             <p className="truncate font-mono text-xs text-muted-foreground">{project.key}</p>
@@ -91,7 +114,7 @@ export function ProjectCard({ project }: { project: ProjectSummary }) {
         <div className="flex items-baseline justify-between gap-3">
           <dt
             title="Distinct raw sessions.project strings that normalize to this project — subdirectories, worktrees, slash and case variants."
-            className="cursor-help decoration-dotted underline-offset-2 hover:underline"
+            className="relative z-10 cursor-help decoration-dotted underline-offset-2 hover:underline"
           >
             Path spellings
           </dt>

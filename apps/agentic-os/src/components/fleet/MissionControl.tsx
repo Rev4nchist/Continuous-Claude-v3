@@ -1,5 +1,7 @@
 'use client';
 
+import { useState } from 'react';
+
 import type { MissionControlSnapshot } from '@/server/queries/mission-control';
 
 import { useLiveData } from '@/hooks/useLiveData';
@@ -8,6 +10,10 @@ import { cn } from '@/lib/utils';
 import { AccountingBar } from './AccountingBar';
 import { ActiveSessionsStrip } from './ActiveSessionsStrip';
 import { FleetGrid } from './FleetGrid';
+import { ReadyForDave } from './ReadyForDave';
+import { SessionCards } from './SessionCards';
+import { SourceHealth } from './SourceHealth';
+import { StatTiles } from './StatTiles';
 import { UnmatchedPanel } from './UnmatchedPanel';
 
 /**
@@ -16,9 +22,10 @@ import { UnmatchedPanel } from './UnmatchedPanel';
  * ADR-0002 requires polling behind a single `useLiveData()` hook so Slice 3 can
  * swap in SSE without touching components — so this is the one place that calls
  * it, and everything below receives plain data as props. FleetGrid, ProjectCard,
- * AccountingBar, ActiveSessionsStrip and UnmatchedPanel are all server-renderable
- * pure functions of their props; none of them import the hook, fetch anything, or
- * hold state.
+ * AccountingBar, ActiveSessionsStrip, UnmatchedPanel, ReadyForDave, StatTiles,
+ * SessionCards and SourceHealth are all server-renderable pure functions of their props;
+ * none of them import the hook or fetch anything. The one piece of client state, the
+ * project filter, lives in this component and reaches them as props.
  *
  * THE TYPE IMPORT IS SAFE AND IS CHECKED. `@/server/queries/mission-control`
  * carries `import 'server-only'`, which throws if it reaches a client bundle.
@@ -34,7 +41,14 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
       initialData: initial,
     });
 
-  const { fleet, active, database } = data;
+  const { fleet, active, database, ready, cards, tiles, sources } = data;
+
+  // The project filter is the only client state. Clicking the selected project clears it.
+  const [selectedKey, setSelectedKey] = useState<string | null>(null);
+  const toggleProject = (key: string) => setSelectedKey((current) => (current === key ? null : key));
+  const selectedProject = fleet.projects.find((p) => p.key === selectedKey) ?? null;
+  const shownCards =
+    selectedKey === null ? cards : cards.filter((card) => card.projectKey === selectedKey);
 
   return (
     <div className="mx-auto flex min-h-screen max-w-[100rem] flex-col gap-8 p-6 lg:p-8">
@@ -42,7 +56,7 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Agentic OS</h1>
           <p className="text-sm text-muted-foreground">
-            Fleet overview · local-first, read-only, no auth
+            Fleet overview · what each session is doing and what needs Dave
           </p>
         </div>
         <LiveIndicator
@@ -68,6 +82,20 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
         </div>
       )}
 
+      <ReadyForDave items={ready} />
+
+      <StatTiles tiles={tiles} />
+
+      <SessionCards
+        cards={shownCards}
+        filter={
+          selectedKey === null
+            ? null
+            : { key: selectedKey, label: selectedProject?.displayName ?? selectedKey }
+        }
+        onClear={() => setSelectedKey(null)}
+      />
+
       <ActiveSessionsStrip active={active} />
 
       <section className="space-y-3">
@@ -77,19 +105,21 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
             {fleet.projects.length} in the registry
           </span>
         </h2>
-        <FleetGrid projects={fleet.projects} />
+        <FleetGrid projects={fleet.projects} selectedKey={selectedKey} onSelect={toggleProject} />
       </section>
 
       <AccountingBar fleet={fleet} />
 
       <UnmatchedPanel unmatched={fleet.unmatched} />
 
+      <SourceHealth sources={sources} />
+
       <footer className="mt-auto border-t pt-4 text-xs text-muted-foreground">
         {database.ok
           ? `Connected as agentic_os_app (SELECT-only, ${database.latencyMs}ms).`
           : 'Not connected.'}{' '}
-        Slice 1: fleet grid only. Transcripts, search, memory and every write path are
-        deliberately out of scope.
+        Read-only, localhost, no login. Briefs come from session state files; asks older than 24
+        hours are hidden.
       </footer>
     </div>
   );

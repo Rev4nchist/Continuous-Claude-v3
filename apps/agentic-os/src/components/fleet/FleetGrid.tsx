@@ -7,7 +7,15 @@ import { ProjectCard } from './ProjectCard';
  * history lead and the empty ones sink — no client-side re-sort that could
  * disagree with the query's own ordering.
  */
-export function FleetGrid({ projects }: { projects: ProjectSummary[] }) {
+export function FleetGrid({
+  projects,
+  selectedKey = null,
+  onSelect,
+}: {
+  projects: ProjectSummary[];
+  selectedKey?: string | null;
+  onSelect?: (key: string) => void;
+}) {
   if (projects.length === 0) {
     return (
       <p className="rounded-lg border border-dashed p-6 text-sm text-muted-foreground">
@@ -20,7 +28,12 @@ export function FleetGrid({ projects }: { projects: ProjectSummary[] }) {
   return (
     <div className="grid grid-cols-1 gap-3 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4">
       {projects.map((project) => (
-        <ProjectCard key={project.key} project={project} />
+        <ProjectCard
+          key={project.key}
+          project={project}
+          onSelect={onSelect}
+          selected={selectedKey === project.key}
+        />
       ))}
     </div>
   );
