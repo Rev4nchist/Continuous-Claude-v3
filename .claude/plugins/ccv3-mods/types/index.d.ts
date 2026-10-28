@@ -40,6 +40,13 @@ export type OsBrief = {
   updatedAt: number
 }
 
+/**
+ * Where the session runs, read from the .git files (hooks/agentic-os/gitinfo.ts) at the session start and at each turn start.
+ * `repo` is the top-level folder name (of the main checkout, for a linked worktree); `branch` is the short sha when HEAD is
+ * detached; `worktree` is null for the primary checkout. A field is null when it is not known. The snapshot carries all three as top-level keys.
+ */
+export type OsGit = { repo: string | null; branch: string | null; worktree: string | null }
+
 export type OsPlan = { title: string; file?: string }
 
 export type OsTurn = { id: string; startedAt: number }
@@ -197,6 +204,8 @@ declare module 'claude-code' {
       refused: boolean
       /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call): an open ask stays fresh 24 hours from it. */
       activeAt: number | null
+      /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
+      git: OsGit | null
     }
   }
 }

@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
 import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -10,6 +10,8 @@ import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
 import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd } from './brief'
+import { bandLines } from './band-model'
+import { gitInfo } from './gitinfo'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
@@ -47,6 +49,9 @@ const brief = atom({ plugin: 'ccv3-mods', key: 'brief' } as const, null as OsBri
 const refused = atom({ plugin: 'ccv3-mods', key: 'refused' } as const, false)
 /** When the session last did anything: a prompt, a turn start or end, a main-loop tool call. An open ask stays fresh 24 hours from it. */
 const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as number | null)
+
+/** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
+const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -100,6 +105,36 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
 })
 
 /**
+ * The chip, one way for the snapshot and the band, so the two cannot disagree.
+ * `working`: Dave's prompt just arrived, so a turn is about to start and the chip leaves waiting-on-dave at once.
+ * `except`: the call that is writing (brief_set is itself a running step while its handler answers).
+ */
+const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { working?: boolean; except?: string } = {}) =>
+  deriveChip({
+    brief: await read($, brief),
+    tasks: now.tasks,
+    toolRunning: (await read($, steps)).some(one => one.id !== opts.except),
+    turnActive: now.turn !== null || opts.working === true,
+    blocked: await read($, refused),
+    now: at,
+    activeAt: await read($, activeAt),
+  })
+
+/**
+ * Repo, branch and worktree from the .git files of the session folder: file reads only, no process.
+ * Never throws; any failure leaves the three fields null.
+ */
+const refreshGit = async ($: EngineInterface): Promise<void> => {
+  try {
+    const cwd = await $.session.cwd().catch(() => $.session.root())
+    const found = await gitInfo(cwd, path => $.fs.read(path).then(text => (typeof text === 'string' ? text : null), () => null))
+    await update($, git, () => found)
+  } catch {
+    await update($, git, () => null).catch(() => undefined)
+  }
+}
+
+/**
  * One JSON file per session under ~/.claude/state/agentic-os/: the read side
  * for the web dashboard (Slice 2) and the evidence for headless probes.
  * A failed write never touches the session.
@@ -112,18 +147,20 @@ const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; exce
     const at = await $.clock.now()
     const now = await view($)
     const current = await read($, brief)
-    // `working`: Dave's prompt just arrived, so a turn is about to start and the chip leaves waiting-on-dave at once.
-    // `except`: the call that is writing (brief_set is itself a running step while its handler answers).
-    const chip = deriveChip({
+    const chip = await chipNow($, now, at, opts)
+    const where = await read($, git)
+    const snapshot = {
+      sessionId,
+      at,
+      ...now,
+      agentRuns: await read($, agentRuns),
+      cache: await read($, cache),
       brief: current,
-      tasks: now.tasks,
-      toolRunning: (await read($, steps)).some(one => one.id !== opts.except),
-      turnActive: now.turn !== null || opts.working === true,
-      blocked: await read($, refused),
-      now: at,
-      activeAt: await read($, activeAt),
-    })
-    const snapshot = { sessionId, at, ...now, agentRuns: await read($, agentRuns), cache: await read($, cache), brief: current, chip }
+      chip,
+      repo: where?.repo ?? null,
+      branch: where?.branch ?? null,
+      worktree: where?.worktree ?? null,
+    }
     await $.fs.write(`${home}/.claude/state/agentic-os/${sessionId}.json`, JSON.stringify(snapshot, null, 2))
   } catch {
     // Observer only: a snapshot is best effort.
@@ -420,6 +457,7 @@ export const agenticOs = (on: On) => {
       await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
       await registerBrief($)
+      await refreshGit($)
       if (e.isInteractive) await startUi($)
       return next(e)
     } catch (err) {
@@ -475,6 +513,8 @@ export const agenticOs = (on: On) => {
     await update($, activeAt, () => startedAt)
     // A new turn is a fresh start: last turn's refusal no longer blocks the chip.
     await update($, refused, () => false)
+    // A branch switch or a new worktree shows at the next turn: two small file reads, no process.
+    await refreshGit($)
     if (await worthSnapshot($)) await writeSnapshot($)
     return next(e)
   })
@@ -552,7 +592,8 @@ export const agenticOs = (on: On) => {
     const runs = await read($, agentRuns)
     // Finished runs alone don't keep the band up; a running one does.
     const quiet = isQuiet(now) && !runs.some(run => run.status === 'running')
-    if (e.props.hasSurvey || (quiet && hudNow === null)) return next(e)
+    // The core lines draw even when the session is quiet: GOAL not set is visible on purpose (PRD 5.5).
+    if (e.props.hasSurvey || e.props.maxRows < 1) return next(e)
     const elements = $.ui.resolve(e)
     const { Box, Text } = elements
     const spansRow = (key: string, spans: Span[]) => (
@@ -566,8 +607,11 @@ export const agenticOs = (on: On) => {
         </Text>
       </Box>
     )
+    // Rows, in this priority: the core lines (PRD 5.3: they never move), then the HUD row, then the widget line, both below them.
+    const coreRows = e.props.maxRows >= 2 ? 2 : 1
+    const spare = e.props.maxRows - coreRows
     let hudRow = null
-    if (hudNow !== null) {
+    if (hudNow !== null && spare >= 1) {
       const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()))
       // The terminal draws no Svg: its HUD is text gauges. Every other surface gets the rings and bars.
       if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(parts))
@@ -591,14 +635,31 @@ export const agenticOs = (on: On) => {
         )
       }
     }
-    // With the HUD up, ctx lives in its ring, so the task row leaves it out.
-    // One row of room: the HUD alone.
-    const bandRow = quiet || (hudRow !== null && e.props.maxRows < 2)
-      ? null
-      : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, await $.clock.now(), e.props.bodyColumns, ledgerBandSpans(runs)))
-    if (hudRow === null) return bandRow ?? next(e)
+    const at = await $.clock.now()
+    const lines = bandLines(
+      {
+        chip: await chipNow($, now, at),
+        brief: await read($, brief),
+        tasks: now.tasks,
+        repo: (await read($, git))?.repo ?? null,
+        branch: (await read($, git))?.branch ?? null,
+        lane: now.lanes?.[0]?.id ?? null,
+        ctx: now.ctx,
+        costUsd: hudNow?.costUsd ?? null,
+        // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
+        fallback: null,
+        now: at,
+        activeAt: await read($, activeAt),
+      },
+      e.props.bodyColumns,
+    ).slice(0, coreRows)
+    // The widget line below keeps the pre-core band (plan title, task progress, the step, PRs, agents) under its old key.
+    // With the HUD up, ctx lives in its ring, so the widget line leaves it out (line 1 shows it too). Its row comes after the HUD and the core lines.
+    const widgetRoom = spare - (hudRow === null ? 0 : 1)
+    const bandRow = quiet || widgetRoom < 1 ? null : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, at, e.props.bodyColumns, ledgerBandSpans(runs)))
     return (
       <Box flexDirection="column">
+        {lines.map((line, i) => spansRow(`row-core-${i + 1}`, line))}
         {hudRow}
         {bandRow}
       </Box>

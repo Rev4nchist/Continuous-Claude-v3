@@ -7,6 +7,8 @@ export type Tone =
   | 'title' | 'head' | 'active' | 'done' | 'todo' | 'dim' | 'ok' | 'warn' | 'bad' | 'chip' | 'track'
   /** HUD: the model chip when effort is below the high pin, and the advisor. */
   | 'chipBad' | 'advisor'
+  /** Band (band-model.ts), after the mockup: working is a blue chip (`chipDoing`) and a doing plan cell is blue (`doing`); waiting-on-dave amber, done green, idle grey, blocked `chipBad`. */
+  | 'chipDoing' | 'doing' | 'chipWarn' | 'chipOk' | 'chipDim'
   /** Agent Ledger: a Sonnet tier badge. */
   | 'sonnetTier'
   /** Skin diff lines. */
