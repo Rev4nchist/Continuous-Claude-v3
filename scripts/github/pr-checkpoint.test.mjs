@@ -498,3 +498,14 @@ test('T30 (CLI): bad usage exits 2: an unknown flag, or --facts or --config with
     assert.match(r.stderr, /usage/i, args.join(' '));
   }
 });
+
+test('T31 (CLI input): a CodeRabbit CLI run that did not complete is not a clean review', async () => {
+  const { cliFromStream } = await load();
+  const minor = JSON.stringify({ type: 'finding', severity: 'minor', fileName: 'a.mjs' });
+  const done = JSON.stringify({ type: 'complete', status: 'review_completed' });
+  const error = JSON.stringify({ type: 'error', errorType: 'rate_limit', message: 'limited' });
+  assert.equal(cliFromStream(minor), null, 'cut off before complete');
+  assert.equal(cliFromStream(`${minor}\n${error}`), null, 'error event, no complete');
+  assert.equal(cliFromStream(''), null, 'empty output');
+  assert.deepEqual(cliFromStream(`${minor}\n${done}`), { bySeverity: { minor: 1 } }, 'completed run');
+});

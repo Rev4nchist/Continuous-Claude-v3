@@ -302,11 +302,17 @@ function readStamp() {
   try { return JSON.parse(readFileSync(path.join(ROOT, STAMP_REL), 'utf8')); } catch { return null; }
 }
 
-/** The saved CLI review output of the head (pre-pr.mjs keeps it as <date>-pre-pr-cr-<sha7>.txt). null = not found. */
+/** CLI facts from a saved review stream. null unless the run completed with no error or awaiting status, so a cut-off run never reads as clean. */
+export function cliFromStream(text) {
+  const p = parseAgentStream(text);
+  return p.complete && !p.awaiting && p.errors.length === 0 ? { bySeverity: p.bySeverity } : null;
+}
+
+/** The saved CLI review output of the head (pre-pr.mjs keeps it as <date>-pre-pr-cr-<sha7>.txt). null = not found or not complete. */
 function readCli(head) {
   const dir = path.join(ROOT, '.claude', 'cache', 'e2e');
   const name = existsSync(dir) ? readdirSync(dir).find((n) => new RegExp(`^\\d{4}-\\d{2}-\\d{2}-pre-pr-cr-${head.slice(0, 7)}\\.txt$`).test(n)) : undefined;
-  return name ? { bySeverity: parseAgentStream(readFileSync(path.join(dir, name), 'utf8')).bySeverity } : null;
+  return name ? cliFromStream(readFileSync(path.join(dir, name), 'utf8')) : null;
 }
 
 /** The branch config differs from the base branch's: the router uses main's config. */
