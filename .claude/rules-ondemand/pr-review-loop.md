@@ -10,7 +10,8 @@ Dave merges (`/land`). Follow the live steps below.
 
 **Dependabot PRs** need no bot review (CodeRabbit refuses bot-authored PRs). This holds only when
 the PR author is the `dependabot[bot]` Bot account and every commit is by `dependabot[bot]` and
-signed by GitHub. A person's commit on that branch ends the exception. All other READY items apply.
+signed by GitHub. A person's commit on that branch ends the exception. All other READY items apply,
+except the PR body proof (see "Proof in the PR body").
 
 **Approved target (Wiring Plan 2026-10-25, D2–D4): partially built.** Label-gated CodeRabbit, READY
 counting (DW-91) and label routing at ready (P3c) are live. See "Target" at the end.
@@ -87,6 +88,80 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 
 Never merge the PR. That is a separate, confirmed decision.
 
+## Proof in the PR body (live, P4b)
+
+Every PR body names one proof type and shows its evidence. `review-status.mjs` reads it from the PR
+body only, never from a comment. Write the Evidence block from `pr-and-commit-style.md` when you open
+the PR. After each push, run the GREEN check again on the new head and update the GREEN line only.
+Keep the CodeRabbit and Greptile blocks in the body byte for byte.
+
+| Proof type | Use it for | RED (BEFORE for a refactor) | GREEN, on the head |
+|---|---|---|---|
+| `bugfix` | a defect | A test or probe that reproduces the bug fails on a commit before the fix. | The same command passes. |
+| `feature` | new behaviour | The end-to-end check, written first, fails. | The same check passes. Add unit tests only where the end-to-end check cannot reach. |
+| `refactor` | behaviour that must not change | BEFORE: the full suite passes on the commit before the change. | The same suite passes. |
+| `ui` | an interactive or UI change | The Playwright run at desktop and phone width fails. | The same run passes at both widths. |
+| `harness` | a hook, rule, skill or agent | The AGENTS.md "Testing" row shows the old behaviour. | The same row shows the new behaviour (see "Harness proof"). |
+| `docs` | text only | None. | None. Valid only when the review router classed this head `docs`. |
+
+Name one type. A PR that mixes types names the type of its riskiest change.
+
+### Harness proof
+
+Use the AGENTS.md "Testing" row for the surface you changed.
+
+- A hook: build it, then pipe a real payload into the built hook. This is the full row, and it runs
+  before the merge.
+- A rule, skill or agent: run the static gates (`context-budget-guard.mjs --repo`, `audit-skills.mjs`,
+  `check-agent-model-drift.mjs`, `check-agent-body.mjs`) and `rule-router-probe.mjs` in the worktree.
+  The behaviour run, `claude -p` on a prompt the change targets, needs the change in `~/.claude`.
+  Policy: do not sync a branch into `~/.claude`. Run that step after the land and note it on the
+  PR. It is not a READY item.
+
+### Closest executable check
+
+Work with no test harness still needs RED and GREEN. Use the closest executable check. It is the
+cheapest command that does three things:
+
+1. It runs the real artifact the way a user or the harness runs it.
+2. It exits non-zero, or prints a named failure line, when the behaviour is wrong.
+3. It gives the same result when you run it again.
+
+Prefer, in this order:
+
+1. An existing probe or gate script.
+2. A short script in `.claude/cache/e2e/` that reads the real artifact and checks the change. Keep
+   it and name it.
+3. A `claude -p` run whose JSON shows the behaviour.
+
+These are not checks: reading the file, a grep hit, "it compiles", a type check alone, an agent's
+report. For a pure addition, RED is the same check on the commit before the change. It shows the
+missing behaviour. Subagents never commit: the main session supplies the RED commit, and it can be the base.
+
+### What READY checks
+
+- One `Proof type:` line, outside HTML comments, code fences and bot blocks. It uses a known type.
+  Write one type only, with at most a parenthetical after it.
+- Each field the type needs, once: a command in backticks, `@`, a commit SHA (7 to 40 hex
+  characters) and a fenced output block that is not empty. A placeholder like `<command>` fails.
+- The GREEN SHA is the head.
+
+READY checks the shape and the head. It does not judge whether RED really failed. The reviewer does.
+
+Exemptions:
+
+- A Dependabot PR, as defined at the top of this file.
+- A `docs` PR. It still writes `Proof type: docs`. The review router's comment must name this head
+  with class `docs`, and every `risk:*` label must be `risk:docs`. No RED or GREEN is needed.
+- A repo other than CCv3. `review-status.mjs` runs the check only for it.
+- `land-pr.ps1 -IgnoreReview` skips this check with the rest. Post the reason on the PR.
+
+### Last step before done
+
+Before you say done or fill in GREEN, read
+`~/.claude/skills/_vendor/pstack/skills/principle-prove-it-works/SKILL.md` and apply it. Keep the
+artifact in `.claude/cache/e2e/`. Never commit it.
+
 ## Before you call a PR ready, or land it
 
 Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. READY means:
@@ -95,7 +170,8 @@ output; while Greptile auto review is off, CodeRabbit replaces Greptile in that 
 as defined above needs none); a Greptile review, when required, has a check run `success`, a summary
 naming that head and confidence at least 4/5; 0 threads unresolved from any reviewer; every commit status other
 than CodeRabbit's is `success`; every check run other than Greptile's is completed with `success`,
-`neutral` or `skipped`; and `mergeable_state` is clean. A merge was once called safe 92 s before a
+`neutral` or `skipped`; the PR body names one proof type with its evidence, and its GREEN line names
+the head (see "Proof in the PR body"; a Dependabot PR needs none); and `mergeable_state` is clean. A merge was once called safe 92 s before a
 reviewer found a real defect on the new head.
 
 That sentence is what `review-status.mjs` implements today. It does not close three gaps observed on

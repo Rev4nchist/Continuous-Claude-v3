@@ -17,7 +17,7 @@
 - `to-spec`: turns a conversation into a spec file. User-only wrapper.
 - `tdd`: owns the name `tdd` (ADR-C). `.claude/skills/tdd/SKILL.md` is its wrapper. `name_shadows` in the lock lists the collision.
 - `diagnosing-bugs`: red-first loop for hard and performance bugs. `systematic-debugging` stays the entry point and routes here.
-- `pr`: Summary visual and Merge Danger template. One pointer line in `.claude/rules-ondemand/pr-and-commit-style.md`.
+- `pr`: Summary visual and Merge Danger template. One pointer line in `.claude/rules-ondemand/pr-and-commit-style.md`. Its Evidence section is replaced by the CCv3 Evidence block there (P4b).
 - `code-review`: hidden. Cross-family review brief only. CCv3 `code-review` stays the verification gate. `name_shadows` lists both the skill and the bundled name.
 
 ## Ways in

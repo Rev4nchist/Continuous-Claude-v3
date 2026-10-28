@@ -70,6 +70,8 @@ End the final message with exactly one fenced JSON block:
 {
   "agent": "arbiter",
   "status": "passed | failed | partial",
+  "proof_type": "bugfix | feature | refactor | ui | harness | docs",
+  "phase": "red | before | green",
   "suites": [
     {"name": "<suite/command>", "total": 0, "passed": 0, "failed": 0, "skipped": 0, "evidence": "<the runner's actual summary line>"}
   ],
@@ -80,6 +82,8 @@ End the final message with exactly one fenced JSON block:
 ```
 
 - If the task prompt names a JSON shape, return that shape and add `status`.
+- `proof_type` comes from the task prompt. If it names none, pick one from the table in `pr-review-loop.md` "Proof in the PR body" and say why above the JSON.
+- `phase` is `red` when the run must fail (the RED step), `before` for a refactor baseline that must pass, and `green` for the final run.
 - `status` is `passed` only when every suite ran to the end with zero failures. A timeout or a skipped suite makes it `partial`.
 - `evidence` is the runner's verbatim summary line, for example `Tests 61 passed | 5 skipped`. The orchestrator re-checks it. A paraphrased count breaks the contract.
 - Put suggested fixes in `root_cause` or in the text above the JSON. Do not apply them.

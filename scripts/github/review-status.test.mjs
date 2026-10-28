@@ -18,9 +18,24 @@ import {
   FAILED_UNREQUIRED_REASON,
   greptileAutoFrom,
 } from './review-status.mjs';
+// P4b proof gate: parseProof, PROOF_REASON_PREFIX, PROOF_TYPES, PROOF_REPOS, docsHeadVerified.
+import * as RS from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
+// The commit a RED line names. Any 7 to 40 hex characters pass; membership in the PR is not checked.
+const RED_SHA = 'c'.repeat(7);
+
+// The Evidence block from pr-and-commit-style.md. Every body `input()` builds carries one, so the READY
+// tests that are about the reviews stay READY. The proof tests below change or remove it.
+const fenced = (text) => `\`\`\`text\n${text}\n\`\`\`\n`;
+const proofField = (key, sha, out) => `${key}: \`node --test x.test.mjs\` @ ${sha}\n${fenced(out)}`;
+const proof = (head, type = 'bugfix') => {
+  const lines = ['', '', '## Evidence', '', `Proof type: ${type}`, ''];
+  if (type === 'docs') return lines.join('\n');
+  const first = type === 'refactor' ? proofField('BEFORE', RED_SHA, '# fail 0') : proofField('RED', RED_SHA, 'not ok 1 - x');
+  return `${lines.join('\n')}${first}\n${proofField('GREEN', head, '# fail 0')}`;
+};
 
 const body = (sha, score) =>
   `Summary text.\n<!-- greptile_comment -->\n<h2>Confidence Score: ${score}/5</h2>\n` +
@@ -34,9 +49,9 @@ const run = (conclusion, status = 'completed', id = 2) => ({
 
 const GREPTILE_EDIT = { editor: { __typename: 'Bot', login: 'greptile-apps' } };
 
-function input({ prBody = body(HEAD, 5), runs = [run('success')], threads = [], statuses = [], bodyEdits = [GREPTILE_EDIT] } = {}) {
+function input({ prBody = body(HEAD, 5), proofBody = proof(HEAD), runs = [run('success')], threads = [], statuses = [], bodyEdits = [GREPTILE_EDIT] } = {}) {
   return {
-    pull: { number: 111, state: 'open', merged: false, mergeable_state: 'clean', body: prBody, head: { sha: HEAD, ref: 'feat/x' } },
+    pull: { number: 111, state: 'open', merged: false, mergeable_state: 'clean', body: `${prBody}${proofBody}`, head: { sha: HEAD, ref: 'feat/x' } },
     combined: { statuses },
     checkRuns: runs,
     threads,
@@ -487,7 +502,7 @@ const crInput = (head, comments, reviews = [], over = {}) => {
   i.pull.head.sha = head;
   i.pull.labels = [{ name: 'review:coderabbit' }];
   i.checkRuns = [run('success')];
-  i.pull.body = body(head, 5);
+  i.pull.body = body(head, 5) + proof(head);
   return { ...i, reviews, comments, commentEdits: neverEdited(comments), headCommittedAt: HEAD_DATE, ...over };
 };
 
@@ -1247,4 +1262,326 @@ test('Dependabot: CI and threads still gate', () => {
   assert.ok(ci.reasons.some((x) => /semgrep/.test(x)), ci.reasons.join('; '));
   const thread = evaluate(DEP({ extra: { threads: [{ isResolved: false }] } }));
   assert.equal(thread.ready, false);
+});
+
+// ---------------------------------------------------------------------------------------------
+// P4b proof gate (DW-102): a PR body names one proof type and shows RED and GREEN evidence. READY
+// reads it from the PR body only. Each test names the failure it guards; the mutation check
+// (.claude/cache/p4b-tmp/mutate.mjs) breaks the code and confirms the matching test fails.
+// ---------------------------------------------------------------------------------------------
+const proofReasons = (r) => r.reasons.filter((x) => x.startsWith(RS.PROOF_REASON_PREFIX));
+const check = (proofBody, over = {}) => evaluate(input({ proofBody, ...over }));
+const GOOD = proof(HEAD);
+const CMD = '`node --test x.test.mjs`';
+const RED_F = proofField('RED', RED_SHA, 'not ok 1 - x');
+const GREEN_F = proofField('GREEN', HEAD, '# fail 0');
+const BEFORE_F = proofField('BEFORE', RED_SHA, '# fail 0');
+const preamble = (type) => `\n\nProof type: ${type}\n\n`;
+const readyOrWhy = (r) => r.reasons.join('; ');
+
+test('proof: a body with no proof is NOT READY; the default fixture is READY only through its Evidence block', () => {
+  assert.equal(evaluate(input()).ready, true);
+  const r = check('');
+  assert.equal(r.ready, false);
+  assert.equal(r.proof.status, 'missing');
+  assert.ok(proofReasons(r).some((x) => /"Proof type:" line/.test(x)), readyOrWhy(r));
+});
+
+test('proof: a block left inside an HTML comment does not count; a comment before a real block does not hide it', () => {
+  const hidden = {
+    'one-line comment': '\n\n<!-- Proof type: bugfix -->\n',
+    'multi-line comment around a whole block': `\n\n<!--\n${GOOD}\n-->\n`,
+    'comment opened mid-line': '\n\ntext <!-- start\nProof type: bugfix\n-->\n',
+  };
+  for (const [name, p] of Object.entries(hidden)) {
+    const r = check(p);
+    assert.equal(r.proof.status, 'missing', name);
+    assert.equal(r.ready, false, name);
+  }
+  const visible = check(`\n<!-- note -->\n<!-- another\nnote -->${GOOD}`);
+  assert.equal(visible.ready, true, readyOrWhy(visible));
+});
+
+test('proof: a block inside the Greptile or CodeRabbit body block does not count; one after the block does', () => {
+  const greptile = (inner) => `\n<!-- greptile_comment -->\n${inner}\n<!-- /greptile_comment -->\n`;
+  const rabbit = (inner) => `\n<!-- This is an auto-generated comment: summarize by coderabbit.ai -->\n${inner}\n<!-- end of auto-generated comment: summarize by coderabbit.ai -->\n`;
+  for (const [name, wrap] of [['greptile', greptile], ['coderabbit', rabbit]]) {
+    const hidden = check(wrap(GOOD));
+    assert.equal(hidden.proof.status, 'missing', name);
+    assert.equal(hidden.ready, false, name);
+    const after = check(`${wrap('Summary text.')}${GOOD}`);
+    assert.equal(after.ready, true, `${name}: ${readyOrWhy(after)}`);
+  }
+});
+
+test('proof: field lines inside a code fence are not fields (4-backtick and ~~~ fences too)', () => {
+  const fencedBlocks = { 'four backticks around three': `\n\n\`\`\`\`markdown\n${GOOD}\n\`\`\`\`\n`, 'tilde fence': `\n\n~~~\n${GOOD}\n~~~\n` };
+  for (const [name, p] of Object.entries(fencedBlocks)) {
+    assert.equal(check(p).proof.status, 'missing', name);
+  }
+  const trick = `${preamble('bugfix')}RED: ${CMD} @ ${RED_SHA}\n\`\`\`text\nnot ok 1\nGREEN: ${CMD} @ ${HEAD}\n\`\`\`\n`;
+  const r = check(trick);
+  assert.equal(r.ready, false);
+  assert.ok(proofReasons(r).some((x) => /needs a GREEN line/.test(x)), `a GREEN line inside the RED output is not a GREEN field: ${readyOrWhy(r)}`);
+});
+
+test('proof: "<!--" inside fenced output does not hide the GREEN line', () => {
+  const p = `${preamble('bugfix')}${proofField('RED', RED_SHA, 'not ok 1\n<div><!-- never closed')}\n${GREEN_F}`;
+  const r = check(p);
+  assert.equal(r.ready, true, readyOrWhy(r));
+});
+
+test('proof: an unknown type is rejected, and the reason lists the six types', () => {
+  const r = check(GOOD.replace('Proof type: bugfix', 'Proof type: tests'));
+  assert.equal(r.ready, false);
+  assert.equal(r.proof.status, 'invalid');
+  const why = proofReasons(r).find((x) => /unknown proof type "tests"/.test(x));
+  assert.ok(why, readyOrWhy(r));
+  for (const t of ['bugfix', 'feature', 'refactor', 'ui', 'harness', 'docs']) assert.ok(why.includes(t), `${t} listed`);
+});
+
+test('proof: two Proof type lines are NOT READY', () => {
+  const r = check(`${GOOD}\nProof type: feature\n`);
+  assert.equal(r.ready, false);
+  assert.ok(proofReasons(r).some((x) => /2 "Proof type:" lines/.test(x)), readyOrWhy(r));
+});
+
+test('proof: the type line must hold one clean type (no list, no extra words); a parenthetical is fine', () => {
+  for (const v of ['bugfix, feature', 'bugfix | feature', 'bugfix feature', 'bugfix and feature']) {
+    const r = check(GOOD.replace('Proof type: bugfix', `Proof type: ${v}`));
+    assert.equal(r.ready, false, v);
+    assert.ok(proofReasons(r).some((x) => /Name one type/.test(x)), `${v}: ${readyOrWhy(r)}`);
+  }
+  const note = check(GOOD.replace('Proof type: bugfix', 'Proof type: bugfix (fixes #12)'));
+  assert.equal(note.ready, true, readyOrWhy(note));
+});
+
+test('proof: the template placeholder and an empty type value have no type', () => {
+  for (const v of ['<bugfix | feature | refactor | ui | harness | docs>', '']) {
+    const r = check(GOOD.replace('Proof type: bugfix', `Proof type: ${v}`));
+    assert.equal(r.ready, false, `"${v}"`);
+    assert.ok(proofReasons(r).some((x) => /has no type/.test(x)), `"${v}": ${readyOrWhy(r)}`);
+  }
+});
+
+test('proof: bugfix, feature, ui and harness each need a RED line', () => {
+  for (const type of ['bugfix', 'feature', 'ui', 'harness']) {
+    const r = check(preamble(type) + GREEN_F);
+    assert.equal(r.ready, false, type);
+    assert.ok(proofReasons(r).some((x) => /needs a RED line/.test(x)), `${type}: ${readyOrWhy(r)}`);
+    assert.equal(check(preamble(type) + RED_F + GREEN_F).ready, true, `${type} with RED and GREEN`);
+  }
+});
+
+test('proof: a missing GREEN line is NOT READY', () => {
+  const r = check(preamble('bugfix') + RED_F);
+  assert.equal(r.ready, false);
+  assert.ok(proofReasons(r).some((x) => /needs a GREEN line/.test(x)), readyOrWhy(r));
+});
+
+test('proof: a refactor needs BEFORE and GREEN; RED does not stand in for BEFORE', () => {
+  const noBefore = check(preamble('refactor') + RED_F + GREEN_F);
+  assert.equal(noBefore.ready, false);
+  assert.ok(proofReasons(noBefore).some((x) => /needs a BEFORE line/.test(x)), readyOrWhy(noBefore));
+  const ok = check(preamble('refactor') + BEFORE_F + GREEN_F);
+  assert.equal(ok.ready, true, readyOrWhy(ok));
+});
+
+test('proof: the Pocock "**Before:**" line is not a BEFORE field (keys are upper case)', () => {
+  const r = check(preamble('refactor') + BEFORE_F.replace('BEFORE:', '- **Before:**') + GREEN_F);
+  assert.equal(r.ready, false);
+  assert.ok(proofReasons(r).some((x) => /needs a BEFORE line/.test(x)), readyOrWhy(r));
+});
+
+test('proof: a field needs a command in backticks, and a placeholder command is no command', () => {
+  const none = check(preamble('bugfix') + RED_F.replace(CMD, '') + GREEN_F);
+  assert.equal(none.ready, false);
+  assert.ok(proofReasons(none).some((x) => /RED line has no command in backticks/.test(x)), readyOrWhy(none));
+  const holder = check(preamble('bugfix') + RED_F.replace(CMD, '`<command>`') + GREEN_F);
+  assert.equal(holder.ready, false);
+  assert.ok(proofReasons(holder).some((x) => /RED line has a placeholder command/.test(x)), readyOrWhy(holder));
+});
+
+test('proof: a field needs a commit of 7 to 40 hex characters; case does not matter', () => {
+  for (const [name, sha] of [['none', ''], ['6 characters', 'cccccc'], ['not hex', 'zzzzzzz'], ['placeholder', '<red-sha>']]) {
+    const r = check(preamble('bugfix') + RED_F.replace(`@ ${RED_SHA}`, sha === '' ? '' : `@ ${sha}`) + GREEN_F);
+    assert.equal(r.ready, false, name);
+    assert.ok(proofReasons(r).some((x) => /RED line names no commit/.test(x)), `${name}: ${readyOrWhy(r)}`);
+  }
+  const short = check(preamble('bugfix') + RED_F + proofField('GREEN', HEAD.slice(0, 7), '# fail 0'));
+  assert.equal(short.ready, true, `a 7-character prefix of the head: ${readyOrWhy(short)}`);
+  const upper = check(preamble('bugfix') + RED_F + proofField('GREEN', 'A'.repeat(7), '# fail 0'));
+  assert.equal(upper.ready, true, `an upper-case prefix of the head: ${readyOrWhy(upper)}`);
+});
+
+test('proof: a field needs a fenced output block that is not empty', () => {
+  const none = check(`${preamble('bugfix')}RED: ${CMD} @ ${RED_SHA}\n\nsome prose, no fence\n\n${GREEN_F}`);
+  assert.equal(none.ready, false);
+  assert.ok(proofReasons(none).some((x) => /RED line has no fenced output block/.test(x)), readyOrWhy(none));
+  const empty = check(preamble('bugfix') + proofField('RED', RED_SHA, '  ') + GREEN_F);
+  assert.equal(empty.ready, false);
+  assert.ok(proofReasons(empty).some((x) => /RED output block is empty/.test(x)), readyOrWhy(empty));
+  const gap = check(preamble('bugfix') + RED_F.replace('\n```text', '\n\n\n```text') + GREEN_F);
+  assert.equal(gap.ready, true, `blank lines before the fence are fine: ${readyOrWhy(gap)}`);
+});
+
+test('proof: GREEN must name the head; a GREEN from an older commit is stale after a push', () => {
+  const r = check(preamble('bugfix') + RED_F + proofField('GREEN', OLD, '# fail 0'));
+  assert.equal(r.ready, false);
+  assert.ok(proofReasons(r).some((x) => /bbbbbbb/.test(x) && /aaaaaaa/.test(x) && /not the head/.test(x)), readyOrWhy(r));
+});
+
+test('proof: a duplicate RED or GREEN line is NOT READY, not "first wins" or "last wins"', () => {
+  const twoGreen = check(preamble('bugfix') + RED_F + proofField('GREEN', OLD, '# fail 0') + GREEN_F);
+  assert.equal(twoGreen.ready, false);
+  assert.ok(proofReasons(twoGreen).some((x) => /2 GREEN lines/.test(x)), readyOrWhy(twoGreen));
+  const twoRed = check(preamble('bugfix') + RED_F + RED_F + GREEN_F);
+  assert.ok(proofReasons(twoRed).some((x) => /2 RED lines/.test(x)), readyOrWhy(twoRed));
+});
+
+test('proof: a body with CRLF line endings parses (GitHub web edits save CRLF)', () => {
+  const r = check(GOOD.replace(/\n/g, '\r\n'));
+  assert.equal(r.ready, true, readyOrWhy(r));
+});
+
+test('proof: Markdown forms of the keys parse', () => {
+  const forms = {
+    'bold key, colon inside': GOOD.replace('Proof type: bugfix', '**Proof type:** `bugfix`').replace('RED:', '**RED:**').replace('GREEN:', '**GREEN:**'),
+    'bold key, colon outside': GOOD.replace('Proof type: bugfix', '**Proof type**: bugfix').replace('RED:', '**RED**:').replace('GREEN:', '**GREEN**:'),
+    'list items': GOOD.replace('Proof type:', '- Proof type:').replace('RED:', '- RED:').replace('GREEN:', '* GREEN:'),
+    'mixed-case Proof type': GOOD.replace('Proof type: bugfix', 'proof TYPE: BugFix'),
+    'at in place of @': GOOD.replaceAll(' @ ', ' at '),
+  };
+  for (const [name, p] of Object.entries(forms)) {
+    const r = check(p);
+    assert.equal(r.ready, true, `${name}: ${readyOrWhy(r)}`);
+  }
+});
+
+// docs: the author must still write "Proof type: docs", and the review router must have classed THIS head docs.
+const docsRouter = (sha, cls = 'docs') => ({ ...routerComment(sha), body: routerComment(sha).body.replace('class=infra', `class=${cls}`) });
+const docsPr = (over = {}) => {
+  const { labels = ['risk:docs'], router = docsRouter(HEAD), body: proofBody = proof(HEAD, 'docs') } = over;
+  return routed(labels, { input: { ...NO_GREPTILE, proofBody }, router: false, eval: { comments: router ? [router] : [] } });
+};
+
+test('proof: "Proof type: docs" needs no RED or GREEN when the router classed this head docs and every risk label is risk:docs', () => {
+  const r = evaluate(docsPr());
+  assert.equal(r.ready, true, readyOrWhy(r));
+  assert.equal(r.proof.status, 'ok');
+  assert.equal(r.proof.type, 'docs');
+});
+
+test('proof: a docs claim fails when any docs condition is missing', () => {
+  const cases = {
+    'router class is not docs': { router: docsRouter(HEAD, 'infra') },
+    'router saw an older head': { router: docsRouter(OLD) },
+    'a higher risk label is on the PR': { labels: ['risk:docs', 'risk:normal'] },
+    'no risk label at all': { labels: [] },
+    'no router comment': { router: null },
+  };
+  for (const [name, over] of Object.entries(cases)) {
+    const r = evaluate(docsPr(over));
+    assert.equal(r.ready, false, name);
+    assert.ok(proofReasons(r).some((x) => /docs/.test(x) && /router/.test(x)), `${name}: ${readyOrWhy(r)}`);
+  }
+  const noLine = evaluate(docsPr({ body: '' }));
+  assert.equal(noLine.proof.status, 'missing', 'docs still needs the Proof type line');
+});
+
+// Dependabot: DEP() goes through input(), so its body carries the default Evidence block. Strip it.
+const depNoProof = (over = {}) => {
+  const r = DEP(over);
+  r.pull.body = body(HEAD, 5);
+  return r;
+};
+
+test('proof: a Dependabot PR (signed, all commits by the bot) is exempt', () => {
+  const r = evaluate(depNoProof());
+  assert.equal(r.ready, true, readyOrWhy(r));
+  assert.equal(r.proof.status, 'exempt');
+  assert.equal(r.proof.required, false);
+});
+
+test('proof: no exemption for a person commit, an unsigned commit, a User account or another bot', () => {
+  for (const [name, over] of [
+    ['person commit on the branch', { commits: [DEP_COMMIT, { author: 'Rev4nchist', githubSigned: true }] }],
+    ['unsigned commit', { commits: [{ author: 'dependabot[bot]', githubSigned: false }] }],
+    ['User account named dependabot[bot]', { user: { login: 'dependabot[bot]', type: 'User' } }],
+    ['another bot', { user: { login: 'renovate[bot]', type: 'Bot' }, commits: [{ author: 'renovate[bot]', githubSigned: true }] }],
+  ]) {
+    const r = evaluate(depNoProof(over));
+    assert.equal(r.proof.status, 'missing', name);
+    assert.ok(proofReasons(r).length > 0, name);
+    assert.equal(r.ready, false, name);
+  }
+});
+
+test('proof: proofGate false (a repo other than CCv3) skips the check', () => {
+  const r = evaluate({ ...input({ proofBody: '' }), proofGate: false });
+  assert.equal(r.ready, true, readyOrWhy(r));
+  assert.equal(r.proof.status, 'off');
+  assert.equal(proofReasons(r).length, 0);
+});
+
+test('proof: the Evidence template in pr-and-commit-style.md parses once filled, and fails while its placeholders remain', () => {
+  const doc = readFileSync(new URL('../../.claude/rules-ondemand/pr-and-commit-style.md', import.meta.url), 'utf8').split(/\r?\n/);
+  const start = doc.findIndex((l) => l.trim() === '~~~markdown');
+  assert.ok(start >= 0, 'the "~~~markdown" template opener exists');
+  const end = doc.indexOf('~~~', start + 1);
+  assert.ok(end > start, 'the template closer exists');
+  const template = doc.slice(start + 1, end).join('\n');
+  const raw = check(`\n\n${template}\n`);
+  assert.equal(raw.ready, false, 'a pasted template with its placeholders is not proof');
+  const filled = template
+    .replace(/Proof type: <[^>]*>/, 'Proof type: bugfix')
+    .replaceAll('<command>', 'node --test x.test.mjs')
+    .replace('<red-sha>', RED_SHA)
+    .replace('<head-sha>', HEAD)
+    .replace(/<failing output[^>]*>/, 'not ok 1 - x')
+    .replace(/<passing output[^>]*>/, '# fail 0');
+  const r = check(`\n\n${filled}\n`);
+  assert.equal(r.ready, true, readyOrWhy(r));
+  // Type, commands and SHAs filled; both output placeholders left in their fences.
+  const keptOutputs = template
+    .replace(/Proof type: <[^>]*>/, 'Proof type: bugfix')
+    .replaceAll('<command>', 'node --test x.test.mjs')
+    .replace('<red-sha>', RED_SHA)
+    .replace('<head-sha>', HEAD);
+  const kept = check(`\n\n${keptOutputs}\n`);
+  assert.equal(kept.ready, false, 'an output placeholder left in its fence is not proof');
+  const reasons = proofReasons(kept);
+  assert.ok(reasons.some((x) => /RED output block is a placeholder/.test(x)), reasons.join(' | '));
+  assert.ok(reasons.some((x) => /GREEN output block is a placeholder/.test(x)), reasons.join(' | '));
+});
+
+test('proof: every proof reason starts with the prefix and matches none of the pr-loop mod reason patterns', () => {
+  // Copies of the patterns in .claude/plugins/ccv3-mods/hooks/pr-loop/model.ts (PER_PR_ERROR line 82,
+  // FAILED_CHECK 110, GREPTILE_FAILED 129, CANCELLED_REVIEW 250). Update them when the mod changes.
+  const modPatterns = [
+    /HTTP 404|Not Found \(HTTP|Could not resolve to|more than \d+ /i,
+    /^status ".*" is (failure|error)$|^check ".*" is completed\//,
+    /^Greptile check ended failure/,
+    /was cancelled \(superseded by a push\)/,
+  ];
+  const bad = [
+    '', GOOD.replace('Proof type: bugfix', 'Proof type: tests'), `${GOOD}\nProof type: feature\n`, preamble('bugfix') + GREEN_F,
+    preamble('bugfix') + RED_F, preamble('bugfix') + RED_F.replace(CMD, '') + GREEN_F, preamble('bugfix') + RED_F + proofField('GREEN', OLD, 'x'),
+    preamble('bugfix') + RED_F + GREEN_F + GREEN_F, preamble('docs'), GOOD.replace('Proof type: bugfix', 'Proof type: bugfix, feature'),
+  ];
+  for (const p of bad) {
+    const reasons = proofReasons(check(p));
+    assert.ok(reasons.length > 0, 'a bad body gives a proof reason');
+    for (const reason of reasons) for (const re of modPatterns) assert.equal(re.test(reason), false, `${re}: ${reason}`);
+  }
+});
+
+test('proof: a null PR body is "missing", never a throw', () => {
+  assert.deepEqual(RS.parseProof(null).types, []);
+  assert.deepEqual(RS.parseProof(undefined).types, []);
+  const i = input();
+  i.pull.body = null;
+  const r = evaluate(i);
+  assert.equal(r.proof.status, 'missing');
+  assert.equal(r.ready, false);
 });

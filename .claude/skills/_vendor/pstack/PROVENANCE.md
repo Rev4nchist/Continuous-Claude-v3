@@ -18,7 +18,7 @@
 - `architect` (+ `arena`): plan front door. Sketches types and signatures before code, then writes a plan file. User-only wrapper `sketch-first`.
   The wrapper has its own name to avoid confusion with the `architect` agent.
 - `interrogate`, `blast-radius`, `show-me-your-work`: bytes only, hidden. Used only inside the cross-family review brief (D4).
-- `principle-prove-it-works`: bytes only, hidden. No wrapper in P4. P4b consumes it.
+- `principle-prove-it-works`: bytes only, hidden. No wrapper. The `tdd` wrapper (step 9) and `pr-review-loop.md` "Last step before done" tell the agent to read it before it says done (P4b).
 
 ## Ways in
 
@@ -26,7 +26,7 @@
 |---|---|
 | `architect` (+ `arena`) | `.claude/skills/sketch-first/SKILL.md` (user-only wrapper). Output: `thoughts/shared/plans/<name>-plan.md` |
 | `interrogate`, `blast-radius`, `show-me-your-work` | the cross-family review brief only. They have no wrapper. |
-| `principle-prove-it-works` | none in P4 |
+| `principle-prove-it-works` | the last step of `.claude/skills/tdd/SKILL.md` and `.claude/rules-ondemand/pr-review-loop.md` |
 
 ## Never-lines
 
