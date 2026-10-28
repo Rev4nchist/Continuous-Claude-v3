@@ -1,13 +1,13 @@
 import { cn } from '@/lib/utils';
 
-export type ViewId = 'overview' | 'sessions';
+export type ViewId = 'overview' | 'board' | 'sessions';
 
 type Tab = { id: string; label: string; tag: 'NEXT' | 'LATER' | null };
 
 /** Mockup order. A tab with a tag is not built yet: it is a real disabled button. */
 const TABS: Tab[] = [
   { id: 'overview', label: 'Overview', tag: null },
-  { id: 'board', label: 'Board', tag: 'NEXT' },
+  { id: 'board', label: 'Board', tag: null },
   { id: 'sessions', label: 'Sessions', tag: null },
   { id: 'workflows', label: 'Workflows', tag: 'NEXT' },
   { id: 'handoffs', label: 'Handoffs', tag: 'NEXT' },
@@ -19,7 +19,7 @@ const TABS: Tab[] = [
 const isLive = (tab: Tab): tab is Tab & { id: ViewId } => tab.tag === null;
 
 /**
- * The top bar: the mark and the view tabs. Pure props. Only Overview and Sessions work; the rest
+ * The top bar: the mark and the view tabs. Pure props. Only Overview, Board and Sessions work; the rest
  * are disabled buttons (not focusable) with a NEXT or LATER tag. The active tab has
  * aria-current="page". Wraps on a phone.
  */

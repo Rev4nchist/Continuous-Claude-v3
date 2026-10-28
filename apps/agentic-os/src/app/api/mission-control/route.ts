@@ -1,6 +1,6 @@
 import { NextResponse, type NextRequest } from 'next/server';
 
-import { getMissionControlSnapshot } from '@/server/queries/mission-control';
+import { getMissionControlSnapshot, parseViewName } from '@/server/queries/mission-control';
 import { parseSessionId } from '@/server/queries/session-detail';
 
 /**
@@ -15,6 +15,9 @@ import { parseSessionId } from '@/server/queries/session-detail';
  * `?session=<id>` adds the detail of that session to the snapshot. An id of the wrong
  * format is ignored (never a 400): both detail fields stay null.
  *
+ * `?view=board` adds the lane Board. Any other `view` value is ignored (board stays null),
+ * never an error. Without it the 5 second poll stays small.
+ *
  * NOTE ON LOCATION: the `aos-fleet-grid` lane scope declared
  * `src/app/(mission-control)/**`, and a route group would have kept this file
  * inside it while still serving `/api/mission-control`. It is deliberately at the
@@ -28,7 +31,8 @@ export const revalidate = 0;
 export async function GET(request: NextRequest) {
   try {
     const sessionId = parseSessionId(request.nextUrl.searchParams.get('session'));
-    const snapshot = await getMissionControlSnapshot(sessionId);
+    const view = parseViewName(request.nextUrl.searchParams.get('view'));
+    const snapshot = await getMissionControlSnapshot(sessionId, view === 'board');
     return NextResponse.json(snapshot, {
       headers: { 'cache-control': 'no-store' },
     });

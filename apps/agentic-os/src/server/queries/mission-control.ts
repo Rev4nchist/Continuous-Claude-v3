@@ -7,9 +7,11 @@ import {
   getFleetSessions,
   getHeldLanes,
   type FleetSessions,
+  type PrRow,
   type ReadyItem,
   type SessionCard,
 } from '@/server/queries/fleet-sessions';
+import { getLaneBoard, type LaneBoard } from '@/server/queries/lane-board';
 import { getFleetOverview, type FleetOverview } from '@/server/queries/projects';
 import {
   getSessionDetail,
@@ -47,7 +49,16 @@ export type StatTiles = {
   openPrs: number;
 };
 
-export type { DetailUnavailable, ReadyItem, SessionCard, SessionDetail };
+export type { DetailUnavailable, LaneBoard, PrRow, ReadyItem, SessionCard, SessionDetail };
+
+export const VIEW_IDS = ['overview', 'board', 'sessions'] as const;
+export type ViewName = (typeof VIEW_IDS)[number];
+
+/** A `view` from a query string: one of the three known values, else null. Never an error. */
+export function parseViewName(value: unknown): ViewName | null {
+  const first = Array.isArray(value) ? value[0] : value;
+  return VIEW_IDS.find((view) => view === first) ?? null;
+}
 
 export type MissionControlSnapshot = {
   fleet: FleetOverview;
@@ -63,6 +74,10 @@ export type MissionControlSnapshot = {
   detail: SessionDetail | null;
   /** Set when a valid-format id was asked for and `detail` is null. */
   detailUnavailable: DetailUnavailable | null;
+  /** PR rows of live sessions (max 20). Always present. */
+  prs: PrRow[];
+  /** The lane Board. Computed only when the request carries `view=board`, else null. */
+  board: LaneBoard | null;
   /** When the server produced this, ISO-8601 UTC. The UI shows staleness relative
    *  to receipt rather than to this value — a clock difference between server and
    *  browser is not the user's problem to reason about. */
@@ -78,7 +93,7 @@ const NO_FLEET: FleetSessions = {
   cards: [],
   ready: [],
   join: { matched: 0, quiet: 0, noSessionRow: 0, droppedEnded: 0, droppedStale: 0, unchecked: 0 },
-  openPrs: 0,
+  prs: [],
 };
 
 /** Run a source read. One failing source must not fail the snapshot. */
@@ -117,17 +132,34 @@ function stateFilesSource(
   return { ...base, status: bad > 0 ? 'degraded' : 'ok', detail: parts.join(', ') };
 }
 
-/** `sessionId` must already pass parseSessionId(); the caller validates it. */
+/** The lane-registry row. On a board request it adds the rows seen, and shows a failed board read. */
+function laneSource(
+  lanes: { ok: true; value: number } | { ok: false; error: string },
+  board: LaneBoard | null,
+): DataSource {
+  const base = { id: 'lane-registry', label: 'Lane registry (agentic_os.lane)' };
+  if (!lanes.ok) return { ...base, status: 'error', detail: lanes.error };
+  if (board === null) return { ...base, status: 'ok', detail: `active lanes ${lanes.value}` };
+  if (board.status === 'error') return { ...base, status: 'error', detail: board.error ?? 'board read failed' };
+  return { ...base, status: 'ok', detail: `active lanes ${lanes.value}, lanes ${board.total}` };
+}
+
+/**
+ * `sessionId` must already pass parseSessionId(); the caller validates it.
+ * `withBoard` is true only for a request that carries `view=board`.
+ */
 export async function getMissionControlSnapshot(
   sessionId: string | null = null,
+  withBoard = false,
 ): Promise<MissionControlSnapshot> {
-  const [databaseRaw, fleet, active, files, lanes, heldLanes] = await Promise.all([
+  const [databaseRaw, fleet, active, files, lanes, heldLanes, board] = await Promise.all([
     checkDatabaseReady(),
     getFleetOverview(),
     getActiveSessions(),
     settle(readStateFiles),
     settle(getActiveLaneCount),
     settle(getHeldLanes),
+    withBoard ? getLaneBoard() : Promise.resolve(null),
   ]);
 
   const database: MissionControlSnapshot['database'] = databaseRaw.ok
@@ -150,7 +182,7 @@ export async function getMissionControlSnapshot(
     needsDave: new Set(sessions.ready.map((r) => r.sessionId)).size,
     blocked: sessions.cards.filter((c) => c.chip === 'blocked').length,
     activeLanes: lanes.ok ? lanes.value : 0,
-    openPrs: sessions.openPrs,
+    openPrs: sessions.prs.length,
   };
 
   const sources: DataSource[] = [
@@ -163,12 +195,7 @@ export async function getMissionControlSnapshot(
     joined.ok
       ? stateFilesSource(files, sessions)
       : { id: 'state-files', label: 'Session state files', status: 'error', detail: joined.error },
-    {
-      id: 'lane-registry',
-      label: 'Lane registry (agentic_os.lane)',
-      status: lanes.ok ? 'ok' : 'error',
-      detail: lanes.ok ? `active lanes ${lanes.value}` : lanes.error,
-    },
+    laneSource(lanes, board),
   ];
 
   return {
@@ -186,6 +213,8 @@ export async function getMissionControlSnapshot(
       : detailResult.ok
         ? detailResult.value.unavailable
         : { id: sessionId as string, reason: 'unknown id' },
+    prs: sessions.prs,
+    board,
     generatedAt: new Date().toISOString(),
   };
 }
