@@ -53,7 +53,14 @@ export default defineConfig({
     trace: 'retain-on-failure',
     screenshot: 'only-on-failure',
   },
-  projects: [{ name: 'chromium', use: { browserName: 'chromium' } }],
+  projects: [
+    { name: 'chromium', use: { browserName: 'chromium' } },
+    // Phone width on the same engine. The mockup targets a phone-width Pane too.
+    {
+      name: 'phone',
+      use: { browserName: 'chromium', viewport: { width: 390, height: 844 } },
+    },
+  ],
   webServer: {
     command: `npx next dev --port ${PORT} --hostname 127.0.0.1`,
     env: { AGENTIC_OS_DIST_DIR: '.next-e2e' },
