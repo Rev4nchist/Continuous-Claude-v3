@@ -19,6 +19,18 @@
  *   - the override works when it is not a leading assignment           -> O1
  *   - the override is not logged                                       -> O1
  *   - the deny text teaches the override                               -> D2
+ * Body (the stamp holds the sha256 of the body pre-pr.mjs checked; the hook must be able to compare it)
+ *   - an inline, stdin, --fill or missing body passes unchecked        -> X1, X2, X3
+ *   - the override stops working for those                             -> X4
+ *   - a quoted body path with spaces is cut at the first space         -> X5, X6, X7
+ *   - a quoted stdin marker is read as a file named "-"                -> X5
+ * Checkout identity
+ *   - an explicit CCv3 target skips the "is this a CCv3 checkout" test -> X8 (X9: a CCv3 checkout stays allowed)
+ * Critic review of PR1
+ *   - a repeated body flag, --input or a second body source passes      -> Y1 (Y2: a normal create stays allowed)
+ *   - --repo HOST/OWNER/REPO, a URL, a glued -R or GH_REPO skips identity -> Y3, Y4, Y5
+ *   - gh pr create -F <file> is denied as not a file                   -> Y6
+ *   - an unexpanded body path gives a misleading reason                -> Y7
  * Fail open
  *   - bad input, a git crash, or another tool blocks the call          -> F1
  * Wiring
@@ -36,6 +48,7 @@ import {
   CCV3_REPO,
   MAX_STAMP_AGE_MS,
   STAMP_REL,
+  bodyFileOf,
   decide,
   handle,
   hasOverride,
@@ -54,10 +67,16 @@ const HEAD = 'a'.repeat(40);
 const ROOT = '/work/ccv3';
 const CCV3_REMOTES = 'fork\thttps://github.com/Rev4nchist/Continuous-Claude-v3.git (fetch)\nfork\thttps://github.com/Rev4nchist/Continuous-Claude-v3.git (push)\n';
 
-type GitFn = (cwd: string, args: string[]) => { status: number; stdout: string };
+/** The default body file of the CREATE and CONTINUED fixtures. deps() serves its text and stampJson() hashes it. */
+const DEFAULT_BODY_TEXT = 'default body\n';
+const DEFAULT_BODY_PATH = resolve('/work/default-body.md');
+const DB = DEFAULT_BODY_PATH.replace(/\\/g, '/');
+const sha256 = (t: string) => createHash('sha256').update(t).digest('hex');
+
+type GitFn =(cwd: string, args: string[]) => { status: number; stdout: string };
 
 function stampJson(over: Record<string, unknown> = {}): string {
-  return JSON.stringify({ head: HEAD, branch: 'feat/x', at: new Date(NOW - 3_600_000).toISOString(), body_sha256: 'b'.repeat(64), results: [], ...over });
+  return JSON.stringify({ head: HEAD, branch: 'feat/x', at: new Date(NOW - 3_600_000).toISOString(), body_sha256: sha256(DEFAULT_BODY_TEXT), results: [], ...over });
 }
 
 function deps(over: { stamp?: string | null; remotes?: string; gitFail?: boolean; head?: string; calls?: Array<{ cwd: string; args: string[] }>; worktrees?: string; stamps?: Record<string, string>; pushed?: string | null; branch?: string } = {}): Deps {
@@ -78,6 +97,7 @@ function deps(over: { stamp?: string | null; remotes?: string; gitFail?: boolean
   return {
     git,
     readFile: (p) => {
+      if (p === DEFAULT_BODY_PATH && !(over.stamps && p in over.stamps)) return DEFAULT_BODY_TEXT;
       if (over.stamps) return over.stamps[p] ?? null;
       return over.stamp === undefined ? null : over.stamp;
     },
@@ -88,27 +108,28 @@ function deps(over: { stamp?: string | null; remotes?: string; gitFail?: boolean
 
 const input = (command: string, extra: Record<string, unknown> = {}) => ({ tool_name: 'Bash', tool_input: { command }, cwd: ROOT, ...extra });
 
+// Every create names the default body file: the hook allows a create only when it can hash the body.
 const CREATE = [
-  'gh pr create --fill',
-  'gh pr create --base main --head feat/x --title "t" --body "x"',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -f head=feat/x -f base=main',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --method POST -f title=t',
-  'gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t',
-  'gh api --method=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t -f head=feat/x',
+  `gh pr create --body-file ${DB}`,
+  `gh pr create --base main --head feat/x --title "t" --body-file ${DB}`,
+  `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -f head=feat/x -f base=main -F body=@${DB}`,
+  `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls --method POST -f title=t -F body=@${DB}`,
+  `gh api -X POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t -F body=@${DB}`,
+  `gh api --method=POST repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t -F body=@${DB}`,
+  `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=t -f head=feat/x -F body=@${DB}`,
 ];
 
 const CONTINUED = [
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls `\n  -X POST `\n  -f title=t',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls `\r\n  --method POST `\r\n  -f title=t',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls \\\n  -X POST \\\n  -f title=t',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls \\\r\n  -f title=t \\\r\n  -f head=feat/x',
-  'gh api -X POST `\n  repos/Rev4nchist/Continuous-Claude-v3/pulls `\n  -f title=t',
-  'gh pr create `\n  --fill',
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls `\n  -X POST `\n  -f title=t -F body=@' + DB,
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls `\r\n  --method POST `\r\n  -f title=t -F body=@' + DB,
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls \\\n  -X POST \\\n  -f title=t -F body=@' + DB,
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls \\\r\n  -f title=t \\\r\n  -f head=feat/x -F body=@' + DB,
+  'gh api -X POST `\n  repos/Rev4nchist/Continuous-Claude-v3/pulls `\n  -f title=t -F body=@' + DB,
+  'gh pr create `\n  --body-file ' + DB,
   // Bash deletes a backslash-newline outright, so a word split across lines runs as one word (CLI review, d2403f3).
-  'gh a\\\npi repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=x',
-  'gh api repos/Rev4nchist/Continuous-Claude-v3/pu\\\nlls -X POST -f title=x',
-  'gh pr cre\\\r\nate --fill',
+  'gh a\\\npi repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=x -F body=@' + DB,
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pu\\\nlls -X POST -f title=x -F body=@' + DB,
+  'gh pr cre\\\r\nate --body-file ' + DB,
 ];
 
 // Not a PR create, though the text names /pulls or a method. Each was a false deny or a miss before P2-d.
@@ -276,7 +297,7 @@ describe('D: the stamp decides', () => {
 
   it('D6: the branch being opened is the head that is compared', () => {
     const calls: Array<{ cwd: string; args: string[] }> = [];
-    const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -f head=feat/other -f base=main';
+    const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -f head=feat/other -f base=main -F body=@' + DB;
     const d = decide(input(c), deps({ calls, stamp: stampJson(), head: 'd'.repeat(40) }));
     expect(d.action).toBe('deny');
     expect(calls.some((x) => x.args.join(' ') === 'rev-parse feat/other^{commit}')).toBe(true);
@@ -290,15 +311,15 @@ describe('D: the stamp decides', () => {
   it('D7: the stamp is read from the command checkout; a cd moves it; a worktree on the branch is searched', () => {
     const seen: string[] = [];
     const d = deps({ stamp: stampJson() });
-    const spy: Deps = { ...d, readFile: (p) => { seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
-    decide(input('gh pr create --fill'), spy);
+    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    decide(input(CREATE[0]), spy);
     expect(seen).toEqual([`${ROOT}/${STAMP_REL}`]);
     seen.length = 0;
-    decide(input('cd /other/checkout && gh pr create --fill'), spy);
+    decide(input(`cd /other/checkout && ${CREATE[0]}`), spy);
     expect(seen).toEqual([`/other/checkout/${STAMP_REL}`]);
     seen.length = 0;
     const wt = 'worktree /work/ccv3\nHEAD aaa\nbranch refs/heads/main\n\nworktree /work/wt-x\nHEAD bbb\nbranch refs/heads/feat/x\n';
-    const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t';
+    const c = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@' + DB;
     const res = decide(input(c), deps({ worktrees: wt, stamps: { [join('/work/wt-x', STAMP_REL)]: stampJson() } }));
     expect(res.action).toBe('allow');
   });
@@ -364,7 +385,7 @@ describe('B: the pushed head and the body file', () => {
     expect(decide(input(CREATE[0]), deps({ stamp: stampJson(), pushed: null })).action).toBe('allow');
     // A named head branch is the one that is looked up.
     const calls: Array<{ cwd: string; args: string[] }> = [];
-    decide(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/named -f title=t'), deps({ calls, stamp: stampJson(), pushed: HEAD }));
+    decide(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/named -f title=t -F body=@' + DB), deps({ calls, stamp: stampJson(), pushed: HEAD }));
     expect(calls.some((c) => c.args.join(' ') === 'rev-parse --verify --quiet refs/remotes/fork/feat/named^{commit}')).toBe(true);
   });
 
@@ -390,13 +411,252 @@ describe('B: the pushed head and the body file', () => {
     }
   });
 
-  it('B3: an inline body, a stdin body and no body are not compared', () => {
+  // B3 asserted that inline, stdin and no-body creates are allowed. That is the opposite of X1 to X3, so it is removed.
+});
+
+describe('X: the PR body must be verifiable, and the body path and checkout must be read right (CodeRabbit #193 outside-diff findings)', () => {
+  const BODY = resolve('/work/body.md');
+  const SPACED = resolve('/work/a b/body.md');
+  const sha = (t: string) => createHash('sha256').update(t).digest('hex');
+  const TEXT = 'the body\n';
+  /** A fresh stamp for HEAD whose body hash matches TEXT, plus the files the hook may read. */
+  const withBody = (files: Record<string, string> = {}, remotes?: string): Deps =>
+    deps({ remotes, stamps: { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: sha(TEXT) }), [BODY]: TEXT, ...files } });
+  const fwd = (p: string) => p.replace(/\\/g, '/');
+  const denyReason = (c: string, d: Deps): string => {
+    const r = decide(input(c), d);
+    expect(r.action, c).toBe('deny');
+    return r.action === 'deny' ? r.reason : '';
+  };
+
+  // Finding 1 (Major): bodyFileOf() is null for these, and stampProblem() then skips the body-hash check.
+  it('X1: an inline body is denied with a reason that names -F body=@<file> and --body-file <file>', () => {
     for (const c of [
-      'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f body=inline',
-      'gh pr create --head feat/x --body-file -',
-      'gh pr create --fill',
+      'gh pr create --head feat/x --title t --body "inline text"',
+      'gh pr create --head feat/x --title t --body=inline',
+      'gh pr create --head feat/x --title t -b inline',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -f body=inline',
     ]) {
-      expect(decide(input(c), bodyDeps(null, 'a'.repeat(64))).action, c).toBe('allow');
+      const why = denyReason(c, withBody());
+      expect(why, c).toContain('-F body=@<file>');
+      expect(why, c).toContain('--body-file <file>');
+    }
+  });
+
+  it('X2: a body from stdin is denied with the same reason', () => {
+    for (const c of [
+      'gh pr create --head feat/x --title t --body-file -',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@-',
+    ]) {
+      const why = denyReason(c, withBody());
+      expect(why, c).toContain('-F body=@<file>');
+      expect(why, c).toContain('--body-file <file>');
+    }
+  });
+
+  it('X3: --fill (gh builds the body from commits) and a command with no body at all are denied with the same reason', () => {
+    for (const c of [
+      'gh pr create --head feat/x --fill',
+      'gh pr create --head feat/x --fill-first',
+      'gh pr create --head feat/x --title t',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t',
+    ]) {
+      const why = denyReason(c, withBody());
+      expect(why, c).toContain('-F body=@<file>');
+      expect(why, c).toContain('--body-file <file>');
+    }
+  });
+
+  it('X4: the override still lets an unverifiable body through, and logs it as an override (sh form on Bash, $env form on PowerShell)', () => {
+    const cases: Array<[string, string]> = [
+      ['Bash', 'SKIP_PRE_PR_GATE=1 gh pr create --head feat/x --fill'],
+      ['PowerShell', "$env:SKIP_PRE_PR_GATE='1'; gh pr create --head feat/x --body inline"],
+    ];
+    for (const [tool, c] of cases) expect(decide(input(c, { tool_name: tool }), withBody()).action, `${tool}: ${c}`).toBe('override');
+    const dir = mkdtempSync(join(tmpdir(), 'prepr-gate-x4-'));
+    const file = join(dir, 'guard-decisions.jsonl');
+    const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = file;
+    try {
+      for (const [tool, c] of cases) expect(handle(JSON.stringify(input(c, { tool_name: tool })), withBody()), `${tool}: ${c}`).toBe('{}');
+    } finally {
+      if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG;
+      else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    }
+    expect(existsSync(file), 'the override was not logged').toBe(true);
+    expect(readFileSync(file, 'utf8').trim().split('\n').map((l) => JSON.parse(l).decision)).toEqual(['override', 'override']);
+  });
+
+  // Finding 2 (Minor): the body path stops at the first space.
+  it('X5: bodyFileOf returns the whole quoted path, with spaces, for both options and both quote kinds', () => {
+    expect(bodyFileOf('gh pr create --body-file "C:/a b/body.md"')).toBe('C:/a b/body.md');
+    expect(bodyFileOf("gh pr create --body-file 'C:/a b/body.md'")).toBe('C:/a b/body.md');
+    expect(bodyFileOf('gh pr create --body-file="C:/a b/body.md"')).toBe('C:/a b/body.md');
+    expect(bodyFileOf('gh api repos/o/r/pulls -X POST -F "body=@C:/a b/body.md"')).toBe('C:/a b/body.md');
+    expect(bodyFileOf("gh api repos/o/r/pulls -X POST -F 'body=@C:/a b/body.md'")).toBe('C:/a b/body.md');
+    expect(bodyFileOf('gh api repos/o/r/pulls -X POST --field body=@"C:/a b/body.md"')).toBe('C:/a b/body.md');
+    expect(bodyFileOf("gh api repos/o/r/pulls -X POST -F body=@'C:/a b/body.md'")).toBe('C:/a b/body.md');
+    // Unquoted paths still work, and stdin stays null whether or not the marker is quoted (no file named "-").
+    expect(bodyFileOf('gh pr create --body-file C:/a/body.md')).toBe('C:/a/body.md');
+    expect(bodyFileOf('gh pr create --body-file -')).toBeNull();
+    expect(bodyFileOf('gh pr create --body-file "-"')).toBeNull();
+    expect(bodyFileOf("gh pr create --body-file '-'")).toBeNull();
+    expect(bodyFileOf('gh api repos/o/r/pulls -X POST -F body=@-')).toBeNull();
+    expect(bodyFileOf("gh api repos/o/r/pulls -X POST -F 'body=@-'")).toBeNull();
+    expect(bodyFileOf('gh pr create --fill')).toBeNull();
+  });
+
+  it('X6: a body file path with spaces is hashed whole: a matching body allows', () => {
+    const c = `gh pr create --head feat/x --body-file "${fwd(SPACED)}"`;
+    expect(decide(input(c), withBody({ [SPACED]: TEXT })).action).toBe('allow');
+  });
+
+  it('X7: a quoted path that starts with a validated file name is not read as that file (the prefix file must not stand in for the real body)', () => {
+    const DRAFT = resolve(ROOT, 'draft.md');
+    const c = 'gh pr create --head feat/x --body-file "draft.md unvalidated.md"';
+    // draft.md is the validated file. gh would submit "draft.md unvalidated.md", which does not exist here.
+    const why = denyReason(c, withBody({ [DRAFT]: TEXT }));
+    expect(why).toMatch(/cannot be read|not the body/);
+    expect(why).toContain('draft.md unvalidated.md');
+  });
+
+  // Finding 3 (Minor): --repo / repos/<o>/<r> naming CCv3 skips the checkout identity check.
+  const FOREIGN = 'origin\thttps://github.com/other/repo.git (fetch)\norigin\thttps://github.com/other/repo.git (push)\n';
+  it('X8: an explicit CCv3 target from a checkout that is not CCv3 is denied, even with a fresh stamp and a matching body', () => {
+    for (const c of [
+      `gh pr create --repo Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${fwd(BODY)}`,
+      `gh pr create -R Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${fwd(BODY)}`,
+      `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -F body=@${fwd(BODY)}`,
+    ]) {
+      expect(denyReason(c, withBody({}, FOREIGN)), c).toMatch(/not a CCv3 checkout/i);
+    }
+  });
+
+  it('X9: the same explicit CCv3 target from a CCv3 checkout (a worktree shares its remotes) is still allowed', () => {
+    for (const c of [
+      `gh pr create --repo Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${fwd(BODY)}`,
+      `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -F body=@${fwd(BODY)}`,
+    ]) {
+      expect(decide(input(c), withBody()).action, c).toBe('allow');
+    }
+  });
+});
+
+describe('Y: the body flag, the repo forms and the body path are read the way gh reads them (critic review of PR1)', () => {
+  const BODY = resolve('/work/body.md');
+  const OTHER = resolve('/work/other.md');
+  const TEXT = 'the body\n';
+  const FOREIGN = 'origin\thttps://github.com/other/repo.git (fetch)\norigin\thttps://github.com/other/repo.git (push)\n';
+  const fwd = (p: string) => p.replace(/\\/g, '/');
+  const B = fwd(BODY);
+  const O = fwd(OTHER);
+  const API = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t';
+  const withBody = (over: { remotes?: string; env?: NodeJS.ProcessEnv } = {}): Deps => ({
+    ...deps({ remotes: over.remotes, stamps: { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: createHash('sha256').update(TEXT).digest('hex') }), [BODY]: TEXT, [OTHER]: 'other\n' } }),
+    ...(over.env ? { env: over.env } : {}),
+  });
+  const reasonOf = (c: string, d: Deps, tool = 'Bash'): string => {
+    const r = decide(input(c, { tool_name: tool }), d);
+    expect(r.action, c).toBe('deny');
+    return r.action === 'deny' ? r.reason : '';
+  };
+
+  // Finding 2: gh uses the LAST value of a repeated flag, and --input replaces the whole request body.
+  it('Y1: a command that names more than one body, or a second source of the body, is denied as unverifiable', () => {
+    for (const c of [
+      `gh pr create --head feat/x --body-file ${B} --body-file ${O}`,
+      `${API} -F body=@${B} -F body=@${O}`,
+      `${API} --input pr.json -F body=@${B}`,
+      `gh pr create --head feat/x --body-file ${B} --body evil`,
+      `gh pr create --head feat/x --title "x --body-file ${B}" --body evil`,
+      `gh pr create --head feat/x --body-file ${B} -b evil`,
+      `${API} -F body=@${B} -f body=evil`,
+      // Equals-form fields (CodeRabbit CLI, PR1 gate run 2): gh reads --field=body=@x like --field body=@x.
+      `${API} -F body=@${B} --field=body=@${O}`,
+      `${API} -F body=@${B} -F=body=@${O}`,
+      `${API} -F body=@${B} --raw-field=body=evil`,
+      `${API} -F body=@${B} -f=body=evil`,
+      `${API} -F body=@${B} --field=body=evil`,
+    ]) expect(reasonOf(c, withBody()), c).toContain('--body-file <file>');
+  });
+
+  it('Y1b: one equals-form body file field is read as that file', () => {
+    expect(bodyFileOf(`${API} --field=body=@${B}`)).toBe(B);
+    expect(decide(input(`${API} --field=body=@${B}`), withBody()).action).toBe('allow');
+  });
+
+  it('Y2: one body file with other flags is still allowed (the Y1 checks do not deny a normal create)', () => {
+    for (const c of [
+      `gh pr create --head feat/x --title "a title" --body-file ${B}`,
+      `${API} -F body=@${B}`,
+    ]) expect(decide(input(c), withBody()).action, c).toBe('allow');
+  });
+
+  // Finding 3: gh accepts HOST/OWNER/REPO, a URL and a glued -R value.
+  it('Y3: namedRepo reads the host form, the URL form and a glued -R value', () => {
+    for (const c of [
+      'gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create --repo=github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create -RRev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create -R "github.com/Rev4nchist/Continuous-Claude-v3" --head feat/x',
+      // The clone URL a user copies from GitHub ends in .git; gh trims it (CodeRabbit CLI, PR1 gate run).
+      'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3.git --head feat/x',
+      'gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3.GIT --head feat/x',
+    ]) expect(namedRepo(c), c).toBe(CCV3_REPO);
+    expect(namedRepo('gh pr create --repo github.com/other/repo')).toBe('other/repo');
+  });
+
+  // CodeRabbit #197 full review (outside diff, Major): endpoint-shaped text in a title replaced the real target.
+  it('Y3b: endpoint text in a title or another argument never hides an explicit or checkout CCv3 target', () => {
+    const OTHER_EP = 'repos/other/repo/pulls';
+    // An explicit CCv3 target stays CCv3 whatever the title says.
+    expect(namedRepo(`gh pr create --repo Rev4nchist/Continuous-Claude-v3 --title "see ${OTHER_EP}" --head feat/x`)).toBe(CCV3_REPO);
+    // gh pr create has no endpoint: with no repo flag the checkout decides (null), even if the title holds endpoint text.
+    expect(namedRepo(`gh pr create --title "${OTHER_EP}" --head feat/x`)).toBeNull();
+    expect(namedRepo(`gh pr create --title "gh api ${OTHER_EP}" --head feat/x`)).toBeNull();
+    // gh api: a title field that names another repo cannot hide the real CCv3 endpoint, in either order.
+    expect(namedRepo(`gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title="${OTHER_EP}" -f head=feat/x`)).toBe(CCV3_REPO);
+    expect(namedRepo(`gh api -f title="${OTHER_EP}" repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x`)).toBe(CCV3_REPO);
+    // Fail closed: CCv3 named anywhere wins over a foreign explicit target.
+    expect(namedRepo('gh pr create --repo other/repo --title "repos/Rev4nchist/Continuous-Claude-v3/pulls" --head feat/x')).toBe(CCV3_REPO);
+    // A real foreign target with no CCv3 text stays foreign.
+    expect(namedRepo(`gh api ${OTHER_EP} -X POST -f head=feat/x`)).toBe('other/repo');
+  });
+
+  it('Y3c: a title spoof from a foreign checkout no longer skips the gate', () => {
+    const c = `gh pr create --repo Rev4nchist/Continuous-Claude-v3 --title "repos/other/repo/pulls" --head feat/x --body-file ${B}`;
+    expect(reasonOf(c, withBody({ remotes: FOREIGN })), c).toMatch(/not a CCv3 checkout/i);
+  });
+
+  it('Y4: those repo forms from a foreign checkout are denied', () => {
+    for (const c of [
+      `gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${B}`,
+      `gh pr create -RRev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${B}`,
+    ]) expect(reasonOf(c, withBody({ remotes: FOREIGN })), c).toMatch(/not a CCv3 checkout/i);
+  });
+
+  // Finding 4: gh reads GH_REPO when no --repo is given.
+  it('Y5: GH_REPO naming CCv3 (command prefix, PowerShell form, or process env) from a foreign checkout is denied', () => {
+    const foreign = withBody({ remotes: FOREIGN });
+    expect(reasonOf(`GH_REPO=Rev4nchist/Continuous-Claude-v3 gh pr create --head feat/x --body-file ${B}`, foreign), 'sh prefix').toMatch(/not a CCv3 checkout/i);
+    expect(reasonOf(`$env:GH_REPO='Rev4nchist/Continuous-Claude-v3'; gh pr create --head feat/x --body-file ${B}`, foreign, 'PowerShell'), 'pwsh').toMatch(/not a CCv3 checkout/i);
+    const viaEnv = withBody({ remotes: FOREIGN, env: { GH_REPO: 'Rev4nchist/Continuous-Claude-v3' } });
+    expect(reasonOf(`gh pr create --head feat/x --body-file ${B}`, viaEnv), 'process env').toMatch(/not a CCv3 checkout/i);
+  });
+
+  // Finding 5: -F is gh's own short form of --body-file for gh pr create (and a field flag for gh api).
+  it('Y6: gh pr create -F <file> is a body file: a matching file allows, another file and stdin deny', () => {
+    expect(bodyFileOf(`gh pr create --head feat/x -F ${B}`)).toBe(B);
+    expect(decide(input(`gh pr create --head feat/x -F ${B}`), withBody()).action).toBe('allow');
+    expect(reasonOf(`gh pr create --head feat/x -F ${O}`, withBody())).toMatch(/not the body/);
+    expect(reasonOf('gh pr create --head feat/x -F -', withBody())).toContain('--body-file <file>');
+  });
+
+  // Finding 6: the hook does not expand these, so the reason must say so.
+  it('Y7: a body path the hook does not expand is denied with a reason that says what path to use', () => {
+    for (const p of ['~/body.md', '$env:TEMP\\body.md', '/c/Users/x/body.md']) {
+      expect(reasonOf(`gh pr create --head feat/x --body-file "${p}"`, withBody()), p).toMatch(/does not expand/);
     }
   });
 });
@@ -444,7 +704,7 @@ describe('F: fail open', () => {
 
   it('F3: an internal error on a command that is a PR create DENIES, one reason per error kind; the deny does not teach the override', () => {
     const create = JSON.stringify(input(CREATE[0]));
-    const named = JSON.stringify(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t'));
+    const named = JSON.stringify(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t -F body=@' + DB));
     const errors: string[] = [];
     const base = (over: Partial<Deps>): Deps => ({ ...deps({ stamp: stampJson() }), logError: (m) => errors.push(m), ...over });
     const timeout = Object.assign(new Error('spawnSync git ETIMEDOUT'), { code: 'ETIMEDOUT' });
