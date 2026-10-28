@@ -86,7 +86,7 @@ reviews:
         doubt. An advisory hook fails OPEN: no stderr, exit 0. Flag the reverse. Flag any new
         hand-written shell lexer. child_process never uses shell: true or a non-literal shell option.
         Detached children use .claude/hooks/src/lib/spawn-hidden.ts. stdout carries only the hook JSON.
-        A new hook appears in .claude/settings.json.template in the same PR. Do not comment on dist/.
+        A new hook appears in .claude/settings.json.template in the same PR. Do not comment on dist/ freshness.
     - path: ".claude/hooks/src/__tests__/**"
       instructions: "Tests import the real function. Flag logic copied into a test and tests that restate the code."
     - path: ".claude/{rules-src,rules-ondemand}/**"
