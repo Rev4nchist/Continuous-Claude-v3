@@ -34,9 +34,9 @@ import type { ActiveSession, ActiveSessions } from './sessions';
  * is stale and never reaches the strip, whatever its session is.
  */
 
-const STALE_ASK_SECONDS = 24 * 60 * 60;
+export const STALE_ASK_SECONDS = 24 * 60 * 60;
 const QUIET_MAX_SECONDS = 24 * 60 * 60;
-const GREEN_UNDER_SECONDS = 120;
+export const GREEN_UNDER_SECONDS = 120;
 const LOOKUP_LIMIT = 200;
 
 export const CHIPS = ['working', 'waiting-on-dave', 'blocked', 'done', 'idle'] as const;
@@ -71,6 +71,8 @@ export type SessionCard = {
   askStale: number;
   unproven: number;
   ctxPct: number | null;
+  /** First lane this session holds (active, review, blocked or ready), or null. */
+  laneId: string | null;
   liveColour: 'green' | 'amber';
   liveSecondsAgo: number;
   /** Seconds since the state file was written, or null with no file. */
@@ -97,7 +99,7 @@ export type FleetSessions = {
 
 type Step = { done: boolean; proven: boolean };
 
-function chipOf(value: string | null): Chip | null {
+export function chipOf(value: string | null): Chip | null {
   return (CHIPS as readonly string[]).includes(value ?? '') ? (value as Chip) : null;
 }
 
@@ -120,11 +122,16 @@ function stepsOf(snapshot: StateSnapshot | undefined): Step[] {
   }));
 }
 
-function cardName(projectKey: string | null, id: string, snapshot: StateSnapshot | undefined): string {
+export function cardName(projectKey: string | null, id: string, snapshot: StateSnapshot | undefined): string {
   return `${projectKey ?? 'unmapped'}/${snapshot?.branch ?? '-'}/${id.slice(0, 4)}`;
 }
 
-function buildCard(session: ActiveSession, snapshot: StateSnapshot | undefined, nowMs: number): SessionCard {
+function buildCard(
+  session: ActiveSession,
+  snapshot: StateSnapshot | undefined,
+  nowMs: number,
+  laneId: string | null,
+): SessionCard {
   const steps = stepsOf(snapshot);
   const brief = snapshot?.brief ?? null;
   const asks = (brief?.ask ?? []).filter((a) => !a.answered);
@@ -151,6 +158,7 @@ function buildCard(session: ActiveSession, snapshot: StateSnapshot | undefined, 
       snapshot?.ctx === null || snapshot?.ctx === undefined
         ? null
         : Math.min(100, Math.max(0, Math.round(snapshot.ctx))),
+    laneId,
     liveColour: session.liveSecondsAgo < GREEN_UNDER_SECONDS ? 'green' : 'amber',
     liveSecondsAgo: session.liveSecondsAgo,
     stateAgeSeconds: snapshot ? Math.max(0, Math.round((nowMs - snapshot.at) / 1000)) : null,
@@ -158,7 +166,7 @@ function buildCard(session: ActiveSession, snapshot: StateSnapshot | undefined, 
 }
 
 /** `now - (brief.updatedAt ?? file.at)` in seconds. Both stamps are epoch milliseconds. */
-function askAgeSeconds(updatedAt: number | null, snapshot: StateSnapshot | undefined, nowMs: number): number {
+export function askAgeSeconds(updatedAt: number | null, snapshot: StateSnapshot | undefined, nowMs: number): number {
   const stamp = updatedAt ?? snapshot?.at ?? nowMs;
   return Math.max(0, Math.round((nowMs - stamp) / 1000));
 }
@@ -237,6 +245,7 @@ export async function getFleetSessions(
   active: ActiveSessions,
   files: StateFiles,
   nowMs: number = Date.now(),
+  lanes: Map<string, string[]> = new Map(),
 ): Promise<FleetSessions> {
   const bySession = new Map(files.snapshots.map((s) => [s.sessionId, s]));
   const liveIds = new Set(active.sessions.map((s) => s.id));
@@ -286,7 +295,7 @@ export async function getFleetSessions(
   const openPrs = new Set<number>();
   for (const session of active.sessions) {
     const snapshot = bySession.get(session.id);
-    const card = buildCard(session, snapshot, nowMs);
+    const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null);
     cards.push(card);
     if (!snapshot) continue;
     ready.push(...buildReady(card.id, card.name, snapshot, nowMs));
@@ -308,4 +317,32 @@ export async function getActiveLaneCount(): Promise<number> {
     sql`SELECT count(*)::int AS n FROM agentic_os.lane WHERE state = 'active'`,
   );
   return Number(rows[0]?.n ?? 0);
+}
+
+const HELD_LANE_STATES = ['active', 'review', 'blocked', 'ready'];
+const HELD_LANE_LIMIT = 200;
+
+/**
+ * Lanes held by a session, by owner session id. Lowest priority number first, then id, so the
+ * first entry is stable. Bounded by HELD_LANE_LIMIT. Throws when the query fails.
+ */
+export async function getHeldLanes(): Promise<Map<string, string[]>> {
+  const { rows } = await db.execute<{ id: string; owner_session_id: string }>(sql`
+    SELECT id, owner_session_id
+    FROM agentic_os.lane
+    WHERE owner_session_id IS NOT NULL
+      AND state IN (${sql.join(
+        HELD_LANE_STATES.map((state) => sql`${state}`),
+        sql`, `,
+      )})
+    ORDER BY priority, id
+    LIMIT ${HELD_LANE_LIMIT}
+  `);
+  const byOwner = new Map<string, string[]>();
+  for (const row of rows) {
+    const held = byOwner.get(row.owner_session_id) ?? [];
+    held.push(row.id);
+    byOwner.set(row.owner_session_id, held);
+  }
+  return byOwner;
 }

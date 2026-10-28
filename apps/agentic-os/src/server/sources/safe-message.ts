@@ -18,13 +18,18 @@ const POSIX_HOME_PATH =
   /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^'"`<>|\r\n]*/g;
 const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
 
-export function safeMessage(error: unknown): string {
-  const raw = error instanceof Error ? error.message : String(error);
-  const redacted = redact(raw.slice(0, 2000)).text;
-  const noPaths = redacted
+/** Replace every absolute path in already redacted text with `<path>`. */
+export function scrubPaths(text: string): string {
+  return text
     .replace(WINDOWS_PATH, '<path>')
     .replace(POSIX_HOME_PATH, '<path>')
     .replace(POSIX_DEEP_PATH, '<path>');
+}
+
+export function safeMessage(error: unknown): string {
+  const raw = error instanceof Error ? error.message : String(error);
+  const redacted = redact(raw.slice(0, 2000)).text;
+  const noPaths = scrubPaths(redacted);
   const flat = noPaths.replace(/\s+/g, ' ').trim();
   return flat.length <= MAX_MESSAGE ? flat : `${flat.slice(0, MAX_MESSAGE - 3)}...`;
 }
