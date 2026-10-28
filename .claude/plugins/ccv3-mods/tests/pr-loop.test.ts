@@ -609,7 +609,8 @@ describe('pr-loop tools', () => {
     const { clock, seen } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [READY(7)] } })
     await start($, false)
     await clock.advance(TICK * 2)
-    expect(seen.tools).toEqual(['pr_status'])
+    // Agentic OS registers brief_set in the same session; this test is about this module's tools.
+    expect(seen.tools.filter(name => name !== 'brief_set')).toEqual(['pr_status'])
     expect(seen.status).toEqual([])
     expect(seen.toasts).toEqual([])
   })

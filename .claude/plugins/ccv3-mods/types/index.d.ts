@@ -7,6 +7,39 @@ export type OsTask = {
   activeForm?: string
 }
 
+/** Where a brief value came from. A `parsed` value (read from the model's own output) never replaces a `brief_set` one. */
+export type OsBriefSource = 'brief_set' | 'parsed'
+
+export type OsPlanStep = { id: string; text: string; status: 'todo' | 'doing' | 'done' | 'blocked' }
+
+/** `answered` is set when Dave's next prompt arrives: the ask stays, dim, and is not counted. */
+export type OsAskItem = {
+  kind: 'question' | 'approval' | 'decision' | 'block'
+  text: string
+  recommend?: string
+  source: OsBriefSource
+  answered?: true
+}
+
+/**
+ * A proof is tied to the id, the kind (task or plan step) and the subject (or plan step text) it was given for, so a
+ * TodoWrite reorder cannot move it to another task and two tasks with one subject do not share it. Id and subject are redacted.
+ */
+export type OsProof = { id: string; artifact: string; at: number; subject: string; kind: 'task' | 'plan' }
+
+/** What the session says about itself, set by the brief_set tool (hooks/agentic-os/brief.ts). Every string is redacted. */
+export type OsBrief = {
+  title?: string
+  goal?: string
+  stopAt?: string
+  sources: { title?: OsBriefSource; goal?: OsBriefSource; stopAt?: OsBriefSource; ask?: OsBriefSource }
+  plan: OsPlanStep[]
+  ask: OsAskItem[]
+  decisions: { text: string; by: string; at: number }[]
+  proofs: OsProof[]
+  updatedAt: number
+}
+
 export type OsPlan = { title: string; file?: string }
 
 export type OsTurn = { id: string; startedAt: number }
@@ -158,6 +191,12 @@ declare module 'claude-code' {
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */
       turnBeaconed: boolean
+      /** The brief_set tool's record (agentic-os): goal, stop-at, plan, asks, decisions, proofs. Cleared at /clear and resume. */
+      brief: OsBrief | null
+      /** True once a main-loop tool call was refused in the current turn: the chip reads blocked. Cleared at the next turn. */
+      refused: boolean
+      /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call): an open ask stays fresh 24 hours from it. */
+      activeAt: number | null
     }
   }
 }

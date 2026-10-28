@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState, OsAgent, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
 import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -9,6 +9,7 @@ import { ledgerBandSpans, settle } from '../agent-ledger/model'
 import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
+import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd } from './brief'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
@@ -40,11 +41,21 @@ const cache = atom({ plugin: 'ccv3-mods', key: 'cache' } as const, EMPTY_CACHE a
 /** Agent Ledger runs (hooks/agent-ledger); turn.complete below settles them. */
 const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as AgentRun[])
 
+/** What the session says about itself (the brief_set tool, plus the turn-end parser). Written here only; cleared at /clear and resume. */
+const brief = atom({ plugin: 'ccv3-mods', key: 'brief' } as const, null as OsBrief | null)
+/** True once a main-loop tool call was refused in this turn: the chip reads blocked until the next turn starts. */
+const refused = atom({ plugin: 'ccv3-mods', key: 'refused' } as const, false)
+/** When the session last did anything: a prompt, a turn start or end, a main-loop tool call. An open ask stays fresh 24 hours from it. */
+const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as number | null)
+
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
 const uiArmed = atom({ plugin: 'ccv3-mods', key: 'uiArmed' } as const, false)
 
 const PANE = 'agentic-os'
+/** The only fields the handler reads off the brief_set call: the rest of the event is the engine's. */
+const BRIEF_KEYS = ['title', 'goal', 'stopAt', 'plan', 'ask', 'decision', 'proof'] as const
+const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 const PULSE_MS = 5000
 /** Idle, the band still redraws this often: the cache countdown is in minutes. */
 const IDLE_PULSE_MS = 60_000
@@ -59,6 +70,12 @@ const okResult = (ran: Result): Record<string, unknown> | undefined =>
   ran.deny === undefined && ran.isError !== true && typeof ran.result === 'object' && ran.result !== null
     ? (ran.result as Record<string, unknown>)
     : undefined
+
+/** Records that the session did something now. Called before the snapshot the same event writes. */
+const touch = async ($: EngineInterface): Promise<void> => {
+  const at = await $.clock.now()
+  await update($, activeAt, () => at)
+}
 
 /** CCV3_MODS_OFF=1 keeps the whole module inert: every hook passes the event on. */
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
@@ -87,12 +104,26 @@ const view = async ($: EngineInterface): Promise<OsView> => ({
  * for the web dashboard (Slice 2) and the evidence for headless probes.
  * A failed write never touches the session.
  */
-const writeSnapshot = async ($: EngineInterface): Promise<void> => {
+const writeSnapshot = async ($: EngineInterface, opts: { working?: boolean; except?: string } = {}): Promise<void> => {
   try {
     const home = await homeDir($)
     if (!home) return
     const sessionId = await $.session.id()
-    const snapshot = { sessionId, at: await $.clock.now(), ...(await view($)), agentRuns: await read($, agentRuns), cache: await read($, cache) }
+    const at = await $.clock.now()
+    const now = await view($)
+    const current = await read($, brief)
+    // `working`: Dave's prompt just arrived, so a turn is about to start and the chip leaves waiting-on-dave at once.
+    // `except`: the call that is writing (brief_set is itself a running step while its handler answers).
+    const chip = deriveChip({
+      brief: current,
+      tasks: now.tasks,
+      toolRunning: (await read($, steps)).some(one => one.id !== opts.except),
+      turnActive: now.turn !== null || opts.working === true,
+      blocked: await read($, refused),
+      now: at,
+      activeAt: await read($, activeAt),
+    })
+    const snapshot = { sessionId, at, ...now, agentRuns: await read($, agentRuns), cache: await read($, cache), brief: current, chip }
     await $.fs.write(`${home}/.claude/state/agentic-os/${sessionId}.json`, JSON.stringify(snapshot, null, 2))
   } catch {
     // Observer only: a snapshot is best effort.
@@ -104,7 +135,10 @@ const writeSnapshot = async ($: EngineInterface): Promise<void> => {
  * Other headless runs (reports, probes, workflow agents) would add a file each and nothing prunes the folder.
  */
 const worthSnapshot = async ($: EngineInterface): Promise<boolean> =>
-  (await read($, mode)) === 'interactive' || (await read($, tasks)).length > 0 || (await read($, plan)) !== null
+  (await read($, mode)) === 'interactive' ||
+  (await read($, tasks)).length > 0 ||
+  (await read($, plan)) !== null ||
+  (await read($, brief)) !== null
 
 const refreshAgents = async ($: EngineInterface): Promise<void> => {
   try {
@@ -195,6 +229,120 @@ const refreshAfter = ($: EngineInterface, tool: string, input: Record<string, un
   if ((tool === 'Bash' || tool === 'PowerShell') && command.includes('lane.mjs')) void refreshLanes($)
 }
 
+const briefSchema = {
+  type: 'object',
+  additionalProperties: false,
+  properties: {
+    title: { type: 'string', description: 'Short session title, shown in the Fleet. Max 80 characters.' },
+    goal: { type: 'string', description: 'One line: what this session is for. Max 240 characters.' },
+    stopAt: { type: 'string', description: "Dave's literal stop point, in his words. Max 240 characters." },
+    plan: {
+      type: 'array',
+      maxItems: 30,
+      description: 'Replaces the whole plan. Use it when you keep no task list. Max 30 steps.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          id: { type: 'string' },
+          text: { type: 'string', description: 'Max 200 characters.' },
+          status: { type: 'string', enum: ['todo', 'doing', 'done', 'blocked'] },
+        },
+        required: ['id', 'text', 'status'],
+      },
+    },
+    ask: {
+      type: 'array',
+      maxItems: 8,
+      description: 'Replaces the whole list of open questions for Dave. [] clears it. Max 8 items.',
+      items: {
+        type: 'object',
+        additionalProperties: false,
+        properties: {
+          kind: { type: 'string', enum: ['question', 'approval', 'decision', 'block'] },
+          text: { type: 'string', description: 'Max 300 characters.' },
+          recommend: { type: 'string', description: 'Your recommended answer.' },
+        },
+        required: ['kind', 'text'],
+      },
+    },
+    decision: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'Appends one decision to the log.',
+      properties: { text: { type: 'string' }, by: { type: 'string', description: 'Who decided: Dave or agent.' } },
+      required: ['text', 'by'],
+    },
+    proof: {
+      type: 'object',
+      additionalProperties: false,
+      description: 'Marks one task or plan step proven. taskId is a task id, a plan step id, or the exact task subject.',
+      properties: { taskId: { type: 'string' }, artifact: { type: 'string', description: 'The command output or file that proves it.' } },
+      required: ['taskId', 'artifact'],
+    },
+  },
+}
+
+const BRIEF_DESCRIPTION =
+  "Records what this session is for, so Dave sees it in the Agentic OS band and the Fleet. Call it when the goal, the stop-at (Dave's literal stop point), the title, the plan or an open question changes, and when a task is proven. " +
+  'Every field is optional; send at least one. plan and ask replace their whole list, so ask [] clears the open questions once Dave answered. decision appends to the log. proof marks a task or plan step proven (taskId is a task id, a plan step id or the exact task subject). ' +
+  'Secrets in any string are removed before storage. The answer is the saved summary, or "brief_set failed:" with the reason (a proof that matches nothing lists the valid ids).'
+
+/** A mod-served tool answers with a list of content blocks (the engine refuses the MCP object); see hooks/pr-loop. */
+const textResult = (value: string) => ({ result: [{ type: 'text', text: value }] })
+
+/** Own try/catch: the session.start hook rethrows, and a failed registration must not fail the start chain. */
+const registerBrief = async ($: EngineInterface): Promise<void> => {
+  try {
+    await $.tool.register({ name: 'brief_set', description: BRIEF_DESCRIPTION, inputSchema: briefSchema })
+  } catch (err) {
+    await noteError($, 'brief-register', err)
+  }
+}
+
+/** The handler of brief_set. The pure part is brief.ts. It answers with text, never a deny. */
+const briefCall = async ($: EngineInterface, e: unknown) => {
+  const given = e as Record<string, unknown>
+  // A model that leaves a field out may send null for it. The engine's own fields on the event are not read.
+  const raw = Object.fromEntries(BRIEF_KEYS.filter(key => given[key] !== undefined && given[key] !== null).map(key => [key, given[key]]))
+  const list = await read($, tasks)
+  const result = applyBrief(await read($, brief), raw, list, await $.clock.now())
+  if ('error' in result) return textResult(`brief_set failed: ${result.error}`)
+  await update($, brief, () => result.brief)
+  await writeSnapshot($, typeof given.tool_use_id === 'string' ? { except: given.tool_use_id } : {})
+  return textResult(briefSummary(result.brief, list))
+}
+
+/** A turn ended: the model's own restate line and Next steps block fill what brief_set did not set. */
+const learnFromAnswer = async ($: EngineInterface, answer: unknown): Promise<void> => {
+  try {
+    const parsed = parseTurnEnd(typeof answer === 'string' ? answer : '')
+    if (!parsed.goal && !parsed.stopAt && !parsed.ask) return
+    const current = await read($, brief)
+    // A headless run with no brief writes no file: nothing prunes the folder.
+    if (current === null && (await read($, mode)) !== 'interactive') return
+    const at = await $.clock.now()
+    await update($, brief, now => mergeParsed(now, parsed, at))
+  } catch {
+    // Observer only: a parser failure never touches the turn.
+  }
+}
+
+/** Dave's prompt answers every open ask. The mod's own report lines (the PR watcher) are not Dave. */
+const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
+  try {
+    // The mod's own report lines are not activity of Dave's; any other prompt is.
+    if (!(typeof text === 'string' && isModSubmission(text))) await touch($)
+    const current = await read($, brief)
+    if (current === null || (typeof text === 'string' && isModSubmission(text))) return
+    const next = markAsksAnswered(current)
+    if (next !== current) await update($, brief, () => next)
+    if (await worthSnapshot($)) await writeSnapshot($, { working: true })
+  } catch {
+    // Observer only.
+  }
+}
+
 type Proof = { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }
 
 /**
@@ -271,6 +419,7 @@ export const agenticOs = (on: On) => {
       await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
       await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
+      await registerBrief($)
       if (e.isInteractive) await startUi($)
       return next(e)
     } catch (err) {
@@ -286,6 +435,8 @@ export const agenticOs = (on: On) => {
       if (!(await isOff($))) {
         await update($, tasks, () => [])
         await update($, plan, () => null)
+        await update($, brief, () => null)
+        await update($, refused, () => false)
       }
       return next(e)
     }).catch(($, e, next) => next(e))
@@ -321,6 +472,10 @@ export const agenticOs = (on: On) => {
     }
     const startedAt = await $.clock.now()
     await update($, turn, () => ({ id: e.turnId, startedAt }))
+    await update($, activeAt, () => startedAt)
+    // A new turn is a fresh start: last turn's refusal no longer blocks the chip.
+    await update($, refused, () => false)
+    if (await worthSnapshot($)) await writeSnapshot($)
     return next(e)
   })
 
@@ -336,6 +491,8 @@ export const agenticOs = (on: On) => {
     if (agentId === undefined) {
       await update($, turn, () => null)
       await update($, steps, () => [])
+      await touch($)
+      await learnFromAnswer($, e.answer)
       if (await worthSnapshot($)) await writeSnapshot($)
     }
     return next(e)
@@ -362,12 +519,29 @@ export const agenticOs = (on: On) => {
     const tool = String(e.tool)
     const id = e.tool_use_id
     const startedAt = await $.clock.now()
+    await update($, activeAt, () => startedAt)
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
     const ran = await next(e)
     await update($, steps, list => list.filter(one => one.id !== id))
+    // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.
+    if (ran.deny !== undefined && tool !== 'AskUserQuestion') await update($, refused, () => true)
     if (await record($, tool, input, ran)) await writeSnapshot($)
     refreshAfter($, tool, input)
     return ran
+  }).catch(($, e, next) => next(e))
+
+  // The mod's own tool. Matched, so it sits beside the one unmatched observer above.
+  on('tool.call', { tool: BRIEF_TOOL }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    // The brief is the main session's. A subagent's call must not overwrite it.
+    if (e.agentId !== undefined) return textResult('brief_set failed: only the main session sets the brief')
+    return briefCall($, e)
+  }).catch(($, e, next) => next(e))
+
+  // The one unmatched prompt.submit hook of the plugin. Observer: the prompt goes on unchanged.
+  on('prompt.submit', async ($, e, next) => {
+    if (!(await isOff($))) await answerAsks($, e.text)
+    return next(e)
   }).catch(($, e, next) => next(e))
 
   on('ui.render', { component: 'AbovePrompt' }, async ($, e, next) => {
