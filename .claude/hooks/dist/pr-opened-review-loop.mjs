@@ -12,15 +12,24 @@ var POST_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))POST\b/i;
 var ANY_METHOD_RE = /(?:^|\s)(?:-X\s*|--method(?:\s+|=))\w/i;
 var FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*["']?[\w.[\]-]+=|--(?:raw-field|field|input)[\s=])/;
 var GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
+var DATA_VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)+`;
+var DATA_FLAG_RE = new RegExp(String.raw`(^|\s)(-[fFHqt]\s*|--(?:raw-field|field|header|jq|template|input)(?:\s+|=))${DATA_VALUE}`, "g");
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
+function joinContinuations(command, shell) {
+  const text = command || "";
+  return shell === "bash" ? text.replace(/\\\r?\n/g, "") : text.replace(/[ \t]*`\r?\n[ \t]*/g, " ");
+}
 function isPrOpenCommand(command) {
-  const cmd = command || "";
+  return isPrOpenText(joinContinuations(command, "bash")) || isPrOpenText(joinContinuations(command, "pwsh"));
+}
+function isPrOpenText(cmd) {
   if (PR_CREATE_RE.test(cmd)) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";
-  if (!PULLS_PATH_RE.test(api)) return false;
-  if (POST_METHOD_RE.test(api)) return true;
-  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(api);
+  const bare = api.replace(DATA_FLAG_RE, "$1$2");
+  if (!PULLS_PATH_RE.test(bare)) return false;
+  if (POST_METHOD_RE.test(bare)) return true;
+  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(bare);
 }
 function responseText(resp) {
   if (resp === null || resp === void 0) return "";
@@ -141,6 +150,7 @@ export {
   extractPrInfo,
   hasNumberField,
   isPrOpenCommand,
+  joinContinuations,
   legacyStatePath,
   main,
   markFired,

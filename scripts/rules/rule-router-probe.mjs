@@ -69,6 +69,7 @@ const CASES = [
   ['PR create via REST: block for style, plus the review loop', bash('s7', 'gh api repos/o/r/pulls -X POST -f title=x -f head=b'), 'deny', ['pr-and-commit-style', 'pr-review-loop'], []],
   ['REST merge injects the merge workflow', bash('s8', 'gh api repos/o/r/pulls/57/merge -X PUT -f merge_method=merge'), 'inject', ['git-merge'], ['pr-and-commit-style']],
   ['land-pr injects merge + review loop rules', ps('s9', 'pwsh -File scripts/github/land-pr.ps1 -Pr 57'), 'inject', ['git-merge', 'pr-review-loop'], []],
+  ['pre-pr.mjs injects the review loop rule (Before you open a PR)', bash('s9b', 'node scripts/github/pre-pr.mjs --body draft.md'), 'inject', ['pr-review-loop'], ['pr-and-commit-style']],
   ['grok-adversary agent blocks', { session_id: 's10', tool_name: 'Agent', tool_input: { subagent_type: 'grok-adversary' } }, 'deny', ['grok'], []],
   ['Task tool name works too', { session_id: 's10b', tool_name: 'Task', tool_input: { subagent_type: 'grok-worker' } }, 'deny', ['grok'], []],
   ['a gate rule (grok) still blocks a subagent after the session had the block', bash('s10', 'grok exec -', { agent_id: 'sub-1' }), 'deny', ['grok'], []],

@@ -62,7 +62,13 @@ type Status = {
   routedReviewed?: boolean
   coderabbitReviewedHead?: boolean | null
   routing?: { required: string[]; held: string | null; source: string }
+  coderabbitRateLimited?: boolean | null
+  coderabbitRetryMinutes?: number | null
+  proof?: { required: boolean; type: string | null; status: string; problems: string[] }
 }
+
+const PROOF_REASON = 'PR body proof: no "Proof type:" line. Add the Evidence block from pr-and-commit-style.md (types: bugfix, feature, refactor, ui, harness, docs)'
+const GREEN_REASON = 'PR body proof: GREEN names commit aaaaaaa, not the head bbbbbbb. Run the check on the head and update the GREEN line'
 
 const status = (pr: number, over: Partial<Status> = {}): Status => ({
   pr,
@@ -508,6 +514,133 @@ describe('pr-loop watcher', () => {
     await clock.advance(TICK)
     expect(seen.submits[0]).toMatch(/not READY after 60 minutes/)
     expect(seen.submits[0]).not.toMatch(/no (Greptile|CodeRabbit)/)
+  })
+
+  test('W31 a CodeRabbit rate limit says do NOT post the review request, check capacity free, and gives the minutes', async ($, on) => {
+    const s = status(8, {
+      routing: CR_ONLY, routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: true, coderabbitRetryMinutes: 12,
+      reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'],
+    })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    const line = seen.submits[0] as string
+    expect(line).toMatch(/rate limited by CodeRabbit/)
+    expect(line).toContain('Do NOT post @coderabbitai review')
+    expect(line).toContain('@coderabbitai rate limit')
+    expect(line).toMatch(/costs no review/)
+    expect(line).toContain('available in 12 minutes')
+    expect(line).toMatch(/once when capacity is back/)
+    expect(line).not.toMatch(/Act per pr-review-loop/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['LIMITED'])
+  })
+
+  test('W31 an older status script is still read as a rate limit from its reason, with no minutes', async ($, on) => {
+    const s = status(8, { coderabbitLimited: true, reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toContain('Do NOT post @coderabbitai review')
+    expect(seen.submits[0]).not.toMatch(/available in/)
+  })
+
+  test('W31 a skipped or failed CodeRabbit review keeps the general LIMITED text', async ($, on) => {
+    const s = status(8, { coderabbitLimited: true, coderabbitRateLimited: false, reasons: ['CodeRabbit skipped the review of the head (PR-bot review did not run; CLI/plugin output does not count)'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/Act per pr-review-loop.md "No review on the head"/)
+    expect(seen.submits[0]).not.toMatch(/Do NOT post/)
+  })
+
+  test('W32 a missing PR body proof is an author action at once, not PENDING', async ($, on) => {
+    const s = status(8, { reasons: [PROOF_REASON, 'no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    const line = seen.submits[0] as string
+    expect(line).toMatch(/Author action: add or fix the Evidence block/)
+    expect(line).toMatch(/update the GREEN line to that head/)
+    expect(line).toContain('no "Proof type:" line')
+    expect(line).toContain('aaaaaaa')
+    expect(seen.toasts[0]).toMatch(/PR body proof needs fixing/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PROOF'])
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+  })
+
+  test('W35 a docs proof that the router did not confirm asks for the docs class and label, not a GREEN run', async ($, on) => {
+    const DOCS_REASON = 'PR body proof: proof type docs needs the review router to class this head as docs, with risk:docs as the only risk label'
+    const s = status(8, { reasons: [DOCS_REASON, 'no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toContain('proof type docs needs the review router')
+    expect(line).toMatch(/risk:docs/)
+    expect(line).not.toMatch(/update the GREEN line/)
+  })
+
+  test('W32 a proof problem is PROOF after 60 minutes too, never STALLED', async ($, on) => {
+    const s = status(8, { reasons: [GREEN_REASON] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/Author action/)
+    expect(seen.submits[0]).not.toMatch(/after 60 minutes/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PROOF'])
+  })
+
+  test('W32 a new head with a stale GREEN alerts again; the structured proof field counts without the reason text', async ($, on) => {
+    const first = status(8, { reasons: [GREEN_REASON] })
+    const second = status(8, { head: 'b'.repeat(40), headShort: 'bbbbbbb', reasons: [], proof: { required: true, type: 'feature', status: 'invalid', problems: [GREEN_REASON] } })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [first, second] } })
+    await start($)
+    await clock.advance(TICK)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(2)
+    expect(seen.submits[1]).toContain('bbbbbbb')
+  })
+
+  test('W34 a proof problem only in status.proof.problems is listed in the author line', async ($, on) => {
+    const s = status(8, { reasons: [], proof: { required: true, type: 'feature', status: 'invalid', problems: [PROOF_REASON, GREEN_REASON] } })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    const line = seen.submits[0] as string
+    expect(line).toContain('no "Proof type:" line')
+    expect(line).toContain('GREEN names commit aaaaaaa')
+    expect(line).not.toMatch(/wrong: \./)
+    expect(line).toMatch(/Author action/)
+  })
+
+  test('W32 findings on a reviewed head come before the proof problem', async ($, on) => {
+    const s = status(8, { routing: CR_ONLY, routedReviewed: true, coderabbitReviewedHead: true, reviewedHead: true, unresolved: 2, reasons: [PROOF_REASON, '2 review thread(s) unresolved'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/was reviewed by CodeRabbit but is not READY/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W33 a STALLED line lists the reasons', async ($, on) => {
+    const s = status(9, { routing: DEEP, reviewedHead: true, coderabbitReviewedHead: true, routedReviewed: true, reasons: ['check "ci" is in_progress/null', 'mergeable_state is "blocked"'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toContain('Reasons: check "ci" is in_progress/null; mergeable_state is "blocked"')
+  })
+
+  test('W33 a STALLED line for a missing bot review lists the reasons too', async ($, on) => {
+    const t = status(10, { routing: CR_ONLY, routedReviewed: false, reviewedHead: true, reasons: ['no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 10, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 10: [t] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toContain('Reasons: no CodeRabbit PR-bot review of the head commit')
   })
 
   test('W16 another session\'s list is not watched', async ($, on) => {

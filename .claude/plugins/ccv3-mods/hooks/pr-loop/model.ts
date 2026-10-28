@@ -17,6 +17,12 @@ export type PrStatus = {
   rateLimited: boolean
   /** A labelled PR whose CodeRabbit review is missing: rate limited, skipped or failed. Null when unlabelled. Absent from older scripts. */
   coderabbitLimited?: boolean | null
+  /** CodeRabbit's notice for the head is a rate limit or a review limit (not a skip or a failure). Absent from older scripts: the reason text decides. */
+  coderabbitRateLimited?: boolean | null
+  /** Minutes until CodeRabbit's next included review ("Next included review available in N minutes"). Null when the notice has no figure. */
+  coderabbitRetryMinutes?: number | null
+  /** The PR body proof check (P4b). Absent from older scripts: the reasons carry its problems. */
+  proof?: { required: boolean; type: string | null; status: string; problems: string[] }
   /** Every bot in `routing.required` reviewed the head. Absent from older scripts: `reviewedHead` decides then. */
   routedReviewed?: boolean
   /** CodeRabbit PR-bot review on the head. Null when the labels do not require CodeRabbit. */
@@ -31,7 +37,20 @@ export type PrStatus = {
 export type Probe = { kind: 'ok'; status: PrStatus } | { kind: 'error'; text: string; perPr: boolean }
 
 /** What the watcher tells Dave and the model about one PR. */
-export type Alert = { pr: number; state: PrState; headShort: string; merged: boolean; whenReady: boolean; reasons: string[]; bots?: string[]; reviewedBy?: string[] }
+export type Alert = {
+  pr: number
+  state: PrState
+  headShort: string
+  merged: boolean
+  whenReady: boolean
+  reasons: string[]
+  bots?: string[]
+  reviewedBy?: string[]
+  /** Set when the missing CodeRabbit review is a rate limit. `minutes` is CodeRabbit's own figure, or null. */
+  rateLimit?: { minutes: number | null }
+  /** Set for a PROOF alert: the PR body proof problems (status.proof.problems, else the reasons that carry the prefix). */
+  proofProblems?: string[]
+}
 
 export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
 
@@ -150,12 +169,29 @@ const needsAction = (status: PrStatus): boolean =>
 /** The reviewer app (Greptile, or CodeRabbit on a labelled PR) will not review this head without a nudge. */
 const reviewMissing = (status: PrStatus): boolean => status.rateLimited || status.coderabbitLimited === true
 
+/**
+ * The prefix review-status.mjs puts on every PR body proof reason (PROOF_REASON_PREFIX). The mod cannot import
+ * the .mjs; scripts/github/pr-loop-sync.test.mjs fails when the two differ.
+ */
+export const PROOF_REASON_PREFIX = 'PR body proof:'
+
+/** The PR body proof problems of this status: the structured field, else the reasons that carry the prefix. */
+export const proofProblemsOf = (status: PrStatus): string[] =>
+  status.proof?.problems?.length ? status.proof.problems : status.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
+
+/** A CodeRabbit rate limit is the cause of the missing review. Older scripts only say so in a reason. */
+const CODERABBIT_RATE_LIMITED = /^CodeRabbit rate limited:/
+const rateLimitedByCodeRabbit = (status: PrStatus): boolean =>
+  status.coderabbitRateLimited === true || (status.coderabbitRateLimited === undefined && status.reasons.some(reason => CODERABBIT_RATE_LIMITED.test(reason)))
+
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
   // Findings on a reviewed head come first: a skipped CodeRabbit review, or a cancelled Greptile run on a
   // review:deep PR, must not hide a finding to fix. Nothing to fix and a review that did not finish is LIMITED.
   if (needsAction(status)) return 'REVIEWED'
+  // A wrong or missing PR body proof is the author's to fix now. It must not wait as PENDING for 60 minutes.
+  if (proofProblemsOf(status).length > 0) return 'PROOF'
   if (status.rateLimited) return 'LIMITED'
   return reviewMissing(status) ? 'LIMITED' : 'PENDING'
 }
@@ -172,7 +208,7 @@ const cleared = ({ fails: _fails, ...rest }: PrWatch): PrWatch => rest
 
 /**
  * Folds one check into a watch. READY and CLOSED end the watch (`watch` null) and alert.
- * LIMITED alerts once and stays. REVIEWED and STALLED alert once per head and stay.
+ * LIMITED alerts once and stays. REVIEWED, PROOF and STALLED alert once per head and stay.
  * PENDING never alerts: waiting is the normal state.
  */
 /**
@@ -193,6 +229,8 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
   const alert: Alert = {
     pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons,
     ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
+    ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
+    ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
   }
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
@@ -207,7 +245,7 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
     return { watch: { ...next, alerted: `REVIEWED:${status.head}${union.length ? `:${union.join('+')}` : ''}` }, alert }
   }
   const marker = `${state}:${status.head}`
-  if (state === 'STALLED' && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
+  if ((state === 'STALLED' || state === 'PROOF') && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
   return { watch: next, alert: null }
 }
 
@@ -237,6 +275,7 @@ const WORDS: Record<PrState, string> = {
   CLOSED: 'closed',
   LIMITED: 'a review did not finish (Greptile or CodeRabbit)',
   REVIEWED: 'reviewed, not READY',
+  PROOF: 'PR body proof needs fixing',
   // Not used for text: word() builds STALLED from the bots that have not reviewed (stalledWords).
   STALLED: 'not READY after 60 minutes',
 }
@@ -263,13 +302,27 @@ export const reportLine = (alert: Alert): string => {
   if (alert.state === 'LIMITED' && alert.reasons.some(reason => CANCELLED_REVIEW.test(reason))) {
     return `${lead} had its Greptile review cancelled: a newer push superseded it. Wait for the review of the new head; if none appears, act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
+  if (alert.state === 'LIMITED' && alert.rateLimit) {
+    const wait = alert.rateLimit.minutes === null ? '' : ` CodeRabbit says the next included review is available in ${alert.rateLimit.minutes} minutes.`
+    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} Post @coderabbitai review once when capacity is back, then report to Dave. Do not merge it.`
+  }
   if (alert.state === 'LIMITED') {
     return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
   }
+  if (alert.state === 'PROOF') {
+    const problems = alert.proofProblems ?? alert.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
+    // A docs proof needs no RED or GREEN: it fails only when the review router did not class this head docs.
+    const docsOnly = problems.length > 0 && problems.every(p => /proof type docs needs the review router/.test(p))
+    const action = docsOnly
+      ? 'a docs proof counts only when the review router classes this head docs and risk:docs is the only risk label. Change the PR so only docs paths differ, or name another proof type with RED and GREEN'
+      : `add or fix the Evidence block in the PR body (pr-and-commit-style.md "Evidence block"), run the GREEN check on head ${alert.headShort} and update the GREEN line to that head`
+    return `${lead} is not READY because its PR body proof is missing or wrong: ${problems.slice(0, 5).join('; ')}. Author action: ${action}. Keep the CodeRabbit and Greptile blocks in the body byte for byte. Do not merge it. The watch continues.`
+  }
   if (alert.state === 'STALLED') {
     const bots = botWords(missingBots(alert))
-    if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave. Do not merge it.`
-    return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
+    const why = alert.reasons.length ? ` Reasons: ${alert.reasons.slice(0, 5).join('; ')}.` : ''
+    if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave.${why} Do not merge it.`
+    return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave.${why} Do not merge it.`
   }
   if (alert.state === 'REVIEWED') {
     const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
