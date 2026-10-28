@@ -699,6 +699,59 @@ function proofResult({ gate, dependabot, body, head, labels, comments }) {
   return { required: true, type, status, problems };
 }
 
+// CodeRabbit lists findings on lines outside the diff in the review body: "Outside diff range comments (N)".
+// They make no review thread, so `unresolved` stays 0. N is the sum over every PR-bot review of the PR: a review
+// of a new head covers only the new commits and never repeats older outside-diff findings, so a push must not clear
+// them. N blocks READY until the PR body "Outside-diff: handled" list has N entries (pr-review-loop.md "When the
+// review lands"). A full re-review can list a finding twice; that over-counts, which fails closed.
+const OUTSIDE_DIFF_HEADING = /^(?:[^\w\n<]|<\/?(?:summary|details|strong)>)*Outside diff range comments\s*\((\d+)\)/im;
+const REVIEW_SENTENCE = /Actionable comments posted:\s*\d+/;
+
+/** N summed over the CodeRabbit app reviews that carry the review sentence, each review id once; 0 when none. */
+export function codeRabbitOutsideDiff({ reviews = [] }) {
+  const seen = new Set();
+  let total = 0;
+  for (const r of reviews || []) {
+    if (!isCodeRabbitUser(r?.user) || !REVIEW_SENTENCE.test(r.body || '')) continue;
+    if (r.id != null && seen.has(r.id)) continue;
+    if (r.id != null) seen.add(r.id);
+    const m = OUTSIDE_DIFF_HEADING.exec(r.body);
+    if (m) total += Number(m[1]);
+  }
+  return total;
+}
+
+const HANDLED_HEADING = /^\s*(?:#{1,6}\s+)?(?:\*\*|__)?Outside-diff:\s*handled(?:\*\*|__)?:?\s*$/i;
+const TOP_BULLET = /^[-*+]\s+\S/;
+const EMPTY_BULLET = /^[-*+]\s*$/;
+const PLACEHOLDER_BULLET = /^[-*+]\s+<[^>]*>\s*$/;
+
+/**
+ * Counts the top-level bullets under the "Outside-diff: handled" heading of the PR body. Fences and HTML
+ * comments are skipped. Indented lines are detail. A heading or a prose line ends the list.
+ */
+export function outsideDiffHandled(body) {
+  const state = { inComment: false };
+  let fence = null;
+  let inList = false;
+  let count = 0;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    if (fence) {
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      continue;
+    }
+    const clean = stripComments(line, state);
+    const open = FENCE_OPEN.exec(clean);
+    if (open) { fence = { ch: open[1][0], len: open[1].length }; if (inList) return count; continue; }
+    if (HANDLED_HEADING.test(clean)) { if (inList) return count; inList = true; continue; }
+    if (!inList || clean.trim() === '' || /^\s/.test(clean) || EMPTY_BULLET.test(clean) || PLACEHOLDER_BULLET.test(clean)) continue;
+    if (TOP_BULLET.test(clean)) count += 1;
+    else return count;
+  }
+  return count;
+}
+
 export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now() }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
@@ -727,6 +780,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const badRuns = (checkRuns || []).filter((c) => !isGreptileRun(c))
     .filter((c) => c.status !== 'completed' || !['success', 'neutral', 'skipped'].includes(c.conclusion));
   const unresolved = threads.filter((t) => !t.isResolved).length;
+  const outsideDiff = codeRabbitOutsideDiff({ head, reviews });
+  const outsideHandled = outsideDiffHandled(pull.body);
 
   const reasons = [];
   if (pull.merged) reasons.push('already merged');
@@ -741,6 +796,9 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   // Say WHY Greptile is needed when the labels alone would not need it (the router check kept it).
   if (need.unverified && greptileBlocks.length > 0) reasons.push(`Greptile is required because ${need.unverified}`);
   if (unresolved > 0) reasons.push(`${unresolved} review thread(s) unresolved`);
+  if (outsideDiff > outsideHandled) {
+    reasons.push(`CodeRabbit lists ${outsideDiff} outside-diff finding(s) across its reviews of this PR (head ${head.slice(0, 7)}) and the PR body "Outside-diff: handled" list has ${outsideHandled}. Read the review body, then fix each finding or list it as handled`);
+  }
   for (const s of badStatuses) reasons.push(`status "${s.context}" is ${s.state}`);
   for (const c of badRuns) reasons.push(`check "${c.name}" is ${c.status}/${c.conclusion}`);
   if (pull.mergeable_state && pull.mergeable_state !== 'clean') reasons.push(`mergeable_state is "${pull.mergeable_state}"`);
@@ -775,6 +833,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     greptile, greptileSummary, confidence: reviewedHead ? summary.confidence : null, lowConfidence,
     reviewed: reviewedHead, reviewedHead, unavailable,
     coderabbit, coderabbitReviewedHead,
+    // N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. 0 when none. Blocks READY until handled.
+    coderabbitOutsideDiff: outsideDiff,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
     coderabbitLimited,
     // true when that missing review is a rate limit or review limit (not a skip or a failure). null when unlabelled.
@@ -834,17 +894,13 @@ function main() {
     const rt = prq.reviewThreads;
     if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
     if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
-    const labels = pullLabelNames(pull);
-    let reviews = [];
     // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
     const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
     // REST finds the candidates; only the GraphQL body is parsed.
     const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
     const greptileAuto = readGreptileAuto(pull.base.ref);
-    // With Greptile off, an unrouted PR needs CodeRabbit too, so read the reviews whenever they can count.
-    if (needsCodeRabbitReview(labels) || !greptileAuto) {
-      reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
-    }
+    // Every PR reads the reviews: outside-diff findings in a CodeRabbit review body block READY whatever the labels.
+    const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
     const headCommit = prq.commits.nodes[0]?.commit;
     const headCommittedAt = headCommit?.oid === pull.head.sha ? headCommit.committedDate : undefined;
     // The GraphQL read must describe the head the REST read saw; a push in between is "cannot determine".

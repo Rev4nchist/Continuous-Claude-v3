@@ -64,6 +64,7 @@ type Status = {
   routing?: { required: string[]; held: string | null; source: string }
   coderabbitRateLimited?: boolean | null
   coderabbitRetryMinutes?: number | null
+  coderabbitOutsideDiff?: number
   proof?: { required: boolean; type: string | null; status: string; problems: string[] }
 }
 
@@ -1133,5 +1134,76 @@ describe('pr-loop one bad PR', () => {
     const { seen } = world(on)
     await start($)
     expect(seen.descriptions.pr_watch).toContain('Rev4nchist/Continuous-Claude-v3')
+  })
+})
+
+describe('pr-loop outside-diff findings', () => {
+  // CodeRabbit lists findings on lines outside the diff in its review body. They make no thread, so
+  // unresolved is 0. review-status.mjs reports their count as coderabbitOutsideDiff and fails READY.
+  const CR_ONLY_OD = { required: ['coderabbit'], held: null, source: 'labels' }
+  const OUTSIDE = (pr: number, over: Partial<Status> = {}) =>
+    status(pr, {
+      routing: CR_ONLY_OD, routedReviewed: true, reviewedHead: false, coderabbitReviewedHead: true, unresolved: 0, coderabbitOutsideDiff: 3,
+      reasons: ['CodeRabbit lists 3 outside-diff finding(s) on head aaaaaaa'], ...over,
+    })
+
+  test('W36 a reviewed head with outside-diff findings and no open thread alerts REVIEWED at once, not STALLED an hour later', async ($, on) => {
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [OUTSIDE(9)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/reviewed by CodeRabbit but is not READY/)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W36 the REVIEWED line tells the model the findings are in the review body, where it must read them', async ($, on) => {
+    const { clock, seen } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [OUTSIDE(9)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits[0]).toMatch(/review body/i)
+    expect(seen.submits[0]).toMatch(/Outside-diff: handled/)
+    expect(seen.submits[0]).toMatch(/do not merge/i)
+  })
+
+  test('W36 a Greptile-routed PR (no CodeRabbit label) with outside-diff findings and no open thread alerts REVIEWED too', async ($, on) => {
+    const greptileRoute = { required: ['greptile'], held: null, source: 'default' }
+    const s = status(9, {
+      routing: greptileRoute, routedReviewed: true, reviewedHead: true, coderabbitReviewedHead: true, unresolved: 0, coderabbitOutsideDiff: 2,
+      reasons: ['CodeRabbit lists 2 outside-diff finding(s) on head aaaaaaa'],
+    })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+  })
+
+  test('W36 the review-body sentence is only for outside-diff alerts: an open thread with a count of 0 does not mention it', async ($, on) => {
+    const threadOnly = OUTSIDE(9, { coderabbitOutsideDiff: 0, unresolved: 1, reasons: ['1 review thread(s) unresolved'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [threadOnly] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['REVIEWED'])
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).not.toMatch(/Outside-diff: handled/)
+  })
+
+  test('W36 findings the handled list already covers do not make REVIEWED: the PR waits for its pending check', async ($, on) => {
+    // review-status.mjs writes the "CodeRabbit lists N outside-diff" reason only while N is above the handled count.
+    const covered = OUTSIDE(9, { coderabbitOutsideDiff: 3, reasons: ['check "ci" is in_progress/null'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [covered] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
+  })
+
+  test('W36 a count of 0 changes nothing: a reviewed head with nothing to fix and a pending check stays PENDING', async ($, on) => {
+    const quiet = OUTSIDE(9, { coderabbitOutsideDiff: 0, reasons: ['check "ci" is in_progress/null'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [quiet] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
   })
 })
