@@ -303,7 +303,7 @@ async function openByUrl(page: Page, id: string, view: 'overview' | 'sessions' =
 
 const TABS: { tab: string; label: string; tag: 'NEXT' | 'LATER' | null }[] = [
   { tab: 'overview', label: 'Overview', tag: null },
-  { tab: 'board', label: 'Board', tag: 'NEXT' },
+  { tab: 'board', label: 'Board', tag: null },
   { tab: 'sessions', label: 'Sessions', tag: null },
   { tab: 'workflows', label: 'Workflows', tag: 'NEXT' },
   { tab: 'handoffs', label: 'Handoffs', tag: 'NEXT' },
@@ -313,7 +313,7 @@ const TABS: { tab: string; label: string; tag: 'NEXT' | 'LATER' | null }[] = [
 ];
 
 test.describe('nav shell', () => {
-  test('eight tabs in order; Overview and Sessions live; the rest disabled with NEXT or LATER', async ({
+  test('eight tabs in order; Overview, Board and Sessions live; the rest disabled with NEXT or LATER', async ({
     page,
   }) => {
     const errors = watchErrors(page);
@@ -367,9 +367,9 @@ test.describe('nav shell', () => {
     await expect(page.getByRole('button', { name: /updated \d+s ago/ })).toBeVisible();
 
     // A forced click on a disabled button fires no click event: nothing changes.
-    await navTab(page, 'board').click({ force: true });
+    await navTab(page, 'workflows').click({ force: true });
     await expect(navTab(page, 'sessions')).toHaveAttribute('aria-current', 'page');
-    await expect(navTab(page, 'board')).not.toHaveAttribute('aria-current', 'page');
+    await expect(navTab(page, 'workflows')).not.toHaveAttribute('aria-current', 'page');
     expect(urlParam(page, 'view')).toBe('sessions');
 
     await navTab(page, 'overview').click();
@@ -744,7 +744,7 @@ test.describe('URL state', () => {
     const live = await liveSession(request);
     writeDetailFixture(live.id);
 
-    await page.goto('/?view=board&session=%3Cscript%3E');
+    await page.goto('/?view=nope&session=%3Cscript%3E');
     await waitForHydration(page);
     await expect(navTab(page, 'overview')).toHaveAttribute('aria-current', 'page');
     await expect(detailPanel(page)).toHaveCount(0);

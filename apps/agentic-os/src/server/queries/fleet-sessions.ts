@@ -89,13 +89,85 @@ export type JoinStats = {
   unchecked: number;
 };
 
+/** One watched PR: grouped by repo and number across LIVE sessions. */
+export type PrRow = {
+  key: string;
+  repo: string | null;
+  pr: number;
+  state: string | null;
+  sessions: { id: string; shortId: string; name: string }[];
+};
+
 export type FleetSessions = {
   cards: SessionCard[];
   ready: ReadyItem[];
   join: JoinStats;
-  /** Distinct PR numbers in live snapshots whose state is not CLOSED. */
-  openPrs: number;
+  /** PR rows of live sessions, sorted and capped. `tiles.openPrs` is their number. */
+  prs: PrRow[];
 };
+
+const MAX_PR_ROWS = 20;
+/** States that need a person: first in the PR panel. READY and CLOSED never show. */
+const PR_PERSON_STATES = new Set(['LIMITED', 'REVIEWED', 'PROOF', 'STALLED']);
+const PR_HIDDEN_STATES = new Set(['READY', 'CLOSED']);
+
+type PrWatch = {
+  repo: string | null;
+  pr: number;
+  sessions: Map<string, { id: string; shortId: string; name: string }>;
+  /** State of the most recently written state file: larger `at`, then the lower file index. */
+  state: string | null;
+  stateAt: number;
+  stateRank: number;
+};
+
+function prTier(state: string | null): number {
+  if (state === null) return 3;
+  return PR_PERSON_STATES.has(state) ? 1 : 2;
+}
+
+/**
+ * PR rows from the state files of live sessions. `rank` is the position of the snapshot in the
+ * reader's list, which is newest file first: a tie on `at` goes to the lower rank (newer mtime).
+ */
+function buildPrRows(
+  entries: { card: SessionCard; snapshot: StateSnapshot; rank: number }[],
+): PrRow[] {
+  const watches = new Map<string, PrWatch>();
+  // Pick the newest state first, READY and CLOSED included; drop a hidden winner afterwards.
+  // A session whose own watch is READY or CLOSED has left the watch: it competes for the
+  // state but is not listed.
+  for (const { card, snapshot, rank } of entries) {
+    for (const watch of snapshot.prs) {
+      const hidden = watch.state !== null && PR_HIDDEN_STATES.has(watch.state);
+      const repo = snapshot.repo;
+      const key = `${repo ?? '?'}#${watch.pr}`;
+      let row = watches.get(key);
+      if (row === undefined) {
+        row = { repo, pr: watch.pr, sessions: new Map(), state: watch.state, stateAt: snapshot.at, stateRank: rank };
+        watches.set(key, row);
+      } else if (snapshot.at > row.stateAt || (snapshot.at === row.stateAt && rank < row.stateRank)) {
+        row.state = watch.state;
+        row.stateAt = snapshot.at;
+        row.stateRank = rank;
+      }
+      if (!hidden && !row.sessions.has(card.id)) {
+        row.sessions.set(card.id, { id: card.id, shortId: card.shortId, name: card.name });
+      }
+    }
+  }
+  return [...watches.entries()]
+    .filter(([, row]) => row.state === null || !PR_HIDDEN_STATES.has(row.state))
+    .map(([key, row]) => ({
+      key,
+      repo: row.repo,
+      pr: row.pr,
+      state: row.state,
+      sessions: [...row.sessions.values()],
+    }))
+    .sort((a, b) => prTier(a.state) - prTier(b.state) || b.pr - a.pr || a.key.localeCompare(b.key))
+    .slice(0, MAX_PR_ROWS);
+}
 
 type Step = { done: boolean; proven: boolean };
 
@@ -292,14 +364,15 @@ export async function getFleetSessions(
 
   const cards: SessionCard[] = [];
   const ready: ReadyItem[] = [];
-  const openPrs = new Set<number>();
+  const rankOf = new Map(files.snapshots.map((s, index) => [s.sessionId, index]));
+  const watching: { card: SessionCard; snapshot: StateSnapshot; rank: number }[] = [];
   for (const session of active.sessions) {
     const snapshot = bySession.get(session.id);
     const card = buildCard(session, snapshot, nowMs, lanes.get(session.id)?.[0] ?? null);
     cards.push(card);
     if (!snapshot) continue;
     ready.push(...buildReady(card.id, card.name, snapshot, nowMs));
-    for (const pr of snapshot.prs) if (pr.state !== 'CLOSED') openPrs.add(pr.pr);
+    watching.push({ card, snapshot, rank: rankOf.get(session.id) ?? 0 });
   }
   // Quiet sessions: no card and no PR count (those stay live-only), but their asks count.
   for (const [id, row] of quietRows) {
@@ -308,7 +381,7 @@ export async function getFleetSessions(
   }
   ready.sort((a, b) => b.ageSeconds - a.ageSeconds || a.sessionId.localeCompare(b.sessionId));
 
-  return { cards, ready, join, openPrs: openPrs.size };
+  return { cards, ready, join, prs: buildPrRows(watching) };
 }
 
 /** `SELECT count(*) FROM agentic_os.lane WHERE state = 'active'`. Throws when the query fails. */
