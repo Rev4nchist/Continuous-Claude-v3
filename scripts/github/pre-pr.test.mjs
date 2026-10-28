@@ -47,7 +47,7 @@ import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
-  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing,
+  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, runGate,
 } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -1249,4 +1249,43 @@ test('R3: the CLI without --body exits 2 and prints usage; --help exits 0', asyn
   const missing = run('--body', path.join(os.tmpdir(), 'does-not-exist-prepr.md'), '--skip-cr');
   assert.equal(missing.status, 2, 'an unreadable body stops before any gate runs');
   assert.match(missing.stderr, /body/i);
+});
+
+// ---------- defects found by the first real run (2026-10-28) ----------
+
+const gateById = (id) => SURFACES.flatMap((s) => s.gates ?? []).find((g) => g.id === id);
+const execOut = (status, stdout) => () => ({ status, stdout, stderr: '', timedOut: false });
+const MODS_SUMMARY = (tail) => `mods FAIL: validate OK (8 gating hooks, 0 without .catch) | tsc NOT RUN | ${tail}`;
+
+test('RR1: the github-tests gate allows the 14-minute suite (timeout at least 20 min)', () => {
+  assert.ok(gateById('github-tests').timeoutMs >= 20 * 60_000, `timeout ${gateById('github-tests').timeoutMs} ms`);
+});
+
+test('RR2: the hooks-vitest gate retries a test that fails only under load', () => {
+  assert.ok(gateById('hooks-vitest').args.some((a) => /^--retry=[1-9]$/.test(a)), gateById('hooks-vitest').args.join(' '));
+});
+
+test('RR3: mods-validate PASSes with a NOTE when only the typecheck could not run', () => {
+  const r = runGate(gateById('mods-validate'), { root: REPO_ROOT, exec: execOut(1, MODS_SUMMARY('test 215 pass 0 fail')), git: fakeGit({}) });
+  assert.equal(r.status, 'PASS');
+  assert.match(r.detail, /tsc NOT RUN/);
+  assert.match(r.detail, /no \.claude-plugin\/types/);
+});
+
+test('RR4: mods-validate still FAILs on a failing mod test, a failed validate, or any other exit', () => {
+  const cases = [
+    MODS_SUMMARY('test 214 pass 1 fail'),
+    'mods FAIL: validate FAIL (0 gating hooks) | tsc NOT RUN | test 215 pass 0 fail',
+    'mods FAIL: validate OK (8 gating hooks, 0 without .catch) | tsc FAIL (3 errors) | test 215 pass 0 fail',
+    'something else broke',
+  ];
+  for (const out of cases) {
+    const r = runGate(gateById('mods-validate'), { root: REPO_ROOT, exec: execOut(1, out), git: fakeGit({}) });
+    assert.equal(r.status, 'FAIL', out);
+  }
+});
+
+test('RR5: the tsc-not-run allowance is mods-validate only; another gate with the same text still FAILs', () => {
+  const r = runGate(gateById('github-tests'), { root: REPO_ROOT, exec: execOut(1, MODS_SUMMARY('test 215 pass 0 fail')), git: fakeGit({}) });
+  assert.equal(r.status, 'FAIL');
 });
