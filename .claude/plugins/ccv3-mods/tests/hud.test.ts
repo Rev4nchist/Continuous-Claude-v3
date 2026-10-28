@@ -230,4 +230,20 @@ describe('hud', () => {
     expect(await keysAt(2)).toEqual(['row-core-1', 'row-core-2'])
     expect(await keysAt(1)).toEqual(['row-core-1'])
   })
+
+  // H12 below 40 columns the band is ONE core line; the row it does not use goes to the HUD and the widget (CodeRabbit, PR 194)
+  test('H12 a narrow band draws one core line, and the row it saves goes to the HUD, then the widget', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const keysAt = async (maxRows: number) => {
+      const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows, bodyColumns: 30 } })
+      const keys = (await band.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))
+      await band.unmount()
+      return keys
+    }
+    expect(await keysAt(2)).toEqual(['row-core-1', 'row-hud'])
+    expect(await keysAt(3)).toEqual(['row-core-1', 'row-hud', 'row-band'])
+  })
 })

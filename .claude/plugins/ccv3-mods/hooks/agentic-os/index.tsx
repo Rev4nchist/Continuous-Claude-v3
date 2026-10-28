@@ -607,8 +607,27 @@ export const agenticOs = (on: On) => {
         </Text>
       </Box>
     )
+    const at = await $.clock.now()
+    const lines = bandLines(
+      {
+        chip: await chipNow($, now, at),
+        brief: await read($, brief),
+        tasks: now.tasks,
+        repo: (await read($, git))?.repo ?? null,
+        branch: (await read($, git))?.branch ?? null,
+        lane: now.lanes?.[0]?.id ?? null,
+        ctx: now.ctx,
+        costUsd: hudNow?.costUsd ?? null,
+        // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
+        fallback: null,
+        now: at,
+        activeAt: await read($, activeAt),
+      },
+      e.props.bodyColumns,
+    ).slice(0, Math.min(2, e.props.maxRows))
     // Rows, in this priority: the core lines (PRD 5.3: they never move), then the HUD row, then the widget line, both below them.
-    const coreRows = e.props.maxRows >= 2 ? 2 : 1
+    // Rows come from the lines actually drawn: under 40 columns there is one core line, and its spare row goes to the HUD.
+    const coreRows = lines.length
     const spare = e.props.maxRows - coreRows
     let hudRow = null
     if (hudNow !== null && spare >= 1) {
@@ -635,24 +654,6 @@ export const agenticOs = (on: On) => {
         )
       }
     }
-    const at = await $.clock.now()
-    const lines = bandLines(
-      {
-        chip: await chipNow($, now, at),
-        brief: await read($, brief),
-        tasks: now.tasks,
-        repo: (await read($, git))?.repo ?? null,
-        branch: (await read($, git))?.branch ?? null,
-        lane: now.lanes?.[0]?.id ?? null,
-        ctx: now.ctx,
-        costUsd: hudNow?.costUsd ?? null,
-        // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
-        fallback: null,
-        now: at,
-        activeAt: await read($, activeAt),
-      },
-      e.props.bodyColumns,
-    ).slice(0, coreRows)
     // The widget line below keeps the pre-core band (plan title, task progress, the step, PRs, agents) under its old key.
     // With the HUD up, ctx lives in its ring, so the widget line leaves it out (line 1 shows it too). Its row comes after the HUD and the core lines.
     const widgetRoom = spare - (hudRow === null ? 0 : 1)
