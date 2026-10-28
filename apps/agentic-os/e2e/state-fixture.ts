@@ -86,6 +86,117 @@ export function ask(text: string, recommend?: string, extra: Partial<FixtureAsk>
   };
 }
 
+// --- Fields the session detail panel reads (P1b B1) ----------------------------------------------
+// Each type copies the writer type of the same meaning in .claude/plugins/ccv3-mods/types/index.d.ts
+// (OsStep, OsAgent, AgentRun, CacheState, PrWatch, OsPlan). The snapshot holds the NEWEST running
+// step only: index.tsx writes `step: (await read($, steps)).at(-1) ?? null`.
+
+export type FixtureStep = { id: string; tool: string; label: string; startedAt: number };
+
+export type FixtureAgent = { id: string; description: string; type: string; status: string };
+
+export type FixtureAgentRun = {
+  id: string;
+  type: string;
+  description: string;
+  model: string | null;
+  effort: string | null;
+  spec: { model?: string; effort?: string };
+  startedAt: number;
+  endedAt: number | null;
+  status: 'running' | 'done' | 'failed';
+  tokens: number;
+  costUsd: number;
+  drift: string | null;
+};
+
+export type FixtureCache = {
+  requests: number;
+  input: number;
+  read: number;
+  write: number;
+  savedUsd: number;
+  contextTokens: number | null;
+  cachedTokens: number | null;
+  lastUsedAt: number | null;
+  lastModel: string | null;
+  lastTurnId: string | null;
+  compacted: boolean;
+  resumed: boolean;
+  ttlMin: number;
+  oneHour: boolean;
+  misses: never[];
+  missCount: number;
+};
+
+export type FixturePr = {
+  pr: number;
+  state: 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF' | null;
+  whenReady: boolean;
+};
+
+export type FixturePlan = { title: string; file?: string };
+
+/** The running step. `startedSecondsAgo` sets `startedAt`; the detail shows the elapsed time. */
+export function step(tool: string, label: string, startedSecondsAgo = 30): FixtureStep {
+  return { id: `e2e-step-${tool}`, tool, label, startedAt: Date.now() - startedSecondsAgo * 1000 };
+}
+
+export function agent(
+  description: string,
+  type = 'scout',
+  status = 'running',
+  id = 'e2e-agent-1',
+): FixtureAgent {
+  return { id, description, type, status };
+}
+
+/** An Agent Ledger run. Defaults: finished, 100 tokens, no cost. */
+export function agentRun(id: string, parts: Partial<FixtureAgentRun> = {}): FixtureAgentRun {
+  return {
+    id,
+    type: 'scout',
+    description: `E2E run ${id}`,
+    model: 'claude-sonnet-4-5',
+    effort: 'high',
+    spec: {},
+    startedAt: Date.now() - 600_000,
+    endedAt: Date.now() - 300_000,
+    status: 'done',
+    tokens: 100,
+    costUsd: 0,
+    drift: null,
+    ...parts,
+  };
+}
+
+/** Prompt-cache state. Defaults: 10 requests, 900 read of 1000 prompt tokens, no write, $1.25 saved. */
+export function cacheState(parts: Partial<FixtureCache> = {}): FixtureCache {
+  return {
+    requests: 10,
+    input: 100,
+    read: 900,
+    write: 0,
+    savedUsd: 1.25,
+    contextTokens: 1000,
+    cachedTokens: 1000,
+    lastUsedAt: Date.now() - 60_000,
+    lastModel: 'claude-sonnet-4-5',
+    lastTurnId: null,
+    compacted: false,
+    resumed: false,
+    ttlMin: 5,
+    oneHour: false,
+    misses: [],
+    missCount: 0,
+    ...parts,
+  };
+}
+
+export function pr(number: number, state: FixturePr['state'], whenReady = false): FixturePr {
+  return { pr: number, state, whenReady };
+}
+
 export type StateOptions = {
   at?: number;
   brief?: FixtureBrief | null;
@@ -96,6 +207,18 @@ export type StateOptions = {
   ctx?: number | null;
   /** The task list. Leave it empty to make the plan count come from `brief.plan`. */
   tasks?: FixtureTask[];
+  /** The newest running tool call (top-level `step`). Default null. */
+  step?: FixtureStep | null;
+  /** Running subagents (top-level `agents`). Default none. */
+  agents?: FixtureAgent[];
+  /** Agent Ledger runs (top-level `agentRuns`). Default none. */
+  agentRuns?: FixtureAgentRun[];
+  /** Prompt-cache state (top-level `cache`). Default null. */
+  cache?: FixtureCache | null;
+  /** Watched PRs (top-level `prs`). Default none. */
+  prs?: FixturePr[];
+  /** The plan FILE reference (top-level `plan`, an OsPlan), not the brief's plan steps. Default null. */
+  plan?: FixturePlan | null;
 };
 
 /** The object the real writer serialises (index.tsx writeSnapshot), with test values. */
@@ -104,15 +227,15 @@ export function makeSnapshot(sessionId: string, options: StateOptions = {}): Rec
     sessionId,
     at: options.at ?? Date.now(),
     tasks: options.tasks ?? [],
-    plan: null,
+    plan: options.plan ?? null,
     turn: null,
-    step: null,
+    step: options.step ?? null,
     ctx: options.ctx ?? null,
-    agents: [],
+    agents: options.agents ?? [],
     lanes: [],
-    prs: [],
-    agentRuns: [],
-    cache: null,
+    prs: options.prs ?? [],
+    agentRuns: options.agentRuns ?? [],
+    cache: options.cache ?? null,
     brief: options.brief ?? null,
     chip: options.chip ?? null,
     repo: options.repo ?? null,
@@ -146,6 +269,13 @@ export function clearStateDir(): void {
   }
 }
 
+/**
+ * The session id format the app accepts in ?session= (B1 design, "Views and URL"). A borrowed
+ * session whose id does not match is ignored by the app, so the detail specs must not use it.
+ */
+export const SESSION_ID_PATTERN = '^[0-9a-fA-F-]{8,64}$';
+export const SESSION_ID_FORMAT = new RegExp(SESSION_ID_PATTERN);
+
 /** Epoch ms for "this many seconds ago". */
 export function secondsAgo(seconds: number): number {
   return Date.now() - seconds * 1000;
@@ -173,7 +303,7 @@ function databaseUrl(): string {
  * does not depend on a session having ended in the last 15 minutes. The newest such row is
  * returned. Throws with a clear message when the table has none.
  */
-export async function findEndedSessionId(): Promise<string> {
+export async function findEndedSessionId(options: { validFormat?: boolean } = {}): Promise<string> {
   const client = new Client({ connectionString: databaseUrl() });
   await client.connect();
   try {
@@ -181,7 +311,9 @@ export async function findEndedSessionId(): Promise<string> {
       `SELECT id FROM public.sessions
        WHERE ended_at IS NOT NULL
          AND ended_at >= GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat))
+         AND ($1::boolean IS NOT TRUE OR id::text ~ '${SESSION_ID_PATTERN}')
        ORDER BY ended_at DESC LIMIT 1`,
+      [options.validFormat === true],
     );
     if (rows.length === 0) {
       throw new Error(
@@ -201,7 +333,7 @@ export async function findEndedSessionId(): Promise<string> {
  * for Dave (PRD 5.2: an ask lasts until 24 h after the last session activity). An abandoned
  * session row is enough. Read straight from the database (SELECT only). Throws when none.
  */
-export async function findQuietSessionId(): Promise<string> {
+export async function findQuietSessionId(options: { validFormat?: boolean } = {}): Promise<string> {
   const client = new Client({ connectionString: databaseUrl() });
   await client.connect();
   try {
@@ -212,7 +344,9 @@ export async function findQuietSessionId(): Promise<string> {
          AND GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat)) > now() - interval '24 hours'
          AND NOT (ended_at IS NOT NULL
                   AND ended_at >= GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat)))
+         AND ($1::boolean IS NOT TRUE OR id::text ~ '${SESSION_ID_PATTERN}')
        ORDER BY 1 LIMIT 1`,
+      [options.validFormat === true],
     );
     if (rows.length === 0) {
       throw new Error(
