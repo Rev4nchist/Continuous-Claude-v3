@@ -41,6 +41,8 @@ costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-r
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
 
+   The PR body must be a file: `-F body=@<file>` or `--body-file <file>`. The hook denies an inline body, stdin and `--fill`.
+
    The review takes 10 to 30 minutes. Run the script in the background (Bash `run_in_background`). Read
    its log when the exit notice arrives. A foreground call can be cut off.
 

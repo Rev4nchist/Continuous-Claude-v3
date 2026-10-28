@@ -14,6 +14,9 @@
  *
  * Posture: fail CLOSED for a matched PR-create shape: a missing, stale or unreadable stamp denies, and so does an internal
  * error while the stamp is checked (git timeout, git or spawn error, remotes that cannot be listed). The error is logged.
+ * The PR body must be exactly one file (-F body=@<file>, --body-file <file>, or -F <file> for gh pr create). An inline body, stdin, --fill,
+ * --input, and a second body source (a repeated flag, --body, -b, -f body=) cannot be hashed and are denied.
+ * An explicit CCv3 target (--repo, -R, repos/<o>/<r>/pulls, GH_REPO) must still run in a CCv3 checkout.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
@@ -42,6 +45,7 @@ const ALLOWED_SKIP_REASONS = new Set(['cli-missing']);
 const COMMAND_TOOLS = new Set(['Bash', 'PowerShell']);
 const HOOK = 'pre-pr-gate';
 const RUN = 'node scripts/github/pre-pr.mjs --body <file>';
+const BODY_UNVERIFIABLE = 'the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied';
 
 export interface GitResult { status: number; stdout: string }
 export interface Deps {
@@ -57,12 +61,18 @@ interface HookInput { tool_name?: string; tool?: string; tool_input?: { command?
 
 // ---------- raw-text readers (narrow on purpose) ----------
 
-/** `owner/repo` (lower case) named by `repos/<o>/<r>/pulls` or `-R` / `--repo`, else null. */
-export function namedRepo(command: string): string | null {
+/** A gh repo value: OWNER/REPO, HOST/OWNER/REPO or a URL. Only the last two segments name the repo. */
+const REPO_VALUE = '((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})';
+const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
+const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'i');
+const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').toLowerCase();
+
+/** `owner/repo` (lower case) that gh would target: `repos/<o>/<r>/pulls`, then `-R` / `--repo`, then `GH_REPO` (command or env), else null. */
+export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
   const api = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/i.exec(command);
   if (api) return api[1].toLowerCase();
-  const flag = /(?:^|\s)(?:-R|--repo)(?:\s+|=)["']?([\w.-]+\/[\w.-]+)/.exec(command);
-  return flag ? flag[1].toLowerCase() : null;
+  const named = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
+  return named ? ownerRepo(named) : null;
 }
 
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
@@ -87,10 +97,35 @@ function workDir(command: string, cwd: string): string {
   return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
 }
 
-/** The file `-F body=@<file>` or `--body-file <file>` names, or null (no body file, inline body, or stdin). */
+/**
+ * The file `-F body=@<file>` or `--body-file <file>` names, or null (no body file, inline body, or stdin).
+ * A quoted path keeps its spaces: the whole quoted text is the file name. A stdin marker `-` is null, quoted or not.
+ */
+const FIELD_BODY = /(?:^|\s)(?:-F|--field)\s*(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
+const BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+/** `-F <file>` is the short form of --body-file for `gh pr create` only. For `gh api`, -F is a field flag. */
+const SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+/** A second source of the body: --body, -b, -f / -F body=<text>. gh may take the last one, so the file would not be the body. */
+const INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)\s*["']?body=|(?:^|\s)(?:-F|--field)\s*["']?body=(?!@)/;
+/** `gh api --input <file>` posts that file as the request body, so the -F fields are not the body. */
+const INPUT_FLAG = /(?:^|\s)--input(?![\w-])/;
+
+/** Every body file the command names, in order. More than one means gh may use another than the first. */
+function bodyFilesOf(command: string): string[] {
+  const sources = [FIELD_BODY, BODY_FILE, ...(/\bgh\s+pr\s+create\b/i.test(command) ? [SHORT_BODY_FILE] : [])];
+  return sources.flatMap((re) => [...command.matchAll(new RegExp(re.source, 'g'))].map((m) => m.slice(1).find((g) => g !== undefined) ?? ''));
+}
+
 export function bodyFileOf(command: string): string | null {
-  const m = /(?:^|\s)(?:-F|--field)\s*["']?body=@([^\s"']+)/.exec(command) ?? /(?:^|\s)--body-file(?:\s+|=)["']?([^\s"']+)/.exec(command);
-  return m && m[1] !== '-' ? m[1] : null;
+  const path = bodyFilesOf(command)[0];
+  return path !== undefined && path !== '-' ? path : null;
+}
+
+/** The one body file the command posts, or null when the body cannot be tied to a single file (none, stdin, inline, --input, or several). */
+function singleBodyFile(command: string): string | null {
+  const files = bodyFilesOf(command);
+  if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG.test(command)) return null;
+  return bodyFileOf(command);
 }
 
 /** The override: a LEADING assignment only (sh form or the PowerShell `$env:` form), or the process env. */
@@ -157,7 +192,7 @@ function stampProblem(raw: string | null, head: string, now: number, body: BodyC
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || 'none'}). Only a finished-run cap, a missing CLI (cli-missing), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
-    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked`;
+    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~, $env: or /c/ paths`;
     if (o.body_sha256 !== body.sha) return `the body file ${body.path} is not the body pre-pr.mjs checked (its hash differs from the stamp). Run pre-pr.mjs on this file`;
   }
   return null;
@@ -188,18 +223,21 @@ export function decide(input: HookInput, deps: Deps): Decision {
 function gate(input: HookInput, command: string, deps: Deps): Decision {
   if (!isPrOpenCommand(command)) return { action: 'allow' };
   const dir = workDir(command, input.cwd || process.cwd());
-  const named = namedRepo(command);
+  const named = namedRepo(command, deps.env);
   const isCcv3 = named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir);
   if (!isCcv3) return { action: 'allow' };
   const top = deps.git(dir, ['rev-parse', '--show-toplevel']);
   if (top.status !== 0) return deny('no-checkout', `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
+  // An explicit target skipped the checkout test above: the stamp of a foreign checkout must not open a CCv3 PR.
+  if (named !== null && !isCcv3Checkout(deps, dir)) return deny('repo-identity', `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
+  const bodyPath = singleBodyFile(command);
+  if (bodyPath === null) return deny('body', BODY_UNVERIFIABLE);
   const root = top.stdout.trim();
   const branch = headBranchOf(command);
   const headRun = deps.git(root, ['rev-parse', branch ? `${branch}^{commit}` : 'HEAD']);
   if (headRun.status !== 0) return deny('head-unresolved', `cannot resolve the head ${branch ?? 'HEAD'} in ${root}`);
   const head = headRun.stdout.trim();
-  const bodyPath = bodyFileOf(command);
-  const body = bodyPath ? { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) } : null;
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) };
   const problems = stampRoots(deps, dir, root, branch).map((r) => stampProblem(deps.readFile(join(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny('stamp', problems[0] ?? 'no stamp');
   const pushed = pushedProblem(deps, root, branch, head);

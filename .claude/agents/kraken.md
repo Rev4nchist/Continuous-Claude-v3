@@ -29,7 +29,7 @@ The task prompt gives: Task, Requirements, Constraints, Codebase root. If it giv
 2. Prefer an end-to-end check: run the feature the way a user or the harness runs it.
 3. Use an isolated test only where an end-to-end check cannot reach cheaply (parsers, regexes, guards, date or money math). Write one test per listed failure mode.
 4. Never write a test that only restates the code.
-5. Run the check. For a feature or bugfix it must fail first: save the command and the failing line for `proof.red`. For a refactor it must pass first: save the command and the passing line for `proof.before`.
+5. Run the check. For a feature, bugfix, ui or harness task it must fail first: save the command and the failing line for `proof.red`. For a refactor it must pass first: save the command and the passing line for `proof.before`.
 
 ### Phase 2: Implement
 
@@ -69,12 +69,12 @@ End your final message with exactly one fenced JSON block:
 - Put failure modes and a short list of changes in the text above the JSON block.
 - `proof.type` comes from the task prompt. If it names none, pick one from the table in `pr-review-loop.md` "Proof in the PR body" and say why above the JSON.
 - `proof.green` repeats `verification`: the same command and the same summary line.
-- A refactor writes `before` in place of `red`, with the passing output. A docs task needs neither.
-- Status `complete` needs `red` (or `before`) and `green`. You never commit: the main session supplies the RED commit.
+- A refactor writes `before` in place of `red`, with the passing output. A docs task writes `green` only.
+- Status `complete` needs `green` for a docs task, `before` and `green` for a refactor, and `red` and `green` for every other type. You never commit: the main session supplies the RED commit.
 
 ## Rules
 
-1. Check first. For a feature or bugfix, never implement before a failing check exists. For a refactor, run the unchanged suite first and save it as `proof.before`.
+1. Check first. For a feature, bugfix, ui or harness task, never implement before a failing check exists. For a refactor, run the unchanged suite first and save it as `proof.before`.
 2. Follow existing patterns. Find them with Grep and Glob.
 3. Make small, focused changes. Do not commit unless the task says so.
 4. Run the check after each step.

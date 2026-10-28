@@ -1057,7 +1057,14 @@ test('X1: bad usage exits 2 and an internal error exits 3', () => {
 
 // The built hook, fed a stamp that pre-pr.mjs really wrote.
 const HOOK = path.join(REPO_ROOT, '.claude', 'hooks', 'dist', 'pre-pr-gate.mjs');
-function hookVerdict(repoDir, command = 'gh pr create --fill') {
+// The hook denies a body that is not a file, so the default command names a file that holds the body prePr() hashed.
+const STAMPED_BODY = 'Proof type: docs\n';
+function hookVerdict(repoDir, command) {
+  if (command === undefined) {
+    const bodyFile = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-hookbody-')), 'body.md');
+    writeFileSync(bodyFile, STAMPED_BODY);
+    command = `gh pr create --body-file "${bodyFile.replace(/\\/g, '/')}"`;
+  }
   const log = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-hooklog-')), 'g.jsonl');
   // A busy machine (the full suite runs files in parallel) can pass the hook's 2 s git limit; a git timeout on a PR
   // create then denies, which is right in use but would make this check depend on load.

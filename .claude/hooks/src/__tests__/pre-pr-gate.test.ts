@@ -26,6 +26,11 @@
  *   - a quoted stdin marker is read as a file named "-"                -> X5
  * Checkout identity
  *   - an explicit CCv3 target skips the "is this a CCv3 checkout" test -> X8 (X9: a CCv3 checkout stays allowed)
+ * Critic review of PR1
+ *   - a repeated body flag, --input or a second body source passes      -> Y1 (Y2: a normal create stays allowed)
+ *   - --repo HOST/OWNER/REPO, a URL, a glued -R or GH_REPO skips identity -> Y3, Y4, Y5
+ *   - gh pr create -F <file> is denied as not a file                   -> Y6
+ *   - an unexpanded body path gives a misleading reason                -> Y7
  * Fail open
  *   - bad input, a git crash, or another tool blocks the call          -> F1
  * Wiring
@@ -533,6 +538,89 @@ describe('X: the PR body must be verifiable, and the body path and checkout must
       `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -F body=@${fwd(BODY)}`,
     ]) {
       expect(decide(input(c), withBody()).action, c).toBe('allow');
+    }
+  });
+});
+
+describe('Y: the body flag, the repo forms and the body path are read the way gh reads them (critic review of PR1)', () => {
+  const BODY = resolve('/work/body.md');
+  const OTHER = resolve('/work/other.md');
+  const TEXT = 'the body\n';
+  const FOREIGN = 'origin\thttps://github.com/other/repo.git (fetch)\norigin\thttps://github.com/other/repo.git (push)\n';
+  const fwd = (p: string) => p.replace(/\\/g, '/');
+  const B = fwd(BODY);
+  const O = fwd(OTHER);
+  const API = 'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x -f title=t';
+  const withBody = (over: { remotes?: string; env?: NodeJS.ProcessEnv } = {}): Deps => ({
+    ...deps({ remotes: over.remotes, stamps: { [join(ROOT, STAMP_REL)]: stampJson({ body_sha256: createHash('sha256').update(TEXT).digest('hex') }), [BODY]: TEXT, [OTHER]: 'other\n' } }),
+    ...(over.env ? { env: over.env } : {}),
+  });
+  const reasonOf = (c: string, d: Deps, tool = 'Bash'): string => {
+    const r = decide(input(c, { tool_name: tool }), d);
+    expect(r.action, c).toBe('deny');
+    return r.action === 'deny' ? r.reason : '';
+  };
+
+  // Finding 2: gh uses the LAST value of a repeated flag, and --input replaces the whole request body.
+  it('Y1: a command that names more than one body, or a second source of the body, is denied as unverifiable', () => {
+    for (const c of [
+      `gh pr create --head feat/x --body-file ${B} --body-file ${O}`,
+      `${API} -F body=@${B} -F body=@${O}`,
+      `${API} --input pr.json -F body=@${B}`,
+      `gh pr create --head feat/x --body-file ${B} --body evil`,
+      `gh pr create --head feat/x --title "x --body-file ${B}" --body evil`,
+      `gh pr create --head feat/x --body-file ${B} -b evil`,
+      `${API} -F body=@${B} -f body=evil`,
+    ]) expect(reasonOf(c, withBody()), c).toContain('--body-file <file>');
+  });
+
+  it('Y2: one body file with other flags is still allowed (the Y1 checks do not deny a normal create)', () => {
+    for (const c of [
+      `gh pr create --head feat/x --title "a title" --body-file ${B}`,
+      `${API} -F body=@${B}`,
+    ]) expect(decide(input(c), withBody()).action, c).toBe('allow');
+  });
+
+  // Finding 3: gh accepts HOST/OWNER/REPO, a URL and a glued -R value.
+  it('Y3: namedRepo reads the host form, the URL form and a glued -R value', () => {
+    for (const c of [
+      'gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create --repo=github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create -RRev4nchist/Continuous-Claude-v3 --head feat/x',
+      'gh pr create -R "github.com/Rev4nchist/Continuous-Claude-v3" --head feat/x',
+    ]) expect(namedRepo(c), c).toBe(CCV3_REPO);
+    expect(namedRepo('gh pr create --repo github.com/other/repo')).toBe('other/repo');
+  });
+
+  it('Y4: those repo forms from a foreign checkout are denied', () => {
+    for (const c of [
+      `gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${B}`,
+      `gh pr create -RRev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${B}`,
+    ]) expect(reasonOf(c, withBody({ remotes: FOREIGN })), c).toMatch(/not a CCv3 checkout/i);
+  });
+
+  // Finding 4: gh reads GH_REPO when no --repo is given.
+  it('Y5: GH_REPO naming CCv3 (command prefix, PowerShell form, or process env) from a foreign checkout is denied', () => {
+    const foreign = withBody({ remotes: FOREIGN });
+    expect(reasonOf(`GH_REPO=Rev4nchist/Continuous-Claude-v3 gh pr create --head feat/x --body-file ${B}`, foreign), 'sh prefix').toMatch(/not a CCv3 checkout/i);
+    expect(reasonOf(`$env:GH_REPO='Rev4nchist/Continuous-Claude-v3'; gh pr create --head feat/x --body-file ${B}`, foreign, 'PowerShell'), 'pwsh').toMatch(/not a CCv3 checkout/i);
+    const viaEnv = withBody({ remotes: FOREIGN, env: { GH_REPO: 'Rev4nchist/Continuous-Claude-v3' } });
+    expect(reasonOf(`gh pr create --head feat/x --body-file ${B}`, viaEnv), 'process env').toMatch(/not a CCv3 checkout/i);
+  });
+
+  // Finding 5: -F is gh's own short form of --body-file for gh pr create (and a field flag for gh api).
+  it('Y6: gh pr create -F <file> is a body file: a matching file allows, another file and stdin deny', () => {
+    expect(bodyFileOf(`gh pr create --head feat/x -F ${B}`)).toBe(B);
+    expect(decide(input(`gh pr create --head feat/x -F ${B}`), withBody()).action).toBe('allow');
+    expect(reasonOf(`gh pr create --head feat/x -F ${O}`, withBody())).toMatch(/not the body/);
+    expect(reasonOf('gh pr create --head feat/x -F -', withBody())).toContain('--body-file <file>');
+  });
+
+  // Finding 6: the hook does not expand these, so the reason must say so.
+  it('Y7: a body path the hook does not expand is denied with a reason that says what path to use', () => {
+    for (const p of ['~/body.md', '$env:TEMP\\body.md', '/c/Users/x/body.md']) {
+      expect(reasonOf(`gh pr create --head feat/x --body-file "${p}"`, withBody()), p).toMatch(/does not expand/);
     }
   });
 });
