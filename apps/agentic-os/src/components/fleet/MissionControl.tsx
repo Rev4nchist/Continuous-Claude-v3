@@ -1,6 +1,6 @@
 'use client';
 
-import { useState } from 'react';
+import { useState, type ReactNode } from 'react';
 
 import type { MissionControlSnapshot } from '@/server/queries/mission-control';
 
@@ -10,8 +10,11 @@ import { cn } from '@/lib/utils';
 import { AccountingBar } from './AccountingBar';
 import { ActiveSessionsStrip } from './ActiveSessionsStrip';
 import { FleetGrid } from './FleetGrid';
+import { NavTabs, type ViewId } from './NavTabs';
 import { ReadyForDave } from './ReadyForDave';
 import { SessionCards } from './SessionCards';
+import { SessionDetail, SessionUnavailable } from './SessionDetail';
+import { SessionsTable } from './SessionsTable';
 import { SourceHealth } from './SourceHealth';
 import { StatTiles } from './StatTiles';
 import { UnmatchedPanel } from './UnmatchedPanel';
@@ -34,24 +37,83 @@ import { UnmatchedPanel } from './UnmatchedPanel';
  * is created here — and if a future refactor turns it into a value import, the
  * build fails loudly instead of shipping a database driver to the browser.
  */
-export function MissionControl({ initial }: { initial: MissionControlSnapshot }) {
+export type { ViewId } from './NavTabs';
+
+const BASE_ENDPOINT = '/api/mission-control';
+
+/** Mirror the view and the selection in the address bar. replaceState: no navigation, no history entry. */
+function mirrorUrl(view: ViewId, session: string | null): void {
+  const params = new URLSearchParams();
+  if (view !== 'overview') params.set('view', view);
+  if (session !== null) params.set('session', session);
+  const query = params.toString();
+  window.history.replaceState(window.history.state, '', `${window.location.pathname}${query ? `?${query}` : ''}`);
+}
+
+export function MissionControl({
+  initial,
+  initialView = 'overview',
+  initialSession = null,
+}: {
+  initial: MissionControlSnapshot;
+  initialView?: ViewId;
+  initialSession?: string | null;
+}) {
+  // The view and the selected session live here and nowhere else. The endpoint carries the
+  // selection, so the next poll brings the detail of that session.
+  const [view, setView] = useState<ViewId>(initialView);
+  const [selected, setSelected] = useState<string | null>(initialSession);
+
   const { data, status, error, ageMs, consecutiveFailures, refresh } =
     useLiveData<MissionControlSnapshot>({
-      endpoint: '/api/mission-control',
+      endpoint:
+        selected === null ? BASE_ENDPOINT : `${BASE_ENDPOINT}?session=${encodeURIComponent(selected)}`,
       initialData: initial,
     });
 
   const { fleet, active, database, ready, cards, tiles, sources } = data;
 
-  // The project filter is the only client state. Clicking the selected project clears it.
+  // After an endpoint change the hook keeps the old data until the new answer lands, so the detail
+  // is shown only when it belongs to the selection.
+  const detail = selected !== null && data.detail?.id === selected ? data.detail : null;
+  const unavailable =
+    selected !== null && detail === null && data.detailUnavailable?.id === selected
+      ? data.detailUnavailable
+      : null;
+
+  const changeView = (next: ViewId) => {
+    setView(next);
+    mirrorUrl(next, selected);
+  };
+  const choose = (id: string | null, nextView: ViewId = view) => {
+    setSelected(id);
+    setView(nextView);
+    mirrorUrl(nextView, id);
+  };
+  const toggleSession = (id: string) => choose(selected === id ? null : id);
+  const closePanel = () => choose(null);
+
+  // The project filter is client state too. Clicking the selected project clears it.
   const [selectedKey, setSelectedKey] = useState<string | null>(null);
   const toggleProject = (key: string) => setSelectedKey((current) => (current === key ? null : key));
   const selectedProject = fleet.projects.find((p) => p.key === selectedKey) ?? null;
   const shownCards =
     selectedKey === null ? cards : cards.filter((card) => card.projectKey === selectedKey);
+  const filter =
+    selectedKey === null
+      ? null
+      : { key: selectedKey, label: selectedProject?.displayName ?? selectedKey };
+  const clearFilter = () => setSelectedKey(null);
+
+  let panel: ReactNode = null;
+  if (selected !== null) {
+    if (detail !== null) panel = <SessionDetail detail={detail} onClose={closePanel} />;
+    else if (unavailable !== null) panel = <SessionUnavailable unavailable={unavailable} onClose={closePanel} />;
+    else panel = <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">Loading session</p>;
+  }
 
   return (
-    <div className="mx-auto flex min-h-screen max-w-[100rem] flex-col gap-8 p-6 lg:p-8">
+    <div className="mx-auto flex min-h-screen max-w-[100rem] flex-col gap-6 p-6 lg:p-8">
       <header className="flex flex-wrap items-start justify-between gap-4">
         <div>
           <h1 className="text-xl font-semibold tracking-tight">Agentic OS</h1>
@@ -69,6 +131,8 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
         />
       </header>
 
+      <NavTabs view={view} onSelect={changeView} />
+
       {!database.ok && (
         <div
           role="alert"
@@ -82,37 +146,62 @@ export function MissionControl({ initial }: { initial: MissionControlSnapshot })
         </div>
       )}
 
-      <ReadyForDave items={ready} />
+      <ReadyForDave items={ready} onSelect={(id) => choose(id, 'overview')} />
 
       <StatTiles tiles={tiles} />
 
-      <SessionCards
-        cards={shownCards}
-        filter={
-          selectedKey === null
-            ? null
-            : { key: selectedKey, label: selectedProject?.displayName ?? selectedKey }
-        }
-        onClear={() => setSelectedKey(null)}
-      />
+      {view === 'sessions' ? (
+        <div className="space-y-6">
+          <SessionsTable
+            cards={shownCards}
+            selectedId={selected}
+            filter={filter}
+            onClear={clearFilter}
+            onSelect={toggleSession}
+          />
+          {panel}
+        </div>
+      ) : (
+        <div className="grid grid-cols-1 gap-6 lg:grid-cols-2 lg:items-start">
+          <div className="order-2 min-w-0 space-y-8 lg:order-1 lg:row-span-2">
+            <SessionCards
+              cards={shownCards}
+              filter={filter}
+              onClear={clearFilter}
+              selectedId={selected}
+              onSelect={toggleSession}
+            />
 
-      <ActiveSessionsStrip active={active} />
+            <ActiveSessionsStrip active={active} />
 
-      <section className="space-y-3">
-        <h2 className="text-sm font-medium tracking-tight">
-          Projects
-          <span className="ml-2 font-normal text-muted-foreground">
-            {fleet.projects.length} in the registry
-          </span>
-        </h2>
-        <FleetGrid projects={fleet.projects} selectedKey={selectedKey} onSelect={toggleProject} />
-      </section>
+            <section className="space-y-3">
+              <h2 className="text-sm font-medium tracking-tight">
+                Projects
+                <span className="ml-2 font-normal text-muted-foreground">
+                  {fleet.projects.length} in the registry
+                </span>
+              </h2>
+              <FleetGrid projects={fleet.projects} selectedKey={selectedKey} onSelect={toggleProject} />
+            </section>
 
-      <AccountingBar fleet={fleet} />
+            <AccountingBar fleet={fleet} />
 
-      <UnmatchedPanel unmatched={fleet.unmatched} />
+            <UnmatchedPanel unmatched={fleet.unmatched} />
+          </div>
 
-      <SourceHealth sources={sources} />
+          <div className="order-1 min-w-0 lg:order-2">
+            {panel ?? (
+              <p className="rounded-lg border border-dashed p-4 text-sm text-muted-foreground">
+                Select a session to see its goal, plan and asks.
+              </p>
+            )}
+          </div>
+
+          <div className="order-3 min-w-0">
+            <SourceHealth sources={sources} />
+          </div>
+        </div>
+      )}
 
       <footer className="mt-auto border-t pt-4 text-xs text-muted-foreground">
         {database.ok

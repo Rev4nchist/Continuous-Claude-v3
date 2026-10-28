@@ -1,6 +1,7 @@
-import { NextResponse } from 'next/server';
+import { NextResponse, type NextRequest } from 'next/server';
 
 import { getMissionControlSnapshot } from '@/server/queries/mission-control';
+import { parseSessionId } from '@/server/queries/session-detail';
 
 /**
  * The one endpoint `useLiveData()` polls.
@@ -10,6 +11,9 @@ import { getMissionControlSnapshot } from '@/server/queries/mission-control';
  * still `src/server/queries/`, and this file contains no logic that could drift
  * from the server render. When Slice 3 swaps polling for SSE, this route is what
  * gets replaced; nothing in `src/components/` changes.
+ *
+ * `?session=<id>` adds the detail of that session to the snapshot. An id of the wrong
+ * format is ignored (never a 400): both detail fields stay null.
  *
  * NOTE ON LOCATION: the `aos-fleet-grid` lane scope declared
  * `src/app/(mission-control)/**`, and a route group would have kept this file
@@ -21,9 +25,10 @@ import { getMissionControlSnapshot } from '@/server/queries/mission-control';
 export const dynamic = 'force-dynamic';
 export const revalidate = 0;
 
-export async function GET() {
+export async function GET(request: NextRequest) {
   try {
-    const snapshot = await getMissionControlSnapshot();
+    const sessionId = parseSessionId(request.nextUrl.searchParams.get('session'));
+    const snapshot = await getMissionControlSnapshot(sessionId);
     return NextResponse.json(snapshot, {
       headers: { 'cache-control': 'no-store' },
     });
