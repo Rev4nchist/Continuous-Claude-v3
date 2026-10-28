@@ -24,6 +24,7 @@ import type { OsBrief, OsTask } from '../types'
 // O14 Overview counts an answered ask in "ASK n", or loses "n answered?"
 // O15 Overview loses the stale mark on ASK, or draws it in the amber of a fresh ask
 // O16 Overview loses "[parsed]" on GOAL or STOP AT, or draws it on a goal that brief_set wrote
+// O19 O20 NOW and the chip row of Overview read idle while a subagent or workflow run is live (no turn, no step)
 // O17 Proof lists several proofs oldest first
 
 const NOW = 100 * 3600_000
@@ -524,5 +525,23 @@ describe('os proof order', () => {
     expect(at('new task')).toBeGreaterThan(-1)
     expect(at('new task')).toBeLessThan(at('mid task'))
     expect(at('mid task')).toBeLessThan(at('old task'))
+  })
+})
+
+describe('os overview with only a subagent running', () => {
+  // No turn and no main-loop step: the only live work is a subagent or workflow run (view.agents holds the running runs).
+  const agent = (status: string) => ({ id: 'a1', description: 'map hooks', type: 'scout', status })
+  const rowsWith = (status: string) => tabRows('overview', empty({ chip: status === 'running' ? 'working' : 'idle', view: { ...empty().view, agents: [agent(status)] } }), NOW, 100, 60)
+  const keyed = (rows: PaneRow[], key: string) => rowText(rows.find(one => one.key === key)!)
+
+  test('O19 NOW is not idle while a subagent runs; with none running it still reads idle', () => {
+    expect(keyed(rowsWith('running'), 'now')).not.toMatch(/idle/)
+    expect(keyed(tabRows('overview', empty(), NOW, 100, 60), 'now')).toMatch(/idle/)
+  })
+
+  test('O20 the chip row beside a working chip does not say idle while a subagent runs', () => {
+    const rows = rowsWith('running')
+    expect(keyed(rows, 'ov-chip')).toContain('WORKING')
+    expect(keyed(rows, 'ov-chip')).not.toMatch(/idle/)
   })
 })

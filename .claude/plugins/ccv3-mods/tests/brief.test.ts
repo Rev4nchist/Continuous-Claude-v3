@@ -18,7 +18,7 @@ import {
   validateBrief,
 } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
-import type { OsTask } from '../types'
+import type { AgentRun, OsTask } from '../types'
 
 // Ways the brief unit can fail, one test each. Secrets are joined at run time: no secret-shaped literal sits here.
 // V1  a valid full input is refused
@@ -46,6 +46,7 @@ import type { OsTask } from '../types'
 // P1..P7 the turn-end parser misreads the restate line or the Next steps block
 // M1..M3 a parsed value overrides a brief_set value, or does not fill an empty one
 // E1..E8 the wiring: registration, snapshot, stray key, prompt.submit, turn end, secrets, clear, off switch
+// C10 E11 E12 E13 the chip ignores a running subagent run; a subagent turn.start overwrites the main turn, or clears a refusal, or is not passed on
 
 const NOW = 1_000_000
 const secrets = {
@@ -384,6 +385,32 @@ describe('deriveChip', () => {
     const tasks = [task('1', 'a', 'completed')]
     const brief = apply(null, { proof: { taskId: '1', artifact: 'a' } }, tasks)
     expect(deriveChip(state({ brief, tasks, turnActive: true }))).toBe('working')
+  })
+
+  // ChipState has no agents field yet. The field is named `agentRuns` (the Agent Ledger's runs); the cast goes when it exists.
+  const run = (status: AgentRun['status']): AgentRun => ({
+    id: 'a1',
+    type: 'scout',
+    description: 'map the hooks',
+    model: 'claude-sonnet-5-5',
+    effort: 'high',
+    spec: {},
+    startedAt: NOW - 5_000,
+    endedAt: status === 'running' ? null : NOW - 1_000,
+    status,
+    tokens: 0,
+    costUsd: 0,
+    drift: null,
+  })
+  const withRuns = (runs: AgentRun[], over: Partial<Parameters<typeof deriveChip>[0]> = {}) => deriveChip({ ...state(over), agentRuns: runs } as never)
+
+  test('C10 a running subagent run is working with no tool and no turn; a settled run is not; work that looks done is still working while one runs', () => {
+    expect(withRuns([run('running')])).toBe('working')
+    expect(withRuns([run('done'), run('failed')])).toBe('idle')
+    const tasks = [task('1', 'a', 'completed')]
+    const brief = apply(null, { proof: { taskId: '1', artifact: 'a' } }, tasks)
+    expect(withRuns([], { brief, tasks })).toBe('done')
+    expect(withRuns([run('running')], { brief, tasks })).toBe('working')
   })
 })
 
@@ -762,6 +789,62 @@ describe('brief_set in the mod', () => {
     await seen.clock.advance(25 * 3600_000)
     await $.turn.start({ turnId: 't9' } as never)
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
+  })
+
+  // The Agent Ledger records the run on agent.spawn (hooks/agent-ledger); agent.list stays empty in this world, so only agentRuns can say a run is live.
+  const withAgents = (on: On) => {
+    const seen = world(on)
+    on('fs.read', () => ({ value: '' }))
+    on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'a1' }))
+    return seen
+  }
+  const spawnScout = ($: Engine) =>
+    $.agent.spawn({ tool_use_id: 't', prompt: 'p', description: 'map the hooks', subagentType: 'scout', parentModel: 'claude-opus-5-5', background: false, fork: false } as never)
+  const subagentStart = ($: Engine) => $.turn.start({ turnId: 'sub', agentId: 'a1' } as never)
+  const subagentEnd = ($: Engine) => $.turn.complete({ answer: '', durationMs: 1, isAborted: false, turnId: 'sub', agentId: 'a1', reason: 'end_turn' } as never)
+
+  test('E11 a running subagent makes the snapshot chip working with no turn and no tool; it is idle again once the run ends', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).agentRuns.map((one: { status: string }) => one.status)).toEqual(['running'])
+    expect(lastSnapshot(seen).chip).toBe('working')
+    await subagentEnd($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g2' })
+    expect(lastSnapshot(seen).agentRuns.map((one: { status: string }) => one.status)).toEqual(['done'])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
+  test("E12 a subagent's turn.start leaves the main turn as it was, and is passed on", async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await seen.clock.advance(5_000)
+    const out = await subagentStart($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).turn).toEqual({ id: 't1', startedAt: 1_000 })
+    expect(out).toMatchObject({ turnId: 'sub' })
+  })
+
+  test('E12b a subagent turn.start with no main turn leaves turn null (the audit snapshot case)', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await subagentStart($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).turn).toBeNull()
+  })
+
+  test("E13 a subagent's turn.start does not clear the main turn's refusal: the chip stays blocked", async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await $.tool.call({ tool: 'Bash', command: 'refuse this' })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).chip).toBe('blocked')
+    await subagentStart($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g2' })
+    expect(lastSnapshot(seen).chip).toBe('blocked')
   })
 
   test('E9 /clear drops the brief', async ($, on) => {
