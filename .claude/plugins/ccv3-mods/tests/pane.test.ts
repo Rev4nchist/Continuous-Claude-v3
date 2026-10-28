@@ -42,7 +42,7 @@ const world = (on: On, opts: World = {}) => {
   return { settle: () => clock.advance(1) }
 }
 
-const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', rows = 24): Promise<string[]> => {
+const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal', rows = 24, tab?: 'plan' | 'proof' | 'decisions'): Promise<string[]> => {
   const pane = await $.ui.mount({
     plugin: 'ccv3-mods',
     surface,
@@ -51,6 +51,7 @@ const paneText = async ($: Engine, surface: 'terminal' | 'desktop' = 'terminal',
     props: PANE_PROPS,
     viewport: { columns: 60, rows },
   })
+  if (tab) await pane.press({ key: `tab-${tab}` })
   const texts = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text)
   await pane.unmount()
   return texts
@@ -88,6 +89,8 @@ describe('agentic-os pane', () => {
     expect((await paneText($)).join('\n')).toContain('lane board not read')
   })
 
+  // Changed with the /os tabs: the task list moved from the one-page pane to the Plan tab (os-tabs-model.ts), so F7 presses
+  // that tab, and the Plan header reads "15 of 20 done" where the old TASKS header read "15/20 done". The fold is unchanged.
   test('F7 F10 a long list folds finished tasks and keeps the active one, on both surfaces', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TodoWrite' }, (_$, e) => ({ result: { oldTodos: [], newTodos: e.todos } }))
@@ -99,8 +102,8 @@ describe('agentic-os pane', () => {
     await $.tool.call({ tool: 'TodoWrite', todos })
 
     for (const surface of ['terminal', 'desktop'] as const) {
-      const text = (await paneText($, surface, 16)).join('\n')
-      expect(text).toContain('15/20 done')
+      const text = (await paneText($, surface, 16, 'plan')).join('\n')
+      expect(text).toContain('15 of 20 done')
       expect(text).toContain('✓ 15 done')
       expect(text).toContain('▶ Doing step 16')
       expect(text).not.toContain('✓ step 1\n')

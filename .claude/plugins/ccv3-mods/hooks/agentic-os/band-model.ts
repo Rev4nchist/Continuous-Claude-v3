@@ -29,7 +29,7 @@ export type BandState = {
   activeAt: number | null
 }
 
-const CHIP: Record<Chip, { word: string; tone: Tone }> = {
+export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
   working: { word: 'WORKING', tone: 'chipDoing' },
   'waiting-on-dave': { word: 'WAITING ON DAVE', tone: 'chipWarn' },
   blocked: { word: 'BLOCKED', tone: 'chipBad' },

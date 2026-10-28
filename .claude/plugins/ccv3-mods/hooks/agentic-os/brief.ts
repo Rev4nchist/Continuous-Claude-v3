@@ -159,13 +159,16 @@ type Item = { id: string; subject: string; kind?: OsProof['kind'] }
  * True when a proof was given for this task or step as it reads now: the same id AND the same subject (and kind, when
  * the caller names one). The id alone would follow a TodoWrite reorder; the subject alone would prove every task
  * that shares its words. Proofs hold redacted text, so the item is compared in its redacted form.
+ * `proofOf` returns the proof (its artifact), `isProven` only whether there is one.
  */
-export const isProven = (brief: Brief | null, item: Item): boolean => {
-  if (brief === null) return false
+export const proofOf = (brief: Brief | null, item: Item): OsProof | null => {
+  if (brief === null) return null
   const id = redact(item.id).text
   const subject = redact(item.subject).text
-  return brief.proofs.some(one => one.id === id && one.subject === subject && (item.kind === undefined || one.kind === item.kind))
+  return brief.proofs.find(one => one.id === id && one.subject === subject && (item.kind === undefined || one.kind === item.kind)) ?? null
 }
+
+export const isProven = (brief: Brief | null, item: Item): boolean => proofOf(brief, item) !== null
 
 type Weighed = Required<Item> & { done: boolean }
 
