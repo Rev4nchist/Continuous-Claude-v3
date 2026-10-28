@@ -21,12 +21,44 @@ Do not lead with an implementation inventory.
 - Good: "My 'new worktree' default was ignored when starting a thread on an existing worktree. Now
   the preference always applies. Verified: 3 new threads on 2 worktrees, all honoured the setting."
 
-Then: **Evidence** (the command and its output, or the test count), **Scope not included** (what
+Then: **Evidence** (the block below; READY reads it), **Scope not included** (what
 you deliberately left out), **Model + harness** one-liner at the end (`claude-fable-5 via Claude
 Code`), because Dave runs several harnesses and tracks which produced what.
 
 For a Summary visual and a Merge Danger block, use the vendored Pocock template
 (`~/.claude/skills/_vendor/pocock-skills/skills/pr/SKILL.md`) inside this structure. This file wins on conflict.
+Its Evidence section (Before/After) is replaced by the Evidence block below: Before is RED, After is GREEN.
+
+## Evidence block (READY reads it)
+
+Every PR in `Rev4nchist/Continuous-Claude-v3` carries this block in the PR body. `review-status.mjs`
+fails READY without it.
+
+~~~markdown
+## Evidence
+
+Proof type: <bugfix | feature | refactor | ui | harness | docs>
+
+RED: `<command>` @ <red-sha>
+```text
+<failing output: the runner's summary line and the first failure>
+```
+
+GREEN: `<command>` @ <head-sha>
+```text
+<passing output: the runner's summary line>
+```
+~~~
+
+- Pick the type from the table in `pr-review-loop.md` "Proof in the PR body". Name one type.
+- RED: the commit where the check fails. GREEN: the head of the PR. After each push, run the check
+  again and update the GREEN line.
+- A refactor writes `BEFORE:` in place of `RED:`, with the passing output. A docs PR writes only the
+  Proof type line.
+- Each field has a command in backticks, `@`, a commit SHA (7 to 40 hex characters) and a fenced
+  output block that is not empty. Start the field name at the start of the line. A numbered list
+  item (`1. RED:`) does not parse.
+- Under the block, name the artifact file in `.claude/cache/e2e/`.
 
 ## Keep the PR the size of the ask
 
