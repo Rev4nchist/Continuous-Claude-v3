@@ -7,7 +7,10 @@ services:
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:-claude_dev}
       POSTGRES_DB: ${POSTGRES_DB:-continuous_claude}
     ports:
-      - "${POSTGRES_PORT:-5432}:5432"
+      # Loopback only (IPv4 and IPv6, because "localhost" can resolve to either).
+      # This database holds every session, lane and memory row.
+      - "127.0.0.1:${POSTGRES_PORT:-5432}:5432"
+      - "[::1]:${POSTGRES_PORT:-5432}:5432"
     volumes:
       - continuous_claude_data:/var/lib/postgresql/data
       - ./init-schema.sql:/docker-entrypoint-initdb.d/init-schema.sql

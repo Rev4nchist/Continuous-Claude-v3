@@ -75,9 +75,12 @@ const mockedReadFileSync = vi.mocked(fs.readFileSync);
 function setupRegistryMock(projectDir: string, registry: object | null, packageJson: object | null = null) {
   mockedReadFileSync.mockImplementation((filePath: fs.PathOrFileDescriptor, _options?: any) => {
     const p = String(filePath);
-    const registryPath = path.join(projectDir, '.claude', 'project-registry.json');
+    // Resolve like the code does: on Windows path.resolve('/home/x') is 'C:\home\x', so an
+    // unresolved key never matches and the read falls through to ENOENT.
+    const root = path.resolve(projectDir);
+    const registryPath = path.join(root, '.claude', 'project-registry.json');
     const fallbackRegistryPath = path.join(homedir(), 'continuous-claude', '.claude', 'project-registry.json');
-    const pkgPath = path.join(projectDir, 'package.json');
+    const pkgPath = path.join(root, 'package.json');
 
     if (registry && (p === registryPath || p === fallbackRegistryPath)) {
       return JSON.stringify(registry);
