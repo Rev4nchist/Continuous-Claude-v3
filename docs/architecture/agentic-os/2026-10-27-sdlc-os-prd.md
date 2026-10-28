@@ -61,7 +61,7 @@ Non-goals (this PRD):
 | Section | Shows | Source |
 |---|---|---|
 | Goal | goal line, **stop-at** (Dave's literal stop point), title | `brief_set` |
-| Plan | steps with status `todo`, `doing`, `done`, `blocked`; "3 of 7" | `ExitPlanMode`, `TaskCreate`, `TaskUpdate`, `TodoWrite` (exists) |
+| Plan | steps with status `todo`, `doing`, `done`, `blocked`; "3 of 7" | the task list (`TaskCreate`, `TaskUpdate`, `TodoWrite`) when the model uses it; else the `plan` field of `brief_set`. State-file check 2026-10-27: 1 of 10 files held tasks, 0 of 10 held a plan (`ExitPlanMode`). Without `brief_set`, most sessions show `0/0`. |
 | Now | current step, tool, elapsed, running agents | exists |
 | Done | finished steps, each with proof or "unproven" | task proof field (new) |
 | Ask | open questions, approvals, blocks, each with a recommended answer | `brief_set` and the Next steps block |
@@ -72,6 +72,10 @@ Non-goals (this PRD):
 States: `working`, `waiting-on-dave`, `blocked`, `done`, `idle`. One chip per session, same words everywhere.
 
 - `waiting-on-dave` when any Ask is open and no tool runs.
+- **Ask lifecycle.** The `ask` list in `brief_set` replaces the whole list, so `ask: []` clears it.
+  A prompt from Dave (`prompt.submit`) flips the chip from `waiting-on-dave` to `working` and marks every open ask
+  `answered?` (dim, not counted in ASK) until the next `brief_set`. An ask not cleared within 24 hours of the last
+  session activity drops from "Ready for Dave" and shows as stale in the session detail. Without this rule the strip fills with old asks.
 - `blocked` when a tool is refused, a gate is red, or a peer holds the lane.
 - `done` only when every plan step is done **and** proven. One unproven step keeps the chip off DONE.
 - Amber means a person is needed. Green needs proof. Violet is for agents.
@@ -99,21 +103,29 @@ States: `working`, `waiting-on-dave`, `blocked`, `done`, `idle`. One chip per se
 
 ### 5.5 `brief_set` (new mod tool)
 
-The model calls it when the goal, stop-at, title or an open question changes.
+The model calls it when the goal, stop-at, title, plan or an open question changes.
 
 ```
 brief_set {
   title?: string,          // short session title, shown in Fleet
   goal?: string,           // one line
   stopAt?: string,         // Dave's literal stop point
-  ask?: [{ kind: 'question'|'approval'|'decision'|'block', text: string, recommend?: string }],
+  plan?: [{ id: string, text: string, status: 'todo'|'doing'|'done'|'blocked' }],   // replaces the list; used when the model keeps no task list
+  ask?: [{ kind: 'question'|'approval'|'decision'|'block', text: string, recommend?: string }],  // replaces the list; [] clears
   decision?: { text: string, by: string },
-  proof?: { step: string, artifact: string }   // marks a step proven
+  proof?: { taskId: string, artifact: string }   // marks a task or plan step proven
 }
 ```
 
 - Writes the `brief` key of `~/.claude/state/agentic-os/<session-id>.json`. It writes no database row.
-- Fallbacks when it is not called: Goal shows `GOAL not set` (visible, on purpose). `public.sessions.working_on` shows as a dim fallback. Ask falls back to parsing the `## Next steps` block at turn end.
+- **Proof join key.** `proof.taskId` is the task id (`OsTask.id`; TodoWrite items are `todo-N`) or the `plan` step id.
+  If the model has no id, an exact match on the task subject is the fallback. No match: the tool answers with an error
+  that lists the valid ids, and the step stays unproven.
+- **Registration.** Register the tool in interactive and headless runs, as `pr_status` does. The P1a proof is a headless `claude -p` run.
+- **How the model learns to call it.** The tool description carries the instruction and says when to call it. No always-loaded rule text is added (context budget). A `prompt.compose` section is the fallback if calls are too rare; P1a measures calls per session.
+- **Fallbacks when it is not called.** Goal shows `GOAL not set` (visible, on purpose); `public.sessions.working_on` shows as a dim fallback.
+  A turn-end parser reads the model's own output: the restate line (goal and stop-at) and the `## Next steps` block (ask).
+  CLAUDE.md already requires both in every response, so the parser has input in every session. Parsed values are marked `parsed` in the Pane and never override a `brief_set` value.
 - All strings pass the redaction patterns in `opc/scripts/core/db/memory_redact.py` before storage or display.
 
 ## 6. Data and ownership
@@ -132,6 +144,7 @@ One source of truth per object. The OS reads where data lives. The UI writes onl
 Facts that shape this table (from the map and the scout, not re-verified in code today):
 - `public.sessions` has no title, branch or worktree column. P1 takes them from the state file. P2 adds columns (migration, confirm-first).
 - The app reads only the database today. Reading state files is new: one module, `src/server/sources/state-files.ts`, behind `src/server/queries/` (keeps ADR-0002).
+- **Stale state files.** Nothing prunes `~/.claude/state/agentic-os/` (mods README). On 2026-10-27 it held 10 files, 7 of them older than a day. The Fleet joins each file to `public.sessions` and drops any file whose session has `ended_at` set or whose liveness is outside the 15 minute window. A dropped file never feeds "Ready for Dave" or the session cards.
 - The lane registry says 33 lanes; the DB holds 7 (DB recreated 2026-10-24). The Fleet shows a data-source health panel and does not trust one source alone.
 
 ## 7. Design system
@@ -167,7 +180,7 @@ Each item is a widget or a tab on the same shell. None needs a redesign.
 
 | Risk | Plan |
 |---|---|
-| The model forgets `brief_set` | Band shows `GOAL not set`; fallbacks in 5.5; count calls per session as a metric |
+| The model forgets `brief_set` | Band shows `GOAL not set`; the turn-end parser fills goal, stop-at and ask (5.5); P1a counts calls per session and adds a `prompt.compose` section only if the rate is low |
 | Mod API changes between engine versions (facts in the mods README are tied to 2.1.292-2.1.296) | Run `node scripts/mods/validate-mods.mjs` and `e2e-headless.mjs` in every P1a PR |
 | One unmatched hook per event per plugin | New widgets use matchers (README, 2.1.295-296 facts) |
 | Always-loaded context budget has 5 characters of headroom (`AGENTS.md`) | Put docs in the plugin README and this directory; add no always-loaded rule text |
@@ -198,6 +211,7 @@ Open questions, answered 2026-10-27 (none block P0):
 
 ## 11. Not yet verified
 
+- State-file contents were read on 2026-10-27 (counts only): 10 files, 1 with tasks (9), 0 with a plan, 1 with a running agent. The mods README says the keys exist; it does not say how often a real session fills them.
 - Scout and map facts about `apps/agentic-os` come from reading source and docs. Nobody ran the app.
 - The pane code (`hooks/agentic-os/index.tsx`) was not read. The six-section mapping assumes the README description is current.
 - The mockup uses illustrative data. Lane names and PR numbers match the board on 2026-10-27.
