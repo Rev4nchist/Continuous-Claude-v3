@@ -253,10 +253,10 @@ function workDir(command, cwd) {
   const target = m[1].replace(/^["']|["']$/g, "");
   return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
 }
-var FIELD_BODY = /(?:^|\s)(?:-F|--field)\s*(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
+var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
 var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
 var SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
-var INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)\s*["']?body=|(?:^|\s)(?:-F|--field)\s*["']?body=(?!@)/;
+var INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
 var INPUT_FLAG = /(?:^|\s)--input(?![\w-])/;
 function bodyFilesOf(command) {
   const sources = [FIELD_BODY, BODY_FILE, .../\bgh\s+pr\s+create\b/i.test(command) ? [SHORT_BODY_FILE] : []];

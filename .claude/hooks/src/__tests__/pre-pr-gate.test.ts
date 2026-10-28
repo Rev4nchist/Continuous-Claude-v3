@@ -571,7 +571,18 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
       `gh pr create --head feat/x --title "x --body-file ${B}" --body evil`,
       `gh pr create --head feat/x --body-file ${B} -b evil`,
       `${API} -F body=@${B} -f body=evil`,
+      // Equals-form fields (CodeRabbit CLI, PR1 gate run 2): gh reads --field=body=@x like --field body=@x.
+      `${API} -F body=@${B} --field=body=@${O}`,
+      `${API} -F body=@${B} -F=body=@${O}`,
+      `${API} -F body=@${B} --raw-field=body=evil`,
+      `${API} -F body=@${B} -f=body=evil`,
+      `${API} -F body=@${B} --field=body=evil`,
     ]) expect(reasonOf(c, withBody()), c).toContain('--body-file <file>');
+  });
+
+  it('Y1b: one equals-form body file field is read as that file', () => {
+    expect(bodyFileOf(`${API} --field=body=@${B}`)).toBe(B);
+    expect(decide(input(`${API} --field=body=@${B}`), withBody()).action).toBe('allow');
   });
 
   it('Y2: one body file with other flags is still allowed (the Y1 checks do not deny a normal create)', () => {

@@ -101,12 +101,12 @@ function workDir(command: string, cwd: string): string {
  * The file `-F body=@<file>` or `--body-file <file>` names, or null (no body file, inline body, or stdin).
  * A quoted path keeps its spaces: the whole quoted text is the file name. A stdin marker `-` is null, quoted or not.
  */
-const FIELD_BODY = /(?:^|\s)(?:-F|--field)\s*(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
+const FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
 const BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
 /** `-F <file>` is the short form of --body-file for `gh pr create` only. For `gh api`, -F is a field flag. */
 const SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
 /** A second source of the body: --body, -b, -f / -F body=<text>. gh may take the last one, so the file would not be the body. */
-const INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)\s*["']?body=|(?:^|\s)(?:-F|--field)\s*["']?body=(?!@)/;
+const INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
 /** `gh api --input <file>` posts that file as the request body, so the -F fields are not the body. */
 const INPUT_FLAG = /(?:^|\s)--input(?![\w-])/;
 
