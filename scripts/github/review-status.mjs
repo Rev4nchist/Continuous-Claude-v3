@@ -191,6 +191,20 @@ export function codeRabbitNotice(body) {
   return LIMIT_WARNING.test(text) ? 'rate limited' : null;
 }
 
+/**
+ * Minutes until CodeRabbit's next included review, read from a limit notice ("Next included review available
+ * in 12 minutes", "Please wait 12 minutes"). Hours and seconds are folded in; any seconds round up one minute.
+ * Null when the text has no figure. Best effort: the wording is CodeRabbit's, so a new wording gives null,
+ * never a wrong number.
+ */
+export function codeRabbitRetryMinutes(body) {
+  const phrase = /(?:available\s+in|please\s+wait(?:\s+for)?|try\s+again\s+in|retry\s+in)\s+([^.\n<]{1,60})/i.exec(String(body ?? ''));
+  if (!phrase) return null;
+  const part = (unit) => Number(new RegExp(`(\\d+)\\s*${unit}`, 'i').exec(phrase[1])?.[1] ?? 0);
+  const total = part('hours?') * 60 + part('minutes?') + (part('seconds?') > 0 ? 1 : 0);
+  return total > 0 ? total : null;
+}
+
 /** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
 export function summaryCoversHead(body, head) {
   const text = String(body ?? '');
@@ -264,8 +278,9 @@ export function codeRabbitHeadReview({ head, reviews = [], comments = [], status
     : statusLimited ? 'rate limited'
     : summary !== null && noticeIsAfterHead(summary, headCommittedAt, head) ? codeRabbitNotice(summary.body)
     : null;
+  const retryMinutes = notice === 'rate limited' ? codeRabbitRetryMinutes(statusLimited ? cr.description : summary?.body) : null;
   return {
-    reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice,
+    reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice, retryMinutes,
     status: cr?.state ?? 'absent', description: cr?.description ?? null,
   };
 }
@@ -716,11 +731,15 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   let coderabbit = null;
   let coderabbitReviewedHead = null;
   let coderabbitLimited = null;
+  let coderabbitRateLimited = null;
+  let coderabbitRetryMinutes = null;
   if (need.coderabbit) {
     const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt });
     coderabbit = cr.status;
     coderabbitReviewedHead = cr.reviewedHead;
     coderabbitLimited = cr.limited;
+    coderabbitRateLimited = cr.rateLimited;
+    coderabbitRetryMinutes = cr.retryMinutes;
     if (cr.rateLimited) {
       reasons.push('CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)');
     } else if (cr.limited) {
@@ -741,6 +760,10 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     coderabbit, coderabbitReviewedHead,
     // true when a labelled PR has no CodeRabbit review because the app rate limited, skipped or failed; null when unlabelled.
     coderabbitLimited,
+    // true when that missing review is a rate limit or review limit (not a skip or a failure). null when unlabelled.
+    // coderabbitRetryMinutes: CodeRabbit's own "next review in N minutes" figure from the notice, else null.
+    // A rate-limited PR must not get an @coderabbitai review request (the pr-loop mod says so).
+    coderabbitRateLimited, coderabbitRetryMinutes,
     // 'comment' or 'body': where the usable Greptile summary came from. null when none was used.
     summarySource: reviewedHead ? summary.source : null,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
