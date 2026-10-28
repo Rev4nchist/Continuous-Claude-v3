@@ -7,6 +7,7 @@ import { expect, test, type APIRequestContext, type Page } from '@playwright/tes
 
 import {
   agent,
+  ask,
   clearStateDir,
   makeBrief,
   secondsAgo,
@@ -113,6 +114,32 @@ test.describe('paths in the strings the detail shows (B1 rule 18)', () => {
     expect(bodies.json).toContain('<path>');
     await expect(page.getByTestId('now-agent').first()).toContainText('<path>');
     expectNoPath(bodies, [`agent${tag}`]);
+  });
+
+  test('the words around a path in a goal, an ask and a recommendation stay visible', async ({
+    page,
+    request,
+  }) => {
+    const tag = randomUUID().slice(0, 8);
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E words around a path',
+        goal: `Move logs from /var/log/app${tag} to S3 and add tests`,
+        ask: [
+          ask(
+            `Should I delete C:\\Users\\free${tag}\\cache or keep it?`,
+            `Keep C:\\tmp\\rec${tag}.txt, then stop.`,
+          ),
+        ],
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText(
+      'Move logs from <path> to S3 and add tests',
+    );
+    await expect(page.getByTestId('detail-ask')).toContainText('Should I delete <path> or keep it?');
+    await expect(page.getByTestId('detail-ask')).toContainText('Keep <path>, then stop.');
+    expectNoPath(bodies, [`app${tag}`, `free${tag}`, `rec${tag}`]);
   });
 
   test('a path in a decision text is replaced with <path>', async ({ page, request }) => {

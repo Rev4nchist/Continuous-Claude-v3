@@ -4,7 +4,7 @@ import { lstat, readdir, readFile } from 'node:fs/promises';
 import { join } from 'node:path';
 
 import { redact } from './redact';
-import { scrubPaths } from './safe-message';
+import { scrubPathsInText } from './safe-message';
 
 /**
  * Reader for the per-session state files the ccv3-mods plugin writes.
@@ -132,7 +132,7 @@ function strScrubbed(value: unknown, max: number): string | null {
   if (typeof value !== 'string') return null;
   const trimmed = value.slice(0, PRE_REDACT_CAP).trim();
   if (trimmed === '') return null;
-  return clip(scrubPaths(redact(trimmed).text), max);
+  return clip(scrubPathsInText(redact(trimmed).text), max);
 }
 
 const ABSOLUTE_PATH = /^(?:[A-Za-z]:[\\/]|\\\\|\/)/;

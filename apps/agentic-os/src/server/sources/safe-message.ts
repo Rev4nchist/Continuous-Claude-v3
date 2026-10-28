@@ -18,12 +18,37 @@ const POSIX_HOME_PATH =
   /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^'"`<>|\r\n]*/g;
 const POSIX_DEEP_PATH = /(?<![\w:/.])(?:\/[\w.@~+-]+){2,}\/?/g;
 
-/** Replace every absolute path in already redacted text with `<path>`. */
+/** Replace every absolute path in already redacted text with `<path>`. For error messages: greedy to the line end. */
 export function scrubPaths(text: string): string {
   return text
     .replace(WINDOWS_PATH, '<path>')
     .replace(POSIX_HOME_PATH, '<path>')
     .replace(POSIX_DEEP_PATH, '<path>');
+}
+
+/**
+ * Same patterns, but a path ends at the next whitespace, so the words around it survive:
+ * "Should I delete C:\tmp\cache or keep it?" keeps "or keep it?". A sentence mark that ends the
+ * path token (comma, period, question mark) stays. Trade-off, chosen on purpose: a path with a
+ * space in it ("C:\Users\First Last\x") leaves the tail after the space visible. This is for
+ * free text Dave reads (goal, ask, plan, decisions); error messages keep the greedy scrub.
+ */
+const WINDOWS_PATH_TOKEN = /(?:\b[A-Za-z]:[\\/]|\\\\)[^\s'"`<>|]*/g;
+const POSIX_HOME_PATH_TOKEN =
+  /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^\s'"`<>|]*/g;
+const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
+
+function pathToken(match: string): string {
+  const tail = TRAILING_MARKS.exec(match);
+  return `<path>${tail ? tail[0] : ''}`;
+}
+
+/** Replace every absolute path in already redacted free text with `<path>`, keeping the words around it. */
+export function scrubPathsInText(text: string): string {
+  return text
+    .replace(WINDOWS_PATH_TOKEN, pathToken)
+    .replace(POSIX_HOME_PATH_TOKEN, pathToken)
+    .replace(POSIX_DEEP_PATH, pathToken);
 }
 
 export function safeMessage(error: unknown): string {
