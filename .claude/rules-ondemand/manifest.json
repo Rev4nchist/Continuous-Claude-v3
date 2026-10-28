@@ -177,6 +177,7 @@
       ],
       "segment": [
         "^node(\\.exe)?\\s.*review-status\\.mjs",
+        "^node(\\.exe)?\\s.*pre-pr\\.mjs",
         "^(pwsh|powershell)(\\.exe)?\\s.*land-pr\\.ps1"
       ]
     },
