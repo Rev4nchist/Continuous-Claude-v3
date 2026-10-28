@@ -509,3 +509,18 @@ test('T31 (CLI input): a CodeRabbit CLI run that did not complete is not a clean
   assert.equal(cliFromStream(''), null, 'empty output');
   assert.deepEqual(cliFromStream(`${minor}\n${done}`), { bySeverity: { minor: 1 } }, 'completed run');
 });
+
+test('T32 (capacity): a 7-day count dated more than 7 days before now changes nothing and says it is stale', async () => {
+  const { recommend } = await load();
+  const at = async (date) => {
+    const p = await policy({ count: 55 });
+    return recommend(facts([file('scripts/a.mjs', 20)], { cli: { bySeverity: { major: 1 } } }), { ...p, coderabbit: { ...p.coderabbit, reviews_7d_manual_date: date } });
+  };
+  const fresh = await at('2026-10-24');
+  assert.equal(fresh.capacity.band, 'high', 'a count from 4 days ago still counts');
+  assert.equal(fresh.recommended, 'wait');
+  const stale = await at('2026-10-20');
+  assert.equal(stale.capacity.band, 'unknown', 'a count from 8 days ago is stale');
+  assert.equal(stale.recommended, 'coderabbit', 'a stale count never makes wait the default');
+  assert.match(stale.capacity.warning, /2026-10-20.*over 7 days old/);
+});

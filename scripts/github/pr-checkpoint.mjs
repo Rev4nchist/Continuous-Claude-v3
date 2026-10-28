@@ -109,12 +109,21 @@ const classBudget = (policy, cls) => budgetPair(policy.budget?.[cls] ?? policy.b
 
 // ---------- state: capacity, Greptile, CLI ----------
 
-function capacityOf(policy) {
+const WEEK_MS = 7 * 24 * 3600 * 1000;
+
+/** A dated manual count older than 7 days at `now` is stale. An undated count is taken as given. */
+const isStale = (date, now) => Boolean(date) && Date.parse(now) - Date.parse(date) > WEEK_MS;
+
+function capacityOf(policy, now) {
   const n = policy.coderabbit?.reviews_7d_manual;
+  const date = policy.coderabbit?.reviews_7d_manual_date ?? null;
   const count = Number.isInteger(n) && n >= 0 ? n : null;
+  if (count !== null && isStale(date, now)) {
+    return { count, band: 'unknown', warning: `CodeRabbit 7-day count ${count} is from ${date}, over 7 days old: update reviews_7d_manual.`, source: 'manual', date };
+  }
   const band = count === null ? 'unknown' : count >= 50 ? 'high' : count >= 40 ? 'warn' : 'ok';
   const warning = band === 'warn' || band === 'high' ? `CodeRabbit 7-day count is ${count}: the rate drops to 6/h at 40, 4/h at 50.` : null;
-  return { count, band, warning, source: count === null ? null : 'manual', date: policy.coderabbit?.reviews_7d_manual_date ?? null };
+  return { count, band, warning, source: count === null ? null : 'manual', date };
 }
 
 /**
@@ -252,7 +261,7 @@ function contextOf(facts, policy) {
   return {
     cls, matched, paths, credits, cli: facts.cli ?? null, dependabot: Boolean(facts.dependabot),
     critical: tagged(paths, policy.checkpoint?.critical), parser: tagged(paths, policy.checkpoint?.parser),
-    size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy),
+    size: sizeOf(reviewable), budgetClass, classBudget: classBudget(policy, budgetClass), greptile: greptileOf(cls, policy, credits), capacity: capacityOf(policy, facts.now),
   };
 }
 
