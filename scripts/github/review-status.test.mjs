@@ -2046,3 +2046,21 @@ test('RN5c (G1): pathway=both with no review:* label requires CodeRabbit too, no
   const r = evaluate(routed(['risk:infra'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [both], greptileAuto: false } }));
   assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], 'auto off adds CodeRabbit; G1 must not drop it');
 });
+
+test('RN9: review:none whose router state on the head saved no pathway=none checkpoint is NOT READY and asks no bot', () => {
+  const reason = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+  const states = [
+    ['no pathway', stateComment(HEAD, 'class=normal head=HEAD')],
+    ['pathway none, no pclass', stateComment(HEAD, 'class=normal head=HEAD pathway=none')],
+    ['pathway coderabbit', stateComment(HEAD, 'class=normal head=HEAD pathway=coderabbit pclass=normal')],
+  ];
+  for (const auto of [true, false]) {
+    for (const [name, comment] of states) {
+      const r = evaluate(noRouter(['review:none', 'risk:normal'], [comment], AUTO(auto)));
+      const at = `${name}, auto ${auto}`;
+      assert.equal(r.ready, false, at);
+      assert.deepEqual(r.routing.required, [], `${at}: no bot is requested`);
+      assert.ok(r.reasons.some((x) => x.includes(reason)), `${at}: ${r.reasons.join('; ')}`);
+    }
+  }
+});

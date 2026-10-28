@@ -179,12 +179,16 @@ export const NONE_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the
  * absent classification), no risk label above the saved class, and, for pathway none, a class that has not risen
  * above the class at the checkpoint. Each problem is a reason; none of them asks a bot for a review.
  */
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+
 function noneBlockers(labels, state, head) {
   if (!state || state.head !== head) return [ROUTER_NONE_UNVERIFIED_NOTE];
+  // Fail closed: review:none skips every bot only when the router saved the checkpoint itself.
+  if (state.pathway !== 'none' || !state.pclass) return [NONE_NO_CHECKPOINT_NOTE];
   const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => rankOf(n.slice(5))));
   return [
     ...(top > rankOf(state.class) ? [NONE_BEHIND_LABEL_NOTE] : []),
-    ...(state.pathway === 'none' && rankOf(state.class) > rankOf(state.pclass) ? [CLASS_RAISED_NOTE] : []),
+    ...(rankOf(state.class) > rankOf(state.pclass) ? [CLASS_RAISED_NOTE] : []),
   ];
 }
 
