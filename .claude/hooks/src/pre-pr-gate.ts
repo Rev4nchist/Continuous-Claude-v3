@@ -216,7 +216,17 @@ export function handle(raw: string, deps: Deps): string {
   let command = '';
   let prCreate = false;
   try {
-    input = JSON.parse(raw.trim() || '{}') as HookInput;
+    try {
+      input = JSON.parse(raw.trim() || '{}') as HookInput;
+    } catch (parseErr) {
+      // Parse doubt: fail closed on the raw text. A payload whose text reads as a PR create is denied; any other
+      // unreadable payload allows, because this hook sees every Bash and PowerShell call (deny-all would block them all).
+      try { deps.logError?.(String((parseErr as Error)?.message ?? parseErr)); } catch { /* the log never blocks */ }
+      if (!isPrOpenCommand(raw)) return '{}';
+      logGuardDecision(HOOK, {}, 'deny', 'unreadable-input', { command: raw.slice(0, 500) });
+      const why = `BLOCKED (pre-pr-gate): could not read the hook input, and its text looks like a PR create, so the pre-PR stamp could not be checked. Run the command again. If it keeps failing, ask Dave.\n\nThe stamp comes from: ${RUN}`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: 'PreToolUse', permissionDecision: 'deny', permissionDecisionReason: why } });
+    }
     const tool = input.tool_name || input.tool || '';
     if (!COMMAND_TOOLS.has(tool)) return '{}';
     command = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';

@@ -359,7 +359,20 @@ function handle(raw, deps) {
   let command = "";
   let prCreate = false;
   try {
-    input = JSON.parse(raw.trim() || "{}");
+    try {
+      input = JSON.parse(raw.trim() || "{}");
+    } catch (parseErr) {
+      try {
+        deps.logError?.(String(parseErr?.message ?? parseErr));
+      } catch {
+      }
+      if (!isPrOpenCommand(raw)) return "{}";
+      logGuardDecision(HOOK, {}, "deny", "unreadable-input", { command: raw.slice(0, 500) });
+      const why = `BLOCKED (pre-pr-gate): could not read the hook input, and its text looks like a PR create, so the pre-PR stamp could not be checked. Run the command again. If it keeps failing, ask Dave.
+
+The stamp comes from: ${RUN}`;
+      return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: why } });
+    }
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
     command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";

@@ -484,6 +484,20 @@ describe('F: fail open', () => {
     expect(timeoutWith('')).toBe(2000);
   });
 
+  it('F7: an unparsable payload whose raw text is a PR create is denied (fail closed on raw text); other unparsable text allows', () => {
+    const errors: string[] = [];
+    const d: Deps = { ...deps({ stamp: null }), logError: (m) => errors.push(m) };
+    // A truncated payload: the JSON does not parse, but the command text is there.
+    const truncated = '{"tool_name":"Bash","tool_input":{"command":"gh pr create --fill"';
+    const out = JSON.parse(handle(truncated, d));
+    expect(out.hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(out.hookSpecificOutput.permissionDecisionReason).toMatch(/could not read/);
+    const apiCreate = '{"tool_name":"PowerShell","tool_input":{"command":"gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t"';
+    expect(JSON.parse(handle(apiCreate, d)).hookSpecificOutput.permissionDecision).toBe('deny');
+    expect(handle('{not json', d)).toBe('{}');
+    expect(handle('{"tool_name":"Bash","tool_input":{"command":"ls -la"', d)).toBe('{}');
+  });
+
   it('F4: an unparsable payload, another tool, and a command that is not a PR create still allow, even when git is broken', () => {
     const errors: string[] = [];
     const broken: Deps = { ...deps({ stamp: null }), git: () => { throw new Error('git is broken'); }, logError: (m) => errors.push(m) };
