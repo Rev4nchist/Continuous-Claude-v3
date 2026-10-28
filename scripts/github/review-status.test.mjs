@@ -1049,8 +1049,10 @@ test('G-R11: the retry minutes count down from the time the notice or status was
   // A status with its own figure, written 3 minutes ago: 4 of 7 left.
   const own = { combined: { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited. Next included review available in 7 minutes', updated_at: '2026-10-26T01:00:00Z' }] } };
   assert.equal(ev(own, at + 3 * 60_000), 4);
-  // The wait has passed: 1 minute, never 0 or a negative number.
-  assert.equal(ev({}, at + 60 * 60_000), 1);
+  // The wait has passed: no figure (null), so the alert states no wait; never 0 or a negative number.
+  assert.equal(ev({}, at + 60 * 60_000), null);
+  assert.equal(ev({}, at + 12 * 60_000), null);
+  assert.equal(ev({}, at + 11 * 60_000), 1);
   // No date on the status: its own figure is kept as written.
   const undated = { combined: { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited. Next included review available in 7 minutes' }] } };
   assert.equal(ev(undated, at + 3 * 60_000), 7);

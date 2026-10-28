@@ -206,12 +206,13 @@ export function codeRabbitRetryMinutes(body) {
 }
 
 /**
- * The minutes still left of a figure written at `writtenMs`. At least 1 once the wait has passed. A source with
- * no date (writtenMs 0) keeps its figure as written. Null stays null.
+ * The minutes still left of a figure written at `writtenMs`. Null once the wait has passed, so no alert states a
+ * wait that is over. A source with no date (writtenMs 0) keeps its figure as written. Null stays null.
  */
 export function minutesLeft(minutes, writtenMs, nowMs) {
   if (minutes === null || !writtenMs) return minutes;
-  return Math.max(1, minutes - Math.floor((nowMs - writtenMs) / 60_000));
+  const left = minutes - Math.floor((nowMs - writtenMs) / 60_000);
+  return left > 0 ? left : null;
 }
 
 /** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
