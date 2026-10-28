@@ -1319,6 +1319,8 @@ test('R2f: a dirty tree is the only FAIL when the rest is fine, and every other 
   const { result } = (await prePr(repo, { skipCr: true }));
   const fails = result.lines.filter((l) => l.startsWith('FAIL'));
   assert.equal(fails.length, 1, result.lines.join('\n'));
+  // The git:stable re-check compares with the state at the start: a tree that was already dirty is reported once, by git:clean.
+  assert.ok(!result.lines.some((l) => /^FAIL git:stable/.test(l)), result.lines.join('\n'));
   assert.ok(result.lines.some((l) => l.startsWith('PASS git:branch')));
   assert.ok(result.lines.some((l) => l.startsWith('PASS evidence')));
 });
@@ -1330,6 +1332,66 @@ test('R2g: a branch with no change against main fails the changes step', async (
   assert.equal(result.ok, false);
   assert.ok(result.lines.some((l) => /^FAIL changes/.test(l)), result.lines.join('\n'));
   assert.equal(crCalls.length, 0);
+});
+
+// CodeRabbit #193 outside-diff finding: the clean-tree and HEAD checks ran only at the start, so a stamp could be
+// written for a head the gates never checked. Each test changes the repo in the middle of the run (in a gate, or in
+// the CodeRabbit step) and expects a FAIL git:stable line, a failed run, and no stamp.
+const stampFile = (repo) => path.join(repo.dir, STAMP_REL);
+const duringCr = (mutate) => ({ crRunner: (o) => { if (o.args[0] === 'usage') return { status: 0, stdout: USAGE_OK, stderr: '' }; mutate(); return { status: 0, stdout: NDJSON_OK, stderr: '' }; } });
+const duringGate = (repo, mutate) => ({ exec: () => { mutate(repo); return { status: 0, stdout: 'ran\nTests  1 passed (1)\n', stderr: '' }; } });
+const assertUnstable = (repo, result) => {
+  assert.equal(result.ok, false, result.lines.join('\n'));
+  assert.ok(result.lines.some((l) => /^FAIL git:stable/.test(l)), result.lines.join('\n'));
+  assert.equal(existsSync(stampFile(repo)), false, 'no stamp for unchecked code');
+  assert.equal(result.stampPath, null);
+};
+
+test('R7: a tracked file edited (not staged) during the CodeRabbit step gives FAIL git:stable and no stamp', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, duringCr(() => writeFileSync(path.join(repo.dir, 'docs/a.md'), 'edited during the run\n')));
+  assertUnstable(repo, result);
+});
+
+test('R8: a tracked file edited and staged during the CodeRabbit step gives FAIL git:stable and no stamp', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, duringCr(() => { writeFileSync(path.join(repo.dir, 'docs/a.md'), 'staged during the run\n'); git(repo.dir, 'add', 'docs/a.md'); }));
+  assertUnstable(repo, result);
+});
+
+test('R9: a commit made during the CodeRabbit step moves HEAD: FAIL git:stable and no stamp for the old head', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, duringCr(() => { writeFileSync(path.join(repo.dir, 'docs/b.md'), 'new\n'); git(repo.dir, 'add', '.'); git(repo.dir, 'commit', '-q', '-m', 'during'); }));
+  assertUnstable(repo, result);
+});
+
+test('R10: a tracked file edited during a gate (before the CodeRabbit step) also gives FAIL git:stable and no stamp', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, duringGate(repo, (r) => writeFileSync(path.join(r.dir, 'docs/a.md'), 'edited by a gate\n')));
+  assertUnstable(repo, result);
+});
+
+test('R11: an untracked file created during the run does not fail it: the log and stamp files are untracked, and only tracked content counts', async () => {
+  const repo = makeRepo();
+  const { result } = await prePr(repo, duringCr(() => writeFileSync(path.join(repo.dir, 'scratch.txt'), 'untracked\n')));
+  assert.equal(result.ok, true, result.lines.join('\n'));
+  assert.ok(existsSync(stampFile(repo)));
+  assert.ok(!result.lines.some((l) => /git:stable/.test(l) && /^FAIL/.test(l)));
+});
+
+test('R12: a git call that fails in the final re-check is FAIL git:stable, never a pass (each of the three commands)', async () => {
+  const cases = [['rev-parse', 'HEAD'], ['diff', '--name-only'], ['diff', '--cached', '--name-only']];
+  for (const failing of cases) {
+    const repo = makeRepo();
+    const real = makeGit(repo.dir);
+    let armed = false;
+    // Armed when the CodeRabbit step runs, so only calls made after it (the re-check) fail.
+    const git = (args) => (armed && args.join(' ') === failing.join(' ') ? { status: 128, stdout: '', stderr: 'fatal: boom' } : real(args));
+    const { result } = await prePr(repo, { git, ...duringCr(() => { armed = true; }) });
+    assert.ok(result.lines.some((l) => /^FAIL git:stable/.test(l)), `${failing.join(' ')}: ${result.lines.join('\n')}`);
+    assert.equal(result.ok, false, failing.join(' '));
+    assert.equal(existsSync(stampFile(repo)), false, `${failing.join(' ')}: no stamp`);
+  }
 });
 
 test('R3: the CLI without --body exits 2 and prints usage; --help exits 0', async () => {
