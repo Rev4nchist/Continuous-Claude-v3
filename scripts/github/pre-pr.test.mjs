@@ -1026,7 +1026,10 @@ test('X1: bad usage exits 2 and an internal error exits 3', () => {
 const HOOK = path.join(REPO_ROOT, '.claude', 'hooks', 'dist', 'pre-pr-gate.mjs');
 function hookVerdict(repoDir, command = 'gh pr create --fill') {
   const log = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-hooklog-')), 'g.jsonl');
-  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: repoDir, session_id: 't' }), encoding: 'utf8', windowsHide: true, env: { ...process.env, CCV3_GUARD_DECISIONS_LOG: log, SKIP_PRE_PR_GATE: '' } });
+  // A busy machine (the full suite runs files in parallel) can pass the hook's 2 s git limit; a git timeout on a PR
+  // create then denies, which is right in use but would make this check depend on load.
+  const env = { ...process.env, CCV3_GUARD_DECISIONS_LOG: log, SKIP_PRE_PR_GATE: '', PRE_PR_GATE_GIT_TIMEOUT_MS: '10000' };
+  const r = spawnSync(process.execPath, [HOOK], { input: JSON.stringify({ tool_name: 'Bash', tool_input: { command }, cwd: repoDir, session_id: 't' }), encoding: 'utf8', windowsHide: true, env });
   assert.equal(r.status, 0, r.stderr);
   return r.stdout.trim() === '{}' ? { allow: true } : { allow: false, reason: JSON.parse(r.stdout).hookSpecificOutput.permissionDecisionReason };
 }

@@ -471,6 +471,19 @@ describe('F: fail open', () => {
     expect(ps.hookSpecificOutput.permissionDecision).toBe('deny');
   });
 
+  it('F6: PRE_PR_GATE_GIT_TIMEOUT_MS can only raise the git timeout (tests under load); a missing, bad or lower value keeps 2000', () => {
+    const timeoutWith = (value: string | undefined): unknown => {
+      const seen: Array<Record<string, unknown>> = [];
+      makeGit((_cmd, _args, opts) => { seen.push(opts); return { status: 0, stdout: '' }; }, value === undefined ? {} : { PRE_PR_GATE_GIT_TIMEOUT_MS: value })('/x', ['status']);
+      return seen[0].timeout;
+    };
+    expect(timeoutWith(undefined)).toBe(2000);
+    expect(timeoutWith('10000')).toBe(10000);
+    expect(timeoutWith('500')).toBe(2000);
+    expect(timeoutWith('abc')).toBe(2000);
+    expect(timeoutWith('')).toBe(2000);
+  });
+
   it('F4: an unparsable payload, another tool, and a command that is not a PR create still allow, even when git is broken', () => {
     const errors: string[] = [];
     const broken: Deps = { ...deps({ stamp: null }), git: () => { throw new Error('git is broken'); }, logError: (m) => errors.push(m) };

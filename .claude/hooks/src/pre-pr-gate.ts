@@ -246,9 +246,12 @@ export function handle(raw: string, deps: Deps): string {
 type SpawnFn = (cmd: string, args: string[], opts: Record<string, unknown>) => { status: number | null; stdout?: string | null; error?: Error };
 
 /** A git runner. A git exit code is a result. A timeout or a spawn error throws: the hook then fails open and logs. */
-export function makeGit(spawn: SpawnFn = spawnSync as unknown as SpawnFn): Deps['git'] {
+export function makeGit(spawn: SpawnFn = spawnSync as unknown as SpawnFn, env: NodeJS.ProcessEnv = process.env): Deps['git'] {
+  // PRE_PR_GATE_GIT_TIMEOUT_MS can only raise the limit: the end-to-end tests set it when the machine is busy.
+  const asked = Number(env.PRE_PR_GATE_GIT_TIMEOUT_MS);
+  const timeout = Number.isFinite(asked) && asked > GIT_TIMEOUT_MS ? asked : GIT_TIMEOUT_MS;
   return (cwd, args) => {
-    const r = spawn('git', args, { cwd, encoding: 'utf8', timeout: GIT_TIMEOUT_MS, windowsHide: true });
+    const r = spawn('git', args, { cwd, encoding: 'utf8', timeout, windowsHide: true });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? '' };
   };

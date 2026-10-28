@@ -387,9 +387,11 @@ The stamp comes from: ${RUN}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
   }
 }
-function makeGit(spawn = spawnSync) {
+function makeGit(spawn = spawnSync, env = process.env) {
+  const asked = Number(env.PRE_PR_GATE_GIT_TIMEOUT_MS);
+  const timeout = Number.isFinite(asked) && asked > GIT_TIMEOUT_MS ? asked : GIT_TIMEOUT_MS;
   return (cwd, args) => {
-    const r = spawn("git", args, { cwd, encoding: "utf8", timeout: GIT_TIMEOUT_MS, windowsHide: true });
+    const r = spawn("git", args, { cwd, encoding: "utf8", timeout, windowsHide: true });
     if (r.error) throw r.error;
     return { status: r.status ?? 1, stdout: r.stdout ?? "" };
   };
