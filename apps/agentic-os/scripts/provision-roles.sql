@@ -35,6 +35,30 @@ ALTER ROLE agentic_os_indexer NOSUPERUSER NOCREATEDB NOCREATEROLE NOINHERIT CONN
 ALTER ROLE agentic_os_app     PASSWORD :'app_pw';
 ALTER ROLE agentic_os_indexer PASSWORD :'indexer_pw';
 
+-- A role that already exists may carry access this script did not grant. NOINHERIT does not
+-- stop SET ROLE, and default_transaction_read_only is a session default, not a boundary.
+-- Reject such a role instead of accepting it. The grants below are added after this check.
+DO $$
+BEGIN
+  IF EXISTS (SELECT 1 FROM pg_auth_members m JOIN pg_roles r ON r.oid = m.member
+              WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')) THEN
+    RAISE EXCEPTION 'an agentic_os role is a member of another role: aborting';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.role_table_grants
+              WHERE grantee = 'agentic_os_app' AND privilege_type <> 'SELECT') THEN
+    RAISE EXCEPTION 'agentic_os_app already holds a non-SELECT table privilege: aborting';
+  END IF;
+  IF EXISTS (SELECT 1 FROM information_schema.role_table_grants
+              WHERE grantee = 'agentic_os_indexer' AND table_schema <> 'agentic_os'
+                AND NOT (table_schema = 'public' AND table_name = 'sessions' AND privilege_type = 'SELECT')) THEN
+    RAISE EXCEPTION 'agentic_os_indexer already holds access outside agentic_os: aborting';
+  END IF;
+  IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
+              WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')) THEN
+    RAISE EXCEPTION 'an agentic_os role owns objects: aborting';
+  END IF;
+END $$;
+
 -- Good neighbour on a shared database (mirrors src/db/index.ts).
 ALTER ROLE agentic_os_app     SET statement_timeout = '10s';
 ALTER ROLE agentic_os_app     SET lock_timeout = '5s';

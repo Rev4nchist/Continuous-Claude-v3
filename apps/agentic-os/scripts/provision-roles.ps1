@@ -69,12 +69,23 @@ if (-not $Apply) {
   return
 }
 
+# Same host port as docker/docker-compose.yml: POSTGRES_PORT, default 5432.
+$port = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { '5432' }
+if ($port -notmatch '^\d{1,5}$') { throw "POSTGRES_PORT is not a port number: $port" }
 $lines = @(
-  "AGENTIC_OS_DATABASE_URL=postgresql://agentic_os_app:$appPw@127.0.0.1:5432/continuous_claude"
-  "AGENTIC_OS_INDEXER_DATABASE_URL=postgresql://agentic_os_indexer:$indexerPw@127.0.0.1:5432/continuous_claude"
+  "AGENTIC_OS_DATABASE_URL=postgresql://agentic_os_app:$appPw@127.0.0.1:$port/continuous_claude"
+  "AGENTIC_OS_INDEXER_DATABASE_URL=postgresql://agentic_os_indexer:$indexerPw@127.0.0.1:$port/continuous_claude"
 )
+# The file holds passwords: no inherited access, only the account that runs this script.
+$acl = [Security.AccessControl.FileSecurity]::new()
+$acl.SetAccessRuleProtection($true, $false)
+$acl.AddAccessRule([Security.AccessControl.FileSystemAccessRule]::new(
+    [Security.Principal.WindowsIdentity]::GetCurrent().User, 'FullControl', 'Allow'))
 # CreateNew fails if the file appeared since the check above: it never overwrites.
-$stream = [IO.File]::Open($envFile, [IO.FileMode]::CreateNew, [IO.FileAccess]::Write)
+# The ACL is applied at creation, so the passwords are never written under the default ACL.
+$stream = [IO.FileSystemAclExtensions]::Create(
+  [IO.FileInfo]::new([IO.Path]::GetFullPath($envFile)), [IO.FileMode]::CreateNew,
+  [Security.AccessControl.FileSystemRights]::Write, [IO.FileShare]::None, 4096, [IO.FileOptions]::None, $acl)
 try {
   $bytes = [Text.UTF8Encoding]::new($false).GetBytes(($lines -join "`n") + "`n")
   $stream.Write($bytes, 0, $bytes.Length)
