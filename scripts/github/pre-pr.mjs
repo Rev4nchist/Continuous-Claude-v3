@@ -18,7 +18,8 @@
  *              The floor is 15: a lower value is ignored with a warning and the limit stays 30.
  *   --json     print one JSON document, not lines.
  * Steps, one PASS / FAIL / SKIP / NOTE line each: git:branch, git:clean, git:behind, changes, evidence,
- * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit. NOTE lines follow the
+ * gate:<id> (the gates of every surface the diff touches, SURFACES below), coderabbit, git:stable (the last step: HEAD
+ * and the tracked files are unchanged since the start; a failed git call is a FAIL). NOTE lines follow the
  * gates: a surface with no automatic gate, a changed file no surface owns, an opc source change with no test.
  * A step FAILs when:
  *   - the branch is main, the base or detached; the tree has an edited, staged or untracked file;
@@ -245,6 +246,23 @@ function checkClean(git) {
   const dirty = [...new Set(runs.flatMap((r) => r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)))];
   if (dirty.length === 0) return result('git:clean', 'PASS', 'working tree clean (gitignored files do not count)');
   return result('git:clean', 'FAIL', `${dirty.length} uncommitted path(s): ${dirty.slice(0, 8).join(', ')}${dirty.length > 8 ? ', ...' : ''}`);
+}
+
+/**
+ * The last step before a stamp: HEAD is still the stamped head, and no tracked file is edited or staged. A gate, the
+ * build or the CodeRabbit step may have changed the code. Untracked files do not count (the log and stamp are untracked).
+ * A git call that fails is a FAIL, never a pass.
+ */
+const STABLE_COMMANDS = [['diff', '--name-only'], ['diff', '--cached', '--name-only']];
+export function checkStable(git, head) {
+  const now = git(['rev-parse', 'HEAD']);
+  const runs = STABLE_COMMANDS.map((a) => git(a));
+  const failed = [now, ...runs].find((r) => r.status !== 0);
+  if (failed) return result('git:stable', 'FAIL', `cannot re-read the repo state before the stamp: ${clip(failed.stderr.trim(), 120)}`);
+  if (now.stdout.trim() !== head) return result('git:stable', 'FAIL', `HEAD moved during the run: it was ${head.slice(0, 7)}, it is ${now.stdout.trim().slice(0, 7)}. Run pre-pr.mjs again`);
+  const dirty = [...new Set(runs.flatMap((r) => r.stdout.split(/\r?\n/).map((l) => l.trim()).filter(Boolean)))];
+  if (dirty.length > 0) return result('git:stable', 'FAIL', `${dirty.length} tracked path(s) changed during the run: ${dirty.slice(0, 8).join(', ')}. The checks did not see this code`);
+  return result('git:stable', 'PASS', 'HEAD and tracked files are unchanged since the start');
 }
 
 /** The fork remote: every CCv3 push goes there (CONTEXT.md). Its remote-tracking ref is read without a fetch. */
@@ -850,6 +868,8 @@ export async function runPrePr({ root, base = 'main', bodyText, skipCr = false, 
     results.push({ step: 'coderabbit:cli-missing', status: 'NOTE', detail: `no CLI review ran: ${crStep.detail}`, notes: [] });
     guardLog({ hook: 'pre-pr', decision: 'cli-missing', reason: crStep.detail });
   }
+  // A tree that was already dirty at the start is reported once, by git:clean.
+  if (head !== null && !results.some((r) => r.step === 'git:clean' && r.status === 'FAIL')) results.push(checkStable(git, head));
   const ok = head !== null && !results.some((r) => r.status === 'FAIL');
   const lines = formatLines(results);
   const bodySha = createHash('sha256').update(String(bodyText ?? '')).digest('hex');

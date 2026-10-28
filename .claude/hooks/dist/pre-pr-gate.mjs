@@ -228,11 +228,20 @@ var ALLOWED_SKIP_REASONS = /* @__PURE__ */ new Set(["cli-missing"]);
 var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
-function namedRepo(command) {
-  const api = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/i.exec(command);
-  if (api) return api[1].toLowerCase();
-  const flag = /(?:^|\s)(?:-R|--repo)(?:\s+|=)["']?([\w.-]+\/[\w.-]+)/.exec(command);
-  return flag ? flag[1].toLowerCase() : null;
+var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
+var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
+var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
+var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "i");
+var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
+var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+function namedRepo(command, env = {}) {
+  const flag = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
+  const explicit = flag ? ownerRepo(flag) : null;
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  if (explicit === CCV3_REPO || endpoints.includes(CCV3_REPO)) return CCV3_REPO;
+  if (explicit) return explicit;
+  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
+  return apiOnly ? endpoints[0] ?? null : null;
 }
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
@@ -248,9 +257,23 @@ function workDir(command, cwd) {
   const target = m[1].replace(/^["']|["']$/g, "");
   return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
 }
+var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
+var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+var SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
+var INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
+var INPUT_FLAG = /(?:^|\s)--input(?![\w-])/;
+function bodyFilesOf(command) {
+  const sources = [FIELD_BODY, BODY_FILE, .../\bgh\s+pr\s+create\b/i.test(command) ? [SHORT_BODY_FILE] : []];
+  return sources.flatMap((re) => [...command.matchAll(new RegExp(re.source, "g"))].map((m) => m.slice(1).find((g) => g !== void 0) ?? ""));
+}
 function bodyFileOf(command) {
-  const m = /(?:^|\s)(?:-F|--field)\s*["']?body=@([^\s"']+)/.exec(command) ?? /(?:^|\s)--body-file(?:\s+|=)["']?([^\s"']+)/.exec(command);
-  return m && m[1] !== "-" ? m[1] : null;
+  const path = bodyFilesOf(command)[0];
+  return path !== void 0 && path !== "-" ? path : null;
+}
+function singleBodyFile(command) {
+  const files = bodyFilesOf(command);
+  if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG.test(command)) return null;
+  return bodyFileOf(command);
 }
 function hasOverride(command, env) {
   return env.SKIP_PRE_PR_GATE === "1" || /^\s*SKIP_PRE_PR_GATE=1\s+/.test(command) || /^\s*\$env:SKIP_PRE_PR_GATE\s*=\s*['"]?1['"]?\s*;/i.test(command);
@@ -312,7 +335,7 @@ function stampProblem(raw, head, now, body) {
     return `the stamp skipped the CodeRabbit CLI review (reason: ${o.cr_skip_reason || "none"}). Only a finished-run cap, a missing CLI (cli-missing), or a rate limit with a known retry time allows a skip. A broken CLI (cli-error) costs nothing to retry. Run pre-pr.mjs again without --skip-cr`;
   }
   if (body) {
-    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked`;
+    if (body.sha === null) return `the body file ${body.path} cannot be read, so it cannot be matched to the body pre-pr.mjs checked. Use an absolute path or a path relative to the working directory. The hook does not expand ~, $env: or /c/ paths`;
     if (o.body_sha256 !== body.sha) return `the body file ${body.path} is not the body pre-pr.mjs checked (its hash differs from the stamp). Run pre-pr.mjs on this file`;
   }
   return null;
@@ -336,18 +359,20 @@ function decide(input, deps) {
 function gate(input, command, deps) {
   if (!isPrOpenCommand(command)) return { action: "allow" };
   const dir = workDir(command, input.cwd || process.cwd());
-  const named = namedRepo(command);
+  const named = namedRepo(command, deps.env);
   const isCcv3 = named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir);
   if (!isCcv3) return { action: "allow" };
   const top = deps.git(dir, ["rev-parse", "--show-toplevel"]);
   if (top.status !== 0) return deny("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
+  if (named !== null && !isCcv3Checkout(deps, dir)) return deny("repo-identity", `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
+  const bodyPath = singleBodyFile(command);
+  if (bodyPath === null) return deny("body", BODY_UNVERIFIABLE);
   const root = top.stdout.trim();
   const branch = headBranchOf(command);
   const headRun = deps.git(root, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
   if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${root}`);
   const head = headRun.stdout.trim();
-  const bodyPath = bodyFileOf(command);
-  const body = bodyPath ? { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) } : null;
+  const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) };
   const problems = stampRoots(deps, dir, root, branch).map((r) => stampProblem(deps.readFile(join3(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny("stamp", problems[0] ?? "no stamp");
   const pushed = pushedProblem(deps, root, branch, head);

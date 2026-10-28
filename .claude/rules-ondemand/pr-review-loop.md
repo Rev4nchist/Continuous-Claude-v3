@@ -41,6 +41,8 @@ costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-r
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
    Evidence against the head. It runs one `cr review --agent`. Fix the findings, commit, and run it again.
 
+   The PR body must be a file: `-F body=@<file>` or `--body-file <file>`. The hook denies an inline body, stdin and `--fill`.
+
    The review takes 10 to 30 minutes. Run the script in the background (Bash `run_in_background`). Read
    its log when the exit notice arrives. A foreground call can be cut off.
 
@@ -96,8 +98,11 @@ POST in `Rev4nchist/Continuous-Claude-v3`. It allows the call only when `.claude
 names the head and is under 24 hours old. It denies a stamp that skipped the CLI review for a reason that
 step 1 does not list.
 
-- A command can name a body file (`-F body=@<file>` or `--body-file <file>`). The file must hash to the
-  stamp's `body_sha256`.
+- A command must name exactly one body file: `-F body=@<file>`, `--body-file <file>`, or `-F <file>` on
+  `gh pr create`. The file must hash to the stamp's `body_sha256`. The hook denies a second body source,
+  a repeated body flag and `--input`.
+- An explicit CCv3 target (`--repo`, `-R`, `repos/<owner>/<repo>/pulls`, `GH_REPO`) must run in a CCv3
+  checkout.
 - When `refs/remotes/fork/<branch>` exists, it must equal the stamped head.
 - The hook reads the command text with its continuation lines joined.
 - If the hook cannot check the stamp, it denies a PR-create command. A git timeout, a git error or an
