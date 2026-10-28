@@ -12,6 +12,7 @@ mistake six weeks later.
 | [0003](0003-agentic-os-schema-in-shared-db.md) | `agentic_os` schema in the shared database | — |
 | [0004](0004-replace-dont-extend-the-fastapi-dashboard.md) | Replace, don't extend, the FastAPI dashboard | — |
 | [0005](0005-local-first-cut.md) | Local-first cut — no auth, OIDC, RLS or `workspace_id` | most of `contracts.md`'s tenancy model, **v1 only** |
+| [0006](0006-code-to-code-traffic-local-notion-stays-cross-assistant.md) | Code-to-Code traffic moves local; Notion stays for cross-assistant traffic (proposed 2026-10-27) | task rule in `notion-operating-model.md`, **Code-to-Code only** |
 
 ## The context all five share
 
