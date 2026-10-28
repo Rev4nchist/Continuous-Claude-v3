@@ -102,8 +102,8 @@ Assess size first. Trivial (<10 lines, one file): just do it. Moderate: a brief 
 Complex (cross-module, migration, architecture): plan mode, tasks, trade-offs written down.
 
 **Preflight before non-trivial work**: git branch and uncommitted changes (not `main` for feature
-work); Docker up if needed (`cd ~/.claude/docker && docker compose up -d`); dependencies
-installed; recall memory (`/recall <topic>`).
+work); Docker up if needed (`cd ~/continuous-claude/docker && docker compose up -d`);
+dependencies installed; recall memory (`/recall <topic>`).
 
 **Plan mode**: objectives, constraints, current state. Read the code before proposing. 1-3 options
 with trade-offs, then "Unresolved Questions": only questions no command can answer. If the work
