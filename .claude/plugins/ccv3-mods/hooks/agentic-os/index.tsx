@@ -15,7 +15,9 @@ import { gitInfo } from './gitinfo'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
-import { bandSpans, paneRows, parseLanes } from './pane-model'
+import { osPane, isTabId } from './os-tabs-model'
+import type { TabId, TabState } from './os-tabs-model'
+import { bandSpans, parseLanes } from './pane-model'
 import type { Span, Tone } from './pane-model'
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
@@ -52,6 +54,9 @@ const activeAt = atom({ plugin: 'ccv3-mods', key: 'activeAt' } as const, null as
 
 /** Repo, branch and worktree of the session folder: read from the .git files at the session start and at each turn start. */
 const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | null)
+
+/** The tab the /os pane shows. Only a live tab is ever stored (a Comms, Swarm or Resources tab has no Button); reset at /clear and resume. */
+const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -475,6 +480,7 @@ export const agenticOs = (on: On) => {
         await update($, plan, () => null)
         await update($, brief, () => null)
         await update($, refused, () => false)
+        await update($, osTab, () => 'overview')
       }
       return next(e)
     }).catch(($, e, next) => next(e))
@@ -669,22 +675,50 @@ export const agenticOs = (on: On) => {
 
   on('ui.render', { component: 'Pane', requestId: PANE }, async ($, e) => {
     await read($, tick)
-    const { Box, Text } = $.ui.resolve(e)
-    const line = (spans: Span[]) => (
-      <Text wrap="truncate-end">
-        {spans.map((span, i) => (
-          <Text key={`s${i}`} {...TONE[span.tone]}>
-            {span.text}
-          </Text>
-        ))}
-      </Text>
-    )
+    const stored = await read($, osTab)
+    const selected: TabId = isTabId(stored) ? stored : 'overview'
+    const { Box, Text, Button } = $.ui.resolve(e)
+    const spans = (list: Span[], prefix: string) =>
+      list.map((span, i) => (
+        <Text key={`${prefix}${i}`} {...TONE[span.tone]}>
+          {span.text}
+        </Text>
+      ))
+    const line = (list: Span[]) => <Text wrap="truncate-end">{spans(list, 's')}</Text>
+    const now = await view($)
+    const at = await $.clock.now()
+    const where = await read($, git)
+    const state: TabState = {
+      view: now,
+      chip: await chipNow($, now, at),
+      brief: await read($, brief),
+      repo: where?.repo ?? null,
+      branch: where?.branch ?? null,
+      worktree: where?.worktree ?? null,
+      costUsd: (await read($, hud))?.costUsd ?? null,
+      activeAt: await read($, activeAt),
+    }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
-    const rows = paneRows(await view($), await $.clock.now(), e.props.bodyColumns - 2, e.props.scroll.bodyRows)
+    const { strip, body } = osPane(selected, state, at, e.props.bodyColumns - 2, e.props.scroll.bodyRows)
+    // A live tab is a Button (a press, or its digit while the pane has the focus); a tab not built yet is plain Text and cannot be pressed.
+    const select = (id: TabId) => () => void update($, osTab, () => id)
     return (
       <Box flexDirection="column" paddingX={1}>
-        {rows.map(row => (
+        {strip.map((items, i) => (
+          <Box key={`row-tabs-${i}`} flexDirection="row" gap={1}>
+            {items.map(item =>
+              item.enabled && isTabId(item.id) ? (
+                <Button key={`tab-${item.id}`} plain hotkey={item.hotkey} onPress={select(item.id)}>
+                  {spans(item.spans, 't')}
+                </Button>
+              ) : (
+                <Text key={`tab-${item.id}`}>{spans(item.spans, 't')}</Text>
+              ),
+            )}
+          </Box>
+        ))}
+        {body.map(row => (
           <Box key={`row-${row.key}`} flexDirection="row" justifyContent="space-between">
             {line(row.left)}
             {row.right ? line(row.right) : null}
