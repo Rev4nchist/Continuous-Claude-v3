@@ -27,6 +27,8 @@ export type PrStatus = {
   routedReviewed?: boolean
   /** CodeRabbit PR-bot review on the head. Null when the labels do not require CodeRabbit. */
   coderabbitReviewedHead?: boolean | null
+  /** N from "Outside diff range comments (N)" in the newest CodeRabbit review of the head. Those findings make no thread. Absent from older scripts. */
+  coderabbitOutsideDiff?: number
   /** The bots the PR labels require. Absent from older scripts: Greptile is the reviewer then. */
   routing?: { required: string[]; held: string | null; source: string }
   prState: string
@@ -50,6 +52,8 @@ export type Alert = {
   rateLimit?: { minutes: number | null }
   /** Set for a PROOF alert: the PR body proof problems (status.proof.problems, else the reasons that carry the prefix). */
   proofProblems?: string[]
+  /** Set for a REVIEWED alert when CodeRabbit lists findings outside the diff in its review body (no thread). */
+  outsideDiff?: number
 }
 
 export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
@@ -151,11 +155,22 @@ const GREPTILE_FAILED = /^Greptile check ended failure/
 const greptileFindings = (status: PrStatus): boolean =>
   (status.reviewedHead && status.lowConfidence === true) || status.reasons.some(reason => GREPTILE_FAILED.test(reason))
 
-/** The bots that reviewed the head: the required ones, plus Greptile when its own result needs action. */
+/**
+ * The reason review-status.mjs writes while N is above the "Outside-diff: handled" count. The mod cannot import the
+ * .mjs; scripts/github/pr-loop-sync.test.mjs fails when the two differ.
+ */
+const OUTSIDE_DIFF_REASON = /^CodeRabbit lists \d+ outside-diff finding\(s\)/
+
+/** CodeRabbit findings outside the diff that nobody handled yet. Whatever the labels: they make no thread. */
+const outsideDiffCount = (status: PrStatus): number =>
+  status.reasons.some(reason => OUTSIDE_DIFF_REASON.test(reason)) ? status.coderabbitOutsideDiff ?? 0 : 0
+
+/** The bots that reviewed the head: the required ones, plus Greptile or CodeRabbit when its own result needs action. */
 const reviewedBots = (status: PrStatus): string[] => {
   const required = status.routing?.required ?? []
   const bots = greptileFindings(status) && !required.includes('greptile') ? ['greptile', ...required] : required
-  return bots.filter(bot => (bot === 'greptile' ? status.reviewedHead || greptileFindings(status) : bot === 'coderabbit' ? status.coderabbitReviewedHead === true : false))
+  const all = outsideDiffCount(status) > 0 && !bots.includes('coderabbit') ? [...bots, 'coderabbit'] : bots
+  return all.filter(bot => (bot === 'greptile' ? status.reviewedHead || greptileFindings(status) : bot === 'coderabbit' ? status.coderabbitReviewedHead === true || outsideDiffCount(status) > 0 : false))
 }
 
 /**
@@ -164,6 +179,7 @@ const reviewedBots = (status: PrStatus): string[] => {
  */
 const needsAction = (status: PrStatus): boolean =>
   greptileFindings(status) ||
+  outsideDiffCount(status) > 0 ||
   (someRequiredReviewed(status) && (status.unresolved > 0 || status.reasons.some(reason => FAILED_CHECK.test(reason))))
 
 /** The reviewer app (Greptile, or CodeRabbit on a labelled PR) will not review this head without a nudge. */
@@ -231,6 +247,7 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
     ...(status.routing ? { bots: status.routing.required, reviewedBy: reviewedBots(status) } : {}),
     ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
     ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
+    ...(state === 'REVIEWED' && outsideDiffCount(status) > 0 ? { outsideDiff: outsideDiffCount(status) } : {}),
   }
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
@@ -326,7 +343,8 @@ export const reportLine = (alert: Alert): string => {
   }
   if (alert.state === 'REVIEWED') {
     const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
-    return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave. Do not merge it. The watch continues.`
+    const body = alert.outsideDiff ? ` CodeRabbit lists ${alert.outsideDiff} finding(s) outside the diff in its review body. They have no thread. Read the review body, then fix each one or list it in the PR body under "Outside-diff: handled", one bullet per finding.` : ''
+    return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body} Do not merge it. The watch continues.`
   }
   return `${lead} is READY (${readyWords(alert.bots)}). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
 }

@@ -155,6 +155,13 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    - P2: fix if cheap, or dismiss with a reason.
    - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
      fix or dismiss it.
+   - Read the whole review body. CodeRabbit lists "Outside diff range comments (N)" there. They have no
+     thread, so no thread count shows them. READY (`review-status.mjs`) adds N over every CodeRabbit
+     review of the PR.
+     A push does not clear them. READY fails while that total is above the number of handled bullets.
+   - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
+     top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
+     If a later review lists the same finding again, write one more bullet for it.
 2. Fix real findings on the PR branch. Commit and push once.
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
@@ -255,7 +262,9 @@ as defined above needs none); a Greptile review, when required, has a check run 
 naming that head and confidence at least 4/5; 0 threads unresolved from any reviewer; every commit status other
 than CodeRabbit's is `success`; every check run other than Greptile's is completed with `success`,
 `neutral` or `skipped`; the PR body names one proof type with its evidence, and its GREEN line names
-the head (see "Proof in the PR body"; a Dependabot PR needs none); and `mergeable_state` is clean. A merge was once called safe 92 s before a
+the head (see "Proof in the PR body"; a Dependabot PR needs none); the `Outside-diff: handled` list
+covers every outside-diff finding in the CodeRabbit reviews of the PR (see "When the review lands");
+and `mergeable_state` is clean. A merge was once called safe 92 s before a
 reviewer found a real defect on the new head.
 
 That sentence is what `review-status.mjs` implements today. It does not close three gaps observed on
