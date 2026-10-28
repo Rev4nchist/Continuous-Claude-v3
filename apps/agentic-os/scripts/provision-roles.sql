@@ -147,6 +147,15 @@ BEGIN
        OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_indexer', c.oid, 'UPDATE')));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_indexer can write outside agentic_os: %', bad; END IF;
 
+  -- Reads: the indexer may read agentic_os and public.sessions, nothing else (PUBLIC counts).
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO bad
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'agentic_os') AND n.nspname NOT LIKE 'pg_toast%'
+     AND c.relkind IN ('r', 'p', 'v', 'm', 'f')
+     AND NOT (n.nspname = 'public' AND c.relname = 'sessions')
+     AND has_table_privilege('agentic_os_indexer', c.oid, 'SELECT');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_indexer can read outside agentic_os: %', bad; END IF;
+
   SELECT string_agg(r.rolname || ' on ' || n.nspname, ', ') INTO bad
     FROM pg_namespace n, pg_roles r
    WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')
