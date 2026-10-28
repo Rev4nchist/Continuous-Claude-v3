@@ -59,7 +59,7 @@ End your final message with exactly one fenced JSON block:
   "status": "complete | partial | blocked",
   "files_changed": ["<path>"],
   "verification": {"suite": "<command run>", "passed": 0, "failed": 0, "evidence": "<the actual summary line from the runner>"},
-  "proof": {"type": "bugfix | feature | refactor | ui | harness | docs", "red": {"command": "", "evidence": ""}, "green": {"command": "", "evidence": ""}},
+  "proof": {"type": "bugfix | feature | refactor | ui | harness | docs", "red": {"command": "", "evidence": ""}, "before": {"command": "", "evidence": ""}, "green": {"command": "", "evidence": ""}},
   "followups": ["<anything left undone, or the checkpoint when status is partial>"]
 }
 ```
@@ -69,6 +69,7 @@ End your final message with exactly one fenced JSON block:
 - Put failure modes and a short list of changes in the text above the JSON block.
 - `proof.type` comes from the task prompt. If it names none, pick one from the table in `pr-review-loop.md` "Proof in the PR body" and say why above the JSON.
 - `proof.green` repeats `verification`: the same command and the same summary line.
+- The example shows every `proof` key. Keep only the keys your type needs, and leave out the rest.
 - A refactor writes `before` in place of `red`, with the passing output. A docs task writes `green` only.
 - Status `complete` needs `green` for a docs task, `before` and `green` for a refactor, and `red` and `green` for every other type. You never commit: the main session supplies the RED commit.
 
