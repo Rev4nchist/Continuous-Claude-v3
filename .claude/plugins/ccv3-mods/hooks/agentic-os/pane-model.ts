@@ -88,7 +88,7 @@ export const taskRows = (tasks: OsTask[], room: number): PaneRow[] => {
 }
 
 /** Agent rows, at most `cap`; the list arrives already cut to live agents (refreshAgents). */
-const agentRows = (agents: OsAgent[], cap: number): PaneRow[] => {
+export const agentRows = (agents: OsAgent[], cap: number): PaneRow[] => {
   const shown = agents.length <= cap ? agents : agents.slice(0, Math.max(1, cap - 1))
   const rows: PaneRow[] = shown.map(agent => ({
     key: `agent-${agent.id}`,
@@ -103,7 +103,7 @@ const agentRows = (agents: OsAgent[], cap: number): PaneRow[] => {
   return hidden > 0 ? [...rows, { key: 'agent-more', left: [sp(`    … ${hidden} agents more`, 'dim')] }] : rows
 }
 
-const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
+export const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
   if (lanes === null) return [{ key: 'lane-none', left: [sp('  lane board not read', 'dim')] }]
   if (lanes.length === 0) return [{ key: 'lane-none', left: [sp('  no lane held', 'dim')] }]
   const [first, ...rest] = lanes
@@ -121,7 +121,7 @@ const attention = (state: string | null): boolean => state === 'LIMITED' || stat
 const PR_TONE: Record<string, Tone> = { READY: 'ok', LIMITED: 'warn', REVIEWED: 'warn', STALLED: 'warn', PENDING: 'dim' }
 
 /** Watched PR rows, at most `cap`. A PR not checked yet reads as waiting. */
-const prRows = (prs: PrWatch[], cap: number): PaneRow[] => {
+export const prRows = (prs: PrWatch[], cap: number): PaneRow[] => {
   const shown = prs.length <= cap ? prs : prs.slice(0, Math.max(1, cap - 1))
   const rows: PaneRow[] = shown.map(one => ({
     key: `pr-${one.pr}`,
@@ -131,13 +131,13 @@ const prRows = (prs: PrWatch[], cap: number): PaneRow[] => {
   return hidden > 0 ? [...rows, { key: 'pr-more', left: [sp(`    … ${hidden} PRs more`, 'dim')] }] : rows
 }
 
-const head = (key: string, label: string, right?: Span[]): PaneRow => ({
+export const head = (key: string, label: string, right?: Span[]): PaneRow => ({
   key,
   left: [sp(label, 'head')],
   ...(right ? { right } : {}),
 })
 
-const gap = (key: string): PaneRow => ({ key, left: [sp(' ', 'dim')] })
+export const gap = (key: string): PaneRow => ({ key, left: [sp(' ', 'dim')] })
 
 /** Every row of the pane, fitted to `columns` and never more than `rows`. */
 export const paneRows = (view: OsView, nowMs: number, columns: number, rows: number): PaneRow[] => {
