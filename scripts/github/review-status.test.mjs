@@ -1654,3 +1654,245 @@ test('proof: a null PR body is "missing", never a throw', () => {
   assert.equal(r.proof.status, 'missing');
   assert.equal(r.ready, false);
 });
+
+// ---------------------------------------------------------------------------------------------
+// PR2: CodeRabbit "Outside diff range comments (N)". The findings sit in the REVIEW BODY and make no
+// review thread, so `unresolved` stays 0. READY reads only the count N from the newest CodeRabbit
+// review of the head. Heading shape copied from the live bodies of PR #193 (reviews on 8491cd23 and 41f3dbe4).
+// Failure modes:
+//  F1 N > 0 on the head review does not block READY (the #193 miss)
+//  F2 a review of an older commit counts against the new head
+//  F3 a body with no heading (or only "Outside diff comments:" prompt text, or a number in finding text) reads as N > 0
+//  F4 an older head review wins over the newest one (either direction)
+//  F5 a review by a person, or by a User account named like the bot, counts
+//  F6 the count is read only when the labels require CodeRabbit (an unlabelled PR slips)
+//  F7 the "Outside-diff: handled" list is not honoured, or fewer than N entries are honoured
+//  F8 the list counts what is not an entry: empty bullets, a fenced or commented example, bullets of another section
+//  F9 the count is missing from the JSON the pr_watch mod reads
+// ---------------------------------------------------------------------------------------------
+const OD_HEADING = (n) => [
+  '> [!CAUTION]',
+  '> Some comments are outside the diff and can’t be posted inline due to GitHub limitations.',
+  '> ',
+  `> **⚠️ Outside diff range comments (${n})**`,
+  '> ',
+  '> <details>',
+  '> <summary><strong>Major</strong> · Deny PR creates without a verifiable body · <code>pre-pr-gate.ts:201-204</code></summary><blockquote>',
+].join('\n');
+const odReview = (commit, n, at, over = {}) => ({
+  user: CR_BOT,
+  commit_id: commit,
+  submitted_at: at,
+  body: `<!-- coderabbit-ai-generated:v1 -->\n\n**Actionable comments posted: 1**\n\n${n === null ? '' : OD_HEADING(n)}\n\n---\n\nReview info\n`,
+  ...over,
+});
+const T1 = '2026-10-28T10:00:00Z';
+const T2 = '2026-10-28T11:00:00Z';
+const odEval = (reviews, proofExtra = '') => evaluate({ ...input({ proofBody: `${proof(HEAD)}${proofExtra}` }), reviews, comments: [] });
+const HANDLED = (n, heading = '## Outside-diff: handled') => `\n\n${heading}\n\n${Array.from({ length: n }, (_, i) => `- finding ${i + 1}: fixed in abc123${i}`).join('\n')}\n`;
+const odFn = (name) => {
+  assert.equal(typeof RS[name], 'function', `review-status.mjs must export ${name}`);
+  return RS[name];
+};
+
+test('outside-diff F1: N > 0 on the head review is NOT READY, and the reason names N and the head', () => {
+  const r = odEval([odReview(HEAD, 3, T1)]);
+  assert.equal(r.unresolved, 0, 'no review thread exists for these findings');
+  assert.equal(r.ready, false, 'READY must fail closed while the head review lists outside-diff findings');
+  const why = r.reasons.find((x) => /outside.diff/i.test(x));
+  assert.ok(why, r.reasons.join('; '));
+  assert.match(why, /\b3\b/);
+  assert.ok(why.includes(HEAD.slice(0, 7)), `reason names the head: ${why}`);
+});
+
+test('outside-diff F6: the count blocks an unlabelled (Greptile-only) PR as well', () => {
+  const r = odEval([odReview(HEAD, 1, T1)]);
+  assert.equal(r.coderabbit, null, 'the fixture PR does not require CodeRabbit');
+  assert.equal(r.ready, false);
+});
+
+test('outside-diff F6: the count blocks a review:coderabbit PR too', () => {
+  const i = routed(['review:coderabbit'], { input: NO_GREPTILE, eval: { reviews: [odReview(HEAD, 2, T2)] } });
+  const r = evaluate(i);
+  assert.equal(r.coderabbitOutsideDiff, 2);
+  assert.equal(r.ready, false, r.reasons.join('; '));
+});
+
+test('outside-diff F2: findings on an older commit still count after a push (a push must not clear them)', () => {
+  // A review of a new head covers only the new commits, so it never repeats the old outside-diff findings.
+  const r = odEval([odReview(OLD, 4, T1)]);
+  assert.equal(r.coderabbitOutsideDiff, 4);
+  assert.equal(r.ready, false, 'unread findings on an older commit keep READY failing');
+  assert.equal(odEval([odReview(OLD, 4, T1)], HANDLED(4)).ready, true, 'a handled list that covers them clears it');
+});
+
+test('outside-diff F3: no heading means N = 0 and the field is still present', () => {
+  const r = odEval([odReview(HEAD, null, T1)]);
+  assert.equal(r.coderabbitOutsideDiff, 0);
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(odEval([]).coderabbitOutsideDiff, 0, 'no review at all');
+});
+
+test('outside-diff F3: the details/summary heading shape is read too', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const shapes = [
+    '<details>\n<summary>⚠️ Outside diff range comments (2)</summary><blockquote>\n\nfinding\n</blockquote></details>',
+    '> <summary>⚠️ Outside diff range comments (2)</summary><blockquote>',
+    '<details><summary>Outside diff range comments (2)</summary>',
+  ];
+  for (const shape of shapes) {
+    const review = odReview(HEAD, null, T1, { body: `**Actionable comments posted: 1**\n\n${shape}\n` });
+    assert.equal(count({ head: HEAD, reviews: [review] }), 2, shape);
+  }
+});
+
+test('outside-diff F3: only the heading count is read, not finding text or the prompt block', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const texts = {
+    'prompt block, no count': 'Outside diff comments:\nReview comments at @a.ts:\n- Around line 191-206: fix it (5 places).',
+    'finding text with a number in brackets': '**Check the checkout (2) before accepting `--repo`.**\nThere are comments (7) outside the diff.',
+    'a different heading': '**Nitpick comments (4)**',
+  };
+  for (const [name, text] of Object.entries(texts)) {
+    assert.equal(count({ head: HEAD, reviews: [odReview(HEAD, null, T1, { body: `Actionable comments posted: 1\n${text}` })] }), 0, name);
+  }
+});
+
+test('outside-diff F3: the heading is read in the live shape and its plain variants', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const bodies = {
+    'live blockquote with bold and emoji': [OD_HEADING(1), 1],
+    'two digits': [OD_HEADING(12), 12],
+    'plain line': ['Outside diff range comments (2)', 2],
+    'bold, no emoji, mixed case': ['**Outside Diff Range Comments (5)**', 5],
+    'CRLF line endings': [OD_HEADING(3).replace(/\n/g, '\r\n'), 3],
+  };
+  for (const [name, [text, n]] of Object.entries(bodies)) {
+    assert.equal(count({ head: HEAD, reviews: [odReview(HEAD, null, T1, { body: `**Actionable comments posted: 1**\n\n${text}\n` })] }), n, name);
+  }
+});
+
+test('outside-diff F4: the count is the sum over every CodeRabbit review, whatever the array order', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const newerClean = [odReview(HEAD, 3, T1), odReview(HEAD, null, T2)];
+  const newerDirty = [odReview(HEAD, null, T1), odReview(HEAD, 2, T2)];
+  const both = [odReview(OLD, 3, T1), odReview(HEAD, 2, T2)];
+  for (const [name, reviews, n] of [['a newer clean review does not clear earlier findings', newerClean, 3], ['newer review has findings', newerDirty, 2], ['old and new commits add up', both, 5]]) {
+    assert.equal(count({ head: HEAD, reviews }), n, `${name}, API order`);
+    assert.equal(count({ head: HEAD, reviews: [...reviews].reverse() }), n, `${name}, reversed order`);
+  }
+});
+
+test('outside-diff F4: a newer CodeRabbit review of the head with no review sentence (a thread reply) does not reset N', () => {
+  // GitHub can record a reply to a review comment as an extra COMMENTED review with an empty body.
+  // Only reviews that carry the "Actionable comments posted: N" sentence are real PR-bot reviews (see L282).
+  const count = odFn('codeRabbitOutsideDiff');
+  const reply = (body) => odReview(HEAD, null, T2, { body });
+  for (const [name, body] of [['empty body', ''], ['null body', null], ['short text without the sentence', 'Thanks, noted.']]) {
+    const reviews = [odReview(HEAD, 3, T1), reply(body)];
+    assert.equal(count({ head: HEAD, reviews }), 3, `${name}, API order`);
+    assert.equal(count({ head: HEAD, reviews: [...reviews].reverse() }), 3, `${name}, reversed order`);
+  }
+  const r = odEval([odReview(HEAD, 3, T1), reply('')]);
+  assert.equal(r.ready, false, 'an empty reply review must not make the head READY');
+});
+
+test('outside-diff F4: a newer review of an OLDER commit does not hide the findings on the head', () => {
+  const r = odEval([odReview(HEAD, 2, T1), odReview(OLD, null, T2)]);
+  assert.equal(r.coderabbitOutsideDiff, 2);
+  assert.equal(r.ready, false);
+});
+
+test('outside-diff F4b: the same review listed twice by the API is counted once', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const review = { ...odReview(OLD, 3, T1), id: 9001 };
+  assert.equal(count({ head: HEAD, reviews: [review, { ...review }] }), 3);
+});
+
+test('outside-diff F5: only the CodeRabbit app counts', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const person = odReview(HEAD, 3, T1, { user: { login: 'someone', type: 'User' } });
+  const lookalike = odReview(HEAD, 3, T1, { user: { login: 'coderabbitai[bot]', type: 'User' } });
+  assert.equal(count({ head: HEAD, reviews: [person] }), 0);
+  assert.equal(count({ head: HEAD, reviews: [lookalike] }), 0);
+});
+
+test('outside-diff F7: an "Outside-diff: handled" list with N entries makes it READY again', () => {
+  const r = odEval([odReview(HEAD, 3, T1)], HANDLED(3));
+  assert.equal(r.coderabbitOutsideDiff, 3, 'the count stays visible when handled');
+  assert.equal(r.ready, true, r.reasons.join('; '));
+});
+
+test('outside-diff F7: more entries than N is fine; fewer than N keeps READY failing and the reason shows both numbers', () => {
+  assert.equal(odEval([odReview(HEAD, 2, T1)], HANDLED(4)).ready, true);
+  const r = odEval([odReview(HEAD, 3, T1)], HANDLED(2));
+  assert.equal(r.ready, false);
+  const why = r.reasons.find((x) => /outside.diff/i.test(x));
+  assert.ok(why, r.reasons.join('; '));
+  assert.match(why, /\b3\b/);
+  assert.match(why, /\b2\b/);
+});
+
+test('outside-diff F7: a list written for an earlier, smaller N does not cover a new head review with more', () => {
+  const r = odEval([odReview(OLD, 2, T1), odReview(HEAD, 4, T2)], HANDLED(2));
+  assert.equal(r.ready, false);
+});
+
+test('outside-diff F7: a handled list with no review findings changes nothing', () => {
+  const r = odEval([odReview(HEAD, null, T1)], HANDLED(2));
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.reasons.some((x) => /outside.diff/i.test(x)), false);
+});
+
+test('outside-diff F7/F8: outsideDiffHandled counts the bullet entries under the heading', () => {
+  const handled = odFn('outsideDiffHandled');
+  const entries = '- one: fixed in abc1234\n* two: dismissed, not a bug\n- three';
+  const cases = {
+    'h2 heading': [`## Outside-diff: handled\n${entries}`, 3],
+    'plain heading line': [`Outside-diff: handled\n${entries}`, 3],
+    'bold heading': [`**Outside-diff: handled**\n${entries}`, 3],
+    'lower case': [`outside-diff: handled\n${entries}`, 3],
+    'blank line after the heading': [`## Outside-diff: handled\n\n${entries}`, 3],
+    'CRLF': [`## Outside-diff: handled\r\n${entries.replace(/\n/g, '\r\n')}\r\n`, 3],
+    'text before and after the section': [`Intro.\n\n## Outside-diff: handled\n${entries}\n\n## Next section\n- not mine\n`, 3],
+    'no section': ['## Summary\n- a\n- b\n', 0],
+    'null body': [null, 0],
+  };
+  for (const [name, [text, n]] of Object.entries(cases)) assert.equal(handled(text), n, name);
+});
+
+test('outside-diff F8: empty bullets, a fenced or commented example and bullets under another heading are not entries', () => {
+  const handled = odFn('outsideDiffHandled');
+  const cases = {
+    'empty bullets': '## Outside-diff: handled\n-\n- \n*\n',
+    'placeholder only': '## Outside-diff: handled\n- <finding and what you did>\n',
+    'inside a code fence': '```md\n## Outside-diff: handled\n- one\n- two\n```\n',
+    'inside an HTML comment': '<!--\n## Outside-diff: handled\n- one\n- two\n-->\n',
+    'bullets above the heading': '- one\n- two\n## Outside-diff: handled\n',
+    'bullets under the next heading': '## Outside-diff: handled\n## Evidence\n- one\n- two\n',
+    'prose line ends the list': '## Outside-diff: handled\nNone yet.\n- one\n- two\n',
+  };
+  for (const [name, text] of Object.entries(cases)) assert.equal(handled(text), 0, name);
+});
+
+test('outside-diff F8: indented detail lines under one entry are not extra entries', () => {
+  const handled = odFn('outsideDiffHandled');
+  assert.equal(handled('## Outside-diff: handled\n- one\n  - why\n  - how\n'), 1, 'two-space sub-bullets');
+  assert.equal(handled('## Outside-diff: handled\n- one\n\t- why\n    - how\n'), 1, 'tab and four-space sub-bullets');
+  assert.equal(handled('## Outside-diff: handled\n- one\n  - why\n- two\n  - why\n'), 2, 'each top-level entry counts once');
+  const r = odEval([odReview(HEAD, 3, T1)], '\n\n## Outside-diff: handled\n- one\n  - why\n  - how\n');
+  assert.equal(r.ready, false, 'one entry with sub-bullets must not cover N = 3');
+});
+
+test('outside-diff F8: blank lines between top-level bullets keep the list going', () => {
+  const handled = odFn('outsideDiffHandled');
+  assert.equal(handled('## Outside-diff: handled\n\n- one\n\n- two\n\n- three\n'), 3);
+});
+
+test('outside-diff F9: the JSON result carries the count as a number, 0 included', () => {
+  for (const [reviews, n] of [[[], 0], [[odReview(HEAD, 5, T1)], 5]]) {
+    const r = odEval(reviews);
+    assert.equal(typeof r.coderabbitOutsideDiff, 'number');
+    assert.equal(r.coderabbitOutsideDiff, n);
+  }
+});
