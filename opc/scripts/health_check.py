@@ -487,7 +487,7 @@ def check_postgres_container() -> CheckResult:
                      f"docker ps failed: {p.stderr.strip()[:200]}",
                      severity="CRITICAL",
                      remediation="start docker compose from "
-                                 "~/.claude/docker/",
+                                 "~/continuous-claude/docker/",
                      duration_ms=dur)
     names = [ln.strip() for ln in p.stdout.splitlines() if ln.strip()]
     if names:
@@ -497,7 +497,7 @@ def check_postgres_container() -> CheckResult:
     return _fail("postgres-container-running", "infrastructure",
                  "no running continuous-claude-postgres container",
                  severity="CRITICAL",
-                 remediation="cd ~/.claude/docker && docker compose up -d",
+                 remediation="cd ~/continuous-claude/docker && docker compose up -d",
                  duration_ms=dur)
 
 
