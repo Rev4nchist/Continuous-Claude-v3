@@ -9,7 +9,11 @@
     "greptile.u1_used: at or above this count, a review:deep PR gets a warning in the router comment.",
     "greptile.u2_used: at or above this count, only r3 PRs get review:deep. Other deep classes get the held labels. Needs deep_enabled true.",
     "greptile.u3_date: on or after this date, a deep-class PR gets one credit-check line in the router comment, but only while credits_used_manual is null. A known count means the check is done, so no line.",
-    "greptile.notify_login: GitHub login named in the u1 and u3 lines. null means nobody is pinged."
+    "greptile.notify_login: GitHub login named in the u1 and u3 lines. null means nobody is pinged.",
+    "budget: CodeRabbit PR reviews per class as [opening, extra after fix pushes] (pr-review-loop.md 'PR review budget per class'). Read by scripts/github/pr-checkpoint.mjs. A bare number is [n, 0].",
+    "checkpoint.critical: path globs of files whose PR gets Greptile too when it is available (pr-checkpoint.mjs rule R3).",
+    "checkpoint.parser: path globs of hand-written lexer and parser guards. Their PR gets one CodeRabbit review and no loop (rule R2). Dave edits this list.",
+    "coderabbit.reviews_7d_manual: CodeRabbit PR reviews in the last 7 days, an integer Dave sets from the free '@coderabbitai rate limit' reply. null means unknown and changes no rule. reviews_7d_manual_date: the day Dave read it."
   ],
   "deep_enabled": false,
   "classes": {
@@ -66,5 +70,29 @@
     "u2_used": 45,
     "u3_date": "2026-11-03",
     "notify_login": null
+  },
+  "budget": {
+    "docs": 0,
+    "normal": [1, 1],
+    "steering": [1, 2],
+    "infra": [1, 2],
+    "r3": [1, 2]
+  },
+  "checkpoint": {
+    "critical": [
+      ".claude/hooks/src/pre-pr-gate.ts",
+      ".claude/hooks/src/*-guard.ts",
+      "scripts/github/review-status.mjs",
+      "scripts/github/review-router.mjs",
+      "scripts/github/land-pr.ps1"
+    ],
+    "parser": [
+      ".claude/hooks/src/coderabbit-guard.ts",
+      ".claude/hooks/src/package-install-guard.ts"
+    ]
+  },
+  "coderabbit": {
+    "reviews_7d_manual": null,
+    "reviews_7d_manual_date": null
   }
 }

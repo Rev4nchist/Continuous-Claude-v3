@@ -2040,3 +2040,9 @@ test('RN7: routerState returns pathway and pclass from a bot comment, null when 
   assert.equal(junk.pclass, null);
   assert.equal(RS.routerState([stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=normal`, { user: { login: 'someone', type: 'User' } })]), null);
 });
+
+test('RN5c (G1): pathway=both with no review:* label requires CodeRabbit too, not Greptile alone', () => {
+  const both = stateComment(HEAD, `class=infra head=${HEAD} pathway=both pclass=infra`);
+  const r = evaluate(routed(['risk:infra'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [both], greptileAuto: false } }));
+  assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], 'auto off adds CodeRabbit; G1 must not drop it');
+});

@@ -160,6 +160,18 @@ test('T3b (R1): a Dependabot PR gets none', async () => {
   assert.equal(r.recommended, 'none');
 });
 
+test('T3d (R1, Dave decision 3): a Dependabot PR gets none even when it touches a critical or parser file, and the why line names the file', async () => {
+  for (const [name, p] of [['critical', CRITICAL], ['parser', PARSER]]) {
+    const r = await run([file('package.json', 3, 3), file(p, 20)], { dependabot: true });
+    assert.equal(r.recommended, 'none', `${name}: Dependabot wins over R2 and R3`);
+    assert.deepEqual(r.budget, [0, 0], name);
+    assert.ok(r.why.some((w) => w.includes(p) && /Dependabot/i.test(w) && /bots? refuse/i.test(w)), `${name}: ${r.why.join(' | ')}`);
+  }
+  // Without the Dependabot flag the same files are still reviewed (R2 and R3 are unchanged).
+  assert.equal((await run([file(CRITICAL, 20)])).recommended, 'coderabbit');
+  assert.ok(!(await run([file('package.json', 3, 3), file(CRITICAL, 20)], { dependabot: true })).why.some((w) => w.includes('package.json') && /refuse/.test(w)), 'only the critical or parser file is named');
+});
+
 test('T3c: R1 applies only when no other rule matches: a thoughts/ file next to a critical or parser file is reviewed', async () => {
   const crit = await run([file('thoughts/x.yaml', 30), file(CRITICAL, 20)]);
   assert.equal(crit.recommended, 'coderabbit', 'R3 beats R1');
@@ -407,4 +419,82 @@ test('T23: parseNameStatus keeps the old path of a rename, so the class of the o
     { filename: 'new file.txt', previous_filename: undefined },
   ]);
   assert.deepEqual(parseNameStatus('').map(pick), [], 'an empty diff has no files');
+});
+
+// ---------- fix round 1 (critic findings): option pricing, Dependabot options, base ref, usage ----------
+
+test('T24: each option is priced from its own pathway, not from the recommendation', async () => {
+  // R1 (docs): the coderabbit option is not free. CodeRabbit opens one review at least.
+  const docs = await run([file('docs/guide.md', 40)]);
+  assert.equal(docs.recommended, 'none');
+  assert.ok(pathways(docs).includes('coderabbit'), 'a docs PR still offers coderabbit');
+  assert.notDeepEqual(optionOf(docs, 'coderabbit').cost, [0, 0], 'R1 coderabbit option');
+  assert.ok(optionOf(docs, 'coderabbit').cost[0] >= 1);
+  assert.deepEqual(optionOf(docs, 'none').cost, [0, 0]);
+  // R1 (quiet dir, class normal): the coderabbit option costs the class budget 1+1.
+  const quiet = await run([file('.claudedocs/probe-output.json', 30)]);
+  assert.deepEqual(optionOf(quiet, 'coderabbit').cost, [1, 1], 'class budget of the paths');
+  // R2 alone is 1+0 for coderabbit; the both option adds a Greptile round, so it costs more than 1+0.
+  const parser = await run([file(PARSER, 80)]);
+  assert.deepEqual(optionOf(parser, 'coderabbit').cost, [1, 0], 'R2 coderabbit keeps 1+0');
+  const both = optionOf(parser, 'both').cost;
+  assert.notDeepEqual(both, [0, 0]);
+  assert.notDeepEqual(both, [1, 0], 'R2 both option must not cost the same as coderabbit alone');
+  assert.ok(both[1] >= 1, 'the second slot carries the Greptile final-head review');
+});
+
+test('T25 (Dave decision 3): a Dependabot PR offers only none, even when it touches a critical file', async () => {
+  for (const files of [[file('package.json', 3, 3)], [file('package.json', 3, 3), file(CRITICAL, 20)]]) {
+    const r = await run(files, { dependabot: true });
+    assert.equal(r.recommended, 'none');
+    assert.deepEqual(pathways(r), ['none'], files.map((f) => f.filename).join());
+  }
+});
+
+test('T26: isDependabotAuthors is true only when every commit author is dependabot[bot]', async () => {
+  const { isDependabotAuthors } = await load();
+  const bot = '49699333+dependabot[bot]@users.noreply.github.com';
+  assert.equal(isDependabotAuthors(`${bot}\n${bot}\n`), true);
+  assert.equal(isDependabotAuthors(`${bot}\ndave@example.com\n`), false, 'a human commit on the branch makes it a human PR');
+  assert.equal(isDependabotAuthors(''), false, 'no commits is not Dependabot');
+  assert.equal(isDependabotAuthors('someone@notdependabot[bot]@users.noreply.github.com'), false);
+});
+
+test('T27: resolveBase names the base ref and commit, and warns when the ref may be stale', async () => {
+  const { resolveBase } = await load();
+  const sha = 'abcdef1234567890';
+  const ok = resolveBase({ fetched: true, hasFork: true, sha });
+  assert.equal(ok.ref, 'fork/main');
+  assert.match(ok.notes.join(' '), /fork\/main at abcdef1/);
+  assert.doesNotMatch(ok.notes.join(' '), /stale/i);
+  const stale = resolveBase({ fetched: false, hasFork: true, sha });
+  assert.equal(stale.ref, 'fork/main');
+  assert.match(stale.notes.join(' '), /fetch.*failed.*stale/i);
+  const local = resolveBase({ fetched: false, hasFork: false, sha });
+  assert.equal(local.ref, 'main');
+  assert.match(local.notes.join(' '), /local main.*stale/i);
+});
+
+test('T28: facts.notes reach why[], also on the R0 stop', async () => {
+  const note = 'Base fork/main at abcdef1 (fetched).';
+  assert.ok((await run([file('scripts/a.mjs')], { notes: [note] })).why.includes(note));
+  assert.ok((await run([file('scripts/a.mjs')], { notes: [note], stamp: null })).why.includes(note));
+});
+
+test('T29 (CLI): --dependabot sets the flag the mod passes, and the result is none', () => {
+  const r = runCli(['--json', '--dependabot'], facts([file('package.json', 3, 3), file(CRITICAL, 20)]));
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.recommended, 'none');
+  assert.ok(out.why.some((w) => w.includes(CRITICAL)));
+});
+
+test('T30 (CLI): bad usage exits 2: an unknown flag, or --facts or --config without a value', () => {
+  const cli = path.join(HERE, 'pr-checkpoint.mjs');
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-usage-'));
+  for (const args of [['--bogus'], ['--facts'], ['--config'], ['--facts', '--json'], ['--json', '--config']]) {
+    const r = spawnSync(process.execPath, [cli, ...args], { encoding: 'utf8', cwd: dir });
+    assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /usage/i, args.join(' '));
+  }
 });

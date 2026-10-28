@@ -1138,3 +1138,14 @@ test('CP7b (CLI): a push reads the saved pathway and pclass from the bot comment
   assert.match(out, /update router comment 31/);
   assert.match(out, new RegExp(`head=${HEAD} pathway=none pclass=normal -->`));
 });
+
+test('CP8: a raise after review:none was removed adds neither a CodeRabbit nor a hold label, and saves no hold', () => {
+  // Saved state says pathway=none. A person removed review:none. The class then rises to infra.
+  for (const config of [BASE, cfg({ deep_enabled: true })]) {
+    const d = decide('synchronize', pr(['.github/workflows/x.yml']), ['risk:normal', B], 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
+    assert.equal(d.reason, 'raised', `deep_enabled ${config.deep_enabled}`);
+    assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}: one signal for quiet and for the adds`);
+    assert.equal(d.held, null);
+    assert.equal(d.pathway, 'none');
+  }
+});
