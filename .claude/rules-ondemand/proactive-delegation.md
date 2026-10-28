@@ -154,24 +154,30 @@ A timed-out agent/command (exit 143) is **not** proof of failure — verify stat
 
 ## Long background waits: keep the cache warm
 
-This section applies only when the session has idle compaction off (`idleCompaction: false` in its
-settings; Dave's machine since 2026-10-27) and a 1-hour cache TTL (the session states its TTL). With idle
-compaction on, Claude Code compacts the idle session itself, so skip this section. A request more than 1 hour
-after the last one rewrites the whole context: at Opus 5.5 list prices about $2 at 300k tokens, where a small
-keep-warm turn reads it for about $0.07.
+Use this section only when two things are true:
+- The session settings have `idleCompaction: false` (Dave's machine since 2026-10-27).
+- The session states a 1-hour cache TTL.
 
-When you end a turn while background work runs (a background agent, a Workflow, CI, a PR review wait) and
-the work can take more than 50 minutes, and the session is not in usage overage:
+With idle compaction on, Claude Code compacts the idle session itself. Then skip this section.
+
+A request more than 1 hour after the last one rewrites the whole cache. At Opus 5.5 list prices this
+costs about $2 at 300k tokens. A small keep-warm turn reads the cache for about $0.07.
+
+Use the steps when all three are true:
+- You end a turn while background work runs: a background agent, a Workflow, CI or a PR review wait.
+- The work can take more than 50 minutes.
+- The session is not in usage overage.
+
 1. Start one background command that exits within 48 minutes. Prefer a check that exits when the work is
    done. With nothing to poll, use `Start-Sleep -Seconds 2880` (PowerShell tool, `run_in_background`).
-2. When it exits and the work is done, handle the result. If the work still runs, start one more chunk and
-   end the turn in one line.
-3. Check the TTL again before each new chunk. Stop the chunks when the work ends, when the session is in
-   usage overage (the TTL is then 5 minutes, so a chunk cannot help), or after 6 chunks with no progress.
-   Then report to Dave. A chunk already waiting needs no cancel: it sends no request until it exits.
+2. When it exits and the work is done, handle the result. If the work still runs, start one more chunk.
+   Then end the turn in one line.
+3. Check the TTL before each new chunk. Stop when the work ends or usage overage starts. In overage the
+   TTL is 5 minutes, so a chunk cannot help. Stop after 6 chunks with no progress, and report to Dave.
+4. Do not cancel a chunk that already waits. It sends no request until it exits.
 
 Limits:
-- Nothing can refresh the cache while the main loop is blocked: a foreground Agent or Workflow call, or an
-  open AskUserQuestion. Start long work in the background.
-- Before a known long wait with a large context, a manual `/compact` costs less than either.
-- Do not chunk waits under 50 minutes: inside the hour the cache stays warm by itself.
+- Nothing refreshes the cache while the main loop is blocked. A foreground Agent or Workflow call blocks
+  it. An open AskUserQuestion blocks it too. Start long work in the background.
+- Before a known long wait with a large context, a manual `/compact` costs less than a keep-warm.
+- Do not chunk waits under 50 minutes. Inside the hour the cache stays warm by itself.
