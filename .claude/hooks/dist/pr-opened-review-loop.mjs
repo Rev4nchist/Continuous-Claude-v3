@@ -15,11 +15,14 @@ var GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
 var DATA_VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)+`;
 var DATA_FLAG_RE = new RegExp(String.raw`(^|\s)(-[fFHqt]\s*|--(?:raw-field|field|header|jq|template|input)(?:\s+|=))${DATA_VALUE}`, "g");
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
-function joinContinuations(command) {
-  return (command || "").replace(/[ \t]*[\\`]\r?\n[ \t]*/g, " ");
+function joinContinuations(command, shell) {
+  const text = command || "";
+  return shell === "bash" ? text.replace(/\\\r?\n/g, "") : text.replace(/[ \t]*`\r?\n[ \t]*/g, " ");
 }
 function isPrOpenCommand(command) {
-  const cmd = joinContinuations(command);
+  return isPrOpenText(joinContinuations(command, "bash")) || isPrOpenText(joinContinuations(command, "pwsh"));
+}
+function isPrOpenText(cmd) {
   if (PR_CREATE_RE.test(cmd)) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";

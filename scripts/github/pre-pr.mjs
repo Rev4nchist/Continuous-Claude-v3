@@ -267,7 +267,11 @@ function checkBehind(git, base) {
   if (broken) return result('git:behind', 'FAIL', broken.error);
   const caveat = `compared with local ${base}${hasFork ? ` and the last-fetched ${FORK}/${base}` : ''}; no fetch was done, so run git fetch first if ${base} may be stale`;
   const behind = counts.filter((c) => c.n > 0).map((c) => `${c.n} commit(s) behind ${c.name}${c.name === base ? '' : ' (as last fetched)'}`);
-  if (behind.length > 0) return result('git:behind', 'FAIL', `${behind.join('; ')}: merge or rebase it in (${caveat})`);
+  // Merge, not rebase: the CLI run cap keys on the branch's first own commit, which a merge keeps and a rebase rewrites.
+  if (behind.length > 0) {
+    const how = `merge ${base} in (a rebase rewrites the first own commit and starts a new CodeRabbit CLI run count)`;
+    return result('git:behind', 'FAIL', `${behind.join('; ')}: ${how} (${caveat})`);
+  }
   return result('git:behind', 'PASS', `0 commits behind ${counts.map((c) => c.name).join(' and ')} (${caveat})`);
 }
 

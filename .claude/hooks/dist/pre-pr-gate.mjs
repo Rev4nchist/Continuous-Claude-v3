@@ -22,11 +22,14 @@ var GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
 var DATA_VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)+`;
 var DATA_FLAG_RE = new RegExp(String.raw`(^|\s)(-[fFHqt]\s*|--(?:raw-field|field|header|jq|template|input)(?:\s+|=))${DATA_VALUE}`, "g");
 var PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
-function joinContinuations(command) {
-  return (command || "").replace(/[ \t]*[\\`]\r?\n[ \t]*/g, " ");
+function joinContinuations(command, shell) {
+  const text = command || "";
+  return shell === "bash" ? text.replace(/\\\r?\n/g, "") : text.replace(/[ \t]*`\r?\n[ \t]*/g, " ");
 }
 function isPrOpenCommand(command) {
-  const cmd = joinContinuations(command);
+  return isPrOpenText(joinContinuations(command, "bash")) || isPrOpenText(joinContinuations(command, "pwsh"));
+}
+function isPrOpenText(cmd) {
   if (PR_CREATE_RE.test(cmd)) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";
@@ -323,9 +326,10 @@ function pushedProblem(deps, root, branch, head) {
   if (pushed.toLowerCase() === head.toLowerCase()) return null;
   return `the pushed head fork/${name} is ${pushed.slice(0, 7)}, not the stamped head ${head.slice(0, 7)}. Push the stamped commit, or run pre-pr.mjs again`;
 }
+var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pwsh" : "bash";
 function decide(input, deps) {
   const raw = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
-  const command = joinContinuations(raw);
+  const command = joinContinuations(raw, shellOf(input));
   const d = gate(input, command, deps);
   return d.action === "deny" && hasOverride(command, deps.env) ? { action: "override" } : d;
 }
@@ -372,7 +376,7 @@ function handle(raw, deps) {
     } catch {
     }
     if (!prCreate) return "{}";
-    if (hasOverride(joinContinuations(command), deps.env)) {
+    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
       logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
       return "{}";
     }

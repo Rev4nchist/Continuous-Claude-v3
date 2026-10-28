@@ -105,6 +105,10 @@ const CONTINUED = [
   'gh api repos/Rev4nchist/Continuous-Claude-v3/pulls \\\r\n  -f title=t \\\r\n  -f head=feat/x',
   'gh api -X POST `\n  repos/Rev4nchist/Continuous-Claude-v3/pulls `\n  -f title=t',
   'gh pr create `\n  --fill',
+  // Bash deletes a backslash-newline outright, so a word split across lines runs as one word (CLI review, d2403f3).
+  'gh a\\\npi repos/Rev4nchist/Continuous-Claude-v3/pulls -f title=x',
+  'gh api repos/Rev4nchist/Continuous-Claude-v3/pu\\\nlls -X POST -f title=x',
+  'gh pr cre\\\r\nate --fill',
 ];
 
 // Not a PR create, though the text names /pulls or a method. Each was a false deny or a miss before P2-d.

@@ -43,15 +43,21 @@ const DATA_FLAG_RE = new RegExp(String.raw`(^|\s)(-[fFHqt]\s*|--(?:raw-field|fie
 const PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 
 /**
- * A backslash (bash) or a backtick (PowerShell) before a line end joins two lines into one command. Joined first, a
- * `gh api` call split over several lines is read whole. A bare line end still separates two commands.
+ * Join continued lines the way each shell does. Bash deletes a backslash-newline outright, so `gh a\` + newline +
+ * `pi` runs as `gh api`. PowerShell reads a backtick-newline as a space. A bare line end still separates two commands.
+ * The hook does not know which shell runs the text, so isPrOpenCommand reads both forms and matches if either one is a
+ * PR create: on doubt it matches more, never less (the pre-pr-gate guard then asks for a stamp).
  */
-export function joinContinuations(command: string): string {
-  return (command || '').replace(/[ \t]*[\\`]\r?\n[ \t]*/g, ' ');
+export function joinContinuations(command: string, shell: 'bash' | 'pwsh'): string {
+  const text = command || '';
+  return shell === 'bash' ? text.replace(/\\\r?\n/g, '') : text.replace(/[ \t]*`\r?\n[ \t]*/g, ' ');
 }
 
 export function isPrOpenCommand(command: string): boolean {
-  const cmd = joinContinuations(command);
+  return isPrOpenText(joinContinuations(command, 'bash')) || isPrOpenText(joinContinuations(command, 'pwsh'));
+}
+
+function isPrOpenText(cmd: string): boolean {
   if (PR_CREATE_RE.test(cmd)) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? '';

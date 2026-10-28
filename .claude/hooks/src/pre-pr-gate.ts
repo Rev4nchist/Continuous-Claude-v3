@@ -174,10 +174,13 @@ function pushedProblem(deps: Deps, root: string, branch: string | null, head: st
   return `the pushed head fork/${name} is ${pushed.slice(0, 7)}, not the stamped head ${head.slice(0, 7)}. Push the stamped commit, or run pre-pr.mjs again`;
 }
 
+/** The shell that runs the command: the PowerShell tool runs pwsh; the Bash tool runs bash. */
+const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || input.tool) === 'PowerShell' ? 'pwsh' : 'bash');
+
 /** Pure given its deps. Allow, override (a deny that the override let through; it is logged) or deny. */
 export function decide(input: HookInput, deps: Deps): Decision {
   const raw = typeof input.tool_input?.command === 'string' ? input.tool_input.command : '';
-  const command = joinContinuations(raw);
+  const command = joinContinuations(raw, shellOf(input));
   const d = gate(input, command, deps);
   return d.action === 'deny' && hasOverride(command, deps.env) ? { action: 'override' } : d;
 }
@@ -230,7 +233,7 @@ export function handle(raw: string, deps: Deps): string {
     // Unparsable input, another tool, or a command that is not a PR create: nothing to guard, so allow.
     if (!prCreate) return '{}';
     // A PR create whose stamp could not be checked (git timeout, git error, unreadable stamp): the leading override allows it, else deny.
-    if (hasOverride(joinContinuations(command), deps.env)) {
+    if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
       logGuardDecision(HOOK, input, 'override', 'SKIP_PRE_PR_GATE', { command });
       return '{}';
     }

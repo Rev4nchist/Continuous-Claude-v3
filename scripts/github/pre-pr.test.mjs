@@ -1318,6 +1318,14 @@ test('RR2: the hooks-vitest gate retries a test that fails only under load', () 
   assert.ok(gateById('hooks-vitest').args.some((a) => /^--retry=[1-9]$/.test(a)), gateById('hooks-vitest').args.join(' '));
 });
 
+test('RR7: the behind FAIL says to merge the base in, and that a rebase starts a new CodeRabbit CLI run count', () => {
+  const r = checkGit(fakeGit({ ...GOOD, 'rev-list --count HEAD..main': '3\n' }), 'main');
+  assert.equal(r[2].status, 'FAIL');
+  assert.match(r[2].detail, /merge main in/);
+  assert.doesNotMatch(r[2].detail, /merge or rebase/);
+  assert.match(r[2].detail, /rebase .*new CodeRabbit CLI run count/);
+});
+
 test('RR6: the hooks-vitest gate gives each test at least 20 s (dist-integration tests spawn node under load)', () => {
   const t = gateById('hooks-vitest').args.map((a) => /^--testTimeout=(\d+)$/.exec(a)).find(Boolean);
   assert.ok(t && Number(t[1]) >= 20_000, gateById('hooks-vitest').args.join(' '));
