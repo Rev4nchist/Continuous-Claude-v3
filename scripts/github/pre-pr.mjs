@@ -298,14 +298,33 @@ export function checkEvidence({ body, head, paths, config }) {
 
 // ---------- gates ----------
 
+/**
+ * The program and arguments to spawn for a gate, never with a shell. npm and npx run as `node <npm>/bin/npm-cli.js`
+ * (or npx-cli.js): on Windows their .cmd shims would need a shell, and Node 20.12+ refuses a .cmd without one.
+ * Searched next to node (Windows layout) and in ../lib/node_modules (POSIX layout). Not found: POSIX runs the plain
+ * command; Windows throws, so the gate FAILs and names the missing file.
+ */
+export function resolveSpawn(spec, { platform = process.platform, execPath = process.execPath, exists = existsSync } = {}) {
+  const win = platform === 'win32';
+  const { cmd, args } = spec;
+  if (cmd === 'node') return { cmd: execPath, args, shell: false };
+  if (cmd === 'bash' && win) return { cmd: 'C:\\Program Files\\Git\\bin\\bash.exe', args, shell: false };
+  if (cmd === 'npm' || cmd === 'npx') {
+    const sep = win ? '\\' : '/';
+    const dir = execPath.slice(0, Math.max(execPath.lastIndexOf('\\'), execPath.lastIndexOf('/')));
+    const script = `${cmd}-cli.js`;
+    const candidates = [[dir, 'node_modules', 'npm', 'bin', script], [dir, '..', 'lib', 'node_modules', 'npm', 'bin', script]].map((p) => p.join(sep));
+    const found = candidates.find((p) => exists(p));
+    if (found) return { cmd: execPath, args: [found, ...args], shell: false };
+    if (win) throw new Error(`cannot find ${script} next to ${execPath}; looked in ${candidates.join(', ')}`);
+  }
+  return { cmd, args, shell: false };
+}
+
 export function defaultExec(spec) {
-  const win = process.platform === 'win32';
-  let cmd = spec.cmd;
-  let shell = false;
-  if (cmd === 'node') cmd = process.execPath;
-  else if (cmd === 'bash' && win) cmd = 'C:\\Program Files\\Git\\bin\\bash.exe';
-  else if (win && (cmd === 'npm' || cmd === 'npx')) shell = true; // .cmd shims need a shell; the arguments are fixed strings
-  const r = spawnSync(cmd, spec.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell, maxBuffer: 64 * 1024 * 1024 });
+  let s;
+  try { s = resolveSpawn(spec); } catch (err) { return { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message) }; }
+  const r = spawnSync(s.cmd, s.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell: s.shell, maxBuffer: 64 * 1024 * 1024 });
   const timedOut = r.error?.code === 'ETIMEDOUT';
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', timedOut, error: r.error && !timedOut ? String(r.error.message) : undefined };
 }

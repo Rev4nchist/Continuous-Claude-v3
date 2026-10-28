@@ -47,7 +47,7 @@ import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
-  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate,
+  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn,
 } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -1321,6 +1321,26 @@ test('RR1: the github-tests gate allows the 14-minute suite (timeout at least 20
 
 test('RR2: the hooks-vitest gate retries a test that fails only under load', () => {
   assert.ok(gateById('hooks-vitest').args.some((a) => /^--retry=[1-9]$/.test(a)), gateById('hooks-vitest').args.join(' '));
+});
+
+test('RR8: npm and npx run through node and npm\'s own CLI script, never a shell (Semgrep spawn-shell-true)', () => {
+  const nodeExe = 'C:\\nodejs\\node.exe';
+  const exists = (p) => /npm-cli\.js$|npx-cli\.js$/.test(p);
+  for (const platform of ['win32', 'linux']) {
+    for (const tool of ['npm', 'npx']) {
+      const s = resolveSpawn({ cmd: tool, args: ['run', 'build'] }, { platform, execPath: nodeExe, exists });
+      assert.equal(s.shell, false, `${platform} ${tool}`);
+      assert.equal(s.cmd, nodeExe, `${platform} ${tool}`);
+      assert.match(s.args[0], new RegExp(`${tool}-cli\\.js$`));
+      assert.deepEqual(s.args.slice(1), ['run', 'build']);
+    }
+  }
+  assert.throws(() => resolveSpawn({ cmd: 'npm', args: [] }, { platform: 'win32', execPath: nodeExe, exists: () => false }), /npm-cli\.js/);
+  const n = resolveSpawn({ cmd: 'node', args: ['x.mjs'] }, { platform: 'win32', execPath: nodeExe, exists });
+  assert.deepEqual([n.cmd, n.shell], [nodeExe, false]);
+  const b = resolveSpawn({ cmd: 'bash', args: ['t.sh'] }, { platform: 'win32', execPath: nodeExe, exists });
+  assert.equal(b.cmd, 'C:\\Program Files\\Git\\bin\\bash.exe');
+  assert.equal(resolveSpawn({ cmd: 'uv', args: ['run'] }, { platform: 'win32', execPath: nodeExe, exists }).shell, false);
 });
 
 test('RR7: the behind FAIL says to merge the base in, and that a rebase starts a new CodeRabbit CLI run count', () => {
