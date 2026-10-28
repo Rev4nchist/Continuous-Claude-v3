@@ -217,7 +217,7 @@ function parseDecisions(value: unknown): StateBrief['decisions'] {
     const text = strScrubbed(item.text, CLIP.decision);
     const at = num(item.at);
     if (text === null || at === null) continue;
-    out.push({ text, by: str(item.by, CLIP.by) ?? '-', at });
+    out.push({ text, by: strScrubbed(item.by, CLIP.by) ?? '-', at });
   }
   return out;
 }

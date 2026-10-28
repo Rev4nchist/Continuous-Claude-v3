@@ -38,9 +38,12 @@ export function scrubPaths(text: string): string {
 const WINDOWS_PATH_TOKEN = /(?:\b[A-Za-z]:[\\/]|\\\\)[^\s'"`<>|]*/g;
 const POSIX_HOME_PATH_TOKEN =
   /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^\s'"`<>|]*/g;
+/** Home-relative forms: ~/x, $HOME/x, %USERPROFILE%\x. They carry file names even with no user name. */
+const HOME_REL_TOKEN = /(?<![\w:/.~])(?:~|\$HOME|%USERPROFILE%)[\\/][^\s'"`<>|]*/g;
 const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
 const PATH_START =
-  /(?:[A-Za-z]:[\\/]|\\\\|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/.source;
+  /(?:[A-Za-z]:[\\/]|\\\\|~[\\/]|\$HOME[\\/]|%USERPROFILE%[\\/]|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/
+    .source;
 /**
  * A whole quoted absolute path, spaces included: "C:\Users\First Last\x", '/home/a/Acme Corp/y'.
  * Each quote kind ends at its own closing quote, so another quote character may sit inside the
@@ -53,10 +56,10 @@ const QUOTED_PATH = new RegExp(
 /**
  * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
  * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
- * separator, so the sentence around the path survives. A link (scheme://...) is not a path tail.
+ * separator, so the sentence around the path survives. A word that holds a link (scheme://, also
+ * inside a Markdown link) is not a path tail.
  */
-const PATH_TAIL =
-  /<path>((?:[ \t]+(?![A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
+const PATH_TAIL = /<path>((?:[ \t]+(?![^\s]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
 
 function pathToken(match: string): string {
   const tail = TRAILING_MARKS.exec(match);
@@ -69,6 +72,7 @@ export function scrubPathsInText(text: string): string {
     .replace(QUOTED_PATH, '<path>')
     .replace(WINDOWS_PATH_TOKEN, pathToken)
     .replace(POSIX_HOME_PATH_TOKEN, pathToken)
+    .replace(HOME_REL_TOKEN, pathToken)
     .replace(POSIX_DEEP_PATH, pathToken)
     .replace(PATH_TAIL, (_all, tail: string) => `<path>${TRAILING_MARKS.exec(tail)?.[0] ?? ''}`);
 }

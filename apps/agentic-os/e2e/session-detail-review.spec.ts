@@ -199,6 +199,49 @@ test.describe('paths in the strings the detail shows (B1 rule 18)', () => {
     expectNoPath(bodies, [`report${tag}`]);
   });
 
+  test('a Markdown link after a path is kept', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const link = `[proof](https://example.com/ticket/${tag})`;
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E markdown link after a path',
+        goal: `Fix /tmp/report${tag} ${link} then stop`,
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText(`Fix <path> ${link} then stop`);
+    expectNoPath(bodies, [`report${tag}`]);
+  });
+
+  test('home-relative paths are scrubbed like absolute ones', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E home-relative paths',
+        goal: `Open ~/Documents/Acme${tag} Corp/plan.txt now`,
+        ask: [ask(`Then %USERPROFILE%\\tmp${tag}\\f.txt and $HOME/h${tag}/g.txt end`)],
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText('Open <path> now');
+    await expect(page.getByTestId('detail-ask')).toContainText('Then <path> and <path> end');
+    expectNoPath(bodies, [`Acme${tag}`, 'plan.txt', `tmp${tag}`, `h${tag}`]);
+  });
+
+  test('a path in the author of a decision is scrubbed', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E decision author path',
+        decisions: [{ text: 'kept the plan', by: `C:\\Users\\by${tag}\\dave`, at: secondsAgo(300) }],
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-decisions')).toContainText('kept the plan');
+    expect(bodies.json).toContain('<path>');
+    expectNoPath(bodies, [`by${tag}`]);
+  });
+
   test('a path in a decision text is replaced with <path>', async ({ page, request }) => {
     const tag = randomUUID().slice(0, 8);
     const bodies = await detailBodies(page, request, {
