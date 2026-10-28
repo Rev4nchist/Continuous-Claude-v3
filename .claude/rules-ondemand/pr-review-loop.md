@@ -99,8 +99,8 @@ names the head and is under 24 hours old. It denies a stamp that skipped the CLI
 step 1 does not list.
 
 - A command must name exactly one body file: `-F body=@<file>`, `--body-file <file>`, or `-F <file>` on
-  `gh pr create`. The file must hash to the stamp's `body_sha256`. A second body source, a repeated body
-  flag or `--input` is denied.
+  `gh pr create`. The file must hash to the stamp's `body_sha256`. The hook denies a second body source,
+  a repeated body flag and `--input`.
 - An explicit CCv3 target (`--repo`, `-R`, `repos/<owner>/<repo>/pulls`, `GH_REPO`) must run in a CCv3
   checkout.
 - When `refs/remotes/fork/<branch>` exists, it must equal the stamped head.

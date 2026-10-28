@@ -607,6 +607,28 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
     expect(namedRepo('gh pr create --repo github.com/other/repo')).toBe('other/repo');
   });
 
+  // CodeRabbit #197 full review (outside diff, Major): endpoint-shaped text in a title replaced the real target.
+  it('Y3b: endpoint text in a title or another argument never hides an explicit or checkout CCv3 target', () => {
+    const OTHER_EP = 'repos/other/repo/pulls';
+    // An explicit CCv3 target stays CCv3 whatever the title says.
+    expect(namedRepo(`gh pr create --repo Rev4nchist/Continuous-Claude-v3 --title "see ${OTHER_EP}" --head feat/x`)).toBe(CCV3_REPO);
+    // gh pr create has no endpoint: with no repo flag the checkout decides (null), even if the title holds endpoint text.
+    expect(namedRepo(`gh pr create --title "${OTHER_EP}" --head feat/x`)).toBeNull();
+    expect(namedRepo(`gh pr create --title "gh api ${OTHER_EP}" --head feat/x`)).toBeNull();
+    // gh api: a title field that names another repo cannot hide the real CCv3 endpoint, in either order.
+    expect(namedRepo(`gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title="${OTHER_EP}" -f head=feat/x`)).toBe(CCV3_REPO);
+    expect(namedRepo(`gh api -f title="${OTHER_EP}" repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x`)).toBe(CCV3_REPO);
+    // Fail closed: CCv3 named anywhere wins over a foreign explicit target.
+    expect(namedRepo('gh pr create --repo other/repo --title "repos/Rev4nchist/Continuous-Claude-v3/pulls" --head feat/x')).toBe(CCV3_REPO);
+    // A real foreign target with no CCv3 text stays foreign.
+    expect(namedRepo(`gh api ${OTHER_EP} -X POST -f head=feat/x`)).toBe('other/repo');
+  });
+
+  it('Y3c: a title spoof from a foreign checkout no longer skips the gate', () => {
+    const c = `gh pr create --repo Rev4nchist/Continuous-Claude-v3 --title "repos/other/repo/pulls" --head feat/x --body-file ${B}`;
+    expect(reasonOf(c, withBody({ remotes: FOREIGN })), c).toMatch(/not a CCv3 checkout/i);
+  });
+
   it('Y4: those repo forms from a foreign checkout are denied', () => {
     for (const c of [
       `gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x --body-file ${B}`,

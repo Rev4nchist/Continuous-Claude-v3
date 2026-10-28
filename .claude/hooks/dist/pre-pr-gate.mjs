@@ -233,11 +233,15 @@ var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
 var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
 var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "i");
 var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
+var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
 function namedRepo(command, env = {}) {
-  const api = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/i.exec(command);
-  if (api) return api[1].toLowerCase();
-  const named = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
-  return named ? ownerRepo(named) : null;
+  const flag = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
+  const explicit = flag ? ownerRepo(flag) : null;
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  if (explicit === CCV3_REPO || endpoints.includes(CCV3_REPO)) return CCV3_REPO;
+  if (explicit) return explicit;
+  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
+  return apiOnly ? endpoints[0] ?? null : null;
 }
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);

@@ -67,12 +67,22 @@ const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_
 const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'i');
 const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
 
-/** `owner/repo` (lower case) that gh would target: `repos/<o>/<r>/pulls`, then `-R` / `--repo`, then `GH_REPO` (command or env), else null. */
+const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+
+/**
+ * `owner/repo` (lower case) the command targets, or null when the checkout decides.
+ * The raw text cannot tell an endpoint from a title, so it fails closed: a CCv3 `repos/<o>/<r>/pulls` text anywhere,
+ * or a CCv3 `-R` / `--repo` / `GH_REPO`, means CCv3. Otherwise the repo flag names the target. A foreign endpoint
+ * text names it only for a `gh api` call that is not also a `gh pr create` (a title can hold either phrase).
+ */
 export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
-  const api = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/i.exec(command);
-  if (api) return api[1].toLowerCase();
-  const named = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
-  return named ? ownerRepo(named) : null;
+  const flag = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
+  const explicit = flag ? ownerRepo(flag) : null;
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  if (explicit === CCV3_REPO || endpoints.includes(CCV3_REPO)) return CCV3_REPO;
+  if (explicit) return explicit;
+  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
+  return apiOnly ? endpoints[0] ?? null : null;
 }
 
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
