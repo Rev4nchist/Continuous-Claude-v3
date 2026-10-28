@@ -230,7 +230,12 @@ describe('applyBrief', () => {
     const tasks = [task('x', 'same words', 'completed')]
     const brief = apply(null, { plan: [{ id: 'x', text: 'same words', status: 'done' }], proof: { taskId: 'x', artifact: 'a' } }, tasks)
     expect(brief.proofs).toHaveLength(1)
-    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('idle')
+    expect(brief.proofs[0]?.kind).toBe('task')
+    // PRD 5.1: the task list is the plan source while it holds a task, so the unproven plan step no longer keeps the chip off done.
+    // (Before the 5.1 fix this expected 'idle', because the chip weighed the plan step too.)
+    expect(deriveChip({ brief, tasks, toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('done')
+    // With no task the same plan step is the source, and its proof is missing.
+    expect(deriveChip({ brief, tasks: [], toolRunning: false, turnActive: false, blocked: false, now: NOW })).toBe('idle')
   })
 
   test('A16 a secret in a task subject is not stored in the proof, and the proof still joins on it', () => {
@@ -276,6 +281,13 @@ describe('applyBrief', () => {
     expect(text).toContain('1 open ask')
     expect(text).toContain('1 of 2 proven')
   })
+
+  test('A12 the proven count weighs the tasks only when a task exists (PRD 5.1)', () => {
+    const tasks = [task('1', 'a', 'completed'), task('2', 'b')]
+    const brief = apply(null, { plan: [step('p1', 'done'), step('p2', 'done'), step('p3', 'done')], proof: { taskId: '1', artifact: 'a' } }, tasks)
+    expect(briefSummary(brief, tasks)).toContain('1 of 2 proven')
+    expect(briefSummary(brief, [])).toContain('0 of 3 proven')
+  })
 })
 
 describe('deriveChip', () => {
@@ -300,12 +312,30 @@ describe('deriveChip', () => {
     expect(deriveChip(state({ brief, tasks }))).toBe('idle')
   })
 
-  test('C3 every task and plan step done and proven is done', () => {
+  test('C3 every task done and proven is done; with no task, every plan step done and proven is done', () => {
     const tasks = [task('1', 'a', 'completed')]
-    const brief = apply(null, { plan: [step('p1', 'done')], proof: { taskId: '1', artifact: 'a' } }, tasks)
-    const both = apply(brief, { proof: { taskId: 'p1', artifact: 'b' } }, tasks)
-    expect(deriveChip(state({ brief: both, tasks }))).toBe('done')
-    expect(deriveChip(state({ brief, tasks }))).toBe('idle')
+    const proven = apply(null, { proof: { taskId: '1', artifact: 'a' } }, tasks)
+    expect(deriveChip(state({ brief: proven, tasks }))).toBe('done')
+    const plan = apply(null, { plan: [step('p1', 'done')] })
+    expect(deriveChip(state({ brief: plan }))).toBe('idle')
+    const planProven = apply(plan, { proof: { taskId: 'p1', artifact: 'b' } })
+    expect(deriveChip(state({ brief: planProven }))).toBe('done')
+  })
+
+  test('C11 PRD 5.1: with a task the plan is ignored; the chip weighs the tasks only', () => {
+    const open = apply(null, { plan: [step('p1', 'done'), step('p2', 'doing')] })
+    // Tasks all done and proven, plan unfinished: done.
+    const done = [task('1', 'a', 'completed')]
+    const brief = apply(open, { proof: { taskId: '1', artifact: 'a' } }, done)
+    expect(deriveChip(state({ brief, tasks: done }))).toBe('done')
+    // A pending task keeps the chip off done even when the whole plan is done and proven.
+    const finished = apply(null, { plan: [step('p1', 'done')] })
+    const planProven = apply(finished, { proof: { taskId: 'p1', artifact: 'b' } })
+    expect(deriveChip(state({ brief: planProven, tasks: [task('1', 'a', 'pending')] }))).toBe('idle')
+    // A blocked plan step does not block the chip while a task exists; it does with no task.
+    const stuck = apply(null, { plan: [step('p1', 'blocked')] })
+    expect(deriveChip(state({ brief: stuck, tasks: [task('1', 'a', 'pending')] }))).toBe('idle')
+    expect(deriveChip(state({ brief: stuck }))).toBe('blocked')
   })
 
   test('C3 a plan step that is not done keeps the chip off done', () => {

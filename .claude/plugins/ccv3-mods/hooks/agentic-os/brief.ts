@@ -167,11 +167,16 @@ export const isProven = (brief: Brief | null, item: Item): boolean => {
   return brief.proofs.some(one => one.id === id && one.subject === subject && (item.kind === undefined || one.kind === item.kind))
 }
 
-/** Tasks first, then plan steps. Id and subject are redacted here, so everything built on an item is safe to store. */
-const itemsOf = (tasks: OsTask[], plan: PlanStep[]): (Required<Item> & { done: boolean })[] => [
+type Weighed = Required<Item> & { done: boolean }
+
+/** Every task and every plan step: what a proof may name. Id and subject are redacted here, so everything built on an item is safe to store. */
+const itemsOf = (tasks: OsTask[], plan: PlanStep[]): Weighed[] => [
   ...tasks.map(one => ({ id: redact(one.id).text, subject: redact(one.subject).text, kind: 'task' as const, done: one.status === 'completed' })),
   ...plan.map(one => ({ id: redact(one.id).text, subject: redact(one.text).text, kind: 'plan' as const, done: one.status === 'done' })),
 ]
+
+/** PRD 5.1: what the chip and the summary weigh: the task list when it holds a task, else the plan steps. */
+const weighedOf = (tasks: OsTask[], plan: PlanStep[]): Weighed[] => (tasks.length > 0 ? itemsOf(tasks, []) : itemsOf([], plan))
 
 const clip = (value: string, max: number): string => (value.length <= max ? value : `${value.slice(0, Math.max(0, max - 1))}…`)
 
@@ -276,16 +281,17 @@ export type ChipState = {
 export const deriveChip = (state: ChipState): Chip => {
   const { brief } = state
   const plan = brief?.plan ?? []
-  if (state.blocked || plan.some(one => one.status === 'blocked')) return 'blocked'
+  // A blocked plan step counts only when the plan is the source (no task).
+  if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
   if (brief !== null && !state.toolRunning && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt)) return 'waiting-on-dave'
   if (state.toolRunning || state.turnActive) return 'working'
-  const items = itemsOf(state.tasks, plan)
+  const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'
 }
 
 /** One line for the model after a good call: what the brief holds now. */
 export const briefSummary = (brief: Brief, tasks: OsTask[]): string => {
-  const items = itemsOf(tasks, brief.plan)
+  const items = weighedOf(tasks, brief.plan)
   const open = brief.ask.filter(isOpen).length
   const parts = [
     brief.goal ? `goal: ${brief.goal}` : 'goal not set',
