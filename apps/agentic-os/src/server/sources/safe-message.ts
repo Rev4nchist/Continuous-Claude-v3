@@ -39,15 +39,24 @@ const WINDOWS_PATH_TOKEN = /(?:\b[A-Za-z]:[\\/]|\\\\)[^\s'"`<>|]*/g;
 const POSIX_HOME_PATH_TOKEN =
   /(?<![\w:/.])\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b[^\s'"`<>|]*/g;
 const TRAILING_MARKS = /[.,;:!?)\]}]+$/;
-/** A whole quoted absolute path, spaces included: "C:\Users\First Last\x", '/home/a/Acme Corp/y'. */
-const QUOTED_PATH =
-  /(["'`])(?:[A-Za-z]:[\\/]|\\\\|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)[^"'`\r\n]*\1/g;
+const PATH_START =
+  /(?:[A-Za-z]:[\\/]|\\\\|\/(?:home|Users|root|tmp|var|etc|usr|opt|mnt|srv|private|run|proc)\b)/.source;
+/**
+ * A whole quoted absolute path, spaces included: "C:\Users\First Last\x", '/home/a/Acme Corp/y'.
+ * Each quote kind ends at its own closing quote, so another quote character may sit inside the
+ * path: "/home/alice/O'Brien/x.txt".
+ */
+const QUOTED_PATH = new RegExp(
+  `"${PATH_START}[^"\\r\\n]*"|'${PATH_START}[^'\\r\\n]*'|\`${PATH_START}[^\`\\r\\n]*\``,
+  'g',
+);
 /**
  * Words right after a scrubbed path that still hold a path separator ("Corp/layoffs.csv",
  * "Last\My") are the rest of a path with spaces: absorb them. A plain word (or, to, today) has no
- * separator, so the sentence around the path survives.
+ * separator, so the sentence around the path survives. A link (scheme://...) is not a path tail.
  */
-const PATH_TAIL = /<path>((?:[ \t]+[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
+const PATH_TAIL =
+  /<path>((?:[ \t]+(?![A-Za-z][A-Za-z0-9+.-]*:\/\/)[^\s'"`<>|]*[\\/][^\s'"`<>|]*)+)/g;
 
 function pathToken(match: string): string {
   const tail = TRAILING_MARKS.exec(match);

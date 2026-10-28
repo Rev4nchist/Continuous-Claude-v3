@@ -170,6 +170,35 @@ test.describe('paths in the strings the detail shows (B1 rule 18)', () => {
     ]);
   });
 
+  test('a quoted path with an apostrophe is scrubbed whole', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E quoted path with an apostrophe',
+        goal: `Archive "/home/alice${tag}/O'Brien/finance${tag}.txt" before Friday`,
+        ask: [ask(`Open "C:\\Users\\Pat${tag}\\O'Neil Docs\\plan.txt" now?`)],
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText('Archive <path> before Friday');
+    await expect(page.getByTestId('detail-ask')).toContainText('Open <path> now?');
+    expectNoPath(bodies, ["O'Brien", `finance${tag}`, `Pat${tag}`, "O'Neil", 'plan.txt']);
+  });
+
+  test('a link after a path is kept, not absorbed into the path', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const link = `https://example.com/ticket/${tag}`;
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E link after a path',
+        goal: `Fix the report in /tmp/report${tag} ${link} then stop`,
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText(`Fix the report in <path> ${link} then stop`);
+    expectNoPath(bodies, [`report${tag}`]);
+  });
+
   test('a path in a decision text is replaced with <path>', async ({ page, request }) => {
     const tag = randomUUID().slice(0, 8);
     const bodies = await detailBodies(page, request, {
