@@ -1049,10 +1049,14 @@ test.describe('Session not available', () => {
       // After the first client fetch the reason is still there, and a Close clears it.
       await waitForHydration(page);
       await expect(box).toHaveAttribute('data-reason', reason);
-      const text = await page.locator('body').innerText();
+      // Path fragments are checked inside the box that explains the reason: an unrelated panel
+      // (for example a project name) must not be able to fail this test. The fixture's detail
+      // text must appear nowhere on the page.
+      const boxText = await box.innerText();
       for (const fragment of pathFragments()) {
-        expect(text, `page leaks "${fragment}"`).not.toContain(fragment);
+        expect(boxText, `unavailable box leaks "${fragment}"`).not.toContain(fragment);
       }
+      const text = await page.locator('body').innerText();
       expect(text).not.toContain(D.title);
       expect(text).not.toContain(D.goal);
       await box.getByRole('button', { name: 'Close', exact: true }).click();

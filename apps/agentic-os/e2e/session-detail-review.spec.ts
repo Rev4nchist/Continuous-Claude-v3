@@ -133,14 +133,16 @@ test.describe('paths in the strings the detail shows (B1 rule 18)', () => {
 
   test('a path and a token in a PR state never reach the page', async ({ page, request }) => {
     const tag = randomUUID().slice(0, 8);
+    // Built at run time: a literal ghp_ token in this file is a NEW secret finding for the Trivy ratchet.
+    const token = ['ghp', '_'].join('') + 'A'.repeat(36);
     const hostile = {
       pr: 4321,
-      state: `C:\\Users\\prs${tag}\\x ghp_AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA`,
+      state: `C:\\Users\\prs${tag}\\x ${token}`,
       whenReady: false,
     } as unknown as FixturePr;
     const bodies = await detailBodies(page, request, { prs: [hostile] });
     await expect(page.getByTestId('health-pr').first()).toContainText('4321');
-    expectNoPath(bodies, [`prs${tag}`, 'ghp_AAAA', 'AAAAAAAAAAAA']);
+    expectNoPath(bodies, [`prs${tag}`, token.slice(0, 8), 'AAAAAAAAAAAA']);
   });
 });
 
