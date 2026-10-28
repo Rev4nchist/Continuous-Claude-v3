@@ -1117,8 +1117,10 @@ const okExec = (log) => (spec) => { log.push(spec.id ?? spec.args.join(' ')); re
 async function prePr(repo, extra = {}) {
   const gateRuns = [];
   const crCalls = [];
+  // The real clock by default: the B tests feed this stamp to the built hook, which checks it against the real time
+  // (a fixed date made them fail once the real clock passed it by 24 hours). R1 passes its own fixed time.
   const opts = {
-    root: repo.dir, base: 'main', config: CONFIG, now: new Date('2026-10-27T10:00:00Z'),
+    root: repo.dir, base: 'main', config: CONFIG, now: new Date(),
     exec: okExec(gateRuns), crRunner: (o) => { if (o.args[0] === 'usage') return { status: 0, stdout: USAGE_OK, stderr: '' }; crCalls.push(o); return { status: 0, stdout: NDJSON_OK, stderr: '' }; },
     guardLog: () => {},
     bodyText: 'Proof type: docs\n', ...extra,
@@ -1128,7 +1130,7 @@ async function prePr(repo, extra = {}) {
 
 test('R1: a full pass writes a stamp (head, branch, at, body hash, results), the log, and leaves the tree clean', async () => {
   const repo = makeRepo();
-  const { result, gateRuns, crCalls } = (await prePr(repo));
+  const { result, gateRuns, crCalls } = (await prePr(repo, { now: new Date('2026-10-27T10:00:00Z') }));
   assert.equal(result.ok, true, result.lines.join('\n'));
   assert.equal(crCalls.length, 1);
   assert.deepEqual(gateRuns, ['context-budget']);
