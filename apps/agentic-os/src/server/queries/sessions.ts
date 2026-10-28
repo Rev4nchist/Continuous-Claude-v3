@@ -4,8 +4,7 @@ import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
 import { projectLabel } from '@/server/sources/project-label';
-import { redact } from '@/server/sources/redact';
-import { scrubPathsInText } from '@/server/sources/safe-message';
+import { promptText } from '@/server/sources/prompt-text';
 
 /**
  * The live half of the fleet view — who is working right now.
@@ -220,7 +219,7 @@ export async function getActiveSessions(
       projectKey: r.project_key,
       projectDisplayName: r.display_name,
       rawProject: projectLabel(r.raw_project),
-      workingOn: r.working_on === null ? null : scrubPathsInText(redact(r.working_on).text),
+      workingOn: r.working_on === null ? null : promptText(r.working_on, 140),
       heartbeatSecondsAgo: Number(r.heartbeat_seconds_ago ?? 0),
       // NOT `?? 0`: zero would render as "active this second" for every row that
       // predates agent-activity tracking, which is the confidently-wrong failure

@@ -19,6 +19,7 @@ const CASES: [string, string][] = [
   ['//wsl$/Ubuntu/home/dkhay', '~'],
   ['\\\\server\\share\\Users\\dkhay', '~'],
   ['\\\\?\\C:\\Users\\dkhay', '~'],
+  ['\\\\?\\UNC\\server\\share\\Users\\dkhay', '~'],
   ['/var/home/dkhay', '~'],
   ['c:/users/dkhay/continuous-claude', 'continuous-claude'],
   ['c:/users/dkhay/continuous-claude/.claude/worktrees/sdlc-os-p1a', 'sdlc-os-p1a'],
