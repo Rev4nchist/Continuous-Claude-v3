@@ -232,7 +232,7 @@ var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to t
 var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
 var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
 var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "i");
-var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").toLowerCase();
+var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
 function namedRepo(command, env = {}) {
   const api = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/i.exec(command);
   if (api) return api[1].toLowerCase();

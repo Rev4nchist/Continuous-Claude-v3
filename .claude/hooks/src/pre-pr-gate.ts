@@ -65,7 +65,7 @@ interface HookInput { tool_name?: string; tool?: string; tool_input?: { command?
 const REPO_VALUE = '((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})';
 const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
 const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'i');
-const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').toLowerCase();
+const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
 
 /** `owner/repo` (lower case) that gh would target: `repos/<o>/<r>/pulls`, then `-R` / `--repo`, then `GH_REPO` (command or env), else null. */
 export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {

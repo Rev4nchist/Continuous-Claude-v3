@@ -589,6 +589,9 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
       'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3 --head feat/x',
       'gh pr create -RRev4nchist/Continuous-Claude-v3 --head feat/x',
       'gh pr create -R "github.com/Rev4nchist/Continuous-Claude-v3" --head feat/x',
+      // The clone URL a user copies from GitHub ends in .git; gh trims it (CodeRabbit CLI, PR1 gate run).
+      'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3.git --head feat/x',
+      'gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3.GIT --head feat/x',
     ]) expect(namedRepo(c), c).toBe(CCV3_REPO);
     expect(namedRepo('gh pr create --repo github.com/other/repo')).toBe('other/repo');
   });
