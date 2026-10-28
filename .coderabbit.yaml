@@ -2,6 +2,7 @@
 # https://docs.coderabbit.ai/reference/configuration
 
 language: en
+tone_instructions: "Write in ASD-STE100: short active sentences, one idea each. Lead with the defect and file:line. No praise, no summary of what the code does."
 
 reviews:
   auto_review:
@@ -13,9 +14,12 @@ reviews:
     # Off: a push does not start a review, so after a push on a labelled PR post "@coderabbitai review"
     # once. review-status.mjs says so in its reason. Do not post it after a rate-limit notice.
     auto_incremental_review: false
+    # Backstop only: if the label gate is ever removed, pause after 2 reviewed commits.
+    auto_pause_after_reviewed_commits: 2
     drafts: false
+    # Anchored: an unanchored "main" also matches branches such as "main-2".
     base_branches:
-      - main
+      - "^main$"
   # Skip list: keep equal to REVIEW.md (scripts/ratchets/review-skip-sync.mjs checks it).
   path_filters:
     - "!**/*.min.js"
@@ -31,12 +35,92 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: true
-  # Advisory only: no CodeRabbit-authored commits. Key verified in docs.coderabbit.ai/reference/configuration
-  # (Fix comments finishing touch). The ongoing "Autofix"/autopilot mode has no documented YAML key.
+  # Walkthrough extras that cost review time and add no CCv3 value.
+  sequence_diagrams: false
+  related_prs: false
+  related_issues: false
+  suggested_reviewers: false
+  suggested_labels: false
+  # Advisory only: no CodeRabbit-authored commits. fix_ci and resolve_merge_conflict default to true
+  # on the Team plan and commit to the branch when triggered, so all writing touches are off.
+  # The ongoing "Autofix"/autopilot mode has no documented YAML key (coderabbit-cli.md forbids it).
   finishing_touches:
     autofix:
       enabled: false
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  # Our CI runs Semgrep (ccv3-checks.yml); the Markdown linters are noise on a mostly-Markdown repo.
+  # Secret, workflow and shell scanners stay on (gitleaks, trufflehog, actionlint, zizmor,
+  # shellcheck, psscriptanalyzer, skillspector, yamllint).
+  tools:
+    semgrep:
+      enabled: false
+    opengrep:
+      enabled: false
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    dotenvLint:
+      enabled: false
+  # Review CCv3 the way its gates cannot: intent, agreement between two surfaces, fail-open vs
+  # fail-closed. Do not re-check what a gate measures (context budget, dist freshness, model drift,
+  # skill audit, Semgrep, Trivy). Never list CLAUDE.md here (it is a code guideline already).
+  path_instructions:
+    - path: ".claude/hooks/src/**/*.ts"
+      instructions: |
+        Claude Code hook. Check: the settings.json matcher and the runtime tool_name check name the
+        same tools, and those tools exist (the subagent tool is "Agent"). A guard fails CLOSED on parse
+        doubt; an advisory hook fails OPEN and quiet. Flag the reverse. Flag any new hand-written shell
+        lexer. Detached children use lib/spawn-hidden.ts. stdout carries only the hook JSON. A new hook
+        appears in .claude/settings.json.template in the same PR. Do not comment on dist/ freshness.
+    - path: ".claude/hooks/src/__tests__/**"
+      instructions: "Tests import the real function. Flag logic copied into a test and tests that restate the code."
+    - path: ".claude/{rules-src,rules-ondemand,skills,agents}/**"
+      instructions: |
+        Steering text loaded into sessions. Under .claude/skills/_vendor/ apply only the _vendor
+        instruction and skip this one. Check: STE style (max 20/25 words, active voice, CONTEXT.md terms);
+        no duplicate of another rule; a rule that claims enforcement names a registered hook or script;
+        a new on-demand rule updates manifest.json and on-demand-rules.md; a skill description is a
+        trigger that does not take another skill's trigger; agents never use haiku.
+        No docstring or unit-test suggestions. Do not count bytes.
+    - path: ".claude/skills/_vendor/**"
+      instructions: "Third-party content. Report only security issues: secrets, remote code fetch, destructive commands. Ignore style and steering checks."
+    - path: "scripts/github/**"
+      instructions: |
+        READY fails closed: missing data, rate-limit notices, "Review skipped" and "Review failed" never count.
+        CodeRabbit CLI output never satisfies READY. Never add --use-credits or --api-key. API reads paginate.
+    - path: ".github/workflows/**"
+      instructions: "pull_request_target jobs never check out or run PR-head code. Actions pin to a SHA. Secrets are never echoed."
+    - path: "**/*.ps1"
+      instructions: "PowerShell 7. Single quotes for literal text. No taskkill /T. No bash-only syntax."
 
 knowledge_base:
   mcp:
     usage: disabled
+  # CLAUDE.md and AGENTS.md load by default. These add the CCv3 terms and the rules each surface
+  # follows. Keep the list short: the guideline budget can drop a source.
+  code_guidelines:
+    enabled: true
+    filePatterns:
+      - files: "CONTEXT.md"
+        applyTo: "**"
+      - files: ".claude/rules-src/hook-dev-lifecycle.md"
+        applyTo: ".claude/hooks/**"
+      - files: ".claude/rules-src/every-surface-checklist.md"
+        applyTo: ".claude/**"
+      - files: ".claude/rules-src/agent-model-selection.md"
+        applyTo: ".claude/agents/**"
+  # A learning from a chat reply waits 3 days before it becomes a review rule.
+  learnings:
+    scope: local
+    approval_delay: 3
