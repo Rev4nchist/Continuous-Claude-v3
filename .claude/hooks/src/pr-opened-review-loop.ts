@@ -34,16 +34,32 @@ const FIELD_FLAG_RE = /(?:^|\s)(?:-[fF]\s*["']?[\w.[\]-]+=|--(?:raw-field|field|
 // Only the `gh api` command itself counts, not what a pipe or a chained command does after it.
 const GH_API_SEGMENT_RE = /\bgh\s+api\b[^|;&\n]*/i;
 
+// The value of a flag that carries data (-f/-F field, -H header, --jq, --template, --input). It is never the
+// endpoint, so a "/pulls" inside it must not make the call look like a PR create. A value is quotes and bare text
+// joined: title="two words".
+const DATA_VALUE = String.raw`(?:"[^"]*"|'[^']*'|[^\s"']+)+`;
+const DATA_FLAG_RE = new RegExp(String.raw`(^|\s)(-[fFHqt]\s*|--(?:raw-field|field|header|jq|template|input)(?:\s+|=))${DATA_VALUE}`, 'g');
+
 const PR_URL_RE = /https:\/\/github\.com\/([^/\s"']+)\/([^/\s"']+)\/pull\/(\d+)/;
 
+/**
+ * A backslash (bash) or a backtick (PowerShell) before a line end joins two lines into one command. Joined first, a
+ * `gh api` call split over several lines is read whole. A bare line end still separates two commands.
+ */
+export function joinContinuations(command: string): string {
+  return (command || '').replace(/[ \t]*[\\`]\r?\n[ \t]*/g, ' ');
+}
+
 export function isPrOpenCommand(command: string): boolean {
-  const cmd = command || '';
+  const cmd = joinContinuations(command);
   if (PR_CREATE_RE.test(cmd)) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? '';
-  if (!PULLS_PATH_RE.test(api)) return false;
-  if (POST_METHOD_RE.test(api)) return true;
-  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(api);
+  // The endpoint and the method are read with the data values removed; the implicit-POST check needs the flags.
+  const bare = api.replace(DATA_FLAG_RE, '$1$2');
+  if (!PULLS_PATH_RE.test(bare)) return false;
+  if (POST_METHOD_RE.test(bare)) return true;
+  return FIELD_FLAG_RE.test(api) && !ANY_METHOD_RE.test(bare);
 }
 
 export function responseText(resp: unknown): string {

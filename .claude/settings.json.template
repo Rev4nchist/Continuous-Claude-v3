@@ -138,6 +138,14 @@
           {
             "type": "command",
             "command": "node",
+            "timeout": 15,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pre-pr-gate.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
             "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/scan-scope-guard.mjs"
@@ -162,6 +170,14 @@
             "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/destructive-command-guard.mjs"
+            ]
+          },
+          {
+            "type": "command",
+            "command": "node",
+            "timeout": 15,
+            "args": [
+              "{{CLAUDE_HOME}}/hooks/dist/pre-pr-gate.mjs"
             ]
           },
           {
