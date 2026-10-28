@@ -207,6 +207,8 @@ declare module 'claude-code' {
       activeAt: number | null
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
       git: OsGit | null
+      /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
+      osTab: 'overview' | 'plan' | 'proof' | 'decisions'
     }
   }
 }
