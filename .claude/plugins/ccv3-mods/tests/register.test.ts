@@ -36,6 +36,8 @@ const world = (on: On, refuse: string[]) => {
     seen.commands.push(e.name)
     return { value: { command: e.name } }
   })
+  // Agentic OS registers brief_set at session start; this world only checks commands, so the tool is accepted.
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
   return seen
 }
 
