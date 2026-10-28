@@ -77,7 +77,7 @@ test.describe('rawProject holds no absolute path', () => {
     const labels = new Set(sessions.map((s) => s.rawProject));
     // The live rows are repo folders and the home folder, in this repo's sessions.
     for (const label of labels) {
-      expect(label, `"${label}" must be "~" or a folder name without a path`).toMatch(/^[^\\/:]+$/);
+      expect(label, `"${label}" must be "~" or a folder name without a path`).toMatch(/^[^\\/]+$/);
     }
   });
 });

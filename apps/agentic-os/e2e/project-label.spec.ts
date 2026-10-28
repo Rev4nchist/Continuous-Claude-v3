@@ -26,9 +26,9 @@ const CASES: [string, string][] = [
   ['/home/dkhay/work/api', 'api'],
   ['plain-name', 'plain-name'],
   ['c:/users/dkhay/My Project', 'My Project'],
-  // Known limit, on the safe side: a folder named `home` or `users` right above the last folder
-  // reads as a home root, so a repo inside it shows as `~`.
-  ['/home/dkhay/projects/home/site', '~'],
+  ['/home/dkhay/projects/home/site', 'site'],
+  // Known limit, on the safe side: a short path whose second-last folder is `home` or `users`.
+  ['/srv/home/site', '~'],
   ['c:', 'unknown'],
   ['C:\\', 'unknown'],
   ['', 'unknown'],
