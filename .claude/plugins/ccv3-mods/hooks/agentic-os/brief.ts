@@ -252,8 +252,10 @@ export const markAsksAnswered = (brief: Brief): Brief =>
 export const isAskStale = (brief: Brief, now: number, lastActivity?: number | null): boolean =>
   brief.ask.some(isOpen) && now - Math.max(brief.updatedAt, lastActivity ?? 0) >= STALE_ASK_MS
 
-/** The mod's own report lines (the PR watcher) arrive as prompts too: they are not Dave. */
-export const isModSubmission = (value: string): boolean => /^\s*PR watcher:/.test(value)
+/** The mod's own submissions arrive as prompts too: they are not Dave's answer to a brief ask.
+ *  Both come from hooks/pr-loop/index.ts: the PR watcher report line, and the /land fallback
+ *  text (`Dave pressed "Land" on ...`). Keep this list in step with its `$.prompt.submit` calls. */
+export const isModSubmission = (value: string): boolean => /^\s*(PR watcher:|Dave pressed "Land" on )/.test(value)
 
 export type ChipState = {
   brief: Brief | null

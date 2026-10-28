@@ -390,6 +390,13 @@ describe('ask lifecycle', () => {
     expect(isModSubmission('PR watcher: #12 head abc1234 is READY')).toBe(true)
     expect(isModSubmission('yes, merge it')).toBe(false)
   })
+
+  test('K3b the /land fallback text (pr-loop, submitted by the mod) is not Dave either', () => {
+    // hooks/pr-loop/index.ts builds this text: `Dave pressed "Land" on <via>. ...`
+    expect(isModSubmission('Dave pressed "Land" on /land 191. That press is his merge yes for PR #191 only.')).toBe(true)
+    // A real reply that merely mentions the word is still Dave.
+    expect(isModSubmission('I pressed Land earlier, now fix the test')).toBe(false)
+  })
 })
 
 const ANSWER = [
