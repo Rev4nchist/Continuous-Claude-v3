@@ -20,7 +20,13 @@ The Pocock tdd workflow (vendored, v1.3.1) owns this name. This page adds the CC
 6. A feature with several slices: run the agent loop in [CCv3 tdd loop](references/ccv3-tdd.md).
    The plan-agent splits the feature. Per slice, arbiter writes the failing test, kraken makes it pass, arbiter verifies.
 7. Excuses and the final checklist: [philosophy](references/philosophy.md).
-8. Proof follows AGENTS.md "Testing": an end-to-end check first, with its output saved.
+8. Before the first test, name the proof type from [pr-review-loop.md](../../rules-ondemand/pr-review-loop.md) "Proof in the PR body".
+   Record RED (command, failing output, commit) and GREEN (command, passing output, head) for the Evidence block in
+   [pr-and-commit-style.md](../../rules-ondemand/pr-and-commit-style.md). A refactor records BEFORE in place of RED.
+   A subagent never commits, so the main session supplies the RED commit. For a pure addition, RED can be the base commit.
+   Proof follows AGENTS.md "Testing": an end-to-end check first, with its output saved.
+9. Last step before done: read [prove-it-works](../_vendor/pstack/skills/principle-prove-it-works/SKILL.md) and apply it.
+   Keep the artifact in `.claude/cache/e2e/`. Never commit it.
 
 ## Never
 

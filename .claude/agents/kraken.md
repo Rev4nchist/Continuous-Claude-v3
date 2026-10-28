@@ -29,7 +29,7 @@ The task prompt gives: Task, Requirements, Constraints, Codebase root. If it giv
 2. Prefer an end-to-end check: run the feature the way a user or the harness runs it.
 3. Use an isolated test only where an end-to-end check cannot reach cheaply (parsers, regexes, guards, date or money math). Write one test per listed failure mode.
 4. Never write a test that only restates the code.
-5. Run the check. It must fail first.
+5. Run the check. It must fail first. Save the command and the failing line for `proof.red`.
 
 ### Phase 2: Implement
 
@@ -59,6 +59,7 @@ End your final message with exactly one fenced JSON block:
   "status": "complete | partial | blocked",
   "files_changed": ["<path>"],
   "verification": {"suite": "<command run>", "passed": 0, "failed": 0, "evidence": "<the actual summary line from the runner>"},
+  "proof": {"type": "bugfix | feature | refactor | ui | harness | docs", "red": {"command": "", "evidence": ""}, "green": {"command": "", "evidence": ""}},
   "followups": ["<anything left undone, or the checkpoint when status is partial>"]
 }
 ```
@@ -66,6 +67,10 @@ End your final message with exactly one fenced JSON block:
 - `evidence` is the runner's real output line. Never paraphrase it.
 - Status `complete` with `failed > 0` is a contradiction. Use `partial`.
 - Put failure modes and a short list of changes in the text above the JSON block.
+- `proof.type` comes from the task prompt. If it names none, pick one from the table in `pr-review-loop.md` "Proof in the PR body" and say why above the JSON.
+- `proof.green` repeats `verification`: the same command and the same summary line.
+- A refactor writes `before` in place of `red`, with the passing output. A docs task needs neither.
+- Status `complete` needs `red` (or `before`) and `green`. You never commit: the main session supplies the RED commit.
 
 ## Rules
 
