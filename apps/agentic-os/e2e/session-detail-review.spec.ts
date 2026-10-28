@@ -142,6 +142,34 @@ test.describe('paths in the strings the detail shows (B1 rule 18)', () => {
     expectNoPath(bodies, [`app${tag}`, `free${tag}`, `rec${tag}`]);
   });
 
+  test('a path with spaces in it does not leave its tail visible', async ({ page, request }) => {
+    const tag = randomUUID().slice(0, 8);
+    const bodies = await detailBodies(page, request, {
+      brief: makeBrief({
+        title: 'E2E paths with spaces',
+        goal: `Archive /home/alice${tag}/Acme Corp/layoffs${tag}.csv before Friday`,
+        ask: [
+          ask(
+            `Open "C:\\Users\\First Last${tag}\\My Docs\\plan.txt" now?`,
+            `Use C:\\Users\\Jo Smith${tag}\\Program Files\\x.exe today.`,
+          ),
+        ],
+        updatedAt: secondsAgo(60),
+      }),
+    });
+    await expect(page.getByTestId('detail-goal')).toContainText('Archive <path> before Friday');
+    await expect(page.getByTestId('detail-ask')).toContainText('Open <path> now?');
+    await expect(page.getByTestId('detail-ask')).toContainText('Use <path> today.');
+    expectNoPath(bodies, [
+      'Acme Corp',
+      `layoffs${tag}`,
+      `Last${tag}`,
+      'My Docs',
+      `Smith${tag}`,
+      'Program Files',
+    ]);
+  });
+
   test('a path in a decision text is replaced with <path>', async ({ page, request }) => {
     const tag = randomUUID().slice(0, 8);
     const bodies = await detailBodies(page, request, {
