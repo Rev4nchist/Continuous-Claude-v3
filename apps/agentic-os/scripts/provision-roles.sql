@@ -54,8 +54,14 @@ BEGIN
     RAISE EXCEPTION 'agentic_os_indexer already holds access outside agentic_os: aborting';
   END IF;
   IF EXISTS (SELECT 1 FROM pg_class c JOIN pg_roles r ON r.oid = c.relowner
-              WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')) THEN
-    RAISE EXCEPTION 'an agentic_os role owns objects: aborting';
+              WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer'))
+     OR EXISTS (SELECT 1 FROM pg_namespace n JOIN pg_roles r ON r.oid = n.nspowner
+                 WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer'))
+     OR EXISTS (SELECT 1 FROM pg_proc p JOIN pg_roles r ON r.oid = p.proowner
+                 WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer'))
+     OR EXISTS (SELECT 1 FROM pg_database d JOIN pg_roles r ON r.oid = d.datdba
+                 WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')) THEN
+    RAISE EXCEPTION 'an agentic_os role owns a relation, schema, function or database: aborting';
   END IF;
 END $$;
 
@@ -117,6 +123,40 @@ BEGIN
       AND has_table_privilege('agentic_os_app', 'public.archival_memory', 'SELECT')
       AND has_table_privilege('agentic_os_app', 'agentic_os.lane', 'SELECT')) THEN
     RAISE EXCEPTION 'agentic_os_app cannot read what it needs: aborting';
+  END IF;
+END $$;
+
+-- Effective access, PUBLIC grants included (the has_*_privilege functions count them;
+-- information_schema.role_table_grants does not). Only the SELECT grants above may remain.
+DO $$
+DECLARE
+  bad text;
+  w constant text := 'INSERT,UPDATE,DELETE,TRUNCATE,REFERENCES,TRIGGER';
+BEGIN
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO bad
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+     AND ((c.relkind IN ('r', 'p', 'v', 'm', 'f') AND has_table_privilege('agentic_os_app', c.oid, w))
+       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_app', c.oid, 'UPDATE')));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_app can write: %', bad; END IF;
+
+  SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO bad
+    FROM pg_class c JOIN pg_namespace n ON n.oid = c.relnamespace
+   WHERE n.nspname NOT IN ('pg_catalog', 'information_schema', 'agentic_os') AND n.nspname NOT LIKE 'pg_toast%'
+     AND ((c.relkind IN ('r', 'p', 'v', 'm', 'f') AND has_table_privilege('agentic_os_indexer', c.oid, w))
+       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_indexer', c.oid, 'UPDATE')));
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_indexer can write outside agentic_os: %', bad; END IF;
+
+  SELECT string_agg(r.rolname || ' on ' || n.nspname, ', ') INTO bad
+    FROM pg_namespace n, pg_roles r
+   WHERE r.rolname IN ('agentic_os_app', 'agentic_os_indexer')
+     AND n.nspname NOT IN ('pg_catalog', 'information_schema') AND n.nspname NOT LIKE 'pg_toast%'
+     AND has_schema_privilege(r.rolname, n.oid, 'CREATE');
+  IF bad IS NOT NULL THEN RAISE EXCEPTION 'a role can create objects: %', bad; END IF;
+
+  IF has_database_privilege('agentic_os_app', current_database(), 'CREATE')
+     OR has_database_privilege('agentic_os_indexer', current_database(), 'CREATE') THEN
+    RAISE EXCEPTION 'a role can create schemas in this database: aborting';
   END IF;
 END $$;
 

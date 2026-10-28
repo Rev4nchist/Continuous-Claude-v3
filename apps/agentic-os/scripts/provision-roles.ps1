@@ -31,6 +31,13 @@ if ($Apply -and (Test-Path $envFile)) {
   throw "$([IO.Path]::GetFullPath($envFile)) already exists. Refusing: -Apply would rotate passwords the file no longer matches. Move the file first."
 }
 
+# Same host port as docker/docker-compose.yml: POSTGRES_PORT, default 5432. Checked before any
+# DB call: a bad value must not leave committed passwords with no .env.local to hold them.
+$port = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { '5432' }
+if ($port -notmatch '^\d{1,5}$' -or [int]$port -lt 1 -or [int]$port -gt 65535) {
+  throw "POSTGRES_PORT is not a port number from 1 to 65535: $port"
+}
+
 function New-Password {
   $bytes = [byte[]]::new(32)
   [Security.Cryptography.RandomNumberGenerator]::Fill($bytes)
@@ -69,9 +76,6 @@ if (-not $Apply) {
   return
 }
 
-# Same host port as docker/docker-compose.yml: POSTGRES_PORT, default 5432.
-$port = if ($env:POSTGRES_PORT) { $env:POSTGRES_PORT } else { '5432' }
-if ($port -notmatch '^\d{1,5}$') { throw "POSTGRES_PORT is not a port number: $port" }
 $lines = @(
   "AGENTIC_OS_DATABASE_URL=postgresql://agentic_os_app:$appPw@127.0.0.1:$port/continuous_claude"
   "AGENTIC_OS_INDEXER_DATABASE_URL=postgresql://agentic_os_indexer:$indexerPw@127.0.0.1:$port/continuous_claude"
