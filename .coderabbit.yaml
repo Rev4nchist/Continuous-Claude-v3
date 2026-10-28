@@ -13,9 +13,12 @@ reviews:
     # Off: a push does not start a review, so after a push on a labelled PR post "@coderabbitai review"
     # once. review-status.mjs says so in its reason. Do not post it after a rate-limit notice.
     auto_incremental_review: false
+    # Backstop only: if the label gate is ever removed, pause after 2 reviewed commits.
+    auto_pause_after_reviewed_commits: 2
     drafts: false
+    # Anchored: an unanchored "main" also matches branches such as "main-2".
     base_branches:
-      - main
+      - "^main$"
   # Skip list: keep equal to REVIEW.md (scripts/ratchets/review-skip-sync.mjs checks it).
   path_filters:
     - "!**/*.min.js"
@@ -31,10 +34,42 @@ reviews:
   poem: false
   review_status: true
   collapse_walkthrough: true
-  # Advisory only: no CodeRabbit-authored commits. Key verified in docs.coderabbit.ai/reference/configuration
-  # (Fix comments finishing touch). The ongoing "Autofix"/autopilot mode has no documented YAML key.
+  # Walkthrough extras that cost review time and add no CCv3 value.
+  sequence_diagrams: false
+  related_prs: false
+  related_issues: false
+  suggested_reviewers: false
+  suggested_labels: false
+  # Advisory only: no CodeRabbit-authored commits. fix_ci and resolve_merge_conflict default to true
+  # on the Team plan and commit to the branch when triggered, so all writing touches are off.
+  # The ongoing "Autofix"/autopilot mode has no documented YAML key (coderabbit-cli.md forbids it).
   finishing_touches:
     autofix:
+      enabled: false
+    docstrings:
+      enabled: false
+    unit_tests:
+      enabled: false
+    fix_ci:
+      enabled: false
+    resolve_merge_conflict:
+      enabled: false
+  pre_merge_checks:
+    docstrings:
+      mode: "off"
+  # Our CI runs Semgrep (ccv3-checks.yml); the Markdown linters are noise on a mostly-Markdown repo.
+  # Secret, workflow and shell scanners stay on (gitleaks, trufflehog, actionlint, zizmor,
+  # shellcheck, psscriptanalyzer, skillspector, yamllint).
+  tools:
+    semgrep:
+      enabled: false
+    opengrep:
+      enabled: false
+    markdownlint:
+      enabled: false
+    languagetool:
+      enabled: false
+    dotenvLint:
       enabled: false
 
 knowledge_base:
