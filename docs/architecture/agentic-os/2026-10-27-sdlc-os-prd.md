@@ -161,7 +161,7 @@ Each phase is its own branch, worktree and PR to `fork`, label `review:coderabbi
 
 | Phase | Scope | Proof of done |
 |---|---|---|
-| **P0** | Make `apps/agentic-os` run: `.env.local`, DB roles `agentic_os_app` and `agentic_os_reader` (**confirm-first**), seed `project` from the registry, dark theme, port 3010 | `npm run e2e` smoke passes at desktop and phone width; `psql` as `agentic_os_reader` is denied `INSERT INTO public.sessions` |
+| **P0** | Make `apps/agentic-os` run: `.env.local`, DB roles `agentic_os_app` (SELECT only) and `agentic_os_indexer` (writes to `agentic_os` only) (**confirm-first**), seed `project` from the registry, dark theme, port 3010 | `npm run e2e` smoke passes at desktop and phone width; `psql` as `agentic_os_app` is denied `INSERT INTO public.sessions` |
 | **P1a Pane** | `brief_set`; snapshot fields (repo, branch, worktree, goal, stopAt, title, ask, proof); band and `/os` per mockup board 1-2; chip rules; redaction | headless `claude -p` run calls `brief_set`; snapshot holds the fields; a task with no proof keeps the chip off DONE; a seeded secret does not render |
 | **P1b Fleet** | Ready for Dave, session cards with titles, session detail, lane board (read-only), PR panel, data-source health, unmatched, closed | open the site with 2 live sessions; a new session shows within 10 s; Ready for Dave lists asks from state files; Playwright E2E saved |
 | **P2** | Dave's writes: move a card, notes. Migration for session title, branch, worktree. Local handoff table with one-way Notion export | move a card in the UI, `lane.mjs board` shows it; handoff round trip |
