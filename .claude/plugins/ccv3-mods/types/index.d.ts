@@ -61,8 +61,9 @@ export type OsLane = { id: string; title: string; state: string; note?: string }
  * READY, merged or closed ends a watch. LIMITED means the reviewer did not finish a review of the head (a person decides).
  * REVIEWED means the head was reviewed but is not READY (open threads or a failed check): the model acts.
  * STALLED means no review 60 minutes after the head appeared.
+ * PROOF means the PR body proof is missing or wrong: the author fixes the Evidence block now.
  */
-export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED'
+export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF'
 
 /**
  * One watched PR. `state` is null until the first check. `whenReady` asks Land/No at READY.

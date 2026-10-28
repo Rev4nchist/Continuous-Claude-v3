@@ -116,7 +116,7 @@ export const laneRows = (lanes: OsLane[] | null): PaneRow[] => {
 }
 
 /** A watched PR a person or the model must look at: rate limited, reviewed with findings, or no review. */
-const attention = (state: string | null): boolean => state === 'LIMITED' || state === 'REVIEWED' || state === 'STALLED'
+const attention = (state: string | null): boolean => state === 'LIMITED' || state === 'REVIEWED' || state === 'STALLED' || state === 'PROOF'
 
 const PR_TONE: Record<string, Tone> = { READY: 'ok', LIMITED: 'warn', REVIEWED: 'warn', STALLED: 'warn', PENDING: 'dim' }
 
