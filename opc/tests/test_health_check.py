@@ -352,6 +352,10 @@ def test_vitest_check_uses_output_file(tmp_path):
     """check_hook_vitest must pass --outputFile to vitest and read that file."""
     from scripts.health_check import check_hook_vitest, CLAUDE_DIR
 
+    # The checkout's real hooks/package.json must survive this test.
+    real_pkg = CLAUDE_DIR / "hooks" / "package.json"
+    real_before = real_pkg.read_bytes() if real_pkg.exists() else None
+
     vitest_json = {
         "numTotalTests": 10,
         "numPassedTests": 10,
@@ -373,28 +377,25 @@ def test_vitest_check_uses_output_file(tmp_path):
         ns.stderr = ""
         return ns
 
-    hooks_pkg = CLAUDE_DIR / "hooks" / "package.json"
-    hooks_pkg.parent.mkdir(parents=True, exist_ok=True)
-    hooks_pkg.write_text("{}", encoding="utf-8")
+    # Point the check at a fake .claude dir. Writing the checkout's own
+    # hooks/package.json and then deleting it removed the real file.
+    fake_claude = tmp_path / ".claude"
+    (fake_claude / "hooks").mkdir(parents=True)
+    (fake_claude / "hooks" / "package.json").write_text("{}", encoding="utf-8")
 
-    try:
-        with patch("scripts.health_check._run", side_effect=fake_run):
-            result = check_hook_vitest()
+    with patch("scripts.health_check.CLAUDE_DIR", fake_claude), \
+            patch("scripts.health_check._run", side_effect=fake_run):
+        result = check_hook_vitest()
 
-        # Must have passed --outputFile in the command
-        assert any(a.startswith("--outputFile=") for a in captured_cmd), (
-            "--outputFile not found in vitest command: " + str(captured_cmd)
-        )
-        # Must have read the file and reported correctly
-        assert result.status == "PASS"
-        assert "10/10" in result.evidence
-    finally:
-        # Clean up the package.json we created only if it was ours
-        try:
-            if hooks_pkg.exists() and hooks_pkg.read_text() == "{}":
-                hooks_pkg.unlink(missing_ok=True)
-        except OSError:
-            pass
+    # Must have passed --outputFile in the command
+    assert any(a.startswith("--outputFile=") for a in captured_cmd), (
+        "--outputFile not found in vitest command: " + str(captured_cmd)
+    )
+    # Must have read the file and reported correctly
+    assert result.status == "PASS"
+    assert "10/10" in result.evidence
+    real_after = real_pkg.read_bytes() if real_pkg.exists() else None
+    assert real_after == real_before, "test changed the real .claude/hooks/package.json"
 
 
 # ---------------------------------------------------------------------------
@@ -1028,3 +1029,20 @@ def test_git_remote_sync_uses_rev_list_against_fork_main():
                  if "status" in c and "-sb" in c]
     assert not status_sb, (
         "must not use 'git status -sb' for fork backup delta: " + str(captured))
+
+
+# ---------------------------------------------------------------------------
+# Postgres container remediation points at this checkout's docker/ dir
+# ---------------------------------------------------------------------------
+
+
+@pytest.mark.parametrize("returncode", [0, 1])
+def test_postgres_remediation_uses_repo_docker_dir(returncode):
+    """Both failure paths name REPO_ROOT/docker, not a fixed home path."""
+    from scripts import health_check as hc
+
+    fake = SimpleNamespace(returncode=returncode, stdout="", stderr="boom")
+    with patch("scripts.health_check._run", return_value=fake):
+        r = hc.check_postgres_container()
+    assert r.status == "FAIL"
+    assert (hc.REPO_ROOT / "docker").as_posix() in r.remediation
