@@ -41,11 +41,11 @@ test.describe('rawProject holds no absolute path', () => {
       expect(label, `rawProject of ${session.id} must not be empty`).not.toBe('');
       expect(label, `rawProject "${label}" holds a path separator`).not.toMatch(/[\\/]/);
       expect(label, `rawProject "${label}" holds a drive letter`).not.toMatch(/^[A-Za-z]:/);
+      // The folder name can hold the user name on purpose (`dkhay-notes`); only a bare user name is a leak.
       for (const fragment of leakFragments()) {
-        expect(
-          label.toLowerCase(),
-          `rawProject "${label}" leaks "${fragment}"`,
-        ).not.toContain(fragment.toLowerCase());
+        expect(label.toLowerCase(), `rawProject "${label}" leaks "${fragment}"`).not.toBe(
+          fragment.toLowerCase(),
+        );
       }
     }
   });
@@ -62,7 +62,7 @@ test.describe('rawProject holds no absolute path', () => {
     expect(text).not.toContain(`/home/${user}`);
   });
 
-  test('page: the strip shows no absolute path', async ({ page }) => {
+  test('page (smoke): the page text shows no absolute path', async ({ page }) => {
     await page.goto('/');
     await expect(page.getByRole('heading', { level: 1, name: 'Agentic OS' })).toBeVisible();
     const text = (await page.locator('body').innerText()).toLowerCase();

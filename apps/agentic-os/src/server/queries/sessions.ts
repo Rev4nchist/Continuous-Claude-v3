@@ -3,6 +3,7 @@ import 'server-only';
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
+import { projectLabel } from '@/server/sources/project-label';
 import { redact } from '@/server/sources/redact';
 import { scrubPathsInText } from '@/server/sources/safe-message';
 
@@ -38,21 +39,6 @@ const DEFAULT_WINDOW_MINUTES = 15;
  *  truncates and says so rather than rendering an unbounded list. */
 const MAX_SESSIONS = 50;
 
-const MAX_PROJECT_LABEL = 60;
-const HOME_ROOTS = new Set(['users', 'home']);
-
-/** `sessions.project` holds an absolute working directory. Send only its last folder, and `~`
- *  for a home folder, whose last folder is the user name. Secrets and any path left inside the
- *  folder name are removed too. */
-function projectLabel(raw: string): string {
-  const parts = raw.split(/[\\/]/).filter((part) => part !== '');
-  const isHome =
-    (parts.length === 2 && HOME_ROOTS.has(parts[0].toLowerCase())) ||
-    (parts.length === 3 && /^[A-Za-z]:$/.test(parts[0]) && HOME_ROOTS.has(parts[1].toLowerCase()));
-  if (isHome) return '~';
-  const leaf = scrubPathsInText(redact(parts.pop() ?? '').text);
-  return leaf === '' ? 'unknown' : leaf.slice(0, MAX_PROJECT_LABEL);
-}
 
 export type ActiveSession = {
   id: string;
@@ -64,7 +50,8 @@ export type ActiveSession = {
   projectKey: string | null;
   projectDisplayName: string | null;
   /** The `sessions.project` folder name (last path segment, `~` for a home folder), always
-   *  present. Shown when unmapped so the fix (add an alias row) is visible without opening psql. */
+   *  present. Shown when unmapped as a hint to which project it is. The alias row needs the full
+   *  path, which this label no longer carries: read it in psql. */
   rawProject: string;
   /** Truncated in SQL, not in the browser — this is the user's prompt text and
    *  there is no reason to ship 4KB of it over the wire every 5 seconds. */
@@ -233,7 +220,7 @@ export async function getActiveSessions(
       projectKey: r.project_key,
       projectDisplayName: r.display_name,
       rawProject: projectLabel(r.raw_project),
-      workingOn: r.working_on,
+      workingOn: r.working_on === null ? null : scrubPathsInText(redact(r.working_on).text),
       heartbeatSecondsAgo: Number(r.heartbeat_seconds_ago ?? 0),
       // NOT `?? 0`: zero would render as "active this second" for every row that
       // predates agent-activity tracking, which is the confidently-wrong failure
