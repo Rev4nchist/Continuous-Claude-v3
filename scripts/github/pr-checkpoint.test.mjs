@@ -523,4 +523,9 @@ test('T32 (capacity): a 7-day count dated more than 7 days before now changes no
   assert.equal(stale.capacity.band, 'unknown', 'a count from 8 days ago is stale');
   assert.equal(stale.recommended, 'coderabbit', 'a stale count never makes wait the default');
   assert.match(stale.capacity.warning, /2026-10-20.*over 7 days old/);
+  for (const bad of ['not-a-date', '2026-11-05']) {
+    const r = await at(bad);
+    assert.equal(r.capacity.band, 'unknown', `${bad}: an invalid or future date is stale`);
+    assert.equal(r.recommended, 'coderabbit', bad);
+  }
 });

@@ -111,8 +111,12 @@ const classBudget = (policy, cls) => budgetPair(policy.budget?.[cls] ?? policy.b
 
 const WEEK_MS = 7 * 24 * 3600 * 1000;
 
-/** A dated manual count older than 7 days at `now` is stale. An undated count is taken as given. */
-const isStale = (date, now) => Boolean(date) && Date.parse(now) - Date.parse(date) > WEEK_MS;
+/** A dated manual count is stale when the date is invalid, in the future, or over 7 days before `now`. An undated count is taken as given. */
+function isStale(date, now) {
+  if (!date) return false;
+  const age = Date.parse(now) - Date.parse(date);
+  return !Number.isFinite(age) || age < 0 || age > WEEK_MS;
+}
 
 function capacityOf(policy, now) {
   const n = policy.coderabbit?.reviews_7d_manual;
