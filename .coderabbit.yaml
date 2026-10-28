@@ -98,7 +98,8 @@ reviews:
     - path: "scripts/github/**"
       instructions: |
         READY fails closed: missing data, rate-limit notices, "Review skipped" and "Review failed" never count.
-        CodeRabbit CLI output never satisfies READY. Never add --use-credits or --api-key. API reads paginate.
+        CodeRabbit CLI output never satisfies READY. Never add a paid-usage or API-key flag to a CodeRabbit
+        command (coderabbit-cli.md lists them). API reads paginate.
     - path: ".github/workflows/**"
       instructions: "pull_request_target jobs never check out or run PR-head code. Actions pin to a SHA. Secrets are never echoed."
     - path: "**/*.ps1"
