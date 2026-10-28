@@ -111,3 +111,186 @@ describe('agentic-os band', () => {
     }
   })
 })
+
+// The two core lines of the band (PRD 5.3), through the whole mod. Every check reads what the person sees.
+// C1 a session with no brief draws no GOAL not set, or draws nothing at all while idle
+// C2 a brief_set goal does not replace GOAL not set, or the ASK and UNPROVEN counts stay at zero
+// C3 a seeded secret in a goal or an ask (brief_set or the turn-end parser) reaches a drawn Text
+// C4 repo, branch and worktree are not read at the session start, or not re-read at a turn start, or not in the snapshot
+// C5 a git read that fails reaches the session, or leaves something other than null in the snapshot
+// C6 the existing widget line (row-band) is dropped or moved above the core lines, or the rows do not give way
+
+const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
+const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
+
+const core = async ($: Engine, columns = 120) => {
+  const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, bodyColumns: columns } })
+  const rows = (await band.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-'))
+  const texts = (await band.findAll({ type: 'Text' })).map(found => found.text)
+  await band.unmount()
+  const text = (key: string) => rows.find(found => found.key === key)?.text
+  return { keys: rows.map(found => found.key), line1: text('row-core-1'), line2: text('row-core-2'), widget: text('row-band'), texts, all: rows.map(found => found.text).join('\n') }
+}
+
+describe('agentic-os core band', () => {
+  test('C1 a session with no brief draws both core lines with GOAL not set, idle, and no widget line', async ($, on) => {
+    world(on)
+    const got = await core($)
+    expect(got.line1).toContain('IDLE')
+    expect(got.line2).toContain('GOAL not set')
+    expect(got.line2).toMatch(/PLAN [▱]+ 0\/0/)
+    expect(got.widget).toBeUndefined()
+    expect(got.keys.indexOf('row-core-1')).toBeLessThan(got.keys.indexOf('row-core-2'))
+  })
+
+  test('C2 a brief_set goal shows, and open asks and a done task with no proof are counted', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'build' } } }))
+    on('tool.call', { tool: 'TaskUpdate' }, () => ({ result: { success: true } }))
+    await $.tool.call({ tool: 'TaskCreate', subject: 'build', description: 'd' })
+    await $.tool.call({ tool: 'TaskUpdate', taskId: '1', status: 'completed' })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove P1a', ask: [{ kind: 'question', text: 'Which branch?' }] })
+    const got = await core($)
+    expect(got.line2).toContain('GOAL prove P1a')
+    expect(got.line2).not.toContain('not set')
+    expect(got.line2).toContain('ASK 1')
+    expect(got.line2).toContain('UNPROVEN 1')
+    expect(got.line2).toMatch(/PLAN ▰ 1\/1/)
+    expect(got.line1).toContain('WAITING ON DAVE')
+    // The widget line still carries the task progress (the existing band), below the core lines.
+    expect(got.widget).toContain('1/1 done')
+    expect(got.keys).toEqual(['row-core-1', 'row-core-2', 'row-band'])
+  })
+
+  test('C3 a secret in a goal or an ask never reaches a drawn Text, from brief_set or from the turn-end parser', async ($, on) => {
+    world(on)
+    on('turn.complete', (_$, e) => ({ text: e.answer }))
+    await $.tool.call({ tool: BRIEF_TOOL, goal: `ship ${SECRET}`, ask: [{ kind: 'question', text: `use ${SECRET}?`, recommend: SECRET }] })
+    let got = await core($)
+    expect(got.line2).toContain('GOAL ship')
+    expect(got.line2).toContain('ASK 1')
+    expect(got.all).not.toContain(SECRET)
+    expect(got.texts.join('\n')).not.toContain(SECRET)
+    expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
+
+  })
+
+  test('C3 a secret in the turn-end parser input (goal line and Next steps block) never reaches a drawn Text', async ($, on) => {
+    world(on)
+    on('turn.complete', (_$, e) => ({ text: e.answer }))
+    await $.turn.complete({
+      answer: `Goal: ship ${SECRET}\n\nDone.\n\n## Next steps\n1. Rotate ${SECRET} before the merge?\n`,
+      durationMs: 1,
+      isAborted: false,
+      turnId: 't1',
+      reason: 'end_turn',
+    } as never)
+    const got = await core($)
+    expect(got.line1).toContain('WAITING ON DAVE')
+    expect(got.line2).toMatch(/GOAL ship\S* .*\[parsed\]/)
+    expect(got.line2).toContain('ASK 1')
+    expect(got.all).not.toContain(SECRET)
+    expect(got.texts.join('\n')).not.toContain('a'.repeat(40))
+  })
+
+  test('C6 with one row of room only the first core line draws, and survey time draws nothing', async ($, on) => {
+    world(on)
+    const one = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows: 1 } })
+    expect((await one.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))).toEqual(['row-core-1'])
+    await one.unmount()
+    const survey = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, hasSurvey: true } })
+    expect(await survey.find({ key: 'row-core-1' })).toBeUndefined()
+    await survey.unmount()
+  })
+})
+
+// Repo, branch and worktree: the mod reads the .git files of the session folder. The files here are a Map.
+type Git = { files: Record<string, string>; reads: string[]; writes: { path: string; text: string }[] }
+
+const gitWorld = (on: On, files: Record<string, string>, opts: { env?: Record<string, string>; noCwd?: boolean } = {}): Git => {
+  const cwd = 'C:/wt/w1/src'
+  const seen: Git = { files, reads: [], writes: [] }
+  mock.clock(on, { now: 1_000 })
+  mock.env(on, { USERPROFILE: 'C:/home', ...opts.env })
+  on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
+  on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('fs.write', (_$, e) => {
+    seen.writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
+  on('fs.read', (_$, e) => {
+    // The engine hands the path over with the platform's separators.
+    const path = e.path.replace(/\\/g, '/')
+    seen.reads.push(path)
+    const hit = seen.files[path]
+    if (hit === undefined) throw new Error(`ENOENT ${e.path}`)
+    return { value: hit }
+  })
+  const where = () => {
+    if (opts.noCwd) throw new Error('no cwd')
+    return { value: cwd }
+  }
+  on('session.cwd', where)
+  on('session.root', where)
+  on('session.id', () => ({ value: 'test-session' }))
+  on('command.register', (_$, e) => ({ value: { command: e.name } }))
+  on('tool.register', (_$, e) => ({ value: { tool: `mcp__ccv3-mods__${e.name}` } }))
+  return seen
+}
+
+const LINKED = {
+  'C:/wt/w1/.git': 'gitdir: C:/main/repo-x/.git/worktrees/w1\r\n',
+  'C:/main/repo-x/.git/worktrees/w1/HEAD': 'ref: refs/heads/feat/one\r\n',
+  'C:/main/repo-x/.git/worktrees/w1/commondir': '../..\r\n',
+}
+
+const lastSnapshot = (seen: Git): Record<string, any> =>
+  JSON.parse(seen.writes.filter(write => /[\\/]test-session\.json$/.test(write.path)).at(-1)?.text ?? '{}')
+
+describe('agentic-os git info', () => {
+  test('C4 the start reads the .git files, a turn start reads them again, and the snapshot and the band carry the result', async ($, on) => {
+    const seen = gitWorld(on, { ...LINKED })
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen)).toMatchObject({ repo: 'repo-x', branch: 'feat/one', worktree: 'w1' })
+
+    seen.files['C:/main/repo-x/.git/worktrees/w1/HEAD'] = 'ref: refs/heads/feat/two\n'
+    await $.turn.start({ turnId: 't1' } as never)
+    expect(lastSnapshot(seen).branch).toBe('feat/two')
+    const line1 = (await core($)).line1
+    expect(line1).toContain('feat/two')
+    expect(line1).toContain('repo-x')
+  })
+
+  test('C4 a primary checkout has worktree null', async ($, on) => {
+    const seen = gitWorld(on, { 'C:/wt/w1/.git/HEAD': 'ref: refs/heads/main\n' })
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen)).toMatchObject({ repo: 'w1', branch: 'main', worktree: null })
+  })
+
+  test('C5 no .git at all: the start succeeds and the snapshot fields are null', async ($, on) => {
+    const seen = gitWorld(on, {})
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const snapshot = lastSnapshot(seen)
+    expect(snapshot.brief.goal).toBe('g')
+    expect(snapshot).toMatchObject({ repo: null, branch: null, worktree: null })
+    expect((await core($)).line1).toContain('● -')
+  })
+
+  test('C5 a cwd that cannot be read leaves the fields null and the session alone', async ($, on) => {
+    const seen = gitWorld(on, { ...LINKED }, { noCwd: true })
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen)).toMatchObject({ repo: null, branch: null, worktree: null })
+  })
+
+  test('C4 the off switch reads nothing', async ($, on) => {
+    const seen = gitWorld(on, { ...LINKED }, { env: { CCV3_MODS_OFF: '1' } })
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: false })
+    await $.turn.start({ turnId: 't1' } as never)
+    expect(seen.reads).toEqual([])
+  })
+})

@@ -212,4 +212,22 @@ describe('hud', () => {
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
     expect((await hudOn($, 'terminal')).taskRow).toContain('ctx 42%')
   })
+
+  // H11 the HUD row draws above the two core lines (PRD 5.3: the core lines never move), or the rows do not give way in order
+  test('H11 with the HUD up the rows run core 1, core 2, HUD, widget; short room drops the widget, then the HUD', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const keysAt = async (maxRows: number) => {
+      const band = await $.ui.mount({ plugin: 'ccv3-mods', surface: 'terminal', component: 'AbovePrompt', props: { ...BAND_PROPS, maxRows } })
+      const keys = (await band.findAll({ type: 'Box' })).map(found => found.key).filter(key => key?.startsWith('row-'))
+      await band.unmount()
+      return keys
+    }
+    expect(await keysAt(10)).toEqual(['row-core-1', 'row-core-2', 'row-hud', 'row-band'])
+    expect(await keysAt(3)).toEqual(['row-core-1', 'row-core-2', 'row-hud'])
+    expect(await keysAt(2)).toEqual(['row-core-1', 'row-core-2'])
+    expect(await keysAt(1)).toEqual(['row-core-1'])
+  })
 })
