@@ -1,4 +1,5 @@
-import { existsSync } from 'node:fs';
+import { existsSync, mkdirSync } from 'node:fs';
+import { tmpdir } from 'node:os';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
 
@@ -35,6 +36,15 @@ if (!process.env.AGENTIC_OS_DATABASE_URL && !existsSync(join(appDir, '.env.local
 const PORT = 3011;
 const ORIGIN = `http://127.0.0.1:${PORT}`;
 
+/**
+ * Where the E2E server reads session state files (AGENTIC_OS_STATE_DIR). A temp dir, never
+ * the real ~/.claude/state/agentic-os, so fixture files cannot mix with a live session's
+ * snapshot. e2e/state-fixture.ts imports this constant, so the server and the specs
+ * share one path. The specs empty the directory before and after every test.
+ */
+export const E2E_STATE_DIR = join(tmpdir(), 'agentic-os-e2e-state');
+mkdirSync(E2E_STATE_DIR, { recursive: true });
+
 export default defineConfig({
   testDir: './e2e',
   timeout: 60_000,
@@ -63,7 +73,7 @@ export default defineConfig({
   ],
   webServer: {
     command: `npx next dev --port ${PORT} --hostname 127.0.0.1`,
-    env: { AGENTIC_OS_DIST_DIR: '.next-e2e' },
+    env: { AGENTIC_OS_DIST_DIR: '.next-e2e', AGENTIC_OS_STATE_DIR: E2E_STATE_DIR },
     url: `${ORIGIN}/icon.svg`,
     reuseExistingServer: false,
     timeout: 120_000,
