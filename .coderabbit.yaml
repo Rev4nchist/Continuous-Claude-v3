@@ -30,7 +30,10 @@ reviews:
     - "!.claude/cache/**"
     - "!docs/reviews/**"
   profile: chill
-  request_changes_workflow: false
+  auto_approvals:
+    enabled: false
+  # Adds "extra context used" to each review, so we can see which guideline files load (5-PR window).
+  review_details: true
   high_level_summary: true
   poem: false
   review_status: true
@@ -80,30 +83,43 @@ reviews:
       instructions: |
         Claude Code hook. Check: the settings.json matcher and the runtime tool_name check name the
         same tools, and those tools exist (the subagent tool is "Agent"). A guard fails CLOSED on parse
-        doubt; an advisory hook fails OPEN and quiet. Flag the reverse. Flag any new hand-written shell
-        lexer. Detached children use lib/spawn-hidden.ts. stdout carries only the hook JSON. A new hook
-        appears in .claude/settings.json.template in the same PR. Do not comment on dist/ freshness.
+        doubt. An advisory hook fails OPEN: no stderr, exit 0. Flag the reverse. Flag any new
+        hand-written shell lexer. child_process never uses shell: true or a non-literal shell option.
+        Detached children use .claude/hooks/src/lib/spawn-hidden.ts. stdout carries only the hook JSON.
+        A new hook appears in .claude/settings.json.template in the same PR. Do not comment on dist/.
     - path: ".claude/hooks/src/__tests__/**"
       instructions: "Tests import the real function. Flag logic copied into a test and tests that restate the code."
-    - path: ".claude/{rules-src,rules-ondemand,skills,agents}/**"
+    - path: ".claude/{rules-src,rules-ondemand}/**"
       instructions: |
-        Steering text loaded into sessions. Under .claude/skills/_vendor/ apply only the _vendor
-        instruction and skip this one. Check: STE style (max 20/25 words, active voice, CONTEXT.md terms);
-        no duplicate of another rule; a rule that claims enforcement names a registered hook or script;
-        a new on-demand rule updates manifest.json and on-demand-rules.md; a skill description is a
-        trigger that does not take another skill's trigger; agents never use haiku.
-        No docstring or unit-test suggestions. Do not count bytes.
+        Rule text loaded into sessions. Use CONTEXT.md terms and active voice. Flag only a sentence
+        clearly over 25 words; do not count words or bytes otherwise. No duplicate of another rule.
+        A rule that claims enforcement names a registered hook or script. A new on-demand rule updates
+        manifest.json and on-demand-rules.md. A behaviour run listed as "after land" in Evidence is accepted.
+    - path: ".claude/skills/**"
+      instructions: |
+        Skill. Under .claude/skills/_vendor/ apply only the _vendor instruction. The description is a
+        trigger, not a summary, and it does not take another skill's trigger. No docstring or unit-test ideas.
+    - path: ".claude/agents/**"
+      instructions: "Agent definition. The .md and .json mirror agree. The tools list covers what the body asks the agent to do. Model tier is checked by a gate; do not comment on it."
     - path: ".claude/skills/_vendor/**"
       instructions: "Third-party content. Report only security issues: secrets, remote code fetch, destructive commands. Ignore style and steering checks."
     - path: "scripts/github/**"
       instructions: |
-        READY fails closed: missing data, rate-limit notices, "Review skipped" and "Review failed" never count.
-        CodeRabbit CLI output never satisfies READY. Never add a paid-usage or API-key flag to a CodeRabbit
-        command (coderabbit-cli.md lists them). API reads paginate.
+        READY fails closed: missing data, rate-limit notices, "Review skipped" and "Review failed" never
+        count. CodeRabbit CLI output never satisfies READY. Never add a paid-usage or API-key flag to a
+        CodeRabbit command. API reads paginate. child_process never uses shell: true or a non-literal
+        shell option. An empty or unreadable lock file counts as held until it is stale.
     - path: ".github/workflows/**"
       instructions: "pull_request_target jobs never check out or run PR-head code. Actions pin to a SHA. Secrets are never echoed."
     - path: "**/*.ps1"
-      instructions: "PowerShell 7. Single quotes for literal text. No taskkill /T. No bash-only syntax."
+      instructions: "PowerShell 7. Single quotes for literal text. No taskkill /T. No bash-only syntax. A file that holds a secret gets a restricted ACL before the secret is written."
+    - path: "apps/**/*.sql"
+      instructions: |
+        Postgres role and privilege script. Review the whole checklist in one pass, not one gap per
+        round: effective privileges through has_*_privilege(), PUBLIC grants included; column-level
+        grants; sequence USAGE and UPDATE; ownership of the database, schemas, tables and functions;
+        role membership and attributes (SUPERUSER, CREATEROLE, BYPASSRLS); default privileges.
+        A safety check fails closed when its query returns no row.
 
 knowledge_base:
   mcp:
@@ -125,3 +141,12 @@ knowledge_base:
   learnings:
     scope: local
     approval_delay: 3
+  # Default "auto" means global for private repos: Minions history would reach CCv3 reviews.
+  pull_requests:
+    scope: local
+  issues:
+    scope: local
+
+chat:
+  # Replies only when mentioned.
+  auto_reply: false
