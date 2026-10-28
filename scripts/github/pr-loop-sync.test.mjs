@@ -24,3 +24,11 @@ test('the mod reads the rate-limit reason review-status.mjs writes', () => {
   assert.ok(read, 'model.ts no longer declares CODERABBIT_RATE_LIMITED');
   assert.equal(read[1], written[1]);
 });
+
+test('the mod reads the outside-diff reason review-status.mjs writes', () => {
+  const written = /reasons\.push\(`(CodeRabbit lists) \$\{outsideDiff\} (outside-diff finding\(s\))/.exec(STATUS);
+  assert.ok(written, 'review-status.mjs no longer writes a "CodeRabbit lists N outside-diff finding(s)" reason');
+  const read = /const OUTSIDE_DIFF_REASON = \/\^([^/]+)\//.exec(MODEL);
+  assert.ok(read, 'model.ts no longer declares OUTSIDE_DIFF_REASON');
+  assert.ok(new RegExp(`^${read[1]}`).test(`${written[1]} 3 ${written[2]} on head abc1234`), `model regex ${read[1]} does not match the written reason`);
+});

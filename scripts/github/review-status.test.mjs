@@ -1718,10 +1718,12 @@ test('outside-diff F6: the count blocks a review:coderabbit PR too', () => {
   assert.equal(r.ready, false, r.reasons.join('; '));
 });
 
-test('outside-diff F2: a review of an older commit does not count against the current head', () => {
+test('outside-diff F2: findings on an older commit still count after a push (a push must not clear them)', () => {
+  // A review of a new head covers only the new commits, so it never repeats the old outside-diff findings.
   const r = odEval([odReview(OLD, 4, T1)]);
-  assert.equal(r.coderabbitOutsideDiff, 0);
-  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.equal(r.coderabbitOutsideDiff, 4);
+  assert.equal(r.ready, false, 'unread findings on an older commit keep READY failing');
+  assert.equal(odEval([odReview(OLD, 4, T1)], HANDLED(4)).ready, true, 'a handled list that covers them clears it');
 });
 
 test('outside-diff F3: no heading means N = 0 and the field is still present', () => {
@@ -1729,6 +1731,19 @@ test('outside-diff F3: no heading means N = 0 and the field is still present', (
   assert.equal(r.coderabbitOutsideDiff, 0);
   assert.equal(r.ready, true, r.reasons.join('; '));
   assert.equal(odEval([]).coderabbitOutsideDiff, 0, 'no review at all');
+});
+
+test('outside-diff F3: the details/summary heading shape is read too', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const shapes = [
+    '<details>\n<summary>⚠️ Outside diff range comments (2)</summary><blockquote>\n\nfinding\n</blockquote></details>',
+    '> <summary>⚠️ Outside diff range comments (2)</summary><blockquote>',
+    '<details><summary>Outside diff range comments (2)</summary>',
+  ];
+  for (const shape of shapes) {
+    const review = odReview(HEAD, null, T1, { body: `**Actionable comments posted: 1**\n\n${shape}\n` });
+    assert.equal(count({ head: HEAD, reviews: [review] }), 2, shape);
+  }
 });
 
 test('outside-diff F3: only the heading count is read, not finding text or the prompt block', () => {
@@ -1757,11 +1772,12 @@ test('outside-diff F3: the heading is read in the live shape and its plain varia
   }
 });
 
-test('outside-diff F4: the newest review of the head wins, whatever the array order', () => {
+test('outside-diff F4: the count is the sum over every CodeRabbit review, whatever the array order', () => {
   const count = odFn('codeRabbitOutsideDiff');
   const newerClean = [odReview(HEAD, 3, T1), odReview(HEAD, null, T2)];
   const newerDirty = [odReview(HEAD, null, T1), odReview(HEAD, 2, T2)];
-  for (const [name, reviews, n] of [['newer review is clean', newerClean, 0], ['newer review has findings', newerDirty, 2]]) {
+  const both = [odReview(OLD, 3, T1), odReview(HEAD, 2, T2)];
+  for (const [name, reviews, n] of [['a newer clean review does not clear earlier findings', newerClean, 3], ['newer review has findings', newerDirty, 2], ['old and new commits add up', both, 5]]) {
     assert.equal(count({ head: HEAD, reviews }), n, `${name}, API order`);
     assert.equal(count({ head: HEAD, reviews: [...reviews].reverse() }), n, `${name}, reversed order`);
   }
@@ -1785,6 +1801,12 @@ test('outside-diff F4: a newer review of an OLDER commit does not hide the findi
   const r = odEval([odReview(HEAD, 2, T1), odReview(OLD, null, T2)]);
   assert.equal(r.coderabbitOutsideDiff, 2);
   assert.equal(r.ready, false);
+});
+
+test('outside-diff F4b: the same review listed twice by the API is counted once', () => {
+  const count = odFn('codeRabbitOutsideDiff');
+  const review = { ...odReview(OLD, 3, T1), id: 9001 };
+  assert.equal(count({ head: HEAD, reviews: [review, { ...review }] }), 3);
 });
 
 test('outside-diff F5: only the CodeRabbit app counts', () => {

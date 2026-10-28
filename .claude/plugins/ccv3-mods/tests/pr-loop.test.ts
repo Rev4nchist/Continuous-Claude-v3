@@ -1188,6 +1188,16 @@ describe('pr-loop outside-diff findings', () => {
     expect(seen.submits[0]).not.toMatch(/Outside-diff: handled/)
   })
 
+  test('W36 findings the handled list already covers do not make REVIEWED: the PR waits for its pending check', async ($, on) => {
+    // review-status.mjs writes the "CodeRabbit lists N outside-diff" reason only while N is above the handled count.
+    const covered = OUTSIDE(9, { coderabbitOutsideDiff: 3, reasons: ['check "ci" is in_progress/null'] })
+    const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [covered] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits).toEqual([])
+    expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
+  })
+
   test('W36 a count of 0 changes nothing: a reviewed head with nothing to fix and a pending check stays PENDING', async ($, on) => {
     const quiet = OUTSIDE(9, { coderabbitOutsideDiff: 0, reasons: ['check "ci" is in_progress/null'] })
     const { clock, seen, store } = world(on, { store: seed([{ pr: 9, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 9: [quiet] } })

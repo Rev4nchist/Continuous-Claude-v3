@@ -153,6 +153,11 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    - P2: fix if cheap, or dismiss with a reason.
    - Any level: a security, privacy or data finding that is new to you or unclear. Ask Dave before you
      fix or dismiss it.
+   - Read the whole review body. CodeRabbit lists "Outside diff range comments (N)" there. They have no
+     thread, so no thread count shows them. READY adds N over every CodeRabbit review of the PR.
+     A push does not clear them. READY fails while that total is above the number of handled bullets.
+   - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
+     top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
 2. Fix real findings on the PR branch. Commit and push once.
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
