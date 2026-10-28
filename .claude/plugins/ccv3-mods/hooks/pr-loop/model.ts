@@ -311,7 +311,12 @@ export const reportLine = (alert: Alert): string => {
   }
   if (alert.state === 'PROOF') {
     const problems = alert.proofProblems ?? alert.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
-    return `${lead} is not READY because its PR body proof is missing or wrong: ${problems.slice(0, 5).join('; ')}. Author action: add or fix the Evidence block in the PR body (pr-and-commit-style.md "Evidence block"), run the GREEN check on head ${alert.headShort} and update the GREEN line to that head. Keep the CodeRabbit and Greptile blocks in the body byte for byte. Do not merge it. The watch continues.`
+    // A docs proof needs no RED or GREEN: it fails only when the review router did not class this head docs.
+    const docsOnly = problems.length > 0 && problems.every(p => /proof type docs needs the review router/.test(p))
+    const action = docsOnly
+      ? 'a docs proof counts only when the review router classes this head docs and risk:docs is the only risk label. Change the PR so only docs paths differ, or name another proof type with RED and GREEN'
+      : `add or fix the Evidence block in the PR body (pr-and-commit-style.md "Evidence block"), run the GREEN check on head ${alert.headShort} and update the GREEN line to that head`
+    return `${lead} is not READY because its PR body proof is missing or wrong: ${problems.slice(0, 5).join('; ')}. Author action: ${action}. Keep the CodeRabbit and Greptile blocks in the body byte for byte. Do not merge it. The watch continues.`
   }
   if (alert.state === 'STALLED') {
     const bots = botWords(missingBots(alert))

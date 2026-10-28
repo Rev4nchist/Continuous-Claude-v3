@@ -57,7 +57,7 @@
  */
 import { spawn, spawnSync } from 'node:child_process';
 import { createHash } from 'node:crypto';
-import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, unlinkSync, writeFileSync } from 'node:fs';
+import { appendFileSync, createWriteStream, existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, statSync, unlinkSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -668,6 +668,9 @@ export function finishedRuns(root, branch, base = 'main') {
   try { return readCounter(crPaths(root, branch, base).counter, branch).runs.filter((r) => r.complete === true).length; } catch { return 0; }
 }
 
+/** An empty or half-written lock younger than this may still be in its writer's hands (wx creates, then writes). */
+export const LOCK_GRACE_MS = 10_000;
+
 const pidAlive = (pid) => {
   try { process.kill(pid, 0); return true; } catch (err) { return err.code === 'EPERM'; }
 };
@@ -687,9 +690,23 @@ function acquireLock(file, info, { nowMs, staleMs }) {
       if (err.code !== 'EEXIST') throw err;
     }
     let held = null;
-    try { held = JSON.parse(readFileSync(file, 'utf8')); } catch { held = null; }
-    const age = held ? nowMs - Date.parse(held.at) : NaN;
-    if (held && Number.isInteger(held.pid) && pidAlive(held.pid) && !(age > staleMs)) return { ok: false, pid: held.pid, head: held.head };
+    let text;
+    try { text = readFileSync(file, 'utf8'); } catch (err) {
+      if (err.code === 'ENOENT') continue; // the holder just released it: try again
+      throw err; // another read error: never remove a lock we cannot read
+    }
+    try { held = JSON.parse(text); } catch { held = null; }
+    if (!held) {
+      // Empty or half-written: wx creates the file before its body is written. Remove it only when it is old enough
+      // that no live writer can still be between those two steps (LOCK_GRACE_MS), else report it as held.
+      let mtimeMs = Date.now();
+      try { mtimeMs = statSync(file).mtimeMs; } catch { /* gone: the next attempt sees ENOENT */ }
+      if (Date.now() - mtimeMs < LOCK_GRACE_MS) return { ok: false, pid: null, head: null };
+      rmSync(file, { force: true });
+      continue;
+    }
+    const age = nowMs - Date.parse(held.at);
+    if (Number.isInteger(held.pid) && pidAlive(held.pid) && !(age > staleMs)) return { ok: false, pid: held.pid, head: held.head };
     rmSync(file, { force: true });
   }
   return { ok: false, pid: null, head: null };

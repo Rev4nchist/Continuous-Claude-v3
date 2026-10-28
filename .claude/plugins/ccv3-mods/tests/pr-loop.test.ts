@@ -572,6 +572,18 @@ describe('pr-loop watcher', () => {
     expect(seen.submits.length).toBe(1)
   })
 
+  test('W35 a docs proof that the router did not confirm asks for the docs class and label, not a GREEN run', async ($, on) => {
+    const DOCS_REASON = 'PR body proof: proof type docs needs the review router to class this head as docs, with risk:docs as the only risk label'
+    const s = status(8, { reasons: [DOCS_REASON, 'no CodeRabbit PR-bot review of the head commit'] })
+    const { clock, seen } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - MIN }]), script: { 8: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    const line = seen.submits[0] as string
+    expect(line).toContain('proof type docs needs the review router')
+    expect(line).toMatch(/risk:docs/)
+    expect(line).not.toMatch(/update the GREEN line/)
+  })
+
   test('W32 a proof problem is PROOF after 60 minutes too, never STALLED', async ($, on) => {
     const s = status(8, { reasons: [GREEN_REASON] })
     const { clock, seen, store } = world(on, { store: seed([{ pr: 8, state: 'PENDING', head: HEAD_A, since: NOW - 61 * MIN }]), script: { 8: [s] } })

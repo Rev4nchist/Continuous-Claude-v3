@@ -278,7 +278,11 @@ export function codeRabbitHeadReview({ head, reviews = [], comments = [], status
     : statusLimited ? 'rate limited'
     : summary !== null && noticeIsAfterHead(summary, headCommittedAt, head) ? codeRabbitNotice(summary.body)
     : null;
-  const retryMinutes = notice === 'rate limited' ? codeRabbitRetryMinutes(statusLimited ? cr.description : summary?.body) : null;
+  // The status line first; when it names no figure, a summary notice that applies to this head may (G-R10).
+  const summaryForHead = summary !== null && noticeIsAfterHead(summary, headCommittedAt, head) ? summary.body : null;
+  const retryMinutes = notice !== 'rate limited' ? null
+    : statusLimited ? codeRabbitRetryMinutes(cr.description) ?? (summaryForHead === null ? null : codeRabbitRetryMinutes(summaryForHead))
+    : codeRabbitRetryMinutes(summary?.body);
   return {
     reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice, retryMinutes,
     status: cr?.state ?? 'absent', description: cr?.description ?? null,

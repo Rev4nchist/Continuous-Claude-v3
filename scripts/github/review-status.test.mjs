@@ -1027,6 +1027,17 @@ test('G-R9: a notice with no figure gives null minutes; a skipped notice is not 
   assert.equal(b.coderabbitRetryMinutes, null);
 });
 
+test('G-R10: a rate-limited status with no figure takes the minutes from a summary notice that applies to the head', () => {
+  const notice = { id: 23, updated_at: '2026-10-26T01:00:00Z', user: CR_BOT, body: `${SUMMARY_MARKER}\n> [!WARNING]\n> ## Rate limit exceeded\n> Please wait 12 minutes.` };
+  const statuses = { combined: { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited' }] } };
+  const r = evaluate(crInput(HEAD, [notice], [], statuses));
+  assert.equal(r.coderabbitRateLimited, true);
+  assert.equal(r.coderabbitRetryMinutes, 12);
+  // A status that names its own figure keeps it.
+  const own = { combined: { statuses: [{ context: 'CodeRabbit', state: 'success', description: 'Review rate limited. Next included review available in 7 minutes' }] } };
+  assert.equal(evaluate(crInput(HEAD, [notice], [], own)).coderabbitRetryMinutes, 7);
+});
+
 test('G-R9: a PR that does not need CodeRabbit reports null for both fields', () => {
   const r = evaluate(input());
   assert.equal(r.coderabbitRateLimited, null);

@@ -837,10 +837,27 @@ test('L2: a lock whose pid is not alive, or whose body is unreadable, is stale a
     const { lock } = crPaths(f.root, 'feat/x');
     mkdirSync(path.dirname(lock), { recursive: true });
     writeFileSync(lock, body);
+    // Older than the grace: a malformed body is then a dead writer's leftover, not a write in progress.
+    const old = new Date(Date.now() - 60_000);
+    utimesSync(lock, old, old);
     const r = await runCodeRabbit(crOpts(f));
     assert.equal(r.status, 'PASS', body);
     assert.equal(f.calls.length, 1);
     assert.equal(existsSync(lock), false);
+  }
+});
+
+test('L5: a fresh empty or half-written lock is another run between create and write: held, not removed (CodeRabbit #193)', async () => {
+  for (const body of ['', '{"pid":']) {
+    const f = crFixture();
+    const { lock } = crPaths(f.root, 'feat/x');
+    mkdirSync(path.dirname(lock), { recursive: true });
+    writeFileSync(lock, body);
+    const r = await runCodeRabbit(crOpts(f));
+    assert.equal(r.status, 'FAIL', JSON.stringify(body));
+    assert.match(r.detail, /in progress/);
+    assert.equal(f.calls.length, 0, 'no CLI run while the lock may be held');
+    assert.equal(existsSync(lock), true, 'the lock of the other run is not removed');
   }
 });
 
