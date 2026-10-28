@@ -139,7 +139,7 @@ BEGIN
      AND ((c.relkind IN ('r', 'p', 'v', 'm', 'f')
            AND (has_table_privilege('agentic_os_app', c.oid, w)
                 OR has_any_column_privilege('agentic_os_app', c.oid, 'INSERT,UPDATE,REFERENCES')))
-       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_app', c.oid, 'UPDATE')));
+       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_app', c.oid, 'USAGE,UPDATE')));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_app can write: %', bad; END IF;
 
   SELECT string_agg(n.nspname || '.' || c.relname, ', ') INTO bad
@@ -148,7 +148,7 @@ BEGIN
      AND ((c.relkind IN ('r', 'p', 'v', 'm', 'f')
            AND (has_table_privilege('agentic_os_indexer', c.oid, w)
                 OR has_any_column_privilege('agentic_os_indexer', c.oid, 'INSERT,UPDATE,REFERENCES')))
-       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_indexer', c.oid, 'UPDATE')));
+       OR (c.relkind = 'S' AND has_sequence_privilege('agentic_os_indexer', c.oid, 'USAGE,UPDATE')));
   IF bad IS NOT NULL THEN RAISE EXCEPTION 'agentic_os_indexer can write outside agentic_os: %', bad; END IF;
 
   -- Reads: the indexer may read agentic_os and public.sessions, nothing else (PUBLIC counts).
