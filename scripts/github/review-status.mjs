@@ -205,6 +205,15 @@ export function codeRabbitRetryMinutes(body) {
   return total > 0 ? total : null;
 }
 
+/**
+ * The minutes still left of a figure written at `writtenMs`. At least 1 once the wait has passed. A source with
+ * no date (writtenMs 0) keeps its figure as written. Null stays null.
+ */
+export function minutesLeft(minutes, writtenMs, nowMs) {
+  if (minutes === null || !writtenMs) return minutes;
+  return Math.max(1, minutes - Math.floor((nowMs - writtenMs) / 60_000));
+}
+
 /** Summary comment on the PR naming the reviewed head (from legacy coderabbit-status.mjs). */
 export function summaryCoversHead(body, head) {
   const text = String(body ?? '');
@@ -259,7 +268,7 @@ const noticeIsAfterHead = (comment, headCommittedAt, head) => {
  * PR-bot review on the head only; rate-limit text on the status never counts as reviewed.
  * `commentEdits` (comment id -> GraphQL edits) and `headCommittedAt` (ISO date) tie the summary comment to the head.
  */
-export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [], commentEdits, headCommittedAt }) {
+export function codeRabbitHeadReview({ head, reviews = [], comments = [], statuses = [], commentEdits, headCommittedAt, nowMs = Date.now() }) {
   const cr = (statuses || []).find((s) => /coderabbit/i.test(s?.context || ''));
   const summary = latestCodeRabbitSummary(comments);
   // Same rule as the Greptile comment: no edit history is untrusted, and once the comment has edits
@@ -280,9 +289,12 @@ export function codeRabbitHeadReview({ head, reviews = [], comments = [], status
     : null;
   // The status line first; when it names no figure, a summary notice that applies to this head may (G-R10).
   const summaryForHead = summary !== null && noticeIsAfterHead(summary, headCommittedAt, head) ? summary.body : null;
+  // Each figure counts down from the time its source was written (G-R11).
+  const fromStatus = statusLimited ? minutesLeft(codeRabbitRetryMinutes(cr.description), commentStamp(cr), nowMs) : null;
+  const fromSummary = (body) => (body == null ? null : minutesLeft(codeRabbitRetryMinutes(body), commentStamp(summary), nowMs));
   const retryMinutes = notice !== 'rate limited' ? null
-    : statusLimited ? codeRabbitRetryMinutes(cr.description) ?? (summaryForHead === null ? null : codeRabbitRetryMinutes(summaryForHead))
-    : codeRabbitRetryMinutes(summary?.body);
+    : statusLimited ? fromStatus ?? fromSummary(summaryForHead)
+    : fromSummary(summary?.body);
   return {
     reviewedHead, rateLimited: notice === 'rate limited', limited: notice !== null, notice, retryMinutes,
     status: cr?.state ?? 'absent', description: cr?.description ?? null,
@@ -686,7 +698,7 @@ function proofResult({ gate, dependabot, body, head, labels, comments }) {
   return { required: true, type, status, problems };
 }
 
-export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true }) {
+export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, reviews = [], comments = [], commentEdits, headCommittedAt, greptileAuto = true, commits = [], proofGate = true, nowMs = Date.now() }) {
   const head = pull.head.sha;
   const labels = pullLabelNames(pull);
   const dependabot = isDependabotPr(pull, commits);
@@ -738,7 +750,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   let coderabbitRateLimited = null;
   let coderabbitRetryMinutes = null;
   if (need.coderabbit) {
-    const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt });
+    const cr = codeRabbitHeadReview({ head, reviews, comments, statuses: combined.statuses || [], commentEdits, headCommittedAt, nowMs });
     coderabbit = cr.status;
     coderabbitReviewedHead = cr.reviewedHead;
     coderabbitLimited = cr.limited;

@@ -39,7 +39,7 @@ import { execFileSync, spawn, spawnSync } from 'node:child_process';
 import { EventEmitter, once } from 'node:events';
 import { PassThrough } from 'node:stream';
 import { createHash } from 'node:crypto';
-import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, utimesSync } from 'node:fs';
+import { existsSync, mkdirSync, mkdtempSync, readFileSync, writeFileSync, readdirSync, rmSync, utimesSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -47,7 +47,7 @@ import {
   SURFACES, ALWAYS_GATES, CR_ARGS, CR_RUN_LIMIT, STAMP_REL, gatesFor, summaryLine, checkGit, checkEvidence,
   runCodeRabbit, runPrePr, assertSafeCrArgs, changedFiles, makeGit, notesFor,
   parseAgentStream, parseUsage, crTimeoutMs, defaultCrRunner, CR_USAGE_ARGS,
-  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn,
+  killTree, sharedPrDir, crPaths, finishedRuns, logCliMissing, crTimeoutProblem, runGate, resolveSpawn, acquireLock,
 } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
@@ -859,6 +859,22 @@ test('L5: a fresh empty or half-written lock is another run between create and w
     assert.equal(f.calls.length, 0, 'no CLI run while the lock may be held');
     assert.equal(existsSync(lock), true, 'the lock of the other run is not removed');
   }
+});
+
+test('L6: an empty lock that is removed between the read and the stat is gone, not held: the next create wins (CodeRabbit #193)', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'pre-pr-l6-'));
+  const lock = path.join(dir, 'cr-lock.json');
+  writeFileSync(lock, '');
+  let stats = 0;
+  const stat = (p) => {
+    stats += 1;
+    rmSync(p, { force: true }); // the holder releases the lock at this moment
+    const err = new Error('ENOENT: no such file'); err.code = 'ENOENT'; throw err;
+  };
+  const r = acquireLock(lock, { pid: process.pid, head: HEAD, at: new Date().toISOString() }, { nowMs: Date.now(), staleMs: 60_000, stat });
+  assert.equal(stats, 1);
+  assert.deepEqual(r, { ok: true });
+  assert.equal(JSON.parse(readFileSync(lock, 'utf8')).pid, process.pid);
 });
 
 test('L5: a lock older than the time limit plus 10 minutes is stale even when its pid is alive; a newer one blocks and its path is named', async () => {

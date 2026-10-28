@@ -324,7 +324,7 @@ export function resolveSpawn(spec, { platform = process.platform, execPath = pro
 export function defaultExec(spec) {
   let s;
   try { s = resolveSpawn(spec); } catch (err) { return { status: null, stdout: '', stderr: '', timedOut: false, error: String(err.message) }; }
-  const r = spawnSync(s.cmd, s.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell: s.shell, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync(s.cmd, s.args, { cwd: spec.cwd, encoding: 'utf8', timeout: spec.timeoutMs, windowsHide: true, shell: false, maxBuffer: 64 * 1024 * 1024 });
   const timedOut = r.error?.code === 'ETIMEDOUT';
   return { status: r.status, stdout: r.stdout ?? '', stderr: r.stderr ?? '', timedOut, error: r.error && !timedOut ? String(r.error.message) : undefined };
 }
@@ -680,7 +680,7 @@ const pidAlive = (pid) => {
  * when a live process holds it. A lock is stale, and replaced, when its pid is not alive, its body cannot be read, or it is older than
  * `staleMs` (pids are reused on Windows, so a live pid alone does not prove the run is still going).
  */
-function acquireLock(file, info, { nowMs, staleMs }) {
+export function acquireLock(file, info, { nowMs, staleMs, stat = statSync }) {
   mkdirSync(path.dirname(file), { recursive: true });
   for (let attempt = 0; attempt < 3; attempt += 1) {
     try {
@@ -699,8 +699,11 @@ function acquireLock(file, info, { nowMs, staleMs }) {
     if (!held) {
       // Empty or half-written: wx creates the file before its body is written. Remove it only when it is old enough
       // that no live writer can still be between those two steps (LOCK_GRACE_MS), else report it as held.
-      let mtimeMs = Date.now();
-      try { mtimeMs = statSync(file).mtimeMs; } catch { /* gone: the next attempt sees ENOENT */ }
+      let mtimeMs;
+      try { mtimeMs = stat(file).mtimeMs; } catch (err) {
+        if (err.code === 'ENOENT') continue; // the holder just released it: the next create can win (L6)
+        throw err; // another stat error: never guess the lock's age
+      }
       if (Date.now() - mtimeMs < LOCK_GRACE_MS) return { ok: false, pid: null, head: null };
       rmSync(file, { force: true });
       continue;
