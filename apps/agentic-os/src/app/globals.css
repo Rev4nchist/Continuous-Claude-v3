@@ -29,25 +29,46 @@
   --ring: oklch(0.708 0 0);
 }
 
+/* Dark terminal style: the one design system for the Session Pane and the Fleet
+   Browser (PRD 2026-10-27-sdlc-os-prd.md, design system). The layout sets
+   class="dark" on <html>, so this is the default and only theme in v1. The raw
+   tokens come first; the shadcn names below map onto them. */
 .dark {
-  --background: oklch(0.145 0 0);
-  --foreground: oklch(0.985 0 0);
-  --card: oklch(0.205 0 0);
-  --card-foreground: oklch(0.985 0 0);
-  --popover: oklch(0.205 0 0);
-  --popover-foreground: oklch(0.985 0 0);
-  --primary: oklch(0.922 0 0);
-  --primary-foreground: oklch(0.205 0 0);
-  --secondary: oklch(0.269 0 0);
-  --secondary-foreground: oklch(0.985 0 0);
-  --muted: oklch(0.269 0 0);
-  --muted-foreground: oklch(0.708 0 0);
-  --accent: oklch(0.269 0 0);
-  --accent-foreground: oklch(0.985 0 0);
-  --destructive: oklch(0.704 0.191 22.216);
-  --border: oklch(1 0 0 / 10%);
-  --input: oklch(1 0 0 / 15%);
-  --ring: oklch(0.556 0 0);
+  --bg0: #0b0d11;
+  --bg1: #0f1115;
+  --bg2: #151922;
+  --bg3: #1a202c;
+  --bg4: #1f2738;
+  --line: #262c38;
+  --line2: #3a4356;
+  --tx: #d6dbe4;
+  --dim: #8b95a7;
+  --doing: #6ea8fe;
+  --done: #5fcf8b;
+  --warn: #f2b84b;
+  --bad: #ff7b7b;
+  --agent: #b69cff;
+  --font-terminal:
+    'JetBrains Mono', ui-monospace, 'Cascadia Mono', Consolas, 'Liberation Mono', monospace;
+
+  --background: var(--bg0);
+  --foreground: var(--tx);
+  --card: var(--bg2);
+  --card-foreground: var(--tx);
+  --popover: var(--bg2);
+  --popover-foreground: var(--tx);
+  --primary: var(--doing);
+  --primary-foreground: var(--bg0);
+  --secondary: var(--bg3);
+  --secondary-foreground: var(--tx);
+  --muted: var(--bg3);
+  --muted-foreground: var(--dim);
+  --accent: var(--bg4);
+  --accent-foreground: var(--tx);
+  --destructive: var(--bad);
+  --border: var(--line);
+  --input: var(--line2);
+  --ring: var(--doing);
 }
 
 @theme inline {
@@ -69,6 +90,14 @@
   --color-border: var(--border);
   --color-input: var(--input);
   --color-ring: var(--ring);
+  --color-doing: var(--doing);
+  --color-done: var(--done);
+  --color-warn: var(--warn);
+  --color-bad: var(--bad);
+  --color-agent: var(--agent);
+  --color-dim: var(--dim);
+  --font-sans: var(--font-terminal);
+  --font-mono: var(--font-terminal);
   --radius-sm: calc(var(--radius) - 4px);
   --radius-md: calc(var(--radius) - 2px);
   --radius-lg: var(--radius);
@@ -83,6 +112,7 @@
   body {
     background-color: var(--color-background);
     color: var(--color-foreground);
+    font-family: var(--font-terminal);
     font-feature-settings: 'rlig' 1, 'calt' 1;
   }
 }
