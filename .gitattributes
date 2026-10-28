@@ -21,6 +21,14 @@
 *.bat text eol=crlf
 *.cmd text eol=crlf
 
+# Node scripts stay LF. 204 of them start with a shebang, and vitest cannot import a module whose
+# shebang line ends in \r ("SyntaxError: Invalid or unexpected token"); node can. Every tracked
+# .mjs/.js/.cjs is already LF in the index, so this changes checkouts only. Keep it above the
+# vendored rule so _vendor stays -text.
+*.mjs text=auto eol=lf
+*.js text=auto eol=lf
+*.cjs text=auto eol=lf
+
 # Vendored external skills stay byte-identical to upstream (core.autocrlf=true would rewrite them
 # and break the per-file sha256 in vendor.lock.json). Spec: docs/self-improvement/proposals/2026-10-02-skill-intake-fabric.md.
 .claude/skills/_vendor/** -text
