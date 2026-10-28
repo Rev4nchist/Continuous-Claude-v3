@@ -1,6 +1,7 @@
 #!/usr/bin/env node
 // Fails when a service in docker-compose.yml publishes a port on a non-loopback address.
 // Postgres here holds every session, lane and memory row, so it must not listen on the LAN.
+// Scope: it reads `docker compose config`. It does not inspect running containers.
 import { spawnSync } from 'node:child_process';
 import { dirname, join } from 'node:path';
 import { fileURLToPath } from 'node:url';
@@ -32,4 +33,7 @@ if (offenders.length > 0) {
   console.error(`FAIL: published on a non-loopback address:\n  ${offenders.join('\n  ')}`);
   process.exit(1);
 }
-console.log('PASS: every published port is bound to a loopback address');
+console.log(
+  'PASS: every port in docker-compose.yml is bound to a loopback address. ' +
+    'This checks the Compose file only: a running container keeps its old binding until it is recreated with `docker compose up -d`.',
+);
