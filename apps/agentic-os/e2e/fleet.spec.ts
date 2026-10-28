@@ -11,6 +11,7 @@ import {
 import {
   ask,
   clearStateDir,
+  findEndedSessionId,
   makeBrief,
   secondsAgo,
   writeRaw,
@@ -484,12 +485,9 @@ test.describe('files that must not reach the page', () => {
     const snapshot = await loadSnapshot(request);
     expectFleetKeys(snapshot);
     const [live] = liveSessions(snapshot);
-    const ended = snapshot.active.recentlyEnded[0];
-    expect(
-      ended,
-      'Precondition: active.recentlyEnded needs one session (ended within 15 minutes). ' +
-        'Close a Claude Code session and run again.',
-    ).toBeDefined();
+    // Read from the database, not from active.recentlyEnded: a session that ended in the last
+    // 15 minutes is often absent, and an older ended row is dropped by the same rule.
+    const ended = { id: await findEndedSessionId() };
     expect(ended.id).not.toBe(live.id);
 
     writeState(live.id, {

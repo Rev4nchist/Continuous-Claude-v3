@@ -1,5 +1,8 @@
-import { mkdirSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
-import { join } from 'node:path';
+import { existsSync, mkdirSync, readdirSync, readFileSync, rmSync, writeFileSync } from 'node:fs';
+import { dirname, join } from 'node:path';
+import { fileURLToPath } from 'node:url';
+
+import { Client } from 'pg';
 
 import { E2E_STATE_DIR } from '../playwright.config';
 
@@ -146,4 +149,79 @@ export function clearStateDir(): void {
 /** Epoch ms for "this many seconds ago". */
 export function secondsAgo(seconds: number): number {
   return Date.now() - seconds * 1000;
+}
+
+// --- A session that ended (read from the database) ----------------------------------------------
+
+/** AGENTIC_OS_DATABASE_URL from the environment, else from apps/agentic-os/.env.local. Never printed. */
+function databaseUrl(): string {
+  const fromEnv = process.env.AGENTIC_OS_DATABASE_URL;
+  if (fromEnv) return fromEnv;
+  const envFile = join(dirname(fileURLToPath(import.meta.url)), '..', '.env.local');
+  if (existsSync(envFile)) {
+    for (const line of readFileSync(envFile, 'utf8').split(/\r?\n/)) {
+      const match = /^\s*AGENTIC_OS_DATABASE_URL\s*=\s*(.*?)\s*$/.exec(line);
+      if (match) return match[1].replace(/^(["'])(.*)\1$/, '$2');
+    }
+  }
+  throw new Error('AGENTIC_OS_DATABASE_URL is neither in the environment nor in apps/agentic-os/.env.local.');
+}
+
+/**
+ * The id of a session that has ended, by the relative rule of getActiveSessions(): ended_at is
+ * its latest sign of life. Read straight from the database (SELECT only), so the ENDED spec
+ * does not depend on a session having ended in the last 15 minutes. The newest such row is
+ * returned. Throws with a clear message when the table has none.
+ */
+export async function findEndedSessionId(): Promise<string> {
+  const client = new Client({ connectionString: databaseUrl() });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id FROM public.sessions
+       WHERE ended_at IS NOT NULL
+         AND ended_at >= GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat))
+       ORDER BY ended_at DESC LIMIT 1`,
+    );
+    if (rows.length === 0) {
+      throw new Error(
+        'Precondition: public.sessions has no row with ended_at set as its latest sign of life. ' +
+          'Close a Claude Code session and run again.',
+      );
+    }
+    return rows[0].id;
+  } finally {
+    await client.end();
+  }
+}
+
+/**
+ * The id of a QUIET session: not ended (relative rule), and its latest sign of life is between
+ * 15 minutes and 24 hours ago. Such a session has no card, but its open asks still feed Ready
+ * for Dave (PRD 5.2: an ask lasts until 24 h after the last session activity). An abandoned
+ * session row is enough. Read straight from the database (SELECT only). Throws when none.
+ */
+export async function findQuietSessionId(): Promise<string> {
+  const client = new Client({ connectionString: databaseUrl() });
+  await client.connect();
+  try {
+    const { rows } = await client.query<{ id: string }>(
+      `SELECT id FROM public.sessions
+       WHERE id NOT LIKE 's-%'
+         AND GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat)) < now() - interval '15 minutes'
+         AND GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat)) > now() - interval '24 hours'
+         AND NOT (ended_at IS NOT NULL
+                  AND ended_at >= GREATEST(last_heartbeat, COALESCE(last_activity_at, last_heartbeat)))
+       ORDER BY 1 LIMIT 1`,
+    );
+    if (rows.length === 0) {
+      throw new Error(
+        'Precondition: needs a session that is not ended and was last active 15 minutes to 24 hours ago ' +
+          '(an abandoned session row is enough).',
+      );
+    }
+    return rows[0].id;
+  } finally {
+    await client.end();
+  }
 }
