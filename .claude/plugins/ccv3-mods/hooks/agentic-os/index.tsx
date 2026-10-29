@@ -210,7 +210,11 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
     const live = list
       .filter(agent => LIVE_AGENT.has(agent.status))
       .map(({ id, description, type, status }) => ({ id, description, type, status }))
-    await update($, agents, () => live)
+    // A subagent turn.start set `running` before the list says so. A list that still says `waiting` is older than that
+    // start: keep `running` until the agent's own turn.complete removes the entry or the list shows it ended.
+    await update($, agents, previous =>
+      live.map(one => (one.status === 'waiting' && previous.some(before => before.id === one.id && before.status === 'running') ? { ...one, status: 'running' } : one)),
+    )
   } catch {
     // Best effort: the pane keeps the last list.
   }

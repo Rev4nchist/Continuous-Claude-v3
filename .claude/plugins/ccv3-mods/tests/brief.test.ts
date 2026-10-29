@@ -968,6 +968,19 @@ describe('brief_set in the mod', () => {
     expect(lastSnapshot(seen).chip).toBe('working')
   })
 
+  test('E17c a stale waiting list result on the next refresh does not undo the running state a subagent turn.start set', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'waiting' }])
+    await pulseRead($, seen)
+    await subagentStart($)
+    await idleTick(seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual(['a1:running'])
+    expect(lastSnapshot(seen).chip).toBe('working')
+  })
+
   test('E17b after that turn.start, a turn.complete for the agent removes it from AGENTS and the chip is idle', async ($, on) => {
     const seen = withAgents(on)
     await startMod($, true)
