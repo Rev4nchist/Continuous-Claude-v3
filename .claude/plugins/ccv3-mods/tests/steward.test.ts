@@ -12,9 +12,7 @@ import {
   instructBlock,
   nudgeLine,
   observe,
-  sentOf,
   shouldNudge,
-  shouldSend,
   signalOf,
 } from '../hooks/agentic-os/steward'
 import type { Activity, Drift, NudgeGate } from '../hooks/agentic-os/steward'
@@ -27,9 +25,11 @@ import type { OsTask } from '../types'
 // O1..O2  observe: the call count or the signal count is off, or the old counts are mutated
 // N1..N5  the nudge line, the 20-call rate limit, one nudge per reason, no nudge headless / in a subagent / switched off
 // I1..I6  the instruct block: over 600 characters, missing the instruction, missing the current brief, a secret, the nudge cut off
-// P1..P2  shouldSend: the block is sent twice for one brief, or not re-sent when the brief or the nudge changes
-// W1..W9  the wiring: a prompt.compose section once per session start, again on a brief change or a due nudge, never in a subagent
-//         call, never when switched off, and no nudge in a headless run
+// W1..W11 the wiring: a prompt.compose section on every render with byte-identical text until the brief or the nudge changes (a
+//         changed text loses the prompt cache), the nudge line once, subagent calls not counted, never when switched off, nothing
+//         headless unless opted in, and a parsed turn end does not restart the counts
+// Review fixes (P1): a section that goes once toggles the system prompt twice per change; the turn-end parser bumps brief.updatedAt;
+// a headless run would write one state file per run.
 //
 // Not tested here, on purpose: the dim `brief stale` marker next to GOAL (contract item 4). PR 3 edits band-model.ts and
 // os-tabs-model.ts lines, so the display is left to a later PR.
@@ -111,6 +111,14 @@ describe('drift', () => {
     expect(b.key).toBe(a.key)
     expect(drift(apply(brief, { goal: 'a new goal' }, [], NOW + 5), act({ toolCalls: STALE_CALLS })).key).not.toBe(a.key)
     expect(drift(planned(['done', 'done']), act({ toolCalls: STALE_CALLS })).key).not.toBe(a.key)
+  })
+
+  test('D7 the reason key follows the version it is given, not brief.updatedAt (the turn-end parser bumps updatedAt)', () => {
+    const brief = planned(['doing', 'todo'])
+    const later = apply(brief, { goal: 'a new goal' }, [], NOW + 5)
+    expect(drift(brief, act({ toolCalls: STALE_CALLS }), 7).key).toBe('stale@7')
+    expect(drift(later, act({ toolCalls: STALE_CALLS }), 7).key).toBe('stale@7')
+    expect(drift(null, act({ toolCalls: 1 }), 7).key).toBe('unset@7')
   })
 })
 
@@ -291,31 +299,6 @@ describe('instructBlock', () => {
   })
 })
 
-describe('shouldSend', () => {
-  test('P1 the first block of a session is sent, with a brief and without one', () => {
-    expect(shouldSend(null, null, null)).toBe(true)
-    expect(shouldSend(null, planned(['doing']), null)).toBe(true)
-  })
-
-  test('P2 the same brief with no nudge is not sent again', () => {
-    const brief = planned(['doing', 'todo'])
-    expect(shouldSend(sentOf(brief, null), brief, null)).toBe(false)
-    expect(shouldSend(sentOf(null, null), null, null)).toBe(false)
-  })
-
-  test('P3 a changed brief is sent again', () => {
-    const brief = planned(['doing', 'todo'])
-    expect(shouldSend(sentOf(brief, null), apply(brief, { goal: 'a new goal' }, [], NOW + 1), null)).toBe(true)
-  })
-
-  test('P4 a due nudge is sent, and the block after a nudge does not repeat on its own', () => {
-    const brief = planned(['doing', 'todo'])
-    const line = nudgeLine(stale()) ?? ''
-    expect(shouldSend(sentOf(brief, null), brief, line)).toBe(true)
-    expect(shouldSend(sentOf(brief, line), brief, null)).toBe(false)
-  })
-})
-
 // --- The wiring: the real mod, with the engine below it mocked. ---
 
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
@@ -325,7 +308,7 @@ const RENDER = { model: 'm', promptModel: 'm', surfaces: [], tools: [], outputSt
 
 /** `env` is read live, so a test can flip a switch after the session started. */
 const world = (on: On, env: Record<string, string> = {}) => {
-  mock.clock(on, { now: 1_000 })
+  const clock = mock.clock(on, { now: 1_000 })
   env.USERPROFILE ??= 'C:/home'
   on('env.get', (_$, e) => ({ value: env[e.name] }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
@@ -343,6 +326,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
   on('prompt.submit', (_$, e) => ({ text: e.text }))
   on('prompt.compose', () => ({ sections: [{ id: 'intro', text: 'the engine intro', scope: 'shared' }] }))
   on('tool.call', { tool: 'Read' }, () => ({ result: { type: 'text' } }) as never)
+  return clock
 }
 
 const startMod = ($: Engine, isInteractive = true) => $.session.start({ cwd: 'C:/r', surface: isInteractive ? 'terminal' : null, isInteractive })
@@ -350,6 +334,9 @@ const section = async ($: Engine) => (await $.prompt.compose(RENDER)).sections.f
 const reads = async ($: Engine, n: number, agentId?: string) => {
   for (let i = 0; i < n; i++) await $.tool.call({ tool: 'Read', file_path: `C:/r/f${i}.md`, ...(agentId ? { agentId } : {}) } as never)
 }
+/** An answer as CLAUDE.md asks for: it ends with a Next steps block, so the turn-end parser finds an ask in it. */
+const ANSWER = ['Done.', '', '## Next steps', '1. Run the gate.', ''].join('\n')
+const turnEnd =($: Engine, answer: string) => $.turn.complete({ answer, durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
 const stales = (text: string | undefined): number => ((text ?? '').match(/brief is stale:/g) ?? []).length
 
 describe('the steward in the mod', () => {
@@ -365,11 +352,15 @@ describe('the steward in the mod', () => {
     expect(all.at(-1)?.id).toBe(SECTION)
   })
 
-  test('W2 a second compose with nothing changed adds no section: the block goes once per session start', async ($, on) => {
+  test('W2 compose after compose with nothing changed returns the same section, byte for byte (a changed system prompt loses the cache)', async ($, on) => {
     world(on)
     await startMod($)
-    expect(await section($)).toBeDefined()
-    expect(await section($)).toBeUndefined()
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove the steward' })
+    const first = await section($)
+    expect(first).toBeDefined()
+    await reads($, 3)
+    expect(await section($)).toEqual(first)
+    expect(await section($)).toEqual(first)
   })
 
   test('W3 a brief_set that changes the brief brings the block back, carrying the new goal', async ($, on) => {
@@ -400,9 +391,12 @@ describe('the steward in the mod', () => {
     const nudged = await section($)
     expect(stales(nudged?.text)).toBe(1)
     expect(nudged?.text).toMatch(/brief is stale: .*goal.*; update it with brief_set/i)
+    const after = await section($)
+    expect(after?.text).toContain('brief_set')
+    expect(stales(after?.text)).toBe(0)
   })
 
-  test('W6 STALE_CALLS tool calls after a brief_set give exactly one stale nudge; a compose right after has none; 5 more calls have none (rate limit, same reason)', async ($, on) => {
+  test('W6 STALE_CALLS tool calls after a brief_set give exactly one stale nudge; the compose after it keeps the section and drops the line; 5 more calls add none (rate limit, same reason)', async ($, on) => {
     world(on)
     await startMod($)
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove the steward' })
@@ -410,9 +404,11 @@ describe('the steward in the mod', () => {
     await reads($, STALE_CALLS)
     const nudged = await section($)
     expect(stales(nudged?.text)).toBe(1)
-    expect(await section($)).toBeUndefined()
+    const after = await section($)
+    expect(after?.text).toContain('brief_set')
+    expect(stales(after?.text)).toBe(0)
     await reads($, 5)
-    expect(await section($)).toBeUndefined()
+    expect(stales((await section($))?.text)).toBe(0)
   })
 
   test('W7 a brief_set after the tool calls clears the drift: the block comes back with no nudge', async ($, on) => {
@@ -427,22 +423,57 @@ describe('the steward in the mod', () => {
     expect(stales(after?.text)).toBe(0)
   })
 
-  test('W8 tool calls of a subagent do not count as the main session drifting', async ($, on) => {
+  test('W8 tool calls of a subagent do not count as the main session drifting: the section stays as it was', async ($, on) => {
     world(on)
     await startMod($)
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove the steward' })
-    expect(await section($)).toBeDefined()
+    const before = await section($)
+    expect(before).toBeDefined()
     await reads($, STALE_CALLS + 5, 'a1')
+    expect(await section($)).toEqual(before)
+  })
+
+  test('W9 a headless run gets no block, so it is never told to call brief_set (and writes no state file for it)', async ($, on) => {
+    world(on)
+    await startMod($, false)
+    expect(await section($)).toBeUndefined()
+    await reads($, STALE_CALLS + 5)
     expect(await section($)).toBeUndefined()
   })
 
-  test('W9 a headless run gets the block once and never a nudge', async ($, on) => {
-    world(on)
+  test('W9b CCV3_MOD_STEWARD_HEADLESS=1 opts a headless run in: the block comes on every render and never a nudge', async ($, on) => {
+    world(on, { CCV3_MOD_STEWARD_HEADLESS: '1' })
     await startMod($, false)
     const first = await section($)
     expect(first?.text).toContain('brief_set')
     expect(stales(first?.text)).toBe(0)
     await reads($, STALE_CALLS + 5)
+    const later = await section($)
+    expect(later?.text).toContain('brief_set')
+    expect(stales(later?.text)).toBe(0)
+  })
+
+  test('W10 a turn end with a Next steps block does not restart the counts: 10 calls, a turn end, 10 calls is a stale nudge', async ($, on) => {
+    const clock = world(on)
+    await startMod($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove the steward' })
+    await section($)
+    await reads($, 10)
+    await clock.advance(1_000)
+    await turnEnd($, ANSWER)
+    await reads($, 10)
+    expect(stales((await section($))?.text)).toBe(1)
+  })
+
+  test('W11 a turn end that the parser merges does not bring the "no goal" nudge back every 20 calls', async ($, on) => {
+    const clock = world(on)
+    await startMod($)
+    await section($)
+    await reads($, 1)
+    expect(stales((await section($))?.text)).toBe(1)
+    await clock.advance(1_000)
+    await turnEnd($, ANSWER)
+    await reads($, NUDGE_EVERY + 5)
     expect(stales((await section($))?.text)).toBe(0)
   })
 })
