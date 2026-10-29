@@ -242,7 +242,9 @@ const needsPrItems = (prs: DigestPr[]): Item[] => {
     }
     if (one.state === 'LIMITED' || known(one.rateLimit?.minutes)) {
       const wait = one.rateLimit?.minutes
-      out.push(item(RANK.limited, one.at, 'pr', 'warn', () => ({ text: `${prName(one)} hit a review rate limit${known(wait) ? `, wait ${wait}m` : ''}${titled(one)}` })))
+      // LIMITED also means a review that did not finish: only a known wait time is a rate limit.
+      const what = known(wait) ? `hit a review rate limit, wait ${wait}m` : 'review did not finish'
+      out.push(item(RANK.limited, one.at, 'pr', 'warn', () => ({ text: `${prName(one)} ${what}${titled(one)}` })))
     }
   }
   return out

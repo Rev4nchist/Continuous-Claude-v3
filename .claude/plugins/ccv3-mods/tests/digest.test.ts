@@ -287,6 +287,13 @@ describe('digest NEEDS YOU', () => {
     expect(failed[0]).toMatch(/2 checks? failed|failed.*2/i)
   })
 
+  test('D8 a LIMITED PR with no wait time says the review did not finish, not rate limit', () => {
+    const limited = items(go({ prs: [pr(9, 'LIMITED', 6 * MIN)] }).needs)
+    expect(limited[0]).toMatch(/#9\b/)
+    expect(limited[0]).toMatch(/did not finish/i)
+    expect(limited[0]).not.toMatch(/rate limit/i)
+  })
+
   test('D8 a blocked plan step is listed with its text; a todo or done step is not', () => {
     const brief = made({
       goal: 'ship PR 5',
