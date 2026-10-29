@@ -16,7 +16,10 @@
  * error while the stamp is checked (git timeout, git or spawn error, remotes that cannot be listed). The error is logged.
  * The PR body must be exactly one file (-F body=@<file>, --body-file <file>, or -F <file> for gh pr create). An inline body, stdin, --fill,
  * --input, and a second body source (a repeated flag, --body, -b, -f body=) cannot be hashed and are denied.
- * An explicit CCv3 target (--repo, -R, repos/<o>/<r>/pulls, GH_REPO) must still run in a CCv3 checkout.
+ * An explicit CCv3 target (--repo, -R, repos/<o>/<r>/pulls, a PR URL, GH_REPO) must still run in a CCv3 checkout: any CCv3 text anywhere counts.
+ * A FOREIGN repo is named only by a literal -R / --repo value or an inline `GH_REPO=o/r gh ...` prefix, in a raw text with
+ * exactly one `gh` word and none of `$(`, a backtick, `#`, `;`, `&`, `|`, CR or LF (see foreignTarget). Endpoint text, a PR URL and a
+ * GH_REPO statement never name a foreign repo. In any other case the checkout decides.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
@@ -98,12 +101,32 @@ const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
 const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
 
 const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+/** The one inline per-command env that names a repo: `GH_REPO=o/r gh ...`, nothing between the assignment and gh. */
+const INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, 'i');
+/** A raw-text sign that the command is more than one plain gh call: a substitution, a backtick, a comment or a separator. */
+const NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
+
+/**
+ * The FOREIGN repo (lower case) a command names, or null. The rule is a fail-closed check on the raw text, not a lexer.
+ * A repo counts as named only when ALL hold:
+ *   1. it comes from a literal `-R` / `--repo` value, or an inline `GH_REPO=o/r gh ...` prefix with no separator.
+ *      Endpoint text (`repos/<o>/<r>/...`), a PR URL and a GH_REPO statement (`GH_REPO=o/r; gh ...`, `$env:GH_REPO=...; gh ...`)
+ *      never name a repo: a title, a comment or a body field can hold them;
+ *   2. the text holds exactly one `gh` word and none of `$(`, a backtick, `#`, `;`, `&`, `|`, CR or LF, so no other
+ *      gh call, substitution or comment can sit beside the one the value belongs to;
+ *   3. the value is literal (the caller checks Shapes.nonLiteral).
+ * Anything else returns null and the checkout decides. A false null is a deny; a false name would skip the gate.
+ */
+export function foreignTarget(command: string): string | null {
+  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command)) return null;
+  const value = command.matchAll(REPO_FLAG).next().value?.[1] ?? INLINE_GH_REPO.exec(command)?.[1];
+  return value ? ownerRepo(value) : null;
+}
 
 /**
  * `owner/repo` (lower case) the command targets, or null when the checkout decides.
- * The raw text cannot tell an endpoint from a title, so it fails closed: a CCv3 `repos/<o>/<r>/pulls` text anywhere,
- * or a CCv3 `-R` / `--repo` / `GH_REPO`, means CCv3. Otherwise the repo flag names the target. A foreign endpoint
- * text names it only for a `gh api` call that is not also a `gh pr create` (a title can hold either phrase).
+ * Any CCv3 signal anywhere in the raw text means CCv3 (fail closed): a CCv3 `-R` / `--repo` / `GH_REPO` value (also the process env),
+ * a CCv3 `repos/<o>/<r>/pulls` text or a CCv3 PR URL. Otherwise only foreignTarget can name a (foreign) repo.
  */
 export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
   // gh uses the LAST -R / --repo value, a flag beats GH_REPO, and the shell may rewrite either: every value counts, and any CCv3 value means CCv3.
@@ -113,14 +136,9 @@ export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string 
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
   if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  // Fail closed: a foreign value in one segment cannot vouch for another segment's gh call. Several segments: the checkout decides.
-  // A leading GH_REPO assignment statement (`$env:GH_REPO='o/r'; gh ...`, `export GH_REPO=o/r; gh ...`) is part of the one call.
-  const calls = command.replace(/^\s*(?:(?:export\s+)?(?:\$env:)?GH_REPO\s*=\s*\S+\s*;\s*)+/i, '');
-  if (/[;&|\n]/.test(calls)) return null;
-  const explicit = explicits[0] ?? null;
-  if (explicit) return explicit;
-  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return apiOnly ? endpoints[0] ?? null : null;
+  // A CCv3 issues, pulls or labels endpoint text counts too. A foreign one names nothing.
+  if (labelsEndpointRepo(command) === CCV3_REPO) return CCV3_REPO;
+  return foreignTarget(command);
 }
 
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
@@ -276,22 +294,10 @@ const once = <T>(f: () => T): (() => T) => {
   return () => (box ??= { v: f() }).v;
 };
 
-/**
- * The repo a gh api endpoint text names, for a command that namedRepo left open. The raw text cannot tell an endpoint from a
- * title or from another segment. A foreign endpoint names the target only for one segment that is not a PR create.
- * A CCv3 endpoint counts from anywhere (fail closed).
- */
-function endpointTarget(command: string): string | null {
-  const repo = labelsEndpointRepo(command);
-  if (repo === CCV3_REPO) return repo;
-  const oneCall = !/[;&|\n]/.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return oneCall ? repo : null;
-}
-
 function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? endpointTarget(command);
+  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
     if (!tops.has(d)) {

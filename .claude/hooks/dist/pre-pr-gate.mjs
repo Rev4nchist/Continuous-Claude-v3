@@ -329,6 +329,13 @@ var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${
 var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
 var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
 var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+var INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, "i");
+var NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
+function foreignTarget(command) {
+  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command)) return null;
+  const value = command.matchAll(REPO_FLAG).next().value?.[1] ?? INLINE_GH_REPO.exec(command)?.[1];
+  return value ? ownerRepo(value) : null;
+}
 function namedRepo(command, env = {}) {
   const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
   const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
@@ -336,12 +343,8 @@ function namedRepo(command, env = {}) {
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
   if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  const calls = command.replace(/^\s*(?:(?:export\s+)?(?:\$env:)?GH_REPO\s*=\s*\S+\s*;\s*)+/i, "");
-  if (/[;&|\n]/.test(calls)) return null;
-  const explicit = explicits[0] ?? null;
-  if (explicit) return explicit;
-  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return apiOnly ? endpoints[0] ?? null : null;
+  if (labelsEndpointRepo(command) === CCV3_REPO) return CCV3_REPO;
+  return foreignTarget(command);
 }
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
@@ -454,16 +457,10 @@ var once = (f) => {
   let box;
   return () => (box ??= { v: f() }).v;
 };
-function endpointTarget(command) {
-  const repo = labelsEndpointRepo(command);
-  if (repo === CCV3_REPO) return repo;
-  const oneCall = !/[;&|\n]/.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return oneCall ? repo : null;
-}
 function makeCtx(input, command, deps, shapes) {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? endpointTarget(command);
+  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env);
   const tops = /* @__PURE__ */ new Map();
   const top = (d) => {
     if (!tops.has(d)) {
@@ -655,6 +652,7 @@ export {
   STAMP_REL,
   bodyFileOf,
   decide,
+  foreignTarget,
   handle,
   hasOverride,
   headBranchOf,

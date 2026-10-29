@@ -201,7 +201,10 @@ describe('A: only PR-create shapes are looked at', () => {
   });
 
   it('A2: a PR in another repo is allowed, named in the command or by the checkout', () => {
-    expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps()).action).toBe('allow');
+    // Rule change (foreign repo only from a literal -R / --repo or an inline GH_REPO prefix): endpoint text names nothing, so a CCv3 checkout decides.
+    // Was: allow (the endpoint named other/repo).
+    expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps()).action).toBe('deny');
+    expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps({ remotes: 'origin\thttps://github.com/other/repo.git (fetch)\n' })).action).toBe('allow');
     expect(decide(input('gh pr create -R other/repo --fill'), deps()).action).toBe('allow');
     expect(decide(input('gh pr create --repo other/repo --fill'), deps()).action).toBe('allow');
     expect(decide(input('gh pr create --fill'), deps({ remotes: 'origin\thttps://github.com/other/repo.git (fetch)\n' })).action).toBe('allow');
@@ -240,8 +243,10 @@ describe('A: only PR-create shapes are looked at', () => {
       expect(namedRepo(`gh pr edit 201 --add-label review:deep${sep}GH_REPO=someone/else gh repo view`), JSON.stringify(sep)).toBeNull();
     }
     expect(namedRepo('gh pr ready 201 -R someone/else')).toBe('someone/else');
-    // A leading GH_REPO statement belongs to its one call; a second segment after it still hands the choice to the checkout.
-    expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201")).toBe('someone/else');
+    // A GH_REPO statement (followed by ; or a newline) names nothing: it is not a per-command env. Only the inline prefix does.
+    // Was: the PowerShell statement form named someone/else.
+    expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201")).toBeNull();
+    expect(namedRepo('GH_REPO=someone/else gh pr ready 201')).toBe('someone/else');
     expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201; echo hi")).toBeNull();
     expect(namedRepo('export GH_REPO=someone/else; gh pr ready 201 && gh pr view 201')).toBeNull();
     expect(namedRepo('gh pr ready 201; gh repo view -R Rev4nchist/Continuous-Claude-v3')).toBe(CCV3_REPO);
@@ -635,8 +640,8 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
     expect(namedRepo(`gh api -f title="${OTHER_EP}" repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f head=feat/x`)).toBe(CCV3_REPO);
     // Fail closed: CCv3 named anywhere wins over a foreign explicit target.
     expect(namedRepo('gh pr create --repo other/repo --title "repos/Rev4nchist/Continuous-Claude-v3/pulls" --head feat/x')).toBe(CCV3_REPO);
-    // A real foreign target with no CCv3 text stays foreign.
-    expect(namedRepo(`gh api ${OTHER_EP} -X POST -f head=feat/x`)).toBe('other/repo');
+    // Rule change: endpoint text names no foreign repo (a body field can hold it), so the checkout decides. Was: 'other/repo'.
+    expect(namedRepo(`gh api ${OTHER_EP} -X POST -f head=feat/x`)).toBeNull();
   });
 
   it('Y3c: a title spoof from a foreign checkout no longer skips the gate', () => {
@@ -1336,9 +1341,11 @@ describe('B: the checkpoint gate (PR B)', () => {
         }
       }
     }
-    // Scope: the same shapes are allowed from a foreign checkout (GraphQL has no repo in the text) and for another repo's endpoint.
+    // Scope: the same shapes are allowed from a foreign checkout (GraphQL has no repo in the text).
     expect(act(LABEL_BLIND[4], { config: ENFORCE, remotes: FOREIGN_REMOTES }).action, 'foreign checkout, GraphQL').toBe('allow');
-    expect(act('gh api repos/someone/else/issues/201/labels --input labels.json', { config: ENFORCE }).action, 'another repo endpoint').toBe('allow');
+    // Rule change: another repo's endpoint text names nothing, so a CCv3 checkout still gates it. Was: allow. A literal -R still names the repo.
+    expect(denied('gh api repos/someone/else/issues/201/labels --input labels.json', { config: ENFORCE })?.pattern, 'another repo endpoint').toBe('review-label');
+    expect(act('gh api repos/someone/else/issues/201/labels --input labels.json', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action, 'another repo endpoint, foreign checkout').toBe('allow');
     // Warn mode: logged and allowed, like the other new patterns.
     for (const c of LABEL_BLIND) {
       let out = '';
@@ -1447,14 +1454,16 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(act('gh pr edit 201 --add-label review:none', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
     // Naming CCv3 from a foreign checkout is still gated.
     expect(denied('gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3', { config: ENFORCE, remotes: FOREIGN_REMOTES })).not.toBeNull();
-    // A GH_REPO for a foreign repo, from a CCv3 checkout, names another repo: not gated (Bash prefix and PowerShell $env: forms).
+    // An inline GH_REPO prefix for a foreign repo, from a CCv3 checkout, names another repo: not gated.
     const foreignByEnv: Array<[string, string]> = [
       ['GH_REPO=someone/else gh pr ready 201', 'Bash'],
-      ["$env:GH_REPO='someone/else'; gh pr ready 201", 'PowerShell'],
       ['GH_REPO=someone/else gh pr edit 201 --add-label review:none', 'Bash'],
-      ["$env:GH_REPO='someone/else'; gh pr edit 201 --add-label review:none", 'PowerShell'],
     ];
     for (const [c, tool] of foreignByEnv) expect(act(c, { config: ENFORCE }, tool).action, `CCv3 checkout, ${tool}: ${c}`).toBe('allow');
+    // Rule change: the PowerShell `$env:GH_REPO='o/r'; gh ...` form is a statement, not a per-command env, so it names nothing and the
+    // CCv3 checkout gates it. Was: allow.
+    expect(denied("$env:GH_REPO='someone/else'; gh pr ready 201", { config: ENFORCE }, 'PowerShell')?.pattern).toBe('ready');
+    expect(denied("$env:GH_REPO='someone/else'; gh pr edit 201 --add-label review:none", { config: ENFORCE }, 'PowerShell')?.pattern).toBe('review-label');
   });
 
   // ---- open item 3 of prB-red.md (default chosen by Dave's workflow): --undo counts only inside the same gh pr ready command segment ----
@@ -1561,10 +1570,11 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(denied(label, { config: ENFORCE })?.pattern, label).toBe('review-label');
   });
 
-  it('B9e: a single non-create gh api call on a foreign endpoint stays foreign; a CCv3 endpoint anywhere is CCv3', () => {
-    // Guard: one segment, not a create: the endpoint names the target, so a CCv3 checkout does not gate it.
+  it('B9e: a foreign endpoint text names nothing, so the checkout decides; a CCv3 endpoint anywhere is CCv3', () => {
+    // Rule change (was: allow, the single foreign endpoint named the target): endpoint text can sit in a field, so a CCv3 checkout gates it.
     const foreign = 'gh api repos/someone/else/issues/1/labels -f labels[]=review:deep';
-    expect(act(foreign, { config: ENFORCE }).action, foreign).toBe('allow');
+    expect(denied(foreign, { config: ENFORCE })?.pattern, foreign).toBe('review-label');
+    expect(act(foreign, { config: ENFORCE, remotes: FOREIGN_REMOTES }).action, `${foreign} from a foreign checkout`).toBe('allow');
     // A CCv3 endpoint in any segment is CCv3, also from a foreign checkout (fail closed).
     for (const c of [
       'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:deep',
