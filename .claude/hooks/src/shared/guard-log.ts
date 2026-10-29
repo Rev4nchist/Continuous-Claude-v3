@@ -4,9 +4,10 @@
  * Every PreToolUse hook that can deny or ask appends ONE JSON line per deny, ask or override to
  * ~/.claude/logs/guard-decisions.jsonl:
  *
- *   {ts, hook, tool, decision: 'deny'|'ask'|'override', reason, session_id, agent_id?, command?}
+ *   {ts, hook, tool, decision: 'deny'|'ask'|'override'|'warn', reason, session_id, agent_id?, command?}
  *
  * 'override' = a guard let a command through because of an override (SKIP_DESTRUCTIVE_GUARD).
+ * 'warn' = a guard rule in warn mode let a command through and recorded the rule that would have denied it (pre-pr-gate, PR B).
  * This log records the hooks this process runs.
  *
  * Secrets: the log never holds a raw command. `reason` is a rule name, and `command` is at most
@@ -24,7 +25,7 @@ import { appendFileSync, mkdirSync } from 'fs';
 import { homedir } from 'os';
 import { dirname, join } from 'path';
 
-export type GuardDecisionKind = 'deny' | 'ask' | 'override';
+export type GuardDecisionKind = 'deny' | 'ask' | 'override' | 'warn';
 
 /** The subset of a PreToolUse payload the log reads. */
 export interface GuardInput {

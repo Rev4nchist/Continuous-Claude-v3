@@ -54,9 +54,10 @@
 //       --apply takes only --state-dir (and the PR number). It does not take --facts, --config or --body (runB sends them for --confirm only).
 //       The refusals name their reason on stderr: "draft" for a PR that is not a draft, "head" for a moved head, "pathway" for a missing record (TA6).
 //   export applyPathway({ pr, record, gh }) -> { ok: true } | { ok: false, error }     gh(args) -> { status, stdout, stderr }
-//       gh call shapes (pinned): read   ['pr','view',String(pr),'--json','isDraft,headRefOid'] -> stdout {"isDraft":bool,"headRefOid":sha}
-//                                label  ['pr','edit',String(pr),'--add-label',<label>]
-//                                ready  ['pr','ready',String(pr)]
+//       gh call shapes (pinned; every call ends with '-R', DEFAULT_REPO so gh never picks the repo from the cwd remotes, where origin is parcadei):
+//                                read   ['pr','view',String(pr),'--json','isDraft,headRefOid','-R',repo] -> stdout {"isDraft":bool,"headRefOid":sha}
+//                                label  ['pr','edit',String(pr),'--add-label',<label>,'-R',repo]
+//                                ready  ['pr','ready',String(pr),'-R',repo]
 //       Order: read, refuse (not a draft, or headRefOid != record.head), label, ready. A failed label never reaches ready.
 //   CLI gh seam: env PR_CHECKPOINT_GH=<script.mjs> runs `node <script.mjs> <gh args>` in place of gh (tests; never a real gh).
 //   Exit codes: 0 done, 1 refused or gh failed, 2 bad usage (before anything is read or written), 3 internal error.
@@ -119,7 +120,7 @@ import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { matchGlob } from './review-router.mjs';
+import { DEFAULT_REPO, matchGlob } from './review-router.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.join(HERE, '..', '..');
@@ -837,8 +838,8 @@ test('TA3 (spec 18): apply adds the review label BEFORE it marks the PR ready, f
     assert.equal(calls[0], 'pr view', `${pathway}: the live PR is read before any mutation`);
     assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr ready'], `${pathway}: label first, ready second`);
     assert.equal(calls.lastIndexOf('pr view'), 0, `${pathway}: no read after a mutation`);
-    assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--add-label', LABEL_OF[pathway]], pathway);
-    assert.deepEqual(g.calls.find((a) => a[1] === 'ready'), ['pr', 'ready', '201'], pathway);
+    assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--add-label', LABEL_OF[pathway], '-R', DEFAULT_REPO], pathway);
+    assert.deepEqual(g.calls.find((a) => a[1] === 'ready'), ['pr', 'ready', '201', '-R', DEFAULT_REPO], pathway);
   }
 });
 
@@ -895,6 +896,7 @@ test('TA5 (CLI): --apply reads pathway.json, then the PR, adds the label and mar
   assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr ready']);
   assert.ok(r.calls.find((a) => a[1] === 'edit').includes('review:coderabbit'));
   assert.ok(r.calls.every((a) => a[0] !== 'pr' || a.includes('999999')), 'every pr call names the PR');
+  assert.ok(r.calls.every((a) => a.slice(-2).join(' ') === `-R ${DEFAULT_REPO}`), `every gh call names the fork (critic: gh picks the repo from the cwd remotes otherwise): ${JSON.stringify(r.calls)}`);
 });
 
 test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, the PR is not a draft, or the head moved', () => {
@@ -906,7 +908,24 @@ test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, 
   for (const [label, view, why] of [['not a draft', { isDraft: false, headRefOid: HEAD }, /draft/i], ['head moved', { isDraft: true, headRefOid: OTHER }, /head/i]]) {
     const r = runApply({ view });
     assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
-    assert.deepEqual(r.calls, [['pr', 'view', '999999', '--json', 'isDraft,headRefOid']], `${label}: exactly one read through the injected gh, no mutation`);
+    assert.deepEqual(r.calls, [['pr', 'view', '999999', '--json', 'isDraft,headRefOid', '-R', DEFAULT_REPO]], `${label}: exactly one read through the injected gh, no mutation`);
     assert.match(r.stderr, why, `${label}: the refusal names its reason`);
   }
+});
+
+test('TB10 (critic): the facts (head, files, config drift, CLI output) come from the git toplevel of the cwd, the checkout the state dir belongs to, not from the checkout that holds the script', () => {
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-facts-')));
+  const git = (...args) => spawnSync('git', ['-c', 'user.email=t@example.com', '-c', 'user.name=t', ...args], { cwd: repo, encoding: 'utf8' });
+  assert.equal(git('init', '-q', '-b', 'main').status, 0);
+  writeFileSync(path.join(repo, 'a.txt'), 'one\n');
+  assert.equal(git('add', 'a.txt').status, 0);
+  assert.equal(git('commit', '-q', '-m', 'one').status, 0);
+  const tempHead = git('rev-parse', 'HEAD').stdout.trim();
+  const configFile = path.join(repo, 'cfg.json');
+  writeFileSync(configFile, JSON.stringify(LIVE));
+  const scriptHead = spawnSync('git', ['rev-parse', 'HEAD'], { cwd: ROOT, encoding: 'utf8' }).stdout.trim();
+  assert.notEqual(tempHead, scriptHead, 'the fixture checkout and the script checkout differ');
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--json', '--config', configFile], { cwd: repo, encoding: 'utf8', env: { ...process.env, GH_TOKEN: 'invalid-token' } });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  assert.equal(JSON.parse(r.stdout).head, tempHead, 'head is the cwd checkout head, not the script checkout head');
 });

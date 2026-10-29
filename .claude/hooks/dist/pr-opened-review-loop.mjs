@@ -19,11 +19,16 @@ function joinContinuations(command, shell) {
   const text = command || "";
   return shell === "bash" ? text.replace(/\\\r?\n/g, "") : text.replace(/[ \t]*`\r?\n[ \t]*/g, " ");
 }
+function normalizeGh(command) {
+  return (command || "").replace(/(["'])gh(?:\.exe)?\1(?=\s)|\bgh\.exe(?=\s)/gi, "gh");
+}
+var squashQuotes = (text) => text.replace(/["'\\]/g, "");
 function isPrOpenCommand(command) {
-  return isPrOpenText(joinContinuations(command, "bash")) || isPrOpenText(joinContinuations(command, "pwsh"));
+  const text = normalizeGh(command);
+  return isPrOpenText(joinContinuations(text, "bash")) || isPrOpenText(joinContinuations(text, "pwsh"));
 }
 function isPrOpenText(cmd) {
-  if (PR_CREATE_RE.test(cmd)) return true;
+  if (PR_CREATE_RE.test(cmd) || PR_CREATE_RE.test(squashQuotes(cmd))) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";
   const bare = api.replace(DATA_FLAG_RE, "$1$2");
@@ -150,10 +155,13 @@ export {
   extractPrInfo,
   hasNumberField,
   isPrOpenCommand,
+  isPrOpenText,
   joinContinuations,
   legacyStatePath,
   main,
   markFired,
+  normalizeGh,
   responseText,
+  squashQuotes,
   statePath
 };

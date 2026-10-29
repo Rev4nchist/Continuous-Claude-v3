@@ -312,7 +312,8 @@ describe('D: the stamp decides', () => {
   it('D7: the stamp is read from the command checkout; a cd moves it; a worktree on the branch is searched', () => {
     const seen: string[] = [];
     const d = deps({ stamp: stampJson() });
-    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
+    // PR B: a non-draft create also reads review-router.config.json (the warn or enforce switch). This test is about where the STAMP is read.
+    const spy: Deps = { ...d, readFile: (p) => { if (p === DEFAULT_BODY_PATH) return DEFAULT_BODY_TEXT; if (p.endsWith('review-router.config.json')) return null; seen.push(p.replace(/\\/g, '/')); return stampJson(); } };
     decide(input(CREATE[0]), spy);
     expect(seen).toEqual([`${ROOT}/${STAMP_REL}`]);
     seen.length = 0;
@@ -983,6 +984,11 @@ describe('B: the checkpoint gate (PR B)', () => {
     // Dave A.d: a draft create WITHOUT a review: label stays allowed (guards: they pass today and must keep passing).
     `gh pr create --draft --label risk:low --body-file ${DB}`,
     `gh pr create --draft -l "area:hooks" --title "review: tidy up" --body-file ${DB}`,
+    // Fix round guards: a redirect after the draft token, gh.exe with --draft, and a draft create chained before a gh api read.
+    `gh pr create --draft --body-file ${DB} 2>&1`,
+    `gh pr create --draft --body-file ${DB} > out.log`,
+    `gh.exe pr create --draft --body-file ${DB}`,
+    `gh pr create --draft --body-file ${DB} && gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/201/comments`,
   ];
   const NON_DRAFT = [
     `gh pr create --body-file ${DB}`,
@@ -1004,6 +1010,23 @@ describe('B: the checkpoint gate (PR B)', () => {
     `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f draft=false -f title=t -F body=@${DB}`,
     `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -F draft=false -F body=@${DB}`,
     `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST --draft -F body=@${DB}`,
+    // Fix round, critic 1: a comment, a here-string or a command substitution holding the draft token is not a draft flag.
+    `gh pr create --body-file ${DB} # --draft`,
+    `gh pr create --body-file ${DB} <# --draft #>`,
+    `gh pr create --body-file ${DB} <<< --draft`,
+    `gh pr create --body-file ${DB} $(: --draft )`,
+    `gh pr create --body-file ${DB} \`: --draft\``,
+    // Critic 2: an escaped quote moves the quote edge, so ' --draft ' is title text in the shell. An odd quote count or a backslash-quote is doubt: non-draft.
+    `gh pr create --title "a\\" x --draft " --body-file ${DB}`,
+    `gh pr create --title "a\\" x --draft \\"b" --body-file ${DB}`,
+    'gh pr create --title "a`" x --draft " --body-file ' + DB,
+    // Critic 6: gh.exe, a quoted gh, and a spliced subcommand are the same create.
+    `gh.exe pr create --body-file ${DB}`,
+    `& "gh" pr create --body-file ${DB}`,
+    `gh pr "create" --body-file ${DB}`,
+    `gh pr cre''ate --body-file ${DB}`,
+    // Critic 14: a chained gh api create with no draft token (and no body file of its own, so the stamp body count stays one) is non-draft even when the CLI create before it is a draft.
+    `gh pr create --draft --body-file ${DB} && gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t`,
   ];
 
   /** One command per new pattern. Each is allowed today; each must be a deny in enforce mode and a logged allow in warn mode. */
@@ -1124,6 +1147,12 @@ describe('B: the checkpoint gate (PR B)', () => {
     'cd scripts/github; node "pr-checkpoint.mjs" --apply 201',
     'node scripts/github/pr-checkpoint.mjs --json --confirm none --by dave',
     '$f = "scripts/github/pr-checkpoint.mjs"; node $f --apply 201',
+    // Fix round, critic 8: a glob or another script name still runs --apply or --confirm.
+    'node scripts/github/pr-c*.mjs --apply 201',
+    'node scripts/github/pr-?heckpoint.mjs --apply 201',
+    'node scripts/github/cp.mjs --apply=201',
+    'node scripts/github/cp.mjs --confirm none --by dave',
+    'node.exe .\\scripts\\github\\x.mjs --by default --confirm=both',
   ];
   const SELF_OK = [
     'node scripts/github/pr-checkpoint.mjs --json',
@@ -1162,6 +1191,15 @@ describe('B: the checkpoint gate (PR B)', () => {
     // Dave B: `--undo` alone is the recovery path and is NOT gated (B9). `--undo=false` is a boolean false, so it is a real ready: fail closed.
     'gh pr ready 201 --undo=false',
     `gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "PR_x"}) { pullRequest { id } } }'`,
+    // Fix round, critic 6: gh.exe, a quoted gh, and a spliced subcommand are still gh pr ready. Critic 3 and 4: a PR URL or any CCv3 -R value names CCv3.
+    'gh.exe pr ready 201',
+    '& "gh" pr ready 201',
+    'gh pr "ready" 201',
+    "gh pr rea''dy 201",
+    'gh pr {ready,ready} 201',
+    'gh pr ready https://github.com/Rev4nchist/Continuous-Claude-v3/pull/201',
+    'gh pr ready 201 -R someone/else -R Rev4nchist/Continuous-Claude-v3',
+    'gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3 -R someone/else',
   ];
   // Label adds that name a review: label in the text. Allowed only with a pathway for HEAD whose label equals the one named (Dave A.a).
   const LABEL = [
@@ -1174,6 +1212,13 @@ describe('B: the checkpoint gate (PR B)', () => {
     'gh issue edit 201 --add-label review:none',
     'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -f "labels[]=review:coderabbit"',
     'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X POST -f labels[]=review:deep',
+    // Fix round, critic 5: a labels field on the issue or pull endpoint, with no /labels path.
+    "gh api -X PATCH repos/Rev4nchist/Continuous-Claude-v3/issues/201 -f 'labels[]=review:deep'",
+    'gh api --method=PATCH repos/Rev4nchist/Continuous-Claude-v3/pulls/201 -f labels[]=review:none',
+    // Critic 6, 3 and 4: gh.exe, a PR URL selector, and a CCv3 value among several -R values.
+    'gh.exe pr edit 201 --add-label review:deep',
+    'gh pr edit https://github.com/Rev4nchist/Continuous-Claude-v3/pull/201 --add-label review:deep',
+    'gh pr edit 201 -R someone/else -R Rev4nchist/Continuous-Claude-v3 --add-label review:none',
   ];
 
   it('B8: gh pr ready, markPullRequestReadyForReview and a review: label are denied with no pathway.json for HEAD, or a pathway for another head or a broken one', () => {
@@ -1256,6 +1301,13 @@ describe('B: the checkpoint gate (PR B)', () => {
     'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X PUT --input -',
     `gh api graphql -f query='mutation { addLabelsToLabelable(input: {labelableId: "PR_x", labelIds: ["L_x"]}) { clientMutationId } }'`,
     `gh api graphql -f query='mutation($id: ID!, $l: [ID!]!) { addLabelsToLabelable(input: {labelableId: $id, labelIds: $l}) { clientMutationId } }' -f id=PR_x`,
+    // Fix round, critic 5: file-fed label values and the update mutations carry the label text out of sight.
+    'gh api -X PATCH repos/Rev4nchist/Continuous-Claude-v3/issues/201 -F labels[]=@l.txt',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -F labels[]=@l.txt',
+    `gh api graphql -f query='mutation { updatePullRequest(input: {pullRequestId: "PR_x", labelIds: ["L_x"]}) { clientMutationId } }'`,
+    `gh api graphql -f query='mutation { updateIssue(input: {id: "I_x", labelIds: ["L_x"]}) { clientMutationId } }'`,
+    // Critic 7: brace expansion hides the label text.
+    'gh pr edit 201 --add-label=review:{deep,deep}',
   ];
 
   it('B8e: a label add with no visible label text (labels endpoint with --input, GraphQL addLabelsToLabelable) is denied "review-label" on CCv3, with no pathway AND with a pathway', () => {
@@ -1392,6 +1444,107 @@ describe('B: the checkpoint gate (PR B)', () => {
     for (const [c, tool] of foreignByEnv) expect(act(c, { config: ENFORCE }, tool).action, `CCv3 checkout, ${tool}: ${c}`).toBe('allow');
   });
 
+  // ---- open item 3 of prB-red.md (default chosen by Dave's workflow): --undo counts only inside the same gh pr ready command segment ----
+  it('B9b: --undo exempts only the gh pr ready command it belongs to (segments split on ; && || | and newlines); a --undo elsewhere, quoted or glued to =false is still a ready', () => {
+    const NOT_UNDO = [
+      'gh pr ready 201; echo --undo',
+      'echo --undo && gh pr ready 201',
+      'gh pr ready 201 | cat --undo',
+      'gh pr ready 201\necho --undo',
+      'gh pr ready --undo; gh pr ready 201',
+      'gh pr ready 201 "--undo"',
+      "bash -c 'gh pr ready 201'",
+      // Fix round, critic 1: a comment, a here-string or a substitution that holds --undo does not excuse the ready.
+      'gh pr ready 201 # --undo',
+      'gh pr ready 201 <# --undo #>',
+      'gh pr ready 201 <<< --undo',
+      'gh pr ready 201 $(: --undo )',
+      'gh pr ready 201 `: --undo`',
+      // Critic 2: an escaped quote moves the quote edge.
+      'gh pr ready 201 "x\\" --undo "',
+    ];
+    for (const c of NOT_UNDO) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied(c, { config: ENFORCE }, tool)?.pattern, `enforce ${tool}: ${JSON.stringify(c)}`).toBe('ready');
+      }
+      let out = '';
+      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      expect(out, `warn: ${JSON.stringify(c)}`).toBe('{}');
+      expect(rows, `warn: ${JSON.stringify(c)}`).toHaveLength(1);
+      expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'ready' });
+    }
+    // Guards (pass today): the undo sits in its own ready segment, so nothing is logged or denied.
+    for (const c of ['gh pr ready 201 --undo; echo done', 'echo start; gh pr ready --undo 201', 'gh pr ready 201 --undo && gh pr view 201', 'gh pr ready --undo; gh pr ready --undo']) {
+      for (const config of [undefined, ENFORCE]) {
+        let out = '';
+        const rows = logged(() => { out = handle(payload(c), gdeps({ config })); });
+        expect(out, `${config ? 'enforce' : 'warn'}: ${c}`).toBe('{}');
+        expect(rows, `${config ? 'enforce' : 'warn'}: ${c}: no row`).toEqual([]);
+      }
+    }
+  });
+
+  // ---- fix round, critic 7: shell word splicing hides the label ----
+  it('B8g: a label with spliced quotes or a quoted part is the same label: denied with no pathway or another pathway; the matching pathway allows', () => {
+    const SPLICED = [
+      "gh pr edit 201 --add-label rev''iew:deep",
+      'gh pr edit 201 --add-label "review":deep',
+      "gh pr edit 201 --add-label re'view':deep",
+      'gh pr edit 201 --add-""label review:deep',
+      'gh pr edit 201 --add-label \\review:deep',
+    ];
+    for (const c of SPLICED) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied(c, { config: ENFORCE }, tool)?.pattern, `${tool}, no pathway: ${c}`).toBe('review-label');
+        expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, 'review:none') }, tool)?.pattern, `${tool}, other pathway: ${c}`).toBe('review-label');
+      }
+      expect(act(c, { config: ENFORCE, pathway: pathwayFor(HEAD, 'review:deep') }).action, `matching pathway: ${c}`).toBe('allow');
+    }
+  });
+
+  // ---- fix round, critic 3 and 4: the repo selector forms ----
+  it('B9c: a PR URL or any CCv3 value among several -R / --repo / GH_REPO values names CCv3 from a foreign checkout; foreign values stay foreign', () => {
+    const CCV3 = 'Rev4nchist/Continuous-Claude-v3';
+    const gate = gateModule as unknown as { namedRepo: (c: string, env?: Record<string, string>) => string | null };
+    for (const c of [
+      `gh pr ready 201 -R someone/else -R ${CCV3}`,
+      `gh pr ready 201 -R ${CCV3} -R someone/else`,
+      `gh pr ready 201 --repo someone/else --repo=${CCV3}`,
+      `GH_REPO=someone/else gh pr ready 201 -R ${CCV3}`,
+      `gh pr ready https://github.com/${CCV3}/pull/201`,
+      `gh issue edit https://github.com/${CCV3}/issues/7 --add-label review:none`,
+    ]) expect(gate.namedRepo(c), c).toBe('rev4nchist/continuous-claude-v3');
+    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'foreign values name the first').toBe('someone/else');
+    // Gated from a foreign checkout.
+    expect(denied(`gh pr ready https://github.com/${CCV3}/pull/201`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('ready');
+    expect(denied(`gh pr edit https://github.com/${CCV3}/pull/201 --add-label review:deep`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('review-label');
+    expect(denied(`gh pr ready 201 -R someone/else -R ${CCV3}`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('ready');
+    // A create with a CCv3 value among several: the stamp rules apply (a CCv3 checkout with no stamp; a foreign checkout is a repo-identity deny).
+    const create = `gh pr create --draft -R someone/else -R ${CCV3} --body-file ${DB}`;
+    expect(denied(create, { config: ENFORCE, stamp: false })?.pattern, 'CCv3 checkout, no stamp').toBe('stamp');
+    expect(denied(create, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern, 'foreign checkout').toBe('repo-identity');
+    // Guards: foreign values only, from a CCv3 checkout, stay allowed.
+    expect(act('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE }).action).toBe('allow');
+  });
+
+  // ---- fix round, critic 6: gh.exe and a quoted gh on the PR create stamp rules (#193, #197) ----
+  it('B16: gh.exe, a quoted gh and a spliced subcommand are a PR create: no stamp is a "stamp" deny, in warn mode too', () => {
+    for (const c of [
+      `gh.exe pr create --draft --body-file ${DB}`,
+      `& "gh" pr create --draft --body-file ${DB}`,
+      `gh pr "create" --draft --body-file ${DB}`,
+      `gh pr cre''ate --draft --body-file ${DB}`,
+      `gh.exe api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -F body=@${DB}`,
+      `& "gh" api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -F body=@${DB}`,
+    ]) {
+      for (const config of [undefined, ENFORCE]) {
+        for (const tool of ['Bash', 'PowerShell']) {
+          expect(denied(c, { config, stamp: false }, tool)?.pattern, `${config ? 'enforce' : 'warn'} ${tool}: ${c}`).toBe('stamp');
+        }
+      }
+    }
+  });
+
   // ---- lane gate-nonliteral-repo (CodeRabbit #197 thread PRRT_kwDOQ9JX0c6xVOwe) ----
   const NONLIT = [
     `gh pr create --draft --repo $REPO --body-file ${DB}`,
@@ -1405,6 +1558,11 @@ describe('B: the checkpoint gate (PR B)', () => {
     `gh pr create --draft --repo other/x$Y --body-file ${DB}`,
     'gh pr ready 201 --repo $REPO',
     'gh pr edit 201 --add-label review:none -R "$(echo a/b)"',
+    // Fix round, critic 9: a non-literal GH_REPO assignment, sh and PowerShell forms.
+    'GH_REPO=$R gh pr ready 201',
+    '$env:GH_REPO=$r; gh pr ready 201',
+    'GH_REPO="$(git remote get-url fork)" gh pr edit 201 --add-label review:none',
+    'GH_REPO=%REPO% gh pr ready 201',
   ];
 
   it('B10: a --repo or -R value with $, $(...), a backtick or %VAR% is denied "nonliteral-repo", from a CCv3 or a foreign checkout, even with a stamp and a pathway', () => {
