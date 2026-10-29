@@ -206,7 +206,9 @@ const seed = (prs: SeedPr[], backoffUntil = 0) => ({
 })
 
 describe('pr-loop watcher', () => {
-  test('W1 pending, pending, READY gives one toast and one report line and the PR leaves the list', async ($, on) => {
+  // The first test of the file pays the cold load of the engine and the plugin: 3.8 to 5.0 s on a quiet machine, so the 5 s default
+  // made the mods gate fail at random. A longer limit changes no assertion.
+  test('W1 pending, pending, READY gives one toast and one report line and the PR leaves the list', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, seen, store } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [status(7), status(7, { reasons: ['other'] }), READY(7)] } })
     await start($)
     await clock.advance(TICK)

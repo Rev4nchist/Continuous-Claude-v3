@@ -103,8 +103,13 @@ step 1 does not list.
 - A command must name exactly one body file: `-F body=@<file>`, `--body-file <file>`, or `-F <file>` on
   `gh pr create`. The file must hash to the stamp's `body_sha256`. The hook denies a second body source,
   a repeated body flag and `--input`.
-- An explicit CCv3 target (`--repo`, `-R`, `repos/<owner>/<repo>/pulls`, `GH_REPO`) must run in a CCv3
-  checkout.
+- The checkout decides the target. Only a CCv3 signal overrides it: a CCv3 `--repo`, `-R` or `GH_REPO`
+  value, a CCv3 `repos/<owner>/<repo>/` endpoint text or a CCv3 PR URL anywhere in the command. Such a
+  command must run in a CCv3 checkout.
+- The hook never names a foreign repo. A gated command in a CCv3 checkout is always gated, whatever
+  `-R` it holds. To act on another repo, run the command from that repo's checkout.
+- Accepted residual: from a foreign checkout, a CCv3 `-R` hidden by shell syntax (`v""3`, `-dR`) is
+  not seen. The hook guards against mistakes, not a hostile agent.
 - When `refs/remotes/fork/<branch>` exists, it must equal the stamped head.
 - The hook reads the command text with its continuation lines joined.
 - If the hook cannot check the stamp, it denies a PR-create command. A git timeout, a git error or an
@@ -120,9 +125,9 @@ step 1 does not list.
   non-draft create (the hook does not lex quotes). A hand-written `pathway.json` (the Write tool) or an
   indirect script is accepted until the lock of spec section 3.6 (spike S2). A confirmed label is tied to
   HEAD, not to a PR number: `gh pr edit <other> --add-label review:deep` passes while that pathway stands.
-  A subcommand built from a variable (`gh pr $sub 201`) is not read. The mode is read from the cwd
-  checkout, so a cwd with no `review-router.config.json` is warn mode: PR C must read the mode from the
-  CCv3 checkout the command names before it flips `enforce`.
+  The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
+  from the cwd checkout. A cwd with no `review-router.config.json` is warn mode. Before PR C flips
+  `enforce`, it must read the mode from the CCv3 checkout that the command names.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.

@@ -16,7 +16,11 @@
  * error while the stamp is checked (git timeout, git or spawn error, remotes that cannot be listed). The error is logged.
  * The PR body must be exactly one file (-F body=@<file>, --body-file <file>, or -F <file> for gh pr create). An inline body, stdin, --fill,
  * --input, and a second body source (a repeated flag, --body, -b, -f body=) cannot be hashed and are denied.
- * An explicit CCv3 target (--repo, -R, repos/<o>/<r>/pulls, GH_REPO) must still run in a CCv3 checkout.
+ * The checkout decides the target; only a CCv3 signal overrides it. A CCv3 signal anywhere in the raw text (a CCv3 -R / --repo / GH_REPO value,
+ * the process env GH_REPO, a repos/<o>/<r>/ endpoint text, a PR URL) names CCv3, and that command must run in a CCv3 checkout.
+ * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
+ * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates too, as the cwd does.
+ * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
@@ -44,10 +48,10 @@ import { createHash } from 'crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
-import { isGated, labelsEndpointRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
+import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision } from './shared/guard-log.js';
 
-export const CCV3_REPO = 'rev4nchist/continuous-claude-v3';
+export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
 /** The pathway record pr-checkpoint.mjs --confirm writes next to the stamp. */
 export const PATHWAY_REL = '.claude/cache/pre-pr/pathway.json';
@@ -89,36 +93,6 @@ interface HookInput { tool_name?: string; tool?: string; tool_input?: { command?
 
 // ---------- raw-text readers (narrow on purpose) ----------
 
-/** A gh repo value: OWNER/REPO, HOST/OWNER/REPO or a URL. Only the last two segments name the repo. */
-const REPO_VALUE = '((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})';
-const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, 'g');
-const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'gi');
-/** A PR or issue URL names its repo: `gh pr ready https://github.com/<o>/<r>/pull/201`. */
-const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
-const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
-
-const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-
-/**
- * `owner/repo` (lower case) the command targets, or null when the checkout decides.
- * The raw text cannot tell an endpoint from a title, so it fails closed: a CCv3 `repos/<o>/<r>/pulls` text anywhere,
- * or a CCv3 `-R` / `--repo` / `GH_REPO`, means CCv3. Otherwise the repo flag names the target. A foreign endpoint
- * text names it only for a `gh api` call that is not also a `gh pr create` (a title can hold either phrase).
- */
-export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
-  // gh uses the LAST -R / --repo value, a flag beats GH_REPO, and the shell may rewrite either: every value counts, and any CCv3 value means CCv3.
-  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
-  const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
-  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
-  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  const explicit = explicits[0] ?? null;
-  if (explicit) return explicit;
-  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return apiOnly ? endpoints[0] ?? null : null;
-}
-
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
 export function headBranchOf(command: string): string | null {
   // -H is a header for gh api and the head only for gh pr create.
@@ -133,12 +107,26 @@ export function isCcv3Remote(url: string): boolean {
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
 
-/** The directory a leading `cd <dir>` names, resolved against the hook cwd; else the cwd. */
+const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+const resolveIn = (cwd: string, target: string): string => {
+  const t = target.replace(/^["']|["']$/g, '');
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+};
+
+/** The directory the first `cd <dir>` names, resolved against the hook cwd; else the cwd. */
 function workDir(command: string, cwd: string): string {
-  const m = /(?:^|[;&|]\s*|&&\s*)(?:cd|Set-Location|sl)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i.exec(command);
-  if (!m) return cwd;
-  const target = m[1].replace(/^["']|["']$/g, '');
-  return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
+  const m = new RegExp(CD_TARGET.source, 'i').exec(command);
+  return m ? resolveIn(cwd, m[1]) : cwd;
+}
+
+/**
+ * Every directory a cd, Set-Location, sl, pushd or Push-Location in the text names, plus the cwd. Read from the raw text and from the text with
+ * its quotes deleted. No lexing: a target inside quoted text counts too, which can only gate more (fail closed).
+ */
+function candidateDirs(command: string, cwd: string): string[] {
+  const texts = [command, command.replace(/["']/g, '')];
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ''))));
+  return [...new Set([cwd, ...targets])];
 }
 
 /**
@@ -197,6 +185,11 @@ function isCcv3Checkout(deps: Deps, dir: string): boolean {
     const url = line.split(/\s+/)[1];
     return url !== undefined && isCcv3Remote(url);
   });
+}
+
+/** isCcv3Checkout for a directory the text only mentions: a directory that git cannot read (it may not exist) is not a CCv3 checkout. */
+function isCcv3Dir(deps: Deps, dir: string): boolean {
+  try { return isCcv3Checkout(deps, dir); } catch { return false; }
 }
 
 /** Checkouts that may hold the stamp: the command's own, then any worktree that has the named branch checked out. */
@@ -258,9 +251,9 @@ const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || inpu
 
 /** Per-decision memo of the facts several rules share, so a decision spawns each git call at most once. */
 interface Ctx {
-  /** The directory the command acts in (a leading `cd` moves it). */
+  /** The directory the command acts in (the first `cd` moves it). */
   dir: string;
-  /** The repo the command names, or null when the checkout decides. A non-literal --repo value names nothing. */
+  /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
   named: string | null;
   top: (dir: string) => string | null;
   ccv3: () => boolean;
@@ -275,7 +268,7 @@ const once = <T>(f: () => T): (() => T) => {
 function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? labelsEndpointRepo(command);
+  const named = namedRepo(command, deps.env);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
     if (!tops.has(d)) {
@@ -286,7 +279,7 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
   };
   return {
     dir, named, top,
-    ccv3: once(() => (named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir))),
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
     enforcing: once(() => enforceIn(deps, top(cwd))),
   };
 }

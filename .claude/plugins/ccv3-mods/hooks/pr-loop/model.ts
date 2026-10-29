@@ -161,6 +161,15 @@ const greptileFindings = (status: PrStatus): boolean =>
  */
 const OUTSIDE_DIFF_REASON = /^CodeRabbit lists \d+ outside-diff finding\(s\)/
 
+/**
+ * Texts review-status.mjs writes, held here by value so the mod can tell them from other reasons. Not read by any state yet
+ * (PR C wires them); scripts/github/pr-loop-sync.test.mjs fails when a text here differs from the .mjs.
+ */
+export const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
+export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow'
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow'
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again'
+
 /** CodeRabbit findings outside the diff that nobody handled yet. Whatever the labels: they make no thread. */
 const outsideDiffCount = (status: PrStatus): number =>
   status.reasons.some(reason => OUTSIDE_DIFF_REASON.test(reason)) ? status.coderabbitOutsideDiff ?? 0 : 0

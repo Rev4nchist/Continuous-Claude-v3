@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Skill Router API - Deterministic skill/agent routing for Maestro orchestration.
+"""Skill Router API - Deterministic skill/agent routing for workflow orchestration.
 
 Provides JSON in/out interface for:
 - Matching skills based on keywords and intent patterns
@@ -88,8 +88,6 @@ PATTERN_AGENT_MAP = {
     "adversarial": "validate-agent",
     "map_reduce": "kraken",
     "jury": "validate-agent",
-    "blackboard": "maestro",
-    "chain_of_responsibility": "maestro",
     "event_driven": "kraken",
     "circuit_breaker": "kraken",
 }
@@ -114,7 +112,6 @@ AGENT_TYPES = {
     "profiler": "performance",
     "herald": "release",
     "scribe": "documentation",
-    "maestro": "orchestration",
 }
 
 
@@ -375,9 +372,9 @@ def calculate_complexity(task: str, context: str, files: list[str], cwd: str = "
 
     # Determine action
     if total >= COMPLEXITY_THRESHOLD_FORCE:
-        action = "force_maestro"
+        action = "force_workflow"
     elif total >= COMPLEXITY_THRESHOLD_SUGGEST:
-        action = "suggest_maestro"
+        action = "suggest_workflow"
     else:
         action = "proceed"
 

@@ -27,7 +27,7 @@ Static gates:
 |---|---|---|
 | Context budget | `node scripts/rules/context-budget-guard.mjs --repo` | `always-loaded: 5 files, 23502 chars (budget 23516, Claude Code limit 150000) [repo]` |
 | Hook output contract | `node scripts/hooks/hook-contract-guard.mjs` | `PASS ... 75 live entries / 67 names ... 0 discarded-output, 2 known-debt, 8/8 timers safe` |
-| Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 35 \| opus: 12 sonnet: 23 \| OK` |
+| Model policy | `node scripts/check-agent-model-drift.mjs .` | `agents: 34 \| opus: 11 sonnet: 23 \| OK` |
 | Skills | `node scripts/skills/audit-skills.mjs` | `80 skills, 0 hard failures, 0 ratchet regressions` (rules G01-G33) |
 | Test suite size | `node scripts/hooks/suite-count-ratchet.mjs` | Fails if passed or collected tests drop below the baseline in `scripts/hooks/suite-baseline.json` |
 

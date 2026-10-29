@@ -67,14 +67,6 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 10,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/maestro-enforcer.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 5,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/pre-tool-knowledge.mjs"
@@ -273,14 +265,6 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/maestro-state-manager.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
             "timeout": 10,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/memory-awareness.mjs"
@@ -346,14 +330,6 @@
             "timeout": 15,
             "args": [
               "{{CLAUDE_HOME}}/hooks/dist/session-start-init-check.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/session-start-recovery.mjs"
             ]
           },
           {
@@ -452,14 +428,6 @@
     "SessionEnd": [
       {
         "hooks": [
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/maestro-cleanup.mjs"
-            ]
-          },
           {
             "type": "command",
             "command": "node",

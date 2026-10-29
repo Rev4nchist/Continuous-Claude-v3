@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
 import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -19,6 +19,8 @@ import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
 import { bandSpans, parseLanes } from './pane-model'
 import type { Span, Tone } from './pane-model'
+import { drift, observe } from './steward'
+import type { Activity, Drift } from './steward'
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
@@ -57,6 +59,14 @@ const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | n
 
 /** The tab the /os pane shows. Only a live tab is ever stored (a Comms, Swarm or Resources tab has no Button); reset at /clear and resume. */
 const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
+
+/**
+ * What the steward (steward.ts) keeps: the counts since the last brief_set (`briefAt` is its time; only briefCall moves
+ * it, the turn-end parser does not). Watch only: nothing of it goes to the model. Reset at session.start, /clear and resume.
+ */
+const NO_ACTIVITY: Activity = { toolCalls: 0, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 }
+const FRESH_STEWARD: OsSteward = { briefAt: null, activity: NO_ACTIVITY }
+const steward = atom({ plugin: 'ccv3-mods', key: 'steward' } as const, FRESH_STEWARD)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -98,13 +108,26 @@ const noteError = async ($: EngineInterface, where: string, err: unknown) => {
   if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
 }
 
+/**
+ * Live agents for the pane: the one source for the AGENTS rows, NOW and the chip. The `agents` atom (agent.list) is
+ * authoritative for an id it holds. The Agent Ledger adds a running run the list lacks, because the list is only re-read
+ * while a turn or a step runs. A settled run leaves the atom at turn.complete; turn.start reopens it if the agent resumes.
+ */
+const liveAgents = async ($: EngineInterface): Promise<OsAgent[]> => {
+  const runs = await read($, agentRuns)
+  const listed = await read($, agents)
+  const known = new Set(listed.map(agent => agent.id))
+  const running = runs.filter(run => run.status === 'running' && !known.has(run.id)).map(({ id, description, type }) => ({ id, description, type, status: 'running' }))
+  return [...listed, ...running]
+}
+
 const view = async ($: EngineInterface): Promise<OsView> => ({
   tasks: await read($, tasks),
   plan: await read($, plan),
   turn: await read($, turn),
   step: (await read($, steps)).at(-1) ?? null,
   ctx: await read($, ctx),
-  agents: await read($, agents),
+  agents: await liveAgents($),
   lanes: await read($, lanes),
   prs: await read($, prs),
 })
@@ -123,6 +146,7 @@ const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { work
     blocked: await read($, refused),
     now: at,
     activeAt: await read($, activeAt),
+    agentRuns: now.agents.filter(agent => agent.status === 'running'),
   })
 
 /**
@@ -196,7 +220,11 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
     const live = list
       .filter(agent => LIVE_AGENT.has(agent.status))
       .map(({ id, description, type, status }) => ({ id, description, type, status }))
-    await update($, agents, () => live)
+    // A subagent turn.start set `running` before the list says so. A list that still says `waiting` is older than that
+    // start: keep `running` until the agent's own turn.complete removes the entry or the list shows it ended.
+    await update($, agents, previous =>
+      live.map(one => (one.status === 'waiting' && previous.some(before => before.id === one.id && before.status === 'running') ? { ...one, status: 'running' } : one)),
+    )
   } catch {
     // Best effort: the pane keeps the last list.
   }
@@ -221,11 +249,15 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown. */
+/**
+ * While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown.
+ * Idle with a running ledger run or a listed agent that runs: also re-read the agents, so a run the list holds as ended settles. Idle without one: no read.
+ */
 const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
+    if ((await read($, agentRuns)).some(run => run.status === 'running') || (await read($, agents)).some(one => one.status === 'running')) await refreshAgents($)
     return
   }
   await update($, tick, () => now)
@@ -348,9 +380,14 @@ const briefCall = async ($: EngineInterface, e: unknown) => {
   // A model that leaves a field out may send null for it. The engine's own fields on the event are not read.
   const raw = Object.fromEntries(BRIEF_KEYS.filter(key => given[key] !== undefined && given[key] !== null).map(key => [key, given[key]]))
   const list = await read($, tasks)
-  const result = applyBrief(await read($, brief), raw, list, await $.clock.now())
+  const prev = await read($, brief)
+  // Two saves in one millisecond must differ: updatedAt orders the brief's saves.
+  const at = Math.max(await $.clock.now(), (prev?.updatedAt ?? -1) + 1)
+  const result = applyBrief(prev, raw, list, at)
   if ('error' in result) return textResult(`brief_set failed: ${result.error}`)
   await update($, brief, () => result.brief)
+  // A brief_set is the one thing that restarts the steward's counts. The turn-end parser also moves updatedAt, so it is not the version.
+  await update($, steward, state => ({ ...state, briefAt: result.brief.updatedAt, activity: NO_ACTIVITY }))
   await writeSnapshot($, typeof given.tool_use_id === 'string' ? { except: given.tool_use_id } : {})
   return textResult(briefSummary(result.brief, list))
 }
@@ -383,6 +420,36 @@ const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
   } catch {
     // Observer only.
   }
+}
+
+/** HEAD before or after a call that may commit: one process, only for a commit-looking shell call in an interactive run. */
+const headOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | null> => {
+  const command = typeof input.command === 'string' ? input.command : ''
+  if ((tool !== 'Bash' && tool !== 'PowerShell') || !/\bcommit\b/.test(command) || (await read($, mode)) !== 'interactive') return null
+  const run = await $.process.run(['git', 'rev-parse', 'HEAD'], { timeoutMs: 5000 }).catch(() => null)
+  return run !== null && run.exitCode === 0 ? run.stdout.trim() || null : null
+}
+
+/** CCV3_MOD_STEWARD_OFF=1 stops the counting and the pane row. Read live, so it works mid-session. */
+const stewardOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MOD_STEWARD_OFF')) === '1'
+
+/** A main-loop call ran: the steward counts it. brief_set is the brief changing, not work. A refused call did not run. */
+const watch = async ($: EngineInterface, tool: string, input: Record<string, unknown>, before: string | null, ran: Result): Promise<void> => {
+  try {
+    if (tool === BRIEF_TOOL || ran.deny !== undefined || (await stewardOff($))) return
+    const after = before === null ? null : await headOf($, tool, input)
+    const moved = after !== null && after !== before
+    await update($, steward, state => ({ ...state, activity: observe(state.activity, tool, input, moved) }))
+  } catch {
+    // Observer only.
+  }
+}
+
+/** The steward's verdict on the brief, for the pane. Null when the steward is switched off. Read-only: nothing is written or sent. */
+const driftNow = async ($: EngineInterface): Promise<Drift | null> => {
+  if (await stewardOff($)) return null
+  const state = await read($, steward)
+  return drift(await read($, brief), state.activity, state.briefAt ?? 0)
 }
 
 type Proof = { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }
@@ -459,6 +526,7 @@ export const agenticOs = (on: On) => {
       // A start (or a reload, which drops the old timers) re-arms the pulse.
       await update($, uiArmed, () => false)
       await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
+      await update($, steward, () => FRESH_STEWARD)
       await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
       await registerBrief($)
@@ -479,6 +547,7 @@ export const agenticOs = (on: On) => {
         await update($, tasks, () => [])
         await update($, plan, () => null)
         await update($, brief, () => null)
+        await update($, steward, () => FRESH_STEWARD)
         await update($, refused, () => false)
         await update($, osTab, () => 'overview')
       }
@@ -509,7 +578,16 @@ export const agenticOs = (on: On) => {
 
   // No off check on command.run: with the mod off, session.start never registers /os, so it never fires.
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn is not the main turn: its run shows through `agentRuns`, and it must not reset the refusal or the clock.
     if (await isOff($)) return next(e)
+    const resumed = e.agentId
+    if (resumed !== undefined) {
+      // A settled run whose agent starts a turn again (a message resumes it under the same id) is running again.
+      await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
+      // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
+      await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
+      return next(e)
+    }
     if (!(await read($, turnBeaconed).catch(() => false))) {
       await beacon($, 'turn')
       await update($, turnBeaconed, () => true).catch(() => undefined)
@@ -532,6 +610,7 @@ export const agenticOs = (on: On) => {
       const endedAt = await $.clock.now()
       const failed = e.isAborted || e.reason === 'error' || e.reason === 'aborted' || e.reason === 'refusal'
       await update($, agentRuns, runs => runs.map(run => (run.id === agentId ? settle(run, endedAt, failed) : run)))
+      await update($, agents, list => list.filter(agent => agent.id !== agentId))
       if (await worthSnapshot($)) await writeSnapshot($)
     }
     if (agentId === undefined) {
@@ -567,8 +646,10 @@ export const agenticOs = (on: On) => {
     const startedAt = await $.clock.now()
     await update($, activeAt, () => startedAt)
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
+    const headBefore = await headOf($, tool, input).catch(() => null)
     const ran = await next(e)
     await update($, steps, list => list.filter(one => one.id !== id))
+    await watch($, tool, input, headBefore, ran)
     // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.
     if (ran.deny !== undefined && tool !== 'AskUserQuestion') await update($, refused, () => true)
     if (await record($, tool, input, ran)) await writeSnapshot($)
@@ -697,6 +778,7 @@ export const agenticOs = (on: On) => {
       worktree: where?.worktree ?? null,
       costUsd: (await read($, hud))?.costUsd ?? null,
       activeAt: await read($, activeAt),
+      drift: await driftNow($),
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.

@@ -83,7 +83,7 @@
       "stack": [
         "Python 3.12",
         "uv",
-        "Maestro/CCv3",
+        "CCv3",
         "Alpaca paper",
         "pgvector memory"
       ],

@@ -4,18 +4,18 @@
  *
  * Contract, written before the code (.claude/hooks/src/checkpoint-shapes-cli.ts, built to dist/checkpoint-shapes-cli.mjs):
  *   node dist/checkpoint-shapes-cli.mjs --shell bash|pwsh     the command text on stdin
- *   prints one line of JSON: shapesOf(joinContinuations(text, shell)), the Shapes of shared/checkpoint-shapes.ts, plus `repos`, exit 0
- *   `repos` (Fill round, critic finding 1): one entry per gated invocation in the text (a ready, a label add, a self-confirm), in
- *   order. An entry is the lower case owner/repo that invocation names with a literal -R, --repo or GH_REPO value, or null when it
- *   names none or a non-literal one (the checkout decides). The ccv3-mods lock passes a gated command through only when `repos` is
- *   not empty and every entry is a literal repo other than the CCv3 fork. So the lock reads no -R from raw text itself.
+ *   prints one line of JSON: shapesOf(joinContinuations(text, shell)), the Shapes of shared/checkpoint-shapes.ts, plus `ccv3`, exit 0
+ *   `ccv3` (PR C0 contract change, Dave's PR B rule "the hook never names a foreign repo; a visible CCv3 signal gates; else the
+ *   checkout decides"): true when namedRepo(text, {}) of pre-pr-gate names the CCv3 fork (a CCv3 -R / --repo / GH_REPO, a CCv3
+ *   endpoint, or a CCv3 PR URL anywhere in the text), else false. The CLI prints no list of foreign repos. The ccv3-mods lock
+ *   treats a gated command with ccv3 false as the checkout's to decide.
  *   joinContinuations is the one in pr-opened-review-loop.ts (it needs the shell)
  *   exit 2 with a stderr line and nothing on stdout: empty stdin, a missing --shell, or a --shell that is not bash or pwsh
  *
  * How it can fail, and the test that catches it:
  *   the built file is missing (a new src/*.ts that nobody built, or the CLI not written)  -> every test, named in C0
- *   the shape keys drift from Shapes + repos                                                 -> C1
- *   a compound command lets one -R cover a second gated command, or a CCv3 -R reads as foreign -> C5
+ *   the shape keys drift from Shapes + ccv3                                                  -> C1
+ *   a CCv3 signal (-R, --repo, endpoint, PR URL) is missed, or a foreign/compound text reads as CCv3 -> C5
  *   a ready/label/self/graphql shape is not read, or --undo reads as a ready               -> C2
  *   a PowerShell backtick continuation or a bash backslash continuation is not joined      -> C3
  *   the shell flag is ignored (the same text reads the same in both)                        -> C3
@@ -41,7 +41,7 @@ const shapes = (stdin: string, shell: 'bash' | 'pwsh') => {
   expect(r.status, `exit ${r.status}, stderr: ${r.stderr}`).toBe(0);
   return JSON.parse(r.stdout) as {
     create: boolean; nonDraft: boolean; ready: boolean; label: { labels: string[]; blind: boolean } | null; self: boolean; nonLiteral: boolean;
-    repos: (string | null)[];
+    ccv3: boolean;
   };
 };
 
@@ -50,12 +50,12 @@ describe('checkpoint-shapes-cli', () => {
     expect(existsSync(CLI), `${CLI} is missing: add src/checkpoint-shapes-cli.ts and build it`).toBe(true);
   });
 
-  it('C1 prints one JSON line with exactly the Shapes keys and repos', () => {
+  it('C1 prints one JSON line with exactly the Shapes keys and ccv3', () => {
     const r = run('gh pr view 201', '--shell', 'bash');
     expect(r.status, r.stderr).toBe(0);
     expect(r.stdout.trim().split('\n').length).toBe(1);
-    expect(Object.keys(JSON.parse(r.stdout)).sort()).toEqual(['create', 'label', 'nonDraft', 'nonLiteral', 'ready', 'repos', 'self']);
-    expect(shapes('gh pr view 201', 'bash')).toEqual({ create: false, nonDraft: false, ready: false, label: null, self: false, nonLiteral: false, repos: [] });
+    expect(Object.keys(JSON.parse(r.stdout)).sort()).toEqual(['ccv3', 'create', 'label', 'nonDraft', 'nonLiteral', 'ready', 'self']);
+    expect(shapes('gh pr view 201', 'bash')).toEqual({ create: false, nonDraft: false, ready: false, label: null, self: false, nonLiteral: false, ccv3: false });
   });
 
   it('C2 reads the gated shapes: ready, --undo, a label add, GraphQL, self-confirm, and the override prefix', () => {
@@ -75,20 +75,33 @@ describe('checkpoint-shapes-cli', () => {
     expect(shapes('gh pr \\\nready 201', 'bash').ready).toBe(true);
     expect(shapes('gh pr edit 201 `\r\n  --add-label review:coderabbit', 'pwsh').label?.labels).toEqual(['review:coderabbit']);
     expect(shapes('gh pr edit 201 \\\n  --add-label review:coderabbit', 'bash').label?.labels).toEqual(['review:coderabbit']);
+    // The flag decides. A bash continuation inside a word joins it; PowerShell has no backslash continuation, so the word stays split.
+    expect(shapes('gh pr rea\\\ndy 201', 'bash').ready).toBe(true);
+    expect(shapes('gh pr rea\\\ndy 201', 'pwsh').ready).toBe(false);
   });
 
-  it('C5 repos: one entry per gated invocation; an unnamed or non-literal repo is null; a compound command cannot hide a second one', () => {
-    const CCV3 = 'rev4nchist/continuous-claude-v3';
-    expect(shapes('gh pr ready 201', 'bash').repos).toEqual([null]);
-    expect(shapes('gh pr ready 201 -R someone/else', 'bash').repos).toEqual(['someone/else']);
-    expect(shapes('gh pr edit 201 --repo Someone/Else --add-label review:none', 'pwsh').repos).toEqual(['someone/else']);
-    expect(shapes('gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3', 'bash').repos).toEqual([CCV3]);
-    expect(shapes('gh pr ready 201 -R "$TARGET"', 'bash').repos).toEqual([null]);
-    // The critic's compound case: the first command is foreign, the second names nothing, so the checkout (CCv3) decides it.
-    expect(shapes('gh pr ready 1 -R a/b; gh pr ready 2', 'bash').repos).toEqual(['a/b', null]);
-    expect(shapes('gh pr ready 1 -R a/b && gh pr edit 2 --add-label review:none', 'bash').repos).toEqual(['a/b', null]);
-    // A mention inside quotes cannot be told from a command in raw text, so it fails closed: a null entry is present.
-    expect(shapes("echo 'gh pr ready 1 -R a/b'; gh pr ready 2", 'bash').repos).toContain(null);
+  it('C5 ccv3: true on a visible CCv3 signal (-R, --repo, endpoint, PR URL); false when the text names no CCv3 repo', () => {
+    for (const c of [
+      'gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3',
+      'gh pr ready 201 --repo rev4nchist/continuous-claude-v3',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
+      'gh pr ready https://github.com/Rev4nchist/Continuous-Claude-v3/pull/9',
+      'GH_REPO=Rev4nchist/Continuous-Claude-v3 gh pr ready 1',
+      'gh pr ready 1 -R "Rev4nchist/Continuous-Claude-v3"',
+      'gh.exe api repos/Rev4nchist/Continuous-Claude-v3/issues/7/labels -f labels[]=review:deep',
+      '"gh" api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
+      'gh pr ready 1 \\\n -R Rev4nchist/Continuous-Claude-v3',
+    ]) expect(shapes(c, 'bash').ccv3, c).toBe(true);
+    for (const c of [
+      "$env:GH_REPO='Rev4nchist/Continuous-Claude-v3'; gh pr ready 1",
+      'gh pr ready 1 -R "Rev4nchist/Continuous-Claude-v3"',
+      'gh.exe api repos/Rev4nchist/Continuous-Claude-v3/issues/7/labels -f labels[]=review:deep',
+      '"gh" api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
+      'gh pr ready 1 `\r\n -R Rev4nchist/Continuous-Claude-v3',
+    ]) expect(shapes(c, 'pwsh').ccv3, c).toBe(true);
+    for (const c of ['gh pr ready 201', 'gh pr ready 201 -R someone/else', 'gh pr ready 1 -R a/b; gh pr ready 2']) {
+      expect(shapes(c, 'bash').ccv3, c).toBe(false);
+    }
   });
 
   it('C4 empty stdin, a missing --shell and a bad --shell exit 2 with a stderr line and no stdout', () => {

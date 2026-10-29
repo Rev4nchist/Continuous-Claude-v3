@@ -128,20 +128,20 @@ describe('initActivity', () => {
 
 describe('logSkill', () => {
   it('adds a new skill entry with count 1', () => {
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
 
     const activity = readActivity(TEST_SESSION_ID);
     expect(activity).not.toBeNull();
     expect(activity!.skills).toHaveLength(1);
-    expect(activity!.skills[0].name).toBe('maestro');
+    expect(activity!.skills[0].name).toBe('systematic-debugging');
     expect(activity!.skills[0].count).toBe(1);
     expect(activity!.skills[0].first_seen).toBeDefined();
   });
 
   it('increments count for an existing skill', () => {
-    logSkill(TEST_SESSION_ID, 'maestro');
-    logSkill(TEST_SESSION_ID, 'maestro');
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
 
     const activity = readActivity(TEST_SESSION_ID);
     expect(activity!.skills).toHaveLength(1);
@@ -149,26 +149,26 @@ describe('logSkill', () => {
   });
 
   it('preserves first_seen timestamp when incrementing', () => {
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
     const firstActivity = readActivity(TEST_SESSION_ID);
     const firstSeen = firstActivity!.skills[0].first_seen;
 
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
     const secondActivity = readActivity(TEST_SESSION_ID);
     expect(secondActivity!.skills[0].first_seen).toBe(firstSeen);
   });
 
   it('tracks multiple skills independently', () => {
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
     logSkill(TEST_SESSION_ID, 'memory-awareness');
-    logSkill(TEST_SESSION_ID, 'maestro');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
 
     const activity = readActivity(TEST_SESSION_ID);
     expect(activity!.skills).toHaveLength(2);
 
-    const maestro = activity!.skills.find(s => s.name === 'maestro');
+    const skill = activity!.skills.find(s => s.name === 'systematic-debugging');
     const memory = activity!.skills.find(s => s.name === 'memory-awareness');
-    expect(maestro!.count).toBe(2);
+    expect(skill!.count).toBe(2);
     expect(memory!.count).toBe(1);
   });
 
@@ -209,14 +209,14 @@ describe('logHook', () => {
   });
 
   it('tracks hooks and skills separately', () => {
-    logSkill(TEST_SESSION_ID, 'maestro');
-    logHook(TEST_SESSION_ID, 'maestro-enforcer');
+    logSkill(TEST_SESSION_ID, 'systematic-debugging');
+    logHook(TEST_SESSION_ID, 'task-router');
 
     const activity = readActivity(TEST_SESSION_ID);
     expect(activity!.skills).toHaveLength(1);
     expect(activity!.hooks).toHaveLength(1);
-    expect(activity!.skills[0].name).toBe('maestro');
-    expect(activity!.hooks[0].name).toBe('maestro-enforcer');
+    expect(activity!.skills[0].name).toBe('systematic-debugging');
+    expect(activity!.hooks[0].name).toBe('task-router');
   });
 
   it('auto-initializes the activity file if it does not exist', () => {

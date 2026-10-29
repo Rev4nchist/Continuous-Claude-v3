@@ -259,7 +259,6 @@ Now `/deploy` works in this project.
 | `/explore` | Codebase exploration |
 | `/build` | Feature implementation workflow |
 | `/fix` | Bug investigation + fix workflow |
-| `/maestro` | Multi-step orchestration |
 | `/ralph` | Autonomous development mode |
 
 ### Agent Delegation
@@ -430,5 +429,4 @@ After setup, explore these workflows:
 
 - **`/explore quick`** - Quick codebase overview
 - **`/build`** - Start implementing a feature
-- **`/maestro`** - Orchestrate a complex multi-step task
 - **`/help`** - See all available commands and capabilities

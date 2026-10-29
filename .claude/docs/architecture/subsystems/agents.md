@@ -16,8 +16,8 @@ TESTING                  REVIEW                   DEBUG
                          ├── plan-reviewer (plans)
                          └── grok-adversary (cross-model)
 
-ORCHESTRATE              DOCS                     DEPLOY
-├── maestro              └── scribe               └── deployer
+                         DOCS                     DEPLOY
+                         └── scribe               └── deployer
 ```
 
 **Cross-model review** is Grok (`grok-adversary`) plus Claude `critic`. The
@@ -45,7 +45,6 @@ that runner. The `plan-exit-premortem-prompt` hook offers `/premortem` after
 | Cross-model review | grok-adversary | sonnet | Read-only Grok review |
 | Validate a plan | plan-reviewer | sonnet | Read, Grep, Glob |
 | Security audit | aegis | opus | Read, Bash, Grep |
-| Multi-step orchestration | maestro | opus | Read, Bash, Task, Skill |
 | Docs/handoffs | scribe | sonnet | Read, Write, Glob, Grep |
 
 ## Spawning Agents
@@ -142,7 +141,6 @@ Agents add latency. Use directly when task is simple.
 | /explore | scout (with depth control) |
 | /review | critic and plan-reviewer, in parallel during Phase 1, in the background |
 | /premortem | inline failure-mode analysis, then a Grok pass when the user picks Grok |
-| /maestro | Coordinates any specialists |
 
 ## Deep Dive
 

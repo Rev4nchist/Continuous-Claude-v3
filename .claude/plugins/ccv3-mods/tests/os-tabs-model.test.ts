@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { applyBrief, markAsksAnswered } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
+import { drift } from '../hooks/agentic-os/steward'
+import type { Drift } from '../hooks/agentic-os/steward'
 import { TABS, isTabId, osPane, tabRows, tabStrip } from '../hooks/agentic-os/os-tabs-model'
 import type { TabId, TabItem, TabState } from '../hooks/agentic-os/os-tabs-model'
 import type { PaneRow } from '../hooks/agentic-os/pane-model'
@@ -24,6 +26,7 @@ import type { OsBrief, OsTask } from '../types'
 // O14 Overview counts an answered ask in "ASK n", or loses "n answered?"
 // O15 Overview loses the stale mark on ASK, or draws it in the amber of a fresh ask
 // O16 Overview loses "[parsed]" on GOAL or STOP AT, or draws it on a goal that brief_set wrote
+// O19 O20 NOW and the chip row of Overview read idle while a subagent or workflow run is live (no turn, no step)
 // O17 Proof lists several proofs oldest first
 
 const NOW = 100 * 3600_000
@@ -524,5 +527,86 @@ describe('os proof order', () => {
     expect(at('new task')).toBeGreaterThan(-1)
     expect(at('new task')).toBeLessThan(at('mid task'))
     expect(at('mid task')).toBeLessThan(at('old task'))
+  })
+})
+
+describe('os overview with only a subagent running', () => {
+  // No turn and no main-loop step: the only live work is a subagent or workflow run (view.agents holds the running runs).
+  const agent = (status: string) => ({ id: 'a1', description: 'map hooks', type: 'scout', status })
+  const rowsWith = (status: string) => tabRows('overview', empty({ chip: status === 'running' ? 'working' : 'idle', view: { ...empty().view, agents: [agent(status)] } }), NOW, 100, 60)
+  const keyed = (rows: PaneRow[], key: string) => rowText(rows.find(one => one.key === key)!)
+
+  test('O19 NOW is not idle while a subagent runs; with none running it still reads idle', () => {
+    expect(keyed(rowsWith('running'), 'now')).not.toMatch(/idle/)
+    expect(keyed(tabRows('overview', empty(), NOW, 100, 60), 'now')).toMatch(/idle/)
+  })
+
+  test('O20 the chip row beside a working chip does not say idle while a subagent runs', () => {
+    const rows = rowsWith('running')
+    expect(keyed(rows, 'ov-chip')).toContain('WORKING')
+    expect(keyed(rows, 'ov-chip')).not.toMatch(/idle/)
+  })
+
+  test('O20b an agent that waits is not running: NOW and the chip row both read idle beside an idle chip', () => {
+    const rows = rowsWith('waiting')
+    expect(keyed(rows, 'now')).toMatch(/idle/)
+    expect(keyed(rows, 'now')).not.toMatch(/running/)
+    expect(keyed(rows, 'ov-chip')).not.toContain('WORKING')
+  })
+})
+
+// O18 the dim `brief stale` row (the steward, watch-only): missing for unset, stale or finished, not plain English, not dim, drawn when
+//     the drift is ok, null or unset, not next to GOAL, wider than the pane at 20 to 200 columns, or a secret in the reason reaches a row
+describe('os overview: the brief stale row', () => {
+  const NO_GOAL = drift(null, { toolCalls: 1, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const planned = briefWith({ goal: 'prove the steward', plan: [{ id: 'a', text: 'one', status: 'doing' }] })
+  const done = briefWith({ goal: 'prove the steward', plan: [{ id: 'a', text: 'one', status: 'done' }] })
+  const STALE = drift(planned, { toolCalls: 12, commits: 1, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const FINISHED = drift(done, { toolCalls: 3, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const withDrift = (brief: Brief | null, found: Drift | null): TabState => ({ ...empty({ brief }), drift: found }) as TabState
+  const staleRows = (rows: PaneRow[]) => rows.filter(one => rowText(one).includes('brief stale'))
+
+  test('O18 unset, stale and finished each draw one dim row that says why, in plain words', () => {
+    const cases: [Drift, Brief | null, RegExp][] = [
+      [NO_GOAL, null, /^brief stale: no goal set yet while work started$/],
+      [STALE, planned, /^brief stale: 12 tool calls and 1 commit since the brief changed$/],
+      [FINISHED, done, /^brief stale: every plan step is done but work continues$/],
+    ]
+    for (const [found, brief, expected] of cases) {
+      const rows = staleRows(tabRows('overview', withDrift(brief, found), NOW, 100, 60))
+      expect(rows).toHaveLength(1)
+      expect(rowText(rows[0]!)).toMatch(expected)
+      expect(rows[0]!.left.every(one => one.tone === 'dim')).toBe(true)
+      expect(rows[0]!.right).toBeUndefined()
+    }
+  })
+
+  test('O18 the row sits directly under GOAL', () => {
+    const keys = tabRows('overview', withDrift(planned, STALE), NOW, 100, 60).map(one => one.key)
+    expect(keys[keys.indexOf('ov-goal') + 1]).toBe('ov-stale')
+  })
+
+  test('O18 no row when the drift is ok, null or not given', () => {
+    const ok: Drift = { level: 'ok', reason: '', key: 'ok@0' }
+    expect(all(tabRows('overview', withDrift(planned, ok), NOW, 100, 60))).not.toContain('brief stale')
+    expect(all(tabRows('overview', withDrift(planned, null), NOW, 100, 60))).not.toContain('brief stale')
+    expect(all(tabRows('overview', empty({ brief: planned }), NOW, 100, 60))).not.toContain('brief stale')
+  })
+
+  test('O18 the row stays inside the pane from 20 to 200 columns and still starts with "brief stale"', () => {
+    for (const columns of [20, 24, 40, 80, 200]) {
+      const rows = tabRows('overview', withDrift(planned, STALE), NOW, columns, 40)
+      for (const row of rows) expect(rowWidth(row)).toBeLessThanOrEqual(columns)
+      expect(rowText(rows.find(one => one.key === 'ov-stale')!)).toMatch(/^brief stale/)
+    }
+  })
+
+  test('O18 a secret in the reason is in no row, whole or cut, at any width', () => {
+    const leaked: Drift = { level: 'stale', reason: `after ${SECRET} was used`, key: 'stale@1' }
+    for (const columns of [20, 40, 60, 200]) {
+      const text = all(tabRows('overview', withDrift(planned, leaked), NOW, columns, 40))
+      expect(text).not.toContain(SECRET)
+      expect(text).not.toContain('aaaaaaaa')
+    }
   })
 })

@@ -7,7 +7,6 @@
 │                    WORKFLOWS                                │
 ├─────────────────────────────────────────────────────────────┤
 │                                                             │
-│  /maestro  - Coordinate multiple specialists               │
 │  /fix      - Reproduce → Investigate → Fix → Re-run repro  │
 │  /build    - Plan → Implement → Review                     │
 │  /explore  - Codebase research at varying depths           │
@@ -35,27 +34,6 @@ ExitPlanMode                                          Hardened plan
 - Skip Grok for doc-only or trivial diffs. There is no second CLI reviewer.
 
 **Usage:** `/premortem` (or auto-offered after a plan is approved)
-
-## /maestro Workflow
-
-Versatile orchestrator for complex multi-step tasks.
-
-```
-Analyze Request
-      │
-      ▼
-Spawn Specialists (parallel where possible)
-      │
-      ├── scout (if research needed)
-      ├── oracle (if external docs needed)
-      ├── kraken (if implementation needed)
-      └── arbiter (if testing needed)
-      │
-      ▼
-Synthesize Results
-```
-
-**Usage:** `/maestro "research auth patterns and implement OAuth"`
 
 ## /fix Workflow
 
@@ -147,5 +125,5 @@ Skills in `~/.claude/skills/` can compose workflows:
 |-----------|-----|
 | Single focused task | Direct agent |
 | Multi-step with dependencies | Workflow |
-| Need coordination | /maestro |
+| Need coordination | Workflow tool |
 | Stress-test a plan before building | /premortem |

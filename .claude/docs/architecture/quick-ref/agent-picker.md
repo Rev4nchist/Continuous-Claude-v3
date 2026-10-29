@@ -37,7 +37,6 @@
 | **Deployment** |
 | Vercel deploy/monitor | deployer | sonnet | Deploy, verify, debug deployments |
 | **Orchestration & Docs** |
-| Multi-step orchestration | maestro | opus | Coordinates specialists; interview-gated phases |
 | Docs/handoffs/summaries | scribe | sonnet | Handoffs, continuity ledgers, session summaries |
 
 ## Quick Decision

@@ -20,7 +20,7 @@
 | Hooks | Intercept & modify Claude behavior | `.claude/hooks/` |
 | Agents | Specialized task delegation | Task tool |
 | PageIndex | Document navigation & search | `pageindex_cli.py` |
-| Workflows | Multi-step orchestration | `/maestro` |
+| Workflows | Multi-step orchestration | Workflow tool |
 | Braintrust | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Tracing is off. | none |
 | RLM | Analyze inputs that overflow the context window — the large-context escape hatch (dormant; Docker-gated) | `/rlm-analyze`, `rlm_client.py` |
 
@@ -35,7 +35,7 @@
         ▼           ▼           ▼           ▼           ▼           ▼
 ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐ ┌──────────┐
 │  MEMORY  │ │  HOOKS   │ │  AGENTS  │ │ PAGEINDEX│ │ WORKFLOWS│ │ RETIRED  │
-│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Maestro   │ │ archive/ │
+│PostgreSQL│ │TS source │ │ Task tool│ │Doc search│ │Workflow  │ │ archive/ │
 │+pgvector │ │ → dist   │ │ delegate │ │LLM reason│ │          │ │braintrust│
 └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘ └──────────┘
 ```
@@ -57,7 +57,7 @@ For current inventory: see [agent-skill-map.md](../agent-skill-map.md), [hook-ca
 - [ROADMAP System](subsystems/roadmap.md) - Goal tracking, 4 hooks, /roadmap skill
 - [Hook System](subsystems/hooks.md) - Lifecycle, blocking, patterns
 - [Agent Orchestration](subsystems/agents.md) - When to use which agent
-- [Workflows](subsystems/workflows.md) - Maestro, compound workflows
+- [Workflows](subsystems/workflows.md) - Workflow tool, compound workflows
 - [Braintrust Observability](subsystems/braintrust.md) - RETIRED 2026-09-30. History only. Code is in `archive/braintrust-2026-10/`.
 
 **Phase 5 design docs (../):**

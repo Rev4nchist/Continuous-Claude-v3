@@ -196,10 +196,9 @@ var LABEL_FIELD = /\blabels(?:\[[^\]]*\])?=/i;
 var FILE_LABELS = /\blabels(?:\[[^\]]*\])?=@/i;
 var LABEL_MUTATION = /\b(?:labelIds|updatePullRequest|updateIssue)\b/;
 var INPUT_FLAG = /(?:^|\s)--input(?:=|\s|$)/;
-function labelsEndpointRepo(raw) {
-  if (!/\bgh\s+api\b/i.test(raw)) return null;
-  const repos = [...raw.matchAll(ISSUE_ENDPOINT)].map((m) => m[1].toLowerCase());
-  return repos.find((r) => r === "rev4nchist/continuous-claude-v3") ?? repos[0] ?? null;
+function hasCcv3Endpoint(raw) {
+  if (!/\bgh\s+api\b/i.test(raw)) return false;
+  return [...raw.matchAll(ISSUE_ENDPOINT)].some((m) => m[1].toLowerCase() === "rev4nchist/continuous-claude-v3");
 }
 var valuesOf = (re, raw) => [...raw.matchAll(re)].map((m) => m[1]);
 var unquote = (word) => word.replace(/["'\\]/g, "");
@@ -240,6 +239,22 @@ function shapesOf(command) {
   return { create, nonDraft: create && isNonDraftCreate(text), ready, label, self: isSelfConfirm(text), nonLiteral };
 }
 var isGated = (s) => s.create || s.ready || s.label !== null || s.self;
+var CCV3_REPO = "rev4nchist/continuous-claude-v3";
+var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
+var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, "g");
+var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "gi");
+var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
+var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
+var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+function namedRepo(command, env = {}) {
+  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
+  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
+  const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
+  return ccv3 ? CCV3_REPO : null;
+}
 
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync as mkdirSync2 } from "fs";
@@ -311,7 +326,6 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
 }
 
 // src/pre-pr-gate.ts
-var CCV3_REPO = "rev4nchist/continuous-claude-v3";
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
 var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
 var CONFIG_REL = "review-router.config.json";
@@ -323,24 +337,6 @@ var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
 var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
-var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
-var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, "g");
-var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "gi");
-var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
-var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
-var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-function namedRepo(command, env = {}) {
-  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
-  const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
-  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
-  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  const explicit = explicits[0] ?? null;
-  if (explicit) return explicit;
-  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return apiOnly ? endpoints[0] ?? null : null;
-}
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
   return m ? m[1].replace(/^[^:\s]+:/, "").replace(/["']+$/, "") : null;
@@ -349,11 +345,19 @@ function isCcv3Remote(url) {
   const m = /github\.com[:/]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
+var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+var resolveIn = (cwd, target) => {
+  const t = target.replace(/^["']|["']$/g, "");
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+};
 function workDir(command, cwd) {
-  const m = /(?:^|[;&|]\s*|&&\s*)(?:cd|Set-Location|sl)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i.exec(command);
-  if (!m) return cwd;
-  const target = m[1].replace(/^["']|["']$/g, "");
-  return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
+  const m = new RegExp(CD_TARGET.source, "i").exec(command);
+  return m ? resolveIn(cwd, m[1]) : cwd;
+}
+function candidateDirs(command, cwd) {
+  const texts = [command, command.replace(/["']/g, "")];
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""))));
+  return [.../* @__PURE__ */ new Set([cwd, ...targets])];
 }
 var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
 var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
@@ -395,6 +399,13 @@ function isCcv3Checkout(deps, dir) {
     const url = line.split(/\s+/)[1];
     return url !== void 0 && isCcv3Remote(url);
   });
+}
+function isCcv3Dir(deps, dir) {
+  try {
+    return isCcv3Checkout(deps, dir);
+  } catch {
+    return false;
+  }
 }
 function stampRoots(deps, dir, root, branch) {
   const roots = [root];
@@ -455,7 +466,7 @@ var once = (f) => {
 function makeCtx(input, command, deps, shapes) {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? labelsEndpointRepo(command);
+  const named = namedRepo(command, deps.env);
   const tops = /* @__PURE__ */ new Map();
   const top = (d) => {
     if (!tops.has(d)) {
@@ -468,7 +479,7 @@ function makeCtx(input, command, deps, shapes) {
     dir,
     named,
     top,
-    ccv3: once(() => named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir)),
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
     enforcing: once(() => enforceIn(deps, top(cwd)))
   };
 }

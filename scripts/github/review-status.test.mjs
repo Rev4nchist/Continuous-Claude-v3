@@ -2087,6 +2087,8 @@ test('RN9: review:none whose router state on the head saved no pathway=none chec
 //   coderabbitRoundsOf missing, or the auto opening plus 2 requests is not 3      -> RS3
 //   a request before the first review is counted twice                            -> RS3
 //   two review objects of one commit count as two rounds (the round ask fires early) -> RS4
+//   an empty-body thread-reply review counts as a round                                       -> RS4
+//   a non-empty review body without 'Actionable comments posted' is skipped as a round        -> RS4
 //   the JSON drops the fields, or they are not numbers/booleans                   -> RS5
 //   DRAFT_REASON not exported, or evaluate writes another text                    -> RS6
 const REQ_USER = { login: 'Rev4nchist', type: 'User' };
@@ -2159,6 +2161,29 @@ test('RS4: two CodeRabbit review objects on one commit are one round', () => {
   assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(A, '2026-10-28T10:01:00Z')], comments: [] }), 1);
   assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(B, '2026-10-28T11:00:00Z'), crBotReview(B, '2026-10-28T11:02:00Z')], comments: [] }), 2);
   assert.equal(rounds({ reviews: [{ user: { login: 'someone', type: 'User' }, commit_id: A, submitted_at: '2026-10-28T10:00:00Z', body: 'x' }], comments: [] }), 0, 'only the CodeRabbit app counts');
+  // A thread reply makes a COMMENTED review with an empty body on the head commit: it buys no round.
+  const reply = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: '' });
+  assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), reply(B, '2026-10-28T11:00:00Z')], comments: [] }), 1, 'an empty-body reply on commit B is not a round');
+  assert.equal(rounds({ reviews: [reply(A, '2026-10-28T10:00:00Z')], comments: [] }), 0, 'a reply alone is no round');
+  assert.equal(
+    rounds({ reviews: [reply(A, '2026-10-28T09:00:00Z'), crBotReview(A, '2026-10-28T10:30:00Z')], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T10:00:00Z')] }),
+    1,
+    'an early reply does not make the first review older than the request',
+  );
+  // A real round can carry no "Actionable comments posted" line (outside-diff and nitpick findings only): it still counts.
+  const C = 'c'.repeat(40);
+  const noSentence = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: '**Outside diff range comments (2)**\n'.padEnd(8258, 'x') });
+  assert.equal(
+    rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(B, '2026-10-28T11:00:00Z'), noSentence(C, '2026-10-28T12:00:00Z')], comments: [] }),
+    3,
+    'a long body with no review sentence on commit C is a round',
+  );
+  const blank = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: ' \n\t ' });
+  assert.equal(
+    rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), reply(B, '2026-10-28T11:00:00Z'), blank(C, '2026-10-28T12:00:00Z')], comments: [] }),
+    1,
+    'an empty and a whitespace-only review on other commits add no round',
+  );
 });
 
 test('RS5: the JSON result carries isDraft, labels, coderabbitRequests and coderabbitRounds, whatever the labels', () => {

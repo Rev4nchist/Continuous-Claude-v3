@@ -59,14 +59,14 @@ TIER_2_ARCHITECTURE = [
 ]
 
 TOP_SKILLS = [
-    "build", "ralph", "fix", "explore", "init-project", "maestro",
+    "build", "ralph", "fix", "explore", "init-project",
     "debug", "research", "refactor", "commit", "review",
     "tdd", "test", "migrate", "security", "hook-developer",
     "plan-mode", "skill-developer", "agentica-sdk", "knowledge-tree", "memory"
 ]
 
 TOP_AGENTS = [
-    "phoenix", "maestro", "kraken", "spark", "scout", "oracle",
+    "phoenix", "kraken", "spark", "scout", "oracle",
     "architect", "arbiter", "debug-agent", "sleuth", "scribe",
     "herald", "profiler", "principal-reviewer", "principal-debugger"
 ]

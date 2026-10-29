@@ -116,11 +116,10 @@ const FILE_LABELS = /\blabels(?:\[[^\]]*\])?=@/i;
 const LABEL_MUTATION = /\b(?:labelIds|updatePullRequest|updateIssue)\b/;
 const INPUT_FLAG = /(?:^|\s)--input(?:=|\s|$)/;
 
-/** `owner/repo` (lower case) a `gh api` endpoint text names (labels, issues or pulls), CCv3 first; or null. */
-export function labelsEndpointRepo(raw: string): string | null {
-  if (!/\bgh\s+api\b/i.test(raw)) return null;
-  const repos = [...raw.matchAll(ISSUE_ENDPOINT)].map((m) => m[1].toLowerCase());
-  return repos.find((r) => r === 'rev4nchist/continuous-claude-v3') ?? repos[0] ?? null;
+/** True when a `gh api` text holds a CCv3 issues or pulls endpoint. A foreign endpoint is never named: the hook names CCv3 or nothing. */
+export function hasCcv3Endpoint(raw: string): boolean {
+  if (!/\bgh\s+api\b/i.test(raw)) return false;
+  return [...raw.matchAll(ISSUE_ENDPOINT)].some((m) => m[1].toLowerCase() === 'rev4nchist/continuous-claude-v3');
 }
 
 const valuesOf = (re: RegExp, raw: string): string[] => [...raw.matchAll(re)].map((m) => m[1]);
@@ -188,3 +187,31 @@ export function shapesOf(command: string): Shapes {
 }
 
 export const isGated = (s: Shapes): boolean => s.create || s.ready || s.label !== null || s.self;
+
+export const CCV3_REPO = 'rev4nchist/continuous-claude-v3';
+
+// ---------- repo identity (moved from pre-pr-gate.ts so the shapes CLI can import it without running a hook main()) ----------
+
+/** A gh repo value: OWNER/REPO, HOST/OWNER/REPO or a URL. Only the last two segments name the repo. */
+const REPO_VALUE = '((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})';
+const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, 'g');
+const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'gi');
+/** A PR or issue URL names its repo: `gh pr ready https://github.com/<o>/<r>/pull/201`. */
+const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
+const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
+
+const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+/**
+ * `rev4nchist/continuous-claude-v3` when the raw text holds any CCv3 signal, else null (the checkout decides). The hook never names a foreign repo.
+ * A CCv3 signal is a CCv3 `-R` / `--repo` / `GH_REPO=` value (also the process env GH_REPO), a CCv3 `repos/<o>/<r>/pulls` or issues or labels
+ * endpoint text, or a CCv3 PR URL. Any one of them anywhere in the text means CCv3 (fail closed): gh may use the last -R, and a title can hold text.
+ */
+export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
+  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
+  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
+  const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
+  return ccv3 ? CCV3_REPO : null;
+}
