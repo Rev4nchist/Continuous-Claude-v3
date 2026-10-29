@@ -83,7 +83,7 @@ States: `working`, `waiting-on-dave`, `blocked`, `done`, `idle`. One chip per se
 
 ### 5.3 Session Pane (terminal)
 
-- **Band**: two lines above the prompt. Line 1: chip, project dot, repo, branch, lane. No ctx, cost or limits on any band row: the status line has them. Line 2: goal, plan bar, ASK count, UNPROVEN count. A widget may add one line below. The two core lines never move.
+- **Band**: two lines above the prompt. Line 1: chip, project dot, repo, branch, lane, ctx, cost. Line 2: goal, plan bar, ASK count, UNPROVEN count. A widget may add one line below. The two core lines never move.
 - **`/os` pane**: tabs Overview, Plan, Proof, Decisions. Tabs Comms, Swarm, Resources show as disabled with a NEXT or LATER tag.
 - Opens at 110 columns or wider. Text gauges only (no Svg in the terminal). Zero model tokens.
 - Observer only: it never denies or rewrites a tool call. Its single session-side write is `brief_set` (5.5).
