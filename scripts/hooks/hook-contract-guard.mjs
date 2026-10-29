@@ -106,8 +106,8 @@ const LEGACY_SPEAKING = [
  * Hooks allowed to keep the discarded shape, each with the reason.
  *
  * ONLY SessionEnd belongs here, and only because the session is over -- there is
- * no turn left for injected context to reach. These three do real work in their
- * side effects (writing handoffs, recording outcome, clearing state) and their
+ * no turn left for injected context to reach. These two do real work in their
+ * side effects (writing handoffs, recording outcome) and their
  * `message` is vestigial.
  *
  * This list is deliberately small and named. "It's just advisory" is NOT a reason
@@ -116,7 +116,6 @@ const LEGACY_SPEAKING = [
  * here requires stating why the model does not need to hear it.
  */
 const ALLOWED_DISCARD = new Map([
-  ['maestro-cleanup', 'SessionEnd -- no turn remains to receive context'],
   ['session-outcome', 'SessionEnd -- no turn remains to receive context'],
   ['session-end-handoff-indexer', 'SessionEnd -- no turn remains to receive context'],
 ]);

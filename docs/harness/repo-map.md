@@ -10,7 +10,7 @@
 | `.claude/rules-src/` | Path-scoped rules and the always-loaded index of on-demand rules |
 | `.claude/rules-ondemand/` | 20 tool rules and the `manifest.json` that routes them |
 | `.claude/templates/` | The core `CLAUDE.md` template and other install templates |
-| `.claude/agents/` | 35 subagent definitions as `.md`, plus 17 `.json` sidecars |
+| `.claude/agents/` | 34 subagent definitions as `.md`, plus 16 `.json` sidecars |
 | `.claude/skills/` | 80 skills, each in its own folder with a `SKILL.md` |
 | `.claude/settings.json.template` | The hook registration template. The rendered `settings.json` is untracked. |
 | `opc/` | Python: the setup wizard (`opc/scripts/setup/`), memory scripts (`opc/scripts/core/`) and their tests |

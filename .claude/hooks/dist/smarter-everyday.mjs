@@ -344,7 +344,7 @@ function processTransition(state, toolName, toolInput, toolResponse, projectDir)
   let message = null;
   if (toolName === "Edit" || toolName === "Write") {
     const filePath = toolInput.file_path || "";
-    if (filePath && (filePath.includes("smarter-everyday-state") || filePath.includes(".claude/cache/") || filePath.includes("extraction-state.json") || filePath.includes(".claude/maestro-state.json"))) {
+    if (filePath && (filePath.includes("smarter-everyday-state") || filePath.includes(".claude/cache/") || filePath.includes("extraction-state.json"))) {
       return { newState: state, message: null };
     }
     const normalizedPath = path.basename(filePath);

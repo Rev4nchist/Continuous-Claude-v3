@@ -17,11 +17,9 @@ const __dirname = dirname(fileURLToPath(import.meta.url));
 const TEST_FILES = [
   { name: 'Agent Trust (A)', file: 'agent-trust-tests.mjs' },
   { name: 'State Corruption (B)', file: 'state-corruption-tests.mjs' },
-  { name: 'Pattern Exploits (C)', file: 'pattern-exploit-tests.mjs' },
   { name: 'Error Learning (D)', file: 'error-learning-tests.mjs' },
   { name: 'Long-Running (E)', file: 'long-running-tests.mjs' },
   { name: 'Cross-Session (F)', file: 'cross-session-tests.mjs' },
-  { name: 'Maestro Isolation (G)', file: 'maestro-isolation-tests.mjs' },
 ];
 
 async function runTest(testFile) {

@@ -2,6 +2,8 @@
 Created: 2026-04-26 | Author: architect | Branch: feature/system-coherence
 Inputs: `.claude/docs/agent-skill-map.md` (post-cleanup), commit `f9c7c59` archive READMEs, Phase 5b brief
 
+> REMOVED: the `maestro` agent, the `/maestro` skill and the maestro hooks (`maestro-detector`, `maestro-enforcer`, `maestro-state-manager`, `maestro-cleanup`, `session-start-recovery`) no longer exist. This design doc is a 2026-04 snapshot. Treat every maestro reference below as history, not as a live component.
+
 > Status: **Design only** per the plan Phase 5 gate. No code or skill body changes proposed for execution in this document. All recommendations are intent for a follow-up Phase 5c plan that the user must approve before any execution.
 
 ---

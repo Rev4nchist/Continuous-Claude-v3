@@ -2004,30 +2004,6 @@
         ]
       }
     },
-    "maestro": {
-      "type": "orchestration",
-      "enforcement": "suggest",
-      "priority": "high",
-      "description": "Multi-agent coordination for complex patterns",
-      "promptTriggers": {
-        "keywords": [
-          "coordinate",
-          "orchestrate",
-          "development loop",
-          "parallel agents",
-          "multiple agents",
-          "agent workflow",
-          "agent pipeline",
-          "multi-agent"
-        ],
-        "intentPatterns": [
-          "(coordinate|orchestrate).*?(agents?|tasks?)",
-          "(parallel|multiple|multi).*?agents?",
-          "agent.*?(workflow|pipeline|coordination)",
-          "(development|dev).*?loop"
-        ]
-      }
-    },
     "react-perf": {
       "type": "domain",
       "enforcement": "suggest",

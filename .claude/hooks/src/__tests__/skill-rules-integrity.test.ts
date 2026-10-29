@@ -55,7 +55,7 @@ interface Rules {
  * merge deleting live registrations -- without failing on additions.
  */
 const MIN_SKILLS = 56; // 2026-10-23: the removed cross-model skill left skill-rules.json
-const MIN_AGENTS = 18;
+const MIN_AGENTS = 17; // 2026-10-29: the removed maestro agent left skill-rules.json
 
 // ── validators, extracted so they can be run against a bad fixture ─────────
 

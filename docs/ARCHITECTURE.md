@@ -42,12 +42,12 @@ The system has five pillars: **Memory** (persistent learnings), **Hooks** (autom
 +-----------------------------------------------------------------------------------+
 |                              AGENT LAYER (31 agents)                               |
 |                                                                                    |
-|  ORCHESTRATORS          IMPLEMENTERS         EXPLORERS          REVIEWERS         |
-|  +----------+           +----------+         +----------+       +----------+      |
-|  | maestro  |           | kraken   |         | scout    |       | critic   |      |
-|  | (opus)   |           | (opus)   |         | (sonnet) |       | (sonnet) |      |
-|  | multi-ag |           | TDD impl |         | codebase |       | code     |      |
-|  +----------+           +----------+         +----------+       +----------+      |
+|                         IMPLEMENTERS         EXPLORERS          REVIEWERS         |
+|                         +----------+         +----------+       +----------+      |
+|                         | kraken   |         | scout    |       | critic   |      |
+|                         | (opus)   |         | (sonnet) |       | (sonnet) |      |
+|                         | TDD impl |         | codebase |       | code     |      |
+|                         +----------+         +----------+       +----------+      |
 |                                                                                    |
 |  PLANNERS              DEBUGGERS            VALIDATORS         SPECIALIZED        |
 |  +----------+          +----------+         +----------+       +----------+       |
@@ -184,7 +184,6 @@ Hooks fire automatically at specific lifecycle points. Users don't invoke them d
 
 | Agent | Model | Purpose |
 |-------|-------|---------|
-| **maestro** | opus | Multi-agent coordination, pattern selection |
 | **kraken** | opus | TDD implementation, checkpointing, resumable work |
 
 ### Planning Agents
@@ -489,7 +488,6 @@ Claude calls Grep("validateToken")
 | File | Purpose |
 |------|---------|
 | `.claude/agents/kraken.md` | TDD implementation agent |
-| `.claude/agents/maestro.md` | Multi-agent orchestrator |
 | `.claude/agents/architect.md` | Feature planning agent |
 | `.claude/agents/scout.md` | Codebase exploration |
 
