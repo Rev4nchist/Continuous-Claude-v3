@@ -4,7 +4,7 @@ import type { Engine } from 'claude-code/testing'
 
 // The PR loop mod, one test each. Every check reads what the engine was asked to do
 // (a spawned process, a toast, a submitted prompt, a tool call, a store write).
-// W1  pending, pending, READY: one toast and one report line, and the PR leaves the list
+// W1  pending, pending, READY: one toast and no model line, and the PR leaves the list
 // W2  NOT READY (exit 1) is a normal answer: it must not read as an error or start the backoff
 // W3  merged or closed: one toast, no model turn, the PR leaves the list
 // W4  a reload re-arms from the store and does not report a state it already reported
@@ -29,7 +29,7 @@ import type { Engine } from 'claude-code/testing'
 // W23 a status script without prState or merged is an error, never CLOSED
 // W24 one PR's own error never stops the others; three in a row drop it; shared errors still back off
 // W25 pr_watch and /watch refuse a PR whose status cannot be read; the tool names its repo
-// W12 (again) a READY alert answered No or dismissed still gives the model its report line
+// W12 (again) a READY alert answered No or dismissed gives Dave the toast and the model no line
 // W26 a reviewed head below the confidence bar alerts REVIEWED, not STALLED
 // W27 a labelled PR whose CodeRabbit review was rate limited or skipped is LIMITED, not PENDING for 60 minutes
 // W28 a Greptile review a push cancelled says cancelled; a reviewed head below the bar is REVIEWED
@@ -202,7 +202,7 @@ const seed = (prs: SeedPr[], backoffUntil = 0) => ({
 describe('pr-loop watcher', () => {
   // The first test of the file pays the cold load of the engine and the plugin: 3.8 to 5.0 s on a quiet machine, so the 5 s default
   // made the mods gate fail at random. A longer limit changes no assertion.
-  test('W1 pending, pending, READY gives one toast and one report line and the PR leaves the list', { timeoutMs: 30_000 }, async ($, on) => {
+  test('W1 pending, pending, READY gives one toast and no model line and the PR leaves the list', { timeoutMs: 30_000 }, async ($, on) => {
     const { clock, seen, store } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [status(7), status(7, { reasons: ['other'] }), READY(7)] } })
     await start($)
     await clock.advance(TICK)
@@ -213,9 +213,7 @@ describe('pr-loop watcher', () => {
     expect(seen.toasts.length).toBe(1)
     expect(seen.toasts[0]).toContain('#7')
     expect(seen.toasts[0]).toContain('READY')
-    expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain('#7')
-    expect(seen.submits[0]).toMatch(/do not merge/i)
+    expect(seen.submits).toEqual([])
     expect(stored(store)).toBeUndefined()
     await clock.advance(TICK * 3)
     expect(seen.status).toEqual([7, 7, 7])
@@ -375,15 +373,6 @@ describe('pr-loop watcher', () => {
     await clock.advance(TICK)
     expect(seen.submits).toEqual([])
     expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
-  })
-
-  test('W29 READY names the bots the labels required', async ($, on) => {
-    const ready = status(9, { ready: true, reasons: [], routing: CR_ONLY, routedReviewed: true, reviewedHead: false, mergeable_state: 'clean' })
-    const { clock, seen } = world(on, { store: seed([{ pr: 9 }]), script: { 9: [ready] } })
-    await start($)
-    await clock.advance(TICK)
-    expect(seen.submits[0]).toMatch(/CodeRabbit reviewed it/)
-    expect(seen.submits[0]).not.toMatch(/Greptile|confidence at least/)
   })
 
   test('W29 a docs-only PR (no bot required) never waits for a review', async ($, on) => {
@@ -879,20 +868,20 @@ describe('/land', () => {
     await clock.advance(TICK)
     expect(seen.asks.length).toBe(1)
     expect(seen.land).toEqual([])
-    // The PR left the list at READY: a No must not leave Dave with only a 10 second toast.
-    expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain('#7')
-    expect(seen.submits[0]).toMatch(/READY/)
-    expect(seen.submits[0]).toMatch(/do not merge/i)
+    // READY reaches Dave by toast only; the model gets no line, and a No does not change that.
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toContain('READY')
+    expect(seen.submits).toEqual([])
   })
 
-  test('W12 a flagged PR whose dialog is dismissed still reports READY to the model', async ($, on) => {
+  test('W12 a flagged PR whose dialog is dismissed gives the model no line', async ($, on) => {
     const { clock, seen } = world(on, { answer: 'dismiss', store: seed([{ pr: 7, state: 'PENDING', whenReady: true }]), script: { 7: [READY(7)] } })
     await start($)
     await clock.advance(TICK)
     expect(seen.land).toEqual([])
-    expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toMatch(/READY/)
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toContain('READY')
+    expect(seen.submits).toEqual([])
   })
 
   test('W13 with no shell tool, Land hands the model one instruction instead', async ($, on) => {
