@@ -1224,7 +1224,7 @@ describe('pr-loop checkpoint states', () => {
   const COMMAND = 'pathway'
   const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
   const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
-  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again'
+  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /pathway again'
   const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
   const NO_REVIEW = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one'
   const record = (over: Record<string, unknown> = {}) => ({
@@ -1371,6 +1371,7 @@ describe('pr-loop checkpoint states', () => {
     await ticks(clock, 13)
     expect(seen.submits.length).toBe(1)
     expect(seen.submits[0]).toContain(`Run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
+    expect(seen.submits[0]).not.toContain('/checkpoint')
   })
 
   test('CW12 an older status script with no isDraft is still a draft, from the DRAFT_REASON text', async ($, on) => {

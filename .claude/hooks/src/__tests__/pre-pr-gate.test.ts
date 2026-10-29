@@ -899,10 +899,10 @@ describe('W: wiring', () => {
 //   Enforce mode: the same commands are denied, and the row is { decision: 'deny', reason: <pattern> }.
 //   The stamp rules of #193 and #197 are NOT new: they are enforced in both modes, and they are checked before the PR B rules.
 //   New patterns and deny texts (each text must not mention SKIP_PRE_PR_GATE):
-//     non-draft       'open as draft; run /checkpoint'
-//     self-confirm    names pr-checkpoint with --confirm or --apply: only Dave's press in the /checkpoint mod records a pathway
+//     non-draft       'open as draft; run /pathway'
+//     self-confirm    names pr-checkpoint with --confirm or --apply: only Dave's press in the /pathway mod records a pathway
 //     ready           gh pr ready, markPullRequestReadyForReview: ALWAYS denied in enforce mode, pathway or not (Dave 2026-10-28; --apply runs gh
-//                     inside node, so the hook never sees it). Text must contain /checkpoint. `gh pr ready --undo` is NOT gated (recovery path).
+//                     inside node, so the hook never sees it). Text must contain /pathway. `gh pr ready --undo` is NOT gated (recovery path).
 //     review-label    a gh text that adds a review: label (--add-label, a labels endpoint, or gh pr create --label / -l). Allowed ONLY when pathway.json
 //                     names HEAD AND the review: label equals pathway.label. Any other review: label is denied. A label add with no visible label text
 //                     (gh api .../labels --input <file>, GraphQL addLabelsToLabelable) is denied on CCv3 even WITH a pathway (the label cannot be checked).
@@ -1053,10 +1053,10 @@ describe('B: the checkpoint gate (PR B)', () => {
 
   /** One command per new pattern. Each is allowed today; each must be a deny in enforce mode and a logged allow in warn mode. */
   const NEW_DENIES: Array<{ name: string; command: string; pattern: string; reason: RegExp }> = [
-    { name: 'non-draft create', command: CREATE[1], pattern: 'non-draft', reason: /open as draft; run \/checkpoint/ },
+    { name: 'non-draft create', command: CREATE[1], pattern: 'non-draft', reason: /open as draft; run \/pathway/ },
     { name: 'self-confirm', command: 'node scripts/github/pr-checkpoint.mjs --confirm none --by dave', pattern: 'self-confirm', reason: /pr-checkpoint[\s\S]*press/i },
-    { name: 'ready', command: 'gh pr ready 201', pattern: 'ready', reason: /\/checkpoint/ },
-    { name: 'review label', command: 'gh pr edit 201 --add-label review:coderabbit', pattern: 'review-label', reason: /\/checkpoint/ },
+    { name: 'ready', command: 'gh pr ready 201', pattern: 'ready', reason: /\/pathway/ },
+    { name: 'review label', command: 'gh pr edit 201 --add-label review:coderabbit', pattern: 'review-label', reason: /\/pathway/ },
     { name: 'non-literal repo', command: `gh pr create --draft --repo $REPO --body-file ${DB}`, pattern: 'nonliteral-repo', reason: /literal/i },
   ];
 
@@ -1069,13 +1069,13 @@ describe('B: the checkpoint gate (PR B)', () => {
     }
   });
 
-  it('B2: a create with no explicit draft-true token is denied "open as draft; run /checkpoint" (enforce); --draft=false and a later draft=false count', () => {
+  it('B2: a create with no explicit draft-true token is denied "open as draft; run /pathway" (enforce); --draft=false and a later draft=false count', () => {
     for (const c of NON_DRAFT) {
       for (const tool of ['Bash', 'PowerShell']) {
         const d = denied(c, { config: ENFORCE }, tool);
         expect(d, `${tool}: ${c}`).not.toBeNull();
         expect(d?.pattern, c).toBe('non-draft');
-        expect(d?.reason, c).toContain('open as draft; run /checkpoint');
+        expect(d?.reason, c).toContain('open as draft; run /pathway');
         expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
       }
     }
@@ -1114,6 +1114,15 @@ describe('B: the checkpoint gate (PR B)', () => {
         expect(d.action === 'deny' ? d.pattern : d.action, `${config ? 'enforce' : 'warn'} stale stamp: ${c}`).toBe('stamp');
       }
     }
+  });
+
+  it('B3z: no deny text names /checkpoint, a built-in command of Claude Code; the texts name /pathway (rename guard)', () => {
+    for (const n of NEW_DENIES) {
+      const d = denied(n.command, { config: ENFORCE });
+      expect(d?.pattern, n.name).toBe(n.pattern);
+      expect(d?.reason, n.name).not.toContain('/checkpoint');
+    }
+    for (const c of [NEW_DENIES[0].command, NEW_DENIES[2].command, NEW_DENIES[3].command]) expect(denied(c, { config: ENFORCE })?.reason, c).toContain('/pathway');
   });
 
   it('B4: warn mode (no config, enforce false, no key, bad JSON): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
@@ -1248,7 +1257,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       for (const tool of ['Bash', 'PowerShell']) {
         const none = denied(c, { config: ENFORCE }, tool);
         expect(none?.pattern, `${tool}: ${c}`).toBe(want);
-        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).toContain('/pathway');
         expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
       }
       expect(denied(c, { config: ENFORCE, pathway: pathwayFor(BHEAD, READY.includes(c) ? undefined : labelOf(c)) })?.pattern, `pathway of another head: ${c}`).toBe(want);
@@ -1299,7 +1308,7 @@ describe('B: the checkpoint gate (PR B)', () => {
         for (const pathway of [pathwayFor(HEAD), pathwayFor(HEAD, 'review:none'), pathwayFor(HEAD, 'review:deep')]) {
           const d = denied(c, { config: ENFORCE, pathway }, tool);
           expect(d?.pattern, `${tool}, pathway ${JSON.parse(pathway).label}: ${c}`).toBe('ready');
-          expect(d?.reason, c).toContain('/checkpoint');
+          expect(d?.reason, c).toContain('/pathway');
           expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
         }
       }
@@ -1336,7 +1345,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       for (const tool of ['Bash', 'PowerShell']) {
         const none = denied(c, { config: ENFORCE }, tool);
         expect(none?.pattern, `${tool}, no pathway: ${c}`).toBe('review-label');
-        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).toContain('/pathway');
         expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
         // The label cannot be checked against pathway.label, so a pathway for HEAD does not open it.
         for (const label of REVIEW_LABELS) {
@@ -1374,7 +1383,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       for (const tool of ['Bash', 'PowerShell']) {
         const none = denied(c, { config: ENFORCE }, tool);
         expect(none?.pattern, `${tool}, no pathway: ${c}`).toBe('review-label');
-        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).toContain('/pathway');
         expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
         const other = REVIEW_LABELS.find((l) => l !== labelOf(c)) as string;
         expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, other) }, tool)?.pattern, `${tool}, pathway ${other}: ${c}`).toBe('review-label');

@@ -1081,7 +1081,8 @@ test('CP5: a raise on a review:none PR adds risk:* only and posts the checkpoint
     const d = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
     assert.equal(d.reason, 'raised');
     assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}`);
-    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Run \/checkpoint again\./);
+    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Run \/pathway again\./);
+    assert.doesNotMatch(d.comment, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
     assert.equal(d.pathway, 'none');
     assert.equal(d.pclass, 'normal', 'pclass stays the class at the checkpoint');
     assert.equal(d.effective, 'infra');

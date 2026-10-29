@@ -68,7 +68,7 @@ export type OsLane = { id: string; title: string; state: string; note?: string }
  * REVIEWED means the head was reviewed but is not READY (open threads or a failed check): the model acts.
  * STALLED means no review 60 minutes after the head appeared.
  * PROOF means the PR body proof is missing or wrong: the author fixes the Evidence block now.
- * DRAFT means the PR waits for Dave's /checkpoint: no bot reviews a draft, and the watcher says so once per head.
+ * DRAFT means the PR waits for Dave's /pathway: no bot reviews a draft, and the watcher says so once per head.
  */
 export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF' | 'DRAFT'
 

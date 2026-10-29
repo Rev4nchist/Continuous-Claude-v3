@@ -34,8 +34,9 @@ stops the report lines too. It never merges. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
 `pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a
-`review:none` PR with no router state as "no bot wanted". Before a CodeRabbit round past the PR's
-budget, it asks Dave in the checkpoint pane. Read its line before you post any review request.
+`review:none` PR with no router state as "has no router state for this head. Re-run the
+review-router workflow for this head. Do not request a bot review." Before a CodeRabbit round past
+the PR's budget, it asks Dave in the checkpoint pane. Read its line before you post any review request.
 
 ## Before you open a PR
 
