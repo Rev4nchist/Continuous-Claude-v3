@@ -1,4 +1,5 @@
 import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch } from '../../types'
+import { SLASH } from '../pr-checkpoint/model'
 
 /** What `review-status.mjs <N> --json` prints. Only the fields the mod reads. */
 export type PrStatus = {
@@ -230,7 +231,7 @@ const rateLimitedByCodeRabbit = (status: PrStatus): boolean =>
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
-  // A draft waits on Dave's /checkpoint: no bot reviews it, so it is never PENDING, STALLED, LIMITED or REVIEWED.
+  // A draft waits on Dave's checkpoint command (SLASH): no bot reviews it, so it is never PENDING, STALLED, LIMITED or REVIEWED.
   if (isDraftStatus(status)) return 'DRAFT'
   // Findings on a reviewed head come first: a skipped CodeRabbit review, or a cancelled Greptile run on a
   // review:deep PR, must not hide a finding to fix. Nothing to fix and a review that did not finish is LIMITED.
@@ -327,7 +328,7 @@ const WORDS: Record<PrState, string> = {
   PROOF: 'PR body proof needs fixing',
   // Not used for text: word() builds STALLED from the bots that have not reviewed (stalledWords).
   STALLED: 'not READY after 60 minutes',
-  DRAFT: 'draft, waiting on /checkpoint',
+  DRAFT: `draft, waiting on ${SLASH}`,
 }
 
 const word = (alert: Alert): string =>
@@ -346,7 +347,7 @@ const readyWords = (bots: string[] | undefined): string => {
   return [...parts, '0 threads unresolved', 'checks green'].join(', ')
 }
 
-const CLASS_RAISED_LINE = 'Run /checkpoint again: the class rose after the checkpoint. Do not request a review.'
+const CLASS_RAISED_LINE = `Run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
 
 /**
  * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.
@@ -412,7 +413,7 @@ export const reportLine = (alert: Alert): string => {
 
 /** A draft's reasons that name a bot or a review request: the model must not read them as an order. */
 const BOT_REASON = /CodeRabbit|Greptile|@coderabbitai|@greptileai/i
-const DRAFT_LINE = "Draft: waiting on Dave's /checkpoint. Do not request a review."
+const DRAFT_LINE = `Draft: waiting on Dave's ${SLASH}. Do not request a review.`
 
 /** The status the model reads. A draft drops the reasons that send it to a bot and gains the draft line. */
 export const statusForModel = (status: PrStatus): PrStatus =>

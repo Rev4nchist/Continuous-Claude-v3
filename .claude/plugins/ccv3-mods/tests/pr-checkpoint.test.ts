@@ -28,9 +28,12 @@ import type { Engine } from 'claude-code/testing'
 // K17 lock B in warn mode denies, or toasts more than once per pattern; a non-boolean enforce enforces
 // K18 a failing shapes CLI after a prefilter hit allows the command   K19 a throw inside a lock hook lets the command run
 // K19b outside a CCv3 root the lock denies or spawns (pass-through)
-// K19c in a CCv3 root a gated shape is enforced whatever the CLI says about `ccv3` (a foreign -R does not lift it: the checkout decides, as in the PR B gate)
-//      K19d the same for a compound command, a non-literal -R and a CLI that says ccv3 true. The lock reads no -R from raw text and no repo from the CLI:
-//      the CLI's `ccv3` is not read for a pass in a CCv3 root. K19b is the only pass: a root with no scripts/github/pr-checkpoint.mjs, with no spawn.
+// K19c a foreign -R, GH_REPO or a CLI that says ccv3:false lifts the lock in a CCv3 root (the checkout decides, as in the PR B gate)
+// K19d a compound command, a non-literal -R, or a CLI that says ccv3:true is let through in a CCv3 root (the lock reads no -R and no repo itself)
+// K19e a failing fs.exists or session.root after a prefilter hit allows the command (the root lookup swallowed its error and passed)
+// K9b  a throw after --confirm (store.set) leaves the pane on "Running" with no option Buttons   K1c a held recommendation still marks a Button Recommended
+// A2e  a late Yes posts a review request on a merged PR or on a head that moved
+// The command name: the module registers COMMAND, a word Claude Code does not ship (validate refuses "/checkpoint"); K0, K0b, K22, A4 and slash() read it.
 // K21 the model is not told the outcome (session.append row), or the tell costs a turn
 // K22 the kill switches (CCV3_MODS_OFF, CCV3_PR_CHECKPOINT_OFF) leave a tool, command or lock behind
 // A1  the round ask: text, order (No first), count from the stored capacity, grant on Yes, decline on No, no post
@@ -44,6 +47,8 @@ const ROOT = 'C:/r'
 const HEAD = 'a'.repeat(40)
 const OTHER_HEAD = 'b'.repeat(40)
 const TOOL = 'mcp__ccv3-mods__pr_checkpoint'
+// The command Dave types. `claude plugin validate` 2.1.312 refuses "/checkpoint" (a name Claude Code ships), so the module registers this word.
+const COMMAND = 'pathway'
 const MIN = 60_000
 const TICK = 300_000
 const NOW = 1_000_000
@@ -175,12 +180,15 @@ const world = (on: On, opts: Opts = {}) => {
   const root = opts.root ?? ROOT
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
+  // Armed by a test after `start`, so only the call under test throws.
+  const fail = { exists: false, root: false, set: false }
 
   on('store.get', (_$, e) => {
     if (opts.throwStore && e.key.startsWith(opts.throwStore)) throw new Error('store failed')
     return { value: store.get(e.key) }
   })
   on('store.set', (_$, e) => {
+    if (fail.set && e.key.startsWith('checkpoint:pr:')) throw new Error('store.set failed')
     store.set(e.key, JSON.parse(JSON.stringify(e.value)))
     return { value: undefined }
   })
@@ -192,12 +200,18 @@ const world = (on: On, opts: Opts = {}) => {
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.id', () => ({ value: SESSION }))
-  on('session.root', () => ({ value: root }))
+  on('session.root', () => {
+    if (fail.root) throw new Error('session.root failed')
+    return { value: root }
+  })
   on('agent.list', () => ({ value: [] }))
   on('tool.list', () => ({ value: ['Bash', 'PowerShell'].map(name => ({ name })) as never }))
   // The engine hands a fake the native path form (C:\r\x on Windows). The fixtures use forward slashes, so compare in that form.
   const slash = (path: string) => path.replace(/\\/g, '/')
-  on('fs.exists', (_$, e) => ({ value: !(opts.missing ?? []).some(part => slash(e.path).includes(part)) }))
+  on('fs.exists', (_$, e) => {
+    if (fail.exists && slash(e.path).includes('pr-checkpoint.mjs')) throw new Error('fs.exists failed')
+    return { value: !(opts.missing ?? []).some(part => slash(e.path).includes(part)) }
+  })
   on('fs.read', (_$, e) => {
     const text = files[slash(e.path)]
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
@@ -242,7 +256,7 @@ const world = (on: On, opts: Opts = {}) => {
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') {
       const reply: Reply = opts.view ?? {
-        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, headRefOid: opts.viewHead ?? HEAD, author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
+        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
       }
       return done(reply)
     }
@@ -287,7 +301,7 @@ const world = (on: On, opts: Opts = {}) => {
     seen.asks.push(String((e as unknown as { questions: { question: string }[] }).questions[0]?.question))
     return { deny: 'no chat prompt in the checkpoint flows' }
   })
-  return { clock, seen, store, session }
+  return { clock, seen, store, session, fail }
 }
 
 const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: ROOT, surface: isInteractive ? 'terminal' : null, isInteractive })
@@ -302,7 +316,7 @@ const callTool = async ($: Engine, input: Rec) => {
 }
 
 const slash = ($: Engine, args: string, kind = 'composer') =>
-  $.command.run({ command: 'checkpoint', args, origin: (kind === 'plugin' ? { kind, name: 'other-mod' } : { kind }) as never, presentation: { isFullscreen: false, columns: 100 } })
+  $.command.run({ command: COMMAND, args, origin: (kind === 'plugin' ? { kind, name: 'other-mod' } : { kind }) as never, presentation: { isFullscreen: false, columns: 100 } })
 
 const PANE_PROPS = { title: 'PR checkpoint', isFocused: true, bodyColumns: 100, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 30 }, view: {} }
 const mountPane = ($: Engine) =>
@@ -336,14 +350,14 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     const a = world(on)
     await start($)
     expect(a.seen.tools).toContain('pr_checkpoint')
-    expect(a.seen.registered).toContain('checkpoint')
+    expect(a.seen.registered).toContain(COMMAND)
   })
 
   test('K0b a headless session registers the tool and the command too (text only there)', async ($, on) => {
     const a = world(on)
     await start($, false)
     expect(a.seen.tools).toContain('pr_checkpoint')
-    expect(a.seen.registered).toContain('checkpoint')
+    expect(a.seen.registered).toContain(COMMAND)
   })
 
   test('K1 the first option is the recommendation, not the engine order; hotkeys, autoFocus, primary look; pane opened with focus', async ($, on) => {
@@ -482,6 +496,40 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     expect(counts(w.seen).confirm).toBe(1)
     expect(counts(w.seen).apply).toBe(2)
   })
+
+  test('K9b a throw after --confirm (the store write fails) frees the pane: the error shows, the option Buttons return, and a second press works', async ($, on) => {
+    const w = world(on)
+    const { pane } = await openPane($)
+    w.fail.set = true
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(counts(w.seen).confirm).toBe(1)
+    expect(counts(w.seen).apply).toBe(0)
+    const text = await paneText(pane)
+    expect(text).toMatch(/store\.set/) // the kit skips a throwing hook and reports 'no implementation for store.set'
+    expect(text).not.toMatch(/Running/)
+    expect(await keys(pane)).toEqual(['opt-coderabbit', 'opt-none', 'dismiss'])
+    w.fail.set = false
+    await pane.press({ key: 'opt-coderabbit' })
+    expect(counts(w.seen).confirm).toBe(2)
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+  })
+
+  test('K1c a recommendation that is held marks no Button Recommended, gives none the focus or the primary look, and every press is --by dave', async ($, on) => {
+    const held = engineJson({ recommended: 'both', options: [option('none'), option('coderabbit'), option('both', { available: false, reason: 'Greptile held: credits unknown' })] })
+    const { seen } = world(on, { json: { stdout: JSON.stringify(held) } })
+    const { pane } = await openPane($)
+    expect(await keys(pane)).toEqual(['opt-none', 'opt-coderabbit', 'dismiss'])
+    const [first, second] = await buttons(pane)
+    for (const one of [first!, second!]) {
+      expect(one.text).not.toContain('(Recommended)')
+      expect(one.props.autoFocus).not.toBe(true)
+      expect(one.props.variant).not.toBe('primary')
+    }
+    expect(await paneText(pane)).toContain('Greptile held: credits unknown')
+    await pane.press({ key: 'opt-none' })
+    const confirm = engineCalls(seen).find(call => call.startsWith('--confirm'))
+    expect(confirm).toMatch(/^--confirm none --by dave /)
+  })
 })
 
 describe('pr-checkpoint: the tool refuses before it opens anything', () => {
@@ -552,13 +600,13 @@ describe('pr-checkpoint: the tool refuses before it opens anything', () => {
     expect(seen.opens).toEqual([])
   })
 
-  test('K12d the pane is not placed (isPlaced false): a toast with the engine reason, and "type /checkpoint"', async ($, on) => {
+  test('K12d the pane is not placed (isPlaced false): a toast with the engine reason, and "type /<command>"', async ($, on) => {
     const { seen, store } = world(on, { open: { isPlaced: false, reason: 'the terminal is 100 columns wide; a pane waits below 144' } })
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
-    expect(told.text).toContain('/checkpoint')
+    expect(told.text).toContain(`/${COMMAND}`)
     expect(told.text).toContain('the terminal is 100 columns wide')
-    expect(seen.toasts.some(text => text.includes('type /checkpoint'))).toBe(true)
+    expect(seen.toasts.some(text => text.includes(`type /${COMMAND}`))).toBe(true)
     expect(seen.toasts.some(text => text.includes('100 columns'))).toBe(true)
     expect(store.get(PENDING)).toBeDefined()
     const before = seen.opens.length
@@ -844,6 +892,23 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(seen.ran.length).toBe(1)
   })
 
+  for (const [name, arm] of [
+    ['fs.exists', (fail: { exists: boolean; root: boolean }) => { fail.exists = true }],
+    ['session.root', (fail: { exists: boolean; root: boolean }) => { fail.root = true }],
+  ] as const) {
+    for (const [mode, files] of [['warn', undefined], ['enforce', CONFIG_ENFORCE]] as const) {
+      test(`K19e a failing ${name} after a prefilter hit is denied with the lock-failed text in ${mode} mode, and the command never ran`, async ($, on) => {
+        const w = world(on, { files })
+        await start($)
+        arm(w.fail)
+        const r = await shell($, 'gh pr ready 201')
+        expect(LOCK_DENIED(r)).toBe(true)
+        expect(r.deny).toMatch(/lock failed/i)
+        expect(w.seen.ran).toEqual([])
+      })
+    }
+  }
+
   test('K19b (guard) outside a CCv3 root, a ready or label shape passes with no spawn and no deny', async ($, on) => {
     const other = world(on, { root: 'C:/other', missing: ['C:/other/scripts/github/pr-checkpoint.mjs', 'C:/other/.claude/hooks/dist'], files: { 'C:/other/review-router.config.json': '{"checkpoint":{"enforce":true}}' } })
     await start($)
@@ -894,7 +959,7 @@ describe('pr-checkpoint: kill switches', () => {
       const { seen } = world(on, { env, files: CONFIG_ENFORCE })
       await start($)
       expect(seen.tools).not.toContain('pr_checkpoint')
-      expect(seen.registered).not.toContain('checkpoint')
+      expect(seen.registered).not.toContain(COMMAND)
       const r = (await $.tool.call({ tool: 'Bash', command: 'gh pr ready 201' } as never)) as unknown as { deny?: string }
       expect(LOCK_DENIED(r)).toBe(false)
       const w = (await $.tool.call({ tool: 'Write', file_path: 'C:/r/.claude/cache/pre-pr/pathway.json', content: '{}' } as never)) as unknown as { deny?: string }
@@ -1018,6 +1083,44 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(w.seen.opens.length).toBe(1)
   })
 
+  for (const [name, view] of [
+    ['the PR was merged', { state: 'MERGED', headRefOid: HEAD }],
+    ['the PR was closed', { state: 'CLOSED', headRefOid: HEAD }],
+    ['the head moved', { state: 'OPEN', headRefOid: OTHER_HEAD }],
+  ] as const) {
+    test(`A2e a late Yes on the opening ask posts nothing when ${name}: the ask is dropped and Dave gets a toast`, async ($, on) => {
+      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, view: { stdout: JSON.stringify(view) } })
+      await start($)
+      await w.clock.advance(TICK)
+      expect(asksOf(w.store).length).toBe(1)
+      const pane = await mountPane($)
+      await pane.press({ key: 'ask-yes' })
+      expect(counts(w.seen).comments).toEqual([])
+      expect(asksOf(w.store)).toEqual([])
+      expect(w.seen.toasts.some(text => /#7/.test(text) && /no longer|merged|closed|moved/i.test(text))).toBe(true)
+      expect(argvOf(w.seen, 'view').some(argv => argv.includes('state,headRefOid'))).toBe(true)
+    })
+  }
+
+  for (const [name, view] of [
+    ['gh fails to start', 'throw'],
+    ['gh exits 1', { exitCode: 1, stderr: 'HTTP 502' }],
+    ['gh prints no JSON', { stdout: 'not json' }],
+  ] as [string, Reply][]) {
+    test(`A2f a Yes posts nothing when the PR state cannot be read (${name}): the ask stays queued and Dave gets a toast`, async ($, on) => {
+      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
+      const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, view })
+      await start($)
+      await w.clock.advance(TICK)
+      const pane = await mountPane($)
+      await pane.press({ key: 'ask-yes' })
+      expect(counts(w.seen).comments).toEqual([])
+      expect(asksOf(w.store).length).toBe(1)
+      expect(w.seen.toasts.some(text => /#7/.test(text) && /could not read/i.test(text))).toBe(true)
+    })
+  }
+
   test('A2b the opening ask waits for 15 minutes after ready', async ($, on) => {
     const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit'] })
     const early = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record({ appliedAt: NOW }) }, statuses: { 7: quiet } })
@@ -1089,7 +1192,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     expect(only.seen.opens).toEqual([])
   })
 
-  test('A4 an ask with isPlaced false gives a toast with the reason and "type /checkpoint"; /checkpoint then draws the ask', async ($, on) => {
+  test('A4 an ask with isPlaced false gives a toast with the reason and "type /<command>"; the command then draws the ask', async ($, on) => {
     const w = world(on, {
       store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: REVIEWED(3) },
       open: { isPlaced: false, reason: 'the terminal is 100 columns wide; a pane waits below 144' },
@@ -1097,7 +1200,7 @@ describe('pr-checkpoint: asks from the watcher', () => {
     await start($)
     await w.clock.advance(TICK)
     expect(asksOf(w.store).length).toBe(1)
-    expect(w.seen.toasts.some(text => text.includes('type /checkpoint') && text.includes('#7'))).toBe(true)
+    expect(w.seen.toasts.some(text => text.includes(`type /${COMMAND}`) && text.includes('#7'))).toBe(true)
     expect(w.seen.toasts.some(text => text.includes('100 columns wide'))).toBe(true)
     const before = w.seen.opens.length
     await slash($, '')

@@ -2,6 +2,7 @@ import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
 import type { CheckpointAsk, PrWatch } from '../../types'
+import { SLASH } from '../pr-checkpoint/model'
 import {
   BACKOFF_MS,
   BACKOFF_SLACK_MS,
@@ -184,7 +185,7 @@ const lastLine = (text: string): string =>
 /** Tells Dave and, except for a closed PR, the model. Never merges. */
 const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
-  // A closed PR needs no line. A draft gets the toast only: it waits on Dave's /checkpoint, not on the model.
+  // A closed PR needs no line. A draft gets the toast only: it waits on Dave's checkpoint command, not on the model.
   if (alert.state === 'CLOSED' || alert.state === 'DRAFT') return
   if (alert.state === 'READY' && alert.whenReady) {
     if (await confirmLand($, alert.pr)) {
@@ -215,15 +216,15 @@ const saveAsks = async ($: EngineInterface, list: CheckpointAsk[]): Promise<void
   await update($, checkpointAsks, () => list)
 }
 
-/** Opens the checkpoint pane with the keys. A pane that waits undrawn gets a toast: Dave types /checkpoint. */
+/** Opens the checkpoint pane with the keys. A pane that waits undrawn gets a toast: Dave types the checkpoint command. */
 const openAskPane = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> => {
   try {
     const opened = await $.ui.open({ id: CHECKPOINT_PANE, title: 'PR checkpoint', focus: true, closeOnEscape: true })
     if (!opened.isPlaced) {
-      $.ui.toast(`PR #${ask.pr}: a question waits in the checkpoint pane (${opened.reason}); type /checkpoint to open it`, { timeoutMs: 15_000 })
+      $.ui.toast(`PR #${ask.pr}: a question waits in the checkpoint pane (${opened.reason}); type ${SLASH} to open it`, { timeoutMs: 15_000 })
     }
   } catch {
-    // The question stays queued: /checkpoint draws it.
+    // The question stays queued: the checkpoint command draws it.
   }
 }
 

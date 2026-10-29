@@ -2,7 +2,7 @@
 // One test per way the gate can pass for the wrong reason.
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { gatingProblems, parseArgs } from './validate-mods.mjs';
+import { gatingProblems, parseArgs, refusedCommandProblems } from './validate-mods.mjs';
 
 const DEFAULT = '/repo/default-plugin';
 
@@ -56,4 +56,20 @@ test('no folder named gives the default; a lone --min-gating value is not a fold
   const { pluginDir, minGating } = parseArgs(['--min-gating', '3'], DEFAULT);
   assert.match(pluginDir.replace(/\\/g, '/'), /\/repo\/default-plugin$/);
   assert.equal(minGating, 3);
+});
+
+// A command name Claude Code ships is refused live and its hook is skipped, yet the test kit accepts any name (PR C review, /checkpoint).
+// validate reports it as a warning, which the gate used to ignore.
+const shipped = name => ({ path: 'modules../register.tsx', message: `"/${name}" is a name Claude Code ships: $.command.register refuses it and the hook that calls it is skipped`, code: null });
+
+test('a refused command name in the hooks warnings fails the gate and names the command', () => {
+  const problems = refusedCommandProblems({ contents: [{ file: 'hooks.json', warnings: [shipped('checkpoint')] }] });
+  assert.equal(problems.length, 1);
+  assert.match(problems[0], /"\/checkpoint" is a name Claude Code ships/);
+});
+
+test('a refused name in the manifest warnings fails too; unrelated warnings and a clean report pass', () => {
+  assert.equal(refusedCommandProblems({ manifest: { warnings: [shipped('plan')] }, contents: [] }).length, 1);
+  assert.deepEqual(refusedCommandProblems({ manifest: { warnings: [] }, contents: [{ warnings: [{ message: 'some other warning' }] }, {}] }), []);
+  assert.deepEqual(refusedCommandProblems({}), []);
 });

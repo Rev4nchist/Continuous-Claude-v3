@@ -4,6 +4,13 @@ import type { CheckpointAsk, CheckpointOption, CheckpointResult } from '../../ty
 
 export const PANE = 'pr-checkpoint'
 export const TOOL_NAME = 'pr_checkpoint'
+/**
+ * The command Dave types. One constant: the registration, the matcher, the usage text and every "type /..." line read it.
+ * Not "checkpoint": `claude plugin validate` (2.1.312) reports that as a name Claude Code ships, so `$.command.register` refuses it live.
+ * validate-mods fails on such a name (refusedCommandProblems).
+ */
+export const COMMAND = 'pathway'
+export const SLASH = `/${COMMAND}`
 export const REPO = 'Rev4nchist/Continuous-Claude-v3'
 export const ENGINE_REL = 'scripts/github/pr-checkpoint.mjs'
 export const ENGINE_TIMEOUT_MS = 120_000
@@ -11,7 +18,7 @@ export const APPLY_TIMEOUT_MS = 180_000
 export const GIT_TIMEOUT_MS = 20_000
 export const PENDING_STALE_MS = 7 * 24 * 3_600_000
 
-export const USAGE = 'Usage: /checkpoint [pr] [accept|coderabbit|both|none|wait] [--body <file>]'
+export const USAGE = `Usage: ${SLASH} [pr] [accept|coderabbit|both|none|wait] [--body <file>]`
 export const NEED_PR = 'Call pr_checkpoint first, or pass <pr> --body <file>.'
 const PATHWAY_WORDS = ['accept', 'coderabbit', 'both', 'none', 'wait']
 
@@ -52,6 +59,9 @@ export const resolveBody = (root: string, body: string): string => (ABSOLUTE.tes
 export const engineArgv = (root: string, ...flags: string[]): string[] => ['node', `${root}/${ENGINE_REL}`, ...flags]
 
 export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,author,number', '-R', REPO]
+
+/** The PR's state and head, read before a late Yes posts a review request. */
+export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid', '-R', REPO]
 
 export const commentArgv = (pr: number, body: string): string[] => ['gh', 'pr', 'comment', String(pr), '-R', REPO, '--body', body]
 
@@ -96,13 +106,15 @@ export const parseResult = (stdout: string): CheckpointResult | null => {
 /**
  * The options Dave can press, the recommended pathway first whatever order the engine lists; and the held ones, which are text.
  * A pathway not in the list is never invented: with no recommendation (R0) nothing is pressable.
+ * `recommendedFirst` is true only when the first Button IS the recommendation. When the engine recommends a pathway that is held, the
+ * open options keep the engine order and none is marked Recommended, focused or pressed `--by default` (the engine refuses that).
  */
-export const optionsInOrder = (result: CheckpointResult): { buttons: CheckpointOption[]; held: CheckpointOption[] } => {
+export const optionsInOrder = (result: CheckpointResult): { buttons: CheckpointOption[]; held: CheckpointOption[]; recommendedFirst: boolean } => {
   const open = result.options.filter(one => one.available)
   const held = result.options.filter(one => !one.available)
   const first = open.find(one => one.pathway === result.recommended)
   const buttons = first ? [first, ...open.filter(one => one !== first)] : open
-  return { buttons: result.recommended === null ? [] : buttons, held }
+  return { buttons: result.recommended === null ? [] : buttons, held, recommendedFirst: first !== undefined && result.recommended !== null }
 }
 
 export const costText = (cost: [number, number]): string => (cost[0] + cost[1] === 0 ? 'no review' : `budget ${cost[0]}+${cost[1]}`)

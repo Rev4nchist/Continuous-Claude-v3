@@ -31,7 +31,7 @@ READY, merged or closed; when a reviewed head has findings, a confidence below 4
 60 minutes. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
-`pr_watch` also reports a draft as "waiting on /checkpoint" (a toast, no line to you) and a
+`pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a
 `review:none` PR with no router state as "no bot wanted". Before a CodeRabbit round past the PR's
 budget, it asks Dave in the checkpoint pane. Read its line before you post any review request.
 
@@ -173,7 +173,7 @@ stamp. A PR opened one of those ways skips the checks. It wastes the reviews thi
 
 ## No review on the head
 
-Never request a review on a draft or on a `review:none` PR. A draft waits on `/checkpoint`. A
+Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
 `review:none` PR with no router state needs the review-router workflow re-run for that head.
 
 On a coderabbit or both PR with no CodeRabbit review 15 minutes after ready, `pr_watch` asks Dave in

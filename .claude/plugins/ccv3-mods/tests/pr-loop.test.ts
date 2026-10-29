@@ -1217,7 +1217,7 @@ describe('pr-loop outside-diff findings', () => {
 })
 
 // PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint pane; every check reads the engine's calls.
-// CW1  a draft PR is DRAFT: one toast "waiting on /checkpoint", no STALLED model line after 60 minutes
+// CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
 // CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says Dave decides in the pane
@@ -1227,10 +1227,12 @@ describe('pr-loop outside-diff findings', () => {
 // CW8  a closed PR deletes its checkpoint record and grant
 // CW9  after Dave declines the opening ask the STALLED line says "Do not request a review", not "No review on the head"
 // CW10 a skipped CodeRabbit review at the budget (LIMITED) queues the round ask and tells the model to wait for Dave
-// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /checkpoint again" and "Do not request a review"
+// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"
 // CW12 an older status script (no isDraft) is still a draft, from the DRAFT_REASON text
 // CW13 an older status script (no round fields) with a record: "rounds unknown", and no round ask
 describe('pr-loop checkpoint states', () => {
+  // The command the pr-checkpoint module registers (COMMAND in pr-checkpoint.test.ts).
+  const COMMAND = 'pathway'
   const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
   const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
   const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again'
@@ -1256,14 +1258,14 @@ describe('pr-loop checkpoint states', () => {
   const REVIEWED_AT = (rounds: number, over: Partial<Status> = {}) =>
     status(7, { routing: CR_ROUTE, routedReviewed: true, coderabbitReviewedHead: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'], isDraft: false, coderabbitRounds: rounds, ...over })
 
-  test('CW1 a draft PR is DRAFT: one toast "waiting on /checkpoint", and no STALLED line after 60 minutes', async ($, on) => {
+  test('CW1 a draft PR is DRAFT: one toast "waiting on /<command>", and no STALLED line after 60 minutes', async ($, on) => {
     const draft = status(7, { isDraft: true, labels: [], routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
     const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [draft] } })
     await start($)
     await ticks(clock, 13)
     expect(seen.submits).toEqual([])
     expect(seen.toasts.length).toBe(1)
-    expect(seen.toasts[0]).toMatch(/waiting on \/checkpoint/)
+    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
   })
 
   test('CW2 review:none with no router state: STALLED names the router re-run and never "No review on the head"', async ($, on) => {
@@ -1326,7 +1328,7 @@ describe('pr-loop checkpoint states', () => {
     cw(on, { script: { 7: [draft] } })
     await start($)
     const told = JSON.stringify(((await $.tool.call({ tool: STATUS_TOOL, pr: 7 } as never)) as unknown as { result?: unknown }).result)
-    expect(told).toContain("waiting on Dave's /checkpoint")
+    expect(told).toContain(`waiting on Dave's /${COMMAND}`)
     expect(told).toMatch(/Do not request a review/)
     expect(told).not.toContain('@coderabbitai')
   })
@@ -1373,13 +1375,13 @@ describe('pr-loop checkpoint states', () => {
     expect(comments(seen)).toEqual([])
   })
 
-  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /checkpoint again" and "Do not request a review"', async ($, on) => {
+  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"', async ($, on) => {
     const raised = status(7, { labels: ['review:none', 'risk:infra'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [CLASS_RAISED] })
     const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [raised] } })
     await start($)
     await ticks(clock, 13)
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain('Run /checkpoint again: the class rose after the checkpoint. Do not request a review.')
+    expect(seen.submits[0]).toContain(`Run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
   })
 
   test('CW12 an older status script with no isDraft is still a draft, from the DRAFT_REASON text', async ($, on) => {
@@ -1389,7 +1391,7 @@ describe('pr-loop checkpoint states', () => {
     await ticks(clock, 13)
     expect(seen.submits).toEqual([])
     expect(seen.toasts.length).toBe(1)
-    expect(seen.toasts[0]).toMatch(/waiting on \/checkpoint/)
+    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
   })
 
   test('CW13 an older status script with no round fields and a record: "rounds unknown", and no round ask', async ($, on) => {
