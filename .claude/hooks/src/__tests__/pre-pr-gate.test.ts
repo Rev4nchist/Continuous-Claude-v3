@@ -1540,6 +1540,38 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(act('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE }).action).toBe('allow');
   });
 
+  // ---- CodeRabbit CLI (major): labelsEndpointRepo read repos/<o>/<r>/issues|pulls/<n> from anywhere in the raw text ----
+  it('B9d: a foreign endpoint text in a create title does not name the target: the stamp rule applies in both modes', () => {
+    // A create has no endpoint: the title text cannot move the target off a CCv3 checkout. The stamp rule applies in both modes.
+    const create = `gh pr create --draft --body-file ${DB} --title "gh api repos/o/r/issues/5"`;
+    for (const config of [undefined, ENFORCE]) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(denied(create, { config, stamp: false }, tool)?.pattern, `${config ? 'enforce' : 'warn'} ${tool}: ${create}`).toBe('stamp');
+      }
+    }
+  });
+
+  it('B9d2: a foreign endpoint in one segment cannot vouch for a later gh pr ready', () => {
+    const ready = 'gh api repos/someone/else/issues/1/comments; gh pr ready 201';
+    expect(denied(ready, { config: ENFORCE })?.pattern, ready).toBe('ready');
+  });
+
+  it('B9d3: a foreign endpoint in one segment cannot vouch for a later review: label add', () => {
+    const label = 'gh api repos/someone/else/issues/1/labels -f labels[]=x; gh pr edit 201 --add-label review:deep';
+    expect(denied(label, { config: ENFORCE })?.pattern, label).toBe('review-label');
+  });
+
+  it('B9e: a single non-create gh api call on a foreign endpoint stays foreign; a CCv3 endpoint anywhere is CCv3', () => {
+    // Guard: one segment, not a create: the endpoint names the target, so a CCv3 checkout does not gate it.
+    const foreign = 'gh api repos/someone/else/issues/1/labels -f labels[]=review:deep';
+    expect(act(foreign, { config: ENFORCE }).action, foreign).toBe('allow');
+    // A CCv3 endpoint in any segment is CCv3, also from a foreign checkout (fail closed).
+    for (const c of [
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:deep',
+      'gh api repos/someone/else/issues/1/comments; gh api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:deep',
+    ]) expect(denied(c, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern, c).toBe('review-label');
+  });
+
   // ---- fix round, critic 6: gh.exe and a quoted gh on the PR create stamp rules (#193, #197) ----
   it('B16: gh.exe, a quoted gh and a spliced subcommand are a PR create: no stamp is a "stamp" deny, in warn mode too', () => {
     for (const c of [
