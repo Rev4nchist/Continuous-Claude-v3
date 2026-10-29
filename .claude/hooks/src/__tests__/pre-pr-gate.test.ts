@@ -44,6 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { isPrOpenCommand } from '../pr-opened-review-loop.js';
+import { hasCcv3Endpoint } from '../shared/checkpoint-shapes.js';
 import * as gateModule from '../pre-pr-gate.js';
 import {
   CCV3_REPO,
@@ -914,8 +915,9 @@ describe('W: wiring', () => {
 //   Override: a LEADING SKIP_PRE_PR_GATE=1 turns a deny into an 'override' row, as today.
 //   Stamp scope (fill round): a create whose --repo or -R value is non-literal, from a CCv3 checkout, is judged by the stamp rules as a
 //     CCv3 create. With no valid stamp it is denied 'stamp' in BOTH modes (stamp first, as B3). A bare $REPO already reads as "the checkout
-//     decides" (namedRepo gives null). A literal prefix before the $ does not: "--repo other/x$Y" names "other/x" and skips the stamp, so
-//     warn mode would leave that #197 bypass open for the whole week. B3 pins the prefix forms.
+//     decides" (namedRepo gives null). A literal prefix before the $ ("--repo other/x$Y") names nothing either: the hook never names a foreign
+//     repo, so the checkout decides and the stamp rules apply in both modes. B3 pins the prefix forms. A visible CCv3 signal beside a
+//     non-literal value still names CCv3 (B9j).
 //   Foreign checkout naming CCv3 (fill round): a ready or label shape that names CCv3 (flag or GH_REPO) from a foreign checkout is denied with the
 //     shape's own pattern ('ready' or 'review-label'), not 'repo-identity' (B8b; B9 leaves the same case as a plain deny).
 //   Draft token search (fill round): a draft token inside a quoted value (a title such as "add -d flag") is not a draft token. A quoted
@@ -1080,11 +1082,10 @@ describe('B: the checkpoint gate (PR B)', () => {
   });
 
   it('B3: the stamp rules come first and stay enforced in warn mode: a create with no stamp is denied "stamp", draft or not, literal repo or not', () => {
-    // A non-literal --repo from a CCv3 checkout must not be a stamp hole, in warn mode too (#197). The first three already read as "the checkout
-    // decides" today (namedRepo gives null), so they pass now and guard GREEN. The last three carry a literal PREFIX before the $: namedRepo reads the prefix
-    // as the repo ("rev4nchist/continuous-claude-v", "other/x"), the identity test sees a foreign repo, and the create skips the stamp. They fail today.
+    // A non-literal --repo from a CCv3 checkout must not be a stamp hole, in warn mode too (#197). The hook never names a foreign repo: a non-literal
+    // value, bare or with a literal PREFIX before the $ ("other/x$Y"), names nothing, so the CCv3 checkout decides and the stamp rules apply.
     // Dave decision C (2026-10-28): a non-literal --repo on a create from a CCv3 checkout is judged by the CHECKOUT identity, so the stamp rules apply.
-    // The bare forms $REPO, $(...), backticks and %VAR% are pinned the same way (guards: namedRepo gives null for them today, so they pass today).
+    // The bare forms $REPO, $(...), backticks and %VAR% are pinned the same way (namedRepo gives null for them, so the checkout decides).
     const NONLIT_CREATES = [
       `gh pr create --draft --repo $REPO --body-file ${DB}`,
       `gh pr create --repo "$REPO" --body-file ${DB}`,
@@ -1416,7 +1417,7 @@ describe('B: the checkpoint gate (PR B)', () => {
     }
   });
 
-  it('B9: other gh commands, non-review labels, removals, label creation, other repos and foreign checkouts are not gated; no git is spawned for text that is not a shape', () => {
+  it('B9: other gh commands, non-review labels, removals, label creation and foreign checkouts are not gated (another repo is gated only by the checkout); no git is spawned for text that is not a shape', () => {
     const NOT_GATED = [
       'gh pr view 201 --json labels',
       'gh pr edit 201 --add-label risk:low',
@@ -1533,9 +1534,8 @@ describe('B: the checkpoint gate (PR B)', () => {
   });
 
   // ---- fix round, critic 3 and 4: the repo selector forms ----
-  it('B9c: a PR URL or any CCv3 value among several -R / --repo / GH_REPO values names CCv3 from a foreign checkout; foreign values stay foreign', () => {
+  it('B9c: a PR URL or any CCv3 value among several -R / --repo / GH_REPO values names CCv3 from a foreign checkout; foreign values name nothing and the checkout decides', () => {
     const CCV3 = 'Rev4nchist/Continuous-Claude-v3';
-    const gate = gateModule as unknown as { namedRepo: (c: string, env?: Record<string, string>) => string | null };
     for (const c of [
       `gh pr ready 201 -R someone/else -R ${CCV3}`,
       `gh pr ready 201 -R ${CCV3} -R someone/else`,
@@ -1543,8 +1543,8 @@ describe('B: the checkpoint gate (PR B)', () => {
       `GH_REPO=someone/else gh pr ready 201 -R ${CCV3}`,
       `gh pr ready https://github.com/${CCV3}/pull/201`,
       `gh issue edit https://github.com/${CCV3}/issues/7 --add-label review:none`,
-    ]) expect(gate.namedRepo(c), c).toBe('rev4nchist/continuous-claude-v3');
-    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'foreign values name nothing').toBeNull();
+    ]) expect(namedRepo(c), c).toBe('rev4nchist/continuous-claude-v3');
+    expect(namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'foreign values name nothing').toBeNull();
     // Gated from a foreign checkout.
     expect(denied(`gh pr ready https://github.com/${CCV3}/pull/201`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('ready');
     expect(denied(`gh pr edit https://github.com/${CCV3}/pull/201 --add-label review:deep`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('review-label');
@@ -1557,7 +1557,7 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(denied('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE })?.pattern).toBe('ready');
   });
 
-  // ---- CodeRabbit CLI (major): labelsEndpointRepo read repos/<o>/<r>/issues|pulls/<n> from anywhere in the raw text ----
+  // ---- CodeRabbit CLI (major): endpoint text repos/<o>/<r>/issues|pulls/<n> anywhere in the raw text (a title, a field) never vouches for the target ----
   it('B9d: a foreign endpoint text in a create title does not name the target: the stamp rule applies in both modes', () => {
     // A create has no endpoint: the title text cannot move the target off a CCv3 checkout. The stamp rule applies in both modes.
     const create = `gh pr create --draft --body-file ${DB} --title "gh api repos/o/r/issues/5"`;
@@ -1635,6 +1635,61 @@ describe('B: the checkpoint gate (PR B)', () => {
         expect(act(c, { config: ENFORCE, remotes: FOREIGN_REMOTES }, tool).action, `foreign checkout, ${tool}: ${c}`).toBe('allow');
       }
     }
+  });
+
+  // ---- critic round 2: a visible CCv3 signal gates beside a non-literal repo; any cd into a CCv3 checkout gates ----
+  it('B9j: a literal CCv3 -R beside a non-literal GH_REPO from a foreign checkout is a stamp-rule deny in warn mode too', () => {
+    const CCV3 = 'Rev4nchist/Continuous-Claude-v3';
+    for (const c of [
+      `GH_REPO=$R gh pr create -R ${CCV3} --draft --body-file ${DB}`,
+      `gh pr create -R $R --repo ${CCV3} --draft --body-file ${DB}`,
+    ]) {
+      for (const config of [undefined, ENFORCE]) {
+        expect(denied(c, { config, stamp: false, remotes: FOREIGN_REMOTES })?.pattern, `${config ? 'enforce' : 'warn'}: ${c}`).toBe('repo-identity');
+      }
+    }
+  });
+
+  /** Two checkouts: a path with "foreign" or "other-repo" in it has a foreign remote; every other path is CCv3. The hook cwd is `cwd`. */
+  const twoCheckouts = (command: string, o: Opts = {}, cwd = ROOT, tool = 'Bash') => {
+    const base = gdeps(o);
+    const git: Deps['git'] = (dir, args) => (/foreign|other-repo/.test(dir.replace(/\\/g, '/')) && args.join(' ') === 'remote -v' ? { status: 0, stdout: FOREIGN_REMOTES } : base.git(dir, args));
+    const readFile: Deps['readFile'] = (path) => (path.endsWith('review-router.config.json') ? (o.config ?? null) : base.readFile(path));
+    return decide(input(command, { tool_name: tool, cwd }), { ...base, git, readFile });
+  };
+
+  it('B9k: a cd to a foreign checkout, before or after the gated call, cannot move a CCv3 checkout out of the gate', () => {
+    const FOREIGN_CWD = resolve('/work/foreign');
+    const cases = [
+      'gh pr ready 201; cd ../other-repo',
+      'cd ../foreign; cd ../continuous-claude; gh pr ready 201',
+      'cd ../other-repo && gh pr ready 201',
+      'gh pr ready 201 --title "x; cd ../foreign"',
+      'Set-Location ../other-repo; gh pr ready 201',
+      'pushd ../other-repo; gh pr ready 201',
+      'gh pr ready 201\ncd ../other-repo',
+    ];
+    for (const c of cases) {
+      const d = twoCheckouts(c, { config: ENFORCE });
+      expect(d.action === 'deny' ? d.pattern : d.action, `CCv3 cwd: ${c}`).toBe('ready');
+    }
+    // A foreign cwd that cd's into a CCv3 checkout after a foreign cd is gated too (the first cd is not the only one).
+    for (const c of ['cd /work/other-repo; cd /work/ccv3; gh pr ready 201', 'cd /work/other-repo; Push-Location /work/ccv3; gh pr ready 201', 'cd /work/other-repo; sl /work/ccv3; gh pr ready 201']) {
+      const d = twoCheckouts(c, { config: ENFORCE }, FOREIGN_CWD);
+      expect(d.action === 'deny' ? d.pattern : d.action, `foreign cwd: ${c}`).toBe('ready');
+    }
+    // Guards: a foreign cwd with only foreign cd targets, and no cd at all, stay allowed.
+    for (const c of ['cd ../other-repo; gh pr ready 201', 'gh pr ready 201']) {
+      expect(twoCheckouts(c, { config: ENFORCE }, FOREIGN_CWD).action, `foreign cwd: ${c}`).toBe('allow');
+    }
+  });
+
+  it('B9l: hasCcv3Endpoint is true only when a gh api endpoint text names CCv3; a foreign endpoint is not named', () => {
+    const CCV3 = 'Rev4nchist/Continuous-Claude-v3';
+    expect(hasCcv3Endpoint(`gh api repos/${CCV3}/issues/1/labels -f labels[]=x`)).toBe(true);
+    expect(hasCcv3Endpoint(`gh api repos/o/r/issues/1/comments; gh api repos/${CCV3}/pulls/2 -X PATCH`)).toBe(true);
+    expect(hasCcv3Endpoint('gh api repos/o/r/issues/1/labels -f labels[]=x')).toBe(false);
+    expect(hasCcv3Endpoint(`repos/${CCV3}/issues/1 without the tool`)).toBe(false);
   });
 
   // ---- fail-open inputs the Opus critic found in the foreign-repo rule: from a CCv3 checkout each must be gated, not allowed ----

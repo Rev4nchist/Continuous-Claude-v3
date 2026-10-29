@@ -116,11 +116,10 @@ const FILE_LABELS = /\blabels(?:\[[^\]]*\])?=@/i;
 const LABEL_MUTATION = /\b(?:labelIds|updatePullRequest|updateIssue)\b/;
 const INPUT_FLAG = /(?:^|\s)--input(?:=|\s|$)/;
 
-/** `owner/repo` (lower case) a `gh api` endpoint text names (labels, issues or pulls), CCv3 first; or null. */
-export function labelsEndpointRepo(raw: string): string | null {
-  if (!/\bgh\s+api\b/i.test(raw)) return null;
-  const repos = [...raw.matchAll(ISSUE_ENDPOINT)].map((m) => m[1].toLowerCase());
-  return repos.find((r) => r === 'rev4nchist/continuous-claude-v3') ?? repos[0] ?? null;
+/** True when a `gh api` text holds a CCv3 issues or pulls endpoint. A foreign endpoint is never named: the hook names CCv3 or nothing. */
+export function hasCcv3Endpoint(raw: string): boolean {
+  if (!/\bgh\s+api\b/i.test(raw)) return false;
+  return [...raw.matchAll(ISSUE_ENDPOINT)].some((m) => m[1].toLowerCase() === 'rev4nchist/continuous-claude-v3');
 }
 
 const valuesOf = (re: RegExp, raw: string): string[] => [...raw.matchAll(re)].map((m) => m[1]);

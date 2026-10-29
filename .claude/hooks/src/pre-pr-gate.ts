@@ -19,6 +19,7 @@
  * The checkout decides the target; only a CCv3 signal overrides it. A CCv3 signal anywhere in the raw text (a CCv3 -R / --repo / GH_REPO value,
  * the process env GH_REPO, a repos/<o>/<r>/ endpoint text, a PR URL) names CCv3, and that command must run in a CCv3 checkout.
  * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
+ * Any cd, Set-Location, sl, pushd or Push-Location target in the text (before or after the call, quoted or not) that is a CCv3 checkout gates too, as the cwd does.
  * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
@@ -47,7 +48,7 @@ import { createHash } from 'crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
-import { isGated, labelsEndpointRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
+import { hasCcv3Endpoint, isGated, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision } from './shared/guard-log.js';
 
 export const CCV3_REPO = 'rev4nchist/continuous-claude-v3';
@@ -112,7 +113,7 @@ export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string 
   const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || labelsEndpointRepo(command) === CCV3_REPO;
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
   return ccv3 ? CCV3_REPO : null;
 }
 
@@ -130,12 +131,26 @@ export function isCcv3Remote(url: string): boolean {
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
 
-/** The directory a leading `cd <dir>` names, resolved against the hook cwd; else the cwd. */
+const CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+const resolveIn = (cwd: string, target: string): string => {
+  const t = target.replace(/^["']|["']$/g, '');
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+};
+
+/** The directory the first `cd <dir>` names, resolved against the hook cwd; else the cwd. */
 function workDir(command: string, cwd: string): string {
-  const m = /(?:^|[;&|]\s*|&&\s*)(?:cd|Set-Location|sl)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i.exec(command);
-  if (!m) return cwd;
-  const target = m[1].replace(/^["']|["']$/g, '');
-  return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
+  const m = new RegExp(CD_TARGET.source, 'i').exec(command);
+  return m ? resolveIn(cwd, m[1]) : cwd;
+}
+
+/**
+ * Every directory a cd, Set-Location, sl, pushd or Push-Location in the text names, plus the cwd. Read from the raw text and from the text with
+ * its quotes deleted. No lexing: a target inside quoted text counts too, which can only gate more (fail closed).
+ */
+function candidateDirs(command: string, cwd: string): string[] {
+  const texts = [command, command.replace(/["']/g, '')];
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ''))));
+  return [...new Set([cwd, ...targets])];
 }
 
 /**
@@ -194,6 +209,11 @@ function isCcv3Checkout(deps: Deps, dir: string): boolean {
     const url = line.split(/\s+/)[1];
     return url !== undefined && isCcv3Remote(url);
   });
+}
+
+/** isCcv3Checkout for a directory the text only mentions: a directory that git cannot read (it may not exist) is not a CCv3 checkout. */
+function isCcv3Dir(deps: Deps, dir: string): boolean {
+  try { return isCcv3Checkout(deps, dir); } catch { return false; }
 }
 
 /** Checkouts that may hold the stamp: the command's own, then any worktree that has the named branch checked out. */
@@ -255,9 +275,9 @@ const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || inpu
 
 /** Per-decision memo of the facts several rules share, so a decision spawns each git call at most once. */
 interface Ctx {
-  /** The directory the command acts in (a leading `cd` moves it). */
+  /** The directory the command acts in (the first `cd` moves it). */
   dir: string;
-  /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal --repo value names nothing. */
+  /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal value beside a CCv3 signal does not hide it. */
   named: string | null;
   top: (dir: string) => string | null;
   ccv3: () => boolean;
@@ -272,7 +292,7 @@ const once = <T>(f: () => T): (() => T) => {
 function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env);
+  const named = namedRepo(command, deps.env);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
     if (!tops.has(d)) {
@@ -283,7 +303,7 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
   };
   return {
     dir, named, top,
-    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir)),
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
     enforcing: once(() => enforceIn(deps, top(cwd))),
   };
 }
