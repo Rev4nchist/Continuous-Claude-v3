@@ -184,9 +184,10 @@ the pane. The mod posts one `@coderabbitai review` only when he presses Yes. Do 
 On a PR with a checkpoint record, a missing, skipped or failed CodeRabbit review is a round. Follow the
 `pr_watch` line. Post `@coderabbitai review` only when it says a round is left or Dave allowed it.
 
-On a PR with no checkpoint record (opened before the checkpoint, or by another route): if no review from
-a required bot appears on the head after 15 minutes, or the last one was cancelled, failed or skipped,
-post ONE review request for that bot (`@coderabbitai review`), then wait again.
+On a PR with no checkpoint record (opened before the checkpoint, or by another route), watch for two cases.
+Case one: no review from a required bot appears on the head after 15 minutes.
+Case two: the last review was cancelled, failed or skipped.
+In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
 
 After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
 the request; report to Dave. If the request also produces no review, report to Dave. With his merge

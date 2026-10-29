@@ -314,7 +314,24 @@ const freePane = async ($: EngineInterface, err: unknown, retry: { pathway: stri
   await update($, checkpoint, v => (v ? { ...v, running: null, error: message(err), retry } : v))
 }
 
-const pressOption = async ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => {
+/**
+ * One pane press at a time (the module loads once per session). The `running` flag lives in the store, so two presses that land before the first write both read
+ * "idle" and run the engine, or post a review request, twice. This flag is set before the first await and cleared in `finally`.
+ */
+let pressing = false
+const exclusive = async (press: () => Promise<void>): Promise<void> => {
+  if (pressing) return
+  pressing = true
+  try {
+    await press()
+  } finally {
+    pressing = false
+  }
+}
+
+const pressOption = ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => exclusive(() => runOption($, pathway, isRecommended))
+
+const runOption = async ($: EngineInterface, pathway: string, isRecommended: boolean): Promise<void> => {
   const view = await read($, checkpoint)
   if (!view || view.running !== null) return
   if (pathway === 'wait') {
@@ -333,7 +350,9 @@ const pressOption = async ($: EngineInterface, pathway: string, isRecommended: b
   }
 }
 
-const pressRetry = async ($: EngineInterface): Promise<void> => {
+const pressRetry = ($: EngineInterface): Promise<void> => exclusive(() => runRetry($))
+
+const runRetry = async ($: EngineInterface): Promise<void> => {
   const view = await read($, checkpoint)
   if (!view || view.running !== null || view.retry === null) return
   const record = readRecord(await $.store.get(`${RECORD_PREFIX}${view.pr}`))
@@ -392,7 +411,9 @@ const staleness = async ($: EngineInterface, root: string, ask: CheckpointAsk): 
 }
 
 /** Dave's Yes or No on the first question. A Yes that posts a comment and fails leaves the question queued. */
-const pressAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => {
+const pressAsk = ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => exclusive(() => runAsk($, answer))
+
+const runAsk = async ($: EngineInterface, answer: 'yes' | 'no'): Promise<void> => {
   const queue = await read($, checkpointAsks)
   const ask = queue[0]
   if (!ask) return

@@ -39,6 +39,8 @@ import type { Engine } from 'claude-code/testing'
 // A1  the round ask: text, order (No first), count from the stored capacity, grant on Yes, decline on No, no post
 // A2  the opening ask: 15 minutes, Yes first, exactly one @coderabbitai review on Yes   A2d No on the opening ask posts nothing and is not asked twice
 // A3  the Greptile ask: once, No first   A1-A3 first button: hotkey 1, autoFocus, primary look, "(Recommended)"
+// A5  a second press of Yes while the first still posts spends a second review (one gh pr comment per press, for the opening and the Greptile ask)
+// K2b a second press of an option while the first still records runs the engine twice
 // A4  an ask with isPlaced false gives a toast and "type /checkpoint", and /checkpoint draws it
 // Choices that these tests pin and Dave may change are listed in prC-red.md, section "Choices for Dave".
 
@@ -134,6 +136,10 @@ type Opts = {
   isDraft?: boolean
   viewHead?: string
   throwStore?: string
+  /** A pending promise: the fake `gh pr comment` and the engine `--confirm` answer only after it settles (a slow call, so two presses overlap). */
+  gate?: Promise<void>
+  /** Replies for the first `gh pr comment` calls, in order; later calls succeed. */
+  comments?: Reply[]
 }
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
@@ -260,7 +266,10 @@ const world = (on: On, opts: Opts = {}) => {
       }
       return done(reply)
     }
-    if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'comment') return done(OK)
+    if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'comment') {
+      if (opts.gate) return opts.gate.then(() => done(OK)) as never
+      return done(opts.comments?.shift() ?? OK)
+    }
     if (argv[0] === 'git' && argv.includes('rev-parse')) return done({ stdout: `${opts.head ?? HEAD}\n` })
     if (argv[0] === 'git' && argv.includes('log')) return done({ stdout: 'feat: one\nfix: two\n' })
     if (argv[0] === 'git' && argv.includes('diff')) return done({ stdout: '10\t2\tscripts/github/review-status.mjs\n' })
@@ -275,7 +284,8 @@ const world = (on: On, opts: Opts = {}) => {
         const by = argv[argv.indexOf('--by') + 1]
         const label = pathway === 'none' ? 'review:none' : pathway === 'both' ? 'review:deep' : 'review:coderabbit'
         const record = { head: HEAD, body_sha256: 'c'.repeat(64), pathway, label, class: 'infra', recommended: 'coderabbit', decided_by: by, at: '2026-10-28T20:00:00.000Z', budget: pathway === 'none' ? [0, 0] : [1, 2] }
-        return done(opts.confirm ?? { stdout: JSON.stringify(record) })
+        const reply = done(opts.confirm ?? { stdout: JSON.stringify(record) })
+        return opts.gate ? (opts.gate.then(() => reply) as never) : reply
       }
       if (argv.includes('--apply')) return done(opts.apply ?? OK)
       return done({ stdout: `PR checkpoint for ${HEAD.slice(0, 7)}: class infra, 7 file(s), 212 line(s)\nRecommended: coderabbit  budget 1+2\n` })
@@ -329,6 +339,10 @@ const paneText = async (pane: Pane) =>
   [...(await pane.findAll({ type: 'Text' })), ...(await buttons(pane))].map(found => found.text).join('\n')
 const argvOf = (seen: { run: Run[] }, part: string) => seen.run.filter(r => r.argv.some(a => a.includes(part))).map(r => r.argv)
 const engineCalls = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a => a.includes('pr-checkpoint.mjs'))).map(r => r.argv.slice(2).join(' '))
+/** A press returns before its handler ends, so a test waits for the work a press started. */
+const settle = async () => {
+  for (let turn = 0; turn < 500; turn += 1) await Promise.resolve()
+}
 const counts = (seen: { run: Run[] }) => ({
   confirm: seen.run.filter(r => r.argv.includes('--confirm')).length,
   apply: seen.run.filter(r => r.argv.includes('--apply')).length,
@@ -448,6 +462,21 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     expect(calls[1]).toBe('--apply 7')
     expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
     expect((store.get('checkpoint:pr:7') as Rec).budget).toEqual([0, 0])
+  })
+
+  test('K2b two overlapping presses of an option run the engine once: one --confirm and one --apply', async ($, on) => {
+    let release: () => void = () => undefined
+    const gate = new Promise<void>(resolve => (release = resolve))
+    const { seen } = world(on, { gate })
+    const { pane } = await openPane($)
+    const first = pane.press({ key: 'opt-coderabbit' })
+    const second = pane.press({ key: 'opt-coderabbit' })
+    await settle()
+    release()
+    await Promise.all([first, second])
+    await settle()
+    expect(counts(seen).confirm).toBe(1)
+    expect(counts(seen).apply).toBe(1)
   })
 
   test('K6 dismiss records nothing and closes the pane', async ($, on) => {
@@ -1177,6 +1206,53 @@ describe('pr-checkpoint: asks from the watcher', () => {
     const posts = counts(w.seen).comments
     expect(posts.length).toBe(1)
     expect(posts[0]).toEqual(['gh', 'pr', 'comment', '7', '-R', REPO, '--body', '@greptileai'])
+    expect(asksOf(w.store)).toEqual([])
+  })
+
+  for (const [name, pathway, body] of [
+    ['opening', 'coderabbit', '@coderabbitai review'],
+    ['greptile', 'both', '@greptileai'],
+  ] as const) {
+    test(`A5 two overlapping Yes presses on the ${name} ask post exactly one comment`, async ($, on) => {
+      const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
+      const clean = status(7, {
+        routing: { required: ['greptile', 'coderabbit'], held: null, source: 'labels' }, coderabbitReviewedHead: true, reviewedHead: false, coderabbitRounds: 1,
+        reasons: ['no Greptile check on the head commit yet (review pending)'],
+      })
+      let release: () => void = () => undefined
+      const gate = new Promise<void>(resolve => (release = resolve))
+      const w = world(on, {
+        store: { ...watchDoc(), 'checkpoint:pr:7': record(pathway === 'both' ? { pathway: 'both', label: 'review:deep' } : {}) },
+        statuses: { 7: pathway === 'both' ? clean : quiet },
+        gate,
+      })
+      await start($)
+      await w.clock.advance(TICK)
+      const pane = await mountPane($)
+      const first = pane.press({ key: 'ask-yes' })
+      const second = pane.press({ key: 'ask-yes' })
+      await settle()
+      release()
+      await Promise.all([first, second])
+      await settle()
+      const posts = counts(w.seen).comments
+      expect(posts.length).toBe(1)
+      expect(posts[0]).toEqual(['gh', 'pr', 'comment', '7', '-R', REPO, '--body', body])
+      expect(asksOf(w.store)).toEqual([])
+    })
+  }
+
+  test('A5b a failed post frees the press: the ask stays queued and a second Yes posts', async ($, on) => {
+    const quiet = status(7, { reasons: ['no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count).'] })
+    const w = world(on, { store: { ...watchDoc(), 'checkpoint:pr:7': record() }, statuses: { 7: quiet }, comments: [{ exitCode: 1, stderr: 'HTTP 502' }, OK] })
+    await start($)
+    await w.clock.advance(TICK)
+    const pane = await mountPane($)
+    await pane.press({ key: 'ask-yes' })
+    expect(counts(w.seen).comments.length).toBe(1)
+    expect(asksOf(w.store).length).toBe(1)
+    await pane.press({ key: 'ask-yes' })
+    expect(counts(w.seen).comments.length).toBe(2)
     expect(asksOf(w.store)).toEqual([])
   })
 
