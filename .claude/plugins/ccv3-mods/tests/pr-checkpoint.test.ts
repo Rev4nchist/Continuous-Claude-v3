@@ -28,8 +28,9 @@ import type { Engine } from 'claude-code/testing'
 // K17 lock B in warn mode denies, or toasts more than once per pattern; a non-boolean enforce enforces
 // K18 a failing shapes CLI after a prefilter hit allows the command   K19 a throw inside a lock hook lets the command run
 // K19b outside a CCv3 root the lock denies or spawns (pass-through)
-// K19c a gated shape that the CLI says names only another literal repo is denied, or the CLI is not asked   K19d a gated shape the CLI reports with a null, an empty or a
-//      CCv3 repo passes (compound command, non-literal -R, raw -R text that disagrees with the CLI). The lock reads no -R from raw text.
+// K19c in a CCv3 root a gated shape is enforced whatever the CLI says about `ccv3` (a foreign -R does not lift it: the checkout decides, as in the PR B gate)
+//      K19d the same for a compound command, a non-literal -R and a CLI that says ccv3 true. The lock reads no -R from raw text and no repo from the CLI:
+//      the CLI's `ccv3` is not read for a pass in a CCv3 root. K19b is the only pass: a root with no scripts/github/pr-checkpoint.mjs, with no spawn.
 // K21 the model is not told the outcome (session.append row), or the tell costs a turn
 // K22 the kill switches (CCV3_MODS_OFF, CCV3_PR_CHECKPOINT_OFF) leave a tool, command or lock behind
 // A1  the round ask: text, order (No first), count from the stored capacity, grant on Yes, decline on No, no post
@@ -148,10 +149,9 @@ const shapesFor = (command: string) => {
     label: /--add-label|addLabelsToLabelable|\/labels/.test(command) ? { labels, blind: /addLabelsToLabelable/.test(command) } : null,
     self: /pr-checkpoint/.test(command) && /--(confirm|apply)/.test(command),
     nonLiteral: false,
-    repos: [] as (string | null)[],
+    // The real CLI prints `ccv3: true` when the text holds a visible CCv3 signal. These commands hold none, so the checkout decides.
+    ccv3: false,
   }
-  // One null per gated invocation: the command names no repo, so the checkout (CCv3) decides.
-  if (out.ready || out.label || out.self) out.repos = [null]
   return { exitCode: 0, stdout: JSON.stringify(out), stderr: '' }
 }
 
@@ -732,7 +732,7 @@ describe('pr-checkpoint: lock B, shell text', () => {
 
   test('K15b the CLI gets the whole command on stdin and the shell of the tool; the SKIP_PRE_PR_GATE prefix does not lift the lock', async ($, on) => {
     // This fake CLI joins nothing: it says "ready" when the word is in the text it was given. The real joining is tested in checkpoint-shapes-cli.test.ts.
-    const sawReady = (command: string): Reply => ({ stdout: JSON.stringify({ create: false, nonDraft: false, ready: command.includes('ready'), label: null, self: false, nonLiteral: false, repos: [null] }) })
+    const sawReady = (command: string): Reply => ({ stdout: JSON.stringify({ create: false, nonDraft: false, ready: command.includes('ready'), label: null, self: false, nonLiteral: false, ccv3: false }) })
     const { seen } = world(on, { files: CONFIG_ENFORCE, shapes: sawReady })
     await start($)
     const prefixed = 'SKIP_PRE_PR_GATE=1 gh pr ready 201'
@@ -852,32 +852,33 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(argvOf(other.seen, 'checkpoint-shapes-cli')).toEqual([])
   })
 
-  // The repo a gated command names comes from the shapes CLI (`repos`, the gate's own reader), never from -R in raw text here.
-  const reposReply = (repos: (string | null)[]) => (command: string): Reply => ({
+  // The CLI's `ccv3` is the gate's own reader of a visible CCv3 signal. Dave's PR B rule: the hook never names a foreign repo; a gated command from a
+  // CCv3 checkout is always gated, whatever -R it holds. This root has scripts/github/pr-checkpoint.mjs, so it is a CCv3 checkout.
+  const ccv3Reply = (ccv3: boolean) => (command: string): Reply => ({
     stdout: JSON.stringify({
       create: false, nonDraft: false, ready: /ready/.test(command), label: /add-label/.test(command) ? { labels: ['review:none'], blind: false } : null,
-      self: false, nonLiteral: false, repos,
+      self: false, nonLiteral: false, ccv3,
     }),
   })
 
-  test('K19c in a CCv3 root, a gated shape that the CLI says names only another literal repo passes, and the CLI was asked', async ($, on) => {
-    const { seen } = world(on, { files: CONFIG_ENFORCE, shapes: reposReply(['someone/else']) })
+  test('K19c in a CCv3 root a gated shape is denied even when the CLI says ccv3 false (a foreign -R does not lift it), and the CLI was asked', async ($, on) => {
+    const { seen } = world(on, { files: CONFIG_ENFORCE, shapes: ccv3Reply(false) })
     await start($)
     const commands = ['gh pr ready 201 -R someone/else', 'gh pr edit 201 --repo someone/else --add-label review:none', 'GH_REPO=someone/else gh pr ready 201']
-    for (const command of commands) expect(LOCK_DENIED(await shell($, command)), command).toBe(false)
-    expect(seen.ran.length).toBe(3)
+    for (const command of commands) expect(LOCK_DENIED(await shell($, command)), command).toBe(true)
+    expect(seen.ran).toEqual([])
     expect(argvOf(seen, 'checkpoint-shapes-cli').length).toBe(3)
   })
 
-  for (const [name, command, repos] of [
-    ['a compound command whose second ready names no repo', 'gh pr ready 1 -R a/b; gh pr ready 2', ['a/b', null]],
-    ['raw -R text that names a foreign repo while the CLI reads the CCv3 fork', 'gh pr ready 201 -R someone/else', ['rev4nchist/continuous-claude-v3']],
-    ['a non-literal -R value (the CLI reports null)', 'gh pr ready 201 -R "$TARGET"', [null]],
-    ['no repo entry at all for a ready', 'gh pr ready 201', []],
-    ['one foreign and one unnamed label add', 'gh pr edit 1 --repo a/b --add-label review:none && gh pr ready 2', ['a/b', null]],
-  ] as [string, string, (string | null)[]][]) {
-    test(`K19d enforce: ${name} is denied, because only a repos list of literal non-CCv3 repos passes`, async ($, on) => {
-      const { seen } = world(on, { files: CONFIG_ENFORCE, shapes: reposReply(repos) })
+  for (const [name, command, ccv3] of [
+    ['a compound command whose second ready names no repo', 'gh pr ready 1 -R a/b; gh pr ready 2', false],
+    ['raw -R text that names a foreign repo while the CLI reads the CCv3 fork', 'gh pr ready 201 -R someone/else', true],
+    ['a non-literal -R value', 'gh pr ready 201 -R "$TARGET"', false],
+    ['a ready that names the CCv3 repo', 'gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3', true],
+    ['one foreign and one unnamed label add', 'gh pr edit 1 --repo a/b --add-label review:none && gh pr ready 2', false],
+  ] as [string, string, boolean][]) {
+    test(`K19d enforce: ${name} is denied in a CCv3 root, whatever ccv3 says`, async ($, on) => {
+      const { seen } = world(on, { files: CONFIG_ENFORCE, shapes: ccv3Reply(ccv3) })
       await start($)
       expect(LOCK_DENIED(await shell($, command))).toBe(true)
       expect(seen.ran).toEqual([])
