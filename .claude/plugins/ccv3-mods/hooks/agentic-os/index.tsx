@@ -235,11 +235,15 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown. */
+/**
+ * While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown.
+ * Idle with a running ledger run: also re-read the agents, so a run the list holds as ended settles. Idle without one: no read.
+ */
 const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
+    if ((await read($, agentRuns)).some(run => run.status === 'running')) await refreshAgents($)
     return
   }
   await update($, tick, () => now)
@@ -529,6 +533,8 @@ export const agenticOs = (on: On) => {
     if (resumed !== undefined) {
       // A settled run whose agent starts a turn again (a message resumes it under the same id) is running again.
       await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
+      // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
+      await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
       return next(e)
     }
     if (!(await read($, turnBeaconed).catch(() => false))) {

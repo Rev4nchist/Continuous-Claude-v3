@@ -907,6 +907,65 @@ describe('brief_set in the mod', () => {
     expect(lastSnapshot(seen).chip).toBe('working')
   })
 
+  // CodeRabbit on PR #206. The idle pulse (no main turn, no step) re-reads agent.list only while a ledger run is running.
+  const countListReads = (seen: Seen) => {
+    const state = { reads: 0 }
+    Object.defineProperty(seen, 'agents', { configurable: true, get: () => ((state.reads += 1), [{ id: 'a1', status: 'completed', description: 'map the hooks', type: 'scout' }]) })
+    return state
+  }
+  const idleTick = async (seen: Seen) => {
+    await seen.clock.advance(5_000)
+    // The pulse runs unawaited (void pulse): let its reads finish.
+    for (let turns = 0; turns < 50; turns += 1) await Promise.resolve()
+  }
+
+  test('E16 an idle pulse with a running ledger run re-reads agent.list, so a run the list holds as done settles', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    const list = countListReads(seen)
+    await idleTick(seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(list.reads).toBeGreaterThan(0)
+    expect(lastSnapshot(seen).agentRuns.map((one: { status: string }) => one.status)).toEqual(['done'])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
+  test('E16b an idle pulse with no running ledger run does not call agent.list', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    await subagentEnd($)
+    const list = countListReads(seen)
+    await idleTick(seen)
+    expect(list.reads).toBe(0)
+  })
+
+  test('E17 a subagent turn.start sets the listed entry for that agent to running: a waiting list entry no longer hides the run', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'waiting' }])
+    await pulseRead($, seen)
+    await subagentStart($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual(['a1:running'])
+    expect(lastSnapshot(seen).chip).toBe('working')
+  })
+
+  test('E17b after that turn.start, a turn.complete for the agent removes it from AGENTS and the chip is idle', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'waiting' }])
+    await pulseRead($, seen)
+    await subagentStart($)
+    await subagentEnd($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual([])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
   test('E9 /clear drops the brief', async ($, on) => {
     const seen = world(on)
     await startMod($, true)
