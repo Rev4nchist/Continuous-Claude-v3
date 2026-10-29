@@ -92,7 +92,8 @@ export const DEEP_HELD_NOTE = 'deep review held (Apex billing, D3)';
  *   review:deep          Greptile AND CodeRabbit (a person upgrading a held PR wins over review:deep-held)
  *   review:deep-held     CodeRabbit only; `held` carries the note
  *   review:coderabbit    CodeRabbit only
- *   risk:docs, alone     no bot review (any other risk:* label next to it keeps Greptile)
+ *   review:none          no bot (the PR checkpoint chose it; verifiedBots also needs the router state of the head)
+ *   risk:docs, alone    no bot review (any other risk:* label next to it keeps Greptile)
  *   anything else        Greptile only: the rule every PR had before the router labels existed
  * `source` is 'default' only when the PR has no review:* and no risk:* label at all. A risk:* label
  * with no review:* label (for example risk:normal) is not specified by the router; Greptile stays
@@ -124,6 +125,7 @@ function labelBots(labels) {
   if (has('review:deep')) return pick(true, true);
   if (has('review:deep-held')) return pick(false, true, DEEP_HELD_NOTE);
   if (has('review:coderabbit')) return pick(false, true);
+  if (has('review:none')) return pick(false, false);
   if (risks.length > 0 && risks.every((n) => n === 'risk:docs')) return pick(false, false);
   return { ...pick(true, false), source: routed ? 'labels' : 'default' };
 }
@@ -134,20 +136,30 @@ export function needsCodeRabbitReview(labels) {
 
 const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
 // `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
-// Attributes after the head (for example `held=apex_d3`) are allowed and ignored here.
-const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})(?:\s+\w+=\w+)*\s*-->/;
+// Attributes after the head: `pathway=` and `pclass=` are read below (PR checkpoint); others (`held=apex_d3`) are ignored here.
+const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})((?:\s+\w+=\w+)*)\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
+export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow';
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again';
+const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
 /**
  * The review router's saved state: only a github-actions[bot] comment that starts with the
  * marker counts (lowest id), so a pasted or forged marker is ignored. null when there is none.
+ * pathway and pclass (the PR checkpoint's choice and class) are null when absent or not on the list.
  */
 export function routerState(comments) {
   const own = (comments || [])
     .filter((c) => c?.user?.login === 'github-actions[bot]' && c?.user?.type === 'Bot' && String(c?.body ?? '').startsWith(ROUTER_COMMENT_MARKER))
     .sort((a, b) => a.id - b.id)[0];
   const m = own ? String(own.body).match(ROUTER_STATE_RE) : null;
-  return m ? { class: m[1], head: m[2] } : null;
+  if (!m) return null;
+  const attrs = Object.fromEntries([...m[3].matchAll(/(\w+)=(\w+)/g)].map((a) => [a[1], a[2]]));
+  return {
+    class: m[1], head: m[2],
+    pathway: PATHWAYS.has(attrs.pathway) ? attrs.pathway : null,
+    pclass: Object.hasOwn(RISK_RANK, attrs.pclass) ? attrs.pclass : null,
+  };
 }
 
 /**
@@ -159,14 +171,38 @@ export function routerState(comments) {
 const RISK_RANK = { docs: 0, normal: 1, high: 2, steering: 3, infra: 4, r3: 5 };
 export const ROUTER_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the review router saved; Greptile stays required until the router routes it';
 
+const rankOf = (cls) => RISK_RANK[cls] ?? -1;
+export const NONE_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the review router saved; the router has not routed it yet';
+
+/**
+ * review:none wants no bot. READY still needs the router state of THIS head (a missing state means a stale or
+ * absent classification), no risk label above the saved class, and, for pathway none, a class that has not risen
+ * above the class at the checkpoint. Each problem is a reason; none of them asks a bot for a review.
+ */
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+
+function noneBlockers(labels, state, head) {
+  if (!state || state.head !== head) return [ROUTER_NONE_UNVERIFIED_NOTE];
+  // Fail closed: review:none skips every bot only when the router saved the checkpoint itself.
+  if (state.pathway !== 'none' || !state.pclass) return [NONE_NO_CHECKPOINT_NOTE];
+  const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => rankOf(n.slice(5))));
+  return [
+    ...(top > rankOf(state.class) ? [NONE_BEHIND_LABEL_NOTE] : []),
+    ...(rankOf(state.class) > rankOf(state.pclass) ? [CLASS_RAISED_NOTE] : []),
+  ];
+}
+
 export function verifiedBots(labels, comments, head, greptileAuto = true) {
-  const need = requiredBots(labels, greptileAuto);
+  const state = routerState(comments);
+  // G1: the router saved pathway=both (a person chose Greptile too): Greptile stays required, and the CodeRabbit need of auto off stays. Any head: never relaxes.
+  const base = requiredBots(labels, greptileAuto);
+  const need = state?.pathway === 'both' ? { ...base, greptile: true } : base;
   if (need.greptile) return need;
+  if ((labels || []).includes('review:none') && !need.coderabbit) return { ...need, blockers: noneBlockers(labels, state, head) };
   // Greptile on: the fallback is Greptile. Greptile off: CodeRabbit, with the note naming it.
   const keep = (note) => (greptileAuto
     ? { ...need, greptile: true, unverified: note }
     : { ...need, coderabbit: true, unverified: note.replace('Greptile stays required', 'CodeRabbit is required') });
-  const state = routerState(comments);
   if (!state || state.head !== head) return keep(ROUTER_UNVERIFIED_NOTE);
   const top = Math.max(-1, ...(labels || []).filter((n) => n.startsWith('risk:')).map((n) => RISK_RANK[n.slice(5)] ?? -1));
   if (top > (RISK_RANK[state.class] ?? -1)) return keep(ROUTER_BEHIND_LABEL_NOTE);
@@ -788,6 +824,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
   if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
   reasons.push(...proof.problems);
+  reasons.push(...(need.blockers ?? []));
   const greptileBlocks = greptileReasons({
     required: need.greptile, greptile, run, greptileSummary, unavailable, summaryProblem, lowConfidence, reviewedHead, confidence: summary?.confidence,
     failedOnHead: greptileFailedOnHead(checkRuns),
