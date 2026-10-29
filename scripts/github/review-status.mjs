@@ -140,7 +140,7 @@ const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
 const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})((?:\s+\w+=\w+)*)\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow';
-export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /pathway again';
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again';
 const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
 /**

@@ -187,7 +187,7 @@ const OUTSIDE_DIFF_REASON = /^CodeRabbit lists \d+ outside-diff finding\(s\)/
 export const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow'
 export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /pathway or re-run the router workflow'
-export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /pathway again'
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again'
 
 /** CodeRabbit findings outside the diff that nobody handled yet. Whatever the labels: they make no thread. */
 const outsideDiffCount = (status: PrStatus): number =>
@@ -339,7 +339,7 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 /** The status script's reason for a Greptile run that a newer push cancelled (review-status.mjs CANCELLED_REASON). */
 const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
 
-const CLASS_RAISED_LINE = `Run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
+const CLASS_RAISED_LINE = `Return the PR to draft (gh pr ready --undo), then run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
 
 /**
  * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.

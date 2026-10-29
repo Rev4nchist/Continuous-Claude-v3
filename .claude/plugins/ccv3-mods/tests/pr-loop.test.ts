@@ -1216,7 +1216,7 @@ describe('pr-loop outside-diff findings', () => {
 // CW8  a closed PR deletes its checkpoint record and grant
 // CW9  after Dave declines the opening ask the STALLED line says "Do not request a review", not "No review on the head"
 // CW10 a skipped CodeRabbit review at the budget (LIMITED) queues the round ask and tells the model to wait for Dave
-// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"
+// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Return the PR to draft (gh pr ready --undo), then run /<command> again" and "Do not request a review"
 // CW12 an older status script (no isDraft) is still a draft, from the DRAFT_REASON text
 // CW13 an older status script (no round fields) with a record: "rounds unknown", and no round ask
 describe('pr-loop checkpoint states', () => {
@@ -1224,7 +1224,7 @@ describe('pr-loop checkpoint states', () => {
   const COMMAND = 'pathway'
   const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
   const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
-  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /pathway again'
+  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again'
   const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
   const NO_REVIEW = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one'
   const record = (over: Record<string, unknown> = {}) => ({
@@ -1364,13 +1364,14 @@ describe('pr-loop checkpoint states', () => {
     expect(comments(seen)).toEqual([])
   })
 
-  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"', async ($, on) => {
+  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Return the PR to draft (gh pr ready --undo), then run /<command> again" and "Do not request a review"', async ($, on) => {
     const raised = status(7, { labels: ['review:none', 'risk:infra'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [CLASS_RAISED] })
     const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [raised] } })
     await start($)
     await ticks(clock, 13)
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain(`Run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
+    expect(seen.submits[0]).toContain(`Return the PR to draft (gh pr ready --undo), then run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
+    expect(seen.submits[0]).toContain('gh pr ready --undo')
     expect(seen.submits[0]).not.toContain('/checkpoint')
   })
 

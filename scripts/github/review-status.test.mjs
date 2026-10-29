@@ -2051,7 +2051,8 @@ test('RN9z: no note review-status.mjs exports tells a person to run /checkpoint,
   const notes = Object.entries(RS).filter(([, v]) => typeof v === 'string');
   assert.ok(notes.length >= 3, 'review-status.mjs exports its note texts as strings');
   for (const [name, text] of notes) assert.ok(!text.includes('/checkpoint'), `${name} names /checkpoint: ${text}`);
-  assert.match(RS.CLASS_RAISED_NOTE, /Run \/pathway again/);
+  assert.match(RS.CLASS_RAISED_NOTE, /Return the PR to draft \(gh pr ready --undo\), then run \/pathway again/);
+  assert.ok(RS.CLASS_RAISED_NOTE.includes('gh pr ready --undo'), 'the note names the draft step');
   assert.match(RS.NONE_NO_CHECKPOINT_NOTE, /run \/pathway /);
 });
 

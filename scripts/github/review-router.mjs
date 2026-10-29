@@ -32,7 +32,7 @@
  *   - PR checkpoint (spec 2026-10-28, section 3.3): at a person_override the comment also holds pathway=none|coderabbit|both
  *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
  *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
- *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Run /pathway again.". A raise on a PR that
+ *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Return the PR to draft (gh pr ready --undo), then run /pathway again.". A raise on a PR that
  *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
  * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
@@ -206,7 +206,7 @@ function checkpointOf({ reason, previousClass, labelsNow, effective, saved }) {
   return saved.pclass !== null && pathway !== null ? { pathway, pclass: saved.pclass } : none;
 }
 
-const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Run /pathway again.`;
+const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;
 
 /**
  * What a raise may add. A review:none PR, or one whose saved pathway is none, gets risk:* only (it wants no bot). A PR with review:coderabbit or
