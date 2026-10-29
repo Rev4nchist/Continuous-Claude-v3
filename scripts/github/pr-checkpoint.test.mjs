@@ -451,7 +451,7 @@ test('T20: the config blocks exist and are typed', () => {
 
 test('T20b (PR B): checkpoint.enforce is a boolean in the live config, and it is false for the warn week', () => {
   assert.equal(typeof LIVE.checkpoint?.enforce, 'boolean', 'checkpoint.enforce must exist (the pre-pr-gate hook reads it)');
-  assert.equal(LIVE.checkpoint?.enforce, false, 'warn mode ships first (spec section 7, PR B row); flip it to true in PR C, not here');
+  assert.equal(LIVE.checkpoint?.enforce, false, 'warn mode ships first (spec section 7, PR B row); the later flip PR sets it to true after the warn week, not PR C');
   assert.ok(LIVE._doc.some((l) => /checkpoint\.enforce/.test(l)), 'the _doc block explains the key');
 });
 
