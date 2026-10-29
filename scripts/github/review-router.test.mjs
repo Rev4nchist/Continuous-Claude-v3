@@ -411,11 +411,13 @@ test('a raise after deep_enabled flips on adds review:deep (it was never added, 
   assert.ok(d.add.includes('review:deep'), `review:deep must be added: ${d.add.join(', ')}`);
 });
 
-test('a push that raises the class adds the new labels and keeps the old ones', () => {
+test('a push that raises the class adds the new risk label and keeps the old ones, with no second CodeRabbit label', () => {
   const labels = ['risk:normal', 'review:coderabbit', B];
   const d = dec('synchronize', pr(['scripts/a.mjs', '.github/workflows/x.yml']), labels, 'normal');
   assert.equal(d.reason, 'raised');
-  assert.deepEqual(d.add, ['risk:infra', 'review:deep-held']);
+  // PR checkpoint (spec 3.3): review:coderabbit is on the PR; review:deep-held is also a CodeRabbit label
+  // (.coderabbit.yaml auto_review.labels), so adding it could start a second review.
+  assert.deepEqual(d.add, ['risk:infra']);
   assert.ok(!('remove' in d));
 });
 
@@ -436,11 +438,11 @@ test('a review label a person already set stops the router adding another', () =
   assert.ok(!d.add.some((l) => l.startsWith('review:')));
 });
 
-test('a risk label a person added above the comment class is a raise and gets its review label', () => {
+test('a risk label a person added above the comment class is a raise; review:deep is added when on, no second CodeRabbit label when off', () => {
   const labels = ['risk:normal', 'review:coderabbit', 'risk:high', B];
   const held = dec('synchronize', pr(['scripts/a.mjs']), labels, 'normal');
   assert.equal(held.reason, 'raised');
-  assert.deepEqual(held.add, ['review:deep-held']);
+  assert.deepEqual(held.add, [], 'review:coderabbit is on the PR: no second CodeRabbit label (review:deep-held)');
   const on = dec('synchronize', pr(['scripts/a.mjs']), labels, 'normal', cfg({ deep_enabled: true }));
   assert.deepEqual(on.add, ['review:deep']);
 });
@@ -523,9 +525,9 @@ test('previousClassFrom reads only the comment state; labels never count', () =>
 test('state carries the class and the full head', () => {
   const body = renderComment('x', 'infra', HEAD);
   assert.match(body, new RegExp(`<!-- review-router-state class=infra head=${HEAD} -->`));
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null });
-  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null, held: null });
-  assert.deepEqual(stateFrom('nothing'), { class: null, head: null, held: null });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null });
+  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null, held: null, pathway: null, pclass: null });
+  assert.deepEqual(stateFrom('nothing'), { class: null, head: null, held: null, pathway: null, pclass: null });
 });
 
 test('renderComment: the marker appears once and the body starts with it', () => {
@@ -818,8 +820,8 @@ test('release once: after the release a person removing review:deep is not undon
 test('held state: renderComment writes held only when set; stateFrom reads it; old comments still parse', () => {
   assert.equal(renderComment('x', 'infra', HEAD), `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} -->\nx`);
   const body = renderComment('x', 'infra', HEAD, 'apex_d3');
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: 'apex_d3' });
-  assert.deepEqual(stateFrom(renderComment('x', 'infra', HEAD)), { class: 'infra', head: HEAD, held: null });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: null, pclass: null });
+  assert.deepEqual(stateFrom(renderComment('x', 'infra', HEAD)), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null });
   assert.equal(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} held=junk -->`).held, null);
 });
 
@@ -973,4 +975,177 @@ test('ledger: files_source is written when known', () => {
   const d = dec(READY, pr(['docs/a.md']), [B], null);
   const j = JSON.parse(ledgerLine({ d, pr: pr(['docs/a.md'], { filesSource: 'compare' }), event: READY, ops: [], now: NOW }));
   assert.equal(j.files_source, 'compare');
+});
+
+// ---------- PR checkpoint (PR A, spec sections 3.3 and 6) ----------
+//
+// New contract, written before the code:
+//   renderComment(text, cls, head, held, { pathway, pclass })  5th argument optional; the attributes follow head= and held=
+//     in the order `pathway=` then `pclass=` (review-status ROUTER_STATE_RE needs head= right after class=).
+//   stateFrom(body) -> { class, head, held, pathway, pclass }  pathway in none|coderabbit|both, pclass a class; else null
+//   decide(..., { previousPathway, previousPclass }) -> d.pathway, d.pclass
+//     person_override (a first run, or a later run): pathway comes from the review label (none, coderabbit, both = review:deep,
+//     deep-held = coderabbit; the strongest label wins). On a first run pclass is the effective class; on a later run pclass
+//     is kept from the saved state (spec 3.3: "It keeps pclass on later updates"). A later person_override with no review:*
+//     label at all keeps the saved pathway. A routed first run writes neither. A raised run keeps both from the saved state.
+//
+// How it can fail, and the test that catches it:
+//   state attributes not written, not parsed, or junk accepted                  -> CP1, CP2
+//   old comments (no attributes) change bytes                                   -> CP1, CP3
+//   pathway taken from the wrong label, or the weaker label wins                -> CP3
+//   a routed run writes pathway (the router, not a person, chose)               -> CP3
+//   pathway or pclass lost on a push, or the saved state is not read by main()  -> CP4, CP7b
+//   pathway frozen after the first run: a re-checkpoint (new review label) never  -> CP4b
+//     clears the raise reason in review-status, so the PR can never be READY
+//   the raise note names the wrong "from" class                                 -> CP5b (X = pclass, the class at the checkpoint)
+//   raise on review:none adds a review label, or posts no note                  -> CP5
+//   raise with a CodeRabbit label adds a second CodeRabbit label                -> CP6, the two updated raise tests
+//     Narrow rule: when review:coderabbit or review:deep-held is on the PR, a raise adds neither of them. review:deep is
+//     still added when it is wanted (deep_enabled true): the deep-flip and release tests keep asserting that.
+//   the narrow rule's consequence for a deep flip is pinned, not left implicit    -> CP6b (a decision for Dave)
+//   pathway=none does not reach the comment through the real CLI                -> CP7
+
+test('CP1: renderComment writes pathway and pclass after head and held; without them the bytes are unchanged', () => {
+  const body = renderComment('x', 'infra', HEAD, null, { pathway: 'none', pclass: 'normal' });
+  assert.match(body, new RegExp(`<!-- review-router-state class=infra head=${HEAD} pathway=none pclass=normal -->`));
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: 'none', pclass: 'normal' });
+  const held = renderComment('x', 'infra', HEAD, 'apex_d3', { pathway: 'coderabbit', pclass: 'infra' });
+  assert.match(held, new RegExp(`head=${HEAD} held=apex_d3 pathway=coderabbit pclass=infra -->`));
+  assert.deepEqual(stateFrom(held), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: 'coderabbit', pclass: 'infra' });
+  assert.equal(renderComment('x', 'infra', HEAD), `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} -->\nx`);
+  assert.doesNotMatch(renderComment('x', 'infra', HEAD, null, {}), /pathway=|pclass=/);
+});
+
+test('CP2: stateFrom drops a pathway or pclass that is not on the list', () => {
+  const junk = `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} pathway=evil pclass=nonsense -->`;
+  const s = stateFrom(junk);
+  assert.equal(s.class, 'infra', 'the rest of the state still reads');
+  assert.equal(s.pathway, null);
+  assert.equal(s.pclass, null);
+});
+
+test('CP3: a person review label on a first run writes the pathway from the strongest label and pclass = the class', () => {
+  const table = [
+    [['review:none'], 'none'], [['review:coderabbit'], 'coderabbit'], [['review:deep'], 'both'], [['review:deep-held'], 'coderabbit'],
+    [['review:none', 'review:coderabbit'], 'coderabbit'], [['review:none', 'review:deep'], 'both'],
+  ];
+  for (const [labels, pathway] of table) {
+    const d = decide(READY, pr(['.github/x.yml']), [...labels, B], null, BASE, { now: NOW });
+    assert.equal(d.reason, 'person_override', labels.join());
+    assert.equal(d.pathway, pathway, labels.join());
+    assert.equal(d.pclass, 'infra', labels.join());
+    assert.ok(d.add.every((l) => l.startsWith('risk:')), `only risk:* is added: ${d.add.join()}`);
+    const [, create] = planOps(d, null);
+    assert.match(create.body, new RegExp(`head=${HEAD} pathway=${pathway} pclass=infra -->`), labels.join());
+  }
+  const routed = decide(READY, pr(['scripts/a.mjs']), [B], null, BASE, { now: NOW });
+  assert.equal(routed.reason, 'routed');
+  assert.equal(routed.pathway ?? null, null);
+  assert.doesNotMatch(planOps(routed, null).find((o) => o.op === 'comment-create').body, /pathway=|pclass=/);
+});
+
+test('CP4: pathway and pclass are kept from the saved state on a push, with no comment write when nothing changed', () => {
+  const first = decide(READY, pr(['scripts/a.mjs']), ['review:none', B], null, BASE, { now: NOW });
+  const existing = bot(40, planOps(first, null).find((o) => o.op === 'comment-create').body);
+  const saved = stateFrom(existing.body);
+  const labels = ['review:none', 'risk:normal', B];
+  const keep = { now: NOW, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass };
+  const same = decide('synchronize', pr(['scripts/a.mjs']), labels, saved.class, BASE, keep);
+  assert.equal(same.pathway, 'none');
+  assert.equal(same.pclass, 'normal');
+  assert.deepEqual(planOps(same, existing), [], 'same head, same state: no comment write');
+  const newHead = 'c'.repeat(40);
+  const push = decide('synchronize', pr(['scripts/a.mjs'], { head: newHead }), labels, saved.class, BASE, keep);
+  const ops = planOps(push, existing);
+  assert.deepEqual(ops.map((o) => o.op), ['comment-update']);
+  assert.match(ops[0].body, new RegExp(`head=${newHead} pathway=none pclass=normal -->`));
+});
+
+test('CP4b: a later person_override re-reads the pathway from the review label and keeps pclass', () => {
+  const run = (labels, previousPathway) => decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'infra', BASE, { now: NOW, previousPathway, previousPclass: 'normal' });
+  // A raised review:none PR, then a person runs the checkpoint again and the label becomes review:coderabbit.
+  const re = run(['review:none', 'review:coderabbit', 'risk:infra', B], 'none');
+  assert.equal(re.reason, 'person_override');
+  assert.equal(re.pathway, 'coderabbit', 'the saved none is replaced by the stronger label');
+  assert.equal(re.pclass, 'normal', 'pclass is kept');
+  assert.equal(run(['review:deep', 'risk:infra', B], 'none').pathway, 'both');
+  // No review:* label at all on a later person_override: the saved pathway stays.
+  const none = run(['risk:infra', B], 'coderabbit');
+  assert.equal(none.reason, 'person_override');
+  assert.equal(none.pathway, 'coderabbit');
+});
+
+test('CP5: a raise on a review:none PR adds risk:* only and posts the checkpoint note; deep on changes nothing', () => {
+  const labels = ['risk:normal', 'review:none', B];
+  for (const config of [BASE, cfg({ deep_enabled: true })]) {
+    const d = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
+    assert.equal(d.reason, 'raised');
+    assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}`);
+    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Run \/checkpoint again\./);
+    assert.equal(d.pathway, 'none');
+    assert.equal(d.pclass, 'normal', 'pclass stays the class at the checkpoint');
+    assert.equal(d.effective, 'infra');
+  }
+});
+
+test('CP6: a raise with a CodeRabbit label on the PR adds no second CodeRabbit label', () => {
+  for (const have of [['review:coderabbit'], ['review:deep-held'], ['review:coderabbit', 'review:deep-held']]) {
+    const d = dec('synchronize', pr(['.github/workflows/x.yml']), ['risk:normal', ...have, B], 'normal');
+    assert.equal(d.reason, 'raised', have.join());
+    assert.deepEqual(d.add, ['risk:infra'], have.join());
+  }
+});
+
+test('CP5b: the raise note names the class at the checkpoint (pclass) as the "from" class, not the previous router class', () => {
+  const d = decide('synchronize', pr(['.github/workflows/x.yml']), ['risk:steering', 'review:none', B], 'steering', BASE, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
+  assert.equal(d.reason, 'raised');
+  assert.deepEqual(d.add, ['risk:infra']);
+  assert.match(d.comment, /Class raised from normal to infra after the checkpoint./);
+  assert.doesNotMatch(d.comment, /from steering/);
+  assert.equal(d.pclass, 'normal');
+});
+
+test('CP6b (pins the consequence of CP6, Dave to confirm): after a raise with review:coderabbit, a deep flip does not add review:deep', () => {
+  const labels = ['risk:normal', 'review:coderabbit', B];
+  const raise = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal', BASE, { now: NOW });
+  assert.equal(raise.reason, 'raised');
+  assert.deepEqual(raise.add, ['risk:infra'], 'step 1: no review:deep-held');
+  // Step 2: deep review is switched on. The PR holds review:coderabbit but not review:deep-held, and the existing
+  // opt-out rule ("a person who removed review:deep-held opted out", test above) reads that as an opt-out.
+  const flip = decide('synchronize', pr(['.github/workflows/x.yml']), [...labels, ...raise.add], raise.effective, cfg({ deep_enabled: true }), { now: NOW, previousHeld: raise.held });
+  assert.notEqual(flip.reason, 'released');
+  assert.ok(!flip.add.includes('review:deep'), `review:deep must not be added: ${flip.add.join()}`);
+});
+
+const cliFix = (labels, comments = []) => ({
+  pull: { number: 7, state: 'open', draft: false, changed_files: 1, head: { sha: HEAD }, labels: labels.map((name) => ({ name })) },
+  files: [{ filename: 'scripts/a.mjs' }],
+  comments,
+});
+
+test('CP7 (CLI): a ready_for_review fixture with review:none gives person_override, risk:* only, and pathway=none in the comment', () => {
+  const out = runCli(cliFix(['review:none', B]), ['--event', READY]);
+  const j = ledgerOf(out);
+  assert.equal(j.decision, 'person_override');
+  assert.deepEqual(j.labels_added, ['risk:normal']);
+  assert.equal(j.comment, 'create');
+  assert.match(out, new RegExp(`head=${HEAD} pathway=none pclass=normal -->`));
+});
+
+test('CP7b (CLI): a push reads the saved pathway and pclass from the bot comment and writes them back on the new head', () => {
+  const old = bot(31, renderComment('No open router notes.', 'normal', 'b'.repeat(40), null, { pathway: 'none', pclass: 'normal' }));
+  const out = runCli(cliFix(['review:none', 'risk:normal', B], [old]), ['--event', 'synchronize']);
+  assert.match(out, /update router comment 31/);
+  assert.match(out, new RegExp(`head=${HEAD} pathway=none pclass=normal -->`));
+});
+
+test('CP8: a raise after review:none was removed adds neither a CodeRabbit nor a hold label, and saves no hold', () => {
+  // Saved state says pathway=none. A person removed review:none. The class then rises to infra.
+  for (const config of [BASE, cfg({ deep_enabled: true })]) {
+    const d = decide('synchronize', pr(['.github/workflows/x.yml']), ['risk:normal', B], 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
+    assert.equal(d.reason, 'raised', `deep_enabled ${config.deep_enabled}`);
+    assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}: one signal for quiet and for the adds`);
+    assert.equal(d.held, null);
+    assert.equal(d.pathway, 'none');
+  }
 });
