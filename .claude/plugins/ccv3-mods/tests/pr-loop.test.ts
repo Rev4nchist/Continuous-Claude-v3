@@ -66,6 +66,11 @@ type Status = {
   coderabbitRetryMinutes?: number | null
   coderabbitOutsideDiff?: number
   proof?: { required: boolean; type: string | null; status: string; problems: string[] }
+  // PR C (checkpoint): additive fields of review-status.mjs. Absent from an older script.
+  isDraft?: boolean
+  labels?: string[]
+  coderabbitRequests?: number
+  coderabbitRounds?: number
 }
 
 const PROOF_REASON = 'PR body proof: no "Proof type:" line. Add the Evidence block from pr-and-commit-style.md (types: bugfix, feature, refactor, ui, harness, docs)'
@@ -118,7 +123,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('store.keys', () => ({ value: [...store.keys()] }))
   const script = opts.script ?? {}
-  const seen = { status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[], registered: [] as string[], tools: [] as string[], descriptions: {} as Record<string, string> }
+  const seen = { calls: [] as string[][], status: [] as number[], toasts: [] as string[], submits: [] as string[], asks: [] as string[], land: [] as Record<string, unknown>[], registered: [] as string[], tools: [] as string[], descriptions: {} as Record<string, string> }
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.id', () => ({ value: SESSION }))
@@ -146,6 +151,7 @@ const world = (on: On, opts: Opts = {}) => {
   })
   on('process.run', (_$, e) => {
     const argv = [...e.argv]
+    seen.calls.push(argv)
     if (!argv.some(part => part.includes('review-status.mjs'))) {
       return { value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }
     }
@@ -734,8 +740,8 @@ describe('pr-loop tools', () => {
     const { clock, seen } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [READY(7)] } })
     await start($, false)
     await clock.advance(TICK * 2)
-    // Agentic OS registers brief_set in the same session; this test is about this module's tools.
-    expect(seen.tools.filter(name => name !== 'brief_set')).toEqual(['pr_status'])
+    // Agentic OS registers brief_set and the PR checkpoint module registers pr_checkpoint (a headless session gets its text plan) in the same session; this test is about this module's tools.
+    expect(seen.tools.filter(name => name !== 'brief_set' && name !== 'pr_checkpoint')).toEqual(['pr_status'])
     expect(seen.status).toEqual([])
     expect(seen.toasts).toEqual([])
   })
@@ -1196,5 +1202,194 @@ describe('pr-loop outside-diff findings', () => {
     await clock.advance(TICK)
     expect(seen.submits).toEqual([])
     expect(stored(store)?.prs.map(p => p.state)).toEqual(['PENDING'])
+  })
+})
+
+// PR C (checkpoint states). The module under test is pr-loop plus the pr-checkpoint pane; every check reads the engine's calls.
+// CW1  a draft PR is DRAFT: one toast "waiting on /<command>", no STALLED model line after 60 minutes
+// CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
+// CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
+// CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says Dave decides in the pane
+// CW5  the opening ask is queued 15 minutes after ready on a coderabbit record with 0 rounds
+// CW6  a draft's pr_status text never tells the model to post @coderabbitai review
+// CW7  a round grant changes the REVIEWED line to "Dave allowed round 4"
+// CW8  a closed PR deletes its checkpoint record and grant
+// CW9  after Dave declines the opening ask the STALLED line says "Do not request a review", not "No review on the head"
+// CW10 a skipped CodeRabbit review at the budget (LIMITED) queues the round ask and tells the model to wait for Dave
+// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"
+// CW12 an older status script (no isDraft) is still a draft, from the DRAFT_REASON text
+// CW13 an older status script (no round fields) with a record: "rounds unknown", and no round ask
+describe('pr-loop checkpoint states', () => {
+  // The command the pr-checkpoint module registers (COMMAND in pr-checkpoint.test.ts).
+  const COMMAND = 'pathway'
+  const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
+  const NONE_UNVERIFIED = 'the router has not classified this head; re-run the router workflow'
+  const CLASS_RAISED = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again'
+  const CR_ROUTE = { required: ['coderabbit'], held: null, source: 'labels' }
+  const NO_REVIEW = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one'
+  const record = (over: Record<string, unknown> = {}) => ({
+    pr: 7, state: 'applied', head: HEAD_A, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 11 * MIN, ...over,
+  })
+  const cw = (on: On, opts: Opts = {}) => {
+    const w = world(on, opts)
+    on('ui.open', () => ({ value: { isPlaced: true } }) as never)
+    on('ui.close', () => ({ value: undefined }))
+    mock.session(on)
+    return w
+  }
+  const ticks = async (clock: { advance: (ms: number) => Promise<unknown> }, n: number) => {
+    for (let i = 0; i < n; i += 1) await clock.advance(TICK)
+  }
+  /** Every `gh pr comment` the mod ran. A review request is posted only on Dave's press in the pane, never by the watcher. */
+  const comments = (seen: { calls: string[][] }) => seen.calls.filter(argv => argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'comment')
+  const asks = (store: Map<string, unknown>) => (store.get(`checkpoint:asks:${SESSION}`) ?? []) as { kind: string; text: string }[]
+  const REVIEWED_AT = (rounds: number, over: Partial<Status> = {}) =>
+    status(7, { routing: CR_ROUTE, routedReviewed: true, coderabbitReviewedHead: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'], isDraft: false, coderabbitRounds: rounds, ...over })
+
+  test('CW1 a draft PR is DRAFT: one toast "waiting on /<command>", and no STALLED line after 60 minutes', async ($, on) => {
+    const draft = status(7, { isDraft: true, labels: [], routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [draft] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
+  })
+
+  test('CW2 review:none with no router state: STALLED names the router re-run and never "No review on the head"', async ($, on) => {
+    const none = status(7, { labels: ['review:none', 'risk:normal'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [NONE_UNVERIFIED] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [none] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/re-run the review-router workflow/i)
+    expect(seen.submits[0]).toContain('review:none')
+    expect(seen.submits[0]).not.toMatch(/No review on the head/)
+  })
+
+  test('CW3 a PR that leaves draft restarts the 60 minute clock: no STALLED at its first ready check', async ($, on) => {
+    const draft = status(7, { isDraft: true, labels: [], routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
+    const ready = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [NO_REVIEW] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [...Array.from({ length: 12 }, () => draft), ready] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits).toEqual([])
+  })
+
+  test('CW4 the round ask fires at budget + 1: rounds 3 of 1+2 ask "Round 4 of 1+2", and the line sends the decision to the pane', async ($, on) => {
+    const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [REVIEWED_AT(3)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store).map(ask => ask.kind)).toEqual(['round'])
+    expect(asks(store)[0]!.text).toContain('Round 4 of 1+2 for #7')
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Dave decides round 4 in the checkpoint pane')
+    expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
+    expect(comments(seen)).toEqual([])
+  })
+
+  test('CW4b rounds 2 of 1+2: no ask, and the line says "Rounds used 2 of 1+2" with a round left', async ($, on) => {
+    const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [REVIEWED_AT(2)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store)).toEqual([])
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Rounds used 2 of 1+2')
+    expect(seen.submits[0]).toMatch(/post one @coderabbitai review/i)
+  })
+
+  // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 15 minutes at the record's `appliedAt`, the moment the mod's
+  // --apply succeeded. That is when the PR left draft (plan 4.2 "since the PR left draft"), not the first watcher check and not the push.
+  test('CW5 the opening ask is queued 15 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
+    const quiet = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [NO_REVIEW] })
+    const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [quiet] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store).map(ask => ask.kind)).toEqual(['opening'])
+    expect(asks(store)[0]!.text).toContain('Post one @coderabbitai review?')
+    expect(seen.submits).toEqual([])
+    expect(comments(seen)).toEqual([])
+  })
+
+  test('CW6 a draft status text never tells the model to post @coderabbitai review', async ($, on) => {
+    const draft = status(7, { isDraft: true, labels: [], routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
+    cw(on, { script: { 7: [draft] } })
+    await start($)
+    const told = JSON.stringify(((await $.tool.call({ tool: STATUS_TOOL, pr: 7 } as never)) as unknown as { result?: unknown }).result)
+    expect(told).toContain(`waiting on Dave's /${COMMAND}`)
+    expect(told).toMatch(/Do not request a review/)
+    expect(told).not.toContain('@coderabbitai')
+  })
+
+  test('CW7 a round grant changes the REVIEWED line to "Dave allowed round 4"', async ($, on) => {
+    const kept = { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record(), 'checkpoint:grant:7': { round: 4, head: HEAD_A, at: NOW } }
+    const { clock, seen, store } = cw(on, { store: kept, script: { 7: [REVIEWED_AT(3)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Dave allowed round 4')
+    expect(asks(store)).toEqual([])
+  })
+
+  test('CW8 a closed PR deletes its checkpoint record and grant', async ($, on) => {
+    const kept = { ...seed([{ pr: 7 }]), 'checkpoint:pr:7': record(), 'checkpoint:grant:7': { round: 4, head: HEAD_A, at: NOW } }
+    const { clock, store } = cw(on, { store: kept, script: { 7: [CLOSED(7)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(store.get('checkpoint:pr:7')).toBeUndefined()
+    expect(store.get('checkpoint:grant:7')).toBeUndefined()
+  })
+
+  test('CW9 after Dave declined the opening ask, STALLED says "Do not request a review" and never "No review on the head"', async ($, on) => {
+    const quiet = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [NO_REVIEW] })
+    const declined = record({ declined: { kind: 'opening', round: 1, head: HEAD_A } })
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - 61 * MIN }]), 'checkpoint:pr:7': declined }, script: { 7: [quiet] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toMatch(/Do not request a review/)
+    expect(seen.submits[0]).not.toMatch(/No review on the head/)
+  })
+
+  test('CW10 a skipped CodeRabbit review at the budget (LIMITED, rounds 3 of 1+2) queues the round ask and tells the model to wait for Dave', async ($, on) => {
+    const skipped = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbitReviewedHead: false, coderabbitLimited: true, coderabbitRounds: 3, reasons: ['CodeRabbit skipped the review of the head (PR-bot review did not run; CLI/plugin output does not count)'] })
+    const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [skipped] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store).map(ask => ask.kind)).toEqual(['round'])
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Dave decides round 4 in the checkpoint pane')
+    expect(seen.submits[0]).not.toMatch(/No review on the head/)
+    expect(comments(seen)).toEqual([])
+  })
+
+  test('CW11 CLASS_RAISED_NOTE in the reasons: the line says "Run /<command> again" and "Do not request a review"', async ($, on) => {
+    const raised = status(7, { labels: ['review:none', 'risk:infra'], routing: { required: [], held: null, source: 'labels' }, routedReviewed: true, reasons: [CLASS_RAISED] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [raised] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain(`Run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
+  })
+
+  test('CW12 an older status script with no isDraft is still a draft, from the DRAFT_REASON text', async ($, on) => {
+    const old = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [DRAFT_REASON, NO_REVIEW] })
+    const { clock, seen } = cw(on, { store: seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), script: { 7: [old] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits).toEqual([])
+    expect(seen.toasts.length).toBe(1)
+    expect(seen.toasts[0]).toContain(`waiting on /${COMMAND}`)
+  })
+
+  test('CW13 an older status script with no round fields and a record: "rounds unknown", and no round ask', async ($, on) => {
+    const old = status(7, { routing: CR_ROUTE, routedReviewed: true, coderabbitReviewedHead: true, unresolved: 1, reasons: ['1 review thread(s) unresolved'] })
+    const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [old] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(asks(store)).toEqual([])
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('rounds unknown')
   })
 })

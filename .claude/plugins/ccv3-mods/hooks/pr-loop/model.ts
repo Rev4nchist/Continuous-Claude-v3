@@ -1,4 +1,5 @@
-import type { PrState, PrWatch } from '../../types'
+import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch } from '../../types'
+import { SLASH } from '../pr-checkpoint/model'
 
 /** What `review-status.mjs <N> --json` prints. Only the fields the mod reads. */
 export type PrStatus = {
@@ -33,6 +34,14 @@ export type PrStatus = {
   routing?: { required: string[]; held: string | null; source: string }
   prState: string
   merged: boolean
+  /** The PR is a draft. Absent from older scripts: DRAFT_REASON in the reasons says so. */
+  isDraft?: boolean
+  /** The label names on the PR. Absent from older scripts. */
+  labels?: string[]
+  /** CodeRabbit review requests Dave or the model posted. Absent from older scripts. */
+  coderabbitRequests?: number
+  /** CodeRabbit PR reviews bought so far (the automatic opening counts once). Absent from older scripts: the round ask never fires then. */
+  coderabbitRounds?: number
 }
 
 /** `perPr` marks an error that belongs to this PR alone (a 404, a list too long); any other error is shared by all PRs. */
@@ -54,6 +63,16 @@ export type Alert = {
   proofProblems?: string[]
   /** Set for a REVIEWED alert when CodeRabbit lists findings outside the diff in its review body (no thread). */
   outsideDiff?: number
+  /** Set when the PR has a checkpoint record: the budget and what Dave decided. */
+  checkpoint?: AlertCheckpoint
+}
+
+/** What the lines about a CodeRabbit round need from the checkpoint record. `rounds` is null for an older status script. */
+export type AlertCheckpoint = {
+  budget: [number, number]
+  rounds: number | null
+  granted: number | null
+  declined: { round: number } | null
 }
 
 export type WatchDoc = { prs: PrWatch[]; backoffUntil: number; touched: number }
@@ -161,6 +180,15 @@ const greptileFindings = (status: PrStatus): boolean =>
  */
 const OUTSIDE_DIFF_REASON = /^CodeRabbit lists \d+ outside-diff finding\(s\)/
 
+/**
+ * Texts review-status.mjs writes, held here by value so the mod can tell them from other reasons. Not read by any state yet
+ * (PR C wires them); scripts/github/pr-loop-sync.test.mjs fails when a text here differs from the .mjs.
+ */
+export const DRAFT_REASON = 'PR is a draft (no bot review on drafts)'
+export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow'
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow'
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again'
+
 /** CodeRabbit findings outside the diff that nobody handled yet. Whatever the labels: they make no thread. */
 const outsideDiffCount = (status: PrStatus): number =>
   status.reasons.some(reason => OUTSIDE_DIFF_REASON.test(reason)) ? status.coderabbitOutsideDiff ?? 0 : 0
@@ -203,6 +231,8 @@ const rateLimitedByCodeRabbit = (status: PrStatus): boolean =>
 export const stateOf = (status: PrStatus): PrState => {
   if (isClosed(status)) return 'CLOSED'
   if (status.ready) return 'READY'
+  // A draft waits on Dave's checkpoint command (SLASH): no bot reviews it, so it is never PENDING, STALLED, LIMITED or REVIEWED.
+  if (isDraftStatus(status)) return 'DRAFT'
   // Findings on a reviewed head come first: a skipped CodeRabbit review, or a cancelled Greptile run on a
   // review:deep PR, must not hide a finding to fix. Nothing to fix and a review that did not finish is LIMITED.
   if (needsAction(status)) return 'REVIEWED'
@@ -238,9 +268,11 @@ const reviewedSeen = (alerted: string | undefined, head: string): string[] | nul
   return rest.startsWith(':') ? rest.slice(1).split('+').filter(Boolean) : ['greptile']
 }
 
-export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: PrWatch | null; alert: Alert | null } => {
-  const base = forHead(watch, status.head, now)
+export const settle = (watch: PrWatch, status: PrStatus, now: number, cp: AlertCheckpoint | null = null): { watch: PrWatch | null; alert: Alert | null } => {
   const found = stateOf(status)
+  const onHead = forHead(watch, status.head, now)
+  // Leaving DRAFT starts the 60 minute clock: the hours a draft waited are not hours without a review.
+  const base = watch.state === 'DRAFT' && found !== 'DRAFT' ? { ...onHead, since: now } : onHead
   const state = found === 'PENDING' && now - (base.since ?? now) >= STALL_MS ? 'STALLED' : found
   const alert: Alert = {
     pr: watch.pr, state, headShort: status.headShort, merged: status.merged, whenReady: watch.whenReady, reasons: status.reasons,
@@ -248,6 +280,7 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
     ...(state === 'LIMITED' && rateLimitedByCodeRabbit(status) ? { rateLimit: { minutes: status.coderabbitRetryMinutes ?? null } } : {}),
     ...(state === 'PROOF' ? { proofProblems: proofProblemsOf(status) } : {}),
     ...(state === 'REVIEWED' && outsideDiffCount(status) > 0 ? { outsideDiff: outsideDiffCount(status) } : {}),
+    ...(cp ? { checkpoint: cp } : {}),
   }
   if (state === 'READY' || state === 'CLOSED') return { watch: null, alert }
   const next = { ...cleared(base), state }
@@ -262,7 +295,7 @@ export const settle = (watch: PrWatch, status: PrStatus, now: number): { watch: 
     return { watch: { ...next, alerted: `REVIEWED:${status.head}${union.length ? `:${union.join('+')}` : ''}` }, alert }
   }
   const marker = `${state}:${status.head}`
-  if ((state === 'STALLED' || state === 'PROOF') && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
+  if ((state === 'STALLED' || state === 'PROOF' || state === 'DRAFT') && base.alerted !== marker) return { watch: { ...next, alerted: marker }, alert }
   return { watch: next, alert: null }
 }
 
@@ -295,6 +328,7 @@ const WORDS: Record<PrState, string> = {
   PROOF: 'PR body proof needs fixing',
   // Not used for text: word() builds STALLED from the bots that have not reviewed (stalledWords).
   STALLED: 'not READY after 60 minutes',
+  DRAFT: `draft, waiting on ${SLASH}`,
 }
 
 const word = (alert: Alert): string =>
@@ -305,6 +339,25 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 /** The status script's reason for a Greptile run that a newer push cancelled (review-status.mjs CANCELLED_REASON). */
 const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
 
+const CLASS_RAISED_LINE = `Run ${SLASH} again: the class rose after the checkpoint. Do not request a review.`
+
+/**
+ * What the model may do about a CodeRabbit review on a PR with a checkpoint record. `when` starts the clause that allows a post.
+ * Dave's decline wins, then an unknown count, then the budget: at the budget the decision is Dave's, in the pane.
+ */
+const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string => {
+  const [opening, extra] = cp.budget
+  if (cp.declined) return `Dave declined round ${cp.declined.round} for #${pr}. Do not request a review. Report to Dave.`
+  if (opening + extra === 0) return `No CodeRabbit review is budgeted for #${pr}. Do not request a review.`
+  if (cp.rounds === null) return `Budget ${opening}+${extra}, rounds unknown (older status script). Do not post @coderabbitai review. Ask Dave.`
+  const next = cp.rounds + 1
+  if (cp.granted !== null && cp.granted >= next) return `Dave allowed round ${next}. ${when}, post one @coderabbitai review.`
+  if (cp.rounds >= opening + extra) {
+    return `Rounds used ${cp.rounds} of ${opening}+${extra}. Do not post @coderabbitai review. Dave decides round ${next} in the checkpoint pane.`
+  }
+  return `Rounds used ${cp.rounds} of ${opening}+${extra}. ${when}, post one @coderabbitai review.`
+}
+
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
@@ -313,10 +366,12 @@ export const reportLine = (alert: Alert): string => {
   }
   if (alert.state === 'LIMITED' && alert.rateLimit) {
     const wait = alert.rateLimit.minutes === null ? '' : ` CodeRabbit says the next included review is available in ${alert.rateLimit.minutes} minutes.`
-    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} Post @coderabbitai review once when capacity is back, then report to Dave. Do not merge it.`
+    const act = alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When capacity is back')} Then` : 'Post @coderabbitai review once when capacity is back, then'
+    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'LIMITED') {
-    return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). Act per pr-review-loop.md "No review on the head", then report to Dave. Do not merge it.`
+    const act = alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'
+    return `${lead} has no finished review (Greptile or CodeRabbit: cancelled, failed, skipped or rate limited). ${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'PROOF') {
     const problems = alert.proofProblems ?? alert.reasons.filter(reason => reason.startsWith(PROOF_REASON_PREFIX))
@@ -330,16 +385,36 @@ export const reportLine = (alert: Alert): string => {
   if (alert.state === 'STALLED') {
     const bots = botWords(missingBots(alert))
     const why = alert.reasons.length ? ` Reasons: ${alert.reasons.slice(0, 5).join('; ')}.` : ''
+    // A review:none PR with no router state, or one classed higher after the checkpoint: a bot review is not the fix.
+    if (alert.reasons.some(reason => reason.includes(CLASS_RAISED_NOTE))) return `${lead} (review:none): ${CLASS_RAISED_LINE} Then report to Dave. Do not merge it.`
+    if (alert.reasons.some(reason => reason.includes(ROUTER_NONE_UNVERIFIED_NOTE) || reason.includes(NONE_NO_CHECKPOINT_NOTE))) {
+      return `${lead} (review:none) has no router state for this head. Re-run the review-router workflow for this head. Do not request a bot review. Then report to Dave. Do not merge it.`
+    }
     if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave.${why} Do not merge it.`
-    return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave.${why} Do not merge it.`
+    const act = alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'
+    return `${lead} has no ${bots} review after 60 minutes. ${act} report to Dave.${why} Do not merge it.`
   }
   const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
   const body = alert.outsideDiff ? ` CodeRabbit lists ${alert.outsideDiff} finding(s) outside the diff in its review body. They have no thread. Read the review body, then fix each one or list it in the PR body under "Outside-diff: handled", one bullet per finding.` : ''
-  return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body} Do not merge it. The watch continues.`
+  const budget = alert.checkpoint ? ` ${budgetSentence(alert.checkpoint, alert.pr, 'After the fix push')}` : ''
+  return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body}${budget} Do not merge it. The watch continues.`
 }
+
+/** A draft's reasons that name a bot or a review request: the model must not read them as an order. */
+const BOT_REASON = /CodeRabbit|Greptile|@coderabbitai|@greptileai/i
+const DRAFT_LINE = `Draft: waiting on Dave's ${SLASH}. Do not request a review.`
+
+/** The status the model reads. A draft drops the reasons that send it to a bot and gains the draft line. */
+export const statusForModel = (status: PrStatus): PrStatus =>
+  isDraftStatus(status) ? { ...status, reasons: [...status.reasons.filter(reason => !BOT_REASON.test(reason)), DRAFT_LINE] } : status
 
 export const statusText = (status: PrStatus): string => {
   const state = stateOf(status)
+  if (state === 'DRAFT') {
+    const head = `PR #${status.pr} head ${status.headShort} (${status.branch}): NOT READY`
+    const rows = [`  ${DRAFT_LINE}`, `  Threads unresolved: ${status.unresolved}`, `  Mergeable state: ${status.mergeable_state ?? 'unknown'}`]
+    return [head, ...rows, ...status.reasons.filter(reason => !BOT_REASON.test(reason)).map(reason => `  - ${reason}`)].join('\n')
+  }
   const head = `PR #${status.pr} head ${status.headShort} (${status.branch}): ${state === 'CLOSED' ? (status.merged ? 'MERGED' : 'CLOSED') : state === 'READY' ? 'READY' : 'NOT READY'}`
   const rows = [
     botWords(status.routing?.required) ? `  ${botWords(status.routing?.required)} reviewed the head: ${reviewedByRequired(status) ? 'yes' : 'NO'}` : '  Bot review: not required',
@@ -366,3 +441,84 @@ export const parseArgs = (args: string): WatchArgs => {
 export const landCommand = (root: string, pr: number): string => `pwsh -File "${root}/scripts/github/land-pr.ps1" -Pr ${pr}`
 
 export const clipTail = (text: string, max: number): string => (text.length <= max ? text : `...${text.slice(text.length - max)}`)
+
+/** The opening review waits this long after the PR left draft before Dave is asked to request it. */
+export const OPENING_WAIT_MS = 15 * 60_000
+
+/** The checkpoint record of a PR, or null when the stored value lacks the fields the asks read. */
+export const readRecord = (value: unknown): CheckpointRecord | null => {
+  const rec = value as Partial<CheckpointRecord> | null | undefined
+  if (!rec || typeof rec !== 'object') return null
+  const budget = rec.budget
+  if (!isPrNumber(rec.pr) || (rec.state !== 'confirmed' && rec.state !== 'applied') || typeof rec.head !== 'string' || typeof rec.pathway !== 'string') return null
+  if (!Array.isArray(budget) || budget.length !== 2 || !budget.every(n => typeof n === 'number')) return null
+  return rec as CheckpointRecord
+}
+
+/** The round Dave allowed (checkpoint:grant:<n>), or null. */
+export const grantRound = (value: unknown): number | null => {
+  const round = (value as { round?: unknown } | null | undefined)?.round
+  return typeof round === 'number' ? round : null
+}
+
+/** A draft or an older script's DRAFT_REASON: no bot reviews a draft, so no ask is made. */
+const isDraftStatus = (status: PrStatus): boolean => status.isDraft ?? status.reasons.includes(DRAFT_REASON)
+
+const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, round?: number): CheckpointAsk => ({
+  kind,
+  pr: status.pr,
+  head: status.head,
+  text,
+  ...(round === undefined ? {} : { round }),
+})
+
+/**
+ * The one question the checkpoint pane asks Dave about this PR now, or null. Pure; the caller queues it once.
+ * - round: CodeRabbit reviewed the head (REVIEWED) or skipped it (LIMITED, not a rate limit) and the rounds bought reach the budget.
+ *   A grant for that round, or a No on it, ends the ask.
+ * - opening: a coderabbit or both PR with no CodeRabbit round 15 minutes after the mod's --apply (the PR left draft), not rate limited.
+ * - greptile: a both PR, CodeRabbit reviewed the head, nothing unresolved, Greptile has not. Once per PR.
+ * An older status script has no round count: no round ask, and the opening ask reads the count as 0.
+ */
+export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: number, granted: number | null): CheckpointAsk | null => {
+  if (!record || record.state !== 'applied' || isClosed(status) || status.ready || isDraftStatus(status)) return null
+  if (record.pathway !== 'coderabbit' && record.pathway !== 'both') return null
+  const rounds = status.coderabbitRounds
+  const [opening, extra] = record.budget
+  const reviewed = status.coderabbitReviewedHead === true
+  const limited = rateLimitedByCodeRabbit(status) || status.rateLimited
+  const state = stateOf(status)
+  const skipped = state === 'LIMITED' && status.coderabbitLimited === true && !limited
+  if (typeof rounds === 'number' && opening + extra > 0 && rounds >= opening + extra && ((state === 'REVIEWED' && reviewed) || skipped)) {
+    const round = rounds + 1
+    const declined = record.declined?.kind === 'round' && record.declined.round === round
+    if (declined || (granted !== null && granted >= round)) return null
+    const count = record.capacity?.count
+    return askAt(status, 'round', `Round ${round} of ${opening}+${extra} for #${status.pr}. Spend 1 more? 7d ≈${typeof count === 'number' ? count : 'unknown'}`, round)
+  }
+  // An older status script has no round count: no CodeRabbit review and no request on the PR reads as round 0.
+  if ((rounds ?? 0) === 0 && (status.coderabbitRequests ?? 0) === 0 && !reviewed && !limited && status.coderabbitLimited !== true && !record.opened && record.declined?.kind !== 'opening') {
+    if (now - (record.appliedAt ?? now) < OPENING_WAIT_MS) return null
+    return askAt(
+      status,
+      'opening',
+      `CodeRabbit has not started on #${status.pr} 15 minutes after ready. Post one @coderabbitai review? It counts as the opening review (round 1 of ${opening}+${extra}).`,
+      1,
+    )
+  }
+  if (record.pathway === 'both' && reviewed && status.unresolved === 0 && !status.reviewedHead && !record.greptile) {
+    return askAt(status, 'greptile', `Ask Greptile to review the final head ${status.headShort} of #${status.pr}? 3 credits (Plus).`)
+  }
+  return null
+}
+
+/** What the report lines need from the record, the status and the grant. Null when the PR has no record. */
+export const checkpointOf = (record: CheckpointRecord | null, status: PrStatus, granted: number | null): AlertCheckpoint | null =>
+  record
+    ? {
+        budget: record.budget,
+        rounds: typeof status.coderabbitRounds === 'number' ? status.coderabbitRounds : null,
+        granted,
+        declined: record.declined ? { round: record.declined.round } : null,
+      }
+    : null

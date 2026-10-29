@@ -2064,3 +2064,142 @@ test('RN9: review:none whose router state on the head saved no pathway=none chec
     }
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// PR checkpoint (PR C, spec section 4): additive JSON fields the pr-loop mod reads. No READY logic changes.
+//
+// New contract, written before the code:
+//   evaluate(...).isDraft               boolean, pull.draft === true
+//   evaluate(...).labels                the label names on the PR (strings)
+//   evaluate(...).coderabbitRequests    number: issue comments by a NON-bot author whose trimmed body starts with
+//                                       "@coderabbitai review" or "@coderabbitai full review"
+//   evaluate(...).coderabbitRounds      coderabbitRoundsOf({ reviews, comments })
+//   export coderabbitRoundsOf({ reviews = [], comments = [] }) -> number: the CodeRabbit PR reviews bought so far
+//       no bot review and no request                                        0
+//       else max(botReviews, requests + (first bot review older than the first request ? 1 : 0))
+//       botReviews = distinct commit_id values among the coderabbitai[bot] review objects
+//   export DRAFT_REASON = 'PR is a draft (no bot review on drafts)'   the reason evaluate pushes for a draft
+//
+// How it can fail, and the test that catches it:
+//   isDraft or labels missing, or isDraft true for a non-draft                    -> RS1
+//   a request counted from a bot, from a rate-limit comment or from "reviewer"    -> RS2
+//   "full review" not counted, or leading whitespace breaks the match             -> RS2
+//   coderabbitRoundsOf missing, or the auto opening plus 2 requests is not 3      -> RS3
+//   a request before the first review is counted twice                            -> RS3
+//   two review objects of one commit count as two rounds (the round ask fires early) -> RS4
+//   an empty-body thread-reply review counts as a round                                       -> RS4
+//   a non-empty review body without 'Actionable comments posted' is skipped as a round        -> RS4
+//   the JSON drops the fields, or they are not numbers/booleans                   -> RS5
+//   DRAFT_REASON not exported, or evaluate writes another text                    -> RS6
+const REQ_USER = { login: 'Rev4nchist', type: 'User' };
+const reqComment = (id, body, createdAt, user = REQ_USER) => ({ id, user, body, created_at: createdAt });
+const crBotReview = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: 'Actionable comments posted: 0' });
+const rsFn = (name) => {
+  assert.equal(typeof RS[name], 'function', `review-status.mjs must export ${name}`);
+  return RS[name];
+};
+
+test('RS1: isDraft and labels are in the result; a non-draft is false', () => {
+  const draft = evaluate(routed(['review:coderabbit', 'risk:infra'], { draft: true }));
+  assert.equal(draft.isDraft, true);
+  assert.deepEqual(draft.labels, ['review:coderabbit', 'risk:infra']);
+  const open = evaluate(routed(['review:none'], { draft: false }));
+  assert.equal(open.isDraft, false);
+  assert.deepEqual(open.labels, ['review:none']);
+  assert.equal(evaluate(routed([], {})).isDraft, false, 'no draft key on the pull is not a draft');
+});
+
+test('RS2: coderabbitRequests counts only a person asking for a review', () => {
+  const comments = [
+    reqComment(1, '@coderabbitai review', '2026-10-28T10:00:00Z'),
+    reqComment(2, '  @coderabbitai full review\n', '2026-10-28T11:00:00Z'),
+    reqComment(3, '@coderabbitai rate limit', '2026-10-28T11:30:00Z'),
+    reqComment(4, '@coderabbitai reviewer please', '2026-10-28T11:40:00Z'),
+    reqComment(5, '> @coderabbitai review', '2026-10-28T11:50:00Z'),
+    reqComment(6, '@coderabbitai review', '2026-10-28T12:00:00Z', { login: 'coderabbitai[bot]', type: 'Bot' }),
+    reqComment(7, '@coderabbitai review', '2026-10-28T12:10:00Z', { login: 'github-actions[bot]', type: 'Bot' }),
+    reqComment(8, 'looks good, ask @coderabbitai review later', '2026-10-28T12:20:00Z'),
+  ];
+  const r = evaluate(routed(['review:coderabbit'], { eval: { comments, reviews: [] } }));
+  assert.equal(r.coderabbitRequests, 2, 'comments 1 and 2 only');
+});
+
+test('RS3: coderabbitRoundsOf counts the opening once and each request after it', () => {
+  const rounds = rsFn('coderabbitRoundsOf');
+  const A = 'a'.repeat(40);
+  assert.equal(rounds({ reviews: [], comments: [] }), 0, 'no review and no request');
+  assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z')], comments: [] }), 1, 'the automatic opening review');
+  assert.equal(
+    rounds({ reviews: [crBotReview(A, '2026-10-28T10:05:00Z')], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T10:00:00Z')] }),
+    1,
+    'a request posted before the first review is the opening, not a second round',
+  );
+  assert.equal(
+    rounds({
+      reviews: [crBotReview(A, '2026-10-28T10:00:00Z')],
+      comments: [reqComment(1, '@coderabbitai review', '2026-10-28T11:00:00Z'), reqComment(2, '@coderabbitai full review', '2026-10-28T12:00:00Z')],
+    }),
+    3,
+    'an auto opening and 2 requests (their reviews not in yet)',
+  );
+  assert.equal(
+    rounds({ reviews: [], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T11:00:00Z')] }),
+    1,
+    'a request with no review yet is one bought round',
+  );
+  assert.equal(
+    rounds({ reviews: [], comments: [reqComment(1, '@coderabbitai rate limit', '2026-10-28T11:00:00Z'), reqComment(2, 'review', '2026-10-28T11:01:00Z', CR_BOT)] }),
+    0,
+    'a rate-limit query and bot comments are not rounds',
+  );
+});
+
+test('RS4: two CodeRabbit review objects on one commit are one round', () => {
+  const rounds = rsFn('coderabbitRoundsOf');
+  const A = 'a'.repeat(40);
+  const B = 'b'.repeat(40);
+  assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(A, '2026-10-28T10:01:00Z')], comments: [] }), 1);
+  assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(B, '2026-10-28T11:00:00Z'), crBotReview(B, '2026-10-28T11:02:00Z')], comments: [] }), 2);
+  assert.equal(rounds({ reviews: [{ user: { login: 'someone', type: 'User' }, commit_id: A, submitted_at: '2026-10-28T10:00:00Z', body: 'x' }], comments: [] }), 0, 'only the CodeRabbit app counts');
+  // A thread reply makes a COMMENTED review with an empty body on the head commit: it buys no round.
+  const reply = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: '' });
+  assert.equal(rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), reply(B, '2026-10-28T11:00:00Z')], comments: [] }), 1, 'an empty-body reply on commit B is not a round');
+  assert.equal(rounds({ reviews: [reply(A, '2026-10-28T10:00:00Z')], comments: [] }), 0, 'a reply alone is no round');
+  assert.equal(
+    rounds({ reviews: [reply(A, '2026-10-28T09:00:00Z'), crBotReview(A, '2026-10-28T10:30:00Z')], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T10:00:00Z')] }),
+    1,
+    'an early reply does not make the first review older than the request',
+  );
+  // A real round can carry no "Actionable comments posted" line (outside-diff and nitpick findings only): it still counts.
+  const C = 'c'.repeat(40);
+  const noSentence = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: '**Outside diff range comments (2)**\n'.padEnd(8258, 'x') });
+  assert.equal(
+    rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), crBotReview(B, '2026-10-28T11:00:00Z'), noSentence(C, '2026-10-28T12:00:00Z')], comments: [] }),
+    3,
+    'a long body with no review sentence on commit C is a round',
+  );
+  const blank = (commit, at) => ({ user: CR_BOT, commit_id: commit, submitted_at: at, body: ' \n\t ' });
+  assert.equal(
+    rounds({ reviews: [crBotReview(A, '2026-10-28T10:00:00Z'), reply(B, '2026-10-28T11:00:00Z'), blank(C, '2026-10-28T12:00:00Z')], comments: [] }),
+    1,
+    'an empty and a whitespace-only review on other commits add no round',
+  );
+});
+
+test('RS5: the JSON result carries isDraft, labels, coderabbitRequests and coderabbitRounds, whatever the labels', () => {
+  for (const labels of [[], ['review:none'], ['review:coderabbit'], ['risk:docs']]) {
+    const r = evaluate(routed(labels, { eval: { reviews: [crBotReview(HEAD, '2026-10-28T10:00:00Z')], comments: [reqComment(1, '@coderabbitai review', '2026-10-28T11:00:00Z')] } }));
+    assert.equal(typeof r.isDraft, 'boolean', labels.join());
+    assert.ok(Array.isArray(r.labels), labels.join());
+    assert.equal(typeof r.coderabbitRequests, 'number', labels.join());
+    assert.equal(typeof r.coderabbitRounds, 'number', labels.join());
+    assert.equal(r.coderabbitRounds, 2, `${labels.join()}: an auto opening plus 1 request`);
+  }
+});
+
+test('RS6: DRAFT_REASON is exported and is the reason a draft carries; a draft is still never READY', () => {
+  assert.equal(RS.DRAFT_REASON, 'PR is a draft (no bot review on drafts)');
+  const draft = evaluate(routed(['review:none'], { draft: true, eval: { comments: [NONE_STATE()] } }));
+  assert.ok(draft.reasons.includes(RS.DRAFT_REASON), draft.reasons.join('; '));
+  assert.equal(draft.ready, false);
+});

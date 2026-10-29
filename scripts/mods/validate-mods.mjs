@@ -66,6 +66,18 @@ export const gatingProblems = (report, min) => {
   return problems;
 };
 
+/**
+ * Command names the engine refuses. `claude plugin validate` reports one as a warning ("/x" is a name Claude Code ships: $.command.register
+ * refuses it and the hook that calls it is skipped). The test kit accepts any name, so without this check such a command passes every test and
+ * is dead in a live session (PR C: /checkpoint).
+ */
+export const refusedCommandProblems = report =>
+  [report?.manifest, ...(report?.contents ?? [])]
+    .flatMap(entry => entry?.warnings ?? [])
+    .map(warning => (typeof warning === 'string' ? warning : (warning?.message ?? '')))
+    .filter(message => /is a name Claude Code ships/.test(message))
+    .map(message => `validate: refused command name: ${message}`);
+
 const label = hook => `${hook.module ?? '?'} ${hook.hook ?? hook.pattern ?? '?'}`;
 
 const checkValidate = () => {
@@ -84,6 +96,7 @@ const checkValidate = () => {
     for (const error of entry?.errors ?? []) problems.push(`validate: ${entry.file}: ${typeof error === 'string' ? error : JSON.stringify(error)}`);
   }
   problems.push(...gatingProblems(report, minGating));
+  problems.push(...refusedCommandProblems(report));
   return { ok: problems.length === 0, note: problems.join('\n'), short: `validate ${problems.length === 0 ? 'OK' : 'FAIL'} (${hooks.length} gating hook${hooks.length === 1 ? '' : 's'}, ${bare.length} without .catch)` };
 };
 

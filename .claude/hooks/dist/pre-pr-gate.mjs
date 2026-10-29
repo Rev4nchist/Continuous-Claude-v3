@@ -239,6 +239,22 @@ function shapesOf(command) {
   return { create, nonDraft: create && isNonDraftCreate(text), ready, label, self: isSelfConfirm(text), nonLiteral };
 }
 var isGated = (s) => s.create || s.ready || s.label !== null || s.self;
+var CCV3_REPO = "rev4nchist/continuous-claude-v3";
+var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
+var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, "g");
+var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "gi");
+var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
+var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
+var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
+function namedRepo(command, env = {}) {
+  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
+  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
+  const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
+  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
+  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
+  return ccv3 ? CCV3_REPO : null;
+}
 
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync as mkdirSync2 } from "fs";
@@ -310,7 +326,6 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
 }
 
 // src/pre-pr-gate.ts
-var CCV3_REPO = "rev4nchist/continuous-claude-v3";
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
 var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
 var CONFIG_REL = "review-router.config.json";
@@ -322,21 +337,6 @@ var COMMAND_TOOLS2 = /* @__PURE__ */ new Set(["Bash", "PowerShell"]);
 var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
 var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
-var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
-var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, "g");
-var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "gi");
-var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
-var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
-var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-function namedRepo(command, env = {}) {
-  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
-  const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
-  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
-  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
-  return ccv3 ? CCV3_REPO : null;
-}
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
   return m ? m[1].replace(/^[^:\s]+:/, "").replace(/["']+$/, "") : null;

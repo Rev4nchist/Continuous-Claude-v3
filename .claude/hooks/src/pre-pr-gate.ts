@@ -48,10 +48,10 @@ import { createHash } from 'crypto';
 import { appendFileSync, mkdirSync, readFileSync } from 'fs';
 import { dirname, isAbsolute, join, resolve } from 'path';
 import { isPrOpenCommand, joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
-import { hasCcv3Endpoint, isGated, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
+import { CCV3_REPO, isGated, namedRepo, shapesOf, type LabelShape, type Shapes } from './shared/checkpoint-shapes.js';
 import { guardLogPath, logGuardDecision } from './shared/guard-log.js';
 
-export const CCV3_REPO = 'rev4nchist/continuous-claude-v3';
+export { CCV3_REPO, namedRepo };
 export const STAMP_REL = '.claude/cache/pre-pr/stamp.json';
 /** The pathway record pr-checkpoint.mjs --confirm writes next to the stamp. */
 export const PATHWAY_REL = '.claude/cache/pre-pr/pathway.json';
@@ -92,30 +92,6 @@ export type Decision =
 interface HookInput { tool_name?: string; tool?: string; tool_input?: { command?: unknown }; cwd?: string; session_id?: string; agent_id?: string }
 
 // ---------- raw-text readers (narrow on purpose) ----------
-
-/** A gh repo value: OWNER/REPO, HOST/OWNER/REPO or a URL. Only the last two segments name the repo. */
-const REPO_VALUE = '((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})';
-const REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, 'g');
-const GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, 'gi');
-/** A PR or issue URL names its repo: `gh pr ready https://github.com/<o>/<r>/pull/201`. */
-const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
-const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
-
-const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-/**
- * `rev4nchist/continuous-claude-v3` when the raw text holds any CCv3 signal, else null (the checkout decides). The hook never names a foreign repo.
- * A CCv3 signal is a CCv3 `-R` / `--repo` / `GH_REPO=` value (also the process env GH_REPO), a CCv3 `repos/<o>/<r>/pulls` or issues or labels
- * endpoint text, or a CCv3 PR URL. Any one of them anywhere in the text means CCv3 (fail closed): gh may use the last -R, and a title can hold text.
- */
-export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
-  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
-  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
-  const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
-  const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
-  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
-  return ccv3 ? CCV3_REPO : null;
-}
 
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
 export function headBranchOf(command: string): string | null {

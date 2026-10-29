@@ -13,7 +13,7 @@
     "budget: CodeRabbit PR reviews per class as [opening, extra after fix pushes] (pr-review-loop.md 'PR review budget per class'). Read by scripts/github/pr-checkpoint.mjs. A bare number is [n, 0].",
     "checkpoint.critical: path globs of files whose PR gets Greptile too when it is available (pr-checkpoint.mjs rule R3).",
     "checkpoint.parser: path globs of hand-written lexer and parser guards. Their PR gets one CodeRabbit review and no loop (rule R2). Dave edits this list.",
-    "checkpoint.enforce: boolean, read by the pre-pr-gate hook from the checkout the session runs in. false (warn mode): the new checkpoint rules (non-draft create, shell gh pr ready, hand review: label, self-confirm, non-literal --repo) allow the command and log one warn row to guard-decisions.jsonl. true: the same commands are denied. Only a literal true enforces. The stamp rules are enforced in both modes. PR C flips it to true after the warn week.",
+    "checkpoint.enforce: boolean, read by the pre-pr-gate hook from the checkout the session runs in. false (warn mode): the new checkpoint rules (non-draft create, shell gh pr ready, hand review: label, self-confirm, non-literal --repo) allow the command and log one warn row to guard-decisions.jsonl. true: the same commands are denied. Only a literal true enforces. The stamp rules are enforced in both modes. The later flip PR flips it to true after the warn week.",
     "coderabbit.reviews_7d_manual: CodeRabbit PR reviews in the last 7 days, an integer Dave sets from the free '@coderabbitai rate limit' reply. null means unknown and changes no rule. reviews_7d_manual_date: the day Dave read it."
   ],
   "deep_enabled": false,
