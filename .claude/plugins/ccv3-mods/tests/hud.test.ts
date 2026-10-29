@@ -12,9 +12,10 @@ import { hudParts } from '../hooks/hud/model'
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
-// H8 with the HUD up, ctx shows twice (ring and task row); with it off, the task row loses ctx
+// H8 PR 3: ctx shows in the HUD row, the task row or core line 1 (the status line owns ctx, cost and limits)
 // H9 a kill switch is set but the advisor runs anyway: the chip stays "blocked"
-// H10 a dated model id shows a date as its version; a spend limit's label breaks on the terminal
+// H10 a dated model id shows a date as its version; PR 3: a spend limit still draws a bar in the HUD row (the model label of a dated id stays)
+// H13 PR 3: core line 1 draws ctx or cost end to end, through the caller in index.tsx
 
 const BAND_PROPS = {
   hasSurvey: false,
@@ -76,8 +77,9 @@ const hudOn = async ($: Engine, surface: 'terminal' | 'desktop') => {
   const model = await band.find({ type: 'Text', text: /^ (Opus|Sonnet|Fable) / })
   const svgs = await band.findAll({ type: 'Svg' })
   const taskRow = (await band.find({ key: 'row-band' }))?.text
+  const core1 = (await band.find({ key: 'row-core-1' }))?.text
   await band.unmount()
-  return { text: row?.text, modelProps: model?.props, svgs: svgs.length, taskRow }
+  return { text: row?.text, modelProps: model?.props, svgs: svgs.length, taskRow, core1 }
 }
 
 describe('hud', () => {
@@ -149,29 +151,36 @@ describe('hud', () => {
     world(on, { limits: [{ kind: 'spend_limit', percentUsed: 40 }] })
     await start($)
     const text = (await hudOn($, 'terminal')).text ?? ''
-    expect(text).toContain('spend limit ▰')
-    expect(text).toContain('40%')
+    expect(text).not.toContain('spend limit')
+    expect(text).not.toContain('40%')
+    expect(text).toContain('Fable advisor')
   })
 
-  test('H5 no rate-limit windows, no bars; a measured change shows up', async ($, on) => {
-    world(on, { limits: [] })
+  test('H5 the HUD row draws no rate-limit bar, at start or after a measured change; model and advisor stay', async ($, on) => {
+    world(on, { limits: [{ kind: 'five_hour', percentUsed: 38 }] })
     await start($)
-    expect((await hudOn($, 'terminal')).text).not.toContain('5h')
+    const first = (await hudOn($, 'terminal')).text ?? ''
+    expect(first).not.toContain('5h')
+    expect(first).not.toContain('38%')
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [{ kind: 'seven_day', percentUsed: 61 }], cost: { usd: 4.1 }, changed: ['rateLimits', 'cost'] } as never)
-    const text = (await hudOn($, 'terminal')).text
-    expect(text).toContain('7d')
-    expect(text).toContain('61%')
-    expect(text).toContain('$4.10')
+    const text = (await hudOn($, 'terminal')).text ?? ''
+    expect(text).not.toContain('7d')
+    expect(text).not.toContain('61%')
+    expect(text).not.toContain('$4.10')
+    expect(text).not.toContain('$')
+    expect(text).toContain('Fable advisor')
   })
 
-  test('H6 Svg on desktop, never on the terminal', async ($, on) => {
+  test('H6 the HUD row draws no gauge on any surface: no Svg ring or bar on the desktop, no block characters on the terminal', async ($, on) => {
     world(on)
     await start($)
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }], changed: ['context'] } as never)
     const terminal = await hudOn($, 'terminal')
     expect(terminal.svgs).toBe(0)
-    expect(terminal.text).toMatch(/[▰▱]/)
-    expect((await hudOn($, 'desktop')).svgs).toBe(2)
+    expect(terminal.text).not.toMatch(/[▰▱]/)
+    const desktop = await hudOn($, 'desktop')
+    expect(desktop.svgs).toBe(0)
+    expect(desktop.text).toContain('Fable advisor')
   })
 
   test('H7 off switch and headless runs draw no HUD row', async ($, on) => {
@@ -192,25 +201,39 @@ describe('hud', () => {
     expect((await hudOn($, 'desktop')).text).toBeUndefined()
   })
 
-  test('H8 with the HUD up, ctx is in the ring only', async ($, on) => {
+  test('H8 with the HUD up, ctx is in no row of the band', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
     await start($)
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
     const seen = await hudOn($, 'terminal')
-    expect(seen.text).toContain('ctx 42%')
+    expect(seen.text).not.toContain('ctx')
+    expect(seen.text).not.toContain('42%')
     expect(seen.taskRow).toContain('0/1 done')
     expect(seen.taskRow).not.toContain('ctx')
+    expect(seen.taskRow).not.toContain('42%')
   })
 
-  test('H8 with the HUD off, the task row keeps ctx', async ($, on) => {
+  test('H8 with the HUD off, the task row does not take ctx over', async ($, on) => {
     world(on, { env: { CCV3_MOD_HUD_OFF: '1' } })
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
     await start($)
     await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
-    expect((await hudOn($, 'terminal')).taskRow).toContain('ctx 42%')
+    const seen = await hudOn($, 'terminal')
+    expect(seen.taskRow).toContain('0/1 done')
+    expect(seen.taskRow).not.toContain('ctx')
+    expect(seen.taskRow).not.toContain('42%')
+  })
+
+  test('H13 core line 1 draws no ctx, cost or percent end to end', async ($, on) => {
+    world(on)
+    await start($)
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: 3.84 }, changed: ['context', 'rateLimits', 'cost'] } as never)
+    const core1 = (await hudOn($, 'terminal')).core1 ?? ''
+    expect(core1).toMatch(/IDLE|WORKING|DONE|BLOCKED|WAITING ON DAVE/)
+    expect(core1).not.toMatch(/ctx|\$|%/)
   })
 
   // H11 the HUD row draws above the two core lines (PRD 5.3: the core lines never move), or the rows do not give way in order
