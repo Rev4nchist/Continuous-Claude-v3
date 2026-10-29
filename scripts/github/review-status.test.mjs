@@ -1896,3 +1896,171 @@ test('outside-diff F9: the JSON result carries the count as a number, 0 included
     assert.equal(r.coderabbitOutsideDiff, n);
   }
 });
+
+// ---------------------------------------------------------------------------------------------
+// PR checkpoint (PR A, spec sections 3.4 and 6): review:none, the raise reason, G1 and the state attributes.
+//
+// New contract, written before the code:
+//   routerState(comments) -> { class, head, pathway, pclass } | null    pathway/pclass null when absent or not on the list
+//   requiredBots(['review:none'], auto) -> { greptile: false, coderabbit: false }   after the deep and coderabbit checks
+//   evaluate: review:none with no router state on the head -> no bot, NOT READY, reason
+//     "the router has not classified this head; re-run the router workflow"
+//   evaluate: state pathway=none and class above pclass -> NOT READY, reason "class raised after the checkpoint"
+//   evaluate: state pathway=both keeps Greptile required while greptileAuto is false (G1)
+//
+// How it can fail, and the test that catches it:
+//   review:none still asks for Greptile (the old default) or CodeRabbit               -> RN1, RN2
+//   a stricter label next to review:none is overridden                                 -> RN1b (passes before the change)
+//   review:none with no state on the head is READY (or falls to CodeRabbit)            -> RN3
+//   the raise after the checkpoint is READY                                            -> RN4
+//   the raise reason fires on a pathway that is not none                              -> RN4
+//   G1 drops Greptile on a both PR when auto is off, or forces it when no state says both -> RN5
+//   G1 is skipped when the pathway=both state is for an older head (a stale state never relaxes) -> RN5
+//   RN2, RN3, RN4 hold only with Greptile auto on: with auto off, keep() asks for CodeRabbit -> loops over greptileAuto
+//   a person risk label above the saved class on a review:none PR asks for a bot (keep())   -> RN8
+//   a forged pathway= in a person comment steers READY                                 -> RN6
+//   routerState does not return the attributes, or accepts junk                        -> RN7
+const stateComment = (sha, attrs, { id = 900, user = { login: 'github-actions[bot]', type: 'Bot' } } = {}) => ({
+  id, user, body: `<!-- review-router -->\n<!-- review-router-state ${attrs.replace('HEAD', sha)} -->\nNo open router notes.`,
+});
+const noRouter = (labels, comments, over = {}) => routed(labels, { router: false, input: NO_GREPTILE, ...over, eval: { ...over.eval, comments } });
+const NONE_STATE = (sha = HEAD) => stateComment(sha, 'class=normal head=HEAD pathway=none pclass=normal');
+
+test('RN1: review:none needs no bot, with Greptile auto on or off', () => {
+  for (const auto of [true, false]) {
+    const r = requiredBots(['review:none'], auto);
+    assert.equal(r.greptile, false, `auto ${auto}`);
+    assert.equal(r.coderabbit, false, `auto ${auto}`);
+    assert.equal(r.source, 'labels');
+  }
+  const risk = requiredBots(['review:none', 'risk:normal'], true);
+  assert.deepEqual([risk.greptile, risk.coderabbit], [false, false], 'a risk label next to review:none keeps no bot');
+});
+
+test('RN1b: a stricter review label next to review:none wins (passes before the change)', () => {
+  const only = (r) => [r.greptile, r.coderabbit];
+  assert.deepEqual(only(requiredBots(['review:none', 'review:deep'])), [true, true]);
+  assert.deepEqual(only(requiredBots(['review:none', 'review:coderabbit'])), [false, true]);
+  assert.deepEqual(only(requiredBots(['review:none', 'review:deep-held'])), [false, true]);
+});
+
+const AUTO = (auto) => ({ eval: { greptileAuto: auto } });
+
+test('RN2: a review:none PR with the router state on the head is READY with no bot review, with Greptile auto on or off', () => {
+  for (const auto of [true, false]) {
+    const r = evaluate(noRouter(['review:none', 'risk:normal'], [NONE_STATE()], AUTO(auto)));
+    assert.equal(r.ready, true, `auto ${auto}: ${r.reasons.join('; ')}`);
+    assert.deepEqual(r.routing.required, [], `auto ${auto}`);
+    assert.equal(r.routing.unverified, undefined, `auto ${auto}`);
+    assert.equal(r.coderabbit, null, `auto ${auto}: no CodeRabbit review is asked for`);
+  }
+});
+
+test('RN3: review:none with no router state on the head needs no bot and is NOT READY with the router reason', () => {
+  const reason = 'the router has not classified this head; re-run the router workflow';
+  for (const auto of [true, false]) {
+    for (const [name, comments] of [['no comment', []], ['state of an older head', [NONE_STATE(OLD)]]]) {
+      const r = evaluate(noRouter(['review:none'], comments, AUTO(auto)));
+      const at = `${name}, auto ${auto}`;
+      assert.equal(r.ready, false, at);
+      assert.deepEqual(r.routing.required, [], `${at}: no bot is requested`);
+      assert.equal(r.coderabbit, null, at);
+      assert.ok(r.reasons.some((x) => x.includes(reason)), `${at}: ${r.reasons.join('; ')}`);
+    }
+  }
+});
+
+test('RN4: pathway none with a class above pclass is NOT READY with the raise reason; other cases are READY', () => {
+  const raised = stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=normal`);
+  for (const auto of [true, false]) {
+    const r = evaluate(noRouter(['review:none', 'risk:infra'], [raised], AUTO(auto)));
+    assert.equal(r.ready, false, `auto ${auto}`);
+    assert.deepEqual(r.routing.required, [], `auto ${auto}`);
+    assert.ok(r.reasons.some((x) => /class raised after the checkpoint/.test(x)), `auto ${auto}: ${r.reasons.join('; ')}`);
+  }
+  const same = stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=infra`);
+  assert.equal(evaluate(noRouter(['review:none', 'risk:infra'], [same])).ready, true, 'class equal to pclass is fine');
+  // A coderabbit pathway can rise freely: the raise reason is for pathway none only.
+  const cr = stateComment(HEAD, `class=infra head=${HEAD} pathway=coderabbit pclass=normal`);
+  const withCr = evaluate(routed(['review:coderabbit', 'risk:infra'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [cr] } }));
+  assert.ok(!withCr.reasons.some((x) => /class raised after the checkpoint/.test(x)), withCr.reasons.join('; '));
+  assert.equal(withCr.ready, true, withCr.reasons.join('; '));
+});
+
+test('RN5 (G1): pathway=both in the state keeps Greptile required while Greptile auto is off', () => {
+  const both = stateComment(HEAD, `class=infra head=${HEAD} pathway=both pclass=infra`);
+  const r = evaluate(routed(['review:deep'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [both], greptileAuto: false } }));
+  assert.deepEqual(r.routing.required, ['greptile', 'coderabbit']);
+  assert.equal(r.ready, false, 'Greptile has not reviewed the head');
+  // Control: the same PR with no pathway=both in the state still drops Greptile while auto is off.
+  const plain = stateComment(HEAD, `class=infra head=${HEAD}`);
+  const c = evaluate(routed(['review:deep'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [plain], greptileAuto: false } }));
+  assert.deepEqual(c.routing.required, ['coderabbit']);
+  assert.equal(c.ready, true, c.reasons.join('; '));
+});
+
+test('RN5b (G1): a pathway=both state for an older head still keeps Greptile required (stricter, never relaxes); READY stays false', () => {
+  const stale = stateComment(OLD, `class=infra head=${OLD} pathway=both pclass=infra`);
+  const r = evaluate(routed(['review:deep'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [stale], greptileAuto: false } }));
+  assert.deepEqual(r.routing.required, ['greptile', 'coderabbit']);
+  assert.equal(r.ready, false);
+});
+
+test('RN6: a forged pathway= in a person comment is ignored, even with a lower id than the router comment', () => {
+  const real = stateComment(HEAD, `class=infra head=${HEAD} pathway=both pclass=infra`, { id: 900 });
+  const forged = stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=infra`, { id: 1, user: { login: 'someone', type: 'User' } });
+  const r = evaluate(routed(['review:deep'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [forged, real], greptileAuto: false } }));
+  assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], 'only the bot comment says both');
+  // A forged "none" state cannot make a review:none PR READY either.
+  const lone = evaluate(noRouter(['review:none'], [stateComment(HEAD, `class=normal head=${HEAD} pathway=none pclass=normal`, { id: 1, user: { login: 'someone', type: 'User' } })]));
+  assert.equal(lone.ready, false);
+  assert.ok(lone.reasons.some((x) => /has not classified this head/.test(x)), lone.reasons.join('; '));
+});
+
+test('RN8: a person risk label above the saved class on a review:none PR still names no bot, and the PR is NOT READY', () => {
+  for (const auto of [true, false]) {
+    const r = evaluate(noRouter(['review:none', 'risk:high'], [NONE_STATE()], AUTO(auto)));
+    assert.deepEqual(r.routing.required, [], `auto ${auto}: review:none wants no bot, so keep() must not add one`);
+    assert.equal(r.coderabbit, null, `auto ${auto}`);
+    assert.equal(r.ready, false, `auto ${auto}: the router has not routed the higher label`);
+  }
+});
+
+test('RN7: routerState returns pathway and pclass from a bot comment, null when absent or not on the list', () => {
+  const s = RS.routerState([stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=normal`)]);
+  assert.deepEqual(s, { class: 'infra', head: HEAD, pathway: 'none', pclass: 'normal' });
+  const held = RS.routerState([stateComment(HEAD, `class=steering head=${HEAD} held=apex_d3 pathway=both pclass=steering`)]);
+  assert.equal(held.pathway, 'both');
+  assert.equal(held.pclass, 'steering');
+  const old = RS.routerState([stateComment(HEAD, `class=infra head=${HEAD}`)]);
+  assert.deepEqual(old, { class: 'infra', head: HEAD, pathway: null, pclass: null });
+  const junk = RS.routerState([stateComment(HEAD, `class=infra head=${HEAD} pathway=evil pclass=nonsense`)]);
+  assert.equal(junk.class, 'infra');
+  assert.equal(junk.pathway, null);
+  assert.equal(junk.pclass, null);
+  assert.equal(RS.routerState([stateComment(HEAD, `class=infra head=${HEAD} pathway=none pclass=normal`, { user: { login: 'someone', type: 'User' } })]), null);
+});
+
+test('RN5c (G1): pathway=both with no review:* label requires CodeRabbit too, not Greptile alone', () => {
+  const both = stateComment(HEAD, `class=infra head=${HEAD} pathway=both pclass=infra`);
+  const r = evaluate(routed(['risk:infra'], { router: false, input: NO_GREPTILE, eval: { reviews: [CR_REVIEW], comments: [both], greptileAuto: false } }));
+  assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], 'auto off adds CodeRabbit; G1 must not drop it');
+});
+
+test('RN9: review:none whose router state on the head saved no pathway=none checkpoint is NOT READY and asks no bot', () => {
+  const reason = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+  const states = [
+    ['no pathway', stateComment(HEAD, 'class=normal head=HEAD')],
+    ['pathway none, no pclass', stateComment(HEAD, 'class=normal head=HEAD pathway=none')],
+    ['pathway coderabbit', stateComment(HEAD, 'class=normal head=HEAD pathway=coderabbit pclass=normal')],
+  ];
+  for (const auto of [true, false]) {
+    for (const [name, comment] of states) {
+      const r = evaluate(noRouter(['review:none', 'risk:normal'], [comment], AUTO(auto)));
+      const at = `${name}, auto ${auto}`;
+      assert.equal(r.ready, false, at);
+      assert.deepEqual(r.routing.required, [], `${at}: no bot is requested`);
+      assert.ok(r.reasons.some((x) => x.includes(reason)), `${at}: ${r.reasons.join('; ')}`);
+    }
+  }
+});
