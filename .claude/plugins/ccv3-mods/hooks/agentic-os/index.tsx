@@ -1,7 +1,7 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsTask, OsTurn, PrWatch } from '../../types'
+import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
 import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
@@ -19,6 +19,8 @@ import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
 import { bandSpans, parseLanes } from './pane-model'
 import type { Span, Tone } from './pane-model'
+import { drift, observe } from './steward'
+import type { Activity, Drift } from './steward'
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
@@ -57,6 +59,14 @@ const git = atom({ plugin: 'ccv3-mods', key: 'git' } as const, null as OsGit | n
 
 /** The tab the /os pane shows. Only a live tab is ever stored (a Comms, Swarm or Resources tab has no Button); reset at /clear and resume. */
 const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as TabId)
+
+/**
+ * What the steward (steward.ts) keeps: the counts since the last brief_set (`briefAt` is its time; only briefCall moves
+ * it, the turn-end parser does not). Watch only: nothing of it goes to the model. Reset at session.start, /clear and resume.
+ */
+const NO_ACTIVITY: Activity = { toolCalls: 0, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 }
+const FRESH_STEWARD: OsSteward = { briefAt: null, activity: NO_ACTIVITY }
+const steward = atom({ plugin: 'ccv3-mods', key: 'steward' } as const, FRESH_STEWARD)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 /** True once this environment's pulse is armed; a start resets it, so a reload arms a fresh one. */
@@ -348,9 +358,14 @@ const briefCall = async ($: EngineInterface, e: unknown) => {
   // A model that leaves a field out may send null for it. The engine's own fields on the event are not read.
   const raw = Object.fromEntries(BRIEF_KEYS.filter(key => given[key] !== undefined && given[key] !== null).map(key => [key, given[key]]))
   const list = await read($, tasks)
-  const result = applyBrief(await read($, brief), raw, list, await $.clock.now())
+  const prev = await read($, brief)
+  // Two saves in one millisecond must differ: updatedAt orders the brief's saves.
+  const at = Math.max(await $.clock.now(), (prev?.updatedAt ?? -1) + 1)
+  const result = applyBrief(prev, raw, list, at)
   if ('error' in result) return textResult(`brief_set failed: ${result.error}`)
   await update($, brief, () => result.brief)
+  // A brief_set is the one thing that restarts the steward's counts. The turn-end parser also moves updatedAt, so it is not the version.
+  await update($, steward, state => ({ ...state, briefAt: result.brief.updatedAt, activity: NO_ACTIVITY }))
   await writeSnapshot($, typeof given.tool_use_id === 'string' ? { except: given.tool_use_id } : {})
   return textResult(briefSummary(result.brief, list))
 }
@@ -383,6 +398,36 @@ const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
   } catch {
     // Observer only.
   }
+}
+
+/** HEAD before or after a call that may commit: one process, only for a commit-looking shell call in an interactive run. */
+const headOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | null> => {
+  const command = typeof input.command === 'string' ? input.command : ''
+  if ((tool !== 'Bash' && tool !== 'PowerShell') || !/\bcommit\b/.test(command) || (await read($, mode)) !== 'interactive') return null
+  const run = await $.process.run(['git', 'rev-parse', 'HEAD'], { timeoutMs: 5000 }).catch(() => null)
+  return run !== null && run.exitCode === 0 ? run.stdout.trim() || null : null
+}
+
+/** CCV3_MOD_STEWARD_OFF=1 stops the counting and the pane row. Read live, so it works mid-session. */
+const stewardOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MOD_STEWARD_OFF')) === '1'
+
+/** A main-loop call ran: the steward counts it. brief_set is the brief changing, not work. A refused call did not run. */
+const watch = async ($: EngineInterface, tool: string, input: Record<string, unknown>, before: string | null, ran: Result): Promise<void> => {
+  try {
+    if (tool === BRIEF_TOOL || ran.deny !== undefined || (await stewardOff($))) return
+    const after = before === null ? null : await headOf($, tool, input)
+    const moved = after !== null && after !== before
+    await update($, steward, state => ({ ...state, activity: observe(state.activity, tool, input, moved) }))
+  } catch {
+    // Observer only.
+  }
+}
+
+/** The steward's verdict on the brief, for the pane. Null when the steward is switched off. Read-only: nothing is written or sent. */
+const driftNow = async ($: EngineInterface): Promise<Drift | null> => {
+  if (await stewardOff($)) return null
+  const state = await read($, steward)
+  return drift(await read($, brief), state.activity, state.briefAt ?? 0)
 }
 
 type Proof = { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }
@@ -459,6 +504,7 @@ export const agenticOs = (on: On) => {
       // A start (or a reload, which drops the old timers) re-arms the pulse.
       await update($, uiArmed, () => false)
       await update($, mode, () => (e.isInteractive ? 'interactive' : 'headless'))
+      await update($, steward, () => FRESH_STEWARD)
       await writeProof($, { trigger: 'start', isInteractive: e.isInteractive, surface: e.surface ?? null })
       // Headless (a -p run, or the desktop app before it attaches): no pane, no timer, no process. Capture still runs.
       await registerBrief($)
@@ -479,6 +525,7 @@ export const agenticOs = (on: On) => {
         await update($, tasks, () => [])
         await update($, plan, () => null)
         await update($, brief, () => null)
+        await update($, steward, () => FRESH_STEWARD)
         await update($, refused, () => false)
         await update($, osTab, () => 'overview')
       }
@@ -567,8 +614,10 @@ export const agenticOs = (on: On) => {
     const startedAt = await $.clock.now()
     await update($, activeAt, () => startedAt)
     await update($, steps, list => [...list, { id, tool, label: stepLabel(input), startedAt }])
+    const headBefore = await headOf($, tool, input).catch(() => null)
     const ran = await next(e)
     await update($, steps, list => list.filter(one => one.id !== id))
+    await watch($, tool, input, headBefore, ran)
     // A refusal (not Dave dismissing his own question) blocks the chip until the next turn.
     if (ran.deny !== undefined && tool !== 'AskUserQuestion') await update($, refused, () => true)
     if (await record($, tool, input, ran)) await writeSnapshot($)
@@ -695,6 +744,7 @@ export const agenticOs = (on: On) => {
       branch: where?.branch ?? null,
       worktree: where?.worktree ?? null,
       activeAt: await read($, activeAt),
+      drift: await driftNow($),
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
