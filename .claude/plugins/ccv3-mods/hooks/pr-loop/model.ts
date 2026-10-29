@@ -1,4 +1,4 @@
-import type { PrState, PrWatch } from '../../types'
+import type { CheckpointAsk, CheckpointRecord, PrState, PrWatch } from '../../types'
 
 /** What `review-status.mjs <N> --json` prints. Only the fields the mod reads. */
 export type PrStatus = {
@@ -33,6 +33,14 @@ export type PrStatus = {
   routing?: { required: string[]; held: string | null; source: string }
   prState: string
   merged: boolean
+  /** The PR is a draft. Absent from older scripts: DRAFT_REASON in the reasons says so. */
+  isDraft?: boolean
+  /** The label names on the PR. Absent from older scripts. */
+  labels?: string[]
+  /** CodeRabbit review requests Dave or the model posted. Absent from older scripts. */
+  coderabbitRequests?: number
+  /** CodeRabbit PR reviews bought so far (the automatic opening counts once). Absent from older scripts: the round ask never fires then. */
+  coderabbitRounds?: number
 }
 
 /** `perPr` marks an error that belongs to this PR alone (a 404, a list too long); any other error is shared by all PRs. */
@@ -386,3 +394,73 @@ export const parseArgs = (args: string): WatchArgs => {
 export const landCommand = (root: string, pr: number): string => `pwsh -File "${root}/scripts/github/land-pr.ps1" -Pr ${pr}`
 
 export const clipTail = (text: string, max: number): string => (text.length <= max ? text : `...${text.slice(text.length - max)}`)
+
+/** The opening review waits this long after the PR left draft before Dave is asked to request it. */
+export const OPENING_WAIT_MS = 15 * 60_000
+
+/** The checkpoint record of a PR, or null when the stored value lacks the fields the asks read. */
+export const readRecord = (value: unknown): CheckpointRecord | null => {
+  const rec = value as Partial<CheckpointRecord> | null | undefined
+  if (!rec || typeof rec !== 'object') return null
+  const budget = rec.budget
+  if (!isPrNumber(rec.pr) || (rec.state !== 'confirmed' && rec.state !== 'applied') || typeof rec.head !== 'string' || typeof rec.pathway !== 'string') return null
+  if (!Array.isArray(budget) || budget.length !== 2 || !budget.every(n => typeof n === 'number')) return null
+  return rec as CheckpointRecord
+}
+
+/** The round Dave allowed (checkpoint:grant:<n>), or null. */
+export const grantRound = (value: unknown): number | null => {
+  const round = (value as { round?: unknown } | null | undefined)?.round
+  return typeof round === 'number' ? round : null
+}
+
+/** A draft or an older script's DRAFT_REASON: no bot reviews a draft, so no ask is made. */
+const isDraftStatus = (status: PrStatus): boolean => status.isDraft ?? status.reasons.includes(DRAFT_REASON)
+
+const askAt = (status: PrStatus, kind: CheckpointAsk['kind'], text: string, round?: number): CheckpointAsk => ({
+  kind,
+  pr: status.pr,
+  head: status.head,
+  text,
+  ...(round === undefined ? {} : { round }),
+})
+
+/**
+ * The one question the checkpoint pane asks Dave about this PR now, or null. Pure; the caller queues it once.
+ * - round: CodeRabbit reviewed the head (REVIEWED) or skipped it (LIMITED, not a rate limit) and the rounds bought reach the budget.
+ *   A grant for that round, or a No on it, ends the ask.
+ * - opening: a coderabbit or both PR with no CodeRabbit round 15 minutes after the mod's --apply (the PR left draft), not rate limited.
+ * - greptile: a both PR, CodeRabbit reviewed the head, nothing unresolved, Greptile has not. Once per PR.
+ * An older status script has no round count: no round and no opening ask.
+ */
+export const askFor = (record: CheckpointRecord | null, status: PrStatus, now: number, granted: number | null): CheckpointAsk | null => {
+  if (!record || record.state !== 'applied' || isClosed(status) || status.ready || isDraftStatus(status)) return null
+  if (record.pathway !== 'coderabbit' && record.pathway !== 'both') return null
+  const rounds = status.coderabbitRounds
+  if (typeof rounds !== 'number') return null
+  const [opening, extra] = record.budget
+  const reviewed = status.coderabbitReviewedHead === true
+  const limited = rateLimitedByCodeRabbit(status) || status.rateLimited
+  const state = stateOf(status)
+  const skipped = state === 'LIMITED' && status.coderabbitLimited === true && !limited
+  if (opening + extra > 0 && rounds >= opening + extra && ((state === 'REVIEWED' && reviewed) || skipped)) {
+    const round = rounds + 1
+    const declined = record.declined?.kind === 'round' && record.declined.round === round
+    if (declined || (granted !== null && granted >= round)) return null
+    const count = record.capacity?.count
+    return askAt(status, 'round', `Round ${round} of ${opening}+${extra} for #${status.pr}. Spend 1 more? 7d ≈${typeof count === 'number' ? count : 'unknown'}`, round)
+  }
+  if (rounds === 0 && !reviewed && !limited && status.coderabbitLimited !== true && !record.opened && record.declined?.kind !== 'opening') {
+    if (now - (record.appliedAt ?? now) < OPENING_WAIT_MS) return null
+    return askAt(
+      status,
+      'opening',
+      `CodeRabbit has not started on #${status.pr} 15 minutes after ready. Post one @coderabbitai review? It counts as the opening review (round 1 of ${opening}+${extra}).`,
+      1,
+    )
+  }
+  if (record.pathway === 'both' && reviewed && status.unresolved === 0 && !status.reviewedHead && !record.greptile) {
+    return askAt(status, 'greptile', `Ask Greptile to review the final head ${status.headShort} of #${status.pr}? 3 credits (Plus).`)
+  }
+  return null
+}

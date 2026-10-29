@@ -316,7 +316,7 @@ const engineCalls = (seen: { run: Run[] }) => seen.run.filter(r => r.argv.some(a
 const counts = (seen: { run: Run[] }) => ({
   confirm: seen.run.filter(r => r.argv.includes('--confirm')).length,
   apply: seen.run.filter(r => r.argv.includes('--apply')).length,
-  comments: seen.run.filter(r => r.argv[0] === 'gh' && r.argv[2] === 'comment'),
+  comments: seen.run.filter(r => r.argv[0] === 'gh' && r.argv[2] === 'comment').map(r => r.argv),
 })
 
 /** Opens the pane the way the model does (the tool call) and mounts it. */

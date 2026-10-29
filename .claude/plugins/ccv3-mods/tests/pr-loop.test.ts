@@ -751,8 +751,8 @@ describe('pr-loop tools', () => {
     const { clock, seen } = world(on, { store: seed([{ pr: 7 }]), script: { 7: [READY(7)] } })
     await start($, false)
     await clock.advance(TICK * 2)
-    // Agentic OS registers brief_set in the same session; this test is about this module's tools.
-    expect(seen.tools.filter(name => name !== 'brief_set')).toEqual(['pr_status'])
+    // Agentic OS registers brief_set and the PR checkpoint module registers pr_checkpoint (a headless session gets its text plan) in the same session; this test is about this module's tools.
+    expect(seen.tools.filter(name => name !== 'brief_set' && name !== 'pr_checkpoint')).toEqual(['pr_status'])
     expect(seen.status).toEqual([])
     expect(seen.toasts).toEqual([])
   })
