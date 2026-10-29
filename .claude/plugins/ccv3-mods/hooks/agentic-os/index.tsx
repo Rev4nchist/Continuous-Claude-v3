@@ -237,13 +237,13 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
 
 /**
  * While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown.
- * Idle with a running ledger run: also re-read the agents, so a run the list holds as ended settles. Idle without one: no read.
+ * Idle with a running ledger run or a listed agent that runs: also re-read the agents, so a run the list holds as ended settles. Idle without one: no read.
  */
 const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
-    if ((await read($, agentRuns)).some(run => run.status === 'running')) await refreshAgents($)
+    if ((await read($, agentRuns)).some(run => run.status === 'running') || (await read($, agents)).some(one => one.status === 'running')) await refreshAgents($)
     return
   }
   await update($, tick, () => now)

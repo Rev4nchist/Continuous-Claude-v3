@@ -941,6 +941,21 @@ describe('brief_set in the mod', () => {
     expect(list.reads).toBe(0)
   })
 
+  test('E16c an idle pulse re-reads agent.list while the list itself holds a running agent, so a stale running entry settles', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    listing(seen, [{ id: 'a9', status: 'running' }])
+    await pulseRead($, seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual(['a9:running'])
+    const list = countListReads(seen)
+    await idleTick(seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g2' })
+    expect(list.reads).toBeGreaterThan(0)
+    expect(agentStatuses(seen)).toEqual([])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
   test('E17 a subagent turn.start sets the listed entry for that agent to running: a waiting list entry no longer hides the run', async ($, on) => {
     const seen = withAgents(on)
     await startMod($, true)
