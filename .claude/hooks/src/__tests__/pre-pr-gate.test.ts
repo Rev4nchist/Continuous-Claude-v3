@@ -234,6 +234,19 @@ describe('A: only PR-create shapes are looked at', () => {
     expect(named.action === 'deny' && named.reason).toMatch(/not a git checkout/);
   });
 
+  it('A5b: a foreign repo value in another command segment names nothing; the checkout decides (CodeRabbit CLI, PR B)', () => {
+    for (const sep of ['; ', ' && ', ' || ', ' | ', '\n']) {
+      expect(namedRepo(`gh pr ready 201${sep}gh repo view -R someone/else`), JSON.stringify(sep)).toBeNull();
+      expect(namedRepo(`gh pr edit 201 --add-label review:deep${sep}GH_REPO=someone/else gh repo view`), JSON.stringify(sep)).toBeNull();
+    }
+    expect(namedRepo('gh pr ready 201 -R someone/else')).toBe('someone/else');
+    // A leading GH_REPO statement belongs to its one call; a second segment after it still hands the choice to the checkout.
+    expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201")).toBe('someone/else');
+    expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201; echo hi")).toBeNull();
+    expect(namedRepo('export GH_REPO=someone/else; gh pr ready 201 && gh pr view 201')).toBeNull();
+    expect(namedRepo('gh pr ready 201; gh repo view -R Rev4nchist/Continuous-Claude-v3')).toBe(CCV3_REPO);
+  });
+
   it('A5: the helpers read the repo and the head branch from raw text', () => {
     expect(namedRepo('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST')).toBe(CCV3_REPO);
     expect(namedRepo('gh pr create -R Foo/Bar')).toBe('foo/bar');

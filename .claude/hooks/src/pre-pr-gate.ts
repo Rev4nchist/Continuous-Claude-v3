@@ -113,6 +113,10 @@ export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string 
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
   if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
+  // Fail closed: a foreign value in one segment cannot vouch for another segment's gh call. Several segments: the checkout decides.
+  // A leading GH_REPO assignment statement (`$env:GH_REPO='o/r'; gh ...`, `export GH_REPO=o/r; gh ...`) is part of the one call.
+  const calls = command.replace(/^\s*(?:(?:export\s+)?(?:\$env:)?GH_REPO\s*=\s*\S+\s*;\s*)+/i, '');
+  if (/[;&|\n]/.test(calls)) return null;
   const explicit = explicits[0] ?? null;
   if (explicit) return explicit;
   const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);

@@ -336,6 +336,8 @@ function namedRepo(command, env = {}) {
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
   if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
+  const calls = command.replace(/^\s*(?:(?:export\s+)?(?:\$env:)?GH_REPO\s*=\s*\S+\s*;\s*)+/i, "");
+  if (/[;&|\n]/.test(calls)) return null;
   const explicit = explicits[0] ?? null;
   if (explicit) return explicit;
   const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
