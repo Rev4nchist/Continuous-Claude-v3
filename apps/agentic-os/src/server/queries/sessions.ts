@@ -3,6 +3,8 @@ import 'server-only';
 import { sql } from 'drizzle-orm';
 
 import { db } from '@/db';
+import { projectLabel } from '@/server/sources/project-label';
+import { promptText } from '@/server/sources/prompt-text';
 
 /**
  * The live half of the fleet view — who is working right now.
@@ -36,6 +38,7 @@ const DEFAULT_WINDOW_MINUTES = 15;
  *  truncates and says so rather than rendering an unbounded list. */
 const MAX_SESSIONS = 50;
 
+
 export type ActiveSession = {
   id: string;
   /** First 8 chars — what the lane bus and hook logs actually print. */
@@ -45,8 +48,9 @@ export type ActiveSession = {
    *  unmatched bucket keeps: a session you cannot attribute is still a session. */
   projectKey: string | null;
   projectDisplayName: string | null;
-  /** The raw `sessions.project` string, always present. Shown when unmapped so
-   *  the fix (add an alias row) is visible without opening psql. */
+  /** The `sessions.project` folder name (last path segment, `~` for a home folder), always
+   *  present. Shown when unmapped as a hint to which project it is. The alias row needs the full
+   *  path, which this label no longer carries: read it in psql. */
   rawProject: string;
   /** Truncated in SQL, not in the browser — this is the user's prompt text and
    *  there is no reason to ship 4KB of it over the wire every 5 seconds. */
@@ -214,8 +218,8 @@ export async function getActiveSessions(
       shortId: r.id.slice(0, 8),
       projectKey: r.project_key,
       projectDisplayName: r.display_name,
-      rawProject: r.raw_project,
-      workingOn: r.working_on,
+      rawProject: projectLabel(r.raw_project),
+      workingOn: r.working_on === null ? null : promptText(r.working_on, 140),
       heartbeatSecondsAgo: Number(r.heartbeat_seconds_ago ?? 0),
       // NOT `?? 0`: zero would render as "active this second" for every row that
       // predates agent-activity tracking, which is the confidently-wrong failure

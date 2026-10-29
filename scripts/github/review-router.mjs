@@ -29,6 +29,11 @@
  *     held= existed (before 2026-10-27) has no saved hold: re-run it with workflow_dispatch BEFORE the flip, or a
  *     person adds review:deep by hand.
  *   - labeled / unlabeled by a person (risk:* or review:*): one ledger row with the label and the person, no writes.
+ *   - PR checkpoint (spec 2026-10-28, section 3.3): at a person_override the comment also holds pathway=none|coderabbit|both
+ *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
+ *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
+ *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Run /checkpoint again.". A raise on a PR that
+ *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
  * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
  * it). On an error the line has decision "error" and the exit code is 2.
@@ -156,14 +161,18 @@ export const builderOf = (labels) => {
 };
 
 // `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
-const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?(?: held=(\w+))?\s*-->/;
+const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?(?: held=(\w+))?(?: pathway=(\w+))?(?: pclass=(\w+))?\s*-->/;
 const HOLDS = new Set(['apex_d3', 'credits_u2']);
+const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
-/** The class, head and hold stored in a router comment body. Unknown or missing parts are null. */
+/** The class, head, hold, pathway and pclass stored in a router comment body. Unknown or missing parts are null. */
 export function stateFrom(body) {
   const m = STATE_RE.exec(String(body ?? ''));
-  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null, held: null };
-  return { class: m[1], head: m[2] ?? null, held: HOLDS.has(m[3]) ? m[3] : null };
+  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null, held: null, pathway: null, pclass: null };
+  return {
+    class: m[1], head: m[2] ?? null, held: HOLDS.has(m[3]) ? m[3] : null,
+    pathway: PATHWAYS.has(m[4]) ? m[4] : null, pclass: Object.hasOwn(RANK, m[5]) ? m[5] : null,
+  };
 }
 
 /** The class the router decided before: from the router comment only. Labels are not memory. */
@@ -174,6 +183,41 @@ const labelClassOf = (labels) => labels.filter((l) => l.startsWith('risk:')).map
   .filter((c) => Object.hasOwn(RANK, c)).reduce((best, c) => (best === null || rank(c) > rank(best) ? c : best), null);
 
 const higher = (a, b) => (a === null ? b : b === null ? a : rank(b) > rank(a) ? b : a);
+
+// ---------- PR checkpoint: the pathway a person chose with a review:* label ----------
+
+const PATHWAY_LABELS = [['review:deep', 'both'], ['review:deep-held', 'coderabbit'], ['review:coderabbit', 'coderabbit'], ['review:none', 'none']];
+/** The pathway of the strongest review:* label on the PR (both > coderabbit > none), else null. */
+export const pathwayFrom = (labels) => PATHWAY_LABELS.find(([l]) => labels.includes(l))?.[1] ?? null;
+
+/**
+ * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
+ * Later runs: person_override and no_change re-read the pathway from the labels (no review:* label keeps the saved one);
+ * every reason keeps pclass. A comment saved before the checkpoint existed (no pclass) stays without them.
+ */
+function checkpointOf({ reason, previousClass, labelsNow, effective, saved }) {
+  const none = { pathway: null, pclass: null };
+  if (previousClass === null) {
+    const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
+    return pathway ? { pathway, pclass: effective } : none;
+  }
+  const reread = reason === 'person_override' || reason === 'no_change';
+  const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
+  return saved.pclass !== null && pathway !== null ? { pathway, pclass: saved.pclass } : none;
+}
+
+const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Run /checkpoint again.`;
+
+/**
+ * What a raise may add. A review:none PR, or one whose saved pathway is none, gets risk:* only (it wants no bot). A PR with review:coderabbit or
+ * review:deep-held gets no second CodeRabbit label; review:deep is still added when it is wanted.
+ */
+function raiseAdds(add, labelsNow, savedNone) {
+  const has = (l) => labelsNow.includes(l);
+  const codeRabbit = has('review:coderabbit') || has('review:deep-held');
+  if ((has('review:none') || savedNone) && !codeRabbit) return add.filter((l) => l.startsWith('risk:'));
+  return codeRabbit ? add.filter((l) => l !== 'review:coderabbit' && l !== 'review:deep-held') : add;
+}
 
 const READY_EVENTS = new Set(['opened', 'reopened', 'ready_for_review']);
 // A person adding or removing a risk:* or review:* label: the person wins, the router only writes a ledger row (spec 2).
@@ -202,8 +246,9 @@ const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld
 /**
  * decide(event, pr, labelsNow, previousClass, config, { now, previousHeld }) -> a decision
  *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
+ *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null.
  *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
- *   -> { reason, class, effective, matched, previousClass, add, comment, held, builder, credits, noop }
+ *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, builder, credits, noop }
  * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
  * noop true = touch nothing, not even the comment. The decision never has a "remove".
  */
@@ -211,7 +256,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const credits = creditsState(config, opts.now ?? new Date());
   const { class: cls, matched } = classify(pr.paths ?? [], config);
   const builder = builderOf(labelsNow);
-  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, builder, credits, noop: true };
+  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, builder, credits, noop: true };
   const stop = (reason) => ({ ...out, reason });
   // A label event reads no files, so it reports no class, on any PR state.
   if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
@@ -249,16 +294,30 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
     reason = r.wanted.some((l) => !labelsNow.includes(l)) ? 'person_override' : 'no_change';
   }
   const personChose = previousClass === null && reason === 'person_override';
-  const notes = [...(personChose ? [] : [r.comment].filter(Boolean)), ...sideNotes({ builder, labelsNow, wanted: r.wanted, pr })];
-  return { ...out, reason, effective, add, held: personChose ? null : r.held, comment: notes.length ? notes.join('\n\n') : null, noop: false };
+  const saved = { pathway: opts.previousPathway ?? null, pclass: opts.previousPclass ?? null };
+  const cp = checkpointOf({ reason, previousClass, labelsNow, effective, saved });
+  // One signal for "wants no bot": the saved pathway (also after a person removed review:none) drives the adds and the hold alike.
+  if (reason === 'raised') add = raiseAdds(add, labelsNow, cp.pathway === 'none');
+  // A review:none PR wants no bot: no hold and no hold note. If the class rose above the checkpoint class, say so on every run.
+  const quiet = personChose || cp.pathway === 'none';
+  const raisedNone = cp.pathway === 'none' && rank(effective) > rank(cp.pclass);
+  const notes = [
+    ...(raisedNone ? [raiseNote(cp.pclass, effective)] : []),
+    ...(quiet ? [] : [r.comment].filter(Boolean)),
+    ...sideNotes({ builder, labelsNow, wanted: r.wanted, pr }),
+  ];
+  return { ...out, reason, effective, add, ...cp, held: quiet ? null : r.held, comment: notes.length ? notes.join('\n\n') : null, noop: false };
 }
 
 // ---------- the one router comment ----------
 
 export const ROUTER_MARKER = '<!-- review-router -->';
-/** held is written only while a hold is in force, so a comment without a hold is byte-identical to before. */
-export const renderComment = (text, cls, head = null, held = null) =>
-  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''}${held ? ` held=${held}` : ''} -->\n${text}`;
+/**
+ * held is written only while a hold is in force; pathway and pclass only after a checkpoint. A comment without them
+ * is byte-identical to before.
+ */
+export const renderComment = (text, cls, head = null, held = null, { pathway = null, pclass = null } = {}) =>
+  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''}${held ? ` held=${held}` : ''}${pathway ? ` pathway=${pathway}` : ''}${pclass ? ` pclass=${pclass}` : ''} -->\n${text}`;
 const RESOLVED_TEXT = 'No open router notes.';
 const ROUTER_BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
@@ -283,7 +342,7 @@ export function planOps(d, existing) {
   if (d.noop) return [];
   const ops = [];
   if (d.add.length > 0) ops.push({ op: 'labels', labels: d.add });
-  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head, d.held);
+  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head, d.held, { pathway: d.pathway, pclass: d.pclass });
   if (!existing) ops.push({ op: 'comment-create', body });
   else if (existing.body !== body) ops.push({ op: 'comment-update', id: existing.id, body });
   return ops;
@@ -443,7 +502,7 @@ function main() {
     const existing = findRouterComment(comments);
     const saved = stateFrom(existing?.body);
     const now = new Date();
-    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held });
+    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass });
     const ops = planOps(d, existing);
     const done = applyOps(ops, { repo, pr: number, dryRun, gh });
     emitLedger(ledgerLine({ d, pr: prState, event, ops, now }));
