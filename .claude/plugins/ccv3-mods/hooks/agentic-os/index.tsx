@@ -98,13 +98,26 @@ const noteError = async ($: EngineInterface, where: string, err: unknown) => {
   if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
 }
 
+/**
+ * Live agents for the pane: the one source for the AGENTS rows, NOW and the chip. The `agents` atom (agent.list) is
+ * authoritative for an id it holds. The Agent Ledger adds a running run the list lacks, because the list is only re-read
+ * while a turn or a step runs. A settled run leaves the atom at turn.complete; turn.start reopens it if the agent resumes.
+ */
+const liveAgents = async ($: EngineInterface): Promise<OsAgent[]> => {
+  const runs = await read($, agentRuns)
+  const listed = await read($, agents)
+  const known = new Set(listed.map(agent => agent.id))
+  const running = runs.filter(run => run.status === 'running' && !known.has(run.id)).map(({ id, description, type }) => ({ id, description, type, status: 'running' }))
+  return [...listed, ...running]
+}
+
 const view = async ($: EngineInterface): Promise<OsView> => ({
   tasks: await read($, tasks),
   plan: await read($, plan),
   turn: await read($, turn),
   step: (await read($, steps)).at(-1) ?? null,
   ctx: await read($, ctx),
-  agents: await read($, agents),
+  agents: await liveAgents($),
   lanes: await read($, lanes),
   prs: await read($, prs),
 })
@@ -123,6 +136,7 @@ const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { work
     blocked: await read($, refused),
     now: at,
     activeAt: await read($, activeAt),
+    agentRuns: now.agents.filter(agent => agent.status === 'running'),
   })
 
 /**
@@ -509,7 +523,14 @@ export const agenticOs = (on: On) => {
 
   // No off check on command.run: with the mod off, session.start never registers /os, so it never fires.
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn is not the main turn: its run shows through `agentRuns`, and it must not reset the refusal or the clock.
     if (await isOff($)) return next(e)
+    const resumed = e.agentId
+    if (resumed !== undefined) {
+      // A settled run whose agent starts a turn again (a message resumes it under the same id) is running again.
+      await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
+      return next(e)
+    }
     if (!(await read($, turnBeaconed).catch(() => false))) {
       await beacon($, 'turn')
       await update($, turnBeaconed, () => true).catch(() => undefined)
@@ -532,6 +553,7 @@ export const agenticOs = (on: On) => {
       const endedAt = await $.clock.now()
       const failed = e.isAborted || e.reason === 'error' || e.reason === 'aborted' || e.reason === 'refusal'
       await update($, agentRuns, runs => runs.map(run => (run.id === agentId ? settle(run, endedAt, failed) : run)))
+      await update($, agents, list => list.filter(agent => agent.id !== agentId))
       if (await worthSnapshot($)) await writeSnapshot($)
     }
     if (agentId === undefined) {

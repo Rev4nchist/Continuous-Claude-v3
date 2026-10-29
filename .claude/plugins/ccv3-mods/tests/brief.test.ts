@@ -589,12 +589,12 @@ describe('mergeParsed', () => {
 
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
 
-type Seen = { writes: { path: string; text: string }[]; tools: Record<string, string>; schemas: Record<string, unknown>; clock: ReturnType<typeof mock.clock>; inRead?: () => Promise<void> }
+type Seen = { writes: { path: string; text: string }[]; tools: Record<string, string>; schemas: Record<string, unknown>; clock: ReturnType<typeof mock.clock>; inRead?: () => Promise<void>; agents: unknown[] }
 
 const world = (on: On, env: Record<string, string> = {}) => {
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, { USERPROFILE: 'C:/home', ...env })
-  const seen: Seen = { writes: [], tools: {}, schemas: {}, clock }
+  const seen: Seen = { writes: [], tools: {}, schemas: {}, clock, agents: [] }
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
   on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
@@ -607,7 +607,7 @@ const world = (on: On, env: Record<string, string> = {}) => {
   })
   on('process.run', () => ({ value: { exitCode: 0, stdout: '[]', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
   on('session.id', () => ({ value: 'test-session' }))
-  on('agent.list', () => ({ value: [] }))
+  on('agent.list', () => ({ value: seen.agents as never }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('tool.register', (_$, e) => {
     const named = e as unknown as { description?: string; inputSchema?: unknown }
@@ -792,8 +792,8 @@ describe('brief_set in the mod', () => {
   })
 
   // The Agent Ledger records the run on agent.spawn (hooks/agent-ledger); agent.list stays empty in this world, so only agentRuns can say a run is live.
-  const withAgents = (on: On) => {
-    const seen = world(on)
+  const withAgents = (on: On, env: Record<string, string> = {}) => {
+    const seen = world(on, env)
     on('fs.read', () => ({ value: '' }))
     on('agent.spawn', () => ({ model: 'claude-sonnet-5-5', agentId: 'a1' }))
     return seen
@@ -845,6 +845,66 @@ describe('brief_set in the mod', () => {
     await subagentStart($)
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'g2' })
     expect(lastSnapshot(seen).chip).toBe('blocked')
+  })
+
+  // Review fixes. The agents atom fills from agent.list while a turn runs (the 5 s pulse), so these tests run a main turn, let the pulse read, then end it.
+  const listing = (seen: Seen, agents: { id: string; status: string }[]) => {
+    seen.agents = agents.map(one => ({ ...one, description: 'map the hooks', type: 'scout' }))
+  }
+  const pulseRead = async ($: Engine, seen: Seen) => {
+    await $.turn.start({ turnId: 't1' } as never)
+    await seen.clock.advance(5_000)
+    await turnEnd($, 'ok')
+  }
+  const agentStatuses = (seen: Seen) => lastSnapshot(seen).agents.map((one: { id: string; status: string }) => `${one.id}:${one.status}`)
+
+  test('E14 a settled run whose agent starts a turn again is live again: chip working, listed in AGENTS', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    await subagentEnd($)
+    await subagentStart($)
+    listing(seen, [{ id: 'a1', status: 'running' }])
+    await pulseRead($, seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).agentRuns.map((one: { status: string }) => one.status)).toEqual(['running'])
+    expect(agentStatuses(seen)).toEqual(['a1:running'])
+    expect(lastSnapshot(seen).chip).toBe('working')
+  })
+
+  test('E14b an agent that ends drops out of AGENTS at once, even when the last list still held it', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'running' }])
+    await pulseRead($, seen)
+    await subagentEnd($)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual([])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
+  test('E15 the list is authoritative: a running ledger run the list holds as waiting is not working', async ($, on) => {
+    const seen = withAgents(on)
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'waiting' }])
+    await pulseRead($, seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(agentStatuses(seen)).toEqual(['a1:waiting'])
+    expect(lastSnapshot(seen).chip).toBe('idle')
+  })
+
+  test('E15b ledger off: an agent the list holds as running still makes the chip working, the same as AGENTS says', async ($, on) => {
+    const seen = withAgents(on, { CCV3_MOD_LEDGER_OFF: '1' })
+    await startMod($, true)
+    await spawnScout($)
+    listing(seen, [{ id: 'a1', status: 'running' }])
+    await pulseRead($, seen)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    expect(lastSnapshot(seen).agentRuns).toEqual([])
+    expect(agentStatuses(seen)).toEqual(['a1:running'])
+    expect(lastSnapshot(seen).chip).toBe('working')
   })
 
   test('E9 /clear drops the brief', async ($, on) => {

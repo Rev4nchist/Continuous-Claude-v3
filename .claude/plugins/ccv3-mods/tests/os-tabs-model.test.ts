@@ -544,4 +544,11 @@ describe('os overview with only a subagent running', () => {
     expect(keyed(rows, 'ov-chip')).toContain('WORKING')
     expect(keyed(rows, 'ov-chip')).not.toMatch(/idle/)
   })
+
+  test('O20b an agent that waits is not running: NOW and the chip row both read idle beside an idle chip', () => {
+    const rows = rowsWith('waiting')
+    expect(keyed(rows, 'now')).toMatch(/idle/)
+    expect(keyed(rows, 'now')).not.toMatch(/running/)
+    expect(keyed(rows, 'ov-chip')).not.toContain('WORKING')
+  })
 })
