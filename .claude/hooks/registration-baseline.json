@@ -1,6 +1,6 @@
 {
   "_comment": "Floors recorded by scripts/hooks/registration-reconcile.mjs. Regenerate deliberately with --update-baseline; a DROP is a finding, not a reason to rewrite this file.",
-  "recordedAt": "2026-10-07T00:00:00.000Z",
-  "liveEntries": 78,
-  "liveNames": 71
+  "recordedAt": "2026-10-29T14:51:37.800Z",
+  "liveEntries": 73,
+  "liveNames": 64
 }

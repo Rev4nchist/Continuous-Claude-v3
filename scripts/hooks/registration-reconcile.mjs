@@ -63,8 +63,11 @@ const LIVE = join(homedir(), '.claude', 'settings.json');
 // Lowered 2026-10-06 (80/75 -> 75/68), keeping the original ~4-6 of slack under the
 // re-recorded baseline of 79 entries / 72 names. Every lost name has a commit,
 // listed in the commit that made this change (Dave approved the lower floors).
-const MIN_LIVE_ENTRIES = 75;
-const MIN_LIVE_NAMES = 68;
+// Lowered 2026-10-29 (75/68 -> 69/60) for the Maestro removal (PR 211): maestro-enforcer,
+// maestro-state-manager, maestro-cleanup and session-start-recovery left settings.json, so the
+// live count is 73 entries / 64 names; the floors keep the same ~4 of slack. Dave approved.
+const MIN_LIVE_ENTRIES = 69;
+const MIN_LIVE_NAMES = 60;
 const MIN_COVERAGE = 0.95;   // fraction of live names findable in committed state
 
 const findings = [];

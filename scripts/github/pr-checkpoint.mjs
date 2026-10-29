@@ -5,27 +5,59 @@
  * Given the stamp, the changed files and the credit state, it picks one review pathway for a draft PR:
  * none, coderabbit or both (or wait when the CodeRabbit 7-day count is high). It spends nothing and writes nothing.
  *
+ * PR B adds two modes that write or spend. Only Dave's press in the /checkpoint mod runs them (the pre-pr-gate hook denies
+ * a shell that names pr-checkpoint with --confirm or --apply).
+ *
  * Usage: node scripts/github/pr-checkpoint.mjs [--json] [--facts facts.json] [--config router-config.json]
  *   --json     print the result as one JSON object (default: plain lines).
  *   --dependabot  the PR is a Dependabot PR. PR B's mod passes it from the PR author (the authoritative source).
  *              Without it, the real run derives it from base...HEAD: every commit author is dependabot[bot].
  *   --facts    read the facts from a JSON file, not from git and the stamp (tests, like review-router.mjs --fixture).
  *   --config   the router config (default: review-router.config.json of this checkout).
- *   --confirm, --apply   PR B. Exit 2, nothing is written. This script never writes .claude/cache/pre-pr/pathway.json.
- * Exit 0 = a result was printed (including the R0 stop: recommended null). 2 = bad usage or a PR B mode. 3 = internal error.
+ *
+ * node scripts/github/pr-checkpoint.mjs --confirm <none|coderabbit|both> --by <dave|default> --body <draft.md> [--state-dir <dir>]
+ *   Records the pathway in <state-dir>/pathway.json and prints the record. It refuses (exit 1, nothing written) when the stamp is
+ *   missing, for another head or has a FAIL row; the body hash differs from the stamp; the pathway is wait, not offered or held; or
+ *   --by default names a pathway that is not the recommendation. The state dir holds stamp.json and pathway.json. Default:
+ *   <git toplevel of the cwd>/.claude/cache/pre-pr. --facts and --config work as above (tests).
+ * node scripts/github/pr-checkpoint.mjs --apply <pr> [--state-dir <dir>]
+ *   Reads pathway.json, checks the live PR (a draft, at the recorded head), adds the review label, then marks it ready. The label
+ *   comes first, and a failed label never reaches ready. gh is the real gh, or `node $PR_CHECKPOINT_GH` (tests).
+ * Exit 0 = done (a result was printed, including the R0 stop: recommended null). 1 = refused, or gh failed. 2 = bad usage (nothing read or written). 3 = internal error.
  * Without --facts it runs `git fetch fork main` (spec section 2; it moves only refs/remotes/fork/main), then reads
  * `git diff --name-status -M` and `--numstat` against fork/main, the pre-pr stamp, and the saved CLI review output of the head.
  * The base ref and its commit go into why[]. A failed fetch, or a missing fork/main, adds a "may be stale" warning.
  */
 import { spawnSync } from 'node:child_process';
-import { existsSync, readFileSync, readdirSync, realpathSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { existsSync, mkdirSync, readFileSync, readdirSync, realpathSync, writeFileSync } from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { classify, creditsState, matchGlob, route } from './review-router.mjs';
+import { DEFAULT_REPO, classify, creditsState, matchGlob, route } from './review-router.mjs';
 import { STAMP_REL, parseAgentStream } from './pre-pr.mjs';
 
 const HERE = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(HERE, '..', '..');
+
+let workTopCache;
+/**
+ * The git toplevel of the cwd: the checkout whose state dir the hook reads and pre-pr.mjs writes. Outside a checkout: this script's checkout.
+ * Every fact (head, files, config drift, saved CLI output) comes from it, so a script run from one checkout never mixes in another's facts.
+ */
+function workTop() {
+  if (workTopCache === undefined) {
+    const r = spawnSync('git', ['rev-parse', '--show-toplevel'], { cwd: process.cwd(), encoding: 'utf8', windowsHide: true });
+    workTopCache = r.status === 0 && r.stdout.trim() ? path.resolve(r.stdout.trim()) : ROOT;
+  }
+  return workTopCache;
+}
+
+/** A file of the work checkout, else the same file of this script's checkout. */
+const workFile = (name) => (existsSync(path.join(workTop(), name)) ? path.join(workTop(), name) : path.join(ROOT, name));
+
+/** The record --confirm writes and the pre-pr-gate hook reads. Same directory as the stamp (STAMP_REL). */
+export const PATHWAY_REL = '.claude/cache/pre-pr/pathway.json';
+const STATE_REL = path.posix.dirname(PATHWAY_REL);
 
 const GREPTILE_COST = 3;
 const PATHWAY_RANK = { none: 0, coderabbit: 1, both: 2 };
@@ -204,7 +236,9 @@ function hitsFor(c) {
 
 function combine(hits) {
   const pathway = hits.reduce((best, h) => (PATHWAY_RANK[h.pathway] > PATHWAY_RANK[best] ? h.pathway : best), 'none');
-  const budget = hits.reduce((b, h) => [Math.max(b[0], h.budget[0]), Math.max(b[1], h.budget[1])], [0, 0]);
+  // Dave 2026-10-28: a parser file (R2) means one review and no loop, so R2's budget beats R3's. R4 (class r3) keeps its own.
+  const counted = hits.some((h) => h.rule === 'R2') ? hits.filter((h) => h.rule !== 'R3') : hits;
+  const budget = counted.reduce((b, h) => [Math.max(b[0], h.budget[0]), Math.max(b[1], h.budget[1])], [0, 0]);
   return { pathway, budget, why: hits.flatMap((h) => h.why), rules: hits.map((h) => h.rule) };
 }
 
@@ -288,14 +322,14 @@ export function recommend(facts, policy) {
 // ---------- real inputs (read-only) ----------
 
 function git(args) {
-  const r = spawnSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: ROOT, encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
+  const r = spawnSync('git', ['-c', 'core.quotepath=off', ...args], { cwd: workTop(), encoding: 'utf8', windowsHide: true, maxBuffer: 64 * 1024 * 1024 });
   if (r.status !== 0) throw new Error(`git ${args[0]} failed: ${String(r.stderr).trim().split('\n')[0]}`);
   return r.stdout;
 }
 
-const gitOk = (args) => spawnSync('git', args, { cwd: ROOT, encoding: 'utf8', windowsHide: true }).status === 0;
+const gitOk = (args) => spawnSync('git', args, { cwd: workTop(), encoding: 'utf8', windowsHide: true }).status === 0;
 const FETCH_TIMEOUT_MS = 30000;
-const fetchBase = () => spawnSync('git', ['fetch', '--quiet', 'fork', 'main'], { cwd: ROOT, encoding: 'utf8', windowsHide: true, timeout: FETCH_TIMEOUT_MS }).status === 0;
+const fetchBase = () => spawnSync('git', ['fetch', '--quiet', 'fork', 'main'], { cwd: workTop(), encoding: 'utf8', windowsHide: true, timeout: FETCH_TIMEOUT_MS }).status === 0;
 
 /** Spec section 2: fetch fork main, then diff against it. Returns { ref, notes }. */
 function baseRef() {
@@ -311,8 +345,14 @@ function readFiles(base) {
   return parseNameStatus(git(['diff', '--name-status', '-M', range])).map((f) => ({ ...f, additions: 0, deletions: 0, ...counts.get(f.filename) }));
 }
 
-function readStamp() {
-  try { return JSON.parse(readFileSync(path.join(ROOT, STAMP_REL), 'utf8')); } catch { return null; }
+/** <state-dir>/stamp.json, or null when it is missing or not JSON. */
+function readStamp(stateDir) {
+  try { return JSON.parse(readFileSync(path.join(stateDir, path.basename(STAMP_REL)), 'utf8')); } catch { return null; }
+}
+
+/** <git toplevel of the cwd>/.claude/cache/pre-pr: where pre-pr.mjs writes the stamp and the hook looks. Outside a checkout: this script's checkout. */
+function defaultStateDir() {
+  return path.join(workTop(), ...STATE_REL.split('/'));
 }
 
 /** CLI facts from a saved review stream. null unless the run completed with no error or awaiting status, so a cut-off run never reads as clean. */
@@ -323,41 +363,145 @@ export function cliFromStream(text) {
 
 /** The saved CLI review output of the head (pre-pr.mjs keeps it as <date>-pre-pr-cr-<sha7>.txt). null = not found or not complete. */
 function readCli(head) {
-  const dir = path.join(ROOT, '.claude', 'cache', 'e2e');
+  const dir = path.join(workTop(), '.claude', 'cache', 'e2e');
   const name = existsSync(dir) ? readdirSync(dir).find((n) => new RegExp(`^\\d{4}-\\d{2}-\\d{2}-pre-pr-cr-${head.slice(0, 7)}\\.txt$`).test(n)) : undefined;
   return name ? cliFromStream(readFileSync(path.join(dir, name), 'utf8')) : null;
 }
 
 /** The branch config differs from the base branch's: the router uses main's config. */
 function configDrift(base, configText) {
-  const r = spawnSync('git', ['show', `${base}:review-router.config.json`], { cwd: ROOT, encoding: 'utf8', windowsHide: true });
+  const r = spawnSync('git', ['show', `${base}:review-router.config.json`], { cwd: workTop(), encoding: 'utf8', windowsHide: true });
   if (r.status !== 0) return false;
   try { return JSON.stringify(JSON.parse(r.stdout)) !== JSON.stringify(JSON.parse(configText)); } catch { return false; }
 }
 
-function gatherFacts(configText) {
+function gatherFacts(configText, stateDir) {
   const { ref: base, notes } = baseRef();
   const head = git(['rev-parse', 'HEAD']).trim();
   // Fallback only: the PR author is the authoritative source, and the mod passes it with --dependabot.
   const dependabot = isDependabotAuthors(git(['log', '--format=%ae', `${base}..HEAD`]));
-  return { head, now: new Date().toISOString(), stamp: readStamp(), files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), notes };
+  return { head, now: new Date().toISOString(), stamp: readStamp(stateDir), files: readFiles(base), cli: readCli(head), dependabot, config_drift: configDrift(base, configText), notes };
+}
+
+// ---------- PR B: --confirm (record a pathway) and --apply (label, then ready) ----------
+
+const bodyHash = (text) => createHash('sha256').update(String(text ?? '')).digest('hex');
+
+/** The rule budget, never below 1+0 for a chosen review and 0+0 for none. option.cost is a price, not the budget. */
+const recordBudget = (pathway, rule) => (pathway === 'none' ? [0, 0] : atLeast(rule, [1, 0]));
+
+/** The first reason --confirm must refuse, or null. Order: stamp (R0), body, wait, offered, held, --by default. */
+export function confirmProblem({ result, facts, pathway, by, bodySha }) {
+  if (result.recommended === null) return result.why[0];
+  if (facts.stamp.body_sha256 !== bodySha) return 'The PR body is not the body pre-pr.mjs checked (its sha256 differs from the stamp). Run pre-pr.mjs on this body file.';
+  if (pathway === 'wait') return 'wait records nothing: the PR stays a draft. Confirm none, coderabbit or both when you decide.';
+  const option = result.options.find((o) => o.pathway === pathway);
+  if (!option) return `${pathway} is not offered. Offered: ${result.options.map((o) => o.pathway).join(', ')}.`;
+  if (!option.available) return `${pathway} is held: ${option.reason}`;
+  if (by === 'default' && pathway !== result.recommended) return `--by default needs the recommended pathway (${result.recommended}), not ${pathway}.`;
+  return null;
+}
+
+/** The nine-field pathway.json record. head and body_sha256 come from the stamp that confirmProblem checked. */
+export function confirmRecord({ result, facts, pathway, by }) {
+  return {
+    head: facts.stamp.head, body_sha256: facts.stamp.body_sha256, pathway, label: LABELS[pathway], class: result.class,
+    recommended: result.recommended, decided_by: by, at: facts.now, budget: recordBudget(pathway, result.budget),
+  };
+}
+
+/** Why a pathway record cannot be applied, or null. It is checked before any gh call. */
+function recordProblem(record) {
+  if (!record || typeof record !== 'object') return 'No pathway record. Run /checkpoint (pr-checkpoint.mjs --confirm) first.';
+  if (typeof record.head !== 'string' || record.head === '') return 'The pathway record has no head.';
+  if (!['none', 'coderabbit', 'both'].includes(record.pathway)) return `The pathway record holds pathway ${String(record.pathway)}, which records no review.`;
+  if (record.label !== LABELS[record.pathway]) return `The pathway record label ${String(record.label)} does not match its pathway ${record.pathway}.`;
+  return null;
+}
+
+/** Every gh call names the fork: gh otherwise picks the repo from the cwd remotes, where origin is parcadei (review-router.mjs and review-status.mjs pin it too). */
+const REPO_ARGS = ['-R', DEFAULT_REPO];
+
+const firstLine = (text) => String(text ?? '').trim().split('\n')[0];
+const failed = (error) => ({ ok: false, error });
+
+function readPr(pr, gh) {
+  const r = gh(['pr', 'view', String(pr), '--json', 'isDraft,headRefOid', ...REPO_ARGS]);
+  if (r.status !== 0) return { error: `Could not read PR #${pr} (${firstLine(r.stderr)}).` };
+  try { return JSON.parse(r.stdout); } catch { return { error: `Could not read PR #${pr}: gh gave no JSON.` }; }
+}
+
+/**
+ * applyPathway({ pr, record, gh }) -> { ok: true } | { ok: false, error }. gh(args) -> { status, stdout, stderr }.
+ * Order: refuse a bad record, read the PR, refuse a PR that is not a draft or whose head moved, add the label, then mark it ready.
+ * A failed label never reaches ready: a ready PR with no label would be routed with no pathway.
+ */
+export function applyPathway({ pr, record, gh }) {
+  const bad = recordProblem(record);
+  if (bad) return failed(bad);
+  const live = readPr(pr, gh);
+  if (live.error) return failed(live.error);
+  if (live.isDraft !== true) return failed(`PR #${pr} is not a draft, so the pathway is not applied.`);
+  if (String(live.headRefOid).toLowerCase() !== record.head.toLowerCase()) {
+    return failed(`The head of PR #${pr} moved since the pathway was confirmed (PR ${String(live.headRefOid).slice(0, 7)}, record ${record.head.slice(0, 7)}). Run /checkpoint again.`);
+  }
+  const label = gh(['pr', 'edit', String(pr), '--add-label', record.label, ...REPO_ARGS]);
+  if (label.status !== 0) return failed(`Could not add the label ${record.label} (${firstLine(label.stderr)}). The PR was not marked ready.`);
+  const ready = gh(['pr', 'ready', String(pr), ...REPO_ARGS]);
+  if (ready.status !== 0) return failed(`The label ${record.label} was added, but gh pr ready failed (${firstLine(ready.stderr)}).`);
+  return { ok: true };
+}
+
+/** The real gh, or `node $PR_CHECKPOINT_GH <args>` (the test seam: a fake gh script, never a real GitHub call). */
+function ghRunner(env = process.env) {
+  return (args) => {
+    const fake = env.PR_CHECKPOINT_GH;
+    const r = spawnSync(fake ? process.execPath : 'gh', fake ? [fake, ...args] : args, { encoding: 'utf8', windowsHide: true, env });
+    return { status: r.status ?? 1, stdout: r.stdout ?? '', stderr: r.stderr || String(r.error?.message ?? '') };
+  };
 }
 
 // ---------- CLI ----------
 
-const FLAGS = ['--json', '--dependabot', '--facts', '--config'];
+const VALUE_FLAGS = ['--facts', '--config', '--confirm', '--by', '--body', '--state-dir', '--apply'];
+const BOOL_FLAGS = ['--json', '--dependabot'];
+const PATHWAYS = ['none', 'coderabbit', 'both', 'wait'];
 
-/** A message for an unknown argument, or --facts or --config without a value; else null. */
-function usageProblem(args) {
+/** { opts } or { error }. A value flag with no value (or whose next argument is a flag) is an error. */
+function parseArgs(args) {
+  const opts = {};
   for (let i = 0; i < args.length; i++) {
-    if (!FLAGS.includes(args[i])) return `unknown argument ${args[i]}`;
-    if ((args[i] === '--facts' || args[i] === '--config') && (args[i + 1] === undefined || args[i + 1].startsWith('--'))) return `${args[i]} needs a value`;
-    if (args[i] === '--facts' || args[i] === '--config') i++;
+    const a = args[i];
+    if (BOOL_FLAGS.includes(a)) { opts[a] = true; continue; }
+    if (!VALUE_FLAGS.includes(a)) return { error: `unknown argument ${a}` };
+    if (args[i + 1] === undefined || args[i + 1].startsWith('--')) return { error: `${a} needs a value` };
+    opts[a] = args[++i];
   }
-  return null;
+  return { opts };
 }
 
-const opt = (args, k) => { const i = args.indexOf(k); return i >= 0 ? args[i + 1] : undefined; };
+function confirmUsage(o) {
+  if (!PATHWAYS.includes(o['--confirm'])) return `--confirm needs one of ${PATHWAYS.join(', ')}`;
+  if (!['dave', 'default'].includes(o['--by'])) return '--confirm needs --by dave or --by default';
+  return o['--body'] ? null : '--confirm needs --body <file>: the PR body file that pre-pr.mjs checked';
+}
+
+function applyUsage(o) {
+  if (!/^[1-9]\d*$/.test(o['--apply'])) return '--apply needs a PR number';
+  const stray = ['--facts', '--config', '--body', '--by', '--json', '--dependabot'].find((k) => o[k] !== undefined);
+  return stray ? `${stray} is not an --apply flag: it takes --state-dir only` : null;
+}
+
+/** A message for bad usage, or null. Checked before anything is read or written. */
+function usageProblem(o) {
+  const confirm = o['--confirm'] !== undefined;
+  const apply = o['--apply'] !== undefined;
+  if (confirm && apply) return '--confirm and --apply cannot be combined';
+  if (confirm) return confirmUsage(o);
+  if (apply) return applyUsage(o);
+  const stray = ['--by', '--body', '--state-dir'].find((k) => o[k] !== undefined);
+  return stray ? `${stray} needs --confirm or --apply` : null;
+}
 
 export function renderText(r) {
   const lines = [`PR checkpoint for ${String(r.head).slice(0, 7)}: class ${r.class}, ${r.size.files} file(s), ${r.size.lines} line(s)`];
@@ -369,26 +513,61 @@ export function renderText(r) {
   return lines.join('\n');
 }
 
+/** The facts and the policy of a real or fixture run. With --facts and no `stamp` key, --confirm reads <state-dir>/stamp.json. */
+function inputsOf(o, stateDir) {
+  const configText = readFileSync(o['--config'] ?? workFile('review-router.config.json'), 'utf8');
+  const yaml = workFile('.coderabbit.yaml');
+  const policy = { ...JSON.parse(configText), path_filters: pathFiltersFrom(existsSync(yaml) ? readFileSync(yaml, 'utf8') : '') };
+  const factsFile = o['--facts'];
+  const facts = factsFile ? JSON.parse(readFileSync(factsFile, 'utf8')) : gatherFacts(configText, stateDir);
+  if (factsFile && o['--confirm'] !== undefined && !('stamp' in facts)) facts.stamp = readStamp(stateDir);
+  if (o['--dependabot']) facts.dependabot = true;
+  return { facts, policy };
+}
+
+const refuse = (message) => { console.error(`pr-checkpoint: refused: ${message}`); process.exitCode = 1; };
+
+function runConfirm(o) {
+  const stateDir = o['--state-dir'] ?? defaultStateDir();
+  const { facts, policy } = inputsOf(o, stateDir);
+  let bodyText;
+  try { bodyText = readFileSync(o['--body'], 'utf8'); } catch { return refuse(`cannot read the body file ${o['--body']}`); }
+  const args = { result: recommend(facts, policy), facts, pathway: o['--confirm'], by: o['--by'], bodySha: bodyHash(bodyText) };
+  const problem = confirmProblem(args);
+  if (problem) return refuse(problem);
+  const record = confirmRecord(args);
+  mkdirSync(stateDir, { recursive: true });
+  writeFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), `${JSON.stringify(record, null, 2)}\n`);
+  console.log(JSON.stringify(record));
+}
+
+function runApply(o) {
+  const stateDir = o['--state-dir'] ?? defaultStateDir();
+  let record = null;
+  try { record = JSON.parse(readFileSync(path.join(stateDir, path.basename(PATHWAY_REL)), 'utf8')); } catch { /* recordProblem names the missing record */ }
+  const r = applyPathway({ pr: o['--apply'], record, gh: ghRunner() });
+  if (!r.ok) return refuse(r.error);
+  console.log(`pr-checkpoint: PR #${o['--apply']} labelled ${record.label} and marked ready.`);
+}
+
+function runRecommend(o) {
+  const { facts, policy } = inputsOf(o, defaultStateDir());
+  const result = recommend(facts, policy);
+  console.log(o['--json'] ? JSON.stringify(result) : renderText(result));
+}
+
 function main() {
-  const args = process.argv.slice(2);
-  if (args.some((a) => /^--(confirm|apply)(=|$)/.test(a))) {
-    console.error('pr-checkpoint: --confirm and --apply are not available yet (PR B). Nothing was written.');
-    process.exit(2);
-  }
-  const bad = usageProblem(args);
+  const parsed = parseArgs(process.argv.slice(2));
+  const bad = parsed.error ?? usageProblem(parsed.opts);
   if (bad) {
-    console.error(`pr-checkpoint: usage: ${bad}. Flags: --json, --dependabot, --facts <file>, --config <file>.`);
+    console.error(`pr-checkpoint: usage: ${bad}. Modes: [--json] [--dependabot] [--facts f] [--config c] | --confirm <pathway> --by <dave|default> --body <file> [--state-dir d] | --apply <pr> [--state-dir d].`);
     process.exit(2);
   }
+  const o = parsed.opts;
   try {
-    const configText = readFileSync(opt(args, '--config') ?? path.join(ROOT, 'review-router.config.json'), 'utf8');
-    const yaml = path.join(ROOT, '.coderabbit.yaml');
-    const policy = { ...JSON.parse(configText), path_filters: pathFiltersFrom(existsSync(yaml) ? readFileSync(yaml, 'utf8') : '') };
-    const factsFile = opt(args, '--facts');
-    const facts = factsFile ? JSON.parse(readFileSync(factsFile, 'utf8')) : gatherFacts(configText);
-    if (args.includes('--dependabot')) facts.dependabot = true;
-    const result = recommend(facts, policy);
-    console.log(args.includes('--json') ? JSON.stringify(result) : renderText(result));
+    if (o['--apply'] !== undefined) runApply(o);
+    else if (o['--confirm'] !== undefined) runConfirm(o);
+    else runRecommend(o);
   } catch (err) {
     console.error(`pr-checkpoint: could not determine (${String(err.message).split('\n')[0]})`);
     process.exit(3);

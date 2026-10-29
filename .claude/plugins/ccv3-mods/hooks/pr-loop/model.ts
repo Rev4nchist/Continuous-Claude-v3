@@ -305,15 +305,7 @@ export const toastText = (alert: Alert): string => `PR #${alert.pr}: ${word(aler
 /** The status script's reason for a Greptile run that a newer push cancelled (review-status.mjs CANCELLED_REASON). */
 const CANCELLED_REVIEW = /was cancelled \(superseded by a push\)/
 
-/** What READY rests on. With Greptile in the list (or no list) the old words stay. */
-const readyWords = (bots: string[] | undefined): string => {
-  const named = botWords(bots)
-  const parts = [named ? `${named} reviewed it` : 'no bot review was required']
-  if (bots === undefined || bots.includes('greptile')) parts.push('confidence at least 4/5')
-  return [...parts, '0 threads unresolved', 'checks green'].join(', ')
-}
-
-/** The one line the model gets. It never asks for a merge. */
+/** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
   const lead = `PR watcher: #${alert.pr} head ${alert.headShort}`
   if (alert.state === 'LIMITED' && alert.reasons.some(reason => CANCELLED_REVIEW.test(reason))) {
@@ -341,12 +333,9 @@ export const reportLine = (alert: Alert): string => {
     if (!bots) return `${lead} is not READY after 60 minutes and ${alert.bots?.length ? 'every required bot has reviewed it' : 'needs no bot review'}: check CI, threads and mergeable state, then report to Dave.${why} Do not merge it.`
     return `${lead} has no ${bots} review after 60 minutes. Act per pr-review-loop.md "No review on the head", then report to Dave.${why} Do not merge it.`
   }
-  if (alert.state === 'REVIEWED') {
-    const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
-    const body = alert.outsideDiff ? ` CodeRabbit lists ${alert.outsideDiff} finding(s) outside the diff in its review body. They have no thread. Read the review body, then fix each one or list it in the PR body under "Outside-diff: handled", one bullet per finding.` : ''
-    return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body} Do not merge it. The watch continues.`
-  }
-  return `${lead} is READY (${readyWords(alert.bots)}). Report this to Dave. Do not merge it: only Dave's yes lands a PR.`
+  const by = alert.reviewedBy?.length ? botWords(alert.reviewedBy) : botWords(alert.bots)
+  const body = alert.outsideDiff ? ` CodeRabbit lists ${alert.outsideDiff} finding(s) outside the diff in its review body. They have no thread. Read the review body, then fix each one or list it in the PR body under "Outside-diff: handled", one bullet per finding.` : ''
+  return `${lead} ${by ? `was reviewed by ${by}` : 'needs no bot review'} but is not READY: ${alert.reasons.slice(0, 5).join('; ')}. Act per pr-review-loop.md "When the review lands": read every finding, fix the real ones on the PR branch, dismiss false positives with a one-line reason, then report the finding, fixed and dismissed counts and the CI status to Dave.${body} Do not merge it. The watch continues.`
 }
 
 export const statusText = (status: PrStatus): string => {
