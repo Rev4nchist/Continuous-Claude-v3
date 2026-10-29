@@ -33,6 +33,10 @@ give you no line. You get one report line only when a reviewed head has findings
 stops the report lines too. It never merges. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
+`pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a
+`review:none` PR with no router state as "no bot wanted". Before a CodeRabbit round past the PR's
+budget, it asks Dave in the checkpoint pane. Read its line before you post any review request.
+
 ## Before you open a PR
 
 CodeRabbit allows 8 PR reviews per hour for the one Rev4nchist identity. The rate drops to 6, 4, 2 and 1
@@ -73,12 +77,16 @@ costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-r
    Only one CodeRabbit step runs per branch at a time, across all worktrees. A second run fails while
    the first holds the lock. The run count is keyed on the branch name and its first own commit.
    A merge of main keeps the count. A rebase rewrites that commit and starts a new count.
-2. Open the PR as a draft (`gh pr create --draft`). Run `/checkpoint`: Dave picks the review pathway,
-   and the mod adds the `review:` label and marks the PR ready. Never run `gh pr ready`, never add a
-   `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a shell.
+2. Open the PR as a draft (`gh pr create --draft`), then call `pr_watch`. Call `pr_checkpoint` with
+   `pr` and `body` (the file that `pre-pr.mjs --body` checked). The tool opens the checkpoint pane
+   and returns at once. Wait for Dave's press in the pane. Then the mod adds the `review:` label and
+   marks the PR ready. A headless run gets a text plan and records nothing. Never run `gh pr ready`,
+   never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
+   shell. The mod lock denies a Write-tool edit of `pathway.json` and any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
-3. Batch every fix into one push. Then post one `@coderabbitai review`. Never push while a review runs:
-   the push supersedes it and the review is lost.
+3. Batch every fix into one push. Then post one `@coderabbitai review`, only when the `pr_watch` line
+   says a round is left or says Dave allowed the round. Never push while a review runs: the push
+   supersedes it and the review is lost.
 4. Bundle small fixes in one area into one PR.
 5. Do not stack PRs by default. `base_branches` is `main`, so a stacked PR gets no review. READY pins the
    review to the head, so each restack needs a new review.
@@ -90,12 +98,16 @@ costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-r
 The review router sets the class. This budget counts CodeRabbit PR reviews: the opening review and each
 `@coderabbitai review`. It does not count CLI runs.
 
+- The budget of a PR is in its checkpoint record (`pathway.json` `budget`, kept by the mod). The numbers
+  below are the defaults in `review-router.config.json` `budget`.
 - docs: 0 PR reviews. The router adds no label.
 - normal: 1 PR review, and at most 1 more after a fix push.
 - steering, infra and r3: 1 PR review, and at most 2 more after fix pushes.
-- Put all fixes of a round in one push. Then post one `@coderabbitai review`.
+- Put all fixes of a round in one push. Then post one `@coderabbitai review`, if a round is left.
 - Do not click GitHub "Update branch" unless the merge needs it. Each click makes a new head and a new review.
-- A PR at its budget gets no more `@coderabbitai review` without Dave's yes. Ask him instead.
+- `pr_watch` counts the rounds used. At budget + 1 it asks Dave in the checkpoint pane. A PR at its
+  budget gets no more `@coderabbitai review` until the line says "Dave allowed round N". Wait for his
+  press in the pane. Do not ask him in chat.
 
 The `pre-pr-gate` PreToolUse hook enforces step 1. It denies `gh pr create` and `gh api .../pulls` with
 POST in `Rev4nchist/Continuous-Claude-v3`. It allows the call only when `.claude/cache/pre-pr/stamp.json`
@@ -124,9 +136,11 @@ step 1 does not list.
   rules above are enforced in both modes.
 - Residual risks, accepted: GraphQL with the query text in a file (`-F query=@file`) shows the hook no
   label or ready text. `gh pr ready --undo` and `-F "draft=true"` inside quotes read as a ready and a
-  non-draft create (the hook does not lex quotes). A hand-written `pathway.json` (the Write tool) or an
-  indirect script is accepted until the lock of spec section 3.6 (spike S2). A confirmed label is tied to
-  HEAD, not to a PR number: `gh pr edit <other> --add-label review:deep` passes while that pathway stands.
+  non-draft create (the hook does not lex quotes). The ccv3-mods lock closes the Write-tool route:
+  it denies a Write, Edit, MultiEdit or NotebookEdit of `pathway.json` and any shell text that names it.
+  An indirect script that builds the path from parts is accepted. A confirmed label is tied to
+  HEAD, not to a PR number, in this hook: `gh pr edit <other> --add-label review:deep` passes while that
+  pathway stands. The mod lock also checks the PR number against its store record.
   The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
   from the cwd checkout. A cwd with no `review-router.config.json` is warn mode. Before PR C flips
   `enforce`, it must read the mode from the CCv3 checkout that the command names.
@@ -156,19 +170,31 @@ stamp. A PR opened one of those ways skips the checks. It wastes the reviews thi
   `<!-- greptile_comment -->` block in the PR body. When you edit a PR body, keep that block byte
   for byte. An edit by a person after a body summary makes the gate report UNAVAILABLE until
   Greptile rewrites it. Edits by apps are fine.
-- Batch fixes into one push. Every review uses a bot allowance or credit. After 5 fix rounds
-  without READY, stop and report to Dave.
+- Batch fixes into one push. Every review uses a bot allowance or credit. At the PR's budget, stop.
+  `pr_watch` asks Dave in the checkpoint pane. Report the open findings to Dave.
 
 ## No review on the head
 
-If no review from a required bot appears on the head after 15 minutes, or the last one was
-cancelled, failed or skipped: post ONE review request for that bot (`@coderabbitai review`), then
-wait again. After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
+Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
+`review:none` PR with no router state needs the review-router workflow re-run for that head.
+
+On a coderabbit or both PR with no CodeRabbit review 15 minutes after ready, `pr_watch` asks Dave in
+the pane. The mod posts one `@coderabbitai review` only when he presses Yes. Do not post it yourself.
+
+On a PR with a checkpoint record, a missing, skipped or failed CodeRabbit review is a round. Follow the
+`pr_watch` line. Post `@coderabbitai review` only when it says a round is left or Dave allowed it.
+
+On a PR with no checkpoint record (opened before the checkpoint, or by another route), watch for two cases.
+Case one: no review from a required bot appears on the head after 15 minutes.
+Case two: the last review was cancelled, failed or skipped.
+In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
+
+After a CodeRabbit "Review rate limited" or "Review limit reached" notice, do not post
 the request; report to Dave. If the request also produces no review, report to Dave. With his merge
 yes, post the reason on the PR, then run `land-pr.ps1 -Pr <N> -IgnoreReview` (PR #111 precedent).
 
-While Greptile auto review is off, post `@greptileai` only when Dave asks: each review bills a
-credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
+On a both PR, `pr_watch` asks Dave once in the pane for Greptile on the final head. Post `@greptileai`
+only when he asks: each review bills a credit. Do not raise the review tier (`@greptileai review this at apex`, 10 credits) without Dave's
 yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
 
 ## When the review lands
@@ -197,7 +223,8 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    judged: 👍 means real and fixed, 👎 means false positive. Add a reaction with
    `gh api repos/<O>/<R>/pulls/comments/<comment_id>/reactions -f content='+1'` (`-1` for 👎).
 5. Never resolve a thread you did not act on.
-6. Request the review of the new head (`@coderabbitai review`; a push does not start one) and wait.
+6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only within the
+   PR's budget, or after the pane shows "Dave allowed round N". Then wait.
 7. Post the outcome to the user: finding count, fixed count, dismissed count, Greptile confidence
    (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.

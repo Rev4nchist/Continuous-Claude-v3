@@ -18,13 +18,16 @@
  *   summary in the session transcript must hold the marker line `KEEPER <session8> open 2 of 2`. A second process
  *   with CCV3_MODS_OFF=1 must leave it out.
  *
- * Usage: node scripts/mods/e2e-headless.mjs [plugin-dir] [--date YYYY-MM-DD]
+ * Run 5 (PR checkpoint): the model calls pr_checkpoint headless; the tool_result in the transcript is the text plan (pathway.json: smoke check).
+ *   `--only-checkpoint` runs this run alone.
+ *
+ * Usage: node scripts/mods/e2e-headless.mjs [plugin-dir] [--date YYYY-MM-DD] [--only-checkpoint]
  * Saves under .claude/cache/e2e/<date>-mods-headless-*.json (gitignored).
  * Removes the two snapshots it caused, so test sessions stay out of the dashboard's folder.
  * Exit code: 1 when any check fails. ASCII only, node builtins only.
  */
 import { spawn, spawnSync } from 'node:child_process';
-import { randomUUID } from 'node:crypto';
+import { createHash, randomUUID } from 'node:crypto';
 import { copyFileSync, existsSync, mkdirSync, readFileSync, readdirSync, rmSync, writeFileSync } from 'node:fs';
 import { homedir } from 'node:os';
 import { dirname, join, resolve } from 'node:path';
@@ -166,11 +169,79 @@ const compactionSummary = sessionId => {
   return null;
 };
 
+/**
+ * The text of every tool_result in the session transcript whose tool_use is `toolName` (the tool_use_id links the two rows).
+ * This is what the tool returned, not what the model said it returned. Null when there is no transcript.
+ */
+const toolResultTexts = (sessionId, toolName) => {
+  const projects = join(homedir(), '.claude', 'projects');
+  const folder = readdirSync(projects).find(name => existsSync(join(projects, name, `${sessionId}.jsonl`)));
+  if (!folder) return null;
+  const rows = readFileSync(join(projects, folder, `${sessionId}.jsonl`), 'utf8').split(/\r?\n/).filter(Boolean);
+  const ids = new Set();
+  const texts = [];
+  for (const row of rows) {
+    let blocks;
+    try {
+      blocks = JSON.parse(row)?.message?.content;
+    } catch {
+      continue; // a partial line
+    }
+    if (!Array.isArray(blocks)) continue;
+    for (const block of blocks) {
+      if (block?.type === 'tool_use' && block.name === toolName) ids.add(block.id);
+      if (block?.type === 'tool_result' && ids.has(block.tool_use_id)) {
+        const body = block.content;
+        texts.push(typeof body === 'string' ? body : Array.isArray(body) ? body.map(part => part?.text ?? '').join('\n') : '');
+      }
+    }
+  }
+  return texts;
+};
+
 const checks = [];
 const check = (name, ok, detail = '') => {
   checks.push({ name, ok });
   console.log(`${ok ? 'PASS' : 'FAIL'}  ${name}${detail ? ` (${detail})` : ''}`);
 };
+
+// Run 5 (PR checkpoint, headless). The model calls pr_checkpoint. A headless session must get the TEXT plan back and
+// must record nothing. The repo has no stamp for HEAD in this run, so the engine answers its "Run pre-pr.mjs" stop text;
+// that still proves "text returned".
+// What each check proves (critic finding 3):
+//   - The two text checks read the tool_result block in the session transcript, not the model's reply, so they do not depend
+//     on the model repeating the tool text word for word.
+//   - "pathway.json is unchanged" is a SMOKE check. With no stamp for HEAD a wrong --confirm is refused anyway, so it cannot
+//     fail on a mod that confirms. The real proof that headless never confirms is the unit test K4 (no --confirm, --apply, gh or pane).
+// `--only-checkpoint` runs this one run alone (one model turn) and skips the others.
+const CHECKPOINT_PROMPT = bodyFile =>
+  `Call the pr_checkpoint tool (load it with ToolSearch first if it is deferred) with pr 1 and body '${bodyFile}'. ` +
+  'Then reply with the single word done.';
+const sha256 = file => (existsSync(file) ? createHash('sha256').update(readFileSync(file)).digest('hex') : 'absent');
+
+const checkpointRun = () => {
+  const bodyFile = join(outDir, `${date}-checkpoint-body.md`);
+  writeFileSync(bodyFile, '# checkpoint e2e body\n');
+  const pathway = join(repoRoot, '.claude/cache/pre-pr/pathway.json');
+  const before = sha256(pathway);
+  const ran = run('checkpoint', false, CHECKPOINT_PROMPT(bodyFile), ['ToolSearch', 'mcp__ccv3-mods__pr_checkpoint']);
+  const id = ran.result?.session_id;
+  check('checkpoint: claude exited 0 with a JSON result', ran.status === 0 && Boolean(id), `exit ${ran.status}, ${ran.seconds}s, session ${id}`);
+  const results = id ? toolResultTexts(id, 'mcp__ccv3-mods__pr_checkpoint') : null;
+  const text = (results ?? []).join('\n');
+  check('checkpoint: the transcript holds a pr_checkpoint tool_result', results !== null && results.length > 0, `${results?.length ?? 'no transcript'} result(s)`);
+  check('checkpoint: the tool_result is the text plan', text.includes('PR checkpoint for'), text.slice(0, 80).replace(/\s+/g, ' '));
+  check('checkpoint: the tool_result says nothing was recorded', /Nothing was recorded/i.test(text), text.slice(-120).replace(/\s+/g, ' '));
+  check('checkpoint: pathway.json is unchanged (smoke check; K4 is the proof)', sha256(pathway) === before, `${before.slice(0, 12)} -> ${sha256(pathway).slice(0, 12)}`);
+  if (id) rmSync(snapshotPath(id), { force: true });
+};
+
+if (argv.includes('--only-checkpoint')) {
+  checkpointRun();
+  const failedOnly = checks.filter(c => !c.ok).length;
+  console.log(`mods e2e-headless (checkpoint only): ${checks.length - failedOnly} passed, ${failedOnly} failed`);
+  process.exit(failedOnly === 0 ? 0 : 1);
+}
 
 const on = run('on', false);
 const onId = on.result?.session_id;
@@ -283,6 +354,8 @@ check(
   ids.every((id, i) => id === [on, off, ledger][i].sessionId && id !== on.parentId) && new Set(ids).size === 3,
   ids.join(', '),
 );
+
+checkpointRun();
 
 const failed = checks.filter(c => !c.ok).length;
 console.log(`mods e2e-headless: ${checks.length - failed} passed, ${failed} failed`);

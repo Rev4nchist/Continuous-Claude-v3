@@ -68,8 +68,9 @@ export type OsLane = { id: string; title: string; state: string; note?: string }
  * REVIEWED means the head was reviewed but is not READY (open threads or a failed check): the model acts.
  * STALLED means no review 60 minutes after the head appeared.
  * PROOF means the PR body proof is missing or wrong: the author fixes the Evidence block now.
+ * DRAFT means the PR waits for Dave's /checkpoint: no bot reviews a draft, and the watcher says so once per head.
  */
-export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF'
+export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF' | 'DRAFT'
 
 /**
  * One watched PR. `state` is null until the first check. `whenReady` asks Land/No at READY.
@@ -177,6 +178,71 @@ export type AgentRun = {
 /** A file this session touched: read, edited, or edited and then committed. Path is relative to the session root. */
 export type FileTouch = { path: string; state: 'read' | 'edited' | 'committed'; added: number; removed: number }
 
+/** One way to review a draft PR, as `pr-checkpoint.mjs --json` lists it. A held option (`available` false) carries its reason and cannot be pressed. */
+export type CheckpointOption = {
+  pathway: string
+  label: string | null
+  available: boolean
+  /** [opening reviews, extra rounds after fix pushes] */
+  cost: [number, number]
+  reason: string
+}
+
+/** What `pr-checkpoint.mjs --json` prints (the T21 key set of scripts/github/pr-checkpoint.test.mjs). Only the fields the pane reads. */
+export type CheckpointResult = {
+  head: string
+  class: string
+  matched: number
+  size: { files: number; lines: number }
+  checks: { step: string; status: string; detail?: string }[]
+  cli: { bySeverity: Record<string, number> } | null
+  credits: { used: number | null; monthly: number | null }
+  capacity: { count: number | null; band: string | null; warning: string | null; source: string | null; date: string | null }
+  recommended: string | null
+  options: CheckpointOption[]
+  why: string[]
+  budget: [number, number]
+  config_drift: boolean
+}
+
+/** `checkpoint:pr:<n>` in $.store: the pathway.json record the engine printed at --confirm, plus what the mod adds. `appliedAt` is epoch ms (the clock of the pr-loop store). */
+export type CheckpointRecord = {
+  pr: number
+  state: 'confirmed' | 'applied'
+  head: string
+  pathway: string
+  label: string | null
+  budget: [number, number]
+  decided_by: string
+  session: string
+  capacity?: CheckpointResult['capacity']
+  appliedAt?: number
+  /** Set when Dave said No to an ask. A grant or a new checkpoint clears it. */
+  declined?: { kind: 'opening' | 'round' | 'greptile'; round: number; head: string }
+  /** Set when the mod posted the opening review request on Dave's Yes. */
+  opened?: { head: string; at: number }
+  /** Set when Dave answered the Greptile ask: no later ask for this PR. */
+  greptile?: { head?: string; at?: number; declined?: true }
+  [key: string]: unknown
+}
+
+/** A question for Dave, drawn in the checkpoint pane. `round` is the round it asks about (the opening is round 1). */
+export type CheckpointAsk = { kind: 'opening' | 'round' | 'greptile'; pr: number; head: string; text: string; round?: number }
+
+/** The checkpoint the pane shows: the engine result of a draft PR, until Dave presses an option. `error` is the last refusal line; `retry` offers --apply again. */
+export type CheckpointView = {
+  pr: number
+  body: string
+  root: string
+  result: CheckpointResult
+  covers: string[]
+  stamp: string | null
+  prHead: string
+  running: string | null
+  error: string | null
+  retry: { pathway: string } | null
+}
+
 declare module 'claude-code' {
   interface PluginState {
     'ccv3-mods': {
@@ -217,6 +283,12 @@ declare module 'claude-code' {
       osTab: 'overview' | 'plan' | 'proof' | 'decisions'
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
+      /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */
+      checkpoint: CheckpointView | null
+      /** Questions for Dave in the checkpoint pane, oldest first (written by pr-loop, answered by pr-checkpoint). Mirrors $.store checkpoint:asks:<session>. */
+      checkpointAsks: CheckpointAsk[]
+      /** Lock patterns already shown in a warn toast this session. */
+      lockWarned: string[]
     }
   }
 }

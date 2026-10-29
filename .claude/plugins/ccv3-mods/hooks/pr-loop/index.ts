@@ -1,7 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { PrWatch } from '../../types'
+import type { CheckpointAsk, PrWatch } from '../../types'
+import { SLASH } from '../pr-checkpoint/model'
 import {
   BACKOFF_MS,
   BACKOFF_SLACK_MS,
@@ -9,7 +10,10 @@ import {
   STATUS_TIMEOUT_MS,
   TICK_MS,
   addWatch,
+  askFor,
+  checkpointOf,
   clipTail,
+  grantRound,
   isClosed,
   isPrNumber,
   isStale,
@@ -18,14 +22,16 @@ import {
   parseArgs,
   parseProbe,
   readDoc,
+  readRecord,
   reportLine,
   settle,
   stateOf,
+  statusForModel,
   statusText,
   toastText,
   watchLine,
 } from './model'
-import type { Alert, Probe, WatchDoc } from './model'
+import type { Alert, AlertCheckpoint, Probe, PrStatus, WatchDoc } from './model'
 
 /**
  * The same atom the Agentic OS module declares (same plugin and key, same default): the engine
@@ -36,11 +42,19 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 /** This session's watched PRs, mirrored from $.store so the band and pane redraw. */
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 
+/** Questions for Dave in the checkpoint pane. The pr-checkpoint module declares the same atom and answers them. */
+const checkpointAsks = atom({ plugin: 'ccv3-mods', key: 'checkpointAsks' } as const, [] as CheckpointAsk[])
+
 const STATUS_SCRIPT = 'scripts/github/review-status.mjs'
 const REPO = 'Rev4nchist/Continuous-Claude-v3'
 const KEY_PREFIX = 'pr-watch:'
 const WATCH_TOOL = 'mcp__ccv3-mods__pr_watch'
 const STATUS_TOOL = 'mcp__ccv3-mods__pr_status'
+
+const ASKS_PREFIX = 'checkpoint:asks:'
+const RECORD_PREFIX = 'checkpoint:pr:'
+const GRANT_PREFIX = 'checkpoint:grant:'
+const CHECKPOINT_PANE = 'pr-checkpoint'
 
 const prSchema = {
   type: 'object',
@@ -174,7 +188,8 @@ const lastLine = (text: string): string =>
 /** Tells Dave and, for an alert the model must act on, the model. Never merges. */
 const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
-  if (alert.state === 'CLOSED') return
+  // A closed PR needs no line. A draft gets the toast only: it waits on Dave's checkpoint command, not on the model.
+  if (alert.state === 'CLOSED' || alert.state === 'DRAFT') return
   if (alert.state === 'READY' && alert.whenReady) {
     if (await confirmLand($, alert.pr)) {
       const out = await landNow($, alert.pr, `the READY alert for #${alert.pr}`)
@@ -185,6 +200,72 @@ const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   // READY needs no model turn, and quiet mode wants none: the toast is the alert.
   if (alert.state === 'READY' || (await isQuiet($))) return
   await $.prompt.submit({ text: reportLine(alert) })
+}
+
+const isAsk = (value: unknown): value is CheckpointAsk => {
+  const ask = value as Partial<CheckpointAsk> | null
+  return !!ask && Number.isInteger(ask.pr) && typeof ask.head === 'string' && typeof ask.text === 'string' && (ask.kind === 'opening' || ask.kind === 'round' || ask.kind === 'greptile')
+}
+
+const loadAsks = async ($: EngineInterface): Promise<CheckpointAsk[]> => {
+  const value = await $.store.get(`${ASKS_PREFIX}${await $.session.id()}`)
+  return Array.isArray(value) ? value.filter(isAsk) : []
+}
+
+/** An empty queue deletes the key. The atom mirrors the queue so the pane redraws. */
+const saveAsks = async ($: EngineInterface, list: CheckpointAsk[]): Promise<void> => {
+  const key = `${ASKS_PREFIX}${await $.session.id()}`
+  if (list.length === 0) await $.store.delete(key)
+  else await $.store.set(key, list)
+  await update($, checkpointAsks, () => list)
+}
+
+/** Opens the checkpoint pane with the keys. A pane that waits undrawn gets a toast: Dave types the checkpoint command. */
+const openAskPane = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> => {
+  try {
+    const opened = await $.ui.open({ id: CHECKPOINT_PANE, title: 'PR checkpoint', focus: true, closeOnEscape: true })
+    if (!opened.isPlaced) {
+      $.ui.toast(`PR #${ask.pr}: a question waits in the checkpoint pane (${opened.reason}); type ${SLASH} to open it`, { timeoutMs: 15_000 })
+    }
+  } catch {
+    // The question stays queued: the checkpoint command draws it.
+  }
+}
+
+/** One ask per PR, kind and head. The pane opens when the queue was empty. */
+const queueAsk = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> => {
+  const list = await loadAsks($)
+  if (list.some(one => one.pr === ask.pr && one.kind === ask.kind && one.head === ask.head)) return
+  await saveAsks($, [...list, ask])
+  if (list.length === 0) await openAskPane($, ask)
+}
+
+/**
+ * The checkpoint part of one PR's check: a closed PR drops its record, grant and asks; an ask whose head moved leaves the
+ * queue; a record that has run out of its budget, or waited 15 minutes for CodeRabbit, queues one question for Dave.
+ * The watcher never posts a review request: the mod posts only on Dave's press.
+ */
+const asking = async ($: EngineInterface, status: PrStatus, now: number): Promise<void> => {
+  if ((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1') return
+  const queue = await loadAsks($)
+  if (isClosed(status)) {
+    await $.store.delete(`${RECORD_PREFIX}${status.pr}`)
+    await $.store.delete(`${GRANT_PREFIX}${status.pr}`)
+    if (queue.some(one => one.pr === status.pr)) await saveAsks($, queue.filter(one => one.pr !== status.pr))
+    return
+  }
+  const kept = queue.filter(one => one.pr !== status.pr || one.head === status.head)
+  if (kept.length !== queue.length) await saveAsks($, kept)
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
+  const ask = askFor(record, status, now, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
+  if (ask) await queueAsk($, ask)
+}
+
+/** The PR's checkpoint record and grant, read for the report lines. Null with no record, a closed PR or the kill switch. */
+const checkpointFor = async ($: EngineInterface, status: PrStatus): Promise<AlertCheckpoint | null> => {
+  if ((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1' || isClosed(status)) return null
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
+  return checkpointOf(record, status, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
 }
 
 type Results = Map<number, PrWatch | null>
@@ -219,9 +300,10 @@ const check = async ($: EngineInterface): Promise<void> => {
       if (!kept) notices.push(`PR #${watch.pr}: dropped from the watch list after ${MAX_FAILS} failed checks in a row (${result.text}).`)
       continue
     }
-    const settled = settle(watch, result.status, now)
+    const settled = settle(watch, result.status, now, await checkpointFor($, result.status))
     results.set(watch.pr, settled.watch)
     if (settled.alert) alerts.push(settled.alert)
+    await asking($, result.status, now).catch(() => undefined)
   }
   const fresh = await loadDoc($)
   await saveDoc($, { ...fresh, prs: merge(fresh.prs, results), backoffUntil: failure === null ? 0 : now + BACKOFF_MS })
@@ -374,7 +456,7 @@ export const prLoop = (on: On) => {
     const pr = inputPr(e)
     if (pr === null) return { deny: 'pr_status needs "pr": a positive whole number.' }
     const result = await probe($, pr)
-    return result.kind === 'ok' ? textResult(JSON.stringify(result.status)) : textResult(`pr_status failed: ${probeText(pr, result)}`)
+    return result.kind === 'ok' ? textResult(JSON.stringify(statusForModel(result.status))) : textResult(`pr_status failed: ${probeText(pr, result)}`)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'watch' }, ($, e) => watchCommand($, e.args)).catch(() => ({ text: '/watch failed.' }))
