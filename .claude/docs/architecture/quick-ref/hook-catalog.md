@@ -22,7 +22,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | session-register | Register session in PostgreSQL for cross-terminal coordination |
 | session-start-continuity | Load handoffs and prior session context |
 | session-start-init-check | Auto-generate knowledge tree if missing |
-| session-start-recovery | Recover from interrupted sessions |
 | roadmap-reconcile | Sync ROADMAP.md with actual state on session start |
 | hook-health-monitor | Verify hook registration health on startup |
 
@@ -31,7 +30,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | Hook | Description |
 |------|-------------|
 | heartbeat | Session keepalive heartbeat to PostgreSQL |
-| maestro-state-manager | Manage Maestro workflow phase state |
 | ~~skill-activation-prompt~~ | ARCHIVED/DEREGISTERED 2026-08-31 (was: detect skill trigger keywords in user input) |
 | memory-awareness | Inject relevant memories from semantic search |
 | pageindex-navigator | Route to PageIndex for document queries (disabled 2026-06-01; on-demand only) |
@@ -47,7 +45,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 | no-haiku-enforcer | Agent | Block haiku model selection for agents |
 | navigator-validate | Agent | Validate navigator agent configuration |
 | task-router | Agent | Suggest better agent for task type |
-| maestro-enforcer | Agent | Enforce Maestro phase gating (block skipping) |
 | pre-tool-knowledge | Agent | Inject knowledge tree context for agents |
 | ~~tldr-context-inject~~ | Agent | ARCHIVED/DEREGISTERED 2026-08-31 (was: inject TLDR analysis context for agents) |
 | smart-search-router | Grep | Route to AST-grep or TLDR for structured searches |
@@ -98,7 +95,6 @@ Current registrations live in `~/.claude/settings.json`. For totals and per-even
 
 | Hook | Description |
 |------|-------------|
-| maestro-cleanup | Clean up Maestro workflow state files |
 | session-end-extract | Extract session learnings on close (L2) |
 | session-outcome | Prompt for session outcome marking |
 
@@ -108,7 +104,6 @@ Only PreToolUse hooks can block tool execution via `permissionDecision: "deny"`.
 
 Key blockers:
 - **file-claims** -- prevents concurrent edits to same file across sessions
-- **maestro-enforcer** -- blocks phase-skipping in Maestro workflows
 - **no-haiku-enforcer** -- blocks haiku model selection for agents
 - **test-before-done** -- blocks task completion without test evidence
 - **package-install-guard** -- blocks malicious/typosquatted package installs

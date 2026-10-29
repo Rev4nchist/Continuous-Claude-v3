@@ -22,34 +22,10 @@ This guide helps you choose the right agent for your task and understand how to 
 | Audit security | aegis | - |
 | Prepare a release | herald | - |
 | Create handoff docs | scribe | - |
-| Orchestrate complex work | maestro | - |
 
 ## Agent Categories
 
-### 1. Orchestrators
-
-#### maestro
-- **Model:** Opus
-- **Purpose:** Coordinate multiple agents for complex multi-phase work
-- **When to use:** Task requires multiple agents in sequence or parallel
-- **Patterns:**
-  - **Pipeline:** Linear dependency chain (scout → architect → kraken → arbiter)
-  - **Swarm:** Parallel research (scout + oracle + scout → synthesize)
-  - **Hierarchical:** Plan → Implement → Validate (default)
-  - **Generator-Critic:** Iterative refinement (architect → critic → architect)
-  - **Jury:** Majority vote (critic₁ + critic₂ + critic₃ → decision)
-
-**Example:**
-```
-Task: "Design and implement user authentication"
-maestro decomposes into:
-  ├── scout (internal auth patterns)
-  ├── oracle (external best practices)
-  ├── architect (design)
-  ├── plan-reviewer (validate)
-  ├── kraken (implement)
-  └── arbiter (test)
-```
+### 1. Lead Implementer
 
 #### kraken
 - **Model:** Sonnet
@@ -234,7 +210,7 @@ pathfinder:
 
 ### 4. Implementers
 
-#### kraken (see Orchestrators above)
+#### kraken (see Lead Implementer above)
 
 #### spark
 - **Model:** Sonnet
@@ -626,7 +602,7 @@ What needs validation?
 
 Tiering is by **judgment density**, not task size (canonical: `.claude/rules/agent-model-selection.md`; live source of truth: each agent's `model:` frontmatter, verified by `scripts/check-agent-model-drift.mjs`).
 
-- **Opus agents** (12 — judgment-dense planning/review/forensics): aegis, architect, critic, debug-agent, maestro, phoenix, plan-agent, plan-reviewer, principal-reviewer, review-agent, sleuth, wizard
+- **Opus agents** (11 — judgment-dense planning/review/forensics): aegis, architect, critic, debug-agent, phoenix, plan-agent, plan-reviewer, principal-reviewer, review-agent, sleuth, wizard
 - **Sonnet agents** (25 — execution/exploration/tests/docs): everything else, including kraken, scout, oracle, spark, arbiter, atlas
 
 **Rule:** Sonnet executes, Opus judges. Never haiku, never omit/inherit.
@@ -643,11 +619,11 @@ RIGHT: /build greenfield "feature" → architect → plan-reviewer → kraken
 ### 4. Validate Plans
 Always run `plan-reviewer` or `validate-agent` after creating a plan. Catches issues before implementation.
 
-### 5. Use Maestro for Complexity
-Don't manually chain 5+ agents. Let maestro orchestrate:
+### 5. Use the Workflow Tool for Complexity
+Don't manually chain 5+ agents. Use the Workflow tool (fan-out/pipeline/verify):
 ```
 WRONG: scout → oracle → architect → plan-reviewer → kraken (manual)
-RIGHT: maestro "Design and implement auth system" (automatic)
+RIGHT: Workflow tool run for "Design and implement auth system" (automatic)
 ```
 
 ### 6. Check Output Files
@@ -706,7 +682,6 @@ kraken (implement) → review-agent (verify) → arbiter (test)
 | scribe | Sonnet | Fast | Low | Documentation |
 | herald | Sonnet | Fast | Low | Release prep |
 | aegis | Opus | Slow | High | Security audit |
-| maestro | Opus | Slow | High | Orchestration |
 
 ## Troubleshooting
 
@@ -743,5 +718,4 @@ If you see references to deprecated agents, use their replacements.
 
 - [Agent Development Guide](../../CONTRIBUTING.md#agents)
 - [Task Tool Documentation](../skills/task.md)
-- [Maestro Orchestration Patterns](../agents/maestro.md)
 - [Kraken Checkpoint System](../agents/kraken.md)

@@ -121,8 +121,6 @@ Context Update: All Session Work (Feb 3, 2026)
   ├────────────────────────────────┼────────────────────────┼──────────────────────────────────────┼───────────────────┤
   │ session-end-extract.mjs        │ SessionEnd             │ Final learning extraction sweep      │ No                │
   ├────────────────────────────────┼────────────────────────┼──────────────────────────────────────┼───────────────────┤
-  │ maestro-state-manager.mjs      │ UserPromptSubmit       │ Track maestro workflow state         │ No                │
-  ├────────────────────────────────┼────────────────────────┼──────────────────────────────────────┼───────────────────┤
   │ ralph-delegation-enforcer.mjs  │ PreToolUse:Task        │ Enforce ralph agent routing          │ Yes               │
   ├────────────────────────────────┼────────────────────────┼──────────────────────────────────────┼───────────────────┤
   │ git-memory-check.mjs           │ PreToolUse:Bash        │ Check memory before git ops          │ Yes (conditional) │

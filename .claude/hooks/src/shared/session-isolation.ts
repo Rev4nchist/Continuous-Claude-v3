@@ -35,7 +35,7 @@ export function getSessionId(): string {
 /**
  * Get session-specific state file path.
  *
- * @param baseName - The base name of the state file (e.g., "maestro-state")
+ * @param baseName - The base name of the state file (e.g., "ralph-state")
  * @param sessionId - Optional session ID override
  * @returns Full path to the session-specific state file
  */

@@ -4,7 +4,6 @@
 
 | Command | Purpose | When to Use |
 |---------|---------|-------------|
-| `/maestro` | Multi-agent orchestration | Complex multi-step tasks |
 | `/fix` | Bug resolution | Reproduce → Investigate → Fix → Re-run repro |
 | `/build` | Feature development | Plan → Implement → Review |
 | `/explore` | Codebase research | Understanding code |
@@ -94,7 +93,7 @@ Research:     /explore, /recall, scout, oracle
 Implement:    /build, /fix, kraken, spark
 Review:       /review, critic, judge
 Release:      /release, /commit
-Orchestrate:  /maestro
+Orchestrate:  Workflow tool
 ```
 
 ## Agent Shortcuts

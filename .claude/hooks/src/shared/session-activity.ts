@@ -21,7 +21,7 @@ import { join } from 'path';
 // =============================================================================
 
 export interface ActivationEntry {
-  name: string;        // e.g. "maestro", "memory-awareness"
+  name: string;        // e.g. "systematic-debugging", "memory-awareness"
   first_seen: string;  // ISO timestamp
   count: number;       // how many times activated
 }
@@ -167,7 +167,7 @@ function upsertEntry(entries: ActivationEntry[], name: string): void {
  * Creates the activity file if it does not exist.
  *
  * @param sessionId - The session UUID
- * @param skillName - Name of the skill (e.g. "maestro", "systematic-debugging")
+ * @param skillName - Name of the skill (e.g. "systematic-debugging", "commit")
  */
 export function logSkill(sessionId: string, skillName: string): void {
   const activity = loadOrCreate(sessionId);

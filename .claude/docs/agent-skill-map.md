@@ -5,7 +5,7 @@ Generated: 2026-04-27 | Branch: feature/system-coherence | Phase 5c step 10 refr
 
 | Entity | Count |
 |--------|-------|
-| Agents (active in `.claude/agents/`) | 35 (+ 1 deprecated stub: session-analyst.md — canonical archived to `_archived/2026-04-26-duplicates/`) |
+| Agents (active in `.claude/agents/`) | 34 (+ 1 deprecated stub: session-analyst.md — canonical archived to `_archived/2026-04-26-duplicates/`) |
 | Agents (archived) | 1 (session-analyst, plus README) |
 | Skills (active, substantive SKILL.md) | ~102 |
 | Workflow orchestrator skills | 14 |
@@ -23,30 +23,29 @@ Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-ana
 | agent-factory | opus | Scaffold new agent .md files (validate frontmatter, draft, hand off for review) | Read, Write, Glob, Grep, Bash | sub-agents / agent-development (optional) | — |
 | agentica-agent | sonnet | Build Python agents with Agentica SDK | Bash, Read, Write, Edit, Glob, Grep | `agentica-sdk/SKILL.md` | — |
 | arbiter | (inherit) | Test execution and validation | Bash, Read, Glob, Grep | — | fix, build, refactor, release, tdd |
-| architect | (inherit) | System design and planning | Read, Glob, Grep, Write, Bash | — | build, refactor, migrate, maestro |
+| architect | (inherit) | System design and planning | Read, Glob, Grep, Write, Bash | — | build, refactor, migrate |
 | atlas | (inherit) | Full E2E and test-suite runner | Bash, Read, Glob, Grep | — | release |
 | braintrust-analyst | opus | RETIRED 2026-09-30 (see `archive/braintrust-2026-10/`). Braintrust session log retro-analysis | Bash, Read | `braintrust-analyze/SKILL.md` | — |
 | critic | (inherit) | Feature/implementation code review | Read, Glob, Grep | — | review |
-| debug-agent | (inherit) | General root-cause analysis for unclear or single-file bugs (R1) | Bash, Read, Glob, Grep | `systematic-debugging/SKILL.md` | fix, maestro |
+| debug-agent | (inherit) | General root-cause analysis for unclear or single-file bugs (R1) | Bash, Read, Glob, Grep | `systematic-debugging/SKILL.md` | fix |
 | deployer | sonnet | Vercel/Railway/Sentry/Linear/Neon deployments | Bash, Read, Glob, Grep, WebFetch | `vercel-cli`, `railway-cli`, `sentry-cli`, `neonctl` (R8 conditional) | release, build |
 | herald | (inherit) | Changelog and version bump writer | Write, Read, Edit, Bash, Grep, Glob | — | release |
 | judge | sonnet | Refactoring quality review — behavior preservation verdict | Read, Grep, Glob | — | refactor (optional companion, R2) |
-| kraken | (inherit) | Complex implementation via TDD | Bash, Read, Edit, Write, Glob, Grep | — | fix, build, refactor, tdd, maestro |
+| kraken | (inherit) | Complex implementation via TDD | Bash, Read, Edit, Write, Glob, Grep | — | fix, build, refactor, tdd |
 | liaison | sonnet | Integration / external API review | Read, Grep, Glob | — | release (optional companion, R2) |
-| maestro | (inherit) | Multi-step orchestration conductor | Read, Bash, Grep, Glob, Task, Skill, AskUserQuestion | `maestro/SKILL.md` | maestro |
 | memory-extractor | sonnet | Extract perception changes from session transcripts | Bash, Read | — | — |
 | onboard | (inherit) | Brownfield onboarding — initial continuity ledger | Read, Glob, Grep, Bash | `onboard/SKILL.md` | build (brownfield), explore |
-| oracle | (inherit) | External research — web, docs, APIs (7-tool stack) | WebSearch, Bash, Read | `exa`, `opencli`, `github-search` | fix, build, migrate, maestro |
+| oracle | (inherit) | External research — web, docs, APIs (7-tool stack) | WebSearch, Bash, Read | `exa`, `opencli`, `github-search` | fix, build, migrate |
 | pathfinder | opus | External repository research and analysis | Read, Bash, Grep, Glob | — | — |
 | phoenix | opus | Refactoring planning AND migration planning | Read, Bash, Grep, Glob | — | refactor, migrate |
 | plan-agent | (inherit) | Implementation planning agent | Read, Glob, Grep, Write | `plan-agent/SKILL.md` | refactor, migrate, release, build |
 | plan-reviewer | (inherit) | Plan quality gate before code changes | Read, Grep, Glob | — | refactor, review |
 | principal-reviewer | opus | Senior/staff review — architecture, security, blast radius | Read, Glob, Grep, Bash (NO Edit/Write — review-only) | — | — (no hook routing yet) |
-| profiler | (inherit) | Performance profiling, race conditions, memory issues | Read, Bash, Grep, Glob | — | build, maestro |
+| profiler | (inherit) | Performance profiling, race conditions, memory issues | Read, Bash, Grep, Glob | — | build |
 | react-perf-reviewer | (inherit) | React/Next.js performance code review | Read, Grep, Glob | `react-perf/SKILL.md` | (PostToolUse-injected via react-perf-context hook) |
 | review-agent | (inherit) | Synthesis code reviewer — final release approval | All tools | — | review, release |
-| scout | (inherit) | Codebase exploration and pattern finding | Read, Grep, Glob, Bash | — | build, fix, explore, migrate, maestro |
-| scribe | (inherit) | Documentation, handoffs, session summaries | Read, Write, Glob, Grep | `create_handoff/SKILL.md`, `continuity_ledger/SKILL.md` | release, maestro |
+| scout | (inherit) | Codebase exploration and pattern finding | Read, Grep, Glob, Bash | — | build, fix, explore, migrate |
+| scribe | (inherit) | Documentation, handoffs, session summaries | Read, Write, Glob, Grep | `create_handoff/SKILL.md`, `continuity_ledger/SKILL.md` | release |
 | sentinel | sonnet | Browser QA — multi-role E2E and UAT | Bash, Read, Write, Glob, Grep | `browser-dev-cycle/SKILL.md` (bidirectional, R4) | browser-dev-cycle |
 | session-analyst | opus | DEPRECATED. Its replacement braintrust-analyst is RETIRED 2026-09-30 | Bash, Read | `braintrust-analyze/SKILL.md` (duplicate) | — |
 | sleuth | opus | Deep bug forensics — multi-file, evidence-grade reproduction (R1) | Read, Bash, Grep, Glob | `systematic-debugging/SKILL.md` | fix |
@@ -68,7 +67,6 @@ Active agents are `.claude/agents/*.md` excluding `_archived/`. The `session-ana
 | fix | fix, bug, broken, debug | sleuth (deep forensics), debug-agent (general), kraken, oracle, arbiter | "Investigator selection" subsection codifies sleuth/debug-agent split (R1) |
 | explore | explore, understand, map | scout, onboard | quick / deep / architecture |
 | ralph | /ralph, autonomous | ralph workflow | GSD lifecycle |
-| maestro | /maestro, orchestrate | maestro, architect, kraken, spark, oracle, scout, debug-agent, profiler, scribe | 5 patterns; phase-gated |
 | refactor | refactor, restructure | phoenix, plan-agent, kraken, plan-reviewer, arbiter, judge (optional, R2) | judge optional companion for high-stakes architecture refactors |
 | migrate | migrate, upgrade, port | oracle, phoenix, plan-agent, kraken, surveyor | Research → analyze → plan → implement → review |
 | release | release, ship, deploy, launch | aegis, atlas, review-agent, herald, scribe, deployer, liaison (optional, R2) | liaison optional for cross-service / external-API releases |
@@ -206,7 +204,6 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | braintrust-analyst (RETIRED 2026-09-30) | `braintrust-analyze/SKILL.md` (RETIRED) |
 | debug-agent | `systematic-debugging/SKILL.md` |
 | deployer | `vercel-cli`, `railway-cli`, `sentry-cli`, `neonctl` (conditional, R8) |
-| maestro | `maestro/SKILL.md` |
 | onboard | `onboard/SKILL.md` |
 | plan-agent | `plan-agent/SKILL.md` (Phase 5a deep-dive A1 fixed broken `create_plan` path) |
 | react-perf-reviewer | `react-perf/SKILL.md` |
@@ -255,7 +252,6 @@ Archived in `_archived/2026-04-26-tldr-cleanup/`: `tldr-router`, `tldr-overview`
 | task-router | UserPromptSubmit | RECOMMEND agent based on keyword detection |
 | guardrail-enforcer | UserPromptSubmit | SOFT BLOCK 1x/session — requires systematic-debugging / databases / code-review skills |
 | skill-activation-prompt | UserPromptSubmit | RECOMMEND skill via skill-rules.json + LLM validation |
-| maestro-detector | UserPromptSubmit | SUGGEST /maestro for multi-step prompts (R7 — re-entrancy guard added 2026-04-26) |
 | react-perf-context | PostToolUse(Read) | INJECT — auto-loads react-perf skill on .tsx read |
 | agent-model-guard | PreToolUse(Task) | HARD BLOCK on unknown `subagent_type` (agent file existence check; renamed from `agent-validate.ts` in R5, 2026-04-26 — name is historical, behavior is existence validation, not model gating) |
 | no-haiku-enforcer | PreToolUse(Task) | HARD BLOCK on `model: haiku` (this is the actual haiku gate) |
@@ -289,10 +285,9 @@ This map was regenerated as Step 10 of Phase 5c. Changes since the Phase 5a map:
 3. **R1 codified**: `sleuth` and `debug-agent` descriptions now point at each other for the inverse case; `fix/SKILL.md` has Investigator selection subsection
 4. **R2 (judge/liaison discoverability)**: optional-companion callouts added to `refactor/SKILL.md` and `release/SKILL.md`
 5. **R4 (sentinel ↔ browser-dev-cycle)**: bidirectional companion callouts confirmed
-6. **R7 (maestro re-entrancy)**: `isMaestroActive()` guard added with 30-min mtime check; fail-open on read errors
-7. **R8 (deployer ↔ neonctl)**: deployer.md has conditional Neon section + neonctl-safety reference
-8. **R9 closed**: 4 memory sub-skills are distinct slash commands (recall-reasoning uses different backend)
-9. **TLDR cleanup (Phase 5a addendum)**: `tldr-router`, `tldr-overview`, `tldr-deep` archived; `tldr-code` canonical; `tldr-stats` wired with `python3` → `python` fix
+6. **R8 (deployer ↔ neonctl)**: deployer.md has conditional Neon section + neonctl-safety reference
+7. **R9 closed**: 4 memory sub-skills are distinct slash commands (recall-reasoning uses different backend)
+8. **TLDR cleanup (Phase 5a addendum)**: `tldr-router`, `tldr-overview`, `tldr-deep` archived; `tldr-code` canonical; `tldr-stats` wired with `python3` → `python` fix
 
 ---
 

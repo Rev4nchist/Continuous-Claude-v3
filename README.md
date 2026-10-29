@@ -19,7 +19,7 @@
 <p align="center">
   <img alt="License: MIT" src="https://img.shields.io/badge/license-MIT-blue">
   <img alt="73 hook programs" src="https://img.shields.io/badge/hooks-73-6b5bff">
-  <img alt="35 subagents" src="https://img.shields.io/badge/agents-35-12a594">
+  <img alt="34 subagents" src="https://img.shields.io/badge/agents-34-12a594">
   <img alt="80 skills" src="https://img.shields.io/badge/skills-80-2f6fed">
 </p>
 
@@ -104,7 +104,7 @@ CCv3 carries a full software lifecycle, and the harness enforces each stage. A s
 | **[Hooks](docs/harness/layers.md#1-hooks)** (73 programs) | Run code before and after every tool call | Ask before `git reset --hard` | Unsafe actions stop before they run |
 | **[Rules](docs/harness/layers.md#2-rules)** (20 on demand) | Tell the model how to behave, in small pieces | A commit-style rule loads only when you commit | A small always-loaded core |
 | **[Memory](docs/harness/layers.md#3-memory)** | Keep lessons and session state in PostgreSQL, outside the chat | A stored lesson survives a restart | Work does not vanish with the session |
-| **[Agents](docs/harness/layers.md#4-agents-and-coordination)** (35 subagents) | Hand work to specialists. Judgment runs on opus, execution on sonnet. | A scout reads many files so the main chat stays short | Parallel work without a crowded context |
+| **[Agents](docs/harness/layers.md#4-agents-and-coordination)** (34 subagents) | Hand work to specialists. Judgment runs on opus, execution on sonnet. | A scout reads many files so the main chat stays short | Parallel work without a crowded context |
 | **[Guardrails](docs/harness/layers.md#5-guardrails)** | Scan for secrets, check package installs, run CI | gitleaks runs before each commit and again in CI | Secrets and risky installs are caught early |
 | **[Observability](docs/harness/layers.md#6-observability)** | Log hook decisions and rule loads | A log shows a rule that fired when it should not | The harness can be measured and fixed |
 
@@ -141,7 +141,7 @@ New to the terms here? [CONTEXT.md](CONTEXT.md) defines them. For the details be
 | Hook programs | 73 | TypeScript files at the top level of `.claude/hooks/src/` |
 | Live hook registrations | 75 | Entries across 67 hook names, counted by `hook-contract-guard.mjs` |
 | Hook test files | 101 | `.claude/hooks/src/__tests__/*.test.ts` |
-| Subagent definitions | 35 | `.claude/agents/*.md`: 12 on `opus`, 23 on `sonnet` |
+| Subagent definitions | 34 | `.claude/agents/*.md`: 11 on `opus`, 23 on `sonnet` |
 | Skills | 80 | Folders in `.claude/skills/` that hold a `SKILL.md` |
 | On-demand rules | 20 | `.claude/rules-ondemand/*.md`, loaded by the `rule-router` hook |
 | Always-loaded instructions | 23,502 chars | Core plus this repo's `CLAUDE.md` chain. Core alone was 18,275 after PR #57, down from 153,689. |

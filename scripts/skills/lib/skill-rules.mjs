@@ -438,7 +438,7 @@ export const CHAIN_VERBS = new Set([
   'investigate', 'diagnose', 'implement', // fix: "investigate → diagnose → implement → test → commit"
   'plan', 'preflight', // fix: "preflight → research → plan → implement"
   'reproduce', 'lint', // fix: "reproduce → sleuth → ..." and "kraken → lint → commit"
-  'refine', 'repeat', // maestro/SKILL.md:316 "phoenix → judge → refine → repeat" (loop steps)
+  'refine', 'repeat', // generator-critic loop chains: "critic → refine → repeat"
 ]);
 const ARROW_RE = /\s*(?:→|->)\s*/;
 // Inside a fence with a language tag, "x -> y" is code syntax (a lambda, a return type); only → counts.

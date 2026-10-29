@@ -173,7 +173,6 @@ Then wait for the user's input.
    | `architect` | plan | Feature design, system architecture, implementation planning |
    | `phoenix` | plan | Refactoring plans, migrations, codebase restructuring |
    | `herald` | deploy | Releases, deployments, publishing |
-   | `maestro` | orchestrate | Complex multi-agent workflows |
 
    **Workers (focused specialists):**
    | Agent | Domain | Use For |
