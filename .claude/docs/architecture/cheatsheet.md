@@ -84,7 +84,6 @@ echo '{}' | node C:\Users\<username>\.claude\hooks\dist\session-register.mjs
 | `smarter-everyday.mjs` | PostToolUse | Detect problem resolution patterns |
 | `user-confirmation-detector.mjs` | UserPromptSubmit | Capture "it's fixed" signals |
 | `session-end-extract.mjs` | SessionEnd | Final learning extraction (calls `lazy_memory.py`) |
-| `maestro-state-manager.mjs` | UserPromptSubmit | Track maestro workflow state |
 | `git-memory-check.mjs` | PreToolUse:Bash | Check memory before git (**BLOCKS**) |
 | `pre-tool-knowledge.mjs` | PreToolUse:Task | Inject knowledge tree context |
 | `post-plan-roadmap.mjs` | PostToolUse:ExitPlanMode | Update ROADMAP from plan |

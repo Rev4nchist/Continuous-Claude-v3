@@ -246,8 +246,7 @@ function processTransition(
     if (filePath && (
       filePath.includes('smarter-everyday-state') ||
       filePath.includes('.claude/cache/') ||
-      filePath.includes('extraction-state.json') ||
-      filePath.includes('.claude/maestro-state.json')
+      filePath.includes('extraction-state.json')
     )) {
       return { newState: state, message: null };
     }

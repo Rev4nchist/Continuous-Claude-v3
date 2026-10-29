@@ -9,7 +9,7 @@ Agents and sessions exchange work through typed channels, not chat copy-paste.
 | Channel | Between | Mechanism | Where |
 |---|---|---|---|
 | Subagent spawn | A session and a subagent | Agent tool, pinned model, memory brief | `.claude/agents/`, `agent-recall-injector` hook |
-| Workflows | An orchestrator and its workers | Parallel research, synthesis, adversarial check | `/maestro`, `/build`, `/premortem` skills |
+| Workflows | An orchestrator and its workers | Parallel research, synthesis, adversarial check | `/build`, `/premortem` skills |
 | Lanes and messages | Parallel sessions | Lanes, leases and direct messages in PostgreSQL | `scripts/coordination/lane.mjs` |
 | File claims | Parallel sessions | A lock checked before each edit | `file-claims` hook |
 | Cross-model review | Claude and Grok | A second model family reviews diffs and plans | `grok-adversary` agent, `/premortem --grok` |

@@ -13,17 +13,16 @@
  *     3.  no-haiku-enforcer.mjs
  *     4.  navigator-validate.mjs
  *     5.  task-router.mjs
- *     6.  maestro-enforcer.mjs
- *     7.  pre-tool-knowledge.mjs
- *     8.  tldr-context-inject.mjs
- *     9.  agent-recall-injector.mjs
+ *     6.  pre-tool-knowledge.mjs
+ *     7.  tldr-context-inject.mjs
+ *     8.  agent-recall-injector.mjs
  *
  *   PostToolUse hooks (matcher: "Task")
- *     10. agent-error-capture.mjs
- *     11. agent-verification.mjs
+ *     9.  agent-error-capture.mjs
+ *     10. agent-verification.mjs
  *
  *   PostToolUse hooks (matcher: "Skill|Task")
- *     12. telemetry-tracker.mjs
+ *     11. telemetry-tracker.mjs
  *
  * For each hook we assert:
  *   - exit code 0  (fail-open contract — hooks must never block Task on crash)
@@ -338,15 +337,6 @@ describe('PreToolUse:Task — task-router', () => {
   it.skipIf(!hookPath)(
     'exits 0 with valid output on Task event',
     () => assertFailOpen('task-router [PreToolUse]', runHook(hookPath!, PRE_TASK_EVENT)),
-    IT_TIMEOUT_MS,
-  );
-});
-
-describe('PreToolUse:Task — maestro-enforcer', () => {
-  const hookPath = resolveHook('maestro-enforcer');
-  it.skipIf(!hookPath)(
-    'exits 0 with valid output on Task event (no maestro state file)',
-    () => assertFailOpen('maestro-enforcer [PreToolUse]', runHook(hookPath!, PRE_TASK_EVENT)),
     IT_TIMEOUT_MS,
   );
 });

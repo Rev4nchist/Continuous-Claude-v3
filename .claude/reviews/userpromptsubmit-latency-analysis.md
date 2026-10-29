@@ -1,5 +1,7 @@
 # UserPromptSubmit Hook Latency Analysis
 
+> REMOVED: the `maestro` agent, the `/maestro` skill and the maestro hooks (`maestro-detector`, `maestro-enforcer`, `maestro-state-manager`, `maestro-cleanup`, `session-start-recovery`) no longer exist. This analysis is a 2026-04 snapshot. Treat every maestro reference below as history, not as a live component.
+
 ## Current State
 
 12 hooks fire **serially** on every user prompt submission:

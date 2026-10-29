@@ -138,7 +138,7 @@ export interface ComplexityScore {
   file_score: number;
   prompt_signals: PromptSignal[];
   file_signals: FileSignal[];
-  action: 'proceed' | 'suggest_maestro' | 'force_maestro';
+  action: 'proceed' | 'suggest_workflow' | 'force_workflow';
 }
 
 /** Signal detected from prompt analysis */

@@ -123,12 +123,12 @@ first.
 Subagents take delegated work. A coordination layer in PostgreSQL stops parallel sessions from
 colliding.
 
-- `.claude/agents/` holds 35 agent definitions (`.md`) and 17 `.json` sidecars. Each definition pins its model:
+- `.claude/agents/` holds 34 agent definitions (`.md`) and 16 `.json` sidecars. Each definition pins its model:
   `opus` for judgment (planning, review, orchestration) or `sonnet` for execution.
 - `scripts/check-agent-model-drift.mjs` fails on a missing model, on `haiku` or `inherit`, or on
   a sidecar that disagrees with its `.md` file.
-- Workflow skills such as `/build`, `/fix`, `/explore` and `/maestro` chain agents. The `maestro`
-  agent (opus) picks a pattern. The `kraken` agent (sonnet) implements.
+- Workflow skills such as `/build`, `/fix` and `/explore` chain agents. The `kraken` agent (sonnet)
+  implements.
 - `scripts/coordination/lane.mjs` lets a session claim a lane (a named unit of work). The claim is
   atomic and has a lease. The `lane-context` hook shows the lane board inside each session.
 - The `file-claims` hook runs before each Edit or Write. It denies an edit to a file that another

@@ -20,7 +20,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 |--------|----------|----------|
 | `gate` | PreToolUse with allow/deny decision | `package-install-guard.ts`, `plan-to-ralph-enforcer.ts`, `agent-model-guard.ts`, `explore-to-scout.ts`, `no-haiku-enforcer.ts`, `ralph-delegation-enforcer.ts` |
 | `injector` | PostToolUse or PreToolUse adding `additionalContext` | `tldr-context-inject.ts`, `tldr-read-enforcer.ts`, `react-perf-context.ts`, `pre-tool-knowledge.ts`, `memory-awareness.ts`, `epistemic-reminder.ts`, `signature-helper.ts` |
-| `orchestrator` | Multi-step state mgmt across hook events | `maestro-state-manager.ts`, `maestro-detector.ts`, `ralph-task-monitor.ts`, `ralph-progress-inject.ts`, `ralph-watchdog.ts`, `plan-exit-tracker.ts`, `roadmap-reconcile.ts`, `roadmap-completion.ts` |
+| `orchestrator` | Multi-step state mgmt across hook events | `ralph-task-monitor.ts`, `ralph-progress-inject.ts`, `ralph-watchdog.ts`, `plan-exit-tracker.ts`, `roadmap-reconcile.ts`, `roadmap-completion.ts` |
 | `telemetry` | Logs/observes only; never blocks | `hook-health-monitor.ts`, `mcp-activity-tracker.ts`, `telemetry-tracker.ts`, `periodic-extract.ts`, `session-outcome.ts`, `heartbeat.mjs`, planned `hook-trace.ts` |
 
 (103 source files in `.claude/hooks/src/*.ts`. ~70 are registered in `~/.claude/settings.json`. The plan tracks the 60 zombie `.mjs` files for Phase 2 cleanup.)
@@ -67,7 +67,7 @@ CCv3 has three places to put a capability. Each has a clear ownership rule. Conf
 
 ### 1.3 Skills — own multi-step workflows and behavior contracts
 
-**Definition.** Markdown documents the model reads when matched. Activated by the `skill-activation-prompt` hook (which uses `skill-rules.json` + LLM validation), or the `guardrail-enforcer` (which blocks until certain skills load on certain prompt classes), or by user-invoked slash commands like `/build`, `/fix`, `/maestro`.
+**Definition.** Markdown documents the model reads when matched. Activated by the `skill-activation-prompt` hook (which uses `skill-rules.json` + LLM validation), or the `guardrail-enforcer` (which blocks until certain skills load on certain prompt classes), or by user-invoked slash commands like `/build`, `/fix`.
 
 **Skill contract:**
 
@@ -87,11 +87,11 @@ When adding any new capability, walk this matrix top-to-bottom. The first row th
 |------------------|------|-----|---------|
 | **Always-on context injection** triggered by tool use | Hook (PostToolUse `additionalContext`) | The user does not request it; it has to fire automatically on every Edit/Read/Grep | `tldr-context-inject` (injects call graph before agent calls), `react-perf-context` (auto-loads react-perf skill on `.tsx` reads), `epistemic-reminder` (warns after Grep), `pre-tool-knowledge` (knowledge tree context before agent spawn) |
 | **Per-tool gate** (allow/deny) | Hook (PreToolUse `permissionDecision`) | Only hooks can deny | `plan-to-ralph-enforcer` (blocks Edit/Write after plan approval unless Ralph), `package-install-guard` (blocks malicious package installs), `agent-model-guard` / `no-haiku-enforcer` (blocks haiku model), `explore-to-scout` (forces scout instead of Explore) |
-| **State across hook events** | Hook (orchestrator with state file) | Multi-event coordination needs a shared state file in `$TEMP` | `maestro-state-manager` + `maestro-detector` (track maestro phase progress), `plan-exit-tracker` + `plan-to-ralph-enforcer` (plan-approved state file), `ralph-task-monitor` + `ralph-watchdog` |
+| **State across hook events** | Hook (orchestrator with state file) | Multi-event coordination needs a shared state file in `$TEMP` | `plan-exit-tracker` + `plan-to-ralph-enforcer` (plan-approved state file), `ralph-task-monitor` + `ralph-watchdog` |
 | **External authenticated service** with vendor-maintained API | MCP | Auth, rate limits, API surface lives elsewhere | Notion (claude.ai bundled), Linear (`mcp.linear.app`), Sentry (`mcp.sentry.dev`), Neon (`mcp.neon.tech`), GitHub (npx server) |
 | **External authenticated service** with batch/scripted use | CLI + skill + safety rule | 32x token savings, predictable structured output | `vercel`, `railway`, `gh`, `linearis`, `sentry-cli`, `neonctl`, `tldr`, `opencli`, `qlty` |
 | **Web platform with browser login** | OpenCLI adapter | Reuses Chrome cookies, zero API keys | Twitter, Reddit, HN, LinkedIn (44 platforms; see `opencli list`) |
-| **User-prompted multi-step workflow** | Skill | Skill body is the playbook the model reads | `build`, `fix`, `release`, `tdd`, `refactor`, `maestro`, `ralph`, `security`, `test`, `review` |
+| **User-prompted multi-step workflow** | Skill | Skill body is the playbook the model reads | `build`, `fix`, `release`, `tdd`, `refactor`, `ralph`, `security`, `test`, `review` |
 | **One-step methodology guide** | Skill (lightweight) | The skill body is short but the trigger is real | `databases` (guardrail), `code-review` (guardrail), `systematic-debugging` (guardrail), `notion-bridge`, `tldr-code` |
 | **Reusable library called by other components** | `.claude/hooks/src/lib/` (Phase 3) | Imported by hooks; not registered as a hook itself | `daemon-client.ts`, `skill-router.ts`, `transcript-parser.ts`, `skill-validation-prompt.ts`, `hook-trace.ts` |
 | **Per-platform conventional script** | Plain script under `scripts/` | Not a hook, not an MCP — just a CLI helper | `scripts/cdp.mjs`, `scripts/sync-to-active.sh`, `scripts/dev-cleanup.mjs`, `scripts/audit_hook_state.mjs` (planned Phase 2) |
