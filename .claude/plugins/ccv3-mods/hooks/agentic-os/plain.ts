@@ -60,7 +60,7 @@ export const prSentence = (pr: PrFact): { text: string; needsDave: boolean } | n
     case 'CLOSED':
       return say(`Change #${n} is closed.`)
     case 'DRAFT':
-      return say(`Change #${n} is a draft, waiting on /pathway.`)
+      return say(`Change #${n} is a draft, not ready for review yet.`)
     case null:
       return say(`Change #${n} is not checked yet.`)
     default:
@@ -168,6 +168,7 @@ export const laneSentence = (lane: BoardLane): string => {
   const id = piece(lane.id, 'unnamed')
   switch (lane.state) {
     case 'active': {
+      if (lane.mine !== true && lane.owner === null) return oneLine(`A lane nobody holds yet: ${id}`)
       if (lane.mine !== true) return oneLine(`Another session holds lane ${id}`)
       const title = oneLine(lane.title)
       return oneLine(title === '' ? `You hold lane ${id}` : `You hold lane ${id}: ${title}`)
@@ -201,14 +202,21 @@ export const filesSentences = (files: FileTouch[]): string[] => {
 
 // --- Compaction (keeper) ---
 
-/** The newest record sets the line; 3 of the newest 5 that lost the plan add the kill rule. Null with no record. */
-export const keeperSentence = (records: KeeperRecord[]): { text: string; kill: boolean } | null => {
-  const judged = (Array.isArray(records) ? records : [])
+/** The records the keeper line judges, newest first (a tie goes to the later record), at most the kill window. A null or untimed record is skipped. */
+const judgedOf = (records: KeeperRecord[]): KeeperRecord[] =>
+  (Array.isArray(records) ? records : [])
     .map((one, i) => ({ one, i }))
     .filter(({ one }) => one !== null && typeof one === 'object' && known(one.at))
     .sort((a, b) => b.one.at - a.one.at || b.i - a.i)
     .slice(0, KILL_WINDOW)
     .map(({ one }) => one)
+
+/** The record that sets the keeper line: the same pick keeperSentence makes, so a row's tone and its text read one source. Null with no record. */
+export const newestKeeper = (records: KeeperRecord[]): KeeperRecord | null => judgedOf(records)[0] ?? null
+
+/** The newest record sets the line; 3 of the newest 5 that lost the plan add the kill rule. Null with no record. */
+export const keeperSentence = (records: KeeperRecord[]): { text: string; kill: boolean } | null => {
+  const judged = judgedOf(records)
   const newest = judged[0]
   if (newest === undefined) return null
   const lost = judged.filter(one => one.kept !== true).length
@@ -242,7 +250,9 @@ export const roomSentences = (room: { ctx: number | null; costUsd: number | null
 export const proofSentence = (proof: { subject: string; result?: { passed: number; failed: number } | undefined }): string => {
   const result = proof.result
   if (result !== undefined && known(result.passed) && known(result.failed)) {
-    return result.failed > 0 ? `${result.failed} of ${result.passed + result.failed} tests fail` : `${result.passed} tests pass, 0 fail`
+    const total = result.passed + result.failed
+    if (result.failed > 0) return total === 1 ? '1 of 1 test fails' : `${result.failed} of ${total} tests fail`
+    return result.passed === 1 ? '1 test passes' : `${result.passed} tests pass, 0 fail`
   }
   const subject = oneLine(proof.subject)
   return oneLine(subject === '' ? 'Proof saved' : `Proof saved for "${subject}"`)

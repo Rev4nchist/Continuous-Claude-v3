@@ -57,7 +57,7 @@ const world = (on: On, opts: World = {}) => {
   on('agent.list', () => ({ value: (opts.agents ?? []) as AgentInfo[] }))
   if (opts.runs) {
     const runs = opts.runs.map(one => ({ model: null, effort: null, spec: {}, tokens: 0, costUsd: 0, drift: null, ...one }))
-    on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: runs, version: 1 })) as never)
+    on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: { value: runs, version: 1 } })) as never)
   }
   // /os returns at once; its lane and agent reads land when the event loop settles.
   return { settle: () => clock.advance(1) }

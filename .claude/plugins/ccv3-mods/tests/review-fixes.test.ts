@@ -48,7 +48,7 @@ const world = (on: On, agents: AgentInfo[] = [], runs: unknown[] = []) => {
   on('agent.list', () => ({ value: agents }))
   on('fs.exists', () => ({ value: false }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
-  if (runs.length > 0) on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: runs, version: 1 })) as never)
+  if (runs.length > 0) on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: { value: runs, version: 1 } })) as never)
   return { settle: () => clock.advance(1) }
 }
 

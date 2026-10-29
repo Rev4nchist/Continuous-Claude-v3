@@ -145,7 +145,11 @@ export const SURFACES = [
     globs: ['.claude/plugins/ccv3-mods/**'],
     gates: [nodeGate('mods-validate', 'scripts/mods/validate-mods.mjs', [], { timeoutMs: 10 * MIN, acceptExit: modsTscNotRun })],
   },
-  { id: 'mod-scripts', globs: ['scripts/mods/**'], gates: [nodeTest('mods-script-tests', 'scripts/mods/validate-mods.test.mjs')] },
+  {
+    id: 'mod-scripts',
+    globs: ['scripts/mods/**', '.claude/plugins/claude-hud/**'],
+    gates: [nodeTest('mods-script-tests', 'scripts/mods/validate-mods.test.mjs'), nodeTest('claude-hud-config-test', 'scripts/mods/claude-hud-config.test.mjs')],
+  },
   {
     id: 'opc',
     globs: ['opc/**'],

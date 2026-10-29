@@ -531,7 +531,8 @@ describe('band compact line: ctx, 5h and 7d', () => {
       for (let width = 20; width <= 200; width++) {
         const line = text(compactLine(state({ chip, repo: 'r'.repeat(80), ...({ helpers: 12, limits: BOTH } as object) }), width))
         expect(line.startsWith(` ${words[chip]} `)).toBe(true)
-        expect(line).toContain('ctx 41%')
+        // ctx needs the whole chip plus its own 8 cells (' ctx 41%'); below that the chip alone stays, whole.
+        if (width >= ` ${words[chip]} `.length + 8) expect(line).toContain('ctx 41%')
       }
     }
   })

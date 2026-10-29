@@ -9,7 +9,7 @@ import type { Engine } from 'claude-code/testing'
 // Row budget (item 2). The core lines never move (PRD 5.3) when there is room.
 //   maxRows 1: the compact line only (key row-core-1; chip, repo, ctx, cost, helpers; no lane, no GOAL)
 //   maxRows 2: the compact line plus the HUD row (HUD up); with the HUD off the two core lines fit, so they draw
-//   maxRows 3: two core lines plus the HUD row (under 40 columns the one narrow core line, the HUD row and the widget line)
+//   maxRows 3: two core lines plus the HUD row (under 40 columns the one compact core line (it drops GOAL by design), the HUD row and the widget line)
 //   maxRows 4: plus the widget line (row-band)
 // B1 a row budget picks the wrong rows at some width from the matrix 20, 40, 120 (compact line missing, core line 2 kept, HUD or widget out of order)
 // B2 the compact line is not the compact line: it keeps lane or GOAL, or loses the chip, ctx, cost or the helper count

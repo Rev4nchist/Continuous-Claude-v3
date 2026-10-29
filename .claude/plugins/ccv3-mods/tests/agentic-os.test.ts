@@ -356,7 +356,7 @@ const boardWorld = (on: On, over: { seed?: Record<string, unknown> } = {}) => {
     seen.board.push(e.value)
     return next(e)
   }) as never)
-  for (const [key, value] of Object.entries(over.seed ?? {})) on('state.get', { plugin: 'ccv3-mods', key } as never, (() => ({ value, version: 1 })) as never)
+  for (const [key, value] of Object.entries(over.seed ?? {})) on('state.get', { plugin: 'ccv3-mods', key } as never, (() => ({ value: { value, version: 1 } })) as never)
   const boards = () => seen.argv.filter(one => one.includes('board') || one.includes('mine'))
   return { seen, boards, settle: () => clock.advance(1), advance: (ms: number) => clock.advance(ms) }
 }

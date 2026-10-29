@@ -292,6 +292,8 @@ declare module 'claude-code' {
       compactions: KeeperRecord[]
       /** Every lane `lane.mjs board --json` listed at the last good read; null before the first read (agentic-os). */
       board: BoardLane[] | null
+      /** When that board read happened (epoch ms); null before the first good read (agentic-os). The Work tab says "as of <age>". */
+      boardAt: number | null
       /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */
@@ -305,7 +307,7 @@ declare module 'claude-code' {
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
-      osTab: 'overview' | 'plan' | 'proof' | 'decisions'
+      osTab: 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions'
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
       /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */
