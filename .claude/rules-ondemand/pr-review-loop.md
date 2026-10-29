@@ -25,10 +25,12 @@ When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool w
 not in `Rev4nchist/Continuous-Claude-v3`, start a `/loop` instead. Interval 5 minutes.
 
 `pr_watch` is a ccv3-mods tool. The session checks the PR every 5 minutes with
-`scripts/github/review-status.mjs`, tells Dave with a toast, and tells you with one report line at
-READY, merged or closed; when a reviewed head has findings, a confidence below 4/5 or a failed check
-(act per "When the review lands"); when a bot did not finish a review; and when no review comes in
-60 minutes. It never merges. `pr_status` reads the same status once. Dave uses `/watch <N>` to watch
+`scripts/github/review-status.mjs` and tells Dave with a toast at READY, merged or closed. Those three
+give you no line. You get one report line only when a reviewed head has findings, a confidence below
+4/5 or a failed check (REVIEWED: act per "When the review lands"); when the PR body proof is wrong
+(PROOF); when no review comes in 60 minutes (STALLED); and when a bot did not finish a review
+(LIMITED). Use `pr_status` to read the state; it reads the same status once. `CCV3_MOD_PRLOOP_QUIET=1`
+stops the report lines too. It never merges. Dave uses `/watch <N>` to watch
 and `/land <N>` to land: pressing Land in `/land` is his merge yes.
 
 `pr_watch` also reports a draft as "waiting on /pathway" (a toast, no line to you) and a

@@ -71,6 +71,9 @@ const textResult = (text: string) => ({ result: [{ type: 'text', text }] })
 /** CCV3_MODS_OFF=1 keeps the whole module inert. */
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
 
+/** CCV3_MOD_PRLOOP_QUIET=1 (exactly "1") keeps every alert off the model: the toast and the PRS row stay. */
+const isQuiet = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MOD_PRLOOP_QUIET')) === '1'
+
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
 
 const interactive = async ($: EngineInterface): Promise<boolean> => (await read($, mode)) === 'interactive'
@@ -182,7 +185,7 @@ const lastLine = (text: string): string =>
     .filter(Boolean)
     .at(-1) ?? ''
 
-/** Tells Dave and, except for a closed PR, the model. Never merges. */
+/** Tells Dave and, for an alert the model must act on, the model. Never merges. */
 const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
   // A closed PR needs no line. A draft gets the toast only: it waits on Dave's checkpoint command, not on the model.
@@ -193,8 +196,9 @@ const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
       $.ui.toast(`Land #${alert.pr}: ${lastLine(out)}`, { timeoutMs: 15_000 })
       return
     }
-    // No or a dismissed dialog: the PR already left the list, so the report line is the trace of READY.
   }
+  // READY needs no model turn, and quiet mode wants none: the toast is the alert.
+  if (alert.state === 'READY' || (await isQuiet($))) return
   await $.prompt.submit({ text: reportLine(alert) })
 }
 
@@ -351,7 +355,7 @@ const watchCommand = async ($: EngineInterface, args: string): Promise<{ text: s
   }
   const refused = await addChecked($, pr)
   if (refused) return { text: refused }
-  return { text: `Watching #${pr}. A check runs every 5 minutes; Dave gets a toast and the model one report line at READY.` }
+  return { text: `Watching #${pr}. A check runs every 5 minutes. READY, merged and closed reach Dave by toast only; the model gets a line only for REVIEWED, PROOF, STALLED and LIMITED (none with CCV3_MOD_PRLOOP_QUIET=1).` }
 }
 
 const LAND_USAGE = 'Usage: /land <pr> [--when-ready]'
@@ -411,7 +415,7 @@ const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> 
       await $.tool.register({
         name: 'pr_watch',
         description:
-          'Adds a pull request in Rev4nchist/Continuous-Claude-v3 to the watch list. Every 5 minutes the session checks the Greptile review and CI for it. It tells Dave (toast) and you (one report line) when the PR is READY, merged or closed, when Greptile reviewed it and findings, a low confidence score or failed checks need action, and when no review comes in 60 minutes. Never merges. Call this when you open a PR in that repo.',
+          'Adds a pull request in Rev4nchist/Continuous-Claude-v3 to the watch list. Every 5 minutes the session checks the Greptile review and CI for it. READY, merged and closed reach Dave by toast only. You get one report line only when Greptile reviewed it and findings, a low confidence score or failed checks need action (REVIEWED), the PR body proof is wrong (PROOF), no review comes in 60 minutes (STALLED), or a review did not finish (LIMITED). Use pr_status to read the state. CCV3_MOD_PRLOOP_QUIET=1 stops those lines too. Never merges. Call this when you open a PR in that repo.',
         inputSchema: prSchema,
       })
     }
@@ -444,7 +448,7 @@ export const prLoop = (on: On) => {
     const refused = await addChecked($, pr)
     if (refused) return textResult(refused)
     return textResult(
-      `Watching #${pr}. The session checks every 5 minutes and tells Dave and you at READY, merged or closed, when a review needs action, and when none comes in 60 minutes. Do not merge.`,
+      `Watching #${pr}. The session checks every 5 minutes. READY, merged and closed reach Dave by toast only: you get one line only for REVIEWED, PROOF, STALLED and LIMITED. Use pr_status to read the state. Do not merge.`,
     )
   }).catch(($, e, next) => next(e))
 
