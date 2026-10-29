@@ -310,7 +310,8 @@ export const briefSummary = (brief: Brief, tasks: OsTask[]): string => {
 
 // --- Turn-end parser (the fallback when brief_set is not called) ---
 
-export type Parsed = { text: string; source: 'parsed' }
+/** `rank: 'sentence'` marks a hit from unlabelled prose ("I will ... stop at ..."). No rank means a label hit ("Restating the ask:", "Goal:", "Stop at:"). */
+export type Parsed = { text: string; source: 'parsed'; rank?: 'sentence' }
 export type ParsedTurnEnd = { goal?: Parsed; stopAt?: Parsed; ask?: AskItem[] }
 
 /** The parser reads only the end of an answer, and no line longer than this: the regexes below are quadratic on long runs. */
@@ -322,9 +323,18 @@ const parsedText = (value: string, max: number): string => clip(redact(value).te
 
 const lineOf = (raw: string): string => raw.replace(/\*\*|__/g, '').replace(/^\s*(?:[-*+]\s+|\d+[.)]\s+)/, '').trim()
 
-const RESTATE = /^(?:restate\s*[:\-–—]\s*)?(?:I\s+will|I'll|I\s+am\s+going\s+to|will)\s+(.+?)[,;.]?\s+(?:and\s+)?(?:will\s+)?stop(?:ping)?\s+(?:at|before|after)\s+(.+?)\.?$/i
-const GOAL_LABEL = /^(?:goal|restate)\s*[:\-–—]\s*(.+)$/i
-const STOP_LABEL = /^stop[\s-]?(?:at|point)\s*[:\-–—]\s*(.+)$/i
+/** The label of a restate line: "Restate:", "Restating the ask:", "Restated ask:", "Restating both asks -". CLAUDE.md's own "Restate the ask before ..." has no separator after the label, so it does not match. */
+const RESTATE_LABEL = /^restat(?:e|es|ed|ing)(?:\s+(?:the|both|your|my))?(?:\s+asks?)?\s*[:\-–—]\s*(.+)$/i
+/** An unlabelled "I will ..." sentence is a restate only when it also holds a stop clause. */
+const WILL_SENTENCE = /^(?:I\s+will|I'll|I\s+am\s+going\s+to)\s/i
+/** "stop at X", "I'll stop before X", "stop there". Group 1 is the word after stop. The match starts at the space before it. */
+const STOP_CLAUSE = /(?:^|[\s(])(?:(?:I(?:'ll|\s+will)?|will)\s+)?stop(?:ping)?\s+(at|before|after|there|here)\b/i
+/** A sentence of its own: "I stop at an open PR". */
+const STOP_SENTENCE = /^I(?:'ll|\s+will)?\s+stop(?:ping)?\s+(?:at|before|after|there|here)\b/i
+const LEAD_WILL = /^(?:I\s+will|I'll|I\s+am\s+going\s+to|will)\s+/i
+const SENTENCE = { rank: 'sentence' } as const
+const GOAL_LABEL = /^(?:goal|objective)\s*[:\-–—]\s*(.+)$/i
+const STOP_LABEL = /^(?:stop[\s-]?(?:at|point)|stopping\s+at|stop\s+condition)\s*[:\-–—]\s*(.+)$/i
 
 /**
  * Lines outside fenced code blocks, from the last 16 KB of the answer. The tail is redacted whole, before any line is
@@ -344,14 +354,38 @@ const proseLines = (source: string): string[] => {
   return out
 }
 
+/** What follows "stop at" up to the end of its sentence. "stop there" keeps the word: "there; no Phase 3 code". */
+const stopText = (body: string, clause: RegExpExecArray): string => {
+  const word = (clause[1] ?? '').toLowerCase()
+  const rest = body.slice(clause.index + clause[0].length)
+  return ((word === 'there' || word === 'here' ? word : '') + rest).split(/\.(?=\s|$)/)[0] ?? ''
+}
+
+/** A restate body split at its stop clause: the goal is what comes before it (its lead-in "and" cut), the stop-at what follows it. */
+const splitRestate = (body: string): { goal: string; stop: string | null } => {
+  const clause = STOP_CLAUSE.exec(body)
+  const goal = (clause ? body.slice(0, clause.index) : body).replace(/(?:[,;.\s]|\band\b)+$/i, '')
+  return { goal: goal.replace(LEAD_WILL, ''), stop: clause ? stopText(body, clause) : null }
+}
+
 const restate = (lines: string[]): Pick<ParsedTurnEnd, 'goal' | 'stopAt'> => {
   const found: Pick<ParsedTurnEnd, 'goal' | 'stopAt'> = {}
   for (const raw of lines) {
     const line = lineOf(raw)
-    const sentence = RESTATE.exec(line)
-    if (sentence && !found.goal) {
-      found.goal = { text: parsedText(sentence[1] ?? '', LIMITS.goal), source: 'parsed' }
-      found.stopAt ??= { text: parsedText(sentence[2] ?? '', LIMITS.stopAt), source: 'parsed' }
+    const labelled = RESTATE_LABEL.exec(line)?.[1]
+    const body = labelled ?? (WILL_SENTENCE.test(line) ? line : undefined)
+    if (body !== undefined && !found.goal) {
+      const { goal, stop } = splitRestate(body)
+      if (labelled !== undefined || stop !== null) {
+        const rank = labelled === undefined ? SENTENCE : {}
+        found.goal = { text: parsedText(goal, LIMITS.goal), source: 'parsed', ...rank }
+        if (stop !== null) found.stopAt ??= { text: parsedText(stop, LIMITS.stopAt), source: 'parsed', ...rank }
+        continue
+      }
+    }
+    if (STOP_SENTENCE.test(line) && !found.stopAt) {
+      const clause = STOP_CLAUSE.exec(line)
+      if (clause) found.stopAt = { text: parsedText(stopText(line, clause), LIMITS.stopAt), source: 'parsed', ...SENTENCE }
       continue
     }
     const goal = GOAL_LABEL.exec(line)
@@ -367,7 +401,9 @@ const restate = (lines: string[]): Pick<ParsedTurnEnd, 'goal' | 'stopAt'> => {
 const kindOf = (value: string): AskKind => {
   if (/\bblock(?:ed|er)?\b/i.test(value)) return 'block'
   if (/\b(?:approve|approval|confirm|permission)\b/i.test(value)) return 'approval'
-  return value.includes('?') ? 'question' : 'decision'
+  if (/\b(?:decide|choose|pick|select)\b/i.test(value)) return 'decision'
+  // An action line ("Paste the response", "Run the validator") is something Dave does or answers, not a choice he makes.
+  return 'question'
 }
 
 const RECOMMEND = /\s*\(?\brecommend(?:ed|ation)?\s*[:\-]\s*(.+?)\)?\.?$/i
@@ -381,6 +417,8 @@ const askOf = (item: string): AskItem => {
 
 const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
+/** "None — waiting on X" (CLAUDE.md's form, with or without a list marker). "None of the options fit" is a real item. */
+const NONE_ITEM = /^none\s*(?:[-–—:.,;]|$)/i
 
 /** The ask items of the `## Next steps` block. undefined: no block, or one with nothing readable. `None — ...`: []. */
 const nextSteps = (lines: string[]): AskItem[] | undefined => {
@@ -391,7 +429,9 @@ const nextSteps = (lines: string[]): AskItem[] | undefined => {
   for (const raw of lines.slice(start + 1)) {
     if (/^\s*#{1,6}\s/.test(raw)) break
     const item = ITEM.exec(raw)
-    if (item) items.push(askOf(lineOf(item[1] ?? '')))
+    const text = item ? lineOf(item[1] ?? '') : ''
+    if (item && NONE_ITEM.test(text)) none = true
+    else if (item) items.push(askOf(text))
     else if (/^\s*(?:\*\*)?none\b/i.test(raw)) none = true
   }
   const kept = items.filter(one => one.text !== '').slice(0, LIMITS.askItems)
@@ -410,14 +450,27 @@ export const parseTurnEnd = (answer: string): ParsedTurnEnd => {
   }
 }
 
-/** Folds parsed values in. A value from brief_set stays; a parsed value fills an empty one or replaces an older parsed one. */
+/**
+ * What one model request of the main loop gives (hooks/hud calls it per turn.step): goal and stop-at only. The restate
+ * line comes early in a turn; the Next steps block belongs to the final text, which turn.complete parses.
+ */
+export const parseStep = (answer: string): Pick<ParsedTurnEnd, 'goal' | 'stopAt'> => {
+  const { goal, stopAt } = parseTurnEnd(answer)
+  return { ...(goal ? { goal } : {}), ...(stopAt ? { stopAt } : {}) }
+}
+
+/**
+ * Folds parsed values in. A value from brief_set stays. A label hit fills an empty slot or replaces an older parsed value.
+ * A sentence hit (unlabelled prose) fills an empty slot only: narration in a later step must not replace the restate.
+ */
 export const mergeParsed = (brief: Brief | null, parsed: ParsedTurnEnd, now: number): Brief => {
   const base = brief ?? emptyBrief(now)
   const next: Brief = { ...base, sources: { ...base.sources } }
   let changed = false
   for (const key of ['goal', 'stopAt'] as const) {
     const value = parsed[key]
-    if (value && base.sources[key] !== 'brief_set' && base[key] !== value.text) {
+    const open = value?.rank === 'sentence' ? base.sources[key] === undefined : base.sources[key] !== 'brief_set'
+    if (value && open && base[key] !== value.text) {
       next[key] = value.text
       next.sources[key] = 'parsed'
       changed = true

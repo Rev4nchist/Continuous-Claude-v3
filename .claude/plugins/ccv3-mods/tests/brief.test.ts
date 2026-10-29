@@ -47,6 +47,11 @@ import type { AgentRun, OsTask } from '../types'
 // M1..M3 a parsed value overrides a brief_set value, or does not fill an empty one
 // E1..E8 the wiring: registration, snapshot, stray key, prompt.submit, turn end, secrets, clear, off switch
 // C10 E11 E12 E13 the chip ignores a running subagent run; a subagent turn.start overwrites the main turn, or clears a refusal, or is not passed on
+// P13..P14 "None — waiting on X" becomes an ask; a real item that starts with "None of" stops being one
+// P15..P16 an action line ("Paste...", "Run...") is a decision ask; a real "Decide..." line stops being one
+// P17..P22 the restate parser misses real lines (Restating the ask:, Restated ask:, Restate the ask:, a bold label, "I stop at" in a later sentence)
+// P23 a widened regex reads CLAUDE.md's own instruction text as a goal; P24 the replay over real restate lines from the session transcripts
+// E11..E14 a turn.step answer is never parsed; a subagent step or a parsed value overrides a main or brief_set value; a "None" turn leaves the chip on waiting-on-dave
 
 const NOW = 1_000_000
 const secrets = {
@@ -585,6 +590,170 @@ describe('mergeParsed', () => {
   })
 })
 
+// --- The parser on real answers (audit 2026-10-28, section 2 items 2 and 3) ---
+
+/** Restate lines the model wrote in this repo's own sessions (364266d5, b32775bc, 8ae5db83, 6d039146, 4b739767, 6899a287). `stop`: a part of the stop-at text, `true` when only its presence counts, `null` when the line has none. */
+const REAL_RESTATES: { line: string; goal: string; stop: string | true | null }[] = [
+  {
+    line: 'Restating the ask: I resume the handoff and do follow-up 1. That means scrubbing `rawProject` in `/api/mission-control`, tests first, in a new worktree off `main`. I stop at an open PR and wait for your merge yes.',
+    goal: 'rawProject',
+    stop: 'open PR',
+  },
+  {
+    line: "Restating the ask: I'll bank the Trivy gains in a separate PR that lowers `scripts/ratchets/trivy-baseline.json` to the current findings. It gets its own worktree and branch from `main`, and it won't touch #200. I'll stop after the pre-PR gate and opening the PR, with no merge until you say so.",
+    goal: 'Trivy',
+    stop: 'pre-PR gate',
+  },
+  {
+    line: 'Restating: I will build PR 1 in a new worktree on a new branch. It adds the banner and asset SVGs, a new README opening, and keeps the old body below under a Reference heading. I will stop before commit so you can review the diff.',
+    goal: 'PR 1',
+    stop: 'commit',
+  },
+  {
+    line: 'Restating: I will build PR 2 in a new worktree on `docs/readme-reference-move-pr2`, cut from `main` at `6f402bb6`. It moves the reference text into `docs/harness/`, shrinks the README, folds the counts and gates, and re-runs the gates. I will stop before commit, and landing is held until the READY change is on `main`.',
+    goal: 'PR 2',
+    stop: 'commit',
+  },
+  {
+    line: 'Restating: PR 3 adds a "From idea to merge" section to the README, as a stage table plus one SVG, on a new branch and worktree. I read your two yeses as the section (not the one-line change) and `risk:docs`. I will stop before commit.',
+    goal: 'From idea to merge',
+    stop: 'commit',
+  },
+  {
+    line: "Restating the ask: I'll resume P0 step 1 on lane `sdlc-os`. I'll write the role SQL and a dry-run wrapper on branch `feat/sdlc-os-p0` in a new worktree, then show you the dry run. I stop before any DB write.",
+    goal: 'P0 step 1',
+    stop: 'DB write',
+  },
+  {
+    line: "Restating the ask: I'll start P1a (the `brief_set` mod tool and the Session Pane in the `ccv3-mods` agentic-os hook) on a new worktree. I'll stop at the first point that needs your yes, and I'll still land #191 at READY as you said. First I read what the PRD says P1a is.",
+    goal: 'P1a',
+    stop: 'first point',
+  },
+  {
+    line: 'Restating: I will (1) remove the DW-91 worktree and its merged local branch, (2) brief you on where Phase 3 (DW-80) stands and what must happen before it starts, and (3) write a next-session handoff so this session can close. I stop there; no Phase 3 code.',
+    goal: 'DW-91',
+    stop: true,
+  },
+  { line: "Restating the ask: I'll create branch `feat/sdlc-os-p1b` in a new worktree at `C:\\Users\\dkhay\\continuous-claude\\.claude\\worktrees\\sdlc-os-p1b`, based on `main`. The primary checkout stays on `main`, and I'll check that before and after.", goal: 'feat/sdlc-os-p1b', stop: null },
+  { line: "Restating the ask: plan P1b in `C:\\Users\\dkhay\\continuous-claude\\.claude\\worktrees\\sdlc-os-p1b`. I'll read the app code first and write nothing yet.", goal: 'plan P1b', stop: null },
+  {
+    line: "Restating both asks: start part B2 (Board and PR panel) in its own worktree from `main`, and give you my recommendation on the smaller follow-ups. For the `hud` one, cost, limits and context must not repeat in the band above the prompt. I'm checking what the band shows today before I recommend, and creating the B2 worktree meanwhile.",
+    goal: 'B2',
+    stop: null,
+  },
+  { line: 'Restating: I will study well-regarded GitHub READMEs, then write one HTML report with a plan and mock examples to redo the CCv3 README as an educational guide. I will not edit the repo README. The report goes in `.claudedocs/`.', goal: 'GitHub READMEs', stop: null },
+  { line: 'Restating: commit the PR 2 build with git-safe, push to `fork`, open the PR, and add only the `review:coderabbit` label. No Greptile trigger and no merge.', goal: 'commit the PR 2 build', stop: null },
+  { line: 'Restated ask: run P0 (gate zero) from the scratchpad with no repo change. Tell the other two sessions what the video-intake lanes will touch, so we avoid conflicts.', goal: 'P0 (gate zero)', stop: null },
+]
+
+const PR_LINE = REAL_RESTATES[0]!.line
+
+describe('parseTurnEnd on real answers', () => {
+  test('P13 "None — waiting on X" in any CLAUDE.md form is an empty ask list, never an ask', () => {
+    const forms = [
+      '1. None — waiting on the CI run.',
+      '1. None - waiting on the CI run.',
+      '- None — waiting on the CI run.',
+      '1. **None** — waiting on the Greptile review.',
+      '1. none — waiting on Eve.',
+    ]
+    const wrong = forms.filter(form => JSON.stringify(parseTurnEnd(`Opened PR 12.\n\n## Next steps\n${form}`).ask) !== '[]')
+    expect(wrong).toEqual([])
+  })
+
+  test('P14 an item that only starts with "None of" is still an ask', () => {
+    const ask = parseTurnEnd('## Next steps\n1. None of the three options fit. Pick another approach?').ask
+    expect(ask).toHaveLength(1)
+    expect(ask?.[0]?.text).toContain('None of the three options')
+  })
+
+  test('P15 a plain action line (paste, run, open) is not a decision ask', () => {
+    const answer = [
+      '## Next steps',
+      '1. Paste the T2 response here.',
+      '2. Run `node scripts/mods/validate-mods.mjs` in the worktree.',
+      '3. Open the PR for review.',
+    ].join('\n')
+    const ask = parseTurnEnd(answer).ask ?? []
+    expect(ask.map(one => one.text)).toHaveLength(3)
+    expect(ask.filter(one => one.kind === 'decision').map(one => one.text)).toEqual([])
+  })
+
+  test('P16 a line that asks Dave to decide or choose stays a decision, with its recommendation', () => {
+    const ask = parseTurnEnd(
+      '## Next steps\n1. Decide whether to land PR 12 now or wait for CI. Recommend: wait for CI.\n2. Choose the tab layout: one row or two rows.',
+    ).ask
+    expect(ask?.map(one => one.kind)).toEqual(['decision', 'decision'])
+    expect(ask?.[0]?.recommend).toBe('wait for CI')
+  })
+
+  test('P17 "Restating the ask:" gives the goal without the stop clause, and the stop-at from the later sentence', () => {
+    const parsed = parseTurnEnd(PR_LINE)
+    expect(parsed.goal?.text).toContain('rawProject')
+    expect(parsed.goal?.text).not.toMatch(/\bstop\b/i)
+    expect(parsed.goal?.source).toBe('parsed')
+    expect(parsed.stopAt?.text ?? '').toContain('open PR')
+    expect(parsed.stopAt?.source).toBe('parsed')
+  })
+
+  test('P18 "Restate the ask: I will ... and stop at ..." (the CLAUDE.md wording) gives goal and stop-at', () => {
+    const forms = [
+      'Restate the ask: I will add the steward model to the ccv3-mods plugin in the os-pane-steward worktree, and I will stop at the validator run.',
+      'Restate the ask — I will add the steward model to the ccv3-mods plugin in the os-pane-steward worktree and stop at the validator run.',
+    ]
+    for (const form of forms) {
+      const parsed = parseTurnEnd(form)
+      expect(parsed.goal?.text ?? '').toContain('steward model')
+      expect(parsed.stopAt?.text ?? '').toContain('validator run')
+    }
+  })
+
+  test('P19 a bold label around the restate still parses', () => {
+    const parsed = parseTurnEnd(PR_LINE.replace('Restating the ask:', '**Restating the ask:**'))
+    expect(parsed.goal?.text ?? '').toContain('rawProject')
+    expect(parsed.stopAt?.text ?? '').toContain('open PR')
+  })
+
+  test('P20 "I stop at X" in a sentence of its own gives the stop-at', () => {
+    const parsed = parseTurnEnd('Reading the handoff first.\nI stop at an open PR.\n')
+    expect(parsed.stopAt?.text).toBe('an open PR')
+  })
+
+  test('P21 "I stop there" ends the restate: a stop-at is found', () => {
+    const line = REAL_RESTATES.find(one => one.line.includes('DW-91'))!.line
+    const parsed = parseTurnEnd(line)
+    expect(parsed.goal?.text ?? '').toContain('DW-91')
+    expect(parsed.stopAt?.source).toBe('parsed')
+  })
+
+  test('P22 a restate in a full answer with a None block gives goal, stop-at and no ask', () => {
+    const answer = [PR_LINE, '', 'Opened the PR and wrote the evidence.', '', '## Next steps', '1. None — waiting on your merge yes.'].join('\n')
+    const parsed = parseTurnEnd(answer)
+    expect(parsed.goal?.text ?? '').toContain('rawProject')
+    expect(parsed.stopAt?.text ?? '').toContain('open PR')
+    expect(parsed.ask).toEqual([])
+  })
+
+  test('P23 the instruction text of CLAUDE.md is not a restate', () => {
+    const parsed = parseTurnEnd('Restate the ask before non-trivial work. One line: what you will build, where, and where you will stop.')
+    expect(parsed.goal).toBeUndefined()
+    expect(parsed.stopAt).toBeUndefined()
+  })
+
+  test('P24 replay: every real restate line gives its goal, never the stop clause in the goal, and its stop-at', () => {
+    const misses: string[] = []
+    for (const { line, goal, stop } of REAL_RESTATES) {
+      const parsed = parseTurnEnd(line)
+      const label = line.slice(0, 48)
+      if (!(parsed.goal?.text ?? '').includes(goal)) misses.push(`goal: ${label} -> ${JSON.stringify(parsed.goal?.text)}`)
+      if (stop !== null && /\bI(?:'ll| will)? stop\b/i.test(parsed.goal?.text ?? '')) misses.push(`goal holds the stop clause: ${label}`)
+      if (stop === true && parsed.stopAt === undefined) misses.push(`stop missing: ${label}`)
+      if (typeof stop === 'string' && !(parsed.stopAt?.text ?? '').includes(stop)) misses.push(`stop: ${label} -> ${JSON.stringify(parsed.stopAt?.text)}`)
+    }
+    expect(misses).toEqual([])
+  })
+})
+
 // --- The wiring: the real mod, with the engine below it mocked. ---
 
 const BRIEF_TOOL = 'mcp__ccv3-mods__brief_set'
@@ -1008,5 +1177,113 @@ describe('brief_set in the mod', () => {
     await startMod($, true)
     expect(Object.keys(seen.tools)).toEqual([])
     expect(seen.writes).toEqual([])
+  })
+})
+
+// --- The turn.step answers of the main loop feed the parser (audit 2026-10-28, section 2 item 2) ---
+
+const beneathStep = { answer: '' }
+
+/** The engine below answers every model request with `beneathStep.answer`; the mod's turn.step hook sees it as `result.answer`. */
+const stepWorld = (on: On, env: Record<string, string> = {}) => {
+  on('turn.step', async function* (_$, e) {
+    return { turnId: e.turnId, index: e.index, answer: beneathStep.answer, toolUses: [], stopReason: 'end_turn' as const, usage: null }
+  })
+  return world(on, env)
+}
+
+/** One model request of a turn: `agentId` makes it a subagent's. */
+const modelStep = async ($: Engine, answer: string, extra: { agentId?: string; index?: number } = {}) => {
+  beneathStep.answer = answer
+  const stream = $.turn.step({ turnId: 't1', index: extra.index ?? 0, messageCount: 1, model: 'claude-opus-5-5', ...extra } as never)
+  for await (const _chunk of stream) {
+    // drain
+  }
+  await stream.result
+}
+
+const RESTATE_STEP = `${PR_LINE}\n\nI read the handoff first.`
+
+describe('turn.step answers in the mod', () => {
+  test('E11 a restate in the first model request of a turn fills goal and stop-at, though the final text has none', async ($, on) => {
+    const seen = stepWorld(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await modelStep($, RESTATE_STEP, { index: 0 })
+    await modelStep($, 'The tests pass.', { index: 1 })
+    await modelStep($, 'Checking the diff.', { index: 2 })
+    await turnEnd($, 'Opened the PR.')
+    const brief = lastSnapshot(seen).brief
+    expect(brief?.goal ?? '').toContain('rawProject')
+    expect(brief?.stopAt ?? '').toContain('open PR')
+    expect(brief?.sources).toMatchObject({ goal: 'parsed', stopAt: 'parsed' })
+  })
+
+  test('E12 a subagent request that restates something else does not replace the main goal', async ($, on) => {
+    const seen = stepWorld(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await modelStep($, RESTATE_STEP, { index: 0 })
+    await modelStep($, 'Restating the ask: I will delete every branch in the repo. I stop before the push.', { agentId: 'a1', index: 0 })
+    await turnEnd($, 'Done.')
+    const brief = lastSnapshot(seen).brief
+    expect(brief?.goal ?? '').toContain('rawProject')
+    expect(brief?.goal ?? '').not.toContain('delete')
+    expect(brief?.stopAt ?? '').toContain('open PR')
+  })
+
+  test('E13 a brief_set goal survives a step restate, and the stop-at it left empty is filled', async ($, on) => {
+    const seen = stepWorld(on)
+    await startMod($, true)
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'from the tool' })
+    await $.turn.start({ turnId: 't1' } as never)
+    await modelStep($, RESTATE_STEP, { index: 0 })
+    await turnEnd($, 'Done.')
+    const brief = lastSnapshot(seen).brief
+    expect(brief.goal).toBe('from the tool')
+    expect(brief.sources.goal).toBe('brief_set')
+    expect(brief?.stopAt ?? '').toContain('open PR')
+  })
+
+  test('E14 a "None — waiting on X" turn clears the ask of the turn before and the chip leaves waiting-on-dave', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
+    await turnEnd($, 'Waiting.\n\n## Next steps\n1. None — waiting on the CI run.')
+    const after = lastSnapshot(seen)
+    expect(after.brief.ask).toEqual([])
+    expect(after.chip).not.toBe('waiting-on-dave')
+  })
+
+  test('E15 narration in a later step ("I will ... stop at ...", "I\'ll stop here ...") never replaces the labelled restate', async ($, on) => {
+    const seen = stepWorld(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await modelStep($, RESTATE_STEP, { index: 0 })
+    await modelStep($, 'The tests pass.', { index: 1 })
+    await modelStep($, 'I will check the logs and stop at the first error.', { index: 2 })
+    await modelStep($, "I'll stop here and wait for your go-ahead.", { index: 3 })
+    await turnEnd($, 'Done.')
+    const brief = lastSnapshot(seen).brief
+    expect(brief?.goal ?? '').toContain('rawProject')
+    expect(brief?.goal ?? '').not.toContain('check the logs')
+    expect(brief?.stopAt ?? '').toContain('open PR')
+    expect(brief?.stopAt ?? '').not.toContain('first error')
+    expect(brief?.stopAt ?? '').not.toContain('go-ahead')
+  })
+
+  test('E15b an unlabelled "I will ... stop at ..." sentence fills an empty goal and stop-at; a labelled restate then replaces it', async ($, on) => {
+    const seen = stepWorld(on)
+    await startMod($, true)
+    await $.turn.start({ turnId: 't1' } as never)
+    await modelStep($, 'I will check the logs and stop at the first error.', { index: 0 })
+    await turnEnd($, 'Waiting.')
+    expect(lastSnapshot(seen).brief?.goal ?? '').toContain('check the logs')
+    expect(lastSnapshot(seen).brief?.stopAt ?? '').toContain('the first error')
+    await modelStep($, RESTATE_STEP, { index: 1 })
+    await turnEnd($, 'Done.')
+    expect(lastSnapshot(seen).brief?.goal ?? '').toContain('rawProject')
+    expect(lastSnapshot(seen).brief?.stopAt ?? '').toContain('open PR')
   })
 })
