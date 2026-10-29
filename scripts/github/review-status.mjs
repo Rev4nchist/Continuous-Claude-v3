@@ -757,6 +757,34 @@ export function codeRabbitOutsideDiff({ reviews = [] }) {
   return total;
 }
 
+/** The reason a draft carries. The pr-loop mod holds this text by value (pr-loop-sync.test.mjs pins it). */
+export const DRAFT_REASON = 'PR is a draft (no bot review on drafts)';
+
+const CODERABBIT_REQUEST = /^@coderabbitai\s+(?:full\s+)?review\b/i;
+const isBotAuthor = (user) => user?.type === 'Bot' || /\[bot\]$/i.test(user?.login || '');
+
+/** Issue comments by a person (not a bot) whose trimmed body starts with "@coderabbitai review" or "@coderabbitai full review". */
+export function coderabbitRequestComments(comments = []) {
+  return (comments || []).filter((c) => !isBotAuthor(c?.user) && CODERABBIT_REQUEST.test((c?.body || '').trim()));
+}
+
+/**
+ * The CodeRabbit PR reviews bought so far. 0 with no bot review and no request. Else max(botReviews, requests + opening), where
+ * botReviews = distinct commit_id among the CodeRabbit app reviews and opening = 1 when the first bot review is older than the first
+ * request (the automatic opening review was not asked for). Requests whose review is not in yet still count.
+ */
+export function coderabbitRoundsOf({ reviews = [], comments = [] } = {}) {
+  const bot = (reviews || []).filter((r) => isCodeRabbitUser(r?.user));
+  const requests = coderabbitRequestComments(comments);
+  if (bot.length === 0 && requests.length === 0) return 0;
+  const botReviews = new Set(bot.map((r) => r.commit_id)).size;
+  const at = (iso) => Date.parse(iso);
+  const firstReview = Math.min(...bot.map((r) => at(r.submitted_at)));
+  const firstRequest = Math.min(...requests.map((c) => at(c.created_at)));
+  const opening = bot.length > 0 && requests.length > 0 && firstReview < firstRequest ? 1 : 0;
+  return Math.max(botReviews, requests.length + opening);
+}
+
 const HANDLED_HEADING = /^\s*(?:#{1,6}\s+)?(?:\*\*|__)?Outside-diff:\s*handled(?:\*\*|__)?:?\s*$/i;
 const TOP_BULLET = /^[-*+]\s+\S/;
 const EMPTY_BULLET = /^[-*+]\s*$/;
@@ -822,7 +850,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
   const reasons = [];
   if (pull.merged) reasons.push('already merged');
   if (pull.state !== 'open') reasons.push(`PR is ${pull.state}`);
-  if (pull.draft === true) reasons.push('PR is a draft (no bot review on drafts)');
+  if (pull.draft === true) reasons.push(DRAFT_REASON);
   reasons.push(...proof.problems);
   reasons.push(...(need.blockers ?? []));
   const greptileBlocks = greptileReasons({
@@ -878,6 +906,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     // coderabbitRetryMinutes: CodeRabbit's own "next review in N minutes" figure from the notice, else null.
     // A rate-limited PR must not get an @coderabbitai review request (the pr-loop mod says so).
     coderabbitRateLimited, coderabbitRetryMinutes,
+    // PR checkpoint fields the pr-loop mod reads: draft state, the label names, the requests people posted, and the rounds bought.
+    isDraft: pull.draft === true, labels, coderabbitRequests: coderabbitRequestComments(comments).length, coderabbitRounds: coderabbitRoundsOf({ reviews, comments }),
     // 'comment' or 'body': where the usable Greptile summary came from. null when none was used.
     summarySource: reviewedHead ? summary.source : null,
     // rateLimited is the pre-Greptile name for "the reviewer did not finish". Older mod copies read it.
