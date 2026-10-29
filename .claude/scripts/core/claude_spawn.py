@@ -334,7 +334,7 @@ MAX_DEPTH = 3
 # Agent routing table: keyword patterns -> agent name
 AGENT_ROUTING = {
     # Orchestrate (check first - high priority)
-    r"\b(coordinate|orchestrate|multi-agent)\b": "maestro",
+    r"\b(coordinate|orchestrate|multi-agent)\b": "architect",
     # Implement
     r"\b(implement|build|create)\b.*\b(feature|system|module)\b": "kraken",
     r"\b(fix|tweak|update|small)\b": "spark",
@@ -830,7 +830,7 @@ def register_agent_in_db(
 
 
 # Lead agents that can spawn other agents
-LEAD_AGENTS = {"kraken", "architect", "phoenix", "herald", "maestro"}
+LEAD_AGENTS = {"kraken", "architect", "phoenix", "herald"}
 
 # Worker agents (leaf nodes, no spawning)
 WORKER_AGENTS = {

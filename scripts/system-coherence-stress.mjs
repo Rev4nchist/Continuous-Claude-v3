@@ -272,7 +272,6 @@ async function simulateFreshProject(targetDir, label = 'synthetic') {
     'session-register',
     'session-start-continuity',
     'session-start-init-check',
-    'session-start-recovery',
     'roadmap-reconcile',
     'session-start-context-loaders',
     'session-start-memory-loaders',

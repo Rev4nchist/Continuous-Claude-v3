@@ -46,7 +46,7 @@ Replace `<name>` with your machine profile. Create it first, as described in
 The wizard handles:
 - Docker PostgreSQL + pgvector container (4 tables, idempotent schema)
 - Hook installation + TypeScript build (73 source hooks compiled to dist/*.mjs)
-- Skills (80), agents (35) and rules (20 on-demand, plus the core set) installed to `~/.claude/`
+- Skills (80), agents (34) and rules (20 on-demand, plus the core set) installed to `~/.claude/`
 - CLAUDE.md and RULES.md behavioral config from templates
 - Environment variables (`CLAUDE_OPC_DIR`, `PYTHONUTF8=1` on Windows)
 - Git post-commit hook for automatic repo-to-active sync
@@ -243,7 +243,7 @@ for that account (step 1). Full detail:
 - **Persistent memory** -- PostgreSQL + pgvector semantic search across sessions
 - **95+ hook source files** -- auto-inject context, enforce patterns, track state
 - **40+ specialized agents** -- scout, kraken, architect, debug-agent, oracle, etc.
-- **150+ skills** -- /build, /fix, /explore, /maestro workflows
+- **150+ skills** -- /build, /fix, /explore workflows
 - **Cross-session continuity** -- handoffs, knowledge trees, ROADMAP tracking
 - **Auto-sync** -- git commits in the repo auto-deploy to ~/.claude/
 

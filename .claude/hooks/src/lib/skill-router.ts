@@ -2,7 +2,7 @@
 /**
  * Skill Router API - TypeScript Implementation
  *
- * Provides deterministic skill/agent routing for Maestro orchestration.
+ * Provides deterministic skill/agent routing for workflow orchestration.
  * Mirrors the Python implementation for native performance in hooks.
  *
  * USAGE:
@@ -117,8 +117,6 @@ const PATTERN_AGENT_MAP: Record<string, string> = {
     adversarial: 'validate-agent',
     map_reduce: 'kraken',
     jury: 'validate-agent',
-    blackboard: 'maestro',
-    chain_of_responsibility: 'maestro',
     event_driven: 'kraken',
     circuit_breaker: 'kraken',
 };
@@ -142,7 +140,6 @@ const AGENT_TYPES: Record<string, string> = {
     profiler: 'performance',
     herald: 'release',
     scribe: 'documentation',
-    maestro: 'orchestration',
 };
 
 // =============================================================================
@@ -536,11 +533,11 @@ function calculateComplexity(
         .reduce((sum, s) => sum + s.weight, 0);
     const total = Math.min(promptScore + fileScore, 1.0);
 
-    let action: 'proceed' | 'suggest_maestro' | 'force_maestro' = 'proceed';
+    let action: 'proceed' | 'suggest_workflow' | 'force_workflow' = 'proceed';
     if (total >= COMPLEXITY_THRESHOLD_FORCE) {
-        action = 'force_maestro';
+        action = 'force_workflow';
     } else if (total >= COMPLEXITY_THRESHOLD_SUGGEST) {
-        action = 'suggest_maestro';
+        action = 'suggest_workflow';
     }
 
     return {

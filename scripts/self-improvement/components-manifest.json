@@ -26,8 +26,8 @@
     {
       "id": "workflows",
       "name": "Workflows",
-      "summary": "Orchestrated workflows: Maestro (multi-step orchestration) and the deterministic Workflow tool (fan-out/pipeline/verify).",
-      "currentImpl": [".claude/skills/maestro/"],
+      "summary": "Orchestrated workflows: the deterministic Workflow tool (fan-out/pipeline/verify).",
+      "currentImpl": [],
       "frontierHints": ["agentic workflow patterns", "plan-execute-verify loops", "deterministic vs model-driven orchestration", "LangGraph/agent supervisors", "self-correcting workflows", "adversarial verification"]
     },
     {

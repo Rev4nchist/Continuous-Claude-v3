@@ -39,7 +39,6 @@ Top MCP Servers:
 - [ ] claude_ai_Excalidraw — collaborative diagramming for architecture sketches. Activate via claude.ai → Settings → Connectors.
 
 ### Skills to Know About
-- /maestro — multi-step orchestrator that routes work to specialized agents (interview-gated)
 - /plan — planning mode for moderate-to-complex tasks before any implementation
 - /goal — track project goals and progress against ROADMAP.md
 - /compact — manually compact context before it auto-truncates mid-task
