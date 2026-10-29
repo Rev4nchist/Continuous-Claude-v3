@@ -1572,6 +1572,52 @@ describe('B: the checkpoint gate (PR B)', () => {
     ]) expect(denied(c, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern, c).toBe('review-label');
   });
 
+  // ---- a foreign repo must not hide a CCv3 command in any text form (Dave's rule) ----
+  // A command names a foreign repo only from a literal -R / --repo, or an inline `GH_REPO=o/r gh ...` prefix, in a raw text
+  // with exactly one `gh` word and none of $( ` # ; & | CR LF. Endpoint text, a PR URL and a GH_REPO statement name nothing.
+  it('B9f: text that only looks like a foreign target (title, comment, substitution, second gh, statement) leaves the checkout in charge', () => {
+    const TITLE = '--title "gh api repos/x/y/issues/1"';
+    const GRAPHQL = `gh api graphql -f query='mutation{markPullRequestReadyForReview(input:{pullRequestId:"PR_x"}){clientMutationId}}' -f n=repos/x/y/issues/1`;
+    const cases: Array<{ c: string; tool: string; pattern: string }> = [
+      { c: `gh pr "create" --draft --body-file ${DB} ${TITLE}`, tool: 'Bash', pattern: 'stamp' },
+      { c: `gh pr cre''ate --draft --body-file ${DB} ${TITLE}`, tool: 'Bash', pattern: 'stamp' },
+      { c: `gh pr "create" --draft --body-file ${DB} ${TITLE}`, tool: 'PowerShell', pattern: 'stamp' },
+      { c: `gh pr edit 201 --add-label review:deep ${TITLE}`, tool: 'Bash', pattern: 'review-label' },
+      { c: 'gh pr ready 201 # gh api repos/x/y/issues/1', tool: 'Bash', pattern: 'ready' },
+      { c: GRAPHQL, tool: 'Bash', pattern: 'ready' },
+      { c: 'gh api repos/{owner}/{repo}/issues/201/labels -f labels[]=review:deep -f n=repos/x/y/issues/1', tool: 'Bash', pattern: 'review-label' },
+      { c: 'gh api repos/x/y/issues/1/comments -f body="$(gh pr ready 201)"', tool: 'Bash', pattern: 'ready' },
+      { c: 'gh api repos/x/y/issues/1/comments -f body=`gh pr ready 201`', tool: 'Bash', pattern: 'ready' },
+      { c: 'gh pr comment 1 -R x/y --body (gh pr ready 201)', tool: 'PowerShell', pattern: 'ready' },
+      { c: 'GH_REPO=x/y; gh pr ready 201', tool: 'Bash', pattern: 'ready' },
+      { c: "$env:GH_REPO='x/y'; gh pr ready 201", tool: 'Bash', pattern: 'ready' },
+      { c: 'export GH_REPO=x/y; gh pr ready 201', tool: 'PowerShell', pattern: 'ready' },
+      { c: "$env:GH_REPO='x/y'; gh pr ready 201", tool: 'PowerShell', pattern: 'ready' },
+      { c: 'gh pr comment 1 -R x/y\rgh pr ready 201', tool: 'PowerShell', pattern: 'ready' },
+      { c: 'gh pr ready 201 -R x/y; gh pr ready 202', tool: 'Bash', pattern: 'ready' },
+    ];
+    // Collect every miss so one run lists them all.
+    const misses = cases
+      .map(({ c, tool, pattern }) => ({ tool, c, pattern, got: denied(c, { config: ENFORCE, stamp: false }, tool)?.pattern ?? 'allow' }))
+      .filter((r) => r.got !== r.pattern)
+      .map((r) => `${r.tool} ${JSON.stringify(r.c)}: want ${r.pattern}, got ${r.got}`);
+    expect(misses).toEqual([]);
+  });
+
+  it('B9g: a literal -R, --repo or inline GH_REPO prefix in a single gh call still names a foreign repo', () => {
+    for (const c of [
+      'gh pr ready 5 -R x/y',
+      'gh pr ready 5 --repo=x/y',
+      'gh pr ready 5 --repo x/y',
+      'GH_REPO=x/y gh pr ready 5',
+      'gh pr edit 5 -R x/y --add-label review:deep',
+    ]) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(act(c, { config: ENFORCE }, tool).action, `${tool}: ${c}`).toBe('allow');
+      }
+    }
+  });
+
   // ---- fix round, critic 6: gh.exe and a quoted gh on the PR create stamp rules (#193, #197) ----
   it('B16: gh.exe, a quoted gh and a spliced subcommand are a PR create: no stamp is a "stamp" deny, in warn mode too', () => {
     for (const c of [
