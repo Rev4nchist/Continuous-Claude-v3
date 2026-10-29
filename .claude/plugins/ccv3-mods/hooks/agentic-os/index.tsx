@@ -671,8 +671,6 @@ export const agenticOs = (on: On) => {
         repo: (await read($, git))?.repo ?? null,
         branch: (await read($, git))?.branch ?? null,
         lane: now.lanes?.[0]?.id ?? null,
-        ctx: now.ctx,
-        costUsd: hudNow?.costUsd ?? null,
         // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
         fallback: null,
         now: at,
@@ -686,7 +684,8 @@ export const agenticOs = (on: On) => {
     const spare = e.props.maxRows - coreRows
     let hudRow = null
     if (hudNow !== null && spare >= 1) {
-      const parts = hudParts(hudNow, now.ctx, cacheView(await read($, cache), await $.clock.now()))
+      // The status line owns ctx, cost and limits (Dave, PR 3): the HUD row keeps the model, the advisor and the cache element.
+      const parts = hudParts({ ...hudNow, costUsd: null, limits: [] }, null, cacheView(await read($, cache), await $.clock.now()))
       // The terminal draws no Svg: its HUD is text gauges. Every other surface gets the rings and bars.
       if (e.surface === 'terminal' || !('Svg' in elements)) hudRow = spansRow('row-hud', hudSpans(parts))
       else {
@@ -710,9 +709,9 @@ export const agenticOs = (on: On) => {
       }
     }
     // The widget line below keeps the pre-core band (plan title, task progress, the step, PRs, agents) under its old key.
-    // With the HUD up, ctx lives in its ring, so the widget line leaves it out (line 1 shows it too). Its row comes after the HUD and the core lines.
+    // Its row comes after the HUD and the core lines.
     const widgetRoom = spare - (hudRow === null ? 0 : 1)
-    const bandRow = quiet || widgetRoom < 1 ? null : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, at, e.props.bodyColumns, ledgerBandSpans(runs)))
+    const bandRow = quiet || widgetRoom < 1 ? null : spansRow('row-band', bandSpans(now, at, e.props.bodyColumns, ledgerBandSpans(runs)))
     return (
       <Box flexDirection="column">
         {lines.map((line, i) => spansRow(`row-core-${i + 1}`, line))}
@@ -744,7 +743,6 @@ export const agenticOs = (on: On) => {
       repo: where?.repo ?? null,
       branch: where?.branch ?? null,
       worktree: where?.worktree ?? null,
-      costUsd: (await read($, hud))?.costUsd ?? null,
       activeAt: await read($, activeAt),
       drift: await driftNow($),
     }

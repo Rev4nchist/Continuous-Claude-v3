@@ -5,12 +5,12 @@ import { isAskStale, proofOf } from './brief'
 import type { Chip } from './brief'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
-import { agentRows, bar, gaugeTone, gap, head, laneRows, prRows } from './pane-model'
+import { agentRows, bar, gap, head, laneRows, prRows } from './pane-model'
 import type { Drift } from './steward'
 import type { PaneRow, Span, Tone } from './pane-model'
 
 // The /os pane tabs (PRD 5.3), as plain rows. Pure: no engine, no clock (the caller passes `now`).
-//   Overview   chip, goal, the dim `brief stale` reason, stop-at, where, plan bar, counts, now, ctx and cost, lane, agents, PRs
+//   Overview   chip, goal, the dim `brief stale` reason, stop-at, where, plan bar, counts, now, lane, agents, PRs (no ctx, cost or limits: the status line has them)
 //   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
 //   Proof      done-but-unproven steps first, then each proof with its artifact
 //   Decisions  the decision log newest first, then the open asks
@@ -55,7 +55,6 @@ export type TabState = {
   repo: string | null
   branch: string | null
   worktree: string | null
-  costUsd: number | null
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
   /** The steward's verdict on the brief (steward.ts `drift`). Null, or `ok`, or not given: no row. */
@@ -244,24 +243,13 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
         : line('now', sp('  ○ idle', 'dim')),
   ]
 
-  const ctx = view.ctx
-  const cost = s.costUsd
-  const health: PaneRow[] = [
-    line(
-      'ov-health',
-      sp('ctx ', 'dim'),
-      ...(ctx === null ? [sp('-', 'dim')] : [...bar(ctx / 100, Math.max(4, Math.min(10, Math.floor(columns / 4))), gaugeTone(ctx), ['▰', '▱']), sp(` ${ctx}%`, gaugeTone(ctx))]),
-      sp(`   cost ${typeof cost === 'number' && Number.isFinite(cost) ? `$${cost.toFixed(2)}` : '$-'}`, 'dim'),
-    ),
-  ]
-
   const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
   const live = view.agents.filter(one => one.status === 'running').length
   const agents: PaneRow[] = view.agents.length ? [head('h-agents', 'AGENTS', [sp(`${live} running`, 'dim')]), ...agentRows(view.agents, cap)] : []
   const prs: PaneRow[] = view.prs.length ? [head('h-prs', 'PRS', [sp(`${view.prs.length} watched`, 'dim')]), ...prRows(view.prs, cap)] : []
 
   // `rank` is how much a block matters when the pane is short (0 first); `group` is the section a gap goes between.
-  // Running agents and PRs outrank the repo, branch, worktree, cost and stop-at detail.
+  // Running agents and PRs outrank the repo, branch, worktree and stop-at detail.
   const blocks: Block[] = [
     { rank: 0, group: 0, rows: [chipRow] },
     { rank: 1, group: 0, rows: [goalRow, ...staleRow] },
@@ -273,7 +261,6 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
     { rank: 13, group: 1, rows: planTitle },
     { rank: 3, group: 1, rows: [counts] },
     { rank: 6, group: 2, rows: nowRows },
-    { rank: 9, group: 3, rows: health },
     { rank: 7, group: 4, rows: lane },
     { rank: 4, group: 5, rows: agents },
     { rank: 5, group: 6, rows: prs },

@@ -1,8 +1,9 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On, TurnUsage } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState } from '../../types'
+import type { AgentRun, CacheState, HudState, OsBrief } from '../../types'
 import { addStep } from '../agent-ledger/model'
+import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
@@ -19,6 +20,10 @@ const ctx = atom({ plugin: 'ccv3-mods', key: 'ctx' } as const, null as number | 
 const cache = atom({ plugin: 'ccv3-mods', key: 'cache' } as const, EMPTY_CACHE as CacheState)
 /** The Agent Ledger's runs (hooks/agent-ledger): this file's turn.step hook adds each subagent request. */
 const agentRuns = atom({ plugin: 'ccv3-mods', key: 'agentRuns' } as const, [] as AgentRun[])
+
+/** The session brief and the run mode, written by hooks/agentic-os (same keys): learnFromStep below fills the brief. */
+const brief = atom({ plugin: 'ccv3-mods', key: 'brief' } as const, null as OsBrief | null)
+const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 
 /** CCV3_MODS_OFF=1 turns every mod off; CCV3_MOD_HUD_OFF=1 this one. Off, the atom stays null. */
 const isOff = async ($: EngineInterface): Promise<boolean> =>
@@ -58,6 +63,24 @@ const measureStep = async ($: EngineInterface, step: Step, usage: TurnUsage | nu
     const oneHour = subscription ?? now.oneHour
     return addRequest(now, { usage, contextTokens: session?.context.tokens ?? null, sentAt: step.sentAt ?? at, at, turnId: step.turnId, ttlMin: ttlMinutes(override, oneHour), oneHour })
   })
+}
+
+/**
+ * A main-loop request answered: its restate line fills the session brief's goal and stop-at early in the turn.
+ * Here, not in hooks/agentic-os: a plugin holds one unmatched turn.step hook. Same rules as the turn-end parse there:
+ * a brief_set value stays (mergeParsed), and a headless run with no brief writes none. The snapshot follows at the turn end.
+ */
+const learnFromStep = async ($: EngineInterface, answer: unknown): Promise<void> => {
+  try {
+    if (typeof answer !== 'string' || (await $.env.get('CCV3_MODS_OFF')) === '1') return
+    const parsed = parseStep(answer)
+    if (!parsed.goal && !parsed.stopAt) return
+    if ((await read($, brief)) === null && (await read($, mode)) !== 'interactive') return
+    const at = await $.clock.now()
+    await update($, brief, now => mergeParsed(now, parsed, at))
+  } catch {
+    // Observer only: a parser failure never touches the request.
+  }
 }
 
 /** A new conversation in the same process (`/clear`, or another session resumed in its place): its counts start over. */
@@ -121,6 +144,7 @@ export const hudCapture = (on: On) => {
     // Read before the request: the idle gap a cache entry lived through ends when the request is sent.
     const sentAt = await $.clock.now().catch(() => null)
     const result = yield* next(e)
+    await learnFromStep($, result.answer)
     try {
       await measureStep($, { turnId: e.turnId, sentAt }, result.usage)
     } catch {
