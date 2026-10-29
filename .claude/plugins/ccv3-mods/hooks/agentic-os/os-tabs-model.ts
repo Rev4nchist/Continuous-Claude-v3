@@ -6,10 +6,11 @@ import type { Chip } from './brief'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
 import { agentRows, bar, gap, head, laneRows, prRows } from './pane-model'
+import type { Drift } from './steward'
 import type { PaneRow, Span, Tone } from './pane-model'
 
 // The /os pane tabs (PRD 5.3), as plain rows. Pure: no engine, no clock (the caller passes `now`).
-//   Overview   chip, goal, stop-at, where, plan bar, counts, now, lane, agents, PRs (no ctx, cost or limits: the status line has them)
+//   Overview   chip, goal, the dim `brief stale` reason, stop-at, where, plan bar, counts, now, lane, agents, PRs (no ctx, cost or limits: the status line has them)
 //   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
 //   Proof      done-but-unproven steps first, then each proof with its artifact
 //   Decisions  the decision log newest first, then the open asks
@@ -56,6 +57,8 @@ export type TabState = {
   worktree: string | null
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
+  /** The steward's verdict on the brief (steward.ts `drift`). Null, or `ok`, or not given: no row. */
+  drift?: Drift | null
 }
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
@@ -218,6 +221,7 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
 
   const chipRow: PaneRow = { key: 'ov-chip', left: [sp(` ${chip.word} `, chip.tone)], right: working }
   const goalRow = line('ov-goal', sp('GOAL ', 'dim'), goal === '' ? sp('not set', 'warn') : sp(goal, 'todo'), ...(goal !== '' && brief?.sources.goal === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
+  const staleRow: PaneRow[] = s.drift && s.drift.level !== 'ok' ? [line('ov-stale', sp(`brief stale: ${s.drift.reason}`, 'dim'))] : []
   const stopRow = line('ov-stop', sp('STOP AT ', 'dim'), stop === '' ? sp('not set', 'dim') : sp(stop, 'todo'), ...(stop !== '' && brief?.sources.stopAt === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
 
   const cells = Math.max(4, Math.min(10, Math.floor(columns / 4)))
@@ -252,7 +256,7 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
   // Running agents and PRs outrank the repo, branch, worktree and stop-at detail.
   const blocks: Block[] = [
     { rank: 0, group: 0, rows: [chipRow] },
-    { rank: 1, group: 0, rows: [goalRow] },
+    { rank: 1, group: 0, rows: [goalRow, ...staleRow] },
     { rank: 8, group: 0, rows: [stopRow] },
     { rank: 10, group: 0, rows: [label('repo', s.repo)] },
     { rank: 11, group: 0, rows: [label('branch', s.branch)] },
