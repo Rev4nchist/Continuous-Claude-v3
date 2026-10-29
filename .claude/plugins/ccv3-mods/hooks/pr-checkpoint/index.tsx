@@ -618,6 +618,22 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
   }
 }
 
+type WriteCall = { file_path?: unknown; notebook_path?: unknown }
+
+/**
+ * Lock A's verdict for one tool write: a deny, or null to let it go on. Like shellLock, it answers a failure by its own return and does not
+ * leave the deny to `.catch`, which an outer unmatched hook can drop. `next` is called outside, so a throw never denies a write that ran.
+ */
+const writeLock = async ($: EngineInterface, e: WriteCall): Promise<{ deny: string } | null> => {
+  try {
+    if (await isOff($)) return null
+    const path = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : null
+    return path !== null && isPathwayFile(path) ? { deny: PATHWAY_DENY } : null
+  } catch {
+    return { deny: LOCK_FAILED }
+  }
+}
+
 /** One module's part of session.start, on either trigger. The tool and the command register in both modes; the pane is interactive only. */
 const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> => {
   // The mode first: a throw below must not leave the default ('interactive') in place for a headless run.
@@ -679,13 +695,7 @@ export const prCheckpoint = (on: On) => {
   }).catch(($, e, next) => (next.called ? next(e) : textResult('pr_checkpoint failed. Nothing was recorded. The PR stays a draft.')))
 
   // Lock A: no tool writes pathway.json. Always enforced, warn mode included.
-  on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    const input = e as unknown as { file_path?: unknown; notebook_path?: unknown }
-    const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : null
-    if (path !== null && isPathwayFile(path)) return { deny: PATHWAY_DENY }
-    return next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => (await writeLock($, e as unknown as WriteCall)) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   // Lock B: shell text. Judge first, call next last, so a throw never denies a command that already ran.
   on('tool.call', { tool: 'Bash' }, async ($, e, next) => {

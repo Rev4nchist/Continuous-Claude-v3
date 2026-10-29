@@ -168,7 +168,12 @@ const shapesFor = (command: string) => {
 
 const world = (on: On, opts: Opts = {}) => {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: 'C:/home', ...(opts.env ?? {}) })
+  // What mock.env does (a variable not listed is unset), plus a throw a test arms after `start`: this module's own kill-switch read, the first step of each of its lock hooks. No other module reads this name.
+  const variables: Record<string, string> = { USERPROFILE: 'C:/home', ...(opts.env ?? {}) }
+  on('env.get', (_$, e) => {
+    if (fail.env && e.name === 'CCV3_PR_CHECKPOINT_OFF') throw new Error('env.get failed')
+    return { value: variables[e.name] }
+  })
   const session = mock.session(on)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   const seen = {
@@ -187,7 +192,7 @@ const world = (on: On, opts: Opts = {}) => {
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
   // Armed by a test after `start`, so only the call under test throws.
-  const fail = { exists: false, root: false, set: false }
+  const fail = { exists: false, root: false, set: false, env: false }
 
   on('store.get', (_$, e) => {
     if (opts.throwStore && e.key.startsWith(opts.throwStore)) throw new Error('store failed')
@@ -744,6 +749,31 @@ describe('pr-checkpoint: lock A, tool writes to pathway.json', () => {
     expect(LOCK_DENIED(passed as never)).toBe(false)
     expect(seen.ran.map(r => r.text)).toEqual(['C:/r/.claude/cache/pre-pr/stamp.json'])
   })
+})
+
+describe('pr-checkpoint: lock A fails closed by its own return', () => {
+  // K13f: Lock A answers { deny } itself when it throws, as Lock B does, and does not leave the deny to .catch. A .catch deny of a hook that
+  // threw can be lost under an outer unmatched tool.call hook (the Agentic OS observer; PR C kit finding). The seam is env.get: Lock A's
+  // first step (the kill-switch read) throws, so the deny must come from the hook's own return. The kit reproduces the loss: the plugin's
+  // other modules already hold unmatched tool.call hooks (touched-files, the Agentic OS observer), so even the plain case fails on the old
+  // code. The two extra cases add a bare pass-through hook first and last.
+  const writes = ($: Engine) => $.tool.call({ tool: 'Write', file_path: 'C:/r/.claude/cache/pre-pr/stamp.json', content: '{}' } as never) as unknown as Promise<{ deny?: string }>
+
+  for (const where of ['none', 'outer-first', 'outer-last'] as const) {
+    test(`K13f a throw inside lock A (${where === 'none' ? 'no outer hook' : `an unmatched outer tool.call hook, registered ${where === 'outer-first' ? 'before' : 'after'} the mod`}) denies with the lock-failed text, and the write never ran`, async ($, on) => {
+      const outer = (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e)
+      if (where === 'outer-first') on('tool.call', outer as never)
+      const w = world(on)
+      const { seen } = w
+      if (where === 'outer-last') on('tool.call', outer as never)
+      await start($)
+      w.fail.env = true
+      const r = await writes($)
+      expect(LOCK_DENIED(r)).toBe(true)
+      expect(r.deny).toMatch(/lock failed/i)
+      expect(seen.ran).toEqual([])
+    })
+  }
 })
 
 describe('pr-checkpoint: lock B, shell text', () => {
