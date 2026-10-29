@@ -72,7 +72,7 @@ IMPLEMENTATION
     │   └── YES → architect → kraken
     │
     └── Multi-step orchestration?
-        └── YES → /maestro workflow
+        └── YES → Workflow tool
 ```
 
 **Quick Reference:**
@@ -192,6 +192,6 @@ cd $CLAUDE_OPC_DIR && PYTHONPATH=. uv run python scripts/core/store_learning.py 
 | Explore codebase | `/explore` | scout with depth control |
 | Fix a bug | `/fix` | reproduce → investigate → implement → re-run repro |
 | Build feature | `/build` | plan → implement → review |
-| Orchestrate many | `/maestro` | Coordinate specialists |
+| Orchestrate many | Workflow tool | Coordinate specialists |
 | Security audit | `/security` | aegis + verification |
 | Release prep | `/release` | audit → test → changelog |

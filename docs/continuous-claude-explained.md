@@ -96,7 +96,6 @@ There are about 90 of these tiny automated routines running quietly in the backg
 - `/recall` — searches the memory notebook for anything relevant to your current question.
 - `/rlm-analyze` — deep-analyzes a huge document, folder, or codebase (the newest one, just built).
 - `/ralph` — autonomous mode that takes a spec and builds the feature using the specialist team.
-- `/maestro` — a conductor that plans and orchestrates multi-step tasks.
 - `/fix`, `/build`, `/refactor`, `/review`, `/release` — workflows for common development phases.
 
 There are 150+ skills in total. Most of them trigger automatically when the AI notices the right context.

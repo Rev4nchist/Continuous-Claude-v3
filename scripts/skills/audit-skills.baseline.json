@@ -4,14 +4,13 @@
   "repo": {
    "rules": {
     "G04": {
-     "count": 16,
+     "count": 14,
      "skills": {
       "build": 1,
       "discovery-interview": 2,
       "hook-scaffold": 1,
       "hooks": 1,
       "init-project": 1,
-      "maestro": 2,
       "memory": 1,
       "memory-stats": 1,
       "mot": 1,
@@ -228,14 +227,13 @@
   "repo+active": {
    "rules": {
     "G04": {
-     "count": 16,
+     "count": 14,
      "skills": {
       "build": 1,
       "discovery-interview": 2,
       "hook-scaffold": 1,
       "hooks": 1,
       "init-project": 1,
-      "maestro": 2,
       "memory": 1,
       "memory-stats": 1,
       "mot": 1,

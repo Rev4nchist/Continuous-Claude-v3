@@ -161,7 +161,7 @@ Details: `.claude/rules-ondemand/pr-review-loop.md`.
 ## Workflow Composition
 
 ```
-/maestro Workflow:
+Workflow tool pattern:
   Analyze task → Spawn specialists → Coordinate → Synthesize
                       │
         ┌─────────────┼─────────────┐

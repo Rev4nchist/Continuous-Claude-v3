@@ -1,5 +1,7 @@
 # Hook Audit — 2026-04-26 (Phase 2)
 
+> REMOVED: the `maestro` agent, the `/maestro` skill and the maestro hooks (`maestro-detector`, `maestro-enforcer`, `maestro-state-manager`, `maestro-cleanup`, `session-start-recovery`) no longer exist. This audit is a 2026-04 snapshot. Treat every maestro reference below as history, not as a live component.
+
 Source: `scripts/audit_hook_state.mjs` (read-only) →
 `.claude/cache/hook-audit-2026-04-26.json` (full per-file rows).
 

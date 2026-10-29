@@ -11,7 +11,7 @@ Every predefined agent (`.claude/agents/*.md`, **and** its `.json` mirror where 
 
 ## The two tiers
 
-- **`model: opus`** = Opus, pinned `effort: high` like Sonnet (see below). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), orchestration (maestro), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
+- **`model: opus`** = Opus, pinned `effort: high` like Sonnet (see below). Reserve for judgment-dense work: planning/design (architect, phoenix, plan-agent), review/soundness gates (critic, plan-reviewer, principal-reviewer, review-agent), deep forensics (sleuth, debug-agent), security (aegis), high-stakes bootstrap (wizard).
 - **`model: sonnet`** = Sonnet. The **default** for execution: implementation (kraken, spark), exploration/research (scout, oracle, pathfinder, onboard), test execution (arbiter, atlas, sentinel), checklist review, mechanical ops, docs.
 
 ## Agents always run at effort high

@@ -99,7 +99,7 @@ This project is managed by Continuous Claude v3.
 |------------|-----------|
 | Global config | `~/.claude/CLAUDE.md` and `~/.claude/rules/` |
 | Memory | `/recall "<topic>"` to search past learnings |
-| Workflows | `/explore`, `/build`, `/fix`, `/maestro` for orchestrated development |
+| Workflows | `/explore`, `/build`, `/fix` for orchestrated development |
 | Code intelligence | TLDR CLI (`tldr impact`, `tldr structure`) + ast-grep for AST rewrites |
 | Tri-model features | `/game-plan <feature>` + `/workroom` for multi-milestone builds |
 | Cross-model workers | `/grok` (xAI) executes tasks in isolated worktrees |

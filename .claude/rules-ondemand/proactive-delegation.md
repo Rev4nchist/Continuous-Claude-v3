@@ -13,7 +13,7 @@ When user message arrives, detect:
 | Implementation | "add", "implement", "create" | Route to /build workflow |
 | Bug/issue | "fix", "broken", "failing", "debug" | Load `systematic-debugging` first (template router). `/fix` only when Dave types it |
 | Exploration | "understand", "explore", "how does X work" | Route to /explore |
-| Complex multi-step work | several phases, unclear scope | Route to /maestro (its interview phase is enforced by `maestro-enforcer`); user-invoked, so suggest it, never load it |
+| Complex multi-step work | several phases, unclear scope | Use the Workflow tool (plan mode plus AskUserQuestion for the human check) |
 | Mechanical multi-file fix | Same edit pattern across N files | Spawn N parallel sparks (1 file each), NOT one spark for N files |
 
 ## Workflow Suggestions
