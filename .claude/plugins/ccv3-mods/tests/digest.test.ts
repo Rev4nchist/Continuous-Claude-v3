@@ -499,6 +499,14 @@ describe('digest derived facts', () => {
     expect(list).toHaveLength(1)
     expect(list[0]).toContain('band_rule')
   })
+
+  test('D12 a derived decision that says follow-up shows in WATCH as derived, a plain one does not', () => {
+    const derived = items(go({ decisions: [decision('follow-up: split the parser', 'handoff', HOUR, { derived: true })] }).watch)
+    expect(derived).toHaveLength(1)
+    expect(derived[0]).toMatch(/\[derived decision\] /)
+    const plain = items(go({ decisions: [decision('follow-up: split the parser', 'Claude', HOUR)] }).watch)
+    expect(plain[0]).toMatch(/\[decision\] /)
+  })
 })
 
 describe('digest safety', () => {

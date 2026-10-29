@@ -1,8 +1,10 @@
-import type { OsBrief, OsProof } from '../../types'
+import type { AgentRun, OsBrief, OsProof } from '../../types'
 import { redact } from '../shared/redact'
 import { CHIP } from './band-model'
 import { isAskStale, proofOf } from './brief'
 import type { Chip } from './brief'
+import { MAX_ITEMS, MIN_ITEMS, digest, fold } from './digest'
+import type { Digest, DigestBlock, DigestCommit, DigestCompaction, DigestLane, DigestPr } from './digest'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
 import { agentRows, bar, gap, head, laneRows, prRows } from './pane-model'
@@ -10,7 +12,8 @@ import type { Drift } from './steward'
 import type { PaneRow, Span, Tone } from './pane-model'
 
 // The /os pane tabs (PRD 5.3), as plain rows. Pure: no engine, no clock (the caller passes `now`).
-//   Overview   chip, goal, the dim `brief stale` reason, stop-at, where, plan bar, counts, now, lane, agents, PRs (no ctx, cost or limits: the status line has them)
+//   Overview   chip, goal, the session briefing (NEEDS YOU, HIGHLIGHTS, WATCH; digest.ts, PRD 5.3), stop-at, where, plan bar, counts, now, lane, agents, PRs
+//              (no ctx, cost or limits: the status line has them). The steward's `brief stale` reason is one WATCH row, shown once.
 //   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
 //   Proof      done-but-unproven steps first, then each proof with its artifact
 //   Decisions  the decision log newest first, then the open asks
@@ -59,6 +62,10 @@ export type TabState = {
   activeAt: number | null
   /** The steward's verdict on the brief (steward.ts `drift`). Null, or `ok`, or not given: no row. */
   drift?: Drift | null
+  /** The subagent runs of this session (agent-ledger): start and end times for the long-running and finished-run rows of the briefing. */
+  agentRuns?: AgentRun[]
+  /** Facts the pane state does not hold yet. Each is optional and may be empty: the briefing then has fewer rows, never invented ones. */
+  feed?: { commits?: DigestCommit[]; compactions?: DigestCompaction[]; lanes?: DigestLane[]; prs?: DigestPr[] }
 }
 
 const sp = (text: string, tone: Tone): Span => ({ text, tone })
@@ -202,6 +209,55 @@ const stepRow = (step: Step): PaneRow => {
 const label = (name: string, value: string | null, empty = '-'): PaneRow =>
   line(`ov-${name.trim()}`, sp(`  ${name.padEnd(9)}`, 'dim'), sp(value && value.trim() !== '' ? value : empty, value && value.trim() !== '' ? 'todo' : 'dim'))
 
+// --- Briefing (PR 5) ---
+
+const BRIEF_BLOCKS = ['needs', 'highlights', 'watch'] as const
+
+/** Maps what the pane reads onto the digest inputs. Pure. An ask has no time of its own: it carries the brief's. */
+const digestOf = (s: TabState, now: number, columns: number): Digest => {
+  const { brief, view } = s
+  const at = brief?.updatedAt
+  const prs: DigestPr[] = [
+    ...view.prs.map(one => ({ pr: one.pr, state: one.state, whenReady: one.whenReady, ...(one.since === undefined ? {} : { at: one.since }) })),
+    ...(s.feed?.prs ?? []),
+  ]
+  return digest(
+    brief,
+    view.tasks,
+    s.drift ?? null,
+    prs,
+    s.agentRuns ?? [],
+    s.feed?.lanes ?? [],
+    (brief?.ask ?? []).map(one => ({ kind: one.kind, text: one.text, recommend: one.recommend, source: one.source, at, answered: one.answered })),
+    (brief?.decisions ?? []).map(one => ({ text: one.text, by: one.by, at: one.at })),
+    (brief?.proofs ?? []).map(one => ({ id: one.id, kind: one.kind, subject: one.subject, artifact: one.artifact, at: one.at })),
+    { now, columns, limit: MAX_ITEMS, commits: s.feed?.commits, compactions: s.feed?.compactions },
+  )
+}
+
+const sizeOf = (one: DigestBlock): number => 1 + one.rows.length
+
+/**
+ * Grows each block toward `to` items while `spare` rows last, one item at a time, needs first. A step that costs no row
+ * (two items in the room of one item and "+1 more") is always taken. Returns the rows left.
+ */
+const grow = (full: DigestBlock[], limits: number[], spare: number, to: number): number => {
+  let left = spare
+  for (let target = 2; target <= to; target++) {
+    full.forEach((one, i) => {
+      let at = limits[i] ?? 1
+      while (at < target && at < one.shown) {
+        const cost = sizeOf(fold(one, at + 1)) - sizeOf(fold(one, at))
+        if (cost > Math.max(0, left)) break
+        at += 1
+        left -= cost
+      }
+      limits[i] = at
+    })
+  }
+  return left
+}
+
 const overview = (s: TabState, now: number, columns: number, rows: number): PaneRow[] => {
   const { view, brief } = s
   const steps = stepsOf(s)
@@ -221,7 +277,6 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
 
   const chipRow: PaneRow = { key: 'ov-chip', left: [sp(` ${chip.word} `, chip.tone)], right: working }
   const goalRow = line('ov-goal', sp('GOAL ', 'dim'), goal === '' ? sp('not set', 'warn') : sp(goal, 'todo'), ...(goal !== '' && brief?.sources.goal === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
-  const staleRow: PaneRow[] = s.drift && s.drift.level !== 'ok' ? [line('ov-stale', sp(`brief stale: ${s.drift.reason}`, 'dim'))] : []
   const stopRow = line('ov-stop', sp('STOP AT ', 'dim'), stop === '' ? sp('not set', 'dim') : sp(stop, 'todo'), ...(stop !== '' && brief?.sources.stopAt === 'parsed' ? [sp(' [parsed]', 'dim')] : []))
 
   const cells = Math.max(4, Math.min(10, Math.floor(columns / 4)))
@@ -253,26 +308,41 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
   const prs: PaneRow[] = view.prs.length ? [head('h-prs', 'PRS', [sp(`${view.prs.length} watched`, 'dim')]), ...prRows(view.prs, cap)] : []
 
   // `rank` is how much a block matters when the pane is short (0 first); `group` is the section a gap goes between.
-  // Running agents and PRs outrank the repo, branch, worktree and stop-at detail.
-  const blocks: Block[] = [
-    { rank: 0, group: 0, rows: [chipRow] },
-    { rank: 1, group: 0, rows: [goalRow, ...staleRow] },
-    { rank: 8, group: 0, rows: [stopRow] },
-    { rank: 10, group: 0, rows: [label('repo', s.repo)] },
-    { rank: 11, group: 0, rows: [label('branch', s.branch)] },
-    { rank: 12, group: 0, rows: [label('worktree', s.worktree)] },
-    { rank: 2, group: 1, rows: [planRow] },
-    { rank: 13, group: 1, rows: planTitle },
-    { rank: 3, group: 1, rows: [counts] },
-    { rank: 6, group: 2, rows: nowRows },
-    { rank: 7, group: 4, rows: lane },
-    { rank: 4, group: 5, rows: agents },
-    { rank: 5, group: 6, rows: prs },
+  // The briefing (NEEDS YOU, HIGHLIGHTS, WATCH) comes straight after the chip and GOAL and outranks the detail rows: it holds the
+  // PRs, agents and steps the old sections list. `must` blocks are never traded for a "+N more" row.
+  const full = digestOf(s, now, columns)
+  const parts = BRIEF_BLOCKS.map(key => full[key])
+  const limits = parts.map(() => 1)
+  const layout = (): Block[] => [
+    { rank: 0, group: 0, must: true, rows: [chipRow] },
+    { rank: 1, group: 0, must: true, rows: [goalRow] },
+    ...parts.map((one, i) => ({ rank: 2 + i, group: 1 + i, must: true, rows: [one.head, ...fold(one, limits[i] ?? 1).rows] })),
+    { rank: 11, group: 4, rows: [stopRow] },
+    { rank: 13, group: 4, rows: [label('repo', s.repo)] },
+    { rank: 14, group: 4, rows: [label('branch', s.branch)] },
+    { rank: 15, group: 4, rows: [label('worktree', s.worktree)] },
+    { rank: 5, group: 5, rows: [planRow] },
+    { rank: 16, group: 5, rows: planTitle },
+    { rank: 6, group: 5, rows: [counts] },
+    { rank: 9, group: 6, rows: nowRows },
+    { rank: 10, group: 7, rows: lane },
+    { rank: 7, group: 8, rows: agents },
+    { rank: 8, group: 9, rows: prs },
   ].filter(block => block.rows.length > 0)
+  const total = (list: Block[]): number => list.reduce((n, block) => n + block.rows.length, 0)
+  // Room: the must rows first (every block at one item), then each block up to MIN_ITEMS, then, when the detail rows fit too, up to MAX_ITEMS.
+  const mustRowsAt = (): number => total(layout().filter(block => block.must))
+  // Blocks of 2 or more items cost 3 rows each at limit 1: fold them to head plus "+N more" so the three heads fit a short pane.
+  if (mustRowsAt() > rows) limits.fill(0)
+  // One row stays for the "+N more" of the detail blocks, so they are never dropped without a marker.
+  grow(parts, limits, rows - mustRowsAt() - (layout().some(block => !block.must) ? 1 : 0), MIN_ITEMS)
+  const bare = total(layout())
+  if (bare <= rows) grow(parts, limits, rows - bare, MAX_ITEMS)
+  const blocks = layout()
   return fillBlocks(blocks, rows)
 }
 
-type Block = { rank: number; group: number; rows: PaneRow[] }
+type Block = { rank: number; group: number; rows: PaneRow[]; must?: boolean }
 
 /**
  * Whole blocks, in display order, that fit `budget` rows. All fit: gaps go between the sections when they fit too. Not all
@@ -287,6 +357,9 @@ const fillBlocks = (blocks: Block[], budget: number): PaneRow[] => {
   }
   if (bare.length <= budget) return bare
   if (budget < 2) return blocks.slice(0, 1).flatMap(block => block.rows) // one row: the chip, no room for a marker
+  // The briefing fills the pane exactly: it owns the rows, and the detail below it is on the other tabs.
+  const musts = blocks.filter(block => block.must)
+  if (musts.reduce((n, block) => n + block.rows.length, 0) === budget) return musts.flatMap(block => block.rows)
   let room = budget - 1
   const kept = new Set<Block>()
   for (const block of [...blocks].sort((a, b) => a.rank - b.rank)) {

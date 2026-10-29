@@ -432,9 +432,25 @@ describe('os overview in a short pane', () => {
     return state
   }
 
-  test('O11 AGENTS and PRS stay in a 10, 12 or 13 row Overview; whatever is cut leaves a "+N more" row; never over the budget', () => {
+  // PR 5 edit: the briefing (NEEDS YOU, HIGHLIGHTS, WATCH) outranks AGENTS and PRS, which it already lists (a PR waiting for the
+  // merge yes, a long agent, a finished run), so a 10 to 13 row pane keeps the three heads (B1) and no longer AGENTS and PRS.
+  // The old rule "whatever is cut leaves a +N more row" still holds unless the briefing fills the pane to its last row.
+  test('O11 a 10, 12 or 13 row Overview keeps the briefing heads; whatever is cut leaves a "+N more" row unless the briefing fills the pane; never over the budget', () => {
     for (const state of [rich(), crowded()]) {
       for (const rows of [10, 12, 13]) {
+        const built = tabRows('overview', state, NOW, 58, rows)
+        const text = all(built)
+        expect(built.length).toBeLessThanOrEqual(rows)
+        for (const title of ['NEEDS YOU', 'HIGHLIGHTS', 'WATCH']) expect(text).toContain(title)
+        const complete = ['LANE', 'NOW', 'STOP AT', 'worktree'].every(word => text.includes(word))
+        if (!complete && !built.at(-1)!.key.startsWith('brief-')) expect(rowText(built.at(-1)!)).toMatch(/^\s*\+\d+ more$/)
+      }
+    }
+  })
+
+  test('O11 AGENTS and PRS stay in a 24 or 30 row Overview; whatever is cut leaves a "+N more" row; never over the budget', () => {
+    for (const state of [rich(), crowded()]) {
+      for (const rows of [24, 30]) {
         const built = tabRows('overview', state, NOW, 58, rows)
         const text = all(built)
         expect(built.length).toBeLessThanOrEqual(rows)
@@ -602,9 +618,10 @@ describe('os overview: the brief stale row', () => {
 
   test('O18 unset, stale and finished each draw one dim row that says why, in plain words', () => {
     const cases: [Drift, Brief | null, RegExp][] = [
-      [NO_GOAL, null, /^brief stale: no goal set yet while work started$/],
-      [STALE, planned, /^brief stale: 12 tool calls and 1 commit since the brief changed$/],
-      [FINISHED, done, /^brief stale: every plan step is done but work continues$/],
+      // PR 5 edit (B8): the row is now one WATCH item, `  <text> [steward] <age>`: an indent in front, the source tag and age behind.
+      [NO_GOAL, null, /^\s*brief stale: no goal set yet while work started \[steward\] (?:-|now|\d+[mhd])$/],
+      [STALE, planned, /^\s*brief stale: 12 tool calls and 1 commit since the brief changed \[steward\] (?:-|now|\d+[mhd])$/],
+      [FINISHED, done, /^\s*brief stale: every plan step is done but work continues \[steward\] (?:-|now|\d+[mhd])$/],
     ]
     for (const [found, brief, expected] of cases) {
       const rows = staleRows(tabRows('overview', withDrift(brief, found), NOW, 100, 60))
@@ -615,9 +632,15 @@ describe('os overview: the brief stale row', () => {
     }
   })
 
-  test('O18 the row sits directly under GOAL', () => {
-    const keys = tabRows('overview', withDrift(planned, STALE), NOW, 100, 60).map(one => one.key)
-    expect(keys[keys.indexOf('ov-goal') + 1]).toBe('ov-stale')
+  // PR 5 edit (B8): the stale brief shows once, in the WATCH block. It no longer sits directly under GOAL (no `ov-stale` row).
+  test('O18 the row is in the WATCH block, not under GOAL', () => {
+    const rows = tabRows('overview', withDrift(planned, STALE), NOW, 100, 60)
+    const keys = rows.map(one => one.key)
+    expect(keys).not.toContain('ov-stale')
+    expect(keys[keys.indexOf('ov-goal') + 1]).not.toMatch(/stale/)
+    const watchAt = rows.findIndex(one => rowText(one).startsWith('WATCH'))
+    expect(watchAt).toBeGreaterThan(-1)
+    expect(rows.findIndex(one => rowText(one).includes('brief stale'))).toBeGreaterThan(watchAt)
   })
 
   test('O18 no row when the drift is ok, null or not given', () => {
@@ -631,7 +654,9 @@ describe('os overview: the brief stale row', () => {
     for (const columns of [20, 24, 40, 80, 200]) {
       const rows = tabRows('overview', withDrift(planned, STALE), NOW, columns, 40)
       for (const row of rows) expect(rowWidth(row)).toBeLessThanOrEqual(columns)
-      expect(rowText(rows.find(one => one.key === 'ov-stale')!)).toMatch(/^brief stale/)
+      // PR 5 edit: the row is a WATCH item with an indent and a tag. Below 40 columns the tag and age leave room for 7 to 18 characters
+      // of text only, so the row starts with "brief" (cut) instead of the whole "brief stale".
+      expect(rowText(rows.find(one => rowText(one).includes('brief'))!)).toMatch(columns >= 40 ? /^\s*brief stale/ : /^\s*brief/)
     }
   })
 
@@ -713,6 +738,28 @@ describe('os overview: the session briefing (PR 5)', () => {
     const rows = tabRows('overview', briefed(), NOW, 58, 10)
     for (const title of HEADS) expect(headAt(rows, title), title).toBeGreaterThan(-1)
     expect(headAt(rows, 'NEEDS YOU')).toBeLessThanOrEqual(3)
+  })
+
+  test('B1 a 10 row pane keeps all three heads when every block holds 3 or more items', () => {
+    const asks = Array.from({ length: 3 }, (_, i) => ({ kind: 'question' as const, text: `open question ${i}`, source: 'brief_set' as const }))
+    const decisions = Array.from({ length: 3 }, (_, i) => ({ text: `decided ${i}`, by: 'Dave', at: NOW - (i + 1) * 60_000 }))
+    const lanes = Array.from({ length: 3 }, (_, i) => ({ id: `peer-${i}`, title: 'peer', state: 'active', mine: false, holder: `session ${i}` }))
+    const brief: OsBrief = { sources: {}, plan: [], ask: asks, decisions, proofs: [], updatedAt: NOW - 60_000 }
+    const state = { ...empty({ brief, activeAt: NOW }), feed: { lanes } } as TabState
+    const full = tabRows('overview', state, NOW, 80, 60)
+    for (const title of HEADS) expect(itemRows(blockOf(full, title)).length, title).toBeGreaterThanOrEqual(3)
+    for (const rows of [8, 9, 10]) {
+      const built = tabRows('overview', state, NOW, 80, rows)
+      expect(built.length).toBeLessThanOrEqual(rows)
+      for (const title of HEADS) expect(headAt(built, title), `${rows} ${title}`).toBeGreaterThan(-1)
+      // The briefing leaves a row for what it cut below it: the detail rows never vanish without a "+N more".
+      if (rows === 10) expect(built.at(-1)!.key).toBe('more-overview')
+    }
+  })
+
+  test('B12 a failed status read of a watched PR (fails) is not drawn as failed checks', () => {
+    const state = empty({ view: { ...empty().view, prs: [{ pr: 9, state: 'PENDING', whenReady: false, fails: 2 }] } })
+    expect(all(tabRows('overview', state, NOW, 100, 60))).not.toMatch(/checks? failed/i)
   })
 
   test('B2 NEEDS YOU lists the open ask with its recommendation, the READY PR as a merge yes, then the approval', () => {
@@ -801,5 +848,29 @@ describe('os overview: the session briefing (PR 5)', () => {
       expect(new Set(keys).size).toBe(keys.length)
       if (rows >= 10) expect(headAt(tabRows('overview', briefed(), NOW, 80, rows), 'NEEDS YOU')).toBeGreaterThan(-1)
     }
+  })
+})
+
+// PR 5 wiring: the pane feeds the run list and the optional feed to the digest.
+// B11 a run list that is fed (agentRuns, feed) never reaches WATCH or HIGHLIGHTS, or a missing one throws
+describe('os overview: the briefing reads agentRuns and the feed', () => {
+  const MIN = 60_000
+  const runs = [
+    { id: 'r1', type: 'kraken', description: 'slow build', model: null, effort: null, spec: {}, startedAt: NOW - 25 * MIN, endedAt: null, status: 'running' as const, tokens: 0, costUsd: 0, drift: null },
+    { id: 'r2', type: 'scout', description: 'map hooks', model: null, effort: null, spec: {}, startedAt: NOW - 50 * MIN, endedAt: NOW - 40 * MIN, status: 'done' as const, tokens: 0, costUsd: 0, drift: null },
+  ]
+  const block = (rows: PaneRow[], title: string): string[] => {
+    const from = rows.findIndex(one => rowText(one).startsWith(title))
+    return rows.slice(from + 1).map(rowText).slice(0, 3)
+  }
+
+  test('B11 a run that is live for 25 minutes is in WATCH, a finished one in HIGHLIGHTS, a peer lane and a commit from the feed show, none fed is fine', () => {
+    const state = { ...empty(), agentRuns: runs, feed: { commits: [{ sha: 'b8448c3e1f2a', subject: 'fix: scrub', at: NOW - 5 * MIN }], lanes: [{ id: 'sdlc-os', title: 'SDLC', state: 'active', mine: false, holder: 'session 9f2c' }] } } as TabState
+    const rows = tabRows('overview', state, NOW, 100, 60)
+    expect(block(rows, 'WATCH').join('\n')).toMatch(/slow build running 25m \[agent\] 25m/)
+    expect(block(rows, 'WATCH').join('\n')).toMatch(/sdlc-os held by session 9f2c/)
+    expect(block(rows, 'HIGHLIGHTS').join('\n')).toMatch(/b8448c3 fix: scrub \[git\] 5m/)
+    expect(block(rows, 'HIGHLIGHTS').join('\n')).toMatch(/map hooks finished \[agent\] 40m/)
+    expect(() => tabRows('overview', empty(), NOW, 100, 60)).not.toThrow()
   })
 })
