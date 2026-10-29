@@ -770,11 +770,12 @@ export function coderabbitRequestComments(comments = []) {
 
 /**
  * The CodeRabbit PR reviews bought so far. 0 with no bot review and no request. Else max(botReviews, requests + opening), where
- * botReviews = distinct commit_id among the CodeRabbit app reviews and opening = 1 when the first bot review is older than the first
+ * botReviews = distinct commit_id among the CodeRabbit app reviews that carry the review sentence (a thread-reply review does not) and opening = 1 when the first bot review is older than the first
  * request (the automatic opening review was not asked for). Requests whose review is not in yet still count.
  */
 export function coderabbitRoundsOf({ reviews = [], comments = [] } = {}) {
-  const bot = (reviews || []).filter((r) => isCodeRabbitUser(r?.user));
+  // A thread reply makes a COMMENTED review with an empty body: only a review with the review sentence is a round.
+  const bot = (reviews || []).filter((r) => isCodeRabbitUser(r?.user) && REVIEW_SENTENCE.test(r.body || ''));
   const requests = coderabbitRequestComments(comments);
   if (bot.length === 0 && requests.length === 0) return 0;
   const botReviews = new Set(bot.map((r) => r.commit_id)).size;

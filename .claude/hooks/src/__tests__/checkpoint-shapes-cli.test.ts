@@ -75,6 +75,9 @@ describe('checkpoint-shapes-cli', () => {
     expect(shapes('gh pr \\\nready 201', 'bash').ready).toBe(true);
     expect(shapes('gh pr edit 201 `\r\n  --add-label review:coderabbit', 'pwsh').label?.labels).toEqual(['review:coderabbit']);
     expect(shapes('gh pr edit 201 \\\n  --add-label review:coderabbit', 'bash').label?.labels).toEqual(['review:coderabbit']);
+    // The flag decides. A bash continuation inside a word joins it; PowerShell has no backslash continuation, so the word stays split.
+    expect(shapes('gh pr rea\\\ndy 201', 'bash').ready).toBe(true);
+    expect(shapes('gh pr rea\\\ndy 201', 'pwsh').ready).toBe(false);
   });
 
   it('C5 ccv3: true on a visible CCv3 signal (-R, --repo, endpoint, PR URL); false when the text names no CCv3 repo', () => {
@@ -83,7 +86,19 @@ describe('checkpoint-shapes-cli', () => {
       'gh pr ready 201 --repo rev4nchist/continuous-claude-v3',
       'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
       'gh pr ready https://github.com/Rev4nchist/Continuous-Claude-v3/pull/9',
+      'GH_REPO=Rev4nchist/Continuous-Claude-v3 gh pr ready 1',
+      'gh pr ready 1 -R "Rev4nchist/Continuous-Claude-v3"',
+      'gh.exe api repos/Rev4nchist/Continuous-Claude-v3/issues/7/labels -f labels[]=review:deep',
+      '"gh" api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
+      'gh pr ready 1 \\\n -R Rev4nchist/Continuous-Claude-v3',
     ]) expect(shapes(c, 'bash').ccv3, c).toBe(true);
+    for (const c of [
+      "$env:GH_REPO='Rev4nchist/Continuous-Claude-v3'; gh pr ready 1",
+      'gh pr ready 1 -R "Rev4nchist/Continuous-Claude-v3"',
+      'gh.exe api repos/Rev4nchist/Continuous-Claude-v3/issues/7/labels -f labels[]=review:deep',
+      '"gh" api repos/Rev4nchist/Continuous-Claude-v3/issues/1/labels -f labels[]=review:none',
+      'gh pr ready 1 `\r\n -R Rev4nchist/Continuous-Claude-v3',
+    ]) expect(shapes(c, 'pwsh').ccv3, c).toBe(true);
     for (const c of ['gh pr ready 201', 'gh pr ready 201 -R someone/else', 'gh pr ready 1 -R a/b; gh pr ready 2']) {
       expect(shapes(c, 'bash').ccv3, c).toBe(false);
     }

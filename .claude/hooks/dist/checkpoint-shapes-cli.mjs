@@ -255,7 +255,7 @@ function shellArg(argv) {
   return value === "bash" || value === "pwsh" ? value : null;
 }
 function reportOf(text, shell) {
-  const joined = joinContinuations(text, shell);
+  const joined = normalizeGh(joinContinuations(text, shell));
   return JSON.stringify({ ...shapesOf(joined), ccv3: namedRepo(joined, {}) === CCV3_REPO });
 }
 async function readStdin() {
@@ -267,12 +267,14 @@ async function main2() {
   const shell = shellArg(process.argv.slice(2));
   if (shell === null) {
     process.stderr.write("checkpoint-shapes-cli: --shell bash|pwsh is required\n");
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   const text = await readStdin();
   if (text.trim() === "") {
     process.stderr.write("checkpoint-shapes-cli: empty stdin: pass the command text on stdin\n");
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   process.stdout.write(`${reportOf(text, shell)}
 `);

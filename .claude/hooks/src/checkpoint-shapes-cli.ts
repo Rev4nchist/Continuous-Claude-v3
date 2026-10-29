@@ -9,7 +9,7 @@
  * exit 2, one stderr line, empty stdout: empty stdin, a missing --shell, or a --shell that is not bash or pwsh. The caller cannot
  * read "no shape" from a failure.
  */
-import { joinContinuations } from './pr-opened-review-loop.js';
+import { joinContinuations, normalizeGh } from './pr-opened-review-loop.js';
 import { CCV3_REPO, namedRepo, shapesOf } from './shared/checkpoint-shapes.js';
 
 type Shell = 'bash' | 'pwsh';
@@ -21,7 +21,8 @@ export function shellArg(argv: string[]): Shell | null {
 }
 
 export function reportOf(text: string, shell: Shell): string {
-  const joined = joinContinuations(text, shell);
+  // The gate's order: join continued lines, normalize gh.exe / "gh", then read.
+  const joined = normalizeGh(joinContinuations(text, shell));
   return JSON.stringify({ ...shapesOf(joined), ccv3: namedRepo(joined, {}) === CCV3_REPO });
 }
 
@@ -35,12 +36,14 @@ async function main(): Promise<void> {
   const shell = shellArg(process.argv.slice(2));
   if (shell === null) {
     process.stderr.write('checkpoint-shapes-cli: --shell bash|pwsh is required\n');
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   const text = await readStdin();
   if (text.trim() === '') {
     process.stderr.write('checkpoint-shapes-cli: empty stdin: pass the command text on stdin\n');
-    process.exit(2);
+    process.exitCode = 2;
+    return;
   }
   process.stdout.write(`${reportOf(text, shell)}\n`);
 }
