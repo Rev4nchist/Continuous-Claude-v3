@@ -275,10 +275,12 @@ export type ChipState = {
   now: number
   /** When the session last did anything (a prompt, a turn start or end, a main-loop tool call). Keeps an ask fresh. */
   activeAt?: number | null
+  /** The agents the pane lists (subagents and workflow agents). One with status running keeps the chip working with no turn and no tool. */
+  agentRuns?: { status: string }[]
 }
 
 /**
- * PRD 5.2. Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an open ask and no tool running), then working,
+ * PRD 5.2. Blocked (a refused tool call or a blocked plan step) first, then waiting-on-dave (an open ask and no tool running), then working (a tool, the main turn or a running agent run),
  * then done (every task and plan step done AND proven, and at least one exists), else idle.
  */
 export const deriveChip = (state: ChipState): Chip => {
@@ -287,7 +289,7 @@ export const deriveChip = (state: ChipState): Chip => {
   // A blocked plan step counts only when the plan is the source (no task).
   if (state.blocked || (state.tasks.length === 0 && plan.some(one => one.status === 'blocked'))) return 'blocked'
   if (brief !== null && !state.toolRunning && brief.ask.some(isOpen) && !isAskStale(brief, state.now, state.activeAt)) return 'waiting-on-dave'
-  if (state.toolRunning || state.turnActive) return 'working'
+  if (state.toolRunning || state.turnActive || state.agentRuns?.some(one => one.status === 'running')) return 'working'
   const items = weighedOf(state.tasks, plan)
   return items.length > 0 && items.every(one => one.done && isProven(brief, one)) ? 'done' : 'idle'
 }

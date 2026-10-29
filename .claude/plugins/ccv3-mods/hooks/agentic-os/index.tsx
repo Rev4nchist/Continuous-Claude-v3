@@ -108,13 +108,26 @@ const noteError = async ($: EngineInterface, where: string, err: unknown) => {
   if (home) await $.fs.write(`${home}/${DIAG_DIR}/${errorFile(where)}`, errorText(where, err)).catch(() => undefined)
 }
 
+/**
+ * Live agents for the pane: the one source for the AGENTS rows, NOW and the chip. The `agents` atom (agent.list) is
+ * authoritative for an id it holds. The Agent Ledger adds a running run the list lacks, because the list is only re-read
+ * while a turn or a step runs. A settled run leaves the atom at turn.complete; turn.start reopens it if the agent resumes.
+ */
+const liveAgents = async ($: EngineInterface): Promise<OsAgent[]> => {
+  const runs = await read($, agentRuns)
+  const listed = await read($, agents)
+  const known = new Set(listed.map(agent => agent.id))
+  const running = runs.filter(run => run.status === 'running' && !known.has(run.id)).map(({ id, description, type }) => ({ id, description, type, status: 'running' }))
+  return [...listed, ...running]
+}
+
 const view = async ($: EngineInterface): Promise<OsView> => ({
   tasks: await read($, tasks),
   plan: await read($, plan),
   turn: await read($, turn),
   step: (await read($, steps)).at(-1) ?? null,
   ctx: await read($, ctx),
-  agents: await read($, agents),
+  agents: await liveAgents($),
   lanes: await read($, lanes),
   prs: await read($, prs),
 })
@@ -133,6 +146,7 @@ const chipNow = async ($: EngineInterface, now: OsView, at: number, opts: { work
     blocked: await read($, refused),
     now: at,
     activeAt: await read($, activeAt),
+    agentRuns: now.agents.filter(agent => agent.status === 'running'),
   })
 
 /**
@@ -206,7 +220,11 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
     const live = list
       .filter(agent => LIVE_AGENT.has(agent.status))
       .map(({ id, description, type, status }) => ({ id, description, type, status }))
-    await update($, agents, () => live)
+    // A subagent turn.start set `running` before the list says so. A list that still says `waiting` is older than that
+    // start: keep `running` until the agent's own turn.complete removes the entry or the list shows it ended.
+    await update($, agents, previous =>
+      live.map(one => (one.status === 'waiting' && previous.some(before => before.id === one.id && before.status === 'running') ? { ...one, status: 'running' } : one)),
+    )
   } catch {
     // Best effort: the pane keeps the last list.
   }
@@ -231,11 +249,15 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
   }
 }
 
-/** While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown. */
+/**
+ * While a turn runs: redraw elapsed times and re-read the agents. Idle: one redraw a minute, for the cache countdown.
+ * Idle with a running ledger run or a listed agent that runs: also re-read the agents, so a run the list holds as ended settles. Idle without one: no read.
+ */
 const pulse = async ($: EngineInterface): Promise<void> => {
   const now = await $.clock.now()
   if ((await read($, turn)) === null && (await read($, steps)).length === 0) {
     if ((await read($, cache)).lastUsedAt !== null && now - (await read($, tick)) >= IDLE_PULSE_MS) await update($, tick, () => now)
+    if ((await read($, agentRuns)).some(run => run.status === 'running') || (await read($, agents)).some(one => one.status === 'running')) await refreshAgents($)
     return
   }
   await update($, tick, () => now)
@@ -556,7 +578,16 @@ export const agenticOs = (on: On) => {
 
   // No off check on command.run: with the mod off, session.start never registers /os, so it never fires.
   on('turn.start', async ($, e, next) => {
+    // A subagent's turn is not the main turn: its run shows through `agentRuns`, and it must not reset the refusal or the clock.
     if (await isOff($)) return next(e)
+    const resumed = e.agentId
+    if (resumed !== undefined) {
+      // A settled run whose agent starts a turn again (a message resumes it under the same id) is running again.
+      await update($, agentRuns, runs => runs.map(run => (run.id === resumed && run.status !== 'running' ? { ...run, status: 'running', endedAt: null } : run)))
+      // The list can still hold it as waiting, and the list wins for an id it holds: the turn is the newer fact.
+      await update($, agents, list => list.map(agent => (agent.id === resumed && agent.status !== 'running' ? { ...agent, status: 'running' } : agent)))
+      return next(e)
+    }
     if (!(await read($, turnBeaconed).catch(() => false))) {
       await beacon($, 'turn')
       await update($, turnBeaconed, () => true).catch(() => undefined)
@@ -579,6 +610,7 @@ export const agenticOs = (on: On) => {
       const endedAt = await $.clock.now()
       const failed = e.isAborted || e.reason === 'error' || e.reason === 'aborted' || e.reason === 'refusal'
       await update($, agentRuns, runs => runs.map(run => (run.id === agentId ? settle(run, endedAt, failed) : run)))
+      await update($, agents, list => list.filter(agent => agent.id !== agentId))
       if (await worthSnapshot($)) await writeSnapshot($)
     }
     if (agentId === undefined) {

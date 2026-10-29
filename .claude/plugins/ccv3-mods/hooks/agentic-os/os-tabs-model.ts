@@ -212,7 +212,9 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
   const answered = asks.length - open
   const stale = brief !== null && isAskStale(brief, now, s.activeAt)
   const chip = CHIP[s.chip] ?? CHIP.idle
-  const working = view.step || view.turn ? [sp('● ', 'warn'), sp(`working ${elapsed(now - (view.turn ?? view.step)!.startedAt)}`, 'dim')] : [sp('○ idle', 'dim')]
+  const running = view.agents.filter(one => one.status === 'running').length
+  const runningText = `${running} agent${running === 1 ? '' : 's'} running`
+  const working = view.step || view.turn ? [sp('● ', 'warn'), sp(`working ${elapsed(now - (view.turn ?? view.step)!.startedAt)}`, 'dim')] : running > 0 ? [sp('● ', 'warn'), sp(runningText, 'dim')] : [sp('○ idle', 'dim')]
   const goal = brief?.goal?.trim() ?? ''
   const stop = brief?.stopAt?.trim() ?? ''
   const cap = Math.max(1, Math.floor(rows / 4))
@@ -240,7 +242,9 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
       ? { key: 'now', left: [sp('  ', 'dim'), sp(` ${view.step.tool} `, 'chip'), sp(` ${view.step.label}`, 'active')], right: [sp(elapsed(now - view.step.startedAt), 'dim')] }
       : view.turn
         ? { key: 'now', left: [sp('  ◌ thinking', 'dim')], right: [sp(elapsed(now - view.turn.startedAt), 'dim')] }
-        : line('now', sp('  ○ idle', 'dim')),
+        : running > 0
+          ? line('now', sp('  ◌ ', 'dim'), sp(runningText, 'active'))
+          : line('now', sp('  ○ idle', 'dim')),
   ]
 
   const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
