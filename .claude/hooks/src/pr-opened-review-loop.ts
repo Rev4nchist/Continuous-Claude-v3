@@ -53,12 +53,25 @@ export function joinContinuations(command: string, shell: 'bash' | 'pwsh'): stri
   return shell === 'bash' ? text.replace(/\\\r?\n/g, '') : text.replace(/[ \t]*`\r?\n[ \t]*/g, ' ');
 }
 
-export function isPrOpenCommand(command: string): boolean {
-  return isPrOpenText(joinContinuations(command, 'bash')) || isPrOpenText(joinContinuations(command, 'pwsh'));
+/**
+ * `gh.exe` and a quoted `"gh"` / `'gh'` are the gh command: they read as plain `gh`. Only a whole quoted word or a `.exe` suffix
+ * changes, so the quote parity of the rest of the text is kept.
+ */
+export function normalizeGh(command: string): string {
+  return (command || '').replace(/(["'])gh(?:\.exe)?\1(?=\s)|\bgh\.exe(?=\s)/gi, 'gh');
 }
 
-function isPrOpenText(cmd: string): boolean {
-  if (PR_CREATE_RE.test(cmd)) return true;
+/** The text with every quote character and backslash deleted: the shell joins `rea''dy` and `"ready"` into one word. */
+export const squashQuotes = (text: string): string => text.replace(/["'\\]/g, '');
+
+export function isPrOpenCommand(command: string): boolean {
+  const text = normalizeGh(command);
+  return isPrOpenText(joinContinuations(text, 'bash')) || isPrOpenText(joinContinuations(text, 'pwsh'));
+}
+
+export function isPrOpenText(cmd: string): boolean {
+  // A spliced subcommand (`gh pr "create"`, `gh pr cre''ate`) is the same create: read the text with the quotes deleted too.
+  if (PR_CREATE_RE.test(cmd) || PR_CREATE_RE.test(squashQuotes(cmd))) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? '';
   // The endpoint and the method are read with the data values removed; the implicit-POST check needs the flags.

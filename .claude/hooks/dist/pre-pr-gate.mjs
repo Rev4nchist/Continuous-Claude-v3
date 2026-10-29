@@ -26,11 +26,16 @@ function joinContinuations(command, shell) {
   const text = command || "";
   return shell === "bash" ? text.replace(/\\\r?\n/g, "") : text.replace(/[ \t]*`\r?\n[ \t]*/g, " ");
 }
+function normalizeGh(command) {
+  return (command || "").replace(/(["'])gh(?:\.exe)?\1(?=\s)|\bgh\.exe(?=\s)/gi, "gh");
+}
+var squashQuotes = (text) => text.replace(/["'\\]/g, "");
 function isPrOpenCommand(command) {
-  return isPrOpenText(joinContinuations(command, "bash")) || isPrOpenText(joinContinuations(command, "pwsh"));
+  const text = normalizeGh(command);
+  return isPrOpenText(joinContinuations(text, "bash")) || isPrOpenText(joinContinuations(text, "pwsh"));
 }
 function isPrOpenText(cmd) {
-  if (PR_CREATE_RE.test(cmd)) return true;
+  if (PR_CREATE_RE.test(cmd) || PR_CREATE_RE.test(squashQuotes(cmd))) return true;
   if (!GH_API_RE.test(cmd)) return false;
   const api = cmd.match(GH_API_SEGMENT_RE)?.[0] ?? "";
   const bare = api.replace(DATA_FLAG_RE, "$1$2");
@@ -149,6 +154,92 @@ if ((process.argv[1] || "").includes("pr-opened-review-loop")) {
   }
 }
 
+// src/shared/checkpoint-shapes.ts
+var QUOTED = /"[^"]*"|'[^']*'/g;
+var stripQuotes = (text) => text.replace(QUOTED, " ");
+var segmentsOf = (text) => text.split(/[;&|\r\n]+/);
+var countOf = (re, text) => (text.match(re) ?? []).length;
+var plainPart = (segment) => segment.split(/#|<|>|\$\(|`/)[0];
+var quoteDoubt = (raw) => /\\["']|`["']/.test(raw) || countOf(/["']/g, stripQuotes(raw)) % 2 === 1;
+function uncovered(raw, re, ok) {
+  const total = countOf(re, squashQuotes(raw));
+  if (total === 0) return false;
+  if (quoteDoubt(raw)) return true;
+  const covered = segmentsOf(stripQuotes(raw)).map(plainPart).filter(ok).reduce((n, s) => n + countOf(re, s), 0);
+  return total > covered;
+}
+var CLI_CREATE = /\bgh\s+pr\s+create\b/gi;
+var GH_API = /\bgh\s+api\b/gi;
+var CLI_DRAFT = /(?:^|\s)(?:--draft|-d)(?=\s|$)/;
+var API_DRAFT = /(?:^|\s)(?:-F|-f|--field|--raw-field)(?:=|\s+)draft=true(?=\s|$)/;
+var DRAFT_FALSE = /\bdraft=false\b/i;
+var apiCreateUncovered = (raw) => segmentsOf(raw).some((s) => /\bgh\s+api\b/i.test(s) && isPrOpenText(s) && !API_DRAFT.test(plainPart(stripQuotes(s))));
+function isNonDraftCreate(raw) {
+  if (DRAFT_FALSE.test(raw)) return true;
+  if (!/\bgh\s+pr\s+create\b/i.test(squashQuotes(raw))) return uncovered(raw, GH_API, (s) => API_DRAFT.test(s));
+  return uncovered(raw, CLI_CREATE, (s) => CLI_DRAFT.test(s)) || apiCreateUncovered(raw);
+}
+var READY_CLI = /\bgh\s+pr\s+ready\b/gi;
+var READY_GRAPHQL = /markPullRequestReadyForReview/i;
+var READY_BRACE = /\bgh\s+pr\s+\S*[{}]/i;
+var UNDO = /(?:^|\s)--undo(?=\s|$)/;
+function isReadyShape(raw) {
+  return READY_GRAPHQL.test(raw) || READY_BRACE.test(raw) || uncovered(raw, READY_CLI, (s) => UNDO.test(s));
+}
+var WORD = String.raw`(?:"[^"]*"|'[^']*'|[^\s"'])+`;
+var ADD_LABEL = new RegExp(String.raw`(?:^|\s)--add-label(?:=|\s+)(${WORD})`, "g");
+var CREATE_LABEL = new RegExp(String.raw`(?:^|\s)(?:--label(?:=|\s+)|-l\s*)(${WORD})`, "g");
+var REVIEW_TOKEN = /review:[\w-]+/gi;
+var ISSUE_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/(?:issues|pulls)\/[^\s/"'?]+/gi;
+var LABELS_PATH = /\/labels\b/i;
+var LABEL_FIELD = /\blabels(?:\[[^\]]*\])?=/i;
+var FILE_LABELS = /\blabels(?:\[[^\]]*\])?=@/i;
+var LABEL_MUTATION = /\b(?:labelIds|updatePullRequest|updateIssue)\b/;
+var INPUT_FLAG = /(?:^|\s)--input(?:=|\s|$)/;
+function hasCcv3Endpoint(raw) {
+  if (!/\bgh\s+api\b/i.test(raw)) return false;
+  return [...raw.matchAll(ISSUE_ENDPOINT)].some((m) => m[1].toLowerCase() === "rev4nchist/continuous-claude-v3");
+}
+var valuesOf = (re, raw) => [...raw.matchAll(re)].map((m) => m[1]);
+var unquote = (word) => word.replace(/["'\\]/g, "");
+var reviewTokens = (text) => (text.match(REVIEW_TOKEN) ?? []).map((t) => t.toLowerCase());
+function labelShape(raw, create) {
+  if (!/\bgh\b/i.test(raw)) return null;
+  const squashed = squashQuotes(raw);
+  const read = (re) => [...valuesOf(re, raw).map(unquote), ...valuesOf(re, squashed)];
+  const values = [...read(ADD_LABEL), ...create ? read(CREATE_LABEL) : []];
+  const api = /\bgh\s+api\b/i.test(squashed);
+  const labelsApi = api && (LABELS_PATH.test(squashed) || new RegExp(ISSUE_ENDPOINT.source, "i").test(squashed) && LABEL_FIELD.test(squashed));
+  const labels = [...new Set(reviewTokens(values.join(" ") + (labelsApi ? ` ${squashed}` : "")))];
+  const blind = /addLabelsToLabelable/i.test(raw) || api && (LABEL_MUTATION.test(squashed) || FILE_LABELS.test(squashed) || labelsApi && INPUT_FLAG.test(squashed)) || values.some((v) => /[$`{}]/.test(v));
+  return labels.length > 0 || blind ? { labels, blind } : null;
+}
+var SELF_FLAG = /(?:^|\s)--(?:confirm|apply)(?:=|\s|$)/;
+var NODE_CMD = /\bnode(?:\.exe)?["']?\s/i;
+var APPLY_N = /(?:^|\s)--apply(?:=|\s+)["']?\d+/;
+var CONFIRM_PATHWAY = /(?:^|\s)--confirm(?:=|\s+)["']?(?:none|coderabbit|both|wait)\b/;
+var BY_FLAG = /(?:^|\s)--by(?:=|\s)/;
+var SCRIPT_GLOB = /scripts[\\/]+github[\\/]+[^\s"']*[*?[]/i;
+var NONLITERAL_REPO = new RegExp(
+  String.raw`(?:^|\s)(?:-R\s*=?|--repo(?:\s+|=))["']?[^\s"']*(?:\$|\x60|%[A-Za-z_]\w*%)` + String.raw`|(?:^|[\s;])(?:\$env:)?GH_REPO\s*=\s*["']?[^\s"';]*(?:\$|\x60|%[A-Za-z_]\w*%)`,
+  "i"
+);
+function isSelfConfirm(raw) {
+  if (/pr-checkpoint/i.test(raw) && SELF_FLAG.test(raw)) return true;
+  if (NODE_CMD.test(raw) && (APPLY_N.test(raw) || CONFIRM_PATHWAY.test(raw) && BY_FLAG.test(raw))) return true;
+  return SELF_FLAG.test(raw) && SCRIPT_GLOB.test(raw);
+}
+var hasNonLiteralRepo = (raw) => NONLITERAL_REPO.test(raw);
+function shapesOf(command) {
+  const text = normalizeGh(command);
+  const create = isPrOpenCommand(text);
+  const ready = isReadyShape(text);
+  const label = labelShape(text, create);
+  const nonLiteral = (create || ready || label !== null) && hasNonLiteralRepo(text);
+  return { create, nonDraft: create && isNonDraftCreate(text), ready, label, self: isSelfConfirm(text), nonLiteral };
+}
+var isGated = (s) => s.create || s.ready || s.label !== null || s.self;
+
 // src/shared/guard-log.ts
 import { appendFileSync, mkdirSync as mkdirSync2 } from "fs";
 import { homedir } from "os";
@@ -221,6 +312,8 @@ function logGuardDecision(hook, input, decision, reason, opts = {}) {
 // src/pre-pr-gate.ts
 var CCV3_REPO = "rev4nchist/continuous-claude-v3";
 var STAMP_REL = ".claude/cache/pre-pr/stamp.json";
+var PATHWAY_REL = ".claude/cache/pre-pr/pathway.json";
+var CONFIG_REL = "review-router.config.json";
 var MAX_STAMP_AGE_MS = 24 * 36e5;
 var FUTURE_SLACK_MS = 5 * 6e4;
 var GIT_TIMEOUT_MS = 2e3;
@@ -230,18 +323,19 @@ var HOOK = "pre-pr-gate";
 var RUN = "node scripts/github/pre-pr.mjs --body <file>";
 var BODY_UNVERIFIABLE = "the PR body is not a file, so it cannot be matched to the body pre-pr.mjs checked. Pass the body as a file: -F body=@<file> (gh api) or --body-file <file> (gh pr create). An inline body, a body from stdin, --fill and --fill-first are denied";
 var REPO_VALUE = "((?:https?:\\/\\/)?[\\w.-]+(?:\\/[\\w.-]+){1,2})";
-var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`);
-var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "i");
+var REPO_FLAG = new RegExp(`(?:^|\\s)(?:-R\\s*=?|--repo(?:\\s+|=))["']?${REPO_VALUE}`, "g");
+var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${REPO_VALUE}`, "gi");
+var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
 var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
 var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
 function namedRepo(command, env = {}) {
-  const flag = REPO_FLAG.exec(command)?.[1] ?? GH_REPO_ASSIGN.exec(command)?.[1] ?? (env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1]);
-  const explicit = flag ? ownerRepo(flag) : null;
+  const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
+  const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
+  const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
-  if (explicit === CCV3_REPO || endpoints.includes(CCV3_REPO)) return CCV3_REPO;
-  if (explicit) return explicit;
-  const apiOnly = /\bgh\s+api\b/i.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
-  return apiOnly ? endpoints[0] ?? null : null;
+  const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || hasCcv3Endpoint(command);
+  return ccv3 ? CCV3_REPO : null;
 }
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
@@ -251,17 +345,25 @@ function isCcv3Remote(url) {
   const m = /github\.com[:/]+([\w.-]+\/[\w.-]+?)(?:\.git)?\/?$/i.exec(url.trim());
   return m !== null && m[1].toLowerCase() === CCV3_REPO;
 }
+var CD_TARGET = /(?:^|[;&|\r\n]\s*)(?:cd|Set-Location|sl|pushd|Push-Location)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/gi;
+var resolveIn = (cwd, target) => {
+  const t = target.replace(/^["']|["']$/g, "");
+  return isAbsolute(t) || /^[A-Za-z]:/.test(t) ? t : resolve(cwd, t);
+};
 function workDir(command, cwd) {
-  const m = /(?:^|[;&|]\s*|&&\s*)(?:cd|Set-Location|sl)\s+(?:-LiteralPath\s+|-Path\s+)?("[^"]+"|'[^']+'|[^\s;&|]+)/i.exec(command);
-  if (!m) return cwd;
-  const target = m[1].replace(/^["']|["']$/g, "");
-  return isAbsolute(target) || /^[A-Za-z]:/.test(target) ? target : resolve(cwd, target);
+  const m = new RegExp(CD_TARGET.source, "i").exec(command);
+  return m ? resolveIn(cwd, m[1]) : cwd;
+}
+function candidateDirs(command, cwd) {
+  const texts = [command, command.replace(/["']/g, "")];
+  const targets = texts.flatMap((t) => [...t.matchAll(CD_TARGET)].map((m) => resolveIn(cwd, m[1].replace(/["']+$/, ""))));
+  return [.../* @__PURE__ */ new Set([cwd, ...targets])];
 }
 var FIELD_BODY = /(?:^|\s)(?:-F|--field)(?:=|\s*)(?:"body=@([^"]+)"|'body=@([^']+)'|body=@(?:"([^"]+)"|'([^']+)'|([^\s"']+)))/;
 var BODY_FILE = /(?:^|\s)--body-file(?:\s+|=)(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
 var SHORT_BODY_FILE = /(?:^|\s)-F\s+(?:"([^"]+)"|'([^']+)'|([^\s"']+))/;
 var INLINE_BODY = /(?:^|\s)(?:--body(?![\w-])|-b)|(?:^|\s)(?:-f|--raw-field)(?:=|\s*)["']?body=|(?:^|\s)(?:-F|--field)(?:=|\s*)["']?body=(?!@)/;
-var INPUT_FLAG = /(?:^|\s)--input(?![\w-])/;
+var INPUT_FLAG2 = /(?:^|\s)--input(?![\w-])/;
 function bodyFilesOf(command) {
   const sources = [FIELD_BODY, BODY_FILE, .../\bgh\s+pr\s+create\b/i.test(command) ? [SHORT_BODY_FILE] : []];
   return sources.flatMap((re) => [...command.matchAll(new RegExp(re.source, "g"))].map((m) => m.slice(1).find((g) => g !== void 0) ?? ""));
@@ -272,7 +374,7 @@ function bodyFileOf(command) {
 }
 function singleBodyFile(command) {
   const files = bodyFilesOf(command);
-  if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG.test(command)) return null;
+  if (files.length !== 1 || INLINE_BODY.test(command) || INPUT_FLAG2.test(command)) return null;
   return bodyFileOf(command);
 }
 function hasOverride(command, env) {
@@ -297,6 +399,13 @@ function isCcv3Checkout(deps, dir) {
     const url = line.split(/\s+/)[1];
     return url !== void 0 && isCcv3Remote(url);
   });
+}
+function isCcv3Dir(deps, dir) {
+  try {
+    return isCcv3Checkout(deps, dir);
+  } catch {
+    return false;
+  }
 }
 function stampRoots(deps, dir, root, branch) {
   const roots = [root];
@@ -350,39 +459,113 @@ function pushedProblem(deps, root, branch, head) {
   return `the pushed head fork/${name} is ${pushed.slice(0, 7)}, not the stamped head ${head.slice(0, 7)}. Push the stamped commit, or run pre-pr.mjs again`;
 }
 var shellOf = (input) => (input.tool_name || input.tool) === "PowerShell" ? "pwsh" : "bash";
+var once = (f) => {
+  let box;
+  return () => (box ??= { v: f() }).v;
+};
+function makeCtx(input, command, deps, shapes) {
+  const cwd = input.cwd || process.cwd();
+  const dir = workDir(command, cwd);
+  const named = namedRepo(command, deps.env);
+  const tops = /* @__PURE__ */ new Map();
+  const top = (d) => {
+    if (!tops.has(d)) {
+      const r = deps.git(d, ["rev-parse", "--show-toplevel"]);
+      tops.set(d, r.status === 0 ? r.stdout.trim() : null);
+    }
+    return tops.get(d) ?? null;
+  };
+  return {
+    dir,
+    named,
+    top,
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
+    enforcing: once(() => enforceIn(deps, top(cwd)))
+  };
+}
+function enforceIn(deps, top) {
+  const text = top === null ? null : deps.readFile(join3(top, CONFIG_REL));
+  if (text === null) return false;
+  try {
+    return JSON.parse(text)?.checkpoint?.enforce === true;
+  } catch {
+    return false;
+  }
+}
 function decide(input, deps) {
   const raw = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
-  const command = joinContinuations(raw, shellOf(input));
-  const d = gate(input, command, deps);
-  return d.action === "deny" && hasOverride(command, deps.env) ? { action: "override" } : d;
+  const command = normalizeGh(joinContinuations(raw, shellOf(input)));
+  const shapes = shapesOf(command);
+  if (!isGated(shapes)) return { action: "allow" };
+  const ctx = makeCtx(input, command, deps, shapes);
+  const d = judge(command, deps, ctx, shapes);
+  if (d.action !== "deny") return d;
+  if (hasOverride(command, deps.env)) return { action: "override" };
+  return d.soft && !ctx.enforcing() ? { action: "allow", warn: d.pattern } : d;
 }
-function gate(input, command, deps) {
-  if (!isPrOpenCommand(command)) return { action: "allow" };
-  const dir = workDir(command, input.cwd || process.cwd());
-  const named = namedRepo(command, deps.env);
-  const isCcv3 = named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir);
-  if (!isCcv3) return { action: "allow" };
-  const top = deps.git(dir, ["rev-parse", "--show-toplevel"]);
-  if (top.status !== 0) return deny("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
+function judge(command, deps, ctx, shapes) {
+  const stamp = shapes.create ? stampDeny(command, deps, ctx) : null;
+  return stamp ?? checkpointDeny(deps, ctx, shapes) ?? { action: "allow" };
+}
+function stampDeny(command, deps, ctx) {
+  const { dir, named } = ctx;
+  if (!ctx.ccv3()) return null;
+  const top = ctx.top(dir);
+  if (top === null) return deny("no-checkout", `this command opens a PR in ${CCV3_REPO}, but ${dir} is not a git checkout, so no pre-PR stamp can be found`);
   if (named !== null && !isCcv3Checkout(deps, dir)) return deny("repo-identity", `this command names ${CCV3_REPO}, but ${dir} is not a CCv3 checkout, so its stamp does not count`);
   const bodyPath = singleBodyFile(command);
   if (bodyPath === null) return deny("body", BODY_UNVERIFIABLE);
-  const root = top.stdout.trim();
   const branch = headBranchOf(command);
-  const headRun = deps.git(root, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
-  if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${root}`);
+  const headRun = deps.git(top, ["rev-parse", branch ? `${branch}^{commit}` : "HEAD"]);
+  if (headRun.status !== 0) return deny("head-unresolved", `cannot resolve the head ${branch ?? "HEAD"} in ${top}`);
   const head = headRun.stdout.trim();
   const body = { path: bodyPath, sha: sha256Of(deps.readFile(resolve(dir, bodyPath))) };
-  const problems = stampRoots(deps, dir, root, branch).map((r) => stampProblem(deps.readFile(join3(r, STAMP_REL)), head, deps.now(), body));
+  const problems = stampRoots(deps, dir, top, branch).map((r) => stampProblem(deps.readFile(join3(r, STAMP_REL)), head, deps.now(), body));
   if (!problems.some((p) => p === null)) return deny("stamp", problems[0] ?? "no stamp");
-  const pushed = pushedProblem(deps, root, branch, head);
-  return pushed ? deny("pushed-head", pushed) : { action: "allow" };
+  const pushed = pushedProblem(deps, top, branch, head);
+  return pushed ? deny("pushed-head", pushed) : null;
+}
+function soft(pattern, why) {
+  return { action: "deny", pattern, soft: true, reason: `BLOCKED (pre-pr-gate): ${why}` };
+}
+var SELF_WHY = "pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave's press in the /checkpoint mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.";
+var LITERAL_WHY = "pass a literal OWNER/REPO to --repo or -R. A value with $, a backtick or %VAR% hides the target repo from this gate.";
+var DRAFT_WHY = `open as draft; run /checkpoint. Open the PR with gh pr create --draft (gh api: -F draft=true). The /checkpoint mod picks the review pathway and marks the PR ready after Dave presses it.`;
+var READY_WHY = "gh pr ready is not run from a shell. Run /checkpoint: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.";
+var LABEL_WHY = "a review: label is set only by /checkpoint, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /checkpoint.";
+function checkpointDeny(deps, ctx, shapes) {
+  if (shapes.self) return soft("self-confirm", SELF_WHY);
+  if (shapes.nonLiteral) return soft("nonliteral-repo", LITERAL_WHY);
+  if (!ctx.ccv3()) return null;
+  if (shapes.nonDraft) return soft("non-draft", DRAFT_WHY);
+  if (shapes.ready) return soft("ready", READY_WHY);
+  if (shapes.label && !labelAllowed(shapes.label, deps, ctx)) return soft("review-label", LABEL_WHY);
+  return null;
+}
+function labelAllowed(label, deps, ctx) {
+  if (label.blind || label.labels.length !== 1) return false;
+  return pathwayLabel(deps, ctx) === label.labels[0];
+}
+function pathwayLabel(deps, ctx) {
+  const top = ctx.top(ctx.dir);
+  const text = top === null ? null : deps.readFile(join3(top, PATHWAY_REL));
+  const head = top === null ? null : deps.git(top, ["rev-parse", "HEAD"]);
+  if (text === null || head === null || head.status !== 0) return null;
+  let p;
+  try {
+    p = JSON.parse(text);
+  } catch {
+    return null;
+  }
+  if (!p || typeof p.head !== "string" || typeof p.label !== "string") return null;
+  return p.head.toLowerCase() === head.stdout.trim().toLowerCase() ? p.label.toLowerCase() : null;
 }
 var sha256Of = (text) => text === null ? null : createHash("sha256").update(text).digest("hex");
 function handle(raw, deps) {
   let input = {};
   let command = "";
-  let prCreate = false;
+  let gated = false;
+  let create = false;
   try {
     try {
       input = JSON.parse(raw.trim() || "{}");
@@ -401,9 +584,11 @@ The stamp comes from: ${RUN}`;
     const tool = input.tool_name || input.tool || "";
     if (!COMMAND_TOOLS2.has(tool)) return "{}";
     command = typeof input.tool_input?.command === "string" ? input.tool_input.command : "";
-    prCreate = isPrOpenCommand(command);
+    create = isPrOpenCommand(command);
+    gated = create || isGated(shapesOf(joinContinuations(command, shellOf(input))));
     const d = decide(input, deps);
     if (d.action === "override") logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
+    if (d.action === "allow" && d.warn) logGuardDecision(HOOK, input, "warn", d.warn, { command });
     if (d.action !== "deny") return "{}";
     logGuardDecision(HOOK, input, "deny", d.pattern, { command });
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: d.reason } });
@@ -413,13 +598,14 @@ The stamp comes from: ${RUN}`;
       deps.logError?.(message);
     } catch {
     }
-    if (!prCreate) return "{}";
+    if (!gated) return "{}";
     if (hasOverride(joinContinuations(command, shellOf(input)), deps.env)) {
       logGuardDecision(HOOK, input, "override", "SKIP_PRE_PR_GATE", { command });
       return "{}";
     }
     logGuardDecision(HOOK, input, "deny", "verify-error", { command });
-    const reason = `BLOCKED (pre-pr-gate): could not verify the pre-PR stamp (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.
+    const what = create ? "the pre-PR stamp" : "the PR checkpoint rules";
+    const reason = `BLOCKED (pre-pr-gate): could not verify ${what} (${message.slice(0, 200)}). Run the command again. If it keeps failing, ask Dave.
 
 The stamp comes from: ${RUN}`;
     return JSON.stringify({ hookSpecificOutput: { hookEventName: "PreToolUse", permissionDecision: "deny", permissionDecisionReason: reason } });
@@ -468,6 +654,7 @@ export {
   CCV3_REPO,
   GIT_TIMEOUT_MS,
   MAX_STAMP_AGE_MS,
+  PATHWAY_REL,
   STAMP_REL,
   bodyFileOf,
   decide,
