@@ -44,6 +44,7 @@ import { fileURLToPath } from 'node:url';
 import { createHash } from 'node:crypto';
 import { describe, expect, it } from 'vitest';
 import { isPrOpenCommand } from '../pr-opened-review-loop.js';
+import * as gateModule from '../pre-pr-gate.js';
 import {
   CCV3_REPO,
   MAX_STAMP_AGE_MS,
@@ -860,5 +861,635 @@ describe('W: wiring', () => {
     const m = /export const STAMP_REL = '([^']+)'/.exec(source);
     expect(m).not.toBeNull();
     expect(STAMP_REL).toBe(m?.[1]);
+  });
+});
+
+// =====================================================================================================================
+// PR B: the checkpoint gate (spec .claudedocs/2026-10-28-pr-checkpoint-mod-spec.md section 3.2 and PR B row of section 7).
+//
+// Contract (written before the code):
+//   Config: <git toplevel>/review-router.config.json  checkpoint.enforce. ONLY a literal `true` enforces. A missing file, an
+//     unreadable or invalid file, a missing key or any other value is WARN mode (the week-one default).
+//   Warn mode, for every NEW PR B deny (patterns below): the command is ALLOWED and one row goes to the guard decision log
+//     (guard-decisions.jsonl, so CCV3_GUARD_DECISIONS_LOG redirects it in tests; guard-log.ts GREEN adds the kind 'warn'):
+//       { ts, hook: 'pre-pr-gate', tool, decision: 'warn', reason: <pattern>, session_id, command (masked, at most 80 chars) }
+//     No 'deny' row is written. Under VITEST with no CCV3_GUARD_DECISIONS_LOG nothing is written (same as guard-log.ts today).
+//   Enforce mode: the same commands are denied, and the row is { decision: 'deny', reason: <pattern> }.
+//   The stamp rules of #193 and #197 are NOT new: they are enforced in both modes, and they are checked before the PR B rules.
+//   New patterns and deny texts (each text must not mention SKIP_PRE_PR_GATE):
+//     non-draft       'open as draft; run /checkpoint'
+//     self-confirm    names pr-checkpoint with --confirm or --apply: only Dave's press in the /checkpoint mod records a pathway
+//     ready           gh pr ready, markPullRequestReadyForReview: ALWAYS denied in enforce mode, pathway or not (Dave 2026-10-28; --apply runs gh
+//                     inside node, so the hook never sees it). Text must contain /checkpoint. `gh pr ready --undo` is NOT gated (recovery path).
+//     review-label    a gh text that adds a review: label (--add-label, a labels endpoint, or gh pr create --label / -l). Allowed ONLY when pathway.json
+//                     names HEAD AND the review: label equals pathway.label. Any other review: label is denied. A label add with no visible label text
+//                     (gh api .../labels --input <file>, GraphQL addLabelsToLabelable) is denied on CCv3 even WITH a pathway (the label cannot be checked).
+//     nonliteral-repo a --repo or -R value with $, a backtick or %VAR%: pass a literal OWNER/REPO
+//   pathway.json (<toplevel>/.claude/cache/pre-pr/pathway.json) names the head when its `head` equals `git rev-parse HEAD` there.
+//   Scope: ready and label shapes are gated for CCv3 only (named repo, else the checkout), as the create is. self-confirm and
+//     nonliteral-repo are not repo-scoped: the text alone decides.
+//   Draft tokens (explicit true only): gh pr create --draft | -d ; gh api -F draft=true | -f draft=true. Anything else, and any
+//     draft=false next to a true token, is non-draft.
+//   Override: a LEADING SKIP_PRE_PR_GATE=1 turns a deny into an 'override' row, as today.
+//   Stamp scope (fill round): a create whose --repo or -R value is non-literal, from a CCv3 checkout, is judged by the stamp rules as a
+//     CCv3 create. With no valid stamp it is denied 'stamp' in BOTH modes (stamp first, as B3). A bare $REPO already reads as "the checkout
+//     decides" (namedRepo gives null). A literal prefix before the $ does not: "--repo other/x$Y" names "other/x" and skips the stamp, so
+//     warn mode would leave that #197 bypass open for the whole week. B3 pins the prefix forms.
+//   Foreign checkout naming CCv3 (fill round): a ready or label shape that names CCv3 (flag or GH_REPO) from a foreign checkout is denied with the
+//     shape's own pattern ('ready' or 'review-label'), not 'repo-identity' (B8b; B9 leaves the same case as a plain deny).
+//   Draft token search (fill round): a draft token inside a quoted value (a title such as "add -d flag") is not a draft token. A quoted
+//     -F "draft=true" or -F 'draft=true' also counts as NON-draft: fail closed on the raw text, the unquoted form works (B2).
+//   Errors: an internal error while judging a ready, label or self-confirm shape (git throws) DENIES in BOTH modes, as the
+//     'verify-error' path does for a create today (F3). Warn mode covers rule hits only, not a gate that could not decide.
+//
+// How the new rules can fail, and the test that catches it:
+//   a draft create is denied, or a non-draft create is allowed               -> B1, B2
+//   --draft=false, a later draft=false, or a glued -dx counts as a draft      -> B2
+//   a PR B rule hides or replaces a stamp deny                                -> B3 (also: a non-literal --repo create with no stamp, in warn mode)
+//   a draft token inside a quoted title opens a non-draft PR                  -> B2
+//   the warn or deny row has the wrong tool for a PowerShell payload          -> B4, B5
+//   ready or label from a foreign checkout naming CCv3 by env, or CCv3 naming a foreign repo by env  -> B8, B9
+//   warn mode denies, logs nothing, logs a deny row, or logs a wrong shape    -> B4
+//   enforce mode allows, or logs the wrong row                                -> B5
+//   a truthy non-boolean enforce value enforces                               -> B6
+//   the session confirms or applies its own pathway from a shell              -> B7
+//   --json is denied, or an allowed command spawns git                        -> B7
+//   gh pr ready or a review: label goes through with no pathway for the head  -> B8
+//   a pathway for another head, or a broken one, opens the gate               -> B8
+//   a pathway lets a DIFFERENT review: label through, or a pathway with no label field lets one through -> B8c (Dave A.a)
+//   a pathway lets a shell gh pr ready through                                -> B8d (Dave A.b); warn mode logs it and allows
+//   a label add with no visible label text goes through, with or without a pathway -> B8e (Dave A.c)
+//   gh pr create --label review:x / -l review:x goes through                  -> B8f (Dave A.d); a draft create with no review label stays allowed (DRAFT_OK)
+//   gh pr ready --undo is denied (it is the recovery path), or --undo=false is read as an undo -> B9, B8d (Dave B)
+//   other gh commands, other repos or non-review labels are blocked           -> B9
+//   a non-literal --repo or -R skips the CCv3 identity test                   -> B10
+//   the override stops working, or a non-leading override works               -> B11
+//   an internal error on a ready or label shape lets it through (any mode)   -> B12
+//   a continued line hides a ready shape                                      -> B13
+//   the warn row is written to the real log under vitest                      -> B14
+//   the pathway.json path drifts from the one pr-checkpoint.mjs writes        -> B15
+// =====================================================================================================================
+describe('B: the checkpoint gate (PR B)', () => {
+  const CONFIG_FILE = join(ROOT, 'review-router.config.json');
+  const PATHWAY_FILE = join(ROOT, '.claude', 'cache', 'pre-pr', 'pathway.json');
+  const FOREIGN_REMOTES = 'origin\thttps://github.com/someone/else.git (fetch)\norigin\thttps://github.com/someone/else.git (push)\n';
+  const ENFORCE = JSON.stringify({ checkpoint: { enforce: true } });
+  const PATHWAY_OF: Record<string, string> = { 'review:none': 'none', 'review:coderabbit': 'coderabbit', 'review:deep': 'both' };
+  /** A pathway.json for `head`. `label` is the label the pathway allows (Dave A.a: a label add must equal it). */
+  const pathwayFor = (head: string, label = 'review:coderabbit'): string => JSON.stringify({ head, body_sha256: sha256(DEFAULT_BODY_TEXT), pathway: PATHWAY_OF[label], label, class: 'normal', recommended: 'coderabbit', decided_by: 'dave', at: new Date(NOW).toISOString(), budget: [1, 1] });
+  /** The same record with the label key removed: the hook must read pathway.label, not just the head. */
+  const pathwayNoLabel = (head: string): string => { const p = JSON.parse(pathwayFor(head)); delete p.label; return JSON.stringify(p); };
+  const REVIEW_LABELS = ['review:none', 'review:coderabbit', 'review:deep'];
+  /** The first review: token in a command (a label add always names one). */
+  const labelOf = (c: string): string => /review:[a-z-]+/.exec(c)?.[0] ?? '';
+  const BHEAD = 'b'.repeat(40);
+
+  interface Opts { config?: string; head?: string; stamp?: boolean; pathway?: string; remotes?: string; calls?: Array<{ cwd: string; args: string[] }> }
+  /** Deps for the PR B tests: a fresh stamp for HEAD (unless stamp: false), the config, and the pathway file, all served by path. */
+  function gdeps(o: Opts = {}): Deps {
+    const files: Record<string, string> = {};
+    if (o.stamp !== false) files[join(ROOT, STAMP_REL)] = stampJson();
+    if (o.config !== undefined) files[CONFIG_FILE] = o.config;
+    if (o.pathway !== undefined) files[PATHWAY_FILE] = o.pathway;
+    return deps({ stamps: files, remotes: o.remotes, calls: o.calls, head: o.head });
+  }
+  const payload = (command: string, tool = 'Bash') => JSON.stringify(input(command, { tool_name: tool, session_id: 's1' }));
+  const act = (command: string, o: Opts = {}, tool = 'Bash') => decide(input(command, { tool_name: tool }), gdeps(o));
+  const denied = (command: string, o: Opts = {}, tool = 'Bash') => {
+    const d = act(command, o, tool);
+    return d.action === 'deny' ? d : null;
+  };
+
+  /** Run `fn` with the guard decision log redirected to a temp file, and return the rows it wrote. */
+  function logged(fn: () => void): Array<Record<string, unknown>> {
+    const file = join(mkdtempSync(join(tmpdir(), 'prepr-gate-b-')), 'guard-decisions.jsonl');
+    const saved = process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.CCV3_GUARD_DECISIONS_LOG = file;
+    try { fn(); } finally {
+      if (saved === undefined) delete process.env.CCV3_GUARD_DECISIONS_LOG;
+      else process.env.CCV3_GUARD_DECISIONS_LOG = saved;
+    }
+    return existsSync(file) ? readFileSync(file, 'utf8').split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  }
+
+  const DRAFT_OK = [
+    `gh pr create --draft --body-file ${DB}`,
+    `gh pr create -d --base main --head feat/x --title "t" --body-file ${DB}`,
+    `gh pr create --base main --head feat/x --body-file ${DB} --draft`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -f title=t -f head=feat/x -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f draft=true -f title=t -F body=@${DB}`,
+    // A real draft token outside the quotes still counts, whatever the quoted title says.
+    `gh pr create --draft --title "add -d flag" --body-file ${DB}`,
+    // Dave A.d: a draft create WITHOUT a review: label stays allowed (guards: they pass today and must keep passing).
+    `gh pr create --draft --label risk:low --body-file ${DB}`,
+    `gh pr create --draft -l "area:hooks" --title "review: tidy up" --body-file ${DB}`,
+  ];
+  const NON_DRAFT = [
+    `gh pr create --body-file ${DB}`,
+    // A draft token inside a quoted value is text, not a flag. A raw-text scan for -d or --draft would open a routed PR here.
+    `gh pr create --title "add -d flag" --body-file ${DB}`,
+    `gh pr create --title "add --draft flag" --body-file ${DB}`,
+    `gh pr create --title 'add -d flag' --body-file ${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title="fix -F draft=true" -F body=@${DB}`,
+    // Pinned fail closed (choice 15): a quoted draft=true is a real draft token in the shell, but the hook does not lex quotes. Type it unquoted.
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F "draft=true" -f title=t -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F 'draft=true' -f title=t -F body=@${DB}`,
+    `gh pr create --draft=false --body-file ${DB}`,
+    `gh pr create --draft --draft=false --body-file ${DB}`,
+    `gh pr create --draft=true --body-file ${DB}`,
+    `gh pr create -dx --body-file ${DB}`,
+    `gh pr create --drafts --body-file ${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=false -f title=t -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f draft=false -f title=t -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -F draft=true -F draft=false -F body=@${DB}`,
+    `gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST --draft -F body=@${DB}`,
+  ];
+
+  /** One command per new pattern. Each is allowed today; each must be a deny in enforce mode and a logged allow in warn mode. */
+  const NEW_DENIES: Array<{ name: string; command: string; pattern: string; reason: RegExp }> = [
+    { name: 'non-draft create', command: CREATE[1], pattern: 'non-draft', reason: /open as draft; run \/checkpoint/ },
+    { name: 'self-confirm', command: 'node scripts/github/pr-checkpoint.mjs --confirm none --by dave', pattern: 'self-confirm', reason: /pr-checkpoint[\s\S]*press/i },
+    { name: 'ready', command: 'gh pr ready 201', pattern: 'ready', reason: /\/checkpoint/ },
+    { name: 'review label', command: 'gh pr edit 201 --add-label review:coderabbit', pattern: 'review-label', reason: /\/checkpoint/ },
+    { name: 'non-literal repo', command: `gh pr create --draft --repo $REPO --body-file ${DB}`, pattern: 'nonliteral-repo', reason: /literal/i },
+  ];
+
+  it('B1: a draft create with a valid stamp is allowed with or without a pathway, on Bash and PowerShell, in enforce mode', () => {
+    for (const c of DRAFT_OK) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        expect(act(c, { config: ENFORCE }, tool).action, `${tool}: ${c}`).toBe('allow');
+        expect(act(c, { config: ENFORCE, pathway: pathwayFor(HEAD) }, tool).action, `${tool} + pathway: ${c}`).toBe('allow');
+      }
+    }
+  });
+
+  it('B2: a create with no explicit draft-true token is denied "open as draft; run /checkpoint" (enforce); --draft=false and a later draft=false count', () => {
+    for (const c of NON_DRAFT) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        const d = denied(c, { config: ENFORCE }, tool);
+        expect(d, `${tool}: ${c}`).not.toBeNull();
+        expect(d?.pattern, c).toBe('non-draft');
+        expect(d?.reason, c).toContain('open as draft; run /checkpoint');
+        expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+      }
+    }
+  });
+
+  it('B3: the stamp rules come first and stay enforced in warn mode: a create with no stamp is denied "stamp", draft or not, literal repo or not', () => {
+    // A non-literal --repo from a CCv3 checkout must not be a stamp hole, in warn mode too (#197). The first three already read as "the checkout
+    // decides" today (namedRepo gives null), so they pass now and guard GREEN. The last three carry a literal PREFIX before the $: namedRepo reads the prefix
+    // as the repo ("rev4nchist/continuous-claude-v", "other/x"), the identity test sees a foreign repo, and the create skips the stamp. They fail today.
+    // Dave decision C (2026-10-28): a non-literal --repo on a create from a CCv3 checkout is judged by the CHECKOUT identity, so the stamp rules apply.
+    // The bare forms $REPO, $(...), backticks and %VAR% are pinned the same way (guards: namedRepo gives null for them today, so they pass today).
+    const NONLIT_CREATES = [
+      `gh pr create --draft --repo $REPO --body-file ${DB}`,
+      `gh pr create --repo "$REPO" --body-file ${DB}`,
+      `gh pr create --draft -R $env:TARGET --body-file ${DB}`,
+      `gh pr create --draft --repo=$(git remote get-url fork) --body-file ${DB}`,
+      `gh pr create --draft --repo "$(git remote get-url fork)" --body-file ${DB}`,
+      `gh pr create --draft --repo \`git remote get-url fork\` --body-file ${DB}`,
+      `gh pr create --draft --repo %REPO% --body-file ${DB}`,
+      `gh pr create --draft --repo Rev4nchist/Continuous-Claude-v$N --body-file ${DB}`,
+      `gh pr create --repo other/x$Y --body-file ${DB}`,
+      `gh pr create --draft -R "Rev4nchist/Continuous-Claude-v$env:N" --body-file ${DB}`,
+    ];
+    for (const config of [undefined, ENFORCE]) {
+      for (const c of [DRAFT_OK[0], DRAFT_OK[3], NON_DRAFT[0], ...NONLIT_CREATES]) {
+        for (const tool of ['Bash', 'PowerShell']) {
+          const d = denied(c, { config, stamp: false }, tool);
+          expect(d?.pattern, `${config ? 'enforce' : 'warn'} ${tool}: ${c}`).toBe('stamp');
+        }
+      }
+    }
+    // A stamp for another head is still the stamp deny, not the draft deny, in warn and in enforce mode.
+    const staleHead = (config: string | undefined): Deps => ({ ...gdeps({ config }), git: (cwd, args) => (args.join(' ') === 'rev-parse HEAD' ? { status: 0, stdout: `${BHEAD}\n` } : gdeps().git(cwd, args)) });
+    for (const config of [undefined, ENFORCE]) {
+      for (const c of [NON_DRAFT[0], DRAFT_OK[0], NONLIT_CREATES[0]]) {
+        const d = decide(input(c), staleHead(config));
+        expect(d.action === 'deny' ? d.pattern : d.action, `${config ? 'enforce' : 'warn'} stale stamp: ${c}`).toBe('stamp');
+      }
+    }
+  });
+
+  it('B4: warn mode (no config, enforce false, no key, bad JSON): every new deny is ALLOWED and logs one warn row of the pinned shape', () => {
+    const configs: Array<[string, string | undefined]> = [['no config file', undefined], ['enforce false', JSON.stringify({ checkpoint: { enforce: false } })], ['no key', JSON.stringify({ checkpoint: {} })], ['bad JSON', '{not json']];
+    for (const [label, config] of configs) {
+      for (const n of NEW_DENIES) {
+        for (const tool of ['Bash', 'PowerShell']) {
+          let out = '';
+          const rows = logged(() => { out = handle(payload(n.command, tool), gdeps({ config })); });
+          expect(out, `${label} / ${tool} / ${n.name}: allowed`).toBe('{}');
+          expect(rows, `${label} / ${tool} / ${n.name}: one row`).toHaveLength(1);
+          expect(rows[0], `${label} / ${tool} / ${n.name}`).toMatchObject({ hook: 'pre-pr-gate', tool, decision: 'warn', reason: n.pattern, session_id: 's1' });
+          expect(typeof rows[0].ts, n.name).toBe('string');
+          expect(String(rows[0].command), n.name).toContain(n.command.slice(0, 20));
+          expect(String(rows[0].command).length, n.name).toBeLessThanOrEqual(80);
+        }
+      }
+    }
+  });
+
+  it('B5: enforce mode: the same commands are denied with the pattern text, and the log row is a deny, not a warn', () => {
+    for (const n of NEW_DENIES) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        let out = '';
+        const rows = logged(() => { out = handle(payload(n.command, tool), gdeps({ config: ENFORCE })); });
+        const parsed = JSON.parse(out || '{}');
+        expect(parsed.hookSpecificOutput?.permissionDecision, `${tool} / ${n.name}`).toBe('deny');
+        expect(parsed.hookSpecificOutput?.permissionDecisionReason, n.name).toMatch(n.reason);
+        expect(parsed.hookSpecificOutput?.permissionDecisionReason, n.name).not.toMatch(/SKIP_PRE_PR_GATE/);
+        expect(rows, `${tool} / ${n.name}`).toHaveLength(1);
+        expect(rows[0], `${tool} / ${n.name}`).toMatchObject({ hook: 'pre-pr-gate', tool, decision: 'deny', reason: n.pattern });
+      }
+    }
+  });
+
+  it('B6: only a boolean true enforces: the strings "true" and the number 1 are warn mode', () => {
+    for (const enforce of ['true', 1, 'yes']) {
+      const d = act(NEW_DENIES[2].command, { config: JSON.stringify({ checkpoint: { enforce } }) });
+      expect(d.action, String(enforce)).toBe('allow');
+    }
+  });
+
+  // ---- C1: self-confirm ----
+  const SELF = [
+    'node scripts/github/pr-checkpoint.mjs --confirm none --by dave',
+    'node scripts/github/pr-checkpoint.mjs --confirm=coderabbit --by=default',
+    'node scripts/github/pr-checkpoint.mjs --by dave --confirm both',
+    'node scripts/github/pr-checkpoint.mjs --apply 201',
+    'node scripts/github/pr-checkpoint.mjs --apply=201',
+    'node scripts/github/PR-Checkpoint.mjs --apply 201',
+    'node .\\scripts\\github\\pr-checkpoint.mjs --apply 201',
+    'cd scripts/github; node "pr-checkpoint.mjs" --apply 201',
+    'node scripts/github/pr-checkpoint.mjs --json --confirm none --by dave',
+    '$f = "scripts/github/pr-checkpoint.mjs"; node $f --apply 201',
+  ];
+  const SELF_OK = [
+    'node scripts/github/pr-checkpoint.mjs --json',
+    'node scripts/github/pr-checkpoint.mjs',
+    'node scripts/github/pr-checkpoint.mjs --json --facts f.json --config c.json --dependabot',
+    'node scripts/github/pre-pr.mjs --body b.md',
+    'node --test scripts/github/pr-checkpoint.test.mjs',
+    'git add scripts/github/pr-checkpoint.mjs',
+    'some-other-tool --confirm none',
+  ];
+
+  it('B7: a shell text that names pr-checkpoint with --confirm or --apply is denied (Bash and PowerShell); --json and other tools are allowed with no git call', () => {
+    for (const c of SELF) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        const d = denied(c, { config: ENFORCE }, tool);
+        expect(d, `${tool}: ${c}`).not.toBeNull();
+        expect(d?.pattern, c).toBe('self-confirm');
+        expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+      }
+    }
+    // Not repo-scoped: the text alone decides (a foreign checkout is denied too).
+    expect(denied(SELF[0], { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('self-confirm');
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    for (const c of SELF_OK) {
+      for (const tool of ['Bash', 'PowerShell']) expect(act(c, { config: ENFORCE, calls }, tool).action, `${tool}: ${c}`).toBe('allow');
+    }
+    expect(calls, 'an allowed command never spawns git').toEqual([]);
+  });
+
+  // ---- ready and review labels ----
+  const READY = [
+    'gh pr ready 201',
+    'gh pr ready',
+    'gh  pr   ready 201 --repo Rev4nchist/Continuous-Claude-v3',
+    'GH PR READY 201',
+    // Dave B: `--undo` alone is the recovery path and is NOT gated (B9). `--undo=false` is a boolean false, so it is a real ready: fail closed.
+    'gh pr ready 201 --undo=false',
+    `gh api graphql -f query='mutation { markPullRequestReadyForReview(input: {pullRequestId: "PR_x"}) { pullRequest { id } } }'`,
+  ];
+  // Label adds that name a review: label in the text. Allowed only with a pathway for HEAD whose label equals the one named (Dave A.a).
+  const LABEL = [
+    'gh pr edit 201 --add-label review:coderabbit',
+    'gh pr edit 201 --add-label "review:deep"',
+    "gh pr edit 201 --add-label 'review:coderabbit'",
+    'gh pr edit 201 --add-label=review:none',
+    'gh pr edit 201 --add-label risk:low,review:none',
+    'gh pr edit 201 --repo Rev4nchist/Continuous-Claude-v3 --add-label review:none',
+    'gh issue edit 201 --add-label review:none',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -f "labels[]=review:coderabbit"',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X POST -f labels[]=review:deep',
+  ];
+
+  it('B8: gh pr ready, markPullRequestReadyForReview and a review: label are denied with no pathway.json for HEAD, or a pathway for another head or a broken one', () => {
+    for (const c of [...READY, ...LABEL]) {
+      const want = READY.includes(c) ? 'ready' : 'review-label';
+      for (const tool of ['Bash', 'PowerShell']) {
+        const none = denied(c, { config: ENFORCE }, tool);
+        expect(none?.pattern, `${tool}: ${c}`).toBe(want);
+        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+      }
+      expect(denied(c, { config: ENFORCE, pathway: pathwayFor(BHEAD, READY.includes(c) ? undefined : labelOf(c)) })?.pattern, `pathway of another head: ${c}`).toBe(want);
+      for (const bad of ['{not json', '{}', 'null', JSON.stringify({ head: 7 })]) {
+        expect(denied(c, { config: ENFORCE, pathway: bad })?.pattern, `pathway ${bad}: ${c}`).toBe(want);
+      }
+    }
+  });
+
+  // ---- Dave A.a: the label must equal pathway.label ----
+  it('B8c: a review: label add is allowed ONLY when pathway.json names HEAD and the label equals pathway.label; any other review: label is denied "review-label"', () => {
+    for (const c of LABEL) {
+      const label = labelOf(c);
+      for (const tool of ['Bash', 'PowerShell']) {
+        // The pathway for the SAME label allows it (a guard on over-blocking; it also passes today).
+        expect(act(c, { config: ENFORCE, pathway: pathwayFor(HEAD, label) }, tool).action, `${tool}, matching pathway ${label}: ${c}`).toBe('allow');
+        for (const other of REVIEW_LABELS.filter((l) => l !== label)) {
+          const d = denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, other) }, tool);
+          expect(d?.pattern, `${tool}, pathway ${other} vs label ${label}: ${c}`).toBe('review-label');
+          expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+        }
+      }
+    }
+    // A pathway for HEAD with no label field cannot vouch for any label: the hook must read pathway.label.
+    expect(denied('gh pr edit 201 --add-label review:none', { config: ENFORCE, pathway: pathwayNoLabel(HEAD) })?.pattern, 'pathway with no label').toBe('review-label');
+    // A label that only starts like the pathway label is another label (the match is equality, not a prefix or substring test).
+    for (const c of ['gh pr edit 201 --add-label review:coderabbit-held', 'gh pr edit 201 --add-label review:coderabbitx', 'gh pr edit 201 --add-label review:deep-held']) {
+      expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, labelOf(c).replace(/-held$|x$/, '')) })?.pattern, c).toBe('review-label');
+    }
+    // More than one review: label in one command cannot match one pathway label: denied (also when the pathway names one of them).
+    for (const c of [
+      'gh pr edit 201 --add-label review:coderabbit,review:deep',
+      'gh pr edit 201 --add-label review:coderabbit --add-label review:none',
+    ]) expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, 'review:coderabbit') })?.pattern, c).toBe('review-label');
+    // GitHub label names are case-insensitive: a case variant is the same label, so with no pathway or a different one it is denied.
+    for (const c of ['gh pr edit 201 --add-label Review:NONE', 'gh pr edit 201 --add-label REVIEW:Deep']) {
+      expect(denied(c, { config: ENFORCE })?.pattern, `no pathway: ${c}`).toBe('review-label');
+      expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, 'review:coderabbit') })?.pattern, `other pathway: ${c}`).toBe('review-label');
+    }
+    // A matching label for ANOTHER head is not a match (the head test and the label test both apply).
+    expect(denied('gh pr edit 201 --add-label review:none', { config: ENFORCE, pathway: pathwayFor(BHEAD, 'review:none') })?.pattern).toBe('review-label');
+  });
+
+  // ---- Dave A.b and B: ready ----
+  it('B8d: a shell gh pr ready (and markPullRequestReadyForReview) is ALWAYS denied in enforce mode, even with a pathway for HEAD; warn mode logs a warn row and allows', () => {
+    for (const c of READY) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        for (const pathway of [pathwayFor(HEAD), pathwayFor(HEAD, 'review:none'), pathwayFor(HEAD, 'review:deep')]) {
+          const d = denied(c, { config: ENFORCE, pathway }, tool);
+          expect(d?.pattern, `${tool}, pathway ${JSON.parse(pathway).label}: ${c}`).toBe('ready');
+          expect(d?.reason, c).toContain('/checkpoint');
+          expect(d?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+        }
+      }
+      // Warn mode with a pathway: allowed, one warn row. (No pathway in warn mode is B4.)
+      for (const config of [undefined, JSON.stringify({ checkpoint: { enforce: false } })]) {
+        let out = '';
+        const rows = logged(() => { out = handle(payload(c), gdeps({ config, pathway: pathwayFor(HEAD) })); });
+        expect(out, `warn, pathway: ${c}`).toBe('{}');
+        expect(rows, `warn, pathway: ${c}`).toHaveLength(1);
+        expect(rows[0], c).toMatchObject({ hook: 'pre-pr-gate', decision: 'warn', reason: 'ready' });
+      }
+    }
+  });
+
+  // ---- Dave A.c: label adds with no visible label text ----
+  const LABEL_BLIND = [
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels --input labels.json',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X POST --input labels.json',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels --input=labels.json',
+    'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X PUT --input -',
+    `gh api graphql -f query='mutation { addLabelsToLabelable(input: {labelableId: "PR_x", labelIds: ["L_x"]}) { clientMutationId } }'`,
+    `gh api graphql -f query='mutation($id: ID!, $l: [ID!]!) { addLabelsToLabelable(input: {labelableId: $id, labelIds: $l}) { clientMutationId } }' -f id=PR_x`,
+  ];
+
+  it('B8e: a label add with no visible label text (labels endpoint with --input, GraphQL addLabelsToLabelable) is denied "review-label" on CCv3, with no pathway AND with a pathway', () => {
+    for (const c of LABEL_BLIND) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        const none = denied(c, { config: ENFORCE }, tool);
+        expect(none?.pattern, `${tool}, no pathway: ${c}`).toBe('review-label');
+        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+        // The label cannot be checked against pathway.label, so a pathway for HEAD does not open it.
+        for (const label of REVIEW_LABELS) {
+          expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, label) }, tool)?.pattern, `${tool}, pathway ${label}: ${c}`).toBe('review-label');
+        }
+      }
+    }
+    // Scope: the same shapes are allowed from a foreign checkout (GraphQL has no repo in the text) and for another repo's endpoint.
+    expect(act(LABEL_BLIND[4], { config: ENFORCE, remotes: FOREIGN_REMOTES }).action, 'foreign checkout, GraphQL').toBe('allow');
+    expect(act('gh api repos/someone/else/issues/201/labels --input labels.json', { config: ENFORCE }).action, 'another repo endpoint').toBe('allow');
+    // Warn mode: logged and allowed, like the other new patterns.
+    for (const c of LABEL_BLIND) {
+      let out = '';
+      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      expect(out, `warn: ${c}`).toBe('{}');
+      expect(rows, `warn: ${c}`).toHaveLength(1);
+      expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'review-label' });
+    }
+  });
+
+  // ---- Dave A.d: gh pr create --label / -l ----
+  const CREATE_LABEL = [
+    `gh pr create --draft --label review:coderabbit --body-file ${DB}`,
+    `gh pr create --draft -l review:none --body-file ${DB}`,
+    `gh pr create --draft --label=review:deep --body-file ${DB}`,
+    `gh pr create --draft -lreview:none --body-file ${DB}`,
+    `gh pr create --draft --label "risk:low,review:coderabbit" --body-file ${DB}`,
+    `gh pr create -d --label 'review:none' --title t --body-file ${DB}`,
+  ];
+
+  it('B8f: gh pr create --draft --label review:x (and -l) is a label shape: denied "review-label" with no pathway or a pathway for another label; a draft create with no review label is allowed', () => {
+    for (const c of CREATE_LABEL) {
+      for (const tool of ['Bash', 'PowerShell']) {
+        const none = denied(c, { config: ENFORCE }, tool);
+        expect(none?.pattern, `${tool}, no pathway: ${c}`).toBe('review-label');
+        expect(none?.reason, c).toContain('/checkpoint');
+        expect(none?.reason, c).not.toMatch(/SKIP_PRE_PR_GATE/);
+        const other = REVIEW_LABELS.find((l) => l !== labelOf(c)) as string;
+        expect(denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD, other) }, tool)?.pattern, `${tool}, pathway ${other}: ${c}`).toBe('review-label');
+      }
+      expect(denied(c, { config: ENFORCE, pathway: pathwayFor(BHEAD, labelOf(c)) })?.pattern, `pathway of another head: ${c}`).toBe('review-label');
+      // Warn mode: allowed with one warn row.
+      let out = '';
+      const rows = logged(() => { out = handle(payload(c), gdeps({})); });
+      expect(out, `warn: ${c}`).toBe('{}');
+      expect(rows, `warn: ${c}`).toHaveLength(1);
+      expect(rows[0], c).toMatchObject({ decision: 'warn', reason: 'review-label' });
+    }
+    // Over-blocking guards (pass today): a draft create with no review label, and a --label review: on another repo's create.
+    for (const c of DRAFT_OK) expect(act(c, { config: ENFORCE }).action, c).toBe('allow');
+    expect(act(`gh pr create --draft --repo someone/else --label review:none --body-file ${DB}`, { config: ENFORCE, stamp: false }).action, 'another repo').toBe('allow');
+    // NOT pinned: a create --label review:x WITH a pathway for HEAD whose label equals it. Dave named the no-pathway case only (open item in prB-red.md).
+  });
+
+  it('B8b: an env prefix cannot move a ready or label shape out of scope: GH_REPO=CCv3 from a foreign checkout is denied; a plain FOO=1 prefix is denied', () => {
+    const CCV3 = 'Rev4nchist/Continuous-Claude-v3';
+    const named: Array<[string, string, string]> = [
+      ['GH_REPO=' + CCV3 + ' gh pr ready 201', 'Bash', 'ready'],
+      ["$env:GH_REPO='" + CCV3 + "'; gh pr ready 201", 'PowerShell', 'ready'],
+      ['GH_REPO=' + CCV3 + ' gh pr edit 201 --add-label review:none', 'Bash', 'review-label'],
+      ["$env:GH_REPO='" + CCV3 + "'; gh pr edit 201 --add-label review:none", 'PowerShell', 'review-label'],
+    ];
+    for (const [c, tool, pattern] of named) {
+      expect(denied(c, { config: ENFORCE, remotes: FOREIGN_REMOTES }, tool)?.pattern, `foreign checkout, ${tool}: ${c}`).toBe(pattern);
+    }
+    const plain: Array<[string, string, string]> = [
+      ['FOO=1 gh pr ready 201', 'Bash', 'ready'],
+      ['FOO=1 gh pr edit 201 --add-label review:none', 'Bash', 'review-label'],
+      ["$env:FOO='1'; gh pr ready 201", 'PowerShell', 'ready'],
+      ["$env:FOO='1'; gh pr edit 201 --add-label review:none", 'PowerShell', 'review-label'],
+    ];
+    for (const [c, tool, pattern] of plain) {
+      expect(denied(c, { config: ENFORCE }, tool)?.pattern, `CCv3 checkout, ${tool}: ${c}`).toBe(pattern);
+    }
+  });
+
+  it('B9: other gh commands, non-review labels, removals, label creation, other repos and foreign checkouts are not gated; no git is spawned for text that is not a shape', () => {
+    const NOT_GATED = [
+      'gh pr view 201 --json labels',
+      'gh pr edit 201 --add-label risk:low',
+      'gh pr edit 201 --remove-label review:deep-held',
+      'gh pr edit 201 --title "review: tidy up"',
+      'gh label create review:none --color ededed',
+      'gh pr list --label review:deep',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels',
+      'gh pr checks 201',
+      'gh pr view 201 --repo $REPO',
+      'gh issue list -R $REPO',
+      // Dave B: gh pr ready --undo moves a PR back to draft. It is the recovery path and is allowed in both modes. (Guards: nothing gates ready today.)
+      'gh pr ready 201 --undo',
+      'gh pr ready --undo',
+      'gh pr ready --undo 201',
+      // Dave A.c over-blocking guards: a labels read, a GraphQL read, and --input on an endpoint that is not a labels write.
+      `gh api graphql -f query='{ repository(owner: "a", name: "b") { labels(first: 5) { nodes { name } } } }'`,
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/comments --input comment.json',
+      'gh api repos/Rev4nchist/Continuous-Claude-v3/issues/201/labels -X POST -f labels[]=risk:low',
+    ];
+    const calls: Array<{ cwd: string; args: string[] }> = [];
+    for (const c of NOT_GATED) expect(act(c, { config: ENFORCE, calls }).action, c).toBe('allow');
+    expect(calls).toEqual([]);
+    // gh pr ready --undo is allowed with no warn or deny row in BOTH modes, with and without a pathway, Bash and PowerShell, also with a named CCv3 repo.
+    for (const c of ['gh pr ready 201 --undo', 'gh pr ready --undo', 'gh pr ready 201 --repo Rev4nchist/Continuous-Claude-v3 --undo']) {
+      for (const config of [undefined, ENFORCE]) {
+        for (const tool of ['Bash', 'PowerShell']) {
+          let out = '';
+          const rows = logged(() => { out = handle(payload(c, tool), gdeps({ config })); });
+          expect(out, `${config ? 'enforce' : 'warn'} ${tool}: ${c}`).toBe('{}');
+          expect(rows, `${config ? 'enforce' : 'warn'} ${tool}: ${c}: no row`).toEqual([]);
+        }
+      }
+    }
+    // Another repo is not gated: named in the command, or by a foreign checkout.
+    expect(act('gh pr ready 201 --repo someone/else', { config: ENFORCE }).action).toBe('allow');
+    expect(act('gh pr edit 201 --add-label review:none -R someone/else', { config: ENFORCE }).action).toBe('allow');
+    expect(act('gh pr ready 201', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
+    expect(act('gh pr edit 201 --add-label review:none', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
+    // Naming CCv3 from a foreign checkout is still gated.
+    expect(denied('gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3', { config: ENFORCE, remotes: FOREIGN_REMOTES })).not.toBeNull();
+    // A GH_REPO for a foreign repo, from a CCv3 checkout, names another repo: not gated (Bash prefix and PowerShell $env: forms).
+    const foreignByEnv: Array<[string, string]> = [
+      ['GH_REPO=someone/else gh pr ready 201', 'Bash'],
+      ["$env:GH_REPO='someone/else'; gh pr ready 201", 'PowerShell'],
+      ['GH_REPO=someone/else gh pr edit 201 --add-label review:none', 'Bash'],
+      ["$env:GH_REPO='someone/else'; gh pr edit 201 --add-label review:none", 'PowerShell'],
+    ];
+    for (const [c, tool] of foreignByEnv) expect(act(c, { config: ENFORCE }, tool).action, `CCv3 checkout, ${tool}: ${c}`).toBe('allow');
+  });
+
+  // ---- lane gate-nonliteral-repo (CodeRabbit #197 thread PRRT_kwDOQ9JX0c6xVOwe) ----
+  const NONLIT = [
+    `gh pr create --draft --repo $REPO --body-file ${DB}`,
+    `gh pr create --draft --repo "$REPO" --body-file ${DB}`,
+    `gh pr create --draft -R $env:TARGET --body-file ${DB}`,
+    `gh pr create --draft --repo=$(git remote get-url fork) --body-file ${DB}`,
+    `gh pr create --draft --repo \`git remote get-url fork\` --body-file ${DB}`,
+    `gh pr create --draft --repo %REPO% --body-file ${DB}`,
+    `gh pr create --draft --repo owner/$NAME --body-file ${DB}`,
+    `gh pr create --draft --repo Rev4nchist/Continuous-Claude-v$N --body-file ${DB}`,
+    `gh pr create --draft --repo other/x$Y --body-file ${DB}`,
+    'gh pr ready 201 --repo $REPO',
+    'gh pr edit 201 --add-label review:none -R "$(echo a/b)"',
+  ];
+
+  it('B10: a --repo or -R value with $, $(...), a backtick or %VAR% is denied "nonliteral-repo", from a CCv3 or a foreign checkout, even with a stamp and a pathway', () => {
+    for (const c of NONLIT) {
+      for (const remotes of [undefined, FOREIGN_REMOTES]) {
+        const d = denied(c, { config: ENFORCE, pathway: pathwayFor(HEAD), remotes });
+        expect(d?.pattern, `${remotes ? 'foreign' : 'ccv3'}: ${c}`).toBe('nonliteral-repo');
+        expect(d?.reason, c).toMatch(/literal/i);
+      }
+    }
+    // Literal values, and a $ that is not a repo value, stay allowed.
+    for (const c of [
+      `gh pr create --draft --repo Rev4nchist/Continuous-Claude-v3 --body-file ${DB}`,
+      `gh pr create --draft --repo "Rev4nchist/Continuous-Claude-v3" --body-file ${DB}`,
+      `gh pr create --draft -R Rev4nchist/Continuous-Claude-v3 --body-file ${DB}`,
+      `gh pr create --draft --title "costs $5" --body-file ${DB}`,
+    ]) {
+      expect(act(c, { config: ENFORCE }).action, c).toBe('allow');
+    }
+  });
+
+  // ---- override ----
+  it('B11: a LEADING SKIP_PRE_PR_GATE=1 turns a new deny into an override row (sh and PowerShell form); a non-leading one does not', () => {
+    const ok: Array<[string, string]> = [
+      ['SKIP_PRE_PR_GATE=1 gh pr ready 201', 'Bash'],
+      ['SKIP_PRE_PR_GATE=1 node scripts/github/pr-checkpoint.mjs --apply 201', 'Bash'],
+      ["$env:SKIP_PRE_PR_GATE='1'; node scripts/github/pr-checkpoint.mjs --confirm none --by dave", 'PowerShell'],
+      ['SKIP_PRE_PR_GATE=1 gh pr edit 201 --add-label review:none', 'Bash'],
+    ];
+    for (const [c, tool] of ok) {
+      let out = '';
+      const rows = logged(() => { out = handle(payload(c, tool), gdeps({ config: ENFORCE })); });
+      expect(out, c).toBe('{}');
+      expect(rows.map((r) => r.decision), c).toEqual(['override']);
+      expect(rows[0].reason, c).toBe('SKIP_PRE_PR_GATE');
+    }
+    expect(act('echo SKIP_PRE_PR_GATE=1 && gh pr ready 201', { config: ENFORCE }).action).toBe('deny');
+    expect(act('gh pr ready 201 # SKIP_PRE_PR_GATE=1', { config: ENFORCE }).action).toBe('deny');
+  });
+
+  it('B12: an internal error (git throws) on a ready or label shape DENIES in both modes; a command that is not a shape still allows', () => {
+    for (const config of [ENFORCE, undefined]) {
+      const boom: Deps = { ...gdeps({ config }), git: () => { throw new Error('git boom'); }, logError: () => {} };
+      for (const c of ['gh pr ready 201', 'gh pr edit 201 --add-label review:none', LABEL_BLIND[4], `gh pr create --draft --label review:none --body-file ${DB}`]) {
+        const out = JSON.parse(handle(payload(c), boom) || '{}');
+        expect(out.hookSpecificOutput?.permissionDecision, `${config ? 'enforce' : 'warn'}: ${c}`).toBe('deny');
+      }
+      expect(handle(payload('gh pr view 201'), boom), 'a command that is not a shape still allows').toBe('{}');
+    }
+  });
+
+  it('B13: a continued line is one command: PowerShell backtick and bash backslash-newline forms of ready, label and self-confirm are denied', () => {
+    const cases: Array<[string, string, string]> = [
+      ['gh pr `\n  ready 201', 'PowerShell', 'ready'],
+      ['gh pr \\\nready 201', 'Bash', 'ready'],
+      ['gh pr edit 201 `\n  --add-label review:none', 'PowerShell', 'review-label'],
+      ['node scripts/github/pr-checkpoint.mjs `\n  --apply 201', 'PowerShell', 'self-confirm'],
+      ['node scripts/github/pr-checkpoint.mjs \\\n  --confirm none --by dave', 'Bash', 'self-confirm'],
+      [`gh pr create --draft \`\n  --label review:none --body-file ${DB}`, 'PowerShell', 'review-label'],
+    ];
+    for (const [c, tool, pattern] of cases) expect(denied(c, { config: ENFORCE }, tool)?.pattern, `${tool}: ${JSON.stringify(c)}`).toBe(pattern);
+  });
+
+  it('B14: under vitest with no CCV3_GUARD_DECISIONS_LOG a warn row is never written to the real home', () => {
+    const home = mkdtempSync(join(tmpdir(), 'prepr-gate-home-'));
+    const saved = { log: process.env.CCV3_GUARD_DECISIONS_LOG, up: process.env.USERPROFILE, home: process.env.HOME };
+    delete process.env.CCV3_GUARD_DECISIONS_LOG;
+    process.env.USERPROFILE = home;
+    process.env.HOME = home;
+    try {
+      for (const n of NEW_DENIES) handle(payload(n.command), gdeps());
+    } finally {
+      if (saved.log !== undefined) process.env.CCV3_GUARD_DECISIONS_LOG = saved.log;
+      if (saved.up === undefined) delete process.env.USERPROFILE; else process.env.USERPROFILE = saved.up;
+      if (saved.home === undefined) delete process.env.HOME; else process.env.HOME = saved.home;
+    }
+    expect(existsSync(join(home, '.claude')), 'nothing under the sandbox home').toBe(false);
+  });
+
+  it('B15: PATHWAY_REL is exported, sits next to STAMP_REL, and is the path pr-checkpoint.mjs writes', () => {
+    const gate = gateModule as unknown as Record<string, unknown>;
+    const source = readFileSync(join(REPO, 'scripts', 'github', 'pr-checkpoint.mjs'), 'utf8');
+    const m = /export const PATHWAY_REL = '([^']+)'/.exec(source);
+    expect(m, 'pr-checkpoint.mjs exports PATHWAY_REL').not.toBeNull();
+    expect(gate.PATHWAY_REL).toBe(m?.[1]);
+    expect(gate.PATHWAY_REL).toBe(STAMP_REL.replace(/stamp\.json$/, 'pathway.json'));
   });
 });

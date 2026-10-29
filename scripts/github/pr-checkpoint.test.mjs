@@ -1,4 +1,4 @@
-// Tests for pr-checkpoint.mjs (PR A: the read-only recommendation engine).
+// Tests for pr-checkpoint.mjs: PR A (the read-only recommendation engine) and PR B (--confirm and --apply, the pathway record).
 // Run: node --test scripts/github/pr-checkpoint.test.mjs
 // Spec: .claudedocs/2026-10-28-pr-checkpoint-mod-spec.md sections 2 and 6 (tests 1-15; 16-18 are PR B).
 //
@@ -32,7 +32,37 @@
 //   Config keys: budget, checkpoint.critical, checkpoint.parser, coderabbit.reviews_7d_manual and coderabbit.reviews_7d_manual_date.
 //   R5 is the fallback: it runs only when R2, R3 and R4 did not match, and it needs reviewable lines (T2).
 //   CLI seams: node pr-checkpoint.mjs --json [--facts facts.json] [--config router-config.json]. --facts replaces the git and stamp reads
-//   (a fixture, like review-router.mjs --fixture). --confirm and --apply are PR B: exit 2.
+//   (a fixture, like review-router.mjs --fixture).
+//
+// PR B contract (tests TB*, TA*, T5*, T20b, T22 below; spec sections 1, 3.1, 5, 6 and the PR B row of 7):
+//   export PATHWAY_REL = '.claude/cache/pre-pr/pathway.json'      the file the pre-pr-gate hook reads (same dir as STAMP_REL)
+//   --confirm <none|coderabbit|both> --by <dave|default> --body <file> [--state-dir <dir>] [--facts f] [--config c]
+//       --body       the PR body file; its sha256 (pre-pr.mjs hashes the text the same way) must equal stamp.body_sha256.
+//       --state-dir  the dir that holds stamp.json (real run) and pathway.json (default <repo>/.claude/cache/pre-pr). Test seam, like --facts.
+//       Refuses (exit 1, stderr names the reason, nothing written) when: the stamp is missing, for another head or has a FAIL row (R0);
+//       the body hash differs from the stamp; the pathway is wait, or is not an option of the result, or is a held option.
+//       Writes pathway.json { head, body_sha256, pathway, label, class, recommended, decided_by, at, budget } and prints the same JSON, exit 0.
+//       head, body_sha256: from the stamp; class: result.class; recommended: result.recommended (may be "wait");
+//       at: facts.now; label: review:none | review:coderabbit | review:deep.
+//       budget = the RULE budget (result.budget), [0,0] for none, and never below [1,0] for coderabbit or both. Never option.cost.
+//       --body is required: a --confirm with no --body (or --body with no value) is bad usage, exit 2, nothing written (T22).
+//       Stamp source: facts.stamp when the facts carry a `stamp` key (the fixture seam, TB1-TB7); when the facts have NO `stamp` key,
+//       <state-dir>/stamp.json is read (the production path, TB8). A missing or unreadable stamp.json is the R0 refusal.
+//       Default state dir (no --state-dir): <git toplevel of the cwd>/.claude/cache/pre-pr, i.e. PATHWAY_REL under the toplevel, the place
+//       pre-pr.mjs and the hook use. Never next to the script, never the bare cwd (TB9).
+//   --apply <pr>  [--state-dir <dir>]            reads pathway.json, then talks to gh. Exit 1 on a refusal or a gh failure.
+//       --apply takes only --state-dir (and the PR number). It does not take --facts, --config or --body (runB sends them for --confirm only).
+//       The refusals name their reason on stderr: "draft" for a PR that is not a draft, "head" for a moved head, "pathway" for a missing record (TA6).
+//   export applyPathway({ pr, record, gh }) -> { ok: true } | { ok: false, error }     gh(args) -> { status, stdout, stderr }
+//       gh call shapes (pinned): read   ['pr','view',String(pr),'--json','isDraft,headRefOid'] -> stdout {"isDraft":bool,"headRefOid":sha}
+//                                label  ['pr','edit',String(pr),'--add-label',<label>]
+//                                ready  ['pr','ready',String(pr)]
+//       Order: read, refuse (not a draft, or headRefOid != record.head), label, ready. A failed label never reaches ready.
+//   CLI gh seam: env PR_CHECKPOINT_GH=<script.mjs> runs `node <script.mjs> <gh args>` in place of gh (tests; never a real gh).
+//   Exit codes: 0 done, 1 refused or gh failed, 2 bad usage (before anything is read or written), 3 internal error.
+//
+// PR B, config: checkpoint.enforce (boolean, false for the warn week) in review-router.config.json; read by the pre-pr-gate hook.
+// PR B, Dave decision 2026-10-28: R2 (parser) budget 1+0 wins over R3 (critical); R4 (r3 class) still gives 1+2.
 //
 // How the unit can fail, and the test that catches it:
 //   R0  stamp missing, for another head, or with a failed row is ignored          -> T14, T15
@@ -63,10 +93,28 @@
 //   .coderabbit.yaml filters are mis-parsed (labels or branches read as paths)    -> T19
 //   the config blocks are missing or mistyped                                     -> T20
 //   the CLI --json output loses a field of the output shape                       -> T21
-//   PR B modes (--confirm, --apply) exist in PR A, or write pathway.json          -> T22
+//   --confirm or --apply with bad usage writes or reads anything                  -> T22 (was the PR A "not available" test, replaced in PR B)
+// PR B:
+//   confirm records a body that is not the stamped body                           -> TB1 (spec 16)
+//   confirm records for a missing stamp, another head or a failed stamp row       -> TB2 (spec 16)
+//   the record loses a field, or stdout differs from the file                     -> TB3
+//   the record budget is option.cost, not the rule budget                         -> TB4
+//   none is recorded with a budget, or its label is wrong                         -> TB5
+//   confirm records a pathway that was not offered, is held, or is wait           -> TB6
+//   coderabbit over a docs recommendation gets budget 0, or "wait" is lost        -> TB7
+//   bad usage reads or writes something, or --confirm works with no --body        -> T22
+//   --confirm trusts facts.stamp only, so the stamp.json read and head check are untested  -> TB8
+//   the default state dir is script-relative or cwd-relative, so the hook never sees the record  -> TB9
+//   apply spends on a non-draft PR or a head that moved                           -> TA1, TA2 (spec 17)
+//   apply marks ready before the label, or after a failed label                   -> TA3, TA4 (spec 18)
+//   the wired CLI skips the checks, or calls the real gh                          -> TA5, TA6 (TA6 pins the one gh read, so a CLI that ignores PR_CHECKPOINT_GH fails)
+//   R2 budget loses to R3, R2 swallows R4, or the parser line is lost             -> T5, T5b, T5c, T5d (spec 5, Dave 2026-10-28)
+//   checkpoint.enforce is missing or not a boolean                                -> T20b
+//   the pathway.json path drifts from the one the hook reads                      -> T20c
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
-import { readFileSync, writeFileSync, mkdtempSync, existsSync, statSync } from 'node:fs';
+import { createHash } from 'node:crypto';
+import { readFileSync, writeFileSync, mkdtempSync, mkdirSync, existsSync, readdirSync, realpathSync } from 'node:fs';
 import { spawnSync } from 'node:child_process';
 import os from 'node:os';
 import path from 'node:path';
@@ -188,10 +236,36 @@ test('T4 (R2): a parser tag alone gives coderabbit with budget 1+0 and the do-no
   assert.ok(r.why.some((w) => /Do not loop\. Use a vetted parser\./.test(w)), r.why.join(' | '));
 });
 
-test('T5 (R2+R3): parser plus critical gives the class budget and keeps the parser line', async () => {
+// PR B replaces the PR A test T5 (spec test 5). PR A pinned "the largest budget of any matched rule" = [1, 2] for parser plus
+// critical. Dave decided on 2026-10-28 that R2 (parser) wins over R3 (critical): a parser PR is never looped, so budget 1+0.
+test('T5 (R2+R3, Dave 2026-10-28): parser plus critical gives budget 1+0 (R2 wins over R3) and keeps the parser line', async () => {
   const r = await run([file(PARSER, 80), file(CRITICAL, 20)]);
   assert.equal(r.recommended, 'coderabbit', 'Greptile is held (deep_enabled false)');
-  assert.deepEqual(r.budget, [1, 2], 'the largest budget of any matched rule');
+  assert.deepEqual(r.budget, [1, 0], 'R2 budget 1+0 beats the R3 class budget 1+2');
+  assert.ok(r.why.some((w) => /Do not loop\. Use a vetted parser\./.test(w)), r.why.join(' | '));
+});
+
+test('T5b (R2+R3): one file that is both parser and critical gets 1+0 (the live case: the two *-guard.ts parser files)', async () => {
+  const { recommend } = await load();
+  const both = '.claude/hooks/src/package-install-guard.ts';
+  const p = { ...(await policy()), checkpoint: { ...LIVE.checkpoint, parser: [both] } };
+  assert.ok(LIVE.checkpoint.critical.some((g) => matchGlob(g, both)), 'the fixture file is critical in the live config');
+  const r = recommend(facts([file(both, 60)]), p);
+  assert.equal(r.recommended, 'coderabbit');
+  assert.deepEqual(r.budget, [1, 0]);
+  assert.ok(r.why.some((w) => /Do not loop\. Use a vetted parser\./.test(w)), r.why.join(' | '));
+});
+
+test('T5c (R2+R3+R4): R2 wins over R3 only; an r3-class file in the same PR keeps budget 1+2', async () => {
+  const r = await run([file(PARSER, 80), file(CRITICAL, 20), file(SQL, 12)]);
+  assert.equal(r.class, 'r3');
+  assert.deepEqual(r.budget, [1, 2], 'R4 is not R3: the r3 class budget stays');
+});
+
+test('T5d (R2+R3, Greptile available): the pathway stays both, and the rule budget is 1+0', async () => {
+  const r = await run([file(PARSER, 80), file(CRITICAL, 20)], {}, { deep: true, used: 10 });
+  assert.equal(r.recommended, 'both', 'R3 still raises the pathway');
+  assert.deepEqual(r.budget, [1, 0]);
   assert.ok(r.why.some((w) => /Do not loop\. Use a vetted parser\./.test(w)), r.why.join(' | '));
 });
 
@@ -374,6 +448,19 @@ test('T20: the config blocks exist and are typed', () => {
   assert.ok(!hit('.claude/hooks/src/session-start.ts'), 'an ordinary hook is not critical');
 });
 
+test('T20b (PR B): checkpoint.enforce is a boolean in the live config, and it is false for the warn week', () => {
+  assert.equal(typeof LIVE.checkpoint?.enforce, 'boolean', 'checkpoint.enforce must exist (the pre-pr-gate hook reads it)');
+  assert.equal(LIVE.checkpoint?.enforce, false, 'warn mode ships first (spec section 7, PR B row); flip it to true in PR C, not here');
+  assert.ok(LIVE._doc.some((l) => /checkpoint\.enforce/.test(l)), 'the _doc block explains the key');
+});
+
+test('T20c (PR B): PATHWAY_REL sits next to the stamp, and is the path the hook reads', async () => {
+  const { PATHWAY_REL } = await load();
+  const { STAMP_REL } = await import('./pre-pr.mjs');
+  assert.equal(PATHWAY_REL, '.claude/cache/pre-pr/pathway.json');
+  assert.equal(path.posix.dirname(PATHWAY_REL), path.posix.dirname(STAMP_REL));
+});
+
 // ---------- CLI: the way the harness runs it ----------
 
 function runCli(args, factsObj) {
@@ -396,15 +483,28 @@ test('T21 (CLI): --json prints the whole output shape as one JSON object and exi
   assert.equal(out.recommended, 'coderabbit');
 });
 
-test('T22 (CLI): --confirm and --apply are PR B; they exit 2 and write no pathway.json (not in cwd, not in the repo root)', () => {
-  const rootRecord = path.join(ROOT, '.claude', 'cache', 'pre-pr', 'pathway.json');
-  const stamp = () => (existsSync(rootRecord) ? statSync(rootRecord).mtimeMs : null);
-  const before = stamp();
-  for (const mode of [['--confirm', 'none', '--by', 'dave'], ['--apply', '201']]) {
-    const r = runCli(mode, facts([file('scripts/a.mjs')]));
-    assert.equal(r.status, 2, `${mode[0]}: ${r.stdout} ${r.stderr}`);
-    assert.ok(!existsSync(path.join(r.dir, '.claude', 'cache', 'pre-pr', 'pathway.json')), mode[0]);
-    assert.equal(stamp(), before, `${mode[0]}: the repo-root pathway.json is untouched`);
+// PR B replaces the PR A test T22 ("--confirm and --apply exit 2, not available yet"). Both modes exist now; T22 keeps the
+// part that still holds: bad usage exits 2 before anything is read or written.
+test('T22 (CLI): bad --confirm or --apply usage exits 2 and writes no pathway.json', () => {
+  const bad = [
+    ['--confirm'], ['--confirm', '--by', 'dave'], ['--confirm', 'bogus', '--by', 'dave'], ['--confirm', 'none'],
+    ['--confirm', 'none', '--by'], ['--confirm', 'none', '--by', 'robot'], ['--apply'], ['--apply', 'abc'], ['--apply', '-5'], ['--apply', '--json'],
+  ];
+  for (const args of bad) {
+    const r = runB(args);
+    assert.equal(r.status, 2, `${args.join(' ')}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /usage/i, args.join(' '));
+    assert.ok(!existsSync(r.pathwayFile), `${args.join(' ')}: nothing written`);
+  }
+  // --body is required. A GREEN that treats it as optional (skips the hash check when it is absent) would record a pathway here.
+  // The stamp and the facts are valid, so only the missing --body can make these exit 2.
+  const noBody = [['--confirm', 'none', '--by', 'dave'], ['--confirm', 'coderabbit', '--by', 'default'], ['--confirm', 'none', '--by', 'dave', '--body']];
+  for (const args of noBody) {
+    const r = runB(args, { noBody: true });
+    assert.equal(r.status, 2, `no --body: ${args.join(' ')}: ${r.stdout} ${r.stderr}`);
+    assert.match(r.stderr, /usage/i, args.join(' '));
+    assert.match(r.stderr, /body/i, `${args.join(' ')}: names the missing flag`);
+    assert.ok(!existsSync(r.pathwayFile), `no --body: ${args.join(' ')}: nothing written`);
   }
 });
 
@@ -527,5 +627,286 @@ test('T32 (capacity): a 7-day count dated more than 7 days before now changes no
     const r = await at(bad);
     assert.equal(r.capacity.band, 'unknown', `${bad}: an invalid or future date is stale`);
     assert.equal(r.recommended, 'coderabbit', bad);
+  }
+});
+
+// ---------- PR B: --confirm and --apply (spec sections 1, 3.1, 6 tests 16-18) ----------
+// The CLI is run the way the harness runs it. A child never reaches a real gh or GitHub: its env holds a bad token and an empty gh config.
+
+const sha = (t) => createHash('sha256').update(t).digest('hex');
+const BODY_TEXT = 'PR body\nwith an Evidence block\n';
+const BODY_SHA = sha(BODY_TEXT);
+const BSTAMP = { ...PASS_STAMP, body_sha256: BODY_SHA };
+const PATHWAY_PATH = '.claude/cache/pre-pr/pathway.json'; // T20c pins that PATHWAY_REL equals this
+const RECORD_KEYS = ['at', 'body_sha256', 'budget', 'class', 'decided_by', 'head', 'label', 'pathway', 'recommended'];
+
+/**
+ * Run `node pr-checkpoint.mjs <mode...>` with the fixture seams. Returns the spawn result plus the state dir and its pathway.json path.
+ * --body, --facts and --config are added for --confirm only (the --apply contract lists --state-dir alone).
+ * Options: noBody (leave --body out), noStateDir (leave --state-dir out; the default dir applies), cwd (the child cwd, default the temp dir),
+ *   stampFile: undefined = the stamp travels in the facts; an object or string = the facts carry NO stamp key and <state>/stamp.json holds it
+ *   (a string is written raw); false = no stamp key in the facts and no stamp.json. stampAt: the dir that gets stamp.json instead of the state dir.
+ */
+function runB(mode, { files = [file('scripts/a.mjs', 20)], facts: factOver = {}, pol = {}, body = BODY_TEXT, env = {}, noBody = false, noStateDir = false, cwd = null, stampFile, stampAt = null } = {}) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-b-'));
+  const state = path.join(dir, 'pre-pr');
+  mkdirSync(state, { recursive: true });
+  const factsFile = path.join(dir, 'facts.json');
+  const cfgFile = path.join(dir, 'config.json');
+  const bodyFile = path.join(dir, 'body.md');
+  const factsObj = facts(files, { stamp: BSTAMP, ...factOver });
+  if (stampFile !== undefined) {
+    delete factsObj.stamp;
+    if (stampFile !== false) {
+      mkdirSync(stampAt ?? state, { recursive: true });
+      writeFileSync(path.join(stampAt ?? state, 'stamp.json'), typeof stampFile === 'string' ? stampFile : JSON.stringify(stampFile));
+    }
+  }
+  writeFileSync(factsFile, JSON.stringify(factsObj));
+  writeFileSync(bodyFile, body);
+  writeFileSync(cfgFile, JSON.stringify({
+    ...LIVE, deep_enabled: pol.deep ?? false,
+    greptile: { ...LIVE.greptile, credits_used_manual: pol.used ?? null },
+    coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: pol.count ?? null },
+    checkpoint: { ...LIVE.checkpoint, parser: ['lib/lexer/**'] },
+  }));
+  const isConfirm = mode[0] === '--confirm';
+  const args = [
+    path.join(HERE, 'pr-checkpoint.mjs'), ...mode,
+    ...(isConfirm && !noBody ? ['--body', bodyFile] : []),
+    ...(noStateDir ? [] : ['--state-dir', state]),
+    ...(isConfirm ? ['--facts', factsFile, '--config', cfgFile] : []),
+  ];
+  const r = spawnSync(process.execPath, args, { encoding: 'utf8', cwd: cwd ?? dir, env: { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, ...env } });
+  return { ...r, dir, state, pathwayFile: path.join(state, 'pathway.json') };
+}
+const confirm = (pathway, by, opts) => runB(['--confirm', pathway, '--by', by], opts);
+const recordOf = (r) => JSON.parse(readFileSync(r.pathwayFile, 'utf8'));
+const refused = (r, why, label) => {
+  assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
+  assert.match(r.stderr, why, label);
+  assert.ok(!existsSync(r.pathwayFile), `${label}: no pathway.json`);
+};
+
+test('TB1 (spec 16): --confirm refuses a body whose hash is not the stamped body hash, and writes nothing', () => {
+  refused(confirm('coderabbit', 'dave', { body: `${BODY_TEXT}one more line\n` }), /body/i, 'edited body');
+  refused(confirm('coderabbit', 'default', { body: '' }), /body/i, 'empty body');
+});
+
+test('TB2 (spec 16, R0): --confirm refuses a missing stamp, a stamp for another head and a stamp with a failed row', () => {
+  const failed = { ...BSTAMP, results: [...BSTAMP.results, { step: 'gate:tests', status: 'FAIL', detail: 'x' }] };
+  for (const [label, stamp] of [['no stamp', null], ['another head', { ...BSTAMP, head: OTHER }], ['failed row', failed]]) {
+    refused(confirm('coderabbit', 'dave', { facts: { stamp } }), /pre-pr/i, label);
+  }
+});
+
+test('TB3: --confirm writes the nine-field record and prints the same JSON', () => {
+  const r = confirm('coderabbit', 'default');
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const rec = recordOf(r);
+  assert.deepEqual(Object.keys(rec).sort(), RECORD_KEYS);
+  assert.deepEqual(rec, {
+    head: HEAD, body_sha256: BODY_SHA, pathway: 'coderabbit', label: 'review:coderabbit', class: 'normal',
+    recommended: 'coderabbit', decided_by: 'default', at: NOW, budget: [1, 1],
+  });
+  assert.deepEqual(JSON.parse(r.stdout), rec, 'stdout is the record');
+});
+
+test('TB4: the record budget is the RULE budget, not the option cost (R2 parser file, both chosen: rule 1+0, option cost 1+1)', async () => {
+  const { recommend } = await load();
+  const f = facts([file(PARSER, 80)], { stamp: BSTAMP });
+  const both = recommend(f, await policy({ deep: true, used: 10 })).options.find((o) => o.pathway === 'both');
+  assert.deepEqual(both.cost, [1, 1], 'the option cost differs from the rule budget, so this test can tell them apart');
+  const r = confirm('both', 'dave', { files: [file(PARSER, 80)], pol: { deep: true, used: 10 } });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const rec = recordOf(r);
+  assert.equal(rec.pathway, 'both');
+  assert.equal(rec.label, 'review:deep');
+  assert.deepEqual(rec.budget, [1, 0]);
+});
+
+test('TB5: none (option 2 of R5 on a clean CLI) records label review:none, budget 0+0, decided_by dave, recommended coderabbit', () => {
+  const r = confirm('none', 'dave');
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const rec = recordOf(r);
+  assert.equal(rec.pathway, 'none');
+  assert.equal(rec.label, 'review:none');
+  assert.equal(rec.recommended, 'coderabbit');
+  assert.equal(rec.decided_by, 'dave');
+  assert.deepEqual(rec.budget, [0, 0]);
+});
+
+test('TB6: --confirm records only an offered, available pathway; --by default must be the recommendation', () => {
+  const critical = { files: [file(CRITICAL, 30)] };
+  refused(confirm('both', 'dave', critical), /held|not available|apex_d3/i, 'held Greptile');
+  refused(confirm('none', 'dave', critical), /not offered|not an option/i, 'none is not offered for a critical file');
+  refused(confirm('coderabbit', 'dave', { files: [file('package.json', 3, 3)], facts: { dependabot: true } }), /not offered|not an option/i, 'Dependabot offers none only');
+  refused(confirm('none', 'default'), /default|recommend/i, '--by default with a pathway that is not the recommendation');
+  refused(confirm('wait', 'dave', { pol: { count: 55 }, facts: { cli: { bySeverity: { major: 1 } } } }), /wait/i, 'wait writes no pathway');
+});
+
+test('TB7: coderabbit chosen over a docs "none" gets budget 1+0 at least; chosen at count 55 it keeps recommended wait', () => {
+  const docs = confirm('coderabbit', 'dave', { files: [file('docs/guide.md', 40)] });
+  assert.equal(docs.status, 0, `${docs.stdout} ${docs.stderr}`);
+  assert.equal(recordOf(docs).recommended, 'none');
+  assert.deepEqual(recordOf(docs).budget, [1, 0], 'a chosen CodeRabbit review is never budget 0+0');
+  const high = confirm('coderabbit', 'dave', { pol: { count: 55 }, facts: { cli: { bySeverity: { major: 1 } } } });
+  assert.equal(high.status, 0, `${high.stdout} ${high.stderr}`);
+  assert.equal(recordOf(high).recommended, 'wait');
+  assert.equal(recordOf(high).pathway, 'coderabbit');
+  assert.deepEqual(recordOf(high).budget, [1, 1]);
+});
+
+test('TB8: with no stamp in the facts, --confirm reads <state-dir>/stamp.json: a matching file confirms; a wrong body, head or a missing or broken file refuses', () => {
+  const ok = confirm('coderabbit', 'dave', { stampFile: BSTAMP });
+  assert.equal(ok.status, 0, `${ok.stdout} ${ok.stderr}`);
+  assert.equal(recordOf(ok).head, HEAD);
+  assert.equal(recordOf(ok).body_sha256, BODY_SHA);
+  refused(confirm('coderabbit', 'dave', { stampFile: { ...BSTAMP, body_sha256: sha('another body\n') } }), /body/i, 'stamp.json holds another body hash');
+  refused(confirm('coderabbit', 'dave', { stampFile: { ...BSTAMP, head: OTHER } }), /pre-pr/i, 'stamp.json is for another head');
+  refused(confirm('coderabbit', 'dave', { stampFile: { ...BSTAMP, results: [{ step: 'gate:tests', status: 'FAIL', detail: 'x' }] } }), /pre-pr/i, 'stamp.json has a failed row');
+  refused(confirm('coderabbit', 'dave', { stampFile: false }), /pre-pr/i, 'no stamp.json and no facts stamp');
+  refused(confirm('coderabbit', 'dave', { stampFile: '{not json' }), /pre-pr/i, 'stamp.json is not JSON');
+});
+
+test('TB9: with no --state-dir, --confirm reads stamp.json and writes pathway.json under the git toplevel of the cwd (where pre-pr.mjs and the hook look), from a subdirectory too', () => {
+  const repo = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-repo-')));
+  const init = spawnSync('git', ['init', '-q', repo], { encoding: 'utf8' });
+  assert.equal(init.status, 0, init.stderr);
+  const sub = path.join(repo, 'sub', 'dir');
+  mkdirSync(sub, { recursive: true });
+  const r = runB(['--confirm', 'coderabbit', '--by', 'dave'], { noStateDir: true, cwd: sub });
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const want = path.join(repo, ...PATHWAY_PATH.split('/'));
+  assert.ok(existsSync(want), `pathway.json at the toplevel: ${want}`);
+  assert.equal(JSON.parse(readFileSync(want, 'utf8')).head, HEAD);
+  assert.ok(!existsSync(path.join(sub, ...PATHWAY_PATH.split('/'))), 'not under the cwd');
+  assert.ok(!existsSync(r.pathwayFile), 'not in the fixture state dir, which this run never passed');
+  // The stamp READ uses the same default dir: no facts stamp, stamp.json under the toplevel's .claude/cache/pre-pr, cwd in a subdirectory.
+  const repo2 = realpathSync(mkdtempSync(path.join(os.tmpdir(), 'checkpoint-repo-')));
+  assert.equal(spawnSync('git', ['init', '-q', repo2], { encoding: 'utf8' }).status, 0);
+  const sub2 = path.join(repo2, 'sub');
+  mkdirSync(sub2, { recursive: true });
+  const r2 = runB(['--confirm', 'coderabbit', '--by', 'dave'], { noStateDir: true, cwd: sub2, stampFile: BSTAMP, stampAt: path.join(repo2, ...PATHWAY_PATH.split('/').slice(0, -1)) });
+  assert.equal(r2.status, 0, `stamp read from the default dir: ${r2.stdout} ${r2.stderr}`);
+  assert.equal(JSON.parse(readFileSync(path.join(repo2, ...PATHWAY_PATH.split('/')), 'utf8')).body_sha256, BODY_SHA);
+});
+
+// ---------- --apply: applyPathway with an injected gh, then the wired CLI with a fake gh script ----------
+
+const RECORD = { head: HEAD, body_sha256: BODY_SHA, pathway: 'coderabbit', label: 'review:coderabbit', class: 'normal', recommended: 'coderabbit', decided_by: 'dave', at: NOW, budget: [1, 1] };
+const LABEL_OF = { none: 'review:none', coderabbit: 'review:coderabbit', both: 'review:deep' };
+
+/** A fake gh. A `pr edit` or `pr ready` call is a mutation; every other call is a read and gets the PR view. */
+function fakeGh({ view = { isDraft: true, headRefOid: HEAD }, fail = null } = {}) {
+  const calls = [];
+  const gh = (args) => {
+    calls.push(args);
+    const kind = args[0] === 'pr' ? args[1] : null;
+    if (kind === fail) return { status: 1, stdout: '', stderr: `fake gh: ${kind} failed` };
+    return { status: 0, stdout: kind === 'edit' || kind === 'ready' ? '' : JSON.stringify(view), stderr: '' };
+  };
+  return { gh, calls, mutations: () => calls.filter((a) => a[0] === 'pr' && (a[1] === 'edit' || a[1] === 'ready')) };
+}
+
+test('TA1 (spec 17): apply refuses a PR that is not a draft and makes no mutation', async () => {
+  const { applyPathway } = await load();
+  const g = fakeGh({ view: { isDraft: false, headRefOid: HEAD } });
+  const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /draft/i);
+  assert.deepEqual(g.mutations(), []);
+});
+
+test('TA2 (spec 17): apply refuses when the live head moved since confirm and makes no mutation', async () => {
+  const { applyPathway } = await load();
+  const g = fakeGh({ view: { isDraft: true, headRefOid: OTHER } });
+  const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /head/i);
+  assert.deepEqual(g.mutations(), []);
+});
+
+test('TA3 (spec 18): apply adds the review label BEFORE it marks the PR ready, for every pathway (none adds review:none)', async () => {
+  const { applyPathway } = await load();
+  for (const pathway of ['none', 'coderabbit', 'both']) {
+    const g = fakeGh();
+    const r = await applyPathway({ pr: 201, record: { ...RECORD, pathway, label: LABEL_OF[pathway] }, gh: g.gh });
+    assert.deepEqual(r, { ok: true }, pathway);
+    const calls = g.calls.map((a) => `${a[0]} ${a[1]}`);
+    assert.equal(calls[0], 'pr view', `${pathway}: the live PR is read before any mutation`);
+    assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr ready'], `${pathway}: label first, ready second`);
+    assert.equal(calls.lastIndexOf('pr view'), 0, `${pathway}: no read after a mutation`);
+    assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--add-label', LABEL_OF[pathway]], pathway);
+    assert.deepEqual(g.calls.find((a) => a[1] === 'ready'), ['pr', 'ready', '201'], pathway);
+  }
+});
+
+test('TA4 (spec 18): a failed label never reaches ready; a failed ready after the label reports it', async () => {
+  const { applyPathway } = await load();
+  const noLabel = fakeGh({ fail: 'edit' });
+  const a = await applyPathway({ pr: 201, record: RECORD, gh: noLabel.gh });
+  assert.equal(a.ok, false);
+  assert.match(a.error, /label/i);
+  assert.ok(!noLabel.calls.some((c) => c[1] === 'ready'), 'ready after a failed label would route the PR with no label');
+  const noReady = fakeGh({ fail: 'ready' });
+  const b = await applyPathway({ pr: 201, record: RECORD, gh: noReady.gh });
+  assert.equal(b.ok, false);
+  assert.match(b.error, /ready/i);
+});
+
+test('TA4b: apply with no record, or a record with an unknown pathway or no head, refuses before any gh call', async () => {
+  const { applyPathway } = await load();
+  for (const record of [null, undefined, {}, { ...RECORD, pathway: 'wait' }, { ...RECORD, pathway: 'bogus' }, { ...RECORD, head: '' }]) {
+    const g = fakeGh();
+    const r = await applyPathway({ pr: 201, record, gh: g.gh });
+    assert.equal(r.ok, false, JSON.stringify(record));
+    assert.deepEqual(g.calls, [], JSON.stringify(record));
+  }
+});
+
+/** The wired CLI: a fake gh script (env PR_CHECKPOINT_GH) logs every call to a file and prints a canned PR view. */
+function runApply({ record = RECORD, view = { isDraft: true, headRefOid: HEAD }, pr = '999999' } = {}) {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-apply-'));
+  const state = path.join(dir, 'pre-pr');
+  mkdirSync(state, { recursive: true });
+  if (record) writeFileSync(path.join(state, 'pathway.json'), JSON.stringify(record));
+  const script = path.join(dir, 'fake-gh.mjs');
+  const log = path.join(dir, 'gh-calls.jsonl');
+  writeFileSync(script, [
+    "import { appendFileSync } from 'node:fs';",
+    'const a = process.argv.slice(2);',
+    "appendFileSync(process.env.FAKE_GH_LOG, JSON.stringify(a) + '\\n');",
+    "if (a[0] === 'pr' && a[1] === 'view') process.stdout.write(process.env.FAKE_GH_VIEW);",
+  ].join('\n'));
+  const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), '--apply', pr, '--state-dir', state], {
+    encoding: 'utf8', cwd: dir,
+    env: { ...process.env, GH_TOKEN: 'invalid-token', GH_CONFIG_DIR: dir, PR_CHECKPOINT_GH: script, FAKE_GH_LOG: log, FAKE_GH_VIEW: JSON.stringify(view) },
+  });
+  const calls = existsSync(log) ? readFileSync(log, 'utf8').trim().split('\n').filter(Boolean).map((l) => JSON.parse(l)) : [];
+  return { ...r, calls };
+}
+
+test('TA5 (CLI): --apply reads pathway.json, then the PR, adds the label and marks ready, in that order, through the injected gh', () => {
+  const r = runApply();
+  assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
+  const kinds = r.calls.map((a) => `${a[0]} ${a[1]}`);
+  assert.equal(kinds[0], 'pr view');
+  assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr ready']);
+  assert.ok(r.calls.find((a) => a[1] === 'edit').includes('review:coderabbit'));
+  assert.ok(r.calls.every((a) => a[0] !== 'pr' || a.includes('999999')), 'every pr call names the PR');
+});
+
+test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, the PR is not a draft, or the head moved', () => {
+  const none = runApply({ record: null });
+  assert.equal(none.status, 1, `${none.stdout} ${none.stderr}`);
+  assert.match(none.stderr, /pathway/i);
+  assert.deepEqual(none.calls, [], 'no record: gh is not called');
+  // The one gh call is the read. An empty call log would mean the injected gh was never used (the real gh failing on the bad token also exits 1).
+  for (const [label, view, why] of [['not a draft', { isDraft: false, headRefOid: HEAD }, /draft/i], ['head moved', { isDraft: true, headRefOid: OTHER }, /head/i]]) {
+    const r = runApply({ view });
+    assert.equal(r.status, 1, `${label}: ${r.stdout} ${r.stderr}`);
+    assert.deepEqual(r.calls, [['pr', 'view', '999999', '--json', 'isDraft,headRefOid']], `${label}: exactly one read through the injected gh, no mutation`);
+    assert.match(r.stderr, why, `${label}: the refusal names its reason`);
   }
 });
