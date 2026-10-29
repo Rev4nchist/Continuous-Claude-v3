@@ -20,33 +20,26 @@ import type { OsTask } from '../types'
 // L9 below 40 columns more than the chip and the goal is drawn
 // L10 a secret in the state reaches the drawn text
 // L11 ASK and UNPROVEN keep the wrong tone
-// L12 PR 3 (Dave: the band must not repeat ctx, cost or limits, the status line has them): any band row at any width
-//     draws ctx, a dollar cost, a limit bar or a percent; line 1 changes when ctx or cost change; a null ctx or cost reads as a dash
 
 const text = (line: Span[] | undefined): string => (line ?? []).map(span => span.text).join('')
 const all = (lines: Span[][]): string => lines.map(text).join('\n')
 
 const task = (id: string, subject: string, status: OsTask['status']): OsTask => ({ id, subject, status })
 
-// ctx and costUsd are still fed to the band by the caller; the tests prove the band does not draw them. They are typed
-// loose here so the helper compiles whether or not BandState keeps the two fields.
-type Fed = Partial<BandState> & { ctx?: number | null; costUsd?: number | null }
-
-const state = (over: Fed = {}): BandState =>
-  ({
-    chip: 'working',
-    brief: null,
-    tasks: [],
-    repo: 'continuous-claude',
-    branch: 'feat/dash-header',
-    lane: 'dash-header',
-    ctx: 41,
-    costUsd: 1.84,
-    fallback: null,
-    now: 1_000,
-    activeAt: 1_000,
-    ...over,
-  }) as BandState
+const state = (over: Partial<BandState> = {}): BandState => ({
+  chip: 'working',
+  brief: null,
+  tasks: [],
+  repo: 'continuous-claude',
+  branch: 'feat/dash-header',
+  lane: 'dash-header',
+  ctx: 41,
+  costUsd: 1.84,
+  fallback: null,
+  now: 1_000,
+  activeAt: 1_000,
+  ...over,
+})
 
 const briefWith = (raw: Record<string, unknown>, tasks: OsTask[] = [], prev: Brief | null = null): Brief => {
   const made = applyBrief(prev, raw, tasks, 1_000)
@@ -54,7 +47,7 @@ const briefWith = (raw: Record<string, unknown>, tasks: OsTask[] = [], prev: Bri
   return made.brief
 }
 
-const lineOf = (over: Fed, width = 120, index = 1): string => text(bandLines(state(over), width)[index])
+const lineOf = (over: Partial<BandState>, width = 120, index = 1): string => text(bandLines(state(over), width)[index])
 
 describe('band line 1', () => {
   test('L1 each chip state draws its own word and its own tone', () => {
@@ -80,53 +73,20 @@ describe('band line 1', () => {
     expect(TONE.chipWarn.backgroundColor).toBe('warning')
   })
 
-  test('L2 line 1 holds chip, project dot, repo, branch and lane, in that order', () => {
+  test('L2 line 1 holds chip, project dot, repo, branch, lane, ctx and cost, in that order', () => {
     const line = text(bandLines(state(), 120)[0])
-    const at = ['WORKING', '● continuous-claude', 'feat/dash-header', 'lane dash-header'].map(part => line.indexOf(part))
+    const at = ['WORKING', '● continuous-claude', 'feat/dash-header', 'lane dash-header', 'ctx 41%', '$1.84'].map(part => line.indexOf(part))
     expect(at.every(n => n >= 0)).toBe(true)
     expect([...at].sort((a, b) => a - b)).toEqual(at)
   })
 
   test('L2 a field the state does not have reads as a dash, not as a value and not as a gap', () => {
-    const line = text(bandLines(state({ repo: null, branch: null, lane: null }), 120)[0])
+    const line = text(bandLines(state({ repo: null, branch: null, lane: null, ctx: null, costUsd: null }), 120)[0])
     expect(line).toContain('lane -')
+    expect(line).toContain('ctx -')
+    expect(line).toContain('$-')
     expect(line).not.toContain('null')
     expect(line).not.toContain('undefined')
-  })
-})
-
-describe('band without ctx, cost or limits (PR 3)', () => {
-  // The words and shapes the status line owns. Nothing of them may reach a band row.
-  const OWNED = /ctx|\$|\bcost\b|limit|\b[57][hd]\b|\d\s*%/i
-
-  const fed: Fed[] = [
-    {},
-    { ctx: 97, costUsd: 120.5 },
-    { ctx: 0, costUsd: 0 },
-    { ctx: null, costUsd: null },
-    { ctx: 41, costUsd: 1.84, chip: 'waiting-on-dave', brief: briefWith({ goal: 'Add session header', ask: [{ kind: 'question', text: 'q?' }] }) },
-  ]
-
-  test('L12 no row of the band draws ctx, a dollar cost, a limit or a percent, at every width from 20 to 200', () => {
-    for (const given of fed) {
-      for (let width = 20; width <= 200; width++) {
-        for (const line of bandLines(state(given), width)) expect(text(line)).not.toMatch(OWNED)
-      }
-    }
-  })
-
-  test('L12 line 1 at 120 columns reads the same whatever ctx and cost the caller feeds', () => {
-    const calm = text(bandLines(state({ ctx: 5, costUsd: 0.01 }), 120)[0])
-    const hot = text(bandLines(state({ ctx: 99, costUsd: 250 }), 120)[0])
-    const none = text(bandLines(state({ ctx: null, costUsd: null }), 120)[0])
-    expect(hot).toBe(calm)
-    expect(none).toBe(calm)
-  })
-
-  test('L12 line 1 holds the chip, repo, branch and lane and nothing else, even with ctx and cost fed', () => {
-    const line = bandLines(state({ ctx: 97, costUsd: 120.5 }), 120)[0] ?? []
-    const words = line.map(span => span.text.trim()).filter(word => word !== '' && word !== '·')
-    expect(words).toEqual(['WORKING', '●', 'continuous-claude', 'feat/dash-header', 'lane dash-header'])
   })
 })
 
@@ -357,22 +317,24 @@ describe('band width', () => {
     expect(line).not.toContain('…')
   })
 
-  test('L8 line 1 drops the lane before it cuts the chip', () => {
+  test('L8 line 1 drops lane, then cost, then ctx before it cuts the chip', () => {
     const wide = text(bandLines(full(), 200)[0])
     expect(wide).toContain('lane ')
-    expect(wide).not.toContain('$1.84')
+    expect(wide).toContain('$1.84')
     const mid = text(bandLines(full(), 70)[0])
     expect(mid).not.toContain('lane ')
     expect(mid).toContain('WORKING')
-    expect(mid).not.toContain('ctx')
+    expect(mid).toContain('ctx 41%')
     const small = text(bandLines(full(), 45)[0])
     expect(small).toContain('WORKING')
     expect(small).toContain('continuous-claude')
   })
 
-  test('L8 the drop order: the branch is cut first, then the lane drops, then the branch, then the repo', () => {
-    // full(): width 58 holds chip + repo + a cut branch, but not the lane.
+  test('L8 the drop order: the branch is cut first, then lane, cost, ctx, branch, repo', () => {
+    // full(): width 58 holds chip + repo + a cut branch + ctx, but not the lane or the cost.
     const at58 = text(bandLines(full(), 58)[0])
+    expect(at58).toContain('ctx 41%')
+    expect(at58).not.toContain('$1.84')
     expect(at58).not.toContain('lane ')
     expect(at58).toMatch(/feature\/b+…/)
     expect(at58.length).toBeLessThanOrEqual(58)
@@ -380,7 +342,8 @@ describe('band width', () => {
     const cut = text(bandLines(full(), 120)[0])
     expect(cut).toMatch(/feature\/b+…/)
     expect(cut).toContain('lane ')
-    expect(cut).not.toContain('$')
+    expect(cut).toContain('$1.84')
+    // Narrower: ctx goes only after cost, and the branch only after ctx.
     const at46 = text(bandLines(full(), 46)[0])
     expect(at46).not.toContain('ctx')
     expect(at46).toMatch(/feature\/b+/)

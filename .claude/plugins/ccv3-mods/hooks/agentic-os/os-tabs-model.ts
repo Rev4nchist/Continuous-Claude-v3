@@ -7,13 +7,13 @@ import { MAX_ITEMS, MIN_ITEMS, digest, fold } from './digest'
 import type { Digest, DigestBlock, DigestCommit, DigestCompaction, DigestLane, DigestPr } from './digest'
 import { clip, elapsed } from './model'
 import type { OsView } from './model'
-import { agentRows, bar, gap, head, laneRows, prRows } from './pane-model'
+import { agentRows, bar, gaugeTone, gap, head, laneRows, prRows } from './pane-model'
 import type { Drift } from './steward'
 import type { PaneRow, Span, Tone } from './pane-model'
 
 // The /os pane tabs (PRD 5.3), as plain rows. Pure: no engine, no clock (the caller passes `now`).
 //   Overview   chip, goal, the session briefing (NEEDS YOU, HIGHLIGHTS, WATCH; digest.ts, PRD 5.3), stop-at, where, plan bar, counts, now, lane, agents, PRs
-//              (no ctx, cost or limits: the status line has them). The steward's `brief stale` reason is one WATCH row, shown once.
+//              ctx and cost sit below them. The steward's `brief stale` reason is one WATCH row, shown once.
 //   Plan       the steps: tasks when there are any, else the brief plan (PRD 5.1), each done step proven or UNPROVEN
 //   Proof      done-but-unproven steps first, then each proof with its artifact
 //   Decisions  the decision log newest first, then the open asks
@@ -58,6 +58,7 @@ export type TabState = {
   repo: string | null
   branch: string | null
   worktree: string | null
+  costUsd: number | null
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
   /** The steward's verdict on the brief (steward.ts `drift`). Null, or `ok`, or not given: no row. */
@@ -302,6 +303,17 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
           : line('now', sp('  ○ idle', 'dim')),
   ]
 
+  const ctx = view.ctx
+  const cost = s.costUsd
+  const health: PaneRow[] = [
+    line(
+      'ov-health',
+      sp('ctx ', 'dim'),
+      ...(ctx === null ? [sp('-', 'dim')] : [...bar(ctx / 100, Math.max(4, Math.min(10, Math.floor(columns / 4))), gaugeTone(ctx), ['▰', '▱']), sp(` ${ctx}%`, gaugeTone(ctx))]),
+      sp(`   cost ${typeof cost === 'number' && Number.isFinite(cost) ? `$${cost.toFixed(2)}` : '$-'}`, 'dim'),
+    ),
+  ]
+
   const lane: PaneRow[] = [head('h-lane', 'LANE'), ...laneRows(view.lanes)]
   const live = view.agents.filter(one => one.status === 'running').length
   const agents: PaneRow[] = view.agents.length ? [head('h-agents', 'AGENTS', [sp(`${live} running`, 'dim')]), ...agentRows(view.agents, cap)] : []
@@ -325,6 +337,7 @@ const overview = (s: TabState, now: number, columns: number, rows: number): Pane
     { rank: 16, group: 5, rows: planTitle },
     { rank: 6, group: 5, rows: [counts] },
     { rank: 9, group: 6, rows: nowRows },
+    { rank: 12, group: 6, rows: health },
     { rank: 10, group: 7, rows: lane },
     { rank: 7, group: 8, rows: agents },
     { rank: 8, group: 9, rows: prs },
