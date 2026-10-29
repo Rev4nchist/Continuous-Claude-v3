@@ -16,10 +16,10 @@
  * error while the stamp is checked (git timeout, git or spawn error, remotes that cannot be listed). The error is logged.
  * The PR body must be exactly one file (-F body=@<file>, --body-file <file>, or -F <file> for gh pr create). An inline body, stdin, --fill,
  * --input, and a second body source (a repeated flag, --body, -b, -f body=) cannot be hashed and are denied.
- * An explicit CCv3 target (--repo, -R, repos/<o>/<r>/pulls, a PR URL, GH_REPO) must still run in a CCv3 checkout: any CCv3 text anywhere counts.
- * A FOREIGN repo is named only by a literal -R / --repo value or an inline `GH_REPO=o/r gh ...` prefix, in a raw text with
- * exactly one `gh` word and none of `$(`, a backtick, `#`, `;`, `&`, `|`, CR or LF (see foreignTarget). Endpoint text, a PR URL and a
- * GH_REPO statement never name a foreign repo. In any other case the checkout decides.
+ * The checkout decides the target; only a CCv3 signal overrides it. A CCv3 signal anywhere in the raw text (a CCv3 -R / --repo / GH_REPO value,
+ * the process env GH_REPO, a repos/<o>/<r>/ endpoint text, a PR URL) names CCv3, and that command must run in a CCv3 checkout.
+ * The hook never names a foreign repo: a gated command from a CCv3 checkout is always gated, whatever -R it holds.
+ * Accepted residual: from a foreign checkout, a CCv3 -R hidden by shell syntax (v""3, -dR) is not seen. The hook guards against mistakes, not a hostile agent.
  * Everything else is allowed: another tool, a command that is not a PR create, a repo that is not CCv3, and input that
  * cannot be parsed (there is no command to judge).
  * Override: `SKIP_PRE_PR_GATE=1` as a LEADING assignment (`$env:SKIP_PRE_PR_GATE='1';` in PowerShell).
@@ -101,56 +101,19 @@ const PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
 const ownerRepo = (value: string): string => value.replace(/^https?:\/\//i, '').split('/').slice(-2).join('/').replace(/\.git$/i, '').toLowerCase();
 
 const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-/** The one inline per-command env that names a repo: `GH_REPO=o/r gh ...`, nothing between the assignment and gh. */
-const INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, 'i');
-/** A raw-text sign that the command is more than one plain gh call: a substitution, a backtick, a comment or a separator. */
-const NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
-/** Raw-text characters the shell uses to join, expand or evaluate a word. Any of them and no repo is named. Not a lexer: a character ban. */
-const SHELL_SYNTAX = /["'\\$(){}@]/;
-/** Every token that is a repo flag, also inside a combined short flag (`-dR`). Used only to count: more than one means gh may use another. */
-const REPEAT_FLAG = /(?:^|\s)-[A-Za-z]*R(?=[\s=]|$|[\w.-]+\/)|(?:^|\s)--repo(?=[\s=]|$)/g;
-
 /**
- * The FOREIGN repo (lower case) a command names, or null. The rule is a fail-closed check on the raw text, not a lexer.
- * A repo counts as named only when ALL hold:
- *   1. it comes from a literal `-R` / `--repo` value, or an inline `GH_REPO=o/r gh ...` prefix with no separator.
- *      Endpoint text (`repos/<o>/<r>/...`), a PR URL and a GH_REPO statement (`GH_REPO=o/r; gh ...`, `$env:GH_REPO=...; gh ...`)
- *      never name a repo: a title, a comment or a body field can hold them;
- *   2. the text holds exactly one `gh` word and none of `$(`, a backtick, `#`, `;`, `&`, `|`, CR or LF, so no other
- *      gh call, substitution or comment can sit beside the one the value belongs to;
- *   3. the value is literal (the caller checks Shapes.nonLiteral).
- *   4. the text holds no quote, backslash, `$`, paren, brace or `@`, so the shell cannot join, expand or evaluate a value into
- *      another repo, and no `-R` can hide in quoted text;
- *   5. the text holds at most one repo-flag token (REPEAT_FLAG counts `-R`, `-dR`, `--repo`), and if it holds one, REPO_FLAG parsed it.
- *      gh uses the LAST repo flag and a flag beats GH_REPO, so a second or unparsable flag cannot be ignored.
- * Anything else returns null and the checkout decides. A false null is a deny; a false name would skip the gate.
- */
-export function foreignTarget(command: string): string | null {
-  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command) || SHELL_SYNTAX.test(command)) return null;
-  const flags = (command.match(REPEAT_FLAG) ?? []).length;
-  if (flags > 1) return null;
-  const flagged = command.matchAll(REPO_FLAG).next().value?.[1];
-  if (flags === 1 && !flagged) return null;
-  const value = flagged ?? INLINE_GH_REPO.exec(command)?.[1];
-  return value ? ownerRepo(value) : null;
-}
-
-/**
- * `owner/repo` (lower case) the command targets, or null when the checkout decides.
- * Any CCv3 signal anywhere in the raw text means CCv3 (fail closed): a CCv3 `-R` / `--repo` / `GH_REPO` value (also the process env),
- * a CCv3 `repos/<o>/<r>/pulls` text or a CCv3 PR URL. Otherwise only foreignTarget can name a (foreign) repo.
+ * `rev4nchist/continuous-claude-v3` when the raw text holds any CCv3 signal, else null (the checkout decides). The hook never names a foreign repo.
+ * A CCv3 signal is a CCv3 `-R` / `--repo` / `GH_REPO=` value (also the process env GH_REPO), a CCv3 `repos/<o>/<r>/pulls` or issues or labels
+ * endpoint text, or a CCv3 PR URL. Any one of them anywhere in the text means CCv3 (fail closed): gh may use the last -R, and a title can hold text.
  */
 export function namedRepo(command: string, env: NodeJS.ProcessEnv = {}): string | null {
-  // gh uses the LAST -R / --repo value, a flag beats GH_REPO, and the shell may rewrite either: every value counts, and any CCv3 value means CCv3.
   const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
   const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
   const explicits = [...values, ...(envRepo ? [envRepo] : [])].map(ownerRepo);
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  // A CCv3 issues, pulls or labels endpoint text counts too. A foreign one names nothing.
-  if (labelsEndpointRepo(command) === CCV3_REPO) return CCV3_REPO;
-  return foreignTarget(command);
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || labelsEndpointRepo(command) === CCV3_REPO;
+  return ccv3 ? CCV3_REPO : null;
 }
 
 /** The head branch a PR-create command names (`--head`, `-H`, `-f head=`), without an `owner:` prefix. */
@@ -294,7 +257,7 @@ const shellOf = (input: HookInput): 'bash' | 'pwsh' => ((input.tool_name || inpu
 interface Ctx {
   /** The directory the command acts in (a leading `cd` moves it). */
   dir: string;
-  /** The repo the command names, or null when the checkout decides. A non-literal --repo value names nothing. */
+  /** CCV3_REPO when the command holds a CCv3 signal, else null (the checkout decides). A non-literal --repo value names nothing. */
   named: string | null;
   top: (dir: string) => string | null;
   ccv3: () => boolean;
@@ -320,7 +283,7 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
   };
   return {
     dir, named, top,
-    ccv3: once(() => (named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir))),
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir)),
     enforcing: once(() => enforceIn(deps, top(cwd))),
   };
 }

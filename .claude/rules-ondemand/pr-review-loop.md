@@ -103,12 +103,13 @@ step 1 does not list.
 - A command must name exactly one body file: `-F body=@<file>`, `--body-file <file>`, or `-F <file>` on
   `gh pr create`. The file must hash to the stamp's `body_sha256`. The hook denies a second body source,
   a repeated body flag and `--input`.
-- An explicit CCv3 target (`--repo`, `-R`, `repos/<owner>/<repo>/pulls`, a PR URL, `GH_REPO`) must run in
-  a CCv3 checkout. CCv3 text anywhere in the command counts.
-- The hook names a foreign repo only from a literal `-R` or `--repo` value, or an inline
-  `GH_REPO=o/r gh ...` prefix. The command must hold one `gh` word and none of `$(`, a backtick, `#`, `;`,
-  `&`, `|`, CR or LF. Endpoint text, a PR URL and a `GH_REPO` statement never name a foreign repo.
-  Otherwise the checkout decides.
+- The checkout decides the target. Only a CCv3 signal overrides it: a CCv3 `--repo`, `-R` or `GH_REPO`
+  value, a CCv3 `repos/<owner>/<repo>/` endpoint text or a CCv3 PR URL anywhere in the command. Such a
+  command must run in a CCv3 checkout.
+- The hook never names a foreign repo. A gated command in a CCv3 checkout is always gated, whatever
+  `-R` it holds. To act on another repo, run the command from that repo's checkout.
+- Accepted residual: from a foreign checkout, a CCv3 `-R` hidden by shell syntax (`v""3`, `-dR`) is
+  not seen. The hook guards against mistakes, not a hostile agent.
 - When `refs/remotes/fork/<branch>` exists, it must equal the stamped head.
 - The hook reads the command text with its continuation lines joined.
 - If the hook cannot check the stamp, it denies a PR-create command. A git timeout, a git error or an

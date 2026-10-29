@@ -329,28 +329,14 @@ var GH_REPO_ASSIGN = new RegExp(`(?:^|[\\s;])(?:\\$env:)?GH_REPO\\s*=\\s*["']?${
 var PR_URL = /github\.com\/([\w.-]+\/[\w.-]+)\/(?:pull|issues)\/\d+/gi;
 var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-2).join("/").replace(/\.git$/i, "").toLowerCase();
 var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
-var INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, "i");
-var NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
-var SHELL_SYNTAX = /["'\\$(){}@]/;
-var REPEAT_FLAG = /(?:^|\s)-[A-Za-z]*R(?=[\s=]|$|[\w.-]+\/)|(?:^|\s)--repo(?=[\s=]|$)/g;
-function foreignTarget(command) {
-  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command) || SHELL_SYNTAX.test(command)) return null;
-  const flags = (command.match(REPEAT_FLAG) ?? []).length;
-  if (flags > 1) return null;
-  const flagged = command.matchAll(REPO_FLAG).next().value?.[1];
-  if (flags === 1 && !flagged) return null;
-  const value = flagged ?? INLINE_GH_REPO.exec(command)?.[1];
-  return value ? ownerRepo(value) : null;
-}
 function namedRepo(command, env = {}) {
   const envRepo = env.GH_REPO && new RegExp(`^${REPO_VALUE}$`).exec(env.GH_REPO.trim())?.[1];
   const values = [...command.matchAll(REPO_FLAG), ...command.matchAll(GH_REPO_ASSIGN)].map((m) => m[1]);
   const explicits = [...values, ...envRepo ? [envRepo] : []].map(ownerRepo);
   const endpoints = [...command.matchAll(API_ENDPOINT)].map((m) => m[1].toLowerCase());
   const urls = [...command.matchAll(PR_URL)].map((m) => m[1].toLowerCase());
-  if (explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO)) return CCV3_REPO;
-  if (labelsEndpointRepo(command) === CCV3_REPO) return CCV3_REPO;
-  return foreignTarget(command);
+  const ccv3 = explicits.includes(CCV3_REPO) || endpoints.includes(CCV3_REPO) || urls.includes(CCV3_REPO) || labelsEndpointRepo(command) === CCV3_REPO;
+  return ccv3 ? CCV3_REPO : null;
 }
 function headBranchOf(command) {
   const m = /(?:^|\s)(?:-[fF]|--(?:raw-)?field)\s*["']?head=["']?([^\s"']+)/.exec(command) ?? (/\bgh\s+pr\s+create\b/i.test(command) ? /(?:^|\s)(?:--head(?:\s+|=)|-H\s*)["']?([^\s"']+)/.exec(command) : null);
@@ -479,7 +465,7 @@ function makeCtx(input, command, deps, shapes) {
     dir,
     named,
     top,
-    ccv3: once(() => named !== null ? named === CCV3_REPO : isCcv3Checkout(deps, dir)),
+    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir)),
     enforcing: once(() => enforceIn(deps, top(cwd)))
   };
 }
@@ -658,7 +644,6 @@ export {
   STAMP_REL,
   bodyFileOf,
   decide,
-  foreignTarget,
   handle,
   hasOverride,
   headBranchOf,

@@ -200,13 +200,16 @@ describe('A: only PR-create shapes are looked at', () => {
     expect(calls).toEqual([]);
   });
 
-  it('A2: a PR in another repo is allowed, named in the command or by the checkout', () => {
-    // Rule change (foreign repo only from a literal -R / --repo or an inline GH_REPO prefix): endpoint text names nothing, so a CCv3 checkout decides.
-    // Was: allow (the endpoint named other/repo).
+  it('A2: the checkout decides the target; a foreign -R or endpoint never moves a CCv3 checkout out of the gate', () => {
+    // Rule (Dave, final): the hook never names a foreign repo. A foreign -R, --repo or endpoint text does not skip the gate in a CCv3 checkout.
+    // Was: allow for the -R / --repo forms (they named other/repo).
+    const OTHER = 'origin\thttps://github.com/other/repo.git (fetch)\n';
     expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps()).action).toBe('deny');
-    expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps({ remotes: 'origin\thttps://github.com/other/repo.git (fetch)\n' })).action).toBe('allow');
-    expect(decide(input('gh pr create -R other/repo --fill'), deps()).action).toBe('allow');
-    expect(decide(input('gh pr create --repo other/repo --fill'), deps()).action).toBe('allow');
+    expect(decide(input('gh api repos/other/repo/pulls -X POST -f title=t'), deps({ remotes: OTHER })).action).toBe('allow');
+    expect(decide(input('gh pr create -R other/repo --fill'), deps()).action).toBe('deny');
+    expect(decide(input('gh pr create --repo other/repo --fill'), deps()).action).toBe('deny');
+    expect(decide(input('gh pr create -R other/repo --fill'), deps({ remotes: OTHER })).action).toBe('allow');
+    expect(decide(input('gh pr create --repo other/repo --fill'), deps({ remotes: OTHER })).action).toBe('allow');
     expect(decide(input('gh pr create --fill'), deps({ remotes: 'origin\thttps://github.com/other/repo.git (fetch)\n' })).action).toBe('allow');
     // The repo named in the command wins over the checkout: a CCv3 PR from a foreign checkout is gated.
     expect(decide(input('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST -f title=t'), deps({ remotes: 'origin\thttps://github.com/other/repo.git (fetch)\n' })).action).toBe('deny');
@@ -237,16 +240,15 @@ describe('A: only PR-create shapes are looked at', () => {
     expect(named.action === 'deny' && named.reason).toMatch(/not a git checkout/);
   });
 
-  it('A5b: a foreign repo value in another command segment names nothing; the checkout decides (CodeRabbit CLI, PR B)', () => {
+  it('A5b: a foreign repo value in any segment names nothing; only a CCv3 value is a signal', () => {
     for (const sep of ['; ', ' && ', ' || ', ' | ', '\n']) {
       expect(namedRepo(`gh pr ready 201${sep}gh repo view -R someone/else`), JSON.stringify(sep)).toBeNull();
       expect(namedRepo(`gh pr edit 201 --add-label review:deep${sep}GH_REPO=someone/else gh repo view`), JSON.stringify(sep)).toBeNull();
     }
-    expect(namedRepo('gh pr ready 201 -R someone/else')).toBe('someone/else');
-    // A GH_REPO statement (followed by ; or a newline) names nothing: it is not a per-command env. Only the inline prefix does.
-    // Was: the PowerShell statement form named someone/else.
+    // Was: 'someone/else'. A foreign value names nothing now.
+    expect(namedRepo('gh pr ready 201 -R someone/else')).toBeNull();
     expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201")).toBeNull();
-    expect(namedRepo('GH_REPO=someone/else gh pr ready 201')).toBe('someone/else');
+    expect(namedRepo('GH_REPO=someone/else gh pr ready 201')).toBeNull();
     expect(namedRepo("$env:GH_REPO='someone/else'; gh pr ready 201; echo hi")).toBeNull();
     expect(namedRepo('export GH_REPO=someone/else; gh pr ready 201 && gh pr view 201')).toBeNull();
     expect(namedRepo('gh pr ready 201; gh repo view -R Rev4nchist/Continuous-Claude-v3')).toBe(CCV3_REPO);
@@ -254,8 +256,8 @@ describe('A: only PR-create shapes are looked at', () => {
 
   it('A5: the helpers read the repo and the head branch from raw text', () => {
     expect(namedRepo('gh api repos/Rev4nchist/Continuous-Claude-v3/pulls -X POST')).toBe(CCV3_REPO);
-    expect(namedRepo('gh pr create -R Foo/Bar')).toBe('foo/bar');
-    expect(namedRepo('gh pr create --repo=Foo/Bar')).toBe('foo/bar');
+    expect(namedRepo('gh pr create -R Foo/Bar')).toBeNull();
+    expect(namedRepo('gh pr create --repo=Foo/Bar')).toBeNull();
     expect(namedRepo('gh pr create --fill')).toBeNull();
     expect(headBranchOf('gh pr create --head feat/x')).toBe('feat/x');
     expect(headBranchOf('gh pr create -H feat/x')).toBe('feat/x');
@@ -624,7 +626,7 @@ describe('Y: the body flag, the repo forms and the body path are read the way gh
       'gh pr create --repo https://github.com/Rev4nchist/Continuous-Claude-v3.git --head feat/x',
       'gh pr create --repo github.com/Rev4nchist/Continuous-Claude-v3.GIT --head feat/x',
     ]) expect(namedRepo(c), c).toBe(CCV3_REPO);
-    expect(namedRepo('gh pr create --repo github.com/other/repo')).toBe('other/repo');
+    expect(namedRepo('gh pr create --repo github.com/other/repo')).toBeNull();
   });
 
   // CodeRabbit #197 full review (outside diff, Major): endpoint-shaped text in a title replaced the real target.
@@ -1386,7 +1388,9 @@ describe('B: the checkpoint gate (PR B)', () => {
     }
     // Over-blocking guards (pass today): a draft create with no review label, and a --label review: on another repo's create.
     for (const c of DRAFT_OK) expect(act(c, { config: ENFORCE }).action, c).toBe('allow');
-    expect(act(`gh pr create --draft --repo someone/else --label review:none --body-file ${DB}`, { config: ENFORCE, stamp: false }).action, 'another repo').toBe('allow');
+    // A --repo on another repo no longer helps in a CCv3 checkout; a foreign checkout allows it.
+    expect(act(`gh pr create --draft --repo someone/else --label review:none --body-file ${DB}`, { config: ENFORCE, stamp: false }).action, 'another repo, CCv3 checkout').toBe('deny');
+    expect(act(`gh pr create --draft --repo someone/else --label review:none --body-file ${DB}`, { config: ENFORCE, stamp: false, remotes: FOREIGN_REMOTES }).action, 'another repo, foreign checkout').toBe('allow');
     // NOT pinned: a create --label review:x WITH a pathway for HEAD whose label equals it. Dave named the no-pathway case only (open item in prB-red.md).
   });
 
@@ -1447,21 +1451,25 @@ describe('B: the checkpoint gate (PR B)', () => {
         }
       }
     }
-    // Another repo is not gated: named in the command, or by a foreign checkout.
-    expect(act('gh pr ready 201 --repo someone/else', { config: ENFORCE }).action).toBe('allow');
-    expect(act('gh pr edit 201 --add-label review:none -R someone/else', { config: ENFORCE }).action).toBe('allow');
+    // Another repo is not gated when the checkout is foreign. A foreign -R or GH_REPO prefix in a CCv3 checkout is gated (the hook never names a foreign repo).
+    expect(denied('gh pr ready 201 --repo someone/else', { config: ENFORCE })?.pattern).toBe('ready');
+    expect(denied('gh pr edit 201 --add-label review:none -R someone/else', { config: ENFORCE })?.pattern).toBe('review-label');
+    expect(act('gh pr ready 201 --repo someone/else', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
+    expect(act('gh pr edit 201 --add-label review:none -R someone/else', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
     expect(act('gh pr ready 201', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
     expect(act('gh pr edit 201 --add-label review:none', { config: ENFORCE, remotes: FOREIGN_REMOTES }).action).toBe('allow');
     // Naming CCv3 from a foreign checkout is still gated.
     expect(denied('gh pr ready 201 -R Rev4nchist/Continuous-Claude-v3', { config: ENFORCE, remotes: FOREIGN_REMOTES })).not.toBeNull();
-    // An inline GH_REPO prefix for a foreign repo, from a CCv3 checkout, names another repo: not gated.
-    const foreignByEnv: Array<[string, string]> = [
-      ['GH_REPO=someone/else gh pr ready 201', 'Bash'],
-      ['GH_REPO=someone/else gh pr edit 201 --add-label review:none', 'Bash'],
+    // An inline GH_REPO prefix for a foreign repo is gated from a CCv3 checkout and allowed from a foreign one.
+    const foreignByEnv: Array<[string, string, string]> = [
+      ['GH_REPO=someone/else gh pr ready 201', 'Bash', 'ready'],
+      ['GH_REPO=someone/else gh pr edit 201 --add-label review:none', 'Bash', 'review-label'],
     ];
-    for (const [c, tool] of foreignByEnv) expect(act(c, { config: ENFORCE }, tool).action, `CCv3 checkout, ${tool}: ${c}`).toBe('allow');
-    // Rule change: the PowerShell `$env:GH_REPO='o/r'; gh ...` form is a statement, not a per-command env, so it names nothing and the
-    // CCv3 checkout gates it. Was: allow.
+    for (const [c, tool, pattern] of foreignByEnv) {
+      expect(denied(c, { config: ENFORCE }, tool)?.pattern, `CCv3 checkout, ${tool}: ${c}`).toBe(pattern);
+      expect(act(c, { config: ENFORCE, remotes: FOREIGN_REMOTES }, tool).action, `foreign checkout, ${tool}: ${c}`).toBe('allow');
+    }
+    // The PowerShell GH_REPO statement names nothing: the CCv3 checkout gates it.
     expect(denied("$env:GH_REPO='someone/else'; gh pr ready 201", { config: ENFORCE }, 'PowerShell')?.pattern).toBe('ready');
     expect(denied("$env:GH_REPO='someone/else'; gh pr edit 201 --add-label review:none", { config: ENFORCE }, 'PowerShell')?.pattern).toBe('review-label');
   });
@@ -1536,7 +1544,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       `gh pr ready https://github.com/${CCV3}/pull/201`,
       `gh issue edit https://github.com/${CCV3}/issues/7 --add-label review:none`,
     ]) expect(gate.namedRepo(c), c).toBe('rev4nchist/continuous-claude-v3');
-    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'two repo flags: gh uses the last, so none is named').toBeNull();
+    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'foreign values name nothing').toBeNull();
     // Gated from a foreign checkout.
     expect(denied(`gh pr ready https://github.com/${CCV3}/pull/201`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('ready');
     expect(denied(`gh pr edit https://github.com/${CCV3}/pull/201 --add-label review:deep`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('review-label');
@@ -1545,7 +1553,7 @@ describe('B: the checkpoint gate (PR B)', () => {
     const create = `gh pr create --draft -R someone/else -R ${CCV3} --body-file ${DB}`;
     expect(denied(create, { config: ENFORCE, stamp: false })?.pattern, 'CCv3 checkout, no stamp').toBe('stamp');
     expect(denied(create, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern, 'foreign checkout').toBe('repo-identity');
-    // Two foreign values: gh uses the last and the hook cannot vouch for it, so the CCv3 checkout decides. One foreign value stays allowed (B9g).
+    // Two foreign values: the CCv3 checkout decides.
     expect(denied('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE })?.pattern).toBe('ready');
   });
 
@@ -1583,8 +1591,7 @@ describe('B: the checkpoint gate (PR B)', () => {
   });
 
   // ---- a foreign repo must not hide a CCv3 command in any text form (Dave's rule) ----
-  // A command names a foreign repo only from a literal -R / --repo, or an inline `GH_REPO=o/r gh ...` prefix, in a raw text
-  // with exactly one `gh` word and none of $( ` # ; & | CR LF. Endpoint text, a PR URL and a GH_REPO statement name nothing.
+  // The hook never names a foreign repo: from a CCv3 checkout every case below is gated, whatever foreign text it holds.
   it('B9f: text that only looks like a foreign target (title, comment, substitution, second gh, statement) leaves the checkout in charge', () => {
     const TITLE = '--title "gh api repos/x/y/issues/1"';
     const GRAPHQL = `gh api graphql -f query='mutation{markPullRequestReadyForReview(input:{pullRequestId:"PR_x"}){clientMutationId}}' -f n=repos/x/y/issues/1`;
@@ -1614,7 +1621,7 @@ describe('B: the checkpoint gate (PR B)', () => {
     expect(misses).toEqual([]);
   });
 
-  it('B9g: a literal -R, --repo or inline GH_REPO prefix in a single gh call still names a foreign repo', () => {
+  it('B9g: a literal foreign -R, --repo or inline GH_REPO prefix is gated from a CCv3 checkout and allowed from a foreign one', () => {
     for (const c of [
       'gh pr ready 5 -R x/y',
       'gh pr ready 5 --repo=x/y',
@@ -1623,13 +1630,15 @@ describe('B: the checkpoint gate (PR B)', () => {
       'gh pr edit 5 -R x/y --add-label review:deep',
     ]) {
       for (const tool of ['Bash', 'PowerShell']) {
-        expect(act(c, { config: ENFORCE }, tool).action, `${tool}: ${c}`).toBe('allow');
+        // Was: allow. The hook never names a foreign repo, so the CCv3 checkout gates it.
+        expect(act(c, { config: ENFORCE }, tool).action, `CCv3 checkout, ${tool}: ${c}`).toBe('deny');
+        expect(act(c, { config: ENFORCE, remotes: FOREIGN_REMOTES }, tool).action, `foreign checkout, ${tool}: ${c}`).toBe('allow');
       }
     }
   });
 
   // ---- fail-open inputs the Opus critic found in the foreign-repo rule: from a CCv3 checkout each must be gated, not allowed ----
-  it('B9h: a quote, backslash, $, paren or brace, a second repo flag, or a -R inside quoted text cannot name a foreign repo', () => {
+  it('B9h: shell syntax, a second repo flag, a -R inside quoted text or a glued -R cannot move a CCv3 checkout out of the gate', () => {
     const cases: Array<{ c: string; tool: string; pattern: string }> = [
       // Shell quote joins: the CCv3 name is v3 after the shell removes the quotes, but the raw value stops at the quote.
       { c: 'gh pr ready 5 -R rev4nchist/continuous-claude-v""3', tool: 'Bash', pattern: 'ready' },
@@ -1648,23 +1657,17 @@ describe('B: the checkpoint gate (PR B)', () => {
       // A -R inside quoted text is not a flag: the checkout (CCv3) is the target.
       { c: 'gh pr edit 5 --add-label review:full --title "x -R o/x"', tool: 'Bash', pattern: 'review-label' },
       { c: 'gh pr create --label review:full --title "a -R o/x" --body b', tool: 'Bash', pattern: 'body' },
+      // The critic's latest inputs: a -R value that sits in a title or is glued, or a bracket that breaks the CCv3 name.
+      { c: 'gh pr create --title -R=foo/bar --body-file b.md', tool: 'Bash', pattern: 'stamp' },
+      { c: 'gh pr create -t -Rfoo/bar --body-file b.md', tool: 'Bash', pattern: 'stamp' },
+      { c: 'gh pr edit 201 --add-label review:full --title -R=foo/bar', tool: 'Bash', pattern: 'review-label' },
+      { c: 'gh pr create --body-file b.md -R rev4nchist/continuous-claude-v[3]', tool: 'Bash', pattern: 'stamp' },
     ];
     const misses = cases
       .map(({ c, tool, pattern }) => ({ tool, c, pattern, got: denied(c, { config: ENFORCE, stamp: false }, tool)?.pattern ?? 'allow' }))
       .filter((r) => r.got !== r.pattern)
       .map((r) => `${r.tool} ${JSON.stringify(r.c)}: want ${r.pattern}, got ${r.got}`);
     expect(misses).toEqual([]);
-  });
-
-  it('B9i: foreignTarget names a repo only for one plain repo flag and no quote, backslash, $, paren, brace or @', () => {
-    for (const c of ['gh pr ready 5 -R x/y', 'gh pr ready 5 --repo=x/y', 'GH_REPO=x/y gh pr ready 5']) {
-      expect(gateModule.foreignTarget(c), c).toBe('x/y');
-    }
-    for (const c of [
-      // A combined short flag is a repo flag the reader cannot parse: fail closed.
-      'gh pr ready 5 -dR x/y','gh pr ready 5 -R x/y -R a/b', 'gh pr ready 5 -R "x/y"', 'gh pr ready 5 -R x/y ${A:-b}', 'GH_REPO=x/y gh pr ready 5 -R (echo a/b)']) {
-      expect(gateModule.foreignTarget(c), c).toBeNull();
-    }
   });
 
   // ---- fix round, critic 6: gh.exe and a quoted gh on the PR create stamp rules (#193, #197) ----
