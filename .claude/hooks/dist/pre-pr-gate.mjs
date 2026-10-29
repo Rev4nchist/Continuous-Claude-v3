@@ -454,10 +454,16 @@ var once = (f) => {
   let box;
   return () => (box ??= { v: f() }).v;
 };
+function endpointTarget(command) {
+  const repo = labelsEndpointRepo(command);
+  if (repo === CCV3_REPO) return repo;
+  const oneCall = !/[;&|\n]/.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
+  return oneCall ? repo : null;
+}
 function makeCtx(input, command, deps, shapes) {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? labelsEndpointRepo(command);
+  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? endpointTarget(command);
   const tops = /* @__PURE__ */ new Map();
   const top = (d) => {
     if (!tops.has(d)) {

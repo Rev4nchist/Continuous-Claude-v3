@@ -276,10 +276,22 @@ const once = <T>(f: () => T): (() => T) => {
   return () => (box ??= { v: f() }).v;
 };
 
+/**
+ * The repo a gh api endpoint text names, for a command that namedRepo left open. The raw text cannot tell an endpoint from a
+ * title or from another segment. A foreign endpoint names the target only for one segment that is not a PR create.
+ * A CCv3 endpoint counts from anywhere (fail closed).
+ */
+function endpointTarget(command: string): string | null {
+  const repo = labelsEndpointRepo(command);
+  if (repo === CCV3_REPO) return repo;
+  const oneCall = !/[;&|\n]/.test(command) && !/\bgh\s+pr\s+create\b/i.test(command);
+  return oneCall ? repo : null;
+}
+
 function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes): Ctx {
   const cwd = input.cwd || process.cwd();
   const dir = workDir(command, cwd);
-  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? labelsEndpointRepo(command);
+  const named = shapes.nonLiteral ? null : namedRepo(command, deps.env) ?? endpointTarget(command);
   const tops = new Map<string, string | null>();
   const top = (d: string): string | null => {
     if (!tops.has(d)) {

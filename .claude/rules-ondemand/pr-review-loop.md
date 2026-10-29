@@ -120,9 +120,9 @@ step 1 does not list.
   non-draft create (the hook does not lex quotes). A hand-written `pathway.json` (the Write tool) or an
   indirect script is accepted until the lock of spec section 3.6 (spike S2). A confirmed label is tied to
   HEAD, not to a PR number: `gh pr edit <other> --add-label review:deep` passes while that pathway stands.
-  A subcommand built from a variable (`gh pr $sub 201`) is not read. The mode is read from the cwd
-  checkout, so a cwd with no `review-router.config.json` is warn mode: PR C must read the mode from the
-  CCv3 checkout the command names before it flips `enforce`.
+  The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
+  from the cwd checkout. A cwd with no `review-router.config.json` is warn mode. Before PR C flips
+  `enforce`, it must read the mode from the CCv3 checkout that the command names.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.
