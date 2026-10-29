@@ -1536,7 +1536,7 @@ describe('B: the checkpoint gate (PR B)', () => {
       `gh pr ready https://github.com/${CCV3}/pull/201`,
       `gh issue edit https://github.com/${CCV3}/issues/7 --add-label review:none`,
     ]) expect(gate.namedRepo(c), c).toBe('rev4nchist/continuous-claude-v3');
-    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'foreign values name the first').toBe('someone/else');
+    expect(gate.namedRepo('gh pr ready 201 -R someone/else -R other/repo'), 'two repo flags: gh uses the last, so none is named').toBeNull();
     // Gated from a foreign checkout.
     expect(denied(`gh pr ready https://github.com/${CCV3}/pull/201`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('ready');
     expect(denied(`gh pr edit https://github.com/${CCV3}/pull/201 --add-label review:deep`, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern).toBe('review-label');
@@ -1545,8 +1545,8 @@ describe('B: the checkpoint gate (PR B)', () => {
     const create = `gh pr create --draft -R someone/else -R ${CCV3} --body-file ${DB}`;
     expect(denied(create, { config: ENFORCE, stamp: false })?.pattern, 'CCv3 checkout, no stamp').toBe('stamp');
     expect(denied(create, { config: ENFORCE, remotes: FOREIGN_REMOTES })?.pattern, 'foreign checkout').toBe('repo-identity');
-    // Guards: foreign values only, from a CCv3 checkout, stay allowed.
-    expect(act('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE }).action).toBe('allow');
+    // Two foreign values: gh uses the last and the hook cannot vouch for it, so the CCv3 checkout decides. One foreign value stays allowed (B9g).
+    expect(denied('gh pr ready 201 -R someone/else -R other/repo', { config: ENFORCE })?.pattern).toBe('ready');
   });
 
   // ---- CodeRabbit CLI (major): labelsEndpointRepo read repos/<o>/<r>/issues|pulls/<n> from anywhere in the raw text ----
@@ -1625,6 +1625,45 @@ describe('B: the checkpoint gate (PR B)', () => {
       for (const tool of ['Bash', 'PowerShell']) {
         expect(act(c, { config: ENFORCE }, tool).action, `${tool}: ${c}`).toBe('allow');
       }
+    }
+  });
+
+  // ---- fail-open inputs the Opus critic found in the foreign-repo rule: from a CCv3 checkout each must be gated, not allowed ----
+  it('B9h: a quote, backslash, $, paren or brace, a second repo flag, or a -R inside quoted text cannot name a foreign repo', () => {
+    const cases: Array<{ c: string; tool: string; pattern: string }> = [
+      // Shell quote joins: the CCv3 name is v3 after the shell removes the quotes, but the raw value stops at the quote.
+      { c: 'gh pr ready 5 -R rev4nchist/continuous-claude-v""3', tool: 'Bash', pattern: 'ready' },
+      { c: "gh pr ready 5 -R rev4nchist/continuous-claude-v''3", tool: 'Bash', pattern: 'ready' },
+      { c: 'gh pr ready 5 -R rev4nchist/continuous-claude-v""3', tool: 'PowerShell', pattern: 'ready' },
+      { c: 'gh pr ready 5 -R rev4nchist/continuous-claude-v\\3', tool: 'Bash', pattern: 'ready' },
+      // A combined short flag hides a second -R from the REPO_FLAG reader; gh uses the last one.
+      { c: 'gh pr create -R o/x -dR rev4nchist/continuous-claude-v3 --title t --body b', tool: 'Bash', pattern: 'body' },
+      { c: 'gh pr ready 5 -R o/x -dR rev4nchist/continuous-claude-v3', tool: 'Bash', pattern: 'ready' },
+      // ${X:-default} expands to a later -R that follows a "-", not a space.
+      { c: 'gh pr ready 5 -R o/x ${X:--Rrev4nchist/continuous-claude-v3}', tool: 'Bash', pattern: 'ready' },
+      // A second -R whose value is not a plain repo value.
+      { c: 'gh pr ready 5 -R o/x -R (echo rev4nchist/continuous-claude-v3)', tool: 'PowerShell', pattern: 'ready' },
+      { c: 'gh pr ready 5 -R o/x -R ssh://git@github.com/Rev4nchist/continuous-claude-v3', tool: 'Bash', pattern: 'ready' },
+      { c: 'gh pr ready 5 -R o/x --repo=ssh://git@github.com/Rev4nchist/continuous-claude-v3', tool: 'Bash', pattern: 'ready' },
+      // A -R inside quoted text is not a flag: the checkout (CCv3) is the target.
+      { c: 'gh pr edit 5 --add-label review:full --title "x -R o/x"', tool: 'Bash', pattern: 'review-label' },
+      { c: 'gh pr create --label review:full --title "a -R o/x" --body b', tool: 'Bash', pattern: 'body' },
+    ];
+    const misses = cases
+      .map(({ c, tool, pattern }) => ({ tool, c, pattern, got: denied(c, { config: ENFORCE, stamp: false }, tool)?.pattern ?? 'allow' }))
+      .filter((r) => r.got !== r.pattern)
+      .map((r) => `${r.tool} ${JSON.stringify(r.c)}: want ${r.pattern}, got ${r.got}`);
+    expect(misses).toEqual([]);
+  });
+
+  it('B9i: foreignTarget names a repo only for one plain repo flag and no quote, backslash, $, paren, brace or @', () => {
+    for (const c of ['gh pr ready 5 -R x/y', 'gh pr ready 5 --repo=x/y', 'GH_REPO=x/y gh pr ready 5']) {
+      expect(gateModule.foreignTarget(c), c).toBe('x/y');
+    }
+    for (const c of [
+      // A combined short flag is a repo flag the reader cannot parse: fail closed.
+      'gh pr ready 5 -dR x/y','gh pr ready 5 -R x/y -R a/b', 'gh pr ready 5 -R "x/y"', 'gh pr ready 5 -R x/y ${A:-b}', 'GH_REPO=x/y gh pr ready 5 -R (echo a/b)']) {
+      expect(gateModule.foreignTarget(c), c).toBeNull();
     }
   });
 

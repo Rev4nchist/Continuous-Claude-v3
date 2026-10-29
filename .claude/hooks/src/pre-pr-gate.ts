@@ -105,6 +105,10 @@ const API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
 const INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, 'i');
 /** A raw-text sign that the command is more than one plain gh call: a substitution, a backtick, a comment or a separator. */
 const NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
+/** Raw-text characters the shell uses to join, expand or evaluate a word. Any of them and no repo is named. Not a lexer: a character ban. */
+const SHELL_SYNTAX = /["'\\$(){}@]/;
+/** Every token that is a repo flag, also inside a combined short flag (`-dR`). Used only to count: more than one means gh may use another. */
+const REPEAT_FLAG = /(?:^|\s)-[A-Za-z]*R(?=[\s=]|$|[\w.-]+\/)|(?:^|\s)--repo(?=[\s=]|$)/g;
 
 /**
  * The FOREIGN repo (lower case) a command names, or null. The rule is a fail-closed check on the raw text, not a lexer.
@@ -115,11 +119,19 @@ const NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
  *   2. the text holds exactly one `gh` word and none of `$(`, a backtick, `#`, `;`, `&`, `|`, CR or LF, so no other
  *      gh call, substitution or comment can sit beside the one the value belongs to;
  *   3. the value is literal (the caller checks Shapes.nonLiteral).
+ *   4. the text holds no quote, backslash, `$`, paren, brace or `@`, so the shell cannot join, expand or evaluate a value into
+ *      another repo, and no `-R` can hide in quoted text;
+ *   5. the text holds at most one repo-flag token (REPEAT_FLAG counts `-R`, `-dR`, `--repo`), and if it holds one, REPO_FLAG parsed it.
+ *      gh uses the LAST repo flag and a flag beats GH_REPO, so a second or unparsable flag cannot be ignored.
  * Anything else returns null and the checkout decides. A false null is a deny; a false name would skip the gate.
  */
 export function foreignTarget(command: string): string | null {
-  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command)) return null;
-  const value = command.matchAll(REPO_FLAG).next().value?.[1] ?? INLINE_GH_REPO.exec(command)?.[1];
+  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command) || SHELL_SYNTAX.test(command)) return null;
+  const flags = (command.match(REPEAT_FLAG) ?? []).length;
+  if (flags > 1) return null;
+  const flagged = command.matchAll(REPO_FLAG).next().value?.[1];
+  if (flags === 1 && !flagged) return null;
+  const value = flagged ?? INLINE_GH_REPO.exec(command)?.[1];
   return value ? ownerRepo(value) : null;
 }
 

@@ -331,9 +331,15 @@ var ownerRepo = (value) => value.replace(/^https?:\/\//i, "").split("/").slice(-
 var API_ENDPOINT = /repos\/([\w.-]+\/[\w.-]+)\/pulls\b/gi;
 var INLINE_GH_REPO = new RegExp(`^\\s*GH_REPO=["']?${REPO_VALUE}["']?\\s+gh\\b`, "i");
 var NOT_ONE_CALL = /\$\(|`|#|[;&|\r\n]/;
+var SHELL_SYNTAX = /["'\\$(){}@]/;
+var REPEAT_FLAG = /(?:^|\s)-[A-Za-z]*R(?=[\s=]|$|[\w.-]+\/)|(?:^|\s)--repo(?=[\s=]|$)/g;
 function foreignTarget(command) {
-  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command)) return null;
-  const value = command.matchAll(REPO_FLAG).next().value?.[1] ?? INLINE_GH_REPO.exec(command)?.[1];
+  if ((command.match(/\bgh\b/gi) ?? []).length !== 1 || NOT_ONE_CALL.test(command) || SHELL_SYNTAX.test(command)) return null;
+  const flags = (command.match(REPEAT_FLAG) ?? []).length;
+  if (flags > 1) return null;
+  const flagged = command.matchAll(REPO_FLAG).next().value?.[1];
+  if (flags === 1 && !flagged) return null;
+  const value = flagged ?? INLINE_GH_REPO.exec(command)?.[1];
   return value ? ownerRepo(value) : null;
 }
 function namedRepo(command, env = {}) {
