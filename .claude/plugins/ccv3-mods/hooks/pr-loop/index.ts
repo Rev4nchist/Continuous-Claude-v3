@@ -10,6 +10,7 @@ import {
   TICK_MS,
   addWatch,
   askFor,
+  checkpointOf,
   clipTail,
   grantRound,
   isClosed,
@@ -24,11 +25,12 @@ import {
   reportLine,
   settle,
   stateOf,
+  statusForModel,
   statusText,
   toastText,
   watchLine,
 } from './model'
-import type { Alert, Probe, PrStatus, WatchDoc } from './model'
+import type { Alert, AlertCheckpoint, Probe, PrStatus, WatchDoc } from './model'
 
 /**
  * The same atom the Agentic OS module declares (same plugin and key, same default): the engine
@@ -182,7 +184,8 @@ const lastLine = (text: string): string =>
 /** Tells Dave and, except for a closed PR, the model. Never merges. */
 const deliver = async ($: EngineInterface, alert: Alert): Promise<void> => {
   $.ui.toast(toastText(alert), { timeoutMs: 10_000 })
-  if (alert.state === 'CLOSED') return
+  // A closed PR needs no line. A draft gets the toast only: it waits on Dave's /checkpoint, not on the model.
+  if (alert.state === 'CLOSED' || alert.state === 'DRAFT') return
   if (alert.state === 'READY' && alert.whenReady) {
     if (await confirmLand($, alert.pr)) {
       const out = await landNow($, alert.pr, `the READY alert for #${alert.pr}`)
@@ -253,6 +256,13 @@ const asking = async ($: EngineInterface, status: PrStatus, now: number): Promis
   if (ask) await queueAsk($, ask)
 }
 
+/** The PR's checkpoint record and grant, read for the report lines. Null with no record, a closed PR or the kill switch. */
+const checkpointFor = async ($: EngineInterface, status: PrStatus): Promise<AlertCheckpoint | null> => {
+  if ((await $.env.get('CCV3_PR_CHECKPOINT_OFF')) === '1' || isClosed(status)) return null
+  const record = readRecord(await $.store.get(`${RECORD_PREFIX}${status.pr}`))
+  return checkpointOf(record, status, grantRound(await $.store.get(`${GRANT_PREFIX}${status.pr}`)))
+}
+
 type Results = Map<number, PrWatch | null>
 
 /** The list as it stands now with this tick's results applied; a PR added meanwhile survives. */
@@ -285,7 +295,7 @@ const check = async ($: EngineInterface): Promise<void> => {
       if (!kept) notices.push(`PR #${watch.pr}: dropped from the watch list after ${MAX_FAILS} failed checks in a row (${result.text}).`)
       continue
     }
-    const settled = settle(watch, result.status, now)
+    const settled = settle(watch, result.status, now, await checkpointFor($, result.status))
     results.set(watch.pr, settled.watch)
     if (settled.alert) alerts.push(settled.alert)
     await asking($, result.status, now).catch(() => undefined)
@@ -441,7 +451,7 @@ export const prLoop = (on: On) => {
     const pr = inputPr(e)
     if (pr === null) return { deny: 'pr_status needs "pr": a positive whole number.' }
     const result = await probe($, pr)
-    return result.kind === 'ok' ? textResult(JSON.stringify(result.status)) : textResult(`pr_status failed: ${probeText(pr, result)}`)
+    return result.kind === 'ok' ? textResult(JSON.stringify(statusForModel(result.status))) : textResult(`pr_status failed: ${probeText(pr, result)}`)
   }).catch(($, e, next) => next(e))
 
   on('command.run', { command: 'watch' }, ($, e) => watchCommand($, e.args)).catch(() => ({ text: '/watch failed.' }))

@@ -68,8 +68,9 @@ export type OsLane = { id: string; title: string; state: string; note?: string }
  * REVIEWED means the head was reviewed but is not READY (open threads or a failed check): the model acts.
  * STALLED means no review 60 minutes after the head appeared.
  * PROOF means the PR body proof is missing or wrong: the author fixes the Evidence block now.
+ * DRAFT means the PR waits for Dave's /checkpoint: no bot reviews a draft, and the watcher says so once per head.
  */
-export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF'
+export type PrState = 'READY' | 'PENDING' | 'LIMITED' | 'CLOSED' | 'REVIEWED' | 'STALLED' | 'PROOF' | 'DRAFT'
 
 /**
  * One watched PR. `state` is null until the first check. `whenReady` asks Land/No at READY.
@@ -286,6 +287,8 @@ declare module 'claude-code' {
       checkpoint: CheckpointView | null
       /** Questions for Dave in the checkpoint pane, oldest first (written by pr-loop, answered by pr-checkpoint). Mirrors $.store checkpoint:asks:<session>. */
       checkpointAsks: CheckpointAsk[]
+      /** Lock patterns already shown in a warn toast this session. */
+      lockWarned: string[]
     }
   }
 }

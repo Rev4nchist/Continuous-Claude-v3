@@ -189,3 +189,77 @@ export const isStalePending = (value: unknown, now: number): boolean => {
   const at = (value as { at?: unknown } | null | undefined)?.at
   return typeof at === 'number' && now - at > PENDING_STALE_MS
 }
+
+// ---- the lock ---------------------------------------------------------------------------------------------------------------
+
+export const SHAPES_CLI_REL = '.claude/hooks/dist/checkpoint-shapes-cli.mjs'
+export const SHAPES_TIMEOUT_MS = 10_000
+export const CONFIG_REL = 'review-router.config.json'
+export const PATHWAY_DENY = "pathway.json is written by Dave's press in the checkpoint pane only. A tool or a shell command may not name it. Read it with the Read tool."
+export const LOCK_FAILED = 'pr-checkpoint lock failed; nothing ran'
+
+/** Resolves `.` and `..`, turns backslashes into slashes and lower-cases: the spellings of one path compare equal. */
+export const normalizePath = (path: string): string => {
+  const out: string[] = []
+  for (const part of path.replace(/\\/g, '/').toLowerCase().split('/')) {
+    if (part === '.') continue
+    if (part === '..') out.pop()
+    else out.push(part)
+  }
+  return out.join('/')
+}
+
+/** A tool write (file_path or notebook_path) that lands on a pre-pr pathway.json in any checkout. */
+export const isPathwayFile = (path: string): boolean => `/${normalizePath(path)}`.endsWith('/.claude/cache/pre-pr/pathway.json')
+
+/** Shell text that names the file, in any form and any case: denied with no lexer, so a doubt reads as a deny. */
+export const namesPathway = (command: string): boolean => /pre-pr[\\/]+(?:\.[\\/]+)*pathway\.json/i.test(command)
+
+/** A cheap test on the raw text. A miss spawns nothing; a hit asks the shapes CLI. */
+export const mayBeGated = (command: string): boolean =>
+  (/pr-checkpoint/i.test(command) && /--(confirm|apply)/i.test(command)) || (/\bgh(\.exe)?\b/i.test(command) && /ready|label|review:|graphql/i.test(command))
+
+export type LockShapes = { ready: boolean; self: boolean; label: { labels: string[]; blind: boolean } | null }
+
+/** The CLI's JSON line, or null when it lacks the keys the lock reads. */
+export const parseShapes = (stdout: string): LockShapes | null => {
+  try {
+    const parsed: unknown = JSON.parse(stdout)
+    if (!isObject(parsed) || typeof parsed.ready !== 'boolean' || typeof parsed.self !== 'boolean') return null
+    const label = parsed.label
+    if (label === null) return { ready: parsed.ready, self: parsed.self, label: null }
+    if (!isObject(label) || !Array.isArray(label.labels) || typeof label.blind !== 'boolean') return null
+    return { ready: parsed.ready, self: parsed.self, label: { labels: label.labels.map(String), blind: label.blind } }
+  } catch {
+    return null
+  }
+}
+
+export type LockPattern = 'self-confirm' | 'ready' | 'review-label'
+
+/** The label shape that needs a record: a blind add, or one or more review: labels. An empty, sighted list (a read of labels) is none. */
+export const labelNeedsRecord = (shapes: LockShapes): boolean => shapes.label !== null && (shapes.label.blind || shapes.label.labels.length > 0)
+
+/** The one PR number a `gh pr edit` command names, or null when it names none, two, or an edit without a number. */
+export const editedPr = (command: string): number | null => {
+  const found = [...command.matchAll(/\bgh(?:\.exe)?\s+pr\s+edit\b(?:\s+#?(\d+)\b)?/gi)]
+  if (found.length === 0 || found.some(one => one[1] === undefined)) return null
+  const numbers = new Set(found.map(one => Number(one[1])))
+  return numbers.size === 1 ? [...numbers][0]! : null
+}
+
+/** The store record that lets one label through: this PR, confirmed or applied, this head, this label. */
+export const recordAllowsLabel = (value: unknown, pr: number, head: string, label: string): boolean => {
+  if (!isObject(value)) return false
+  return value.pr === pr && (value.state === 'confirmed' || value.state === 'applied') && value.head === head && value.label === label
+}
+
+export const LOCK_WHY: Record<LockPattern, string> = {
+  'self-confirm': "pr-checkpoint --confirm and --apply run only from Dave's press in the checkpoint pane.",
+  ready: "Only the checkpoint's --apply marks a PR ready. Call pr_checkpoint and wait for Dave's press.",
+  'review-label': "A review: label is added only by the checkpoint's --apply after Dave's press. Call pr_checkpoint and wait.",
+}
+
+export const lockDeny = (patterns: LockPattern[]): string => `Denied by the PR checkpoint lock (${patterns.join(', ')}). ${patterns.map(one => LOCK_WHY[one]).join(' ')}`
+
+export const lockWarn = (pattern: LockPattern): string => `PR checkpoint lock (warn mode): pattern "${pattern}" would be denied once checkpoint.enforce is true.`

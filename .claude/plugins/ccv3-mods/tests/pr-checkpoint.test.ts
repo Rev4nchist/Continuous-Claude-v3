@@ -146,7 +146,7 @@ const shapesFor = (command: string) => {
     create: false,
     nonDraft: false,
     ready: /gh pr ready/.test(command) && !/--undo(?!=)/.test(command),
-    label: /--add-label|addLabelsToLabelable|\/labels/.test(command) ? { labels, blind: /addLabelsToLabelable/.test(command) } : null,
+    label: /--add-label|addLabelsToLabelable|\/labels\b/.test(command) ? { labels, blind: /addLabelsToLabelable/.test(command) } : null,
     self: /pr-checkpoint/.test(command) && /--(confirm|apply)/.test(command),
     nonLiteral: false,
     // The real CLI prints `ccv3: true` when the text holds a visible CCv3 signal. These commands hold none, so the checkout decides.
@@ -195,9 +195,11 @@ const world = (on: On, opts: Opts = {}) => {
   on('session.root', () => ({ value: root }))
   on('agent.list', () => ({ value: [] }))
   on('tool.list', () => ({ value: ['Bash', 'PowerShell'].map(name => ({ name })) as never }))
-  on('fs.exists', (_$, e) => ({ value: !(opts.missing ?? []).some(part => e.path.includes(part)) }))
+  // The engine hands a fake the native path form (C:\r\x on Windows). The fixtures use forward slashes, so compare in that form.
+  const slash = (path: string) => path.replace(/\\/g, '/')
+  on('fs.exists', (_$, e) => ({ value: !(opts.missing ?? []).some(part => slash(e.path).includes(part)) }))
   on('fs.read', (_$, e) => {
-    const text = files[e.path]
+    const text = files[slash(e.path)]
     if (text === undefined) throw new Error(`ENOENT ${e.path}`)
     return { value: text }
   })
@@ -792,10 +794,10 @@ describe('pr-checkpoint: lock B, shell text', () => {
     expect(seen.ran.length).toBe(3)
     // Two patterns (ready, review-label), two lock toasts: the second ready adds none. Toasts of other modules do not count.
     // The lock's toast names its pattern id (contract: prC-red.md).
-    const lockToasts = seen.toasts.filter(text => /ready|review-label/i.test(text))
+    const lockToasts = seen.toasts.filter(text => /\bready\b|review-label/i.test(text))
     expect(lockToasts.length).toBe(2)
     expect(lockToasts.filter(text => /review-label/i.test(text)).length).toBe(1)
-    expect(lockToasts.filter(text => /ready/i.test(text) && !/review-label/i.test(text)).length).toBe(1)
+    expect(lockToasts.filter(text => /\bready\b/i.test(text) && !/review-label/i.test(text)).length).toBe(1)
   })
 
   for (const config of ['{"checkpoint":{"enforce":"true"}}', '{"checkpoint":{"enforce":1}}', 'not json']) {

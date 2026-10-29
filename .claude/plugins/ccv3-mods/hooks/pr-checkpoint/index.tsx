@@ -5,11 +5,16 @@ import type { CheckpointAsk, CheckpointRecord, CheckpointResult, CheckpointView 
 import { isPrNumber, readRecord } from '../pr-loop/model'
 import {
   APPLY_TIMEOUT_MS,
+  CONFIG_REL,
   ENGINE_REL,
   ENGINE_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
+  LOCK_FAILED,
   NEED_PR,
   PANE,
+  PATHWAY_DENY,
+  SHAPES_CLI_REL,
+  SHAPES_TIMEOUT_MS,
   TOOL_NAME,
   USAGE,
   askButtonLabel,
@@ -18,25 +23,37 @@ import {
   commentArgv,
   costText,
   coversRows,
+  editedPr,
   engineArgv,
   firstLine,
   headerRows,
+  isPathwayFile,
   isStalePending,
+  labelNeedsRecord,
   lastLine,
+  lockDeny,
+  lockWarn,
+  mayBeGated,
+  namesPathway,
   optionLabel,
   optionsInOrder,
   parseCheckpointArgs,
   parseResult,
+  parseShapes,
   pressNotice,
   recommendRows,
+  recordAllowsLabel,
   resolveBody,
   viewArgv,
 } from './model'
+import type { LockPattern, LockShapes } from './model'
 
 /** The same atoms the other modules declare (same plugin and key, same default): an atom is read only where it is declared. */
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
 const checkpoint = atom({ plugin: 'ccv3-mods', key: 'checkpoint' } as const, null as CheckpointView | null)
 const checkpointAsks = atom({ plugin: 'ccv3-mods', key: 'checkpointAsks' } as const, [] as CheckpointAsk[])
+/** The lock patterns already shown in a warn toast this session. */
+const lockWarned = atom({ plugin: 'ccv3-mods', key: 'lockWarned' } as const, [] as string[])
 
 const TOOL = `mcp__ccv3-mods__${TOOL_NAME}`
 const PENDING_PREFIX = 'checkpoint:pending:'
@@ -440,6 +457,89 @@ const checkpointCommand = async ($: EngineInterface, e: { args: string; origin: 
   }
 }
 
+// ---- the lock ---------------------------------------------------------------------------------------------------------------
+// Lock A denies a tool write to pathway.json. Lock B reads shell text: it denies any text that names the file, and asks the built
+// shapes CLI (one parser, no lexer here) about ready, a review: label and a self-confirm. Any failure after a prefilter hit denies.
+
+const lockFailure = (what: string): Error => new Error(`${LOCK_FAILED}: ${what}`)
+
+/** The shapes of the gate's own readers for this command. A failure of any kind throws: the .catch denies, in both modes. */
+const readShapes = async ($: EngineInterface, root: string, command: string, shell: 'bash' | 'pwsh'): Promise<LockShapes> => {
+  let ran
+  try {
+    ran = await $.process.run(['node', `${root}/${SHAPES_CLI_REL}`, '--shell', shell], { cwd: root, stdin: command, timeoutMs: SHAPES_TIMEOUT_MS })
+  } catch (err) {
+    throw lockFailure(`the shapes CLI did not run (${message(err)})`)
+  }
+  if (ran.exitCode !== 0) throw lockFailure(`the shapes CLI exited ${ran.exitCode}`)
+  const shapes = parseShapes(ran.stdout)
+  if (!shapes) throw lockFailure('the shapes CLI printed no shapes')
+  return shapes
+}
+
+/** A label add passes only with a store record for this PR number, this HEAD and this label. The store is read before git. */
+const labelAllowed = async ($: EngineInterface, root: string, command: string, shapes: LockShapes): Promise<boolean> => {
+  const labels = shapes.label?.labels ?? []
+  const pr = editedPr(command)
+  if (shapes.label?.blind || labels.length !== 1 || pr === null) return false
+  const stored = await $.store.get(`${RECORD_PREFIX}${pr}`)
+  if (stored === undefined || stored === null) return false
+  const head = await $.process.run(['git', 'rev-parse', 'HEAD'], { cwd: root, timeoutMs: GIT_TIMEOUT_MS })
+  if (head.exitCode !== 0) throw lockFailure('git rev-parse HEAD failed')
+  return recordAllowsLabel(stored, pr, head.stdout.trim(), labels[0]!)
+}
+
+const patternsOf = async ($: EngineInterface, root: string, command: string, shapes: LockShapes): Promise<LockPattern[]> => {
+  const found: LockPattern[] = []
+  if (shapes.self) found.push('self-confirm')
+  if (shapes.ready) found.push('ready')
+  if (labelNeedsRecord(shapes) && !(await labelAllowed($, root, command, shapes))) found.push('review-label')
+  return found
+}
+
+/** Only a boolean true enforces. A missing or unreadable config is warn mode, as the pre-PR gate. */
+const enforcing = async ($: EngineInterface, root: string): Promise<boolean> => {
+  try {
+    const config = JSON.parse(await $.fs.read(`${root}/${CONFIG_REL}`)) as { checkpoint?: { enforce?: unknown } } | null
+    return config?.checkpoint?.enforce === true
+  } catch {
+    return false
+  }
+}
+
+/** Warn mode: one toast per pattern per session. */
+const warnOnce = async ($: EngineInterface, patterns: LockPattern[]): Promise<void> => {
+  const shown = await read($, lockWarned)
+  const fresh = patterns.filter(one => !shown.includes(one))
+  if (fresh.length === 0) return
+  await update($, lockWarned, list => [...list, ...fresh])
+  for (const one of fresh) await $.ui.toast(lockWarn(one), { timeoutMs: 10_000 })
+}
+
+type ShellCall = { command?: unknown }
+
+/**
+ * The verdict for one shell command: a deny, or null to let it go on. Any failure after a prefilter hit is a deny, in both modes.
+ * It is answered here and not left to `.catch`: under an outer unmatched hook (the Agentic OS observer) the engine drops a `.catch` deny
+ * of a hook that threw, while a plain return survives (scratchpad repro, kit 2.1.312).
+ */
+const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh'): Promise<{ deny: string } | null> => {
+  try {
+    const command = typeof e.command === 'string' ? e.command : ''
+    if (namesPathway(command)) return { deny: PATHWAY_DENY }
+    if (!mayBeGated(command)) return null
+    const root = await rootOf($)
+    if (!root) return null
+    const patterns = await patternsOf($, root, command, await readShapes($, root, command, shell))
+    if (patterns.length === 0) return null
+    if (await enforcing($, root)) return { deny: lockDeny(patterns) }
+    await warnOnce($, patterns)
+    return null
+  } catch {
+    return { deny: LOCK_FAILED }
+  }
+}
+
 /** One module's part of session.start, on either trigger. The tool and the command register in both modes; the pane is interactive only. */
 const start = async ($: EngineInterface, isInteractive: boolean): Promise<void> => {
   if (await isOff($)) return
@@ -498,6 +598,26 @@ export const prCheckpoint = (on: On) => {
     }
     return textResult(await toolText($, input.pr, input.body.trim()))
   }).catch(($, e, next) => (next.called ? next(e) : textResult('pr_checkpoint failed. Nothing was recorded. The PR stays a draft.')))
+
+  // Lock A: no tool writes pathway.json. Always enforced, warn mode included.
+  on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    const input = e as unknown as { file_path?: unknown; notebook_path?: unknown }
+    const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : null
+    if (path !== null && isPathwayFile(path)) return { deny: PATHWAY_DENY }
+    return next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+
+  // Lock B: shell text. Judge first, call next last, so a throw never denies a command that already ran.
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    return (await shellLock($, e as unknown as ShellCall, 'bash')) ?? next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+
+  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => {
+    if (await isOff($)) return next(e)
+    return (await shellLock($, e as unknown as ShellCall, 'pwsh')) ?? next(e)
+  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   on('command.run', { command: 'checkpoint' }, ($, e) => checkpointCommand($, e)).catch(() => ({
     text: '/checkpoint failed. Nothing was recorded.',
