@@ -223,7 +223,7 @@ export const paneRows = (view: OsView, nowMs: number, columns: number, rows: num
   return all.slice(0, Math.max(1, rows)).map(row => fit(row, Math.max(10, columns)))
 }
 
-/** The band's spans: plan, progress, the active task, the running step, context. */
+/** The band's spans: plan, progress, the active task, the running step, PRs, agents. */
 export const bandSpans = (view: OsView, nowMs: number, columns: number, agentsPart: Span[] | null = null): Span[] => {
   const parts: Span[][] = []
   if (view.plan) parts.push([sp('◆ ', 'title'), sp(view.plan.title, 'todo')])
@@ -237,7 +237,6 @@ export const bandSpans = (view: OsView, nowMs: number, columns: number, agentsPa
   else if (view.turn) parts.push([sp(`◌ ${elapsed(nowMs - view.turn.startedAt)}`, 'dim')])
   if (view.prs.length) parts.push([sp(`PR ${view.prs.map(one => `#${one.pr}${attention(one.state) ? '!' : ''}`).join(' ')}`, view.prs.some(one => attention(one.state)) ? 'warn' : 'dim')])
   if (agentsPart) parts.push(agentsPart)
-  if (view.ctx !== null) parts.push([sp(`ctx ${view.ctx}%`, gaugeTone(view.ctx))])
   const joined = parts.flatMap((part, i) => (i ? [sp(' · ', 'track'), ...part] : part))
   return fit({ key: 'band', left: joined }, Math.max(10, columns)).left
 }

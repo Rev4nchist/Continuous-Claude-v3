@@ -7,6 +7,7 @@ import type { CacheRequest } from '../hooks/hud/cache'
 import type { CacheState } from '../types'
 
 // Ways the context figure and the cache element can fail, one test each.
+// PR 3: no band row draws ctx any more (the status line has it), so these tests read `ctx` from the snapshot the next turn start writes.
 // X1 ctx holds the last turn's value while a turn makes more requests (the engine measures per turn)
 // X2 ctx holds the pre-compaction value after /compact, or shows the size the engine reports (far below the next
 //    prompt); a subagent's, a precomputed or a vetoed compaction moves it
@@ -40,6 +41,8 @@ const beneath = {
   limits: [] as { kind: string; percentUsed: number }[],
   /** Every command name the plugin registered. */
   registered: [] as string[],
+  /** Every file the plugin wrote: the snapshot is how a test sees ctx. */
+  writes: [] as { path: string; text: string }[],
 }
 
 /** A compaction leaves at least one message. */
@@ -53,6 +56,7 @@ const world = (on: On, env: Record<string, string> = {}, limits = [{ kind: 'five
   beneath.usageFails = false
   beneath.limits = limits
   beneath.registered = []
+  beneath.writes = []
   on('turn.step', async function* (_$, e) {
     const reply = beneath.reply
     if (reply !== null) {
@@ -72,7 +76,12 @@ const world = (on: On, env: Record<string, string> = {}, limits = [{ kind: 'five
     }
   })
   const clock = mock.clock(on, { now: 1_000 })
-  mock.env(on, env)
+  mock.env(on, { USERPROFILE: 'C:/home', ...env })
+  on('turn.start', (_$, e) => ({ turnId: e.turnId }) as never)
+  on('fs.write', (_$, e) => {
+    beneath.writes.push({ path: e.path, text: e.text })
+    return { value: undefined }
+  })
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('settings.read', () => ({ value: { advisorModel: 'fable' } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
@@ -127,6 +136,13 @@ const band = async ($: Engine) => {
   return { hud, tasks }
 }
 
+/** The ctx figure the HUD keeps, as the snapshot of a fresh turn start carries it; no row of the band draws it. */
+const ctxOf = async ($: Engine): Promise<number | null | undefined> => {
+  await $.turn.start({ turnId: `ctx-${beneath.writes.length}` } as never)
+  const text = beneath.writes.filter(write => /agentic-os[\\/]s1\.json$/.test(write.path)).at(-1)?.text
+  return text === undefined ? undefined : (JSON.parse(text) as { ctx: number | null }).ctx
+}
+
 const cacheCommand = async ($: Engine) =>
   (await $.command.run({ command: 'cache', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: false, columns: 100 } })).text ?? ''
 
@@ -150,11 +166,12 @@ describe('context figure', () => {
     world(on)
     await start($)
     await step($, { input: 2, read: 300_000, write: 60_000 })
-    expect((await band($)).hud).toContain('ctx 36%')
+    expect(await ctxOf($)).toBe(36)
+    expect((await band($)).hud).not.toContain('ctx')
     await step($, { input: 2, read: 360_000, write: 40_000 })
-    expect((await band($)).hud).toContain('ctx 40%')
+    expect(await ctxOf($)).toBe(40)
     await step($, { input: 2, read: 1_000, write: 9_000 }, { agentId: 'sub1' })
-    expect((await band($)).hud).toContain('ctx 40%')
+    expect(await ctxOf($)).toBe(40)
   })
 
   test('X2 a compaction shows no ctx until the next reply: neither the old value nor the size the engine reports', async ($, on) => {
@@ -162,12 +179,12 @@ describe('context figure', () => {
     world(on)
     await start($)
     await step($, { input: 2, read: 84_758, write: 2_460 })
-    expect((await band($)).hud).toContain('ctx 9%')
+    expect(await ctxOf($)).toBe(9)
     beneath.tokensAfter = 17_863
     await compact($, 'manual')
-    expect((await band($)).hud).not.toContain('ctx')
+    expect(await ctxOf($)).toBeNull()
     await step($, { input: 2, read: 17_951, write: 72_548 }, { turnId: 't2' })
-    expect((await band($)).hud).toContain('ctx 9%')
+    expect(await ctxOf($)).toBe(9)
     // The rewrite is the compaction's: the size the engine reported must not hide it.
     expect(await cacheCommand($)).toMatch(/rewrote 69k\s+compaction/)
   })
@@ -177,7 +194,7 @@ describe('context figure', () => {
     await start($)
     await step($, { input: 2, read: 300_000, write: 60_000 })
     await compact($, 'auto')
-    expect((await band($)).hud).not.toContain('ctx')
+    expect(await ctxOf($)).toBeNull()
   })
 
   test("X2 a subagent's, a precomputed and a vetoed compaction leave ctx and the cache alone", async ($, on) => {
@@ -189,7 +206,7 @@ describe('context figure', () => {
     await compact($, 'precompute')
     beneath.skip = true
     await compact($, 'manual')
-    expect((await band($)).hud).toContain('ctx 36%')
+    expect(await ctxOf($)).toBe(36)
     // No compaction stood, so a rewrite on the next request is not named one.
     await step($, { input: 2, read: 10_000, write: 350_000 }, { turnId: 't2' })
     expect(await cacheCommand($)).toContain('prompt changed')
@@ -203,7 +220,7 @@ describe('context figure', () => {
       expect(await cacheCommand($)).toContain('requests      1')
       await end($, reason)
       const seen = await band($)
-      expect(seen.hud).not.toContain('ctx')
+      expect(await ctxOf($)).toBeNull()
       expect(seen.hud).not.toContain('cache')
       expect(await cacheCommand($)).toContain('no main-loop request yet')
     }
@@ -224,7 +241,8 @@ describe('context figure', () => {
     await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
     await step($, { input: 2, read: 300_000, write: 60_000 })
     const seen = await band($)
-    expect(seen.tasks).toContain('ctx 36%')
+    expect(await ctxOf($)).toBe(36)
+    expect(seen.tasks).not.toContain('ctx')
     expect(seen.hud).toBe('')
     expect(await cacheCommand($)).toContain('no main-loop request yet')
   })

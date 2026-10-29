@@ -27,6 +27,12 @@ export type OsAskItem = {
  */
 export type OsProof = { id: string; artifact: string; at: number; subject: string; kind: 'task' | 'plan' }
 
+/** The steward's record (hooks/agentic-os/steward.ts), watch-only. `briefAt` is the time of the last brief_set that `activity` counts since (the turn-end parser does not move it). Nothing of it goes to the model. */
+export type OsSteward = {
+  briefAt: number | null
+  activity: { toolCalls: number; commits: number; prs: number; runs: number; resumes: number; laneClaims: number; artifacts: number }
+}
+
 /** What the session says about itself, set by the brief_set tool (hooks/agentic-os/brief.ts). Every string is redacted. */
 export type OsBrief = {
   title?: string
@@ -209,6 +215,8 @@ declare module 'claude-code' {
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
       osTab: 'overview' | 'plan' | 'proof' | 'decisions'
+      /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
+      steward: OsSteward
     }
   }
 }
