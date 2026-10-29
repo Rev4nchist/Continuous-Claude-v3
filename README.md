@@ -141,7 +141,7 @@ New to the terms here? [CONTEXT.md](CONTEXT.md) defines them. For the details be
 | Hook programs | 73 | TypeScript files at the top level of `.claude/hooks/src/` |
 | Live hook registrations | 75 | Entries across 67 hook names, counted by `hook-contract-guard.mjs` |
 | Hook test files | 101 | `.claude/hooks/src/__tests__/*.test.ts` |
-| Subagent definitions | 34 | `.claude/agents/*.md`: 11 on `opus`, 23 on `sonnet` |
+| Subagent definitions | 35 | `.claude/agents/*.md`: 12 on `opus`, 23 on `sonnet` |
 | Skills | 80 | Folders in `.claude/skills/` that hold a `SKILL.md` |
 | On-demand rules | 20 | `.claude/rules-ondemand/*.md`, loaded by the `rule-router` hook |
 | Always-loaded instructions | 23,502 chars | Core plus this repo's `CLAUDE.md` chain. Core alone was 18,275 after PR #57, down from 153,689. |
