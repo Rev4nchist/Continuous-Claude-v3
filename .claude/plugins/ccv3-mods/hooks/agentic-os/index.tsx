@@ -779,6 +779,8 @@ export const agenticOs = (on: On) => {
       costUsd: (await read($, hud))?.costUsd ?? null,
       activeAt: await read($, activeAt),
       drift: await driftNow($),
+      // The briefing's long-running and finished-run rows need the run times, which the agents list does not hold.
+      agentRuns: await read($, agentRuns),
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
