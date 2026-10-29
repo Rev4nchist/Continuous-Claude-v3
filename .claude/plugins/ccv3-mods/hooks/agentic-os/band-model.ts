@@ -2,12 +2,13 @@ import type { OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
 import { isAskStale, isProven } from './brief'
 import type { Chip } from './brief'
+import { gaugeTone } from './pane-model'
 import type { Span, Tone } from './pane-model'
 
 // The two core lines of the band (PRD 5.3), as plain data. Pure: no engine, no clock. The caller passes `now`.
-//   line 1  chip, project dot and repo, branch, lane
+//   line 1  chip, project dot and repo, branch, lane, ctx, cost
 //   line 2  goal, plan bar, ASK count, UNPROVEN count
-// No ctx, cost or limits: the status line owns them (Dave, PR 3). Observer only. Every string is redacted again here (idempotent), so a caller that forgets cannot leak one.
+// Observer only. Every string is redacted again here (idempotent), so a caller that forgets cannot leak one.
 // Below 40 columns the band is one line: the chip and the goal.
 
 export type BandState = {
@@ -18,6 +19,9 @@ export type BandState = {
   branch: string | null
   /** The first lane this session holds. */
   lane: string | null
+  /** Context used, 0-100. */
+  ctx: number | null
+  costUsd: number | null
   /** `public.sessions.working_on`, shown dim after GOAL not set. Nothing feeds it yet. */
   fallback: string | null
   now: number
@@ -108,13 +112,19 @@ const barSpans = (steps: Step[], cells: number): Span[] => {
 
 // --- Line 1 ---
 
-type Item = { key: 'repo' | 'branch' | 'lane'; spans: Span[] }
+type Item = { key: 'repo' | 'branch' | 'lane' | 'ctx' | 'cost'; spans: Span[] }
 
-const items = (s: BandState): Item[] => [
-  { key: 'repo', spans: [sp('● ', 'title'), sp(clean(s.repo) || '-', 'todo')] },
-  { key: 'branch', spans: [sp(clean(s.branch) || '-', 'todo')] },
-  { key: 'lane', spans: [sp(`lane ${clean(s.lane) || '-'}`, 'dim')] },
-]
+const items = (s: BandState): Item[] => {
+  const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
+  const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
+  return [
+    { key: 'repo', spans: [sp('● ', 'title'), sp(clean(s.repo) || '-', 'todo')] },
+    { key: 'branch', spans: [sp(clean(s.branch) || '-', 'todo')] },
+    { key: 'lane', spans: [sp(`lane ${clean(s.lane) || '-'}`, 'dim')] },
+    { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
+    { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] },
+  ]
+}
 
 const chipSpan = (chip: Chip): Span => sp(` ${(CHIP[chip] ?? CHIP.idle).word} `, (CHIP[chip] ?? CHIP.idle).tone)
 
@@ -129,8 +139,8 @@ const lineOne = (s: BandState, width: number): Span[] => {
   const drop = (key: Item['key']) => {
     rest = rest.filter(one => one.key !== key)
   }
-  // Cut in this order: the branch down to its minimum, then the lane, then the branch, then the repo.
-  for (const key of ['lane', 'branch'] as const) {
+  // Cut in this order: the branch down to its minimum, then lane, cost, ctx, then the branch, then the repo.
+  for (const key of ['lane', 'cost', 'ctx', 'branch'] as const) {
     const excess = total() - width
     if (excess <= 0) break
     if (key === 'lane' && textOf('branch') > MIN_BRANCH) shrink('branch', text => clip(text, Math.max(MIN_BRANCH, text.length - excess)))
