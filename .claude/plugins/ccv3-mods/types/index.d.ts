@@ -182,7 +182,7 @@ export type FileTouch = { path: string; state: 'read' | 'edited' | 'committed'; 
 
 /**
  * One lane from `lane.mjs board --json` (hooks/agentic-os/lanes-model.ts). `owner` is the 8-character short session id, never the full id.
- * `live` (set by parseBoard, absent in a hand-built lane) is true only for an owned lane whose owner session is in the board's peers and whose lease has not lapsed.
+ * `live` (set by parseBoard, absent in a hand-built lane) is true for an owned lane whose owner session is in the board's peers, whatever its lease says; `leaseLapsed` is a separate tag.
  */
 export type BoardLane = {
   id: string
