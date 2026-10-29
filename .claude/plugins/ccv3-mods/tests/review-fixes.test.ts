@@ -14,6 +14,11 @@ const textOf = (row: PaneRow) => [...row.left, ...(row.right ?? [])].map(span =>
 // R3 the fold shows "✓ 0 done" when nothing is finished
 // R4 many live agents push the pane past its body rows
 // R5 two parallel calls: the later one finishing first clears NOW while the earlier still runs
+//
+// /os redesign, round 2 (tests first). R4 moves to the Session tab: AGENTS left Overview, and the Session tab lists the ledger's running runs
+// under HELPERS. The test seeds the agentRuns atom with a state.get hook (the kit's `$` cannot write an atom) beside the agent.list answer, then
+// presses tab-session. It still expects the body to stay inside its rows and a `+N more` marker for what was cut (the stricter regex replaces
+// the bare word "more", which the hint "...more -> Tab" could now satisfy).
 
 const tasks = (n: number, status: (i: number) => OsTask['status']): OsTask[] =>
   Array.from({ length: n }, (_, i) => ({ id: String(i + 1), subject: `task ${i + 1}`, status: status(i) }))
@@ -36,17 +41,18 @@ describe('task fold', () => {
   })
 })
 
-const world = (on: On, agents: AgentInfo[] = []) => {
+const world = (on: On, agents: AgentInfo[] = [], runs: unknown[] = []) => {
   const clock = mock.clock(on, { now: 1_000 })
   mock.env(on, {})
   on('ui.render', ($, e) => h($.ui.resolve(e).Box, {}) as RenderElement)
   on('agent.list', () => ({ value: agents }))
   on('fs.exists', () => ({ value: false }))
   on('ui.open', () => ({ value: { isPlaced: true as const } }))
+  if (runs.length > 0) on('state.get', { plugin: 'ccv3-mods', key: 'agentRuns' } as never, (() => ({ value: runs, version: 1 })) as never)
   return { settle: () => clock.advance(1) }
 }
 
-const paneRowsDrawn = async ($: Engine, bodyRows: number): Promise<string[]> => {
+const paneRowsDrawn = async ($: Engine, bodyRows: number, tab?: 'session'): Promise<string[]> => {
   const pane = await $.ui.mount({
     plugin: 'ccv3-mods',
     surface: 'terminal',
@@ -55,20 +61,23 @@ const paneRowsDrawn = async ($: Engine, bodyRows: number): Promise<string[]> => 
     props: { title: 'Agentic OS', isFocused: false, bodyColumns: 60, placement: 'dock', scroll: { offset: 0, bodyRows }, view: {} },
     viewport: { columns: 60, rows: 40 },
   })
+  if (tab) await pane.press({ key: `tab-${tab}` })
   const texts = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text)
   await pane.unmount()
   return texts
 }
 
 describe('pane height', () => {
-  test('R4 six live agents still fit a 12-row body', async ($, on) => {
+  test('R4 six live helpers still fit a 12-row body on the Session tab, with a "+N more" row for what was cut', async ($, on) => {
     const agents = Array.from({ length: 6 }, (_, i) => ({ id: `a${i}`, description: `job ${i}`, type: 'scout', status: 'running' }))
-    const { settle } = world(on, agents as AgentInfo[])
+    const runs = agents.map((one, i) => ({ ...one, model: null, effort: null, spec: {}, startedAt: 1_000 - (i + 1) * 60_000, endedAt: null, tokens: 0, costUsd: 0, drift: null }))
+    const { settle } = world(on, agents as AgentInfo[], runs)
     await $.command.run({ command: 'os', args: '', origin: { kind: 'composer' }, presentation: { isFullscreen: true, columns: 160 } })
     await settle()
-    const rows = await paneRowsDrawn($, 12)
+    const rows = await paneRowsDrawn($, 12, 'session')
     expect(rows.length).toBeLessThanOrEqual(12)
-    expect(rows.join('\n')).toContain('more')
+    expect(rows.join('\n')).toContain('HELPERS')
+    expect(rows.join('\n')).toMatch(/\+\d+ more/)
   })
 })
 

@@ -27,14 +27,17 @@ import type { BoardLane, FileTouch, HudLimit, KeeperRecord } from '../types'
 //     fixing them."), STALLED has no reason ("No review of change #N after 60 minutes."), LIMITED says "reviewer rate limit" only
 //     with a known wait and plain "did not finish" without one (the bfb94e8c fix).
 //   - prSentence of a null state returns null or a sentence with no 'null'; an unknown state ('DRAFT' today, or 'WEIRD') draws a plain
-//     "Change #N ..." sentence that never prints the raw code. DRAFT is pinned: "Change #N is a draft, waiting on /pathway."
+//     "Change #N ..." sentence that never prints the raw code. DRAFT is pinned: "Change #N is a draft, not ready for review yet" (round 2:
+//     voice rule 3 bans a command name such as /pathway on the Overview; the final period is optional).
 //   - stepSentence takes no artifact, so the proven sentence has no parenthesis: the Plan and Proof tabs add the artifact basename.
 //   - proofSentence is NOT in the plan's interface list. The task asks for "checks and proofs" (glossary rows "tests pass", "tests fail",
 //     "proof saved"), so I name it proofSentence(proof: { subject; result?: { passed; failed } }). The gate rows ("Pre-merge checks pass")
 //     have no data source in the mod and are not pinned.
 //   - driftSentence of a stale drift keeps the steward's counts ("12 tool calls and 1 commit") and swaps "since the brief changed" for
 //     "since the plan last changed". The fixture comes from the real steward.drift().
-//   - Plural counts are used everywhere (2 helpers, 3 files): the singular form is not pinned.
+//   - Plural counts are used in the helper, file and workflow sentences (2 helpers, 3 files). Round 2 pins the singular of proofSentence only:
+//     "1 test passes" and "1 of 1 test fails" (a count of one reads singular, with no ", 0 fail" tail).
+//   - Round 2: an ACTIVE lane that nobody owns (owner null, not mine) reads "A lane nobody holds yet", never "Another session holds".
 //   - roomSentences order: context, cost, the 5-hour and weekly allowance, cache. A null field is left out. An unknown limit kind
 //     draws nothing raw (it may be left out).
 //
@@ -114,7 +117,9 @@ describe('prSentence', () => {
   })
 
   test('W1 W2 DRAFT reads as the glossary amendment says; an unknown state draws a plain sentence with no raw code', () => {
-    expect(prSentence({ pr: 15, state: 'DRAFT' as never })?.text).toBe('Change #15 is a draft, waiting on /pathway.')
+    expect(prSentence({ pr: 15, state: 'DRAFT' as never })?.text).toMatch(/^Change #15 is a draft, not ready for review yet\.?$/)
+    expect(prSentence({ pr: 15, state: 'DRAFT' as never })?.text).not.toMatch(/pathway|\//)
+    expect(prSentence({ pr: 15, state: 'DRAFT' as never })?.needsDave).toBe(false)
     const weird = prSentence({ pr: 16, state: 'WEIRD' as never })
     expect(weird?.text).toContain('hange #16')
     expect(weird?.text).not.toContain('WEIRD')
@@ -266,6 +271,15 @@ describe('laneSentence', () => {
     expect(laneSentence(lane({ state: 'blocked' }))).toBe('Lane ccv3-mods is blocked')
   })
 
+  test('W1 W2 an active lane that nobody owns reads "A lane nobody holds yet", not "Another session holds"; an owned peer lane still does', () => {
+    const text = laneSentence(lane({ state: 'active', mine: false, owner: null }))
+    expect(text).toMatch(/^A lane nobody holds yet/)
+    expect(text).toContain('ccv3-mods')
+    expect(text).not.toMatch(/Another session|You hold/)
+    expect(laneSentence(lane({ state: 'active', mine: false, owner: 'bbbbbbbb' }))).toBe('Another session holds lane ccv3-mods')
+    expect(laneSentence(lane({ state: 'active', mine: true, owner: null }))).toMatch(/^You hold lane ccv3-mods/)
+  })
+
   test('W2 an unknown state keeps the lane id and prints no raw state', () => {
     const text = laneSentence(lane({ state: 'weirdstate' }))
     expect(text).toContain('ccv3-mods')
@@ -351,6 +365,14 @@ describe('proofSentence', () => {
     expect(proofSentence({ subject: 'the gate', result: { passed: 502, failed: 0 } })).toBe('502 tests pass, 0 fail')
     expect(proofSentence({ subject: 'the gate', result: { passed: 9, failed: 3 } })).toBe('3 of 12 tests fail')
     expect(proofSentence({ subject: 'Build the pane' })).toBe('Proof saved for "Build the pane"')
+  })
+
+  test('W1 a count of one reads singular: "1 test passes" and "1 of 1 test fails"; two or more stay plural', () => {
+    expect(proofSentence({ subject: 'the gate', result: { passed: 1, failed: 0 } })).toBe('1 test passes')
+    expect(proofSentence({ subject: 'the gate', result: { passed: 0, failed: 1 } })).toBe('1 of 1 test fails')
+    expect(proofSentence({ subject: 'the gate', result: { passed: 0, failed: 2 } })).toBe('2 of 2 tests fail')
+    expect(proofSentence({ subject: 'the gate', result: { passed: 2, failed: 0 } })).toBe('2 tests pass, 0 fail')
+    expect(proofSentence({ subject: 'the gate', result: { passed: 1, failed: 1 } })).toBe('1 of 2 tests fail')
   })
 })
 
