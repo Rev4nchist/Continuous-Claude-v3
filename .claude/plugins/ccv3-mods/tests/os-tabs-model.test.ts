@@ -2,6 +2,8 @@ import { describe, expect, test } from 'claude-code/testing'
 
 import { applyBrief, markAsksAnswered } from '../hooks/agentic-os/brief'
 import type { Brief } from '../hooks/agentic-os/brief'
+import { drift } from '../hooks/agentic-os/steward'
+import type { Drift } from '../hooks/agentic-os/steward'
 import { TABS, isTabId, osPane, tabRows, tabStrip } from '../hooks/agentic-os/os-tabs-model'
 import type { TabId, TabItem, TabState } from '../hooks/agentic-os/os-tabs-model'
 import type { PaneRow } from '../hooks/agentic-os/pane-model'
@@ -524,5 +526,61 @@ describe('os proof order', () => {
     expect(at('new task')).toBeGreaterThan(-1)
     expect(at('new task')).toBeLessThan(at('mid task'))
     expect(at('mid task')).toBeLessThan(at('old task'))
+  })
+})
+
+// O18 the dim `brief stale` row (the steward, watch-only): missing for unset, stale or finished, not plain English, not dim, drawn when
+//     the drift is ok, null or unset, not next to GOAL, wider than the pane at 20 to 200 columns, or a secret in the reason reaches a row
+describe('os overview: the brief stale row', () => {
+  const NO_GOAL = drift(null, { toolCalls: 1, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const planned = briefWith({ goal: 'prove the steward', plan: [{ id: 'a', text: 'one', status: 'doing' }] })
+  const done = briefWith({ goal: 'prove the steward', plan: [{ id: 'a', text: 'one', status: 'done' }] })
+  const STALE = drift(planned, { toolCalls: 12, commits: 1, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const FINISHED = drift(done, { toolCalls: 3, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+  const withDrift = (brief: Brief | null, found: Drift | null): TabState => ({ ...empty({ brief }), drift: found }) as TabState
+  const staleRows = (rows: PaneRow[]) => rows.filter(one => rowText(one).includes('brief stale'))
+
+  test('O18 unset, stale and finished each draw one dim row that says why, in plain words', () => {
+    const cases: [Drift, Brief | null, RegExp][] = [
+      [NO_GOAL, null, /^brief stale: no goal set yet while work started$/],
+      [STALE, planned, /^brief stale: 12 tool calls and 1 commit since the brief changed$/],
+      [FINISHED, done, /^brief stale: every plan step is done but work continues$/],
+    ]
+    for (const [found, brief, expected] of cases) {
+      const rows = staleRows(tabRows('overview', withDrift(brief, found), NOW, 100, 60))
+      expect(rows).toHaveLength(1)
+      expect(rowText(rows[0]!)).toMatch(expected)
+      expect(rows[0]!.left.every(one => one.tone === 'dim')).toBe(true)
+      expect(rows[0]!.right).toBeUndefined()
+    }
+  })
+
+  test('O18 the row sits directly under GOAL', () => {
+    const keys = tabRows('overview', withDrift(planned, STALE), NOW, 100, 60).map(one => one.key)
+    expect(keys[keys.indexOf('ov-goal') + 1]).toBe('ov-stale')
+  })
+
+  test('O18 no row when the drift is ok, null or not given', () => {
+    const ok: Drift = { level: 'ok', reason: '', key: 'ok@0' }
+    expect(all(tabRows('overview', withDrift(planned, ok), NOW, 100, 60))).not.toContain('brief stale')
+    expect(all(tabRows('overview', withDrift(planned, null), NOW, 100, 60))).not.toContain('brief stale')
+    expect(all(tabRows('overview', empty({ brief: planned }), NOW, 100, 60))).not.toContain('brief stale')
+  })
+
+  test('O18 the row stays inside the pane from 20 to 200 columns and still starts with "brief stale"', () => {
+    for (const columns of [20, 24, 40, 80, 200]) {
+      const rows = tabRows('overview', withDrift(planned, STALE), NOW, columns, 40)
+      for (const row of rows) expect(rowWidth(row)).toBeLessThanOrEqual(columns)
+      expect(rowText(rows.find(one => one.key === 'ov-stale')!)).toMatch(/^brief stale/)
+    }
+  })
+
+  test('O18 a secret in the reason is in no row, whole or cut, at any width', () => {
+    const leaked: Drift = { level: 'stale', reason: `after ${SECRET} was used`, key: 'stale@1' }
+    for (const columns of [20, 40, 60, 200]) {
+      const text = all(tabRows('overview', withDrift(planned, leaked), NOW, columns, 40))
+      expect(text).not.toContain(SECRET)
+      expect(text).not.toContain('aaaaaaaa')
+    }
   })
 })

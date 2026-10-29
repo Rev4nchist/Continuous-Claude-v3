@@ -6,7 +6,7 @@ import { EMPTY_CACHE, cacheView } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
-import type { AgentStatus, PromptComposeSection } from 'claude-code'
+import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
 import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd } from './brief'
@@ -19,8 +19,8 @@ import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
 import { bandSpans, parseLanes } from './pane-model'
 import type { Span, Tone } from './pane-model'
-import { drift, instructBlock, nudgeLine, observe, shouldNudge } from './steward'
-import type { Activity } from './steward'
+import { drift, observe } from './steward'
+import type { Activity, Drift } from './steward'
 
 const tasks = atom({ plugin: 'ccv3-mods', key: 'tasks' } as const, [] as OsTask[])
 const plan = atom({ plugin: 'ccv3-mods', key: 'plan' } as const, null as OsPlan | null)
@@ -62,10 +62,10 @@ const osTab = atom({ plugin: 'ccv3-mods', key: 'osTab' } as const, 'overview' as
 
 /**
  * What the steward (steward.ts) keeps: the counts since the last brief_set (`briefAt` is its time; only briefCall moves
- * it, the turn-end parser does not) and when it last nudged. Reset at session.start, /clear and resume.
+ * it, the turn-end parser does not). Watch only: nothing of it goes to the model. Reset at session.start, /clear and resume.
  */
 const NO_ACTIVITY: Activity = { toolCalls: 0, commits: 0, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 }
-const FRESH_STEWARD: OsSteward = { briefAt: null, activity: NO_ACTIVITY, nudge: { lastKey: null, callsSinceNudge: null } }
+const FRESH_STEWARD: OsSteward = { briefAt: null, activity: NO_ACTIVITY }
 const steward = atom({ plugin: 'ccv3-mods', key: 'steward' } as const, FRESH_STEWARD)
 
 const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' as 'interactive' | 'headless')
@@ -400,8 +400,6 @@ const answerAsks = async ($: EngineInterface, text: unknown): Promise<void> => {
   }
 }
 
-const STEWARD_SECTION = 'ccv3-mods:steward'
-
 /** HEAD before or after a call that may commit: one process, only for a commit-looking shell call in an interactive run. */
 const headOf = async ($: EngineInterface, tool: string, input: Record<string, unknown>): Promise<string | null> => {
   const command = typeof input.command === 'string' ? input.command : ''
@@ -410,45 +408,26 @@ const headOf = async ($: EngineInterface, tool: string, input: Record<string, un
   return run !== null && run.exitCode === 0 ? run.stdout.trim() || null : null
 }
 
+/** CCV3_MOD_STEWARD_OFF=1 stops the counting and the pane row. Read live, so it works mid-session. */
+const stewardOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MOD_STEWARD_OFF')) === '1'
+
 /** A main-loop call ran: the steward counts it. brief_set is the brief changing, not work. A refused call did not run. */
 const watch = async ($: EngineInterface, tool: string, input: Record<string, unknown>, before: string | null, ran: Result): Promise<void> => {
   try {
-    if (tool === BRIEF_TOOL || ran.deny !== undefined) return
+    if (tool === BRIEF_TOOL || ran.deny !== undefined || (await stewardOff($))) return
     const after = before === null ? null : await headOf($, tool, input)
     const moved = after !== null && after !== before
-    await update($, steward, state => ({
-      ...state,
-      activity: observe(state.activity, tool, input, moved),
-      nudge: { ...state.nudge, callsSinceNudge: state.nudge.callsSinceNudge === null ? null : state.nudge.callsSinceNudge + 1 },
-    }))
+    await update($, steward, state => ({ ...state, activity: observe(state.activity, tool, input, moved) }))
   } catch {
     // Observer only.
   }
 }
 
-/**
- * The steward's prompt block, appended to the engine's sections on every render, so the model always sees it. Its text
- * changes only when the brief, the task list or the nudge does: a changed system prompt loses the cache. A render writes
- * nothing, except the record that a nudge went out (it goes in once, in the render that fires it). A render that sends
- * nothing (/context, a teammate, --bare) neither sends nor counts. A headless run gets no block unless
- * CCV3_MOD_STEWARD_HEADLESS=1: the block makes the model call brief_set, which writes a state file per run.
- * The render carries no loop identity (PromptComposeInput has no agentId), so a subagent's render cannot be told apart.
- */
-const composeBlock = async ($: EngineInterface, e: { traits: readonly string[] }, sections: readonly PromptComposeSection[]) => {
-  try {
-    if (e.traits.some(trait => trait === 'analysis' || trait === 'teammate' || trait === 'bare')) return null
-    if ((await isOff($)) || (await $.env.get('CCV3_MOD_STEWARD_OFF')) === '1' || sections.some(one => one.id === STEWARD_SECTION)) return null
-    const run = await read($, mode)
-    if (run === 'headless' && (await $.env.get('CCV3_MOD_STEWARD_HEADLESS')) !== '1') return null
-    const [state, current, list] = [await read($, steward), await read($, brief), await read($, tasks)]
-    const d = drift(current, state.activity, state.briefAt ?? 0)
-    const gate = { headless: run === 'headless', subagent: false, off: false }
-    const line = shouldNudge(d, state.nudge, gate) ? nudgeLine(d) : null
-    if (line !== null) await update($, steward, now => ({ ...now, nudge: { lastKey: d.key, callsSinceNudge: 0 } }))
-    return { id: STEWARD_SECTION, text: instructBlock(current, list, line), scope: 'session' as const }
-  } catch {
-    return null
-  }
+/** The steward's verdict on the brief, for the pane. Null when the steward is switched off. Read-only: nothing is written or sent. */
+const driftNow = async ($: EngineInterface): Promise<Drift | null> => {
+  if (await stewardOff($)) return null
+  const state = await read($, steward)
+  return drift(await read($, brief), state.activity, state.briefAt ?? 0)
 }
 
 type Proof = { trigger: 'start' | 'attach'; isInteractive: boolean; surface: string | null }
@@ -654,13 +633,6 @@ export const agenticOs = (on: On) => {
     return briefCall($, e)
   }).catch(($, e, next) => next(e))
 
-  // The steward's block joins the engine's sections. Observer: the engine's own list is returned as it was.
-  on('prompt.compose', async ($, e, next) => {
-    const result = await next(e)
-    const block = await composeBlock($, e, result.sections)
-    return block === null ? result : { sections: [...result.sections, block] }
-  }).catch(($, e, next) => next(e))
-
   // The one unmatched prompt.submit hook of the plugin. Observer: the prompt goes on unchanged.
   on('prompt.submit', async ($, e, next) => {
     if (!(await isOff($))) await answerAsks($, e.text)
@@ -774,6 +746,7 @@ export const agenticOs = (on: On) => {
       worktree: where?.worktree ?? null,
       costUsd: (await read($, hud))?.costUsd ?? null,
       activeAt: await read($, activeAt),
+      drift: await driftNow($),
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
