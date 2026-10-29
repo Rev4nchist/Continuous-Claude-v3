@@ -1,6 +1,7 @@
 import { describe, expect, test } from 'claude-code/testing'
 
-import { oneLine, wrap } from '../hooks/agentic-os/text'
+import type { PaneRow, Span } from '../hooks/agentic-os/pane-model'
+import { oneLine, wrap, wrapRows } from '../hooks/agentic-os/text'
 
 // /os redesign, round 1: hooks/agentic-os/text.ts, the pure text step every pane row passes through.
 //   oneLine(value, max = 400)                       redact the whole string, collapse control chars and spaces, cap
@@ -29,6 +30,9 @@ import { oneLine, wrap } from '../hooks/agentic-os/text'
 // X11 at 20 columns the hint still names the tab (it cannot fit), or at 60 columns it is missing
 // X12 the greedy wrap breaks a word that fits, or reorders words
 // X13 the "home tab holds more" flag is ignored, or adds a hint with no hint given
+// X14 a NaN or infinite column or line count loops forever or returns an unbounded row
+// X15 wrapRows draws a row wider than the pane (lead, right group, indent or hint), from 20 to 200 columns
+// X16 wrapRows loses the right group on a pane wide enough for it, or keeps it on one too narrow
 
 const SECRET = 'sk-' + 'ant-' + 'a'.repeat(40)
 const PROSE = 'The quick brown fox jumps over the lazy dog and keeps running through the long grass until night falls again. '.repeat(8)
@@ -67,6 +71,65 @@ describe('oneLine', () => {
     expect(short.endsWith('…')).toBe(true)
     expect(oneLine('y'.repeat(400))).toBe('y'.repeat(400))
     expect(oneLine('short')).toBe('short')
+  })
+})
+
+const spanWidth = (spans: readonly Span[] = []): number => spans.reduce((n, one) => n + one.text.length, 0)
+/** Cells a row draws: the left spans, and the right group with its one-cell gap. */
+const rowWidth = (row: PaneRow): number => spanWidth(row.left) + (row.right === undefined ? 0 : spanWidth(row.right) + 1)
+
+describe('wrapRows', () => {
+  const LEADS: Record<string, Span[]> = {
+    none: [],
+    short: [{ text: '> ', tone: 'active' }],
+    two: [{ text: '[ok] ', tone: 'ok' }, { text: 'lane-name ', tone: 'head' }],
+    wide: [{ text: 'L'.repeat(300), tone: 'head' }],
+  }
+  const RIGHTS: Record<string, Span[] | undefined> = { none: undefined, age: [{ text: '3m', tone: 'dim' }], group: [{ text: '12 files ', tone: 'dim' }, { text: '2h ago', tone: 'dim' }] }
+
+  test('X15 no row is wider than the columns, from 20 to 200 columns, with every lead, right group, line count and hint', () => {
+    const texts = [PROSE, 'z'.repeat(5000), 'short']
+    for (const [leadName, lead] of Object.entries(LEADS)) {
+      for (const [rightName, right] of Object.entries(RIGHTS)) {
+        for (const text of texts) {
+          for (let columns = 20; columns <= 200; columns += 9) {
+            for (const maxLines of [1, 2, 3, 5]) {
+              for (const [hint, homeHoldsMore] of [[undefined, false], ['Decisions', false], ['Decisions', true]] as const) {
+                const rows = wrapRows('k', lead, text, 'dim', columns, maxLines, { ...(right === undefined ? {} : { right }), ...(hint === undefined ? {} : { hint }), homeHoldsMore })
+                const label = `lead=${leadName} right=${rightName} cols=${columns} lines=${maxLines} hint=${String(hint)} more=${homeHoldsMore}`
+                expect(rows.length, label).toBeLessThanOrEqual(maxLines)
+                for (const row of rows) expect(rowWidth(row), label).toBeLessThanOrEqual(columns)
+              }
+            }
+          }
+        }
+      }
+    }
+  })
+
+  test('X15 later rows indent, keys count up, and the indent never passes the pane', () => {
+    const rows = wrapRows('item', [{ text: '> ', tone: 'active' }], PROSE, 'dim', 40, 4)
+    expect(rows.map(one => one.key)).toEqual(['item', 'item-2', 'item-3', 'item-4'])
+    expect(rows[0]?.left[0]?.text).toBe('> ')
+    for (const row of rows.slice(1)) expect(row.left[0]?.text.startsWith('    ')).toBe(true)
+    const deep = wrapRows('item', [], PROSE, 'dim', 20, 3, { indent: 500 })
+    for (const row of deep) expect(rowWidth(row)).toBeLessThanOrEqual(20)
+  })
+
+  test('X16 the right group shows on line 1 of a wide pane only, and a cut text keeps the hint', () => {
+    const right: Span[] = [{ text: '3m', tone: 'dim' }]
+    const lead: Span[] = [{ text: '> ', tone: 'active' }]
+    const wide = wrapRows('k', lead, PROSE, 'dim', 80, 3, { right, hint: 'Work' })
+    expect(wide[0]?.right).toEqual(right)
+    expect(wide.slice(1).every(one => one.right === undefined)).toBe(true)
+    expect(wide.at(-1)?.left.map(one => one.text).join('')).toMatch(HINT_END('Work'))
+    expect(wrapRows('k', lead, PROSE, 'dim', 20, 3, { right })[0]?.right).toBeUndefined()
+  })
+
+  test('X14 a NaN pane width ends and draws rows of one cell', () => {
+    const rows = wrapRows('k', [], PROSE, 'dim', Number.NaN, 3)
+    expect(rows.length).toBeLessThanOrEqual(3)
+    for (const row of rows) expect(rowWidth(row)).toBeLessThanOrEqual(1)
   })
 })
 
@@ -191,6 +254,18 @@ describe('wrap', () => {
     const wide = wrap(PROSE, 60, 2, 'Decisions')
     expect(widest(wide.lines)).toBeLessThanOrEqual(60)
     expect(wide.lines[1]).toMatch(HINT_END('Decisions'))
+  })
+
+  test('X14 a column or line count that is not a finite number ends and keeps every row within one cell', () => {
+    for (const bad of [Number.NaN, Number.POSITIVE_INFINITY, Number.NEGATIVE_INFINITY]) {
+      const columnsBad = wrap(PROSE, bad, 3, 'Work')
+      expect(widest(columnsBad.lines)).toBeLessThanOrEqual(1)
+      expect(columnsBad.lines.length).toBeLessThanOrEqual(3)
+      const linesBad = wrap(PROSE, 40, bad, 'Work')
+      expect(linesBad.lines).toHaveLength(1)
+      expect(linesBad.cut).toBe(true)
+      expect(widest(linesBad.lines)).toBeLessThanOrEqual(40)
+    }
   })
 
   test('X11 the hint never overflows from 20 to 200 columns: the last row says more, and names the tab from 40 columns up', () => {

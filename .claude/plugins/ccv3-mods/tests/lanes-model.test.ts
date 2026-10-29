@@ -10,8 +10,9 @@ import type { BoardLane, FileTouch } from '../types'
 //
 // Contract these tests pin (the plan left these holes; the choices are mine and the implementer must follow them or change the test):
 //   - parseBoard(stdout, sessionId, now): three arguments (the plan's amendment beats its interface line). `now` is epoch ms.
-//   - BoardLane (types/index.d.ts) gets a boolean `live`: true only for an owned lane whose owner is in `peers[].id` and whose lease
-//     has not lapsed. `leaseLapsed` is true when lease_expires_at is at or before `now`. A lane nobody owns is never live.
+//   - BoardLane (types/index.d.ts) gets a boolean `live`: true only for an owned lane whose owner is in `peers[].id`. A lapsed lease on a
+//     live session means the owner is still working (lane.mjs RECLAIMABLE), so `live` ignores the lease. `leaseLapsed` is a separate tag:
+//     true when lease_expires_at is at or before `now`. A lane nobody owns is never live.
 //     "Live peer lanes" are therefore `lanes.filter(l => !l.mine && l.live)`; the Work tab words the others as 'held by a stopped session'.
 //   - `owner` is the first 8 characters of owner_session_id (lane.mjs short()), or null. The full id never leaves parseBoard.
 //   - `mine` is owner_session_id === (me ?? sessionId). `mine` OsLane rows are { id, title, state, note? } with the first line of the note.
@@ -24,7 +25,7 @@ import type { BoardLane, FileTouch } from '../types'
 // L1  a valid board is not accepted, or `mine` is wrong
 // L2  an array (the old `mine` output), garbage, an empty string, null JSON or a missing or non-array `lanes` is accepted
 // L3  `me` absent does not fall back to the session id; `me` present does not win over it
-// L4  an unowned backlog lane, a lane whose owner session is dead, or one whose lease lapsed counts as a live peer lane
+// L4  an unowned backlog lane or a lane whose owner session is dead counts as a live peer lane, or a live owner with a lapsed lease does not
 // L5  the full owner session id leaks into the result
 // L6  a note keeps its later lines, or a row with no `id` crashes the read or appears
 // L7  an empty board is rejected
@@ -90,14 +91,14 @@ describe('parseBoard', () => {
     expect(withMe?.mine.map(one => one.id)).toEqual(['one'])
   })
 
-  test('L4 live peer lanes are owned, held by a live session, and not lapsed: the others are not live', () => {
+  test('L4 live peer lanes are owned and held by a live session, lease or not: dead owners and unowned lanes are not live', () => {
     const out = parseBoard(board(FIVE), ME, NOW)
     const live = (out?.lanes ?? []).filter((one: BoardLane) => !one.mine && one.live)
-    expect(live.map(one => one.id)).toEqual(['peer-live'])
+    expect(live.map(one => one.id)).toEqual(['peer-live', 'peer-lapsed'])
     const byId = Object.fromEntries((out?.lanes ?? []).map(one => [one.id, one]))
     expect(byId['peer-dead']?.live).toBe(false)
     expect(byId['peer-dead']?.owner).toBe('cccccccc')
-    expect(byId['peer-lapsed']?.live).toBe(false)
+    expect(byId['peer-lapsed']?.live).toBe(true)
     expect(byId['peer-lapsed']?.leaseLapsed).toBe(true)
     expect(byId['peer-live']?.leaseLapsed).toBeFalsy()
     expect(byId['backlog-open']?.live).toBe(false)
@@ -107,7 +108,7 @@ describe('parseBoard', () => {
   test('L4 a lease that ends exactly now has lapsed', () => {
     const out = parseBoard(board([row('edge', { owner_session_id: PEER, lease_expires_at: new Date(NOW).toISOString() })]), ME, NOW)
     expect(out?.lanes[0]?.leaseLapsed).toBe(true)
-    expect(out?.lanes[0]?.live).toBe(false)
+    expect(out?.lanes[0]?.live).toBe(true)
   })
 
   test('L5 the owner is the 8 character short id and the full session id is nowhere in the result', () => {
