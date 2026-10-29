@@ -644,3 +644,162 @@ describe('os overview: the brief stale row', () => {
     }
   })
 })
+
+// PR 5, the briefing (Dave, 2026-10-28: "communicate in a clear manner all the high points and what I need to stay on top of").
+// Overview draws three blocks, NEEDS YOU, HIGHLIGHTS and WATCH, from the state the tabs already read (brief asks, decisions and
+// proofs, the task list, view.prs, drift). The row model is in digest.ts and has its own tests (digest.test.ts); this file does
+// not import it, so these tests fail one by one while digest.ts is missing. They read rows only and do not say the old Overview
+// rows are gone. Item row shape: `  <text> [<source>] <age>`, age is now, Nm, Nh, Nd or -.
+// B1 a block head is missing, renamed or out of order, or sits below the repo / branch / worktree detail in a short pane
+// B2 NEEDS YOU drops an ask, its recommendation, or a READY PR as a merge yes, or lists them in the wrong order
+// B3 HIGHLIGHTS drops a decision by Dave or a proof
+// B4 WATCH drops a done step with no proof
+// B5 an item row has no source tag or no age, or a row is wider than the pane, at 20 to 200 columns
+// B6 an empty block is not one dim line
+// B7 a short pane draws past the budget, or its "+N more" does not count what was left out
+// B8 the stale brief shows twice (under GOAL and in WATCH), or not in WATCH
+// B9 a secret in an ask, its recommendation or a decision reaches a row
+// B10 two briefing rows share a key
+describe('os overview: the session briefing (PR 5)', () => {
+  const ITEM_END = /\[[a-z][a-z -]*\] (?:now|\d+[mhd]|-)$/
+  const HEADS = ['NEEDS YOU', 'HIGHLIGHTS', 'WATCH']
+  const headAt = (rows: PaneRow[], title: string): number => rows.findIndex(one => new RegExp(`^${title}\\b`).test(rowText(one)))
+
+  /** The rows of one block: after its head, up to the next block head, or (last block) the first gap or old section row. */
+  const blockOf = (rows: PaneRow[], title: string): PaneRow[] => {
+    const from = headAt(rows, title)
+    if (from < 0) return []
+    const later = rows.slice(from + 1)
+    const nextHead = later.findIndex((_, i) => HEADS.some(one => headAt([later[i]!], one) === 0))
+    const section = later.findIndex(one => /^(?:gap-|ov-|h-|now$)/.test(one.key) && !HEADS.some(name => headAt([one], name) === 0))
+    const ends = [nextHead, section].filter(i => i >= 0)
+    const stop = ends.length > 0 ? Math.min(...ends) : later.length
+    return later.slice(0, stop).filter(one => rowText(one).trim() !== '')
+  }
+  const itemRows = (block: PaneRow[]): PaneRow[] => block.filter(one => ITEM_END.test(rowText(one)))
+  const moreOf = (block: PaneRow[]): number => Number(/^\s*\+(\d+) more$/.exec(rowText(block.at(-1) ?? { key: '', left: [] }))?.[1] ?? 0)
+
+  /** rich() with a brief that holds two asks, a decision by Dave and one proof, all set 3 hours ago. */
+  const briefed = (): TabState => {
+    const brief = briefWith(
+      {
+        goal: 'prove the pane tabs',
+        ask: [
+          { kind: 'question', text: 'Which branch should PR 5 start from?', recommend: 'main at 0ae5f64a' },
+          { kind: 'approval', text: 'Create the roles?', recommend: 'yes, after review' },
+        ],
+        decision: { text: 'Observer only, no deny.', by: 'Dave' },
+        proof: { taskId: '1', artifact: 'cache/e2e/one.txt' },
+      },
+      TASKS,
+      null,
+      NOW - 3 * 3600_000,
+    )
+    return { ...rich(), brief }
+  }
+
+  test('B1 the three heads are drawn in order, after the chip and GOAL rows and near the top', () => {
+    const rows = tabRows('overview', briefed(), NOW, 100, 60)
+    const [a, b, c] = HEADS.map(one => headAt(rows, one))
+    expect(a).toBeGreaterThan(-1)
+    expect(b).toBeGreaterThan(a!)
+    expect(c).toBeGreaterThan(b!)
+    expect(rows.findIndex(one => one.key === 'ov-chip')).toBeLessThan(a!)
+    expect(rows.findIndex(one => one.key === 'ov-goal')).toBeLessThan(a!)
+    expect(a!).toBeLessThanOrEqual(3)
+  })
+
+  test('B1 a 10 row pane keeps all three heads, and NEEDS YOU is still near the top', () => {
+    const rows = tabRows('overview', briefed(), NOW, 58, 10)
+    for (const title of HEADS) expect(headAt(rows, title), title).toBeGreaterThan(-1)
+    expect(headAt(rows, 'NEEDS YOU')).toBeLessThanOrEqual(3)
+  })
+
+  test('B2 NEEDS YOU lists the open ask with its recommendation, the READY PR as a merge yes, then the approval', () => {
+    const list = blockOf(tabRows('overview', briefed(), NOW, 100, 60), 'NEEDS YOU').map(rowText)
+    const at = (word: string) => list.findIndex(one => one.includes(word))
+    expect(list.find(one => one.includes('Which branch should PR 5 start from?'))).toContain('recommend: main at 0ae5f64a')
+    expect(list.find(one => one.includes('Create the roles?'))).toContain('recommend: yes, after review')
+    const readyRow = list.find(one => one.includes('#194'))
+    expect(readyRow).toMatch(/merge yes/i)
+    expect(readyRow).toContain('[pr]')
+    expect([at('Which branch'), at('#194'), at('Create the roles?')]).toEqual([0, 1, 2])
+    expect(list.find(one => one.includes('Which branch'))).toMatch(/\[ask\] 3h$/)
+  })
+
+  test('B3 HIGHLIGHTS lists the decision by Dave and the proof, each with its tag and age', () => {
+    const list = blockOf(tabRows('overview', briefed(), NOW, 100, 60), 'HIGHLIGHTS').map(rowText)
+    const decided = list.find(one => one.includes('Observer only, no deny.'))
+    expect(decided).toContain('Dave')
+    expect(decided).toMatch(/\[decision\] 3h$/)
+    expect(list.find(one => one.includes('one.txt'))).toMatch(/\[proof\] /)
+  })
+
+  test('B4 WATCH lists the done step that has no proof, and not the proven one', () => {
+    const list = blockOf(tabRows('overview', briefed(), NOW, 100, 60), 'WATCH').map(rowText)
+    expect(list.find(one => one.includes('second step'))).toMatch(/unproven/i)
+    expect(list.some(one => one.includes('first step'))).toBe(false)
+  })
+
+  test('B5 every item row ends with its source tag and age, from 20 to 200 columns, and no row is wider than the pane', () => {
+    for (let columns = 20; columns <= 200; columns += columns < 60 ? 1 : 9) {
+      const rows = tabRows('overview', briefed(), NOW, columns, 60)
+      for (const title of HEADS) {
+        const block = blockOf(rows, title)
+        expect(itemRows(block).length, `${columns} ${title}`).toBeGreaterThan(0)
+        for (const row of block) expect(rowWidth(row), `${columns}: ${rowText(row)}`).toBeLessThanOrEqual(columns)
+      }
+    }
+  })
+
+  test('B6 with nothing to say each block is one dim line: nothing needs you, no highlights yet, nothing to watch', () => {
+    const rows = tabRows('overview', empty(), NOW, 100, 60)
+    const trimmed = (title: string): string[] => blockOf(rows, title).map(one => rowText(one).trim())
+    expect(trimmed('NEEDS YOU')).toEqual(['nothing needs you'])
+    expect(trimmed('HIGHLIGHTS')).toEqual(['no highlights yet'])
+    expect(trimmed('WATCH')).toEqual(['nothing to watch'])
+    for (const title of HEADS) expect(blockOf(rows, title)[0]!.left.every(one => one.tone === 'dim')).toBe(true)
+  })
+
+  test('B7 a crowded session in a 10, 13, 20 or 60 row pane stays in the budget, and shown + "+N more" is always the total', () => {
+    const asks = Array.from({ length: 8 }, (_, i) => ({ kind: 'question' as const, text: `open question ${i}`, source: 'brief_set' as const }))
+    const brief: OsBrief = { sources: {}, plan: [], ask: asks, decisions: [], proofs: [], updatedAt: NOW - 60_000 }
+    const state = empty({ brief, activeAt: NOW, view: { ...empty().view, prs: [{ pr: 7, state: 'READY', whenReady: false }] } })
+    for (const rows of [10, 13, 20, 60]) {
+      const built = tabRows('overview', state, NOW, 80, rows)
+      expect(built.length).toBeLessThanOrEqual(rows)
+      const block = blockOf(built, 'NEEDS YOU')
+      const shown = itemRows(block).length
+      expect(shown, `${rows} rows`).toBeGreaterThan(0)
+      expect(shown + moreOf(block), `${rows} rows`).toBe(9)
+    }
+  })
+
+  test('B8 a stale brief shows once, and in WATCH', () => {
+    const planned = briefWith({ goal: 'prove the steward', plan: [{ id: 'a', text: 'one', status: 'doing' }] })
+    const stale = drift(planned, { toolCalls: 12, commits: 1, prs: 0, runs: 0, resumes: 0, laneClaims: 0, artifacts: 0 })
+    const rows = tabRows('overview', { ...empty({ brief: planned }), drift: stale } as TabState, NOW, 100, 60)
+    expect(rows.filter(one => rowText(one).includes('brief stale'))).toHaveLength(1)
+    const watch = blockOf(rows, 'WATCH').map(rowText)
+    expect(watch.find(one => one.includes('brief stale'))).toContain(stale.reason)
+    expect(watch.find(one => one.includes('brief stale'))).toMatch(/\[steward\] /)
+  })
+
+  test('B9 a secret in an ask, its recommendation or a decision is in no row, whole or cut, at any width', () => {
+    const brief = briefWith({ goal: 'g', ask: [{ kind: 'question', text: `ask ${SECRET}`, recommend: `rec ${SECRET}` }], decision: { text: `decided ${SECRET}`, by: 'Dave' } })
+    for (const columns of [20, 33, 60, 200]) {
+      const text = all(tabRows('overview', empty({ brief, activeAt: NOW }), NOW, columns, 40))
+      expect(text).toContain('decided')
+      expect(text).not.toContain(SECRET)
+      expect(text).not.toMatch(/sk-ant|aaaaaaaa/)
+    }
+  })
+
+  test('B10 no two rows of the briefing share a key, in a roomy and in a short pane', () => {
+    for (const rows of [6, 10, 13, 20, 60]) {
+      const keys = tabRows('overview', briefed(), NOW, 80, rows).map(one => one.key)
+      expect(new Set(keys).size).toBe(keys.length)
+      if (rows >= 10) expect(headAt(tabRows('overview', briefed(), NOW, 80, rows), 'NEEDS YOU')).toBeGreaterThan(-1)
+    }
+  })
+})
