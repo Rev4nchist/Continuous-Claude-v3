@@ -4,6 +4,7 @@ import type { Brief, AskKind } from './brief'
 import type { PaneRow, Span, Tone } from './pane-model'
 import { askSentence, driftSentence, helperSentence, keeperSentence, laneSentence, newestKeeper, prSentence, proofSentence, stepSentence } from './plain'
 import type { Drift } from './steward'
+import { WORDS } from './tab-words'
 import { oneLine, wrapRows } from './text'
 
 // The /os session briefing (PR 5), as plain English (round 2). Pure: no engine, no clock (the caller passes `now`), no state. Three blocks of rows, written
@@ -15,7 +16,8 @@ import { oneLine, wrapRows } from './text'
 // An item is a group of 1 to `lineCap` rows: `  <mark> <text>` with the age in the right group of row 1 (a pane of 24 columns or more), then
 // rows indented 4. The mark is `>` (needs), `+` (done) or `!` (watch). A text cut at `lineCap` rows ends with `...more -> <home tab>`; an item
 // whose home tab holds more (an ask with a recommendation, a peer lane that may overlap) always ends with it. A derived fact (read from a
-// handoff or a log, not stated by the session) starts with `[derived]`. Wording comes from plain.ts. Every string is redacted, made one line
+// handoff or a log, not stated by the session) starts with `[derived]`. Wording comes from plain.ts. The home tab is named by its label
+// (Steps, Work, Checks, Choices; the three plain words are in tab-words.ts). Every string is redacted, made one line
 // and bounded before it is cut to the width (text.ts). Observer only: it injects nothing.
 
 export type DigestAsk = { kind: AskKind; text: string; recommend?: string | undefined; source: 'brief_set' | 'parsed'; at?: number | undefined; answered?: true | undefined }
@@ -181,7 +183,7 @@ const stepsOf = (brief: Brief | null, tasks: OsTask[]): Step[] =>
 const blockedItems = (brief: Brief | null): Item[] =>
   (brief?.plan ?? [])
     .filter(one => one.status === 'blocked')
-    .map(one => item(3, undefined, 'Plan', 'bad', () => ({ text: stepSentence({ state: 'blocked', subject: one.text, proven: false }) })))
+    .map(one => item(3, undefined, WORDS.plan.label, 'bad', () => ({ text: stepSentence({ state: 'blocked', subject: one.text, proven: false }) })))
 
 const stepItems = (brief: Brief | null, tasks: OsTask[]): Item[] => {
   const out: Item[] = []
@@ -189,10 +191,10 @@ const stepItems = (brief: Brief | null, tasks: OsTask[]): Item[] => {
     if (step.state === 'done') {
       // A finished follow-up is closed work, not an unproven claim (D10).
       if (!DEFERRED.test(step.text) && proofOf(brief, { id: step.id, subject: step.text, kind: step.kind }) === null) {
-        out.push(item(0, undefined, 'Plan', 'warn', () => ({ text: stepSentence({ state: 'done', subject: step.text, proven: false }) })))
+        out.push(item(0, undefined, WORDS.plan.label, 'warn', () => ({ text: stepSentence({ state: 'done', subject: step.text, proven: false }) })))
       }
     } else if (step.state !== 'blocked' && DEFERRED.test(step.text)) {
-      out.push(item(0, undefined, 'Plan', 'todo', () => ({ text: stepSentence({ state: 'todo', subject: step.text, proven: false }) })))
+      out.push(item(0, undefined, WORDS.plan.label, 'todo', () => ({ text: stepSentence({ state: 'todo', subject: step.text, proven: false }) })))
     }
   }
   return out
@@ -206,7 +208,7 @@ const askItems = (asks: DigestAsk[]): Item[] =>
   asks
     .filter(one => one.answered !== true)
     .map(one =>
-      item(one.kind === 'approval' ? RANK.approval : RANK.ask, one.at, 'Decisions', 'warn', () => {
+      item(one.kind === 'approval' ? RANK.approval : RANK.ask, one.at, WORDS.decisions.label, 'warn', () => {
         const said = askSentence({ kind: one.kind, text: one.text, recommend: one.recommend }, false)
         return { text: said.text, ...(said.next === undefined ? {} : { next: said.next }), more: oneLine(one.recommend) !== '' }
       }),
@@ -235,7 +237,7 @@ const needsPrItems = (prs: DigestPr[]): Item[] => {
 const failedProofItems = (proofs: DigestProof[]): Item[] =>
   proofs
     .filter(one => known(one.result?.failed) && one.result.failed > 0)
-    .map(one => item(RANK.failed, one.at, 'Proof', 'bad', () => ({ text: oneLine(`Check failed: ${oneLine(one.subject)} (${proofSentence(one)})`) })))
+    .map(one => item(RANK.failed, one.at, WORDS.proof.label, 'bad', () => ({ text: oneLine(`Check failed: ${oneLine(one.subject)} (${proofSentence(one)})`) })))
 
 // --- DONE ---
 
@@ -246,7 +248,7 @@ const passedProofItems = (proofs: DigestProof[]): Item[] =>
       item(
         0,
         one.at,
-        'Proof',
+        WORDS.proof.label,
         'todo',
         () => ({ text: oneLine(one.result ? `${oneLine(one.subject)}: ${proofSentence(one)}` : proofSentence(one)) }),
         one.derived === true,
@@ -256,7 +258,7 @@ const passedProofItems = (proofs: DigestProof[]): Item[] =>
 const decisionItems = (decisions: DigestDecision[]): Item[] =>
   decisions
     .filter(one => one.derived === true || (typeof one.by === 'string' && one.by.trim().toLowerCase() === 'dave'))
-    .map(one => item(0, one.at, 'Decisions', 'todo', () => ({ text: one.derived === true ? oneLine(one.text) : oneLine(`${oneLine(one.text)} - by ${oneLine(one.by)}`) }), one.derived === true))
+    .map(one => item(0, one.at, WORDS.decisions.label, 'todo', () => ({ text: one.derived === true ? oneLine(one.text) : oneLine(`${oneLine(one.text)} - by ${oneLine(one.by)}`) }), one.derived === true))
 
 const milestoneItems = (prs: DigestPr[], agents: AgentRun[], commits: DigestCommit[], now: number): Item[] => [
   ...commits.map(one => item(0, one.at, 'Work', 'todo', () => ({ text: oneLine(one.subject) }))),
@@ -268,7 +270,7 @@ const milestoneItems = (prs: DigestPr[], agents: AgentRun[], commits: DigestComm
 
 const driftItems = (brief: Brief | null, found: Drift | null): Item[] => {
   const said = driftSentence(found)
-  return said === null ? [] : [item(0, brief?.updatedAt, 'Plan', 'dim', () => ({ text: said }))]
+  return said === null ? [] : [item(0, brief?.updatedAt, WORDS.plan.label, 'dim', () => ({ text: said }))]
 }
 
 const threadItems = (prs: DigestPr[]): Item[] =>
@@ -292,7 +294,7 @@ const peerItems = (lanes: DigestLane[]): Item[] =>
     )
 
 const deferredDecisionItems = (decisions: DigestDecision[]): Item[] =>
-  decisions.filter(one => DEFERRED.test(one.text)).map(one => item(0, one.at, 'Decisions', 'todo', () => ({ text: oneLine(one.text) }), one.derived === true))
+  decisions.filter(one => DEFERRED.test(one.text)).map(one => item(0, one.at, WORDS.decisions.label, 'todo', () => ({ text: oneLine(one.text) }), one.derived === true))
 
 /** The newest record sets the line; 3 of the newest 5 that lost the plan make it the kill rule (keeperSentence). */
 const keeperItems = (compactions: DigestCompaction[]): Item[] => {

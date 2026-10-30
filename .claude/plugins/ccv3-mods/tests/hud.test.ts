@@ -359,7 +359,9 @@ describe('hud', () => {
     await start($)
     const after = await hudOn($, 'terminal')
     expect(after.text).toContain('Opus 5.5 · medium')
-    expect(after.modelProps?.backgroundColor).toBe('error')
+    // The chip's own red background is a desktop prop; on the terminal the HUD is one row of spans.
+    const desktop = await hudOn($, 'desktop')
+    expect(desktop.modelProps?.backgroundColor).toBe('error')
   })
 
   // H4l (fresh) a first start with no step has no effort to keep: the chip shows the model alone.
