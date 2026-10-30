@@ -113,11 +113,12 @@ const start = async ($: EngineInterface): Promise<void> => {
   const advisor = advisorFrom(settings.advisorModel, await setSwitches($))
   const model = await $.session.model().catch(() => null)
   const usage = await $.session.usage().catch(() => null)
-  // A re-run start (reload, respawn, attach) keeps the advisor count (read here, so a step's increment is not lost); reset() zeroes it.
+  // A re-run start (reload, respawn, attach) keeps the advisor count (read here, so a step's increment is not lost) but takes
+  // the state from the settings as they are now: an advisor turned off or blocked since is not drawn "on". reset() zeroes the count.
   await update($, hud, now => ({
     model,
     effort: null,
-    advisor: now !== null && now.advisor.calls > 0 ? advisorOn(advisor.model, now.advisor.calls) : advisor,
+    advisor: { ...advisor, calls: now?.advisor.calls ?? 0 },
     costUsd: usage?.cost?.usd ?? null,
     limits: (usage?.rateLimits ?? []).map(({ kind, percentUsed }) => ({ kind, percentUsed })),
   }))

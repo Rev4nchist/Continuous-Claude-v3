@@ -10,6 +10,7 @@ import { hudParts } from '../hooks/hud/model'
 // H3 a subagent's request overwrites the main loop's model and effort
 // H4 advisor calls on the main loop are not counted
 // H4b a re-run start (reload, respawn, desktop attach) zeroes the advisor count
+// H4e a re-run start draws an advisor "on" that the settings now turn off, or drops the kept count when they come back
 // H4c /clear or a resume keeps the old conversation's advisor count and cost
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
@@ -155,6 +156,22 @@ describe('hud', () => {
     world(on)
     await start($)
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4e a re-run start keeps the count but reads the settings as they are now: an advisor switched off or blocked since is not drawn "on".
+  test('H4e a second session.start follows the settings it finds and keeps the count', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    w.settings = {}
+    await start($)
+    const off = (await hudOn($, 'terminal')).text ?? ''
+    expect(off).toContain('advisor off')
+    expect(off).not.toContain('×')
+    w.settings = { advisorModel: 'fable' }
     await start($)
     expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
   })
