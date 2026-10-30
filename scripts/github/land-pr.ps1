@@ -17,7 +17,9 @@
   4. Sync ~/.claude from main (scripts/sync-to-active.sh --changed, via Git Bash). It always syncs
      from a temporary detached worktree of main and removes it afterwards. The primary checkout is
      never used or switched: another session can switch it mid-sync.
-  5. Clean up: remove the PR's worktree (clean worktrees only; a node_modules junction is unlinked
+  5. Clean up: copy the worktree's gitignored .claude/cache/e2e/ to <repo>\.claudedocs\e2e-pr<N>
+     (a differing file already there is never overwritten), then remove the PR's worktree (clean
+     worktrees only; kept when the copy fails or conflicts; a node_modules junction is unlinked
      first), delete the local branch with -d (merged-only), delete the remote branch on fork.
   Every step is idempotent: re-running after a partial failure picks up where it stopped.
   -CleanupOnly skips steps 1-2 for a PR that is already merged.
@@ -173,6 +175,39 @@ if (-not $NoSync) {
 }
 
 # 5. Cleanup: worktree, local branch, remote branch
+# A worktree's .claude/cache/ is gitignored, so `git status --porcelain` does not see the PR's e2e
+# evidence there and removing the worktree would delete it. Copy it out first. Self-contained: it
+# uses no script-level variable and never throws; a failure is reported in the result.
+function Save-E2eArtifacts([string]$Source, [string]$Destination) {
+  $copied = 0; $skipped = 0; $conflicts = [System.Collections.Generic.List[string]]::new(); $errors = [System.Collections.Generic.List[string]]::new()
+  try {
+    if (Test-Path -LiteralPath $Source -PathType Container) {
+      $root = (Get-Item -LiteralPath $Source).FullName.TrimEnd('\', '/')
+      foreach ($file in @(Get-ChildItem -LiteralPath $root -Recurse -File -Force)) {
+        $rel = $file.FullName.Substring($root.Length).TrimStart('\', '/')
+        try {
+          $target = Join-Path $Destination $rel
+          if (Test-Path -LiteralPath $target -PathType Leaf) {
+            $same = ((Get-Item -LiteralPath $target).Length -eq $file.Length) -and
+              ((Get-FileHash -LiteralPath $file.FullName -Algorithm SHA256).Hash -eq (Get-FileHash -LiteralPath $target -Algorithm SHA256).Hash)
+            if ($same) { $skipped++ } else { $conflicts.Add($rel) }
+          } else {
+            New-Item -ItemType Directory -Force -Path (Split-Path $target -Parent) | Out-Null
+            [System.IO.File]::Copy($file.FullName, $target, $false)
+            $copied++
+          }
+        } catch { $errors.Add("${rel}: $($_.Exception.Message)") }
+      }
+    }
+  } catch { $errors.Add($_.Exception.Message) }
+  [pscustomobject]@{
+    Copied    = $copied
+    Skipped   = $skipped
+    Conflicts = [string[]]$conflicts.ToArray()
+    Error     = if ($errors.Count) { $errors -join '; ' } else { $null }
+  }
+}
+
 $wtLines = git -C $RepoPath worktree list --porcelain
 $wtPath = $null
 for ($i = 0; $i -lt $wtLines.Count; $i++) {
@@ -183,10 +218,24 @@ if ($wtPath) {
   if ($LASTEXITCODE -or $dirty) {
     Write-Host "  kept worktree $wtPath (it has uncommitted changes or cannot be read)"
   } else {
-    $junction = Join-Path $wtPath '.claude\hooks\node_modules'
-    if ((Test-Path $junction) -and (Get-Item $junction -Force).LinkType -eq 'Junction') { [System.IO.Directory]::Delete($junction, $false) }
-    git -C $RepoPath worktree remove $wtPath 2>&1 | Out-Host
-    if ($LASTEXITCODE -eq 0) { $done.Add("removed worktree $wtPath") } else { Write-Host "  could not remove worktree $wtPath" }
+    # Save the e2e evidence before the worktree goes. The PR is already merged, so this never calls
+    # Fail: any problem keeps the worktree and says why.
+    $saveProblem = $null
+    try {
+      $e2eDest = Join-Path $RepoPath ".claudedocs\e2e-pr$Pr"
+      $saved = Save-E2eArtifacts -Source (Join-Path $wtPath '.claude\cache\e2e') -Destination $e2eDest
+      if ($saved.Error) { $saveProblem = $saved.Error }
+      elseif ($saved.Conflicts.Count) { $saveProblem = "different files already saved in .claudedocs\e2e-pr${Pr}: $($saved.Conflicts -join ', ')" }
+      elseif ($saved.Copied -gt 0) { $done.Add("saved $($saved.Copied) e2e files to .claudedocs\e2e-pr$Pr") }
+    } catch { $saveProblem = $_.Exception.Message }
+    if ($saveProblem) {
+      Write-Host "  kept worktree $wtPath`: e2e artifacts not saved ($saveProblem)"
+    } else {
+      $junction = Join-Path $wtPath '.claude\hooks\node_modules'
+      if ((Test-Path $junction) -and (Get-Item $junction -Force).LinkType -eq 'Junction') { [System.IO.Directory]::Delete($junction, $false) }
+      git -C $RepoPath worktree remove $wtPath 2>&1 | Out-Host
+      if ($LASTEXITCODE -eq 0) { $done.Add("removed worktree $wtPath") } else { Write-Host "  could not remove worktree $wtPath" }
+    }
   }
 }
 if (git -C $RepoPath branch --list $branch) {
