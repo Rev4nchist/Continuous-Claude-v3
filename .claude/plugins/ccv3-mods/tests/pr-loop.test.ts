@@ -680,11 +680,13 @@ describe('pr-loop view', () => {
       props: { title: 'Agentic OS', isFocused: false, bodyColumns: 60, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 24 }, view: {} },
       viewport: { columns: 60, rows: 24 },
     })
+    // PRS left Overview by design: the watched changes read in plain words on the Work tab (CHANGES).
+    await pane.press({ key: 'tab-work' })
     const rows = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text).join(String.fromCharCode(10))
     await pane.unmount()
-    expect(rows).toMatch(/PRS/)
-    expect(rows).toMatch(/#12\s+● PENDING/)
-    expect(rows).toMatch(/#13\s+● LIMITED/)
+    expect(rows).toMatch(/CHANGES/)
+    expect(rows).toContain('Waiting for the review of change #12')
+    expect(rows).toContain('The review of change #13 did not finish.')
     const band = await $.ui.mount({
       plugin: 'ccv3-mods',
       surface: 'terminal',

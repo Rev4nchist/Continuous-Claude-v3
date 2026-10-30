@@ -1,8 +1,8 @@
 import { atom, read, update } from 'claude-code'
 import type { EngineInterface, On } from 'claude-code'
 
-import type { AgentRun, CacheState, HudState, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
-import { EMPTY_CACHE, cacheView } from '../hud/cache'
+import type { AgentRun, BoardLane, CacheState, FileTouch, HudState, KeeperRecord, OsAgent, OsBrief, OsGit, OsLane, OsPlan, OsStep, OsSteward, OsTask, OsTurn, PrWatch } from '../../types'
+import { EMPTY_CACHE, cacheView, hitRate } from '../hud/cache'
 import { hudParts, hudSpans } from '../hud/model'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { ledgerBandSpans, settle } from '../agent-ledger/model'
@@ -10,14 +10,17 @@ import type { AgentStatus } from 'claude-code'
 import type { HudPart } from '../hud/model'
 import { barSvg, ringSvg } from '../shared/glyphs'
 import { applyBrief, briefSummary, deriveChip, isModSubmission, markAsksAnswered, mergeParsed, parseTurnEnd } from './brief'
-import { bandLines } from './band-model'
+import { hudOrSeed, seedHud } from '../hud/seed'
+import { bandLines, compactLine } from './band-model'
+import type { BandState } from './band-model'
 import { gitInfo } from './gitinfo'
 import { SVG_TRACK, TONE, svgHex } from '../shared/tones'
 import { addTask, isQuiet, patchTask, planTitle, stepLabel, tasksFromTodos } from './model'
 import type { OsView } from './model'
+import { parseBoard } from './lanes-model'
 import { osPane, isTabId } from './os-tabs-model'
 import type { TabId, TabState } from './os-tabs-model'
-import { bandSpans, parseLanes } from './pane-model'
+import { bandSpans } from './pane-model'
 import type { Span, Tone } from './pane-model'
 import { drift, observe } from './steward'
 import type { Activity, Drift } from './steward'
@@ -28,7 +31,14 @@ const turn = atom({ plugin: 'ccv3-mods', key: 'turn' } as const, null as OsTurn 
 const steps = atom({ plugin: 'ccv3-mods', key: 'steps' } as const, [] as OsStep[])
 const ctx = atom({ plugin: 'ccv3-mods', key: 'ctx' } as const, null as number | null)
 const agents = atom({ plugin: 'ccv3-mods', key: 'agents' } as const, [] as OsAgent[])
+/** This session's lanes, from the lane board's `mine` subset (band and compact keeper read them). */
 const lanes = atom({ plugin: 'ccv3-mods', key: 'lanes' } as const, null as OsLane[] | null)
+/** Every lane the lane board listed at the last good read (the Work tab), and when that read happened. Written by refreshLanes only. */
+const board = atom({ plugin: 'ccv3-mods', key: 'board' } as const, null as BoardLane[] | null)
+const boardAt = atom({ plugin: 'ccv3-mods', key: 'boardAt' } as const, null as number | null)
+/** Touched Files (hooks/touched-files) and the keeper's compaction records (hooks/compact-keeper). Read only here: the same atoms those hooks declare and write. */
+const files = atom({ plugin: 'ccv3-mods', key: 'files' } as const, [] as FileTouch[])
+const compactions = atom({ plugin: 'ccv3-mods', key: 'compactions' } as const, [] as KeeperRecord[])
 /** The PRs the pr-loop module watches. Read only here: the same atom pr-loop declares and writes. */
 const prs = atom({ plugin: 'ccv3-mods', key: 'prs' } as const, [] as PrWatch[])
 /** Bumped every few seconds while a turn runs, so elapsed times redraw. */
@@ -101,6 +111,27 @@ const touch = async ($: EngineInterface): Promise<void> => {
 const isOff = async ($: EngineInterface): Promise<boolean> => (await $.env.get('CCV3_MODS_OFF')) === '1'
 
 const homeDir = async ($: EngineInterface) => (await $.env.get('USERPROFILE')) ?? (await $.env.get('HOME'))
+
+const BAND_LOG = '.claude/state/agentic-os/band-debug.log'
+const BAND_LOG_LINES = 200
+
+/**
+ * CCV3_MOD_BAND_DEBUG=1: one JSON line per band render, the newest 200 kept. Numbers and booleans only: no goal, path or name.
+ * Off by default. A failed write never touches the render, and nothing goes to the session.
+ */
+const logBand = async ($: EngineInterface, entry: Record<string, number | boolean>): Promise<void> => {
+  try {
+    if ((await $.env.get('CCV3_MOD_BAND_DEBUG')) !== '1') return
+    const home = await homeDir($)
+    if (!home) return
+    const path = `${home}/${BAND_LOG}`
+    const old = await $.fs.read(path).then(text => (typeof text === 'string' ? text : ''), () => '')
+    const kept = old.split('\n').filter(line => line.trim() !== '').slice(-(BAND_LOG_LINES - 1))
+    await $.fs.write(path, `${[...kept, JSON.stringify(entry)].join('\n')}\n`)
+  } catch {
+    // Diagnostics only.
+  }
+}
 
 /** Leaves ~/.claude/state/ccv3-mods/errors/<time>-<where>.json, so a failure no one sees still says what broke. */
 const noteError = async ($: EngineInterface, where: string, err: unknown) => {
@@ -231,8 +262,9 @@ const refreshAgents = async ($: EngineInterface): Promise<void> => {
 }
 
 /**
- * Reads this session's lanes from the CCv3 lane board, when the repo is there.
- * The one place that spawns lane.mjs, so the headless gate sits here.
+ * Reads the CCv3 lane board (every open lane, not only this session's), when the repo is there.
+ * The one place that spawns lane.mjs, so the headless gate sits here. A good read writes the `lanes` atom (this session's lanes: the band and the
+ * compact keeper read it), the `board` atom (all lanes: the Work tab) and the time of the read. A failed read writes none of them, so the pane keeps the last good board and says how old it is.
  */
 const refreshLanes = async ($: EngineInterface): Promise<void> => {
   try {
@@ -241,9 +273,13 @@ const refreshLanes = async ($: EngineInterface): Promise<void> => {
     const script = `${home}/continuous-claude/scripts/coordination/lane.mjs`
     if (!home || !(await $.fs.exists(script))) return
     const sessionId = await $.session.id()
-    const run = await $.process.run(['node', script, 'mine', '--json', '--as', sessionId], { timeoutMs: 5000 })
-    const parsed = run.exitCode === 0 ? parseLanes(run.stdout) : null
-    if (parsed) await update($, lanes, () => parsed)
+    const run = await $.process.run(['node', script, 'board', '--json', '--as', sessionId], { timeoutMs: 5000 })
+    const at = await $.clock.now()
+    const parsed = run.exitCode === 0 ? parseBoard(run.stdout, sessionId, at) : null
+    if (parsed === null) return
+    await update($, lanes, () => parsed.mine)
+    await update($, board, () => parsed.lanes)
+    await update($, boardAt, () => at)
   } catch {
     // Best effort: no board, no DB, or no node; the pane says "lane board not read".
   }
@@ -550,6 +586,8 @@ export const agenticOs = (on: On) => {
         await update($, steward, () => FRESH_STEWARD)
         await update($, refused, () => false)
         await update($, osTab, () => 'overview')
+        // The keeper's records belong to the conversation they watched: the new one has had no compaction.
+        await update($, compactions, () => [])
       }
       return next(e)
     }).catch(($, e, next) => next(e))
@@ -629,6 +667,8 @@ export const agenticOs = (on: On) => {
       await update($, ctx, () => e.context.percent ?? null)
     }
     // The HUD's cost and limits. Here, not in hooks/hud: a plugin holds one unmatched hook per event.
+    // A resumed session has no HUD yet: seed it first, so the measured cost and limits go over the seed.
+    await seedHud($)
     await update($, hud, now =>
       now === null
         ? now
@@ -675,11 +715,13 @@ export const agenticOs = (on: On) => {
     if (await isOff($)) return next(e)
     await read($, tick)
     const now = await view($)
-    const hudNow = await read($, hud)
+    // A render cannot write the atom: with none set (no session.start ran) it draws a seed, and a measure or step stores it.
+    const hudNow = await hudOrSeed($)
     const runs = await read($, agentRuns)
     // Finished runs alone don't keep the band up; a running one does.
     const quiet = isQuiet(now) && !runs.some(run => run.status === 'running')
-    // The core lines draw even when the session is quiet: GOAL not set is visible on purpose (PRD 5.5).
+    // The core lines draw even when the session is quiet: GOAL not set is visible on purpose (PRD 5.5), from 40 columns up.
+    // Under 40 columns the compact line (chip, ctx, 5h, 7d) takes the place of the narrow chip-and-goal line, so ctx never leaves the band; GOAL does.
     if (e.props.hasSurvey || e.props.maxRows < 1) return next(e)
     const elements = $.ui.resolve(e)
     const { Box, Text } = elements
@@ -695,24 +737,29 @@ export const agenticOs = (on: On) => {
       </Box>
     )
     const at = await $.clock.now()
-    const lines = bandLines(
-      {
-        chip: await chipNow($, now, at),
-        brief: await read($, brief),
-        tasks: now.tasks,
-        repo: (await read($, git))?.repo ?? null,
-        branch: (await read($, git))?.branch ?? null,
-        lane: now.lanes?.[0]?.id ?? null,
-        ctx: now.ctx,
-        costUsd: hudNow?.costUsd ?? null,
-        // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
-        fallback: null,
-        now: at,
-        activeAt: await read($, activeAt),
-      },
-      e.props.bodyColumns,
-    ).slice(0, Math.min(2, e.props.maxRows))
-    // Rows, in this priority: the core lines (PRD 5.3: they never move), then the HUD row, then the widget line, both below them.
+    const bandState: BandState = {
+      chip: await chipNow($, now, at),
+      brief: await read($, brief),
+      tasks: now.tasks,
+      repo: (await read($, git))?.repo ?? null,
+      branch: (await read($, git))?.branch ?? null,
+      lane: now.lanes?.[0]?.id ?? null,
+      ctx: now.ctx,
+      costUsd: hudNow?.costUsd ?? null,
+      // public.sessions.working_on would go here. Nothing reads it in the terminal yet.
+      fallback: null,
+      now: at,
+      activeAt: await read($, activeAt),
+      helpers: runs.filter(run => run.status === 'running').length,
+      limits: hudNow?.limits ?? null,
+    }
+    const cores = bandLines(bandState, e.props.bodyColumns)
+    // The core lines (PRD 5.3) draw when they fit with the HUD row: two lines + HUD = 3 rows (HUD off: 2). Under 40 columns there is one
+    // narrow core line with no ctx, so the compact line (it carries ctx, 5h and 7d) takes its place at every budget, HUD up or off.
+    // Less room: ONE compact line, then the HUD row after it.
+    const fullRows = cores.length === 2 ? (hudNow === null ? 2 : 3) : Infinity
+    const lines = e.props.maxRows >= fullRows ? cores : [compactLine(bandState, e.props.bodyColumns)]
+    // Rows, in this priority: the core lines, then the HUD row, then the widget line, both below them.
     // Rows come from the lines actually drawn: under 40 columns there is one core line, and its spare row goes to the HUD.
     const coreRows = lines.length
     const spare = e.props.maxRows - coreRows
@@ -745,6 +792,7 @@ export const agenticOs = (on: On) => {
     // With the HUD up, ctx lives in its ring, so the widget line leaves it out (line 1 shows it too). Its row comes after the HUD and the core lines.
     const widgetRoom = spare - (hudRow === null ? 0 : 1)
     const bandRow = quiet || widgetRoom < 1 ? null : spansRow('row-band', bandSpans(hudNow === null ? now : { ...now, ctx: null }, at, e.props.bodyColumns, ledgerBandSpans(runs)))
+    await logBand($, { maxRows: e.props.maxRows, bodyColumns: e.props.bodyColumns, hudNow: hudNow !== null, quiet, lines: coreRows + (hudRow === null ? 0 : 1) + (bandRow === null ? 0 : 1) })
     return (
       <Box flexDirection="column">
         {lines.map((line, i) => spansRow(`row-core-${i + 1}`, line))}
@@ -769,6 +817,8 @@ export const agenticOs = (on: On) => {
     const now = await view($)
     const at = await $.clock.now()
     const where = await read($, git)
+    // The same source as the band (the atom, else a seed read once), so the ROOM section and the band agree on cost and limits.
+    const hudState = await hudOrSeed($)
     const state: TabState = {
       view: now,
       chip: await chipNow($, now, at),
@@ -776,29 +826,37 @@ export const agenticOs = (on: On) => {
       repo: where?.repo ?? null,
       branch: where?.branch ?? null,
       worktree: where?.worktree ?? null,
-      costUsd: (await read($, hud))?.costUsd ?? null,
+      costUsd: hudState?.costUsd ?? null,
       activeAt: await read($, activeAt),
       drift: await driftNow($),
       // The briefing's long-running and finished-run rows need the run times, which the agents list does not hold.
       agentRuns: await read($, agentRuns),
+      // The Session and Work tabs: the keeper's records, the lane board and the age of its last good read, the touched files, cache use and the allowance.
+      compactions: await read($, compactions),
+      board: await read($, board),
+      boardAt: await read($, boardAt),
+      files: await read($, files),
+      cachePct: hitRate(await read($, cache)),
+      limits: hudState?.limits ?? [],
     }
     // bodyRows is the engine's own measure of the body: frame rows less its border, tab and close rows.
     // paddingX takes one column each side.
-    const { strip, body } = osPane(selected, state, at, e.props.bodyColumns - 2, e.props.scroll.bodyRows)
-    // A live tab is a Button (a press, or its digit while the pane has the focus); a tab not built yet is plain Text and cannot be pressed.
-    const select = (id: TabId) => () => void update($, osTab, () => id)
+    const { strip, body, footer } = osPane(selected, state, at, e.props.bodyColumns - 2, e.props.scroll.bodyRows)
+    // Every tab is a Button (a press, or its digit while the pane has the focus). The board is read at /os and at a press of Work, so it is not stale when Dave looks.
+    const select = (id: TabId) => () => {
+      void update($, osTab, () => id)
+      if (id === 'work') void refreshLanes($)
+    }
     return (
       <Box flexDirection="column" paddingX={1}>
         {strip.map((items, i) => (
           <Box key={`row-tabs-${i}`} flexDirection="row" gap={1}>
             {items.map(item =>
-              item.enabled && isTabId(item.id) ? (
+              isTabId(item.id) ? (
                 <Button key={`tab-${item.id}`} plain hotkey={item.hotkey} onPress={select(item.id)}>
                   {spans(item.spans, 't')}
                 </Button>
-              ) : (
-                <Text key={`tab-${item.id}`}>{spans(item.spans, 't')}</Text>
-              ),
+              ) : null,
             )}
           </Box>
         ))}
@@ -808,6 +866,11 @@ export const agenticOs = (on: On) => {
             {row.right ? line(row.right) : null}
           </Box>
         ))}
+        {footer ? (
+          <Box key="row-footer" flexDirection="row">
+            {line(footer.left)}
+          </Box>
+        ) : null}
       </Box>
     )
   })

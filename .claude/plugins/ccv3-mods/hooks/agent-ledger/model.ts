@@ -16,9 +16,12 @@ export const newRun = (
   spec: AgentRun['spec'],
   startedAt: number,
   toolUseId?: string,
+  workflowRunId?: string,
 ): AgentRun => ({
   id,
   ...(toolUseId === undefined ? {} : { toolUseId }),
+  // Empty outside a real workflow run: stored only when the engine gave one.
+  ...(workflowRunId === undefined || workflowRunId === '' ? {} : { workflowRunId }),
   type,
   description,
   model,
