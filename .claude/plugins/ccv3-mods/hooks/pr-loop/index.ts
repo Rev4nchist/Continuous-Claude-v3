@@ -242,7 +242,7 @@ const queueAsk = async ($: EngineInterface, ask: CheckpointAsk): Promise<void> =
 
 /**
  * The checkpoint part of one PR's check: a closed PR drops its record, grant and asks; an ask whose head moved leaves the
- * queue; a record that has run out of its budget, or waited 15 minutes for CodeRabbit, queues one question for Dave.
+ * queue; a record that has run out of its budget, or waited 30 minutes for CodeRabbit, queues one question for Dave.
  * The watcher never posts a review request: the mod posts only on Dave's press.
  */
 const asking = async ($: EngineInterface, status: PrStatus, now: number): Promise<void> => {

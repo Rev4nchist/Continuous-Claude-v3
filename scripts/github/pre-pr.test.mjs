@@ -771,7 +771,9 @@ test('B5: a broken CLI (cr usage fails with an exit code) is stamped cli-error a
   const { result } = await prePr(repo, { crRunner: (o) => (o.args[0] === 'usage' ? { status: 1, stdout: '', stderr: 'not authenticated' } : { status: 0, stdout: NDJSON_OK, stderr: '' }) });
   assert.equal(result.ok, true, result.lines.join('\n'));
   assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'cli-error');
-  assert.equal(hookVerdict(repo.dir).allow, false);
+  const v = hookVerdict(repo.dir);
+  assert.equal(v.allow, false);
+  assert.match(v.reason, new RegExp('skipped the CodeRabbit CLI review.*cli-error'));
 });
 
 test('B6: runs that ended awaiting_confirmation, with outcome failed, or with unreviewed files give 0 finished runs, and the built hook denies the resulting cap stamp', async () => {
@@ -1063,7 +1065,8 @@ function hookVerdict(repoDir, command) {
   if (command === undefined) {
     const bodyFile = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-hookbody-')), 'body.md');
     writeFileSync(bodyFile, STAMPED_BODY);
-    command = `gh pr create --body-file "${bodyFile.replace(/\\/g, '/')}"`;
+    // A draft create: a CCv3 create that is not a draft is denied for that reason first, which these checks do not test.
+    command = `gh pr create --draft --body-file "${bodyFile.replace(/\\/g, '/')}"`;
   }
   const log = path.join(mkdtempSync(path.join(os.tmpdir(), 'prepr-hooklog-')), 'g.jsonl');
   // A busy machine (the full suite runs files in parallel) can pass the hook's 2 s git limit; a git timeout on a PR
@@ -1124,7 +1127,9 @@ test('B3: a no-changes SKIP is stamped with reason no-changes and the built hook
   const { result } = await prePr(repo, { crRunner: (o) => (o.args[0] === 'usage' ? { status: 0, stdout: USAGE_OK, stderr: '' } : { status: 0, stdout: empty, stderr: '' }) });
   assert.equal(result.ok, true, result.lines.join('\n'));
   assert.equal(JSON.parse(readFileSync(path.join(repo.dir, STAMP_REL), 'utf8')).cr_skip_reason, 'no-changes');
-  assert.equal(hookVerdict(repo.dir).allow, false);
+  const v = hookVerdict(repo.dir);
+  assert.equal(v.allow, false);
+  assert.match(v.reason, new RegExp('skipped the CodeRabbit CLI review.*no-changes'));
 });
 
 // ---------- runPrePr: real git, fake runners ----------

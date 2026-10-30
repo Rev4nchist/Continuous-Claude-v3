@@ -11,6 +11,7 @@ import {
   ENGINE_TIMEOUT_MS,
   GIT_TIMEOUT_MS,
   LOCK_FAILED,
+  MARKER_DENY,
   NEED_PR,
   PANE,
   PATHWAY_DENY,
@@ -36,6 +37,7 @@ import {
   lockDeny,
   lockWarn,
   mayBeGated,
+  namesMarker,
   namesPathway,
   optionLabel,
   optionsInOrder,
@@ -569,7 +571,10 @@ const patternsOf = async ($: EngineInterface, root: string, command: string, sha
 }
 
 /**
- * Only a boolean true enforces. A missing or unreadable config is warn mode, as the pre-PR gate.
+ * Only a boolean true enforces. A missing or unreadable config is warn mode HERE, unlike the pre-PR gate. With no readable config, the gate
+ * enforces a command that names CCv3, a self-confirm, and any command that runs in a CCv3 checkout. The mod has no lexer to read a repo
+ * name or a cwd, so it only warns. For those commands the gate still denies, and the two layers together deny. A readable config keeps
+ * its own value in both layers.
  * The config is the SESSION ROOT's, not the command's cwd. The PR B gate reads the git toplevel of the cwd, so a Bash call that `cd`s into
  * another worktree can meet a different `enforce` here than in the gate below. Accepted: the mod has no shell lexer to find the cwd, and
  * the gate still decides for that cwd; the mod only warns or denies by the root it was started in.
@@ -605,6 +610,7 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
     if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
+    if (namesMarker(command)) return { deny: MARKER_DENY }
     if (!mayBeGated(command)) return null
     // The root lookup is not rootOf(): that one answers "no checkout" for a lookup that threw. Here only a clean `false` means "not CCv3";
     // a throw from session.root or fs.exists reaches the catch below and denies, as the other failures after a prefilter hit do.

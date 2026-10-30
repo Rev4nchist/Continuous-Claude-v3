@@ -60,3 +60,24 @@ test('the mod holds the same ROUTER_NONE_UNVERIFIED_NOTE, NONE_NO_CHECKPOINT_NOT
     assert.equal(modelHolds(name), RS[name], `model.ts ${name} differs from review-status.mjs`);
   }
 });
+
+// PR D (Dave 2026-10-29): the opening ask waits 30 minutes. The wait is a constant and the ask text names it; one without the other
+// tells Dave a time that the mod does not wait.
+test('the mod waits OPENING_WAIT_MS before the opening ask and its ask text names the same number of minutes', () => {
+  const wait = /export const OPENING_WAIT_MS = (\d+) \* 60_000/.exec(MODEL);
+  assert.ok(wait, 'model.ts no longer declares OPENING_WAIT_MS as <minutes> * 60_000');
+  const said = /CodeRabbit has not started on #\$\{status\.pr\} (\d+) minutes after ready/.exec(MODEL);
+  assert.ok(said, 'model.ts no longer words the opening ask as "has not started on #N <minutes> minutes after ready"');
+  assert.equal(said[1], wait[1], 'the ask text and OPENING_WAIT_MS name different minutes');
+  assert.equal(Number(wait[1]), 30);
+});
+
+// PR D review C9: where only the CLI fix line blocks the carry, review-status.mjs says to run cr-fix.mjs and post no review. The mod tells
+// the model the same only while it recognises that reason, so its prefix must be the start of the real reason.
+test('the mod CARRY_REASON_PREFIX is the start of the reason review-status.mjs writes when only the CLI fix line blocks the carry', async () => {
+  const RS = await import('./review-status.mjs');
+  assert.equal(typeof RS.noReviewCliReason, 'function', 'review-status.mjs must export noReviewCliReason');
+  const prefix = modelHolds('CARRY_REASON_PREFIX');
+  assert.ok(RS.noReviewCliReason(221).startsWith(prefix), `the reason "${RS.noReviewCliReason(221)}" does not start with "${prefix}"`);
+  assert.match(RS.noReviewCliReason(221), /cr-fix\.mjs --pr 221/, 'the reason no longer names cr-fix.mjs');
+});

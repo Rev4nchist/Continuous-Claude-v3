@@ -71,6 +71,7 @@ type Status = {
   labels?: string[]
   coderabbitRequests?: number
   coderabbitRounds?: number
+  coderabbit?: string | null
 }
 
 const PROOF_REASON = 'PR body proof: no "Proof type:" line. Add the Evidence block from pr-and-commit-style.md (types: bugfix, feature, refactor, ui, harness, docs)'
@@ -1212,7 +1213,7 @@ describe('pr-loop outside-diff findings', () => {
 // CW2  review:none with no router state: the STALLED line names the router re-run, never "No review on the head"
 // CW3  a PR that leaves draft restarts the 60 minute clock (it is not STALLED at its first ready check)
 // CW4  the round ask fires at budget + 1 (rounds 3 of 1+2 -> "Round 4 of 1+2"), not before; the line says Dave decides in the pane
-// CW5  the opening ask is queued 15 minutes after ready on a coderabbit record with 0 rounds
+// CW5  the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds: none at 29 minutes, none while the CodeRabbit status is pending
 // CW6  a draft's pr_status text never tells the model to post @coderabbitai review
 // CW7  a round grant changes the REVIEWED line to "Dave allowed round 4"
 // CW8  a closed PR deletes its checkpoint record and grant
@@ -1231,7 +1232,7 @@ describe('pr-loop checkpoint states', () => {
   const NO_REVIEW = 'no CodeRabbit PR-bot review of the head commit (CLI/plugin output does not count). After a push, post "@coderabbitai review" once to start one'
   const record = (over: Record<string, unknown> = {}) => ({
     pr: 7, state: 'applied', head: HEAD_A, pathway: 'coderabbit', label: 'review:coderabbit', budget: [1, 2], decided_by: 'default',
-    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 11 * MIN, ...over,
+    capacity: { count: 38, band: 'ok', source: 'manual', date: '2026-10-25' }, session: SESSION, appliedAt: NOW - 26 * MIN, ...over,
   })
   const cw = (on: On, opts: Opts = {}) => {
     const w = world(on, opts)
@@ -1301,17 +1302,70 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits[0]).toMatch(/post one @coderabbitai review/i)
   })
 
-  // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 15 minutes at the record's `appliedAt`, the moment the mod's
+  // PR D review C9: READY carries an earlier Minor-only review, so a pr_watch line must not order a paid @coderabbitai review where the carry says to post nothing.
+  const CARRY_REASON = 'no CodeRabbit PR-bot review of the head commit; the earlier review carries once the PR body has a clean CLI fix review line. Run node scripts/github/cr-fix.mjs --pr 7 and put its line in the PR body (or fix its findings, then run it again); do not request a review'
+
+  test('CW4c a REVIEWED line with a round left posts a review only after a Major or a fix over 30 lines, else it runs cr-fix.mjs', async ($, on) => {
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [REVIEWED_AT(1)] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('Rounds used 1 of 1+1')
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).toMatch(/only if the last round had a Major or Critical or the fix is over 30 lines/)
+  })
+
+  test('CW4d STALLED on the carry reason tells the model to run cr-fix.mjs and never to post @coderabbitai review', async ($, on) => {
+    const carry = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbitRounds: 1, reasons: [CARRY_REASON] })
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [carry] } })
+    await start($)
+    await ticks(clock, 13)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).toMatch(/paste its line/i)
+    expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
+  })
+
+  test('CW4e LIMITED on the carry reason also runs cr-fix.mjs and never posts @coderabbitai review', async ($, on) => {
+    const carry = status(7, { routing: CR_ROUTE, routedReviewed: false, rateLimited: true, coderabbitRounds: 1, reasons: [CARRY_REASON] })
+    const { clock, seen } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ budget: [1, 1] }) }, script: { 7: [carry] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    expect(seen.submits[0]).toContain('cr-fix.mjs')
+    expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
+  })
+
+  // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 30 minutes at the record's `appliedAt`, the moment the mod's
   // --apply succeeded. That is when the PR left draft (plan 4.2 "since the PR left draft"), not the first watcher check and not the push.
-  test('CW5 the opening ask is queued 15 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
+  test('CW5 the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
     const quiet = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [NO_REVIEW] })
     const { clock, seen, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [quiet] } })
     await start($)
     await clock.advance(TICK)
     expect(asks(store).map(ask => ask.kind)).toEqual(['opening'])
     expect(asks(store)[0]!.text).toContain('Post one @coderabbitai review?')
+    expect(asks(store)[0]!.text).toContain('30 minutes after ready')
     expect(seen.submits).toEqual([])
     expect(comments(seen)).toEqual([])
+  })
+
+  test('CW5b no opening ask at 29 minutes after ready; the ask at 30', async ($, on) => {
+    const quiet = status(7, { routing: CR_ROUTE, routedReviewed: false, reasons: [NO_REVIEW] })
+    const early = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record({ appliedAt: NOW - 24 * MIN }) }, script: { 7: [quiet] } })
+    await start($)
+    await early.clock.advance(TICK)
+    expect(asks(early.store)).toEqual([])
+    await early.clock.advance(TICK)
+    expect(asks(early.store).map(ask => ask.kind)).toEqual(['opening'])
+  })
+
+  test('CW5c no opening ask while the CodeRabbit status is pending', async ($, on) => {
+    const pending = status(7, { routing: CR_ROUTE, routedReviewed: false, coderabbit: 'pending', reasons: [NO_REVIEW] })
+    const { clock, store } = cw(on, { store: { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), 'checkpoint:pr:7': record() }, script: { 7: [pending] } })
+    await start($)
+    await ticks(clock, 2)
+    expect(asks(store)).toEqual([])
   })
 
   test('CW6 a draft status text never tells the model to post @coderabbitai review', async ($, on) => {

@@ -24,7 +24,7 @@
 //   policy = review-router.config.json (classes, deep_enabled, greptile, budget, checkpoint, coderabbit)
 //            + path_filters: string[]         from pathFiltersFrom(.coderabbit.yaml)
 //
-//   result = { head, class, matched, size:{files,lines}, checks, cli, credits (the creditsState() object, so credits.u3_due follows facts.now),
+//   result = { head, class, matched, size:{files,lines,added}, checks, cli, credits (the creditsState() object, so credits.u3_due follows facts.now),
 //              capacity:{count,band,warning,...}, recommended, options:[{pathway,label,available,cost,reason}],
 //              why:[string], budget:[coderabbit,greptile], config_drift }
 //   pathway: 'none' | 'coderabbit' | 'both' | 'wait'. band: 'unknown' | 'ok' | 'warn' | 'high'.
@@ -57,12 +57,13 @@
 //       gh call shapes (pinned; every call ends with '-R', DEFAULT_REPO so gh never picks the repo from the cwd remotes, where origin is parcadei):
 //                                read   ['pr','view',String(pr),'--json','isDraft,headRefOid','-R',repo] -> stdout {"isDraft":bool,"headRefOid":sha}
 //                                label  ['pr','edit',String(pr),'--add-label',<label>,'-R',repo]
+//                                comment ['pr','comment',String(pr),'--body',<marker + visible line>,'-R',repo]  (PR D: the router reads the marker)
 //                                ready  ['pr','ready',String(pr),'-R',repo]
-//       Order: read, refuse (not a draft, or headRefOid != record.head), label, ready. A failed label never reaches ready.
+//       Order: read, refuse (not a draft, or headRefOid != record.head), label, comment, ready. A failed label or comment never reaches ready.
 //   CLI gh seam: env PR_CHECKPOINT_GH=<script.mjs> runs `node <script.mjs> <gh args>` in place of gh (tests; never a real gh).
 //   Exit codes: 0 done, 1 refused or gh failed, 2 bad usage (before anything is read or written), 3 internal error.
 //
-// PR B, config: checkpoint.enforce (boolean, false for the warn week) in review-router.config.json; read by the pre-pr-gate hook.
+// PR B, config: checkpoint.enforce (boolean; false was the warn week, PR D flips it to true) in review-router.config.json; read by the pre-pr-gate hook.
 // PR B, Dave decision 2026-10-28: R2 (parser) budget 1+0 wins over R3 (critical); R4 (r3 class) still gives 1+2.
 //
 // How the unit can fail, and the test that catches it:
@@ -71,7 +72,7 @@
 //   R1  docs class is reviewed                                                    -> T1
 //   R1  a diff with only filtered paths (dist, lock files) is reviewed            -> T2
 //   size counts lines of filtered paths, or counts a rename once                  -> T2b, T13
-//   R5  the class budget lookup is wrong (normal 1+1, infra and steering 1+2)     -> T2b, T2c
+//   R5  the class budget lookup is wrong (normal, infra, steering 1+1; r3 1+2)    -> T2b, PD10
 //   R1  beats R2 or R3 (a thoughts/ file next to a critical or parser file)       -> T3c
 //   R1  thoughts/, artifacts/, .claudedocs/ only is reviewed                      -> T3
 //   R1  a Dependabot PR is reviewed                                               -> T3b
@@ -82,7 +83,18 @@
 //   R3  a held Greptile hides its reason                                          -> T7
 //   Greptile "available" on unknown credits, or with under 3 credits left         -> T9, T9b
 //   the u2 hold skips a non-r3 class, or blocks r3                                -> T10
-//   R5  the capacity bands (39/40/49/50) shift, or "wait" is not first at 50      -> T11
+//   R5  the capacity bands (29/30/39/40) shift, or "wait" is not first at 40      -> PD8 (was T11 at 40/50; PR D moved the bands to 30/40)
+// PR D (rule RS, the small PR):
+//   RS  missing, or a small PR with a clean CLI is not none                       -> PD1
+//   RS  off by one on 3 files or 30 added lines                                   -> PD2
+//   RS  counts deletions, or filtered files                                       -> PD3, PD4
+//   RS  a Major, Critical or missing CLI result still gets none                   -> PD5
+//   RS  beats R1 to R4 or Dependabot                                              -> PD6
+//   RS  coderabbit option costs the class budget, not 1+0                         -> PD7
+//   RS  none waits at a high 7-day count (Dave decision a)                        -> PD9
+//   steering and infra budget is not 1+1, or r3 is not 1+2                        -> PD10
+//   the budget _doc keeps "extra after fix pushes"                                -> PD12
+//   the CLI --json loses the small-PR result                                      -> PD11
 //   "wait" or "none" leaks into R2, R3 or R4 results (both are R5 only)           -> T11b
 //   an unknown 7-day count changes a rule                                         -> T12
 //   a rename's old path is not classified                                         -> T13
@@ -143,7 +155,7 @@ async function policy({ deep = false, used = null, count = null } = {}) {
     ...LIVE,
     deep_enabled: deep,
     greptile: { ...LIVE.greptile, credits_used_manual: used },
-    coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: count },
+    coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: count, reviews_7d_manual_date: null },
     checkpoint: { ...LIVE.checkpoint, parser: ['lib/lexer/**'] },
     path_filters: pathFiltersFrom(YAML),
   };
@@ -165,6 +177,13 @@ const optionOf = (r, p) => r.options.find((o) => o.pathway === p);
 const CRITICAL = '.claude/hooks/src/pre-pr-gate.ts';
 const SQL = 'db/migrations/001_init.sql';
 const PARSER = 'lib/lexer/tokenize.mjs';
+// PR D: a PR of 3 files or fewer and 30 added lines or fewer is "small" (rule RS). R5 tests need a PR over that limit.
+// 4 files, 40 added lines, 2 deleted lines, class normal.
+const R5_FILES = [file('scripts/a.mjs', 10, 2), file('scripts/b.mjs', 10), file('scripts/c.mjs', 10), file('scripts/d.mjs', 10)];
+/** `n` files of 10 added lines each, all under `dir` with extension `ext`. */
+const filesIn = (dir, ext, n = 3) => Array.from({ length: n }, (_, i) => file(`${dir}/f${i}.${ext}`, 10));
+const CLEAN = { bySeverity: { minor: 1 } };
+const MAJOR = { bySeverity: { major: 1 } };
 
 test('T1 (R1): a docs-only PR gets none and costs nothing', async () => {
   const r = await run([file('docs/guide.md', 40)]);
@@ -181,21 +200,14 @@ test('T2 (R1): a dist-only diff is 0 reviewable lines and gets none, though its 
   assert.equal(r.recommended, 'none', 'R1 wins over R5 when nothing is reviewable');
 });
 
-test('T2b: size counts additions and deletions of unfiltered paths only', async () => {
-  const r = await run([file('scripts/a.mjs', 10, 2), file('.claude/hooks/dist/x.mjs', 500), file('package-lock.json', 900)]);
-  assert.deepEqual(r.size, { files: 1, lines: 12 });
+test('T2b: size counts additions and deletions of unfiltered paths only (PD: moved to R5_FILES; size gains `added`)', async () => {
+  const r = await run([...R5_FILES, file('.claude/hooks/dist/x.mjs', 500), file('package-lock.json', 900)]);
+  assert.deepEqual(r.size, { files: 4, lines: 42, added: 40 });
   assert.equal(r.recommended, 'coderabbit');
   assert.deepEqual(r.budget, [1, 1], 'class normal: budget 1+1');
 });
 
-test('T2c (R5): the class budget comes from config: infra and steering get 1+2, not the normal 1+1', async () => {
-  for (const [p, cls] of [['.github/workflows/x.yml', 'infra'], ['.claude/agents/x.md', 'steering']]) {
-    const r = await run([file(p, 10)]);
-    assert.equal(r.class, cls, p);
-    assert.equal(r.recommended, 'coderabbit', p);
-    assert.deepEqual(r.budget, [1, 2], p);
-  }
-});
+// T2c is replaced by PD10 (the steering and infra budget is 1+1 now, and the PR must be over the small limit to reach R5).
 
 test('T3 (R1): thoughts/, artifacts/ and .claudedocs/ only get none (a non-markdown .claudedocs file is class normal)', async () => {
   for (const p of ['thoughts/shared/handoff.yaml', 'artifacts/run/result.json', '.claudedocs/probe-output.json']) {
@@ -224,7 +236,7 @@ test('T3d (R1, Dave decision 3): a Dependabot PR gets none even when it touches 
 test('T3c: R1 applies only when no other rule matches: a thoughts/ file next to a critical or parser file is reviewed', async () => {
   const crit = await run([file('thoughts/x.yaml', 30), file(CRITICAL, 20)]);
   assert.equal(crit.recommended, 'coderabbit', 'R3 beats R1');
-  assert.deepEqual(crit.budget, [1, 2]);
+  assert.deepEqual(crit.budget, [1, 1], 'PD: the steering class budget is 1+1 now');
   const parser = await run([file('thoughts/x.yaml', 30), file(PARSER, 20)]);
   assert.equal(parser.recommended, 'coderabbit', 'R2 beats R1');
   assert.deepEqual(parser.budget, [1, 0]);
@@ -291,7 +303,7 @@ test('T8 (R3): a critical file with Greptile available gives both', async () => 
   const r = await run([file(CRITICAL, 30)], {}, { deep: true, used: 10 });
   assert.equal(r.recommended, 'both');
   assert.equal(optionOf(r, 'both').available, true);
-  assert.deepEqual(r.budget, [1, 2]);
+  assert.deepEqual(r.budget, [1, 1], 'PD: the steering class budget is 1+1 now');
 });
 
 test('T9: deep_enabled true with unknown credits never gives an available Greptile option', async () => {
@@ -319,24 +331,27 @@ test('T10: at u2 a non-r3 class is held with the credit reason; r3 is not held',
   assert.equal(r3.recommended, 'both');
 });
 
-test('T11: the capacity bands: 39 no change, 40 and 49 warn, 50 makes wait the default', async () => {
-  const at = (count, cli = { bySeverity: { major: 1 } }) => run([file('scripts/a.mjs', 20)], { cli }, { count });
-  const r39 = await at(39);
-  assert.equal(r39.capacity.band, 'ok');
-  assert.ok(!r39.capacity.warning);
-  assert.equal(r39.recommended, 'coderabbit');
-  for (const n of [40, 49]) {
+// PD8 replaces T11 (PR D): the bands moved from 40/50 to 30/40, and the PR must be over the small limit (R5_FILES).
+test('PD8 (R5, replaces T11): the capacity bands: 29 no change, 30 and 39 warn, 40 makes wait the default', async () => {
+  const at = (count, cli = MAJOR) => run(R5_FILES, { cli }, { count });
+  const r29 = await at(29);
+  assert.equal(r29.capacity.band, 'ok');
+  assert.ok(!r29.capacity.warning);
+  assert.equal(r29.recommended, 'coderabbit');
+  for (const n of [30, 39]) {
     const r = await at(n);
     assert.equal(r.capacity.band, 'warn', String(n));
-    assert.match(r.capacity.warning, /6\/h at 40, 4\/h at 50/, String(n));
+    assert.match(r.capacity.warning, /warn at 30/, String(n));
+    assert.equal(r.capacity.warning, `CodeRabbit 7-day count is ${n}: warn at 30; the rate drops to 6/h at 40.`, String(n));
     assert.equal(r.recommended, 'coderabbit', `${n}: a warning never blocks or changes the default`);
   }
-  const r50 = await at(50);
-  assert.equal(r50.capacity.band, 'high');
-  assert.equal(r50.recommended, 'wait');
-  assert.equal(r50.options[0].pathway, 'wait');
-  assert.equal(r50.options[1].pathway, 'coderabbit', 'option 2 is the rule pathway');
-  assert.ok(!pathways(r50).includes('none'), 'a non-clean CLI offers no none');
+  const r40 = await at(40);
+  assert.equal(r40.capacity.band, 'high');
+  assert.equal(r40.recommended, 'wait');
+  assert.equal(r40.options[0].pathway, 'wait');
+  assert.equal(r40.options[1].pathway, 'coderabbit', 'option 2 is the rule pathway');
+  assert.ok(!pathways(r40).includes('none'), 'a non-clean CLI offers no none');
+  assert.ok(r40.why.some((w) => /40 or more/.test(w)), r40.why.join(' | '));
   const clean = await at(60, { bySeverity: {} });
   assert.deepEqual(pathways(clean).slice(0, 3), ['wait', 'coderabbit', 'none'], 'option 3 is none when the CLI is clean');
 });
@@ -352,9 +367,139 @@ test('T11b: at 50 the wait default and the none option belong to R5 only; R2, R3
   }
 });
 
-test('T12: an unknown 7-day count changes no rule', async () => {
-  const unknown = await run([file('scripts/a.mjs', 20)], {}, { count: null });
-  const known = await run([file('scripts/a.mjs', 20)], {}, { count: 10 });
+// ---------- PR D: rule RS (a small PR with a clean CLI review gets none) ----------
+
+test('PD1 (RS): 3 files and 30 added lines with a clean CLI give none at budget 0+0; coderabbit is option 2; any class normal, steering or infra', async () => {
+  for (const [name, files] of [['normal', filesIn('scripts', 'mjs')], ['steering', filesIn('.claude/agents', 'md')], ['infra', filesIn('.github/workflows', 'yml')]]) {
+    const r = await run(files, { cli: CLEAN });
+    assert.equal(r.class, name);
+    assert.equal(r.size.added, 30, name);
+    assert.equal(r.recommended, 'none', name);
+    assert.deepEqual(r.budget, [0, 0], name);
+    assert.deepEqual(pathways(r).slice(0, 2), ['none', 'coderabbit'], name);
+    assert.ok(r.why.some((w) => /small/i.test(w)), `${name}: ${r.why.join(' | ')}`);
+  }
+  const zero = await run(filesIn('scripts', 'mjs'), { cli: { bySeverity: {} } });
+  assert.equal(zero.recommended, 'none', 'a CLI run with no findings is clean');
+});
+
+test('PD2 (RS): the limit is exact: 4 files, or 31 added lines, fall to R5', async () => {
+  const four = await run(filesIn('scripts', 'mjs', 4).map((f) => ({ ...f, additions: 5 })), { cli: CLEAN });
+  assert.equal(four.recommended, 'coderabbit', '4 files of 5 lines');
+  assert.ok(!four.why.some((w) => /small/i.test(w)), four.why.join(' | '));
+  assert.deepEqual(four.budget, [1, 1]);
+  const thirtyOne = await run([file('scripts/a.mjs', 31)], { cli: CLEAN });
+  assert.equal(thirtyOne.recommended, 'coderabbit', '1 file of 31 added lines');
+  assert.ok(!thirtyOne.why.some((w) => /small/i.test(w)), thirtyOne.why.join(' | '));
+  assert.equal((await run([file('scripts/a.mjs', 30)], { cli: CLEAN })).recommended, 'none', '30 added lines is still small');
+  assert.equal((await run(filesIn('scripts', 'mjs', 3), { cli: CLEAN })).recommended, 'none', '3 files is still small');
+});
+
+test('PD3 (RS): deletions do not count toward the limit: +30 -200 is small', async () => {
+  const r = await run([file('scripts/a.mjs', 30, 200)], { cli: CLEAN });
+  assert.equal(r.size.added, 30);
+  assert.equal(r.size.lines, 230, 'lines still counts additions plus deletions');
+  assert.equal(r.recommended, 'none');
+  const over = await run([file('scripts/a.mjs', 31, 0)], { cli: CLEAN });
+  assert.equal(over.recommended, 'coderabbit');
+});
+
+test('PD4 (RS): filtered files (dist, lock files) count toward neither the file limit nor the added limit', async () => {
+  const r = await run([...filesIn('scripts', 'mjs', 3), file('.claude/hooks/dist/x.mjs', 500), file('package-lock.json', 900)], { cli: CLEAN });
+  assert.deepEqual(r.size, { files: 3, lines: 30, added: 30 });
+  assert.equal(r.recommended, 'none');
+});
+
+test('PD5 (RS): a Major, a Critical or a missing CLI result on a small PR gives coderabbit at 1+0 and offers no none', async () => {
+  for (const [label, cli] of [['major', { bySeverity: { major: 1 } }], ['critical', { bySeverity: { critical: 1 } }], ['no CLI result', null]]) {
+    const r = await run(filesIn('scripts', 'mjs'), { cli });
+    assert.equal(r.recommended, 'coderabbit', label);
+    assert.deepEqual(r.budget, [1, 0], label);
+    assert.ok(!pathways(r).includes('none'), label);
+    assert.deepEqual(pathways(r).slice(0, 2), ['coderabbit', 'both'], label);
+    assert.deepEqual(optionOf(r, 'coderabbit').cost, [1, 0], label);
+    assert.ok(r.why.some((w) => /Major|Critical|no (completed )?CLI/i.test(w)), `${label}: ${r.why.join(' | ')}`);
+  }
+});
+
+test('PD6 (RS): RS never beats a stronger rule: critical, parser, r3, docs and Dependabot files at 5 lines keep their result', async () => {
+  const crit = await run([file(CRITICAL, 5)], { cli: CLEAN });
+  assert.equal(crit.recommended, 'coderabbit', 'R3');
+  assert.deepEqual(crit.budget, [1, 1]);
+  assert.ok(!pathways(crit).includes('none'));
+  const parser = await run([file(PARSER, 5)], { cli: CLEAN });
+  assert.equal(parser.recommended, 'coderabbit', 'R2');
+  assert.deepEqual(parser.budget, [1, 0]);
+  assert.ok(!pathways(parser).includes('none'));
+  const sql = await run([file(SQL, 5)], { cli: CLEAN });
+  assert.equal(sql.class, 'r3');
+  assert.equal(sql.recommended, 'coderabbit', 'R4');
+  assert.deepEqual(sql.budget, [1, 2]);
+  assert.ok(!pathways(sql).includes('none'));
+  const docs = await run([file('docs/guide.md', 5)], { cli: CLEAN });
+  assert.equal(docs.recommended, 'none', 'R1');
+  assert.ok(docs.why.some((w) => /Class docs/.test(w)), docs.why.join(' | '));
+  const dep = await run([file('package.json', 3, 3)], { dependabot: true, cli: CLEAN });
+  assert.deepEqual(pathways(dep), ['none'], 'Dependabot offers none only');
+  const quiet = await run([file('.claudedocs/probe-output.json', 5)], { cli: CLEAN });
+  assert.ok(quiet.why.some((w) => /\.claudedocs/.test(w)), `R1 text, not RS: ${quiet.why.join(' | ')}`);
+});
+
+test('PD7 (RS): the coderabbit option of a clean small PR costs 1+0, and --confirm coderabbit records budget 1+0', async () => {
+  const r = await run(filesIn('scripts', 'mjs'), { cli: CLEAN });
+  assert.deepEqual(optionOf(r, 'coderabbit').cost, [1, 0], 'the class budget is 1+1, but RS prices a chosen review at 1+0');
+  assert.deepEqual(optionOf(r, 'none').cost, [0, 0]);
+  const c = confirm('coderabbit', 'dave', { files: filesIn('scripts', 'mjs') });
+  assert.equal(c.status, 0, `${c.stdout} ${c.stderr}`);
+  assert.deepEqual(recordOf(c).budget, [1, 0]);
+  assert.equal(recordOf(c).recommended, 'none');
+  const n = confirm('none', 'default', { files: filesIn('scripts', 'mjs') });
+  assert.equal(n.status, 0, `--by default may confirm the recommended none: ${n.stdout} ${n.stderr}`);
+  assert.equal(recordOf(n).label, 'review:none');
+});
+
+test('PD9 (RS, Dave decision a): a clean small PR defaults to none at any 7-day count; wait goes first only when RS picks coderabbit', async () => {
+  for (const count of [10, 30, 40, 70]) {
+    const r = await run(filesIn('scripts', 'mjs'), { cli: CLEAN }, { count });
+    assert.equal(r.recommended, 'none', String(count));
+    assert.deepEqual(pathways(r), ['none', 'coderabbit', 'both'], String(count));
+  }
+  const major39 = await run(filesIn('scripts', 'mjs'), { cli: MAJOR }, { count: 39 });
+  assert.equal(major39.recommended, 'coderabbit');
+  assert.deepEqual(pathways(major39), ['coderabbit', 'both']);
+  const major40 = await run(filesIn('scripts', 'mjs'), { cli: MAJOR }, { count: 40 });
+  assert.equal(major40.recommended, 'wait');
+  assert.deepEqual(pathways(major40), ['wait', 'coderabbit', 'both']);
+  assert.ok(major40.why.some((w) => /40 or more/.test(w)), major40.why.join(' | '));
+  const noCli = await run(filesIn('scripts', 'mjs'), { cli: null }, { count: 55 });
+  assert.equal(noCli.recommended, 'wait', 'no CLI result: RS picks coderabbit, so wait goes first');
+});
+
+test('PD10 (R5, replaces T2c): the live budget is 1+1 for normal, steering and infra and 1+2 for r3', async () => {
+  for (const [dir, ext, cls] of [['scripts', 'mjs', 'normal'], ['.claude/agents', 'md', 'steering'], ['.github/workflows', 'yml', 'infra']]) {
+    const r = await run(filesIn(dir, ext, 4), { cli: CLEAN });
+    assert.equal(r.class, cls);
+    assert.equal(r.recommended, 'coderabbit', cls);
+    assert.deepEqual(r.budget, [1, 1], cls);
+    assert.deepEqual(optionOf(r, 'coderabbit').cost, [1, 1], cls);
+  }
+  const r3 = await run([file(SQL, 12)]);
+  assert.equal(r3.class, 'r3');
+  assert.deepEqual(r3.budget, [1, 2]);
+});
+
+// ---------- the config text ----------
+
+test('PD12 (PR D): the budget _doc says an extra round comes after a Major', () => {
+  const doc = LIVE._doc.find((l) => /^budget:/.test(l));
+  assert.ok(doc, 'the budget line exists');
+  assert.match(doc, /extra after a Major/);
+  assert.doesNotMatch(doc, /extra after fix pushes/);
+});
+
+test('T12: an unknown 7-day count changes no rule (PD: moved to R5_FILES)', async () => {
+  const unknown = await run(R5_FILES, {}, { count: null });
+  const known = await run(R5_FILES, {}, { count: 10 });
   assert.equal(unknown.capacity.band, 'unknown');
   assert.equal(unknown.recommended, known.recommended);
   assert.deepEqual(unknown.options, known.options);
@@ -380,7 +525,7 @@ test('T14 (R0): no stamp, or a failed stamp row, stops with no options; NOTE and
   const failed = { ...PASS_STAMP, results: [...PASS_STAMP.results, { step: 'gate:tests', status: 'FAIL', detail: 'x' }] };
   stop(await run([file('scripts/a.mjs')], { stamp: failed }), 'failed row');
   const soft = { ...PASS_STAMP, results: [...PASS_STAMP.results, { step: 'manual:x', status: 'NOTE', detail: 'x' }, { step: 'coderabbit', status: 'SKIP', detail: 'cap' }] };
-  assert.equal((await run([file('scripts/a.mjs')], { stamp: soft })).recommended, 'coderabbit');
+  assert.equal((await run(R5_FILES, { stamp: soft })).recommended, 'coderabbit'); // PD: moved to R5_FILES (a small PR gets none)
 });
 
 test('T15 (R0): a stamp for another head stops', async () => {
@@ -391,19 +536,19 @@ test('T15 (R0): a stamp for another head stops', async () => {
 });
 
 test('T16 (R5): the default stays coderabbit; none is offered only when the CLI shows 0 Major', async () => {
-  const clean = await run([file('scripts/a.mjs', 20)], { cli: { bySeverity: { minor: 2 } } });
+  const clean = await run(R5_FILES, { cli: { bySeverity: { minor: 2 } } }); // PD: moved to R5_FILES
   assert.equal(clean.recommended, 'coderabbit');
   assert.ok(pathways(clean).includes('none'));
   assert.equal(pathways(clean)[1], 'none', 'none is option 2');
   for (const [label, cli] of [['major finding', { bySeverity: { major: 1 } }], ['critical finding', { bySeverity: { critical: 1 } }], ['unknown', null]]) {
-    const r = await run([file('scripts/a.mjs', 20)], { cli });
+    const r = await run(R5_FILES, { cli });
     assert.equal(r.recommended, 'coderabbit', label);
     assert.ok(!pathways(r).includes('none'), label);
   }
 });
 
 test('T17: option 1 is the recommendation', async () => {
-  for (const [files, pol] of [[[file('scripts/a.mjs')], {}], [[file(CRITICAL)], { deep: true, used: 10 }], [[file('docs/a.md')], {}], [[file('scripts/a.mjs')], { count: 55 }]]) {
+  for (const [files, pol] of [[R5_FILES, {}], [[file(CRITICAL)], { deep: true, used: 10 }], [[file('docs/a.md')], {}], [R5_FILES, { count: 55 }], [[file('scripts/a.mjs')], { count: 55 }]]) { // PD: R5_FILES added; the small case stays
     const r = await run(files, {}, pol);
     assert.equal(r.options[0].pathway, r.recommended, files[0].filename);
   }
@@ -443,15 +588,48 @@ test('T20: the config blocks exist and are typed', () => {
   assert.ok(LIVE.coderabbit && 'reviews_7d_manual' in LIVE.coderabbit && 'reviews_7d_manual_date' in LIVE.coderabbit, 'coderabbit.reviews_7d_manual and its date');
   const n = LIVE.coderabbit?.reviews_7d_manual;
   assert.ok(n === null || (Number.isInteger(n) && n >= 0), 'a count or null');
-  // The five critical files of spec section 2 are all tagged, and an ordinary hook is not.
+  // The five critical files of spec section 2 are all tagged (and, since 2026-10-30, NEW_CRITICAL below), and an ordinary hook is not.
   const hit = (p) => LIVE.checkpoint.critical.some((g) => matchGlob(g, p));
-  for (const p of [CRITICAL, 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', '.claude/hooks/src/destructive-command-guard.ts', 'scripts/github/land-pr.ps1']) assert.ok(hit(p), `${p} is critical`);
+  for (const p of [CRITICAL, 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', '.claude/hooks/src/destructive-command-guard.ts', 'scripts/github/land-pr.ps1', ...NEW_CRITICAL]) assert.ok(hit(p), `${p} is critical`);
   assert.ok(!hit('.claude/hooks/src/session-start.ts'), 'an ordinary hook is not critical');
 });
 
-test('T20b (PR B): checkpoint.enforce is a boolean in the live config, and it is false for the warn week', () => {
+// The 2026-10-30 re-review study (section 4) extends checkpoint.critical to the files where a real Major came from a fix.
+// A path missing from the list makes the carry and the small-PR rule treat that PR as ordinary. One test per way it can fail:
+//   a new path is not in the live list (the list was not extended, or the glob is wrong)   -> PE1
+//   the engine does not tag a new path (the PR stays a small clean PR and gets none)       -> PE2
+//   a glob is too wide and tags an ordinary neighbour file                                  -> PE1
+const NEW_CRITICAL = [
+  '.claude/hooks/src/shared/checkpoint-shapes.ts',
+  'scripts/github/pre-pr.mjs',
+  'apps/agentic-os/src/server/sources/safe-message.ts',
+  'apps/agentic-os/src/server/sources/prompt-text.ts',
+  'apps/agentic-os/scripts/provision-roles.sql',
+  'apps/agentic-os/scripts/provision-roles.mjs',
+];
+
+test('PE1: each path of the 2026-10-30 extension is critical in the live config; ordinary neighbour files are not', () => {
+  const hit = (p) => LIVE.checkpoint.critical.some((g) => matchGlob(g, p));
+  for (const p of NEW_CRITICAL) assert.ok(hit(p), `${p} is critical`);
+  for (const p of [
+    '.claude/hooks/src/shared/other.ts', 'scripts/github/pre-pr.test.mjs', 'apps/agentic-os/src/server/sources/other.ts',
+    'apps/agentic-os/scripts/other.sql', 'apps/agentic-os/src/server/sources/safe-message.test.ts', 'scripts/github/cr-fix.mjs',
+  ]) assert.ok(!hit(p), `${p} is not critical`);
+});
+
+test('PE2 (R3): a small clean PR on a new critical path is not "none"; the same size on an ordinary file is', async () => {
+  for (const p of NEW_CRITICAL) {
+    const r = await run([file(p, 5)]);
+    assert.notEqual(r.recommended, 'none', `${p}: a critical file never takes the small-PR none`);
+    assert.ok(r.why.some((w) => /^Critical file/.test(w)), `${p}: ${r.why.join(' | ')}`);
+  }
+  const ordinary = await run([file('scripts/github/pre-pr.test.mjs', 5)]);
+  assert.equal(ordinary.recommended, 'none');
+});
+
+test('T20b (PR B, flipped by PR D): checkpoint.enforce is a boolean in the live config, and it is true (enforced)', () => {
   assert.equal(typeof LIVE.checkpoint?.enforce, 'boolean', 'checkpoint.enforce must exist (the pre-pr-gate hook reads it)');
-  assert.equal(LIVE.checkpoint?.enforce, false, 'warn mode ships first (spec section 7, PR B row); the later flip PR sets it to true after the warn week, not PR C');
+  assert.equal(LIVE.checkpoint?.enforce, true, 'PR D flips warn mode to enforced (Dave, 2026-10-29; spike S6 passed live on PR #217)');
   assert.ok(LIVE._doc.some((l) => /checkpoint\.enforce/.test(l)), 'the _doc block explains the key');
 });
 
@@ -469,7 +647,7 @@ function runCli(args, factsObj) {
   const factsFile = path.join(dir, 'facts.json');
   const cfgFile = path.join(dir, 'config.json');
   if (factsObj) writeFileSync(factsFile, JSON.stringify(factsObj));
-  writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null } }));
+  writeFileSync(cfgFile, JSON.stringify({ ...LIVE, deep_enabled: false, greptile: { ...LIVE.greptile, credits_used_manual: null }, coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: null, reviews_7d_manual_date: null } }));
   const r = spawnSync(process.execPath, [path.join(HERE, 'pr-checkpoint.mjs'), ...args, '--facts', factsFile, '--config', cfgFile], { encoding: 'utf8', cwd: dir });
   return { ...r, dir };
 }
@@ -482,6 +660,15 @@ test('T21 (CLI): --json prints the whole output shape as one JSON object and exi
   assert.deepEqual(Object.keys(out).sort(), [...shape].sort());
   assert.equal(out.head, HEAD);
   assert.equal(out.recommended, 'coderabbit');
+});
+
+test('PD11 (CLI): the way the harness runs it, a small PR with a clean CLI prints recommended none', () => {
+  const r = runCli(['--json'], facts(filesIn('scripts', 'mjs'), { cli: CLEAN }));
+  assert.equal(r.status, 0, r.stderr);
+  const out = JSON.parse(r.stdout);
+  assert.equal(out.recommended, 'none');
+  assert.deepEqual(out.budget, [0, 0]);
+  assert.deepEqual(out.size, { files: 3, lines: 30, added: 30 });
 });
 
 // PR B replaces the PR A test T22 ("--confirm and --apply exit 2, not available yet"). Both modes exist now; T22 keeps the
@@ -615,7 +802,7 @@ test('T32 (capacity): a 7-day count dated more than 7 days before now changes no
   const { recommend } = await load();
   const at = async (date) => {
     const p = await policy({ count: 55 });
-    return recommend(facts([file('scripts/a.mjs', 20)], { cli: { bySeverity: { major: 1 } } }), { ...p, coderabbit: { ...p.coderabbit, reviews_7d_manual_date: date } });
+    return recommend(facts(R5_FILES, { cli: { bySeverity: { major: 1 } } }), { ...p, coderabbit: { ...p.coderabbit, reviews_7d_manual_date: date } }); // PD: moved to R5_FILES
   };
   const fresh = await at('2026-10-24');
   assert.equal(fresh.capacity.band, 'high', 'a count from 4 days ago still counts');
@@ -648,7 +835,7 @@ const RECORD_KEYS = ['at', 'body_sha256', 'budget', 'class', 'decided_by', 'head
  *   stampFile: undefined = the stamp travels in the facts; an object or string = the facts carry NO stamp key and <state>/stamp.json holds it
  *   (a string is written raw); false = no stamp key in the facts and no stamp.json. stampAt: the dir that gets stamp.json instead of the state dir.
  */
-function runB(mode, { files = [file('scripts/a.mjs', 20)], facts: factOver = {}, pol = {}, body = BODY_TEXT, env = {}, noBody = false, noStateDir = false, cwd = null, stampFile, stampAt = null } = {}) {
+function runB(mode, { files = R5_FILES, facts: factOver = {}, pol = {}, body = BODY_TEXT, env = {}, noBody = false, noStateDir = false, cwd = null, stampFile, stampAt = null } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'checkpoint-b-'));
   const state = path.join(dir, 'pre-pr');
   mkdirSync(state, { recursive: true });
@@ -668,7 +855,7 @@ function runB(mode, { files = [file('scripts/a.mjs', 20)], facts: factOver = {},
   writeFileSync(cfgFile, JSON.stringify({
     ...LIVE, deep_enabled: pol.deep ?? false,
     greptile: { ...LIVE.greptile, credits_used_manual: pol.used ?? null },
-    coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: pol.count ?? null },
+    coderabbit: { ...LIVE.coderabbit, reviews_7d_manual: pol.count ?? null, reviews_7d_manual_date: null },
     checkpoint: { ...LIVE.checkpoint, parser: ['lib/lexer/**'] },
   }));
   const isConfirm = mode[0] === '--confirm';
@@ -798,16 +985,17 @@ test('TB9: with no --state-dir, --confirm reads stamp.json and writes pathway.js
 const RECORD = { head: HEAD, body_sha256: BODY_SHA, pathway: 'coderabbit', label: 'review:coderabbit', class: 'normal', recommended: 'coderabbit', decided_by: 'dave', at: NOW, budget: [1, 1] };
 const LABEL_OF = { none: 'review:none', coderabbit: 'review:coderabbit', both: 'review:deep' };
 
-/** A fake gh. A `pr edit` or `pr ready` call is a mutation; every other call is a read and gets the PR view. */
+/** A fake gh. A `pr edit`, `pr comment` or `pr ready` call is a mutation; every other call is a read and gets the PR view. */
+const MUTATIONS = ['edit', 'comment', 'ready'];
 function fakeGh({ view = { isDraft: true, headRefOid: HEAD }, fail = null } = {}) {
   const calls = [];
   const gh = (args) => {
     calls.push(args);
     const kind = args[0] === 'pr' ? args[1] : null;
     if (kind === fail) return { status: 1, stdout: '', stderr: `fake gh: ${kind} failed` };
-    return { status: 0, stdout: kind === 'edit' || kind === 'ready' ? '' : JSON.stringify(view), stderr: '' };
+    return { status: 0, stdout: MUTATIONS.includes(kind) ? '' : JSON.stringify(view), stderr: '' };
   };
-  return { gh, calls, mutations: () => calls.filter((a) => a[0] === 'pr' && (a[1] === 'edit' || a[1] === 'ready')) };
+  return { gh, calls, mutations: () => calls.filter((a) => a[0] === 'pr' && MUTATIONS.includes(a[1])) };
 }
 
 test('TA1 (spec 17): apply refuses a PR that is not a draft and makes no mutation', async () => {
@@ -838,7 +1026,7 @@ test('TA3 (spec 18): apply adds the review label BEFORE it marks the PR ready, f
     assert.deepEqual(r, { ok: true }, pathway);
     const calls = g.calls.map((a) => `${a[0]} ${a[1]}`);
     assert.equal(calls[0], 'pr view', `${pathway}: the live PR is read before any mutation`);
-    assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr ready'], `${pathway}: label first, ready second`);
+    assert.deepEqual(calls.filter((c) => c !== 'pr view'), ['pr edit', 'pr comment', 'pr ready'], `${pathway}: label, then the pathway-confirmed comment, then ready last`);
     assert.equal(calls.lastIndexOf('pr view'), 0, `${pathway}: no read after a mutation`);
     assert.deepEqual(g.calls.find((a) => a[1] === 'edit'), ['pr', 'edit', '201', '--add-label', LABEL_OF[pathway], '-R', DEFAULT_REPO], pathway);
     assert.deepEqual(g.calls.find((a) => a[1] === 'ready'), ['pr', 'ready', '201', '-R', DEFAULT_REPO], pathway);
@@ -856,6 +1044,52 @@ test('TA4 (spec 18): a failed label never reaches ready; a failed ready after th
   const b = await applyPathway({ pr: 201, record: RECORD, gh: noReady.gh });
   assert.equal(b.ok, false);
   assert.match(b.error, /ready/i);
+});
+
+// PR D: a ready_for_review alone is not a checkpoint. /pathway posts one comment with a hidden marker BEFORE it marks the PR ready;
+// the router counts a ready_for_review as a new checkpoint only when a marker names the head and the label's pathway.
+// It fails if: apply posts no marker, or posts it after ready (the router runs on the ready event and sees no marker) -> TA3b
+//              the marker names another head or pathway than the record                                              -> TA3b, TA3c
+//              a failed post still reaches ready                                                                      -> TA4c
+//              the router cannot read the marker the apply step writes (two copies of the format drift)              -> TA3c
+test('TA3b: apply posts one pr comment with the pathway-confirmed marker for the record head and pathway, before ready', async () => {
+  const { applyPathway } = await load();
+  for (const pathway of ['none', 'coderabbit', 'both']) {
+    const g = fakeGh();
+    const r = await applyPathway({ pr: 201, record: { ...RECORD, pathway, label: LABEL_OF[pathway] }, gh: g.gh });
+    assert.deepEqual(r, { ok: true }, pathway);
+    const comments = g.calls.filter((a) => a[1] === 'comment');
+    assert.equal(comments.length, 1, pathway);
+    const [c] = comments;
+    assert.deepEqual([c[0], c[1], c[2]], ['pr', 'comment', '201'], pathway);
+    assert.deepEqual(c.slice(-2), ['-R', DEFAULT_REPO], pathway);
+    const body = c[c.indexOf('--body') + 1];
+    assert.ok(body.startsWith(`<!-- pathway-confirmed head=${HEAD} pathway=${pathway} -->\n`), `${pathway}: ${body}`);
+    assert.match(body, new RegExp(`Checkpoint: ${pathway} at ${HEAD.slice(0, 7)}, chosen in /pathway\\.`), pathway);
+    const order = g.calls.map((a) => a[1]);
+    assert.ok(order.indexOf('comment') < order.indexOf('ready'), `${pathway}: the marker comes before ready: ${order}`);
+  }
+});
+
+test('TA3c: the router reads the marker the apply step writes (same head, same pathway), and nothing else', async () => {
+  const { applyPathway } = await load();
+  const { confirmedPathways } = await import('./review-router.mjs');
+  const g = fakeGh();
+  await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  const c = g.calls.find((a) => a[1] === 'comment');
+  const comment = { id: 5, author_association: 'OWNER', body: c[c.indexOf('--body') + 1] };
+  assert.deepEqual(confirmedPathways([comment], HEAD), ['coderabbit']);
+  assert.deepEqual(confirmedPathways([comment], OTHER), []);
+});
+
+test('TA4c: a failed marker comment never reaches ready and says so; the label was already added', async () => {
+  const { applyPathway } = await load();
+  const g = fakeGh({ fail: 'comment' });
+  const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
+  assert.equal(r.ok, false);
+  assert.match(r.error, /comment/i);
+  assert.match(r.error, /not marked ready/i);
+  assert.deepEqual(g.calls.map((a) => a[1]), ['view', 'edit', 'comment'], 'view, label, the failed comment, and no ready');
 });
 
 test('TA4b: apply with no record, or a record with an unknown pathway or no head, refuses before any gh call', async () => {
@@ -895,7 +1129,7 @@ test('TA5 (CLI): --apply reads pathway.json, then the PR, adds the label and mar
   assert.equal(r.status, 0, `${r.stdout} ${r.stderr}`);
   const kinds = r.calls.map((a) => `${a[0]} ${a[1]}`);
   assert.equal(kinds[0], 'pr view');
-  assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr ready']);
+  assert.deepEqual(kinds.filter((k) => k !== 'pr view'), ['pr edit', 'pr comment', 'pr ready']);
   assert.ok(r.calls.find((a) => a[1] === 'edit').includes('review:coderabbit'));
   assert.ok(r.calls.every((a) => a[0] !== 'pr' || a.includes('999999')), 'every pr call names the PR');
   assert.ok(r.calls.every((a) => a.slice(-2).join(' ') === `-R ${DEFAULT_REPO}`), `every gh call names the fork (critic: gh picks the repo from the cwd remotes otherwise): ${JSON.stringify(r.calls)}`);
