@@ -55,10 +55,16 @@ import type { AgentRun, OsTask } from '../types'
 // P25 the screenshot block: a "None for now" item is an ask, or the real question next to it is dropped
 // P26 a block of only "None for now. I'm waiting on X" is no list instead of [], so old asks stay open
 // P27 a nothing-for-Dave form (None today, Nothing for you to do, No action needed, Waiting on X) becomes an ask
+// P35 "No action needed — <free text>" is dropped, so an instruction after the dash is lost (fail closed: it must stay an ask)
 // P28 an item that waits on Dave ("Waiting for your decision", a "?") is dropped
 // P30 "Waiting on Dave's approval" or "Nothing for me to do" is dropped, so an open ask on Dave is cleared
 // P29 a bare unbulleted "Nothing for you to do." line gives no list
 // E14c a "None for now" turn leaves the earlier ask open and the chip on waiting-on-dave
+// P31 an item that starts with a waiting clause and then asks ("Waiting on CI, then approve PR 12") is dropped whole, so the approval request is lost
+// P32 a none lead followed by a real request ("None for now. Paste the build log here.", "None, but please review the diff") is dropped whole
+// P33 an unbulleted no-ask line next to an unbulleted question drops the question, and the block clears the earlier asks
+// P34 the no-ask grammar backtracks on a long adversarial item
+// E14d a turn whose only Next steps item is "Waiting on CI, then approve PR 12" clears the earlier ask and the chip leaves waiting-on-dave
 
 const NOW = 1_000_000
 const secrets = {
@@ -784,13 +790,20 @@ describe('parseTurnEnd on real answers', () => {
       '1. None today.',
       '1. None yet — waiting on the Greptile review.',
       '1. Nothing for you to do. Waiting on the CI run.',
-      '1. No action needed — the PR lands at READY.',
+      '1. No action needed.',
       '1. Waiting on the workflow run.',
       "1. I'm waiting on the CodeRabbit review.",
       '1. I’m waiting on the CodeRabbit review.',
     ]
     const wrong = forms.filter(form => JSON.stringify(parseTurnEnd(`Opened PR 12.\n\n## Next steps\n${form}`).ask) !== '[]')
     expect(wrong).toEqual([])
+  })
+
+  // Fail closed: a free-text reason after "No action needed" cannot be told from an instruction, so the item stays an ask.
+  test('P35 a nothing form followed by free text stays an ask', () => {
+    for (const item of ['No action needed — the PR lands at READY.', 'No action needed — paste the build log']) {
+      expect(parseTurnEnd(`Opened PR 12.\n\n## Next steps\n1. ${item}`).ask).toHaveLength(1)
+    }
   })
 
   test('P28 an item that waits on Dave or holds a question mark stays an ask', () => {
@@ -814,6 +827,38 @@ describe('parseTurnEnd on real answers', () => {
 
   test('P29 a bare unbulleted "Nothing for you to do." line under Next steps is an empty ask list', () => {
     expect(parseTurnEnd('Done.\n\n## Next steps\nNothing for you to do. Waiting on the CI run.').ask).toEqual([])
+  })
+
+  test('P31 an item that waits on something and then asks for an action stays one ask', () => {
+    const ask = parseTurnEnd('## Next steps\n1. Waiting on CI, then approve PR 12').ask
+    expect(ask).toHaveLength(1)
+    expect(ask?.[0]?.text).toContain('approve PR 12')
+    expect(ask?.[0]?.kind).toBe('approval')
+  })
+
+  test('P32 a none lead followed by a real request is an ask, not an empty list', () => {
+    const paste = parseTurnEnd('## Next steps\n1. None for now. Paste the build log here.').ask
+    expect(paste).toHaveLength(1)
+    expect(paste?.[0]?.text).toContain('Paste the build log')
+    const review = parseTurnEnd('## Next steps\n1. None, but please review the diff').ask
+    expect(review).toHaveLength(1)
+    expect(review?.[0]?.text).toContain('review the diff')
+  })
+
+  test('P33 an unbulleted no-ask line next to an unbulleted question keeps the question', () => {
+    const ask = parseTurnEnd('Done.\n\n## Next steps\nNothing for you to do.\nCan you approve the PR?').ask
+    expect(ask).toHaveLength(1)
+    expect(ask?.[0]?.text).toContain('approve the PR')
+  })
+
+  test('P34 long adversarial items parse in under 50 ms', () => {
+    const spaces = ' '.repeat(32_000)
+    const items = [`1. Waiting on${spaces}x`, `1. None${spaces}x`, `1. None for now.${spaces}Waiting on x`, `1. Waiting on ${'a '.repeat(15_000)}`]
+    for (const item of items) {
+      const started = Date.now()
+      parseTurnEnd(`## Next steps\n${item}`)
+      expect(Date.now() - started).toBeLessThan(50)
+    }
   })
 })
 
@@ -1328,6 +1373,18 @@ describe('turn.step answers in the mod', () => {
     const after = lastSnapshot(seen)
     expect(after.brief.ask).toEqual([])
     expect(after.chip).not.toBe('waiting-on-dave')
+  })
+
+  test('E14d a "Waiting on CI, then approve PR 12" turn keeps the ask on Dave and the chip on waiting-on-dave', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
+    await turnEnd($, 'Waiting.\n\n## Next steps\n1. Waiting on CI, then approve PR 12')
+    const after = lastSnapshot(seen)
+    expect(after.brief.ask).toHaveLength(1)
+    expect(after.brief.ask?.[0]?.text).toContain('approve PR 12')
+    expect(after.chip).toBe('waiting-on-dave')
   })
 
   test('E15 narration in a later step ("I will ... stop at ...", "I\'ll stop here ...") never replaces the labelled restate', async ($, on) => {
