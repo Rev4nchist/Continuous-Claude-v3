@@ -157,6 +157,9 @@ try {
     'type "%~dp0pull.json"',
     'exit /b 0')
   $env:PATH = "$stub;$oldPath"
+  # Stop before any real gh call: if PowerShell does not resolve the stub, the probe below would run the host's gh.
+  $ghFound = (Get-Command gh -CommandType Application -ErrorAction SilentlyContinue | Select-Object -First 1).Source
+  if ($ghFound -ne (Join-Path $stub 'gh.cmd')) { throw "harness: gh resolves to '$ghFound', not the stub '$stub\gh.cmd'; stopping before any real gh call" }
   $viaStub = gh api repos/Rev4nchist/Continuous-Claude-v3/pulls/7 | ConvertFrom-Json
   Check 'harness: stub gh answers PR 7' ($viaStub.merged -eq $true -and $viaStub.head.ref -eq $branch)
 
