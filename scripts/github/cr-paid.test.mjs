@@ -10,6 +10,7 @@
 //   the head already has a review and a $0 round is allowed                                       -> CP12
 //   record writes a line that cannot be read back, or the check cannot read it                    -> CP13, CP14
 //   ALLOW prints a comment other than the exact paid one                                          -> CP1
+//   the round label is 2 for a third round (it must count the prior reviewed rounds + 1)          -> CP15, CP16
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import { mkdirSync, mkdtempSync, readFileSync, writeFileSync, rmSync, existsSync } from 'node:fs';
@@ -27,7 +28,7 @@ const files = (count) => Array.from({ length: count }, (_, i) => prFile(i));
 const gqlNode = (c) => ({ databaseId: c.id, body: c.body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: c.updated_at, userContentEdits: { nodes: [] } });
 
 /** A temp ledger file plus a fake gh. `rows` (objects) or `raw` (text) seed the ledger. */
-function harness({ reviews = [], prFiles = files(4), compareFiles = [], rows = [], raw = null, filters = [], ghError = null, now = NOW, env = {} } = {}) {
+function harness({ reviews = [], comments = [], prFiles = files(4), compareFiles = [], rows = [], raw = null, filters = [], ghError = null, now = NOW, env = {} } = {}) {
   const dir = mkdtempSync(path.join(os.tmpdir(), 'cr-paid-'));
   const ledgerPath = path.join(dir, 'state', 'coderabbit-paid.jsonl');
   if (raw !== null || rows.length > 0) {
@@ -39,8 +40,8 @@ function harness({ reviews = [], prFiles = files(4), compareFiles = [], rows = [
   const gh = (args) => {
     calls.push(args);
     if (ghError) throw new Error(ghError);
-    if (args.includes('graphql')) return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: [].map(gqlNode) } } } } };
-    if (args.some((a) => /issues\/\d+\/comments/.test(a))) return [];
+    if (args.includes('graphql')) return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: comments.map(gqlNode) } } } } };
+    if (args.some((a) => /issues\/\d+\/comments/.test(a))) return comments;
     if (args.some((a) => /compare\//.test(a))) return { files: compareFiles };
     if (args.some((a) => /pulls\/\d+\/files/.test(a))) return [prFiles];
     if (args.some((a) => /pulls\/\d+\/reviews/.test(a))) return [reviews];
@@ -213,4 +214,46 @@ test('CP15: parseArgs reads the subcommands and refuses a bad number or an unkno
   assert.throws(() => PAID.parseArgs(['check', '--pr', 'x']), /--pr/);
   assert.throws(() => PAID.parseArgs(['check', '--pr', '1', '--frob']), /unknown/);
   assert.throws(() => PAID.parseArgs(['pay']), /usage/);
+});
+
+// PR #225 round 3: the label said "round 2" after two CodeRabbit rounds. Round = distinct reviewed rounds + 1 (newestCodeRabbitRound's view).
+const OLDER = 'd'.repeat(40);
+const BASE = 'c'.repeat(40);
+const cleanSummary = (covered, at) => ({
+  id: 800, user: CR_BOT, created_at: at, updated_at: at,
+  body: `<!-- coderabbit-ai-generated:v1 -->
+
+<!-- This is an auto-generated comment: summarize by coderabbit.ai -->
+
+No actionable comments were generated in the recent review.
+
+`
+    + `Reviewing files that changed from the base of the PR and between ${BASE} and ${covered}.
+
+`
+    + `<!-- final_review_risk_coverage:{"sourceCommitId":"${covered}","coveredCommitId":"${covered}","kind":"reviewed"} -->
+`,
+});
+
+test('CP15: two review objects on two commits label the next round 3, and the fix limits still apply', async () => {
+  const h = harness({ reviews: [review(1, OLDER, '2026-10-30T07:00:00Z'), review(2, OLD, '2026-10-30T08:00:00Z')], compareFiles: [prFile(0, { additions: 10, deletions: 5 })] });
+  const r = await h.check();
+  assert.equal(r.round, 3);
+  assert.equal(r.from, OLD);
+  assert.equal(r.fix.lines, 15);
+  assert.match(PAID.reportOf(r).out[0], /round 3,/);
+  h.done();
+});
+
+test('CP16: a review object plus a newer summary-only clean round label the next round 3; an empty-body thread reply counts none', async () => {
+  const reply = { ...review(3, OLDER, '2026-10-30T07:30:00Z'), body: '' };
+  const h = harness({
+    reviews: [review(1, OLDER, '2026-10-30T07:00:00Z'), reply],
+    comments: [cleanSummary(OLD, '2026-10-30T08:00:00Z')],
+    compareFiles: [prFile(0)],
+  });
+  const r = await h.check();
+  assert.equal(r.round, 3);
+  assert.equal(r.from, OLD);
+  h.done();
 });

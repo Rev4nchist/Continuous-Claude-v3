@@ -1432,6 +1432,28 @@ describe('pr-loop checkpoint states', () => {
     expect(line).toContain('--use-credits')
   })
 
+  // PR #225 round 3: after the paid-review step, the later "post @coderabbitai review" must hold only when no paid review was posted for this head.
+  const PAID_GATE = /only if no paid review was posted for this head/
+
+  test('CW4n a paid-eligible rate limit makes the later post conditional on no paid review for this head, with and without a record', async ($, on) => {
+    const withRecord = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    expect(withRecord).toMatch(PAID_GATE)
+    expect(withRecord.indexOf('cr-paid.mjs check')).toBeLessThan(withRecord.search(PAID_GATE))
+    expect(withRecord.search(PAID_GATE)).toBeLessThan(withRecord.indexOf('When capacity is back, post one @coderabbitai review'))
+  })
+
+  test('CW4o a paid-eligible rate limit with no checkpoint record gates "Post @coderabbitai review once when capacity is back"', async ($, on) => {
+    const line = await limitedLine($, on, null, RATE_LIMITED())
+    expect(line).toMatch(PAID_GATE)
+    expect(line.search(PAID_GATE)).toBeLessThan(line.indexOf('Post @coderabbitai review once when capacity is back'))
+  })
+
+  test('CW4p a rate limit that offers no paid review keeps its later post unconditional', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ reasons: [CARRY_REASON, 'CodeRabbit rate limited: head not reviewed'] }))
+    expect(line).not.toMatch(PAID_GATE)
+    expect(line).not.toContain('paid review was posted')
+  })
+
   // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 30 minutes at the record's `appliedAt`, the moment the mod's
   // --apply succeeded. That is when the PR left draft (plan 4.2 "since the PR left draft"), not the first watcher check and not the push.
   test('CW5 the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
