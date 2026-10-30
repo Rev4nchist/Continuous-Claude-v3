@@ -360,3 +360,24 @@ test('CF20: a clean summary of the head itself leaves no fix commit; a failed co
   assert.equal(failing.calls.runs.length, 0);
   assert.match(r2.reason, /HTTP 502 graphql/);
 });
+
+// ---------------------------------------------------------------------------------------------
+// Verifier round 3 (2026-10-30): a head that already has a clean CodeRabbit summary needs no CLI run.
+// Ways it can fail:
+//   live PR #211 shape: review object R1 of an earlier head, a trusted clean summary that covers the head -> CF21
+//   the stop also hits a summary the carry does not trust, which would hide a real fix range               -> CF21 (control)
+// ---------------------------------------------------------------------------------------------
+test('CF21: an older review object plus a trusted clean summary that covers the head (live PR #211 shape) ends with exit 2 and starts no CLI run', async () => {
+  const reviews = [review(1, OLD, '2026-10-30T07:00:00Z')];
+  const comments = [cleanSummary(HEAD, '2026-10-30T08:00:00Z')];
+  const h = harness({ reviews, comments, commentEdits: { 800: [] } });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(h.calls.runs.length, 0, 'no CLI run is spent');
+  assert.match(r.reason, /CodeRabbit already reviewed the head; no CLI run needed/);
+  // Control: the same summary edited by a person is not trusted, so the head is not reviewed and the fix range is reviewed.
+  const person = { 800: [{ editor: { login: 'someone', __typename: 'User' }, editedAt: '2026-10-30T08:30:00Z' }] };
+  const control = harness({ reviews, comments, commentEdits: person });
+  assert.equal((await control.go()).exitCode, 0);
+  assert.equal(control.calls.runs.length, 1);
+});

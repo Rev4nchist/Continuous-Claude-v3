@@ -1125,7 +1125,8 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
       // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
       const carryResult = carriedReview({ carry, reviews, head, comments, commentEdits, labels, cr, body: pull.body });
       coderabbitCarried = carryResult.carried;
-      coderabbitCarryBlockers = carryResult.blockers;
+      // Only a carry whose inputs were read has blockers to show; a draft or unrouted PR never reads them.
+      coderabbitCarryBlockers = carry ? carryResult.blockers : [];
       if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need, carryResult.cliOnly));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);

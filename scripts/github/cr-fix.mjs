@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { mergeGraphqlComments, newestCodeRabbitRound } from './review-status.mjs';
+import { codeRabbitHeadReview, mergeGraphqlComments, newestCodeRabbitRound } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -133,6 +133,8 @@ function readRange(pr, repo, cwd, deps) {
     return { stop: stop(`could not read the PR or the checkout (${String(err.message).split('\n')[0]})`) };
   }
   if (!SHA40.test(head)) return { stop: stop('the checkout head is not a commit sha') };
+  // The head has a CodeRabbit review (the PR #211 shape: an older review object plus a trusted clean summary of the head). No fix range is left.
+  if (codeRabbitHeadReview({ head, ...source }).reviewedHead) return { stop: stop('CodeRabbit already reviewed the head; no CLI run needed') };
   const newest = newestCodeRabbitRound({ ...source, head });
   if (!newest) return { stop: stop('the PR has no CodeRabbit review (or clean summary round) to start from') };
   const from = String(newest.commit_id ?? '').toLowerCase();

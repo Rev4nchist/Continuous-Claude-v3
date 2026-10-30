@@ -2809,3 +2809,15 @@ test('SC-B: a coverage marker that cannot be read gives no covered commit; the m
   const other = 'c'.repeat(40);
   assert.equal(roundOf(coverage('reviewed', other, OLD)).commit_id, other, 'the reviewed marker names the commit');
 });
+
+// ---------------------------------------------------------------------------------------------
+// Verifier round 3 (2026-10-30): coderabbitCarryBlockers says "[] when carried or not tried".
+// Ways it can fail:
+//   a draft PR never reads the carry inputs, yet lists "inline comments not read", "compare: unread", ... -> CB-A
+// ---------------------------------------------------------------------------------------------
+test('CB-A: a draft PR with review:coderabbit and an older review never tried the carry, so it lists no carry blockers', () => {
+  const r = evaluate(routed(['review:coderabbit', 'risk:normal'], { input: NO_GREPTILE, draft: true, eval: { reviews: [CR_OLD_REVIEW] } }));
+  assert.equal(r.coderabbitCarried, null);
+  assert.deepEqual(r.coderabbitCarryBlockers, []);
+  assert.ok(r.reasons.includes(RS.DRAFT_REASON));
+});

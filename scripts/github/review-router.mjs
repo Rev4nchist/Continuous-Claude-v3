@@ -221,6 +221,9 @@ export function confirmedMarkers(comments, head, consumed = null) {
 }
 export const confirmedPathways = (comments, head, consumed = null) => [...new Set(confirmedMarkers(comments, head, consumed).map((m) => m.pathway))];
 
+// The id to save as consumed: the highest fresh marker id, or the used marker's own id when no id is above it. null for a marker with no id.
+const highest = (usedId, top) => (usedId === null && top < 0 ? null : Math.max(usedId ?? -1, top));
+
 /**
  * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
  * Later runs: person_override and no_change re-read the pathway from the labels (no review:* label keeps the saved one);
@@ -232,20 +235,22 @@ export const confirmedPathways = (comments, head, consumed = null) => [...new Se
  */
 function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed = [] }) {
   const none = { pathway: null, pclass: null, consumed: null };
+  // The highest fresh marker for the head, whatever its pathway: an unused one above the used marker must not stay live.
+  const top = confirmed.reduce((best, c) => (Number.isFinite(c?.id) && c.id > best ? c.id : best), -1);
   // The newest marker that names the label's pathway: the one this ready event uses up.
   const used = event === 'ready_for_review' && hasReview(labelsNow)
     ? confirmed.map((c) => (typeof c === 'string' ? { id: null, pathway: c } : c)).filter((c) => c.pathway === pathwayFrom(labelsNow)).reduce((best, c) => (best === null || (c.id ?? -1) > (best.id ?? -1) ? c : best), null)
     : null;
   if (previousClass === null) {
     const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
-    return pathway ? { pathway, pclass: effective, consumed: used?.id ?? null } : none;
+    return pathway ? { pathway, pclass: effective, consumed: used ? highest(used.id, top) : null } : none;
   }
   // A confirmed ready_for_review is a new checkpoint, also when it is a raise run (a draft run saves no class).
   const redone = used !== null;
   const reread = reason === 'person_override' || reason === 'no_change' || redone;
   const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
   if (saved.pclass === null || pathway === null) return none;
-  return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? used.id : null) ?? saved.consumed };
+  return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? highest(used.id, top) : null) ?? saved.consumed };
 }
 
 const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;

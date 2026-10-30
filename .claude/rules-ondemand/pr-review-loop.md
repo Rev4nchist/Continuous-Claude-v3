@@ -93,7 +93,7 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
    Lock B of the same hook denies any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
 3. Batch every fix into one push. After the push, run `node scripts/github/cr-fix.mjs --pr <N>` in the
-   PR checkout. It stops when local HEAD is not the PR head. It reviews only the commits after the carry source.
+   PR checkout. It stops when local HEAD is not the PR head, or when CodeRabbit already reviewed the head. It reviews only the commits after the carry source.
    The carry source is the newest CodeRabbit review, or a newer clean summary-only round (see "What READY checks").
    Paste the one line of the script (`CLI fix review: <from>..<head> clean`) in the PR body. A body
    edit does not change the head. For a Major or Critical: fix, commit, push, and run it again.
@@ -173,6 +173,8 @@ step 1 does not list.
   A readable config keeps its own `enforce` value.
 - Residual risk, accepted (Dave, 2026-10-30): `review-status.mjs` trusts the `CLI fix review:` line in the PR body.
   Anyone who can edit the body can write that line. This is the same trust as a label, which needs write access.
+- Residual risk, accepted: a router comment written before the consumed line existed has no `consumed` id.
+  A stale marker on such a PR can count once more at the next same-head ready. After that run the router saves the id, and the marker is bound.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.
@@ -340,9 +342,12 @@ hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLi
   READY also counts its outside-diff findings, and the PR body must list each one as handled.
   A body with nothing to read blocks the carry.
 - A clean round can leave only the summary comment and no review object. That summary is a carry source when it
-  meets five conditions. The CodeRabbit app wrote it. No person edited it. It says "No actionable comments were generated".
-  It covers an earlier commit as `kind: reviewed`. A coverage marker of any other kind, or one that is unreadable, rules it out. It is newer than the newest review object, and no review
-  object holds the commit it covers.
+  meets seven conditions. The CodeRabbit app wrote it. No person edited it. It is not a notice.
+  It says "No actionable comments were generated". It covers an earlier commit, not the head. It is newer than the newest
+  review object. No review object holds the commit it covers.
+  The covered commit comes from the first coverage marker of `kind: reviewed`, even when other markers exist.
+  With no coverage marker, it comes from the last "between <sha> and <sha>" line.
+  A coverage marker with no reviewed kind, or one that is unreadable, rules the summary out. The "between" line then does not count.
 - The head is `ahead` of the reviewed head. The delta is 30 lines or fewer: additions plus
   deletions over the files that are in both the compare and the PR. A merge of main that touches
   other files does not count. A change of main inside a PR file still counts. A compare of 300 files blocks.
@@ -364,7 +369,9 @@ A carried round with unhandled outside-diff findings stays NOT READY.
 `review-status.mjs --json` prints `coderabbitCarryBlockers`. It is a list of strings that stopped the carry.
 It is not a READY reason and does not change READY. The text output lists the strings under the reasons.
 
-`cr-fix.mjs` lists the merge commits in `<from>..HEAD` before it runs. It names each one on stderr, with 7 characters of the sha.
+`cr-fix.mjs` stops with exit 2 when CodeRabbit already reviewed the head. The head has a review object, or a trusted clean summary that covers it.
+It prints "CodeRabbit already reviewed the head; no CLI run needed" and spends no CLI run.
+`cr-fix.mjs` lists the merge commits in `<from>..HEAD` after the run. It names each one on stderr, with 7 characters of the sha.
 The review still runs, and the exit code does not change. Merged-in code, such as main, is part of that review.
 A finding may come from that code and not from your fix commits. Read `.claude/cache/e2e/<date>-cr-fix-<head7>.txt`
 to see which commit holds a finding. The `CLI fix review:` line on stdout keeps its form, so the carry still reads `clean`.
@@ -482,7 +489,8 @@ number (Actions, `review-router`, Run workflow).
   Only a comment by `github-actions[bot]` that starts with the marker counts. A person's copy is ignored.
 - After a checkpoint, the state line also holds `pclass`. The router writes `consumed` in its own comment line,
   `<!-- review-router-consumed id=<n> -->`, right after the state line. The state line keeps the shape that an older router reads.
-- The router writes `consumed` only after a ready event that a marker confirmed. It is the id of that `pathway-confirmed` marker comment.
+- The router writes `consumed` only after a ready event that a marker confirmed. It is the highest fresh `pathway-confirmed` marker id for the head.
+  That id covers an unused marker above the one the ready event used, such as a marker left by a failed ready step.
   An older comment without the line still parses.
 - A marker belongs to one ready event. The router skips a marker whose comment id is not above `consumed`.
   Once an id is consumed, the router ignores a marker with no numeric id. Only an owner, member or collaborator marker counts.

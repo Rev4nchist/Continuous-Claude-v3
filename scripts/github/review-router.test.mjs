@@ -1347,3 +1347,15 @@ test('C1g: stateFrom reads the consumed line only right after the state line, ne
   assert.equal(stateFrom(`${state}\nx\n<!-- review-router-consumed id=7 -->`).consumed, null, 'a line in the text is no state');
   assert.equal(stateFrom(`${state}\r\n<!-- review-router-consumed id=7 -->\r\nx`).consumed, 7, 'CRLF');
 });
+
+// C1 follow-up (2026-10-30): two fresh markers for one head. /pathway posted a marker, the ready step failed, /pathway ran again.
+// The router saves the HIGHEST fresh trusted marker id for the head, not only the one it used. Else an unused marker stays live.
+//   an unused marker with a higher id survives the ready event and counts at the next one -> C1h
+test('C1h (CLI): two fresh markers for the head: the highest id is saved as consumed, also when the label matches the lower one', () => {
+  const out = runCli(c1Fix([marked(HEAD, 'none', { id: 95 }), marked(HEAD, 'coderabbit', { id: 96 })], consumedState(90)), ['--event', READY]);
+  assert.match(out, consumedAfter('pathway=none pclass=infra', 96));
+  const first = runCli(cp10Fix([marked(HEAD, 'none', { id: 95 }), marked(HEAD, 'coderabbit', { id: 96 })]), ['--event', READY]);
+  assert.match(first, consumedAfter('pathway=none pclass=infra', 96));
+  const older = runCli(c1Fix([marked(HEAD, 'none', { id: 95 }), marked(HEAD, 'coderabbit', { id: 80 })], consumedState(90)), ['--event', READY]);
+  assert.match(older, consumedAfter('pathway=none pclass=infra', 95), 'a marker at or below the consumed id never counts, so it cannot raise the saved id');
+});
