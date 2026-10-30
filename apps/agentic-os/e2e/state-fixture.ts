@@ -219,6 +219,8 @@ export type StateOptions = {
   prs?: FixturePr[];
   /** The plan FILE reference (top-level `plan`, an OsPlan), not the brief's plan steps. Default null. */
   plan?: FixturePlan | null;
+  /** The HUD's cost and limits (top-level `hud`, writeSnapshot). `unknown` so a spec can write a malformed one. Default null. */
+  hud?: unknown;
 };
 
 /** The object the real writer serialises (index.tsx writeSnapshot), with test values. */
@@ -236,6 +238,7 @@ export function makeSnapshot(sessionId: string, options: StateOptions = {}): Rec
     prs: options.prs ?? [],
     agentRuns: options.agentRuns ?? [],
     cache: options.cache ?? null,
+    hud: options.hud ?? null,
     brief: options.brief ?? null,
     chip: options.chip ?? null,
     repo: options.repo ?? null,

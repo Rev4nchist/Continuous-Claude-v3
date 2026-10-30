@@ -116,8 +116,8 @@ type Detail = {
   cache: { hitPct: number; savedUsd: number } | null;
   agentRuns: { count: number; running: number; costUsd: number } | null;
   prs: { pr: number; state: string | null }[];
-  sessionCost: null;
-  limits: null;
+  sessionCost: number | null;
+  limits: { label: string; percent: number }[] | null;
   stateAgeSeconds: number | null;
   hasBrief: boolean;
 };
@@ -1300,5 +1300,115 @@ test.describe('ask flags in the detail', () => {
     await expect(asks.nth(0)).not.toContainText('stale');
     await expect(asks.nth(1)).toContainText('E2E set detail ask');
     await expect(asks.nth(1)).not.toContainText('[parsed]');
+  });
+});
+
+// --- Spec 13: the HUD's cost and limits in the Health section ---------------------------------
+
+test.describe('hud in the state file', () => {
+  test('cost and limits from the file reach the API and the Health section, apart from the agents cost', async ({
+    page,
+    request,
+  }) => {
+    const live = await liveSession(request);
+    writeDetailFixture(live.id, {
+      hud: {
+        costUsd: 3.84,
+        limits: [
+          { kind: 'five_hour', percentUsed: 38 },
+          { kind: 'seven_day', percentUsed: 12 },
+          { kind: 'spend_limit', percentUsed: 250 },
+        ],
+      },
+    });
+
+    const detail = await loadDetail(request, live.id);
+    expect(detail.sessionCost).toBe(3.84);
+    expect(detail.limits).toEqual([
+      { label: '5h', percent: 38 },
+      { label: '7d', percent: 12 },
+      { label: 'spend limit', percent: 100 },
+    ]);
+
+    await openByUrl(page, live.id);
+    const health = section(page, 'health');
+    await expect(health.getByTestId('health-session-cost')).toHaveText('session cost $3.84');
+    await expect(health.getByTestId('health-limits')).toHaveText('limits 5h 38%, 7d 12%, spend limit 100%');
+    await expect(health.getByTestId('health-agent-cost')).toContainText('1.75');
+  });
+
+  test('no hud, hud null, or a hud with no data: both lines keep the dash', async ({ page, request }) => {
+    const live = await liveSession(request);
+    for (const hud of [null, { costUsd: null, limits: [] }]) {
+      writeDetailFixture(live.id, { hud });
+      const detail = await loadDetail(request, live.id);
+      expect(detail.sessionCost).toBeNull();
+      expect(detail.limits).toBeNull();
+    }
+    await openByUrl(page, live.id);
+    const health = section(page, 'health');
+    await expect(health.getByTestId('health-session-cost')).toHaveText('session cost - (not recorded)');
+    await expect(health.getByTestId('health-limits')).toHaveText('limits - (not recorded)');
+  });
+
+  test('a cost of zero is a cost, not an absent one', async ({ request }) => {
+    const live = await liveSession(request);
+    writeDetailFixture(live.id, { hud: { costUsd: 0, limits: [] } });
+    expect((await loadDetail(request, live.id)).sessionCost).toBe(0);
+  });
+
+  test('a limit kind named like an Object.prototype member reads as its own text, never undefined', async ({ page, request }) => {
+    const live = await liveSession(request);
+    writeDetailFixture(live.id, {
+      hud: { costUsd: 1, limits: [{ kind: 'constructor', percentUsed: 5 }, { kind: 'toString', percentUsed: 6 }] },
+    });
+    const detail = await loadDetail(request, live.id);
+    expect(detail.limits).toEqual([
+      { label: 'constructor', percent: 5 },
+      { label: 'toString', percent: 6 },
+    ]);
+
+    await openByUrl(page, live.id);
+    const limits = section(page, 'health').getByTestId('health-limits');
+    await expect(limits).toHaveText('limits constructor 5%, toString 6%');
+    await expect(limits).not.toContainText('undefined');
+  });
+
+  test('a malformed hud keeps the file readable and drops only the bad parts', async ({ request }) => {
+    const live = await liveSession(request);
+    const bad: unknown[] = [
+      'text',
+      7,
+      [],
+      { costUsd: 'x', limits: 5 },
+      { costUsd: null, limits: { kind: 'five_hour', percentUsed: 1 } },
+      { limits: [null, 4, 'x', { kind: 5, percentUsed: 1 }, { kind: 'five_hour', percentUsed: '38' }, { kind: 'five_hour' }] },
+    ];
+    for (const hud of bad) {
+      writeDetailFixture(live.id, { hud });
+      const result = await loadDetail(request, live.id);
+      expect(result.sessionCost, JSON.stringify(hud)).toBeNull();
+      expect(result.limits, JSON.stringify(hud)).toBeNull();
+      expect(result.ctxPct, 'the rest of the file is still read').toBe(42);
+    }
+
+    // JSON cannot hold NaN (JSON.stringify writes null), so the guard is checked with a string percent and a null one.
+    writeDetailFixture(live.id, {
+      hud: {
+        costUsd: 2,
+        limits: [null, { kind: 'five_hour', percentUsed: '5' }, { kind: 'spend_limit', percentUsed: null }, { kind: 'seven_day', percentUsed: 12 }],
+      },
+    });
+    const mixed = await loadDetail(request, live.id);
+    expect(mixed.sessionCost).toBe(2);
+    expect(mixed.limits).toEqual([{ label: '7d', percent: 12 }]);
+  });
+
+  test('a secret in a limit kind never reaches the JSON', async ({ request }) => {
+    const live = await liveSession(request);
+    const secret = fakeSecret('Hud');
+    writeDetailFixture(live.id, { hud: { costUsd: 1, limits: [{ kind: `five_hour ${secret}`, percentUsed: 5 }] } });
+    const response = await request.get(`/api/mission-control?session=${live.id}`);
+    expect(await response.text()).not.toContain(secret);
   });
 });

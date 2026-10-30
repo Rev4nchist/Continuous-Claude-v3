@@ -281,6 +281,7 @@ describe('agentic-os git info', () => {
     const snapshot = lastSnapshot(seen)
     expect(snapshot.brief.goal).toBe('g')
     expect(snapshot).toMatchObject({ repo: null, branch: null, worktree: null })
+    expect(snapshot).toHaveProperty('hud', null)
     expect((await core($)).line1).toContain('● -')
   })
 
@@ -576,5 +577,123 @@ describe('agentic-os compactions and touched files reach the tabs', () => {
     await settle()
     expect(await tabText($, 'overview')).not.toContain('may touch')
     expect(await tabText($, 'work')).not.toContain('may touch')
+  })
+})
+
+// The HUD's cost and limits in the state file (`hud`): the web Fleet reads them. Interactive starts only: a headless run has no HUD.
+type Usage = { cost?: { usd: unknown }; rateLimits: { kind: string; percentUsed: unknown }[] }
+
+const hudWorld = (on: On, usage: Usage): Git => {
+  const seen = gitWorld(on, {})
+  on('settings.read', () => ({ value: {} }))
+  on('session.model', () => ({ value: 'claude-opus-5-5' }))
+  on('session.usage', () => ({ value: { startedAt: 0, context: { window: 1_000_000 }, ...usage } as never }))
+  on('fs.exists', () => ({ value: false }))
+  on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
+  return seen
+}
+
+/** The hud atom as a store a test controls (heldHud in hud.test.ts, copied): the kit cannot write an atom, so a test sets `held.value`. */
+const heldHud = (on: On) => {
+  const held = { value: null as unknown, version: 0 }
+  const ref = { plugin: 'ccv3-mods', key: 'hud' } as never
+  on('state.get', ref, (() => ({ value: { value: held.value, version: held.version } })) as never)
+  on('state.set', ref, ((_$: unknown, e: { value: unknown; ifVersion?: number }) => {
+    if (e.ifVersion !== undefined && e.ifVersion !== held.version) return { value: { isSet: false, version: held.version } }
+    held.value = e.value
+    held.version += 1
+    return { value: { isSet: true, version: held.version } }
+  }) as never)
+  return held
+}
+
+const hudSnapshot = async ($: Engine, seen: Git, isInteractive = true): Promise<Record<string, any>> => {
+  await $.session.start({ cwd: 'C:/wt/w1/src', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
+  await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+  return lastSnapshot(seen)
+}
+
+// H1 the snapshot has no hud key, or the cost or a limit is lost on the way
+// H2 a headless run (no HUD) writes anything but hud: null
+// H3 a limit kind that holds a secret reaches the file unredacted
+// H4 a cost or percent that is not a finite number reaches the file
+// H5 a measure after the turn-end snapshot leaves the file with the previous turn's cost and limits
+// H6 a limits value that is not a list drops the whole snapshot
+// H7 the writer caps (8 limits, 60 characters a kind) are lost
+describe('agentic-os hud in the state file', () => {
+  test('H1 an interactive session writes hud with the cost and every limit', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 12 }] })
+    const snapshot = await hudSnapshot($, seen)
+    expect(snapshot.hud).toEqual({ costUsd: 3.84, limits: [{ kind: 'five_hour', percentUsed: 38 }, { kind: 'seven_day', percentUsed: 12 }] })
+  })
+
+  test('H1 a usage with no cost writes costUsd null and keeps the limits', async ($, on) => {
+    const seen = hudWorld(on, { rateLimits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    expect((await hudSnapshot($, seen)).hud).toEqual({ costUsd: null, limits: [{ kind: 'five_hour', percentUsed: 38 }] })
+  })
+
+  test('H2 a headless run writes hud: null', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    const snapshot = await hudSnapshot($, seen, false)
+    expect(snapshot).toHaveProperty('hud', null)
+  })
+
+  test('H3 a limit kind with a secret is redacted in the file', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 1 }, rateLimits: [{ kind: `key ${SECRET}`, percentUsed: 5 }] })
+    const written = JSON.stringify((await hudSnapshot($, seen)).hud)
+    expect(written).not.toContain(SECRET)
+    expect(written).toContain('[REDACTED:')
+  })
+
+  test('H4 a non-numeric cost becomes null and a non-numeric percent drops the limit', async ($, on) => {
+    const seen = hudWorld(on, {
+      cost: { usd: '3.84' },
+      rateLimits: [{ kind: 'five_hour', percentUsed: '38' }, { kind: 'seven_day', percentUsed: 12 }],
+    })
+    expect((await hudSnapshot($, seen)).hud).toEqual({ costUsd: null, limits: [{ kind: 'seven_day', percentUsed: 12 }] })
+  })
+
+  test('H5 a measure after the turn-end snapshot moves the new cost and limits into the file', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    on('session.measure', (_$, e) => ({ changed: e.changed }))
+    on('turn.complete', (_$, e) => ({ text: e.answer }))
+    await hudSnapshot($, seen)
+    await $.turn.complete({ answer: 'done', durationMs: 1, isAborted: false, turnId: 't1', reason: 'end_turn' } as never)
+    expect(lastSnapshot(seen).hud.costUsd).toBe(3.84)
+    // The engine measures after the turn ends, so the turn-end snapshot above holds the previous turn's figures.
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, cost: { usd: 9.99 }, rateLimits: [{ kind: 'five_hour', percentUsed: 77 }], changed: ['cost', 'rateLimits'] } as never)
+    expect(lastSnapshot(seen).hud).toEqual({ costUsd: 9.99, limits: [{ kind: 'five_hour', percentUsed: 77 }] })
+  })
+
+  test('H5 a measure that changes nothing in the HUD writes no new snapshot', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }] })
+    on('session.measure', (_$, e) => ({ changed: e.changed }))
+    await hudSnapshot($, seen)
+    const same = { startedAt: 0, context: { window: 1_000_000 }, cost: { usd: 3.84 }, rateLimits: [{ kind: 'five_hour', percentUsed: 38 }], changed: ['context'] } as never
+    await $.session.measure(same)
+    const before = seen.writes.length
+    await $.session.measure(same)
+    expect(seen.writes.length).toBe(before)
+  })
+
+  test('H6 a limits value that is not a list still writes the snapshot, with the cost and the rest intact', async ($, on) => {
+    const seen = hudWorld(on, { cost: { usd: 1 }, rateLimits: [] })
+    const held = heldHud(on)
+    await $.session.start({ cwd: 'C:/wt/w1/src', surface: 'terminal', isInteractive: true } as never)
+    held.value = { model: 'm', effort: null, advisor: null, costUsd: 2.5, limits: 'five_hour 38' }
+    await $.tool.call({ tool: BRIEF_TOOL, goal: 'g' })
+    const snapshot = lastSnapshot(seen)
+    expect(snapshot.brief.goal).toBe('g')
+    expect(snapshot.hud).toEqual({ costUsd: 2.5, limits: [] })
+  })
+
+  test('H7 the writer keeps 8 limits and clips a kind to 60 characters', async ($, on) => {
+    const long = `k_${'x'.repeat(98)}`
+    const nine = Array.from({ length: 9 }, (_, i) => ({ kind: i === 0 ? long : `kind_${i}`, percentUsed: i }))
+    const seen = hudWorld(on, { cost: { usd: 1 }, rateLimits: nine })
+    const { limits } = (await hudSnapshot($, seen)).hud
+    expect(limits).toHaveLength(8)
+    expect(limits[0].kind).toBe(long.slice(0, 60))
+    expect(limits[0].kind).not.toContain('REDACTED')
   })
 })
