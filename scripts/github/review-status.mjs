@@ -923,14 +923,16 @@ function deltaBlockers(compare, prFiles) {
 
 /**
  * The PR body must hold a CLI fix review line for exactly this range: from is a prefix (7 or more hex) of the carried review's
- * commit, head is a prefix of the current head. Every line that names the range must say clean. Anything else blocks.
+ * commit, head is a prefix of the current head. Every line that names the range must say clean, except that a clean line
+ * overrides `incomplete` lines for the range. Anything else blocks.
  */
 function cliFixBlockers({ body, newest }, head) {
   const from = String(newest?.commit_id ?? '');
   const range = `${from.slice(0, 7)}..${String(head ?? '').slice(0, 7)}`;
   const mine = parseCliFixReviews(body).filter((l) => shaIsHead(l.from, from) && shaIsHead(l.head, String(head ?? '')));
   if (mine.length === 0) return [`the PR body has no "CLI fix review: ${range} clean" line (run scripts/github/cr-fix.mjs)`];
-  const bad = mine.find((l) => l.verdict !== 'clean');
+  // A clean line overrides `incomplete` lines (an earlier run that did not finish). A Major or Critical line never yields.
+  const bad = mine.find((l) => l.verdict !== 'clean' && (l.verdict !== 'incomplete' || !mine.some((m) => m.verdict === 'clean')));
   return bad ? [`the CLI fix review of ${range} is "${bad.verdict}", not clean`] : [];
 }
 

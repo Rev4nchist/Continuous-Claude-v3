@@ -9,17 +9,18 @@
  *   1. Reads the PR reviews with `gh api` and takes the newest CodeRabbit review with a body (its commit_id is <from>).
  *   2. Runs `cr review --agent --committed --base-commit <from>` in the current checkout. HEAD is <head>.
  *   3. Saves the full output to .claude/cache/e2e/<date>-cr-fix-<head7>.txt.
- *   4. Prints ONE line on stdout. Paste it into the PR body:
+ *   4. Prints ONE line on stdout when the run finished. Paste it into the PR body:
  *        CLI fix review: <from7>..<head7> <clean|N major|N critical|incomplete>
  *      Critical wins over Major; Minor, Trivial and Info findings still print `clean`. The READY carry reads the line
  *      (parseCliFixReviews in review-status.mjs) and accepts only `clean`.
  *
  * It never passes --use-credits or --api-key. Past the hourly CLI allowance the CLI returns awaiting_confirmation or
- * action_required: this script prints `incomplete`, writes the reason to stderr and exits 1. Dave decides about credits
+ * action_required: this script prints the `incomplete` line and the reason on stderr only (nothing to paste) and exits 1. Dave decides about credits
  * (coderabbit-cli.md). pre-pr.mjs keeps its own run count; runs of this script count separately.
  *
  * Exit 0 = the review finished (the line says what it found). 1 = it did not finish. 2 = it could not start (usage, gh error,
- * no earlier CodeRabbit review, nothing after it); no CLI run is spent.
+ * no earlier CodeRabbit review, nothing after it, the checkout is not the PR head, the earlier review is not an ancestor
+ * of HEAD); no CLI run is spent.
  */
 import { execFileSync, spawnSync } from 'node:child_process';
 import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
@@ -59,6 +60,22 @@ export function parseArgs(argv) {
 }
 
 const incomplete = (reason) => ({ verdict: 'incomplete', reason });
+const KNOWN_SEVERITIES = new Set(['critical', 'major', 'minor', 'trivial', 'info', 'none']);
+
+/**
+ * The number of finding events with no severity (absent or null). parseAgentStream reads those as `info`, which is a known key, so only this
+ * count sees them. An empty, blank or non-string severity is already a `bySeverity` key outside the known set, so it is not counted here too.
+ */
+function noSeverityCount(text) {
+  let n = 0;
+  for (const l of String(text ?? '').split(/\r?\n/)) {
+    try {
+      const o = JSON.parse(l);
+      if (o?.type === 'finding' && o.severity == null) n += 1;
+    } catch { /* not a JSON line */ }
+  }
+  return n;
+}
 
 /**
  * The verdict of one finished or failed run. Pure. { verdict, reason }: verdict is `clean`, `N major`, `N critical` or
@@ -75,9 +92,12 @@ export function fixVerdict(p, run) {
   if (c.status === 'review_skipped') return incomplete('the CLI found no changes to review after the base commit');
   if (c.outcome === 'failed') return incomplete('the CLI review outcome is failed');
   if (Number(c.unreviewedFileCount) > 0) return incomplete(`${Number(c.unreviewedFileCount)} file(s) were not reviewed`);
+  // A severity outside the known set, or none at all, counts as Major: the PR review carry reads it the same way.
   const { critical = 0, major = 0 } = p.bySeverity;
+  const unknown = Object.entries(p.bySeverity).filter(([k]) => !KNOWN_SEVERITIES.has(k)).reduce((sum, [, n]) => sum + n, 0);
+  const total = major + unknown + noSeverityCount(run.stdout);
   if (critical > 0) return { verdict: `${critical} critical`, reason: null };
-  if (major > 0) return { verdict: `${major} major`, reason: null };
+  if (total > 0) return { verdict: `${total} major`, reason: null };
   return { verdict: 'clean', reason: null };
 }
 
@@ -103,6 +123,19 @@ function readRange(pr, repo, cwd, deps) {
   return { from, head };
 }
 
+/** A stop result when the checkout is not the PR head or `from` is not behind HEAD. No CLI run has been spent yet. */
+function checkCheckout({ pr, repo, cwd, from, head }, deps) {
+  let prHead;
+  try {
+    prHead = String(deps.gh([`repos/${repo}/pulls/${pr}`])?.head?.sha ?? '').trim().toLowerCase();
+  } catch (err) {
+    return stop(`could not read the PR head (${String(err.message).split('\n')[0]})`);
+  }
+  if (prHead !== head) return stop(`the checkout head ${head.slice(0, 7)} is not the PR head ${prHead.slice(0, 7) || '(unreadable)'}: check out the PR branch and pull`);
+  if (!deps.isAncestor(cwd, from)) return stop(`the reviewed commit ${from.slice(0, 7)} is not an ancestor of HEAD (fetch it, or the branch was force-pushed)`);
+  return null;
+}
+
 /** Saves the CLI output. A failed save is returned as text; the line is still printed. */
 function save(file, text, deps) {
   try { deps.writeOut(file, text); return null; } catch (err) { return String(err.message); }
@@ -113,10 +146,12 @@ function save(file, text, deps) {
  * writeOut(file, text), now. Returns { line, exitCode, reason, outFile, from, head, verdict }.
  */
 export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEOUT_MIN_DEFAULT * MIN }, deps = {}) {
-  const d = { gh: ghApi, headSha: gitHead, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), ...deps };
+  const d = { gh: ghApi, headSha: gitHead, isAncestor: gitIsAncestor, runCr: defaultCrRunner, writeOut: writeText, now: new Date(), ...deps };
   const range = readRange(pr, repo, cwd, d);
   if (range.stop) return range.stop;
   const { from, head } = range;
+  const bad = checkCheckout({ pr, repo, cwd, from, head }, d);
+  if (bad) return bad;
   const run = await d.runCr({ cwd, args: CR_FIX_ARGS(from), timeoutMs });
   const stdout = String(run.stdout ?? '');
   const outFile = path.join(cwd, '.claude', 'cache', 'e2e', `${dayOf(d.now)}-cr-fix-${head.slice(0, 7)}.txt`);
@@ -141,9 +176,23 @@ function gitHead(cwd) {
   return r.stdout.trim();
 }
 
+function gitIsAncestor(cwd, from) {
+  return spawnSync('git', ['merge-base', '--is-ancestor', from, 'HEAD'], { cwd, windowsHide: true }).status === 0;
+}
+
 function writeText(file, text) {
   mkdirSync(path.dirname(file), { recursive: true });
   writeFileSync(file, text);
+}
+
+/** What main() prints. { out, err }: stdout lines and stderr lines. Only a finished run puts its line on stdout. */
+export function reportOf(r) {
+  const out = [];
+  const err = [];
+  if (r.line) (r.verdict === 'incomplete' ? err : out).push(r.line);
+  if (r.reason) err.push(`cr-fix: ${r.exitCode === 0 ? 'note' : r.line ? 'incomplete' : 'stopped'}: ${r.reason}`);
+  if (r.outFile) err.push(`cr-fix: full output: ${r.outFile}`);
+  return { out, err };
 }
 
 async function main() {
@@ -152,9 +201,9 @@ async function main() {
   const cwd = process.cwd();
   console.error(`cr-fix: reviewing the fix commits of PR #${opts.pr} with the CodeRabbit CLI (takes several minutes)`);
   const r = await crFix({ ...opts, cwd });
-  if (r.line) console.log(r.line);
-  if (r.reason) console.error(`cr-fix: ${r.exitCode === 0 ? 'note' : r.line ? 'incomplete' : 'stopped'}: ${r.reason}`);
-  if (r.outFile) console.error(`cr-fix: full output: ${r.outFile}`);
+  const { out, err } = reportOf(r);
+  for (const l of out) console.log(l);
+  for (const l of err) console.error(l);
   process.exit(r.exitCode);
 }
 

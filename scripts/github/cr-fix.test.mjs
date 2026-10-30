@@ -13,6 +13,10 @@
 //   the full output is not saved, or saved under a name the PR cannot cite             -> CF3, CF6
 //   no CodeRabbit review, the review of the head itself, a gh failure or a bad
 //     argument still starts a (billed) CLI run                                         -> CF7, CF8, CF9
+//   the checkout is not the PR head, or the reviewed commit is not an ancestor of HEAD,
+//     and a billed CLI run still starts                                                -> CF10, CF11
+//   an incomplete run prints a paste-ready line on stdout                              -> CF12
+//   an unknown or missing finding severity prints clean                                -> CF13
 import { test } from 'node:test';
 import assert from 'node:assert/strict';
 import * as FIX from './cr-fix.mjs';
@@ -31,10 +35,15 @@ const finding = (severity, n = 1) => ({ type: 'finding', severity, fileName: `sr
 const DONE = { type: 'complete', status: 'review_completed', outcome: 'completed' };
 
 /** A harness: fake gh (reviews list), fake git head, fake cr runner. Records every call. */
-function harness({ reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], head = HEAD, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null } = {}) {
-  const calls = { gh: [], runs: [], writes: [] };
+function harness({ reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null } = {}) {
+  const calls = { gh: [], runs: [], writes: [], ancestor: [] };
   const deps = {
-    gh: (args) => { calls.gh.push(args); if (ghError) throw new Error(ghError); return reviews; },
+    gh: (args) => {
+      calls.gh.push(args);
+      if (ghError) throw new Error(ghError);
+      return args.some((a) => /pulls\/\d+$/.test(a)) ? { head: { sha: prHead } } : reviews;
+    },
+    isAncestor: (cwd, from) => { calls.ancestor.push(from); return ancestor; },
     headSha: () => head,
     runCr: async (spec) => { calls.runs.push(spec); return typeof run === 'function' ? run(spec) : run; },
     writeOut: (file, text) => { calls.writes.push({ file, text }); },
@@ -168,4 +177,60 @@ test('CF9: parseArgs reads --pr, --repo and --timeout-min; --use-credits, --api-
   for (const bad of [['--pr', '5', '--use-credits'], ['--pr', '5', '--api-key', 'k'], ['--pr', '5', '--api-key=k'], ['--pr', '5', '--base-commit', 'abc'], ['--pr', 'x'], []]) {
     assert.throws(() => FIX.parseArgs(bad), undefined, bad.join(' '));
   }
+});
+
+test('CF10: the PR head must be the checkout HEAD; a stale checkout, another branch or an unreadable PR head ends with exit 2 and starts no CLI run', async () => {
+  const other = harness({ prHead: 'c'.repeat(40) });
+  const r = await other.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(other.calls.runs.length, 0);
+  assert.equal(r.line, null);
+  assert.match(r.reason, /PR head/);
+  assert.ok(other.calls.gh.some((a) => a.some((x) => /pulls\/219$/.test(x))), 'gh reads pulls/219');
+  const upper = harness({ prHead: HEAD.toUpperCase() });
+  assert.equal((await upper.go()).exitCode, 0, 'sha case does not matter');
+  const none = harness({ prHead: '' });
+  assert.equal((await none.go()).exitCode, 2, 'a PR with no head sha');
+  assert.equal(none.calls.runs.length, 0);
+});
+
+test('CF11: the reviewed commit must be an ancestor of HEAD; a force-push or a missing commit ends with exit 2 and starts no CLI run', async () => {
+  const h = harness({ ancestor: false });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(h.calls.runs.length, 0);
+  assert.deepEqual(h.calls.ancestor, [OLD]);
+  assert.match(r.reason, /ancestor/);
+  const ok = harness();
+  assert.equal((await ok.go()).exitCode, 0);
+  assert.equal(ok.calls.runs.length, 1);
+});
+
+test('CF12: a finished run prints its line on stdout; an incomplete run prints nothing on stdout (stderr only)', async () => {
+  const done = await harness().go();
+  assert.deepEqual(FIX.reportOf(done).out, [done.line]);
+  const inc = await harness({ run: { status: 1, stdout: ev(CONTEXT), stderr: 'x' } }).go();
+  assert.equal(inc.verdict, 'incomplete');
+  assert.deepEqual(FIX.reportOf(inc).out, [], 'no paste-ready line on stdout');
+  assert.ok(FIX.reportOf(inc).err.some((l) => l.includes(inc.line)), 'the line is still shown on stderr');
+  const stopped = await harness({ reviews: [] }).go();
+  assert.deepEqual(FIX.reportOf(stopped).out, []);
+});
+
+test('CF13b: a finding with an empty, blank or non-string severity counts once, as major (not once as an unknown key and once as no severity)', async () => {
+  const line = async (...findings) => (await harness({ run: { status: 0, stdout: ev(CONTEXT, ...findings, DONE), stderr: '' } }).go()).line;
+  for (const severity of ['', '  ', 5, false, {}]) {
+    assert.equal(await line({ ...finding('x'), severity }), 'CLI fix review: bbbbbbb..aaaaaaa 1 major', JSON.stringify(severity));
+  }
+  assert.equal(await line({ ...finding('x', 1), severity: '' }, { ...finding('x', 2), severity: undefined }, finding('high', 3)), 'CLI fix review: bbbbbbb..aaaaaaa 3 major', 'three findings read 3, not 4 or 5');
+});
+
+test('CF13: a finding with an unknown or missing severity counts as major, as in the PR review carry', async () => {
+  const line = async (...findings) => (await harness({ run: { status: 0, stdout: ev(CONTEXT, ...findings, DONE), stderr: '' } }).go()).line;
+  assert.equal(await line(finding('high')), 'CLI fix review: bbbbbbb..aaaaaaa 1 major');
+  assert.equal(await line(finding('blocker', 1), finding('minor', 2)), 'CLI fix review: bbbbbbb..aaaaaaa 1 major');
+  assert.equal(await line({ ...finding('x'), severity: undefined }), 'CLI fix review: bbbbbbb..aaaaaaa 1 major', 'no severity');
+  assert.equal(await line({ ...finding('x'), severity: null }), 'CLI fix review: bbbbbbb..aaaaaaa 1 major', 'null severity');
+  assert.equal(await line(finding('critical', 1), finding('high', 2)), 'CLI fix review: bbbbbbb..aaaaaaa 1 critical', 'critical still wins');
+  assert.equal(await line(finding('Minor', 1), finding('TRIVIAL', 2), finding('info', 3), finding('none', 4)), 'CLI fix review: bbbbbbb..aaaaaaa clean', 'known severities in any case');
 });

@@ -2480,6 +2480,8 @@ test('RC14: the missing-review reason names /pathway for a draft and the router 
 //   a line inside a code fence or an HTML comment (a pasted example) counts                    -> RC20
 //   two matching lines, one not clean, pass; a stale line next to a good one blocks            -> RC21
 //   the parser is not exported, or reads fields wrongly (cr-fix.mjs prints the same line)      -> RC22
+//   an old pasted `incomplete` line blocks after a clean line for the same range; a clean line
+//     hides a major or critical line                                                            -> RC21b
 //   a merge of main counts toward the 30 lines                                                 -> RC23
 //   main's changes inside a PR file stop counting (accepted: they do count)                    -> RC24
 //   a compare capped at 300 files hides a PR file, so a small delta is read                    -> RC25
@@ -2566,6 +2568,24 @@ test('RC21: every line that names this from and head must be clean; lines for ot
   assert.equal(carried(carryEval({ cli: `${bad}\n${CLI_LINE()}` })), false, 'the order does not matter');
   const stale = CLI_LINE('c'.repeat(40), 'd'.repeat(40), '1 major');
   assert.equal(carried(carryEval({ cli: `${stale}\n${CLI_LINE()}` })), true, 'a line for an older range is ignored');
+});
+
+test('RC21b: a clean line overrides incomplete lines for the same range; it never overrides a major or critical line', () => {
+  const inc = CLI_LINE(OLD, HEAD, 'incomplete');
+  assert.equal(carried(carryEval({ cli: `${inc}
+${CLI_LINE()}` })), true, 'incomplete, then clean');
+  assert.equal(carried(carryEval({ cli: `${CLI_LINE()}
+${inc}` })), true, 'clean, then incomplete');
+  assert.equal(carried(carryEval({ cli: inc })), false, 'incomplete alone still blocks');
+  for (const bad of ['1 major', '2 critical']) {
+    assert.equal(carried(carryEval({ cli: `${inc}
+${CLI_LINE()}
+${CLI_LINE(OLD, HEAD, bad)}` })), false, bad);
+  }
+  const stale = CLI_LINE('c'.repeat(40), 'd'.repeat(40), 'incomplete');
+  assert.equal(carried(carryEval({ cli: `${stale}
+${inc}
+${CLI_LINE()}` })), true, 'other ranges are ignored');
 });
 
 test('RC22: parseCliFixReviews is exported and reads from, head and verdict; the template text is no result', () => {
