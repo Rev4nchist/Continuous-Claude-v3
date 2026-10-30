@@ -35,13 +35,12 @@
 
 import { readFileSync, existsSync, mkdirSync, appendFileSync } from 'fs';
 import * as path from 'path';
-import { spawnSync } from 'child_process';
+import { spawn } from 'child_process';
 import { getOpcDir } from './shared/opc-path.js';
-import { outputContinue } from './shared/output.js';
 import { logHook } from './shared/session-activity.js';
 import { extractIntent, extractKeywords, deriveRecallIntent, cleanSearchTerm, isMachineGeneratedPrompt } from './shared/intent-extractor.js';
 import { probeDaemon, recallViaDaemon, ensureDaemonRunning } from './shared/embedding-client.js';
-import { getFreeRamBytes, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
+import { getFreeRamBytesNoSpawn, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 import { readBus } from './shared/context-bus.js';
 import { appendIntelBus } from './shared/intel-bus.js';
@@ -163,11 +162,12 @@ function mapDbResults(rawResults: any[], _useHybrid: boolean): LearningResult[] 
  * error is a short string when the recall itself failed (non-zero exit, a JSON
  * {"error": ...} body, spawn failure, unparseable output); null otherwise.
  */
-function checkDbMemory(
+async function checkDbMemory(
   intent: string,
   _projectDir: string,
   useHybrid: boolean,
-): [LearningResult[], boolean, string | null] {
+  deps: RecallDeps = {},
+): Promise<[LearningResult[], boolean, string | null]> {
   const opcDir = getOpcDir();
   if (!opcDir) return [[], false, 'opc dir not found'];
 
@@ -187,8 +187,7 @@ function checkDbMemory(
   // + (optional) embed daemon route + result write = ~4.3-6.0s typical.
   // Claude Code's UserPromptSubmit hook budget is 60s, so 12s is well within bounds.
   // Was 2000ms in Phase 1; SIGKILLed every recall on Windows (bug arbiter 2.1 HIGH-1).
-  const result = spawnSync('uv', args, {
-    encoding: 'utf-8',
+  const result = await runRecallProcess(deps.spawnFn ?? spawn, args, {
     cwd: opcDir,
     env: {
       ...process.env,
@@ -212,6 +211,64 @@ interface RecallProcess {
   signal: NodeJS.Signals | null;
   stdout: string | null;
   error?: Error;
+}
+
+/** Test seam: replaces child_process.spawn for the uv recall. */
+interface RecallDeps {
+  spawnFn?: typeof spawn;
+}
+
+/** Wait this long for the pipes to drain after the process exits, then settle anyway. */
+const RECALL_DRAIN_GRACE_MS = 500;
+
+/**
+ * Run `uv` WITHOUT blocking the event loop, so the other prompt hooks that share this
+ * process keep running while the recall waits (spawnSync blocked all of them).
+ *
+ * Maps the child to the same shape spawnSync returned, so interpretRecallProcess and its
+ * tests are unchanged. `timeout` and `killSignal` are spawn options, so a timeout still
+ * ends as signal 'SIGKILL'. It settles ONCE: 'error', 'exit' and 'close' can all fire.
+ *
+ * Why it also listens on 'exit': `uv run python` leaves a python grandchild that holds
+ * the stdout pipe, and SIGKILL of uv does not kill it. 'close' would wait for it. A
+ * signalled exit settles at once; a normal exit waits a short grace for the pipes.
+ */
+function runRecallProcess(
+  spawnFn: typeof spawn,
+  args: string[],
+  options: { cwd: string; env: NodeJS.ProcessEnv; timeout: number; killSignal: NodeJS.Signals },
+): Promise<RecallProcess> {
+  return new Promise((resolve) => {
+    const chunks: Buffer[] = [];
+    let settled = false;
+    let child: ReturnType<typeof spawn> | null = null;
+    const settle = (result: RecallProcess): void => {
+      if (settled) return;
+      settled = true;
+      try { child?.stdout?.destroy(); } catch { /* already closed */ }
+      resolve(result);
+    };
+    const collected = (): string => Buffer.concat(chunks).toString('utf-8');
+
+    try {
+      child = spawnFn('uv', args, { ...options, stdio: ['ignore', 'pipe', 'ignore'], shell: false });
+    } catch (err) {
+      settle({ status: null, signal: null, stdout: null, error: err as Error });
+      return;
+    }
+    child.stdout?.on('data', (c: Buffer | string) => chunks.push(Buffer.isBuffer(c) ? c : Buffer.from(String(c))));
+    child.on('error', (error: Error) => settle({ status: null, signal: null, stdout: null, error }));
+    child.on('exit', (code: number | null, signal: NodeJS.Signals | null) => {
+      if (signal) {
+        settle({ status: code, signal, stdout: null });
+        return;
+      }
+      setTimeout(() => settle({ status: code, signal: null, stdout: collected() }), RECALL_DRAIN_GRACE_MS).unref();
+    });
+    child.on('close', (code: number | null, signal: NodeJS.Signals | null) => {
+      settle({ status: code, signal, stdout: collected() });
+    });
+  });
 }
 
 /** Short, URL-free error text for the recall log. */
@@ -361,16 +418,16 @@ function applyFloor(match: MemoryMatch | null, floor: number): MemoryMatch | nul
  * inlines the local/db/merge sequence so it can record diagnostics
  * (mode, daemon_ready, total_elapsed_ms) in the recall log.
  */
-function checkMemoryRelevance(
+async function checkMemoryRelevance(
   intent: string,
   projectDir: string,
   useHybrid: boolean = false,
-): MemoryMatch | null {
+): Promise<MemoryMatch | null> {
   if (!intent || intent.length < 3) return null;
 
   // Phase 3 / D3b-04: local-memory probe removed (near-always SIGKILLs; see main()).
   const local: LearningResult[] = [];
-  const [db] = checkDbMemory(intent, projectDir, useHybrid);
+  const [db] = await checkDbMemory(intent, projectDir, useHybrid);
 
   const merged = mergeResults(local, db);
   const floor = useHybrid ? HYBRID_FLOOR : TEXT_ONLY_FLOOR;
@@ -448,34 +505,44 @@ function logRecallFire(entry: RecallLogEntry, projectDir: string): void {
   }
 }
 
-async function main() {
+/**
+ * The job. Takes the raw stdin text so prompt-submit can run it in one process with
+ * the other prompt hooks. Returns what main() prints. Never writes to stdout.
+ * Bad JSON, or a payload with no prompt, fails open to a bare continue.
+ */
+export async function runMemoryAwareness(raw: string): Promise<object> {
+  try {
+    return await memoryAwarenessJob(raw);
+  } catch {
+    // Silent fail - don't block user prompts
+    return { result: 'continue' };
+  }
+}
+
+async function memoryAwarenessJob(raw: string): Promise<object> {
   const t0 = Date.now();
-  const input: UserPromptSubmitInput = JSON.parse(readStdin());
+  const input: UserPromptSubmitInput = JSON.parse(raw);
   const projectDir = process.env.CLAUDE_PROJECT_DIR || input.cwd;
 
   // Skip for subagents - they don't need memory recall (saves tokens)
   if (process.env.CLAUDE_AGENT_ID) {
-    outputContinue();
-    return;
+    return { result: 'continue' };
   }
 
   // Skip very short prompts (greetings, commands)
   if (input.prompt.length < 15) {
-    outputContinue();
-    return;
+    return { result: 'continue' };
   }
 
   // Skip if prompt is just a slash command
   if (input.prompt.trim().startsWith('/')) {
-    outputContinue();
-    return;
+    return { result: 'continue' };
   }
 
   // QW-07: drop machine-generated prompts (Claude Code synthetic <task-notification>
   // blobs etc.) before they ride recall as polluted intent. (D2c-01/D3b-05/D3c-04)
   if (isMachineGeneratedPrompt(input.prompt)) {
-    outputContinue();
-    return;
+    return { result: 'continue' };
   }
 
   // Git expansion first (better matching), else the extracted intent. One shared
@@ -484,8 +551,7 @@ async function main() {
 
   // Skip if no meaningful intent
   if (intent.length < 3) {
-    outputContinue();
-    return;
+    return { result: 'continue' };
   }
 
   // WS-2 Phase B.3b: read the context bus (read-only, fail-open) to bias recall
@@ -515,7 +581,7 @@ async function main() {
   // probeDaemon so we never wake/thrash the model under pressure. Fail-open:
   // getFreeRamBytes returns +Infinity on a probe failure, so a broken probe can
   // never take recall offline.
-  const freeRamBytes = getFreeRamBytes();
+  const freeRamBytes = getFreeRamBytesNoSpawn(); // no child process: the merged hook shares one loop
   const hostMemoryPressured = isHostMemoryPressured(freeRamBytes, getHostRamFloorBytes());
   if (hostMemoryPressured) {
     process.stderr.write(
@@ -606,7 +672,7 @@ async function main() {
     recallVia = 'daemon';
   } else {
     uvUsedHybrid = daemonAttempted ? false : daemonReady;
-    [db, dbTimedOut, recallError] = checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
+    [db, dbTimedOut, recallError] = await checkDbMemory(recallQuery, projectDir, uvUsedHybrid);
   }
   const mergedRaw = mergeResults(local, db);
   // Floor must match the SCORE TYPE actually produced (RRF 0.005-0.0328 vs FTS
@@ -706,24 +772,33 @@ async function main() {
     // above the recalled memory when the bus has non-stale focus.
     const claudeContext = focusBlock ? `${focusBlock}\n${memoryContext}` : memoryContext;
 
-    console.log(JSON.stringify({
+    return {
       hookSpecificOutput: {
         hookEventName: 'UserPromptSubmit',
         additionalContext: claudeContext
       }
-    }));
+    };
   } else if (focusBlock) {
     // WS-2 Phase B.3b: no memory match, but the bus has non-stale focus -> still
     // inject the SESSION FOCUS block (the working set is useful on its own).
-    console.log(JSON.stringify({
+    return {
       hookSpecificOutput: {
         hookEventName: 'UserPromptSubmit',
         additionalContext: focusBlock
       }
-    }));
-  } else {
-    outputContinue();
+    };
   }
+  return { result: 'continue' };
+}
+
+async function main(): Promise<void> {
+  let raw = '';
+  try {
+    raw = readStdin();
+  } catch {
+    // Unreadable stdin: the job fails open on the parse.
+  }
+  console.log(JSON.stringify(await runMemoryAwareness(raw)));
 }
 
 // Auto-run only when executed as a hook. Guard the on-import auto-run (QW-06)
@@ -731,16 +806,22 @@ async function main() {
 // in-process without main() blocking on readStdin(). The real hook is spawned
 // with VITEST unset (see memory-awareness.test.ts runHook env strip), so this
 // does not change runtime behavior. Matches the guard used by 18 sibling hooks.
-if (!process.env.VITEST) {
+//
+// The basename check keeps main() from running when the bundle is only IMPORTED: the
+// combined prompt-submit.mjs, and health_check.py's `node -e import(...)`. Before it,
+// either import printed an extra {"result":"continue"} and read stdin a second time.
+// Basename, not `includes`: a directory named like a hook must not start it.
+if (!process.env.VITEST && /(^|[\\/])memory-awareness\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch(() => {
     // Silent fail - don't block user prompts
-    outputContinue();
+    console.log(JSON.stringify({ result: 'continue' }));
   });
 }
 
 // Exports for testability — Wave 3 introduces these so future tests can pin
 // the merge & floor behavior without going through the stdin/spawn path.
 export {
+  checkDbMemory,
   mergeResults,
   applyFloor,
   classifyRecallOutcome,

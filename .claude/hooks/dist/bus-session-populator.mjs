@@ -3,11 +3,6 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/bus-session-populator.ts
 import { readFileSync as readFileSync4 } from "fs";
 
-// src/shared/output.ts
-function outputContinue() {
-  console.log(JSON.stringify({ result: "continue" }));
-}
-
 // src/shared/context-bus.ts
 import { readFileSync as readFileSync3 } from "node:fs";
 import { dirname as dirname4, join as join5, resolve, sep } from "node:path";
@@ -765,12 +760,11 @@ function shouldSeed(prompt) {
   if (prompt.trim().startsWith("/")) return false;
   return true;
 }
-function main() {
+async function runBusSessionPopulator(raw) {
   try {
-    const input = JSON.parse(readStdin());
+    const input = JSON.parse(raw);
     if (!shouldSeed(input.prompt)) {
-      outputContinue();
-      return;
+      return { result: "continue" };
     }
     const intent = sanitizeMemoryContent(input.prompt, INTENT_CAP);
     mutateBus(void 0, (b) => {
@@ -779,8 +773,19 @@ function main() {
     });
   } catch {
   }
-  outputContinue();
+  return { result: "continue" };
 }
-if ((process.argv[1] || "").includes("bus-session-populator")) {
+function main() {
+  let raw = "";
+  try {
+    raw = readStdin();
+  } catch {
+  }
+  void runBusSessionPopulator(raw).then((out) => console.log(JSON.stringify(out)));
+}
+if (/(^|[\\/])bus-session-populator\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main();
 }
+export {
+  runBusSessionPopulator
+};
