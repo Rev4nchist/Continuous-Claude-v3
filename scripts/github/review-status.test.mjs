@@ -2724,6 +2724,13 @@ test('C2e: with no review sentence, a Major outside-diff finding, an unreadable 
   assert.equal(none(outsideOnly('Minor').replace(/Minor/g, 'Plain')).coderabbitCarried, null, 'outside-diff findings with no marker');
 });
 
+test('C2h: a notice body that quotes review content is never a carry source (CLI finding on c4bbe41)', () => {
+  const notice = `> [!IMPORTANT]\n> ## Review skipped\n> Auto reviews are disabled.\n\n${outsideOnly('Minor')}`;
+  const r = carryEval({ carry: carryOf({ reviewComments: [] }), cli: `${CLI_LINE()}${HANDLED(2)}`, evalOver: { reviews: [outsideReview(notice)] } });
+  assert.equal(r.coderabbitCarried, null, r.reasons.join('; '));
+  assert.ok(r.coderabbitCarryBlockers.some((b) => /notice/.test(b)), r.coderabbitCarryBlockers.join('; '));
+});
+
 test('C2f: carry blockers are in the result as strings; a carried PR has none; the missing-review reason text is unchanged', () => {
   const blocked = carryEval({ cli: null });
   assert.ok(Array.isArray(blocked.coderabbitCarryBlockers) && blocked.coderabbitCarryBlockers.length > 0, 'blockers are listed');

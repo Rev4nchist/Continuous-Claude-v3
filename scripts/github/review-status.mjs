@@ -990,6 +990,8 @@ function reviewBlockers({ newest, reviewComments }, head) {
   if (!newest) return ['no CodeRabbit review to carry'];
   if (!/^[0-9a-f]{40}$/.test(newest.commit_id ?? '') || newest.commit_id === head) return ['the newest CodeRabbit review names no earlier head'];
   if (newest.summaryOnly) return []; // a clean summary-only round has no findings and no inline comments
+  // A notice (rate limit, skipped, failed) is never a review, even when it quotes review content.
+  if (codeRabbitNotice(newest.body)) return ['the newest CodeRabbit review is a notice'];
   const stated = REVIEW_SENTENCE.exec(newest.body);
   // No sentence (an outside-diff or nitpick only review, live PR 205 review 5691905341): 0 inline comments, the body is still read.
   // A body with no sentence, no outside-diff section and no severity marker has nothing to read, so it fails closed.
