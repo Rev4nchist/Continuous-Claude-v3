@@ -17,10 +17,15 @@
 //     and a billed CLI run still starts                                                -> CF10, CF11
 //   an incomplete run prints a paste-ready line on stdout                              -> CF12
 //   an unknown or missing finding severity prints clean                                -> CF13
+//   a merge inside <from>..HEAD is not named, or the note breaks the stdout line the carry reads -> CF14, CF15
 import { test } from 'node:test';
+import { execFileSync } from 'node:child_process';
+import { mkdtempSync, writeFileSync, rmSync } from 'node:fs';
+import os from 'node:os';
+import path from 'node:path';
 import assert from 'node:assert/strict';
 import * as FIX from './cr-fix.mjs';
-import { parseCliFixReviews } from './review-status.mjs';
+import { parseCliFixReviews, carryBlockers, newestCodeRabbitRound } from './review-status.mjs';
 
 const HEAD = 'a'.repeat(40);
 const OLD = 'b'.repeat(40);
@@ -34,17 +39,23 @@ const CONTEXT = { type: 'review_context', workingDirectory: '/x', currentBranch:
 const finding = (severity, n = 1) => ({ type: 'finding', severity, fileName: `src/f${n}.ts`, startLine: n, endLine: n, title: `finding ${n}`, comment: 'c' });
 const DONE = { type: 'complete', status: 'review_completed', outcome: 'completed' };
 
+// The GraphQL node review-status pairs with each REST issue comment (body, update stamp, edit history).
+const gqlNode = (edits) => (c) => ({ databaseId: c.id, body: c.body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: c.updated_at, userContentEdits: { nodes: edits[c.id] ?? [] } });
+
 /** A harness: fake gh (reviews list), fake git head, fake cr runner. Records every call. */
-function harness({ reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null } = {}) {
-  const calls = { gh: [], runs: [], writes: [], ancestor: [] };
+function harness({ merges = [], reviews = [review(1, OLD, '2026-10-30T08:00:00Z')], comments = [], commentEdits = {}, head = HEAD, prHead = head, ancestor = true, run = { status: 0, stdout: ev(CONTEXT, DONE), stderr: '' }, ghError = null } = {}) {
+  const calls = { gh: [], runs: [], writes: [], ancestor: [], merges: [] };
   const deps = {
     gh: (args) => {
       calls.gh.push(args);
       if (ghError) throw new Error(ghError);
+      if (args.includes('graphql')) return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: false }, nodes: comments.map(gqlNode(commentEdits)) } } } } };
+      if (args.some((a) => /issues\/\d+\/comments/.test(a))) return comments;
       return args.some((a) => /pulls\/\d+$/.test(a)) ? { head: { sha: prHead } } : reviews;
     },
     isAncestor: (cwd, from) => { calls.ancestor.push(from); return ancestor; },
     headSha: () => head,
+    mergesIn: (cwd, from) => { calls.merges.push(from); return merges; },
     runCr: async (spec) => { calls.runs.push(spec); return typeof run === 'function' ? run(spec) : run; },
     writeOut: (file, text) => { calls.writes.push({ file, text }); },
     now: NOW,
@@ -233,4 +244,119 @@ test('CF13: a finding with an unknown or missing severity counts as major, as in
   assert.equal(await line({ ...finding('x'), severity: null }), 'CLI fix review: bbbbbbb..aaaaaaa 1 major', 'null severity');
   assert.equal(await line(finding('critical', 1), finding('high', 2)), 'CLI fix review: bbbbbbb..aaaaaaa 1 critical', 'critical still wins');
   assert.equal(await line(finding('Minor', 1), finding('TRIVIAL', 2), finding('info', 3), finding('none', 4)), 'CLI fix review: bbbbbbb..aaaaaaa clean', 'known severities in any case');
+});
+
+const MERGE = 'f'.repeat(40);
+
+test('CF14: a merge commit inside <from>..HEAD is named on stderr; a range without one prints no merge note', async () => {
+  const withMerge = harness({ merges: [MERGE] });
+  const r = await withMerge.go();
+  assert.deepEqual(withMerge.calls.merges, [OLD], 'merges are looked up in <from>..HEAD');
+  assert.equal(r.exitCode, 0, 'a merge never refuses the run');
+  assert.equal(withMerge.calls.runs.length, 1, 'the review still runs');
+  const { err } = FIX.reportOf(r);
+  assert.ok(err.some((l) => l.includes(MERGE.slice(0, 7)) && /merge/i.test(l)), `stderr names the merge sha: ${err.join(' | ')}`);
+  const plain = await harness().go();
+  assert.ok(!FIX.reportOf(plain).err.some((l) => /merge/i.test(l)), 'no merge, no note');
+});
+
+test('CF15: with a merge in the range the stdout line is unchanged and still reads as clean in review-status.mjs', async () => {
+  const r = await harness({ merges: [MERGE, '9'.repeat(40)] }).go();
+  const { out } = FIX.reportOf(r);
+  assert.deepEqual(out, ['CLI fix review: bbbbbbb..aaaaaaa clean']);
+  assert.deepEqual(parseCliFixReviews(out[0]), [{ from: 'bbbbbbb', head: 'aaaaaaa', verdict: 'clean' }]);
+  const inc = FIX.reportOf(await harness({ merges: [MERGE], run: { status: 1, stdout: ev(CONTEXT), stderr: 'x' } }).go());
+  assert.ok(inc.err.some((l) => l.includes(MERGE.slice(0, 7))), 'an incomplete run names the merge too');
+});
+
+test('CF16: gitMergesIn lists the merge commits of <from>..HEAD in a real repo, and none for a linear range', () => {
+  const dir = mkdtempSync(path.join(os.tmpdir(), 'cr-fix-merge-'));
+  const git = (...a) => execFileSync('git', ['-c', 'user.name=t', '-c', 'user.email=t@t', '-c', 'commit.gpgsign=false', ...a], { cwd: dir, encoding: 'utf8' }).trim();
+  try {
+    git('init', '-q', '-b', 'main');
+    const commit = (f) => { writeFileSync(path.join(dir, f), f); git('add', f); git('commit', '-q', '-m', f); return git('rev-parse', 'HEAD'); };
+    const base = commit('a');
+    git('checkout', '-q', '-b', 'feat');
+    commit('b');
+    const linear = FIX.gitMergesIn(dir, base);
+    assert.deepEqual(linear, [], 'a linear range holds no merge');
+    git('checkout', '-q', 'main');
+    commit('c');
+    git('checkout', '-q', 'feat');
+    git('merge', '-q', '--no-ff', '-m', 'merge main', 'main');
+    commit('d');
+    assert.deepEqual(FIX.gitMergesIn(dir, base), [git('rev-parse', 'HEAD~1')]);
+  } finally { rmSync(dir, { recursive: true, force: true }); }
+});
+
+// ---------------------------------------------------------------------------------------------
+// Verifier round 2 (2026-10-30), item 1: cr-fix and review-status must pick the same carry source (newestCodeRabbitRound).
+// Ways it can fail:
+//   PR 213 shape (0 review objects, a clean summary comment): cr-fix stops "no CodeRabbit review"    -> CF17
+//   an older review object A and a newer clean summary B: cr-fix prints A..head, which never matches -> CF18
+//   a summary the carry does not trust (edited by a person) still picks the summary                  -> CF19
+//   a clean summary of the head itself, or an unreadable comment read, starts a CLI run               -> CF20
+// ---------------------------------------------------------------------------------------------
+const SUMMARY_MARKER = '<!-- This is an auto-generated comment: summarize by coderabbit.ai -->';
+const BASE = 'e'.repeat(40);
+// The live PR 213 summary shape, cut to what the reader uses: the marker, the clean sentence, the "between" line and the coverage marker.
+const cleanSummary = (covered, at, id = 800) => ({
+  id, user: CR_BOT, created_at: at, updated_at: at,
+  body: `<!-- coderabbit-ai-generated:v1 -->\n\n${SUMMARY_MARKER}\n\nNo actionable comments were generated in the recent review.\n\n`
+    + `Reviewing files that changed from the base of the PR and between ${BASE} and ${covered}.\n\n`
+    + `<!-- final_review_risk_coverage:{"sourceCommitId":"${covered}","coveredCommitId":"${covered}","kind":"reviewed"} -->\n`,
+});
+
+/** The CLI fix review blockers of review-status for this source and this printed line (carryBlockers with all other inputs left out). */
+function cliBlockers({ reviews, comments, commentEdits }, line) {
+  const newest = newestCodeRabbitRound({ reviews, comments, commentEdits, head: HEAD });
+  return carryBlockers({ head: HEAD, newest, body: line }).filter((b) => /CLI fix review/.test(b));
+}
+
+test('CF17: no review object, only a clean summary comment (live PR 213 shape): the range starts at the commit the summary covers', async () => {
+  const comments = [cleanSummary(OLD, '2026-10-30T08:00:00Z')];
+  const commentEdits = { 800: [] };
+  const h = harness({ reviews: [], comments, commentEdits });
+  const r = await h.go();
+  assert.equal(r.exitCode, 0, r.reason ?? '');
+  assert.deepEqual(h.calls.runs[0].args, ['review', '--agent', '--committed', '--base-commit', OLD]);
+  assert.equal(r.line, 'CLI fix review: bbbbbbb..aaaaaaa clean');
+  assert.deepEqual(parseCliFixReviews(r.line), [{ from: 'bbbbbbb', head: 'aaaaaaa', verdict: 'clean' }]);
+  assert.deepEqual(cliBlockers({ reviews: [], comments, commentEdits }, r.line), [], 'review-status accepts the printed line for this source');
+});
+
+test('CF18: an older review object A and a newer clean summary B: the range starts at B, and review-status accepts that line, not an A line', async () => {
+  const reviews = [review(1, OLDER, '2026-10-30T07:00:00Z')];
+  const comments = [cleanSummary(OLD, '2026-10-30T08:00:00Z')];
+  const commentEdits = { 800: [] };
+  const h = harness({ reviews, comments, commentEdits });
+  const r = await h.go();
+  assert.equal(r.exitCode, 0, r.reason ?? '');
+  assert.equal(r.from, OLD, 'B, the newer source');
+  assert.deepEqual(cliBlockers({ reviews, comments, commentEdits }, r.line), []);
+  assert.equal(cliBlockers({ reviews, comments, commentEdits }, `CLI fix review: ${OLDER.slice(0, 7)}..aaaaaaa clean`).length, 1, 'control: an A..head line does not match the source');
+});
+
+test('CF19: a summary the carry does not trust is not a source: the newest review object is', async () => {
+  const reviews = [review(1, OLDER, '2026-10-30T07:00:00Z')];
+  const comments = [cleanSummary(OLD, '2026-10-30T08:00:00Z')];
+  const person = { 800: [{ editor: { login: 'someone', __typename: 'User' }, editedAt: '2026-10-30T08:30:00Z' }] };
+  const h = harness({ reviews, comments, commentEdits: person });
+  const r = await h.go();
+  assert.equal(r.from, OLDER);
+  assert.deepEqual(cliBlockers({ reviews, comments, commentEdits: { 800: person[800] } }, r.line), []);
+});
+
+test('CF20: a clean summary of the head itself leaves no fix commit; a failed comment read ends with exit 2 and starts no CLI run', async () => {
+  const same = harness({ reviews: [], comments: [cleanSummary(HEAD, '2026-10-30T08:00:00Z')], commentEdits: { 800: [] } });
+  const r = await same.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(same.calls.runs.length, 0);
+  const failing = harness({ reviews: [review(1, OLD, '2026-10-30T08:00:00Z')] });
+  const orig = failing.deps.gh;
+  failing.deps.gh = (args) => { if (args.includes('graphql')) throw new Error('HTTP 502 graphql'); return orig(args); };
+  const r2 = await failing.go();
+  assert.equal(r2.exitCode, 2);
+  assert.equal(failing.calls.runs.length, 0);
+  assert.match(r2.reason, /HTTP 502 graphql/);
 });
