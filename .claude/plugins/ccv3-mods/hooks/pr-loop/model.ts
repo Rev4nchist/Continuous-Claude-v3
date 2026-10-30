@@ -399,7 +399,7 @@ const paidReview = (pr: number): string =>
  * A paid review replaces the capacity post while it runs. The retry depends on the paid review finishing or still running, not on the
  * request having been posted: a request that produced no review must not leave the watcher LIMITED with no way out.
  */
-const PAID_GATE = 'If a paid review was posted for this head and is still running, wait for it. If a paid review was posted for this head and no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back. If none was posted, the post below applies.'
+const PAID_GATE = 'If a paid review was posted for this head: while the CodeRabbit status on the head is pending, wait for it. Otherwise, if no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back. If none was posted, the post below applies.'
 
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {

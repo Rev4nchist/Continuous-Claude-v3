@@ -1434,7 +1434,8 @@ describe('pr-loop checkpoint states', () => {
 
   // PR #225 round 3: after the paid-review step, the later "post @coderabbitai review" must not wait on a paid review that was only posted.
   // CodeRabbit round 1 (PR #227): the fallback depends on the paid review finishing or still running, not on the request having been posted.
-  const PAID_GATE = /If a paid review was posted for this head and no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back/
+  // CodeRabbit round 2 (PR #227): the retry is an "otherwise" branch, so a paid review that still runs after 30 minutes cannot overlap it.
+  const PAID_GATE = /Otherwise, if no CodeRabbit review appeared within 30 minutes, check @coderabbitai rate limit and post one @coderabbitai review when capacity is back/
 
   test('CW4n a paid-eligible rate limit makes the later post conditional on no paid review for this head, with and without a record', async ($, on) => {
     const withRecord = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
@@ -1451,8 +1452,14 @@ describe('pr-loop checkpoint states', () => {
 
   test('CW4n2 the paid gate keeps a retry path: wait while the paid review runs, retry when none appeared, never "only if none was posted"', async ($, on) => {
     const line = await limitedLine($, on, null, RATE_LIMITED())
-    expect(line).toMatch(/still running, wait for it/)
+    expect(line).toMatch(/while the CodeRabbit status on the head is pending, wait for it/)
     expect(line).not.toMatch(/only if no paid review was posted/)
+  })
+
+  test('CW4n3 a paid review still running after 30 minutes cannot reach the retry: the retry is the "otherwise" of the pending wait', async ($, on) => {
+    const line = await limitedLine($, on, null, RATE_LIMITED())
+    expect(line).toMatch(/while the CodeRabbit status on the head is pending, wait for it\. Otherwise, if no CodeRabbit review appeared within 30 minutes/)
+    expect(line).not.toMatch(/is still running, wait for it\. If a paid review was posted/)
   })
 
   test('CW4p a rate limit that offers no paid review keeps its later post unconditional', async ($, on) => {
