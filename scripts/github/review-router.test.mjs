@@ -1081,7 +1081,8 @@ test('CP5: a raise on a review:none PR adds risk:* only and posts the checkpoint
     const d = decide('synchronize', pr(['.github/workflows/x.yml']), labels, 'normal', config, { now: NOW, previousPathway: 'none', previousPclass: 'normal' });
     assert.equal(d.reason, 'raised');
     assert.deepEqual(d.add, ['risk:infra'], `deep_enabled ${config.deep_enabled}`);
-    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Run \/checkpoint again\./);
+    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\. Return the PR to draft \(gh pr ready --undo\), then run \/pathway again\./);
+    assert.doesNotMatch(d.comment, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
     assert.equal(d.pathway, 'none');
     assert.equal(d.pclass, 'normal', 'pclass stays the class at the checkpoint');
     assert.equal(d.effective, 'infra');
@@ -1148,4 +1149,66 @@ test('CP8: a raise after review:none was removed adds neither a CodeRabbit nor a
     assert.equal(d.held, null);
     assert.equal(d.pathway, 'none');
   }
+});
+
+// CP9: the checkpoint is redone after a raise. Only the /pathway mod marks a PR ready, so a ready_for_review event with a review:* label is a new
+// checkpoint: pclass becomes the current class and the raise note clears. A push, a reopen or an open carries no new checkpoint.
+// It fails if: checkpointOf ignores the event (pclass stays normal, the note stays)  -> CP9a
+//              synchronize also resets pclass (the note would vanish on a push)       -> CP9b
+//              reopened or opened also resets pclass                                   -> CP9c
+const RAISED_SAVED = { previousPathway: 'none', previousPclass: 'normal' };
+const raisedRun = (event, labels = ['review:none', 'risk:infra', B]) =>
+  decide(event, pr(['.github/workflows/x.yml']), labels, 'infra', BASE, { now: NOW, ...RAISED_SAVED });
+
+test('CP9a: ready_for_review with a review label on a raised review:none PR saves the new class as pclass and drops the raise note', () => {
+  const d = raisedRun(READY);
+  assert.equal(d.pathway, 'none');
+  assert.equal(d.pclass, 'infra');
+  assert.equal(d.comment ?? '', '');
+  assert.doesNotMatch(d.comment ?? '', /Class raised/);
+  const old = bot(40, renderComment('Class raised from normal to infra after the checkpoint.', 'infra', HEAD, null, { pathway: 'none', pclass: 'normal' }));
+  const ops = planOps(d, old);
+  assert.deepEqual(ops.map((o) => o.op), ['comment-update']);
+  assert.match(ops[0].body, new RegExp(`head=${HEAD} pathway=none pclass=infra -->`));
+  assert.doesNotMatch(ops[0].body, /Class raised/);
+  // A person who picks CodeRabbit the second time gets the new pathway at the new class.
+  const cr = raisedRun(READY, ['review:coderabbit', 'risk:infra', B]);
+  assert.equal(cr.pathway, 'coderabbit');
+  assert.equal(cr.pclass, 'infra');
+});
+
+// It fails if: a class rise while the PR was a draft (not saved: a draft run stops early) makes the ready_for_review
+// run a 'raised' run, and checkpointOf keeps the old pathway while it moves pclass up (CodeRabbit CLI on 1ec6ab3c) -> CP9e
+test('CP9e: a raise during the draft, then /pathway picks CodeRabbit: the ready_for_review run saves the new pathway and class', () => {
+  const run = (labels) => decide(READY, pr(['.github/workflows/x.yml']), labels, 'normal', BASE, { now: NOW, ...RAISED_SAVED });
+  const cr = run(['review:coderabbit', B]);
+  assert.equal(cr.reason, 'raised');
+  assert.equal(cr.pathway, 'coderabbit');
+  assert.equal(cr.pclass, 'infra');
+  assert.doesNotMatch(cr.comment ?? '', /Class raised/);
+  const none = run(['review:none', B]);
+  assert.equal(none.pathway, 'none');
+  assert.equal(none.pclass, 'infra');
+  assert.doesNotMatch(none.comment ?? '', /Class raised/);
+});
+
+test('CP9b: the same raised review:none PR on synchronize keeps the old pclass and the raise note', () => {
+  const d = raisedRun('synchronize');
+  assert.equal(d.pathway, 'none');
+  assert.equal(d.pclass, 'normal');
+  assert.match(d.comment, /Class raised from normal to infra after the checkpoint\./);
+});
+
+test('CP9c: reopened and opened keep the old pclass and the raise note', () => {
+  for (const event of ['reopened', 'opened']) {
+    const d = raisedRun(event);
+    assert.equal(d.pclass, 'normal', event);
+    assert.match(d.comment, /Class raised from normal to infra after the checkpoint\./, event);
+  }
+});
+
+test('CP9d: ready_for_review with no review label keeps the saved pathway and pclass', () => {
+  const d = raisedRun(READY, ['risk:infra', B]);
+  assert.equal(d.pathway, 'none');
+  assert.equal(d.pclass, 'normal');
 });

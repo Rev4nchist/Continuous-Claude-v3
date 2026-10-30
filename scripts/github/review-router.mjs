@@ -32,7 +32,8 @@
  *   - PR checkpoint (spec 2026-10-28, section 3.3): at a person_override the comment also holds pathway=none|coderabbit|both
  *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
  *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
- *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Run /checkpoint again.". A raise on a PR that
+ *     A ready_for_review with a review:* label is a new checkpoint (only /pathway marks a PR ready): pclass becomes the current class.
+ *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Return the PR to draft (gh pr ready --undo), then run /pathway again.". A raise on a PR that
  *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
  * Ledger: one JSON line on stdout, in $GITHUB_STEP_SUMMARY and in $RUNNER_TEMP/review-ledger.jsonl (the workflow uploads
@@ -193,20 +194,25 @@ export const pathwayFrom = (labels) => PATHWAY_LABELS.find(([l]) => labels.inclu
 /**
  * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
  * Later runs: person_override and no_change re-read the pathway from the labels (no review:* label keeps the saved one);
- * every reason keeps pclass. A comment saved before the checkpoint existed (no pclass) stays without them.
+ * every reason keeps pclass, except a ready_for_review with a review:* label on the PR: only the /pathway mod marks a PR ready, so that
+ * is a new checkpoint and pclass becomes the current class (this clears the class-raised note). opened and reopened happen without one.
+ * A comment saved before the checkpoint existed (no pclass) stays without them.
  */
-function checkpointOf({ reason, previousClass, labelsNow, effective, saved }) {
+function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved }) {
   const none = { pathway: null, pclass: null };
   if (previousClass === null) {
     const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
     return pathway ? { pathway, pclass: effective } : none;
   }
-  const reread = reason === 'person_override' || reason === 'no_change';
+  // A ready_for_review with a review:* label is a new checkpoint, also when it is a raise run (a draft run saves no class).
+  const redone = event === 'ready_for_review' && hasReview(labelsNow);
+  const reread = reason === 'person_override' || reason === 'no_change' || redone;
   const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
-  return saved.pclass !== null && pathway !== null ? { pathway, pclass: saved.pclass } : none;
+  if (saved.pclass === null || pathway === null) return none;
+  return { pathway, pclass: redone ? effective : saved.pclass };
 }
 
-const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Run /checkpoint again.`;
+const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;
 
 /**
  * What a raise may add. A review:none PR, or one whose saved pathway is none, gets risk:* only (it wants no bot). A PR with review:coderabbit or
@@ -295,7 +301,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   }
   const personChose = previousClass === null && reason === 'person_override';
   const saved = { pathway: opts.previousPathway ?? null, pclass: opts.previousPclass ?? null };
-  const cp = checkpointOf({ reason, previousClass, labelsNow, effective, saved });
+  const cp = checkpointOf({ event, reason, previousClass, labelsNow, effective, saved });
   // One signal for "wants no bot": the saved pathway (also after a person removed review:none) drives the adds and the hold alike.
   if (reason === 'raised') add = raiseAdds(add, labelsNow, cp.pathway === 'none');
   // A review:none PR wants no bot: no hold and no hold note. If the class rose above the checkpoint class, say so on every run.

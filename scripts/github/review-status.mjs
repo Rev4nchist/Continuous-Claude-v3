@@ -140,7 +140,7 @@ const ROUTER_COMMENT_MARKER = '<!-- review-router -->';
 const ROUTER_STATE_RE = /\x3C!--\s*review-router-state class=(\w+) head=([0-9a-f]{40})((?:\s+\w+=\w+)*)\s*-->/;
 export const ROUTER_UNVERIFIED_NOTE = 'the review router has not classified this head; Greptile stays required';
 export const ROUTER_NONE_UNVERIFIED_NOTE = 'the router has not classified this head; re-run the router workflow';
-export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Run /checkpoint again';
+export const CLASS_RAISED_NOTE = 'class raised after the checkpoint (review:none was chosen at a lower class). Return the PR to draft (gh pr ready --undo), then run /pathway again';
 const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
 /**
@@ -179,7 +179,7 @@ export const NONE_BEHIND_LABEL_NOTE = 'a risk label is higher than the class the
  * absent classification), no risk label above the saved class, and, for pathway none, a class that has not risen
  * above the class at the checkpoint. Each problem is a reason; none of them asks a bot for a review.
  */
-export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+export const NONE_NO_CHECKPOINT_NOTE = 'review:none has no saved checkpoint (pathway=none) on this head; run /pathway or re-run the router workflow';
 
 function noneBlockers(labels, state, head) {
   if (!state || state.head !== head) return [ROUTER_NONE_UNVERIFIED_NOTE];
