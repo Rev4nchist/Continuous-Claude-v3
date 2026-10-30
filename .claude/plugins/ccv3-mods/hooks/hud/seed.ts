@@ -58,7 +58,9 @@ export async function reassertCostForgotten($: EngineInterface): Promise<void> {
 
 /** True from forgetSeedCost until the new conversation's first reply: usage() may still hold the old cost. Never throws. */
 export async function isCostForgotten($: EngineInterface): Promise<boolean> {
-  return read($, costForgotten).catch(() => false)
+  // The module flag covers the gap after session.end, where the engine has wiped the atom and classic.SessionStart has not
+  // written it again; the atom covers a reload, which drops the module flag.
+  return endedHere || (await read($, costForgotten).catch(() => false))
 }
 
 /**

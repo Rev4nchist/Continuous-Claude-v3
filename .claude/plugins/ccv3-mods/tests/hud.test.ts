@@ -295,6 +295,27 @@ describe('hud', () => {
     }
   })
 
+  // H4j a render between the engine's atom reset and classic.SessionStart (E2E: reply, reload, then /resume) finds the atom flag
+  // wiped and the seed lost to the reload; it must still read the module flag that forgetSeedCost set, not usage()'s old cost.
+  test('H4j a render in the gap after session.end shows the dash, with the atom flag wiped and no seed cached', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    const flag = { value: false }
+    const ref = { plugin: 'ccv3-mods', key: 'costForgotten' } as never
+    on('state.get', ref, (() => ({ value: { value: flag.value, version: 0 } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: boolean }) => {
+      flag.value = e.value
+      return { value: { isSet: true, version: 0 } }
+    }) as never)
+    const held = heldHud(on)
+    held.value = null
+    await $.session.end({ reason: 'resume', sessionId: 's1', resume: { id: 's1' } } as never)
+    flag.value = false // the engine's reset
+    const gap = await hudOn($, 'terminal')
+    expect(gap.text).not.toContain('$3.84')
+    expect(gap.core).toContain('$-')
+  })
+
   // H4i a CLI --resume at launch has no earlier conversation in the process: its cost shows at once.
   test('H4i a resume at launch shows the usage cost', async ($, on) => {
     world(on)
