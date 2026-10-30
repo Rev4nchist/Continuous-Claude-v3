@@ -28,7 +28,7 @@
  *
  * PR Checkpoint rules (PR B; spec .claudedocs/2026-10-28-pr-checkpoint-mod-spec.md section 3.2). The shapes are read by
  * shared/checkpoint-shapes.ts from raw text, with no shell lexer. Patterns, in the order they are judged, after the stamp rules:
- *   self-confirm     text that names pr-checkpoint with --confirm or --apply (any checkout). Only Dave's press in /checkpoint records a pathway.
+ *   self-confirm     text that names pr-checkpoint with --confirm or --apply (any checkout). Only Dave's press in /pathway records a pathway.
  *   nonliteral-repo  a --repo or -R value with $, a backtick or %VAR% on a create, ready or label shape (any checkout).
  *   non-draft        a CCv3 PR create with no explicit draft-true token.
  *   ready            `gh pr ready` or markPullRequestReadyForReview on CCv3: always denied; a pathway never opens it. `--undo` in the same command segment is allowed.
@@ -336,11 +336,11 @@ function soft(pattern: string, why: string): Decision {
   return { action: 'deny', pattern, soft: true, reason: `BLOCKED (pre-pr-gate): ${why}` };
 }
 
-const SELF_WHY = 'pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave\'s press in the /checkpoint mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.';
+const SELF_WHY = 'pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave\'s press in the /pathway mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.';
 const LITERAL_WHY = 'pass a literal OWNER/REPO to --repo or -R. A value with $, a backtick or %VAR% hides the target repo from this gate.';
-const DRAFT_WHY = `open as draft; run /checkpoint. Open the PR with gh pr create --draft (gh api: -F draft=true). The /checkpoint mod picks the review pathway and marks the PR ready after Dave presses it.`;
-const READY_WHY = 'gh pr ready is not run from a shell. Run /checkpoint: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.';
-const LABEL_WHY = 'a review: label is set only by /checkpoint, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /checkpoint.';
+const DRAFT_WHY = `open as draft; run /pathway. Open the PR with gh pr create --draft (gh api: -F draft=true). The /pathway mod picks the review pathway and marks the PR ready after Dave presses it.`;
+const READY_WHY = 'gh pr ready is not run from a shell. Run /pathway: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.';
+const LABEL_WHY = 'a review: label is set only by /pathway, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /pathway.';
 
 /** The first PR B rule the command breaks, or null. Rules past the repo-free ones apply to CCv3 only. */
 function checkpointDeny(deps: Deps, ctx: Ctx, shapes: Shapes): Decision | null {

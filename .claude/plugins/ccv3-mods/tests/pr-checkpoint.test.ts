@@ -3,7 +3,7 @@ import type { On, RenderElement } from 'claude-code'
 import type { Engine } from 'claude-code/testing'
 
 // The PR Checkpoint mod (PR C, RED). Every check drives the plugin through the engine, as the model, Dave and the
-// headless run do: a tool call, a /checkpoint command, a pane press, a Bash or Write call, a watcher tick.
+// headless run do: a tool call, a /pathway command, a pane press, a Bash or Write call, a watcher tick.
 // Nothing imports the module under test, so each test fails on what it names and never on a missing import.
 //
 // How it can fail, and the test that catches it:
@@ -14,11 +14,11 @@ import type { Engine } from 'claude-code/testing'
 // K2  Accept does not run --confirm <rec> --by default then --apply, or the work waits on a timer (decision: press work runs INLINE)
 // K3  another option does not run --by dave
 // K4  headless runs --confirm, --apply or gh, opens a pane, or returns no text plan
-// K5  /checkpoint <pr> none costs a model turn (prompt.submit) or does not record; K5b accept; K5c usage text
+// K5  /pathway <pr> none costs a model turn (prompt.submit) or does not record; K5b accept; K5c usage text
 // K6  dismiss records something   K7 wait records something   K8 a refused --confirm still applies   K9 a refused --apply loses the retry
 // K10 an R0 result shows option Buttons   K11 a non-draft PR, a moved head or an unreadable PR opens the pane
 // K12 a held option is pressable   K12b --json exit 3, bad JSON or a timeout opens the pane   K12c a missing body file runs the engine
-// K12d the pane is not placed (isPlaced false) and nobody is told to type /checkpoint
+// K12d the pane is not placed (isPlaced false) and nobody is told to type /pathway
 // K13 lock A: a tool write to pathway.json is allowed (any spelling, NotebookEdit's notebook_path, . and .. segments)
 // K13b lock B: a shell text that names pre-pr/pathway.json is allowed in warn mode, in any write form (>, cp, tee, mv, node -e, Set-Content,
 //      Out-File, Copy-Item, [IO.File]::WriteAllText) or read form, or the deny spawns the CLI   K13c (Dave Q1) a bare mention (a commit message) passes
@@ -41,7 +41,7 @@ import type { Engine } from 'claude-code/testing'
 // A3  the Greptile ask: once, No first   A1-A3 first button: hotkey 1, autoFocus, primary look, "(Recommended)"
 // A5  a second press of Yes while the first still posts spends a second review (one gh pr comment per press, for the opening and the Greptile ask)
 // K2b a second press of an option while the first still records runs the engine twice
-// A4  an ask with isPlaced false gives a toast and "type /checkpoint", and /checkpoint draws it
+// A4  an ask with isPlaced false gives a toast and "type /pathway", and /pathway draws it
 // Choices that these tests pin and Dave may change are listed in prC-red.md, section "Choices for Dave".
 
 const SESSION = 'test-session'
@@ -168,7 +168,12 @@ const shapesFor = (command: string) => {
 
 const world = (on: On, opts: Opts = {}) => {
   const clock = mock.clock(on, { now: NOW })
-  mock.env(on, { USERPROFILE: 'C:/home', ...(opts.env ?? {}) })
+  // What mock.env does (a variable not listed is unset), plus a throw a test arms after `start`: this module's own kill-switch read, the first step of each of its lock hooks. No other module reads this name.
+  const variables: Record<string, string> = { USERPROFILE: 'C:/home', ...(opts.env ?? {}) }
+  on('env.get', (_$, e) => {
+    if (fail.env && e.name === 'CCV3_PR_CHECKPOINT_OFF') throw new Error('env.get failed')
+    return { value: variables[e.name] }
+  })
   const session = mock.session(on)
   const store = new Map<string, unknown>(Object.entries(opts.store ?? {}))
   const seen = {
@@ -187,7 +192,7 @@ const world = (on: On, opts: Opts = {}) => {
   const files: Record<string, string> = { [CONFIG]: JSON.stringify({ checkpoint: { enforce: false } }), ...(opts.files ?? {}) }
   const statuses = opts.statuses ?? {}
   // Armed by a test after `start`, so only the call under test throws.
-  const fail = { exists: false, root: false, set: false }
+  const fail = { exists: false, root: false, set: false, env: false }
 
   on('store.get', (_$, e) => {
     if (opts.throwStore && e.key.startsWith(opts.throwStore)) throw new Error('store failed')
@@ -514,12 +519,13 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
   })
 
   test('K9 a refused --apply keeps the record confirmed, shows the engine text, and retry-apply runs --apply only', async ($, on) => {
-    const moved = 'pr-checkpoint: refused: The head of PR #7 moved since the pathway was confirmed (PR bbbbbbb, record aaaaaaa). Run /checkpoint again.\n'
+    const moved = 'pr-checkpoint: refused: The head of PR #7 moved since the pathway was confirmed (PR bbbbbbb, record aaaaaaa). Run /pathway again.\n'
     const w = world(on, { apply: { exitCode: 1, stderr: moved } })
     const { pane } = await openPane($)
     await pane.press({ key: 'opt-coderabbit' })
     expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('confirmed')
-    expect(await paneText(pane)).toContain('Run /checkpoint again.')
+    expect(await paneText(pane)).toContain('Run /pathway again.')
+    expect(await paneText(pane)).not.toContain('/checkpoint')
     expect(await keys(pane)).toContain('retry-apply')
     await pane.press({ key: 'retry-apply' })
     expect(counts(w.seen).confirm).toBe(1)
@@ -617,7 +623,7 @@ describe('pr-checkpoint: the tool refuses before it opens anything', () => {
     })
   }
 
-  test('K12c a missing body file stops the tool and /checkpoint before the engine runs', async ($, on) => {
+  test('K12c a missing body file stops the tool and /pathway before the engine runs', async ($, on) => {
     const { seen } = world(on, { missing: ['pr-body.md'] })
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
@@ -634,9 +640,11 @@ describe('pr-checkpoint: the tool refuses before it opens anything', () => {
     await start($)
     const told = await callTool($, { pr: 7, body: 'pr-body.md' })
     expect(told.text).toContain(`/${COMMAND}`)
+    expect(told.text).not.toContain('/checkpoint')
     expect(told.text).toContain('the terminal is 100 columns wide')
     expect(seen.toasts.some(text => text.includes(`type /${COMMAND}`))).toBe(true)
     expect(seen.toasts.some(text => text.includes('100 columns'))).toBe(true)
+    expect(seen.toasts.some(text => text.includes('/checkpoint'))).toBe(false)
     expect(store.get(PENDING)).toBeDefined()
     const before = seen.opens.length
     const ran = await slash($, '')
@@ -645,8 +653,8 @@ describe('pr-checkpoint: the tool refuses before it opens anything', () => {
   })
 })
 
-describe('pr-checkpoint: /checkpoint', () => {
-  test('K5 /checkpoint 7 none costs no model turn and records with --by dave', async ($, on) => {
+describe('pr-checkpoint: /pathway', () => {
+  test('K5 /pathway 7 none costs no model turn and records with --by dave', async ($, on) => {
     const { seen, store } = world(on)
     await start($)
     const ran = await slash($, '7 none --body pr-body.md')
@@ -660,14 +668,14 @@ describe('pr-checkpoint: /checkpoint', () => {
     expect(ran.text).toContain('none')
   })
 
-  test('K5b /checkpoint 7 accept records the recommendation with --by default', async ($, on) => {
+  test('K5b /pathway 7 accept records the recommendation with --by default', async ($, on) => {
     const { seen } = world(on)
     await start($)
     await slash($, '7 accept --body pr-body.md')
     expect(engineCalls(seen).some(call => /^--confirm coderabbit --by default /.test(call))).toBe(true)
   })
 
-  test('K5c /checkpoint with nothing to act on, or a bad word, gives the usage text and runs nothing', async ($, on) => {
+  test('K5c /pathway with nothing to act on, or a bad word, gives the usage text and runs nothing', async ($, on) => {
     const { seen } = world(on)
     await start($)
     const empty = await slash($, '')
@@ -678,7 +686,7 @@ describe('pr-checkpoint: /checkpoint', () => {
     expect(seen.opens).toEqual([])
   })
 
-  test('K14 a /checkpoint raised by a plugin records nothing and gives the text plan only', async ($, on) => {
+  test('K14 a /pathway raised by a plugin records nothing and gives the text plan only', async ($, on) => {
     const { seen, store } = world(on)
     await start($)
     const ran = await slash($, '7 none --body pr-body.md', 'plugin')
@@ -687,7 +695,7 @@ describe('pr-checkpoint: /checkpoint', () => {
     expect(store.get('checkpoint:pr:7')).toBeUndefined()
   })
 
-  test('K4b headless /checkpoint 7 none records nothing', async ($, on) => {
+  test('K4b headless /pathway 7 none records nothing', async ($, on) => {
     const { seen, store } = world(on)
     await start($, false)
     const ran = await slash($, '7 none --body pr-body.md')
@@ -741,6 +749,54 @@ describe('pr-checkpoint: lock A, tool writes to pathway.json', () => {
     expect(LOCK_DENIED(passed as never)).toBe(false)
     expect(seen.ran.map(r => r.text)).toEqual(['C:/r/.claude/cache/pre-pr/stamp.json'])
   })
+})
+
+describe('pr-checkpoint: lock A fails closed by its own return', () => {
+  // K13f: Lock A answers { deny } itself when it throws, as Lock B does, and does not leave the deny to .catch. A .catch deny of a hook that
+  // threw can be lost under an outer unmatched tool.call hook (the Agentic OS observer; PR C kit finding). The seam is env.get: Lock A's
+  // first step (the kill-switch read) throws, so the deny must come from the hook's own return. The kit reproduces the loss: the plugin's
+  // other modules already hold unmatched tool.call hooks (touched-files, the Agentic OS observer), so even the plain case fails on the old
+  // code. The two extra cases add a bare pass-through hook first and last.
+  const writes = ($: Engine) => $.tool.call({ tool: 'Write', file_path: 'C:/r/.claude/cache/pre-pr/stamp.json', content: '{}' } as never) as unknown as Promise<{ deny?: string }>
+
+  for (const where of ['none', 'outer-first', 'outer-last'] as const) {
+    test(`K13f a throw inside lock A (${where === 'none' ? 'no outer hook' : `an unmatched outer tool.call hook, registered ${where === 'outer-first' ? 'before' : 'after'} the mod`}) denies with the lock-failed text, and the write never ran`, async ($, on) => {
+      const outer = (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e)
+      if (where === 'outer-first') on('tool.call', outer as never)
+      const w = world(on)
+      const { seen } = w
+      if (where === 'outer-last') on('tool.call', outer as never)
+      await start($)
+      w.fail.env = true
+      const r = await writes($)
+      expect(LOCK_DENIED(r)).toBe(true)
+      expect(r.deny).toMatch(/lock failed/i)
+      expect(seen.ran).toEqual([])
+    })
+  }
+})
+
+describe('pr-checkpoint: lock B fails closed by its own return, off switch included', () => {
+  // K13f for Bash and PowerShell: the kill-switch read is the first step of the handler. A throw there must be answered by shellLock's own
+  // return, because an outer unmatched tool.call hook can drop the deny of a handler that threw (the same loss as lock A, fd8dbae7).
+  // It fails if the handler awaits isOff before shellLock, as the old code did: the deny is then only the .catch one.
+  for (const tool of ['Bash', 'PowerShell'] as const) {
+    for (const where of ['none', 'outer-first', 'outer-last'] as const) {
+      test(`K13f ${tool}: a throw from the env.get read (${where === 'none' ? 'no outer hook' : `an unmatched outer tool.call hook, registered ${where === 'outer-first' ? 'before' : 'after'} the mod`}) denies with the lock-failed text, and the command never ran`, async ($, on) => {
+        const outer = (_$: unknown, e: unknown, next: (e: unknown) => unknown) => next(e)
+        if (where === 'outer-first') on('tool.call', outer as never)
+        const w = world(on)
+        const { seen } = w
+        if (where === 'outer-last') on('tool.call', outer as never)
+        await start($)
+        w.fail.env = true
+        const r = (await $.tool.call({ tool, command: 'git status' } as never)) as unknown as { deny?: string }
+        expect(LOCK_DENIED(r as never)).toBe(true)
+        expect(r.deny).toMatch(/lock failed/i)
+        expect(seen.ran).toEqual([])
+      })
+    }
+  }
 })
 
 describe('pr-checkpoint: lock B, shell text', () => {

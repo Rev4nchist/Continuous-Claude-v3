@@ -528,11 +528,11 @@ function stampDeny(command, deps, ctx) {
 function soft(pattern, why) {
   return { action: "deny", pattern, soft: true, reason: `BLOCKED (pre-pr-gate): ${why}` };
 }
-var SELF_WHY = "pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave's press in the /checkpoint mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.";
+var SELF_WHY = "pr-checkpoint --confirm and --apply record and spend a review pathway. Only Dave's press in the /pathway mod does that. Do not run them from a shell. The read-only form (node scripts/github/pr-checkpoint.mjs --json) is allowed.";
 var LITERAL_WHY = "pass a literal OWNER/REPO to --repo or -R. A value with $, a backtick or %VAR% hides the target repo from this gate.";
-var DRAFT_WHY = `open as draft; run /checkpoint. Open the PR with gh pr create --draft (gh api: -F draft=true). The /checkpoint mod picks the review pathway and marks the PR ready after Dave presses it.`;
-var READY_WHY = "gh pr ready is not run from a shell. Run /checkpoint: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.";
-var LABEL_WHY = "a review: label is set only by /checkpoint, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /checkpoint.";
+var DRAFT_WHY = `open as draft; run /pathway. Open the PR with gh pr create --draft (gh api: -F draft=true). The /pathway mod picks the review pathway and marks the PR ready after Dave presses it.`;
+var READY_WHY = "gh pr ready is not run from a shell. Run /pathway: when Dave presses a pathway, the mod adds the review label and marks the PR ready. To return a PR to draft, use gh pr ready --undo.";
+var LABEL_WHY = "a review: label is set only by /pathway, for the pathway Dave confirmed for this head. Do not add one by hand, and do not use a command whose label text is hidden. Run /pathway.";
 function checkpointDeny(deps, ctx, shapes) {
   if (shapes.self) return soft("self-confirm", SELF_WHY);
   if (shapes.nonLiteral) return soft("nonliteral-repo", LITERAL_WHY);

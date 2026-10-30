@@ -5,7 +5,7 @@
  * Given the stamp, the changed files and the credit state, it picks one review pathway for a draft PR:
  * none, coderabbit or both (or wait when the CodeRabbit 7-day count is high). It spends nothing and writes nothing.
  *
- * PR B adds two modes that write or spend. Only Dave's press in the /checkpoint mod runs them (the pre-pr-gate hook denies
+ * PR B adds two modes that write or spend. Only Dave's press in the /pathway mod runs them (the pre-pr-gate hook denies
  * a shell that names pr-checkpoint with --confirm or --apply).
  *
  * Usage: node scripts/github/pr-checkpoint.mjs [--json] [--facts facts.json] [--config router-config.json]
@@ -412,7 +412,7 @@ export function confirmRecord({ result, facts, pathway, by }) {
 
 /** Why a pathway record cannot be applied, or null. It is checked before any gh call. */
 function recordProblem(record) {
-  if (!record || typeof record !== 'object') return 'No pathway record. Run /checkpoint (pr-checkpoint.mjs --confirm) first.';
+  if (!record || typeof record !== 'object') return 'No pathway record. Run /pathway (pr-checkpoint.mjs --confirm) first.';
   if (typeof record.head !== 'string' || record.head === '') return 'The pathway record has no head.';
   if (!['none', 'coderabbit', 'both'].includes(record.pathway)) return `The pathway record holds pathway ${String(record.pathway)}, which records no review.`;
   if (record.label !== LABELS[record.pathway]) return `The pathway record label ${String(record.label)} does not match its pathway ${record.pathway}.`;
@@ -443,7 +443,7 @@ export function applyPathway({ pr, record, gh }) {
   if (live.error) return failed(live.error);
   if (live.isDraft !== true) return failed(`PR #${pr} is not a draft, so the pathway is not applied.`);
   if (String(live.headRefOid).toLowerCase() !== record.head.toLowerCase()) {
-    return failed(`The head of PR #${pr} moved since the pathway was confirmed (PR ${String(live.headRefOid).slice(0, 7)}, record ${record.head.slice(0, 7)}). Run /checkpoint again.`);
+    return failed(`The head of PR #${pr} moved since the pathway was confirmed (PR ${String(live.headRefOid).slice(0, 7)}, record ${record.head.slice(0, 7)}). Run /pathway again.`);
   }
   const label = gh(['pr', 'edit', String(pr), '--add-label', record.label, ...REPO_ARGS]);
   if (label.status !== 0) return failed(`Could not add the label ${record.label} (${firstLine(label.stderr)}). The PR was not marked ready.`);

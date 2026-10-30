@@ -825,6 +825,8 @@ test('TA2 (spec 17): apply refuses when the live head moved since confirm and ma
   const r = await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
   assert.equal(r.ok, false);
   assert.match(r.error, /head/i);
+  assert.match(r.error, /Run \/pathway again\./);
+  assert.doesNotMatch(r.error, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
   assert.deepEqual(g.mutations(), []);
 });
 
@@ -903,6 +905,8 @@ test('TA6 (CLI): --apply exits 1 with no mutation when pathway.json is missing, 
   const none = runApply({ record: null });
   assert.equal(none.status, 1, `${none.stdout} ${none.stderr}`);
   assert.match(none.stderr, /pathway/i);
+  assert.match(none.stderr, /Run \/pathway /, 'the refusal names the command a person types');
+  assert.doesNotMatch(none.stderr, /\/checkpoint/, "/checkpoint is a built-in of Claude Code, not this mod's command");
   assert.deepEqual(none.calls, [], 'no record: gh is not called');
   // The one gh call is the read. An empty call log would mean the injected gh was never used (the real gh failing on the bad token also exits 1).
   for (const [label, view, why] of [['not a draft', { isDraft: false, headRefOid: HEAD }, /draft/i], ['head moved', { isDraft: true, headRefOid: OTHER }, /head/i]]) {

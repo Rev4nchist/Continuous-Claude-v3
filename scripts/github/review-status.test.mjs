@@ -2047,8 +2047,17 @@ test('RN5c (G1): pathway=both with no review:* label requires CodeRabbit too, no
   assert.deepEqual(r.routing.required, ['greptile', 'coderabbit'], 'auto off adds CodeRabbit; G1 must not drop it');
 });
 
+test('RN9z: no note review-status.mjs exports tells a person to run /checkpoint, a built-in of Claude Code; the notes name /pathway', () => {
+  const notes = Object.entries(RS).filter(([, v]) => typeof v === 'string');
+  assert.ok(notes.length >= 3, 'review-status.mjs exports its note texts as strings');
+  for (const [name, text] of notes) assert.ok(!text.includes('/checkpoint'), `${name} names /checkpoint: ${text}`);
+  assert.match(RS.CLASS_RAISED_NOTE, /Return the PR to draft \(gh pr ready --undo\), then run \/pathway again/);
+  assert.ok(RS.CLASS_RAISED_NOTE.includes('gh pr ready --undo'), 'the note names the draft step');
+  assert.match(RS.NONE_NO_CHECKPOINT_NOTE, /run \/pathway /);
+});
+
 test('RN9: review:none whose router state on the head saved no pathway=none checkpoint is NOT READY and asks no bot', () => {
-  const reason = 'review:none has no saved checkpoint (pathway=none) on this head; run /checkpoint or re-run the router workflow';
+  const reason = 'review:none has no saved checkpoint (pathway=none) on this head; run /pathway or re-run the router workflow';
   const states = [
     ['no pathway', stateComment(HEAD, 'class=normal head=HEAD')],
     ['pathway none, no pclass', stateComment(HEAD, 'class=normal head=HEAD pathway=none')],

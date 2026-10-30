@@ -596,11 +596,13 @@ type ShellCall = { command?: unknown }
 
 /**
  * The verdict for one shell command: a deny, or null to let it go on. Any failure after a prefilter hit is a deny, in both modes.
+ * The kill-switch read is inside the try as well: a throw from env.get must be answered here, like Lock A's (writeLock).
  * It is answered here and not left to `.catch`: under an outer unmatched hook (the Agentic OS observer) the engine drops a `.catch` deny
  * of a hook that threw, while a plain return survives (scratchpad repro, kit 2.1.312).
  */
 const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh'): Promise<{ deny: string } | null> => {
   try {
+    if (await isOff($)) return null
     const command = typeof e.command === 'string' ? e.command : ''
     if (namesPathway(command)) return { deny: PATHWAY_DENY }
     if (!mayBeGated(command)) return null
@@ -613,6 +615,22 @@ const shellLock = async ($: EngineInterface, e: ShellCall, shell: 'bash' | 'pwsh
     if (await enforcing($, root)) return { deny: lockDeny(patterns) }
     await warnOnce($, patterns)
     return null
+  } catch {
+    return { deny: LOCK_FAILED }
+  }
+}
+
+type WriteCall = { file_path?: unknown; notebook_path?: unknown }
+
+/**
+ * Lock A's verdict for one tool write: a deny, or null to let it go on. Like shellLock, it answers a failure by its own return and does not
+ * leave the deny to `.catch`, which an outer unmatched hook can drop. `next` is called outside, so a throw never denies a write that ran.
+ */
+const writeLock = async ($: EngineInterface, e: WriteCall): Promise<{ deny: string } | null> => {
+  try {
+    if (await isOff($)) return null
+    const path = typeof e.file_path === 'string' ? e.file_path : typeof e.notebook_path === 'string' ? e.notebook_path : null
+    return path !== null && isPathwayFile(path) ? { deny: PATHWAY_DENY } : null
   } catch {
     return { deny: LOCK_FAILED }
   }
@@ -679,24 +697,12 @@ export const prCheckpoint = (on: On) => {
   }).catch(($, e, next) => (next.called ? next(e) : textResult('pr_checkpoint failed. Nothing was recorded. The PR stays a draft.')))
 
   // Lock A: no tool writes pathway.json. Always enforced, warn mode included.
-  on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    const input = e as unknown as { file_path?: unknown; notebook_path?: unknown }
-    const path = typeof input.file_path === 'string' ? input.file_path : typeof input.notebook_path === 'string' ? input.notebook_path : null
-    if (path !== null && isPathwayFile(path)) return { deny: PATHWAY_DENY }
-    return next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: /^(Write|Edit|MultiEdit|NotebookEdit)$/ }, async ($, e, next) => (await writeLock($, e as unknown as WriteCall)) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   // Lock B: shell text. Judge first, call next last, so a throw never denies a command that already ran.
-  on('tool.call', { tool: 'Bash' }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    return (await shellLock($, e as unknown as ShellCall, 'bash')) ?? next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: 'Bash' }, async ($, e, next) => (await shellLock($, e as unknown as ShellCall, 'bash')) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
-  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => {
-    if (await isOff($)) return next(e)
-    return (await shellLock($, e as unknown as ShellCall, 'pwsh')) ?? next(e)
-  }).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
+  on('tool.call', { tool: 'PowerShell' }, async ($, e, next) => (await shellLock($, e as unknown as ShellCall, 'pwsh')) ?? next(e)).catch(($, e, next) => (next.called ? next(e) : { deny: LOCK_FAILED }))
 
   on('command.run', { command: COMMAND }, ($, e) => checkpointCommand($, e)).catch(() => ({
     text: `${SLASH} failed. Nothing was recorded.`,
