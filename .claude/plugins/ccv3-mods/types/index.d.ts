@@ -162,6 +162,8 @@ export type AgentRun = {
   id: string
   /** The Agent tool call that started it, so the skin can badge that row. */
   toolUseId?: string
+  /** The workflow run that started it (spawn.workflow.runId). Absent outside a real workflow run; the pane groups a workflow's helpers by it. */
+  workflowRunId?: string
   type: string
   description: string
   model: string | null
@@ -177,6 +179,25 @@ export type AgentRun = {
 
 /** A file this session touched: read, edited, or edited and then committed. Path is relative to the session root. */
 export type FileTouch = { path: string; state: 'read' | 'edited' | 'committed'; added: number; removed: number }
+
+/**
+ * One lane from `lane.mjs board --json` (hooks/agentic-os/lanes-model.ts). `owner` is the 8-character short session id, never the full id.
+ * `live` (set by parseBoard, absent in a hand-built lane) is true for an owned lane whose owner session is in the board's peers, whatever its lease says; `leaseLapsed` is a separate tag.
+ */
+export type BoardLane = {
+  id: string
+  title: string
+  state: string
+  mine: boolean
+  owner: string | null
+  live?: boolean
+  note?: string
+  scope?: string
+  leaseLapsed?: boolean
+}
+
+/** One manual compaction the keeper watched: did the summary keep the plan (the marker line for these counts)? */
+export type KeeperRecord = { at: number; sessionId: string; open: number; total: number; kept: boolean }
 
 /** One way to review a draft PR, as `pr-checkpoint.mjs --json` lists it. A held option (`available` false) carries its reason and cannot be pressed. */
 export type CheckpointOption = {
@@ -267,6 +288,12 @@ declare module 'claude-code' {
       agentRuns: AgentRun[]
       /** Touched Files (hooks/touched-files): only files this session's tool calls named. */
       files: FileTouch[]
+      /** Manual compactions the keeper watched, oldest first, newest last, at most 10 (compact-keeper). Auto compactions are absent. */
+      compactions: KeeperRecord[]
+      /** Every lane `lane.mjs board --json` listed at the last good read; null before the first read (agentic-os). */
+      board: BoardLane[] | null
+      /** When that board read happened (epoch ms); null before the first good read (agentic-os). The Work tab says "as of <age>". */
+      boardAt: number | null
       /** True once this environment's 5 s pulse is armed (agentic-os); a start resets it. */
       uiArmed: boolean
       /** True once this session's first turn left its beacon file (agentic-os). */
@@ -280,7 +307,7 @@ declare module 'claude-code' {
       /** Repo, branch and worktree of the session folder (agentic-os): the band's line 1 and the snapshot's `repo`, `branch`, `worktree`. */
       git: OsGit | null
       /** The tab the /os pane shows (agentic-os): reset to overview at /clear and resume. A tab that is not live (Comms, Swarm, Resources) is never stored. */
-      osTab: 'overview' | 'plan' | 'proof' | 'decisions'
+      osTab: 'overview' | 'session' | 'plan' | 'work' | 'proof' | 'decisions'
       /** The steward's counts since the last brief_set (agentic-os, steward.ts). Reset at session.start, /clear and resume. */
       steward: OsSteward
       /** The checkpoint a draft PR waits on (hooks/pr-checkpoint); null when none is open. */

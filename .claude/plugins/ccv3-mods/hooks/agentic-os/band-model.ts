@@ -1,4 +1,4 @@
-import type { OsBrief, OsTask } from '../../types'
+import type { HudLimit, OsBrief, OsTask } from '../../types'
 import { redact } from '../shared/redact'
 import { isAskStale, isProven } from './brief'
 import type { Chip } from './brief'
@@ -10,6 +10,7 @@ import type { Span, Tone } from './pane-model'
 //   line 2  goal, plan bar, ASK count, UNPROVEN count
 // Observer only. Every string is redacted again here (idempotent), so a caller that forgets cannot leak one.
 // Below 40 columns the band is one line: the chip and the goal.
+// compactLine (below) is the one-row form: chip, repo, ctx, 5h, 7d, cost, helpers.
 
 export type BandState = {
   chip: Chip
@@ -27,6 +28,10 @@ export type BandState = {
   now: number
   /** When the session last did anything: an ask stays fresh 24 hours from it. */
   activeAt: number | null
+  /** Helpers running now. Absent or 0 draws no helper text on the compact line. */
+  helpers?: number
+  /** The HUD's limits. null or absent: not known yet (the compact line reads a dash). A list without a window draws nothing for it. */
+  limits?: HudLimit[] | null
 }
 
 export const CHIP: Record<Chip, { word: string; tone: Tone }> = {
@@ -235,6 +240,66 @@ const narrow = (s: BandState, width: number): Span[] => {
   if (room < 3) return [chip]
   const body = [...goal.fixed, ...(goal.clippable === '' ? [] : [sp(goal.clippable, goal.clippableTone)]), ...goal.tail]
   return [chip, sp(SEP, 'dim'), goal.label, ...clipSpans(body, room)]
+}
+
+// --- Compact line ---
+// The one line the band draws when the row budget leaves no room for two core lines plus the HUD row (and under 40 columns
+// with the HUD up). Chip, repo, ctx, 5h, 7d, cost, helpers. Cut order when the width is short: helpers, cost, repo, 7d, 5h.
+// The chip and ctx stay; a chip too wide for ctx at 20 columns keeps the line inside the width and drops ctx last of all.
+
+type CompactKey = 'repo' | 'ctx' | 'five' | 'seven' | 'cost' | 'helpers'
+type CompactField = { key: CompactKey; spans: Span[] }
+
+const MIN_REPO = 4
+const WINDOW: Record<'five' | 'seven', { kind: string; label: string }> = {
+  five: { kind: 'five_hour', label: '5h' },
+  seven: { kind: 'seven_day', label: '7d' },
+}
+
+/** A rate window: unknown (limits not read yet, or a non-finite percent) reads a dash; a list without the window draws nothing. */
+const windowField = (key: 'five' | 'seven', limits: HudLimit[] | null | undefined): CompactField | null => {
+  const { kind, label } = WINDOW[key]
+  if (!Array.isArray(limits)) return { key, spans: [sp(`${label} -`, 'dim')] }
+  const found = limits.find(one => one.kind === kind)
+  if (found === undefined) return null
+  if (typeof found.percentUsed !== 'number' || !Number.isFinite(found.percentUsed)) return { key, spans: [sp(`${label} -`, 'dim')] }
+  const percent = Math.round(found.percentUsed)
+  return { key, spans: [sp(`${label} ${percent}%`, gaugeTone(percent))] }
+}
+
+const compactFields = (s: BandState, roomy: boolean): CompactField[] => {
+  const ctx = typeof s.ctx === 'number' && Number.isFinite(s.ctx) ? s.ctx : null
+  const cost = typeof s.costUsd === 'number' && Number.isFinite(s.costUsd) ? s.costUsd : null
+  const helpers = typeof s.helpers === 'number' && Number.isFinite(s.helpers) ? Math.floor(s.helpers) : 0
+  const fields: (CompactField | null)[] = [
+    roomy ? { key: 'repo', spans: [sp(clean(s.repo) || '-', 'todo')] } : null,
+    { key: 'ctx', spans: [sp(ctx === null ? 'ctx -' : `ctx ${ctx}%`, ctx === null ? 'dim' : gaugeTone(ctx))] },
+    windowField('five', s.limits),
+    windowField('seven', s.limits),
+    roomy ? { key: 'cost', spans: [sp(cost === null ? '$-' : `$${cost.toFixed(2)}`, 'dim')] } : null,
+    roomy && helpers > 0 ? { key: 'helpers', spans: [sp(`${helpers} ${helpers === 1 ? 'helper' : 'helpers'} running`, 'doing')] } : null,
+  ]
+  return fields.filter((one): one is CompactField => one !== null)
+}
+
+/** The compact band line for a drawing `width` wide. Never wider than `max(width, 20)`; the chip is never cut. */
+export const compactLine = (state: BandState, width: number): Span[] => {
+  const wide = Math.max(MIN_WIDTH, Number.isFinite(width) ? Math.floor(width) : MIN_WIDTH)
+  const chip = chipSpan(state.chip)
+  let fields = compactFields(state, wide >= NARROW)
+  // Every field costs its text and one space in front of it.
+  const total = () => chip.text.length + fields.reduce((n, one) => n + 1 + len(one.spans), 0)
+  const drop = (key: CompactKey) => {
+    fields = fields.filter(one => one.key !== key)
+  }
+  for (const key of ['helpers', 'cost'] as const) if (total() > wide) drop(key)
+  if (total() > wide && fields.some(one => one.key === 'repo')) {
+    const room = wide - (total() - len(fields.find(one => one.key === 'repo')?.spans ?? []))
+    if (room >= MIN_REPO) fields = fields.map(one => (one.key === 'repo' ? { ...one, spans: clipSpans(one.spans, room) } : one))
+    else drop('repo')
+  }
+  for (const key of ['seven', 'five', 'ctx'] as const) if (total() > wide) drop(key)
+  return [chip, ...fields.flatMap(one => [sp(' ', 'dim'), ...one.spans])]
 }
 
 /**

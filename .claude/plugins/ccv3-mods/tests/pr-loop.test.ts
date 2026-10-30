@@ -681,11 +681,13 @@ describe('pr-loop view', () => {
       props: { title: 'Agentic OS', isFocused: false, bodyColumns: 60, placement: 'dock' as const, scroll: { offset: 0, bodyRows: 24 }, view: {} },
       viewport: { columns: 60, rows: 24 },
     })
+    // PRS left Overview by design: the watched changes read in plain words on the Work tab (CHANGES).
+    await pane.press({ key: 'tab-work' })
     const rows = (await pane.findAll({ type: 'Box' })).filter(found => found.key?.startsWith('row-')).map(found => found.text).join(String.fromCharCode(10))
     await pane.unmount()
-    expect(rows).toMatch(/PRS/)
-    expect(rows).toMatch(/#12\s+● PENDING/)
-    expect(rows).toMatch(/#13\s+● LIMITED/)
+    expect(rows).toMatch(/CHANGES/)
+    expect(rows).toContain('Waiting for the review of change #12')
+    expect(rows).toContain('The review of change #13 did not finish.')
     const band = await $.ui.mount({
       plugin: 'ccv3-mods',
       surface: 'terminal',
@@ -1217,7 +1219,7 @@ describe('pr-loop outside-diff findings', () => {
 // CW8  a closed PR deletes its checkpoint record and grant
 // CW9  after Dave declines the opening ask the STALLED line says "Do not request a review", not "No review on the head"
 // CW10 a skipped CodeRabbit review at the budget (LIMITED) queues the round ask and tells the model to wait for Dave
-// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Return the PR to draft (gh pr ready --undo), then run /<command> again" and "Do not request a review"
+// CW11 CLASS_RAISED_NOTE in the reasons: the line says "Return the PR to draft (gh pr ready <pr> --undo), then run /<command> again" and "Do not request a review"
 // CW12 an older status script (no isDraft) is still a draft, from the DRAFT_REASON text
 // CW13 an older status script (no round fields) with a record: "rounds unknown", and no round ask
 describe('pr-loop checkpoint states', () => {
@@ -1390,8 +1392,9 @@ describe('pr-loop checkpoint states', () => {
     await start($)
     await ticks(clock, 13)
     expect(seen.submits.length).toBe(1)
-    expect(seen.submits[0]).toContain(`Return the PR to draft (gh pr ready --undo), then run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
-    expect(seen.submits[0]).toContain('gh pr ready --undo')
+    expect(seen.submits[0]).toContain(`Return the PR to draft (gh pr ready 7 --undo), then run /${COMMAND} again: the class rose after the checkpoint. Do not request a review.`)
+    expect(seen.submits[0]).toContain('gh pr ready 7 --undo')
+    expect(seen.submits[0]).not.toContain('gh pr ready --undo')
     expect(seen.submits[0]).not.toContain('/checkpoint')
   })
 

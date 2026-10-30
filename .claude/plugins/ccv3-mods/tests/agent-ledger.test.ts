@@ -13,6 +13,8 @@ import type { Engine } from 'claude-code/testing'
 // L8 a teammate's second turn adds to a run that already shows done
 // L9 a numeric effort (a thinking budget) is flagged as drift
 // L10 a refusal shows as done
+// L11 /os redesign: a spawn that a workflow started (workflow.runId) does not store workflowRunId on the run
+// L12 an empty runId (outside a real run) or no workflow field stores a workflowRunId anyway (the key must be absent, as toolUseId is); a real runId beside them is lost
 
 const PANE_PROPS = {
   title: 'Agents',
@@ -70,6 +72,14 @@ const start = ($: Engine, isInteractive = true) =>
 
 const spawn = ($: Engine, subagentType: string) =>
   $.agent.spawn({ tool_use_id: 't', prompt: 'p', description: `do ${subagentType}`, subagentType, parentModel: 'claude-opus-5-5', background: false, fork: false } as never)
+
+// A spawn with extra input fields, as a workflow script's agent() call raises it (`workflow: { runId, agentIndex }`).
+const spawnIn = ($: Engine, subagentType: string, extra: Record<string, unknown>) =>
+  $.agent.spawn({ tool_use_id: 't', prompt: 'p', description: `do ${subagentType}`, subagentType, parentModel: 'claude-opus-5-5', background: false, fork: false, ...extra } as never)
+
+// The runs the headless snapshot carried at its last write.
+const agentRunsOf = (writes: Record<string, string>): { id: string; workflowRunId?: string }[] =>
+  (JSON.parse(writes['/home/me/.claude/state/agentic-os/s1.json'] ?? '{}') as { agentRuns?: { id: string; workflowRunId?: string }[] }).agentRuns ?? []
 
 const step = async ($: Engine, agentId: string, model: string, effort: string | number, usage: Beneath['usage']) => {
   beneath.usage = usage
@@ -212,5 +222,35 @@ describe('agent ledger', () => {
     await spawn($, 'scout')
     await finish($, 'a1', 'refusal')
     expect(await paneText($)).toContain('✗ scout')
+  })
+
+  test('L11 a spawn that a workflow started stores the workflow run id on the run', async ($, on) => {
+    reset()
+    const writes = world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($, false)
+    await spawnIn($, 'scout', { workflow: { runId: 'wf_1', agentIndex: 1 } })
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const runs = agentRunsOf(writes)
+    expect(runs).toHaveLength(1)
+    expect(runs[0]?.workflowRunId).toBe('wf_1')
+  })
+
+  test('L12 an empty run id, and a spawn with no workflow, store no workflow run id; a real one beside them is stored', async ($, on) => {
+    reset()
+    const writes = world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($, false)
+    await spawnIn($, 'scout', { workflow: { runId: '', agentIndex: 1 } })
+    reset({ agentId: 'a2' })
+    await spawn($, 'scout')
+    reset({ agentId: 'a3' })
+    await spawnIn($, 'scout', { workflow: { runId: 'wf_2', agentIndex: 2 } })
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const runs = agentRunsOf(writes)
+    expect(runs.map(run => run.id)).toEqual(['a1', 'a2', 'a3'])
+    expect('workflowRunId' in (runs[0] ?? {})).toBe(false)
+    expect('workflowRunId' in (runs[1] ?? {})).toBe(false)
+    expect(runs[2]?.workflowRunId).toBe('wf_2')
   })
 })

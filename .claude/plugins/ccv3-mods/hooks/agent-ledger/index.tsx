@@ -68,7 +68,7 @@ export const agentLedger = (on: On) => {
     if (result.deny !== undefined || result.agentId === undefined || (await isOff($))) return result
     const id = result.agentId
     // Record first: the run's first request may finish before the spec file is read.
-    const run = newRun(id, e.subagentType, e.description, result.model, {}, await $.clock.now(), e.tool_use_id)
+    const run = newRun(id, e.subagentType, e.description, result.model, {}, await $.clock.now(), e.tool_use_id, e.workflow?.runId)
     await update($, agentRuns, runs => capRuns([...runs.filter(one => one.id !== id), run]))
     const spec = await specOf($, e.subagentType)
     await update($, agentRuns, runs => runs.map(one => (one.id === id ? withSpec(one, spec) : one)))
