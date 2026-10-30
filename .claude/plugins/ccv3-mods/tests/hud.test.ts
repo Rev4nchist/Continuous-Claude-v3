@@ -12,6 +12,8 @@ import { hudParts } from '../hooks/hud/model'
 // H4b a re-run start (reload, respawn, desktop attach) zeroes the advisor count
 // H4e a re-run start draws an advisor "on" that the settings now turn off, or drops the kept count when they come back
 // H4c /clear or a resume keeps the old conversation's advisor count and cost
+// H4f a plugin reload (start runs again) between /clear or a resume and the first measure writes the old or startup cost back
+// H4g the cost stays hidden for the whole process: after the new conversation's first reply a reload shows usage()'s cost again
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
@@ -32,7 +34,12 @@ const BAND_PROPS = {
   view: {},
 }
 
-type World = { env?: Record<string, string>; settings?: Record<string, unknown>; limits?: { kind: string; percentUsed: number }[] }
+type World = {
+  env?: Record<string, string>
+  settings?: Record<string, unknown>
+  limits?: { kind: string; percentUsed: number }[]
+  cost?: number
+}
 
 const beneath = { advisorCalls: 0 }
 
@@ -54,7 +61,7 @@ const world = (on: On, w: World = {}) => {
   on('settings.read', () => ({ value: w.settings ?? { advisorModel: 'fable' } }))
   on('session.model', () => ({ value: 'claude-opus-5-5' }))
   on('session.usage', () => ({
-    value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: w.limits ?? [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: 3.84 } },
+    value: { startedAt: 0, context: { window: 1_000_000 }, rateLimits: w.limits ?? [{ kind: 'five_hour', percentUsed: 38 }], cost: { usd: w.cost ?? 3.84 } },
   }))
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('fs.exists', () => ({ value: false }))
@@ -217,6 +224,49 @@ describe('hud', () => {
       expect(after.core).toContain('$-')
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
       expect((await hudOn($, 'terminal')).text).toContain('$0.50')
+    }
+  })
+
+  // H4f start() writes usage()'s cost into the hud atom. After a reload that follows /clear or a resume, usage() still holds
+  // the old conversation's cost (3.84 here), so the dash must stand until the new conversation's first measure.
+  test('H4f a reload after /clear or a resume keeps the cost hidden until the first measure', async ($, on) => {
+    world(on)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$4.10')
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      // The reload: session.start fires again, as in H4b.
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) {
+        expect(after.text).not.toContain(old)
+        expect(after.core).not.toContain(old)
+      }
+      expect(after.core).toContain('$-')
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$0.50')
+    }
+  })
+
+  // H4g the hiding ends with the new conversation's first reply: a reload after it reads usage() again. A guard against a
+  // fix that leaves the "cost forgotten" flag on for the rest of the process.
+  test('H4g after the new conversation\'s first reply a reload shows the usage cost again', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      w.cost = 0.5
+      await start($)
+      const after = await hudOn($, 'terminal')
+      expect(after.text).toContain('$0.50')
+      expect(after.text).not.toContain('$3.84')
+      expect(after.text).not.toContain('$4.10')
+      w.cost = undefined
     }
   })
 
