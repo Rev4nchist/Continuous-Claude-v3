@@ -2794,6 +2794,11 @@ test('C2g: the non-JSON output prints the carry blockers under the reasons (fixt
 // ---------------------------------------------------------------------------------------------
 const LIVE_205 = fixtureText('pr205-review-5691905341-outside-only.md');
 const LIVE_221 = fixtureText('pr221-review-5712203534-outside-only.md');
+// Gate A: a finding is handled by naming its marker id or path:lines (see the ID-* tests), so these tests list ids.
+const IDS_221 = ['7d3b6b2ca280bf2e819358f1', 'c439ddfd145622bee5f8924f', '6d5e5570ee3fd23e01e0694a', '8283acfd3d36e050a88fe37e', 'a6fc8f0910b1e26ae51dbcfc'];
+const IDS_193 = ['b13798430e444855810d559e', 'a808bb67b4cf1eb535da039d', '8ca84b7835e8f0beaf1cbae0'];
+const IDS_205 = ['802a0ad18e4c798ae38fef83', '2159c080314654789693dafb'];
+const idList = (...bullets) => `\n\n## Outside-diff: handled\n\n${bullets.map((b) => `- ${b}`).join('\n')}\n`;
 const liveReview = (id, commit, body, at = T1) => ({ id, user: CR_BOT, commit_id: commit, submitted_at: at, body });
 
 test('OD-A: outside-diff findings count in a review body with no "Actionable comments posted" sentence (live PR 205 and PR 221 bodies)', () => {
@@ -2814,7 +2819,8 @@ test('OD-B: a carried Minor round whose body lists outside-diff findings with no
   assert.equal(open.ready, false, 'the carry alone must not clear the findings');
   const why = open.reasons.find((x) => /outside.diff/i.test(x));
   assert.ok(why.startsWith('CodeRabbit lists 2 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.'), why);
-  const done = ev(`${CLI_LINE()}${HANDLED(2)}`);
+  assert.equal(ev(`${CLI_LINE()}${HANDLED(2)}`).ready, false, 'filler bullets do not handle named findings');
+  const done = ev(`${CLI_LINE()}${idList(...IDS_205)}`);
   assert.equal(done.ready, true, done.reasons.join('; '));
   assert.deepEqual(done.coderabbitCarried, { from: OLD, deltaLines: 12 });
 });
@@ -2878,7 +2884,7 @@ test('HR-B: READY with an outside-diff-only review of the head needs the "Outsid
   assert.equal(open.ready, false);
   assert.ok(open.reasons.some((x) => x.startsWith('CodeRabbit lists 5 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.')), open.reasons.join('; '));
   assert.ok(!open.reasons.some((x) => CARRY_REASON.test(x)), 'no "no review of the head" reason');
-  const done = ev(HANDLED(5));
+  const done = ev(idList(...IDS_221));
   assert.equal(done.ready, true, done.reasons.join('; '));
 });
 
@@ -2938,4 +2944,111 @@ test('RI-A: readIssueComments follows every GraphQL page and merges the edit his
 test('RI-B: readIssueComments throws when a later page fails', () => {
   const { gh } = ghPages([[gqlComment(1, 'one')], [gqlComment(2, 'two')]], { failOn: 'C1' });
   assert.throws(() => RS.readIssueComments(gh, 'o', 'r', 7), /HTTP 502 page 2/);
+});
+
+// ---------------------------------------------------------------------------------------------
+// Gate A, finding identity (2026-10-30). PRs #178, #180, #191 and #193 merged with unread outside-diff findings
+// because READY counted bullets, not findings. Each CodeRabbit finding carries `<!-- cr-comment:v1:HEX -->`; the
+// heading block names its `path:lines`. A finding is handled only when a bullet names its id or its path and lines.
+// Ways it can fail, one test each:
+//   ID-A  filler bullets ("finding 1: fixed") still pass                                         (live PR 221, 5 findings)
+//   ID-B  a bullet that names the marker id (bare hex or "cr-comment:v1:HEX") does not pass
+//   ID-C  a bullet with the exact path and line or range does not pass; a wrong line or a bare path does
+//   ID-D  one of three unnamed passes, or the reason does not name it; the pinned reason prefix changes
+//   ID-E  a body with a heading and no markers does not fall back to the count rule; a partial parse is trusted
+//   ID-F  the same finding in two reviews counts twice; nitpick or other-section markers count as findings
+//   ID-G  the #193 shape (findings in an older round, later clean summary) stops requiring them
+// ---------------------------------------------------------------------------------------------
+const F193 = fixtureText('pr193-review-5683574334-outside-three.md');
+const F178 = fixtureText('pr178-review-5667057662-outside-one.md');
+const reasonOf = (r) => r.reasons.find((x) => /outside.diff/i.test(x));
+const odLive = (body, id = 1, commit = HEAD, at = T1) => ({ id, user: CR_BOT, commit_id: commit, submitted_at: at, body });
+
+test('ID-A: filler bullets do not handle live PR 221 findings', () => {
+  const r = odEval([odLive(LIVE_221)], HANDLED(5));
+  assert.equal(r.coderabbitOutsideDiff, 5, 'the count stays visible');
+  assert.equal(r.ready, false, 'five filler bullets must not clear five named findings');
+  assert.ok(IDS_221.every((id) => reasonOf(r).includes(id)), reasonOf(r));
+});
+
+test('ID-B: bullets naming each marker id handle the findings (bare hex or cr-comment:v1:HEX; an HTML comment is invisible, so it is stripped)', () => {
+  const bare = odEval([odLive(LIVE_221)], idList(...IDS_221.map((id) => `${id}: fixed in abc1234`)));
+  assert.equal(bare.ready, true, bare.reasons.join('; '));
+  const full = odEval([odLive(LIVE_221)], idList(...IDS_221.map((id) => `cr-comment:v1:${id} dismissed, not a bug`)));
+  assert.equal(full.ready, true, full.reasons.join('; '));
+  const nested = odEval([odLive(F193)], `\n\n## Outside-diff: handled\n\n- round one\n  - ${IDS_193.join('\n  - ')}\n`);
+  assert.equal(nested.ready, true, 'ids in indented detail lines of one entry count');
+});
+
+test('ID-C: a bullet with the exact path and line (range) handles the finding; a bare path or another line does not', () => {
+  const P = '.claude/rules-ondemand/pr-review-loop.md';
+  const ok = odEval([odLive(LIVE_221)], idList(`\`${P}:337-340\` fixed`, `${P}:166-168 fixed`, `${P} lines 159-162 fixed`, `${P}#L342-343 fixed`, `${P}:331 fixed`));
+  assert.equal(ok.ready, true, ok.reasons.join('; '));
+  const bad = odEval([odLive(F178)], idList('opc/scripts/setup/docker_setup.py fixed', 'opc/scripts/setup/docker_setup.py:191 fixed', 'docker_setup.py:191-192 fixed', 'opc/scripts/setup/docker_setup.py:1191-1192 fixed'));
+  assert.equal(bad.ready, false, 'bare path, one line of a range, a basename and a longer number are not exact');
+});
+
+test('ID-D: one of three findings unnamed fails, the reason names its id and place, and the pinned prefix holds', () => {
+  const r = odEval([odLive(F193)], idList(`${IDS_193[0]}: fixed`, `${IDS_193[1]}: fixed`, 'filler: nothing to see'));
+  assert.equal(r.ready, false);
+  const why = reasonOf(r);
+  assert.ok(why.startsWith('CodeRabbit lists 3 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 3.'), why);
+  assert.ok(why.includes(IDS_193[2]), 'names the missing marker id');
+  assert.ok(why.includes('.claude/hooks/src/pre-pr-gate.ts:90-94'), 'names the missing place');
+  assert.ok(!why.includes(IDS_193[0]) && !why.includes(IDS_193[1]), 'does not name the handled ones');
+});
+
+test('ID-E: a heading with no markers falls back to the count rule; a partial parse needs spare bullets for the rest', () => {
+  const noMarkers = odReview(HEAD, 3, T1);
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [noMarkers] }), { findings: [], unidentified: 3 });
+  assert.equal(odEval([noMarkers], HANDLED(3)).ready, true, 'today rule: 3 bullets cover 3');
+  assert.equal(odEval([noMarkers], HANDLED(2)).ready, false);
+  const partial = odLive(F193.replace(/^> <!-- cr-comment:v1:8ca84b7835e8f0beaf1cbae0 -->\r?\n/m, ''));
+  const part = RS.codeRabbitOutsideFindings({ reviews: [partial] });
+  assert.deepEqual([part.findings.length, part.unidentified], [2, 1]);
+  assert.equal(odEval([partial], idList(IDS_193[0], IDS_193[1])).ready, false, 'the heading says 3: one finding has no id, needs a spare bullet');
+  assert.equal(odEval([partial], idList(IDS_193[0], IDS_193[1], 'the third, fixed')).ready, true);
+});
+
+test('ID-F: findings are read from the outside-diff section only, and one finding in two reviews counts once', () => {
+  const { findings } = RS.codeRabbitOutsideFindings({ reviews: [odLive(LIVE_221)] });
+  assert.deepEqual(findings.map((f) => f.id), IDS_221, 'the two later markers sit outside the section');
+  assert.deepEqual(findings.map((f) => f.location)[4], '.claude/rules-ondemand/pr-review-loop.md:331');
+  const twice = [odLive(LIVE_221, 1, OLD, T1), odLive(LIVE_221, 2, HEAD, T2)];
+  assert.equal(codeRabbitOutsideDiff({ head: HEAD, reviews: twice }), 5, 'two review ids, same markers');
+  assert.equal(odEval(twice, idList(...IDS_221)).ready, true);
+  assert.equal(codeRabbitOutsideDiff({ head: HEAD, reviews: [odLive(LIVE_221, 1), odLive(F193, 2)] }), 8, 'different findings add up');
+});
+
+test('ID-G: findings in an older round stay required after a later clean review of the head (the #193 shape)', () => {
+  const clean = odReview(HEAD, null, T2, { id: 3 });
+  const reviews = [odLive(F193, 1, OLD, T1), clean];
+  const r = odEval(reviews, HANDLED(3));
+  assert.equal(r.ready, false, 'filler does not pass');
+  assert.ok(IDS_193.every((id) => reasonOf(r).includes(id)), reasonOf(r));
+  assert.equal(odEval(reviews, idList(...IDS_193)).ready, true);
+});
+
+test('isCodeRabbitUser: only the CodeRabbit app bot counts (cr-paid and land-recheck share it)', () => {
+  assert.equal(RS.isCodeRabbitUser({ login: 'coderabbitai[bot]', type: 'Bot' }), true);
+  for (const u of [{ login: 'coderabbitai[bot]', type: 'User' }, { login: 'greptile-apps[bot]', type: 'Bot' }, null, undefined]) assert.equal(RS.isCodeRabbitUser(u), false);
+});
+
+// ID-H: the marker id is exactly 24 hex and a bullet names it as a whole token (review of 2026-10-30, item 3).
+//   a marker of another length is read as an id, and a bullet with a short hex string "names" it     -> ID-H1
+//   a 24-hex id inside a longer hex run is taken as naming the finding                                -> ID-H2
+test('ID-H1: a marker whose id is not 24 hex is no id (the count fallback applies), so a bullet "a1" names nothing', () => {
+  const short = F193.replace(/cr-comment:v1:[0-9a-f]{24}/g, 'cr-comment:v1:a1');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(short)] }), { findings: [], unidentified: 3 });
+  const long = F193.replace(/cr-comment:v1:([0-9a-f]{24})/g, 'cr-comment:v1:$1ab');
+  assert.deepEqual(RS.codeRabbitOutsideFindings({ reviews: [odLive(long)] }), { findings: [], unidentified: 3 });
+  assert.equal(odEval([odLive(short)], idList('a1')).ready, false, 'one bullet does not cover three unidentified findings');
+});
+
+test('ID-H2: an id inside a longer hex string is not named; the exact id, alone or in text, is', () => {
+  const embedded = IDS_193.map((id) => `0${id}`);
+  assert.equal(odEval([odLive(F193)], idList(...embedded)).ready, false, 'a longer hex run before the id');
+  const trailing = IDS_193.map((id) => `${id}ff`);
+  assert.equal(odEval([odLive(F193)], idList(...trailing)).ready, false, 'a longer hex run after the id');
+  assert.equal(odEval([odLive(F193)], idList(...IDS_193.map((id) => `see (${id}), fixed`))).ready, true);
 });
