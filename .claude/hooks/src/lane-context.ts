@@ -184,14 +184,18 @@ const short = (s: string | null): string => (s ? s.slice(0, 8) : '--------');
 /** Echo back the event we were actually invoked for — a SessionStart injection
  *  labelled UserPromptSubmit is a mismatch the harness has no reason to honour. */
 function emit(context: string, eventName: string): void {
-  if (!context.trim()) { process.stdout.write('{}'); return; }
-  const out: ContextInjectionOutput = {
+  process.stdout.write(JSON.stringify(buildOutput(context, eventName)));
+}
+
+/** The object emit() prints: `{}` for no context, else the injection envelope. */
+function buildOutput(context: string, eventName: string): ContextInjectionOutput | Record<string, never> {
+  if (!context.trim()) return {};
+  return {
     hookSpecificOutput: {
       hookEventName: eventName,
       additionalContext: context,
     },
   };
-  process.stdout.write(JSON.stringify(out));
 }
 
 async function readStdin(): Promise<string> {
@@ -277,8 +281,20 @@ export async function deliverDirectMessages(
   }
 }
 
+// main() stays right after deliverDirectMessages on purpose: lane-context-dm.test.ts
+// slices the source between the two to prove the DM path never writes the watermark.
 async function main(): Promise<void> {
-  const raw = await readStdin();
+  const out = await runLaneContext(await readStdin());
+  if (out !== null) process.stdout.write(JSON.stringify(out));
+}
+
+/**
+ * The job. Takes the raw stdin text so prompt-submit can run it in one process with
+ * the other prompt hooks. Returns the object main() prints, or null when the
+ * PostToolUse path has already written its own output. Never writes on the
+ * SessionStart / UserPromptSubmit path.
+ */
+export async function runLaneContext(raw: string): Promise<object | null> {
   let payload: { session_id?: string; hook_event_name?: string } = {};
   try { payload = JSON.parse(raw); } catch { /* fall through to the guard below */ }
 
@@ -291,24 +307,24 @@ async function main(): Promise<void> {
    * identity bug this project spent a session root-causing.
    */
   const me = payload.session_id;
-  if (!me) { process.stdout.write('{}'); return; }
+  if (!me) return {};
 
   const eventName = payload.hook_event_name || 'UserPromptSubmit';
   const isStart = eventName === 'SessionStart';
 
-  if (eventName === 'PostToolUse') { await deliverDirectMessages(me); return; }
+  if (eventName === 'PostToolUse') { await deliverDirectMessages(me); return null; }
 
   const url = connString();
-  if (!url) {
-    process.stdout.write('{}');
-    return;
-  }
+  if (!url) return {};
 
   const client = new Client({
     connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS,
   });
+  // Without a listener, an error on an idle or abandoned client (prompt-submit can
+  // walk away from this job at its deadline) is thrown as an uncaught exception.
+  client.on('error', () => {});
 
   try {
     await client.connect();
@@ -418,16 +434,20 @@ async function main(): Promise<void> {
       );
     }
 
-    emit(lines.join('\n'), eventName);
+    return buildOutput(lines.join('\n'), eventName);
   } catch {
     // Silent by contract. No database, no tables, no lanes, slow connect — all
     // the same answer: say nothing and let the turn proceed.
-    process.stdout.write('{}');
+    return {};
   } finally {
-    await client.end().catch(() => {});
+    // Not awaited. The watermark write above has already committed, and a slow socket
+    // close must not hold the return past prompt-submit's deadline: the output would be
+    // dropped while the messages stay marked read.
+    void client.end().catch(() => {});
   }
 }
 
-if ((process.argv[1] || '').includes('lane-context')) {
+// Basename check, not `includes`: a directory named like a hook must not start it.
+if (/(^|[\\/])lane-context\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main().catch(() => process.stdout.write('{}'));
 }

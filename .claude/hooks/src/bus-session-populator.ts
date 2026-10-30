@@ -29,7 +29,6 @@
  */
 
 import { readFileSync } from 'fs';
-import { outputContinue } from './shared/output.js';
 import { mutateBus, bumpTurn, setIntent } from './shared/context-bus.js';
 import { sanitizeMemoryContent } from './shared/memory-sanitize.js';
 
@@ -63,13 +62,18 @@ function shouldSeed(prompt: string | undefined): boolean {
   return true;
 }
 
-function main(): void {
+/**
+ * The job. Takes the raw stdin text so prompt-submit can run it in one process with
+ * the other prompt hooks. Returns what main() prints. Never writes to stdout.
+ * No await inside: it finishes in the same tick it starts, so prompt-submit can
+ * order it before the other jobs.
+ */
+export async function runBusSessionPopulator(raw: string): Promise<object> {
   try {
-    const input: UserPromptSubmitInput = JSON.parse(readStdin());
+    const input: UserPromptSubmitInput = JSON.parse(raw);
 
     if (!shouldSeed(input.prompt)) {
-      outputContinue();
-      return;
+      return { result: 'continue' };
     }
 
     // Sanitize + truncate the prompt into a bus-safe intent. sanitizeMemoryContent
@@ -87,9 +91,20 @@ function main(): void {
     // Fail-open: any error degrades to a bare continue. Never block a prompt.
   }
   // Always end with a bare continue -- this hook injects NO context.
-  outputContinue();
+  return { result: 'continue' };
 }
 
-if ((process.argv[1] || '').includes('bus-session-populator')) {
+function main(): void {
+  let raw = '';
+  try {
+    raw = readStdin();
+  } catch {
+    // Bad stdin: the job fails open on the parse.
+  }
+  void runBusSessionPopulator(raw).then((out) => console.log(JSON.stringify(out)));
+}
+
+// Basename check, not `includes`: a directory named like a hook must not start it.
+if (/(^|[\\/])bus-session-populator\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
   main();
 }

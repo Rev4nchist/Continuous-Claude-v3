@@ -5415,17 +5415,16 @@ function connString() {
 }
 var short = (s) => s ? s.slice(0, 8) : "--------";
 function emit(context, eventName) {
-  if (!context.trim()) {
-    process.stdout.write("{}");
-    return;
-  }
-  const out = {
+  process.stdout.write(JSON.stringify(buildOutput(context, eventName)));
+}
+function buildOutput(context, eventName) {
+  if (!context.trim()) return {};
+  return {
     hookSpecificOutput: {
       hookEventName: eventName,
       additionalContext: context
     }
   };
-  process.stdout.write(JSON.stringify(out));
 }
 async function readStdin() {
   const chunks = [];
@@ -5486,32 +5485,31 @@ async function deliverDirectMessages(me, now = Date.now(), emitFn = emit) {
   }
 }
 async function main() {
-  const raw = await readStdin();
+  const out = await runLaneContext(await readStdin());
+  if (out !== null) process.stdout.write(JSON.stringify(out));
+}
+async function runLaneContext(raw) {
   let payload = {};
   try {
     payload = JSON.parse(raw);
   } catch {
   }
   const me = payload.session_id;
-  if (!me) {
-    process.stdout.write("{}");
-    return;
-  }
+  if (!me) return {};
   const eventName = payload.hook_event_name || "UserPromptSubmit";
   const isStart = eventName === "SessionStart";
   if (eventName === "PostToolUse") {
     await deliverDirectMessages(me);
-    return;
+    return null;
   }
   const url = connString();
-  if (!url) {
-    process.stdout.write("{}");
-    return;
-  }
+  if (!url) return {};
   const client = new Client({
     connectionString: url,
     connectionTimeoutMillis: CONNECT_TIMEOUT_MS,
     query_timeout: QUERY_TIMEOUT_MS
+  });
+  client.on("error", () => {
   });
   try {
     await client.connect();
@@ -5597,15 +5595,15 @@ async function main() {
         [me, unread[unread.length - 1].id]
       );
     }
-    emit(lines.join("\n"), eventName);
+    return buildOutput(lines.join("\n"), eventName);
   } catch {
-    process.stdout.write("{}");
+    return {};
   } finally {
-    await client.end().catch(() => {
+    void client.end().catch(() => {
     });
   }
 }
-if ((process.argv[1] || "").includes("lane-context")) {
+if (/(^|[\\/])lane-context\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch(() => process.stdout.write("{}"));
 }
 export {
@@ -5613,5 +5611,6 @@ export {
   deliverDirectMessages,
   dmStatePath,
   readDmState,
+  runLaneContext,
   writeDmState
 };

@@ -33,6 +33,7 @@
 
 import { spawnSync as defaultSpawnSync, type SpawnSyncOptions, type SpawnSyncReturns } from 'child_process';
 import { readFileSync as defaultReadFileSync } from 'fs';
+import { freemem as defaultFreemem } from 'os';
 
 /**
  * Free-RAM floor in bytes (2 GB). Below this, recommend text-only fallback.
@@ -140,6 +141,38 @@ export function getFreeRamBytes(
       return Number.POSITIVE_INFINITY;
     }
     return kb * 1024;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+
+/**
+ * Free physical RAM for callers that must not block the event loop (the merged
+ * prompt-submit process runs five jobs on one loop).
+ *
+ * getFreeRamBytes() spawns PowerShell on Windows: ~570 ms of blocked loop per call,
+ * measured 2026-10-29. This returns the same number without a child process.
+ * os.freemem() on Windows is GlobalMemoryStatusEx ullAvailPhys, which is what
+ * Win32_OperatingSystem.FreePhysicalMemory reports; measured on this host the two
+ * differ by 0.1-0.2 percent. On POSIX it is the same /proc/meminfo path as the sync
+ * version. The override env var and the fail-open rule are unchanged.
+ */
+export function getFreeRamBytesNoSpawn(
+  freememFn: () => number = defaultFreemem,
+  readFileFn: ReadFileFn = defaultReadFileSync as ReadFileFn,
+  platform: NodeJS.Platform = process.platform,
+): number {
+  if (platform !== 'win32') {
+    return getFreeRamBytes(defaultSpawnSync, readFileFn, platform);
+  }
+  const override = process.env.CCV3_HOST_RAM_OVERRIDE_BYTES;
+  if (override) {
+    const parsed = parseInt(override, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  try {
+    const bytes = freememFn();
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : Number.POSITIVE_INFINITY;
   } catch {
     return Number.POSITIVE_INFINITY;
   }

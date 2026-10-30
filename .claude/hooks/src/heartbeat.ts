@@ -43,15 +43,24 @@ interface HookInput {
   prompt?: string;
 }
 
-function readStdin(): string {
-  return readFileSync(0, 'utf-8');
+/**
+ * The job. Takes the raw stdin text so prompt-submit can run it in one process with
+ * the other prompt hooks. Returns what main() prints. Never writes to stdout.
+ */
+export async function runHeartbeat(raw: string): Promise<object> {
+  try {
+    return await heartbeatJob(raw);
+  } catch (err) {
+    console.error('Heartbeat error:', err);
+    return { result: 'continue' };
+  }
 }
 
-async function main(): Promise<void> {
+async function heartbeatJob(raw: string): Promise<object> {
   let input: HookInput = {};
 
   try {
-    const rawInput = readStdin().trim();
+    const rawInput = raw.trim();
     if (rawInput) {
       input = JSON.parse(rawInput);
     }
@@ -75,8 +84,7 @@ async function main(): Promise<void> {
     const claudeDir = normalizeProjectKey(homeDir + '/.claude');
     const normalizedProject = normalizeProjectKey(project);
     if (normalizedProject === claudeDir || normalizedProject.endsWith('/.claude')) {
-      console.log(JSON.stringify({ result: 'continue' }));
-      return;
+      return { result: 'continue' };
     }
   }
 
@@ -87,8 +95,7 @@ async function main(): Promise<void> {
 
   // Skip DB update if within cache TTL (30s) for same session
   if (!shouldUpdateHeartbeat(sessionId)) {
-    console.log(JSON.stringify({ result: 'continue' }));
-    return;
+    return { result: 'continue' };
   }
 
   // Update session heartbeat via registerSession (upserts)
@@ -100,10 +107,26 @@ async function main(): Promise<void> {
     updateCache(sessionId);
   }
 
-  console.log(JSON.stringify({ result: 'continue' }));
+  return { result: 'continue' };
 }
 
-main().catch((err) => {
-  console.error('Heartbeat error:', err);
-  console.log(JSON.stringify({ result: 'continue' }));
-});
+async function main(): Promise<void> {
+  let raw = '';
+  try {
+    raw = readFileSync(0, 'utf-8');
+  } catch {
+    // No stdin: the job treats it as an empty payload.
+  }
+  console.log(JSON.stringify(await runHeartbeat(raw)));
+}
+
+// Run only when started as dist/heartbeat.mjs. The old bare `main()` ran on import,
+// so the combined prompt-submit bundle would have read stdin a second time. The
+// check is the file's basename, not `includes`: a directory named like a hook
+// must not start it.
+if (/(^|[\\/])heartbeat\.(mjs|js|ts)$/.test(process.argv[1] || '')) {
+  main().catch((err) => {
+    console.error('Heartbeat error:', err);
+    console.log(JSON.stringify({ result: 'continue' }));
+  });
+}

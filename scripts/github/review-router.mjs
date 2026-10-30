@@ -204,10 +204,11 @@ function checkpointOf({ event, reason, previousClass, labelsNow, effective, save
     const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
     return pathway ? { pathway, pclass: effective } : none;
   }
-  const reread = reason === 'person_override' || reason === 'no_change';
+  // A ready_for_review with a review:* label is a new checkpoint, also when it is a raise run (a draft run saves no class).
+  const redone = event === 'ready_for_review' && hasReview(labelsNow);
+  const reread = reason === 'person_override' || reason === 'no_change' || redone;
   const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
   if (saved.pclass === null || pathway === null) return none;
-  const redone = event === 'ready_for_review' && hasReview(labelsNow);
   return { pathway, pclass: redone ? effective : saved.pclass };
 }
 

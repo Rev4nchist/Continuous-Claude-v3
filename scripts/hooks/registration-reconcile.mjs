@@ -66,8 +66,11 @@ const LIVE = join(homedir(), '.claude', 'settings.json');
 // Lowered 2026-10-29 (75/68 -> 69/60) for the Maestro removal (PR 211): maestro-enforcer,
 // maestro-state-manager, maestro-cleanup and session-start-recovery left settings.json, so the
 // live count is 73 entries / 64 names; the floors keep the same ~4 of slack. Dave approved.
-const MIN_LIVE_ENTRIES = 69;
-const MIN_LIVE_NAMES = 60;
+// Lowered 2026-10-29 (69/60 -> 65/57) for the prompt-hook merge: the 5 UserPromptSubmit entries
+// (heartbeat, memory-awareness, user-confirmation-detector, bus-session-populator, lane-context)
+// become 1 prompt-submit entry, so live is 69 entries / 61 names; ~4 of slack kept. Dave approved.
+const MIN_LIVE_ENTRIES = 65;
+const MIN_LIVE_NAMES = 57;
 const MIN_COVERAGE = 0.95;   // fraction of live names findable in committed state
 
 const findings = [];

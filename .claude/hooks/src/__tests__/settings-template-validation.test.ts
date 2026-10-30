@@ -92,6 +92,25 @@ function templateHookRegistrations(): Map<string, Set<string>> {
 }
 
 describe('settings.json.template', () => {
+  it('16: UserPromptSubmit holds prompt-submit alone: none of the 5 merged hooks is registered there', () => {
+    const reg = templateHookRegistrations();
+    const onUps = (name: string) => [...(reg.get(name) ?? [])].filter((k) => k.startsWith('UserPromptSubmit::'));
+    for (const name of ['heartbeat', 'memory-awareness', 'user-confirmation-detector', 'bus-session-populator', 'lane-context']) {
+      expect(onUps(name), `${name} must not be registered on UserPromptSubmit (prompt-submit runs it)`).toEqual([]);
+    }
+    expect(onUps('prompt-submit')).toEqual(['UserPromptSubmit::']);
+    const t = JSON.parse(readFileSync(tplPath, 'utf8'));
+    const ups = (t.hooks.UserPromptSubmit as any[]).flatMap((b) => b.hooks ?? []);
+    const entry = ups.find((h) => hookDistName(h) === 'prompt-submit');
+    expect(entry?.timeout, 'prompt-submit timeout must stay above its 12 s internal deadline').toBe(15);
+  });
+
+  it('16b: lane-context stays on SessionStart and PostToolUse', () => {
+    const lane = [...(templateHookRegistrations().get('lane-context') ?? [])];
+    expect(lane.some((k) => k.startsWith('SessionStart::'))).toBe(true);
+    expect(lane.some((k) => k.startsWith('PostToolUse::'))).toBe(true);
+  });
+
   it('is valid JSON', () => {
     expect(() => JSON.parse(readFileSync(tplPath, 'utf8'))).not.toThrow();
   });
@@ -218,7 +237,9 @@ describe('settings.json.template', () => {
       // tldr-context-inject removed from the contract 2026-08-31: deregistered
       // everywhere by the TLDR remediation (63s/Task-call, zero real injections)
       // and archived by the Step-10 prune.
-      ['memory-awareness', 'UserPromptSubmit::'],
+      // The 5 prompt hooks run as ONE process (prompt-submit) since 2026-10-29, so
+      // Defender scans one node start per prompt, not five.
+      ['prompt-submit', 'UserPromptSubmit::'],
       ['post-edit-diagnostics', 'PostToolUse::Edit|Write'],
       ['agent-error-capture', 'PostToolUse::Task'],
       ['agent-verification', 'PostToolUse::Task'],

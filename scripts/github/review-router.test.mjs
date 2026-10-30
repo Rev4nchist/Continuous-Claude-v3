@@ -1177,6 +1177,21 @@ test('CP9a: ready_for_review with a review label on a raised review:none PR save
   assert.equal(cr.pclass, 'infra');
 });
 
+// It fails if: a class rise while the PR was a draft (not saved: a draft run stops early) makes the ready_for_review
+// run a 'raised' run, and checkpointOf keeps the old pathway while it moves pclass up (CodeRabbit CLI on 1ec6ab3c) -> CP9e
+test('CP9e: a raise during the draft, then /pathway picks CodeRabbit: the ready_for_review run saves the new pathway and class', () => {
+  const run = (labels) => decide(READY, pr(['.github/workflows/x.yml']), labels, 'normal', BASE, { now: NOW, ...RAISED_SAVED });
+  const cr = run(['review:coderabbit', B]);
+  assert.equal(cr.reason, 'raised');
+  assert.equal(cr.pathway, 'coderabbit');
+  assert.equal(cr.pclass, 'infra');
+  assert.doesNotMatch(cr.comment ?? '', /Class raised/);
+  const none = run(['review:none', B]);
+  assert.equal(none.pathway, 'none');
+  assert.equal(none.pclass, 'infra');
+  assert.doesNotMatch(none.comment ?? '', /Class raised/);
+});
+
 test('CP9b: the same raised review:none PR on synchronize keeps the old pclass and the raise note', () => {
   const d = raisedRun('synchronize');
   assert.equal(d.pathway, 'none');
