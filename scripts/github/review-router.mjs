@@ -163,16 +163,24 @@ export const builderOf = (labels) => {
 
 // `\x3C` is `<`: a regex literal that starts with `<!--` stops Semgrep's JS parser (HTML-like comment).
 const STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?(?: held=(\w+))?(?: pathway=(\w+))?(?: pclass=(\w+))?\s*-->/;
+// The consumed marker id has its own line right after the state line, so the state line keeps the shape the previous router reads.
+const CONSUMED_RE = /^\r?\n\x3C!--\s*review-router-consumed id=(\d+)\s*-->/;
 const HOLDS = new Set(['apex_d3', 'credits_u2']);
 const PATHWAYS = new Set(['none', 'coderabbit', 'both']);
 
-/** The class, head, hold, pathway and pclass stored in a router comment body. Unknown or missing parts are null. */
+const consumedFrom = (rest) => {
+  const c = CONSUMED_RE.exec(rest);
+  return c ? Number(c[1]) : null;
+};
+
+/** The class, head, hold, pathway, pclass and consumed marker id stored in a router comment body. Unknown or missing parts are null. */
 export function stateFrom(body) {
   const m = STATE_RE.exec(String(body ?? ''));
-  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null, held: null, pathway: null, pclass: null };
+  if (!m || !Object.hasOwn(RANK, m[1])) return { class: null, head: null, held: null, pathway: null, pclass: null, consumed: null };
   return {
     class: m[1], head: m[2] ?? null, held: HOLDS.has(m[3]) ? m[3] : null,
     pathway: PATHWAYS.has(m[4]) ? m[4] : null, pclass: Object.hasOwn(RANK, m[5]) ? m[5] : null,
+    consumed: consumedFrom(String(body).slice(m.index + m[0].length)),
   };
 }
 
@@ -200,14 +208,18 @@ export const renderPathwayMarker = (head, pathway) => `\x3C!-- pathway-confirmed
  * Only a comment whose author_association is OWNER, MEMBER or COLLABORATOR counts: /pathway posts as the person who runs gh, and
  * anyone with write access can also add a review:* label (the same trust level). A missing field fails closed. A marker quoted
  * inside another comment, or for another head, never counts.
+ * A marker is bound to one ready event: consumed is the id of the marker comment the router used last. A marker whose id is not
+ * above it never counts again, and once an id is consumed a marker with no numeric id fails closed.
  */
 const PATHWAY_AUTHORS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
-export function confirmedPathways(comments, head) {
+export function confirmedMarkers(comments, head, consumed = null) {
   const want = String(head ?? '').toLowerCase();
-  const found = (comments || []).filter((c) => PATHWAY_AUTHORS.has(c?.author_association))
-    .map((c) => PATHWAY_MARKER_RE.exec(String(c?.body ?? ''))).filter((m) => m && m[1] === want);
-  return [...new Set(found.map((m) => m[2]))];
+  const fresh = (c) => consumed === null || (Number.isFinite(c.id) && c.id > consumed);
+  return (comments || []).filter((c) => PATHWAY_AUTHORS.has(c?.author_association) && fresh(c))
+    .map((c) => ({ id: Number.isFinite(c.id) ? c.id : null, m: PATHWAY_MARKER_RE.exec(String(c?.body ?? '')) })).filter(({ m }) => m && m[1] === want)
+    .map(({ id, m }) => ({ id, pathway: m[2] }));
 }
+export const confirmedPathways = (comments, head, consumed = null) => [...new Set(confirmedMarkers(comments, head, consumed).map((m) => m.pathway))];
 
 /**
  * The pathway and pclass this run saves. First run: only a person_override writes them (pclass = the class then).
@@ -215,20 +227,25 @@ export function confirmedPathways(comments, head) {
  * every reason keeps pclass, except a ready_for_review that /pathway confirmed: a pathway-confirmed marker for this head names the
  * pathway of the review:* label on the PR. That is a new checkpoint and pclass becomes the current class (this clears the class-raised note).
  * A ready_for_review without such a marker (a person clicked "Ready for review", or ran gh pr ready) is not a checkpoint.
+ * The marker's id is saved as consumed (the router already skipped older ones), so the same marker cannot start a second checkpoint.
  * opened and reopened happen without one. A comment saved before the checkpoint existed (no pclass) stays without them.
  */
 function checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed = [] }) {
-  const none = { pathway: null, pclass: null };
+  const none = { pathway: null, pclass: null, consumed: null };
+  // The newest marker that names the label's pathway: the one this ready event uses up.
+  const used = event === 'ready_for_review' && hasReview(labelsNow)
+    ? confirmed.map((c) => (typeof c === 'string' ? { id: null, pathway: c } : c)).filter((c) => c.pathway === pathwayFrom(labelsNow)).reduce((best, c) => (best === null || (c.id ?? -1) > (best.id ?? -1) ? c : best), null)
+    : null;
   if (previousClass === null) {
     const pathway = reason === 'person_override' ? pathwayFrom(labelsNow) : null;
-    return pathway ? { pathway, pclass: effective } : none;
+    return pathway ? { pathway, pclass: effective, consumed: used?.id ?? null } : none;
   }
   // A confirmed ready_for_review is a new checkpoint, also when it is a raise run (a draft run saves no class).
-  const redone = event === 'ready_for_review' && hasReview(labelsNow) && confirmed.includes(pathwayFrom(labelsNow));
+  const redone = used !== null;
   const reread = reason === 'person_override' || reason === 'no_change' || redone;
   const pathway = (reread ? pathwayFrom(labelsNow) : null) ?? saved.pathway;
   if (saved.pclass === null || pathway === null) return none;
-  return { pathway, pclass: redone ? effective : saved.pclass };
+  return { pathway, pclass: redone ? effective : saved.pclass, consumed: (redone ? used.id : null) ?? saved.consumed };
 }
 
 const raiseNote = (from, to) => `Class raised from ${from} to ${to} after the checkpoint. Return the PR to draft (gh pr ready --undo), then run /pathway again.`;
@@ -271,7 +288,7 @@ const releasable = (previousHeld, r, labelsNow, credits) => Boolean(previousHeld
 /**
  * decide(event, pr, labelsNow, previousClass, config, { now, previousHeld }) -> a decision
  *   previousHeld: the hold saved in the router comment (apex_d3, credits_u2) or null.
- *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null. confirmed: pathways /pathway confirmed for this head (confirmedPathways).
+ *   previousPathway, previousPclass: the checkpoint attributes saved in the router comment, or null. confirmed: pathways /pathway confirmed for this head (confirmedMarkers; a plain pathway string has no id). previousConsumed: the marker id saved in the router comment.
  *   pr: { number, head, draft, state, paths, codeRabbitRateLimited }
  *   -> { reason, class, effective, matched, previousClass, add, comment, held, pathway, pclass, builder, credits, noop }
  * reason: draft | not_open | event_ignored | person_label | routed | raised | released | person_override | no_change.
@@ -281,7 +298,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
   const credits = creditsState(config, opts.now ?? new Date());
   const { class: cls, matched } = classify(pr.paths ?? [], config);
   const builder = builderOf(labelsNow);
-  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, builder, credits, noop: true };
+  const out = { reason: null, class: cls, effective: cls, head: pr.head, matched, previousClass, add: [], comment: null, held: null, pathway: null, pclass: null, consumed: null, builder, credits, noop: true };
   const stop = (reason) => ({ ...out, reason });
   // A label event reads no files, so it reports no class, on any PR state.
   if (LABEL_EVENTS.has(event)) return { ...stop('person_label'), class: null, effective: null, matched: {} };
@@ -319,7 +336,7 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
     reason = r.wanted.some((l) => !labelsNow.includes(l)) ? 'person_override' : 'no_change';
   }
   const personChose = previousClass === null && reason === 'person_override';
-  const saved = { pathway: opts.previousPathway ?? null, pclass: opts.previousPclass ?? null };
+  const saved = { pathway: opts.previousPathway ?? null, pclass: opts.previousPclass ?? null, consumed: opts.previousConsumed ?? null };
   const cp = checkpointOf({ event, reason, previousClass, labelsNow, effective, saved, confirmed: opts.confirmed ?? [] });
   // One signal for "wants no bot": the saved pathway (also after a person removed review:none) drives the adds and the hold alike.
   if (reason === 'raised') add = raiseAdds(add, labelsNow, cp.pathway === 'none');
@@ -338,11 +355,11 @@ export function decide(event, pr, labelsNow, previousClass, config, opts = {}) {
 
 export const ROUTER_MARKER = '<!-- review-router -->';
 /**
- * held is written only while a hold is in force; pathway and pclass only after a checkpoint. A comment without them
+ * held is written only while a hold is in force; pathway and pclass only after a checkpoint, and consumed (a marker id) on its own line after the state line. A comment without them
  * is byte-identical to before.
  */
-export const renderComment = (text, cls, head = null, held = null, { pathway = null, pclass = null } = {}) =>
-  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''}${held ? ` held=${held}` : ''}${pathway ? ` pathway=${pathway}` : ''}${pclass ? ` pclass=${pclass}` : ''} -->\n${text}`;
+export const renderComment = (text, cls, head = null, held = null, { pathway = null, pclass = null, consumed = null } = {}) =>
+  `${ROUTER_MARKER}\n<!-- review-router-state class=${cls}${head ? ` head=${head}` : ''}${held ? ` held=${held}` : ''}${pathway ? ` pathway=${pathway}` : ''}${pclass ? ` pclass=${pclass}` : ''} -->\n${consumed ? `<!-- review-router-consumed id=${consumed} -->\n` : ''}${text}`;
 const RESOLVED_TEXT = 'No open router notes.';
 const ROUTER_BOT = { login: 'github-actions[bot]', type: 'Bot' };
 
@@ -367,7 +384,7 @@ export function planOps(d, existing) {
   if (d.noop) return [];
   const ops = [];
   if (d.add.length > 0) ops.push({ op: 'labels', labels: d.add });
-  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head, d.held, { pathway: d.pathway, pclass: d.pclass });
+  const body = renderComment(d.comment ?? RESOLVED_TEXT, d.effective, d.head, d.held, { pathway: d.pathway, pclass: d.pclass, consumed: d.consumed });
   if (!existing) ops.push({ op: 'comment-create', body });
   else if (existing.body !== body) ops.push({ op: 'comment-update', id: existing.id, body });
   return ops;
@@ -527,7 +544,7 @@ function main() {
     const existing = findRouterComment(comments);
     const saved = stateFrom(existing?.body);
     const now = new Date();
-    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass, confirmed: confirmedPathways(comments, head) });
+    const d = decide(event, prState, labels, saved.class, config, { now, previousHeld: saved.held, previousPathway: saved.pathway, previousPclass: saved.pclass, previousConsumed: saved.consumed, confirmed: confirmedMarkers(comments, head, saved.consumed) });
     const ops = planOps(d, existing);
     const done = applyOps(ops, { repo, pr: number, dryRun, gh });
     emitLedger(ledgerLine({ d, pr: prState, event, ops, now }));

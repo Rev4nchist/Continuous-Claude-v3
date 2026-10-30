@@ -525,9 +525,9 @@ test('previousClassFrom reads only the comment state; labels never count', () =>
 test('state carries the class and the full head', () => {
   const body = renderComment('x', 'infra', HEAD);
   assert.match(body, new RegExp(`<!-- review-router-state class=infra head=${HEAD} -->`));
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null });
-  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null, held: null, pathway: null, pclass: null });
-  assert.deepEqual(stateFrom('nothing'), { class: null, head: null, held: null, pathway: null, pclass: null });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null, consumed: null });
+  assert.deepEqual(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra -->`), { class: 'infra', head: null, held: null, pathway: null, pclass: null, consumed: null });
+  assert.deepEqual(stateFrom('nothing'), { class: null, head: null, held: null, pathway: null, pclass: null, consumed: null });
 });
 
 test('renderComment: the marker appears once and the body starts with it', () => {
@@ -820,8 +820,8 @@ test('release once: after the release a person removing review:deep is not undon
 test('held state: renderComment writes held only when set; stateFrom reads it; old comments still parse', () => {
   assert.equal(renderComment('x', 'infra', HEAD), `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} -->\nx`);
   const body = renderComment('x', 'infra', HEAD, 'apex_d3');
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: null, pclass: null });
-  assert.deepEqual(stateFrom(renderComment('x', 'infra', HEAD)), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: null, pclass: null, consumed: null });
+  assert.deepEqual(stateFrom(renderComment('x', 'infra', HEAD)), { class: 'infra', head: HEAD, held: null, pathway: null, pclass: null, consumed: null });
   assert.equal(stateFrom(`${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} held=junk -->`).held, null);
 });
 
@@ -1008,10 +1008,10 @@ test('ledger: files_source is written when known', () => {
 test('CP1: renderComment writes pathway and pclass after head and held; without them the bytes are unchanged', () => {
   const body = renderComment('x', 'infra', HEAD, null, { pathway: 'none', pclass: 'normal' });
   assert.match(body, new RegExp(`<!-- review-router-state class=infra head=${HEAD} pathway=none pclass=normal -->`));
-  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: 'none', pclass: 'normal' });
+  assert.deepEqual(stateFrom(body), { class: 'infra', head: HEAD, held: null, pathway: 'none', pclass: 'normal', consumed: null });
   const held = renderComment('x', 'infra', HEAD, 'apex_d3', { pathway: 'coderabbit', pclass: 'infra' });
   assert.match(held, new RegExp(`head=${HEAD} held=apex_d3 pathway=coderabbit pclass=infra -->`));
-  assert.deepEqual(stateFrom(held), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: 'coderabbit', pclass: 'infra' });
+  assert.deepEqual(stateFrom(held), { class: 'infra', head: HEAD, held: 'apex_d3', pathway: 'coderabbit', pclass: 'infra', consumed: null });
   assert.equal(renderComment('x', 'infra', HEAD), `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} -->\nx`);
   assert.doesNotMatch(renderComment('x', 'infra', HEAD, null, {}), /pathway=|pclass=/);
 });
@@ -1260,6 +1260,8 @@ test('CP10f: a marker counts only from an OWNER, MEMBER or COLLABORATOR comment;
   assert.deepEqual(confirmedPathways([noField, marked(HEAD, 'both', { id: 91 })], HEAD), ['both'], 'one trusted marker among untrusted ones');
 });
 
+// The consumed id sits on its own line after the state line, in the dry-run print too (maskMarker adds "[dry-run] ").
+const consumedAfter = (stateTail, id) => new RegExp(String.raw`${stateTail} -->\n(?:# )?<!-- (?:\[dry-run\] )?review-router-consumed id=${id} -->`);
 const cp10Fix = (comments) => ({
   pull: { number: 7, state: 'open', draft: false, changed_files: 1, head: { sha: HEAD }, labels: ['review:none', 'risk:infra', B].map((name) => ({ name })) },
   files: [{ filename: '.github/workflows/x.yml' }],
@@ -1269,9 +1271,79 @@ const cp10Fix = (comments) => ({
 test('CP10e (CLI): ready_for_review saves the new pclass only with a marker for this head and the label pathway', () => {
   const OLD = 'b'.repeat(40);
   const run = (comments) => runCli(cp10Fix(comments), ['--event', READY]);
-  assert.match(run([marked(HEAD, 'none')]), /pathway=none pclass=infra -->/, 'marker for the head and label');
+  assert.match(run([marked(HEAD, 'none')]), consumedAfter('pathway=none pclass=infra', 90), 'marker for the head and label');
   assert.match(run([]), /pathway=none pclass=normal -->/, 'no marker');
   assert.match(run([marked(OLD, 'none')]), /pathway=none pclass=normal -->/, 'marker for an older head');
   assert.match(run([marked(HEAD, 'coderabbit')]), /pathway=none pclass=normal -->/, 'marker for another pathway');
   assert.match(run([marked(HEAD, 'none', { author_association: 'NONE' })]), /pathway=none pclass=normal -->/, 'marker from a commenter with no repo role');
+});
+
+// C1 (PR D review): a marker is bound to one ready event. The router saves the id of the marker comment it used (consumed=<id>)
+// and does not count that marker, or an older one, again. Else an undo of ready, then a UI "Ready for review", replays it.
+// It fails if: a consumed marker still counts (pclass jumps, the raise note clears)             -> C1a
+//              a new marker with a higher id is refused after a consume                        -> C1b
+//              stateFrom needs consumed (an old comment stops parsing)                         -> C1c
+//              a synchronize run drops the consumed id (the replay returns on the next ready)  -> C1d
+//              confirmedPathways ignores the consumed id, or trusts a marker with no id        -> C1e
+const consumedState = (consumed) => renderComment('Class raised from normal to infra after the checkpoint.', 'infra', HEAD, null, { pathway: 'none', pclass: 'normal', consumed });
+const c1Fix = (comments, state = consumedState(90)) => ({
+  pull: { number: 7, state: 'open', draft: false, changed_files: 1, head: { sha: HEAD }, labels: ['review:none', 'risk:infra', B].map((name) => ({ name })) },
+  files: [{ filename: '.github/workflows/x.yml' }],
+  comments: [bot(31, state), ...comments],
+});
+
+test('C1a (CLI): same head, undo then UI ready with only the old marker is not a checkpoint and the raise note stays', () => {
+  const out = runCli(c1Fix([marked(HEAD, 'none', { id: 90 })]), ['--event', READY]);
+  assert.match(out, consumedAfter('pathway=none pclass=normal', 90));
+  assert.match(out, /Class raised from normal to infra after the checkpoint\. Return the PR to draft \(gh pr ready --undo\), then run \/pathway again\./);
+  const older = runCli(c1Fix([marked(HEAD, 'none', { id: 80 })]), ['--event', READY]);
+  assert.match(older, consumedAfter('pclass=normal', 90), 'a marker older than the consumed one');
+});
+
+test('C1b (CLI): a new /pathway marker (new id) then ready counts as a checkpoint and saves its id', () => {
+  const out = runCli(c1Fix([marked(HEAD, 'none', { id: 90 }), marked(HEAD, 'none', { id: 95 })]), ['--event', READY]);
+  assert.match(out, consumedAfter('pathway=none pclass=infra', 95));
+  assert.doesNotMatch(out, /Class raised/);
+});
+
+test('C1c: an old router comment with no consumed field parses, and its marker still counts once', () => {
+  const old = `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} pathway=none pclass=normal -->\nx`;
+  assert.equal(stateFrom(old).consumed, null);
+  assert.equal(stateFrom(old).pclass, 'normal');
+  assert.equal(stateFrom(consumedState(90)).consumed, 90);
+  assert.equal(stateFrom(consumedState(90)).pclass, 'normal');
+  assert.equal(stateFrom(old.replace('pclass=normal -->', 'pclass=normal -->\n<!-- review-router-consumed id=junk -->')).consumed, null);
+  assert.doesNotMatch(renderComment('x', 'infra', HEAD, null, { pathway: 'none', pclass: 'normal' }), /consumed/);
+  const out = runCli(c1Fix([marked(HEAD, 'none', { id: 90 })], old), ['--event', READY]);
+  assert.match(out, consumedAfter('pathway=none pclass=infra', 90));
+});
+
+test('C1d (CLI): a synchronize run keeps the consumed id', () => {
+  const out = runCli(c1Fix([marked(HEAD, 'none', { id: 90 })]), ['--event', 'synchronize']);
+  assert.match(out, consumedAfter('pathway=none pclass=normal', 90));
+});
+
+test('C1e: confirmedPathways skips a marker whose id is not above the consumed id; other roles still never count', () => {
+  const ms = [marked(HEAD, 'none', { id: 90 }), marked(HEAD, 'both', { id: 95 })];
+  assert.deepEqual(confirmedPathways(ms, HEAD, 90), ['both']);
+  assert.deepEqual(confirmedPathways(ms, HEAD, 95), []);
+  assert.deepEqual(confirmedPathways(ms, HEAD, null).sort(), ['both', 'none']);
+  assert.deepEqual(confirmedPathways([marked(HEAD, 'both', { id: 99, author_association: 'NONE' })], HEAD, 90), []);
+  assert.deepEqual(confirmedPathways([marked(HEAD, 'both', { id: undefined })], HEAD, 90), [], 'no id fails closed once an id is consumed');
+});
+
+test('C1f: the state line keeps the shape the previous router reads; consumed is a separate line the old regex ignores', () => {
+  // The previous reader's contract: this regex literal is copied from main (d4270286:scripts/github/review-router.mjs).
+  const OLD_STATE_RE = /\x3C!--\s*review-router-state class=(\w+)(?: head=([0-9a-f]{40}))?(?: held=(\w+))?(?: pathway=(\w+))?(?: pclass=(\w+))?\s*-->/;
+  const m = OLD_STATE_RE.exec(consumedState(90));
+  assert.ok(m, 'a rolled-back router must still parse a comment that holds consumed');
+  assert.deepEqual([m[1], m[2], m[4], m[5]], ['infra', HEAD, 'none', 'normal']);
+  assert.match(consumedState(90), /\n<!-- review-router-consumed id=90 -->\n/);
+});
+
+test('C1g: stateFrom reads the consumed line only right after the state line, never from the text below it', () => {
+  const state = `${ROUTER_MARKER}\n<!-- review-router-state class=infra head=${HEAD} pathway=none pclass=normal -->`;
+  assert.equal(stateFrom(`${state}\n<!-- review-router-consumed id=7 -->\nx`).consumed, 7);
+  assert.equal(stateFrom(`${state}\nx\n<!-- review-router-consumed id=7 -->`).consumed, null, 'a line in the text is no state');
+  assert.equal(stateFrom(`${state}\r\n<!-- review-router-consumed id=7 -->\r\nx`).consumed, 7, 'CRLF');
 });
