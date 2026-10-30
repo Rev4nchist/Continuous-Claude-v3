@@ -55,7 +55,7 @@
       "publish_from": "lane-board.html",
       "title": "Agentic OS — Lane Board",
       "favicon": "🛤️",
-      "description": "Live lane board generated from agentic_os.lane: 33 lanes across 8 tracks, who holds what right now, and the reconciliation query behind every number.",
+      "description": "Live lane board generated from agentic_os.lane: every lane by track, who holds what right now, and the reconciliation query behind every number.",
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
