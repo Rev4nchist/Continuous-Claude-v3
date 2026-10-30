@@ -374,9 +374,26 @@ const budgetSentence = (cp: AlertCheckpoint, pr: number, when: string): string =
   return `Rounds used ${cp.rounds} of ${opening}+${extra}. ${when}, post one @coderabbitai review only if the last round had a Major or Critical or the fix is over 30 lines; otherwise run node scripts/github/cr-fix.mjs --pr ${pr} and paste its line in the PR body (READY carries the earlier review).`
 }
 
-/** Dave's paid-review policy (2026-10-30, pr-review-loop.md "Paid PR reviews"). The cap check runs before every review request. */
+/**
+ * Whether the checkpoint record lets the model post a CodeRabbit review. It mirrors the order of budgetSentence:
+ * Dave's decline, then a budget of 0, then an unknown count, then his grant, then the budget. No record: no limit.
+ */
+const checkpointAllowsPost = (cp: AlertCheckpoint | undefined): boolean => {
+  if (!cp) return true
+  const [opening, extra] = cp.budget
+  if (cp.declined || opening + extra === 0 || cp.rounds === null) return false
+  return (cp.granted !== null && cp.granted >= cp.rounds + 1) || cp.rounds < opening + extra
+}
+
+/** A paid review is offered only where a post is allowed: not while the carry holds (run cr-fix, post nothing), not against the budget. */
+const paidEligible = (alert: Alert): boolean => !carryHolds(alert) && checkpointAllowsPost(alert.checkpoint)
+
+/**
+ * Dave's paid-review policy (2026-10-30, pr-review-loop.md "Paid PR reviews"). The cap check runs before every review request.
+ * cr-paid.mjs check does not read the carry, the budget or the fixed findings, so the line states the round 2 condition.
+ */
 const paidReview = (pr: number): string =>
-  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave.`
+  `When the next slot is over 15 minutes away, run node scripts/github/cr-paid.mjs check --pr ${pr}. For round 2 or later, do this only after every finding of the last round is fixed, its threads are resolved and the cr-fix line is clean. On ALLOW, post the comment it prints (@coderabbitai review --use-credits), then run cr-paid.mjs record. On ESCALATE, ask Dave.`
 
 /** The one line the model gets: LIMITED, PROOF, STALLED or REVIEWED. READY, merged and closed get a toast only. It never asks for a merge. */
 export const reportLine = (alert: Alert): string => {
@@ -387,7 +404,7 @@ export const reportLine = (alert: Alert): string => {
   if (alert.state === 'LIMITED' && alert.rateLimit) {
     const wait = alert.rateLimit.minutes === null ? '' : ` CodeRabbit says the next included review is available in ${alert.rateLimit.minutes} minutes.`
     const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When capacity is back')} Then` : 'Post @coderabbitai review once when capacity is back, then'
-    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidReview(alert.pr)} ${act} report to Dave. Do not merge it.`
+    return `${lead} is rate limited by CodeRabbit: the head has no review. Do NOT post @coderabbitai review now: it is refused and still counts against the limit. Check capacity with the comment @coderabbitai rate limit (it costs no review).${wait} ${paidEligible(alert) ? `${paidReview(alert.pr)} ` : ''}${act} report to Dave. Do not merge it.`
   }
   if (alert.state === 'LIMITED') {
     const act = carryHolds(alert) ? `${carryAction(alert.pr)} Then` : alert.checkpoint ? `${budgetSentence(alert.checkpoint, alert.pr, 'When the review can run')} Then` : 'Act per pr-review-loop.md "No review on the head", then'

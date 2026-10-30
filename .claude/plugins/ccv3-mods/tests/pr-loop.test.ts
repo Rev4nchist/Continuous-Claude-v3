@@ -1362,6 +1362,76 @@ describe('pr-loop checkpoint states', () => {
     expect(seen.submits[0]).not.toMatch(/post one @coderabbitai review/i)
   })
 
+  // PR #225 CodeRabbit Minor: the paid-review step is offered only where a post is allowed. A line must not say "do not post" and "post --use-credits".
+  const RATE_LIMITED = (over: Partial<Status> = {}) => status(7, {
+    routing: CR_ROUTE, routedReviewed: false, coderabbitLimited: true, coderabbitRateLimited: true, coderabbitRetryMinutes: 40, coderabbitRounds: 1,
+    reasons: ['CodeRabbit rate limited: head not reviewed (PR-bot review does not count; do not buy on-demand review)'], ...over,
+  })
+  const limitedLine = async ($: Parameters<typeof start>[0], on: On, rec: Record<string, unknown> | null, s: Status, extra: Record<string, unknown> = {}) => {
+    const kept = { ...seed([{ pr: 7, head: HEAD_A, since: NOW - MIN }]), ...(rec ? { 'checkpoint:pr:7': rec } : {}), ...extra }
+    const { clock, seen } = cw(on, { store: kept, script: { 7: [s] } })
+    await start($)
+    await clock.advance(TICK)
+    expect(seen.submits.length).toBe(1)
+    return seen.submits[0] as string
+  }
+  const noPaid = (line: string) => {
+    expect(line).toContain('Do NOT post @coderabbitai review')
+    expect(line).not.toContain('cr-paid')
+    expect(line).not.toContain('--use-credits')
+  }
+
+  test('CW4f a rate limit with the carry holding runs cr-fix.mjs and offers no paid review', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ reasons: [CARRY_REASON, 'CodeRabbit rate limited: head not reviewed'] }))
+    noPaid(line)
+    expect(line).toContain('cr-fix.mjs')
+  })
+
+  test('CW4g a rate limit after Dave declined the round offers no paid review', async ($, on) => {
+    noPaid(await limitedLine($, on, record({ declined: { kind: 'round', round: 2, head: HEAD_A } }), RATE_LIMITED()))
+  })
+
+  test('CW4h a rate limit with the budget used up offers no paid review', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ coderabbitRounds: 2 }))
+    noPaid(line)
+    expect(line).toContain('Dave decides round 3')
+  })
+
+  test('CW4i a rate limit with rounds unknown (older status script) offers no paid review', async ($, on) => {
+    const s = RATE_LIMITED()
+    delete (s as { coderabbitRounds?: number }).coderabbitRounds
+    noPaid(await limitedLine($, on, record({ budget: [1, 1] }), s))
+  })
+
+  test('CW4j a rate limit with a budget of 0 offers no paid review', async ($, on) => {
+    noPaid(await limitedLine($, on, record({ budget: [0, 0] }), RATE_LIMITED({ coderabbitRounds: 0 })))
+  })
+
+  test('CW4k a rate limit with a round left offers the paid review, for round 2 or later only after every finding is fixed', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 2] }), RATE_LIMITED({ coderabbitRounds: 1 }))
+    expect(line).toContain('node scripts/github/cr-paid.mjs check --pr 7')
+    expect(line).toContain('@coderabbitai review --use-credits')
+    expect(line).toContain('over 15 minutes')
+    expect(line).toMatch(/ESCALATE, ask Dave/)
+    expect(line).toMatch(/round 2 or later/)
+    expect(line).toMatch(/every finding of the last round is fixed/)
+    expect(line).toMatch(/threads are resolved/)
+    expect(line).toMatch(/cr-fix line is clean/)
+  })
+
+  test('CW4l a rate limit with no checkpoint record keeps the paid review', async ($, on) => {
+    const line = await limitedLine($, on, null, RATE_LIMITED())
+    expect(line).toContain('cr-paid.mjs check --pr 7')
+    expect(line).toContain('--use-credits')
+  })
+
+  test('CW4m a rate limit past the budget keeps the paid review when Dave allowed the next round', async ($, on) => {
+    const line = await limitedLine($, on, record({ budget: [1, 1] }), RATE_LIMITED({ coderabbitRounds: 2 }), { 'checkpoint:grant:7': { round: 3, head: HEAD_A, at: NOW } })
+    expect(line).toContain('Dave allowed round 3')
+    expect(line).toContain('cr-paid.mjs check --pr 7')
+    expect(line).toContain('--use-credits')
+  })
+
   // Clock anchor (critic finding 14): CW5 and the pr-checkpoint A2/A2b start the 30 minutes at the record's `appliedAt`, the moment the mod's
   // --apply succeeded. That is when the PR left draft (plan 4.2 "since the PR left draft"), not the first watcher check and not the push.
   test('CW5 the opening ask is queued 30 minutes after ready on a coderabbit record with 0 rounds', async ($, on) => {
