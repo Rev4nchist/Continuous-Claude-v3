@@ -221,7 +221,7 @@ describe('context figure', () => {
   })
 
   // X4 the engine reports no context until the first reply, but classic.SessionStart carries the transcript's size.
-  for (const source of ['resume', 'fork']) {
+  for (const source of ['resume', 'fork'] as const) {
     test(`X4 a ${source} shows the transcript's size before the first reply`, async ($, on) => {
       world(on)
       await start($)
@@ -236,8 +236,7 @@ describe('context figure', () => {
     await step($, { input: 2, read: 300_000, write: 60_000 })
     expect((await band($)).hud).toContain('ctx 36%')
     await end($, 'resume')
-    // The engine reports no figure for the new conversation until its first response.
-    beneath.context = { window: 1_000_000 }
+    // The mock still holds the old conversation's percent (36), as a not yet rebound usage() may: the seed ignores it.
     await $.classic.SessionStart({ source: 'resume', context_tokens: 120_000 })
     expect((await band($)).hud).toContain('ctx 12%')
     await step($, { input: 2, read: 300_000, write: 60_000 }, { turnId: 't2' })

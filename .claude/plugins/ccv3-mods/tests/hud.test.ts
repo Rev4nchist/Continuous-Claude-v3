@@ -145,7 +145,7 @@ describe('hud', () => {
     world(on)
     await start($)
     for (const reason of ['clear', 'resume']) {
-      await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+      await step($, { model: 'claude-opus-5-5', effort: 'medium' }, 2)
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
       const before = (await hudOn($, 'terminal')).text ?? ''
       expect(before).toContain('$4.10')
@@ -155,6 +155,8 @@ describe('hud', () => {
       expect(after).not.toContain('$4.10')
       expect(after).not.toContain('×')
       expect(after).toContain('Fable advisor')
+      // The row keeps the last step's model chip: a null atom would re-seed it with no effort.
+      expect(after).toContain('· medium')
     }
   })
 
