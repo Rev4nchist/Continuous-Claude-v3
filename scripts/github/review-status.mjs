@@ -502,7 +502,9 @@ export function mergeGraphqlComments(restComments, nodes) {
   for (const c of restComments || []) {
     const n = byId.get(c?.id);
     const restLogin = String(c?.user?.login ?? '').replace(/\[bot\]$/, '');
-    if (!n || typeof n.body !== 'string' || n.author?.login !== restLogin || n.author?.__typename !== c?.user?.type) {
+    // An edit history with more pages may hide a person's edit past page 1: treat it like no history (untrusted).
+    if (!n || typeof n.body !== 'string' || n.author?.login !== restLogin || n.author?.__typename !== c?.user?.type
+      || n.userContentEdits?.pageInfo?.hasNextPage === true) {
       comments.push(c);
       continue;
     }
@@ -514,7 +516,7 @@ export function mergeGraphqlComments(restComments, nodes) {
 
 // One page of issue comments, with the body, author and 20 edits of each in the same response, so a parsed body and its edit
 // history cannot come from different moments. `$c` is the end cursor of the page before (null for the first page).
-const COMMENTS_QUERY = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}}}}}';
+const COMMENTS_QUERY = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){pageInfo{hasNextPage} nodes{editor{__typename login} editedAt}}}}}}}';
 
 /**
  * Every issue comment of the PR with its edit history: all REST pages, paired (mergeGraphqlComments) with all GraphQL pages.
@@ -798,6 +800,7 @@ export function codeRabbitOutsideDiff({ reviews = [] }) {
     if (!isCodeRabbitUser(r?.user)) continue;
     if (r.id != null && seen.has(r.id)) continue;
     if (r.id != null) seen.add(r.id);
+    if (codeRabbitNotice(r.body)) continue; // a notice is never a review, even when it quotes an outside-diff heading
     const m = OUTSIDE_DIFF_HEADING.exec(r.body || '');
     if (m) total += Number(m[1]);
   }

@@ -14,6 +14,7 @@ import {
   needsCodeRabbitReview,
   summaryCoversHead,
   mergeGraphqlComments,
+  codeRabbitOutsideDiff,
   requiredBots,
   FAILED_UNREQUIRED_REASON,
   greptileAutoFrom,
@@ -665,6 +666,27 @@ test('CodeRabbit comment editors: the rule also holds through mergeGraphqlCommen
   assert.equal(reviewed([]), true);
   assert.equal(reviewed([CR_EDIT]), true);
   assert.equal(reviewed([{ editor: { __typename: 'User', login: 'Rev4nchist' } }, CR_EDIT]), false);
+});
+
+test('CodeRabbit comment editors: an edit history with more pages is untrusted (a person edit may sit past page 1, #225 round 1)', () => {
+  const node = (hasNextPage) => ({
+    databaseId: 10, body: CR_REVIEWED_154.body, author: { login: 'coderabbitai', __typename: 'Bot' },
+    lastEditedAt: '2026-10-26T01:10:00Z', updatedAt: CR_REVIEWED_154.updated_at,
+    userContentEdits: { pageInfo: { hasNextPage }, nodes: Array(20).fill(CR_EDIT) },
+  });
+  const reviewed = (more) => {
+    const { comments, commentEdits } = mergeGraphqlComments([CR_REVIEWED_154], [node(more)]);
+    return evaluate({ ...crInput(HEAD154, comments), commentEdits }).coderabbitReviewedHead;
+  };
+  assert.equal(reviewed(false), true, 'a complete page of CodeRabbit edits is trusted');
+  assert.equal(reviewed(true), false, 'an incomplete history is untrusted');
+});
+
+test('outside-diff count: a notice that quotes an outside-diff heading adds nothing (#225 round 1)', () => {
+  const cr = { login: 'coderabbitai[bot]', type: 'Bot' };
+  const quoted = `> ## Review skipped\n> Auto reviews are disabled.\n\n**Outside diff range comments (3)**`;
+  assert.equal(codeRabbitOutsideDiff({ reviews: [{ id: 1, user: cr, body: quoted }] }), 0);
+  assert.equal(codeRabbitOutsideDiff({ reviews: [{ id: 2, user: cr, body: '**Outside diff range comments (3)**' }] }), 3);
 });
 
 test('CodeRabbit: a missing review tells the agent to post @coderabbitai review after a push; a rate limit does not', () => {
