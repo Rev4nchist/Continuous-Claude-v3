@@ -310,18 +310,24 @@ describe('the steward in the mod', () => {
     expect(seen.value).toEqual({ briefAt: null, activity: zero })
   })
 
-  test('W8 the pane Overview draws the dim reason next to GOAL: no goal while work started, gone after a brief_set, back when stale, absent with the steward off', async ($, on) => {
+  test('W8 the pane Overview WATCH line says the goal is not set while work started, is gone after a brief_set, comes back when stale, and is absent with the steward off', async ($, on) => {
+    const UNSET = 'The session goal is not set yet, and work has started.'
+    const STALE = `${STALE_CALLS} tool calls since the plan last changed.`
     const env: Record<string, string> = {}
     world(on, env)
     await startMod($)
-    expect(await paneText($)).not.toContain('brief stale')
+    expect(await paneText($)).not.toContain(UNSET)
     await reads($, 1)
-    expect(await paneText($)).toContain('brief stale: no goal set yet while work started')
+    expect(await paneText($)).toContain(UNSET)
     await $.tool.call({ tool: BRIEF_TOOL, goal: 'prove the steward' })
-    expect(await paneText($)).not.toContain('brief stale')
+    const afterBrief = await paneText($)
+    expect(afterBrief).not.toContain(UNSET)
+    expect(afterBrief).not.toContain('since the plan last changed')
     await reads($, STALE_CALLS)
-    expect(await paneText($)).toContain(`brief stale: ${STALE_CALLS} tool calls since the brief changed`)
+    expect(await paneText($)).toContain(STALE)
     env.CCV3_MOD_STEWARD_OFF = '1'
-    expect(await paneText($)).not.toContain('brief stale')
+    const off = await paneText($)
+    expect(off).not.toContain(STALE)
+    expect(off).not.toContain(UNSET)
   })
 })

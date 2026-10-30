@@ -7,7 +7,7 @@ import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
-import type { KillSwitch } from './model'
+import { seedHud, setSwitches } from './seed'
 
 // HUD capture. The agentic-os band draws the row from these atoms (declared there under the same keys).
 // The HUD row is for interactive sessions only: a headless run has no band to read it. The context
@@ -28,18 +28,6 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
 /** CCV3_MODS_OFF=1 turns every mod off; CCV3_MOD_HUD_OFF=1 this one. Off, the atom stays null. */
 const isOff = async ($: EngineInterface): Promise<boolean> =>
   (await $.env.get('CCV3_MODS_OFF')) === '1' || (await $.env.get('CCV3_MOD_HUD_OFF')) === '1'
-
-/** The kill switches that are set. `$.env.get` takes literals only, so each is spelled out. */
-const setSwitches = async ($: EngineInterface): Promise<KillSwitch[]> => {
-  const set: KillSwitch[] = []
-  const on = (value: string | undefined) => value !== undefined && /^(1|true|yes|on)$/i.test(value.trim())
-  if (on(await $.env.get('CLAUDE_CODE_DISABLE_ADVISOR_TOOL'))) set.push('CLAUDE_CODE_DISABLE_ADVISOR_TOOL')
-  if (on(await $.env.get('DISABLE_TELEMETRY'))) set.push('DISABLE_TELEMETRY')
-  if (on(await $.env.get('DISABLE_GROWTHBOOK'))) set.push('DISABLE_GROWTHBOOK')
-  if (on(await $.env.get('DO_NOT_TRACK'))) set.push('DO_NOT_TRACK')
-  if (on(await $.env.get('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC'))) set.push('CLAUDE_CODE_DISABLE_NONESSENTIAL_TRAFFIC')
-  return set
-}
 
 /**
  * After a main-loop request: the context figure and the cache counts. The engine raises
@@ -151,6 +139,8 @@ export const hudCapture = (on: On) => {
       // Observer only.
     }
     try {
+      // A resumed session never ran the start above: seed the HUD here, then the step's own model and effort go over it.
+      await seedHud($)
       if ((await read($, hud)) === null) return result
       // The model that answered (a fallback or a lower hook may have changed the one asked for).
       const model = result.usage?.model ?? e.model

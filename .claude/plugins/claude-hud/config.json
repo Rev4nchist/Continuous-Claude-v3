@@ -1,8 +1,8 @@
 {
-  "elementOrder": ["project", "addedDirs", "promptCache", "memory", "environment", "tools", "skills", "mcp", "agents", "todos", "sessionTime"],
+  "elementOrder": ["project", "addedDirs", "promptCache", "memory", "environment", "todos", "sessionTime"],
   "display": {
-    "showTools": true,
-    "showAgents": true,
+    "showTools": false,
+    "showAgents": false,
     "showTodos": true,
     "showDuration": true,
     "showConfigCounts": true,

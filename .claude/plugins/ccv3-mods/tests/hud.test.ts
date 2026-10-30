@@ -15,6 +15,10 @@ import { hudParts } from '../hooks/hud/model'
 // H8 with the HUD up, ctx shows twice (ring and task row); with it off, the task row loses ctx
 // H9 a kill switch is set but the advisor runs anyway: the chip stays "blocked"
 // H10 a dated model id shows a date as its version; a spend limit's label breaks on the terminal
+// H11 the rows do not run core 1, core 2, HUD, widget in order, or two rows still hold two core lines and no HUD (Band reliability: the compact line)
+// H12 below 40 columns the one core line is not followed by the HUD row, then the widget
+// H13 /os redesign, Band reliability: a render with a null hud atom (no session.start ran the HUD's start) leaves the HUD row hidden
+// H14 the HUD row draws ctx and the widget line draws it again
 
 const BAND_PROPS = {
   hasSurvey: false,
@@ -213,8 +217,9 @@ describe('hud', () => {
     expect((await hudOn($, 'terminal')).taskRow).toContain('ctx 42%')
   })
 
-  // H11 the HUD row draws above the two core lines (PRD 5.3: the core lines never move), or the rows do not give way in order
-  test('H11 with the HUD up the rows run core 1, core 2, HUD, widget; short room drops the widget, then the HUD', async ($, on) => {
+  // H11 the HUD row draws above the two core lines (PRD 5.3: the core lines never move), or the rows do not give way in order.
+  // Band reliability: with two rows the compact line (one core row, key row-core-1) and the HUD row draw; two core lines need three rows with the HUD up.
+  test('H11 with the HUD up the rows run core 1, core 2, HUD, widget; short room drops the widget, then core 2 (the compact line), never the HUD', async ($, on) => {
     world(on)
     on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
     await start($)
@@ -226,8 +231,9 @@ describe('hud', () => {
       return keys
     }
     expect(await keysAt(10)).toEqual(['row-core-1', 'row-core-2', 'row-hud', 'row-band'])
+    expect(await keysAt(4)).toEqual(['row-core-1', 'row-core-2', 'row-hud', 'row-band'])
     expect(await keysAt(3)).toEqual(['row-core-1', 'row-core-2', 'row-hud'])
-    expect(await keysAt(2)).toEqual(['row-core-1', 'row-core-2'])
+    expect(await keysAt(2)).toEqual(['row-core-1', 'row-hud'])
     expect(await keysAt(1)).toEqual(['row-core-1'])
   })
 
@@ -245,5 +251,34 @@ describe('hud', () => {
     }
     expect(await keysAt(2)).toEqual(['row-core-1', 'row-hud'])
     expect(await keysAt(3)).toEqual(['row-core-1', 'row-hud', 'row-band'])
+  })
+
+  // H13 a render with a null atom seeds it. No session.start here: the HUD's start never ran, as in Dave's screenshot 8.
+  test('H13 a render with a null hud atom still draws the HUD row: model, advisor, cost and limits', async ($, on) => {
+    world(on)
+    const seen = await hudOn($, 'terminal')
+    expect(seen.text).toContain('Opus 5.5')
+    expect(seen.text).toContain('Fable advisor')
+    expect(seen.text).toContain('$3.84')
+    expect(seen.text).toContain('38%')
+  })
+
+  test('H13 the seeded HUD row draws on the desktop with rings too', async ($, on) => {
+    world(on)
+    const seen = await hudOn($, 'desktop')
+    expect(seen.text).toContain('Opus 5.5')
+    expect(seen.svgs).toBeGreaterThan(0)
+  })
+
+  // H14 the first render seeds the atom; the widget line must already leave ctx to the HUD row.
+  test('H14 with a seeded HUD, ctx is in the HUD row only, not on the widget line', async ($, on) => {
+    world(on)
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await $.session.measure({ startedAt: 0, context: { window: 1_000_000, percent: 42 }, rateLimits: [], changed: ['context'] } as never)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    const seen = await hudOn($, 'terminal')
+    expect(seen.text).toContain('ctx 42%')
+    expect(seen.taskRow).toContain('0/1 done')
+    expect(seen.taskRow).not.toContain('ctx')
   })
 })
