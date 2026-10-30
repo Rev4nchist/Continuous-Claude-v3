@@ -9,6 +9,8 @@ import { hudParts } from '../hooks/hud/model'
 // H2 effort below the high pin is not flagged (or high is flagged)
 // H3 a subagent's request overwrites the main loop's model and effort
 // H4 advisor calls on the main loop are not counted
+// H4b a re-run start (reload, respawn, desktop attach) zeroes the advisor count
+// H4c /clear or a resume keeps the old conversation's advisor count and cost
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
@@ -56,6 +58,7 @@ const world = (on: On, w: World = {}) => {
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('fs.exists', () => ({ value: false }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('session.id', () => ({ value: 's1' }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -126,6 +129,33 @@ describe('hud', () => {
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
     await step($, { model: 'claude-sonnet-5-5', effort: 'high', agentId: 'sub1' }, 3)
     expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4b session.start fires again on a reload, a worker respawn or an enable; the turns' count must survive it.
+  test('H4b a second session.start keeps the advisor count', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4c a new conversation in the same process: the old one's count and cost go, the row stays.
+  test('H4c /clear and a resume start the advisor count and the cost over', async ($, on) => {
+    world(on)
+    await start($)
+    for (const reason of ['clear', 'resume']) {
+      await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      const before = (await hudOn($, 'terminal')).text ?? ''
+      expect(before).toContain('$4.10')
+      expect(before).toContain('×2')
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      const after = (await hudOn($, 'terminal')).text ?? ''
+      expect(after).not.toContain('$4.10')
+      expect(after).not.toContain('×')
+      expect(after).toContain('Fable advisor')
+    }
   })
 
   test('H9 an advisor use clears a "blocked" chip', async ($, on) => {
