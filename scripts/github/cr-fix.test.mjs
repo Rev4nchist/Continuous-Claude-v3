@@ -381,3 +381,53 @@ test('CF21: an older review object plus a trusted clean summary that covers the 
   assert.equal((await control.go()).exitCode, 0);
   assert.equal(control.calls.runs.length, 1);
 });
+
+// ---------------------------------------------------------------------------------------------
+// CodeRabbit CLI review of fix round (2026-10-30), item 2: more than 100 issue comments.
+// Ways it can fail:
+//   a second page of GraphQL comments is not read, so the summary on it is missing from the carry source      -> CF22
+//   cr-fix throws on hasNextPage and cannot print a carry line on a long PR                                   -> CF22
+//   an error on page 2 is swallowed: a partial comment set starts a billed CLI run                           -> CF23
+// ---------------------------------------------------------------------------------------------
+/** A fake gh that serves the GraphQL comments in pages of one node. `failOn` is the cursor whose page throws. */
+function pagedGh(h, comments, commentEdits, { failOn = null } = {}) {
+  const orig = h.deps.gh;
+  const calls = [];
+  h.deps.gh = (args) => {
+    if (!args.includes('graphql')) return orig(args);
+    const cursor = args.find((a) => /^c=/.test(a))?.slice(2) ?? null;
+    calls.push(cursor);
+    if (cursor !== null && cursor === failOn) throw new Error('HTTP 502 page 2');
+    const at = cursor === null ? 0 : Number(cursor.slice(1));
+    const node = gqlNode(commentEdits)(comments[at]);
+    const last = at === comments.length - 1;
+    return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: !last, endCursor: `C${at + 1}` }, nodes: [node] } } } } };
+  };
+  return calls;
+}
+
+test('CF22: a second page of GraphQL comments is read and merged: a clean summary on page 2 is the carry source', async () => {
+  const reviews = [review(1, OLDER, '2026-10-30T07:00:00Z')];
+  const filler = { id: 799, user: { login: 'someone', type: 'User' }, created_at: '2026-10-30T07:30:00Z', updated_at: '2026-10-30T07:30:00Z', body: 'thanks' };
+  const comments = [filler, cleanSummary(OLD, '2026-10-30T08:00:00Z')];
+  const h = harness({ reviews, comments });
+  const edits = { 799: [], 800: [] };
+  const cursors = pagedGh(h, comments, edits);
+  const r = await h.go();
+  assert.deepEqual(cursors, [null, 'C1'], 'page 1 has no cursor, page 2 uses the end cursor of page 1');
+  assert.equal(r.exitCode, 0, r.reason ?? '');
+  assert.equal(r.from, OLD, 'the summary on page 2 is the newer source');
+  assert.equal(h.calls.runs.length, 1);
+});
+
+test('CF23: an error on page 2 of the GraphQL comments ends with exit 2 and starts no CLI run', async () => {
+  const reviews = [review(1, OLDER, '2026-10-30T07:00:00Z')];
+  const filler = { id: 799, user: { login: 'someone', type: 'User' }, created_at: '2026-10-30T07:30:00Z', updated_at: '2026-10-30T07:30:00Z', body: 'thanks' };
+  const comments = [filler, cleanSummary(OLD, '2026-10-30T08:00:00Z')];
+  const h = harness({ reviews, comments });
+  pagedGh(h, comments, { 799: [], 800: [] }, { failOn: 'C1' });
+  const r = await h.go();
+  assert.equal(r.exitCode, 2);
+  assert.equal(h.calls.runs.length, 0, 'no CLI run is spent');
+  assert.match(r.reason, /HTTP 502 page 2/);
+});

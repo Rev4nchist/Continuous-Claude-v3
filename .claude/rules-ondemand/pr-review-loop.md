@@ -160,8 +160,10 @@ step 1 does not list.
   Lock A denies a Write, Edit, MultiEdit or NotebookEdit of `pathway.json`. Lock B of the same hook
   denies any shell text that names `pathway.json`. An indirect script that builds the path from parts is accepted.
   Lock B also denies a gh write shape whose text names `pathway-confirmed`, the router's marker.
-  A gh write shape is one of these: a comment, a `pr edit` or `pr create` with a body, an `api` call
-  with POST, PATCH or PUT, a `body=` field, a GraphQL mutation, or `--input`.
+  A gh write shape is any of these.
+  A comment is one. A `pr edit` or `pr create` with a body is one.
+  An `api` call with POST, PATCH or PUT is one. A `body=` field is one.
+  A GraphQL mutation is one. The `--input` flag is one.
   A gh read that names the marker is allowed. A node or
   PowerShell script that posts the marker, or a body file that holds it, is accepted. A confirmed label is tied to
   HEAD, not to a PR number, in this hook: `gh pr edit <other> --add-label review:deep` passes while that

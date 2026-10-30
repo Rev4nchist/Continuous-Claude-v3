@@ -2821,3 +2821,92 @@ test('CB-A: a draft PR with review:coderabbit and an older review never tried th
   assert.deepEqual(r.coderabbitCarryBlockers, []);
   assert.ok(r.reasons.includes(RS.DRAFT_REASON));
 });
+
+// ---------------------------------------------------------------------------------------------
+// CodeRabbit CLI review of fix round (2026-10-30), item 1: a head review with no "Actionable comments posted" sentence.
+// Ways it can fail:
+//   an outside-diff-only review OF THE HEAD (live PR 221 review 5712203534, PR 205 review 5691905341) sets reviewedHead false -> HR-A
+//   the same head review no longer asks for the "Outside-diff: handled" list                                                  -> HR-B
+//   a notice body (rate limit, Review skipped, Review failed) or an empty body on the head counts as a review                  -> HR-C
+//   the head predicate and the carry (reviewBlockers) read different body shapes                                               -> HR-D
+// ---------------------------------------------------------------------------------------------
+const headOf = (body) => ({ ...CR_OLD_REVIEW, id: 5712203534, commit_id: HEAD, body });
+
+test('HR-A: a CodeRabbit review of the head with an outside-diff section and no review sentence is a head review (live PR 221 and PR 205 bodies)', () => {
+  for (const [name, body] of [['PR 221', LIVE_221], ['PR 205', LIVE_205], ['built', outsideOnly('Minor')]]) {
+    assert.ok(!/Actionable comments posted/.test(body), `${name} holds no review sentence`);
+    assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [headOf(body)] }).reviewedHead, true, name);
+  }
+  assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [{ ...headOf(LIVE_221), commit_id: OLD }] }).reviewedHead, false, 'a review of an older head is not a head review');
+  assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [{ ...headOf(LIVE_221), user: { login: 'someone', type: 'User' } }] }).reviewedHead, false, 'only the CodeRabbit app');
+});
+
+test('HR-B: READY with an outside-diff-only review of the head needs the "Outside-diff: handled" list', () => {
+  const ev = (cli) => carryEval({ carry: null, cli, evalOver: { reviews: [headOf(LIVE_221)] } });
+  const open = ev(null);
+  assert.equal(open.coderabbitReviewedHead, true);
+  assert.equal(open.coderabbitOutsideDiff, 5);
+  assert.equal(open.ready, false);
+  assert.ok(open.reasons.some((x) => x.startsWith('CodeRabbit lists 5 outside-diff finding(s) across its reviews of this PR (head aaaaaaa) and the PR body "Outside-diff: handled" list has 0.')), open.reasons.join('; '));
+  assert.ok(!open.reasons.some((x) => CARRY_REASON.test(x)), 'no "no review of the head" reason');
+  const done = ev(HANDLED(5));
+  assert.equal(done.ready, true, done.reasons.join('; '));
+});
+
+test('HR-C: a notice body or an empty body on the head is not a review', () => {
+  const notices = [
+    '> ## Rate limit exceeded\n> Please wait 12 minutes before requesting another review.',
+    '> ## Review skipped\n> Draft detected.',
+    '> ## Review failed\n> The review failed.',
+    '',
+    '   \n',
+  ];
+  for (const body of notices) assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [headOf(body)] }).reviewedHead, false, JSON.stringify(body));
+  // A notice that also quotes an outside-diff heading is still a notice.
+  assert.equal(codeRabbitHeadReview({ head: HEAD, reviews: [headOf(`> ## Review failed\n${outsideOnly('Minor')}`)] }).reviewedHead, false);
+});
+
+test('HR-D: the head predicate and the carry read the same body shape', () => {
+  const shapes = [LIVE_221, LIVE_205, outsideOnly('Minor'), 'Actionable comments posted: 0', 'Thanks. I will look at this again later, there is nothing else to report here.', ''];
+  for (const body of shapes) {
+    const head = codeRabbitHeadReview({ head: HEAD, reviews: [headOf(body)] }).reviewedHead;
+    const carryReadable = !RS.carryBlockers({ head: HEAD, newest: { ...CR_OLD_REVIEW, body }, reviewComments: [] }).includes('the newest CodeRabbit review has no review sentence');
+    assert.equal(head, carryReadable, JSON.stringify(body.slice(0, 40)));
+  }
+});
+
+// ---------------------------------------------------------------------------------------------
+// CodeRabbit CLI review of fix round (2026-10-30), item 2: review-status.mjs and cr-fix.mjs read the issue comments through ONE reader.
+// Ways it can fail:
+//   the reader stops at 100 comments or throws when there is a second page                                  -> RI-A
+//   the REST comments of every page are not paired with the GraphQL nodes of every page                      -> RI-A
+//   a page error is swallowed                                                                                -> RI-B
+// ---------------------------------------------------------------------------------------------
+const ghPages = (pages, { failOn = null } = {}) => {
+  const seen = [];
+  const rest = pages.flat().map((n) => ({ id: n.databaseId, user: { login: 'coderabbitai[bot]', type: 'Bot' }, body: 'rest body', updated_at: 'r' }));
+  const gh = (args) => {
+    if (!args.includes('graphql')) return [rest];
+    const cursor = args.find((a) => /^c=/.test(a))?.slice(2) ?? null;
+    seen.push(cursor);
+    if (cursor !== null && cursor === failOn) throw new Error('HTTP 502 page 2');
+    const at = cursor === null ? 0 : Number(cursor.slice(1));
+    return { data: { repository: { pullRequest: { comments: { pageInfo: { hasNextPage: at < pages.length - 1, endCursor: `C${at + 1}` }, nodes: pages[at] } } } } };
+  };
+  return { gh, seen };
+};
+const gqlComment = (id, body) => ({ databaseId: id, body, author: { login: 'coderabbitai', __typename: 'Bot' }, lastEditedAt: null, updatedAt: 'g', userContentEdits: { nodes: [{ editor: { login: 'coderabbitai', __typename: 'Bot' }, editedAt: 'e' + id }] } });
+
+test('RI-A: readIssueComments follows every GraphQL page and merges the edit history of each comment', () => {
+  const { gh, seen } = ghPages([[gqlComment(1, 'one'), gqlComment(2, 'two')], [gqlComment(3, 'three')], [gqlComment(4, 'four')]]);
+  const { comments, commentEdits } = RS.readIssueComments(gh, 'o', 'r', 7);
+  assert.deepEqual(seen, [null, 'C1', 'C2']);
+  assert.deepEqual(comments.map((c) => [c.id, c.body]), [[1, 'one'], [2, 'two'], [3, 'three'], [4, 'four']], 'the GraphQL body wins on every page');
+  assert.deepEqual(Object.keys(commentEdits).sort(), ['1', '2', '3', '4']);
+  assert.equal(commentEdits[4][0].editedAt, 'e4');
+});
+
+test('RI-B: readIssueComments throws when a later page fails', () => {
+  const { gh } = ghPages([[gqlComment(1, 'one')], [gqlComment(2, 'two')]], { failOn: 'C1' });
+  assert.throws(() => RS.readIssueComments(gh, 'o', 'r', 7), /HTTP 502 page 2/);
+});

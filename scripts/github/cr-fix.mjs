@@ -32,7 +32,7 @@ import { existsSync, mkdirSync, realpathSync, writeFileSync } from 'node:fs';
 import os from 'node:os';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
-import { codeRabbitHeadReview, mergeGraphqlComments, newestCodeRabbitRound } from './review-status.mjs';
+import { codeRabbitHeadReview, newestCodeRabbitRound, readIssueComments } from './review-status.mjs';
 import { CR_TIMEOUT_MIN_DEFAULT, CR_TIMEOUT_MIN_FLOOR, defaultCrRunner, parseAgentStream } from './pre-pr.mjs';
 
 const DEFAULT_REPO = 'Rev4nchist/Continuous-Claude-v3';
@@ -109,17 +109,12 @@ export function fixVerdict(p, run) {
 const dayOf = (d) => `${d.getFullYear()}-${String(d.getMonth() + 1).padStart(2, '0')}-${String(d.getDate()).padStart(2, '0')}`;
 const stop = (reason) => ({ line: null, exitCode: 2, reason, outFile: null, from: null, head: null, verdict: null });
 
-// The issue comments with their edit history, as review-status.mjs reads them (readLiveInputs): the summary comment is trusted only with it.
-const COMMENTS_QUERY = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}}}}}';
-
-/** { reviews, comments, commentEdits }: the three inputs of newestCodeRabbitRound. Throws when a read fails or the comments pass one page. */
+/** { reviews, comments, commentEdits }: the three inputs of newestCodeRabbitRound. Throws when a read fails. */
 function readSource(pr, repo, deps) {
   const [owner, name] = repo.split('/');
   const reviews = [deps.gh(['--paginate', '--slurp', `repos/${repo}/pulls/${pr}/reviews?per_page=100`])].flat(2);
-  const rest = [deps.gh(['--paginate', '--slurp', `repos/${repo}/issues/${pr}/comments?per_page=100`])].flat(2);
-  const nodes = deps.gh(['graphql', '-f', `query=${COMMENTS_QUERY}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]).data.repository.pullRequest.comments;
-  if (nodes.pageInfo.hasNextPage) throw new Error('more than 100 comments');
-  return { reviews, ...mergeGraphqlComments(rest, nodes.nodes) };
+  // The issue comments with their edit history: every page, through the reader review-status.mjs uses (the summary is trusted only with it).
+  return { reviews, ...readIssueComments(deps.gh, owner, name, pr) };
 }
 
 /** The carry source's commit (the same round review-status.mjs reads) and the checkout head, or a stop result. No CLI run has been spent yet. */

@@ -334,7 +334,7 @@ export function codeRabbitHeadReview({ head, reviews = [], comments = [], status
   const summaryTrusted = trustedCodeRabbitSummary(comments, commentEdits) !== null;
   const reviewedHead =
     reviews.some(
-      (r) => isCodeRabbitUser(r.user) && r.commit_id === head && /Actionable comments posted:\s*\d+/.test(r.body || ''),
+      (r) => isCodeRabbitUser(r.user) && r.commit_id === head && !codeRabbitNotice(r.body) && hasReviewContent(r.body),
     ) || (summaryTrusted && summaryCoversHead(summary.body, head));
   const statusLimited = !reviewedHead && /rate limit|limit reached/i.test(cr?.description || '');
   // The summary comment from the CodeRabbit app holds the notice ("Review skipped", "Review failed",
@@ -510,6 +510,32 @@ export function mergeGraphqlComments(restComments, nodes) {
     commentEdits[c.id] = n.userContentEdits?.nodes ?? [];
   }
   return { comments, commentEdits };
+}
+
+// One page of issue comments, with the body, author and 20 edits of each in the same response, so a parsed body and its edit
+// history cannot come from different moments. `$c` is the end cursor of the page before (null for the first page).
+const COMMENTS_QUERY = 'query($o:String!,$r:String!,$n:Int!,$c:String){repository(owner:$o,name:$r){pullRequest(number:$n){comments(first:100,after:$c){pageInfo{hasNextPage endCursor} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}}}}}';
+
+/**
+ * Every issue comment of the PR with its edit history: all REST pages, paired (mergeGraphqlComments) with all GraphQL pages.
+ * review-status.mjs and cr-fix.mjs both read through this, so they see the same comment set. `gh(args)` returns parsed JSON.
+ * Throws when any read fails, a cursor is missing or a cursor repeats: a partial set must never stand for the whole.
+ */
+export function readIssueComments(gh, owner, name, pr) {
+  const nodes = [];
+  const seen = new Set();
+  let cursor = null;
+  do {
+    const args = ['graphql', '-f', `query=${COMMENTS_QUERY}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`];
+    if (cursor !== null) args.push('-f', `c=${cursor}`);
+    const page = gh(args).data.repository.pullRequest.comments;
+    nodes.push(...page.nodes);
+    cursor = page.pageInfo.hasNextPage ? page.pageInfo.endCursor : null;
+    if (page.pageInfo.hasNextPage && (typeof cursor !== 'string' || cursor === '' || seen.has(cursor))) throw new Error('the comment pages have no usable cursor');
+    seen.add(cursor);
+  } while (cursor !== null);
+  const rest = [gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`])].flat(2);
+  return mergeGraphqlComments(rest, nodes);
 }
 
 export const CANCELLED_REASON = 'Greptile review of the head was cancelled (superseded by a push); wait for the review of the new head';
@@ -850,6 +876,18 @@ const SEVERITY_OF = { critical: 'critical', major: 'major', minor: 'minor', triv
 const SEVERITY_RANK = { unknown: 0, minor: 1, major: 2, critical: 3 };
 const severityMarks = (text) => [...String(text ?? '').matchAll(SEVERITY_MARK)].map((m) => SEVERITY_OF[m[1].toLowerCase()]);
 
+const REVIEW_SENTENCE = /Actionable comments posted:\s*(\d+)/;
+
+/**
+ * Is this a CodeRabbit review body worth reading? It holds the review sentence, an outside-diff section or a severity marker (the
+ * live PR 205 and PR 221 outside-diff-only reviews have no sentence). The head review (codeRabbitHeadReview) and the carry
+ * (reviewBlockers) both use this rule, so they cannot drift. It does not test for a notice: the head review does that itself.
+ */
+export function hasReviewContent(body) {
+  const text = String(body ?? '');
+  return REVIEW_SENTENCE.test(text) || OUTSIDE_DIFF_HEADING.test(text) || severityMarks(text).length > 0;
+}
+
 /** 'critical', 'major', 'minor' (Trivial and Nitpick too) or 'unknown'. The highest marker in the text wins. */
 export function codeRabbitSeverity(text) {
   return severityMarks(text).reduce((best, s) => (SEVERITY_RANK[s] > SEVERITY_RANK[best] ? s : best), 'unknown');
@@ -952,11 +990,10 @@ function reviewBlockers({ newest, reviewComments }, head) {
   if (!newest) return ['no CodeRabbit review to carry'];
   if (!/^[0-9a-f]{40}$/.test(newest.commit_id ?? '') || newest.commit_id === head) return ['the newest CodeRabbit review names no earlier head'];
   if (newest.summaryOnly) return []; // a clean summary-only round has no findings and no inline comments
-  const stated = /Actionable comments posted:\s*(\d+)/.exec(newest.body);
+  const stated = REVIEW_SENTENCE.exec(newest.body);
   // No sentence (an outside-diff or nitpick only review, live PR 205 review 5691905341): 0 inline comments, the body is still read.
   // A body with no sentence, no outside-diff section and no severity marker has nothing to read, so it fails closed.
-  const hasContent = OUTSIDE_DIFF_HEADING.test(newest.body) || severityMarks(newest.body).length > 0;
-  if (!stated && !hasContent) return ['the newest CodeRabbit review has no review sentence'];
+  if (!hasReviewContent(newest.body)) return ['the newest CodeRabbit review has no review sentence'];
   if (!Array.isArray(reviewComments)) return ['the inline comments of the newest review were not read'];
   const blocks = [];
   const bodySeverity = codeRabbitSeverity(newest.body);
@@ -1239,19 +1276,16 @@ function readLiveInputs() {
   const checkRuns = runsDoc.check_runs;
   if ((runsDoc.total_count ?? 0) > checkRuns.length) throw new Error(`more than ${checkRuns.length} check runs`);
   // userContentEdits is newest first; 20 is plenty to reach Greptile's newest edit.
-  // Comments: the first 100, with body, author and 20 edits each in ONE response, so the parsed body and its edit
-  // history cannot come from different moments. More than 100 is "cannot determine", like threads.
+  // Comments are read apart, page by page (readIssueComments). More than 100 review threads is "cannot determine".
   // commits(last:1) is the head commit, for the CodeRabbit notice date.
-  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} comments(first:100){pageInfo{hasNextPage} nodes{databaseId body author{__typename login} lastEditedAt updatedAt userContentEdits(first:20){nodes{editor{__typename login} editedAt}}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
+  const q = 'query($o:String!,$r:String!,$n:Int!){repository(owner:$o,name:$r){pullRequest(number:$n){headRefOid reviewThreads(first:100){pageInfo{hasNextPage} nodes{isResolved}} userContentEdits(first:20){nodes{editor{__typename login}}} commits(last:1){nodes{commit{oid committedDate}}} allCommits: commits(first:100){totalCount nodes{commit{author{user{login}} signature{isValid wasSignedByGitHub}}}}}}}';
   const g = gh(['graphql', '-f', `query=${q}`, '-f', `o=${owner}`, '-f', `r=${name}`, '-F', `n=${pr}`]);
   const prq = g.data.repository.pullRequest;
   const rt = prq.reviewThreads;
   if (rt.pageInfo.hasNextPage) throw new Error('more than 100 review threads');
-  if (prq.comments.pageInfo.hasNextPage) throw new Error('more than 100 comments');
-  // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them.
-  const restComments = gh(['--paginate', '--slurp', `repos/${owner}/${name}/issues/${pr}/comments?per_page=100`]).flat();
+  // Issue comments carry the Greptile summary (and CodeRabbit's), so every PR reads them. All pages, through the reader cr-fix.mjs uses.
   // REST finds the candidates; only the GraphQL body is parsed.
-  const { comments, commentEdits } = mergeGraphqlComments(restComments, prq.comments.nodes);
+  const { comments, commentEdits } = readIssueComments(gh, owner, name, pr);
   const greptileAuto = readGreptileAuto(pull.base.ref);
   // Every PR reads the reviews: outside-diff findings in a CodeRabbit review body block READY whatever the labels.
   const reviews = gh(['--paginate', '--slurp', `repos/${owner}/${name}/pulls/${pr}/reviews?per_page=100`]).flat();
