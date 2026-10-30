@@ -5,8 +5,9 @@
 does not start a review). **Greptile** (`greptile-apps[bot]`) stays installed, but its automatic
 review is off (`.greptile/config.json` `"autoReview": []`, Dave, 2026-10-26). While it is off,
 `review-status.mjs` requires CodeRabbit wherever the labels would require Greptile. Only PR-bot
-reviews on the current head count toward READY. `pr_watch` / `review-status.mjs` decide READY; only
-Dave merges (`/land`). Follow the live steps below.
+reviews on the current head count toward READY. One exception: a small fix after a Minor-only
+review can carry that review (see "What READY checks" below). `pr_watch` / `review-status.mjs`
+decide READY; only Dave merges (`/land`). Follow the live steps below.
 
 **Dependabot PRs** need no bot review (CodeRabbit refuses bot-authored PRs). This holds only when
 the PR author is the `dependabot[bot]` Bot account and every commit is by `dependabot[bot]` and
@@ -42,7 +43,12 @@ the PR's budget, it asks Dave in the checkpoint pane. Read its line before you p
 
 CodeRabbit allows 8 PR reviews per hour for the one Rev4nchist identity. The rate drops to 6, 4, 2 and 1
 per hour as the 7-day count passes 40, 50, 60 and 70. Each opening review and each `@coderabbitai review`
-costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-review-budget.md`.
+costs one. Aim for 1 review per PR. Warn at a 7-day count of 30. Wait at 40. Facts:
+`.claudedocs/2026-10-27-coderabbit-review-budget.md`.
+
+A small PR needs no bot review when its CLI run is clean. Small means 3 files or fewer and 30 added
+lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recommends `none`, at any
+7-day count. A Major, a Critical or a missing CLI result on a small PR recommends CodeRabbit 1+0.
 
 1. Run `node scripts/github/pre-pr.mjs --body <draft.md>` from the repo root. Use a clean branch and a
    draft body with the Evidence block. The script runs the gates for the files you changed. It checks the
@@ -86,13 +92,14 @@ costs one. Aim for 2 reviews per PR. Facts: `.claudedocs/2026-10-27-coderabbit-r
    shell. The mod lock denies a Write-tool edit of `pathway.json` and any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
 3. Batch every fix into one push. Then post one `@coderabbitai review`, only when the `pr_watch` line
-   says a round is left or says Dave allowed the round. Never push while a review runs: the push
-   supersedes it and the review is lost.
+   says a round is left or says Dave allowed the round. After a Minor-only round, a fix of 30 lines
+   or fewer needs no new review: READY carries the earlier one. Never push while a review runs: the
+   push supersedes it and the review is lost.
 4. Bundle small fixes in one area into one PR.
 5. Do not stack PRs by default. `base_branches` is `main`, so a stacked PR gets no review. READY pins the
    review to the head, so each restack needs a new review.
 6. When the week is busy, post `@coderabbitai rate limit` before a review request. It costs no review.
-   Keep the 7-day count under 40.
+   Warn at a 7-day count of 30. Wait at 40.
 
 ### PR review budget per class
 
@@ -102,8 +109,9 @@ The review router sets the class. This budget counts CodeRabbit PR reviews: the 
 - The budget of a PR is in its checkpoint record (`pathway.json` `budget`, kept by the mod). The numbers
   below are the defaults in `review-router.config.json` `budget`.
 - docs: 0 PR reviews. The router adds no label.
-- normal: 1 PR review, and at most 1 more after a fix push.
-- steering, infra and r3: 1 PR review, and at most 2 more after fix pushes.
+- normal, steering and infra: 1 PR review (1+1). The extra review is for a round after a Major.
+- r3: 1 PR review, and at most 2 more after fix pushes (1+2).
+- A Minor-only round needs no extra review when the fix is 30 lines or fewer: READY carries the review.
 - Put all fixes of a round in one push. Then post one `@coderabbitai review`, if a round is left.
 - Do not click GitHub "Update branch" unless the merge needs it. Each click makes a new head and a new review.
 - `pr_watch` counts the rounds used. At budget + 1 it asks Dave in the checkpoint pane. A PR at its
@@ -132,9 +140,11 @@ step 1 does not list.
 - The deny text names the command to run.
 - The checkpoint rules of the same hook: a non-draft create, a shell `gh pr ready`, a hand `review:` label
   (also `gh pr create --label`), a shell `pr-checkpoint --confirm` or `--apply`, and a non-literal `--repo`.
-  `checkpoint.enforce` in `review-router.config.json` decides. It is `false` for the first week
-  (warn mode): the hook allows the command and logs a `warn` row to the guard decision log. The stamp
-  rules above are enforced in both modes.
+  `checkpoint.enforce` in `review-router.config.json` decides. It is `true` (enforced): the hook denies
+  each of these commands. Spike S6 passed live on PR #217. The mod added the label at 00:22:23Z and
+  marked the PR ready at 00:22:25Z. The CodeRabbit check started at 00:22:59Z. With `false` (warn
+  mode) the hook allows the command and logs a `warn` row to the guard decision log. The stamp rules
+  above are enforced in both modes.
 - Residual risks, accepted: GraphQL with the query text in a file (`-F query=@file`) shows the hook no
   label or ready text. `gh pr ready --undo` and `-F "draft=true"` inside quotes read as a ready and a
   non-draft create (the hook does not lex quotes). The ccv3-mods lock closes the Write-tool route:
@@ -143,8 +153,8 @@ step 1 does not list.
   HEAD, not to a PR number, in this hook: `gh pr edit <other> --add-label review:deep` passes while that
   pathway stands. The mod lock also checks the PR number against its store record.
   The hook does not read a subcommand built from a variable (`gh pr $sub 201`). The hook reads the mode
-  from the cwd checkout. A cwd with no `review-router.config.json` is warn mode. Before PR C flips
-  `enforce`, it must read the mode from the CCv3 checkout that the command names.
+  from the cwd checkout. A command that names CCv3 is enforced when that cwd has no usable
+  `review-router.config.json`. A command that names no repo, from such a cwd, stays in warn mode.
 - `SKIP_PRE_PR_GATE=1` is Dave-only. An agent never sets it, never suggests it, and never copies it
   from a deny message. It works only as a leading assignment. Each use writes an `override` line to the
   guard decision log.
@@ -158,7 +168,9 @@ stamp. A PR opened one of those ways skips the checks. It wastes the reviews thi
 ## Waiting for the review
 
 - CodeRabbit reviews when the PR has `review:coderabbit` or `review:deep`. A push does not start a
-  new review: after a fix push, post one `@coderabbitai review` for the new head. Greptile does not
+  new review: after a fix push, post one `@coderabbitai review` for the new head, only when the
+  `pr_watch` line says a round is left. A Minor-only round with a fix of 30 lines or fewer needs
+  none: READY carries the earlier review. Greptile does not
   review by itself while its `autoReview` is `[]`. Wait for each required bot's review of the exact
   head. Use `pr_status` or `review-status.mjs`, not a 👍 emoji or a bot comment.
 - Proof of a CodeRabbit review is a `coderabbitai[bot]` review object on the head whose body includes
@@ -179,14 +191,19 @@ stamp. A PR opened one of those ways skips the checks. It wastes the reviews thi
 Never request a review on a draft or on a `review:none` PR. A draft waits on `/pathway`. A
 `review:none` PR with no router state needs the review-router workflow re-run for that head.
 
-On a coderabbit or both PR with no CodeRabbit review 15 minutes after ready, `pr_watch` asks Dave in
+On a coderabbit or both PR with no CodeRabbit review 30 minutes after ready, `pr_watch` asks Dave in
 the pane. The mod posts one `@coderabbitai review` only when he presses Yes. Do not post it yourself.
+Never post a review request while the CodeRabbit commit status is pending: a review is running. The
+mod asks nothing in that state.
+
+For a draft, `review-status.mjs` says "no CodeRabbit PR-bot review of the head commit. Draft: run
+/pathway; do not request a review". Follow it.
 
 On a PR with a checkpoint record, a missing, skipped or failed CodeRabbit review is a round. Follow the
 `pr_watch` line. Post `@coderabbitai review` only when it says a round is left or Dave allowed it.
 
 On a PR with no checkpoint record (opened before the checkpoint, or by another route), watch for two cases.
-Case one: no review from a required bot appears on the head after 15 minutes.
+Case one: no review from a required bot appears on the head after 30 minutes.
 Case two: the last review was cancelled, failed or skipped.
 In either case, post ONE review request for that bot (`@coderabbitai review`), then wait again.
 
@@ -224,8 +241,10 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    judged: 👍 means real and fixed, 👎 means false positive. Add a reaction with
    `gh api repos/<O>/<R>/pulls/comments/<comment_id>/reactions -f content='+1'` (`-1` for 👎).
 5. Never resolve a thread you did not act on.
-6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only within the
-   PR's budget, or after the pane shows "Dave allowed round N". Then wait.
+6. Request the review of the new head (`@coderabbitai review`; a push does not start one) only when the
+   `pr_watch` line says a round is left, or after the pane shows "Dave allowed round N". After a
+   Minor-only round with a fix of 30 lines or fewer, post nothing: READY carries the earlier review.
+   Never post while the CodeRabbit status is pending. Then wait.
 7. Post the outcome to the user: finding count, fixed count, dismissed count, Greptile confidence
    (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.
@@ -290,6 +309,19 @@ missing behaviour. Subagents never commit: the main session supplies the RED com
   characters) and a fenced output block that is not empty. A placeholder like `<command>` fails.
 - The GREEN SHA is the head.
 
+CodeRabbit carry. READY accepts the newest CodeRabbit review of an earlier head when all of these
+hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLines }`.
+
+- That review has Minor or nitpick findings only. An unknown severity counts as Major.
+- The head is `ahead` of the reviewed head. The delta is 30 lines or fewer: additions plus
+  deletions over all files of the compare.
+- The router state names the head. The class is not r3 and the PR has no `risk:high` label.
+- No PR file matches `checkpoint.critical` or `checkpoint.parser` in `review-router.config.json`.
+- The CodeRabbit status is not pending. CI is green. The proof GREEN line names the head.
+
+Any missing fact blocks the carry. Then READY asks for a review of the head as before. A carry does
+not clear unresolved threads, outside-diff findings or the Greptile requirement.
+
 READY checks the shape and the head. It does not judge whether RED really failed. The reviewer does.
 
 Exemptions:
@@ -310,7 +342,7 @@ artifact in `.claude/cache/e2e/`. Never commit it.
 
 Run `node scripts/github/review-status.mjs <N>`. Say "ready" only when it prints READY. READY means:
 every bot the labels require reviewed the CURRENT head commit (a CodeRabbit PR-bot review, not CLI
-output; while Greptile auto review is off, CodeRabbit replaces Greptile in that list; a Dependabot PR
+output; a CodeRabbit carry counts, see "What READY checks"; while Greptile auto review is off, CodeRabbit replaces Greptile in that list; a Dependabot PR
 as defined above needs none); a Greptile review, when required, has a check run `success`, a summary
 naming that head and confidence at least 4/5; 0 threads unresolved from any reviewer; every commit status other
 than CodeRabbit's is `success`; every check run other than Greptile's is completed with `success`,

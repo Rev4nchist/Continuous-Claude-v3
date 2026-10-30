@@ -134,7 +134,12 @@ function reviewableFiles(files, filters = []) {
   return files.filter((f) => !skip.some((g) => matchGlob(g, f.filename)) && (keep.length === 0 || keep.some((g) => matchGlob(g, f.filename))));
 }
 
-const sizeOf = (reviewable) => ({ files: reviewable.length, lines: reviewable.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0) });
+/** files: reviewable files. lines: additions plus deletions. added: additions alone (the small rule RS reads it). */
+const sizeOf = (reviewable) => ({
+  files: reviewable.length,
+  lines: reviewable.reduce((n, f) => n + (f.additions ?? 0) + (f.deletions ?? 0), 0),
+  added: reviewable.reduce((n, f) => n + (f.additions ?? 0), 0),
+});
 
 const budgetPair = (b) => (Array.isArray(b) ? [b[0] ?? 0, b[1] ?? 0] : [Number(b) || 0, 0]);
 const classBudget = (policy, cls) => budgetPair(policy.budget?.[cls] ?? policy.budget?.normal ?? [1, 1]);
@@ -157,8 +162,8 @@ function capacityOf(policy, now) {
   if (count !== null && isStale(date, now)) {
     return { count, band: 'unknown', warning: `CodeRabbit 7-day count ${count} is from ${date}, over 7 days old: update reviews_7d_manual.`, source: 'manual', date };
   }
-  const band = count === null ? 'unknown' : count >= 50 ? 'high' : count >= 40 ? 'warn' : 'ok';
-  const warning = band === 'warn' || band === 'high' ? `CodeRabbit 7-day count is ${count}: the rate drops to 6/h at 40, 4/h at 50.` : null;
+  const band = count === null ? 'unknown' : count >= 40 ? 'high' : count >= 30 ? 'warn' : 'ok';
+  const warning = band === 'warn' || band === 'high' ? `CodeRabbit 7-day count is ${count}: warn at 30; the rate drops to 6/h at 40.` : null;
   return { count, band, warning, source: count === null ? null : 'manual', date };
 }
 
@@ -216,6 +221,29 @@ function noneRule(c) {
   return why ? hit('R1', 'none', [0, 0], [why]) : null;
 }
 
+/** RS limits (constants: a config key would be a persistent format change). */
+const SMALL_FILES = 3;
+const SMALL_ADDED = 30;
+
+/** Why the CLI review is not clean, for the RS why line. */
+function cliProblem(cli) {
+  if (cli === null) return 'there is no completed CLI review of this head';
+  return 'the CLI review found a Major or Critical finding';
+}
+
+/**
+ * RS: a small PR (3 files or fewer, 30 added lines or fewer; class normal, steering or infra).
+ * A clean CLI review gives none. A Major, a Critical or no CLI result gives CodeRabbit at 1+0.
+ * It runs after R1 to R4 and Dependabot, so a stronger rule always wins.
+ */
+function smallRule(c) {
+  if (!['normal', 'steering', 'infra'].includes(c.budgetClass)) return null;
+  if (c.size.files > SMALL_FILES || c.size.added > SMALL_ADDED) return null;
+  const sized = `${c.size.files} file(s), ${c.size.added} added line(s); the limit is ${SMALL_FILES} files and ${SMALL_ADDED} added lines`;
+  if (cliClean(c.cli)) return hit('RS', 'none', [0, 0], [`Small PR (${sized}) and a clean CLI review: no bot review.`]);
+  return hit('RS', 'coderabbit', [1, 0], [`Small PR (${sized}), but ${cliProblem(c.cli)}: CodeRabbit 1+0.`]);
+}
+
 const fallbackRule = (c) => hit('R5', 'coderabbit', c.classBudget, [`Class ${c.budgetClass} (reviewable paths): CodeRabbit ${c.classBudget[0]}+${c.classBudget[1]}.`]);
 
 /** Dependabot wins over every rule: bots refuse bot PRs. A critical or parser file is named so the person reviews it. */
@@ -231,7 +259,7 @@ function hitsFor(c) {
   if (c.dependabot) return [dependabotRule(c)];
   const matched = [parserRule(c), criticalRule(c), r3Rule(c)].filter(Boolean);
   if (matched.length) return matched;
-  return [noneRule(c) ?? fallbackRule(c)];
+  return [noneRule(c) ?? smallRule(c) ?? fallbackRule(c)];
 }
 
 function combine(hits) {
@@ -248,7 +276,9 @@ function orderFor(c, picked) {
   if (c.dependabot) return ['none']; // bots refuse bot PRs: no paid option is offered (Dave decision 3)
   const only = (rule) => picked.rules.length === 1 && picked.rules[0] === rule;
   if (only('R1')) return ['none', 'coderabbit'];
-  if (only('R5')) return [...(c.capacity.band === 'high' ? ['wait'] : []), 'coderabbit', ...(cliClean(c.cli) ? ['none'] : []), 'both'];
+  const waitFirst = c.capacity.band === 'high' ? ['wait'] : [];
+  if (only('RS')) return picked.pathway === 'none' ? ['none', 'coderabbit', 'both'] : [...waitFirst, 'coderabbit', 'both'];
+  if (only('R5')) return [...waitFirst, 'coderabbit', ...(cliClean(c.cli) ? ['none'] : []), 'both'];
   return picked.pathway === 'both' ? ['both', 'coderabbit'] : ['coderabbit', 'both'];
 }
 
@@ -257,9 +287,11 @@ const atLeast = (a, b) => [Math.max(a[0], b[0]), Math.max(a[1], b[1])];
 /**
  * What an option costs, from its own pathway and not from the recommendation. The pair stays CodeRabbit opening+extra.
  * coderabbit: the rule budget when a rule picked CodeRabbit or more, else the class budget, never below 1+0.
+ *   When RS is the only rule, a chosen CodeRabbit review costs 1+0, not the class budget.
  * both: max(rule budget, class budget, 1+1), so a both option never looks free. Do not copy it into pathway.json.budget.
  */
 function costOf(c, picked, pathway) {
+  if (pathway === 'coderabbit' && picked.rules.length === 1 && picked.rules[0] === 'RS') return [1, 0];
   if (pathway === 'coderabbit') return atLeast(picked.pathway === 'none' ? c.classBudget : picked.budget, [1, 0]);
   if (pathway === 'both') return atLeast(atLeast(picked.budget, c.classBudget), [1, 1]);
   return [0, 0];
@@ -277,8 +309,10 @@ function optionOf(c, picked, pathway) {
 }
 
 function waitWhy(c, picked) {
-  const only = picked.rules.length === 1 && picked.rules[0] === 'R5';
-  return only && c.capacity.band === 'high' ? { recommended: 'wait', why: [`CodeRabbit 7-day count is ${c.capacity.count}: wait is the default at 50 or more. It never blocks.`] } : null;
+  const only = picked.rules.length === 1 && ['R5', 'RS'].includes(picked.rules[0]);
+  // A clean small PR (RS, none) buys no review, so there is nothing to wait for.
+  const buys = picked.pathway === 'coderabbit';
+  return only && buys && c.capacity.band === 'high' ? { recommended: 'wait', why: [`CodeRabbit 7-day count is ${c.capacity.count}: wait is the default at 40 or more. It never blocks.`] } : null;
 }
 
 // ---------- recommend ----------
