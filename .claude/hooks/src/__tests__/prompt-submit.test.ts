@@ -18,6 +18,13 @@
  *  10  a job is skipped on bad stdin, or sees pre-parsed data [prompt-submit pre-parses stdin]
  *  11  a late rejection changes the exit code                [unhandledRejection handler removed]
  *  13  a job blocks the loop, so a sibling job misses its timer [jobs run one after another]
+ *  13b the sync prefix of a job is charged to the wrong job    [syncMs removed]
+ *   3b a late console.log lands on stdout before the write     [guard restored before the write]
+ *   4b an uncaught exception stalls every prompt for 12 s      [deadline not cut by the handler]
+ *   9  memory-awareness blocks the loop on the RAM probe       [spawnSync probe back in memory-awareness]
+ *   7  a JOBS name maps to the wrong run function              [JOBS entry swapped]
+ *  16  main() passes DEADLINE_MS through without the uptime    [budget subtraction removed]
+ *  lane-context-end.test.ts: a slow client.end() drops the output after the watermark write
  *  15  a standalone dist stops printing, or runs on import   [main() guard or writer changes]
  *
  * Tests 2, 3, 4, 10, 11 and 15 run the BUILT dist, as Claude Code does.
@@ -32,10 +39,15 @@ import { join, resolve } from 'node:path';
 import { fileURLToPath, pathToFileURL } from 'node:url';
 
 const HERE = fileURLToPath(new URL('.', import.meta.url));
-const SRC = resolve(HERE, '..');
 const DIST = resolve(HERE, '..', '..', 'dist');
 const PROMPT_SUBMIT = join(DIST, 'prompt-submit.mjs');
 const PROMPT_SUBMIT_URL = pathToFileURL(PROMPT_SUBMIT).href;
+
+import { runHeartbeat } from '../heartbeat.js';
+import { runMemoryAwareness } from '../memory-awareness.js';
+import { runUserConfirmationDetector } from '../user-confirmation-detector.js';
+import { runBusSessionPopulator } from '../bus-session-populator.js';
+import { runLaneContext } from '../lane-context.js';
 
 type PS = typeof import('../prompt-submit.js');
 const load = (): Promise<PS> => import('../prompt-submit.js');
@@ -245,12 +257,14 @@ describe('runPromptSubmit', () => {
     expect(t.ms).toBeLessThan(1500);
   });
 
-  it('13b: memory-awareness and user-confirmation-detector never call spawnSync', () => {
-    for (const f of ['memory-awareness.ts', 'user-confirmation-detector.ts']) {
-      const src = readFileSync(join(SRC, f), 'utf-8');
-      expect(/spawnSync\s*\(/.test(src), `${f} calls spawnSync(`).toBe(false);
-      expect(/import\s*\{[^}]*\bspawnSync\b[^}]*\}\s*from/.test(src), `${f} imports spawnSync`).toBe(false);
-    }
+  it('13b: syncMs is reported per job, and a sync prefix is charged to the job that ran it', async () => {
+    const { runPromptSubmit } = await load();
+    const blocker: FakeJob = { name: 'memory-awareness', run: () => { const end = Date.now() + 300; while (Date.now() < end) { /* sync work */ } return Promise.resolve({}); } };
+    const quick = job('lane-context', ctx('LANE'), 0);
+    const { report } = await runPromptSubmit(UPS, [blocker, quick], 5000);
+    const [mem, lane] = report;
+    expect(mem.syncMs, 'blocker syncMs').toBeGreaterThanOrEqual(250);
+    expect(lane.syncMs, 'quick job syncMs').toBeLessThan(100);
   });
 
   it('DEADLINE_MS: the env override is clamped to 100..13000 and defaults to 12000', () => {
@@ -263,6 +277,21 @@ describe('runPromptSubmit', () => {
     expect(read('5')).toBe(100);
     expect(read('999999')).toBe(13000);
     expect(read('2500')).toBe(2500);
+  });
+});
+
+describe('JOBS', () => {
+  it('7: each job name maps to its own run function', async () => {
+    const { JOBS } = await load();
+    const want: Record<string, unknown> = {
+      'bus-session-populator': runBusSessionPopulator,
+      'user-confirmation-detector': runUserConfirmationDetector,
+      'memory-awareness': runMemoryAwareness,
+      'heartbeat': runHeartbeat,
+      'lane-context': runLaneContext,
+    };
+    expect(JOBS.map((j) => j.name).sort()).toEqual(Object.keys(want).sort());
+    for (const j of JOBS) expect(j.run === want[j.name], `${j.name} runs the wrong function`).toBe(true);
   });
 });
 
@@ -307,6 +336,74 @@ describe('the built prompt-submit.mjs, run as Claude Code runs it', () => {
     });
   });
 
+  it('3b: a late console.log from a timed-out job never reaches stdout, even between the deadline and the write', () => {
+    withHome((home) => {
+      const r = runInDist(`
+        const late = { name: 'lane-context', run: () => { setTimeout(() => { console.log('LATE-LOG'); process.stdout.write('LATE-WRITE'); }, 150); return new Promise(() => {}); } };
+        const res = await m.runPromptSubmit(${JSON.stringify(UPS)}, [late], 100);
+        await new Promise((r) => setTimeout(r, 400));
+        m.emitAndExit(res.output);
+      `, home, {}, 10000);
+      expect(r.status).toBe(0);
+      expect(r.stdout.trim()).toBe('{}');
+      expect(r.stderr).toContain('LATE-LOG');
+    });
+  });
+
+  it('4b: an uncaught exception cuts the deadline after a short grace, and the other outputs ship', () => {
+    withHome((home) => {
+      const t0 = Date.now();
+      const r = runInDist(`
+        const bad = { name: 'lane-context', run: () => { setTimeout(() => { throw new Error('emitter-boom'); }, 50); return new Promise(() => {}); } };
+        const ok = { name: 'memory-awareness', run: async () => ({ hookSpecificOutput: { hookEventName: 'UserPromptSubmit', additionalContext: 'MEM' } }) };
+        const res = await m.runPromptSubmit(${JSON.stringify(UPS)}, [ok, bad], 8000);
+        m.emitAndExit({ ...res.output, status: res.report.map((x) => x.name + ':' + x.status).join(',') });
+      `, home, { CCV3_PROMPT_SUBMIT_GRACE_MS: '200' }, 10000);
+      expect(r.status).toBe(0);
+      expect(Date.now() - t0, 'waited for the 8 s deadline').toBeLessThan(5000);
+      const out = JSON.parse(r.stdout.trim());
+      expect(out.hookSpecificOutput.additionalContext).toBe('MEM');
+      expect(out.status).toBe('memory-awareness:ok,lane-context:timeout');
+      expect(r.stderr).toContain('emitter-boom');
+    });
+  });
+
+  it('9: the real memory-awareness and user-confirmation-detector do no long sync work before their first await', () => {
+    withHome((home) => {
+      const r = runInDist(`
+        const jobs = m.JOBS.filter((j) => j.name === 'memory-awareness' || j.name === 'user-confirmation-detector');
+        const res = await m.runPromptSubmit(${JSON.stringify(UPS)}, jobs, 8000);
+        m.emitAndExit({ sync: Object.fromEntries(res.report.map((x) => [x.name, x.syncMs])) });
+      `, home, { CLAUDE_AGENT_ID: '' }, 20000);
+      expect(r.status).toBe(0);
+      const { sync } = JSON.parse(r.stdout.trim());
+      expect(typeof sync['memory-awareness'], r.stderr).toBe('number');
+      expect(sync['memory-awareness'], 'memory-awareness blocked the loop (host RAM probe?)').toBeLessThan(200);
+      expect(sync['user-confirmation-detector']).toBeLessThan(200);
+    });
+  });
+
+  it('16: main() takes the time already spent starting out of the deadline budget', async () => {
+    const home = mkdtempSync(join(tmpdir(), 'ps-home-'));
+    try {
+      const child = spawn(process.execPath, [PROMPT_SUBMIT], {
+        env: isolatedEnv(home, { CCV3_PROMPT_SUBMIT_DEADLINE_MS: '3000' }), stdio: ['pipe', 'pipe', 'pipe'],
+      });
+      let stderr = '';
+      child.stderr.on('data', (d) => { stderr += String(d); });
+      const exited = new Promise<number | null>((res) => child.on('close', res));
+      await new Promise((r) => setTimeout(r, 1000)); // the process is 1 s old when stdin arrives
+      child.stdin.end(UPS);
+      expect(await exited).toBe(0);
+      const budget = Number(/\[prompt-submit\] budget (\d+)ms/.exec(stderr)?.[1]);
+      expect(Number.isFinite(budget), stderr).toBe(true);
+      expect(budget).toBeLessThan(2200); // 3000 passed straight through would be 3000
+      expect(budget).toBeGreaterThan(800);
+    } finally {
+      rmSync(home, { recursive: true, force: true });
+    }
+  }, 20000);
+
   it('10b: empty stdin, bad JSON and a SessionStart payload each give {} and exit 0', () => {
     withHome((home) => {
       for (const input of ['', 'not json', JSON.stringify({ session_id: 's', hook_event_name: 'SessionStart' })]) {
@@ -321,20 +418,31 @@ describe('the built prompt-submit.mjs, run as Claude Code runs it', () => {
 describe('standalone dists keep their output and are import-safe', () => {
   const HOOKS = ['heartbeat', 'memory-awareness', 'user-confirmation-detector', 'bus-session-populator', 'lane-context'];
 
-  it('15: heartbeat and user-confirmation-detector print what they printed before the refactor', () => {
+  // Fixtures: what the pre-refactor dists (git aef1e7e2) printed for these exact inputs,
+  // saved by the E2E script. Not hand-typed. Line endings are normalised because git may
+  // check the files out with CRLF.
+  const FIXTURES = join(HERE, 'fixtures', 'prompt-submit-pre-refactor');
+  const lf = (text: string): string => text.split(String.fromCharCode(13, 10)).join(String.fromCharCode(10));
+  const fixture = (hook: string, prompt: string) =>
+    lf(readFileSync(join(FIXTURES, `${hook}.${prompt === 'hi' ? 'hi' : 'remember'}.stdout`), 'utf-8'));
+
+  it('15: every standalone dist prints what the pre-refactor dist printed', () => {
     withHome((home) => {
       const run = (hook: string, prompt: string) => spawnSync(process.execPath, [join(DIST, `${hook}.mjs`)], {
         input: JSON.stringify({ session_id: 'ps-parity', hook_event_name: 'UserPromptSubmit', cwd: home, prompt }),
         encoding: 'utf-8', timeout: 30000, env: isolatedEnv(home),
       });
-      expect(run('heartbeat', 'remember this for later please').stdout).toBe('{"result":"continue"}\n');
-      expect(run('user-confirmation-detector', 'remember this for later please').stdout).toBe(
-        '{"continue":true,"systemMessage":"[UserConfirm:L1] Memory request detected - watching for content to remember"}\n',
-      );
-      expect(run('user-confirmation-detector', 'hi').stdout).toBe('{"continue":true}\n');
-      expect(run('bus-session-populator', 'remember this for later please').stdout).toBe('{"result":"continue"}\n');
-      expect(run('memory-awareness', 'remember this for later please').stdout).toBe('{"result":"continue"}\n');
-      expect(run('lane-context', 'remember this for later please').stdout).toBe('{}');
+      const cases: Array<[string, string]> = [
+        ['heartbeat', 'remember this for later please'],
+        ['user-confirmation-detector', 'remember this for later please'],
+        ['user-confirmation-detector', 'hi'],
+        ['bus-session-populator', 'remember this for later please'],
+        ['memory-awareness', 'remember this for later please'],
+        ['lane-context', 'remember this for later please'],
+      ];
+      for (const [hook, prompt] of cases) {
+        expect(lf(run(hook, prompt).stdout), `${hook} / ${prompt}`).toBe(fixture(hook, prompt));
+      }
     });
   });
 

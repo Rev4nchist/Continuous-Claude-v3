@@ -39,7 +39,11 @@ export interface PromptJob {
 export interface JobReport {
   name: string;
   status: 'ok' | 'error' | 'timeout';
+  /** Time from the start of the job until its result was read. It includes time the
+   *  other jobs spent blocking the loop. */
   ms: number;
+  /** Time the job itself held the loop before its first await (its sync prefix). */
+  syncMs: number;
   output: unknown;
 }
 
@@ -157,31 +161,69 @@ function isPromptEvent(raw: string): boolean {
 
 let safetyNetsInstalled = false;
 
+/** Cuts the deadline of the run in progress; null when no run is active. */
+let cutDeadline: (() => void) | null = null;
+
+const DEFAULT_GRACE_MS = 1000;
+const MAX_GRACE_MS = 5000;
+
+/** Time other jobs get to finish after an uncaught exception. Env CCV3_PROMPT_SUBMIT_GRACE_MS, 0..5000. */
+function readGrace(raw: string | undefined): number {
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n)) return DEFAULT_GRACE_MS;
+  return Math.min(MAX_GRACE_MS, Math.max(0, Math.round(n)));
+}
+
 /**
  * An abandoned job that rejects or throws late must not change the exit code.
  * Skipped under vitest: a handler there would hide real failures of the test worker.
+ *
+ * An uncaught exception is usually an emitter error (a pg socket, an embedding client)
+ * that a job did not handle, so that job's promise never settles. Waiting for the
+ * deadline would stall every prompt for 12 s, where the standalone hook crashed at once.
+ * So the first one starts a short grace timer, then cuts the deadline: the jobs that
+ * finished ship, and the stuck one is a timeout.
  */
 function installSafetyNets(): void {
   if (safetyNetsInstalled || process.env.VITEST) return;
   safetyNetsInstalled = true;
   process.on('unhandledRejection', (err) => log(`[prompt-submit] late rejection ignored: ${String(err)}`));
-  process.on('uncaughtException', (err) => log(`[prompt-submit] late exception ignored: ${String(err)}`));
+  process.on('uncaughtException', (err) => {
+    log(`[prompt-submit] uncaught exception, cutting the deadline: ${String((err as Error)?.stack ?? err)}`);
+    const cut = cutDeadline;
+    if (!cut) return;
+    const grace = setTimeout(cut, readGrace(process.env.CCV3_PROMPT_SUBMIT_GRACE_MS));
+    grace.unref(); // the deadline timer keeps the loop alive until the cut
+  });
 }
 
+/** The real stdout.write, kept once the guard is installed. emitAndExit writes through it. */
+let realStdoutWrite: typeof process.stdout.write | null = null;
+
 /**
- * While jobs run, a write to stdout would corrupt the one-JSON contract. Send it to
- * stderr, tagged. console.log goes through process.stdout.write, so it is covered.
+ * A write to stdout while the process runs would corrupt the one-JSON contract.
+ * Send it to stderr, tagged. console.log goes through process.stdout.write, so it is
+ * covered. In the hook process the guard stays installed until exit: a timed-out job
+ * is still running when the result is written, so only emitAndExit may use the real
+ * write. Under vitest the guard is released after each run.
  */
 function guardStdout(): () => void {
-  const original = process.stdout.write;
-  process.stdout.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
-    const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf-8');
-    log(`[prompt-submit stray] ${text}`);
-    const done = typeof encoding === 'function' ? encoding : cb;
-    if (typeof done === 'function') (done as () => void)();
-    return true;
-  }) as typeof process.stdout.write;
-  return () => { process.stdout.write = original; };
+  if (!realStdoutWrite) {
+    realStdoutWrite = process.stdout.write;
+    process.stdout.write = ((chunk: unknown, encoding?: unknown, cb?: unknown) => {
+      const text = typeof chunk === 'string' ? chunk : Buffer.from(chunk as Uint8Array).toString('utf-8');
+      log(`[prompt-submit stray] ${text}`);
+      const done = typeof encoding === 'function' ? encoding : cb;
+      if (typeof done === 'function') (done as () => void)();
+      return true;
+    }) as typeof process.stdout.write;
+  }
+  const original = realStdoutWrite;
+  return () => {
+    if (!process.env.VITEST) return;
+    process.stdout.write = original;
+    realStdoutWrite = null;
+  };
 }
 
 const TIMED_OUT = Symbol('timed-out');
@@ -194,6 +236,7 @@ async function runJob(job: PromptJob, raw: string, deadline: Promise<typeof TIME
   } catch (err) {
     running = Promise.reject(err);
   }
+  const syncMs = Date.now() - start;
   const outcome = await Promise.race([
     running.then(
       (output) => ({ status: 'ok' as const, output }),
@@ -201,7 +244,7 @@ async function runJob(job: PromptJob, raw: string, deadline: Promise<typeof TIME
     ),
     deadline.then(() => ({ status: 'timeout' as const, output: null })),
   ]);
-  return { name: job.name, ...outcome, ms: Date.now() - start };
+  return { name: job.name, ...outcome, ms: Date.now() - start, syncMs };
 }
 
 /**
@@ -218,13 +261,19 @@ export async function runPromptSubmit(
 
   const restoreStdout = guardStdout();
   let timer: ReturnType<typeof setTimeout> | undefined;
+  let cut: () => void = () => {};
   try {
-    const deadline = new Promise<typeof TIMED_OUT>((done) => { timer = setTimeout(() => done(TIMED_OUT), deadlineMs); });
+    const deadline = new Promise<typeof TIMED_OUT>((done) => {
+      cut = () => done(TIMED_OUT);
+      timer = setTimeout(cut, deadlineMs);
+    });
+    cutDeadline = cut;
     const report = await Promise.all(jobs.map((job) => runJob(job, raw, deadline)));
-    for (const r of report) log(`[prompt-submit] ${r.name} ${r.status} ${r.ms}ms`);
+    for (const r of report) log(`[prompt-submit] ${r.name} ${r.status} ${r.ms}ms (sync ${r.syncMs}ms)`);
     return { output: mergeOutputs(report.map((r) => ({ name: r.name, output: r.output }))), report };
   } finally {
     if (timer) clearTimeout(timer);
+    if (cutDeadline === cut) cutDeadline = null;
     restoreStdout();
   }
 }
@@ -237,7 +286,9 @@ export async function runPromptSubmit(
  */
 export function emitAndExit(output: object): void {
   setTimeout(() => process.exit(0), 2000);
-  process.stdout.write(JSON.stringify(output), () => process.exit(0));
+  // The captured real write: the guard (if installed) must not divert the one payload.
+  const write = (realStdoutWrite ?? process.stdout.write) as (chunk: string, cb: () => void) => boolean;
+  write.call(process.stdout, JSON.stringify(output), () => process.exit(0));
 }
 
 async function readStdin(): Promise<string> {
@@ -255,6 +306,7 @@ async function main(): Promise<void> {
   const raw = await readStdin();
   // process.uptime() includes node bootstrap, so the deadline is measured from process start.
   const budget = Math.max(MIN_DEADLINE_MS, DEADLINE_MS - Math.round(process.uptime() * 1000));
+  log(`[prompt-submit] budget ${budget}ms (uptime ${Math.round(process.uptime() * 1000)}ms)`);
   const { output } = await runPromptSubmit(raw, JOBS, budget);
   emitAndExit(output);
 }

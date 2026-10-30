@@ -18,6 +18,7 @@ import {
   getFreeRamBytes,
   getHostRamFloorBytes,
   isHostMemoryPressured,
+  getFreeRamBytesNoSpawn,
   HOST_RAM_FLOOR_BYTES,
 } from '../shared/host-ram.js';
 
@@ -133,6 +134,30 @@ describe('host-ram: POSIX (/proc/meminfo)', () => {
     const meminfo = 'MemAvailable:        0 kB\n';
     const bytes = getFreeRamBytes(fakeSpawn(''), fakeReadFile(meminfo), 'linux');
     expect(bytes).toBe(Number.POSITIVE_INFINITY);
+  });
+});
+
+describe('host-ram: getFreeRamBytesNoSpawn (no child process)', () => {
+  afterEach(() => { delete process.env.CCV3_HOST_RAM_OVERRIDE_BYTES; });
+
+  it('Windows: returns os.freemem() bytes', () => {
+    expect(getFreeRamBytesNoSpawn(() => 8 * 1024 ** 3, fakeReadFile(''), 'win32')).toBe(8 * 1024 ** 3);
+  });
+
+  it('Windows: a zero, NaN or throwing freemem fails open', () => {
+    expect(getFreeRamBytesNoSpawn(() => 0, fakeReadFile(''), 'win32')).toBe(Number.POSITIVE_INFINITY);
+    expect(getFreeRamBytesNoSpawn(() => NaN, fakeReadFile(''), 'win32')).toBe(Number.POSITIVE_INFINITY);
+    expect(getFreeRamBytesNoSpawn(() => { throw new Error('x'); }, fakeReadFile(''), 'win32')).toBe(Number.POSITIVE_INFINITY);
+  });
+
+  it('Windows: the override env var wins', () => {
+    process.env.CCV3_HOST_RAM_OVERRIDE_BYTES = '12345';
+    expect(getFreeRamBytesNoSpawn(() => 8 * 1024 ** 3, fakeReadFile(''), 'win32')).toBe(12345);
+  });
+
+  it('POSIX: reads MemAvailable like the sync probe', () => {
+    const meminfo = 'MemAvailable:     2048 kB\n';
+    expect(getFreeRamBytesNoSpawn(() => 1, fakeReadFile(meminfo), 'linux')).toBe(2048 * 1024);
   });
 });
 

@@ -40,7 +40,7 @@ import { getOpcDir } from './shared/opc-path.js';
 import { logHook } from './shared/session-activity.js';
 import { extractIntent, extractKeywords, deriveRecallIntent, cleanSearchTerm, isMachineGeneratedPrompt } from './shared/intent-extractor.js';
 import { probeDaemon, recallViaDaemon, ensureDaemonRunning } from './shared/embedding-client.js';
-import { getFreeRamBytes, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
+import { getFreeRamBytesNoSpawn, isHostMemoryPressured, getHostRamFloorBytes } from './shared/host-ram.js';
 import { sanitizeMemoryContent, wrapMemoryContext } from './shared/memory-sanitize.js';
 import { readBus } from './shared/context-bus.js';
 import { appendIntelBus } from './shared/intel-bus.js';
@@ -581,7 +581,7 @@ async function memoryAwarenessJob(raw: string): Promise<object> {
   // probeDaemon so we never wake/thrash the model under pressure. Fail-open:
   // getFreeRamBytes returns +Infinity on a probe failure, so a broken probe can
   // never take recall offline.
-  const freeRamBytes = getFreeRamBytes();
+  const freeRamBytes = getFreeRamBytesNoSpawn(); // no child process: the merged hook shares one loop
   const hostMemoryPressured = isHostMemoryPressured(freeRamBytes, getHostRamFloorBytes());
   if (hostMemoryPressured) {
     process.stderr.write(

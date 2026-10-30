@@ -5599,7 +5599,7 @@ async function runLaneContext(raw) {
   } catch {
     return {};
   } finally {
-    await client.end().catch(() => {
+    void client.end().catch(() => {
     });
   }
 }

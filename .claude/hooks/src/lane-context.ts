@@ -440,7 +440,10 @@ export async function runLaneContext(raw: string): Promise<object | null> {
     // the same answer: say nothing and let the turn proceed.
     return {};
   } finally {
-    await client.end().catch(() => {});
+    // Not awaited. The watermark write above has already committed, and a slow socket
+    // close must not hold the return past prompt-submit's deadline: the output would be
+    // dropped while the messages stay marked read.
+    void client.end().catch(() => {});
   }
 }
 

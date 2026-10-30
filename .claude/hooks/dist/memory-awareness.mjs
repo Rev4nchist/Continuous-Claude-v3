@@ -756,6 +756,7 @@ function _acquireSpawnLock(lockPath) {
 // src/shared/host-ram.ts
 import { spawnSync as defaultSpawnSync } from "child_process";
 import { readFileSync as defaultReadFileSync } from "fs";
+import { freemem as defaultFreemem } from "os";
 var HOST_RAM_FLOOR_BYTES = 2 * 1024 * 1024 * 1024;
 function getHostRamFloorBytes() {
   const raw = process.env.CCV3_HOST_RAM_FLOOR_BYTES;
@@ -800,6 +801,22 @@ function getFreeRamBytes(spawnFn = defaultSpawnSync, readFileFn = defaultReadFil
       return Number.POSITIVE_INFINITY;
     }
     return kb * 1024;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+function getFreeRamBytesNoSpawn(freememFn = defaultFreemem, readFileFn = defaultReadFileSync, platform = process.platform) {
+  if (platform !== "win32") {
+    return getFreeRamBytes(defaultSpawnSync, readFileFn, platform);
+  }
+  const override = process.env.CCV3_HOST_RAM_OVERRIDE_BYTES;
+  if (override) {
+    const parsed = parseInt(override, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  try {
+    const bytes = freememFn();
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : Number.POSITIVE_INFINITY;
   } catch {
     return Number.POSITIVE_INFINITY;
   }
@@ -1542,7 +1559,7 @@ async function memoryAwarenessJob(raw) {
   }
   const focusTerms = busFocus.terms;
   const focusBlock = buildFocusBlock(focusTerms);
-  const freeRamBytes = getFreeRamBytes();
+  const freeRamBytes = getFreeRamBytesNoSpawn();
   const hostMemoryPressured = isHostMemoryPressured(freeRamBytes, getHostRamFloorBytes());
   if (hostMemoryPressured) {
     process.stderr.write(

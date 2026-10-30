@@ -6358,6 +6358,7 @@ function _acquireSpawnLock(lockPath) {
 // src/shared/host-ram.ts
 import { spawnSync as defaultSpawnSync } from "child_process";
 import { readFileSync as defaultReadFileSync } from "fs";
+import { freemem as defaultFreemem } from "os";
 var HOST_RAM_FLOOR_BYTES = 2 * 1024 * 1024 * 1024;
 function getHostRamFloorBytes() {
   const raw = process.env.CCV3_HOST_RAM_FLOOR_BYTES;
@@ -6402,6 +6403,22 @@ function getFreeRamBytes(spawnFn = defaultSpawnSync, readFileFn = defaultReadFil
       return Number.POSITIVE_INFINITY;
     }
     return kb * 1024;
+  } catch {
+    return Number.POSITIVE_INFINITY;
+  }
+}
+function getFreeRamBytesNoSpawn(freememFn = defaultFreemem, readFileFn = defaultReadFileSync, platform = process.platform) {
+  if (platform !== "win32") {
+    return getFreeRamBytes(defaultSpawnSync, readFileFn, platform);
+  }
+  const override = process.env.CCV3_HOST_RAM_OVERRIDE_BYTES;
+  if (override) {
+    const parsed = parseInt(override, 10);
+    if (!Number.isNaN(parsed) && parsed > 0) return parsed;
+  }
+  try {
+    const bytes = freememFn();
+    return Number.isFinite(bytes) && bytes > 0 ? bytes : Number.POSITIVE_INFINITY;
   } catch {
     return Number.POSITIVE_INFINITY;
   }
@@ -7438,7 +7455,7 @@ async function memoryAwarenessJob(raw) {
   }
   const focusTerms = busFocus.terms;
   const focusBlock = buildFocusBlock(focusTerms);
-  const freeRamBytes = getFreeRamBytes();
+  const freeRamBytes = getFreeRamBytesNoSpawn();
   const hostMemoryPressured = isHostMemoryPressured(freeRamBytes, getHostRamFloorBytes());
   if (hostMemoryPressured) {
     process.stderr.write(
@@ -8092,7 +8109,7 @@ async function runLaneContext(raw) {
   } catch {
     return {};
   } finally {
-    await client.end().catch(() => {
+    void client.end().catch(() => {
     });
   }
 }
@@ -8176,23 +8193,43 @@ function isPromptEvent(raw) {
   }
 }
 var safetyNetsInstalled = false;
+var cutDeadline = null;
+var DEFAULT_GRACE_MS = 1e3;
+var MAX_GRACE_MS = 5e3;
+function readGrace(raw) {
+  const n = Number(raw);
+  if (!raw || !Number.isFinite(n)) return DEFAULT_GRACE_MS;
+  return Math.min(MAX_GRACE_MS, Math.max(0, Math.round(n)));
+}
 function installSafetyNets() {
   if (safetyNetsInstalled || process.env.VITEST) return;
   safetyNetsInstalled = true;
   process.on("unhandledRejection", (err) => log2(`[prompt-submit] late rejection ignored: ${String(err)}`));
-  process.on("uncaughtException", (err) => log2(`[prompt-submit] late exception ignored: ${String(err)}`));
-}
-function guardStdout() {
-  const original = process.stdout.write;
-  process.stdout.write = ((chunk, encoding, cb) => {
-    const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
-    log2(`[prompt-submit stray] ${text}`);
-    const done = typeof encoding === "function" ? encoding : cb;
-    if (typeof done === "function") done();
-    return true;
+  process.on("uncaughtException", (err) => {
+    log2(`[prompt-submit] uncaught exception, cutting the deadline: ${String(err?.stack ?? err)}`);
+    const cut = cutDeadline;
+    if (!cut) return;
+    const grace = setTimeout(cut, readGrace(process.env.CCV3_PROMPT_SUBMIT_GRACE_MS));
+    grace.unref();
   });
+}
+var realStdoutWrite = null;
+function guardStdout() {
+  if (!realStdoutWrite) {
+    realStdoutWrite = process.stdout.write;
+    process.stdout.write = ((chunk, encoding, cb) => {
+      const text = typeof chunk === "string" ? chunk : Buffer.from(chunk).toString("utf-8");
+      log2(`[prompt-submit stray] ${text}`);
+      const done = typeof encoding === "function" ? encoding : cb;
+      if (typeof done === "function") done();
+      return true;
+    });
+  }
+  const original = realStdoutWrite;
   return () => {
+    if (!process.env.VITEST) return;
     process.stdout.write = original;
+    realStdoutWrite = null;
   };
 }
 var TIMED_OUT = /* @__PURE__ */ Symbol("timed-out");
@@ -8204,6 +8241,7 @@ async function runJob(job, raw, deadline) {
   } catch (err) {
     running = Promise.reject(err);
   }
+  const syncMs = Date.now() - start;
   const outcome = await Promise.race([
     running.then(
       (output) => ({ status: "ok", output }),
@@ -8214,28 +8252,34 @@ async function runJob(job, raw, deadline) {
     ),
     deadline.then(() => ({ status: "timeout", output: null }))
   ]);
-  return { name: job.name, ...outcome, ms: Date.now() - start };
+  return { name: job.name, ...outcome, ms: Date.now() - start, syncMs };
 }
 async function runPromptSubmit(raw, jobs = JOBS, deadlineMs = DEADLINE_MS) {
   installSafetyNets();
   if (!isPromptEvent(raw)) return { output: {}, report: [] };
   const restoreStdout = guardStdout();
   let timer;
+  let cut = () => {
+  };
   try {
     const deadline = new Promise((done) => {
-      timer = setTimeout(() => done(TIMED_OUT), deadlineMs);
+      cut = () => done(TIMED_OUT);
+      timer = setTimeout(cut, deadlineMs);
     });
+    cutDeadline = cut;
     const report = await Promise.all(jobs.map((job) => runJob(job, raw, deadline)));
-    for (const r of report) log2(`[prompt-submit] ${r.name} ${r.status} ${r.ms}ms`);
+    for (const r of report) log2(`[prompt-submit] ${r.name} ${r.status} ${r.ms}ms (sync ${r.syncMs}ms)`);
     return { output: mergeOutputs(report.map((r) => ({ name: r.name, output: r.output }))), report };
   } finally {
     if (timer) clearTimeout(timer);
+    if (cutDeadline === cut) cutDeadline = null;
     restoreStdout();
   }
 }
 function emitAndExit(output) {
   setTimeout(() => process.exit(0), 2e3);
-  process.stdout.write(JSON.stringify(output), () => process.exit(0));
+  const write = realStdoutWrite ?? process.stdout.write;
+  write.call(process.stdout, JSON.stringify(output), () => process.exit(0));
 }
 async function readStdin5() {
   const chunks = [];
@@ -8248,6 +8292,7 @@ async function readStdin5() {
 async function main6() {
   const raw = await readStdin5();
   const budget = Math.max(MIN_DEADLINE_MS, DEADLINE_MS - Math.round(process.uptime() * 1e3));
+  log2(`[prompt-submit] budget ${budget}ms (uptime ${Math.round(process.uptime() * 1e3)}ms)`);
   const { output } = await runPromptSubmit(raw, JOBS, budget);
   emitAndExit(output);
 }
