@@ -170,7 +170,8 @@ export const hudCapture = (on: On) => {
       // A resumed session never ran the start above: seed the HUD here, then the step's own model and effort go over it.
       await seedHud($)
       // After the seed, so a seed made at this step still carries no cost; session.measure writes it next.
-      await costShownAgain($)
+      // Only a step with usage: an aborted request measured no cost, and a reload after it would show the old one.
+      if (result.usage) await costShownAgain($)
       if ((await read($, hud)) === null) return result
       // The model that answered (a fallback or a lower hook may have changed the one asked for).
       const model = result.usage?.model ?? e.model

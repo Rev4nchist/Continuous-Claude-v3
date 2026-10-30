@@ -41,7 +41,7 @@ type World = {
   cost?: number
 }
 
-const beneath = { advisorCalls: 0 }
+const beneath = { advisorCalls: 0, usage: null as Record<string, unknown> | null }
 
 const world = (on: On, w: World = {}) => {
   on('turn.step', async function* (_$, e) {
@@ -52,7 +52,7 @@ const world = (on: On, w: World = {}) => {
       toolUses: [],
       serverToolUses: Array.from({ length: beneath.advisorCalls }, (_, i) => ({ id: `a${i}`, name: 'advisor', input: {}, startedAt: 1 })),
       stopReason: 'end_turn' as const,
-      usage: null,
+      usage: beneath.usage as never,
     }
   })
   mock.clock(on, { now: 1_000 })
@@ -74,9 +74,15 @@ const world = (on: On, w: World = {}) => {
 
 const start = ($: Engine, isInteractive = true) => $.session.start({ cwd: '/repo', surface: isInteractive ? 'terminal' : null, isInteractive } as never)
 
-/** One model request; the engine beneath (in `world`) answers with `beneath.advisorCalls` advisor uses. */
-const step = async ($: Engine, input: { model: string; effort?: string; agentId?: string }, advisorCalls = 0) => {
+/**
+ * One model request; the engine beneath (in `world`) answers with `beneath.advisorCalls` advisor uses.
+ * `withUsage` gives the answer a usage block; without it the request ended with no usage (an aborted one).
+ */
+const step = async ($: Engine, input: { model: string; effort?: string; agentId?: string }, advisorCalls = 0, withUsage = false) => {
   beneath.advisorCalls = advisorCalls
+  beneath.usage = withUsage
+    ? { input_tokens: 2, output_tokens: 10, cache_read_input_tokens: 0, cache_creation_input_tokens: 0, model: input.model }
+    : null
   const stream = $.turn.step({ turnId: 't1', index: 0, messageCount: 1, ...input } as never)
   for await (const _chunk of stream) {
     // drain
@@ -259,7 +265,7 @@ describe('hud', () => {
       await start($)
       await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
       await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
-      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      await step($, { model: 'claude-opus-5-5', effort: 'high' }, 0, true)
       w.cost = 0.5
       await start($)
       const after = await hudOn($, 'terminal')
@@ -267,6 +273,23 @@ describe('hud', () => {
       expect(after.text).not.toContain('$3.84')
       expect(after.text).not.toContain('$4.10')
       w.cost = undefined
+    }
+  })
+
+  // H4k the first request of the new conversation ended with no usage (aborted): no cost was measured, so a reload after it
+  // still shows the dash. A step with usage ends the hiding (H4g).
+  test('H4k a first step with no usage keeps the cost hidden across a reload', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      await step($, { model: 'claude-opus-5-5', effort: 'high' })
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
+      expect(after.core).toContain('$-')
     }
   })
 
