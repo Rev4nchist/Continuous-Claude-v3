@@ -52,6 +52,12 @@ import type { AgentRun, OsTask } from '../types'
 // P17..P22 the restate parser misses real lines (Restating the ask:, Restated ask:, Restate the ask:, a bold label, "I stop at" in a later sentence)
 // P23 a widened regex reads CLAUDE.md's own instruction text as a goal; P24 the replay over real restate lines from the session transcripts
 // E11..E14 a turn.step answer is never parsed; a subagent step or a parsed value overrides a main or brief_set value; a "None" turn leaves the chip on waiting-on-dave
+// P25 the screenshot block: a "None for now" item is an ask, or the real question next to it is dropped
+// P26 a block of only "None for now. I'm waiting on X" is no list instead of [], so old asks stay open
+// P27 a nothing-for-Dave form (None today, Nothing for you to do, No action needed, Waiting on X) becomes an ask
+// P28 an item that waits on Dave ("Waiting for your decision", a "?") is dropped
+// P29 a bare unbulleted "Nothing for you to do." line gives no list
+// E14c a "None for now" turn leaves the earlier ask open and the chip on waiting-on-dave
 
 const NOW = 1_000_000
 const secrets = {
@@ -752,6 +758,55 @@ describe('parseTurnEnd on real answers', () => {
     }
     expect(misses).toEqual([])
   })
+
+  test('P25 the screenshot block: a "None for now" item is not an ask, and the question next to it is', () => {
+    const answer = [
+      'Opened PR 220 and the workflow is running.',
+      '',
+      '## Next steps',
+      "1. None for now. I'm waiting on the workflow.",
+      '2. Tell me your band width in columns, and whether the advisor call ran in the main chat or in a subagent.',
+    ].join('\n')
+    const ask = parseTurnEnd(answer).ask
+    expect(ask).toHaveLength(1)
+    expect(ask?.[0]?.text).toContain('band width in columns')
+    expect(ask?.[0]?.kind).toBe('question')
+    expect((ask ?? []).filter(one => one.text.startsWith('None')).map(one => one.text)).toEqual([])
+  })
+
+  test('P26 a block of only "None for now. I\'m waiting on X" is an empty ask list, not no list', () => {
+    expect(parseTurnEnd("Pushed the fix.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.").ask).toEqual([])
+  })
+
+  test('P27 every nothing-for-Dave form gives an empty ask list', () => {
+    const forms = [
+      '1. None today.',
+      '1. None yet — waiting on the Greptile review.',
+      '1. Nothing for you to do. Waiting on the CI run.',
+      '1. No action needed — the PR lands at READY.',
+      '1. Waiting on the workflow run.',
+      "1. I'm waiting on the CodeRabbit review.",
+      '1. I’m waiting on the CodeRabbit review.',
+    ]
+    const wrong = forms.filter(form => JSON.stringify(parseTurnEnd(`Opened PR 12.\n\n## Next steps\n${form}`).ask) !== '[]')
+    expect(wrong).toEqual([])
+  })
+
+  test('P28 an item that waits on Dave or holds a question mark stays an ask', () => {
+    const answer = [
+      '## Next steps',
+      '1. Waiting for your decision: one row or two rows.',
+      "2. I'm waiting on your go-ahead to land.",
+      '3. Waiting on the CI run, then land PR 220 now? Recommend: yes.',
+    ].join('\n')
+    const ask = parseTurnEnd(answer).ask
+    expect(ask).toHaveLength(3)
+    expect(ask?.[2]?.recommend).toBe('yes')
+  })
+
+  test('P29 a bare unbulleted "Nothing for you to do." line under Next steps is an empty ask list', () => {
+    expect(parseTurnEnd('Done.\n\n## Next steps\nNothing for you to do. Waiting on the CI run.').ask).toEqual([])
+  })
 })
 
 // --- The wiring: the real mod, with the engine below it mocked. ---
@@ -1251,6 +1306,17 @@ describe('turn.step answers in the mod', () => {
     await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
     expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
     await turnEnd($, 'Waiting.\n\n## Next steps\n1. None — waiting on the CI run.')
+    const after = lastSnapshot(seen)
+    expect(after.brief.ask).toEqual([])
+    expect(after.chip).not.toBe('waiting-on-dave')
+  })
+
+  test('E14c a "None for now. I\'m waiting on X" turn clears the ask of the turn before and the chip leaves waiting-on-dave', async ($, on) => {
+    const seen = world(on)
+    await startMod($, true)
+    await turnEnd($, '## Next steps\n1. Approve the merge of PR 12?')
+    expect(lastSnapshot(seen).chip).toBe('waiting-on-dave')
+    await turnEnd($, "Waiting.\n\n## Next steps\n1. None for now. I'm waiting on the workflow.")
     const after = lastSnapshot(seen)
     expect(after.brief.ask).toEqual([])
     expect(after.chip).not.toBe('waiting-on-dave')
