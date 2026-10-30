@@ -9,6 +9,9 @@ import { hudParts } from '../hooks/hud/model'
 // H2 effort below the high pin is not flagged (or high is flagged)
 // H3 a subagent's request overwrites the main loop's model and effort
 // H4 advisor calls on the main loop are not counted
+// H4b a re-run start (reload, respawn, desktop attach) zeroes the advisor count
+// H4e a re-run start draws an advisor "on" that the settings now turn off, or drops the kept count when they come back
+// H4c /clear or a resume keeps the old conversation's advisor count and cost
 // H5 rate-limit bars draw with no subscription windows, or miss a measured change
 // H6 the terminal gets Svg (it can't draw it) or the desktop gets none
 // H7 CCV3_MOD_HUD_OFF or a headless run still draws the HUD row
@@ -56,6 +59,7 @@ const world = (on: On, w: World = {}) => {
   on('command.register', (_$, e) => ({ value: { command: e.name } }))
   on('fs.exists', () => ({ value: false }))
   on('session.start', (_$, e) => ({ cwd: e.cwd }))
+  on('session.end', (_$, e) => ({ sessionId: e.sessionId }))
   on('session.measure', (_$, e) => ({ changed: e.changed }))
   on('session.id', () => ({ value: 's1' }))
   on('process.run', () => ({ value: { exitCode: 1, stdout: '', stderr: '', isStdoutTruncated: false, isStderrTruncated: false } }))
@@ -80,8 +84,27 @@ const hudOn = async ($: Engine, surface: 'terminal' | 'desktop') => {
   const model = await band.find({ type: 'Text', text: /^ (Opus|Sonnet|Fable) / })
   const svgs = await band.findAll({ type: 'Svg' })
   const taskRow = (await band.find({ key: 'row-band' }))?.text
+  const core = (await band.find({ key: 'row-core-1' }))?.text
   await band.unmount()
-  return { text: row?.text, modelProps: model?.props, svgs: svgs.length, taskRow }
+  return { text: row?.text, modelProps: model?.props, svgs: svgs.length, taskRow, core }
+}
+
+/**
+ * The hud atom as a store a test controls. In the real engine (Claude Code 2.1.312, E2E 2026-10-30) the atom is already
+ * null when classic.SessionStart fires after /clear or an in-session /resume, so reset() finds nothing to edit.
+ * The kit cannot write an atom, so state.get and state.set for the key answer from `held`; a test nulls it with `held.value = null`.
+ */
+const heldHud = (on: On) => {
+  const held = { value: null as unknown, version: 0 }
+  const ref = { plugin: 'ccv3-mods', key: 'hud' } as never
+  on('state.get', ref, (() => ({ value: { value: held.value, version: held.version } })) as never)
+  on('state.set', ref, ((_$: unknown, e: { value: unknown; ifVersion?: number }) => {
+    if (e.ifVersion !== undefined && e.ifVersion !== held.version) return { value: { isSet: false, version: held.version } }
+    held.value = e.value
+    held.version += 1
+    return { value: { isSet: true, version: held.version } }
+  }) as never)
+  return held
 }
 
 describe('hud', () => {
@@ -126,6 +149,75 @@ describe('hud', () => {
     await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
     await step($, { model: 'claude-sonnet-5-5', effort: 'high', agentId: 'sub1' }, 3)
     expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4b session.start fires again on a reload, a worker respawn or an enable; the turns' count must survive it.
+  test('H4b a second session.start keeps the advisor count', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4e a re-run start keeps the count but reads the settings as they are now: an advisor switched off or blocked since is not drawn "on".
+  test('H4e a second session.start follows the settings it finds and keeps the count', async ($, on) => {
+    const w: World = {}
+    world(on, w)
+    await start($)
+    await step($, { model: 'claude-opus-5-5', effort: 'high' }, 2)
+    w.settings = {}
+    await start($)
+    const off = (await hudOn($, 'terminal')).text ?? ''
+    expect(off).toContain('advisor off')
+    expect(off).not.toContain('×')
+    w.settings = { advisorModel: 'fable' }
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('Fable advisor ×2')
+  })
+
+  // H4c a new conversation in the same process: the old one's count and cost go, the row stays.
+  test('H4c /clear and a resume start the advisor count and the cost over', async ($, on) => {
+    world(on)
+    await start($)
+    for (const reason of ['clear', 'resume']) {
+      await step($, { model: 'claude-opus-5-5', effort: 'medium' }, 2)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      const before = (await hudOn($, 'terminal')).text ?? ''
+      expect(before).toContain('$4.10')
+      expect(before).toContain('×2')
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      const after = (await hudOn($, 'terminal')).text ?? ''
+      expect(after).not.toContain('$4.10')
+      expect(after).not.toContain('×')
+      expect(after).toContain('Fable advisor')
+      // The row keeps the last step's model chip: a null atom would re-seed it with no effort.
+      expect(after).toContain('· medium')
+    }
+  })
+
+  // H4d the real engine leaves the hud atom null at /clear and at an in-session resume. A render then re-seeds it from the
+  // cached seed, whose cost is the startup one ($0.00 at a launch, or whatever usage() said first). The new conversation
+  // shows a dash until its first session.measure, then the engine's cost.
+  test('H4d /clear and a resume with a null hud atom show no cost until the first measure', async ($, on) => {
+    world(on)
+    const held = heldHud(on)
+    // The first render finds the atom null (no start ran) and caches the seed, which holds usage()'s cost of 3.84.
+    expect((await hudOn($, 'terminal')).text).toContain('$3.84')
+    for (const reason of ['clear', 'resume']) {
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$4.10')
+      held.value = null
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.50', '$0.00']) {
+        expect(after.text).not.toContain(old)
+        expect(after.core).not.toContain(old)
+      }
+      expect(after.core).toContain('$-')
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 0.5 }, changed: ['cost'] } as never)
+      expect((await hudOn($, 'terminal')).text).toContain('$0.50')
+    }
   })
 
   test('H9 an advisor use clears a "blocked" chip', async ($, on) => {

@@ -11,6 +11,9 @@ import type { CacheState } from '../types'
 // X2 ctx holds the pre-compaction value after /compact, or shows the size the engine reports (far below the next
 //    prompt); a subagent's, a precomputed or a vetoed compaction moves it
 // X3 /clear or a resume in the same process keeps the old conversation's ctx and cache counts
+// X4 a resumed or forked conversation shows no ctx until its first reply, though the engine sends its transcript
+//    size (classic.SessionStart context_tokens); a compaction or fresh start is seeded; the estimate sticks past
+//    the first reply; the HUD-off task row misses it
 // K1 the hit rate counts a subagent's requests, or is not read ÷ all input
 /// K2 a request that rewrote the prompt is not flagged, or the flag never clears; a fresh session's first request
 //    is flagged as a resume
@@ -215,6 +218,51 @@ describe('context figure', () => {
     await step($, { input: 2, read: 300_000, write: 60_000 })
     await end($, 'prompt_input_exit')
     expect(await cacheCommand($)).toContain('requests      1')
+  })
+
+  // X4 the engine reports no context until the first reply, but classic.SessionStart carries the transcript's size.
+  for (const source of ['resume', 'fork'] as const) {
+    test(`X4 a ${source} shows the transcript's size before the first reply`, async ($, on) => {
+      world(on)
+      await start($)
+      await $.classic.SessionStart({ source, context_tokens: 410_000 })
+      expect((await band($)).hud).toContain('ctx 41%')
+    })
+  }
+
+  test("X4 an in-session resume shows the new transcript's size, and the first reply replaces it", async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { input: 2, read: 300_000, write: 60_000 })
+    expect((await band($)).hud).toContain('ctx 36%')
+    await end($, 'resume')
+    // The mock still holds the old conversation's percent (36), as a not yet rebound usage() may: the seed ignores it.
+    await $.classic.SessionStart({ source: 'resume', context_tokens: 120_000 })
+    expect((await band($)).hud).toContain('ctx 12%')
+    await step($, { input: 2, read: 300_000, write: 60_000 }, { turnId: 't2' })
+    expect((await band($)).hud).toContain('ctx 36%')
+  })
+
+  test('X4 with the HUD off, a resume still seeds ctx on the task row', async ($, on) => {
+    world(on, { CCV3_MOD_HUD_OFF: '1' })
+    on('tool.call', { tool: 'TaskCreate' }, () => ({ result: { task: { id: '1', subject: 'a' } } }))
+    await start($)
+    await $.tool.call({ tool: 'TaskCreate', subject: 'a', description: 'd' })
+    await $.classic.SessionStart({ source: 'resume', context_tokens: 410_000 })
+    expect((await band($)).tasks).toContain('ctx 41%')
+  })
+
+  // Guard, not RED: a compaction's size is far below its next prompt (X2), and a fresh start has no history.
+  test('X4 a compaction or a fresh start seeds no ctx', async ($, on) => {
+    world(on)
+    await start($)
+    await step($, { input: 2, read: 300_000, write: 60_000 })
+    expect((await band($)).hud).toContain('ctx 36%')
+    await compact($, 'manual')
+    await $.classic.SessionStart({ source: 'compact', context_tokens: 410_000 })
+    expect((await band($)).hud).not.toContain('ctx')
+    await $.classic.SessionStart({ source: 'startup', context_tokens: 410_000 })
+    expect((await band($)).hud).not.toContain('ctx')
   })
 
   test('K4 with the HUD off, ctx still moves per request and no cache is captured', async ($, on) => {
