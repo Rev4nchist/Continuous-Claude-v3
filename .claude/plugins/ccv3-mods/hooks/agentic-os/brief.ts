@@ -419,7 +419,7 @@ const NEXT_STEPS = /^\s*(?:#{1,6}\s*|\*\*)next steps\s*:?\s*(?:\*\*)?\s*$/i
 const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
 /**
  * A Next steps item that asks nothing of Dave. The set is closed: the WHOLE item (one final period allowed) must match, or it is an ask.
- * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing needed/required/yet/for now", "No action/input/reply needed/required".
+ * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing required/yet/for now", "No action/input/reply needed/required".
  *     After the lead come at most a sentence end, " - ", " — " or ":" and ONE waiting clause: "None for now. I'm waiting on X", "None — waiting on your merge yes".
  * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
  * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
@@ -428,7 +428,7 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  */
 const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
-const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+now|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|needed|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
+const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+now|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
 const BARE_WAIT = new RegExp(`^${WAIT_CLAUSE}(?!(?:your?|dave)\\b)${WAIT_OBJECT}$`, 'i')
 /** A question mark makes any item an ask, whatever its words. */

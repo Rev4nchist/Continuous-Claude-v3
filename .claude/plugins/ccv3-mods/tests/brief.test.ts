@@ -65,6 +65,7 @@ import type { AgentRun, OsTask } from '../types'
 // P33 an unbulleted no-ask line next to an unbulleted question drops the question, and the block clears the earlier asks
 // P34 the no-ask grammar backtracks on a long adversarial item
 // P36 "Waiting on CI—approve PR 12" (unspaced em or en dash) is dropped whole, so the approval request is lost
+// P37 "Nothing needed" (not in the README's closed set) is dropped, so it clears an open ask
 // E14d a turn whose only Next steps item is "Waiting on CI, then approve PR 12" clears the earlier ask and the chip leaves waiting-on-dave
 
 const NOW = 1_000_000
@@ -843,6 +844,11 @@ describe('parseTurnEnd on real answers', () => {
       expect(ask).toHaveLength(1)
       expect(ask?.[0]?.text).toContain('approve PR 12')
     }
+  })
+
+  test('P37 "Nothing needed" is outside the closed set, so it stays an ask', () => {
+    const ask = parseTurnEnd('## Next steps\n1. Nothing needed').ask
+    expect(ask).toHaveLength(1)
   })
 
   test('P32 a none lead followed by a real request is an ask, not an empty list', () => {
