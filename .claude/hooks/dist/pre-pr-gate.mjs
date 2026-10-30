@@ -475,13 +475,15 @@ function makeCtx(input, command, deps, shapes) {
     }
     return tops.get(d) ?? null;
   };
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d)));
   return {
     dir,
     named,
     top,
-    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
-    // No usable config in the cwd checkout: a command that names CCv3 enforces (fail closed); any other command is warn mode.
-    enforcing: once(() => enforceIn(deps, top(cwd)) ?? named === CCV3_REPO)
+    ccv3: inCcv3,
+    // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
+    // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
+    enforcing: once(() => enforceIn(deps, top(cwd)) ?? (named === CCV3_REPO || shapes.self || inCcv3()))
   };
 }
 function enforceIn(deps, top) {

@@ -35,16 +35,18 @@
  *   review-label     a review: label add on CCv3 (--add-label, a labels endpoint, gh pr create --label). Allowed only when pathway.json names HEAD and its label equals the one added.
  * Mode: `checkpoint.enforce` in <git toplevel of the cwd>/review-router.config.json. Only a boolean true enforces. Anything else is warn mode:
  * the command is allowed and one `warn` row goes to guard-decisions.jsonl. The stamp rules above are enforced in both modes.
- * Exception, fail closed: when that config is missing, unreadable or not valid JSON (a home directory, a non-CCv3 checkout) AND the command text
- * holds a CCv3 signal (namedRepo: -R / --repo / GH_REPO, a repos/<o>/<r>/ endpoint, a PR URL), the checkpoint rules enforce.
- * A readable config keeps its own value (false = warn). A command that names no CCv3 signal is unchanged.
+ * Exception, fail closed: when that config is missing, unreadable or not valid JSON (a home directory, a non-CCv3 checkout, a CCv3 branch that
+ * predates the file) the checkpoint rules enforce if ANY of these holds: the command text holds a CCv3 signal (namedRepo: -R / --repo / GH_REPO,
+ * a repos/<o>/<r>/ endpoint, a PR URL); the command is a self-confirm (repo-free; pr-checkpoint is CCv3-only); or the command runs in a CCv3
+ * checkout (the cwd, or a cd target in the text: the same test the ready, label and non-draft rules use).
+ * A readable config keeps its own value (false = warn). Any other command is unchanged.
  * An internal error while judging any gated shape denies in both modes (verify-error). A leading override logs `override`, not `warn`.
  * Accepted residual risks: GraphQL with the query text in a file (-F query=@file) shows no label or ready text;
  * `gh pr ready --undo` inside quotes is read as a ready (fail closed); a quoted -F "draft=true" is read as non-draft (fail closed);
  * a hand-written pathway.json (the Write tool) or an indirect script is accepted until the lock of spec section 3.6 (spike S2);
  * a confirmed label is tied to HEAD, not to a PR number, so `gh pr edit <other> --add-label <label>` passes while that pathway stands;
- * a subcommand built from a variable (`gh pr $sub 201`) is not read; and a command with no CCv3 signal in its text, run from a cwd
- * with no usable config, is warn mode even when a cd moves it into a CCv3 checkout.
+ * a subcommand built from a variable (`gh pr $sub 201`) is not read; and a non-literal-repo command (`-R $REPO`) with no CCv3 signal,
+ * run from a non-CCv3 checkout with no usable config, is warn mode.
  */
 import { spawnSync } from 'child_process';
 import { createHash } from 'crypto';
@@ -280,11 +282,13 @@ function makeCtx(input: HookInput, command: string, deps: Deps, shapes: Shapes):
     }
     return tops.get(d) ?? null;
   };
+  const inCcv3 = once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d)));
   return {
     dir, named, top,
-    ccv3: once(() => named === CCV3_REPO || isCcv3Checkout(deps, dir) || candidateDirs(command, cwd).some((d) => d !== dir && isCcv3Dir(deps, d))),
-    // No usable config in the cwd checkout: a command that names CCv3 enforces (fail closed); any other command is warn mode.
-    enforcing: once(() => enforceIn(deps, top(cwd)) ?? named === CCV3_REPO),
+    ccv3: inCcv3,
+    // No usable config in the cwd checkout: fail closed for a command that names CCv3, a self-confirm (repo-free, pr-checkpoint is CCv3-only)
+    // and a command that runs in a CCv3 checkout. Any other command is warn mode. A readable config keeps its own value.
+    enforcing: once(() => enforceIn(deps, top(cwd)) ?? (named === CCV3_REPO || shapes.self || inCcv3())),
   };
 }
 
