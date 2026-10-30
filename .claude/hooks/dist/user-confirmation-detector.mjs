@@ -4,7 +4,7 @@ import{createRequire as __hookCreateRequire}from'module';const require=__hookCre
 // src/user-confirmation-detector.ts
 import * as fs from "fs";
 import * as path from "path";
-import { spawnSync } from "child_process";
+import { spawn as spawn2 } from "child_process";
 
 // src/shared/atomic-write.ts
 import {
@@ -177,6 +177,19 @@ function isHarnessWrappedPrompt(prompt) {
   return SYNTHETIC_TAG.test(t);
 }
 
+// src/lib/spawn-hidden.ts
+import { spawn } from "child_process";
+import { tmpdir } from "os";
+import { join as join3 } from "path";
+var RELAY_ERROR_LOG = join3(tmpdir(), "ccv3-spawn-hidden.log");
+var RELAY_LAUNCH_FAILED = 127;
+var RELAY_SCRIPT = `const{spawn}=require('child_process');const[c,...a]=process.argv.slice(1);const p=spawn(c,a,{stdio:'inherit',windowsHide:true});p.on('error',(e)=>{const m='['+new Date().toISOString()+'] spawn-hidden: cannot start '+c+': '+(e.code||'')+' '+e.message+'\\n';try{process.stderr.write(m)}catch{}try{require('fs').appendFileSync(process.env.CCV3_SPAWN_HIDDEN_LOG||require('path').join(require('os').tmpdir(),'ccv3-spawn-hidden.log'),m)}catch{}process.exit(${RELAY_LAUNCH_FAILED})});p.on('exit',(code)=>process.exit(code??1));`;
+function spawnDetachedHidden(cmd, args, options = {}, spawnFn = spawn, platform = process.platform) {
+  const opts = { ...options, detached: true, windowsHide: true };
+  if (platform !== "win32") return spawnFn(cmd, [...args], opts);
+  return spawnFn(process.execPath, ["-e", RELAY_SCRIPT, "--", cmd, ...args], opts);
+}
+
 // src/user-confirmation-detector.ts
 var RESOLUTION_SIGNALS = [
   // Direct confirmations
@@ -231,49 +244,66 @@ function isResolutionConfirmation(prompt) {
 function isMemoryRequest(prompt) {
   return MEMORY_SIGNALS.some((p) => p.test(prompt));
 }
-async function storeUserConfirmedLearning(sessionId, prompt, context, projectDir) {
-  const opcDir = getOpcDir();
-  const content = context ? `User confirmed: "${prompt}". Context: ${context}` : `User confirmed: "${prompt}"`;
-  const script = "scripts/core/store_learning.py";
-  const cappedContent = content.slice(0, 1e3);
+function releaseWhenRunning(child) {
+  const release = () => {
+    try {
+      child.unref?.();
+    } catch {
+    }
+  };
+  if (typeof child.once !== "function") {
+    release();
+    return;
+  }
+  child.once("spawn", release);
+  child.once("error", release);
+}
+function dispatchStore(args, opcDir, spawnFn) {
   try {
-    spawnSync(
+    const child = spawnDetachedHidden(
       "uv",
-      [
-        "run",
-        "python",
-        script,
-        "--session-id",
-        sessionId,
-        "--type",
-        "USER_PREFERENCE",
-        "--content",
-        cappedContent,
-        "--context",
-        "user confirmation",
-        "--tags",
-        "user_confirmed,verified",
-        "--confidence",
-        "high",
-        "--source",
-        "hook",
-        "--project-dir",
-        projectDir
-      ],
-      {
-        encoding: "utf-8",
-        cwd: opcDir,
-        timeout: 6e4,
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false
-      }
+      args,
+      { cwd: opcDir, shell: false, detached: true, stdio: "ignore", windowsHide: true },
+      spawnFn
     );
+    releaseWhenRunning(child);
     return true;
   } catch {
     return false;
   }
 }
-async function storeVictoryFromConfirmation(state, prompt, projectDir) {
+async function storeUserConfirmedLearning(sessionId, prompt, context, projectDir, deps = {}) {
+  const opcDir = getOpcDir();
+  const content = context ? `User confirmed: "${prompt}". Context: ${context}` : `User confirmed: "${prompt}"`;
+  const script = "scripts/core/store_learning.py";
+  const cappedContent = content.slice(0, 1e3);
+  return dispatchStore(
+    [
+      "run",
+      "python",
+      script,
+      "--session-id",
+      sessionId,
+      "--type",
+      "USER_PREFERENCE",
+      "--content",
+      cappedContent,
+      "--context",
+      "user confirmation",
+      "--tags",
+      "user_confirmed,verified",
+      "--confidence",
+      "high",
+      "--source",
+      "hook",
+      "--project-dir",
+      projectDir
+    ],
+    opcDir,
+    deps.spawnFn ?? spawn2
+  );
+}
+async function storeVictoryFromConfirmation(state, prompt, projectDir, deps = {}) {
   const opcDir = getOpcDir();
   const failedApproaches = state.failures.map((f) => f.error).filter((v, i, a) => a.indexOf(v) === i).slice(0, 3).join("; ");
   const content = `Problem solved after ${state.attempts} attempts (user confirmed: "${prompt}").
@@ -284,66 +314,58 @@ ${failedApproaches ? `Failed approaches: ${failedApproaches}` : ""}`;
   const cappedContent = content.slice(0, 2e3);
   const contextStr = `Victory (user confirmed): ${state.context || state.tracked_file}`;
   const tagsStr = `victory,verified,user_confirmed,attempts:${state.attempts}`;
+  return dispatchStore(
+    [
+      "run",
+      "python",
+      script,
+      "--session-id",
+      state.session_id,
+      "--type",
+      "WORKING_SOLUTION",
+      "--content",
+      cappedContent,
+      "--context",
+      contextStr,
+      "--tags",
+      tagsStr,
+      "--confidence",
+      "high",
+      "--source",
+      "hook",
+      "--project-dir",
+      projectDir
+    ],
+    opcDir,
+    deps.spawnFn ?? spawn2
+  );
+}
+async function runUserConfirmationDetector(input) {
   try {
-    spawnSync(
-      "uv",
-      [
-        "run",
-        "python",
-        script,
-        "--session-id",
-        state.session_id,
-        "--type",
-        "WORKING_SOLUTION",
-        "--content",
-        cappedContent,
-        "--context",
-        contextStr,
-        "--tags",
-        tagsStr,
-        "--confidence",
-        "high",
-        "--source",
-        "hook",
-        "--project-dir",
-        projectDir
-      ],
-      {
-        encoding: "utf-8",
-        cwd: opcDir,
-        timeout: 6e4,
-        stdio: ["pipe", "pipe", "pipe"],
-        shell: false
-      }
-    );
-    return true;
-  } catch {
-    return false;
+    return await detectConfirmation(input);
+  } catch (err) {
+    console.error("user-confirmation-detector error:", err);
+    return { continue: true };
   }
 }
-async function main() {
-  const input = await readStdin();
+async function detectConfirmation(input) {
   if (!input.trim()) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
   let data;
   try {
     data = JSON.parse(input);
   } catch {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
   const prompt = data.prompt?.trim() || "";
   const sessionId = data.session_id;
   const projectDir = process.env.CLAUDE_PROJECT_DIR || process.cwd();
   if (prompt.length < 3) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
   if (isHarnessWrappedPrompt(prompt)) {
-    console.log(JSON.stringify({ continue: true }));
-    return;
+    return { continue: true };
   }
   let message = null;
   if (isResolutionConfirmation(prompt)) {
@@ -379,7 +401,10 @@ async function main() {
     continue: true,
     systemMessage: message || void 0
   };
-  console.log(JSON.stringify(output));
+  return output;
+}
+async function main() {
+  console.log(JSON.stringify(await runUserConfirmationDetector(await readStdin())));
 }
 async function readStdin() {
   return new Promise((resolve) => {
@@ -389,13 +414,14 @@ async function readStdin() {
     process.stdin.on("end", () => resolve(data));
   });
 }
-if (process.argv[1] && process.argv[1].includes("user-confirmation-detector")) {
+if (/(^|[\\/])user-confirmation-detector\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
   main().catch((err) => {
     console.error("user-confirmation-detector error:", err);
     console.log(JSON.stringify({ continue: true }));
   });
 }
 export {
+  runUserConfirmationDetector,
   storeUserConfirmedLearning,
   storeVictoryFromConfirmation
 };

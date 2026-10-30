@@ -5530,13 +5530,18 @@ function updateCache(sessionId) {
   } catch {
   }
 }
-function readStdin() {
-  return readFileSync2(0, "utf-8");
+async function runHeartbeat(raw) {
+  try {
+    return await heartbeatJob(raw);
+  } catch (err) {
+    console.error("Heartbeat error:", err);
+    return { result: "continue" };
+  }
 }
-async function main() {
+async function heartbeatJob(raw) {
   let input = {};
   try {
-    const rawInput = readStdin().trim();
+    const rawInput = raw.trim();
     if (rawInput) {
       input = JSON.parse(rawInput);
     }
@@ -5549,14 +5554,12 @@ async function main() {
     const claudeDir = normalizeProjectKey(homeDir + "/.claude");
     const normalizedProject = normalizeProjectKey(project);
     if (normalizedProject === claudeDir || normalizedProject.endsWith("/.claude")) {
-      console.log(JSON.stringify({ result: "continue" }));
-      return;
+      return { result: "continue" };
     }
   }
   const workingOn = input.prompt ? input.prompt.split("\n")[0].substring(0, 100) : void 0;
   if (!shouldUpdateHeartbeat(sessionId)) {
-    console.log(JSON.stringify({ result: "continue" }));
-    return;
+    return { result: "continue" };
   }
   const result = await registerSession(sessionId, project, workingOn);
   if (!result.success) {
@@ -5564,9 +5567,22 @@ async function main() {
   } else {
     updateCache(sessionId);
   }
-  console.log(JSON.stringify({ result: "continue" }));
+  return { result: "continue" };
 }
-main().catch((err) => {
-  console.error("Heartbeat error:", err);
-  console.log(JSON.stringify({ result: "continue" }));
-});
+async function main() {
+  let raw = "";
+  try {
+    raw = readFileSync2(0, "utf-8");
+  } catch {
+  }
+  console.log(JSON.stringify(await runHeartbeat(raw)));
+}
+if (/(^|[\\/])heartbeat\.(mjs|js|ts)$/.test(process.argv[1] || "")) {
+  main().catch((err) => {
+    console.error("Heartbeat error:", err);
+    console.log(JSON.stringify({ result: "continue" }));
+  });
+}
+export {
+  runHeartbeat
+};

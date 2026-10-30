@@ -39,6 +39,21 @@ const STALE_DEREGISTERED = new Set([
   'sync-to-repo.mjs',
 ]);
 
+// Superseded PER EVENT by prompt-submit.mjs (2026-10-29): one node process runs these 5 jobs
+// on UserPromptSubmit, so Defender scans one start per prompt. Until the live settings.json
+// is swapped, it still lists them. Capturing them would put the 5 back in the template,
+// next to prompt-submit, and every prompt would run each job twice. Keyed on the event:
+// lane-context stays registered on SessionStart and PostToolUse.
+const SUPERSEDED = new Map([
+  ['UserPromptSubmit', new Set([
+    'heartbeat.mjs',
+    'memory-awareness.mjs',
+    'user-confirmation-detector.mjs',
+    'bus-session-populator.mjs',
+    'lane-context.mjs',
+  ])],
+]);
+
 const MACHINE_LOCAL = new Set([
   'permission-auto-allow.mjs', // SECURITY: permission-bypass policy; must be opted into per machine
   'linear-branch-context.mjs', // vendor-specific (Linear) machine integration
@@ -127,7 +142,7 @@ function atomicWrite(p, data) {
 const active = read(ACTIVE);
 const template = read(TEMPLATE);
 
-const report = { captured: [], machineLocal: [], danglingSkipped: [], staleSkipped: [] };
+const report = { captured: [], machineLocal: [], danglingSkipped: [], staleSkipped: [], supersededSkipped: [] };
 
 // Iterate the ACTIVE file's own event keys, not just the known list -- a fixed
 // list silently skipped events like SubagentStop (CodeRabbit PR #31). Unknown
@@ -152,6 +167,10 @@ for (const ev of activeEvents) {
         report.staleSkipped.push(`${ev} | ${key}`);
         continue;
       }
+      if (SUPERSEDED.get(ev)?.has(script)) {
+        report.supersededSkipped.push(`${ev} | ${key}`);
+        continue;
+      }
       if (!codeExistsInRepo(h)) {
         report.danglingSkipped.push(`${ev} | ${key}`);
         continue;
@@ -168,7 +187,7 @@ if (!DRY && report.captured.length) {
 
 console.log(JSON.stringify(report, null, 2));
 console.log(
-  `${DRY ? '[DRY RUN] ' : ''}captured=${report.captured.length} machineLocal=${report.machineLocal.length} staleSkipped=${report.staleSkipped.length} danglingSkipped=${report.danglingSkipped.length}`,
+  `${DRY ? '[DRY RUN] ' : ''}captured=${report.captured.length} machineLocal=${report.machineLocal.length} staleSkipped=${report.staleSkipped.length} supersededSkipped=${report.supersededSkipped.length} danglingSkipped=${report.danglingSkipped.length}`,
 );
 if (report.danglingSkipped.length) {
   console.error('WARNING: active registrations with NO code in the repo were skipped -- investigate:');

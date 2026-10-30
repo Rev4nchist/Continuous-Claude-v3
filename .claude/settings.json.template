@@ -257,42 +257,10 @@
           {
             "type": "command",
             "command": "node",
-            "timeout": 5,
+            "timeout": 15,
             "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/heartbeat.mjs"
+              "{{CLAUDE_HOME}}/hooks/dist/prompt-submit.mjs"
             ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 10,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/memory-awareness.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "timeout": 5,
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/user-confirmation-detector.mjs"
-            ]
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/bus-session-populator.mjs"
-            ],
-            "timeout": 10
-          },
-          {
-            "type": "command",
-            "command": "node",
-            "args": [
-              "{{CLAUDE_HOME}}/hooks/dist/lane-context.mjs"
-            ],
-            "timeout": 5
           }
         ]
       }
