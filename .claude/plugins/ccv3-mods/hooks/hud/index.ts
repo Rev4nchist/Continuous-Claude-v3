@@ -7,7 +7,7 @@ import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
-import { costShownAgain, forgetSeedCost, isCostForgotten, seedHud, setSwitches } from './seed'
+import { costShownAgain, forgetSeedCost, isCostForgotten, reassertCostForgotten, seedHud, setSwitches } from './seed'
 
 // HUD capture. The agentic-os band draws the row from these atoms (declared there under the same keys).
 // The HUD row is for interactive sessions only: a headless run has no band to read it. The context
@@ -231,6 +231,7 @@ export const hudCapture = (on: On) => {
     } catch {
       // Observer only.
     }
+    await reassertCostForgotten($)
     try {
       if ((e.source === 'resume' || e.source === 'fork') && typeof e.context_tokens === 'number') await seedCtx($, e.context_tokens)
     } catch {

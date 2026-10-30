@@ -270,6 +270,40 @@ describe('hud', () => {
     }
   })
 
+  // H4h the real engine resets the plugin's atoms after session.end (E2E 2026-10-30), so a flag written in reset() is gone before
+  // the reload. classic.SessionStart follows session.end in the same process: the flag is written again there.
+  test('H4h a flag wiped after session.end is set again at classic.SessionStart, so a reload keeps the dash', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    const flag = { value: false }
+    const ref = { plugin: 'ccv3-mods', key: 'costForgotten' } as never
+    on('state.get', ref, (() => ({ value: { value: flag.value, version: 0 } })) as never)
+    on('state.set', ref, ((_$: unknown, e: { value: boolean }) => {
+      flag.value = e.value
+      return { value: { isSet: true, version: 0 } }
+    }) as never)
+    for (const reason of ['clear', 'resume']) {
+      await start($)
+      await $.session.measure({ startedAt: 0, context: { window: 1_000_000 }, rateLimits: [], cost: { usd: 4.1 }, changed: ['cost'] } as never)
+      await $.session.end({ reason, sessionId: 's1', resume: { id: 's1' } } as never)
+      flag.value = false // the engine's reset
+      await $.classic.SessionStart({ source: reason } as never)
+      await start($)
+      const after = await hudOn($, 'terminal')
+      for (const old of ['$3.84', '$4.10', '$0.00']) expect(after.text).not.toContain(old)
+      expect(after.core).toContain('$-')
+    }
+  })
+
+  // H4i a CLI --resume at launch has no earlier conversation in the process: its cost shows at once.
+  test('H4i a resume at launch shows the usage cost', async ($, on) => {
+    world(on)
+    on('classic.SessionStart', () => ({}))
+    await $.classic.SessionStart({ source: 'resume' } as never)
+    await start($)
+    expect((await hudOn($, 'terminal')).text).toContain('$3.84')
+  })
+
   test('H9 an advisor use clears a "blocked" chip', async ($, on) => {
     world(on, { env: { DISABLE_TELEMETRY: 'yes' } })
     await start($)
