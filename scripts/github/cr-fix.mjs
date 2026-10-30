@@ -184,7 +184,7 @@ export async function crFix({ pr, repo = DEFAULT_REPO, cwd, timeoutMs = CR_TIMEO
 }
 
 // ---- real gh, git and file calls ----
-function ghApi(apiArgs) {
+export function ghApi(apiArgs) {
   const personal = path.join(os.homedir(), '.config', 'gh-personal');
   const dir = process.env.GH_CONFIG_DIR || (existsSync(personal) ? personal : undefined);
   const env = { ...process.env, ...(dir ? { GH_CONFIG_DIR: dir } : {}) };

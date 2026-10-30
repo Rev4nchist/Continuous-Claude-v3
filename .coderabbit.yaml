@@ -30,6 +30,8 @@ reviews:
     - "!.claude/hooks/dist/**"
     - "!.claude/cache/**"
     - "!docs/reviews/**"
+    # Test data. It needs no review, and each reviewed file bills $0.25.
+    - "!scripts/github/fixtures/**"
   profile: chill
   auto_approvals:
     enabled: false

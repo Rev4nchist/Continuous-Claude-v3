@@ -17,4 +17,5 @@ two bots match globs with different engines, and the narrow form still works if 
 .claude/hooks/dist/**
 .claude/cache/**
 docs/reviews/**
+scripts/github/fixtures/**
 ```
