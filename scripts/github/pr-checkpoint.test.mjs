@@ -587,10 +587,43 @@ test('T20: the config blocks exist and are typed', () => {
   assert.ok(LIVE.coderabbit && 'reviews_7d_manual' in LIVE.coderabbit && 'reviews_7d_manual_date' in LIVE.coderabbit, 'coderabbit.reviews_7d_manual and its date');
   const n = LIVE.coderabbit?.reviews_7d_manual;
   assert.ok(n === null || (Number.isInteger(n) && n >= 0), 'a count or null');
-  // The five critical files of spec section 2 are all tagged, and an ordinary hook is not.
+  // The five critical files of spec section 2 are all tagged (and, since 2026-10-30, NEW_CRITICAL below), and an ordinary hook is not.
   const hit = (p) => LIVE.checkpoint.critical.some((g) => matchGlob(g, p));
-  for (const p of [CRITICAL, 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', '.claude/hooks/src/destructive-command-guard.ts', 'scripts/github/land-pr.ps1']) assert.ok(hit(p), `${p} is critical`);
+  for (const p of [CRITICAL, 'scripts/github/review-status.mjs', 'scripts/github/review-router.mjs', '.claude/hooks/src/destructive-command-guard.ts', 'scripts/github/land-pr.ps1', ...NEW_CRITICAL]) assert.ok(hit(p), `${p} is critical`);
   assert.ok(!hit('.claude/hooks/src/session-start.ts'), 'an ordinary hook is not critical');
+});
+
+// The 2026-10-30 re-review study (section 4) extends checkpoint.critical to the files where a real Major came from a fix.
+// A path missing from the list makes the carry and the small-PR rule treat that PR as ordinary. One test per way it can fail:
+//   a new path is not in the live list (the list was not extended, or the glob is wrong)   -> PE1
+//   the engine does not tag a new path (the PR stays a small clean PR and gets none)       -> PE2
+//   a glob is too wide and tags an ordinary neighbour file                                  -> PE1
+const NEW_CRITICAL = [
+  '.claude/hooks/src/shared/checkpoint-shapes.ts',
+  'scripts/github/pre-pr.mjs',
+  'apps/agentic-os/src/server/sources/safe-message.ts',
+  'apps/agentic-os/src/server/sources/prompt-text.ts',
+  'apps/agentic-os/scripts/provision-roles.sql',
+  'apps/agentic-os/scripts/provision-roles.mjs',
+];
+
+test('PE1: each path of the 2026-10-30 extension is critical in the live config; ordinary neighbour files are not', () => {
+  const hit = (p) => LIVE.checkpoint.critical.some((g) => matchGlob(g, p));
+  for (const p of NEW_CRITICAL) assert.ok(hit(p), `${p} is critical`);
+  for (const p of [
+    '.claude/hooks/src/shared/other.ts', 'scripts/github/pre-pr.test.mjs', 'apps/agentic-os/src/server/sources/other.ts',
+    'apps/agentic-os/scripts/other.sql', 'apps/agentic-os/src/server/sources/safe-message.test.ts', 'scripts/github/cr-fix.mjs',
+  ]) assert.ok(!hit(p), `${p} is not critical`);
+});
+
+test('PE2 (R3): a small clean PR on a new critical path is not "none"; the same size on an ordinary file is', async () => {
+  for (const p of NEW_CRITICAL) {
+    const r = await run([file(p, 5)]);
+    assert.notEqual(r.recommended, 'none', `${p}: a critical file never takes the small-PR none`);
+    assert.ok(r.why.some((w) => /^Critical file/.test(w)), `${p}: ${r.why.join(' | ')}`);
+  }
+  const ordinary = await run([file('scripts/github/pre-pr.test.mjs', 5)]);
+  assert.equal(ordinary.recommended, 'none');
 });
 
 test('T20b (PR B, flipped by PR D): checkpoint.enforce is a boolean in the live config, and it is true (enforced)', () => {

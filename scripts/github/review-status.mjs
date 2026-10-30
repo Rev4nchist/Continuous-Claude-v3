@@ -41,7 +41,8 @@
  * Any review thread, from any reviewer, still counts as unresolved.
  *
  * The carry (PR D, Dave 2026-10-29): a CodeRabbit-required PR whose head has no review is still READY when the NEWEST CodeRabbit
- * review (of an earlier head) is Minor-only and the push since is 30 lines or fewer (see carryBlockers). Every other READY item
+ * review (of an earlier head) is Minor-only, the push since is 30 lines or fewer over the PR's own files, and the PR body holds a
+ * `CLI fix review: <from>..<head> clean` line from cr-fix.mjs for that range (see carryBlockers). Every other READY item
  * applies. Result field `coderabbitCarried`: { from, deltaLines } or null; `coderabbitReviewedHead` stays false. A missing input or
  * a failed read is "not eligible", never exit 2. `--fixture <file>` evaluates saved inputs with no gh call (the result says
  * `fixture: true`); it is for the end-to-end check and is never used by land-pr.ps1.
@@ -848,14 +849,48 @@ export function newestCodeRabbitReview(reviews) {
     .reduce((best, r) => (best === null || at(r) >= at(best) ? r : best), null);
 }
 
+// GitHub lists at most 300 files in a compare. A list that long may be cut off, and the PR's own files may be the ones cut.
+const COMPARE_FILE_CAP = 300;
+
 /**
- * Lines changed over all files of a compare: additions plus deletions. A file that counts none (binary, pure rename)
- * counts one, so such a push cannot hide under the limit. null when the file list or a count is unusable.
+ * Lines changed since the reviewed head, over the PR's own files only: additions plus deletions of each compare file that is
+ * also in the PR file list (by its name or its old name). A merge of main that touches files outside the PR does not count.
+ * Accepted limit: a change of main INSIDE a PR file counts, because the compare cannot tell it from a fix line.
+ * A file that counts none (binary, pure rename) counts one, so such a push cannot hide under the limit. null (fail closed)
+ * when the compare file list is missing, is full (300 or more), or holds a bad count, or when the PR file list is missing.
  */
-export function deltaLinesOf(compare) {
+export function deltaLinesOf(compare, prFiles) {
   const files = compare?.files;
-  if (!Array.isArray(files) || !files.every((f) => Number.isInteger(f?.additions) && Number.isInteger(f?.deletions))) return null;
-  return files.reduce((sum, f) => sum + Math.max(1, f.additions + f.deletions), 0);
+  if (!Array.isArray(files) || files.length >= COMPARE_FILE_CAP) return null;
+  if (!files.every((f) => Number.isInteger(f?.additions) && Number.isInteger(f?.deletions))) return null;
+  if (!Array.isArray(prFiles) || !prFiles.every((f) => typeof f?.filename === 'string')) return null;
+  const own = new Set(prFiles.flatMap((f) => [f.filename, f.previous_filename].filter(Boolean)));
+  const mine = files.filter((f) => own.has(f.filename) || (f.previous_filename && own.has(f.previous_filename)));
+  return mine.reduce((sum, f) => sum + Math.max(1, f.additions + f.deletions), 0);
+}
+
+// The CLI fix review line (cr-fix.mjs prints it; the author pastes it into the PR body): `CLI fix review: <from>..<head> <verdict>`.
+// Verdict is clean, "N major", "N critical" or incomplete. Fences and HTML comments are skipped, as in parseProof.
+const CLI_FIX_LINE = /^(?:[-*+]\s+)?CLI fix review:\s*([0-9a-f]{7,40})\.\.([0-9a-f]{7,40})\s+(\S.*?)\s*$/i;
+
+/** Every CLI fix review line of a PR body: [{ from, head, verdict }], the shas in lower case. [] for no body. Pure. */
+export function parseCliFixReviews(body) {
+  const out = [];
+  const state = { inComment: false };
+  let fence = null;
+  for (const line of String(body ?? '').split(/\r?\n/)) {
+    if (fence) {
+      const close = FENCE_CLOSE.exec(line);
+      if (close && close[1][0] === fence.ch && close[1].length >= fence.len) fence = null;
+      continue;
+    }
+    const clean = stripComments(line, state);
+    const open = FENCE_OPEN.exec(clean);
+    if (open) { fence = { ch: open[1][0], len: open[1].length }; continue; }
+    const m = CLI_FIX_LINE.exec(clean.trim());
+    if (m) out.push({ from: m[1].toLowerCase(), head: m[2].toLowerCase(), verdict: m[3] });
+  }
+  return out;
 }
 
 function reviewBlockers({ newest, reviewComments }, head) {
@@ -879,11 +914,24 @@ function reviewBlockers({ newest, reviewComments }, head) {
   return blocks;
 }
 
-function deltaBlockers(compare) {
+function deltaBlockers(compare, prFiles) {
   if (compare?.status !== 'ahead') return [`the earlier head is not an ancestor of this head (compare: ${compare?.status ?? 'unread'})`];
-  const lines = deltaLinesOf(compare);
+  const lines = deltaLinesOf(compare, prFiles);
   if (lines === null) return ['the push since the reviewed head could not be measured'];
   return lines > CARRY_MAX_LINES ? [`the push since the reviewed head is ${lines} lines, over ${CARRY_MAX_LINES}`] : [];
+}
+
+/**
+ * The PR body must hold a CLI fix review line for exactly this range: from is a prefix (7 or more hex) of the carried review's
+ * commit, head is a prefix of the current head. Every line that names the range must say clean. Anything else blocks.
+ */
+function cliFixBlockers({ body, newest }, head) {
+  const from = String(newest?.commit_id ?? '');
+  const range = `${from.slice(0, 7)}..${String(head ?? '').slice(0, 7)}`;
+  const mine = parseCliFixReviews(body).filter((l) => shaIsHead(l.from, from) && shaIsHead(l.head, String(head ?? '')));
+  if (mine.length === 0) return [`the PR body has no "CLI fix review: ${range} clean" line (run scripts/github/cr-fix.mjs)`];
+  const bad = mine.find((l) => l.verdict !== 'clean');
+  return bad ? [`the CLI fix review of ${range} is "${bad.verdict}", not clean`] : [];
 }
 
 function fileBlockers({ prFiles, config, matchGlob }) {
@@ -911,20 +959,21 @@ function scopeBlockers({ state, labels, cr }, head) {
  * is a reason: a failed fetch never makes a PR eligible. Needs the newest review, its inline comments, the compare of
  * that commit to the head, the PR files, the BASE branch's router config and a matchGlob (review-router.mjs).
  */
-export function carryBlockers({ head, newest, reviewComments, compare, prFiles, config, state, labels, cr, matchGlob } = {}) {
+export function carryBlockers({ head, newest, reviewComments, compare, prFiles, config, state, labels, cr, matchGlob, body } = {}) {
   return [
     ...reviewBlockers({ newest, reviewComments }, head),
-    ...deltaBlockers(compare),
+    ...deltaBlockers(compare, prFiles),
+    ...cliFixBlockers({ body, newest }, head),
     ...fileBlockers({ prFiles, config, matchGlob }),
     ...scopeBlockers({ state, labels, cr }, head),
   ];
 }
 
 /** { from, deltaLines } when the newest CodeRabbit review stands for the head (see carryBlockers), else null. */
-function carriedReview({ carry, reviews, head, comments, labels, cr }) {
+function carriedReview({ carry, reviews, head, comments, labels, cr, body }) {
   const newest = newestCodeRabbitReview(reviews);
-  const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr });
-  return blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare) } : null;
+  const blocks = carryBlockers({ ...carry, head, newest, state: routerState(comments), labels, cr, body });
+  return blocks.length === 0 ? { from: newest.commit_id, deltaLines: deltaLinesOf(carry.compare, carry.prFiles) } : null;
 }
 
 /** The reasons a head with no CodeRabbit review carries. The first two are for a draft and an unrouted PR; a person must not post a review request for either. */
@@ -1005,7 +1054,7 @@ export function evaluate({ pull, combined, checkRuns, threads, bodyEdits, review
     } else if (!cr.reviewedHead) {
       // auto_incremental_review is off, so a push does not start a review. A rate-limit notice has its own branch above.
       // A Minor-only review of an earlier head plus a small push stands for the head (the carry); every other case asks for a review.
-      coderabbitCarried = carriedReview({ carry, reviews, head, comments, labels, cr });
+      coderabbitCarried = carriedReview({ carry, reviews, head, comments, labels, cr, body: pull.body });
       if (coderabbitCarried === null) reasons.push(noReviewReason(pull, need));
     }
     if (need.unverified && !need.greptile && cr.reviewedHead !== true) reasons.push(`CodeRabbit is required because ${need.unverified}`);

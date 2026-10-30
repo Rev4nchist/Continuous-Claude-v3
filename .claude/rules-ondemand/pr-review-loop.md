@@ -18,8 +18,8 @@ except the PR body proof (see "Proof in the PR body").
 counting (DW-91) and label routing at ready (P3c) are live. See "Target" at the end.
 
 The in-session `/review` skill (Claude subagents) is an opt-in self-check. It **never** counts toward
-READY (D4). Neither does a CodeRabbit CLI or plugin run (see `coderabbit-cli.md`; at most 2
-`cr review --agent` runs per PR, counted by `pre-pr.mjs`; `coderabbit-guard` is built but not registered).
+READY (D4). Neither does a CodeRabbit CLI or plugin run (see `coderabbit-cli.md`; `pre-pr.mjs` caps its own
+runs at 2 per branch, and `cr-fix.mjs` runs count separately; `coderabbit-guard` is built but not registered).
 
 When a PR opens (`gh pr create` or `POST .../pulls`), call the `pr_watch` tool with the PR number
 (`pr: <N>`) in the same turn. Do not wait to be asked. Only if that tool does not exist, or the PR is
@@ -91,10 +91,12 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
    never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
    shell. The mod lock denies a Write-tool edit of `pathway.json` and any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
-3. Batch every fix into one push. Then post one `@coderabbitai review`, only when the `pr_watch` line
-   says a round is left or says Dave allowed the round. After a Minor-only round, a fix of 30 lines
-   or fewer needs no new review: READY carries the earlier one. Never push while a review runs: the
-   push supersedes it and the review is lost.
+3. Batch every fix into one push. Before the push, run `node scripts/github/cr-fix.mjs --pr <N>` on the
+   fix commits. It reviews only the commits after the newest CodeRabbit review. Paste its one line
+   (`CLI fix review: <from>..<head> clean`) in the PR body. Fix a Major or Critical, commit, and run it again.
+   Then post one `@coderabbitai review`, only when the `pr_watch` line says a round is left or says Dave
+   allowed the round. After a Minor-only round, a fix of 30 lines or fewer with a clean line needs no new
+   review: READY carries the earlier one. Never push while a review runs: the push supersedes it and the review is lost.
 4. Bundle small fixes in one area into one PR.
 5. Do not stack PRs by default. `base_branches` is `main`, so a stacked PR gets no review. READY pins the
    review to the head, so each restack needs a new review.
@@ -112,6 +114,10 @@ The review router sets the class. This budget counts CodeRabbit PR reviews: the 
 - normal, steering and infra: 1 PR review (1+1). The extra review is for a round after a Major.
 - r3: 1 PR review, and at most 2 more after fix pushes (1+2).
 - A Minor-only round needs no extra review when the fix is 30 lines or fewer: READY carries the review.
+- A PR outside the risk list gets at most 2 cloud rounds. The risk list is the critical and parser globs and class r3.
+  The budget gives this: normal, steering and infra are 1+1, and the extra round follows a Major. Only r3 (1+2) and
+  Dave's press in the pane ("Dave allowed round N") go past 2. A saved `pathway.json` keeps its old budget.
+  Rounds 3 and later on such PRs found no real defect in the 2026-10-30 study.
 - Put all fixes of a round in one push. Then post one `@coderabbitai review`, if a round is left.
 - Do not click GitHub "Update branch" unless the merge needs it. Each click makes a new head and a new review.
 - `pr_watch` counts the rounds used. At budget + 1 it asks Dave in the checkpoint pane. A PR at its
@@ -231,6 +237,9 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    - Fix each one, or list it in the PR body under the heading `Outside-diff: handled`. Write one
      top-level bullet per finding, with the fix commit or the reason. READY needs one bullet per finding.
      If a later review lists the same finding again, write one more bullet for it.
+   - Read every finding of the NEWEST round: inline, outside-diff and nitpick. Nobody may merge on a round that
+     nobody read. READY blocks an open thread and an unhandled outside-diff finding. It has no gate for a
+     nitpick, so you are that gate. In the 2026-10-30 study, 14 of 37 later rounds got no fix and no reply.
 2. Fix real findings on the PR branch. Commit and push once.
 3. For each real finding you fixed, reply `Fixed in <sha>: <what changed>` and add a 👍 reaction to
    the finding. Then resolve the thread through GraphQL `resolveReviewThread`. The bots never
@@ -249,7 +258,9 @@ yes. Do not use `review:deep` until the Apex-billing root cause is found (D3).
    (when Greptile reviewed), CI status.
 8. For FourthBot, add a Sync row in the Grok↔Claude comms hub.
 
-Never merge the PR. That is a separate, confirmed decision.
+Never merge the PR. That is a separate, confirmed decision. Before Dave says merge, check three facts: you
+read the newest round in full, the fix push is verified (`review-status.mjs` on the pushed head), and the carry
+line or a review names that head.
 
 ## Proof in the PR body (live, P4b)
 
@@ -314,9 +325,13 @@ hold. `review-status.mjs --json` then prints `coderabbitCarried: { from, deltaLi
 
 - That review has Minor or nitpick findings only. An unknown severity counts as Major.
 - The head is `ahead` of the reviewed head. The delta is 30 lines or fewer: additions plus
-  deletions over all files of the compare.
+  deletions over the files that are in both the compare and the PR. A merge of main that touches
+  other files does not count. A change of main inside a PR file still counts. A compare of 300 files blocks.
 - The router state names the head. The class is not r3 and the PR has no `risk:high` label.
 - No PR file matches `checkpoint.critical` or `checkpoint.parser` in `review-router.config.json`.
+- The PR body holds a `CLI fix review: <from>..<head> clean` line from `cr-fix.mjs`. `from` is the first 7 or more
+  hex characters of the carried review's commit. `head` is the start of the current head. A missing, old or
+  not-clean line blocks the carry.
 - The CodeRabbit status is not pending. CI is green. The proof GREEN line names the head.
 
 Any missing fact blocks the carry. Then READY asks for a review of the head as before. A carry does

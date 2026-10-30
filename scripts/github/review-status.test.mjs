@@ -2282,8 +2282,14 @@ const carryOf = (over = {}) => ({
   reviewComments: [{ id: 1, body: MINOR_205 }], compare: compareOf(12), prFiles: [{ filename: 'scripts/x.mjs' }], config: REAL_CONFIG,
   matchGlob: matchGlobFn, ...over,
 });
-const carryEval = ({ labels = ['review:coderabbit', 'risk:normal'], carry = carryOf(), evalOver = {}, ...over } = {}) => {
+// PR D (2026-10-30): the carry also needs a "CLI fix review: <from>..<head> clean" line in the PR body (RC16 to RC21). Every
+// carry test below runs with that line, so each keeps testing its own blocker. `cli: null` leaves the line out.
+const CLI_LINE = (from = OLD, head = HEAD, verdict = 'clean') => `CLI fix review: ${from.slice(0, 7)}..${head.slice(0, 7)} ${verdict}`;
+const carryEval = ({ labels = ['review:coderabbit', 'risk:normal'], carry = carryOf(), evalOver = {}, cli = CLI_LINE(), ...over } = {}) => {
   const i = routed(labels, { input: NO_GREPTILE, eval: { reviews: [CR_OLD_REVIEW], carry, ...evalOver }, ...over });
+  if (cli !== null) i.pull.body = `${i.pull.body}
+${cli}
+`;
   return evaluate(i);
 };
 const CARRY_REASON = /no CodeRabbit PR-bot review of the head commit/;
@@ -2343,18 +2349,20 @@ test('RC5: the carry limit is 30 lines of additions plus deletions: 30 is READY,
   const over = carryEval({ carry: carryOf({ compare: compareOf(31) }) });
   assert.equal(over.ready, false);
   assert.equal(over.coderabbitCarried, null);
-  const mixed = (a, d) => carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: a, deletions: d }, { filename: 'b', additions: 5, deletions: 5 }] }) });
+  // PR D: only PR files count, so the compare files a and b are PR files here.
+  const mixed = (a, d) => carryOf({ prFiles: [{ filename: 'a' }, { filename: 'b' }], compare: compareOf(0, { files: [{ filename: 'a', additions: a, deletions: d }, { filename: 'b', additions: 5, deletions: 5 }] }) });
   assert.deepEqual(carryEval({ carry: mixed(10, 10) }).coderabbitCarried, { from: OLD, deltaLines: 30 }, 'deletions and a second file count');
   assert.equal(carryEval({ carry: mixed(10, 11) }).coderabbitCarried, null);
-  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: 0, deletions: 30 }] }) }) }).ready, true, 'a deletion-only push of 30');
+  assert.equal(carryEval({ carry: carryOf({ prFiles: [{ filename: 'a' }], compare: compareOf(0, { files: [{ filename: 'a', additions: 0, deletions: 30 }] }) }) }).ready, true, 'a deletion-only push of 30');
 });
 
 test('RC5b: a file that counts no lines (binary, pure rename) counts as one, and a full compare file list is not trusted', () => {
   const binaries = Array.from({ length: 31 }, (_, i) => ({ filename: `img${i}.png`, additions: 0, deletions: 0 }));
-  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: binaries }) }) }).coderabbitCarried, null, '31 binary files are 31 lines');
+  const binaryFiles = binaries.map((b) => ({ filename: b.filename }));
+  assert.equal(carryEval({ carry: carryOf({ prFiles: binaryFiles, compare: compareOf(0, { files: binaries }) }) }).coderabbitCarried, null, '31 binary files are 31 lines');
   const capped = Array.from({ length: 300 }, (_, i) => ({ filename: `f${i}`, additions: 0, deletions: 0 }));
-  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: capped }) }) }).coderabbitCarried, null);
-  assert.equal(carryEval({ carry: carryOf({ compare: compareOf(0, { files: [{ filename: 'a', additions: 'x', deletions: 0 }] }) }) }).coderabbitCarried, null, 'a non-number');
+  assert.equal(carryEval({ carry: carryOf({ prFiles: capped.map((c) => ({ filename: c.filename })), compare: compareOf(0, { files: capped }) }) }).coderabbitCarried, null);
+  assert.equal(carryEval({ carry: carryOf({ prFiles: [{ filename: 'a' }], compare: compareOf(0, { files: [{ filename: 'a', additions: 'x', deletions: 0 }] }) }) }).coderabbitCarried, null, 'a non-number');
 });
 
 test('RC6: a force-push (diverged), a behind compare and any status but ahead are not carried', () => {
@@ -2461,4 +2469,132 @@ test('RC14: the missing-review reason names /pathway for a draft and the router 
     assert.ok(!r.reasons.some((x) => CARRY_REASON.test(x) && /@coderabbitai review/.test(x)), 'no text asks for a review');
     assert.ok(!r.reasons.some((x) => x.includes('/checkpoint')), '/checkpoint is a built-in of Claude Code');
   }
+});
+
+// ---------------------------------------------------------------------------------------------
+// PR D follow-up (Dave, 2026-10-30): two more carry conditions. One test per way each can fail:
+//   a carry without a CLI review of the fix (the body line is missing)                       -> RC16
+//   a line for another from-commit or another head (an old line after a new push)             -> RC17
+//   a line that is not "clean" (1 major, 2 critical, incomplete, extra text) is accepted       -> RC18
+//   a 6-character prefix, or a full 40-character sha, is read wrongly                          -> RC19
+//   a line inside a code fence or an HTML comment (a pasted example) counts                    -> RC20
+//   two matching lines, one not clean, pass; a stale line next to a good one blocks            -> RC21
+//   the parser is not exported, or reads fields wrongly (cr-fix.mjs prints the same line)      -> RC22
+//   a merge of main counts toward the 30 lines                                                 -> RC23
+//   main's changes inside a PR file stop counting (accepted: they do count)                    -> RC24
+//   a compare capped at 300 files hides a PR file, so a small delta is read                    -> RC25
+//   a rename from a PR path is not matched, or a missing PR list is read as eligible           -> RC26
+// ---------------------------------------------------------------------------------------------
+const carried = (r) => r.coderabbitCarried !== null;
+const MISSING_LINE = /no CodeRabbit PR-bot review of the head commit/;
+
+test('RC16: a carry needs the CLI fix review line in the PR body; without it the PR is NOT READY with the missing-review reason', () => {
+  const r = carryEval({ cli: null });
+  assert.equal(r.ready, false);
+  assert.equal(r.coderabbitCarried, null);
+  assert.ok(r.reasons.some((x) => MISSING_LINE.test(x)), r.reasons.join('; '));
+  assert.equal(r.routedReviewed, false);
+  assert.equal(carryEval({}).ready, true, 'with the line it is READY');
+});
+
+test('RC17: the line must name the carried review commit and the current head', () => {
+  const OTHER_SHA = 'c'.repeat(40);
+  assert.equal(carried(carryEval({ cli: CLI_LINE(OTHER_SHA, HEAD) })), false, 'from names another commit');
+  assert.equal(carried(carryEval({ cli: CLI_LINE(OLD, OTHER_SHA) })), false, 'head names another commit (the line is stale after a push)');
+  assert.equal(carried(carryEval({ cli: CLI_LINE(HEAD, OLD) })), false, 'from and head swapped');
+  assert.equal(carried(carryEval({ cli: CLI_LINE() })), true);
+});
+
+test('RC18: only "clean" carries: 1 major, 2 critical, incomplete, a word after clean, and an unknown word are blocked', () => {
+  for (const verdict of ['1 major', '2 critical', 'incomplete', 'clean but one nit', 'cleanish', '0 major', 'major', '']) {
+    const r = carryEval({ cli: CLI_LINE(OLD, HEAD, verdict) });
+    assert.equal(r.coderabbitCarried, null, `"${verdict}"`);
+    assert.equal(r.ready, false, `"${verdict}"`);
+    assert.ok(r.reasons.some((x) => MISSING_LINE.test(x)), `"${verdict}"`);
+  }
+});
+
+test('RC19: the shas are a prefix of 7 or more hex characters or the full 40; 6 characters, non-hex and a non-prefix do not match', () => {
+  const line = (from, head) => `CLI fix review: ${from}..${head} clean`;
+  assert.equal(carried(carryEval({ cli: line(OLD.slice(0, 7), HEAD.slice(0, 7)) })), true, '7 and 7');
+  assert.equal(carried(carryEval({ cli: line(OLD, HEAD) })), true, '40 and 40');
+  assert.equal(carried(carryEval({ cli: line(OLD.slice(0, 12), HEAD.slice(0, 9)) })), true, '12 and 9');
+  assert.equal(carried(carryEval({ cli: line(OLD.slice(0, 6), HEAD.slice(0, 7)) })), false, 'from has 6');
+  assert.equal(carried(carryEval({ cli: line(OLD.slice(0, 7), HEAD.slice(0, 6)) })), false, 'head has 6');
+  assert.equal(carried(carryEval({ cli: line('zzzzzzz', 'zzzzzzz') })), false, 'not hex');
+  assert.equal(carried(carryEval({ cli: line('bbbbbbc', HEAD.slice(0, 7)) })), false, 'a 7-character value that is not a prefix of the review commit');
+});
+
+test('RC20: a line inside a code fence or an HTML comment is an example, not a result', () => {
+  const fencedLine = `\`\`\`text\n${CLI_LINE()}\n\`\`\``;
+  const commented = `<!-- ${CLI_LINE()} -->`;
+  const multi = `<!--\n${CLI_LINE()}\n-->`;
+  for (const [name, cli] of [['fence', fencedLine], ['comment', commented], ['multi-line comment', multi]]) {
+    assert.equal(carried(carryEval({ cli })), false, name);
+  }
+  assert.equal(carried(carryEval({ cli: `${fencedLine}\n${CLI_LINE()}` })), true, 'a real line after a fence counts');
+  assert.equal(carried(carryEval({ cli: `- ${CLI_LINE()}` })), true, 'a list bullet is allowed');
+});
+
+test('RC21: every line that names this from and head must be clean; lines for other commits are ignored', () => {
+  const bad = CLI_LINE(OLD, HEAD, '1 major');
+  assert.equal(carried(carryEval({ cli: `${CLI_LINE()}\n${bad}` })), false, 'a clean line and a major line for the same range');
+  assert.equal(carried(carryEval({ cli: `${bad}\n${CLI_LINE()}` })), false, 'the order does not matter');
+  const stale = CLI_LINE('c'.repeat(40), 'd'.repeat(40), '1 major');
+  assert.equal(carried(carryEval({ cli: `${stale}\n${CLI_LINE()}` })), true, 'a line for an older range is ignored');
+});
+
+test('RC22: parseCliFixReviews is exported and reads from, head and verdict; the template text is no result', () => {
+  assert.equal(typeof RS.parseCliFixReviews, 'function', 'review-status.mjs must export parseCliFixReviews');
+  const got = RS.parseCliFixReviews('intro\nCLI fix review: ABCDEF1..1234567 2 critical\nCLI fix review: bbbbbbb..aaaaaaa clean\n');
+  assert.deepEqual(got, [
+    { from: 'abcdef1', head: '1234567', verdict: '2 critical' },
+    { from: 'bbbbbbb', head: 'aaaaaaa', verdict: 'clean' },
+  ]);
+  assert.deepEqual(RS.parseCliFixReviews(null), []);
+  assert.deepEqual(RS.parseCliFixReviews('CLI fix review: <from7>..<head7> <clean|N major|N critical|incomplete>'), []);
+  assert.ok(Array.isArray(RS.carryBlockers({ head: HEAD })) && RS.carryBlockers({ head: HEAD }).length > 0, 'carryBlockers with no body does not throw');
+});
+
+// Change 5: the delta counts only the PR's own files.
+const BIG_MAIN_MERGE = { status: 'ahead', ahead_by: 3, files: [
+  { filename: 'scripts/x.mjs', additions: 12, deletions: 0 },
+  { filename: 'other/main-a.mjs', additions: 300, deletions: 100 },
+  { filename: 'other/main-b.mjs', additions: 100, deletions: 0 },
+] };
+
+test('RC23: a merge of main that touches 500 lines in files outside the PR does not count; the 12-line PR fix carries', () => {
+  const r = carryEval({ carry: carryOf({ compare: BIG_MAIN_MERGE }) });
+  assert.equal(r.ready, true, r.reasons.join('; '));
+  assert.deepEqual(r.coderabbitCarried, { from: OLD, deltaLines: 12 });
+});
+
+test('RC24: main changes inside a PR file still count (accepted): a 12-line fix plus 25 lines of main in a PR file is 37 and does not carry', () => {
+  // Accepted limit: the compare cannot tell a fix line from a line main changed in the same file, so those lines count.
+  const compare = { status: 'ahead', ahead_by: 2, files: [{ filename: 'scripts/x.mjs', additions: 12 + 20, deletions: 5 }] };
+  const r = carryEval({ carry: carryOf({ compare }) });
+  assert.equal(r.coderabbitCarried, null);
+  assert.equal(r.ready, false);
+  const edge = { status: 'ahead', ahead_by: 1, files: [{ filename: 'scripts/x.mjs', additions: 30, deletions: 0 }, { filename: 'other/m.mjs', additions: 99, deletions: 99 }] };
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: edge }) })), true, '30 in the PR file is the limit; the outside file is ignored');
+  const over = { ...edge, files: [{ ...edge.files[0], additions: 31 }, edge.files[1]] };
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: over }) })), false, '31 in the PR file is over');
+});
+
+test('RC25: a compare that lists 300 files may be cut off, so it never carries, even when none of its files is a PR file', () => {
+  const capped = Array.from({ length: 300 }, (_, i) => ({ filename: `other/m${i}.mjs`, additions: 1, deletions: 0 }));
+  const r = carryEval({ carry: carryOf({ compare: { status: 'ahead', ahead_by: 9, files: capped } }) });
+  assert.equal(r.coderabbitCarried, null);
+  assert.equal(r.ready, false);
+  const small = Array.from({ length: 299 }, (_, i) => ({ filename: `other/m${i}.mjs`, additions: 1, deletions: 0 }));
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: { status: 'ahead', ahead_by: 9, files: small } }) })), true, '299 files is a full list');
+});
+
+test('RC26: the PR file list decides, by new or old name; a missing list or a compare file with a bad count never carries', () => {
+  const renamed = { status: 'ahead', ahead_by: 1, files: [{ filename: 'scripts/new-x.mjs', previous_filename: 'scripts/x.mjs', additions: 40, deletions: 0 }] };
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: renamed }) })), false, 'the PR file scripts/x.mjs was renamed in the push: its 40 lines count');
+  assert.equal(carried(carryEval({ carry: carryOf({ prFiles: null, compare: BIG_MAIN_MERGE }) })), false, 'no PR file list');
+  const bad = { status: 'ahead', ahead_by: 1, files: [{ filename: 'other/m.mjs', additions: 'x', deletions: 0 }, { filename: 'scripts/x.mjs', additions: 1, deletions: 0 }] };
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: bad }) })), false, 'a bad count in a file outside the PR is still unreadable');
+  assert.equal(carried(carryEval({ carry: carryOf({ compare: { status: 'ahead', files: [] } }) })), true, 'an empty compare counts 0 lines');
 });

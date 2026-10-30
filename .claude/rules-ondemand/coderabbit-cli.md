@@ -6,13 +6,24 @@ alongside Greptile. A CLI or plugin run **never** grants READY.
 
 ## Run budget and timeouts
 
-- At most **2** `cr review --agent` runs per PR (per repo + branch). Failed, rate-limited, or
-  incomplete runs **still consume** a slot. `coderabbit-guard` is **not registered** (live settings or
-  template) until DW-80 brings a vetted shell parser. Until then, you enforce every rule in this file.
+- There is no cap of 2 `cr review --agent` runs per PR (Dave, 2026-10-30: use CLI reviews as needed).
+  `pre-pr.mjs` still counts its own runs and stops at 2 per branch. Runs of `scripts/github/cr-fix.mjs`
+  count separately. Run `cr-fix.mjs` after each batch of fix commits (see `pr-review-loop.md`).
+- `coderabbit-guard` is **not registered** (live settings or template) until DW-80 brings a vetted shell
+  parser. Its run cap of 2 and its `--use-credits` block do not match this file. Change them before you register it.
+  Until then, you enforce every rule in this file.
 - Background review timeout: **≥15 minutes** (team default **35 minutes** on long PRs).
 - Treat incomplete outcomes as incomplete: do not claim the PR was reviewed.
 - Stop and report when the CLI ends in `awaiting_confirmation` or `action_required`; do not
-  auto-confirm billing or destructive follow-ups.
+  auto-confirm billing or destructive follow-ups. `cr-fix.mjs` prints `incomplete` and exits 1 then.
+
+## Billing facts (CodeRabbit docs and the account, 2026-10-30)
+
+- The CLI has its own hourly allowance, apart from PR reviews. `cr usage` shows 10 per hour for this repo.
+- Past it, in On demand mode, `cr review --agent` returns `awaiting_confirmation`. It charges nothing unless `--use-credits` is passed.
+- Dave has $25 of CLI and IDE credit. It does not pay for PR reviews.
+- PR reviews have usage billing On demand with a $50 monthly cap. Past the included limit a review waits for a seat holder to consent. It then costs $0.25 per reviewed file.
+- These each count as 1 PR review: marking a draft ready, each `@coderabbitai review`, each push with incremental review on, and GitHub's "Update branch" button.
 
 ## Findings are advisory
 
@@ -21,7 +32,9 @@ PR ready based on CLI output alone. READY comes only from `review-status.mjs` (P
 
 ## Forbidden (coderabbit-guard blocks these once registered)
 
-- `--use-credits` and `--api-key` on any CodeRabbit command.
+- `--api-key` on any CodeRabbit command.
+- `--use-credits` on a PR comment (`@coderabbitai review --use-credits`). Never post it.
+- `--use-credits` on the CLI, except in the one case under "Allowed".
 - `cr code new`, `cr code push`, `coderabbit code new`, `coderabbit code push`.
 - Skill **`coderabbit:autofix`** (writes/autofix mode).
 - Skill installs: `npx skills add coderabbitai/skills`, `coderabbit skills`, or any install of
@@ -29,9 +42,12 @@ PR ready based on CLI output alone. READY comes only from `review-status.mjs` (P
 
 ## Allowed
 
-- Plain **`cr review --agent`** (runs 1–2), with no forbidden flags. Every `cr review --agent` in a
-  chained command counts: `cr review --agent && cr review --agent` is 2 runs.
-- **Read-only commands**, which never count toward the run cap: `cr doctor`, `cr usage` (also
+- Plain **`cr review --agent`**, and `cr review --agent --committed --base-commit <sha>` (the `cr-fix.mjs` run),
+  with no forbidden flags. `cr-fix.mjs` never passes `--use-credits` or `--api-key`.
+- `--use-credits` on one CLI run, only when both are true: that run returned `awaiting_confirmation`,
+  and the PR is on the risk list (a PR file matches `checkpoint.critical` or `checkpoint.parser` in
+  `review-router.config.json`). On any other PR, ask Dave first. Spend from the $25 CLI credit only.
+- **Read-only commands**, which never count as a run: `cr doctor`, `cr usage` (also
   `cr usage --agent`), `cr auth login`, `cr auth status`, `cr --help`, `cr <subcommand> --help`,
   `cr --version`, and the `coderabbit` equivalents.
 - A **read-only autofix subagent** (Task/Agent) when the prompt is explicitly read-only review/fix
@@ -76,4 +92,4 @@ each use writes an `override` line to the guard decision log.
   `@coderabbitai autopilot`. It publishes commits and follow-up fixes without per-patch approval.
 
 - Read, mint, echo, or pass CodeRabbit API keys in chat, commits, or hook state.
-- Buy on-demand reviews or enable usage billing without Dave's explicit yes.
+- Buy on-demand PR reviews or enable usage billing without Dave's explicit yes. Never click the "Review with credits" button.
