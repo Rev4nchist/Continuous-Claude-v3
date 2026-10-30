@@ -422,11 +422,11 @@ const ITEM = /^\s*(?:\d+[.)]|[-*])\s+(\S.*)$/
  * (a) A lead: "None", "None for now/today/yet/right now", "Nothing (for you/Dave) to do", "Nothing needed/required/yet/for now", "No action/input/reply needed/required".
  *     After the lead come at most a sentence end, " - ", " — " or ":" and ONE waiting clause: "None for now. I'm waiting on X", "None — waiting on your merge yes".
  * (b) A bare waiting clause, "(I'm) Waiting on/for X", where X does not start with you, your or Dave ("Waiting on Dave's approval" asks Dave).
- * X is 1 to 80 characters with no ? ; , ! :, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
+ * X is 1 to 80 characters with no ? ; , ! : – —, no sentence end (". "), no dash separator and no " then ", " and ", " or ", " but ".
  * Anything else stays an ask: "Waiting on CI, then approve PR 12", "None for now. Paste the build log", "None, but review the diff", "None of the options fit".
  * Every part is bounded or anchored, with no nested quantifier: linear on a long line.
  */
-const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:\s]|\s)){1,80}`
+const WAIT_OBJECT = String.raw`(?:(?!\.\s|\s[-–—]+\s|\s(?:then|and|or|but)\s)(?:[^?;,!:–—\s]|\s)){1,80}`
 const WAIT_CLAUSE = String.raw`(?:i(?:['’]m|\s+am)\s+)?waiting\s+(?:on|for)\s+`
 const NO_ASK_LEAD = String.raw`(?:none(?:\s+(?:for\s+now|today|yet|right\s+now))?|nothing\s+(?:(?:for\s+(?:you|dave)\s+)?to\s+do|needed|required|yet|for\s+now)|no\s+(?:action|input|reply)\s+(?:needed|required))`
 const LEAD_ITEM = new RegExp(`^${NO_ASK_LEAD}(?:$|(?:\\.\\s+|\\s+-\\s+|\\s*[–—]\\s*|:\\s*)${WAIT_CLAUSE}${WAIT_OBJECT}$)`, 'i')
