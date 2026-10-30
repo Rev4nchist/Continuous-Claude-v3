@@ -1234,7 +1234,7 @@ test('CP10c: a marker whose pathway differs from the label does not count', () =
   assert.match(d.comment, /Class raised/);
 });
 
-const marked = (head, pathway, over = {}) => ({ id: 90, user: { login: 'Rev4nchist', type: 'User' }, body: `${renderPathwayMarker(head, pathway)}\nCheckpoint: ${pathway} at ${head.slice(0, 7)}, chosen in /pathway.`, ...over });
+const marked = (head, pathway, over = {}) => ({ id: 90, user: { login: 'Rev4nchist', type: 'User' }, author_association: 'OWNER', body: `${renderPathwayMarker(head, pathway)}\nCheckpoint: ${pathway} at ${head.slice(0, 7)}, chosen in /pathway.`, ...over });
 
 test('CP10d: confirmedPathways lists the pathways of markers that name the head, from the top of the comment only', () => {
   const OLD = 'b'.repeat(40);
@@ -1246,6 +1246,18 @@ test('CP10d: confirmedPathways lists the pathways of markers that name the head,
   assert.deepEqual(confirmedPathways([{ id: 1, body: `<!-- pathway-confirmed head=${HEAD} pathway=wait -->` }], HEAD), [], 'wait records nothing');
   assert.deepEqual(confirmedPathways([], HEAD), []);
   assert.deepEqual(confirmedPathways(undefined, HEAD), []);
+});
+
+test('CP10f: a marker counts only from an OWNER, MEMBER or COLLABORATOR comment; any other or missing author_association is ignored', () => {
+  for (const author_association of ['OWNER', 'MEMBER', 'COLLABORATOR']) {
+    assert.deepEqual(confirmedPathways([marked(HEAD, 'none', { author_association })], HEAD), ['none'], author_association);
+  }
+  for (const author_association of ['NONE', 'CONTRIBUTOR', 'FIRST_TIMER', 'FIRST_TIME_CONTRIBUTOR', 'MANNEQUIN', 'owner', '', null, 7]) {
+    assert.deepEqual(confirmedPathways([marked(HEAD, 'none', { author_association })], HEAD), [], String(author_association));
+  }
+  const { author_association: _dropped, ...noField } = marked(HEAD, 'none');
+  assert.deepEqual(confirmedPathways([noField], HEAD), [], 'the field is missing');
+  assert.deepEqual(confirmedPathways([noField, marked(HEAD, 'both', { id: 91 })], HEAD), ['both'], 'one trusted marker among untrusted ones');
 });
 
 const cp10Fix = (comments) => ({
@@ -1261,4 +1273,5 @@ test('CP10e (CLI): ready_for_review saves the new pclass only with a marker for 
   assert.match(run([]), /pathway=none pclass=normal -->/, 'no marker');
   assert.match(run([marked(OLD, 'none')]), /pathway=none pclass=normal -->/, 'marker for an older head');
   assert.match(run([marked(HEAD, 'coderabbit')]), /pathway=none pclass=normal -->/, 'marker for another pathway');
+  assert.match(run([marked(HEAD, 'none', { author_association: 'NONE' })]), /pathway=none pclass=normal -->/, 'marker from a commenter with no repo role');
 });

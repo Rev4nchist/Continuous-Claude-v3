@@ -91,9 +91,10 @@ lines or fewer (rule RS of `pr-checkpoint.mjs`). The checkpoint pane then recomm
    never add a `review:` label by hand, and never run `pr-checkpoint.mjs --confirm` or `--apply` from a
    shell. The mod lock denies a Write-tool edit of `pathway.json` and any shell text that names it.
    To return a PR to draft, run `gh pr ready --undo`.
-3. Batch every fix into one push. Before the push, run `node scripts/github/cr-fix.mjs --pr <N>` on the
-   fix commits. It reviews only the commits after the newest CodeRabbit review. Paste its one line
-   (`CLI fix review: <from>..<head> clean`) in the PR body. Fix a Major or Critical, commit, and run it again.
+3. Batch every fix into one push. After the push, run `node scripts/github/cr-fix.mjs --pr <N>` in the
+   PR checkout. It stops when local HEAD is not the PR head. It reviews only the commits after the newest
+   CodeRabbit review. Paste its one line (`CLI fix review: <from>..<head> clean`) in the PR body. A body
+   edit does not change the head. For a Major or Critical: fix, commit, push, and run it again.
    Then post one `@coderabbitai review`, only when the `pr_watch` line says a round is left or says Dave
    allowed the round. After a Minor-only round, a fix of 30 lines or fewer with a clean line needs no new
    review: READY carries the earlier one. Never push while a review runs: the push supersedes it and the review is lost.

@@ -32,7 +32,7 @@
  *   - PR checkpoint (spec 2026-10-28, section 3.3): at a person_override the comment also holds pathway=none|coderabbit|both
  *     (from the strongest review:* label) and pclass=<class at the checkpoint>. A later person_override or no_change run
  *     re-reads the pathway from the labels (no review:* label keeps the saved one) and keeps pclass. A raise keeps both.
- *     A ready_for_review with a review:* label is a new checkpoint only when a "pathway-confirmed head=<sha> pathway=<p>" marker comment (posted by /pathway before it marks the PR ready) names this head and the label's pathway: then pclass becomes the current class. Without one, pclass stays.
+ *     A ready_for_review with a review:* label is a new checkpoint only when a "pathway-confirmed head=<sha> pathway=<p>" marker comment (posted by /pathway before it marks the PR ready, by an OWNER, MEMBER or COLLABORATOR) names this head and the label's pathway: then pclass becomes the current class. Without one, pclass stays.
  *     A raise on a review:none PR adds risk:* only and posts "Class raised ... Return the PR to draft (gh pr ready --undo), then run /pathway again.". A raise on a PR that
  *     already has review:coderabbit or review:deep-held adds neither of them (review:deep is still added when wanted).
  * Files: compare/<base>...<head sha> (pinned to the head), or the PR files list above 300 files.
@@ -197,12 +197,15 @@ export const renderPathwayMarker = (head, pathway) => `\x3C!-- pathway-confirmed
 
 /**
  * The pathways that /pathway confirmed for this head: from PR comments that START with a marker naming the full head sha.
- * The author is not checked: /pathway posts as the person who runs gh, not as a bot, and anyone with write access can also
- * add a review:* label (the same trust level). A marker quoted inside another comment, or for another head, never counts.
+ * Only a comment whose author_association is OWNER, MEMBER or COLLABORATOR counts: /pathway posts as the person who runs gh, and
+ * anyone with write access can also add a review:* label (the same trust level). A missing field fails closed. A marker quoted
+ * inside another comment, or for another head, never counts.
  */
+const PATHWAY_AUTHORS = new Set(['OWNER', 'MEMBER', 'COLLABORATOR']);
 export function confirmedPathways(comments, head) {
   const want = String(head ?? '').toLowerCase();
-  const found = (comments || []).map((c) => PATHWAY_MARKER_RE.exec(String(c?.body ?? ''))).filter((m) => m && m[1] === want);
+  const found = (comments || []).filter((c) => PATHWAY_AUTHORS.has(c?.author_association))
+    .map((c) => PATHWAY_MARKER_RE.exec(String(c?.body ?? ''))).filter((m) => m && m[1] === want);
   return [...new Set(found.map((m) => m[2]))];
 }
 

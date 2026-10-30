@@ -1077,7 +1077,7 @@ test('TA3c: the router reads the marker the apply step writes (same head, same p
   const g = fakeGh();
   await applyPathway({ pr: 201, record: RECORD, gh: g.gh });
   const c = g.calls.find((a) => a[1] === 'comment');
-  const comment = { id: 5, body: c[c.indexOf('--body') + 1] };
+  const comment = { id: 5, author_association: 'OWNER', body: c[c.indexOf('--body') + 1] };
   assert.deepEqual(confirmedPathways([comment], HEAD), ['coderabbit']);
   assert.deepEqual(confirmedPathways([comment], OTHER), []);
 });
