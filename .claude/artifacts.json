@@ -49,7 +49,7 @@
   "artifacts": [
     {
       "id": "agentic-os-lane-board",
-      "url": "https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a",
+      "url": "https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid",
       "source": "scripts/coordination/render-board.mjs",
       "render": "node scripts/coordination/render-board.mjs",
       "publish_from": "lane-board.html",
@@ -59,7 +59,16 @@
       "session": "*",
       "refresh": "at-handoff",
       "content_model": "generated",
-      "last_published": "2026-08-05",
+      "last_published": "2026-10-30",
+      "DIVERGENCE_2026-10-30": {
+        "found": "2026-10-30",
+        "by_session": "12d3a42b",
+        "status": "RESOLVED 2026-10-30 by 12d3a42b (Dave: publish the generated board to a new artifact). The generated board is now at the top-level url (https://claude.ai/artifact/RtrTNVfAq9uowmb2tfbzid, version 1793380344-ebb5, verified by Artifact list and a read-back of 67.6KB before this was recorded). The old url https://claude.ai/code/artifact/9eb25020-1959-47b9-b51f-6589e0c0515a still holds the hand-authored triage page with Dave's saved decisions and was NOT touched; do not publish over it.",
+        "what_was_live": "9eb25020 version 1788214404-14f8 was NOT the render-board.mjs output. It is a hand-authored 14-lane TRIAGE page (board snapshot 2026-08-31, session 2f6d4a0e) with Dave's saved decisions and notes (savedAt 2026-08-31 22:13 UTC, 29.8KB). content_model generated and render above describe the new page, not that one.",
+        "why_not_published_over_it": "Republishing the generated board there would have overwritten Dave's saved triage decisions. create_handoff says to reconcile, not revert.",
+        "copy_of_old_page": ".claudedocs/lane-board-9eb25020-triage-2026-08-31.html (machine-local, .claudedocs is not tracked)",
+        "render_check": "node scripts/coordination/render-board.mjs on 2026-10-30 wrote lane-board.html: 29 lanes, 2 live sessions, 30 events (65.5kb)."
+      },
       "RECONCILED": {
         "resolved": "2026-07-29",
         "by_session": "3831be22",
