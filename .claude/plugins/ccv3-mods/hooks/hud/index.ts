@@ -7,7 +7,7 @@ import { mergeParsed, parseStep } from '../agentic-os/brief'
 import { DIAG_DIR, errorFile, errorText } from '../shared/diag'
 import { EMPTY_CACHE, addRequest, afterCompaction, cacheReport, isSubscription, ttlMinutes } from './cache'
 import { advisorFrom } from './model'
-import { seedHud, setSwitches } from './seed'
+import { forgetSeedCost, seedHud, setSwitches } from './seed'
 
 // HUD capture. The agentic-os band draws the row from these atoms (declared there under the same keys).
 // The HUD row is for interactive sessions only: a headless run has no band to read it. The context
@@ -87,11 +87,13 @@ const seedCtx = async ($: EngineInterface, tokens: number): Promise<void> => {
 /**
  * A new conversation in the same process (`/clear`, or another session resumed in its place): its counts,
  * context figure, advisor count and cost start over. The cost shows again at the next session.measure.
- * The hud atom stays set: a null one is re-seeded from the cached seed and usage(), which can be stale
- * (the last step's model and effort would be lost).
+ * Both states of the hud atom happen. A set one is edited here, so the row keeps the last step's model and effort.
+ * In the real engine (E2E 2026-10-30) it is already null by now: the next render or handler re-seeds it from the cached
+ * seed, so forgetSeedCost() keeps the old conversation's cost, and the startup $0.00, out of that seed.
  */
 const reset = async ($: EngineInterface): Promise<void> => {
   if ((await $.env.get('CCV3_MODS_OFF')) === '1') return
+  forgetSeedCost()
   await update($, cache, () => EMPTY_CACHE)
   await update($, ctx, () => null)
   await update($, hud, now => (now === null ? now : { ...now, costUsd: null, advisor: { ...now.advisor, calls: 0 } }))

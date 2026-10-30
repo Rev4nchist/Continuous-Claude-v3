@@ -19,6 +19,18 @@ const mode = atom({ plugin: 'ccv3-mods', key: 'mode' } as const, 'interactive' a
  * handler (session.measure, turn.step) moves it into the atom. It keeps the model, settings and usage from being read twice.
  */
 let seeded: HudState | null = null
+/** Set when a conversation ends in this process: from then on no seed carries a cost (see forgetSeedCost). */
+let costForgotten = false
+
+/**
+ * A conversation ended in this process (/clear, an in-session resume). The engine leaves the hud atom null then, and the next
+ * render or handler re-seeds it from `seeded`, whose cost is the old conversation's or the startup $0.00. Limits are
+ * account-wide and stay. The new conversation shows no cost until its first session.measure writes one.
+ */
+export function forgetSeedCost(): void {
+  costForgotten = true
+  if (seeded !== null) seeded = { ...seeded, costUsd: null }
+}
 
 /** The kill switches that are set. `$.env.get` takes literals only, so each is spelled out. */
 export async function setSwitches($: EngineInterface): Promise<KillSwitch[]> {
@@ -46,7 +58,7 @@ async function readHud($: EngineInterface): Promise<HudState | null> {
       model,
       effort: null,
       advisor,
-      costUsd: usage.cost?.usd ?? null,
+      costUsd: costForgotten ? null : (usage.cost?.usd ?? null),
       limits: usage.rateLimits.map(({ kind, percentUsed }) => ({ kind, percentUsed })),
     }
     return seeded
