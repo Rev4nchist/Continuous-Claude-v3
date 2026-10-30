@@ -141,6 +141,12 @@ type Opts = {
   gate?: Promise<void>
   /** Replies for the first `gh pr comment` calls, in order; later calls succeed. */
   comments?: Reply[]
+  /** The PR's head branch that gh pr view prints (headRefName). */
+  branch?: string
+  /** What `git worktree list --porcelain` prints in the session root. Unset: an empty list, so the session root is the checkout. */
+  worktrees?: Reply
+  /** `git rev-parse HEAD` per cwd; a cwd not listed answers `head`. */
+  headAt?: Record<string, string>
 }
 
 type Run = { argv: string[]; stdin?: string; cwd?: string }
@@ -268,7 +274,7 @@ const world = (on: On, opts: Opts = {}) => {
     }
     if (argv[0] === 'gh' && argv[1] === 'pr' && argv[2] === 'view') {
       const reply: Reply = opts.view ?? {
-        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
+        stdout: JSON.stringify({ isDraft: opts.isDraft ?? true, state: 'OPEN', headRefOid: opts.viewHead ?? HEAD, headRefName: opts.branch ?? 'feat/x', author: { login: opts.author ?? 'Rev4nchist' }, number: Number(argv[3]) }),
       }
       return done(reply)
     }
@@ -276,7 +282,11 @@ const world = (on: On, opts: Opts = {}) => {
       if (opts.gate) return opts.gate.then(() => done(OK)) as never
       return done(opts.comments?.shift() ?? OK)
     }
-    if (argv[0] === 'git' && argv.includes('rev-parse')) return done({ stdout: `${opts.head ?? HEAD}\n` })
+    if (argv[0] === 'git' && argv.includes('worktree')) return done(opts.worktrees ?? OK)
+    if (argv[0] === 'git' && argv.includes('rev-parse')) {
+      const cwd = (e.init as { cwd?: string } | undefined)?.cwd ?? ''
+      return done({ stdout: `${opts.headAt?.[cwd] ?? opts.head ?? HEAD}\n` })
+    }
     if (argv[0] === 'git' && argv.includes('log')) return done({ stdout: 'feat: one\nfix: two\n' })
     if (argv[0] === 'git' && argv.includes('diff')) return done({ stdout: '10\t2\tscripts/github/review-status.mjs\n' })
     if (line.includes('checkpoint-shapes-cli.mjs')) {
@@ -565,6 +575,125 @@ describe('pr-checkpoint: registration and the checkpoint pane', () => {
     await pane.press({ key: 'opt-none' })
     const confirm = engineCalls(seen).find(call => call.startsWith('--confirm'))
     expect(confirm).toMatch(/^--confirm none --by dave /)
+  })
+})
+
+// The PR's checkout (lane pathway-session-root). A session in the main checkout opens the checkpoint for a PR whose branch is checked
+// out in another worktree. How it can fail, and the test that catches it:
+// W1 the engine's facts (its cwd), the stamp or the git facts come from the session root, not from the worktree that holds the PR branch;
+//    or the engine CODE comes from that worktree (a session in main must run its own copy, never another worktree's)
+// W2 a press (--confirm, --apply) runs in the session root, or the body resolves in the session root while the worktree has it
+// W3 a body that only the session root holds is not found (the fallback is lost)
+// W4 a worktree with no engine in it is used (not a CCv3 checkout)
+// W5 /pathway <pr> <word> --body from the main checkout records in the session root
+// W6 no worktree holds the branch: the refusal does not name the branch, so Dave cannot tell what to check out
+// W7 a failing `git worktree list` stops the checkpoint instead of falling back to the session root
+// W8 Lock B reads HEAD in the session root for a record made in a worktree, so a matching label re-add is denied
+// W9 a missing body names only one of the two paths searched
+// The porcelain has CRLF line ends, a detached worktree block, and a decoy branch (feat/x-old) before feat/x: a startsWith match fails W1.
+const WT = 'C:/r/.claude/worktrees/feat-x'
+const PORCELAIN = [
+  'worktree C:/r', 'HEAD ' + OTHER_HEAD, 'branch refs/heads/main', '',
+  'worktree C:/r/.claude/worktrees/detached', 'HEAD ' + OTHER_HEAD, 'detached', '',
+  'worktree C:/r/.claude/worktrees/feat-x-old', 'HEAD ' + OTHER_HEAD, 'branch refs/heads/feat/x-old', '',
+  `worktree ${WT}`, 'HEAD ' + HEAD, 'branch refs/heads/feat/x', '',
+].join('\r\n')
+const wtOpts = (over: Opts = {}): Opts => ({ worktrees: { stdout: PORCELAIN }, ...over })
+const cwdOf = (seen: { run: Run[] }, part: string) => seen.run.filter(r => r.argv.some(a => a.includes(part))).map(r => r.cwd)
+
+describe('pr-checkpoint: the PR branch checked out in another worktree', () => {
+  test('W1 the engine, the stamp and the git facts run in the worktree that holds the PR branch', async ($, on) => {
+    const { seen, store } = world(on, wtOpts({ files: { [`${WT}/.claude/cache/pre-pr/stamp.json`]: JSON.stringify({ at: '2026-10-30T20:00:00.000Z' }) } }))
+    const { told, pane } = await openPane($)
+    expect(told.text).toMatch(/side pane/i)
+    expect((store.get(PENDING) as Rec).stamp).toBe('2026-10-30T20:00:00.000Z')
+    expect((store.get(PENDING) as Rec).root).toBe(WT)
+    const json = seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
+    expect(json.argv[1]).toBe(ENGINE)
+    expect(json.cwd).toBe(WT)
+    expect(cwdOf(seen, 'log').filter(cwd => cwd !== undefined)).toEqual([WT])
+    expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('diff'))?.cwd).toBe(WT)
+    expect(seen.run.find(r => r.argv[0] === 'git' && r.argv.includes('worktree'))?.cwd).toBe(ROOT)
+    expect(await keys(pane)).toEqual(['opt-coderabbit', 'opt-none', 'dismiss'])
+  })
+
+  test('W2 a press runs --confirm and --apply in the worktree, with the body file resolved there', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    const confirm = seen.run.find(r => r.argv.includes('--confirm'))!
+    expect(confirm.cwd).toBe(WT)
+    expect(confirm.argv[1]).toBe(ENGINE)
+    expect(confirm.argv[confirm.argv.indexOf('--body') + 1]).toBe(`${WT}/pr-body.md`)
+    const apply = seen.run.find(r => r.argv.includes('--apply'))!
+    expect(apply.cwd).toBe(WT)
+    expect(apply.argv[1]).toBe(ENGINE)
+    expect((store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    expect((store.get('checkpoint:pr:7') as Rec).root).toBe(WT)
+  })
+
+  test('W3 a body file that only the session root holds is still found there', async ($, on) => {
+    const { seen } = world(on, wtOpts({ missing: [`${WT}/pr-body.md`] }))
+    const { told, pane } = await openPane($)
+    expect(told.text).toMatch(/side pane/i)
+    await pane.press({ key: 'opt-none' })
+    const confirm = seen.run.find(r => r.argv.includes('--confirm'))!
+    expect(confirm.argv[confirm.argv.indexOf('--body') + 1]).toBe(`${ROOT}/pr-body.md`)
+    expect(confirm.cwd).toBe(WT)
+  })
+
+  test('W4 a worktree with no engine in it is not used: the session root runs the engine', async ($, on) => {
+    const { seen } = world(on, wtOpts({ missing: [`${WT}/scripts/github/pr-checkpoint.mjs`] }))
+    await openPane($)
+    const json = seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))!
+    expect(json.argv[1]).toBe(ENGINE)
+    expect(json.cwd).toBe(ROOT)
+  })
+
+  test('W5 /pathway <pr> none --body from the main checkout records in the worktree', async ($, on) => {
+    const { seen, store } = world(on, wtOpts())
+    await start($)
+    const ran = await slash($, '7 none --body pr-body.md')
+    expect(ran.text ?? '').toMatch(/none recorded/)
+    expect(seen.run.find(r => r.argv.includes('--confirm'))?.cwd).toBe(WT)
+    expect(seen.run.find(r => r.argv.includes('--apply'))?.cwd).toBe(WT)
+    expect((store.get('checkpoint:pr:7') as Rec).decided_by).toBe('dave')
+  })
+
+  test('W6 no worktree holds the PR branch and the session root is elsewhere: the refusal names the branch', async ($, on) => {
+    const { seen } = world(on, wtOpts({ branch: 'feat/y', viewHead: OTHER_HEAD }))
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(told.text).toMatch(/check out the PR branch at its head/i)
+    expect(told.text).toContain('feat/y')
+    expect(seen.opens).toEqual([])
+  })
+
+  test('W7 a failing git worktree list falls back to the session root and the pane still opens', async ($, on) => {
+    const { seen } = world(on, { worktrees: { exitCode: 128, stderr: 'fatal: not a git repository' } })
+    const { told } = await openPane($)
+    expect(told.text).toMatch(/side pane/i)
+    expect(seen.run.find(r => r.argv.includes('--json') && r.argv.some(a => a.includes('pr-checkpoint.mjs')))?.cwd).toBe(ROOT)
+  })
+
+  test('W8 enforce: after a press made in the worktree, a matching label re-add is allowed (HEAD read in the worktree, not in main)', async ($, on) => {
+    const w = world(on, wtOpts({ files: CONFIG_ENFORCE, head: OTHER_HEAD, headAt: { [WT]: HEAD } }))
+    const { pane } = await openPane($)
+    await pane.press({ key: 'opt-coderabbit' })
+    expect((w.store.get('checkpoint:pr:7') as Rec).state).toBe('applied')
+    const before = w.seen.ran.length
+    const r = (await $.tool.call({ tool: 'Bash', command: 'gh pr edit 7 --add-label review:coderabbit' } as never)) as unknown as { deny?: string }
+    expect(LOCK_DENIED(r)).toBe(false)
+    expect(w.seen.ran.length).toBe(before + 1)
+    expect(w.seen.run.filter(r => r.argv[0] === 'git' && r.argv.includes('rev-parse')).at(-1)?.cwd).toBe(WT)
+  })
+
+  test('W9 a missing body names both paths searched: the worktree and the session root', async ($, on) => {
+    world(on, wtOpts({ missing: ['pr-body.md'] }))
+    await start($)
+    const told = await callTool($, { pr: 7, body: 'pr-body.md' })
+    expect(told.text).toContain(`${WT}/pr-body.md`)
+    expect(told.text).toContain(`${ROOT}/pr-body.md`)
   })
 })
 

@@ -238,6 +238,8 @@ export type CheckpointRecord = {
   session: string
   capacity?: CheckpointResult['capacity']
   appliedAt?: number
+  /** The checkout the record's head came from (the PR branch worktree or the session root). Lock B reads HEAD there. */
+  root?: string
   /** Set when Dave said No to an ask. A grant or a new checkpoint clears it. */
   declined?: { kind: 'opening' | 'round' | 'greptile'; round: number; head: string }
   /** Set when the mod posted the opening review request on Dave's Yes. */

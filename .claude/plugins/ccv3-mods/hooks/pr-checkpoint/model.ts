@@ -53,12 +53,34 @@ export const parseCheckpointArgs = (args: string): CheckpointArgs | null => {
 
 const ABSOLUTE = /^([a-zA-Z]:[\\/]|[\\/])/
 
-/** The body file as the engine reads it: a relative path is the session root's. */
+/** The body file as the engine reads it: a relative path is relative to the given root. */
 export const resolveBody = (root: string, body: string): string => (ABSOLUTE.test(body) ? body : `${root.replace(/[\\/]+$/, '')}/${body}`)
 
 export const engineArgv = (root: string, ...flags: string[]): string[] => ['node', `${root}/${ENGINE_REL}`, ...flags]
 
-export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,author,number', '-R', REPO]
+export const viewArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'isDraft,headRefOid,headRefName,author,number', '-R', REPO]
+
+export const WORKTREE_ARGV = ['git', 'worktree', 'list', '--porcelain']
+
+/** One path in two spellings (git prints C:/x, the session root may be C:\x or c:\x\) compares equal. */
+export const samePath = (a: string, b: string): boolean => {
+  const norm = (p: string) => p.replace(/\\/g, '/').replace(/\/+$/, '').replace(/^([a-zA-Z]):/, (_m, d: string) => `${d.toLowerCase()}:`)
+  return norm(a) === norm(b)
+}
+
+/**
+ * The worktree that has `branch` checked out, from `git worktree list --porcelain`. Git lets one branch live in one worktree only,
+ * so the first match is the only one. No match, an empty branch or unreadable text: null.
+ */
+export const worktreeFor = (porcelain: string, branch: string): string | null => {
+  if (!branch) return null
+  for (const block of porcelain.split(/\r?\n\r?\n/)) {
+    const lines = block.split(/\r?\n/)
+    const path = lines.find(line => line.startsWith('worktree '))?.slice('worktree '.length).trim()
+    if (path && lines.some(line => line.trim() === `branch refs/heads/${branch}`)) return path
+  }
+  return null
+}
 
 /** The PR's state and head, read before a late Yes posts a review request. */
 export const stateArgv = (pr: number): string[] => ['gh', 'pr', 'view', String(pr), '--json', 'state,headRefOid', '-R', REPO]
